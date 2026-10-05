@@ -444,7 +444,7 @@ export function dealSignalFromText(message = "") {
 // "make an offer closer to where they are at", "would you be able to do
 // better than that?". That is the opposite of warm (1010 Bellevue,
 // 2026-10-04: read as "the number might work" and flagged hot).
-const COME_UP_RX = /\b(?:come|get|go|move|make (?:an|your|us an) offer)\s+(?:a (?:bit|little|lot)\s+)?(?:closer|up|higher)\b|\bcloser to (?:where )?(?:they|she|he|the sellers?|their|his|her)\b|\bdo (?:any |a (?:bit|little) )?better\b|\b(?:bump|raise|increase|sweeten)\s+(?:it|that|this|the offer|your offer|your number)\b|\bhigher (?:number|offer|price)\b|\bbest and (?:final|highest)\b/i;
+const COME_UP_RX = /\b(?:come|get|go|move|make (?:an|your|us an) offer)\s+(?:a (?:bit|little|lot)\s+)?(?:closer|up|higher)\b|\bcloser to (?:where )?(?:they|she|he|the sellers?|their|his|her)\b|\bdo (?:any |a (?:bit|little) )?better\b|\b(?:bump|raise|increase|sweeten)\s+(?:it|that|this|the offer|your offer|your number)\b|\bhigher (?:number|offer|price)\b|\bbest and (?:final|highest)\b|\b(?:improve|increase|raise|up)\s+(?:your|the|that)?\s*(?:offer|number|price)\b|\bwiggle room\b|\b(?:any|some)\s+(?:room|flexibility)\s+(?:on|in)\s+(?:your|the)\b|\bstronger offer\b|\bwants? more\b|\bwhat (?:else )?can you do\b|\bcan you increase\b/i;
 /** asksUsToComeUp(message) → true when they're asking us to raise our number. */
 export function asksUsToComeUp(message = "") {
   return COME_UP_RX.test(String(message || ""));
@@ -596,6 +596,12 @@ const PLAYBOOK = () => ({
     acceptance: false,    // the "they accepted our number" half, separately
     maxAmount: 0,         // optional absolute cap; 0 = the derived ceiling stands
   },
+  // Hold, then pass (Matt, 2026-10-04). A counter above our number — or an
+  // ask for us to come up — gets our number once, held, never more. Then a
+  // check-in on the normal spacing; after `checkIns` with no movement the
+  // house is marked we_passed. A counter with no number that asks nothing of
+  // us goes out like a status reply. Agent only. Off; Full on the dial.
+  counterHold: { enabled: false, checkIns: 2 },
   // The clock. Off by default, and off again per ladder — and even switched
   // on a nudge only DRAFTS unless its intent is also ticked on the auto-send
   // allowlist above. Two switches is the guard, deliberately.
@@ -905,6 +911,11 @@ function normalizePlaybook(p, party, seed = {}) {
       dailyCap: int(src.counterBand?.dailyCap, 2, 1, 50),
       acceptance: bool(src.counterBand?.acceptance, false),
       maxAmount: int(src.counterBand?.maxAmount, 0, 0, 100000000),
+    },
+    counterHold: {
+      // Agent only: a buyer's price is the investor band's business.
+      enabled: party === "agent" && bool(src.counterHold?.enabled, false),
+      checkIns: int(src.counterHold?.checkIns, 2, 1, 6),
     },
     requote: {
       enabled: bool(src.requote?.enabled, false),

@@ -514,6 +514,9 @@ export const OFFER_LIST_FIELDS = [
   // The newest counter with its number ({amount, at, source}), hoisted off
   // statusHistory so the auto-accept band can read it from a lean row.
   "counter",
+  // Hold, then pass (counter-hold.js): {at, ours, theirs, nudges, replies} —
+  // the Desk shows the next check-in and the day it passes off a lean row.
+  "counterHold",
   // Where the conversation stands, for the pipeline board. Each is a handful
   // of scalars or a short array, well inside "a row must stay a row":
   //   proactive   {takeCheckAt, realmCheckAt} — which float has gone out

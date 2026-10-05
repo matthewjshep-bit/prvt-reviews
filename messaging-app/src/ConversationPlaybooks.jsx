@@ -255,9 +255,26 @@ export function CounterBandCard({ config, patch, example = null }) {
   const pb = config.parties.agent;
   const band = pb.counterBand;
   const set = (next) => patch({ parties: { ...config.parties, agent: { ...pb, counterBand: { ...band, ...next } } } });
+  const hold = pb.counterHold || { enabled: false, checkIns: 2 };
+  const setHold = (next) => patch({ parties: { ...config.parties, agent: { ...pb, counterHold: { ...hold, ...next } } } });
   return (
     <Section title="Counters"
-      intro="A counter is always yours to answer: the bot never goes above the number we sent (since Woodcrest, 2026-10-02). With this on, every counter's draft shows where it sits against the most we'd pay, so you can decide in one look.">
+      intro="The bot never goes above the number we sent (since Woodcrest, 2026-10-02). Hold, then pass: a counter above our number gets our number back once, held, and the house is passed if they don't move.">
+      <Toggle checked={Boolean(hold.enabled)} onChange={(v) => setHold({ enabled: v })}>
+        Hold our number on a counter, check in, then pass
+      </Toggle>
+      {hold.enabled && (
+        <div className="mt-2 mb-3 space-y-2">
+          <ul className="space-y-1 text-xs text-slate-500">
+            <li>· A counter above ours, or “come closer to where they are”, gets our number once — the lowest we've put to them, never more.</li>
+            <li>· Then a light check-in on the normal spacing. After the check-ins below with no movement, the house is marked We passed.</li>
+            <li>· A counter with no number that asks nothing of us (“I'll ask what they'd take”) is answered like any status reply.</li>
+          </ul>
+          <Field label="Check-ins before passing" hint="Texts after the hold, at least the follow-up spacing apart. A reply that doesn't move counts as one.">
+            <Text type="number" value={hold.checkIns} onChange={(v) => setHold({ checkIns: Number(v) })} />
+          </Field>
+        </div>
+      )}
       <Toggle checked={band.enabled} onChange={(v) => set({ enabled: v })}>
         Show the ceiling on every counter
       </Toggle>

@@ -60,7 +60,7 @@ import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone } from "./shared/held-underwrites.js";
-import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName, lastQuoteOnHouse } from "./shared/current-offer.js";
+import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber } from "./shared/current-offer.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
@@ -1561,6 +1561,10 @@ async function linkOwed({ store, locationId, contactId, now = Date.now() }) {
   return linkedSince ? null : { address: blast.outbound.address || blast.propertyAddress || "", offerId: blast.outbound.offerId || null };
 }
 
+// They'll go find out: "I could ask, and see what…", "let me check with the
+// seller", "I'll see what they'd take". A counter-read with no number that
+// says this is a status reply (counterHold, 2026-10-04).
+export const WILL_ASK_RX = /\b(?:i'?ll|i will|i could|i can|let me|i'?m going to|going to)\s+(?:go\s+)?(?:ask|check|find out|see|talk to|run it by|get back)\b/i;
 export const OUR_OFFER_TEXT_RX = /\b(?:here's our (?:written cash offer|letter of intent)|sending our written offer|please find our (?:letter of intent|written (?:cash )?offer)) on\b/i;
 
 /**
@@ -2049,7 +2053,8 @@ export const OUTBOUND_KINDS = {
   counter_nudge: {
     party: "agent",
     enabled: (pb) => Boolean(pb?.followUp?.enabled),
-    ready: ({ offer }) => (offer?.address && Number(offer?.counter?.amount) > 0 ? true : "no counter on record"),
+    // A hold on "come closer to where they are" has no number of theirs.
+    ready: ({ offer }) => (offer?.address && (Number(offer?.counter?.amount) > 0 || offer?.counterHold?.at) ? true : "no counter on record"),
     floats: () => [],
     forbids: () => [],
   },
@@ -2443,8 +2448,11 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
   if (kind === "counter_nudge") {
     const theirs = Math.round(Number(offer?.counter?.amount) || 0);
     const at = Date.parse(offer?.counter?.at || "");
+    // After our hold (counter-hold.js): we already told them our number.
+    const held = subject?.held && Number(subject.held.ours) > 0
+      ? { heldK: kText(subject.held.ours), heldStep: Number(subject.held.step) || 1, heldOf: Number(subject.held.of) || 2 } : {};
     return { ...base, theirs, theirsK: theirs ? kText(theirs) : "", ours: offer?.cashAmount || 0,
-      days: Number.isFinite(at) ? Math.max(1, Math.round((Date.now() - at) / 86400000)) : 0 };
+      days: Number.isFinite(at) ? Math.max(1, Math.round((Date.now() - at) / 86400000)) : 0, ...held };
   }
   if (kind === "realm_check") {
     const closeDays = offer.terms?.closingDays || saved?.psa?.closingDays || 0;
@@ -3034,6 +3042,45 @@ async function runReply(job, ctx) {
     }
   }
 
+  // Hold, then pass (Matt, 2026-10-04: counterHold, Full on the dial). A
+  // counter still above our number after the pass line, or "come closer to
+  // where they are" with no number, gets OUR number back, once, held — the
+  // lowest we've put to them (holdNumber), never more. The check-ins and the
+  // pass are counter-hold.js's. A counter with no number that asks nothing
+  // of us ("I could ask what they'd take") is a status reply, not a counter.
+  let counterHold = null;
+  // Texts only, never a call: a call's transcript carries Matt's own words
+  // ("we can't go higher") and he has just had the conversation. And only
+  // with the follow-up clock on, which the check-ins after the hold ride.
+  const holdOn = config.parties?.agent?.counterHold?.enabled && config.parties?.agent?.followUp?.enabled;
+  if (party === "agent" && !isCall && draft.intent === "counter" && holdOn) {
+    const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const open = currentOffers(book).filter(isNegotiable);
+    const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
+    const full = picked && typeof store.getOffer === "function" ? (await store.getOffer(picked.id).catch(() => null)) || picked : picked;
+    const hold = full ? holdNumber({ offer: full, transcript: a.transcript || "" }) : null;
+    const theirs = Math.round(Number(draft.counterAmount) || 0);
+    const comeUp = asksUsToComeUp(job.originalMessage || job.message);
+    if (hold && (theirs > hold.amount || (!theirs && comeUp))) {
+      const where = String(full.address || "").split(",")[0].trim() || "the house";
+      // Said once; a second ask that didn't move gets the short version.
+      const again = Boolean(full.counterHold?.at) && !(theirs > 0 && theirs < (Number(full.counterHold.theirs) || Infinity));
+      counterHold = { offerId: full.id, ours: hold.amount, theirs, again };
+      // holdNumber's words, written like a text: a dollar sign trips the
+      // carrier filters (the gates hold it), so the number goes bare.
+      const n = hold.amount.toLocaleString("en-US");
+      draft = { ...draft, needsHuman: false, counterHold,
+        reply: again ? `Understood. We're still at ${n} on ${where}; if anything changes on the seller's side, I'm here.`
+          : `Appreciate you working it. On ${where} we're going to hold at ${n}: that's where the numbers work for us. If the seller can get there, we're ready to go.` };
+    } else if (!theirs && !comeUp && !moneyIn(job.originalMessage || job.message).length && !moneyIn(draft.reply).length
+        && WILL_ASK_RX.test(job.originalMessage || job.message)) {
+      // Only what Matt authorised: no number from them, none in ours, no ask
+      // for more — and they said they'd go ask ("I could ask what they'd take").
+      draft = { ...draft, intent: "status_check", reclassifiedFrom: "counter" };
+      job.intent = draft.intent;
+    }
+  }
+
   // Turnkey is not a deal. "This one is pretty turnkey with tenants in place"
   // answers our "project or turnkey?" and read as deal_available — the listing
   // IS available — so Karamveer Tiwana and Angie Bomar (2026-09-14) were moved
@@ -3184,6 +3231,15 @@ async function runReply(job, ctx) {
   // that picks a time) has nothing to release; the pass still books.
   let auto = releaseUnderGuard({ base, party, intent: draft.intent, config, guard });
   auto = releaseForAudit({ auto, gate, draft, deps });
+  // The hold is our number said once, and nothing more: the one counter
+  // reply the machine sends. Only where every other check passed and the
+  // counter's own lock is all that held it — never past a gate, a stop, a
+  // person having the thread, or sends off — and never naming more than ours.
+  if (draft.counterHold && !auto.send && base.code === "never_auto" && !gate?.overOffer?.length && !isCall
+      && (config.autoSend?.channels || []).includes(job.channel)
+      && moneyIn(draft.reply).every((n) => n <= draft.counterHold.ours)) {
+    auto = { ...auto, send: true, code: "", reason: "our number, held — hold, then pass", counterHold: true };
+  }
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
@@ -3631,10 +3687,18 @@ async function runReply(job, ctx) {
     keptScheduledIds: keptScheduled,
     warnings: warnings.slice(0, 6),
     noteOnAutoSend: config.notes?.onAutoSend !== false,
+    ...(draft.counterHold ? { counterHold: draft.counterHold } : {}),
     promptVersion: 3,
     updatedAt: ts,
   });
   job.draftId = record.id;
+
+  // The hold went (or goes at the next open minute): its clock starts on the
+  // offer — counter-hold.js checks in and passes from here.
+  if (auto.counterHold && draft.counterHold && typeof deps.markCounterHold === "function") {
+    await deps.markCounterHold({ offerId: draft.counterHold.offerId, ours: draft.counterHold.ours, theirs: draft.counterHold.theirs, again: draft.counterHold.again, draftId: record.id })
+      .catch((e) => warnings.push(`hold: ${String(e?.message || e).slice(0, 120)}`));
+  }
 
   /* --- 4a. the call itself, on the timeline --- */
   if (isCall && job.call) {
