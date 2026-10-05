@@ -2749,6 +2749,18 @@ The verdicts, in order:
   held **14 days** with no word → `we_passed`; we asked for their read
   **7 days** ago and heard nothing → `we_passed`. The `uw-needs-review` tag
   comes off once nothing of theirs is held.
+  **Not a flip, in their words (2026-10-05).** Ryan Bowen texted "move in
+  ready… certainly not a fix n flip", then "You should come take a look!",
+  and "number first" underwrote 13814 214th St E anyway. `isTurnkeyReply` now
+  reads everything they've said since our last text (`theirLatestWords`),
+  and "not a fixer / fix n flip / flip / project" counts. On such a house
+  no path starts an underwrite (number first, the rule's own, a new subject
+  property). A showing offer on it gets "that one sounds more finished than
+  what we buy… if something rough crosses your desk, I'd love a first look",
+  filed investor_open. This reverses 9/14's "number first" for a house the
+  agent calls finished; anything that might need work still gets the number.
+  The sweep's `TURNKEY_TEXT` reads "move in ready" with a space and "not a
+  fix n flip" too.
   Their numbers are read by house, not by the full address key: Shelley
   Elenbaas' 100k (2026-09-21) was filed under the thread's "161st Court NE,
   Redmond, WA", the rerun looked under the listing's "161st Ct NE, Redmond,

@@ -2872,7 +2872,10 @@ test("an invitation to make an appointment on a project we haven't priced gets '
   assert.equal(d.autoSend.decided, true, `it sends itself: ${d.autoSend.reason}`);
 });
 
-test("a showing offer on a house we haven't priced gets 'numbers first' and an underwrite, not a hold", async () => {
+// Matt, 2026-10-05: an agent who says the house needs nothing has told us
+// it isn't a fit; the underwrite only spends credits. Velia's remodeled
+// triplex (9/14) used to run anyway — now it gets the pass.
+test("a showing offer on a remodeled house we haven't priced gets the pass, not an underwrite", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
@@ -2890,9 +2893,8 @@ test("a showing offer on a house we haven't priced gets 'numbers first' and an u
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.intent, "investor_open", "remodeled with tenants is still Tier 2");
-  assert.match(d.reply, /Before we set up a time, let me run the numbers on 4207 S Bateman St/);
-  assert.equal(uw.length, 1, `the underwrite runs: ${JSON.stringify(d.actions.map((a) => [a.type, a.status, a.detail]))}`);
-  assert.equal(uw[0].address, "4207 S Bateman St, Seattle, WA 98118");
+  assert.match(d.reply, /need real work/);
+  assert.equal(uw.length, 0, `no underwrite: ${JSON.stringify(d.actions.map((a) => [a.type, a.status, a.detail]))}`);
 });
 
 test("a showing offer on a house we already sent an offer on is left alone", async () => {
@@ -4060,7 +4062,7 @@ test("an agent who answers the workflow's first text within minutes gets an answ
   assert.ok(await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript: typed, minutes: 30 }), "a text a person typed still holds the bot");
 });
 
-import { isTurnkeyReply } from "./reply-agent.js";
+import { isTurnkeyReply, theirLatestWords } from "./reply-agent.js";
 
 test("'No, it's not turnkey, but it's all cosmetic' is a house that needs work, not a turnkey one", () => {
   assert.equal(isTurnkeyReply("No, it's not turnkey, but it's all cosmetic. It's a really nice house. It was custom built but never maintained built in nineteen ninety"), false);
@@ -4072,6 +4074,64 @@ test("'No, it's not turnkey, but it's all cosmetic' is a house that needs work, 
   assert.equal(isTurnkeyReply("This one is pretty turnkey with tenants in place"), true);
   assert.equal(isTurnkeyReply("Its turnkey, no work needed"), true);
   assert.equal(isTurnkeyReply("Not much to do, it was fully renovated last year"), true, "a 'not' about something else doesn't undo it");
+});
+
+// Ryan Bowen, 13814 214th St E (2026-10-05): "certainly not a fix n flip"
+// was not read as the agent saying it isn't what we buy.
+const RYAN_1 = "It's a move in ready that could use minor updates but certainly not a fix n flip. With some high end finish work, it could be a $1M+ house though ...";
+test("'move in ready… certainly not a fix n flip' is the agent telling us it isn't what we buy", () => {
+  assert.equal(isTurnkeyReply(RYAN_1), true);
+  assert.equal(isTurnkeyReply("Not a fixer"), true);
+  assert.equal(isTurnkeyReply("it's not a flip"), true);
+  assert.equal(isTurnkeyReply("Not a project, it's turnkey"), true);
+  assert.equal(isTurnkeyReply("Not a flip, but it does need work"), false, "it still needs work");
+  assert.equal(isTurnkeyReply("not a big project, mostly cosmetic"), false);
+});
+
+test("their words since our last text read as one answer", () => {
+  const transcript = [
+    "[2026-10-05 20:13] US SMS: Hey Ryan, noticed your listing. Is that one a bit of a project?",
+    `[2026-10-05 22:24] THEM SMS: ${RYAN_1}`,
+    "[2026-10-05 22:24] THEM SMS: You should come take a look!",
+  ].join("\n");
+  const words = theirLatestWords(transcript, "You should come take a look!");
+  assert.match(words, /not a fix n flip/);
+  assert.equal(words.split("\n").length, 2, "this message isn't counted twice");
+  assert.equal(theirLatestWords(`${transcript}\n[2026-10-05 22:27] US SMS: Appreciate that.`, "Thanks"), "Thanks", "after our reply, only what's new");
+});
+
+test("a showing on a house the agent says isn't a flip gets no underwrite, and the reply says what we buy", async () => {
+  _resetJobs();
+  const base = ghlStubFor(["agent"]);
+  const t0 = Date.now();
+  const client = { call: async (p, o = {}) => {
+    if (p.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+    if (p.startsWith("/conversations/cv1/messages")) return { messages: { messages: [
+      { messageType: "TYPE_SMS", direction: "outbound", dateAdded: new Date(t0 - 3 * 3600000).toISOString(), body: "Hey Ryan, noticed your listing at 13814 214th St E. Is that one a bit of a project?" },
+      { messageType: "TYPE_SMS", direction: "inbound", dateAdded: new Date(t0 - 120000).toISOString(), body: RYAN_1 },
+      { messageType: "TYPE_SMS", direction: "inbound", dateAdded: new Date(t0 - 60000).toISOString(), body: "You should come take a look!" },
+    ], nextPage: false } };
+    return base.client.call(p, o);
+  } };
+  const store = fakeStore();
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "You should come take a look!",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "wants_walkthrough", confidence: "high", needsHuman: true, propertyAddress: "13814 214th St E, Graham, WA 98338",
+        reply: "Thanks Ryan, when works for you?" }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-11" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(uw.length, 0, "no credits on a house we won't buy");
+  assert.equal(d.intent, "investor_open");
+  assert.doesNotMatch(d.reply, /run the numbers/);
+  assert.match(d.reply, /need real work/);
+  assert.equal((d.actions || []).filter((a) => a.type === "start_underwrite").length, 0);
 });
 
 /* ---------- the current offer and the paper (2026-09-25) ---------- */
