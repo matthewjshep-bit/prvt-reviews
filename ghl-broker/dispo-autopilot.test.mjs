@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, secondWaveCandidates, startDispoSweep, _resetJobs } from "./dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, secondWaveCandidates, startDispoSweep, _resetJobs, resumePulledBack } from "./dispo-autopilot.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
 const fakeStore = (deals = []) => {
@@ -266,4 +266,58 @@ test("a blast ends on the walkthrough: the deal's window when it has one, when t
   await queueBlastDrafts({ store: off, locationId: "L", offer: withWindow, investors: buyers.slice(0, 1), saved: { dispoAutopilot: { showings: { askInBlast: false } } }, now: NOW });
   assert.match([...off.rows.values()][0].reply, /Want the details\?$/);
   assert.equal(normalizeDispoAutopilot().showings.askAgentOnPromote, false, "texting the agent on its own ships off");
+});
+
+// 9311 12th Pl SE, 2026-10-04: Matt stopped outreach right after the deal was
+// made, pressed Resume, and none of the 25 buyers the first wave picked ever
+// heard about it. Stop had pulled their texts back, and the next wave still
+// counted them as sent.
+test("resuming a deal you stopped sends the deal texts Stop pulled back", async () => {
+  const store = fakeStore();
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } }, dispoAutopilot: { spreadSec: 60 } };
+  const why = "you stopped outreach on 22018 76th Ave W — not sent";
+  const blast = (contactId, over = {}) => store.createReplyDraft({ locationId: "L", contactId, contactName: contactId, channel: "sms", party: "investor", status: "dismissed",
+    intent: "blast_open", inbound: "", reply: "…", outbound: { kind: "blast_open", offerId: "o1", address: offer.address, label: "dispo-22018-76th-ave-w" }, flags: [why], ...over });
+  await blast("i1");
+  await blast("i2", { channel: "email" });
+  await blast("i3");                                                   // passed since: the wave rules no longer pick them
+  await blast("i4", { flags: ["you dismissed it"] });                  // you dismissed it yourself
+  await blast("i5", { status: "sent", flags: [] });                    // had it already
+  await blast("i5");
+  await blast("i6", { outbound: { kind: "blast_open", offerId: "o2", address: "1 Other St" } }); // another deal
+  await blast("i7", { status: "superseded", flags: [] });              // re-queued since, and waiting
+  await blast("i7", { status: "scheduled", flags: [], sendAt: new Date(NOW + 60000).toISOString() });
+  const before = new Set(store.rows.keys());
+  const stillFit = [
+    { contactId: "i1", name: "Ravi Patel", phone: "+12065550101" },
+    { contactId: "i2", name: "Mei Chen", email: "mei@example.com" },
+    { contactId: "i4", name: "Sam", phone: "+12065550104" },
+    { contactId: "i5", name: "Lee", phone: "+12065550105" },
+    { contactId: "i7", name: "Ana", phone: "+12065550107" },
+  ];
+  const r = await resumePulledBack({ store, locationId: "L", offer, saved, now: NOW, sendsEnabled: true, blastsEnabled: true, startAfterMs: 10 * 60000,
+    deps: { eligible: async () => stillFit } });
+
+  assert.equal(r.pulledBack, 3, "i1, i2 and i3 were pulled back by the stop");
+  assert.equal(r.dropped, 1, "i3 no longer fits");
+  assert.equal(r.queued, 1);
+  assert.equal(r.drafted, 1);
+  const fresh = [...store.rows.values()].filter((d) => !before.has(d.id));
+  assert.deepEqual(fresh.map((d) => d.contactId).sort(), ["i1", "i2"]);
+  const ravi = fresh.find((d) => d.contactId === "i1");
+  assert.equal(ravi.status, "scheduled", "the text goes again by itself");
+  assert.equal(ravi.outbound.label, "dispo-22018-76th-ave-w", "under the wave's own tag");
+  assert.ok(Date.parse(ravi.sendAt) >= NOW + 10 * 60000 - 1000, "after the same head start as a new deal");
+  const mei = fresh.find((d) => d.contactId === "i2");
+  assert.equal(mei.channel, "email");
+  assert.equal(mei.status, "draft", "an email waits for you, as it did the first time");
+});
+
+test("a wave you resumed counts its delay from the resume, not from when it was first picked", () => {
+  const first = new Date(NOW - 50 * 3600000).toISOString();
+  const resumedAt = new Date(NOW - 2 * 3600000).toISOString();
+  const deal = { ...offer.deal, blasts: [{ at: first, resumedAt, count: 25, via: "app" }] };
+  const n = nextWave(deal, normalizeDispoAutopilot({}), NOW);
+  assert.equal(n.due, false);
+  assert.equal(n.dueAt, new Date(Date.parse(resumedAt) + 48 * 3600000).toISOString());
 });

@@ -81,6 +81,25 @@ const assignmentTotal = (contractPrice, assignmentFee) => num(contractPrice) + n
 const shortDate = (iso) =>
   iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
 
+// What Resume put back (POST /deal/outreach → resumed), in one line. Empty
+// when the press wasn't a resume.
+export function resumedLine(r) {
+  if (!r) return "";
+  if (r.error) return `Outreach is back on, but ${r.error}.`;
+  const s = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  if (!r.queued && !r.drafted) {
+    if (r.reason) return `Outreach is back on, but nothing went back out: ${r.reason}.`;
+    return r.firstWave ? "Outreach is back on. No buyer fits this deal's first wave yet."
+      : "Outreach is back on. Nothing was waiting to go back out; the next wave goes when it's due.";
+  }
+  const parts = [
+    r.queued && `${s(r.queued, "deal text", "deal texts")} queued, starting about 10 minutes from now (sending hours only)`,
+    r.drafted && `${s(r.drafted, "is", "are")} waiting for you in the outbox${r.reason ? ` (${r.reason})` : ""}`,
+    r.dropped && `${s(r.dropped, "buyer", "buyers")} left out: passed, unsubscribed or no longer a fit`,
+  ].filter(Boolean);
+  return `${r.firstWave ? "First wave picked" : "Outreach is back on"}: ${parts.join("; ")}. The next wave counts from now.`;
+}
+
 // Deliberately NOT a list of names: on a deal that's been blasted to twenty
 // buyers the chips were taller than the row itself. The overview answers "how
 // far along is disposition", the modal answers "who, exactly".
@@ -325,6 +344,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   // Yours, stored: Stop outreach in the header (shared/offer-status.js).
   const stopped = dealOutreachStopped(deal);
   const [pulledNote, setPulledNote] = useState("");
+  const [resumedNote, setResumedNote] = useState("");
   const [terms, setTerms] = useState(() => ({
     contractPrice: deal.contractPrice ?? "",
     assignmentFee: deal.assignmentFee ?? "",
@@ -403,13 +423,15 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
 
   const saveTerms = () => run(() => updateDeal(offer.id, terms));
 
-  // Stop or resume outreach. Stopping pulls back what was already queued;
-  // the banner says how much, so "stopped" is never a guess.
+  // Stop or resume outreach. Stopping pulls back what was already queued,
+  // and resuming puts it back; the banner says how much either way, so
+  // neither is a guess.
   async function toggleOutreach() {
     const r = await run(() => setDealOutreachStopped(offer.id, !stopped));
     if (!r?.ok) return;
     const n = r.pulled?.dismissed || 0, h = r.pulled?.held || 0;
     setPulledNote([n && `${n} queued text${n === 1 ? "" : "s"} pulled back`, h && `${h} repl${h === 1 ? "y" : "ies"} back with you`].filter(Boolean).join(", "));
+    setResumedNote(resumedLine(r.resumed));
   }
 
   const removeThisDeal = async () => {
@@ -470,7 +492,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             {(stopped || !dealIsOver(deal)) && (
               <button type="button" disabled={busy} onClick={toggleOutreach}
                 className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold ${stopped ? "border-slate-300 hover:bg-slate-50" : "border-rose-300 text-rose-800 hover:bg-rose-50"}`}
-                title={stopped ? "Waves, nudges and package links pick up again when they're next due" : "Nothing goes to buyers about this house by itself until you resume"}>
+                title={stopped ? "The deal texts Stop pulled back go out again, and the next wave counts from now" : "Nothing goes to buyers about this house by itself until you resume"}>
                 {stopped ? <><Play size={14} /> Resume outreach</> : <><Ban size={14} /> Stop outreach</>}
               </button>
             )}
@@ -491,7 +513,11 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             <span className="font-semibold">Outreach stopped {shortDate(stopped.at)}.</span>{" "}
             Nothing goes to buyers about this house by itself: no waves, blasts, nudges, package links or walkthrough texts, and the bot won't bring it up to anyone new. A buyer's reply about it waits for you.
             {pulledNote && <> {pulledNote}.</>}
+            {" "}Resume sends the deal texts it pulled back.
           </p>
+        )}
+        {!stopped && resumedNote && (
+          <p role="status" className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-900">{resumedNote}</p>
         )}
 
         {/* Stage */}

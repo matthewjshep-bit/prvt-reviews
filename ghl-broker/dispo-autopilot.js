@@ -233,6 +233,64 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
   return { queued, drafted, dryRun: Boolean(dryRun), scheduled: willSchedule, reason, rows, price: facts.price };
 }
 
+/* ---------- resume after a stop ---------- */
+
+// The flag Stop leaves on a deal text it pulled back (reply-agent.js
+// stopDealOutreach, and the same guard at send time).
+const STOP_PULLED = /^you stopped outreach on .+ — not sent$/;
+
+/**
+ * pulledBackBlasts(drafts, offer) → [{ contactId, name, channel, label }]
+ *
+ * The buyers whose deal text for this offer Stop pulled back and nothing has
+ * replaced: their newest blast for it is one Stop dismissed, and none was
+ * ever sent. A text you dismissed yourself, or one queued again since, is
+ * not theirs to get back. Pure.
+ */
+export function pulledBackBlasts(drafts = [], offer = {}) {
+  const byContact = new Map();
+  for (const d of drafts) {
+    if (d?.party !== "investor" || d.outbound?.kind !== "blast_open" || d.outbound.offerId !== offer.id || !d.contactId) continue;
+    if (!byContact.has(d.contactId)) byContact.set(d.contactId, []);
+    byContact.get(d.contactId).push(d);
+  }
+  const out = [];
+  for (const [contactId, list] of byContact) {
+    if (list.some((d) => d.status === "sent" || d.status === "sending")) continue;
+    const newest = list.reduce((a, b) => (String(b.createdAt || "") >= String(a.createdAt || "") ? b : a));
+    if (newest.status !== "dismissed" || !(newest.flags || []).some((f) => STOP_PULLED.test(String(f)))) continue;
+    out.push({ contactId, name: newest.contactName || "", channel: newest.channel || "sms", label: newest.outbound.label || "" });
+  }
+  return out;
+}
+
+/**
+ * resumePulledBack({ store, locationId, offer, saved, now, sendsEnabled, blastsEnabled, startAfterMs, deps })
+ *   → { pulledBack, dropped, queued, drafted, scheduled, reason, rows }
+ *
+ * Resume after Stop (Matt, 2026-10-04, 9311 12th Pl SE: stopped right after
+ * the deal was made, resumed, and nobody heard about it). The deal texts Stop
+ * pulled back are queued again, for the buyers the wave rules still pick
+ * right now (`deps.eligible()`: the dispo router's own match, nobody left out
+ * for having been sent it). A buyer who has since passed, unsubscribed or
+ * committed to another deal stays out. Queued the way a wave is: staggered,
+ * priced as each sends, and held for anyone you stopped the bot on.
+ */
+export async function resumePulledBack({ store = defaultStore, locationId, offer, saved = {}, now = Date.now(), sendsEnabled = false, blastsEnabled = DISPO_BLASTS_ENABLED, startAfterMs = 0, deps = {} }) {
+  const drafts = await store.listReplyDrafts(locationId, {
+    status: ["dismissed", "sent", "sending", "scheduled", "draft", "superseded"], since: offer?.deal?.createdAt || null, limit: 5000,
+  });
+  const pulled = pulledBackBlasts(drafts, offer);
+  if (!pulled.length) return { pulledBack: 0, dropped: 0, queued: 0, drafted: 0, rows: [] };
+  const fit = new Map(((await deps.eligible?.()) || []).map((i) => [i.contactId, i]));
+  const investors = pulled.filter((p) => fit.has(p.contactId)).map((p) => fit.get(p.contactId));
+  const label = pulled.find((p) => p.label)?.label || "";
+  const r = investors.length
+    ? await queueBlastDrafts({ store, locationId, offer, investors, saved, now, sendsEnabled, blastsEnabled, label, startAfterMs })
+    : { queued: 0, drafted: 0, rows: [] };
+  return { ...r, pulledBack: pulled.length, dropped: pulled.length - investors.length };
+}
+
 /* ---------- the second wave ---------- */
 
 const jobs = new Map();
@@ -256,7 +314,9 @@ export function nextWave(d = {}, da = normalizeDispoAutopilot({}), now = Date.no
   // Committed, or somebody probably taking it: the wave is new outreach.
   const paused = dealOutreachPaused(d);
   if (paused) return none(paused.status === "stopped" ? "you stopped outreach" : paused.status === "committed" ? "a buyer committed" : "a buyer is probably taking it");
-  const at = Date.parse(blasts[blasts.length - 1].at || "");
+  // A wave Stop pulled back and Resume sent again counts from the resume.
+  const last = blasts[blasts.length - 1];
+  const at = Math.max(Date.parse(last.at || ""), Date.parse(last.resumedAt || "") || -Infinity);
   if (!Number.isFinite(at)) return none("the last wave has no time on it");
   const dueMs = at + da.secondWaveHours * 3600000;
   return { wave: blasts.length + 1, dueAt: new Date(dueMs).toISOString(), due: dueMs <= now, why: "" };

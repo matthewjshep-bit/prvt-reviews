@@ -33,7 +33,7 @@ import { buyboxCustom, investorProfileText, refreshInvestorRow } from "../invest
 import { CURSOR_NAME as BOOK_SYNC_CURSOR } from "../investor-sync.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel } from "../dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel, resumePulledBack } from "../dispo-autopilot.js";
 import { planBuyerPulse, startBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
 import { runShowingSweep } from "../showing-sweep.js";
 import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
@@ -749,7 +749,7 @@ export default function createDispoRouter({ resolveLocation }) {
       res.json({
         ok: true, offerId: offer.id, address: offer.address, stage: offer.deal.stage || null, asset: target.asset || null,
         autoBlastOnPromote: da.autoBlastOnPromote, maxWaves: da.maxWaves, waveHours: da.secondWaveHours,
-        waves: (offer.deal.blasts || []).map((b, i) => ({ wave: b.wave || i + 1, at: b.at, count: b.count ?? (b.contactIds || []).length, via: b.via || "app" })),
+        waves: (offer.deal.blasts || []).map((b, i) => ({ wave: b.wave || i + 1, at: b.at, ...(b.resumedAt ? { resumedAt: b.resumedAt } : {}), count: b.count ?? (b.contactIds || []).length, via: b.via || "app" })),
         ghlTags: offer.deal.blastTags || [],
         alreadySent: ranked.filter((i) => i.alreadyBlasted).length,
         next, wouldGet,
@@ -1190,6 +1190,28 @@ export default function createDispoRouter({ resolveLocation }) {
   }
 
   /**
+   * resumeWave({ locationId, offer, saved, now, startAfterMs }) → resumePulledBack's result
+   *
+   * Resume after Stop (the offers router's POST /:id/deal/outreach): the deal
+   * texts Stop pulled back go again (dispo-autopilot.js resumePulledBack), to
+   * the buyers the wave rules still pick, and the wave's clock restarts so
+   * the next one is due the wave delay after the resume.
+   */
+  async function resumeWave({ locationId, offer, saved = null, now = Date.now(), startAfterMs = 0 }) {
+    const paused = dealOutreachPaused(offer?.deal);
+    if (paused) return { pulledBack: 0, dropped: 0, queued: 0, drafted: 0, rows: [], paused, reason: outreachPausedReason(paused, offer?.address) };
+    const settings = saved || await getSettings(locationId);
+    const r = await resumePulledBack({ store, locationId, offer, saved: settings, now, startAfterMs, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED,
+      deps: { eligible: async () => (await matchForDeal(locationId, offer, { wave: 2, exclude: "none" })).results } });
+    if (r.queued || r.drafted) {
+      const full = await store.getOffer(offer.id);
+      const last = full?.deal?.blasts?.at(-1);
+      if (last) { last.resumedAt = new Date(now).toISOString(); await store.updateOffer(full.id, full); }
+    }
+    return r;
+  }
+
+  /**
    * rankedForDeal(locationId, offer) → { target, linked, ranked, considered }
    *
    * Every active buyer scored against this deal (buyer-score.js), highest
@@ -1318,6 +1340,7 @@ export default function createDispoRouter({ resolveLocation }) {
   router.matchForDeal = matchForDeal;
   router.rankBuyerForDeal = rankBuyerForDeal;
   router.blastFromApp = blastFromApp;
+  router.resumeWave = resumeWave;
 
   return router;
 }

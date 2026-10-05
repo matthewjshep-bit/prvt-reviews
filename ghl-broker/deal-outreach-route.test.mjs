@@ -18,12 +18,19 @@ delete process.env.CARD_SENDS_ENABLED;
 const { default: express } = await import("express");
 const { store } = await import("./store.js");
 const { default: createOffersRouter } = await import("./routes/offers.js");
+const { default: createDispoRouter } = await import("./routes/dispo.js");
 const { dealOutreachPaused } = await import("./shared/offer-status.js");
 
 const LOC = "loc-deal-outreach-route";
+const resolveLocation = () => ({ locationId: LOC, client: { call: async () => ({}) } });
 const app = express();
 app.use(express.json());
-app.use("/api/offers", createOffersRouter({ resolveLocation: () => ({ locationId: LOC, client: { call: async () => ({}) } }), uploadDir: process.env.DATA_DIR }));
+const offersRouter = createOffersRouter({ resolveLocation, uploadDir: process.env.DATA_DIR });
+const dispoRouter = createDispoRouter({ resolveLocation });
+app.use("/api/offers", offersRouter);
+app.use("/api/dispo", dispoRouter);
+// Wired as broker.js wires them.
+offersRouter.setDispoDeps({ matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp, rankBuyerForDeal: dispoRouter.rankBuyerForDeal, resumeWave: dispoRouter.resumeWave });
 const server = app.listen(0);
 const B = `http://127.0.0.1:${server.address().port}`;
 await store.init();
@@ -73,7 +80,76 @@ test("stopping outreach on a deal pulls back what was queued about it, leaves ev
   assert.equal(resumed.ok, true);
   assert.equal(resumed.offer.deal.outreachStopped, undefined);
   assert.equal(dealOutreachPaused((await store.getOffer(o.id)).deal), null, "live again");
-  assert.equal(await after(blast), "dismissed", "resuming sends nothing by itself");
+  assert.equal(await after(nudge), "dismissed", "a nudge isn't put back; the nudge sweep drafts it again once the deal text has gone");
+  assert.equal(await after(reply), "draft", "a reply the stop handed back stays with you");
+  assert.equal(resumed.resumed.dropped, 1, "b1 isn't in the buyer book, so the wave rules don't pick them");
+});
+
+// 9311 12th Pl SE, 2026-10-04: Matt stopped outreach right after the deal was
+// made and pressed Resume; the wave's 25 texts stayed pulled back and the
+// next wave counted those buyers as sent, so none of them ever heard of it.
+const buyer = (contactId) => ({
+  contactId, name: `Buyer ${contactId}`,
+  doc: { name: `Buyer ${contactId}`, phone: "+12065550199", tags: ["investor"], custom: { buybox_areas: "Kent" } },
+  buyboxText: "",
+});
+const KENT = (n) => `${n} Main St, Kent, WA 98031`;
+
+test("resuming a deal you stopped sends the deal texts Stop pulled back, and the next wave counts from the resume", async () => {
+  await store.saveOfferSettings(LOC, { dispoAutopilot: { autoBlastOnPromote: true, minMatchScore: 0, secondWaveMinScore: 0 } });
+  await store.upsertInvestors(LOC, ["k1", "k2", "k-passed"].map(buyer));
+  const firstAt = new Date(Date.now() - 60000).toISOString();
+  const o = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "agent-k", address: KENT(123), cashAmount: 300000, status: "accepted", statusHistory: [],
+    deal: { stage: "under_contract", investors: [], stageHistory: [], createdAt: new Date(Date.now() - 120000).toISOString(), blastTags: ["dispo-123-main-st"],
+      blasts: [{ at: firstAt, via: "app", wave: 1, count: 3, tag: "dispo-123-main-st", contactIds: ["k1", "k2", "k-passed"] }] } });
+  const sendAt = new Date(Date.now() + 9 * 60000).toISOString();
+  for (const cid of ["k1", "k2", "k-passed"]) {
+    await draft({ contactId: cid, contactName: `Buyer ${cid}`, status: "scheduled", sendAt, intent: "blast_open",
+      outbound: { kind: "blast_open", offerId: o.id, address: o.address, label: "dispo-123-main-st" } });
+  }
+
+  const stopped = await setStopped(o.id, { stopped: true });
+  assert.equal(stopped.pulled.dismissed, 3, "the stop pulls the whole wave back");
+
+  // One of them passes on it while it's stopped.
+  const mid = await store.getOffer(o.id);
+  mid.deal.investors = [{ contactId: "k-passed", name: "Buyer k-passed", status: "passed" }];
+  await store.updateOffer(o.id, mid);
+
+  const r = await setStopped(o.id, { stopped: false });
+  assert.equal(r.ok, true, r.error);
+  assert.deepEqual({ ...r.resumed, reason: undefined }, { firstWave: false, queued: 0, drafted: 2, dropped: 1, reason: undefined }, JSON.stringify(r.resumed));
+  assert.match(r.resumed.reason, /CARD_SENDS_ENABLED/, "sends are off in tests, so they come back as drafts and say why");
+  const open = await store.listReplyDrafts(LOC, { status: ["draft", "scheduled"], limit: 100 });
+  const back = open.filter((d) => d.outbound?.kind === "blast_open" && d.outbound.offerId === o.id);
+  assert.deepEqual(back.map((d) => d.contactId).sort(), ["k1", "k2"], "the buyer who passed meanwhile isn't sent it");
+  assert.ok(back.every((d) => d.outbound.label === "dispo-123-main-st"));
+
+  const wave = r.offer.deal.blasts.at(-1);
+  assert.equal(r.offer.deal.blasts.length, 1, "it's still the first wave, not a new one");
+  assert.ok(Date.parse(wave.resumedAt) > Date.parse(firstAt));
+  const preview = await (await fetch(`${B}/api/dispo/waves/preview?offerId=${o.id}`)).json();
+  assert.equal(preview.next.dueAt, new Date(Date.parse(wave.resumedAt) + 48 * 3600000).toISOString(), "wave 2 is two days after the resume");
+
+  // Pressing Resume on a deal that isn't stopped does nothing.
+  const twice = await setStopped(o.id, { stopped: false });
+  assert.equal(twice.resumed, undefined);
+});
+
+test("a deal stopped before its first wave was picked gets that wave when you resume", async () => {
+  // A mobile home, like 9311: its wave goes to the buyers who buy them, whatever their tier.
+  const mh = buyer("k3");
+  await store.upsertInvestors(LOC, [{ ...mh, doc: { ...mh.doc, tags: ["investor", "dispo-type-mobile-home"] } }]);
+  const o = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "agent-k2", address: KENT(456), cashAmount: 300000, status: "accepted", statusHistory: [],
+    asset: { type: "manufactured", land: "own_lot", by: "you" },
+    deal: { stage: "under_contract", investors: [], stageHistory: [], createdAt: new Date().toISOString(), outreachStopped: { at: new Date().toISOString(), by: "you" } } });
+  const r = await setStopped(o.id, { stopped: false });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.resumed.firstWave, true);
+  assert.equal(r.resumed.drafted, 1, JSON.stringify(r.resumed));
+  assert.equal(r.offer.deal.blasts.length, 1);
+  assert.deepEqual(r.offer.deal.blasts[0].contactIds, ["k3"]);
+  assert.equal(r.offer.deal.blasts[0].wave, 1);
 });
 
 test("the switch takes only true or false, and only on a deal", async () => {
