@@ -362,6 +362,40 @@ export function agreedAboveOurNumber(offer) {
  * (four offers, 2026-09-29). A yes is an agreed price, their saying they're
  * writing it up, or your own flag. Until then the offer ladder keeps it.
  */
+// Our own "no" to their number, in a person's words: "We cant get there
+// unfortunately", "we're too far apart", "we'll pass on this one". Matt,
+// 2026-10-04, on a counter he'd already answered that way: "we should mark
+// as we passed and move on". Never a hold ("best we can do is 450"), a
+// showing ("can't get there till 5", "by Friday"), a hand-off ("we'll pass it
+// on to my partner", "pass that along", "pass by the house") or terms ("not
+// going to work for us to close in 10 days").
+const DECLINE_RXS = [
+  /\b(?:can'?t|cannot|can not|won'?t be able to)\s+(?:quite\s+)?get\s+there\b/i,
+  /\btoo far apart\b/i,
+  /\bwe(?:'ll| will|'re| are| have to|'re going to| are going to|'re gonna)?\s+(?:have to\s+|going to\s+|gonna\s+)?pass(?:ing)?\b/i,
+  /\bnot\s+(?:going to|gonna)\s+work\s+for\s+us\b/i,
+];
+// What may follow the words for them to be a no: the end of the thought, or
+// the house. Anything else ("…it on to", "…to close in 10 days") isn't.
+const DECLINE_TAIL = /^\s*(?:$|[.!,;:)\-—–]|unf\w*|for now|this time|on (?:this|that|it|\d|the (?!(?:info|information|message|word|details|note|numbers?|news|contact)\b))|at (?:that|this|those) (?:price|number)|right now|with (?:that|this|the) number)/i;
+const WHEN_RX = /\b(?:today|tonight|tomorrow|till|until|before|in time|by (?:\d|mon|tue|wed|thu|fri|sat|sun|noon|the)|this (?:morning|afternoon|evening|week|weekend)|next (?:week|weekend|mon|tue|wed|thu|fri|sat|sun)|on (?:mon|tues|wednes|thurs|fri|satur|sun)day)\b/i;
+
+/** weDecline(text) → the phrase that says we won't meet their number, or null. */
+export function weDecline(text = "") {
+  const t = String(text || "");
+  for (const rx of DECLINE_RXS) {
+    const m = rx.exec(t);
+    if (!m) continue;
+    if (!DECLINE_TAIL.test(t.slice(m.index + m[0].length))) continue;
+    // The rest of the sentence it sits in: a time means a showing, not a price.
+    const from = Math.max(0, t.lastIndexOf(".", m.index) + 1);
+    const to = t.indexOf(".", m.index + m[0].length);
+    if (WHEN_RX.test(t.slice(from, to < 0 ? t.length : to))) continue;
+    return m[0].replace(/\s+/g, " ").trim().toLowerCase();
+  }
+  return null;
+}
+
 export function pushesToPaper(offer) {
   const heat = offerHeat(offer);
   if (!heat) return false;

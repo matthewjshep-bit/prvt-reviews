@@ -44,7 +44,7 @@ const channelOf = (m) => {
   return "msg";
 };
 
-export default function createContactsRouter({ resolveLocation }) {
+export default function createContactsRouter({ resolveLocation, onHandText = null }) {
   const router = express.Router();
   const fail = (res, err) => {
     const code = err.http || err.status || 500;
@@ -132,11 +132,16 @@ export default function createContactsRouter({ resolveLocation }) {
   router.post("/:id/reply", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
+      const contactId = str(req.params.id, 64);
       const r = await sendHandReply({
-        client, store, locationId, contactId: str(req.params.id, 64), text: req.body?.text,
+        client, store, locationId, contactId, text: req.body?.text,
         offerId: str(req.body?.offerId, 64) || null, live: CARD_SENDS_ENABLED,
       });
-      res.json(r);
+      // What you said can move the offer: "we can't get there" is our pass.
+      const passed = r?.ok && r.dryRun === false && typeof onHandText === "function"
+        ? await onHandText({ locationId, client, contactId, text: String(req.body?.text || ""), at: new Date().toISOString(), via: "sent from the app" }).catch(() => null)
+        : null;
+      res.json({ ...r, ...(passed ? { wePassed: passed } : {}) });
     } catch (err) { fail(res, err); }
   });
 

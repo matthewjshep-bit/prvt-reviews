@@ -69,7 +69,7 @@ import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../
 import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
-  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES,
+  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperWent, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
@@ -3392,28 +3392,137 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       // Their number, when the status is their counter: the band reads it.
       const amount = status === "countered" ? Math.max(0, Math.round(Number(req.body?.amount) || 0)) : 0;
-      recordStatus(offer, status, note, ts, amount ? { amount, source: "operator" } : {});
-      await store.updateOffer(offer.id, offer);
-
-      // Best-effort CRM mirror: the ledger line keeps AI enrichment from
-      // pitching an agent who already said no; the tag lets workflows branch.
-      await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
-        historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), note),
-        { type: `offer_${status}`, offerId: offer.id, source: "operator", at: ts });
-      await syncAgentOfferTag(client, locationId, offer.contactId);
-      // What we owed them on this house is settled by the outcome.
-      if (PROMISE_SETTLING_STATUSES.has(status)) {
-        await settlePromise({ store, locationId, contactId: offer.contactId, address: offer.address, offerId: offer.id, by: `offer_${status}` }).catch(() => {});
-      }
-      // Our own pass ends the chasing, and so does a house that's gone:
-      // whatever the machine had queued about it is dismissed. Their pass
-      // keeps its check-in ladder.
-      const stopped = status === "we_passed" || status === "unavailable"
-        ? await stopMachineTextsForOffer({ client, store, locationId, offer }).catch(() => [])
-        : [];
-
+      const stopped = await applyOperatorStatus({ locationId, client, offer, status, note, ts, amount });
       res.json({ ok: true, offer, stoppedDrafts: stopped.length });
     } catch (err) { fail(res, err); }
+  });
+
+  // A status a person set: the route above, and a person's own words
+  // (passOnOurNo). Returns the machine texts it stopped.
+  async function applyOperatorStatus({ locationId, client, offer, status, note = "", ts = new Date().toISOString(), amount = 0 }) {
+    recordStatus(offer, status, note, ts, amount ? { amount, source: "operator" } : {});
+    await store.updateOffer(offer.id, offer);
+
+    // Best-effort CRM mirror: the ledger line keeps AI enrichment from
+    // pitching an agent who already said no; the tag lets workflows branch.
+    await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
+      historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), note),
+      { type: `offer_${status}`, offerId: offer.id, source: "operator", at: ts });
+    await syncAgentOfferTag(client, locationId, offer.contactId);
+    // What we owed them on this house is settled by the outcome.
+    if (PROMISE_SETTLING_STATUSES.has(status)) {
+      await settlePromise({ store, locationId, contactId: offer.contactId, address: offer.address, offerId: offer.id, by: `offer_${status}` }).catch(() => {});
+    }
+    // Our own pass ends the chasing, and so does a house that's gone:
+    // whatever the machine had queued about it is dismissed. Their pass
+    // keeps its check-in ladder.
+    return status === "we_passed" || status === "unavailable"
+      ? await stopMachineTextsForOffer({ client, store, locationId, offer }).catch(() => [])
+      : [];
+  }
+
+  // The live offer a person's "no" is about: a counter above our number on
+  // this contact's current offers, the most recently countered first.
+  // The counter must still be on the table: their number above ours (or a
+  // countered row with no number — "come closer to where they are"), no
+  // agreement, not flagged hot, and no older than this before the text.
+  const OUR_NO_COUNTER_DAYS = 21;
+  function counteredAboveUs(offers, beforeMs = Infinity, { maxAgeDays = OUR_NO_COUNTER_DAYS } = {}) {
+    const at = (o) => Date.parse(o?.counter?.at || o?.statusAt || "") || 0;
+    const onTable = (o) => {
+      const theirs = Number(o?.counter?.amount) || 0;
+      return theirs > 0 ? theirs > Number(o?.cashAmount) : effectiveStatus(o) === "countered";
+    };
+    const recent = (o) => !Number.isFinite(beforeMs) || beforeMs - at(o) <= maxAgeDays * 86400000;
+    return currentOffers(offers || [])
+      .filter((o) => o && !o.deal && OPEN_STATUSES.has(effectiveStatus(o)) && onTable(o) && !priceAgreed(o) && !isHot(o)
+        && at(o) <= beforeMs && recent(o))
+      .sort((a, b) => at(b) - at(a));
+  }
+  // The house a text names, by its number: "on 3831 Bagley" names 3831.
+  const housesNamed = (text) => [...String(text || "").matchAll(/\b(\d{3,6})\s+(?:[NSEW]{1,2}\.?\s+)?[A-Za-z]/g)].map((m) => m[1]);
+
+  /**
+   * passOnOurNo({ locationId, client, contactId, text, at, via }) → { offerId, address, phrase } | null
+   *
+   * Matt, 2026-10-04: "we should mark as we passed and move on". A text a
+   * PERSON sent (typed in GHL, the app's composer, or a draft they edited
+   * and sent) that says we won't meet their number moves the house they
+   * countered on to we_passed, through the same path the status menu takes.
+   * The bot's own texts never come here; an inbound reply still never sets
+   * we_passed. The note carries the matched words only.
+   */
+  async function passOnOurNo({ locationId, client, contactId, text, at = new Date().toISOString(), via = "", channel = "sms" }) {
+    // A text only: an email carries the thread quoted under it.
+    if (channel !== "sms") return null;
+    const phrase = weDecline(text);
+    if (!phrase || !contactId) return null;
+    const offers = await store.listOffers(locationId, { contactId, limit: 50 }).catch(() => []);
+    const live = counteredAboveUs(offers, (Date.parse(at) || Date.now()) + 60000);
+    // The house it's about: the one it names, or the only counter on the table.
+    const named = housesNamed(text);
+    const offer = named.length
+      ? live.find((o) => named.includes(String(o.address || "").trim().split(/\s+/)[0])) || null
+      : live.length === 1 ? live[0] : null;
+    if (!offer) return null;
+    const full = await store.getOffer(offer.id).catch(() => null);
+    if (!full) return null;
+    await applyOperatorStatus({ locationId, client, offer: full, status: "we_passed", ts: at,
+      note: `you texted "${phrase}"${via ? ` (${via})` : ""}` });
+    return { offerId: full.id, address: full.address, phrase };
+  }
+  router.passOnOurNo = passOnOurNo;
+
+  // The one-time look back: houses still countered above our number where a
+  // person's text since the counter already said no. Body: { dryRun = true }.
+  // Reads each thread once; the bot's own auto-sent texts and workflows are
+  // never taken as a person's no.
+  router.post("/passes/our-no", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const dryRun = req.body?.dryRun !== false;
+      const { searchConversations, listConversationMessages } = await import("../ghl.js");
+      const all = await store.listOffers(locationId, { limit: 2000, lean: true });
+      const byContact = new Map();
+      for (const o of all) if (o?.contactId) { if (!byContact.has(o.contactId)) byContact.set(o.contactId, []); byContact.get(o.contactId).push(o); }
+      const found = [];
+      for (const [contactId, list] of byContact) {
+        const onTable = counteredAboveUs(list);
+        if (onTable.length !== 1) continue;   // one counter on the table, or it's not clear which house
+        const offer = onTable[0];
+        const since = Date.parse(offer.counter?.at || offer.statusAt || "") || 0;
+        const bot = (await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 50 }).catch(() => []))
+          .filter((d) => d.autoSent).map((d) => String(d.sentText || d.reply || "").trim().toLowerCase().slice(0, 60)).filter(Boolean);
+        const { conversations } = await searchConversations(client, locationId, { contactId, limit: 2 }).catch(() => ({ conversations: [] }));
+        let hit = null;
+        for (const c of conversations.slice(0, 1)) {
+          const { messages } = await listConversationMessages(client, c.id, { limit: 50 }).catch(() => ({ messages: [] }));
+          for (const m of [...messages].reverse()) {
+            const at = Date.parse(m.dateAdded || "") || 0;
+            if (at < since || String(m.direction || "").toLowerCase() !== "outbound" || String(m.source || "").toLowerCase() === "workflow") continue;
+            const body = String(m.body || "");
+            if (bot.some((b) => body.trim().toLowerCase().startsWith(b))) continue;
+            if (!/SMS/i.test(String(m.messageType || m.type || ""))) continue;   // texts only
+            const named = housesNamed(body);
+            if (named.length && !named.includes(String(offer.address || "").trim().split(/\s+/)[0])) continue;
+            if (at - since > OUR_NO_COUNTER_DAYS * 86400000) continue;
+            const phrase = weDecline(body);
+            if (phrase) { hit = { at: new Date(at).toISOString(), phrase, via: m.userId ? "typed in GHL" : "sent from the app" }; break; }
+          }
+        }
+        if (!hit) continue;
+        found.push({ contactId, offerId: offer.id, address: offer.address, ...hit });
+        if (!dryRun) {
+          const full = await store.getOffer(offer.id).catch(() => null);
+          if (full) await applyOperatorStatus({ locationId, client, offer: full, status: "we_passed", ts: hit.at, note: `you texted "${hit.phrase}" (${hit.via})` });
+        }
+      }
+      res.json({ ok: true, dryRun, found });
+    } catch (err) { fail(res, err); }
+  });
+  // The hand-reply sweep's hook (hand-reply-sweep.js onHandText).
+  router.handTextDepsFor = ({ locationId, client }) => ({
+    onHandText: (t) => passOnOurNo({ locationId, client, contactId: t.contactId, text: t.body, at: t.at, via: "typed in GHL", channel: t.channel }),
   });
 
   // Heat: flag an offer as close to a contract, or cool one the signals made
@@ -5935,7 +6044,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const b = req.body || {};
         const live = b.dryRun === false && CARD_SENDS_ENABLED;
         const out = await sendReplyDraft({ client, store, locationId, draftId: String(req.params.id), text: b.text, live, reason: b.reason });
-        res.json({ ...out, sendsEnabled: CARD_SENDS_ENABLED });
+        // A person pressed Send: if what went says we won't meet their
+        // number, the house they countered on is ours to pass.
+        let passed = null;
+        if (out?.ok && out.dryRun === false && out.draft?.contactId) {
+          passed = await passOnOurNo({ locationId, client, contactId: out.draft.contactId, text: out.draft.sentText || b.text || out.draft.reply, via: "sent from the app", channel: out.draft.channel || "sms" }).catch(() => null);
+        }
+        res.json({ ...out, sendsEnabled: CARD_SENDS_ENABLED, ...(passed ? { wePassed: passed } : {}) });
       } catch (err) { fail(res, err); }
     });
     router.post(`${prefix}/:id/dismiss`, async (req, res) => {

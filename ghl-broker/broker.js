@@ -181,7 +181,7 @@ dispoRouter.conversationDepsFor = offersRouter.conversationDepsFor;
 offersRouter.setDispoDeps({ matchForDeal: dispoRouter.matchForDeal, blastFromApp: dispoRouter.blastFromApp, rankBuyerForDeal: dispoRouter.rankBuyerForDeal });
 // The contact record: the app's own memory of every agent and investor, and
 // the drawer's door to it. GHL's custom fields are a digest of this.
-app.use("/api/contacts", createContactsRouter({ resolveLocation }));
+app.use("/api/contacts", createContactsRouter({ resolveLocation, onHandText: (args) => offersRouter.passOnOurNo?.(args) }));
 app.use("/api/datarooms", createDataroomRouter({ resolveLocation, publicBaseUrl: DATAROOM_BASE_URL }));
 // Agent-facing offer packages. These live on the OFFERS hostname, not the
 // deals one: an agent gets links branded like the documents they already have,
