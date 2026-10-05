@@ -3665,6 +3665,17 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   first text that is refused, fails, or is held with no draft is written down
   as `outreach_open_skipped`. The next sweep retries it before pulling anyone
   new, up to 3 times within 7 days (`retryFirstTexts`).
+- **Personality (2026-10-05).** The bot gets the listing's town, the decade
+  it was built, its beds and size, whether it's on a big lot, whether it has
+  sat a while or had its price cut, and whether the agent has other listings
+  out (`houseDetails`). It works ONE of these in so the agent can tell somebody
+  looked. A light touch of humour about what we like is allowed, never at the
+  house's expense. The examples show his range ("the uglier the better",
+  original kitchens). Prices and days-on-market counts are never named.
+- **Lost first texts.** A deploy restart drops first texts still queued in
+  memory without recording a skip. The retry also picks up any contact the
+  app created to text (`import` event with `openWith: "app"`) more than 2
+  hours ago that has no draft of any kind.
 - **Samples.** "Write 3 sample first texts" under the examples box
   (`POST /api/outreach/opener/preview`) drafts texts for agents waiting in the
   autopilot batches. Nothing is imported, saved or sent.

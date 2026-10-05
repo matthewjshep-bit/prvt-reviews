@@ -16,12 +16,15 @@
 // when it drafts outreach_open.
 
 // Matt's workflow template with the footer taken off, then three more in the
-// same voice. {first}, {street} and {county} are what the bot fills in.
+// same voice. {first}, {street}, {town} and {county} are what the bot fills in.
+// 2026-10-05: Matt wanted more personality ("personable, concise, friendly,
+// even humorous"), so the last three have a little more of him in them. The
+// humour is about us and what we like, never about their listing.
 export const DEFAULT_OPENER_EXAMPLES = [
   "Hi {first}, came across your listing at {street}. I'm in Seattle and looking for my next flip project anywhere in {county} County. Is this one a bit of a project, or pretty turnkey? And if you've got other fixers on your radar in {county}, I'm all ears.",
-  "Hey {first}, saw your listing on {street}. I'm based in Seattle and looking for my next flip somewhere in {county} County. Is it more of a project or already in decent shape? Happy to hear about any other fixers you've got in {county} too.",
-  "Hi {first}, came across {street} and had a question for you. I'm looking for my next flip in {county} County. Does it need some work, or is it pretty turnkey?",
-  "Hey {first}, {street} caught my eye. I'm looking for a flip anywhere in {county} County right now. Is that one a bit of a project? And if you know of anything else in {county} that needs work, I'm all ears.",
+  "Hey {first}, {street} caught my eye. I'm a Seattle flipper with a soft spot for houses that need a little love, looking anywhere in {county} County. Is this one a bit of a project? Honestly, the uglier the better.",
+  "Hi {first}, saw your {town} listing on {street}, looks like it has some character. I'm hunting for my next flip in {county} County. Fixer, or already pretty turnkey? Either answer helps.",
+  "Hey {first}, I'm someone who gets way too excited about original kitchens. Came across {street} and wondered if it needs some work? Looking for my next flip anywhere in {county} County.",
 ];
 
 export const OPENER_MAX_EXAMPLES = 8;
@@ -85,6 +88,33 @@ export function stripSignOff(text = "", { names = [] } = {}) {
     t = (t.slice(0, m.index) + keep).trim();
   }
   return t;
+}
+
+// Half an acre and up reads as "a big lot" to anyone.
+const BIG_LOT_SQFT = 21780;
+
+/**
+ * houseDetails(hook) → string[]
+ *
+ * What we know about the listing, as the few plain words a person would
+ * notice from the listing page, for the first text to pick ONE from so the
+ * agent can tell somebody actually looked. No prices, no days-on-market
+ * count: those read as a pitch (and money is what the carriers block).
+ */
+export function houseDetails(h = {}) {
+  const out = [];
+  const town = String(h.city || "").trim();
+  if (town) out.push(`it's in ${town}`);
+  const year = Math.round(Number(h.yearBuilt) || 0);
+  if (year >= 1850 && year <= 2030) out.push(year < 1940 ? `an older house, built before the war (${year})` : `built in the ${Math.floor(year / 10) * 10}s`);
+  const beds = Math.round(Number(h.beds) || 0);
+  const sqft = Math.round(Number(h.sqft) || 0);
+  if (beds > 0 && beds <= 8) out.push(`${beds} bedroom${beds === 1 ? "" : "s"}${sqft > 0 && sqft < 1100 ? ", on the small side" : sqft >= 2600 ? ", a big house" : ""}`);
+  if (Number(h.lotSize) >= BIG_LOT_SQFT) out.push("it sits on a big lot");
+  if (Number(h.dom) >= 60) out.push("it has been on the market a while");
+  if (h.priceCut) out.push("the price has come down since it listed");
+  if (Number(h.listingCount) >= 3) out.push("this agent has a few other listings out right now");
+  return out;
 }
 
 /**
