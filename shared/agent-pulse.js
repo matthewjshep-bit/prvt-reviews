@@ -60,7 +60,9 @@ export const AGENT_PULSE_DEFAULTS = {
   voice: "",
 };
 export const AGENT_PULSE_VOICE_MAX = 600;
-export const AGENT_PULSE_MAX_DAILY_CAP = 100;
+// 0 means no cap (Matt, 2026-10-05: "there should be no caps"): every agent
+// due a check-in gets one that day. The per-agent spacing still holds.
+export const AGENT_PULSE_MAX_DAILY_CAP = 5000;
 
 /**
  * normalizeAgentPulse(v) → settings, every switch off by default.
@@ -79,7 +81,7 @@ export function normalizeAgentPulse(v = {}) {
   return {
     enabled: o.enabled === true,
     autoSend: o.autoSend === true,
-    dailyCap: clamp(o.dailyCap, D.dailyCap, 1, AGENT_PULSE_MAX_DAILY_CAP),
+    dailyCap: clamp(o.dailyCap, D.dailyCap, 0, AGENT_PULSE_MAX_DAILY_CAP),
     everyDays: clamp(o.everyDays, D.everyDays, 7, 90),
     quietDays: clamp(o.quietDays, D.quietDays, 2, 30),
     freshDays: clamp(o.freshDays, D.freshDays, 1, 60),
@@ -386,7 +388,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
     return a0 - b0 || a1 - b1 || String(x.agent.contactId).localeCompare(String(y.agent.contactId));
   };
   due.sort(cmp);
-  const cap = seats == null ? s.dailyCap : Math.max(0, seats);
+  const cap = seats == null ? (s.dailyCap > 0 ? s.dailyCap : Infinity) : Math.max(0, seats);
   counts.dueNoSeat = Math.max(0, due.length - cap);
   const toPick = ({ agent, verdict }) => ({
     contactId: agent.contactId, name: agent.name || "", segment: verdict.segment, reason: verdict.pulseReason,
@@ -396,7 +398,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   const picks = due.slice(0, cap).map(toPick);
   // The next in line after the day's seats: an agent skipped before being
   // claimed (unsubscribed in GHL, tagged off, no phone) hands the seat on.
-  const spares = due.slice(cap, cap + Math.max(5, Math.ceil(s.dailyCap / 2))).map(toPick);
+  const spares = cap === Infinity ? [] : due.slice(cap, cap + Math.max(5, Math.ceil(s.dailyCap / 2))).map(toPick);
   return { picks, spares, counts };
 }
 

@@ -637,7 +637,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         const pulse = form.outreachAutopilot.pulse;
         clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12, followUpDays: Number(form.outreachAutopilot.followUpDays) || 14,
           ...(form.outreachAutopilot.opener ? { opener: normalizeOpener(form.outreachAutopilot.opener) } : {}),
-          ...(pulse ? { pulse: { ...pulse, dailyCap: Number(pulse.dailyCap) || 20, everyDays: Number(pulse.everyDays) || 21, coldEveryDays: Number(pulse.coldEveryDays) || 60,
+          ...(pulse ? { pulse: { ...pulse, dailyCap: pulse.dailyCap === "" || pulse.dailyCap == null || !Number.isFinite(Number(pulse.dailyCap)) ? 20 : Number(pulse.dailyCap), everyDays: Number(pulse.everyDays) || 21, coldEveryDays: Number(pulse.coldEveryDays) || 60,
             coldMaxUnanswered: Number(pulse.coldMaxUnanswered) || 3, engagedMaxUnanswered: pulse.engagedMaxUnanswered === "" || pulse.engagedMaxUnanswered == null ? 6 : Number(pulse.engagedMaxUnanswered) } } : {}) };
       }
       if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount", "minMatchScore", "secondWaveMinScore", "maxWaves"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
@@ -1242,7 +1242,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             </div>
             {form.outreachAutopilot?.pulse?.enabled && (
               <div className="mt-3 grid grid-cols-2 gap-3">
-                <Num label="Check-ins a day" value={form.outreachAutopilot?.pulse?.dailyCap ?? 20} onChange={setAgentPulse("dailyCap")} />
+                <Num label="Check-ins a day" suffix="0 = no cap" value={form.outreachAutopilot?.pulse?.dailyCap ?? 20} onChange={setAgentPulse("dailyCap")} />
                 <Num label="Every" suffix="days" value={form.outreachAutopilot?.pulse?.everyDays ?? 21} onChange={setAgentPulse("everyDays")} />
                 <Num label="Never-answered agents, at most every" suffix="days" value={form.outreachAutopilot?.pulse?.coldEveryDays ?? 60} onChange={setAgentPulse("coldEveryDays")} />
                 <Num label="Stop never-answered agents after" suffix="texts" value={form.outreachAutopilot?.pulse?.coldMaxUnanswered ?? 3} onChange={setAgentPulse("coldMaxUnanswered")} />
