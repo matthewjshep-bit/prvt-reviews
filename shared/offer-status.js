@@ -359,6 +359,25 @@ export function agreedAboveOurNumber(offer) {
  * (four offers, 2026-09-29). A yes is an agreed price, their saying they're
  * writing it up, or your own flag. Until then the offer ladder keeps it.
  */
+// Our own "no" to their number, in a person's words: "We cant get there
+// unfortunately", "we're too far apart", "we'll pass". Matt, 2026-10-04, on a
+// counter he'd already answered that way: "we should mark as we passed and
+// move on". Not a hold ("best we can do is 450"), and not a showing ("can't
+// get there till 5").
+const DECLINE_RX = /\b(?:can'?t|cannot|can not|won'?t be able to)\s+(?:quite\s+)?get\s+there\b|\btoo far apart\b|\bwe(?:'ll| will)\s+(?:have to\s+)?pass\b|\bwe(?:'re| are)\s+(?:going to\s+|gonna\s+)?pass(?:ing)?\b|\b(?:going to|gonna|have to)\s+pass\b|\bnot\s+(?:going to|gonna)\s+work\s+for\s+us\b/i;
+const WHEN_RX = /\b(?:today|tonight|tomorrow|till|until|before|by \d|in time|this (?:morning|afternoon|evening|week)|on (?:mon|tues|wednes|thurs|fri|satur|sun)day)\b/i;
+
+/** weDecline(text) → the phrase that says we won't meet their number, or null. */
+export function weDecline(text = "") {
+  const t = String(text || "");
+  const m = DECLINE_RX.exec(t);
+  if (!m) return null;
+  // The rest of the sentence it sits in: a time means a showing, not a price.
+  const sentence = t.slice(Math.max(0, t.lastIndexOf(".", m.index) + 1), (t.indexOf(".", m.index + m[0].length) + 1 || t.length + 1) - 1);
+  if (WHEN_RX.test(sentence)) return null;
+  return m[0].replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 export function pushesToPaper(offer) {
   const heat = offerHeat(offer);
   if (!heat) return false;
