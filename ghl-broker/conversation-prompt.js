@@ -660,6 +660,16 @@ function openingFor(outbound) {
     // way each rung: the listing agent writes it up on NWMLS forms and sends
     // it for us to sign. Never our paper.
     case "hot_push": {
+      // Past the ladder (its weekly repeat), or the seller is wavering: a
+      // light status check, never "what's holding it up" (Matt, 2026-10-04:
+      // keep checking in "in a non-annoying way and professional frequency").
+      if (o.wavering || (o.repeats && !Number(o.stepIndex))) {
+        return `${START} We have an offer out with this agent on ${o.address} that had looked close, and it has gone quiet` +
+          `${o.wavering ? " — they said the seller was having second thoughts" : ""}. In one line, a light, professional check-in: ` +
+          `ask whether there's any word from the seller on ${o.address}. Do NOT ask them to write it up, do NOT ask what's holding ` +
+          `anything up, do NOT name any number or reopen the price, and do NOT say PSA or contract. Don't repeat the wording of ` +
+          `the last message. Easy to ignore. ${CONTINUE} Set intent to hot_push.`;
+      }
       const asks = [
         "ask if they can write it up on NWMLS forms at the agreed number and send it over for us to sign",
         "give them what they need to write it up (the WRITE-UP TERMS: buyer name, earnest money, inspection window) and ask what else they need",

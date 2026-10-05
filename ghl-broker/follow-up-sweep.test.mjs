@@ -585,6 +585,56 @@ test("the hot push ignores the weekly cap, but never goes twice inside twenty ho
   assert.equal(again.started.length, 0, "we texted them five hours ago");
 });
 
+// Matt, 2026-10-04, on 831 NW 52nd: "it should just keep checking in with
+// him automatically in a non-annoying way and professional frequency".
+const WEEKLY_SAVED = { aiApiKey: "k", conversationAi: configWith({ agent: { followUp: { enabled: true, ladders: {
+  offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 0 }, hot_push: { enabled: true, repeatEvery: 7 } } } } }) };
+const pushDraft = (day, step) => ({ id: `p${step}`, contactId: "c1", status: "sent", intent: "hot_push", outbound: { kind: "hot_push" }, inbound: "", reply: "checking in", createdAt: at(day), sentAt: at(day), updatedAt: at(day) });
+
+test("after the pushes run out, a repeating ladder checks in once a week as a status check, not a call for you", async () => {
+  _resetJobs();
+  const rungs = [1, 3, 6, 10];
+  const pushed = hotOffer({ followUps: rungs.map((d) => ({ kind: "hot_push", step: d, at: at(d) })) });
+  const store = fakeStore({ offers: [pushed], drafts: rungs.map((d) => pushDraft(d, d)) });
+  const { job, started } = spySweep(store, { now: T0 + 17.2 * DAY, opts: { saved: WEEKLY_SAVED } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(started.map((s) => s.kind), ["hot_push"], JSON.stringify(job.results));
+  assert.equal(started[0].subject.repeatEvery, 7);
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  const { outboundOpening: outboundInstruction } = await import("./conversation-prompt.js");
+  const o = outboundDescriptor({ kind: "hot_push", offer: pushed, subject: started[0].subject, saved: WEEKLY_SAVED });
+  assert.equal(o.repeats, true);
+  assert.equal(o.stepIndex, 0, "a repeat rung is past the ladder");
+  if (typeof outboundInstruction === "function") {
+    const words = outboundInstruction(o);
+    assert.match(words, /any word from the seller/);
+    assert.doesNotMatch(words, /write it up on NWMLS forms at the agreed number/);
+  }
+  // Without a repeat, two unanswered pushes still stop it.
+  _resetJobs();
+  const off = spySweep(fakeStore({ offers: [pushed], drafts: rungs.map((d) => pushDraft(d, d)) }), { now: T0 + 17.2 * DAY, opts: { saved: HOT_SAVED } });
+  await settle();
+  assert.equal(off.started.length, 0);
+});
+
+test("a seller's second thoughts turn the push into a status check a week later, not another ask for paper", async () => {
+  const waver = { ...theirReply(2, "Hi Matt, seller is having second thoughts and may just want to hold tight. Too low a margin."), intent: "rejection" };
+  const store = () => fakeStore({ offers: [hotOffer()], drafts: [waver] });
+  const [c] = await hotCandidates({ store: store(), locationId: "LOC", config: WEEKLY_SAVED.conversationAi, now: T0 + 5 * DAY });
+  assert.equal(c.wavering, true);
+  assert.deepEqual(c.ladder.steps, [7]);
+  _resetJobs();
+  const early = spySweep(store(), { now: T0 + 5.2 * DAY, opts: { saved: WEEKLY_SAVED } });
+  await settle();
+  assert.equal(early.started.length, 0, "no push to paper three days after cold feet");
+  _resetJobs();
+  const week = spySweep(store(), { now: T0 + 9.2 * DAY, opts: { saved: WEEKLY_SAVED } });
+  await settle();
+  assert.deepEqual(week.started.map((s) => s.kind), ["hot_push"], JSON.stringify(week.job.results));
+  assert.equal(week.started[0].subject.wavering, true);
+});
+
 // 13041 SE 208th St (2026-09-25): the July row was flagged hot ("writing it
 // up") while the house's number had long since moved to a later row.
 test("a hot flag on a superseded row doesn't push a write-up at its number", async () => {
