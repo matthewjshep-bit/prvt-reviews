@@ -2486,7 +2486,7 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "" };
   }
   if (kind === "kind_pass") {
-    return { ...base, address: offer?.address || subject?.address || "", why: subject?.why === "area" ? "area" : "kind", heldReason: String(subject?.heldReason || "").slice(0, 160) };
+    return { ...base, address: offer?.address || subject?.address || "", why: ["area", "numbers"].includes(subject?.why) ? subject.why : "kind", heldReason: String(subject?.heldReason || "").slice(0, 160) };
   }
   if (kind === "take_ask") {
     const needs = Array.isArray(subject?.needs) && subject.needs.length ? subject.needs : ["value", "work"];
@@ -2617,7 +2617,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "counter_nudge": return `Their ${outbound.theirsK || "counter"} on ${where} sat ${outbound.days}d — asks if the seller has any room, names no number of ours.`;
     case "partner_answer": return "Your answer to a question the bot couldn't answer, in its voice.";
     case "hot_push": return `Pushes the agreed price on ${where} toward paper: asks them to write it up on NWMLS forms for us to sign${rung}.`;
-    case "kind_pass": return `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : "we only buy single-family right now"}.`;
+    case "kind_pass": return `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : outbound.why === "numbers" ? "we couldn't get to a number on it" : "we only buy single-family right now"}.`;
     case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
     case "passed_checkin": return outbound.quiet
       ? `Checks back in on ${where} — we never heard back on our offer; asks if it's still available and where the seller is${rung}.`

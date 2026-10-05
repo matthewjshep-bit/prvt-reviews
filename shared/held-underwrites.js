@@ -30,6 +30,8 @@
 //   ask     the holds are answerable by the agent and we haven't asked — one
 //           text asking only for the missing piece(s)
 //   wait    asked, not yet a week, they haven't answered — leave it alone
+//           (`passAt`: when it passes, telling them, unless a number comes)
+//   call    asked, and they wrote back without the number — a phone call
 //   yours   a person's call
 
 import { addressKey, sameStreet, parseUsAddress } from "./us-address.js";
@@ -199,7 +201,8 @@ export function triageHeldUnderwrite({
   if (now - silentSince >= STALE_DAYS * DAY_MS) {
     return { ...base, action: "retire", status: "we_passed", reason: `held ${heldDays} days and nothing since` };
   }
-  if (asked != null && (lastIn == null || lastIn < asked) && now - asked >= ASK_WAIT_DAYS * DAY_MS) {
+  // A hold their numbers could clear has its own week, with a note (step 5).
+  if (!cls.rescuable && asked != null && (lastIn == null || lastIn < asked) && now - asked >= ASK_WAIT_DAYS * DAY_MS) {
     return { ...base, action: "retire", status: "we_passed", reason: "we asked for their read a week ago and heard nothing" };
   }
 
@@ -248,16 +251,36 @@ export function triageHeldUnderwrite({
       return { ...base, action: "yours", needs, reason: `their numbers didn't clear it either (${heldReason})` };
     }
 
-    /* --- 5. ask for the missing piece --- */
+    /* --- 5. ask for the missing piece, once --- */
     const missing = needs.filter((n) => !have[n]);
-    if (asked != null && (lastIn == null || lastIn < asked)) return { ...base, action: "wait", needs: missing, reason: `asked ${Math.floor((now - asked) / DAY_MS)}d ago, waiting on them` };
+    // The sweep claims an ask on the hold and never asks it again
+    // (carryOutHeldVerdict). 3228 S 164th St (2026-10-05) was asked, wrote
+    // back without a number, and then read "ask" every night against a claim
+    // that would never let it go: on the Desk as the machine's with nothing
+    // coming. After the ask, an answer without the number is a conversation
+    // for a person; silence, or an ask that never went out (13536 SW 171st
+    // St, dismissed), passes a week on and tells them so.
+    if (asked != null) {
+      const sentAt = askSentAt(drafts, aboutThisHouse);
+      if (sentAt != null && lastIn != null && lastIn > sentAt) {
+        return { ...base, action: "call", needs: missing, reason: `we asked what ${askFor(missing)} and they wrote back without a number — worth a call (${heldReason})` };
+      }
+      const since = sentAt ?? asked;
+      const passAt = since + ASK_WAIT_DAYS * DAY_MS;
+      if (now >= passAt) {
+        return { ...base, action: "retire", status: "we_passed", passNote: "numbers",
+          reason: sentAt != null ? "we asked for their read a week ago and got no number" : "our ask for their numbers never went out, and a week has passed" };
+      }
+      return { ...base, action: "wait", needs: missing, passAt: new Date(passAt).toISOString(),
+        reason: sentAt != null ? `asked ${Math.floor((now - sentAt) / DAY_MS)}d ago, waiting on their number` : "our ask for their numbers didn't go out" };
+    }
     const alive = (lastIn != null && now - lastIn <= ALIVE_DAYS * DAY_MS) || heldDays <= 3;
     if (!alive) return { ...base, action: "yours", needs: missing, reason: `they haven't written in ${Math.floor((now - (lastIn ?? heldAt)) / DAY_MS)} days (${heldReason})` };
     // The promise sweep already asks this exact question when a promise is
     // owed on a held underwrite (promise_due with heldReason) — one asker.
     const promised = drafts.some((d) => d?.outbound?.kind === "promise_due" && aboutThisHouse(d.propertyAddress) && now - (ms(d.createdAt) ?? 0) <= PROMISE_ASK_DAYS * DAY_MS && d.status !== "dismissed");
     if (promised) return { ...base, action: "wait", needs: missing, reason: "the promise sweep just asked them" };
-    return { ...base, action: "ask", needs: missing, reason: `${heldReason} — ask what ${missing.map((n) => (n === "value" ? "it's worth fixed up" : "the work would run")).join(" and ")}` };
+    return { ...base, action: "ask", needs: missing, reason: `${heldReason} — ask what ${askFor(missing)}` };
   }
 
   /* --- 5b. outside the area we buy in (2026-10-04) --- */
@@ -281,6 +304,15 @@ export function latestInbound(drafts = [], events = []) {
   ].filter((t) => t != null);
   return ts.length ? Math.max(...ts) : null;
 }
+
+// When our ask for their numbers on this house went out, if it did. A
+// claimed ask can still have been held and dismissed without going.
+function askSentAt(drafts = [], about = () => true) {
+  return drafts
+    .filter((d) => d?.outbound?.kind === "take_ask" && d.status === "sent" && about(d.propertyAddress || d.outbound?.address))
+    .map((d) => ms(d.sentAt || d.updatedAt)).filter((t) => t != null).sort((a, b) => b - a)[0] ?? null;
+}
+const askFor = (needs = []) => needs.map((n) => (n === "value" ? "it's worth fixed up" : "the work would run")).join(" and ");
 
 // "couldn't locate 818 Popular, Edmonds on the map"
 const MAP_MISS = /couldn't locate .+ on the map/i;
@@ -350,7 +382,7 @@ export function heldOnTheMachine(offer, { knownCities = null, now = Date.now() }
   return null;
 }
 
-export const HELD_ACTIONS = ["drop", "retire", "rerun", "ask", "wait", "yours"];
+export const HELD_ACTIONS = ["drop", "retire", "rerun", "ask", "wait", "call", "yours"];
 
 // The line the sweep writes on the timeline and in the GHL note.
 export function retireNote(offer, t) {

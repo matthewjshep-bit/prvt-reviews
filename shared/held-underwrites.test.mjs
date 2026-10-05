@@ -13,6 +13,10 @@ const held = (over = {}, reasons = [THIN]) => ({
 const inbound = (text, over = {}) => ({ id: `d${Math.random()}`, contactId: "c1", status: "sent", party: "agent", intent: "question", inbound: text, reply: "ok", propertyAddress: "2500 Alder St, Milton, WA 98354", createdAt: ago(1), ...over });
 const est = (data, over = {}) => ({ type: "agent_estimate", contactId: "c1", address: "2500 Alder St, Unit 15, Milton, WA 98354", at: ago(1), data, ...over });
 const triage = (o = {}) => triageHeldUnderwrite({ offer: held(), now: NOW, ...o });
+// Our ask for their numbers, as the outbox keeps it: sent, or held and dismissed.
+const takeAsk = (d, status = "sent") => ({ id: `ask${d}${status}`, contactId: "c1", status, inbound: "", intent: "take_ask", outbound: { kind: "take_ask", address: "2500 Alder St, Milton, WA 98354" },
+  propertyAddress: "2500 Alder St, Milton, WA 98354", createdAt: ago(d), updatedAt: ago(d), ...(status === "sent" ? { sentAt: ago(d) } : {}) });
+const claimed = (d) => ({ type: "audit_action", contactId: "c1", offerId: "h1", address: "2500 Alder St, Milton, WA 98354", at: ago(d), data: { kind: "held_ask", action: "ask_take" } });
 
 test("hold reasons sort into value / work / junk / address / structural, and only value+work are rescuable", () => {
   assert.equal(classifyHolds([THIN, PHOTOS]).rescuable, true);
@@ -103,8 +107,8 @@ test("stale: two weeks with no word retires it; a week after we asked with no an
   t = triage({ offer: held({ createdAt: ago(STALE_DAYS + 1), autoUnderwrite: { held: [THIN], finishedAt: ago(STALE_DAYS + 1) } }), drafts: [inbound("Any update?", { createdAt: ago(2) })] });
   assert.equal(t.action, "ask");
   const askedEv = { type: "audit_action", contactId: "c1", offerId: "h1", address: "2500 Alder St, Milton, WA 98354", at: ago(ASK_WAIT_DAYS + 1), data: { kind: "held_ask", action: "ask_take" } };
-  t = triage({ offer: held({ createdAt: ago(10), autoUnderwrite: { held: [THIN], finishedAt: ago(10) } }), events: [askedEv], drafts: [inbound("hi", { createdAt: ago(9) })] });
-  assert.equal(t.action, "retire"); assert.match(t.reason, /asked for their read a week ago/);
+  t = triage({ offer: held({ createdAt: ago(10), autoUnderwrite: { held: [THIN], finishedAt: ago(10) } }), events: [askedEv], drafts: [takeAsk(ASK_WAIT_DAYS + 1), inbound("hi", { createdAt: ago(9) })] });
+  assert.equal(t.action, "retire"); assert.match(t.reason, /asked for their read a week ago/); assert.equal(t.passNote, "numbers", "and they hear we passed");
   // Asked three days ago: wait.
   t = triage({ offer: held({ createdAt: ago(5), autoUnderwrite: { held: [THIN], finishedAt: ago(5) } }), events: [{ ...askedEv, at: ago(3) }], drafts: [inbound("hi", { createdAt: ago(4) })] });
   assert.equal(t.action, "wait");
@@ -210,4 +214,28 @@ test("the reply agent's read of a house that's gone: loose on a no, strict other
   assert.equal(houseGone("A few went pending in the area", "other"), false);
   assert.equal(houseGone("It is being sold as is", "rejection"), false);
   assert.equal(houseGone("Seller is not interested", "rejection"), false, "a no is theirs, not gone");
+});
+
+test("an ask is asked once: an answer without a number is a call, and silence or an ask that never went passes a week on, telling them", () => {
+  // 3228 S 164th St (2026-10-05): asked, she described the work but gave no
+  // number, and the sweep read "ask" every night against a claim that never
+  // let it go — on the Desk as the machine's, with nothing coming.
+  const photos = (d) => held({ createdAt: ago(d), updatedAt: ago(d), autoUnderwrite: { held: [PHOTOS], finishedAt: ago(d) } }, [PHOTOS]);
+  let t = triage({ offer: photos(6), events: [claimed(4)], drafts: [takeAsk(4), inbound("Flooring throughout, kitchen cabinets and 3 baths", { createdAt: ago(3) })] });
+  assert.equal(t.action, "call"); assert.deepEqual(t.needs, ["work"]); assert.match(t.reason, /without a number — worth a call/);
+  // Asked three days ago and nothing back: it waits, and says when it passes.
+  t = triage({ offer: photos(6), events: [claimed(3)], drafts: [takeAsk(3), inbound("hi", { createdAt: ago(5) })] });
+  assert.equal(t.action, "wait"); assert.equal(t.passAt, new Date(Date.parse(ago(3)) + ASK_WAIT_DAYS * 86400000).toISOString());
+  // A week of silence after it went: passed, and they hear why.
+  t = triage({ offer: photos(10), events: [claimed(8)], drafts: [takeAsk(8), inbound("hi", { createdAt: ago(9) })] });
+  assert.equal(t.action, "retire"); assert.equal(t.status, "we_passed"); assert.equal(t.passNote, "numbers");
+  // 13536 SW 171st St: the ask was claimed, then held and dismissed, so it
+  // never went. A word from them about something else doesn't make it a
+  // call; a week from the claim it passes, telling them.
+  t = triage({ offer: held({ createdAt: ago(6), updatedAt: ago(6), autoUnderwrite: { held: [THIN], finishedAt: ago(6) } }), events: [claimed(4)], drafts: [takeAsk(4, "dismissed"), inbound("No", { createdAt: ago(2) })] });
+  assert.equal(t.action, "wait"); assert.match(t.reason, /didn't go out/);
+  t = triage({ offer: held({ createdAt: ago(10), updatedAt: ago(10), autoUnderwrite: { held: [THIN], finishedAt: ago(10) } }), events: [claimed(8)], drafts: [takeAsk(8, "dismissed"), inbound("No", { createdAt: ago(6) })] });
+  assert.equal(t.action, "retire"); assert.equal(t.passNote, "numbers"); assert.match(t.reason, /never went out/);
+  // Before any ask, it still asks.
+  assert.equal(triage({ offer: photos(2), drafts: [inbound("ok")] }).action, "ask");
 });

@@ -143,3 +143,28 @@ test("a house that isn't single-family, or outside the towns we buy in, is passe
   assert.deepEqual(d.calls.filter((c) => c[0] === "proactive").map((c) => [c[1], c[2]]).sort(), [["c1", "kind_pass"], ["c2", "kind_pass"]]);
   assert.ok(r.acted.every((a) => /told them/.test(a.reason)), r.acted.map((a) => a.reason).join(" | "));
 });
+
+test("an ask already made isn't claimed again every night: an answer without a number is a call, silence a dated wait", async () => {
+  // 3228 S 164th St (2026-10-05): "claimed" night after night, nothing sent,
+  // and the Desk said the machine was on it.
+  const store = fakeStore({
+    offers: [held({ id: "h1", autoUnderwrite: { held: [PHOTOS], finishedAt: ago(6) }, createdAt: ago(6), updatedAt: ago(6) }),
+      held({ id: "h2", contactId: "c2", address: "13025 Ambaum Blvd SW, Burien, WA", autoUnderwrite: { held: [PHOTOS], finishedAt: ago(6) }, createdAt: ago(6), updatedAt: ago(6) })],
+    events: [
+      { contactId: "c1", type: "audit_action", offerId: "h1", address: "2500 Alder St, Milton, WA 98354", at: ago(4), data: { kind: "held_ask", action: "ask_take" } },
+      { contactId: "c2", type: "audit_action", offerId: "h2", address: "13025 Ambaum Blvd SW, Burien, WA", at: ago(3), data: { kind: "held_ask", action: "ask_take" } },
+    ],
+    drafts: [
+      { id: "a1", contactId: "c1", status: "sent", inbound: "", outbound: { kind: "take_ask" }, propertyAddress: "2500 Alder St, Milton, WA 98354", createdAt: ago(4), sentAt: ago(4) },
+      { id: "i1", contactId: "c1", status: "sent", inbound: "Flooring throughout, kitchen and 3 baths", intent: "small_talk", propertyAddress: "2500 Alder St, Milton, WA 98354", createdAt: ago(3) },
+      { id: "a2", contactId: "c2", status: "sent", inbound: "", outbound: { kind: "take_ask" }, propertyAddress: "13025 Ambaum Blvd SW, Burien, WA", createdAt: ago(3), sentAt: ago(3) },
+    ],
+  });
+  const d = deps();
+  const r = await run(store, fakeClient(), d);
+  assert.deepEqual(d.calls, [], "nothing is asked again");
+  assert.deepEqual(r.acted, []);
+  const byOffer = Object.fromEntries(r.findings.map((f) => [f.offerId, f]));
+  assert.equal(byOffer.h1.kind, "held_call"); assert.match(byOffer.h1.why, /without a number/);
+  assert.equal(byOffer.h2.kind, "held_waiting"); assert.equal(byOffer.h2.passAt, new Date(Date.parse(ago(3)) + 7 * 86400000).toISOString());
+});

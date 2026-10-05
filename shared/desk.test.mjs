@@ -64,6 +64,10 @@ test("a held underwrite the triage is asking about or re-running is the machine'
   assert.equal(sectionFor(held(), { heldByOffer: verdicts }), "machine");
   assert.equal(sectionFor(held({ offerId: "o2" }), { heldByOffer: verdicts }), "decide");
   assert.equal(sectionFor(held({ offerId: "o9" }), { heldByOffer: verdicts }), "decide", "not triaged yet: yours");
+  // After an ask: an answer without a number is a call; a week's wait is the machine's.
+  const after = heldVerdicts({ findings: [{ kind: "held_call", offerId: "o4" }, { kind: "held_waiting", offerId: "o5" }] });
+  assert.equal(sectionFor(held({ offerId: "o4" }), { heldByOffer: after }), "call");
+  assert.equal(sectionFor(held({ offerId: "o5" }), { heldByOffer: after }), "machine");
 });
 
 test("rows about a deal fold by deal, not under the listing agent's other business", () => {

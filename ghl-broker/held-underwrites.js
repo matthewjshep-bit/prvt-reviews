@@ -32,7 +32,7 @@ const iso = (t) => new Date(t).toISOString();
 const wait = (msec) => new Promise((r) => setTimeout(r, msec));
 
 // Finding kinds, as the audit lists them (labels live in AUDIT_KINDS).
-export const KIND_OF = { drop: "held_junk", retire: "held_over", rerun: "held_rerun", ask: "held_ask", yours: "held_yours", wait: null };
+export const KIND_OF = { drop: "held_junk", retire: "held_over", rerun: "held_rerun", ask: "held_ask", yours: "held_yours", call: "held_call", wait: "held_waiting" };
 export const ACTION_OF = { drop: "drop_draft", retire: "retire_draft", rerun: "rerun_held", ask: "ask_take" };
 
 // The finding a triage verdict becomes. Its id is the claim key, so the
@@ -41,9 +41,10 @@ export const ACTION_OF = { drop: "drop_draft", retire: "retire_draft", rerun: "r
 export function heldFinding(o, t, now = Date.now()) {
   const kind = KIND_OF[t.action];
   const f = {
-    kind, severity: t.action === "yours" || t.action === "ask" || t.action === "rerun" ? "soon" : "fyi",
+    kind, severity: ["yours", "call", "ask", "rerun"].includes(t.action) ? "soon" : "fyi",
     contactId: o.contactId || "", contactName: o.contactName || "", party: "agent", address: o.address || "", offerId: o.id,
     why: t.reason, anchorAt: t.anchorAt, dueAt: iso(now), evidence: { held: t.held, needs: t.needs || [] },
+    ...(t.passAt ? { passAt: t.passAt } : {}),
     action: ACTION_OF[t.action] ? { type: ACTION_OF[t.action], ...(t.status ? { status: t.status } : {}), ...(t.needs ? { needs: t.needs } : {}) } : null,
   };
   f.id = auditDedupeKey(f);
@@ -150,10 +151,12 @@ export async function sweepHeldUnderwrites({
     for (const o of mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))) {
       const t = triageHeldUnderwrite({ offer: o, siblings, events, drafts, contact, opportunities, botOffTags, now, knownCities });
       const kind = KIND_OF[t.action];
-      if (t.action === "wait") { counts.waiting++; continue; }
+      // A wait with a date (asked, passes in a week) is reported, so the
+      // Desk can say when; any other wait is nothing to say.
+      if (t.action === "wait") { counts.waiting++; if (t.passAt) findings.push(heldFinding(o, t, now)); continue; }
       const f = heldFinding(o, t, now);
       findings.push(f);
-      if (t.action === "yours") { counts.yours++; continue; }
+      if (t.action === "yours" || t.action === "call") { counts.yours++; continue; }
       if (!may) continue;
 
       const row = { contactId, contactName: f.contactName, address: f.address, kind, action: f.action.type, status: "started", reason: t.reason, jobId: null, offerId: o.id };
