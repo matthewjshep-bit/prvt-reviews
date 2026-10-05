@@ -81,4 +81,6 @@ test("a real conversation is never read as a greeting, however it opens", () => 
   assert.equal(voicemailGreeting(long), null);
   assert.equal(voicemailGreeting("THEM: Sorry I was unavailable. US: It's Matt, calling about Maple.", { durationSec: 340 }), null, "a five-minute call talked");
   assert.equal(voicemailGreeting(""), null);
+  // A short real call that opens with "unavailable" is still a call.
+  assert.equal(voicemailGreeting("THEM: Hey, sorry I was unavailable earlier.\nTHEM: It's Matt, calling about Maple. THEM: Yeah the seller is around."), null);
 });

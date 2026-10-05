@@ -46,7 +46,9 @@ export function connectedCall({ durationSec, status = "" } = {}) {
 // rang through to voicemail arrives as a transcript of them "talking". Read
 // against the whole opening of a call, never a single line of a real one
 // (deal-feedback.js keeps its own narrower line filter for that).
-const GREETING_RE = /leave (?:me )?(?:your|a)\b|please leave|forwarded to voicemail|is not available|not available (?:right now|to take)|unavailable|record your message|after the (?:tone|beep)|at the tone|you(?:'ve| have)? reached|mailbox/i;
+// "Unavailable" only as a greeting says it ("I'm unavailable at this time"):
+// "sorry, I was unavailable earlier" opens real calls too.
+const GREETING_RE = /leave (?:me )?(?:your|a)\b|please leave|forwarded to voicemail|is not available|not available (?:right now|to take)|unavailable (?:at (?:this|the) (?:time|moment)|right now)|record your message|after the (?:tone|beep)|at the tone|you(?:'ve| have)? reached|mailbox/i;
 // Matt's own message after the beep: he says who he is.
 const OUR_MESSAGE_RE = /\b(?:this is|it'?s|it is) matt\b|\bmatt here\b|\bmatt shepherd\b|\bmatt (?:with|from)\b/i;
 const MAX_GREETING_CHARS = 500;
