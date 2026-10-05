@@ -402,3 +402,14 @@ test("a held reply the 7pm check would send is told apart from one that waits fo
   assert.equal(releasableHeld({ ...held, createdAt: "2026-10-01T00:00:00Z" }, { now: at7 }), false, "over 72 hours: stale");
   assert.equal(releasableHeld(held, { now: at7, loose: false }), false);
 });
+
+// 2026-10-04: last night's "held over a day" rows came back on the Desk for
+// drafts Matt had just dismissed.
+test("a row about a held draft steps aside once that draft is closed", () => {
+  const rows = [
+    { id: "gone", kind: "audit_owed", findingKind: "held_aging", contactId: "c1", draftId: "d1", anchorAt: "2026-10-03T00:00:00Z" },
+    { id: "open", kind: "audit_owed", findingKind: "held_aging", contactId: "c2", draftId: "d2", anchorAt: "2026-10-03T00:00:00Z" },
+  ];
+  const kept = stillOwed(rows, { drafts: [{ id: "d1", contactId: "c1", status: "dismissed" }, { id: "d2", contactId: "c2", status: "draft" }] });
+  assert.deepEqual(kept.map((r) => r.id), ["open"]);
+});
