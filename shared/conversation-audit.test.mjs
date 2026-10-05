@@ -391,3 +391,14 @@ test("a reply you typed yourself answers their text, and last night's row steps 
   ] });
   assert.deepEqual(kept.map((r) => r.id), ["open"]);
 });
+
+test("a held reply the 7pm check would send is told apart from one that waits for a person", async () => {
+  const { releasableHeld } = await import("./conversation-audit.js");
+  const at7 = Date.parse("2026-10-05T02:00:00Z");
+  const held = { status: "draft", intent: "other", party: "agent", gateClean: true, needsHuman: false, createdAt: "2026-10-04T20:34:00Z", autoSend: { reason: "a reply the bot couldn't place is a person's call" } };
+  assert.equal(releasableHeld(held, { now: at7 }), true);
+  assert.equal(releasableHeld({ ...held, needsHuman: true }, { now: at7 }), false);
+  assert.equal(releasableHeld({ ...held, autoSend: { reason: "needs a person: no number read" } }, { now: at7 }), false);
+  assert.equal(releasableHeld({ ...held, createdAt: "2026-10-01T00:00:00Z" }, { now: at7 }), false, "over 72 hours: stale");
+  assert.equal(releasableHeld(held, { now: at7, loose: false }), false);
+});

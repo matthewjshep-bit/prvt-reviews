@@ -14,36 +14,12 @@ import { effectiveStatus, OPEN_STATUSES, priceAgreed, isHot } from "./shared/off
 import { currentOffers } from "./shared/current-offer.js";
 import { threadHealth } from "./shared/thread-health.js";
 import { botHold } from "./shared/bot-hold.js";
-import { kText } from "./shared/call-list.js";
 import { recordEvent } from "./contact-record.js";
+import { holdState } from "./shared/counter-hold.js";
 
-const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
+export { holdState };
+
 const iso = (t) => new Date(t).toISOString();
-
-/**
- * holdState(offer, { lastInboundAt, lastOutboundAt, checkIns, gapHours, now }) → { next, at, why }
- *
- * Pure. `next` is "wait" (not yet, or they wrote and the reply agent has
- * it), "nudge" (a check-in is due) or "pass" (they didn't move).
- */
-export function holdState(offer, { lastInboundAt = null, lastOutboundAt = null, checkIns = 2, gapHours = 72, now = Date.now() } = {}) {
-  const h = offer?.counterHold;
-  if (!h?.at) return { next: "none", why: "no hold" };
-  // Our last word counts as a touch too: when they wrote something that
-  // wasn't a counter and we answered it, the clock picks up from our answer
-  // instead of waiting forever on "they wrote since".
-  const touches = [h.at, ...(h.nudges || []), ...(h.replies || []), lastOutboundAt].map(ms).filter((t) => t != null);
-  const lastTouch = Math.max(...touches);
-  const inAt = ms(lastInboundAt);
-  // They wrote after our last word: the reply agent answered (or holds) it.
-  if (inAt != null && inAt > lastTouch + 60000) return { next: "wait", why: "they wrote since — the conversation has it" };
-  const due = lastTouch + gapHours * 3600000;
-  const unmoved = (h.nudges || []).length + (h.replies || []).length;
-  if (now < due) return { next: "wait", at: iso(due), why: unmoved >= checkIns ? "passes then if nothing moves" : "next check-in" };
-  return unmoved >= checkIns
-    ? { next: "pass", why: `held at ${kText(h.ours)}; ${unmoved} check-in${unmoved === 1 ? "" : "s"} and they didn't move` }
-    : { next: "nudge", why: `check-in ${unmoved + 1} of ${checkIns} after the hold` };
-}
 
 /**
  * runCounterHolds({ client, locationId, saved, store, config, sendsEnabled, deps, now, dryRun, startedFor, ignoreSwitch })

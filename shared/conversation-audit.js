@@ -317,10 +317,7 @@ export function auditConversations({
       // person has had the day to look; at 11am a reply held ten minutes ago
       // is a decision they may be about to make. And a person's call (a
       // counter, an acceptance) is never released by day at all.
-      const ageMin = Math.floor((now - (ms(newest.createdAt) ?? now)) / 60000);
-      const dayOk = mode !== "day" || (ageMin >= releaseMinAgeMin && !(NEVER_AUTO[newest.party || "agent"] || []).includes(newest.intent));
-      const releasable = loose && dayOk && (newest.gateClean === true || newest.autoSendable === true) && !newest.needsHuman && age <= RELEASE_MAX_AGE_HOURS
-        && !/you replied to them/.test(reason) && !/^needs a person:/.test(reason);
+      const releasable = releasableHeld(newest, { loose, mode, releaseMinAgeMin, now });
       add({ kind: age >= HELD_AGING_HOURS ? "held_aging" : "unanswered_inbound", contactId: c, contactName: who(c), party: newest.party,
         address: newest.propertyAddress || "", anchorAt: newest.createdAt, draftId: newest.id,
         dueAt: releasable ? iso(now) : clock?.data?.dueAt || unansweredCheckIn(now).dueAt,
@@ -524,12 +521,31 @@ export function auditActions(last, { now = Date.now(), names = {} } = {}) {
     });
 }
 
+/**
+ * releasableHeld(draft, { loose, mode, releaseMinAgeMin, now }) → boolean
+ *
+ * Whether the audit releases this held reply as "a holding reply the guard
+ * passed" — the night's rule, and by day the stricter one (old enough, never
+ * a person's-call intent). Pure, so the Desk can show such a draft with the
+ * machine ("goes out at the 7pm check") instead of on Matt's list.
+ */
+export function releasableHeld(d, { loose = true, mode = "night", releaseMinAgeMin = 120, now = Date.now() } = {}) {
+  if (!d || d.status !== "draft" || QUIET_INTENTS.has(d.intent)) return false;
+  const reason = d.autoSend?.reason || (d.flags || [])[0] || "held";
+  const t = ms(d.createdAt);
+  const age = t == null ? 0 : Math.round((now - t) / 3600000);
+  const ageMin = Math.floor((now - (ms(d.createdAt) ?? now)) / 60000);
+  const dayOk = mode !== "day" || (ageMin >= releaseMinAgeMin && !(NEVER_AUTO[d.party || "agent"] || []).includes(d.intent));
+  return Boolean(loose) && dayOk && (d.gateClean === true || d.autoSendable === true) && !d.needsHuman && age <= RELEASE_MAX_AGE_HOURS
+    && !/you replied to them/.test(reason) && !/^needs a person:/.test(reason);
+}
+
 // Last night's findings about a text they sent: a reply that went (or is
 // queued) after it answers it, whoever wrote it.
 const ANSWERED_BY_A_REPLY = new Set(["unanswered_inbound", "held_aging"]);
 // Rows that ask for a text to someone. Nothing reaches a person who
 // unsubscribed, so none of these is a call to make.
-const TEXTING_KINDS = new Set(["audit_owed", "draft_waiting", "draft_scheduled", "promise_owed"]);
+const TEXTING_KINDS = new Set(["audit_owed", "draft_waiting", "draft_scheduled", "promise_owed", "offer_ready"]);
 
 /**
  * stillOwed(rows, { drafts, unsubscribed }) → rows

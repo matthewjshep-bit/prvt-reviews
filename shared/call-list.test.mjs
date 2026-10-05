@@ -179,3 +179,76 @@ test("they called and you texted them back yourself: off the list", () => {
   const typed = { type: "hand_reply", contactId: "c1", at: ago(0.2), data: { via: "ghl" } };
   assert.equal(callList({ offers: [], cards: [card({ lane: "sent" })], events: [missed, typed], now: NOW }).length, 0);
 });
+
+// The Desk on 2026-10-04 (names changed): 15 Call rows, and Matt — "today
+// should only be for urgent things only a human should do". With the push
+// to paper, the hold and the offer ladder on, the machine has the hot
+// offers, the held counters and the quiet threads; a write-up handed to
+// someone else is the one call left.
+test("the Desk keeps only what needs you: hot, held and quiet are the machine's", () => {
+  const MACHINE = { hotPush: true, offerNudge: true, counterHold: { enabled: true, checkIns: 2, gapHours: 72 }, nudges: true };
+  const hot = (id, c, over = {}) => offer({ id, contactId: c, contactName: `Agent ${c}`, address: `${id} Main St, Seattle, WA 98101`, hot: { at: ago(3), by: "conversation", signal: "presenting" }, ...over });
+  const hotCard = (id, c) => card({ offerId: id, contactId: c, contactName: `Agent ${c}`, address: `${id} Main St, Seattle, WA 98101` });
+  const offers = [
+    hot("1", "writing", { hot: { at: ago(1), by: "conversation", signal: "writing_up" } }),
+    hot("2", "deciding"),
+    hot("3", "handed"),
+    hot("4", "signing"),
+    offer({ id: "5", contactId: "held", contactName: "Agent held", address: "5 Main St, Seattle, WA 98101", status: "countered", cashAmount: 259600, counter: { amount: 270000, at: ago(5) },
+      counterHold: { at: ago(2), ours: 259600, theirs: 270000, nudges: [], replies: [] } }),
+  ];
+  const cards = [hotCard("1", "writing"), hotCard("2", "deciding"), hotCard("3", "handed"), hotCard("4", "signing"),
+    card({ lane: "countered", offerId: "5", contactId: "held", contactName: "Agent held", address: "5 Main St, Seattle, WA 98101", cashAmount: 259600, status: "countered" })];
+  const said = (c, text, d) => ({ id: `${c}-${d}`, contactId: c, inbound: text, createdAt: ago(d) });
+  const drafts = [
+    said("deciding", "Great. Have a good weekend.", 0.5),
+    said("handed", "Write up whatever you like! You can call the listing broker for better insight", 1),
+    said("handed", "(360) 555-0161 here!", 0.5),
+    said("signing", "Sent it over for your signature through Authentisign", 0.2),
+  ];
+  const quiet = [{ kind: "gone_quiet", contactId: "q1", contactName: "Agent q1", offerId: "9", address: "9 Main St" }];
+  const rows = callList({ offers, cards, drafts, actions: quiet, now: NOW, machine: MACHINE });
+  const by = Object.fromEntries(rows.map((r) => [r.contactId, r]));
+  assert.equal(by.writing.section, "machine");
+  assert.equal(by.writing.next.what, "waiting on their write-up");
+  assert.equal(by.deciding.section, "machine", "their goodbye doesn't make a hot offer a call");
+  assert.equal(by.handed.section, "call");
+  assert.match(by.handed.call.goal, /\(360\) 555-0161/);
+  assert.equal(by.signing.kind, "paper_to_sign");
+  assert.equal(by.signing.section, "decide");
+  assert.equal(by.held.kind, "counter_held");
+  assert.equal(by.held.section, "machine");
+  assert.match(by.held.title, /held at 259\.6K/);
+  assert.equal(by.q1, undefined, "the offer ladder keeps asking: no 'gone quiet' call");
+  assert.match(by.deciding.title, /keeps asking where the seller is/, "warm, nothing agreed: the nudge has it, not a push to paper");
+  const desk = foldDesk(rows, {});
+  assert.deepEqual(desk.rows.filter((r) => r.section === "call").map((r) => r.contactId), ["handed"]);
+  // Nothing drives a warm offer when the offer ladder is off: it stays a call.
+  const noNudge = callList({ offers, cards, drafts, actions: quiet, now: NOW, machine: { ...MACHINE, offerNudge: false } });
+  assert.equal(noNudge.find((r) => r.contactId === "deciding").section, "call");
+  // Switched off, they read as before: calls.
+  const off = callList({ offers, cards, drafts, actions: quiet, now: NOW });
+  assert.equal(off.find((r) => r.contactId === "writing").section, "call");
+});
+
+test("a text after the call doesn't put a hot offer back on the call list", () => {
+  const offers = [offer({ hot: { at: ago(3), by: "conversation", signal: "presenting" } })];
+  const talked = { type: "call_summary", contactId: "c1", at: ago(1), data: { transcribed: true, durationSec: 224 } };
+  const after = [{ id: "bye", contactId: "c1", inbound: "Great. Have a good weekend.", createdAt: ago(0.9) }];
+  assert.equal(callList({ offers, cards: [card()], events: [talked], drafts: after, now: NOW }).length, 0);
+});
+
+// 3418 Wetmore: a yes at 289,750, then 226,000 by hand. Not a number to
+// "settle" on the Desk — but no paper at 226k either (pushesToPaper false).
+test("a yes you re-priced below yourself isn't a 'settle the number' call", () => {
+  const MACHINE = { hotPush: true, offerNudge: true, counterHold: null, nudges: true };
+  const wet = offer({ cashAmount: 226000, hot: { at: ago(3), by: "conversation", signal: "writing_up" }, realm: { answer: "yes", ts: ago(3) },
+    agreed: { at: ago(3), via: "realm_yes", amount: 289750 }, revisions: [{ ts: ago(2.5), from: 289750, to: 226000 }] });
+  const rows = callList({ offers: [wet], cards: [card({ cashAmount: 226000 })], now: NOW, machine: MACHINE });
+  assert.equal(rows[0].section, "machine");
+  assert.doesNotMatch(rows[0].title, /settle/);
+  assert.match(rows[0].next.what, /write-up|nudge/);
+  // With no re-price of yours, an agreement above the book is still yours to settle.
+  const stale = offer({ cashAmount: 226000, hot: { at: ago(3), by: "conversation", signal: "warm" }, agreed: { at: ago(3), via: "realm_yes", amount: 289750 } });
+  assert.match(callList({ offers: [stale], cards: [card({ cashAmount: 226000 })], now: NOW, machine: MACHINE })[0].title, /settle the number/);
+});

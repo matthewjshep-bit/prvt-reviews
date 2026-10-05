@@ -37,6 +37,8 @@ import { accessFor } from "./deal-access.js";
 import { KIND_HOLD } from "./asset-type.js";
 
 const DAY_MS = 86400000;
+// How long a hand-made offer nobody sent stays a decision on the Desk.
+export const OFFER_READY_DAYS = 7;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const round = (v) => Math.round(Number(v) || 0);
 const money = (n) => `$${round(n).toLocaleString("en-US")}`;
@@ -372,7 +374,9 @@ export function buildPipeline({
     // The machine never floats a hand-made offer (timerMoves skips it).
     if (lane === "ready" && !card.ai.made && !(o.sends || []).length && !o.proactive?.takeCheckAt && !o.proactive?.realmCheckAt && !(o.followUps || []).length) {
       const pricedMs = ms(o.statusAt) ?? ms(o.createdAt);
-      if (pricedMs != null && now - pricedMs >= DAY_MS) {
+      // A week, then it is history, not a decision (2026-10-04: five rows
+      // priced 40–69 days ago sat on the Desk).
+      if (pricedMs != null && now - pricedMs >= DAY_MS && now - pricedMs <= OFFER_READY_DAYS * DAY_MS) {
         card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon", handMade: true, readyAt: new Date(pricedMs).toISOString(),
           title: `${card.address}: priced ${Math.floor((now - pricedMs) / DAY_MS)}d ago and nothing has gone out`,
           detail: `cash ${money(o.cashAmount)} · made by hand`,
