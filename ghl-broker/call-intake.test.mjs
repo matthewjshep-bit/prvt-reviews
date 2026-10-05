@@ -107,6 +107,34 @@ test("a call nobody picked up is an attempt, not them answering", async () => {
   assert.equal(talked.events[0].type, "call_summary");
 });
 
+// 2026-10-04: a long voicemail greeting cleared the length check and went to
+// the reply agent as if they'd said it; three such drafts waited on Matt.
+test("a call that reaches their voicemail greeting is a try, not a text to answer", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const saved = { aiApiKey: "k", conversationAi: { enabled: true } };
+  const greeting = "THEM: Hi.\nTHEM: This is Sam.\nTHEM: I'm sorry I missed your call.\nTHEM: Please leave me your name and your number, and I will call you back.";
+  const deps = { findCall: async () => ({ id: "v1", direction: "outbound", at: "2026-10-04T19:49:00Z", durationSec: 38, status: "completed" }), transcript: async () => greeting, pollMs: 1, maxPolls: 2 };
+  const { job } = await startCallIntake({ client: {}, locationId: "L", saved, store, contactId: "c1", deps });
+  await settle(40);
+  assert.equal(job.status, "done");
+  assert.equal(job.replyJobId, null, "nothing was drafted");
+  assert.match(job.skipped, /voicemail/);
+  assert.equal(store.events.length, 1);
+  assert.equal(store.events[0].type, "call_attempt");
+  assert.equal(store.events[0].data.outcome, "voicemail");
+  assert.equal(store.events[0].data.leftMessage, false);
+
+  // They called us and left a message: that's them talking, still read.
+  _resetJobs();
+  const theirs = fakeStore();
+  const { job: j2 } = await startCallIntake({ client: {}, locationId: "L", saved, store: theirs, contactId: "c2",
+    deps: { ...deps, findCall: async () => ({ id: "v2", direction: "inbound", at: "2026-10-04T19:50:00Z", durationSec: 40, status: "completed" }),
+      transcript: async () => "THEM: You've reached Matt, please leave a message.\nTHEM: Hey Matt, returning your call about the house on Maple, give me a ring back." } });
+  await settle(40);
+  assert.notEqual(j2.skipped, "reached their voicemail");
+});
+
 test("the poller finds calls that ended since the cursor and reads each once", async () => {
   _resetJobs();
   const now = Date.parse("2026-09-10T18:00:00Z");
