@@ -17,8 +17,8 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "app-first-text-tes
 process.env.OUTREACH_IMPORTS_ENABLED = "true";
 
 const { outboundOpening } = await import("./conversation-prompt.js");
-const { outboundDescriptor, humanHasThread } = await import("./reply-agent.js");
-const { normalizeOpener, countyName, openerVariant, DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
+const { outboundDescriptor, humanHasThread, previewProactive } = await import("./reply-agent.js");
+const { normalizeOpener, countyName, openerVariant, stripSignOff, DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
 const { normalizeOutreachAutopilot, startOutreachSweep, _resetJobs } = await import("./outreach-sweep.js");
 const { store } = await import("./store.js");
 const { default: createOutreachRouter } = await import("./routes/outreach.js");
@@ -36,12 +36,35 @@ test("the first text names the county the listing is in and nowhere else — the
   assert.doesNotMatch(t.replace(/no region \([^)]*\)/, ""), /Seatac|King County|Snohomish/i);
 });
 
-test("the first text never writes its own sign-off, because GHL adds 'No worries if not can stop lmk'", () => {
+test("the first text never writes its own sign-off, because GHL adds 'Thanks, Matt' and 'No worries if not can stop'", () => {
   const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES });
   assert.match(t, /NO sign-off/);
   assert.match(t, /no opt-out line/);
-  assert.match(t, /adds "No worries if not can stop lmk" on the end by itself/);
-  assert.match(t, /under 280 characters/);
+  assert.match(t, /adds "Thanks, Matt" and "No worries if not can stop" on the end by itself/);
+  assert.match(t, /under 250 characters/, "with GHL's two lines it stays inside two SMS segments");
+});
+
+test("a first text the bot signed anyway reaches the agent with one 'Thanks, Matt', not two", () => {
+  const body = "Hey Dana, 1911 9th Ave W caught my eye. I'm looking for a flip anywhere in King County. Is that one a bit of a project?";
+  for (const tail of [" Thanks, Matt", " - Matt", "\n\nThanks!\nMatt", " Thanks!", " Best, Matthew Shepherd", " No worries if not can stop lmk", " Thanks, Matt\nNo worries if not can stop"]) {
+    assert.equal(stripSignOff(body + tail, { names: ["Matt"] }), body, JSON.stringify(tail));
+  }
+  const ears = "Hi Dana, any other fixers in King, I'm all ears. Thanks, Matt";
+  assert.equal(stripSignOff(ears, { names: ["Matt"] }), "Hi Dana, any other fixers in King, I'm all ears.", "the sentence keeps its full stop");
+  for (const fine of ["Hi Matt, came across your listing. Is it a bit of a project?", "Thanks for the reply Dana, is it a project?", "Is it a bit of a project, Matt?"]) {
+    assert.equal(stripSignOff(fine, { names: ["Matt"] }), fine, "a name or a thanks inside the text stays");
+  }
+});
+
+test("the first text's draft comes back with the sign-off taken off before anyone reads it", async () => {
+  const saved = { aiApiKey: "test-key", conversationAi: { enabled: true, persona: { name: "Matt" } } };
+  const draft = async () => ({ reply: "Hey Dana, 12 Elm St caught my eye. Is that one a bit of a project? Thanks, Matt", summary: "s", confidence: "high", needsHuman: false });
+  const r = await previewProactive({ client: { call: async () => ({}) }, locationId: "loc-signoff", saved, store, contactId: "", kind: "outreach_open", name: "Dana",
+    subject: { address: "12 Elm St, Tacoma, WA", county: "Pierce" }, deps: { draft } });
+  assert.equal(r.reply, "Hey Dana, 12 Elm St caught my eye. Is that one a bit of a project?");
+  const other = await previewProactive({ client: { call: async () => ({}) }, locationId: "loc-signoff", saved, store, contactId: "", kind: "buyer_pulse", name: "Dana",
+    subject: {}, deps: { draft } }).catch(() => null);
+  assert.match(other?.reply || other?.skipped || "none", /Thanks, Matt$/, "only the cold open and its nudge are trimmed");
 });
 
 test("the first text is written in Matt's voice: his examples are in the prompt, and another agent leads with another one", () => {
@@ -99,6 +122,8 @@ test("an opener example carrying the stop line is dropped, so the agent never ge
   const o = normalizeOpener({ examples: ["Hi {first}, saw {street}. No worries if not can stop lmk", "Hey {first}, {street} a project?"] });
   assert.deepEqual(o.examples, ["Hey {first}, {street} a project?"]);
   assert.deepEqual(normalizeOpener({}).examples, DEFAULT_OPENER_EXAMPLES, "unset is Matt's defaults");
+  assert.deepEqual(normalizeOpener({ examples: ["Hey {first}, {street} a project? Thanks, Matt"] }).examples, ["Hey {first}, {street} a project?"],
+    "an example signed 'Thanks, Matt' would teach the bot to sign off");
   assert.deepEqual(normalizeOpener({ examples: "one\n\ntwo" }).examples, ["one", "two"], "the Settings box splits on blank lines");
   assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => !/can stop/i.test(x) && /\{county\} County/.test(x)));
   assert.deepEqual(normalizeOutreachAutopilot({}).opener.examples, DEFAULT_OPENER_EXAMPLES, "kept on the outreach settings");
