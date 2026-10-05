@@ -316,6 +316,11 @@ export const SHADOW_GRACE_MS = 20_000;
 export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "showing_reminder", "showing_followup"]);
 export const draftEffort = (outbound) => (outbound && LOW_EFFORT_KINDS.has(outbound.kind) ? "low" : "medium");
 
+// Machine texts a gate catches that wait for a person rather than being
+// redrafted or dropped (runProactive): our number floated, a promised
+// number, a price drop, the first text to a new agent.
+export const KEEP_FOR_A_PERSON = new Set(["realm_check", "take_check", "promise_due", "price_drop", "outreach_open"]);
+
 // Texts a sweep starts that nobody is waiting on: these may go through the
 // Batch API at half price (draft-batch.js). A float after an underwrite, a
 // partner's answer, an address chase and every reply to a person may not.
@@ -2069,6 +2074,17 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // A held underwrite the nightly sweep passed (held-underwrites.js): not
+  // single-family, or outside the towns we buy in. One line so they aren't
+  // left waiting on a number. Started by the sweep, released by the audit;
+  // not on the playbook grid. Names no number.
+  kind_pass: {
+    party: "agent",
+    enabled: (pb) => Boolean(pb?.followUp?.enabled),
+    ready: ({ offer, subject }) => (offer?.address || subject?.address ? true : "no house to pass on"),
+    floats: () => [],
+    forbids: () => [],
+  },
   // A price is agreed and nothing is on paper (follow-up-sweep.js
   // hotCandidates). The ask is always the same one: the listing agent writes
   // it up on NWMLS forms for us to sign. The agreed number is the offer's own
@@ -2434,10 +2450,13 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       arvText: n.arv ? fmtMoney(n.arv) : "", rehabText: n.rehab ? fmtMoney(n.rehab) : "",
       arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "" };
   }
+  if (kind === "kind_pass") {
+    return { ...base, address: offer?.address || subject?.address || "", why: subject?.why === "area" ? "area" : "kind", heldReason: String(subject?.heldReason || "").slice(0, 160) };
+  }
   if (kind === "take_ask") {
     const needs = Array.isArray(subject?.needs) && subject.needs.length ? subject.needs : ["value", "work"];
     return { ...base, heldReason: String(subject?.heldReason || ""), needs,
-      needValue: needs.includes("value"), needWork: needs.includes("work") };
+      needValue: needs.includes("value"), needWork: needs.includes("work"), needAddress: needs.includes("address") };
   }
   if (kind === "partner_answer") {
     return { ...base, address: offer?.address || subject?.address || "", question: String(subject?.question || "").slice(0, 300), answer: String(subject?.answer || "").slice(0, 600) };
@@ -2554,6 +2573,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "counter_nudge": return `Their ${outbound.theirsK || "counter"} on ${where} sat ${outbound.days}d — asks if the seller has any room, names no number of ours.`;
     case "partner_answer": return "Your answer to a question the bot couldn't answer, in its voice.";
     case "hot_push": return `Pushes the agreed price on ${where} toward paper: asks them to write it up on NWMLS forms for us to sign${rung}.`;
+    case "kind_pass": return `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : "we only buy single-family right now"}.`;
     case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
     case "passed_checkin": return outbound.quiet
       ? `Checks back in on ${where} — we never heard back on our offer; asks if it's still available and where the seller is${rung}.`
@@ -2715,7 +2735,33 @@ async function runProactive(job, ctx) {
   if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
   job.summary = draft.summary;
   const gateFor = outboundGateFor({ spec, offer, subject, context, config, party, a, kind });
-  const gate = gateFor(draft);
+  let gate = gateFor(draft);
+  // A text the machine started that a gate caught (not the kind's own
+  // lock): written once more, told what tripped it. If it still trips,
+  // nothing goes and nothing waits on you — nobody asked for this text, and
+  // two check-ins sat on the Desk for days over the word "assigning"
+  // (2026-10-04). The timeline says what was dropped and why.
+  const passes = (g) => Boolean(g.ok || (g.locked && g.clean));
+  // Not a float or a first text, though: those are marked as gone the
+  // moment they're queued (realmCheckAt, takeCheckAt, the outreach record),
+  // so a dropped one would read as sent and never be tried again. They still
+  // wait for you, as before (review, 2026-10-04).
+  if (ctx.machine && !passes(gate) && !KEEP_FOR_A_PERSON.has(kind)) {
+    const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
+    const again = tripped.length ? await deps.draft({ ...draftArgs, outbound: { ...outbound, fix: tripped } }).catch(() => null) : null;
+    if (again?.reply) {
+      again.intent = kind;
+      const g2 = gateFor(again);
+      if (passes(g2)) { Object.assign(draft, again, { intent: kind }); gate = g2; job.summary = draft.summary; }
+    }
+    if (!passes(gate)) {
+      const why = String(tripped[0] || gate.flags?.[0] || "a gate held it").replace(/^needs a person:\s*/, "").slice(0, 160);
+      await recordEvent({ store, locationId, contactId: job.contactId, party, type: "note", at: new Date(now).toISOString(), source: "conversation",
+        dedupeKey: `machine_text_dropped:${job.id}`, data: { note: `${kind.replace(/_/g, " ")} not sent — ${why}`, phrase: "the machine dropped its own text" } }).catch(() => {});
+      job.status = "held"; job.phase = ""; job.heldReason = `dropped, not sent: ${why}`; job.finishedAt = new Date().toISOString();
+      return;
+    }
+  }
   let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   auto = releaseForAudit({ auto, gate, draft, deps });
 
@@ -3373,6 +3419,12 @@ async function runReply(job, ctx) {
   if (party === "agent" && !plan.suggested.some((x) => x.type === "promote_to_deal") && !["rejection", "opt_out", "counter"].includes(draft.intent)
       && !houseGone(signedText, draft.intent)) {
     const signed = signedContractIn(signedText, { now });
+    // Already a deal: their "fully executed" ticks the checklist's "PSA signed by
+    // both sides", so the Desk stops asking (9311 12th Pl SE, 2026-10-04).
+    if (signed.signed && typeof deps.tickDealTask === "function") {
+      await deps.tickDealTask({ contactId: job.contactId, addressHint: draft.propertyAddress || "", taskId: "psa_signed", why: "they said it's signed" })
+        .catch((e) => warnings.push(`checklist: ${String(e?.message || e).slice(0, 120)}`));
+    }
     if (signed.signed) {
       const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50 }).catch(() => []);
       const open = rows.filter((o) => o && !o.deal && OPEN_OFFER_STATUSES.has(offerStatus(o)));

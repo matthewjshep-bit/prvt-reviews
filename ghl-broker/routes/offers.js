@@ -69,7 +69,7 @@ import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../
 import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
-  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline,
+  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperWent, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
@@ -5077,6 +5077,25 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           { offerId: full.id, source: "conversation", at: ts }).catch(() => {});
       }
       return { ok: true, address: full.address };
+    },
+    // Their words tick a deal's checklist item (only "PSA signed" today): the
+    // live deal of theirs on the house they named, or their only live deal.
+    tickDealTask: async ({ contactId, addressHint = "", taskId, why = "" }) => {
+      const rows = (await store.listOffers(locationId, { contactId, limit: 50 }).catch(() => [])).filter((o) => o?.deal && !dealIsOver(o.deal));
+      const pick = pickDealByAddress(rows, addressHint) || (rows.length === 1 ? rows[0] : null);
+      if (!pick) return { ok: false, reason: "no live deal to tick" };
+      const full = await store.getOffer(pick.id).catch(() => null);
+      if (!full?.deal) return { ok: false, reason: "deal vanished" };
+      const before = normalizeChecklist(full.deal.checklist);
+      const after = tickById(full.deal.checklist, taskId);
+      if (JSON.stringify(before) === JSON.stringify(after)) return { ok: true, ticked: false, address: full.address };
+      full.deal.checklist = after;
+      full.updatedAt = new Date().toISOString();
+      await store.updateOffer(full.id, full);
+      await appendDealHistory(client, locationId, contactId, "agent_deal_history",
+        historyLine(full.updatedAt, full.address, `checklist: ${taskId.replace(/_/g, " ")}`, dealStr(why, 120)),
+        { offerId: full.id, source: "conversation", at: full.updatedAt }).catch(() => {});
+      return { ok: true, ticked: true, address: full.address };
     },
     // A check-in after the hold went out: one more rung on its clock.
     markCounterHoldNudge: async ({ offerId }) => {

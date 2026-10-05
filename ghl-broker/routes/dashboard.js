@@ -54,6 +54,7 @@ import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, DESK_SECTIONS, pacificStart, machineDrives } from "../shared/desk.js";
+import { knownCitiesFrom, heldOnTheMachine } from "../shared/held-underwrites.js";
 import { callList, briefFor, normalizeDesk } from "../shared/call-list.js";
 import { LAST_ACTIVITY_TYPES, INBOUND_EVENT_TYPES as LAST_IN_TYPES } from "../shared/last-activity.js";
 import { normalizeLineTargets } from "../shared/line.js";
@@ -537,6 +538,20 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         if (at <= now) at += DAY_MS;
         return at;
       })() : null;
+      // A held underwrite whose verdict is plain from the row — nothing to
+      // place, outside our area, not our kind of house, an address to
+      // confirm — is the machine's tonight (shared/held-underwrites.js).
+      const knownCities = knownCitiesFrom(offers);
+      const offerById = new Map(offers.map((o) => [o.id, o]));
+      for (const a of out.actions) {
+        if (a.kind !== "underwrite_held" || a.group === "machine") continue;
+        const v = heldOnTheMachine(offerById.get(a.offerId), { knownCities, now });
+        if (!v) continue;
+        if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
+        out.counts.actions.byGroup.machine = (out.counts.actions.byGroup.machine || 0) + 1;
+        a.group = "machine";
+        a.next = { what: v.what, at: v.at || (audit7 ? new Date(audit7).toISOString() : null) };
+      }
       if (audit7) {
         const byId = new Map(drafts.map((d) => [d.id, d]));
         for (const a of out.actions) {

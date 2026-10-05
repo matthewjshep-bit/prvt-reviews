@@ -19,7 +19,7 @@
 // agent their take on ARV and repairs and underwrite using that."
 
 import { store as defaultStore } from "./store.js";
-import { triageHeldUnderwrite, retireNote } from "./shared/held-underwrites.js";
+import { triageHeldUnderwrite, retireNote, knownCitiesFrom } from "./shared/held-underwrites.js";
 import { aiHoldReasons, isAiGenerated, effectiveStatus } from "./shared/offer-status.js";
 import { auditDedupeKey } from "./shared/conversation-audit.js";
 import { conversationConfig, startProactive as defaultStartProactive } from "./reply-agent.js";
@@ -126,6 +126,8 @@ export async function sweepHeldUnderwrites({
   const may = !dryRun && config.enabled;
   const startProactive = typeof deps.startProactive === "function" ? deps.startProactive : defaultStartProactive;
   const botOffTags = (config.routing?.botOffTags || []).map((t) => String(t).toLowerCase());
+  // The towns we buy in: our map, and anywhere we've put a number on a house.
+  const knownCities = knownCitiesFrom(offers);
 
   for (const [contactId, mine] of byContact) {
     const siblings = offers.filter((o) => o?.contactId === contactId);
@@ -146,7 +148,7 @@ export async function sweepHeldUnderwrites({
 
     let closed = 0;
     for (const o of mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))) {
-      const t = triageHeldUnderwrite({ offer: o, siblings, events, drafts, contact, opportunities, botOffTags, now });
+      const t = triageHeldUnderwrite({ offer: o, siblings, events, drafts, contact, opportunities, botOffTags, now, knownCities });
       const kind = KIND_OF[t.action];
       if (t.action === "wait") { counts.waiting++; continue; }
       const f = heldFinding(o, t, now);
@@ -176,6 +178,13 @@ export async function sweepHeldUnderwrites({
           }).catch(() => {});
           if (contactId) await createContactNote(client, contactId, { body: note }).catch(() => {});
           row.status = "retired"; counts.retired++; closed++;
+          // Not our kind of house, or not our area: they hear it from us,
+          // once, so a "we'll come back with a number" isn't left hanging.
+          if (t.passNote && contactId) {
+            const r = await startProactive({ client, locationId, saved, store, contactId, kind: "kind_pass", offer: { ...full, status: t.status },
+              subject: { address: o.address, why: t.passNote, heldReason: t.reason }, sendsEnabled, deps: { ...deps, startProactive } }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 120) }));
+            row.reason = `${t.reason}${r?.skipped ? ` — no note: ${r.skipped}` : " — told them"}`;
+          }
         } else {
           const r = await carryOutHeldVerdict({ client, locationId, saved, store, sendsEnabled, deps: { ...deps, startProactive }, offer: o, triage: t, now });
           row.status = r.status; row.jobId = r.jobId;

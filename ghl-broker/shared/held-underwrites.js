@@ -35,10 +35,11 @@
 //   wait    asked, not yet a week, they haven't answered — leave it alone
 //   yours   a person's call
 
-import { addressKey, sameStreet } from "./us-address.js";
+import { addressKey, sameStreet, parseUsAddress } from "./us-address.js";
 import { propertyDossier } from "./contact-record.js";
 import { aiHoldReasons, effectiveStatus, DEAD_STATUSES } from "./offer-status.js";
 import { KIND_HOLD } from "./asset-type.js";
+import { WA_CITY_COORDS } from "./wa-city-coords.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -94,6 +95,7 @@ export function classifyHolds(held = []) {
 /* ---------- the dials ---------- */
 
 export const STALE_DAYS = 14;          // held this long with no word from them → retire
+export const KIND_PASS_HOURS = 24;     // a house that isn't single-family passes after this, unless you underwrite it anyway
 export const ASK_WAIT_DAYS = 7;        // asked this long ago, no answer → retire
 export const ALIVE_DAYS = 21;          // they wrote within this → the thread is live enough to ask
 export const PROMISE_ASK_DAYS = 3;     // a promise_due text this recent already asked
@@ -134,9 +136,12 @@ const CLOSED_OPP = /^(lost|abandoned|abandon)$/i;
  *   contact        { tags: [], dnd: bool } from GHL, or null when unread
  *   opportunities  [{ stageName, status }] from GHL, or []
  *   botOffTags     the routing's bot-off tags (lower-case)
+ *   knownCities    Set of city slugs we buy in (knownCitiesFrom), or null to
+ *                  skip the area check
  */
 export function triageHeldUnderwrite({
   offer, siblings = [], events = [], drafts = [], contact = null, opportunities = [], botOffTags = ["stop bot", "bot-off"], now = Date.now(),
+  knownCities = null,
 } = {}) {
   const held = aiHoldReasons(offer);
   const cls = classifyHolds(held);
@@ -202,10 +207,25 @@ export function triageHeldUnderwrite({
   }
 
   /* --- 3. not our kind of house (2026-10-01: single-family only) --- */
-  // Nothing the agent could tell us clears it: whether to price a mobile
-  // home or a townhouse anyway is a person's call, said in full.
+  // Whether to price a mobile home or a duplex anyway is a person's call —
+  // for a day (Matt, 2026-10-04: the app should do everything else). Then
+  // the house is passed, and the agent hears we're single-family only.
   const kind = held.find((h) => KIND_HOLD.test(String(h || "")));
-  if (kind) return { ...base, action: "yours", reason: String(kind) };
+  if (kind) {
+    const passAt = heldAt + KIND_PASS_HOURS * 3600000;
+    if (now >= passAt) return { ...base, action: "retire", status: "we_passed", passNote: "kind", reason: String(kind) };
+    return { ...base, action: "wait", passAt: new Date(passAt).toISOString(), reason: `${kind} — passes after a day unless you underwrite it anyway` };
+  }
+
+  /* --- 3b. an address the map couldn't place ("818 Popular, Edmonds") --- */
+  // Ask them to confirm the street; their answer re-runs it.
+  const miss = held.find((h) => MAP_MISS.test(String(h || "")));
+  if (miss) {
+    const lastText = latestInbound(drafts, events);
+    if (asked != null && (lastText == null || lastText < asked)) return { ...base, action: "wait", needs: ["address"], reason: "asked them to confirm the address, waiting" };
+    const alive = (lastText != null && now - lastText <= ALIVE_DAYS * DAY_MS) || heldDays <= 3;
+    if (alive) return { ...base, action: "ask", needs: ["address"], reason: `${clip(miss)} — ask them to confirm the street address` };
+  }
 
   /* --- 4. re-run on their numbers --- */
   if (cls.rescuable) {
@@ -243,6 +263,15 @@ export function triageHeldUnderwrite({
     return { ...base, action: "ask", needs: missing, reason: `${heldReason} — ask what ${missing.map((n) => (n === "value" ? "it's worth fixed up" : "the work would run")).join(" and ")}` };
   }
 
+  /* --- 5b. outside the area we buy in (2026-10-04) --- */
+  // A town we've never priced a house in and that isn't on our map: 102 W
+  // Pearl St, Oakesdale (Whitman County) sat on the Desk for a week. Only
+  // here, after anything their numbers could clear: a thin-comps hold in a
+  // town we just haven't priced yet is asked about, never passed.
+  if (knownCities && outsideArea(address, knownCities)) {
+    return { ...base, action: "retire", status: "we_passed", passNote: "area", reason: `outside the area we buy in (${cityName(cityOf(address)) || parseUsAddress(address).state})` };
+  }
+
   /* --- 6. a person's call --- */
   return { ...base, action: "yours", reason: heldReason };
 }
@@ -254,6 +283,74 @@ export function latestInbound(drafts = [], events = []) {
     ...events.filter((e) => e?.type === "text_summary" || e?.type === "call_summary").map((e) => ms(e.at)),
   ].filter((t) => t != null);
   return ts.length ? Math.max(...ts) : null;
+}
+
+// "couldn't locate 818 Popular, Edmonds on the map"
+const MAP_MISS = /couldn't locate .+ on the map/i;
+
+/**
+ * cityOf("102 W Pearl St, Oakesdale, WA") → "oakesdale"
+ *
+ * The city as the address parser reads it (a unit, a missing comma, "Mt"
+ * for "Mount" all handled), slugged like wa-city-coords.js. "" when the
+ * parser can't find one — and then nothing is judged on it.
+ */
+export function cityOf(address = "") {
+  const city = String(parseUsAddress(address).city || "").toLowerCase()
+    .replace(/^mt\.?\s+/, "mount ").replace(/^st\.?\s+/, "saint ")
+    .replace(/[^a-z\s-]/g, "").trim().replace(/\s+/g, "-");
+  return city;
+}
+
+/** outsideArea(address, knownCities) → true only when the parser is sure: another state, or a WA town we don't know. */
+export function outsideArea(address = "", knownCities = null) {
+  if (!knownCities) return false;
+  const p = parseUsAddress(address);
+  const state = String(p.state || "").toUpperCase();
+  if (state && state !== "WA") return true;
+  const city = cityOf(address);
+  return Boolean(city) && !knownCities.has(city);
+}
+const cityName = (slug) => slug.split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
+
+/**
+ * knownCitiesFrom(offers) → Set of city slugs we buy in
+ *
+ * Every town on our map (wa-city-coords.js), and every town we've put a
+ * number on — a priced, non-draft offer anywhere in the book.
+ */
+export function knownCitiesFrom(offers = []) {
+  const out = new Set(Object.keys(WA_CITY_COORDS));
+  for (const o of offers || []) {
+    if (!o || !(Number(o.cashAmount) > 0) || effectiveStatus(o) === "draft") continue;
+    const c = cityOf(o.address);
+    if (c) out.add(c);
+  }
+  return out;
+}
+
+/**
+ * heldOnTheMachine(offer, { knownCities, now }) → { what, at } | null
+ *
+ * For the Desk: a held underwrite whose verdict is plain from the row alone
+ * — nothing to place, outside our area, not our kind of house, an address
+ * to confirm — is the machine's tonight, not a decision. Anything that
+ * needs the thread to judge is null (last night's verdict stands).
+ */
+export function heldOnTheMachine(offer, { knownCities = null, now = Date.now() } = {}) {
+  const held = aiHoldReasons(offer);
+  if (!held.length) return null;
+  const cls = classifyHolds(held);
+  const address = String(offer?.address || "").trim();
+  if (!address || cls.junk || TEST_ADDRESS.test(address) || !/\d/.test(address)) return { what: "dropped at the 7pm check — nothing to place" };
+  if (held.some((h) => KIND_HOLD.test(String(h || "")))) {
+    const heldAt = ms(offer?.autoUnderwrite?.finishedAt) ?? ms(offer?.updatedAt) ?? ms(offer?.createdAt) ?? now;
+    return { what: "passed unless you underwrite it anyway — we buy single-family only", at: new Date(heldAt + KIND_PASS_HOURS * 3600000).toISOString() };
+  }
+  if (held.some((h) => MAP_MISS.test(String(h || "")))) return { what: "asks them to confirm the street address at the 7pm check" };
+  // Outside our area, when nothing their numbers could clear is in the way.
+  if (!cls.rescuable && outsideArea(address, knownCities)) return { what: `passed at the 7pm check — outside the area we buy in (${cityName(cityOf(address))})` };
+  return null;
 }
 
 export const HELD_ACTIONS = ["drop", "retire", "rerun", "ask", "wait", "yours"];

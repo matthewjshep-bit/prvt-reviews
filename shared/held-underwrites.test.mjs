@@ -147,8 +147,12 @@ test("ask only when the thread is alive and nobody else just asked; a structural
   assert.equal(t.action, "yours");
   t = triage({ offer: held({}, ['the address was read with low confidence — "321 W St SE"']), drafts: [inbound("ok")] });
   assert.equal(t.action, "yours");
+  // The map couldn't place it (818 "Popular", 2026-10-04): ask them to
+  // confirm the street, once, while the thread is alive.
   t = triage({ offer: held({}, ["stopped early — couldn't locate 34418 54th Ave S on the map"]), drafts: [inbound("ok")] });
-  assert.equal(t.action, "yours");
+  assert.equal(t.action, "ask"); assert.deepEqual(t.needs, ["address"]);
+  t = triage({ offer: held({ createdAt: ago(10), autoUnderwrite: { held: ["stopped early — couldn't locate 34418 54th Ave S on the map"], finishedAt: ago(10) } }), drafts: [] });
+  assert.equal(t.action, "yours", "nobody to ask: still yours");
 });
 
 test("latestInbound reads drafts and summaries", () => {
@@ -156,15 +160,46 @@ test("latestInbound reads drafts and summaries", () => {
   assert.equal(latestInbound([], []), null);
 });
 
-test("a house that isn't single-family is a person's call, said in full, until it goes stale", async () => {
-  const { triageHeldUnderwrite } = await import("./held-underwrites.js");
+// Matt, 2026-10-04: the app should do everything else. A house that isn't
+// single-family is a person's call for a day (Underwrite anyway), then it is
+// passed and the agent hears we're single-family only.
+test("a house that isn't single-family waits a day for you, then it's passed and they hear why", async () => {
+  const { triageHeldUnderwrite, heldOnTheMachine } = await import("./held-underwrites.js");
   const now = Date.parse("2026-10-01T20:00:00Z");
   const offer = { id: "h1", address: "1510 Maple Lane, Kent, WA 98030", contactId: "a1", status: "draft", createdAt: "2026-10-01T19:00:00Z",
     autoUnderwrite: { finishedAt: "2026-10-01T19:00:00Z", held: ["not our kind of house — a mobile home (single-family only right now)"] } };
   const t = triageHeldUnderwrite({ offer, now });
-  assert.equal(t.action, "yours");
-  assert.equal(t.reason, "not our kind of house — a mobile home (single-family only right now)");
-  assert.equal(triageHeldUnderwrite({ offer, now: now + 15 * 86400000 }).action, "retire", "two quiet weeks retire it like any hold");
+  assert.equal(t.action, "wait");
+  assert.match(t.reason, /passes after a day unless you underwrite it anyway/);
+  const later = triageHeldUnderwrite({ offer, now: now + 25 * 3600000 });
+  assert.deepEqual([later.action, later.status, later.passNote], ["retire", "we_passed", "kind"]);
+  assert.match(heldOnTheMachine(offer, { now }).what, /single-family only/);
+});
+
+test("a town we've never bought in and isn't on our map is outside our area; one we've priced in is not", async () => {
+  const { triageHeldUnderwrite, knownCitiesFrom, cityOf, heldOnTheMachine } = await import("./held-underwrites.js");
+  assert.equal(cityOf("102 W Pearl St, Oakesdale, WA"), "oakesdale");
+  const known = knownCitiesFrom([{ address: "336 SW 15th St, Chehalis, WA 98532", cashAmount: 192250, status: "sent" }, { address: "1 X St, Spokane, WA", cashAmount: 0, status: "draft" }]);
+  assert.ok(known.has("chehalis") && known.has("seattle"));
+  assert.equal(known.has("spokane"), false, "a draft with no number doesn't make a town ours");
+  const now = Date.parse("2026-10-04T20:00:00Z");
+  const oak = { id: "o", address: "102 W Pearl St, Oakesdale, WA", contactId: "a1", status: "draft", createdAt: "2026-09-29T21:34:00Z",
+    autoUnderwrite: { finishedAt: "2026-09-29T21:36:00Z", held: ["\"102 W Pearl St, Oakesdale, WA\" could only be placed at the centre of its city — the comp search is centred on a guess"] } };
+  const t = triageHeldUnderwrite({ offer: oak, now, knownCities: known });
+  assert.deepEqual([t.action, t.status, t.passNote], ["retire", "we_passed", "area"]);
+  assert.match(t.reason, /outside the area we buy in \(Oakesdale\)/);
+  assert.match(heldOnTheMachine(oak, { knownCities: known, now }).what, /outside the area/);
+  const che = { ...oak, address: "500 Main St, Chehalis, WA 98532" };
+  assert.notEqual(triageHeldUnderwrite({ offer: che, now, knownCities: known }).status, "we_passed");
+  // Review, 2026-10-04: a unit, or no comma before the state, read the city
+  // wrong and passed in-area houses. The parser reads them; and a hold their
+  // numbers could clear is asked about before any town is judged.
+  assert.equal(cityOf("2500 Alder St, Unit 15, Milton, WA 98354"), "milton");
+  assert.equal(cityOf("1234 5th Ave S, Seattle WA 98108"), "seattle");
+  assert.equal(cityOf("1 Main St, Mt Vernon, WA 98273"), "mount-vernon");
+  const thin = { ...oak, address: "2500 Alder St, Unit 15, Smalltown, WA 98354", autoUnderwrite: { finishedAt: "2026-10-04T19:00:00Z", held: ["only 1 priced comps — the price proxy needs 6 to have a top tier"] } };
+  assert.equal(triageHeldUnderwrite({ offer: thin, now, knownCities: known }).action, "ask");
+  assert.equal(heldOnTheMachine(thin, { knownCities: known, now }), null);
 });
 
 test("the reply agent's read of a house that's gone: loose on a no, strict otherwise", async () => {
