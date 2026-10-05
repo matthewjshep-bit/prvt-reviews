@@ -48,12 +48,12 @@ import { draftStats } from "../shared/conversation-ai.js";
 import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
 import { conversationConfig, standDownForHold } from "../reply-agent.js";
 import { holdFor, botEventsFor } from "../bot-hold.js";
-import { holdLine, pauseUntil, mergeEvents, BOT_EVENT_TYPES, PACES, paceOf } from "../shared/bot-hold.js";
+import { holdLine, pauseUntil, mergeEvents, BOT_EVENT_TYPES, PACES, paceOf, botHold } from "../shared/bot-hold.js";
 import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
-import { auditActions, withCurrentOffers, stillOwed, summarize as summarizeAudit } from "../shared/conversation-audit.js";
-import { foldDesk, heldVerdicts, nameRows, deskKpis, DESK_SECTIONS } from "../shared/desk.js";
+import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize as summarizeAudit } from "../shared/conversation-audit.js";
+import { foldDesk, heldVerdicts, nameRows, deskKpis, DESK_SECTIONS, pacificStart, machineDrives } from "../shared/desk.js";
 import { callList, briefFor, normalizeDesk } from "../shared/call-list.js";
 import { LAST_ACTIVITY_TYPES, INBOUND_EVENT_TYPES as LAST_IN_TYPES } from "../shared/last-activity.js";
 import { normalizeLineTargets } from "../shared/line.js";
@@ -527,7 +527,29 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const touches = await lastTouches(locationId).catch(() => ({ lastIn: new Map(), lastAny: new Map() }));
       const unsubscribedIds = new Set(botEvents.filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
       const callRows = nameRows(callList({ offers, cards: out.cards, actions: out.actions, drafts: [...drafts, ...recentDrafts], events,
-        lastIn: touches.lastIn, lastAny: touches.lastAny, unsubscribed: unsubscribedIds, settings: deskSettings, now }), names);
+        lastIn: touches.lastIn, lastAny: touches.lastAny, unsubscribed: unsubscribedIds, settings: deskSettings, now, machine: machineDrives(config) }), names);
+      // A held reply the 7pm check will send as it stands (releasableHeld,
+      // the audit's own rule) is the machine's, not a decision: it shows
+      // with the time it goes. You can still open it and send it sooner.
+      const audit7 = config.nightlyAudit?.enabled !== false ? (() => {
+        const hour = Number(config.nightlyAudit?.hour ?? 19);
+        let at = pacificStart(now) + hour * 3600000;
+        if (at <= now) at += DAY_MS;
+        return at;
+      })() : null;
+      if (audit7) {
+        const byId = new Map(drafts.map((d) => [d.id, d]));
+        for (const a of out.actions) {
+          if (a.kind !== "draft_waiting" || a.group === "machine") continue;
+          const d = byId.get(a.draftId);
+          if (!d || !releasableHeld(d, { loose: config.nightlyAudit?.loose !== false, mode: "night", now: audit7 })) continue;
+          if (botHold({ events: botEvents.filter((e) => e.contactId === d.contactId), now }).held) continue;
+          if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
+          out.counts.actions.byGroup.machine = (out.counts.actions.byGroup.machine || 0) + 1;
+          a.group = "machine";
+          a.next = { what: "goes out at the 7pm check", at: new Date(audit7).toISOString() };
+        }
+      }
       // Those names can show you as well (a test text with no offer or draft).
       const auditRows = auditActions(audit, { now, names });
       const auditSelfIds = new Set([...selfIds, ...selfContactIds(auditRows, mine)]);

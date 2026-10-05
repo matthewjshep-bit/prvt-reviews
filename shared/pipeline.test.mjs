@@ -778,3 +778,11 @@ test("an address that left the underwrite queue is on Today until the house is p
   assert.equal(buildPipeline({ offers: [priced], events: [dropped], now: NOW }).actions.some((a) => a.kind === "underwrite_dropped"), false);
   assert.equal(buildPipeline({ events: [dropped], now: NOW + 8 * 86400000 }).actions.some((a) => a.kind === "underwrite_dropped"), false, "a week on, it goes");
 });
+
+// 2026-10-04: five hand-made offers priced 40–69 days ago sat on the Desk.
+test("a hand-made offer nobody sent is a decision for a week, then history", () => {
+  const fresh = build({ offers: [offer({ status: "new", sends: [], statusAt: D(3), createdAt: D(3) })] });
+  assert.ok(fresh.actions.some((a) => a.kind === "offer_ready"));
+  const old = build({ offers: [offer({ status: "new", sends: [], statusAt: D(45), createdAt: D(45) })] });
+  assert.equal(old.actions.some((a) => a.kind === "offer_ready"), false);
+});

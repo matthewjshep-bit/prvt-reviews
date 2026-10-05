@@ -280,14 +280,28 @@ export function priceAgreed(offer) {
   // is history, not a lock; a new yes after it locks the price again. A
   // contract is never taken back this way.
   const clearedAt = Date.parse(offer.agreedCleared?.at || "") || 0;
-  const live = (at) => !clearedAt || (Date.parse(at || "") || 0) > clearedAt;
-  if (offer.agreed?.amount > 0 && live(offer.agreed.at)) return offer.agreed;
+  // A yes to a number we have since re-priced BELOW is a yes to a number we
+  // no longer offer: history, not a lock (3418 Wetmore, 2026-10-04 — a
+  // realm yes at 289,750, then revised by hand to 226,000; the Desk asked
+  // Matt to "settle the number" he had already settled). Only a move down
+  // retires it; this never raises anything.
+  const movedBelow = (amount, at) => {
+    const t = Date.parse(at || "") || 0;
+    return [...(offer.revisions || []), ...(offer.requotes || [])].some((r) => {
+      const to = Number(r?.to ?? r?.amount) || 0;
+      return (Date.parse(r?.ts || "") || 0) > t && to > 0 && to < Number(amount);
+    });
+  };
+  const live = (at, amount = 0) => (!clearedAt || (Date.parse(at || "") || 0) > clearedAt) && !(amount > 0 && movedBelow(amount, at));
+  if (offer.agreed?.amount > 0 && live(offer.agreed.at, Number(offer.agreed.amount))) return offer.agreed;
   if (offer.deal || effectiveStatus(offer) === "accepted") {
     const h = (offer.statusHistory || []).find((x) => x.status === "accepted");
     return { amount: Number(offer.deal?.contractPrice) || Number(offer.cashAmount) || 0, at: h?.ts || offer.deal?.createdAt || offer.statusAt || null, via: "accepted" };
   }
-  if (offer.counterBand?.acceptedAt && live(offer.counterBand.acceptedAt)) return { amount: Number(offer.counterBand.amount) || Number(offer.cashAmount) || 0, at: offer.counterBand.acceptedAt, via: "counter_band" };
-  if (offer.realm?.answer === "yes" && live(offer.realm.ts)) return { amount: Number(offer.cashAmount) || 0, at: offer.realm.ts || null, via: "realm_yes" };
+  if (offer.counterBand?.acceptedAt && live(offer.counterBand.acceptedAt, Number(offer.counterBand.amount) || 0)) return { amount: Number(offer.counterBand.amount) || Number(offer.cashAmount) || 0, at: offer.counterBand.acceptedAt, via: "counter_band" };
+  // The realm yes was to the number out then: a move down since retires it.
+  const realmAmount = Number((offer.revisions || []).filter((r) => (Date.parse(r?.ts || "") || 0) > (Date.parse(offer.realm?.ts || "") || 0)).map((r) => r?.from)[0]) || Number(offer.cashAmount) || 0;
+  if (offer.realm?.answer === "yes" && live(offer.realm.ts, realmAmount)) return { amount: Number(offer.cashAmount) || 0, at: offer.realm.ts || null, via: "realm_yes" };
   return null;
 }
 

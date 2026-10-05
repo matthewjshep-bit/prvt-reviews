@@ -45,12 +45,14 @@ export const CALL_INTENTS = new Set(["wants_call", "scheduling", "wants_walkthro
 // after these, by severity.
 export const KIND_STRENGTH = [
   "call_hot", "hot_stalled", "call_counter", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
-  "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "audit_owed",
+  "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "audit_owed",
   "call_first_reply", "call_quiet", "ladder_exhausted",
   "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "stage_lag",
   "deal_no_buyers", "deal_no_dataroom", "showing_no_window", "underwrite_dropped",
   "call_phone_only", "call_partner",
   "gone_quiet", "showing_soon", "blast_no_opens", "underwrite_failed", "draft_scheduled",
+  // What the machine is driving that used to be a call (2026-10-04).
+  "hot_machine", "counter_held",
 ];
 const STRENGTH = Object.fromEntries(KIND_STRENGTH.map((k, i) => [k, i]));
 
@@ -222,6 +224,28 @@ export function nameRows(reasons = [], names = {}) {
     const renamed = /^An agent\b/.test(title) ? title.replace(/^An agent/, name) : title;
     return { ...a, contactName: name, title: renamed, ...(renamed !== title && !a.dismissedAs ? { dismissedAs: title } : {}) };
   });
+}
+
+/**
+ * machineDrives(config) → the `machine` argument of callList: what the
+ * machine keeps moving by itself, from the conversation settings.
+ *
+ * Matt, 2026-10-04: "today should only be for urgent things only a human
+ * should do and i expect the app to do everything else". A hot offer is
+ * the machine's while the push-to-paper ladder is on; a counter we held our
+ * number on while the hold is on; a quiet offer while the offer ladder
+ * repeats. Each switch off puts its rows back on the call list.
+ */
+export function machineDrives(config) {
+  const pb = config?.parties?.agent;
+  const fu = pb?.followUp;
+  const on = Boolean(config?.enabled && fu?.enabled);
+  return {
+    hotPush: on && Boolean(fu?.ladders?.hot_push?.enabled),
+    counterHold: config?.enabled && pb?.counterHold?.enabled
+      ? { enabled: true, checkIns: Number(pb.counterHold.checkIns) || 2, gapHours: Number(fu?.minHoursBetween) || 72 } : null,
+    nudges: on && Boolean(fu?.ladders?.offer_nudge?.enabled) && Number(fu?.ladders?.offer_nudge?.repeatEvery) > 0,
+  };
 }
 
 /** heldVerdicts(audit) → Map offerId → the held-underwrite finding kind from last night. */

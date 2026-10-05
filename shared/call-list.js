@@ -22,6 +22,8 @@ import { effectiveStatus, pushesToPaper, priceAgreed } from "./offer-status.js";
 import { callEventConnected } from "./talked-to.js";
 import { agentSegment } from "./agent-pulse.js";
 import { IRRITATED_RX } from "./thread-health.js";
+import { handsWriteUpBack } from "./conversation-ai.js";
+import { holdState } from "./counter-hold.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -64,6 +66,10 @@ export function normalizeDesk(v = {}) {
 
 export const CALL_KINDS = [
   { key: "call_hot",         label: "Hot: get it written up" },
+  // Rows the call list hands the machine or a decision (2026-10-04).
+  { key: "paper_to_sign",    label: "Paperwork to sign" },
+  { key: "hot_machine",      label: "Hot: the machine is pushing to paper" },
+  { key: "counter_held",     label: "Counter: held at our number" },
   { key: "call_missed",      label: "They called you" },
   { key: "call_counter",     label: "Counter above our number" },
   { key: "call_first_reply", label: "New agent, first reply" },
@@ -79,6 +85,10 @@ const PER_TRY = 15;
 const PER_DAY = 1, MAX_AGE_PENALTY = 30;
 
 const FIRST_REPLY_INTENTS = new Set(["deal_available", "new_property", "investor_open"]);
+// A phone number in their text: "(360) 555-0161 here!"
+const PHONE_RX = /\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/;
+// The paperwork is on its way to us to sign.
+const SENT_TO_SIGN_RX = /\b(?:docusign|authentisign|dotloop|e-?sign(?:ature)?)\b|\bsent (?:it|you|the (?:offer|paperwork|forms?|contract|psa))(?: over)? (?:for|to) (?:your )?sign(?:ature|ing)?\b|\bready (?:for you )?to sign\b|\bfor your signature\b/i;
 const LIVE_LANES = new Set(["floated", "sent", "countered", "hot"]);
 
 /**
@@ -93,10 +103,22 @@ const LIVE_LANES = new Set(["floated", "sent", "countered", "hot"]);
  *   lastIn        Map contactId → ISO of their last word to us (any time)
  *   lastAny       Map contactId → ISO of the last touch either way
  *   unsubscribed  Set of contactIds who opted out of texts
+ *   machine       what the machine is driving (Matt, 2026-10-04: "today should
+ *                 only be for urgent things only a human should do"):
+ *                   hotPush      the push-to-paper ladder is on — a hot offer
+ *                                is the machine's, unless they handed the
+ *                                write-up to someone else (a call) or sent
+ *                                paper to sign (a decision)
+ *                   counterHold  {enabled, checkIns, gapHours} — a counter we
+ *                                held our number on is the machine's
+ *                   nudges       the offer ladder repeats — a quiet thread is
+ *                                the machine's, not a call
+ *                 Off (the default), each reads as it did before.
  */
 export function callList({
   offers = [], cards = [], actions = [], drafts = [], events = [],
   lastIn = new Map(), lastAny = new Map(), unsubscribed = new Set(), settings = {}, now = Date.now(),
+  machine = {},
 } = {}) {
   const cfg = normalizeDesk(settings);
   const offersById = new Map((offers || []).filter((o) => o?.id).map((o) => [o.id, o]));
@@ -148,6 +170,17 @@ export function callList({
     });
   };
 
+  // A row the machine is already driving: in "The machine is on it", with
+  // what happens next. Never a call, whatever its kind would have said.
+  const machineRow = (kind, { contactId, contactName = "", offerId = null, address = "", title, detail = "", next = null, extra = {} }) => {
+    if (!contactId || taken.has(contactId)) return;
+    taken.add(contactId);
+    out.push({ id: `${kind}:${offerId || contactId}`, kind, section: "machine", group: "machine", severity: "fyi",
+      contactId, contactName, offerId, address, draftId: null, score: 0, title, detail, next, ops: [], ...extra });
+  };
+  // Their texts since a moment, newest first.
+  const wordsSince = (c, at) => theirWords(c).filter((d) => (ms(d.createdAt) ?? 0) >= (ms(at) ?? 0));
+
   /* 1. They called and we missed it. */
   for (const e of events || []) {
     if (e?.type !== "call_attempt" || e.data?.direction !== "inbound" || !e.contactId) continue;
@@ -176,7 +209,42 @@ export function callList({
     const paper = pushesToPaper(o) && !doubt;
     const ours = agreedAt || book;
     const where = street(card.address);
-    const since = latest([o.hot?.at, agreed?.at, o.statusAt, lastWordIso(lastWord(c))]);
+    // When it went hot — not their last word: a "have a good weekend" after
+    // the call re-armed a call that had already happened (336 SW 15th St,
+    // 2026-10-04).
+    const since = latest([o.hot?.at, agreed?.at, o.statusAt]);
+    if (machine.hotPush && !doubt) {
+      const words = wordsSince(c, since);
+      // "Write up whatever you like — call the listing broker" (3418
+      // Wetmore): the paper is with someone the bot doesn't text. A call.
+      const handed = words.find((d) => handsWriteUpBack(d.inbound));
+      if (handed) {
+        const phone = words.map((d) => (String(d.inbound || "").match(PHONE_RX) || [])[0]).find(Boolean) || "";
+        add("call_hot", { contactId: c, contactName: card.contactName, offerId: card.offerId, address: card.address, since: handed.createdAt,
+          why: `they handed the write-up on ${where} to someone else — call them`,
+          goal: `They said to go to someone else to get ${where} written up${phone ? ` (${phone})` : ""}. Call, introduce yourself, and ask them to write it up on the NWMLS forms at ${kText(ours)} for your signature.`,
+          opener: `Hi, it's Matt — ${first(card.contactName)} said you're the one to talk to about writing up ${where}.`,
+          extra: phone ? { handedTo: { phone } } : {}, agePenaltyFrom: ms(handed.createdAt) });
+        continue;
+      }
+      // The paper is here: signing it is yours.
+      const paper = words.find((d) => SENT_TO_SIGN_RX.test(String(d.inbound || "")));
+      if (paper) {
+        if (taken.has(c)) continue;
+        taken.add(c);
+        out.push({ id: `paper_to_sign:${card.offerId}`, kind: "paper_to_sign", section: "decide", group: "yours", severity: "now",
+          contactId: c, contactName: card.contactName, offerId: card.offerId, address: card.address, draftId: null, score: 0,
+          title: `${card.contactName || "They"}: the paperwork on ${where} is ready to sign`,
+          detail: `They sent it over at ${kText(ours)}. Check the number and the terms, then sign.`,
+          ops: [{ key: "open_offer", label: "Open the offer", intent: "primary" }] });
+        continue;
+      }
+      machineRow("hot_machine", { contactId: c, contactName: card.contactName, offerId: card.offerId, address: card.address,
+        title: `${card.contactName || "Someone"}: ${where} is hot${ours ? ` at ${kText(ours)}` : ""} — the machine is pushing it to paper`,
+        detail: o.hot?.signal === "writing_up" ? "They said they're writing it up." : `Asking them to write it up on the NWMLS forms${ours ? ` at ${kText(ours)}` : ""}.`,
+        next: { what: o.hot?.signal === "writing_up" ? "waiting on their write-up" : "the next push to paper", at: null } });
+      continue;
+    }
     add("call_hot", { contactId: c, contactName: card.contactName, offerId: card.offerId, address: card.address, since,
       why: doubt ? `${where} is hot, but the agreed ${kText(agreed.amount)} on record is above our ${kText(book)} — settle the number first`
         : agreedAt ? `${kText(ours)} on ${where} is agreed — get it on paper`
@@ -202,6 +270,16 @@ export function callList({
     const o = offersById.get(card.offerId) || {};
     const ours = Number(card.cashAmount) || 0;
     const theirs = Number(o.counter?.amount) || 0;
+    // Held at our number (counter-hold.js): the machine checks in and passes
+    // — "come closer to where they are" too, which carries no number.
+    if (machine.counterHold?.enabled && o.counterHold?.at) {
+      const st = holdState(o, { lastInboundAt: lastWordIso(lastWord(c)), checkIns: machine.counterHold.checkIns, gapHours: machine.counterHold.gapHours, now });
+      machineRow("counter_held", { contactId: c, contactName: card.contactName, offerId: card.offerId, address: card.address,
+        title: `${card.contactName || "Someone"}: held at ${kText(o.counterHold.ours || ours)} on ${street(card.address)}${theirs ? ` — they're at ${kText(theirs)}` : ""}`,
+        detail: st.why,
+        next: { what: st.next === "pass" ? "marked we passed" : st.next === "nudge" ? "a check-in" : st.why, at: st.at || null } });
+      continue;
+    }
     if (!(theirs > ours)) continue;
     const band = newestBand(draftsBy.get(c) || [], card.offerId);
     const ceiling = Number(band?.exception?.ceiling) || 0;
@@ -237,7 +315,9 @@ export function callList({
   }
 
   /* 5. An agent who talks to us, gone quiet on an offer: a call beats another text. */
-  for (const a of actions || []) {
+  // Unless the offer ladder keeps asking (it repeats weekly): then the
+  // machine is checking in, and that is Matt's ask (2026-10-04).
+  for (const a of machine.nudges ? [] : actions || []) {
     if (!["ladder_exhausted", "gone_quiet"].includes(a?.kind) || !a.contactId) continue;
     const c = a.contactId;
     if (unsubscribed.has(c) || irritated(c)) continue;
