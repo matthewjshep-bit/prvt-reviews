@@ -239,7 +239,9 @@ export function machineDrives(config) {
   const on = Boolean(config?.enabled && fu?.enabled);
   return {
     hotPush: on && Boolean(fu?.ladders?.hot_push?.enabled),
-    counterHold: config?.enabled && pb?.counterHold?.enabled
+    offerNudge: on && Boolean(fu?.ladders?.offer_nudge?.enabled),
+    // The hold's check-ins ride the follow-up clock (counter-hold.js).
+    counterHold: on && pb?.counterHold?.enabled
       ? { enabled: true, checkIns: Number(pb.counterHold.checkIns) || 2, gapHours: Number(fu?.minHoursBetween) || 72 } : null,
     nudges: on && Boolean(fu?.ladders?.offer_nudge?.enabled) && Number(fu?.ladders?.offer_nudge?.repeatEvery) > 0,
   };

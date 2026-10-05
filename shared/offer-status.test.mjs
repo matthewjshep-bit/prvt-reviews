@@ -451,15 +451,15 @@ test("a yes to a higher number is not a reason to push our lower one to paper", 
   assert.equal(agreedAboveOurNumber({ ...wetmore, cashAmount: 289750 }), null);
 });
 
-// 3418 Wetmore (2026-10-04): a realm yes at 289,750, then Matt revised the
-// offer to 226,000 by hand. The Desk asked him to "settle the number" he had
-// already settled.
-test("a yes to a number we've since re-priced below isn't an agreement any more", () => {
-  const base = { id: "w", status: "sent", cashAmount: 226000, realm: { answer: "yes", ts: "2026-10-02T01:52:28Z" },
-    agreed: { at: "2026-10-02T01:52:28Z", via: "realm_yes", amount: 289750 } };
-  const repriced = { ...base, revisions: [{ ts: "2026-10-02T16:08:31Z", from: 289750, to: 244750 }, { ts: "2026-10-02T16:09:00Z", from: 244750, to: 226000 }] };
-  assert.equal(priceAgreed(repriced), null);
-  assert.ok(priceAgreed({ ...base, cashAmount: 289750 }), "with no move down, the yes stands");
-  // A move UP after the yes doesn't retire it (never raises anything).
-  assert.ok(priceAgreed({ ...base, cashAmount: 300000, agreed: { ...base.agreed }, revisions: [{ ts: "2026-10-03T00:00:00Z", from: 289750, to: 300000 }] }));
+// 3418 Wetmore: a realm yes at 289,750, then Matt revised the offer to
+// 226,000 by hand. The agreement stays on record — it is what keeps the
+// machine from pushing paper at 226k or re-quoting above it
+// (agreedAboveOurNumber, priceLocked). The Desk reads the revision itself
+// (shared/call-list.js), not this (review, 2026-10-04).
+test("a yes followed by our own move down still guards the price: no paper at the lower number, nothing re-quoted", () => {
+  const repriced = { id: "w", status: "sent", cashAmount: 226000, realm: { answer: "yes", ts: "2026-10-02T01:52:28Z" },
+    agreed: { at: "2026-10-02T01:52:28Z", via: "realm_yes", amount: 289750 },
+    revisions: [{ ts: "2026-10-02T16:08:31Z", from: 289750, to: 244750 }, { ts: "2026-10-02T16:09:00Z", from: 244750, to: 226000 }] };
+  assert.equal(priceAgreed(repriced)?.amount, 289750);
+  assert.equal(priceLocked(repriced), true);
 });
