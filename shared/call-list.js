@@ -126,8 +126,8 @@ export function callList({
     if (!contactId || taken.has(contactId)) return;
     const evs = eventsBy.get(contactId) || [];
     const sinceMs = ms(since) ?? 0;
-    // Talked since the reason arose: done.
-    if (evs.some((e) => callEventConnected(e) && (ms(e.at) ?? 0) >= sinceMs)) return;
+    // Talked since the reason arose, or you texted them yourself: done.
+    if (evs.some((e) => (callEventConnected(e) || e.type === "hand_reply") && (ms(e.at) ?? 0) >= sinceMs)) return;
     // A call-back date still ahead: not today.
     const back = evs.filter((e) => e.type === "call_attempt" && e.data?.outcome === "call_back" && (ms(e.at) ?? 0) >= sinceMs)
       .map((e) => ms(e.data?.callBackAt)).filter((t) => t != null).sort((a, b) => b - a)[0];

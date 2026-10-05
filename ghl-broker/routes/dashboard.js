@@ -59,6 +59,7 @@ import { LAST_ACTIVITY_TYPES, INBOUND_EVENT_TYPES as LAST_IN_TYPES } from "../sh
 import { normalizeLineTargets } from "../shared/line.js";
 import { normalizeGhlStages } from "../shared/ghl-stages.js";
 import { agentRoster } from "../agent-pulse.js";
+import { maybeSweepHandReplies } from "../hand-reply-sweep.js";
 import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
 // Same expression routes/offers.js reads: the broker's one send gate. The
@@ -186,7 +187,7 @@ async function ghlPage(fn) {
 }
 const PACE_MS = 150; // ≈ 66 req / 10s, comfortably under the burst cap
 
-export default function createDashboardRouter({ resolveLocation, conversationDepsFor = null }) {
+export default function createDashboardRouter({ resolveLocation, conversationDepsFor = null, handTextDepsFor = null }) {
   const router = express.Router();
   const fail = (res, err) => {
     const code = err.http || err.status || 500;
@@ -778,6 +779,22 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const deps = typeof conversationDepsFor === "function" ? conversationDepsFor({ locationId, client, saved: saved || {} }) : {};
       const job = startConversationAudit({ client, locationId, saved: saved || {}, store, sendsEnabled: CARD_SENDS_ENABLED, deps, trigger: "manual", dryRun });
       res.status(202).json({ ok: true, job: publicAuditJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Texts you typed in GHL, looked back over by hand (the one-time cleanup).
+  // Body: { days = 14, dryRun = true }. A dry run lists, per contact, the
+  // drafts it would set aside; a live run writes the hand_reply events and
+  // sets them aside. The cursor the tick uses is left where it was.
+  router.post("/hand-replies/sweep", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      const days = clamp(Number(req.body?.days) || 14, 1, 30);
+      const dryRun = req.body?.dryRun !== false;
+      const deps = !dryRun && typeof handTextDepsFor === "function" ? handTextDepsFor({ locationId, client, saved }) : {};
+      const r = await maybeSweepHandReplies({ client, locationId, saved, store, deps, dryRun, sinceMs: Date.now() - days * DAY_MS, maxPages: 40 });
+      res.json({ ok: true, days, ...(r || { skipped: "a sweep is already running" }) });
     } catch (err) { fail(res, err); }
   });
 
