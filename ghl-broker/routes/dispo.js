@@ -34,7 +34,7 @@ import { CURSOR_NAME as BOOK_SYNC_CURSOR } from "../investor-sync.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel, resumePulledBack } from "../dispo-autopilot.js";
-import { planBuyerPulse, startBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
+import { planBuyerPulse, startBuyerPulse, previewBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
 import { runShowingSweep } from "../showing-sweep.js";
 import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
 import {
@@ -1320,6 +1320,18 @@ export default function createDispoRouter({ resolveLocation }) {
         trigger: "manual", dryRun, limit,
       });
       res.json({ ok: true, job });
+    } catch (err) { fail(res, err); }
+  });
+
+  // A few sample pulse checks, written as they would be today and never
+  // sent (2026-10-05) — the agent check-in's "write 3 samples", for buyers.
+  router.post("/pulse/preview", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const out = await previewBuyerPulse({ client, locationId, saved, store, limit: req.body?.limit ?? 3,
+        deps: { book: (loc) => scoredBook(loc, { status: "active" }) } });
+      res.json({ ok: true, ...out });
     } catch (err) { fail(res, err); }
   });
 

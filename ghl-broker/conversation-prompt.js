@@ -77,6 +77,9 @@ const FACTS =
   "when someone ASKS for them (\"what's your email?\", \"send it over\", \"how do I reach you?\"), give exactly " +
   "what is listed, verbatim, in the same message — no \"I'll send it over\", no checking with anyone. Never " +
   "volunteer them unasked, and never invent one that is not listed. " +
+  "WHO THIS IS: when they ask who this is (or how we got their number), the first words answer it — \"It's Matt\" / " +
+  "\"This is Matt\" (your first name, under YOU ARE; never your bare name followed by a comma, which reads as calling " +
+  "them by it) — then what you do in one plain clause and why you texted them, then whatever else they asked. " +
   "DESCRIBING A HOUSE: use only the words the context gives it — its kind, its facts, the words a deal line " +
   "marks \"in our words\", its numbers, or the words they used themselves. Never add a word of your own for its " +
   "condition or quality (heavy, light, cosmetic, gut job, ugly, rough, cleanup, turnkey, needs work, a steal, a " +
@@ -744,6 +747,10 @@ function openingFor(outbound) {
     // ever had blasts from us, so this has to read like one person texting
     // another — and every clue below is optional colour, never a dossier.
     case "buyer_pulse": {
+      // A deal they never answered is the way in (shared/buyer-pulse.js
+      // after_deal, 2026-10-05): asked what fits, not whether they want it.
+      const lh = o.lastHouse;
+      const afterDeal = Boolean(lh?.street && lh.how === "no answer");
       const clues = [
         o.dealsSent > 1 ? `We have sent them ${o.dealsSent >= 4 ? "several" : "a couple of"} deals by text${o.conversed ? "" : " and never heard back"}.`
           : o.dealsSent === 1 ? `We have sent them one deal by text${o.conversed ? "" : " and never heard back"}.`
@@ -751,27 +758,50 @@ function openingFor(outbound) {
         o.boughtFromUs ? "They have bought from us before — this is a friend, write like it." : "",
         !o.boughtFromUs && o.lookedAtDeals ? "They have looked at a deal of ours without taking it." : "",
         o.passed ? "They passed on something we sent." : "",
+        lh?.street ? (afterDeal
+          ? `THE LAST HOUSE WE SENT THEM: ${lh.street}${lh.city ? ` in ${lh.city}` : ""}, and they never answered. That house is the way in: guess lightly that it wasn't their kind of house and ask what is. Never ask whether they want it, and say nothing about it but its street or city.`
+          : `The last house we sent them: ${lh.street}${lh.city ? ` in ${lh.city}` : ""} (${lh.how}).`) : "",
+        o.passReasons?.length ? `Why they passed before, as recorded: ${o.passReasons.join("; ")}.` : "",
+        o.aboutThem ? `About them, from our notes: ${o.aboutThem}.` : "",
+        o.lastSummary ? `Our last conversation: ${o.lastSummary}` : "",
+        o.nextAction ? `What we meant to do next with them: ${o.nextAction}.` : "",
         o.lastBuyCity ? `Public records show a purchase in ${o.lastBuyCity}${o.lastBuyYear ? ` in ${o.lastBuyYear}` : ""} — you may say you noticed they picked something up in ${o.lastBuyCity}, and nothing more specific than the city.` : "",
         o.cities?.length ? `Where they seem to buy: ${o.cities.join(", ")}.` : "",
         o.types?.length ? `What they seem to do: ${o.types.join(", ").replace(/-/g, " ")}.` : "",
         o.buyBox ? `THE BUY BOX WE HAVE ON FILE: ${o.buyBox}. Do not ask for it from scratch — say what you have in a few words (areas and type only; leave any price out of the text) and ask if that is still right or has changed.` : "",
       ].filter(Boolean).join(" ");
+      // Who's texting, by name. Buck, 2026-09-24: a pulse that only said
+      // "a Seattle investor" got "who is this?". Never the bare name and a
+      // comma first — that reads as calling THEM Matt, and the gate holds it.
+      const who = `who you are by first name ("It's Matt" / "This is Matt" — your name is under YOU ARE; never open with your bare name and a comma)` +
+        `${o.source ? `, how we found them (${o.source})` : ""}, and that you're someone in Seattle who comes across more fixer deals than you can take on yourself`;
+      // Ask for what we don't know, confirm what we do.
+      const missing = (o.missing || []).filter(Boolean);
+      const ask = missing.length && missing.length < 4
+        ? `(3) The ask, as ONE question about the piece of their buy box we don't have — ${missing.slice(0, 2).join(" or ")} — so what you send is actually relevant. `
+        : `(3) The ask, as ONE question: are they looking to buy right now, and what's their buy box — so what you send is actually relevant to them. `;
+      const reference = (o.conversed || afterDeal || o.lastSummary || o.passReasons?.length)
+        ? `THE ONE REFERENCE: carry exactly ONE real, specific thing from the thread or the notes above, in your own words, in a clause — in this order of preference: ` +
+          `something they told us that's still open; the last house we sent and how it went (by street, never a number); why they passed, so you can say you'll only send what fits; ` +
+          `something personal, only if it's recent and reads warm, not nosy; their market. Never quote them, never recite the thread, never more than one, never invent one. `
+        : "";
       return `${START} There is NO deal in this message. It is a check-in with a buyer on our list, between deals. ` +
         `WHAT WE KNOW: ${clues} ` +
         `WHAT TO WRITE: two to four short sentences, one text, the way one local buyer texts another. ` +
         `(1) Their first name. (2) ${o.conversed
-          ? "You have talked before — READ THE THREAD and pick up from it like someone who remembers (what they said they buy, what they passed on and why). Do NOT reintroduce yourself. "
+          ? "You have talked before — READ THE THREAD and pick up from it like someone who remembers (what they said they buy, what they passed on and why). Do NOT reintroduce yourself, but if the thread shows they ever asked who this is, say your name. "
           : o.dealsSent > 0
-            ? "Own it lightly that the deals we sent weren't a fit (\"sent you a couple deals, sorry they weren't a fit\") — once, no grovelling. Then one line on who you are: someone in Seattle who comes across more fixer deals than they can take on themselves. "
-            : "One line on who you are: someone in Seattle who comes across more fixer deals than they can take on themselves. "}` +
-        `(3) The ask, as ONE question: are they looking to buy right now, and what's their buy box — so what you send is ` +
-        `actually relevant to them. ` +
-        `${PULSE_SHAPES[(Number(o.variant) || 0) % PULSE_SHAPES.length]} ` +
+            ? `Own it lightly that the deals we sent weren't a fit ("sent you a couple deals, sorry they weren't a fit") — once, no grovelling. Then ${who}. `
+            : `Say ${who}. `}` +
+        ask +
+        `${reference}` +
+        `${afterDeal ? "SHAPE FOR THIS ONE: open with the house you sent and a light guess that it missed, then the question." : PULSE_SHAPES[(Number(o.variant) || 0) % PULSE_SHAPES.length]} ` +
+        `${o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}" ` : ""}` +
         `Always give the reason for asking in your own words — so what you send them is actually relevant. ` +
         `Use at most ONE clue from above, and only if it makes the text warmer; never list what you know about them, ` +
-        `never mention records, lenders, streets, prices or how many properties they own. If the thread shows they ` +
+        `never mention records, lenders, prices or how many properties they own. If the thread shows they ` +
         `already told us what they buy, confirm it instead of asking again. ` +
-        `Do NOT name a price, a number, a percentage, an address or a link. Do NOT pitch a deal or promise one is coming. ` +
+        `Do NOT name a price, a number, a percentage or a link, and no street address except the house we sent them. Do NOT pitch a deal or promise one is coming. ` +
         `Do NOT say "I'm reaching out", "I hope this finds you well", "touching base" or "just checking in". ` +
         `No exclamation-mark cheer. Easy to ignore, easy to answer in a line. Set intent to buyer_pulse.`;
     }

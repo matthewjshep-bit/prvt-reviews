@@ -2560,7 +2560,13 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       lookedAtDeals: Boolean(p.lookedAtDeals), boughtFromUs: Boolean(p.boughtFromUs),
       lastBuyCity: String(p.lastBuyCity || ""), lastBuyYear: p.lastBuyYear || null, purchases: Number(p.purchases) || 0,
       cities: (p.cities || []).slice(0, 3), types: (p.types || []).slice(0, 3), buyBox: String(p.buyBox || "").slice(0, 200),
-      variant: Number(p.variant) || 0 };
+      variant: Number(p.variant) || 0,
+      // What makes it personal (2026-10-05, shared/buyer-pulse.js pulseSubject).
+      lastHouse: p.lastHouse?.street ? { street: String(p.lastHouse.street).slice(0, 80), city: String(p.lastHouse.city || "").slice(0, 40), how: String(p.lastHouse.how || "").slice(0, 100) } : null,
+      passReasons: (p.passReasons || []).slice(0, 3).map((x) => String(x).slice(0, 120)),
+      aboutThem: String(p.aboutThem || "").slice(0, 200), lastSummary: String(p.lastSummary || "").slice(0, 240), nextAction: String(p.nextAction || "").slice(0, 160),
+      missing: (p.missing || []).slice(0, 4).map(String), source: String(p.source || "").slice(0, 80),
+      voice: String(saved?.dispoAutopilot?.pulse?.voice || "").slice(0, 600) };
   }
   if (kind === "outreach_open") {
     // What we know about the listing, for the introduction. Price and days

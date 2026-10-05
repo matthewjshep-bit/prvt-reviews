@@ -391,3 +391,40 @@ test("the bot is told to describe a house only in the deal's words", () => {
   assert.match(sys, /DESCRIBING A HOUSE: use only the words the context gives it/);
   assert.match(sys, /the condition as the deal describes it/);
 });
+
+/* ---------- the pulse, personal (2026-10-05) ---------- */
+
+// Buck, 2026-09-24: "I'm a Seattle investor…" → "who is this?". The answer
+// opened "Matt, Seattle investor…" and the name gate held it for four days.
+test("a pulse to someone new says it's Matt", () => {
+  const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 3, conversed: false, variant: 0 });
+  assert.match(t, /who you are by first name \("It's Matt" \/ "This is Matt"/);
+  assert.match(t, /never open with your bare name and a comma/);
+  const fb = outboundOpening({ kind: "buyer_pulse", dealsSent: 0, conversed: false, source: "found you through the WA real estate Facebook group" });
+  assert.match(fb, /how we found them \(found you through the WA real estate Facebook group\)/);
+});
+
+test("asked who this is, the answer starts with Matt", () => {
+  const sys = buildSystemPrompt({ config: normalizeConversationAi({ enabled: true }), party: "investor" });
+  assert.match(sys, /WHO THIS IS: when they ask who this is/);
+  assert.match(sys, /never your bare name followed by a comma/);
+});
+
+test("a buyer who never answered a deal is asked what fits, with that house as the way in", () => {
+  const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 1, conversed: false, lastHouse: { street: "3511 NE 153rd St", city: "Lake Forest Park", how: "no answer" }, missing: ["price range"] });
+  assert.match(t, /THE LAST HOUSE WE SENT THEM: 3511 NE 153rd St in Lake Forest Park, and they never answered/);
+  assert.match(t, /Never ask whether they want it/);
+  assert.match(t, /SHAPE FOR THIS ONE: open with the house you sent/);
+  assert.match(t, /the piece of their buy box we don't have — price range/);
+  assert.match(t, /THE ONE REFERENCE/);
+  assert.match(t, /no street address except the house we sent them/);
+});
+
+test("the pulse carries Matt's voice and the notes that make it personal", () => {
+  const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 4, conversed: true, voice: "short, like a friend, no pitch",
+    passReasons: ["7034 South K Street: too far south"], lastSummary: "Wants north King only", aboutThem: "Building spec homes in Shoreline" });
+  assert.match(t, /HOW MATT WANTS THESE TO SOUND .*short, like a friend, no pitch/);
+  assert.match(t, /Why they passed before, as recorded: 7034 South K Street: too far south/);
+  assert.match(t, /Our last conversation: Wants north King only/);
+  assert.match(t, /About them, from our notes: Building spec homes in Shoreline/);
+});

@@ -8,7 +8,7 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { getBuyerPulse, runBuyerPulse, getAgentPulse, sampleAgentPulse, sampleFirstTexts, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
+import { getBuyerPulse, runBuyerPulse, sampleBuyerPulse, getAgentPulse, sampleAgentPulse, sampleFirstTexts, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
 import { DESK_DEFAULTS, normalizeDesk } from "@shared/call-list.js";
@@ -72,7 +72,11 @@ function BuyerPulsePreview() {
     } catch (e) { setState((s) => ({ ...s, busy: false, error: e.message || "preview failed" })); }
   };
   const c = state.status?.counts;
-  const clue = (k) => [k.dealsSent ? `${k.dealsSent} deal${k.dealsSent === 1 ? "" : "s"} sent` : "no deals sent", k.lastBuyCity ? `bought in ${k.lastBuyCity}${k.lastBuyYear ? ` ${k.lastBuyYear}` : ""}` : "", k.buyBox ? "buy box on file" : ""].filter(Boolean).join(" · ");
+  const clue = (k) => [k.dealsSent ? `${k.dealsSent} deal${k.dealsSent === 1 ? "" : "s"} sent` : "no deals sent",
+    k.lastHouse?.street ? `last house ${k.lastHouse.street} (${k.lastHouse.how})` : "",
+    k.lastBuyCity ? `bought in ${k.lastBuyCity}${k.lastBuyYear ? ` ${k.lastBuyYear}` : ""}` : "",
+    k.buyBox ? "buy box on file" : "", k.missing?.length && k.missing.length < 4 ? `asks for ${k.missing[0]}` : ""].filter(Boolean).join(" · ");
+  const groupWord = { conversed: "talked before", after_deal: "never answered a deal", friend: "bought from us", quiet: "never replied" };
   return (
     <div>
       <button type="button" onClick={preview} disabled={state.busy}
@@ -83,14 +87,14 @@ function BuyerPulsePreview() {
       {state.error ? <p className="mt-2 text-xs text-red-600">{state.error}</p> : null}
       {c ? (
         <p className="mt-2 text-xs text-slate-600">
-          {c.eligible.toLocaleString()} of {c.pool.toLocaleString()} buyers are eligible today — {c.quiet.toLocaleString()} never wrote back, {c.conversed.toLocaleString()} you've talked with.
+          {c.eligible.toLocaleString()} of {c.pool.toLocaleString()} buyers are eligible today — {(c.afterDeal || 0).toLocaleString()} never answered a deal we sent, {c.quiet.toLocaleString()} never wrote back, {c.conversed.toLocaleString()} you've talked with.
           Left out: {c.recentlyTexted} texted recently, {c.pulsedRecently} already checked in with, {c.onDeal} on a live deal, {c.noPhone} no phone, {c.blocked} opted out.
         </p>
       ) : null}
       {state.job?.results?.length ? (
         <ul className="mt-2 space-y-0.5 text-xs text-slate-600">
           {state.job.results.map((r) => (
-            <li key={r.contactId}><span className="font-medium text-slate-800">{r.name || r.contactId}</span> · {r.group === "conversed" ? "talked before" : "never replied"} · {clue(r.clues || {})}</li>
+            <li key={r.contactId}><span className="font-medium text-slate-800">{r.name || r.contactId}</span> · {groupWord[r.group] || "never replied"} · {clue(r.clues || {})}</li>
           ))}
         </ul>
       ) : null}
@@ -140,6 +144,40 @@ function AgentPulsePreview() {
 
 // A few check-ins drafted from real threads with the saved settings, so the
 // voice can be read before anything is switched on. Nothing saved or sent.
+// A few pulse checks written now from real threads, never sent (2026-10-05).
+function BuyerPulseSamples() {
+  const [state, setState] = useState({ busy: false, error: "", previews: null });
+  const run = async () => {
+    setState({ busy: true, error: "", previews: null });
+    try { const r = await sampleBuyerPulse(3); setState({ busy: false, error: "", previews: r.previews || [] }); }
+    catch (e) { setState({ busy: false, error: e.message || "couldn't write samples", previews: null }); }
+  };
+  const groupWord = { conversed: "talked before", after_deal: "never answered a deal", friend: "bought from us", quiet: "never replied" };
+  return (
+    <div>
+      <button type="button" onClick={run} disabled={state.busy}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium hover:bg-slate-50 disabled:opacity-50">
+        {state.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Write 3 sample pulse checks
+      </button>
+      <span className="ml-2 text-xs text-slate-500">From the next buyers' real threads, with the saved settings. Nothing is saved or sent; a few cents of AI.</span>
+      {state.error ? <p className="mt-2 text-xs text-red-600">{state.error}</p> : null}
+      {state.previews && !state.previews.length ? <p className="mt-2 text-xs text-slate-500">Nobody is due a pulse check right now.</p> : null}
+      {state.previews?.length ? (
+        <ul className="mt-2 space-y-2">
+          {state.previews.map((p) => (
+            <li key={p.contactId} className="rounded-lg border border-slate-200 p-2 text-sm">
+              <div className="text-xs text-slate-500">{p.name || p.contactId} · {groupWord[p.group] || p.group}{p.clues?.lastHouse?.street ? ` · last house ${p.clues.lastHouse.street}` : ""}</div>
+              {p.skipped ? <div className="text-xs text-amber-700">Wouldn't be drafted: {p.skipped}</div>
+                : <div className="mt-1 whitespace-pre-wrap text-slate-800">{p.reply}</div>}
+              {p.held ? <div className="mt-1 text-xs text-amber-700">Would wait for you: {(p.flags || []).join("; ")}</div> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function AgentPulseSamples() {
   const [state, setState] = useState({ busy: false, error: "", previews: null });
   const run = async () => {
@@ -607,7 +645,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       if (form.lineTargets) clean.lineTargets = normalizeLineTargets(Object.fromEntries(Object.entries(form.lineTargets).map(([k, v]) => [k, typeof v === "string" ? Number(v.replace(/[$,\s]/g, "")) : v])));
       if (form.desk) clean.desk = normalizeDesk(form.desk);
       if (clean.dispoAutopilot?.touchBudget) clean.dispoAutopilot.touchBudget = { ...clean.dispoAutopilot.touchBudget, ...Object.fromEntries(["quietPerWeek", "talkingPerWeek", "talkingDays", "bundleMax"].filter((k) => clean.dispoAutopilot.touchBudget[k] != null).map((k) => [k, Number(clean.dispoAutopilot.touchBudget[k])])) };
-      if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare"].filter((k) => clean.dispoAutopilot.pulse[k] != null).map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
+      if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare", "quietEveryDays", "afterDealDays"].filter((k) => clean.dispoAutopilot.pulse[k] != null && clean.dispoAutopilot.pulse[k] !== "").map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
       const r = await saveSettings(clean);
       onSaved?.(r.settings);
       setForm(effectiveSettings(r.settings));
@@ -1483,8 +1521,21 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             <Num label="Same buyer again after" suffix="days" value={form.dispoAutopilot?.pulse?.everyDays ?? 90} onChange={setPulse("everyDays")} />
             <Num label="Skip anyone texted in the last" suffix="days" value={form.dispoAutopilot?.pulse?.quietDays ?? 7} onChange={setPulse("quietDays")} />
             <Num label="Share for buyers we've talked with" suffix="%" value={form.dispoAutopilot?.pulse?.conversedShare ?? 20} onChange={setPulse("conversedShare")} />
+            <Num label="Same buyer again, if they never wrote back" suffix="days" value={form.dispoAutopilot?.pulse?.quietEveryDays ?? form.dispoAutopilot?.pulse?.everyDays ?? 90} onChange={setPulse("quietEveryDays")} />
+            <Num label="After a deal they never answered, ask what fits" suffix="days later" value={form.dispoAutopilot?.pulse?.afterDealDays ?? 10} onChange={setPulse("afterDealDays")} />
           </div>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={form.dispoAutopilot?.pulse?.afterDeal !== false} onChange={(e) => setPulse("afterDeal")(e.target.checked)} />
+            <span><span className="font-semibold">Ask buyers who never answered a deal what fits them</span><span className="block text-xs text-slate-500">Instead of nudging them about that house, they go first in line for a pulse check that uses it as the way in ("guessing Lake Forest Park wasn't your kind of house — what is?"). Two pulses in a row with no answer and they're asked again in 90 days, not sooner.</span></span>
+          </label>
+          <label className="block text-sm">
+            <span className="font-semibold">How you want these to sound</span>
+            <textarea rows={3} className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              placeholder="e.g. short, like a friend who flips too, never a pitch; I'm Matt and I pass along what I can't take on"
+              value={form.dispoAutopilot?.pulse?.voice || ""} onChange={(e) => setPulse("voice")(e.target.value)} />
+          </label>
           <BuyerPulsePreview />
+          <BuyerPulseSamples />
         </div>
       </section>
       )}

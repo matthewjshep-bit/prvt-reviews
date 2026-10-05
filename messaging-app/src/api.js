@@ -709,6 +709,8 @@ export const syncInvestors = () => post(`/api/dispo/sync`, {});
 // The check-in between deals: status, and a run by hand (a dry run by default).
 export const getBuyerPulse = () => fetch(`${API_BASE}/api/dispo/pulse?${locq()}`).then(j);
 export const runBuyerPulse = ({ dryRun = true, limit = null } = {}) => post(`/api/dispo/pulse/run`, { dryRun, ...(limit != null ? { limit } : {}) });
+// A few pulse checks as the drafter would write them now, from real threads. Nothing saved or sent.
+export const sampleBuyerPulse = (limit = 3) => post(`/api/dispo/pulse/preview`, { limit });
 // The agent check-in (every agent on a ~3-week clock): today's plan, and a run.
 export const getAgentPulse = () => fetch(`${API_BASE}/api/outreach/pulse?${locq()}`).then(j);
 export const runAgentPulse = ({ dryRun = true, limit = null } = {}) => post(`/api/outreach/pulse/run`, { dryRun, ...(limit != null ? { limit } : {}) });

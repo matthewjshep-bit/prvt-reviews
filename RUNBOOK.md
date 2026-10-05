@@ -4142,6 +4142,41 @@ run; a run stale after 45 min is retried, 3 tries, until 4pm).
 `POST /api/dispo/pulse/run {dryRun, limit}` — a dry run (the default, and the
 Preview button) lists who it would text and their clues and touches nobody.
 
+**Relationship first (2026-10-05).** Matt: reach the buyers who haven't
+answered, and ask what fits them, more often and more personally. Don't nudge
+them about a house they ignored.
+- **It says it's Matt.** The who-line is "It's Matt" / "This is Matt", plus how
+  we found them for a Facebook-group buyer.
+  - FACTS gains a rule for every reply: when asked "who is this?", the first
+    words answer it.
+  - Why: Buck's 9/24 "who is this?" was answered at once, but the answer opened
+    "Matt, Seattle investor…". `callsThemOurName` read that as calling him Matt
+    and held it. The audit's check-in redraft opened the same way and was held
+    too, until Matt sent it by hand four days later. The gate is unchanged; the
+    bot now introduces itself in the form the gate already passes.
+- **After a deal** (`afterDeal`, on; `afterDealDays` 10). A buyer sent a deal
+  10–21 days ago who never answered it, nor wrote since, gets a seat right after
+  friends.
+  - The house is the way in: "guessing Lake Forest Park wasn't your kind of
+    house — what is?"
+  - It never asks whether they want the house, and never names a number.
+  - This replaces the old "blasted, no reply" nudges.
+- **Personal clues** (`pulseSubject`, built from the runner's `buyerHistory` read):
+  - the last house we sent and how it went;
+  - their recorded pass reasons;
+  - the record's "about them", "last conversation" and "next action";
+  - the buy-box pieces we're missing, so the ask is for the one missing piece;
+  - how we found a new buyer;
+  - cities ordered by their latest purchase.
+
+  The prompt keeps exactly one real reference (the agent check-in's rule).
+- **Matt's voice** is `dispoAutopilot.pulse.voice`, fed in like the agent check-in's.
+- **Two unanswered in a row** (`ignoredSlowdown` 2; 0 = off): the next pulse waits
+  at least 90 days. They still get deals that fit, under the weekly limit.
+- **Settings → Dispositions → Pulse** has Voice, After a deal, the never-replied
+  cadence, the preview's new groups, and **Write 3 sample pulse checks**
+  (`POST /api/dispo/pulse/preview`: nothing saved or sent).
+
 ### The buyer greenhouse (2026-09-29)
 
 The selling side, reviewed as one line: every live deal reaches every buyer who fits it, once, and the buyer pool stays warm between deals. What changed:

@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { maybeRunBuyerPulse, startBuyerPulse, planBuyerPulse, getBuyerPulseJob, _resetJobs, CURSOR_NAME } from "./buyer-pulse.js";
+import { maybeRunBuyerPulse, startBuyerPulse, planBuyerPulse, previewBuyerPulse, getBuyerPulseJob, _resetJobs, CURSOR_NAME } from "./buyer-pulse.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { normalizeDispoAutopilot } from "./dispo-autopilot.js";
 
@@ -205,4 +205,38 @@ test("a buyer who heard from us this week isn't pulsed, and the next in line get
   assert.deepEqual(s.calls.map((c) => c.contactId), ["next"]);
   assert.match(job.results.find((r) => r.contactId === "busy").reason, /heard from us this week/);
   assert.equal(store.events.some((e) => e.type === "pulse_sent" && e.contactId === "busy"), false, "never claimed");
+});
+
+test("the plan puts a buyer who never answered a deal first, with that house as the way in", async () => {
+  _resetJobs();
+  const store = fakeStore({ events: [
+    { contactId: "quietly", type: "blast_sent", at: ago(12), address: "3511 NE 153rd St, Lake Forest Park, WA 98155", offerId: "o1" },
+    { contactId: "talked", type: "blast_sent", at: ago(12), address: "3511 NE 153rd St, Lake Forest Park, WA 98155", offerId: "o1" },
+    { contactId: "talked", type: "text_summary", at: ago(11) },
+    { contactId: "shy", type: "pulse_sent", at: ago(70), dedupeKey: "pulse_sent:shy:a" },
+    { contactId: "shy", type: "pulse_sent", at: ago(35), dedupeKey: "pulse_sent:shy:b" },
+  ] });
+  const s = starter([
+    buyer("top", { score: 90 }), buyer("quietly", { score: 5, lastBlastAt: ago(12), lastMessageAt: ago(12) }),
+    buyer("talked", { score: 4, lastRepliedAt: ago(11), lastMessageAt: ago(11) }), buyer("shy", { score: 80 }),
+  ]);
+  const plan = await planBuyerPulse({ locationId: "LOC", saved: saved({ dailyCap: 3, everyDays: 30, conversedShare: 0 }), store, deps: s, now: NOW });
+  assert.deepEqual(plan.picks.map((p) => [p.contactId, p.group]), [["quietly", "after_deal"], ["top", "quiet"], ["talked", "conversed"]]);
+  assert.equal(plan.picks[0].subject.lastHouse.city, "Lake Forest Park");
+  assert.equal(plan.picks[0].subject.lastHouse.how, "no answer");
+  assert.equal(plan.counts.afterDeal, 1);
+  assert.ok(!plan.picks.some((p) => p.contactId === "shy"), "two unanswered pulses: next one in a quarter");
+});
+
+test("sample pulse checks are written from the plan and never claimed or sent", async () => {
+  const store = fakeStore();
+  const s = starter([buyer("a", { score: 50 }), buyer("b", { score: 40 })]);
+  const seen = [];
+  const out = await previewBuyerPulse({ locationId: "LOC", saved: saved({ dailyCap: 5 }), store, limit: 2, now: NOW,
+    deps: { ...s, previewProactive: async (args) => { seen.push(args); return { reply: `It's Matt — ${args.contactId}`, contactName: args.contactId }; } } });
+  assert.deepEqual(out.previews.map((p) => p.contactId), ["a", "b"]);
+  assert.ok(seen.every((x) => x.kind === "buyer_pulse"));
+  assert.match(out.previews[0].reply, /^It's Matt/);
+  assert.equal(store.events.length, 0, "nothing claimed");
+  assert.equal(s.calls.length, 0, "nothing started");
 });

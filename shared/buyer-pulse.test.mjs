@@ -149,3 +149,64 @@ test("checking in less with a buyer doubles their cadence; more halves it", () =
   assert.deepEqual(pickPulseBuyers({ ...base, paceBy: new Map([["b1", 2]]) }).picks.map((p) => p.contactId), [], "less: b1 waits for 180");
   assert.deepEqual(pickPulseBuyers({ ...base, paceBy: new Map([["b2", 0.5]]) }).picks.map((p) => p.contactId).sort(), ["b1", "b2"], "more: b2 at 45");
 });
+
+/* ---------- relationship first (2026-10-05) ---------- */
+
+// Matt: "we are currently reaching out to investors who haven't responded to
+// see what fits their bill — let's do more of this and make it more
+// personalized." A buyer who never answered a deal isn't nudged about that
+// house any more (shared/follow-up.js); they're asked what fits them, with
+// that house as the way in.
+test("a buyer who never answered a deal gets a pulse about fit, not a nudge about the deal", () => {
+  const history = new Map([
+    ["after", { lastDeal: { address: "3511 NE 153rd St, Lake Forest Park, WA 98155", at: ago(12), answered: false } }],
+    ["fresh", { lastDeal: { address: "3511 NE 153rd St, Lake Forest Park, WA 98155", at: ago(12), answered: true } }],
+  ]);
+  const { picks } = pickPulseBuyers({ now: NOW, history, settings: { dailyCap: 2, conversedShare: 0 }, investors: [
+    buyer("top", { score: 90 }), buyer("after", { score: 5, lastBlastAt: ago(12), lastMessageAt: ago(12) }), buyer("fresh", { score: 4, lastBlastAt: ago(12) }),
+  ] });
+  assert.deepEqual(picks.map((p) => [p.contactId, p.group]), [["after", "after_deal"], ["top", "quiet"]], "ahead of the quiet line");
+  const s = picks[0].subject;
+  assert.equal(s.lastHouse.street, "3511 NE 153rd St");
+  assert.equal(s.lastHouse.city, "Lake Forest Park");
+  assert.equal(s.lastHouse.how, "no answer");
+  // Too soon after the deal, or too long ago: the quiet line as before.
+  const soon = pickPulseBuyers({ now: NOW, history: new Map([["b", { lastDeal: { address: "1 A St, Kent, WA", at: ago(4), answered: false } }]]), settings: { dailyCap: 5 }, investors: [buyer("b")] });
+  assert.equal(soon.picks[0]?.group, "quiet");
+  assert.equal(normalizeBuyerPulse({}).afterDeal, true);
+  assert.equal(pickPulseBuyers({ now: NOW, history, settings: { dailyCap: 2, conversedShare: 0, afterDeal: false }, investors: [buyer("after", { lastBlastAt: ago(12) })] }).picks[0].group, "quiet");
+});
+
+test("a buyer who ignored two pulses is asked again in 90 days, not 30", () => {
+  const pulsedAt = new Map([["shy", ago(40)], ["new", ago(40)]]);
+  const history = new Map([["shy", { unansweredPulses: 2 }], ["new", { unansweredPulses: 1 }]]);
+  const { picks, counts } = pickPulseBuyers({ now: NOW, pulsedAt, history, settings: { dailyCap: 5, everyDays: 30 }, investors: [buyer("shy"), buyer("new")] });
+  assert.deepEqual(picks.map((p) => p.contactId), ["new"]);
+  assert.equal(counts.pulsedRecently, 1);
+  assert.equal(pickPulseBuyers({ now: NOW, pulsedAt, history, settings: { dailyCap: 5, everyDays: 30, ignoredSlowdown: 0 }, investors: [buyer("shy")] }).picks.length, 1, "0 turns the slowdown off");
+});
+
+test("the pulse asks only for the piece of the buy box we don't have", () => {
+  const s = pulseSubject(buyer("x", { buybox: { areas: ["Shoreline", "Edmonds"], propertyTypes: ["sfr"] } }), { now: NOW });
+  assert.deepEqual(s.missing, ["price range", "how much work they take on"]);
+  assert.match(s.buyBox, /areas Shoreline, Edmonds/);
+  assert.deepEqual(pulseSubject(buyer("y"), { now: NOW }).missing, ["where they buy", "what kind of house", "price range", "how much work they take on"]);
+});
+
+test("the pulse picks up from what they told us, and says how we found someone new", () => {
+  const inv = buyer("x", {
+    lastRepliedAt: ago(60),
+    record: { personal_details: "Building two spec homes in Shoreline this year", last_convo_summary: "Passed on Tacoma — too far south; wants north King", suggested_next_action: "Send north end deals" },
+  });
+  const history = new Map([["x", { lastDeal: { address: "7034 South K Street, Tacoma, WA", at: ago(60), answered: true, outcome: "passed", reason: "too far south" },
+    passes: [{ address: "7034 South K Street, Tacoma, WA", reason: "too far south" }] }]]);
+  const s = pulseSubject(inv, { now: NOW, history: history.get("x") });
+  assert.match(s.aboutThem, /spec homes in Shoreline/);
+  assert.match(s.lastSummary, /too far south/);
+  assert.equal(s.nextAction, "Send north end deals");
+  assert.deepEqual(s.passReasons, ["7034 South K Street: too far south"]);
+  assert.equal(s.lastHouse.how, "passed — too far south");
+  assert.equal(s.source, "");
+  const fb = pulseSubject(buyer("f", { tags: ["investor", "dispo-source-fb-warei"] }), { now: NOW });
+  assert.equal(fb.source, "found you through the WA real estate Facebook group");
+});

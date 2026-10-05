@@ -17,13 +17,14 @@
 
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
-import { conversationConfig, startProactive, markUnsubscribed } from "./reply-agent.js";
+import { conversationConfig, startProactive, previewProactive, markUnsubscribed } from "./reply-agent.js";
 import { getContact, smsUnsubscribed } from "./ghl.js";
 import { workHour, isWorkday } from "./outreach-sweep.js";
-import { normalizeBuyerPulse, pickPulseBuyers } from "./shared/buyer-pulse.js";
+import { normalizeBuyerPulse, pickPulseBuyers, SLOW_EVERY_DAYS } from "./shared/buyer-pulse.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { botHold, paceOf, MAX_PACE } from "./shared/bot-hold.js";
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
+import { sameStreet } from "./shared/us-address.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 
 export const CURSOR_NAME = "buyerPulse";
@@ -43,6 +44,49 @@ export function _resetJobs() { jobs.clear(); }
 
 export const pulseSettings = (saved = {}) => normalizeBuyerPulse(saved?.dispoAutopilot?.pulse);
 
+const HISTORY_DAYS = 180;
+const sameDeal = (a, b) => (a.offerId && b.offerId ? a.offerId === b.offerId : Boolean(a.address && b.address && sameStreet(a.address, b.address)));
+
+/**
+ * buyerHistory({ store, locationId, pulses, now }) → Map(contactId → { lastDeal, passes, lastInboundAt, unansweredPulses })
+ *
+ * One location-wide read of the buyer side of the timeline. `lastDeal` is
+ * the newest deal text and how it went (`answered`, `outcome: "passed"`,
+ * `reason`); `passes` their recorded passes, newest first, with what they
+ * said; `unansweredPulses` the pulses since they last wrote. A read that
+ * fails is an empty story, never a reason to skip the run.
+ */
+export async function buyerHistory({ store, locationId, pulses = [], now = Date.now() }) {
+  const events = await store.listContactEventsSince(locationId, iso(now - HISTORY_DAYS * DAY_MS), {
+    types: ["blast_sent", "investor_passed", "investor_evaluating", "investor_committed", "text_summary", "call_summary"], notParty: "agent", limit: 20000,
+  }).catch(() => []);
+  const out = new Map();
+  const of = (id) => { if (!out.has(id)) out.set(id, { lastDeal: null, passes: [], lastInboundAt: null, unansweredPulses: 0 }); return out.get(id); };
+  for (const e of [...events].sort((a, b) => String(a.at).localeCompare(String(b.at)))) {
+    if (!e?.contactId) continue;
+    const h = of(e.contactId);
+    if (e.type === "blast_sent") {
+      h.lastDeal = { address: e.address || "", offerId: e.offerId || null, at: e.at, answered: false };
+    } else if (e.type === "text_summary" || e.type === "call_summary") {
+      h.lastInboundAt = e.at;
+      if (h.lastDeal && String(e.at) > String(h.lastDeal.at)) h.lastDeal.answered = true;
+    } else if (e.type === "investor_passed") {
+      const note = String(e.data?.note || "").trim();
+      const reason = /^passed$/i.test(note) ? "" : note;
+      h.passes.unshift({ address: e.address || "", offerId: e.offerId || null, reason, at: e.at });
+      if (h.lastDeal && sameDeal(e, h.lastDeal)) Object.assign(h.lastDeal, { answered: true, outcome: "passed", reason });
+    } else if (h.lastDeal && sameDeal(e, h.lastDeal)) {
+      h.lastDeal.answered = true;
+    }
+  }
+  for (const p of pulses) {
+    if (!p?.contactId) continue;
+    const h = of(p.contactId);
+    if (!h.lastInboundAt || String(p.at) > String(h.lastInboundAt)) h.unansweredPulses++;
+  }
+  return out;
+}
+
 /**
  * planBuyerPulse({ locationId, saved, store, deps, now }) → { picks, counts, settings }
  *
@@ -54,7 +98,8 @@ export async function planBuyerPulse({ locationId, saved = {}, store = defaultSt
   const investors = await deps.book(locationId);
   // × MAX_PACE: a buyer you asked to hear from less waits up to twice the
   // cadence, and a pulse that old still has to count.
-  const lookback = Math.max(settings.everyDays, settings.quietEveryDays) * MAX_PACE;
+  // Far enough back to see two unanswered pulses at the slow cadence too.
+  const lookback = Math.max(settings.everyDays, settings.quietEveryDays, SLOW_EVERY_DAYS) * MAX_PACE;
   const events = await store.listContactEventsSince(locationId, iso(now - lookback * DAY_MS), { types: ["pulse_sent", "pulse_voided"], limit: 20000 }).catch(() => []);
   // A claim that drafted nothing (the bot stood down, a waiting reply, a
   // failure) is voided: it neither starts the buyer's cadence nor takes a
@@ -88,8 +133,14 @@ export async function planBuyerPulse({ locationId, saved = {}, store = defaultSt
     const p = paceOf({ events: list });
     if (p.pace !== "normal") paceBy.set(id, p.factor);
   }
+  // Each buyer's story with us (2026-10-05): the last deal we sent and
+  // whether they answered it, what they passed on and why, when they last
+  // wrote, and how many pulses in a row went unanswered. What makes the
+  // pulse personal, and what puts a buyer who never answered a deal at the
+  // front of the line (shared/buyer-pulse.js).
+  const history = await buyerHistory({ store, locationId, pulses: events.filter((e) => e?.type === "pulse_sent" && !voided.has(e.dedupeKey)), now });
   // Tried today already (a voided claim): tomorrow, not twice today.
-  const plan = pickPulseBuyers({ investors: investors.filter((i) => !triedToday.has(i.contactId)), pulsedAt, openDraftIds, stopped, paceBy, settings, now });
+  const plan = pickPulseBuyers({ investors: investors.filter((i) => !triedToday.has(i.contactId)), pulsedAt, openDraftIds, stopped, paceBy, history, settings, now });
   const line = [...plan.picks, ...(plan.spares || [])];
   return { picks: line.slice(0, left), spares: line.slice(left, left + Math.max(5, Math.ceil(settings.dailyCap / 2))), counts: { ...plan.counts, claimedToday, seatsLeft: left }, settings };
 }
@@ -182,6 +233,31 @@ export function startBuyerPulse({ client, locationId, saved = {}, store = defaul
     await finish({ status: "done" });
   })().catch((e) => finish({ status: "error", error: String(e?.message || e).slice(0, 300) }));
   return job;
+}
+
+/**
+ * previewBuyerPulse({ client, locationId, saved, store, limit, deps, now }) → { previews, counts }
+ *
+ * The next few pulse checks as the drafter would write them today — their
+ * thread, their record, the house they never answered, Matt's voice — and
+ * nothing else: no claim, no draft row, nothing sent (reply-agent.js
+ * previewProactive). One model call each, so a handful at most.
+ */
+export async function previewBuyerPulse({ client, locationId, saved = {}, store = defaultStore, limit = 3, deps = {}, now = Date.now() }) {
+  const plan = await planBuyerPulse({ locationId, saved, store, deps, now });
+  const preview = typeof deps.previewProactive === "function" ? deps.previewProactive : previewProactive;
+  const n = Math.max(1, Math.min(5, Math.round(Number(limit)) || 3));
+  const previews = [];
+  let drafted = 0;
+  for (const [i, p] of [...plan.picks, ...(plan.spares || [])].slice(0, n + 4).entries()) {
+    if (drafted >= n) break;
+    const r = await preview({ client, locationId, saved, store, contactId: p.contactId, kind: "buyer_pulse", offer: null, subject: { ...p.subject, variant: i } })
+      .catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
+    if (!r?.skipped) drafted++;
+    previews.push({ contactId: p.contactId, name: r?.contactName || p.name || "", group: p.group, clues: p.subject,
+      reply: r?.reply || "", held: Boolean(r?.held), flags: r?.flags || [], skipped: r?.skipped || "" });
+  }
+  return { previews, counts: plan.counts };
 }
 
 /**
