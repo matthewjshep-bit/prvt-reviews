@@ -370,3 +370,24 @@ test("a house they passed on rides on the live offer's nudge as one line, never 
   assert.doesNotMatch(outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper" }), /closing line/);
   assert.match(outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper", aside: { street: "3 Oak Ave", quiet: true } }), /we never heard back on/);
 });
+
+/* ---------- a buyer who spoke up (2026-10-05) ---------- */
+
+// Buck, 3511 NE 153rd St: "Last check on this one… If it's not one for you
+// just say so and I'll leave it" — to a buyer who never said a word about it.
+// The only deal follow-up a buyer gets now is to one who spoke up, once, and
+// it picks up where they left off.
+test("a follow-up to a buyer never says last check", () => {
+  const t = outboundOpening({ kind: "deal_followup", address: "3511 NE 153rd St", step: 3, stepIndex: 1, stepCount: 1, spokeAt: "2026-10-01T18:00:00Z" });
+  assert.doesNotMatch(t, /This is the LAST follow-up|I'll leave it\)/);
+  assert.match(t, /do NOT call it a last check, do NOT say you'll leave it alone/);
+  assert.match(t, /pick up exactly where they left off/);
+  assert.match(t, /Do NOT name a price or any number/);
+  assert.match(t, /Set intent to deal_followup\.$/);
+});
+
+test("the bot is told to describe a house only in the deal's words", () => {
+  const sys = buildSystemPrompt({ config: normalizeConversationAi({ enabled: true }), party: "investor" });
+  assert.match(sys, /DESCRIBING A HOUSE: use only the words the context gives it/);
+  assert.match(sys, /the condition as the deal describes it/);
+});

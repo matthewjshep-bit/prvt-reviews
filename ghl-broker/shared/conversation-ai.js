@@ -68,7 +68,7 @@ export const OUTBOUND_INTENTS = {
   // does agent_pulse (outreachAutopilot.pulse, shared/agent-pulse.js), and
   // the walkthrough texts (dispoAutopilot.showings, showing-sweep.js).
   agent: ["outreach_open", "realm_check", "take_check", "offer_nudge", "hot_push", "passed_checkin", "outreach_nudge", "call_followup", "promise_due", "price_drop", "checkin_due", "address_chase"],
-  investor: ["blast_open", "blast_nudge", "dataroom_nudge", "call_followup"],
+  investor: ["blast_open", "blast_nudge", "dataroom_nudge", "deal_followup", "call_followup"],
 };
 
 export const INTENT_LABEL = {
@@ -89,6 +89,7 @@ export const INTENT_LABEL = {
     wants_walkthrough: "wants to walk it", passing: "passing", wants_call: "wants a call",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
     blast_nudge: "followed up on a deal we sent", dataroom_nudge: "followed up after they opened the package",
+    deal_followup: "followed up after they asked about a deal",
     buyer_pulse: "checked in between deals",
     showing_reminder: "reminded them about the walkthrough", showing_followup: "asked how the walkthrough went",
     blast_open: "sent them a deal (blast)", call_followup: "text after a call",

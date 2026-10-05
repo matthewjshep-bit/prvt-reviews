@@ -657,6 +657,19 @@ function tooManyBadHits(ip) {
   return rec.count > 40;
 }
 
+/**
+ * isLinkPreview(userAgent) → true for a machine fetching the link to draw a
+ * preview card (iMessage, Google Messages, WhatsApp, Slack…) or any other
+ * bot, and for a request with no user agent at all. iMessage's previewer
+ * wears a desktop Safari string with "facebookexternalhit … Twitterbot" on
+ * the end, so the tail is what gives it away.
+ */
+export function isLinkPreview(ua = "") {
+  const t = String(ua || "").trim();
+  if (!t) return true;
+  return /facebookexternalhit|Facebot|Twitterbot|GoogleMessages|Slackbot|WhatsApp|TelegramBot|Discordbot|LinkedInBot|SkypeUriPreview|Embedly|Iframely|bot\b|crawler|spider/i.test(t);
+}
+
 export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
   const router = express.Router();
 
@@ -994,21 +1007,32 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
       // page shares this route and embeds no script, so the allowance is moot there.
       secureHeaders(res, { scripts: [GALLERY_JS], media: true });
 
-      const viewCount = (invite.viewCount || 0) + 1;
-      await store.updateDataroomInvite(invite.id, {
-        viewCount,
-        lastViewedAt: new Date().toISOString(),
-        ...(invite.firstViewedAt ? {} : { firstViewedAt: new Date().toISOString() }),
-      });
-      await store.logDataroomEvent(room.id, invite.id, "view", {
-        ip: clientIp(req), ua: String(req.headers["user-agent"] || "").slice(0, 200), name: invite.name,
-      });
-      // The record: every view is an event; the first is what the timeline
-      // leads with, the count is what the drawer shows.
-      if (invite.contactId) {
-        await recordEvent({ store, locationId: room.locationId, contactId: invite.contactId, party: "investor", type: "dataroom_viewed",
-          at: new Date().toISOString(), address: room.address || room.snapshot?.property?.address || "", offerId: room.offerId || null, dealId: room.offerId || null,
-          source: "dataroom", ref: invite.id, data: { viewCount, dataroomId: room.id } });
+      // A phone drawing its preview card fetches the link the moment the
+      // text lands (3511 NE 153rd St: 19 of 48 "opens" inside two minutes).
+      // It gets the page — the preview needs it — but nobody looked, so it is
+      // logged as a preview and never counted as a view.
+      const preview = isLinkPreview(req.headers["user-agent"]);
+      const viewCount = (invite.viewCount || 0) + (preview ? 0 : 1);
+      if (preview) {
+        await store.logDataroomEvent(room.id, invite.id, "preview", {
+          ip: clientIp(req), ua: String(req.headers["user-agent"] || "").slice(0, 200), name: invite.name,
+        });
+      } else {
+        await store.updateDataroomInvite(invite.id, {
+          viewCount,
+          lastViewedAt: new Date().toISOString(),
+          ...(invite.firstViewedAt ? {} : { firstViewedAt: new Date().toISOString() }),
+        });
+        await store.logDataroomEvent(room.id, invite.id, "view", {
+          ip: clientIp(req), ua: String(req.headers["user-agent"] || "").slice(0, 200), name: invite.name,
+        });
+        // The record: every view is an event; the first is what the timeline
+        // leads with, the count is what the drawer shows.
+        if (invite.contactId) {
+          await recordEvent({ store, locationId: room.locationId, contactId: invite.contactId, party: "investor", type: "dataroom_viewed",
+            at: new Date().toISOString(), address: room.address || room.snapshot?.property?.address || "", offerId: room.offerId || null, dealId: room.offerId || null,
+            source: "dataroom", ref: invite.id, data: { viewCount, dataroomId: room.id } });
+        }
       }
 
       if (isPortfolio(room)) {

@@ -28,7 +28,7 @@ const INTENT_CLS = {
   new_property: "bg-sky-100 text-sky-800", interested: "bg-sky-100 text-sky-800",
   looking_for_deals: "bg-sky-100 text-sky-800", buybox_update: "bg-sky-100 text-sky-800",
   offer_nudge: "bg-indigo-100 text-indigo-800", blast_nudge: "bg-indigo-100 text-indigo-800",
-  dataroom_nudge: "bg-indigo-100 text-indigo-800", buyer_pulse: "bg-indigo-100 text-indigo-800",
+  dataroom_nudge: "bg-indigo-100 text-indigo-800", deal_followup: "bg-indigo-100 text-indigo-800", buyer_pulse: "bg-indigo-100 text-indigo-800",
   showing_ask: "bg-amber-100 text-amber-800",
 };
 const PARTY_CLS = { agent: "bg-slate-200 text-slate-700", investor: "bg-sky-100 text-sky-800", unknown: "bg-amber-100 text-amber-800" };
@@ -41,6 +41,7 @@ const NUDGE_KINDS = {
   offer_nudge: (a) => `we sent an offer on ${a || "a property"} and heard nothing back`,
   blast_nudge: (a) => `we sent them ${a || "a deal"} and heard nothing back`,
   dataroom_nudge: (a) => `they opened the package on ${a || "a deal"} and went quiet`,
+  deal_followup: (a) => `they said something about ${a || "a deal"} and went quiet`,
 };
 
 const PHASE = {

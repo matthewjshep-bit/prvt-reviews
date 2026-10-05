@@ -841,6 +841,17 @@ function openingFor(outbound) {
         `any number — the deal book has what they were sent and you may refer to it, but this message introduces ` +
         `nothing new. ${CONTINUE} Set intent to blast_nudge.`;
 
+    // A buyer who said something about this deal and went quiet (2026-10-05).
+    // The only deal follow-up a buyer gets, and only once: no ladder, so no
+    // "last check" and no "I'll leave it" — that's for a stranger, and this is
+    // someone who was talking to us.
+    case "deal_followup":
+      return `${START} This buyer said something about ${o.address} and the thread went quiet. ` +
+        `READ THE THREAD and pick up exactly where they left off, in one or two short lines: if they asked something that is still ` +
+        `unanswered, answer it from the context; otherwise one easy question about where they are on it. ` +
+        `This is the only follow-up they get on it — do NOT call it a last check, do NOT say you'll leave it alone, do NOT push. ` +
+        `Do NOT name a price or any number. ${CONTINUE} Set intent to deal_followup.`;
+
     case "dataroom_nudge":
       return `${START} This buyer opened the deal package on ${o.address} and then went quiet. ` +
         `That they looked is the whole reason to write — so ask what they made of it, lightly, without being ` +

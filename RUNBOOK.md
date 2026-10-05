@@ -3782,7 +3782,7 @@ A fourth buyer standing on a deal, between Evaluating and Committed. Set it on
 the buyer in Deals → open the deal, and **outreach on that deal stops**:
 
 - no new blast (the button, the blast on promote, and the second wave),
-- no nudge to any other buyer (`blast_nudge`, `dataroom_nudge`),
+- no follow-up to any other buyer (`deal_followup`),
 - no automatic dataroom invite to anyone but the buyer it is held for.
 
 What it deliberately does **not** do: it is not `dealSpokenFor`. The deal is
@@ -3812,7 +3812,7 @@ switch, `deal.outreachStopped {at, by}`. `dealOutreachPaused` returns
 
 - no blast, whether from the button, on promote or as a later wave (the wave
   preview says "you stopped outreach");
-- no `blast_nudge` / `dataroom_nudge`, no package invite, no walkthrough
+- no `deal_followup`, no package invite, no walkthrough
   reminder or follow-up. That includes the link owed to a buyer who answers
   a deal text that went without it (`blastLink: "on_reply"`). That link is
   sent as an action while the reply is drafted, so `startReply` checks the
@@ -3870,6 +3870,40 @@ the deal. Now (`resumeDealOutreach` in `routes/offers.js`, `resumeWave` in
 
 The pane says what came back: "Outreach is back on: N deal texts queued…, N
 waiting for you in the outbox, N buyers left out…".
+
+### A buyer is followed up only after they speak (2026-10-05)
+
+Buck, on 3511 NE 153rd St, never answered the deal. He still got the blast, a
+walkthrough invite and, on 10/5, "Last check on this one… I'll leave it". 56
+of those "last checks" were queued that morning, every one to a buyer with no
+reply that week. Matt: nudge a buyer about a deal only when they showed some
+interest, meaning they said something.
+
+- **Retired:** the "Blasted, no reply" (`blast_nudge`, days 2/6) and "Opened the
+  package, went quiet" (`dataroom_nudge`, days 1/4) ladders. Neither is offered
+  in Settings, on the dial or by the sweep any more, and their saved ladders are
+  dropped on the next save. Old rows still render and can be sent or dismissed
+  by hand.
+- **In their place is one follow-up, `deal_followup`** ("Spoke up on a deal,
+  then went quiet").
+  - **Trigger:** `investor_evaluating`, which is written when a reply about the
+    deal is filed (`dealReplyFiling`: a question, interested, price, a call, a
+    walkthrough, wanting it) or when you mark them evaluating.
+  - **When:** `steps[0]` days (3) after their last word, once, ever, per house.
+    The sweep keeps only the first day whatever is saved, so there is no ladder
+    and no "last check".
+  - **Skipped when:** they passed or committed on it, are soft-committed, the deal
+    is over, or outreach on it is paused or stopped.
+  - **Off by default** (new automation). Settings → Playbooks → Following up →
+    Buyers, or the dial at Normal / Full.
+- A buyer who never answered, or only opened the package, hears from us about
+  **what fits them** (the pulse), not about that house again.
+- **A link preview is not an open.** The page still renders for iMessage,
+  Google Messages, WhatsApp, Slack and other bots, but `viewCount` and
+  `dataroom_viewed` count people only. The access log records the bot visit as
+  `preview` (`isLinkPreview`, `routes/dataroom.js`). On 3511, 19 of 48 "opens"
+  came within two minutes of the text.
+- Today's `blast_no_opens` row now offers **Find more buyers**, not "Nudge them".
 
 ### Market tags and buyer import (2026-09-13)
 
@@ -4153,7 +4187,7 @@ Before this, wave 2 re-drafted every wave-1 buyer whose text was still sitting i
   - The body is the same text, rewritten at send time like the texts.
 - **`autoSend`**, off by default: emailed deals schedule themselves under the same switches as texts (`CARD_SENDS_ENABLED`, `DISPO_BLASTS_ENABLED`, `blast_open` on the allowlist). Off, they wait in the outbox for you.
 - An auto-sent email checks the contact's email opt-out, not SMS.
-- `blast_sent` records `channel`. A buyer who was only emailed never starts the text-only `blast_nudge` ladder.
+- `blast_sent` records `channel`.
 - A buyer tagged `dispo-source-fb-warei` who has never written back gets "found you through the WA real estate Facebook group" first.
 
 `GET /api/dispo/waves/preview?offerId=` returns the deal's `asset` and each next buyer's `channel`.

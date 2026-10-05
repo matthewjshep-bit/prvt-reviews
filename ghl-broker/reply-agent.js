@@ -100,7 +100,7 @@ import { meterAi } from "./ai-spend.js";
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
-const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "outreach_nudge", "outreach_open", "buyer_pulse", "agent_pulse"]);
+const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "deal_followup", "outreach_nudge", "outreach_open", "buyer_pulse", "agent_pulse"]);
 function scheduleFor({ config, now, kind = null, intent = "", replyLength = 0, random = Math.random }) {
   const a = config.autoSend || {};
   if (kind && STARTED_KINDS.has(kind)) {
@@ -313,7 +313,7 @@ export const SHADOW_GRACE_MS = 20_000;
 // Plain check-ins with no number, no negotiation and no terms in them — the
 // texts where thinking harder buys nothing (2026-09-25). Everything else,
 // replies included, stays at medium.
-export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "showing_reminder", "showing_followup"]);
+export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "deal_followup", "showing_reminder", "showing_followup"]);
 export const draftEffort = (outbound) => (outbound && LOW_EFFORT_KINDS.has(outbound.kind) ? "low" : "medium");
 
 // Machine texts a gate catches that wait for a person rather than being
@@ -326,7 +326,7 @@ export const KEEP_FOR_A_PERSON = new Set(["realm_check", "take_check", "promise_
 // partner's answer, an address chase and every reply to a person may not.
 export const BATCHABLE_KINDS = new Set([
   "outreach_open", "outreach_nudge", "counter_nudge", "take_ask", "offer_nudge", "hot_push", "passed_checkin",
-  "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "promise_due", "price_drop", "checkin_due",
+  "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "deal_followup", "promise_due", "price_drop", "checkin_due",
   "showing_reminder", "showing_followup",
 ]);
 
@@ -2204,6 +2204,15 @@ export const OUTBOUND_KINDS = {
     floats: () => [],
     forbids: () => [],
   },
+  // A buyer who spoke up on a deal and went quiet (shared/follow-up.js):
+  // one text, picking up where they left off. Floats nothing.
+  deal_followup: {
+    party: "investor",
+    enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.ladders?.deal_followup?.enabled,
+    ready: ({ subject }) => (subject?.address ? true : "nothing to follow up on"),
+    floats: () => [],
+    forbids: () => [],
+  },
   // The check-in between deals (buyer-pulse.js): are you buying, and what.
   // No deal, no number. Its switches are dispoAutopilot.pulse, checked by the
   // runner before it gets here; it is not on the playbook grid.
@@ -2564,6 +2573,7 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
     lastTouchAt: subject?.lastTouchAt || null,
+    ...(kind === "deal_followup" ? { spokeAt: subject?.spokeAt || null } : {}),
     ...(kind === "promise_due" ? { what: subject?.what || "answer", heldReason: subject?.heldReason || "", promisedText: subject?.promisedText || "", running: Boolean(subject?.running) } : {}),
     ...(kind === "price_drop" ? { from: Math.round(Number(subject?.from) || 0), to: Math.round(Number(subject?.to) || 0),
       fromK: Number(subject?.from) > 0 ? kText(Number(subject.from)) : "", toK: Number(subject?.to) > 0 ? kText(Number(subject.to)) : "",
@@ -2606,6 +2616,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "showing_followup": return `Asks how ${outbound.street || where} looked after the walkthrough (${outbound.windowLabel}) and whether they want it.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
     case "dataroom_nudge": return `Follows up on ${where} — they opened the package and went quiet${rung}.`;
+    case "deal_followup": return `Picks up on ${where} — they said something about it and went quiet.`;
     case "checkin_due":
       if (outbound.sourceKind === "source") return "Weekly check-in with an agent who offered to send us deals: anything new that needs work?";
       if (outbound.sourceKind === "unanswered") return `Comes back to them${where ? ` on ${where}` : ""} — their last text never got an answer from us.`;

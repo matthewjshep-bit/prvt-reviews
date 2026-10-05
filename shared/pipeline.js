@@ -449,9 +449,11 @@ export function buildPipeline({
         const lastBlast = ms(blasts[blasts.length - 1].at);
         const blastDays = lastBlast != null ? Math.floor((now - lastBlast) / DAY_MS) : 0;
         if (blastDays >= 3) {
+          // Nudging buyers who never answered is the one thing not to do
+          // (Matt, 2026-10-05): the move is more of the right buyers.
           card.actionIds.push(push({ ...base, kind: "blast_no_opens", severity: "soon",
             title: `${card.address}: blasted ${blastDays}d ago, nobody opened it`, detail: `${blasts.length} blast${blasts.length === 1 ? "" : "s"}`,
-            ops: [{ key: "preview_follow_ups", label: "Who'd get a nudge", intent: "secondary" }, { key: "nudge_deal_buyers", label: "Nudge them", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
+            ops: [{ key: "match_investors", label: "Find more buyers", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
         }
       } else if (dd.stage === "under_contract" && (views.length || dd.investors.some((i) => i.state === "evaluating"))
           && !dd.investors.some((i) => i.state === "soft_commit" || i.state === "committed")) {
@@ -722,8 +724,8 @@ const RETRYABLE_ERROR = /timed?\s?out|timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|fet
  *
  * Deliberately not here: `ladder_exhausted` (the follow-up sweep already
  * marks no response unless the ladder says "stop", and "stop" is a setting,
- * not an oversight); `blast_no_opens` (the follow-up sweep owns those rungs
- * and refuses a second run inside 20 hours); closings, hand-offs, deals with
+ * not an oversight); `blast_no_opens` (the dispo sweep's next wave is the
+ * move — buyers who never answered are not nudged); closings, hand-offs, deals with
  * no buyers and failed bands, which are a person's.
  */
 export function timerMoves(actions = [], { config = null, now = Date.now() } = {}) {

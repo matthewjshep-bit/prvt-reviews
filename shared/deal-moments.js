@@ -40,7 +40,7 @@ const MACHINE_LABEL = {
   realm_check: ["floated", "floated our number"], take_check: ["asked_take", "asked for their read"], take_ask: ["asked_take", "asked for their read"],
   promise_due: ["update", "told them we're still on it"], price_drop: ["nudge", "price-drop text"], address_chase: ["asked", "asked for the address"],
   outreach_open: ["reached_out", "reached out"], outreach_nudge: ["nudge", "outreach nudge"],
-  blast_nudge: ["nudge", "deal nudge"], dataroom_nudge: ["nudge", "package nudge"], buyer_pulse: ["checked_in", "checked in"],
+  blast_nudge: ["nudge", "deal nudge"], dataroom_nudge: ["nudge", "package nudge"], deal_followup: ["nudge", "deal follow-up"], buyer_pulse: ["checked_in", "checked in"],
   showing_reminder: ["reminded", "walkthrough reminder"], showing_followup: ["checked_in", "walkthrough follow-up"],
 };
 const STATUS_MOMENT = {

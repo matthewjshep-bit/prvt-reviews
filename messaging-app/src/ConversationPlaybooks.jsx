@@ -157,7 +157,14 @@ export function FollowUpCard({ config, patch }) {
                 </div>
                 {l.enabled && (
                   <div className="mt-2 space-y-2 pl-6">
-                    <DayChips steps={l.steps} onChange={(steps) => setLadder(kind, { steps })} />
+                    {kind === "deal_followup" ? (
+                      <Field label="Days after their last word"
+                        hint="One follow-up, once — never a second ask or a “last check”. A buyer who never answered a deal, or only opened the package, isn't followed up about it; the pulse asks them what fits instead.">
+                        <Text type="number" value={l.steps?.[0] ?? 3} onChange={(v) => setLadder(kind, { steps: [Math.max(1, Math.round(Number(v) || 3))] })} />
+                      </Field>
+                    ) : (
+                      <DayChips steps={l.steps} onChange={(steps) => setLadder(kind, { steps })} />
+                    )}
                     {!sending && (
                       <p className="text-xs text-amber-700">
                         These will wait in the outbox for you. To let them go on their own, tick

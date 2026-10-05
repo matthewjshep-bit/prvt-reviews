@@ -668,6 +668,25 @@ v = await fetch(link2, { redirect: "manual" });
 html = await v.text();
 ok("second invite names its own recipient", html.includes("Sam Cole · CONFIDENTIAL") && !html.includes("Priya Raman"));
 
+// 3511 NE 153rd St, 2026-10-05: 19 of 48 "opens" came within two minutes of
+// the text — the phone fetching the link to draw its preview card. A preview
+// is nobody looking, and "they opened it" drove follow-ups.
+console.log("\n== viewer: a phone's link preview is not a package open ==");
+r = await jget(`${B}/api/datarooms/${room.id}/invites`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, contactId: "contact-inv-preview", name: "Pat Lin", phone: "+12065550191" }),
+});
+const previewLink = r.body.link, previewInvite = r.body.invite.id;
+const IMESSAGE_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_1) AppleWebKit/601.2.4 (KHTML, like Gecko) Version/9.0.1 Safari/601.2.4 facebookexternalhit/1.1 Facebot Twitterbot/1.0";
+for (const ua of [IMESSAGE_UA, "GoogleMessages/20.2 facebookexternalhit/1.1"]) {
+  v = await fetch(previewLink, { redirect: "manual", headers: { "user-agent": ua } });
+  ok(`the preview still gets the page (${ua.slice(0, 14)}…)`, v.status === 200 && (await v.text()).includes("Sumner"), v.status);
+}
+ok("a preview is not counted as a view", !((await store.getDataroomInvite(previewInvite)).viewCount > 0));
+v = await fetch(previewLink, { redirect: "manual", headers: { "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1" } });
+await v.text();
+ok("a person opening it is", (await store.getDataroomInvite(previewInvite)).viewCount === 1);
+
 console.log("\n== viewer: documents ==");
 v = await fetch(`${link}/file/comps`, { redirect: "manual" });
 ok("serves a document behind a live token", v.status === 200 && (await v.text()).startsWith("%PDF"), v.status);

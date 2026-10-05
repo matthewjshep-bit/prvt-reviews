@@ -24,6 +24,7 @@ const KIND_LABEL = {
   offer_nudge: "Offer, no reply",
   blast_nudge: "Deal sent, no reply",
   dataroom_nudge: "Opened the package",
+  deal_followup: "Spoke up, went quiet",
 };
 
 // One bar per stage, each as a share of the widest one, so the drop-off is

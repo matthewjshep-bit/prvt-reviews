@@ -66,7 +66,7 @@ export const AUTONOMY_DOES = {
   normal: [
     "Every auto-eligible reply sends itself, for agents and investors",
     "Realm check and take check float our numbers on their own",
-    "Follow-up ladders run and send: offer, outreach, blast, dataroom",
+    "Follow-up ladders run and send: offer, outreach, and one follow-up to a buyer who spoke up on a deal",
     "Outreach sweep imports and texts new agents daily; re-quotes on their numbers",
     "Deal blasts go out on promote; the assignment drafts on commit",
     "A number we promised goes out when it is ready; a held underwrite asks for their numbers and re-runs on them",
