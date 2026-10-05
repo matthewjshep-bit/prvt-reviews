@@ -1648,12 +1648,13 @@ test("when numbers land with no take from them, the bot floats our ARV and rehab
     deps: { draft: async () => ({ ...DRAFT, intent: "take_check", reply: "Thinking 850K ARV, 200K rehab, so we'd be around 410,000. Thoughts?", summary: "leaks" }) },
   });
   await settle();
-  // Since 2026-10-04 a machine text a gate catches is written once more,
-  // told what tripped it, and dropped if it still trips — never sent, and
-  // never left on the Desk (nobody asked for it).
-  assert.equal(leaky.job.status, "held", leaky.job.error);
-  assert.match(leaky.job.heldReason, /dropped, not sent: .*410,000/, `the price is the one number a take check may not say: ${leaky.job.heldReason}`);
-  assert.equal(leaky.job.draftId, null, "no draft waits for a person");
+  assert.equal(leaky.job.status, "done", leaky.job.error);
+  const ld = await store2.getReplyDraft(leaky.job.draftId);
+  assert.equal(ld.autoSendable, false);
+  assert.ok(ld.flags.some((f) => /410,000/.test(f)), `the price is the one number a take check may not say: ${ld.flags.join(" · ")}`);
+  // A float is marked as gone when it's queued, so it is never dropped: it
+  // waits for a person (review, 2026-10-04).
+  assert.equal(ld.status, "draft", "waits for a person");
 });
 
 test("a take check needs numbers to float, and its switch", async () => {

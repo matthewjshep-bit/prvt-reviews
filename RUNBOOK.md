@@ -2151,7 +2151,10 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
   - While the hot push ladder is on, a hot offer is a Machine row
     (`hot_machine`: "waiting on their write-up" / "the next push to paper").
     It is a call only when they hand the write-up to someone else
-    (`handsWriteUpBack`, with the number they gave). It is a Decide row,
+    (`handsWriteUpBack`, with the number they gave). A warm offer (nothing
+    agreed) sits with the machine only while the offer nudge is on. A yes
+    you re-priced below by hand is not a "settle the number" call, but
+    `priceAgreed` keeps it, so no paper goes out at the lower number. It is a Decide row,
     `paper_to_sign`, when they say the paper is on its way to sign.
   - While `counterHold` is on, a counter we held our number on is a Machine
     row (`counter_held`) with its next check-in or the day it passes. A
@@ -2161,7 +2164,8 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
 - **Hold, then pass** (`parties.agent.counterHold { enabled, checkIns: 2 }`,
   off; Full on the dial).
   - The reply: a counter above our number, or an ask for us to come up with
-    no number, gets our number back once. The reply agent writes it from
+    no number, gets our number back once (by text only, never off a call, and
+    only with the follow-up clock on). The reply agent writes it from
     `holdNumber`'s amount: the lowest we've put to them, never more, and no
     dollar sign. It sends itself only when the counter's NEVER_AUTO lock is
     the one thing holding it. `offer.counterHold = { at, ours, theirs, nudges,
@@ -2192,7 +2196,12 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
     `weDecline`) on a contact whose current offer is countered above ours
     sets `we_passed`.
   - It covers texts typed in GHL, the composer, and a draft you edited and
-    sent. A hold or a showing time doesn't count.
+    sent, as long as all of these hold:
+    - SMS only;
+    - the counter is no more than 21 days old;
+    - nothing is agreed and the offer isn't hot;
+    - the text names that house, or it is the only live counter.
+  - A hold, a showing time or a hand-off doesn't count.
   - Look back: `POST /api/offers/passes/our-no { dryRun }`.
 - **A check-in never goes over a reply we owe.** When the "unanswered" clock
   fires and the held reply never went out, their text goes back through
@@ -2208,10 +2217,13 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
 - **The machine's own leftovers.**
   - A machine-started text that fails a gate is drafted once more with
     `outbound.fix`, else dropped with a timeline note. It never waits on you.
+    The exceptions (`KEEP_FOR_A_PERSON`) still wait: floats, a promised
+    number, a price drop, the first text.
   - Held underwrites:
     - Not single-family: passed after 24h, unless you pressed Underwrite anyway.
     - A town we've never priced in and that isn't on the map
-      (`knownCitiesFrom`): passed.
+      (`knownCitiesFrom`; the city comes from `parseUsAddress`): passed,
+      but only after anything their numbers could clear has been asked.
     - Both get one `kind_pass` text.
     - An address the map couldn't place: one ask to confirm the street.
     - `heldOnTheMachine` shows the plain ones as Machine rows tonight.

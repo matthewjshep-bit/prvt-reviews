@@ -316,6 +316,11 @@ export const SHADOW_GRACE_MS = 20_000;
 export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "showing_reminder", "showing_followup"]);
 export const draftEffort = (outbound) => (outbound && LOW_EFFORT_KINDS.has(outbound.kind) ? "low" : "medium");
 
+// Machine texts a gate catches that wait for a person rather than being
+// redrafted or dropped (runProactive): our number floated, a promised
+// number, a price drop, the first text to a new agent.
+export const KEEP_FOR_A_PERSON = new Set(["realm_check", "take_check", "promise_due", "price_drop", "outreach_open"]);
+
 // Texts a sweep starts that nobody is waiting on: these may go through the
 // Batch API at half price (draft-batch.js). A float after an underwrite, a
 // partner's answer, an address chase and every reply to a person may not.
@@ -2737,7 +2742,11 @@ async function runProactive(job, ctx) {
   // two check-ins sat on the Desk for days over the word "assigning"
   // (2026-10-04). The timeline says what was dropped and why.
   const passes = (g) => Boolean(g.ok || (g.locked && g.clean));
-  if (ctx.machine && !passes(gate)) {
+  // Not a float or a first text, though: those are marked as gone the
+  // moment they're queued (realmCheckAt, takeCheckAt, the outreach record),
+  // so a dropped one would read as sent and never be tried again. They still
+  // wait for you, as before (review, 2026-10-04).
+  if (ctx.machine && !passes(gate) && !KEEP_FOR_A_PERSON.has(kind)) {
     const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
     const again = tripped.length ? await deps.draft({ ...draftArgs, outbound: { ...outbound, fix: tripped } }).catch(() => null) : null;
     if (again?.reply) {

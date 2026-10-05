@@ -35,7 +35,7 @@
 //   wait    asked, not yet a week, they haven't answered — leave it alone
 //   yours   a person's call
 
-import { addressKey, sameStreet } from "./us-address.js";
+import { addressKey, sameStreet, parseUsAddress } from "./us-address.js";
 import { propertyDossier } from "./contact-record.js";
 import { aiHoldReasons, effectiveStatus, DEAD_STATUSES } from "./offer-status.js";
 import { KIND_HOLD } from "./asset-type.js";
@@ -206,17 +206,6 @@ export function triageHeldUnderwrite({
     return { ...base, action: "retire", status: "we_passed", reason: "we asked for their read a week ago and heard nothing" };
   }
 
-  /* --- 2b. outside the area we buy in (2026-10-04) --- */
-  // A town we've never priced a house in and that isn't on our map: 102 W
-  // Pearl St, Oakesdale (Whitman County) sat on the Desk for a week. Chehalis
-  // and Seabeck stay in — we've priced houses there.
-  if (knownCities) {
-    const city = cityOf(address);
-    if (city && !knownCities.has(city)) {
-      return { ...base, action: "retire", status: "we_passed", passNote: "area", reason: `outside the area we buy in (${cityName(city)})` };
-    }
-  }
-
   /* --- 3. not our kind of house (2026-10-01: single-family only) --- */
   // Whether to price a mobile home or a duplex anyway is a person's call —
   // for a day (Matt, 2026-10-04: the app should do everything else). Then
@@ -274,6 +263,15 @@ export function triageHeldUnderwrite({
     return { ...base, action: "ask", needs: missing, reason: `${heldReason} — ask what ${missing.map((n) => (n === "value" ? "it's worth fixed up" : "the work would run")).join(" and ")}` };
   }
 
+  /* --- 5b. outside the area we buy in (2026-10-04) --- */
+  // A town we've never priced a house in and that isn't on our map: 102 W
+  // Pearl St, Oakesdale (Whitman County) sat on the Desk for a week. Only
+  // here, after anything their numbers could clear: a thin-comps hold in a
+  // town we just haven't priced yet is asked about, never passed.
+  if (knownCities && outsideArea(address, knownCities)) {
+    return { ...base, action: "retire", status: "we_passed", passNote: "area", reason: `outside the area we buy in (${cityName(cityOf(address)) || parseUsAddress(address).state})` };
+  }
+
   /* --- 6. a person's call --- */
   return { ...base, action: "yours", reason: heldReason };
 }
@@ -290,11 +288,28 @@ export function latestInbound(drafts = [], events = []) {
 // "couldn't locate 818 Popular, Edmonds on the map"
 const MAP_MISS = /couldn't locate .+ on the map/i;
 
-/** cityOf("102 W Pearl St, Oakesdale, WA") → "oakesdale" — the part after the street, slugged. */
+/**
+ * cityOf("102 W Pearl St, Oakesdale, WA") → "oakesdale"
+ *
+ * The city as the address parser reads it (a unit, a missing comma, "Mt"
+ * for "Mount" all handled), slugged like wa-city-coords.js. "" when the
+ * parser can't find one — and then nothing is judged on it.
+ */
 export function cityOf(address = "") {
-  const parts = String(address || "").split(",").map((p) => p.trim()).filter(Boolean);
-  if (parts.length < 2) return "";
-  return parts[1].toLowerCase().replace(/[^a-z\s-]/g, "").trim().replace(/\s+/g, "-");
+  const city = String(parseUsAddress(address).city || "").toLowerCase()
+    .replace(/^mt\.?\s+/, "mount ").replace(/^st\.?\s+/, "saint ")
+    .replace(/[^a-z\s-]/g, "").trim().replace(/\s+/g, "-");
+  return city;
+}
+
+/** outsideArea(address, knownCities) → true only when the parser is sure: another state, or a WA town we don't know. */
+export function outsideArea(address = "", knownCities = null) {
+  if (!knownCities) return false;
+  const p = parseUsAddress(address);
+  const state = String(p.state || "").toUpperCase();
+  if (state && state !== "WA") return true;
+  const city = cityOf(address);
+  return Boolean(city) && !knownCities.has(city);
 }
 const cityName = (slug) => slug.split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
 
@@ -328,15 +343,13 @@ export function heldOnTheMachine(offer, { knownCities = null, now = Date.now() }
   const cls = classifyHolds(held);
   const address = String(offer?.address || "").trim();
   if (!address || cls.junk || TEST_ADDRESS.test(address) || !/\d/.test(address)) return { what: "dropped at the 7pm check — nothing to place" };
-  if (knownCities) {
-    const city = cityOf(address);
-    if (city && !knownCities.has(city)) return { what: `passed at the 7pm check — outside the area we buy in (${cityName(city)})` };
-  }
   if (held.some((h) => KIND_HOLD.test(String(h || "")))) {
     const heldAt = ms(offer?.autoUnderwrite?.finishedAt) ?? ms(offer?.updatedAt) ?? ms(offer?.createdAt) ?? now;
     return { what: "passed unless you underwrite it anyway — we buy single-family only", at: new Date(heldAt + KIND_PASS_HOURS * 3600000).toISOString() };
   }
   if (held.some((h) => MAP_MISS.test(String(h || "")))) return { what: "asks them to confirm the street address at the 7pm check" };
+  // Outside our area, when nothing their numbers could clear is in the way.
+  if (!cls.rescuable && outsideArea(address, knownCities)) return { what: `passed at the 7pm check — outside the area we buy in (${cityName(cityOf(address))})` };
   return null;
 }
 

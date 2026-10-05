@@ -191,6 +191,15 @@ test("a town we've never bought in and isn't on our map is outside our area; one
   assert.match(heldOnTheMachine(oak, { knownCities: known, now }).what, /outside the area/);
   const che = { ...oak, address: "500 Main St, Chehalis, WA 98532" };
   assert.notEqual(triageHeldUnderwrite({ offer: che, now, knownCities: known }).status, "we_passed");
+  // Review, 2026-10-04: a unit, or no comma before the state, read the city
+  // wrong and passed in-area houses. The parser reads them; and a hold their
+  // numbers could clear is asked about before any town is judged.
+  assert.equal(cityOf("2500 Alder St, Unit 15, Milton, WA 98354"), "milton");
+  assert.equal(cityOf("1234 5th Ave S, Seattle WA 98108"), "seattle");
+  assert.equal(cityOf("1 Main St, Mt Vernon, WA 98273"), "mount-vernon");
+  const thin = { ...oak, address: "2500 Alder St, Unit 15, Smalltown, WA 98354", autoUnderwrite: { finishedAt: "2026-10-04T19:00:00Z", held: ["only 1 priced comps — the price proxy needs 6 to have a top tier"] } };
+  assert.equal(triageHeldUnderwrite({ offer: thin, now, knownCities: known }).action, "ask");
+  assert.equal(heldOnTheMachine(thin, { knownCities: known, now }), null);
 });
 
 test("the reply agent's read of a house that's gone: loose on a no, strict otherwise", async () => {
