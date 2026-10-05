@@ -1072,7 +1072,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                     value={Array.isArray(form.outreachAutopilot?.opener?.examples) ? form.outreachAutopilot.opener.examples.join("\n\n") : form.outreachAutopilot?.opener?.examples ?? DEFAULT_OPENER_EXAMPLES.join("\n\n")}
                     onChange={(e) => setOutreachAuto("opener")({ ...(form.outreachAutopilot?.opener || {}), examples: e.target.value })} />
                   <span className="mt-1 block text-xs text-slate-500">
-                    A few of your own first texts, with a blank line between them. The bot writes every agent a fresh one in this voice and fills in {"{first}"}, {"{street}"} and {"{county}"}, which is the county the listing is in and the only place it names.
+                    A few of your own first texts, with a blank line between them. The bot writes every agent a fresh one in this voice, with one real detail from their listing (the town, the decade it was built, a big lot, sitting a while), and fills in {"{first}"}, {"{street}"}, {"{town}"} and {"{county}"}. The county is the only area it says you're looking in. A little humour is fine; it's never at the house's expense.
                     Leave off "Thanks, Matt" and "No worries if not can stop": GHL adds both to the end of the first text, so the bot never writes a sign-off and one in an example is cut.
                   </span>
                 </label>

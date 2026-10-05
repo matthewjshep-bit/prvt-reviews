@@ -49,7 +49,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
-import { normalizeOpener, countyName, stripSignOff } from "./shared/outreach-opener.js";
+import { normalizeOpener, countyName, stripSignOff, houseDetails } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -2537,7 +2537,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       // The county the listing is in, the only place the text names, and
       // Matt's own openers as the voice (shared/outreach-opener.js).
       county: countyName(subject?.county), city: String(subject?.city || ""),
-      examples: normalizeOpener(saved?.outreachAutopilot?.opener).examples, variant: Number(subject?.variant) || 0 };
+      examples: normalizeOpener(saved?.outreachAutopilot?.opener).examples, variant: Number(subject?.variant) || 0,
+      // One real thing about the house for the text to notice.
+      details: houseDetails({ ...(subject?.house || {}), city: subject?.city || subject?.house?.city || "", dom: Number(subject?.hookDom) || subject?.house?.dom || 0 }) };
   }
   // The nudges. They carry what the message is ABOUT and no numbers at all.
   return { ...base,

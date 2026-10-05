@@ -31,7 +31,7 @@ const ask = (o) => outboundOpening({ kind: "outreach_open", address: "1911 9th A
 test("the first text names the county the listing is in and nowhere else — the workflow said 'greater Seatac' to every agent", () => {
   const t = ask({ county: "Pierce", examples: DEFAULT_OPENER_EXAMPLES });
   assert.match(t, /anywhere in Pierce County/);
-  assert.match(t, /Pierce County is the only place you name/);
+  assert.match(t, /Pierce County is the only area you say you.re looking in/);
   assert.match(t, /on 1911 9th Ave W/, "the listing by street");
   assert.doesNotMatch(t.replace(/no region \([^)]*\)/, ""), /Seatac|King County|Snohomish/i);
 });
@@ -167,13 +167,71 @@ function ghlClient() {
   };
 }
 
-async function batchWith(name, agents) {
-  const batch = await store.createOutreachBatch(LOC, { name, autoNamed: false });
-  await store.upsertOutreachAgents(LOC, batch.id, agents.map((a, i) => ({
-    agentKey: a.key, doc: { name: a.key, firstName: a.key, phone: `20655531${String(i).padStart(2, "0")}`, brokerage: "Test Realty", hook: a.hook, ghl: {} },
+async function batchWith(name, agents, loc = LOC) {
+  const batch = await store.createOutreachBatch(loc, { name, autoNamed: false });
+  await store.upsertOutreachAgents(loc, batch.id, agents.map((a, i) => ({
+    agentKey: a.key, doc: { name: a.key, firstName: a.key, phone: `20655531${String(i).padStart(2, "0")}`, brokerage: "Test Realty", hook: a.hook, listingCount: a.listingCount || 1, ghl: {} },
   })));
   return batch;
 }
+
+test("the first text is told what the agent can see on the listing — a 1950s house on a big lot — so it isn't generic", async () => {
+  const seen = [];
+  const router = createOutreachRouter({ resolveLocation: () => ({ locationId: LOC, client: ghlClient() }),
+    firstTouch: async (a) => { seen.push(a.hook); return { job: { id: "j-house" } }; } });
+  const batch = await batchWith("Autopilot · Mason, WA", [
+    { key: "fresh", listingCount: 4, hook: { address: "961 N Potlatch Dr, Shelton, WA", price: 300000, dom: 95, county: "Mason", city: "Shelton", yearBuilt: 1958, beds: 3, sqft: 980, lotSize: 30000, priceCut: true } },
+    // A row pulled before 2026-10-05: no priceCut, but its score has the cut.
+    { key: "older", hook: { address: "5 Bay St, Shelton, WA", dom: 20, county: "Mason", yearBuilt: 1972, components: [{ key: "cuts", points: 12 }] } },
+  ]);
+  await router.importAgents({ locationId: LOC, client: ghlClient(), agentKeys: ["fresh", "older"], batchId: batch.id, dryRun: false, applyTag: false, openWith: "app" });
+  assert.equal(seen[0].yearBuilt, 1958);
+  assert.equal(seen[0].lotSize, 30000);
+  assert.equal(seen[0].listingCount, 4);
+  assert.equal(seen[0].priceCut, true);
+  assert.equal(seen[1].priceCut, true, "an older row's score still says the price came down");
+
+  const o = outboundDescriptor({ kind: "outreach_open", offer: null, saved: {},
+    subject: { address: seen[0].address, hookDom: seen[0].dom, county: "Mason", city: "Shelton", house: seen[0] } });
+  assert.deepEqual(o.details, ["it's in Shelton", "built in the 1950s", "3 bedrooms, on the small side", "it sits on a big lot",
+    "it has been on the market a while", "the price has come down since it listed", "this agent has a few other listings out right now"]);
+  const t = outboundOpening(o);
+  assert.match(t, /WHAT WE KNOW ABOUT THIS ONE: it's in Shelton; built in the 1950s/);
+  assert.match(t, /Work in ONE of these/);
+  assert.match(t, /never in a way that knocks the house/);
+  assert.ok(o.details.every((d) => !/\$|\bk\b|days?\b/i.test(d)), "no price, no days-on-market count");
+});
+
+test("the first text has room for a little of Matt's humour, but never at the agent's, the seller's or the house's expense", () => {
+  const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES });
+  assert.match(t, /warm and a little funny, never a pitch/);
+  assert.match(t, /PERSONALITY: one light, human touch/);
+  assert.match(t, /never at the agent's, the seller's or the house's expense/);
+  assert.match(t, /plain and friendly is fine/, "humour is optional, never forced");
+  assert.doesNotMatch(ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES }), /WHAT WE KNOW ABOUT THIS ONE/, "no details, no details line");
+});
+
+test("a first text lost to a deploy restart (no draft, no skip written) is sent by the next run", async () => {
+  const L = "loc-first-text-lost";
+  const asked = [];
+  const router = createOutreachRouter({ resolveLocation: () => ({ locationId: L, client: ghlClient() }),
+    firstTouch: async (a) => { asked.push(a); return { job: { id: `j-${asked.length}` } }; } });
+  const batch = await batchWith("Autopilot · Island, WA", [
+    { key: "lost", hook: { address: "5392 Shore Meadow Rd, Clinton, WA", county: "Island" } },
+    { key: "drafted", hook: { address: "1 Beach Rd, Langley, WA", county: "Island" } },
+  ], L);
+  const r = await router.importAgents({ locationId: L, client: ghlClient(), agentKeys: ["lost", "drafted"], batchId: batch.id, dryRun: false, applyTag: false, openWith: "app" });
+  const [lost, drafted] = r.results.map((x) => x.contactId);
+  await store.createReplyDraft({ locationId: L, contactId: drafted, status: "draft", channel: "sms", reply: "Hi", outbound: { kind: "outreach_open" }, updatedAt: new Date().toISOString() });
+  asked.length = 0;
+
+  assert.equal((await router.retryFirstTexts({ locationId: L, client: ghlClient() })).retried, 0, "not while it could still be on its lane");
+  const later = await router.retryFirstTexts({ locationId: L, client: ghlClient(), now: Date.now() + 3 * 3600000 });
+  assert.equal(later.retried, 1);
+  assert.equal(asked[0].contactId, lost, "the one with a draft is in the outbox, not lost");
+  assert.equal(asked[0].hook.address, "5392 Shore Meadow Rd, Clinton, WA");
+  assert.equal(asked[0].hook.county, "Island");
+});
 
 test("the first text knows the county the listing is in, or the county the sweep was reading", async () => {
   const seen = [];

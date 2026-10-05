@@ -163,7 +163,7 @@ const outreachRouter = createOutreachRouter({
     return startProactive({
       client, locationId, saved, store, contactId, kind: "outreach_open",
       subject: { address: hook.address || "", hookPrice: hook.price || 0, hookDom: hook.dom || 0, brokerage: hook.brokerage || "",
-        county: hook.county || "", city: hook.city || "", variant: openerVariant(contactId, 1000) },
+        county: hook.county || "", city: hook.city || "", variant: openerVariant(contactId, 1000), house: hook },
       sendsEnabled: CONVERSATION_SENDS_LIVE,
       deps: { ...offersRouter.conversationDepsFor({ locationId, client, saved }), ...(onSettled ? { onSettled } : {}) },
     });

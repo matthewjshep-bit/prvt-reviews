@@ -66,7 +66,11 @@ const GHL_RECHECK_DAYS = 7;
 // A first text that didn't go is tried again by the next sweeps: this many
 // times in all, for this many days.
 const FIRST_TEXT_TRIES = 3;
+// A hook saved before 2026-10-05 has no priceCut; its score says so instead.
+const priceCutOf = (h) => Boolean(h?.priceCut || (Array.isArray(h?.components) && h.components.some((c) => c?.key === "cuts" && Number(c.points) > 0)));
 const FIRST_TEXT_RETRY_DAYS = 7;
+// A first text with no draft this long after the import was lost to a restart.
+const FIRST_TEXT_LOST_AFTER_MS = 2 * 3600 * 1000;
 
 /* ---------- normalization ---------- */
 
@@ -455,6 +459,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         address, city: l.city, state: l.state, zip: l.zipCode, county: l.county || "",
         price: l.price, daysOnMarket: l.daysOnMarket, listedDate: l.listedDate,
         yearBuilt: l.yearBuilt, sqft: l.squareFootage, propertyType: l.propertyType,
+        beds: l.bedrooms ?? null, baths: l.bathrooms ?? null, lotSize: l.lotSize ?? null,
         mlsName: l.mlsName, mlsNumber: l.mlsNumber, score, components,
         distress: { stale, cut, cheap }, qualifies: qualifying.has(l),
       };
@@ -504,6 +509,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
             listingKey: hook.listingKey, address: hook.address, price: hook.price,
             // The county is what the first text names (shared/outreach-opener.js).
             county: hook.county || "", city: hook.city || "",
+            // What the first text may notice about the house (shared/outreach-opener.js houseDetails).
+            sqft: hook.sqft ?? null, beds: hook.beds ?? null, lotSize: hook.lotSize ?? null, priceCut: Boolean(hook.distress?.cut),
             dom: hook.daysOnMarket, propertyType: hook.propertyType, yearBuilt: hook.yearBuilt,
             score: hook.score, components: hook.components,
           },
@@ -984,14 +991,15 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * retryFirstTexts({ locationId, client, limit, now }) → { retried, opened, results }
    *
    * Agents whose first text didn't happen (outreach_open_skipped in the last
-   * FIRST_TEXT_RETRY_DAYS, no outreach_sent since), tried again, at most
+   * FIRST_TEXT_RETRY_DAYS, or created to text and left with no draft at all,
+   * no outreach_sent since), tried again, at most
    * FIRST_TEXT_TRIES times each and `limit` a run. The sweep runs this
    * before it pulls anyone new.
    */
   async function retryFirstTexts({ locationId, client, limit = Infinity, now = Date.now() }) {
     if (typeof firstTouch !== "function" || !(limit > 0)) return { retried: 0, opened: 0, results: [] };
     const since = new Date(now - FIRST_TEXT_RETRY_DAYS * 86400000).toISOString();
-    const events = await store.listContactEventsSince(locationId, since, { types: ["outreach_open_skipped", "outreach_sent"], limit: 5000 }).catch(() => []);
+    const events = await store.listContactEventsSince(locationId, since, { types: ["outreach_open_skipped", "outreach_sent", "outreach_enrolled", "import"], limit: 5000 }).catch(() => []);
     const byContact = new Map();
     for (const e of events) {
       if (!e?.contactId) continue;
@@ -1001,12 +1009,26 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     const results = [];
     for (const [contactId, list] of byContact) {
       if (results.length >= limit) break;
-      if (list.some((e) => e.type === "outreach_sent")) continue;
+      if (list.some((e) => e.type === "outreach_sent" || e.type === "outreach_enrolled")) continue;
       const skips = list.filter((e) => e.type === "outreach_open_skipped").sort((x, y) => String(x.at).localeCompare(String(y.at)));
-      if (!skips.length || skips.length >= FIRST_TEXT_TRIES) continue;
-      const last = skips.at(-1);
-      const r = await openFirstText({ locationId, client, contactId, hook: last.data?.hook || {}, ref: last.ref || null, tries: skips.length });
-      results.push({ contactId, ...r });
+      if (skips.length >= FIRST_TEXT_TRIES) continue;
+      if (skips.length) {
+        const last = skips.at(-1);
+        const r = await openFirstText({ locationId, client, contactId, hook: last.data?.hook || {}, ref: last.ref || null, tries: skips.length });
+        results.push({ contactId, ...r });
+        continue;
+      }
+      // Lost, not refused: a deploy restarted the broker while the first text
+      // was still queued in memory, so nothing was written down. A contact the
+      // app created to text, hours ago, with no draft of any kind.
+      const made = list.find((e) => e.type === "import" && e.data?.openWith === "app" && e.data?.action === "created"
+        && now - Date.parse(e.at) >= FIRST_TEXT_LOST_AFTER_MS);
+      if (!made) continue;
+      const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 1 }).catch(() => null);
+      if (!Array.isArray(drafts) || drafts.length) continue;
+      const r = await openFirstText({ locationId, client, contactId, ref: made.ref || null, tries: 0,
+        hook: { ...(made.data?.hook || {}), county: made.data?.county || countyName("", String(made.data?.batchName || "").replace(/^Autopilot · /, "")) } });
+      results.push({ contactId, lost: true, ...r });
     }
     return { retried: results.length, opened: results.filter((r) => r.jobId).length, results };
   }
@@ -1175,7 +1197,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
             if (facts.length) await learnFacts({ store, locationId, contactId, party: "agent", facts });
             await recordEvents({ store, locationId, contactId, party: "agent", events: [
               { type: "import", at, address: hook.address || "", source: "import", ref: `${batch.id}:${contactId}`,
-                data: { action, batchId: batch.id, batchName: batch.name || "", hook: { address: hook.address || "", price: hook.price || null, dom: hook.dom || null } } },
+                data: { action, batchId: batch.id, batchName: batch.name || "", hook: { address: hook.address || "", price: hook.price || null, dom: hook.dom || null },
+                  ...(openWith === "app" ? { openWith: "app", county: countyName(hook.county, county) } : {}) } },
               ...[batchTag, ...(sessionTag ? [sessionTag] : []), ...(applyTag ? [OUTREACH_TAG] : [])].map((tag) => ({ type: "tag_added", at, source: "import", ref: batch.id, data: { tag } })),
             ] });
           } catch (e) { warnings.push(`${agentKey}: record: ${e.message}`); }
@@ -1191,7 +1214,9 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           if (openWith === "app" && typeof firstTouch === "function" && action === "created") {
             opened = await openFirstText({ locationId, client, contactId, ref: batch.id,
               hook: { address: hook.address || "", price: hook.price || null, dom: hook.dom || null,
-                county: countyName(hook.county, county), city: hook.city || "", brokerage: a.brokerage || "" } });
+                county: countyName(hook.county, county), city: hook.city || "", brokerage: a.brokerage || "",
+                yearBuilt: hook.yearBuilt || null, beds: hook.beds || null, sqft: hook.sqft || null, lotSize: hook.lotSize || null,
+                priceCut: priceCutOf(hook), listingCount: Number(a.listingCount) || 0 } });
             if (opened.skipped) warnings.push(`${agentKey}: first text: ${opened.skipped}`);
           }
           let enrolled = null;
@@ -1451,7 +1476,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const county = countyName(hook.county, market);
       const out = await preview({
         client, locationId, saved, store, contactId: "", kind: "outreach_open", name: r.doc?.name || "",
-        subject: { address: hook.address || "", hookPrice: hook.price || 0, hookDom: hook.dom || 0, brokerage: r.doc?.brokerage || "", county, city: hook.city || "", variant: i },
+        subject: { address: hook.address || "", hookPrice: hook.price || 0, hookDom: hook.dom || 0, brokerage: r.doc?.brokerage || "", county, city: hook.city || "", variant: i,
+          house: { ...hook, priceCut: priceCutOf(hook), listingCount: Number(r.doc?.listingCount) || 0 } },
       }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
       previews.push({ agentKey: r.agentKey, name: r.doc?.name || "", street: String(hook.address || "").split(",")[0], county,
         reply: out?.reply || "", chars: String(out?.reply || "").length, held: Boolean(out?.held), flags: out?.flags || [], skipped: out?.skipped || "" });

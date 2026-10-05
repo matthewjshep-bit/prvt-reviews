@@ -585,27 +585,40 @@ function openingFor(outbound) {
       const ex = Array.isArray(o.examples) ? o.examples : [];
       const lead = ex.length ? ex[(Number(o.variant) || 0) % ex.length] : "";
       const voice = lead ? [lead, ...ex.filter((x) => x !== lead)] : [];
+      // 2026-10-05: more of Matt in it — one real detail from the listing,
+      // so the agent can tell somebody looked, and room for a light touch of
+      // humour. Still short, still no pitch.
+      const details = Array.isArray(o.details) ? o.details.filter(Boolean) : [];
       return `${START} This is the FIRST text this listing agent has ever had from us, about their listing at ` +
-        `${o.address}${o.hookDom >= 60 ? " (it has been on the market a while)" : ""}. Write it the way Matt texts: someone ` +
-        `local, plain and friendly, not a pitch. Two or three short sentences that do three things: mention their listing on ` +
-        `${street}, say you're in Seattle looking for your next flip anywhere in ${where}, and ask ONE question about whether ` +
-        `it needs work. You may add one short line asking about other fixers they know of ${o.county ? `in ${o.county}` : "around there"}. ` +
+        `${o.address}. Write it the way Matt texts: a friendly local flipper who is easy to talk to, warm and a little ` +
+        `funny, never a pitch. Two or three short sentences that: mention their listing on ${street}, say you're in Seattle ` +
+        `looking for your next flip anywhere in ${where}, and ask ONE question about whether it needs work. You may add one ` +
+        `short line asking about other fixers they know of ${o.county ? `in ${o.county}` : "around there"}. ` +
+        (details.length
+          ? `WHAT WE KNOW ABOUT THIS ONE: ${details.join("; ")}. Work in ONE of these, the one a person would naturally ` +
+            `notice, so it's obvious you actually looked at the listing (e.g. "love a 1950s place", "big lot on that one"). ` +
+            `Never more than one, never a list, and never in a way that knocks the house — it's their listing. `
+          : "") +
         (o.county
-          ? `${where} is the only place you name: no other county, no list of cities, no region ("greater Seattle", "Puget Sound", "Seatac"). `
+          ? `${where} is the only area you say you're looking in: no other county, no list of cities, no region ("greater ` +
+            `Seattle", "Puget Sound", "Seatac"). The listing's own town may describe the house. `
           : `Name no county or region. `) +
+        `PERSONALITY: one light, human touch is welcome when it comes naturally — a wry aside, a bit of self-deprecation, ` +
+        `the "honestly, the uglier the better" kind of line about what WE like. Never a pun, never a joke that needs a setup, ` +
+        `never at the agent's, the seller's or the house's expense. If nothing comes naturally, plain and friendly is fine. ` +
         (voice.length
-          ? `HOW MATT WRITES THESE ({first}, {street} and {county} are the blanks): ${voice.map((x) => `"${x}"`).join(" / ")}. ` +
+          ? `HOW MATT WRITES THESE ({first}, {street}, {town} and {county} are the blanks): ${voice.map((x) => `"${x}"`).join(" / ")}. ` +
             `OPEN THE WAY THE FIRST ONE OPENS and follow its shape; the others only show his range. Match the voice but never ` +
             `copy one word for word: change at least a few phrases, because a hundred agents a day get one of these and no two ` +
             `should read the same. `
           : "") +
         `Use their first name once if you have it. Keep it under ${OPENER_MAX_CHARS} characters. ` +
-        `End on the question or the "all ears" line: NO sign-off, no name, no thanks, and no opt-out line — the phone ` +
+        `End on your question or one short line after it: NO sign-off, no name, no thanks, and no opt-out line — the phone ` +
         `system adds "Thanks, Matt" and "No worries if not can stop" on the end by itself. ` +
         `It must not read like AI: no dashes (— or –), no exclamation marks, no emoji, no "I hope this finds you well", ` +
         `"quick question", "I'm reaching out" or "touching base". ` +
-        `Do NOT name a price, a number, how many days it's been listed, a percentage, or a link. Do NOT ask about this ` +
-        `listing's price. Set intent to outreach_open.`;
+        `Do NOT name a price, how many days it's been listed, a percentage, or a link. Do NOT ask about this listing's ` +
+        `price. Set intent to outreach_open.`;
     }
 
     case "outreach_nudge":
