@@ -19,8 +19,8 @@
 // humour is about us and what we like, never about their listing.
 export const DEFAULT_OPENER_EXAMPLES = [
   "Hi {first}, came across your listing at {street}. I'm in Seattle and looking for my next flip project anywhere in {county} County. Is this one a bit of a project, or pretty turnkey? And if you've got other fixers on your radar in {county}, I'm all ears.",
-  "Hey {first}, {street} caught my eye. I'm a Seattle flipper with a soft spot for houses that need a little love, looking anywhere in {county} County. Is this one a bit of a project? Honestly, the uglier the better.",
-  "Hi {first}, saw your {town} listing on {street}, looks like it has some character. I'm hunting for my next flip in {county} County. Fixer, or already pretty turnkey? Either answer helps.",
+  "Hey {first}, {street} caught my eye. I flip houses around Seattle and have a soft spot for ones that need a little love, looking anywhere in {county} County. Is this one a bit of a project? Honestly, the uglier the better.",
+  "Hi {first}, saw your {town} listing on {street}, looks like it has some character. I'm after my next flip in {county} County. Fixer, or already pretty turnkey? Either answer helps.",
   "Hey {first}, I'm someone who gets way too excited about original kitchens. Came across {street} and wondered if it needs some work? Looking for my next flip anywhere in {county} County.",
 ];
 
@@ -112,6 +112,24 @@ export function houseDetails(h = {}) {
   if (h.priceCut) out.push("the price has come down since it listed");
   if (Number(h.listingCount) >= 3) out.push("this agent has a few other listings out right now");
   return out;
+}
+
+// Phrases the bot kept reaching for whatever it was told: on 2026-10-05, 30 of
+// 45 first texts said "hunting", and "Seattle flipper" and "caught my eye" ran
+// through most of the rest. Fine once; a day's batch of them is a template.
+const OVERUSED = [
+  ["hunting", /\bhunt(?:ing)?\b/i],
+  ["Seattle flipper", /\bseattle flipper\b/i],
+  ["caught my eye", /\bcaught my eye\b/i],
+];
+
+/**
+ * overusedPhrases(text, { allow }) → the overused phrases a first text uses.
+ * `allow` names any this agent's opening may use ("caught my eye" when the
+ * opening is the street catching your eye).
+ */
+export function overusedPhrases(text = "", { allow = [] } = {}) {
+  return OVERUSED.filter(([word, rx]) => !allow.includes(word) && rx.test(String(text || ""))).map(([word]) => word);
 }
 
 /**

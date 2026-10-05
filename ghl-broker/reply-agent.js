@@ -49,7 +49,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
-import { normalizeOpener, countyName, stripSignOff, houseDetails, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
+import { normalizeOpener, countyName, stripSignOff, houseDetails, overusedPhrases, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -89,7 +89,7 @@ import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts,
   investorFacingPrice, INVESTOR_DEAL_STAGES } from "./conversation-context.js";
 import {
-  buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext, CARRIER_CHECKED_KINDS,
+  buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext, CARRIER_CHECKED_KINDS, OPENING_MOVES,
 } from "./conversation-prompt.js";
 import { carrierFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
@@ -2642,6 +2642,19 @@ export async function writeAgainWithoutCarrierWords({ draft, kind, redraft }) {
 // the model wrote anyway would reach the agent twice (Matt, 2026-10-05).
 const NO_SIGN_OFF_KINDS = new Set(["outreach_open", "outreach_nudge"]);
 
+// A first text that leans on what every other agent today is getting
+// ("hunting", "Seattle flipper") is written again once without it; the new one
+// goes if it uses fewer of them and picked up no carrier words.
+export async function writeWithoutOverused({ draft, kind, variant = 0, redraft }) {
+  if (kind !== "outreach_open" || typeof redraft !== "function" || !draft?.reply) return draft;
+  const allow = Math.round(Number(variant) || 0) % OPENING_MOVES.length === 0 ? ["caught my eye"] : [];
+  const before = overusedPhrases(draft.reply, { allow });
+  if (!before.length) return draft;
+  const again = await redraft(before).catch(() => null);
+  return again?.reply && overusedPhrases(again.reply, { allow }).length < before.length
+    && carrierFlags(again.reply).length <= carrierFlags(draft.reply).length ? again : draft;
+}
+
 // A first text over OPENER_MAX_CHARS goes out as three SMS segments once GHL
 // adds its two lines (two of the first six with house details did). Written
 // again once, shorter; the shorter one goes, unless it picked up carrier words.
@@ -2699,7 +2712,9 @@ export async function previewProactive({ client, locationId, saved, store, conta
       redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
     }), kind, a.signer),
     kind, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
-  });
+  }).then((d) => writeWithoutOverused({ draft: d, kind, variant: outbound.variant,
+    redraft: async (words) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, overused: words } }), kind, a.signer) }))
+    .then((d) => writeShorterFirstText({ draft: d, kind, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
   draft.intent = kind;
   const gate = outboundGateFor({ spec, offer, subject, context, config, party, a, kind })(draft);
   const clean = Boolean(gate.ok || (gate.locked && gate.clean));
@@ -2759,7 +2774,9 @@ async function runProactive(job, ctx) {
       redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
     }), kind, a.signer),
     kind, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
-  });
+  }).then((d) => writeWithoutOverused({ draft: d, kind, variant: outbound.variant,
+    redraft: async (words) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, overused: words } }), kind, a.signer) }))
+    .then((d) => writeShorterFirstText({ draft: d, kind, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
   draft.intent = kind;
   if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
   job.summary = draft.summary;

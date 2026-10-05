@@ -646,6 +646,9 @@ function openingFor(outbound) {
           : "") +
         `Use their first name once if you have it. Keep it under ${OPENER_MAX_CHARS} characters. ` +
         (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the detail and the question. ` : "") +
+        (Array.isArray(o.overused) && o.overused.length
+          ? `YOUR LAST DRAFT SAID ${o.overused.map((w) => `"${w}"`).join(", ")}, WHICH MOST OF TODAY'S AGENTS ARE GETTING: write it again and say that another way. `
+          : "") +
         `End on your question or one short line after it: NO sign-off, no name, no thanks, and no opt-out line — the phone ` +
         `system adds "Thanks, Matt" and "No worries if not can stop" on the end by itself. ` +
         `It must not read like AI: no dashes (— or –), no exclamation marks, no emoji, no "I hope this finds you well", ` +
