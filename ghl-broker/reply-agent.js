@@ -49,7 +49,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
-import { normalizeOpener, countyName, stripSignOff, houseDetails } from "./shared/outreach-opener.js";
+import { normalizeOpener, countyName, stripSignOff, houseDetails, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -2641,6 +2641,17 @@ export async function writeAgainWithoutCarrierWords({ draft, kind, redraft }) {
 // "No worries if not can stop" on the first text a contact gets, so a sign-off
 // the model wrote anyway would reach the agent twice (Matt, 2026-10-05).
 const NO_SIGN_OFF_KINDS = new Set(["outreach_open", "outreach_nudge"]);
+
+// A first text over OPENER_MAX_CHARS goes out as three SMS segments once GHL
+// adds its two lines (two of the first six with house details did). Written
+// again once, shorter; the shorter one goes, unless it picked up carrier words.
+export async function writeShorterFirstText({ draft, kind, redraft }) {
+  const n = String(draft?.reply || "").length;
+  if (kind !== "outreach_open" || n <= OPENER_MAX_CHARS || typeof redraft !== "function") return draft;
+  const again = await redraft(n).catch(() => null);
+  const m = String(again?.reply || "").length;
+  return m && m < n && carrierFlags(again.reply).length <= carrierFlags(draft.reply).length ? again : draft;
+}
 function withoutSignOff(draft, kind, signer = "") {
   if (!NO_SIGN_OFF_KINDS.has(kind) || !draft?.reply) return draft;
   const reply = stripSignOff(draft.reply, { names: [signer, String(signer || "").split(/\s+/)[0]] });
@@ -2682,10 +2693,13 @@ export async function previewProactive({ client, locationId, saved, store, conta
     aiApiKey, party, config, context, channel: "sms", outbound, batch: null,
   };
   const draftWith = deps.draft || draftReply;
-  const draft = withoutSignOff(await writeAgainWithoutCarrierWords({
-    draft: await draftWith(previewArgs), kind,
-    redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
-  }), kind, a.signer);
+  const draft = await writeShorterFirstText({
+    draft: withoutSignOff(await writeAgainWithoutCarrierWords({
+      draft: await draftWith(previewArgs), kind,
+      redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
+    }), kind, a.signer),
+    kind, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
+  });
   draft.intent = kind;
   const gate = outboundGateFor({ spec, offer, subject, context, config, party, a, kind })(draft);
   const clean = Boolean(gate.ok || (gate.locked && gate.clean));
@@ -2739,10 +2753,13 @@ async function runProactive(job, ctx) {
     batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) ? batcherFor(aiApiKey) : null,
   };
   // Still reads like an ad the carriers block: written once more without it.
-  const draft = withoutSignOff(await writeAgainWithoutCarrierWords({
-    draft: await deps.draft(draftArgs), kind,
-    redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
-  }), kind, a.signer);
+  const draft = await writeShorterFirstText({
+    draft: withoutSignOff(await writeAgainWithoutCarrierWords({
+      draft: await deps.draft(draftArgs), kind,
+      redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
+    }), kind, a.signer),
+    kind, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
+  });
   draft.intent = kind;
   if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
   job.summary = draft.summary;

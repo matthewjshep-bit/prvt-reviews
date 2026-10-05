@@ -521,6 +521,15 @@ export function outboundOpening(outbound) {
   return `${text} ${CARRIER_RULE}${avoid}`;
 }
 
+// How the first text to a new agent starts, one per agent (outreach_open).
+export const OPENING_MOVES = [
+  "start with the street catching your eye",
+  "start with the one thing you noticed about the house",
+  "start plainly: you came across their listing",
+  "start with a short, friendly line about who you are, then the listing",
+  "start with your question about the house, then who you are",
+];
+
 function openingFor(outbound) {
   if (!outbound?.kind) return "";
   const o = outbound;
@@ -589,16 +598,26 @@ function openingFor(outbound) {
       // so the agent can tell somebody looked, and room for a light touch of
       // humour. Still short, still no pitch.
       const details = Array.isArray(o.details) ? o.details.filter(Boolean) : [];
+      // The first live batch with details (2026-10-05) came out five of six
+      // alike: the bot always picked the decade and blended the examples into
+      // one formula. So each agent gets its own opening move and its own
+      // detail to notice, both from `variant` (the contact id's hash).
+      const v = Math.max(0, Math.round(Number(o.variant) || 0));
+      const move = OPENING_MOVES[v % OPENING_MOVES.length];
+      const town = (details.find((d) => d.startsWith("it's in ")) || "").replace("it's in ", "");
+      const others = details.filter((d) => !d.startsWith("it's in "));
+      const notice = others.length ? others[Math.floor(v / OPENING_MOVES.length) % others.length] : "";
       return `${START} This is the FIRST text this listing agent has ever had from us, about their listing at ` +
         `${o.address}. Write it the way Matt texts: a friendly local flipper who is easy to talk to, warm and a little ` +
         `funny, never a pitch. Two or three short sentences that: mention their listing on ${street}, say you're in Seattle ` +
         `looking for your next flip anywhere in ${where}, and ask ONE question about whether it needs work. You may add one ` +
         `short line asking about other fixers they know of ${o.county ? `in ${o.county}` : "around there"}. ` +
-        (details.length
-          ? `WHAT WE KNOW ABOUT THIS ONE: ${details.join("; ")}. Work in ONE of these, the one a person would naturally ` +
-            `notice, so it's obvious you actually looked at the listing (e.g. "love a 1950s place", "big lot on that one"). ` +
-            `Never more than one, never a list, and never in a way that knocks the house — it's their listing. `
+        (notice || town
+          ? `WHAT TO NOTICE: ${notice || `it's in ${town}`}${notice && town ? ` (it's in ${town}; naming the town is fine too)` : ""}. ` +
+            `Work that in once, in your own words, so it's obvious you actually looked at the listing. No other detail, never ` +
+            `a list, and never in a way that knocks the house — it's their listing. `
           : "") +
+        `OPENING MOVE for this one: ${move}. Say who you are in your own words; don't always call yourself a "Seattle flipper". ` +
         (o.county
           ? `${where} is the only area you say you're looking in: no other county, no list of cities, no region ("greater ` +
             `Seattle", "Puget Sound", "Seatac"). The listing's own town may describe the house. `
@@ -608,11 +627,11 @@ function openingFor(outbound) {
         `never at the agent's, the seller's or the house's expense. If nothing comes naturally, plain and friendly is fine. ` +
         (voice.length
           ? `HOW MATT WRITES THESE ({first}, {street}, {town} and {county} are the blanks): ${voice.map((x) => `"${x}"`).join(" / ")}. ` +
-            `OPEN THE WAY THE FIRST ONE OPENS and follow its shape; the others only show his range. Match the voice but never ` +
-            `copy one word for word: change at least a few phrases, because a hundred agents a day get one of these and no two ` +
-            `should read the same. `
+            `Use them for his voice and humour, not as a template: follow the opening move above. Never copy one word for word, ` +
+            `because a hundred agents a day get one of these and no two should read the same. `
           : "") +
         `Use their first name once if you have it. Keep it under ${OPENER_MAX_CHARS} characters. ` +
+        (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the detail and the question. ` : "") +
         `End on your question or one short line after it: NO sign-off, no name, no thanks, and no opt-out line — the phone ` +
         `system adds "Thanks, Matt" and "No worries if not can stop" on the end by itself. ` +
         `It must not read like AI: no dashes (— or –), no exclamation marks, no emoji, no "I hope this finds you well", ` +
