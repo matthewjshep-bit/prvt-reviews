@@ -26,8 +26,9 @@ const fakeStore = ({ drafts = [] } = {}) => {
 
 // One conversation: they asked, the bot drafted (held), Matt typed his own
 // answer in GHL. Also the bot's own send and a workflow's, neither a person.
+// GHL pages by startAfterDate: the second page is past everything.
 const client = (messages) => ({ call: async (path) => {
-  if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1", contactId: "c1", lastMessageDate: Date.parse(ago(0.5)) }] };
+  if (path.startsWith("/conversations/search")) return { conversations: path.includes("startAfterDate") ? [] : [{ id: "cv1", contactId: "c1", lastMessageDate: Date.parse(ago(0.5)) }] };
   return { messages };
 } });
 const thread = [
@@ -93,7 +94,7 @@ test("conversations that didn't move since the last look aren't read", async () 
 test("a read that didn't finish leaves the cursor where it was, so nothing typed is missed", async () => {
   const store = fakeStore();
   const failing = { call: async (path) => {
-    if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1", contactId: "c1", lastMessageDate: Date.parse(ago(0.5)) }] };
+    if (path.startsWith("/conversations/search")) return { conversations: path.includes("startAfterDate") ? [] : [{ id: "cv1", contactId: "c1", lastMessageDate: Date.parse(ago(0.5)) }] };
     throw new Error("GHL 502");
   } };
   await maybeSweepHandReplies({ client: failing, locationId: "L", store, now: NOW, deps: { removeContactTags: async () => {} } });
