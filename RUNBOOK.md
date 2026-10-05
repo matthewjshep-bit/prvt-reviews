@@ -1922,6 +1922,19 @@ stands would still send, goes back to scheduled (`dialHeldReleasable`), nudges
 spread across the day as the sweep spreads them. A dry run unless `dryRun:
 false`.
 
+**A hold the reader got wrong undoes itself (2026-10-05).** First texts saying
+"your listing at 1301 225th Pl SE" were held as naming $1,301,000 until
+`SHORT_STREET` fixed the reader that morning, but a held draft is never read
+again and the 7pm audit never releases a gate's hold, so the ones held before
+the fix sat under Decide. Every tick (`misread-holds.js`, area
+`misread-holds`) reads again each held text the machine started whose only
+flags are "names $X, which is not in the offer/deal book". When the gate's own
+readers (`moneyIn`, `shorthandPrices`) no longer see any $X in it, it is under
+72h old, the model didn't ask for a person, and `decideAutoSend` as the
+switches stand would send it, it goes back to scheduled, spread across the
+day. One open draft per contact: a newer one wins. The send-time checks still
+apply. A reply to their text, or a hold for anything else, stays yours.
+
 **Dismiss asks why.** One tap: Handled it by phone / We didn't owe anything /
 They went quiet / Not a deal / Something else (`PROMISE_DISMISS_REASONS`); a
 second press on the button skips it. The reason rides on the `promise_kept`

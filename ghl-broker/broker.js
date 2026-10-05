@@ -27,6 +27,7 @@ import { maybeStartOutreachSweep } from "./outreach-sweep.js";
 import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
 import { maybeRunPromiseSweep } from "./promise-sweep.js";
 import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation-audit.js";
+import { releaseMisreadHolds } from "./misread-holds.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunTierCheck } from "./tier-check.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
@@ -246,6 +247,13 @@ const TICK_JOBS = [
   { area: "offer-sends", run: async ({ client, locationId }) => {
     const resent = await offersRouter.retryPendingOfferSends?.({ client, locationId });
     if (resent?.sent) console.log(`${resent.sent} held offer${resent.sent === 1 ? "" : "s"} sent for ${locationId}`);
+  } },
+  // A machine text held for a price the reader misread ("your listing at
+  // 1301 225th Pl SE" as $1,301,000) goes back on its clock once the reader
+  // no longer sees it — only what the auto-send list would send anyway.
+  { area: "misread-holds", run: async ({ locationId, saved }) => {
+    const r = await releaseMisreadHolds({ store, locationId, saved, sendsEnabled: CONVERSATION_SENDS_LIVE });
+    if (r.released) console.log(`${r.released} text${r.released === 1 ? "" : "s"} held for a misread number back on the clock for ${locationId}`);
   } },
   // A floated number nobody answered for a working day: the written offer
   // follows it, for their records (shared/paper-follows.js). Off until
