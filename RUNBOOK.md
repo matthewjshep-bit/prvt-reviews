@@ -2141,6 +2141,90 @@ workflows wrote, and they drifted; these are derived on every read
 - GHL's TIER 1/2/3 tags and workflows keep running as the playbook sets them;
   nothing here writes them. GHL's board is optional (next section).
 
+### Only what needs you — the machine's rows, and hold then pass (2026-10-04)
+
+Matt, 2026-10-04: "today should only be for urgent things only a human should
+do and i expect the app to do everything else". The live Desk had 15 Call and
+25 Decide rows; about 35 needed nothing from him. What changed:
+
+- **The machine's rows** (`machineDrives` in `shared/desk.js` → `callList({ machine })`).
+  - While the hot push ladder is on, a hot offer is a Machine row
+    (`hot_machine`: "waiting on their write-up" / "the next push to paper").
+    It is a call only when they hand the write-up to someone else
+    (`handsWriteUpBack`, with the number they gave). It is a Decide row,
+    `paper_to_sign`, when they say the paper is on its way to sign.
+  - While `counterHold` is on, a counter we held our number on is a Machine
+    row (`counter_held`) with its next check-in or the day it passes. A
+    counter with no hold yet stays a call.
+  - While `offer_nudge` repeats, there is no `call_quiet`.
+  - Each switch off puts its rows back the way they were.
+- **Hold, then pass** (`parties.agent.counterHold { enabled, checkIns: 2 }`,
+  off; Full on the dial).
+  - The reply: a counter above our number, or an ask for us to come up with
+    no number, gets our number back once. The reply agent writes it from
+    `holdNumber`'s amount: the lowest we've put to them, never more, and no
+    dollar sign. It sends itself only when the counter's NEVER_AUTO lock is
+    the one thing holding it. `offer.counterHold = { at, ours, theirs, nudges,
+    replies }`.
+  - The clock: `ghl-broker/counter-hold.js` runs at the end of the morning
+    follow-up sweep. It sends a `counter_nudge` (held wording) at the
+    follow-up spacing. After `checkIns` nudges or unmoved replies with
+    nothing new from them, it sets `we_passed` (`passHeldCounter` → the
+    status menu's own path, which stops the queued texts).
+  - Exceptions: a lower number from them starts a new hold. An agreed, hot
+    or deal offer is never passed.
+  - A counter with no number that asks nothing of us is reclassified
+    `status_check`, gated by the same switch. Matt authorised this narrowing
+    of NEVER_AUTO.
+  - Preview: `GET …/follow-ups?preview=1` → `counterHolds.rows`, even with
+    the switch off.
+- **Your texts in GHL count** (`ghl-broker/hand-reply-sweep.js`, every tick).
+  - It reads the moved conversations and picks out the outbound texts with a
+    GHL `userId` (a person). The app's own sends come as source `app` with no
+    userId.
+  - Each one gets a `hand_reply {via: "ghl"}` and sets aside the open drafts
+    written before it. It sends nothing.
+  - The audit's `stillOwed` and the call list read `hand_reply` and connected
+    calls as answers.
+  - One-time look back: `POST /api/dashboard/hand-replies/sweep { days, dryRun }`.
+- **Your "no" is a pass** (`passOnOurNo`, routes/offers.js).
+  - A text a person sent ("can't get there", "too far apart", "we'll pass" —
+    `weDecline`) on a contact whose current offer is countered above ours
+    sets `we_passed`.
+  - It covers texts typed in GHL, the composer, and a draft you edited and
+    sent. A hold or a showing time doesn't count.
+  - Look back: `POST /api/offers/passes/our-no { dryRun }`.
+- **A check-in never goes over a reply we owe.** When the "unanswered" clock
+  fires and the held reply never went out, their text goes back through
+  `startReply(fromCheckIn: true)` instead. A second hold books no new clock.
+  The offer book says "price is done" only on an agreed number.
+- **Heat** comes only from real warmth. Never on a counter, a price push,
+  "come up", or second thoughts, and those cool heat the conversation set.
+  Our own letter echoed back (`isOurEcho`) is no draft and no heat.
+- **The hot push after its ladder**: with `hot_push.repeatEvery` (live: 0 →
+  set 7 to turn it on) it sends a weekly "any word from the seller?". Second
+  thoughts switch to that cadence at once. `hot_stalled` is then a Machine
+  row.
+- **The machine's own leftovers.**
+  - A machine-started text that fails a gate is drafted once more with
+    `outbound.fix`, else dropped with a timeline note. It never waits on you.
+  - Held underwrites:
+    - Not single-family: passed after 24h, unless you pressed Underwrite anyway.
+    - A town we've never priced in and that isn't on the map
+      (`knownCitiesFrom`): passed.
+    - Both get one `kind_pass` text.
+    - An address the map couldn't place: one ask to confirm the street.
+    - `heldOnTheMachine` shows the plain ones as Machine rows tonight.
+  - A held reply the 7pm check will send (`releasableHeld`) is a Machine row
+    with its time.
+  - Hand-made `offer_ready` rows last 7 days.
+  - "Fully executed" on a live deal ticks `psa_signed`.
+- **Calls that reach voicemail** (`voicemailGreeting`, outbound calls only)
+  are a `call_attempt`, never a draft.
+- **Nightly audit**: wider closers. "You have the thread" is retried the
+  next night. Three empty tries on a text that asks nothing, with no digits,
+  are settled (`reply_not_needed`).
+
 ### GHL's Acquisitions board following the app — optional, off (2026-10-02)
 
 The app's own tiers are the record (Today → In play); GHL's board is a
