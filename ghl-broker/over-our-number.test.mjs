@@ -45,6 +45,29 @@ test("days, weeks, street numbers and the house number are not a shorthand price
   assert.deepEqual(shorthandPrices("14 day inspection, 683,750 as-is.", 0), []);
 });
 
+// The first app-written texts (2026-10-05) were held as "the draft names
+// $512,000, which is not in the offer book" for "your listing at 512 112th
+// Ave NE". A house number before a numbered street is an address.
+test("a first text naming 'your listing at 512 112th Ave NE' is not a price of 512K", () => {
+  assert.deepEqual(shorthandPrices("Hi, came across your listing at 512 112th Ave NE. Is it a project?", 0), []);
+  assert.deepEqual(shorthandPrices("noticed your listing at 3604 61st St W", 0), []);
+  assert.deepEqual(shorthandPrices("saw your listing at 118 72nd Ave E", 0), []);
+  assert.deepEqual(shorthandPrices("your listing at 1302 228th Pl SE", 0), []);
+  assert.deepEqual(shorthandPrices("the house at 905 ne 3rd St", 0), []);
+  assert.deepEqual(pricesWeName("Still around at 512 112th Ave NE?", 450000), []);
+  // A price beside a street is still a price.
+  assert.deepEqual(shorthandPrices("we can be at 650 on the 194th Pl house", 550000), [650000]);
+});
+
+test("a first text with the house number in it goes out instead of being held", () => {
+  const g = evaluateReplyGates({
+    draft: draft({ intent: "outreach_open", reply: "Hi Sam, came across your listing at 512 112th Ave NE. I'm in Seattle looking for my next flip anywhere in King County. Is this one a bit of a project, or pretty turnkey?",
+      propertyAddress: "512 112th Ave NE, Bellevue, WA 98004" }),
+    party: "agent", allowedAmounts: [], inboundMessage: "",
+  });
+  assert.equal(g.ok, true, g.flags.join(" | "));
+});
+
 test("their list price, the ARV and the rehab said in shorthand are not a price we'd pay", () => {
   assert.deepEqual(pricesWeName("Is the seller in a hurry to close, or just testing the market at 625?", 550000), []);
   assert.deepEqual(pricesWeName("Re-ran it on your comps, so about 714 fixed up.", 550000), []);

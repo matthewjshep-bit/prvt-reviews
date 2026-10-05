@@ -260,11 +260,13 @@ export function ourComeDown(o, transcript = "") {
  * 650", "650 works". The money readers want a $, a comma group or a k, so
  * this is the sentence that got past them (Jesse, 39811 226th Ave SE,
  * 2026-09-25: the bot agreed to 650 on our 550K offer and nothing saw a
- * number). Only beside a price word, never before a unit or a capitalised
- * street name, and only where ×1000 is plausible beside `reference` (our
- * number) — 50K to 5M when there is none.
+ * number). Only beside a price word, never before a unit, a capitalised
+ * street name or a numbered street (first texts of 2026-10-05 saying "your
+ * listing at 512 112th Ave NE" were held as $512,000), and only where ×1000 is
+ * plausible beside `reference` (our number) — 50K to 5M when there is none.
  */
 const SHORT_UNIT = /^\s*(?:[kKmM%]|days?\b|hours?\b|hrs?\b|minutes?\b|mins?\b|weeks?\b|wks?\b|months?\b|years?\b|yrs?\b|am\b|pm\b|sq|beds?\b|baths?\b|st\b|nd\b|rd\b|th\b)/;
+const SHORT_STREET = /^\s+(?:(?:n|s|e|w|ne|nw|se|sw)\s+)?\d+(?:st|nd|rd|th)\b/i;
 const SHORT_BEFORE_RX = /\b(?:at|to|for|do|of|around|about|pay|paying|offer|go|be|near|meet(?:\s+you)?\s+at|up\s+to)\s+(\d{2,4})(ish)?(?![\d,]|\.\d)/gi;
 // Not the tail of "1,304,955" or "$683,750": whole numbers only.
 const SHORT_AFTER_RX = /(?<![\d,.$])\b(\d{2,4})(ish)?\s+(?:works|would\s+work|could\s+work|is\s+workable|is\s+doable|as-is|as\s+is|cash|flat|all\s+in)\b/gi;
@@ -278,7 +280,7 @@ function shorthandHits(t, reference) {
       const start = rx === SHORT_BEFORE_RX ? m.index + m[0].length - said.length : m.index;
       const end = start + said.length;
       const rest = rx === SHORT_BEFORE_RX ? t.slice(end, end + 12) : "";
-      if (rest && (SHORT_UNIT.test(rest) || /^\s+[A-Z]/.test(rest))) continue;
+      if (rest && (SHORT_UNIT.test(rest) || SHORT_STREET.test(rest) || /^\s+[A-Z]/.test(rest))) continue;
       const v = Number(m[1]) * 1000;
       if (plausible(v)) hits.push({ v, start, end });
     }
