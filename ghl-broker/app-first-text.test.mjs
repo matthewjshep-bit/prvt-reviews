@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "app-first-text-test-"));
 process.env.OUTREACH_IMPORTS_ENABLED = "true";
 
-const { outboundOpening, OPENING_MOVES } = await import("./conversation-prompt.js");
+const { outboundOpening, OPENING_MOVES, WHO_WE_ARE } = await import("./conversation-prompt.js");
 const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText } = await import("./reply-agent.js");
 const { normalizeOpener, countyName, openerVariant, stripSignOff, DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
 const { normalizeOutreachAutopilot, startOutreachSweep, _resetJobs } = await import("./outreach-sweep.js");
@@ -212,7 +212,16 @@ test("the first six with house details came out alike, so each agent gets its ow
   }
   assert.equal(moves.size, OPENING_MOVES.length, "every opening move is used");
   assert.equal(notices.size, 4, "and not always the decade");
-  assert.match(ask({ county: "Lewis", details, variant: 0 }), /don't always call yourself a "Seattle flipper"/);
+});
+
+test("each agent gets its own way of saying who we are — 30 of the 45 drafts on 2026-10-05 said 'hunting for my next flip'", () => {
+  const whos = new Set();
+  for (let v = 0; v < 30; v++) whos.add(/WHO YOU ARE, for this one: ([^.]*)\./.exec(ask({ county: "Kitsap", variant: v }))[1]);
+  assert.equal(whos.size, WHO_WE_ARE.length, "every one is used");
+  const t = ask({ county: "Kitsap", variant: 0 });
+  assert.match(t, /"touching base" or "hunting"/, "hunting is out");
+  assert.doesNotMatch(t.split("HOW MATT WRITES")[0], /say you're in Seattle looking for your next flip/, "the rules don't dictate one introduction");
+  assert.match(t, /you're looking anywhere in Kitsap County/);
 });
 
 test("a first text over 250 characters is written again shorter once — two of the first six were 266 and 288", async () => {
