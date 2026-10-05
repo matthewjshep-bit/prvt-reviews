@@ -244,8 +244,8 @@ export function callList({
         continue;
       }
       // The paper is here: signing it is yours.
-      const paper = words.find((d) => SENT_TO_SIGN_RX.test(String(d.inbound || "")));
-      if (paper) {
+      const toSign = words.find((d) => SENT_TO_SIGN_RX.test(String(d.inbound || "")));
+      if (toSign) {
         if (taken.has(c)) continue;
         taken.add(c);
         out.push({ id: `paper_to_sign:${card.offerId}`, kind: "paper_to_sign", section: "decide", group: "yours", severity: "now",

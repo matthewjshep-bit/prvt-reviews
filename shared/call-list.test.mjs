@@ -210,6 +210,10 @@ test("the Desk keeps only what needs you: hot, held and quiet are the machine's"
   const rows = callList({ offers, cards, drafts, actions: quiet, now: NOW, machine: MACHINE });
   const by = Object.fromEntries(rows.map((r) => [r.contactId, r]));
   assert.equal(by.writing.section, "machine");
+  // An agreed price says what the machine is doing: pushing it to paper.
+  const agreed = callList({ offers: [hot("7", "agreed", { agreed: { at: ago(1), via: "acceptance", amount: 197500 } })], cards: [hotCard("7", "agreed")], now: NOW, machine: MACHINE });
+  assert.match(agreed[0].title, /pushing it to paper/);
+  assert.equal(agreed[0].next.what, "the next push to paper");
   assert.equal(by.writing.next.what, "waiting on their write-up");
   assert.equal(by.deciding.section, "machine", "their goodbye doesn't make a hot offer a call");
   assert.equal(by.handed.section, "call");
