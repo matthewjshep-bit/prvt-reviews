@@ -2764,6 +2764,29 @@ test("'make an offer closer to where they are' with no number is held at ours to
   assert.equal(marks.length, 1);
 });
 
+test("no hold after a call, none by a channel that doesn't send itself, and 'can you improve your offer?' stays a counter", async () => {
+  // A counter read off a call transcript: Matt was just on the phone.
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...HELD_OFFER };
+  const store = negotiationStore(offer);
+  const marks = [];
+  const { job } = await startReply({ client, locationId: "LOC", saved: HOLD_SAVED(), store, contactId: "c1", sendsEnabled: true, inboundKind: "call",
+    message: "THEM: seller says 315 and not a dollar less\nUS: we can't go higher than 300", call: { messageId: "m1", direction: "outbound", at: new Date().toISOString(), durationSec: 200, dedupeKey: "call:m1" },
+    deps: { draft: async () => ({ ...DRAFT, intent: "counter", counterAmount: 315000, propertyAddress: "12 Elm St", reply: "Thanks for the call." }), markCounterHold: async (a) => { marks.push(a); return { ok: true }; } } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(marks.length, 0);
+  assert.doesNotMatch((await store.getReplyDraft(job.draftId)).reply, /hold at/);
+  // "Can you improve your offer?" asks us to come up: a hold, not a status reply.
+  const up = await holdRun({ message: "Can you improve your offer?", draft: { intent: "counter", counterAmount: 0, reply: "Let me see what we can do." } });
+  assert.equal(up.d.intent, "counter");
+  assert.match(up.d.reply, /hold at 300,000/);
+  // No number and no "I'll ask": still a counter, waiting for you.
+  const plain = await holdRun({ message: "The seller isn't thrilled.", draft: { intent: "counter", counterAmount: 0, reply: "Understood." } });
+  assert.equal(plain.d.intent, "counter");
+});
+
 test("a counter with no number that asks nothing of us is answered like a status reply", async () => {
   const { d, marks } = await holdRun({ message: "I could ask, and see what is the discount price they might be willing to sell right now",
     draft: { intent: "counter", counterAmount: 0, reply: "That'd be great, appreciate you asking. Bring back whatever they'd consider." } });

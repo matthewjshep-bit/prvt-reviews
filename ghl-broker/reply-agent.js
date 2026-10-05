@@ -1561,6 +1561,10 @@ async function linkOwed({ store, locationId, contactId, now = Date.now() }) {
   return linkedSince ? null : { address: blast.outbound.address || blast.propertyAddress || "", offerId: blast.outbound.offerId || null };
 }
 
+// They'll go find out: "I could ask, and see what…", "let me check with the
+// seller", "I'll see what they'd take". A counter-read with no number that
+// says this is a status reply (counterHold, 2026-10-04).
+export const WILL_ASK_RX = /\b(?:i'?ll|i will|i could|i can|let me|i'?m going to|going to)\s+(?:go\s+)?(?:ask|check|find out|see|talk to|run it by|get back)\b/i;
 export const OUR_OFFER_TEXT_RX = /\b(?:here's our (?:written cash offer|letter of intent)|sending our written offer|please find our (?:letter of intent|written (?:cash )?offer)) on\b/i;
 
 /**
@@ -3045,7 +3049,11 @@ async function runReply(job, ctx) {
   // pass are counter-hold.js's. A counter with no number that asks nothing
   // of us ("I could ask what they'd take") is a status reply, not a counter.
   let counterHold = null;
-  if (party === "agent" && draft.intent === "counter" && config.parties?.agent?.counterHold?.enabled) {
+  // Texts only, never a call: a call's transcript carries Matt's own words
+  // ("we can't go higher") and he has just had the conversation. And only
+  // with the follow-up clock on, which the check-ins after the hold ride.
+  const holdOn = config.parties?.agent?.counterHold?.enabled && config.parties?.agent?.followUp?.enabled;
+  if (party === "agent" && !isCall && draft.intent === "counter" && holdOn) {
     const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
     const open = currentOffers(book).filter(isNegotiable);
     const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
@@ -3064,7 +3072,10 @@ async function runReply(job, ctx) {
       draft = { ...draft, needsHuman: false, counterHold,
         reply: again ? `Understood. We're still at ${n} on ${where}; if anything changes on the seller's side, I'm here.`
           : `Appreciate you working it. On ${where} we're going to hold at ${n}: that's where the numbers work for us. If the seller can get there, we're ready to go.` };
-    } else if (!theirs && !comeUp && !moneyIn(draft.reply).length) {
+    } else if (!theirs && !comeUp && !moneyIn(job.originalMessage || job.message).length && !moneyIn(draft.reply).length
+        && WILL_ASK_RX.test(job.originalMessage || job.message)) {
+      // Only what Matt authorised: no number from them, none in ours, no ask
+      // for more — and they said they'd go ask ("I could ask what they'd take").
       draft = { ...draft, intent: "status_check", reclassifiedFrom: "counter" };
       job.intent = draft.intent;
     }
@@ -3224,7 +3235,8 @@ async function runReply(job, ctx) {
   // reply the machine sends. Only where every other check passed and the
   // counter's own lock is all that held it — never past a gate, a stop, a
   // person having the thread, or sends off — and never naming more than ours.
-  if (draft.counterHold && !auto.send && base.code === "never_auto" && !gate?.overOffer?.length
+  if (draft.counterHold && !auto.send && base.code === "never_auto" && !gate?.overOffer?.length && !isCall
+      && (config.autoSend?.channels || []).includes(job.channel)
       && moneyIn(draft.reply).every((n) => n <= draft.counterHold.ours)) {
     auto = { ...auto, send: true, code: "", reason: "our number, held — hold, then pass", counterHold: true };
   }

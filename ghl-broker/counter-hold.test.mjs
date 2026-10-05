@@ -69,3 +69,25 @@ test("an agreed price or a deal is never passed by the clock", async () => {
   const deal = { ...heldOffer({ at: ago(12), nudges: [ago(8), ago(4)] }), deal: { stage: "under_contract" } };
   assert.deepEqual(await runCounterHolds({ locationId: "L", store: fakeStore([deal]), config: CFG(), deps, now: NOW }), []);
 });
+
+// Review, 2026-10-04: a check-in skipped for the day spent its rung for
+// good, a reply we answered froze the clock, and a thread you'd picked up
+// was still passed.
+test("a skipped check-in is tried again tomorrow, our answer restarts the clock, and your thread is never passed for you", async () => {
+  let calls = 0;
+  const flaky = { startProactive: async () => (++calls === 1 ? { skipped: "their text is waiting on you" } : { job: { id: "p" } }), markCounterHoldNudge: async () => ({ ok: true }) };
+  const store = fakeStore([heldOffer({ at: ago(4) })]);
+  assert.deepEqual((await runCounterHolds({ locationId: "L", store, config: CFG(), deps: flaky, now: NOW })).map((r) => r.status), ["skipped"]);
+  assert.deepEqual((await runCounterHolds({ locationId: "L", store, config: CFG(), deps: flaky, now: NOW + DAY })).map((r) => r.status), ["started"], "the rung wasn't spent");
+  // They wrote something that wasn't a counter and we answered it.
+  assert.equal(holdState(heldOffer({ at: ago(8) }), { lastInboundAt: ago(6), lastOutboundAt: ago(5.9), now: NOW }).next, "nudge");
+  assert.equal(holdState(heldOffer({ at: ago(8) }), { lastInboundAt: ago(6), now: NOW }).next, "wait", "unanswered: the conversation has it");
+  // You texted them yourself after the hold: not passed by the machine.
+  const yours = fakeStore([heldOffer({ at: ago(12), nudges: [ago(8), ago(4)] })]);
+  yours.events.push({ type: "hand_reply", contactId: "c1", at: ago(1), data: { via: "ghl" } });
+  const r = await runCounterHolds({ locationId: "L", store: yours, config: CFG(), deps: { passHeldCounter: async () => { throw new Error("must not pass"); } }, now: NOW });
+  assert.match(r[0].reason, /you have the thread/);
+  // Follow-up off: the hold is off too.
+  const off = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: false }, counterHold: { enabled: true } } } });
+  assert.deepEqual(await runCounterHolds({ locationId: "L", store: fakeStore([heldOffer({ at: ago(4) })]), config: off, deps: flaky, now: NOW }), []);
+});
