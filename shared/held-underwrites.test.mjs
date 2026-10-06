@@ -63,6 +63,11 @@ test("the conversation closes it: pending/sold/no, turnkey, a passed event, an u
   assert.equal(t.action, "retire"); assert.equal(t.status, "unavailable"); assert.match(t.reason, /pending/);
   t = triage({ drafts: [inbound("This one is pretty turnkey with tenants in place.", { intent: "deal_available" })] });
   assert.equal(t.action, "retire"); assert.equal(t.status, "we_passed"); assert.match(t.reason, /turnkey/);
+  // Ryan Bowen, 2026-10-05: spaced "move in ready", and "not a fix n flip".
+  t = triage({ drafts: [inbound("It's a move in ready that could use minor updates but certainly not a fix n flip.", { intent: "investor_open" })] });
+  assert.equal(t.action, "retire"); assert.equal(t.status, "we_passed");
+  t = triage({ drafts: [inbound("Honestly it's not a fixer", { intent: "investor_open" })] });
+  assert.equal(t.action, "retire", "'not a fixer' says it isn't one");
   t = triage({ events: [{ type: "property_details", address: "2500 Alder St, Milton, WA", at: ago(1), data: { condition: "turnkey, completely renovated" } }] });
   assert.equal(t.status, "we_passed");
   t = triage({ events: [{ type: "offer_passed", address: "2500 Alder St, Milton, WA", at: ago(1) }] });

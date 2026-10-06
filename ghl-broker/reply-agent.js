@@ -541,11 +541,21 @@ export function parseDraft(response, intents, cfg, outbound = null) {
  * move-in ready. Deliberately NOT true when the same message says it needs
  * work ("renovated kitchen but it's a project", "could use some fix ups").
  */
+// "certainly not a fix n flip", "not a fixer", "it's not a flip", "not a
+// project": the agent telling us, in our own words, it isn't what we buy
+// (Ryan Bowen, 13814 214th St E, 2026-10-05).
+const NOT_A_FLIP = /\b(?:not|isn'?t|is\s+not|wouldn'?t\s+be)\s+(?:really\s+|certainly\s+|exactly\s+|quite\s+)?(?:a\s+|an\s+)?(?:fixer(?:[\s-]?upper)?|fix[\s-]*(?:n|and|&|'n'?|n')[\s-]*flip|flip(?:per)?|project)\b/gi;
 export function isTurnkeyReply(message = "") {
   const t = String(message || "");
+  NOT_A_FLIP.lastIndex = 0;
+  const notFlip = NOT_A_FLIP.test(t);
+  // Read "needs work" with those phrases taken out: "not a fixer" says fixer.
+  const rest = notFlip ? t.replace(NOT_A_FLIP, " ") : t;
   const done = /\b(turn[\s-]?key|move[\s-]?in[\s-]?ready|(?:fully|completely|recently|totally|newly|just)\s+(?:renovated|remodell?ed|updated|redone|flipped)|(?:was|been|is|it's|its)\s+(?:renovated|remodell?ed|flipped)|no\s+work\s+(?:needed|to\s+do|required)|doesn'?t\s+need\s+(?:any(?:thing)?\s+)?work|nothing\s+to\s+(?:do|fix))\b/i;
   const needsWork = /\b(needs?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+)?(?:work|tlc|love|repairs?|updating)|fix[\s-]?ups?|fixer|project|tlc|dated|as[\s-]?is|handyman|rough|distressed|cosmetics?|(?:never|not|poorly)\s+maintained|deferred\s+maintenance)\b/i;
-  if (!done.test(t) || needsWork.test(t)) return false;
+  if (needsWork.test(rest)) return false;
+  if (notFlip) return true;
+  if (!done.test(t)) return false;
   // "No, it's not turnkey, but it's all cosmetic" (Paul Redal, 2026-09-21)
   // answers our own "project or turnkey?" with a no — and read as turnkey, so a
   // house that needs work went to Tier 2 with no underwrite. A turnkey word
@@ -1498,6 +1508,28 @@ export async function applyProfileUpdates({ client, locationId, contactId, party
 /* ---------- who has the thread ---------- */
 
 // The newest thing WE sent, off the transcript: "[YYYY-MM-DD HH:MM] US sms: text".
+/**
+ * theirLatestWords(transcript, message) → string
+ *
+ * Everything they've said since our last text, this message included, one
+ * line each. A burst is one answer: "move in ready… certainly not a fix n
+ * flip", then "You should come take a look!" a minute later (Ryan Bowen,
+ * 2026-10-05) is one agent saying one thing, though each text gets its own
+ * reply job. The transcript is oldest first.
+ */
+export function theirLatestWords(transcript = "", message = "") {
+  let since = [];
+  for (const line of String(transcript || "").split("\n")) {
+    const m = /^\[[^\]]*\]\s+(US|THEM)\b[^:]*:\s?(.*)$/.exec(line);
+    if (!m) continue;
+    if (m[1] === "US") since = [];
+    else if (m[2].trim()) since.push(m[2].trim());
+  }
+  const msg = String(message || "").trim();
+  if (msg && !since.includes(msg)) since.push(msg);
+  return since.join("\n");
+}
+
 export function lastOutbound(transcript = "") {
   let found = null;
   for (const line of String(transcript || "").split("\n")) {
@@ -3227,7 +3259,10 @@ async function runReply(job, ctx) {
   // to Tier 1 and a renovated house was sent to underwriting. A deal is a
   // house that needs work; a turnkey one is "nothing right now, stay in
   // touch", which is Tier 2.
-  if (party === "agent" && ["deal_available", "new_property"].includes(draft.intent) && isTurnkeyReply(job.message)) {
+  // Read across their burst, not just this text: the "not a flip" and the
+  // "come take a look" arrive as two texts and two jobs.
+  const notOurKind = party === "agent" && isTurnkeyReply(theirLatestWords(a.transcript, job.message));
+  if (party === "agent" && ["deal_available", "new_property"].includes(draft.intent) && notOurKind) {
     draft = { ...draft, intent: "investor_open", reclassifiedFrom: draft.intent };
     job.intent = draft.intent;
   }
@@ -3250,17 +3285,30 @@ async function runReply(job, ctx) {
     const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
     const known = knownOfferFor(rows, draft.propertyAddress, now);
     if (!known || known.status === "draft") {
-      numberFirst = { replaceOfferId: known?.id || null };
       const street = String(draft.propertyAddress || "").split(",")[0].trim();
-      const turnkey = draft.intent === "investor_open" || isTurnkeyReply(job.message);
-      draft = {
-        ...draft,
-        intent: turnkey ? "investor_open" : "deal_available",
-        reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
-        needsHuman: false,
-        numberFirst: true,
-        reply: `Appreciate that. Before we set up a time, let me run the numbers on ${street || "it"} with my team so nobody's time gets wasted. I'll come back to you today with where we'd be.`,
-      };
+      if (notOurKind) {
+        // They've told us it needs nothing: not a number to chase (Matt,
+        // 2026-10-05: the underwrite spends credits on a house we won't buy,
+        // and "let me run the numbers" promises one). Say what we do buy.
+        draft = {
+          ...draft,
+          intent: "investor_open",
+          reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
+          needsHuman: false,
+          notOurKind: true,
+          reply: "Appreciate it, but that one sounds more finished than what we buy. We go after houses that need real work, so if something rough crosses your desk, I'd love a first look.",
+        };
+      } else {
+        numberFirst = { replaceOfferId: known?.id || null };
+        draft = {
+          ...draft,
+          intent: draft.intent === "investor_open" ? "investor_open" : "deal_available",
+          reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
+          needsHuman: false,
+          numberFirst: true,
+          reply: `Appreciate that. Before we set up a time, let me run the numbers on ${street || "it"} with my team so nobody's time gets wasted. I'll come back to you today with where we'd be.`,
+        };
+      }
       job.intent = draft.intent;
     }
   }
@@ -3403,6 +3451,11 @@ async function runReply(job, ctx) {
   if (party === "agent" && draft.intent === "acceptance" && !plan.auto.some((x) => x.type === "add_tags" && (x.tags || []).includes("seller-accepted"))) {
     plan.auto.push({ id: `a-acc-${job.id}`, type: "add_tags", mode: "auto", status: "pending", party, tags: ["seller-accepted"],
       why: "the seller accepted — send the contract" });
+  }
+  // Not our kind of house, in their words: no rule spends a credit on it.
+  if (notOurKind) {
+    plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite");
+    plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
   }
   if (numberFirst) {
     const extra = numberFirst.replaceOfferId ? { replaceOfferId: numberFirst.replaceOfferId } : {};
@@ -4094,6 +4147,7 @@ async function runReply(job, ctx) {
     const already = new Set([...plan.auto, ...plan.suggested].map((a) => `${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`));
     const extra = planActions({ party, intent: "new_property", confidence: "high", playbook, minConfidence: "high" });
     const fresh = [...extra.auto, ...extra.suggested].filter((a) => !already.has(`${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`))
+      .filter((a) => !(notOurKind && a.type === "start_underwrite"))
       .map((a) => ({ ...a, via: "subject moved" }));
     if (fresh.length) {
       for (const a of fresh) (a.mode === "auto" ? plan.auto : plan.suggested).push(a);

@@ -122,7 +122,7 @@ export const houseGone = (text = "", intent = "") => {
   const t = String(text || "");
   return GONE_TEXT.test(t) && (intent === "rejection" || OVER_PLAIN.test(t));
 };
-const TURNKEY_TEXT = /\b(turn-?key|move-?in ready|fully (updated|renovated|remodeled)|completely (renovated|remodeled|updated)|not (really )?a fixer|isn'?t a fixer|no work needed)\b/i;
+const TURNKEY_TEXT = /\b(turn[\s-]?key|move[\s-]?in[\s-]?ready|fully (updated|renovated|remodeled)|completely (renovated|remodeled|updated)|not (really |certainly )?an? (fixer|flip|fix[\s-]*(n|and|&|'n'?)[\s-]*flip)|isn'?t an? (fixer|flip)|no work needed)\b/i;
 const COLD_STAGE = /^tier\s*3\b|passed on offer|^lost\b|not a good deal/i;
 const CLOSED_OPP = /^(lost|abandoned|abandon)$/i;
 
