@@ -182,6 +182,11 @@ const inFlight = new Set();
  * outbox with a flag rather than left counting down to nothing.
  */
 export const MAX_SENDS_PER_TICK = 20;
+// Texts the machine started that may leave in one tick. A pile due at the
+// same moment (a spread that rolled onto the morning's opening, a backlog
+// after a restart) is the burst carriers and agents both notice: 80 check-ins
+// sat at 8:00:00 on 2026-10-06. The rest are spread across the hours left.
+export const MACHINE_BURST = 5;
 export const PACE_MS = 2500;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -225,9 +230,22 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
     const auto = windowFor && scheduled.some((d) => !answersInbound(d) && Date.parse(d.sendAt || "") <= now)
       ? await windowFor(locationId).catch(() => null) : null;
     const machineWin = auto ? machineHours(auto) : null;
+    const respread = new Set();
+    if (machineWin) {
+      const pile = scheduled.filter((d) => !answersInbound(d) && Date.parse(d.sendAt || "") <= now && !inFlight.has(d.id))
+        .sort((x, y) => String(x.sendAt).localeCompare(String(y.sendAt)));
+      for (const d of pile.slice(MACHINE_BURST)) {
+        // Outside its hours it is moved below anyway; inside, spread the rest of the day.
+        if (Date.parse(nextSendTime({ now, delayMs: 0, quietHours: machineWin })) > now) continue;
+        const sendAt = spreadAcrossDay({ now, quietHours: machineWin, hours: auto.nudgeSpreadHours ?? 8, random, weekends: auto.weekends || "all" });
+        await store.updateReplyDraft(d.id, { ...d, sendAt, updatedAt: new Date(now).toISOString() }).catch(() => {});
+        respread.add(d.id);
+        out.respread = (out.respread || 0) + 1;
+      }
+    }
     for (const d of scheduled) {
       const due = Date.parse(d.sendAt || "");
-      if (!Number.isFinite(due) || due > now || inFlight.has(d.id)) continue;
+      if (!Number.isFinite(due) || due > now || inFlight.has(d.id) || respread.has(d.id)) continue;
       if (machineWin && !answersInbound(d) && Date.parse(nextSendTime({ now, delayMs: 0, quietHours: machineWin })) > now) {
         const sendAt = spreadAcrossDay({ now, quietHours: machineWin, hours: auto.nudgeSpreadHours ?? 8, random, weekends: auto.weekends || "all" });
         await store.updateReplyDraft(d.id, { ...d, sendAt, updatedAt: new Date(now).toISOString() }).catch(() => {});
