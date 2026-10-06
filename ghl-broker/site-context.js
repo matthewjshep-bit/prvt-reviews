@@ -66,6 +66,16 @@ export function overpassQuery({ box }) {
     `(way[highway~"^(${MAJOR})$"];way[landuse~"^(commercial|retail|industrial)$"];way[railway=rail];);out tags geom;`;
 }
 
+// The same-side check (shared/same-side.js): the main roads, railways and
+// rivers that can stand between a house and a comp. No land use — the lines
+// are all it reads — so a ring a mile out stays a light answer.
+const BARRIER_ROADS = "motorway|trunk|primary|secondary|tertiary";
+export function barrierQuery({ box }) {
+  const f = (v) => Number(v).toFixed(5);
+  return `[out:json][timeout:25][bbox:${f(box.s)},${f(box.w)},${f(box.n)},${f(box.e)}];` +
+    `(way[highway~"^(${BARRIER_ROADS})$"];way[railway=rail];way[waterway=river];);out tags geom;`;
+}
+
 /**
  * fetchSiteContext({ box, fetchImpl, now }) → { context, error }
  *
@@ -75,13 +85,14 @@ export function overpassQuery({ box }) {
 export async function fetchSiteContext({
   box, fetchImpl = globalThis.fetch, endpoints = OVERPASS_ENDPOINTS,
   now = Date.now(), timeoutMs = 25000, budgetMs = 70000, pauseMs = 1500,
+  query = overpassQuery, kind = "site",
 }) {
   if (!box) return { context: null, error: "no coordinates" };
-  const key = [box.s, box.w, box.n, box.e].map((v) => Number(v).toFixed(4)).join(",");
+  const key = `${kind}:` + [box.s, box.w, box.n, box.e].map((v) => Number(v).toFixed(4)).join(",");
   const hit = cache.get(key);
   if (hit && now - hit.at <= SITE_CACHE_TTL_MS) return { context: hit.context, cached: true };
 
-  const body = `data=${encodeURIComponent(overpassQuery({ box }))}`;
+  const body = `data=${encodeURIComponent(query({ box }))}`;
   const attempts = endpoints.length > 1 ? [endpoints[0], endpoints[1], endpoints[0]] : [endpoints[0], endpoints[0]];
   const started = Date.now();
   const errors = [];
@@ -137,4 +148,23 @@ export async function checkSite({ subject, comps = [], t, fetchImpl = globalThis
   const { context, error } = await fetchSiteContext({ box, fetchImpl, now, ...opts });
   const report = siteReport({ subject, comps: pick, context, t });
   return error ? { ...report, error } : report;
+}
+
+// A wider search than this isn't sided: the box would be several miles of
+// main roads, and the comps that far out aren't the ones a side decides.
+export const SIDES_MAX_RADIUS_MILES = 1.5;
+
+/**
+ * fetchBarriers({ subject, radiusMiles, fetchImpl }) → { context, error }
+ *
+ * The main roads, railways and rivers in the square around the house that
+ * holds the whole comp ring, for shared/same-side.js. Same endpoints, cache
+ * and patience as the street check, and the same rule above all: it never
+ * throws, and a map that couldn't be read is `context: null` — the comps then
+ * carry no side, and nothing reads that as "same side".
+ */
+export async function fetchBarriers({ subject, radiusMiles = 1, fetchImpl = globalThis.fetch, ...opts } = {}) {
+  if (!okPoint(subject)) return { context: null, error: "no subject coordinates" };
+  const box = siteBox({ points: [subject], padMeters: Math.max(0.1, Number(radiusMiles) || 1) * 1609.34 + 100 });
+  return fetchSiteContext({ box, fetchImpl, query: barrierQuery, kind: "sides", ...opts });
 }

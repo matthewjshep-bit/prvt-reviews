@@ -30,7 +30,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { pullComps } from "./comps-pull.js";
 import { geocodeAddress, atLeast, precisionRank, PRECISION } from "./geocode.js";
 import { pullZillowComps, pullZillowActives, filterByUnits, streetKey, mergeFacts } from "./comps-zillow.js";
-import { checkSite } from "./site-context.js";
+import { checkSite, fetchBarriers } from "./site-context.js";
 import { checksFor, buyerView, checksLines, summarizeChecks } from "./shared/underwrite-checks.js";
 import { withAllowance } from "./shared/rehab-checks.js";
 import { gradeComps } from "./comps-grade.js";
@@ -43,6 +43,7 @@ import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
 import { offMarketSignals } from "./shared/off-market.js";
+import { markSides, sameSideFirst, isAcross, acrossLabel } from "./shared/same-side.js";
 import { addressKey, completeAddress, sameStreet, sameHouse } from "./shared/us-address.js";
 import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
@@ -552,7 +553,7 @@ export async function extractRequest({ message, transcript, aiApiKey }) {
 // else in this codebase an unknown datum is forgiving — the match scorecard
 // abstains, the sqft filter keeps the comp — because a human is looking at the
 // list. Here nobody is, and "within half a mile" has to mean it.
-export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radiusMiles = UW_RADIUS_MILES }) {
+export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radiusMiles = UW_RADIUS_MILES, barriers = null, eraGivesWay = false }) {
   const origin = compsData?.subject?.lat != null ? compsData.subject : null;
   // The subject's own prior sale is not a comp for the subject.
   //
@@ -569,7 +570,16 @@ export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radi
   // were the pull's own bands, and year built only exists once the ring has
   // been enriched. Everything else is ranking, not filtering.
   const era = { bedsTol: Infinity, bathsTol: Infinity, sqftPct: Infinity, yearTol: UW_POOL_YEAR_TOLERANCE };
-  return (compsData?.comps || [])
+  // Location before age (2026-10-06): when a ring can't carry an ARV inside
+  // the era band, the houses on the subject's side of the main roads come in
+  // anyway, still scored down for their age, before the search widens. On
+  // 2325 48th Ave SW the band dropped every 2005–2014 sale within 0.4 mi and
+  // the run went a mile out for its evidence.
+  const keep = (c) => inPool(subjectFacts, c, era).ok || (eraGivesWay && !isAcross(c));
+  // Which side of the main roads each comp is on (shared/same-side.js) —
+  // measured from the house, read by similarity. No map, no `side`.
+  const sideFrom = origin || (subjectFacts?.lat != null ? subjectFacts : null);
+  return markSides({ subject: sideFrom, comps: compsData?.comps || [], context: barriers })
     .map((c) => {
       const miles = c.distance == null && origin ? milesBetween(origin, c) : c.distance;
       const withDist = miles == null ? c : { ...c, distance: Math.round(miles * 100) / 100 };
@@ -577,7 +587,7 @@ export function nearbyComps({ compsData, subjectFacts, subjectAddress = "", radi
     })
     .filter((c) => c.distance != null && c.distance <= radiusMiles)
     .filter((c) => !isSelf(c))
-    .filter((c) => inPool(subjectFacts, c, era).ok)
+    .filter(keep)
     .sort(compareByMatch);
 }
 
@@ -609,7 +619,13 @@ export function gradeByPriceProxy(nearby = [], { subjectSqft = 0 } = {}) {
   // those by $/sqft is the renovated evidence — similar first, then price,
   // which is the reverse of what let the priciest house in the ring set the
   // ARV (see the dials).
-  const candidates = nearby.slice(0, UW_SIMILAR_CANDIDATES);
+  // The house's own side of the main roads first (shared/same-side.js): a
+  // comp across one comes in only while this side is short of the
+  // PRICE_PROXY_MIN_POOL the proxy needs. Without this the proxy's $/sqft
+  // tier is exactly where across-the-road new builds win (2325 48th Ave SW).
+  const { picked, acrossUsed, sameSide } = sameSideFirst(nearby, { min: PRICE_PROXY_MIN_POOL });
+  const candidates = picked.slice(0, UW_SIMILAR_CANDIDATES);
+  const acrossLeft = nearby.filter(isAcross).length - acrossUsed;
   const tier = Math.max(UW_MAX_ARV_COMPS, Math.round(candidates.length * UW_PROXY_SHARE));
   let proxy = markRenovatedByPrice(candidates, { take: tier });
   // The gut check. Too few priced sales for a real top tier (under
@@ -635,7 +651,7 @@ export function gradeByPriceProxy(nearby = [], { subjectSqft = 0 } = {}) {
   // whenever the tier has the evidence to allow it.
   const sqft = Number(subjectSqft) || 0;
   const fits = (c) => !(sqft > 0) || !(Number(c.sqft) > 0) || Math.abs(Number(c.sqft) - sqft) / sqft <= SIZE_TOLERANCE_PCT / 100;
-  const ranked = [...markedRenovated].sort(compareByMatch);
+  const ranked = [...markedRenovated].sort((a, b) => Number(isAcross(a)) - Number(isAcross(b)) || compareByMatch(a, b));
   const inSize = ranked.filter(fits);
   const offSize = ranked.filter((c) => !fits(c));
   const need = proxy.gutCheck ? UW_GUT_CHECK_MIN_COMPS : UW_MIN_REHABBED_COMPS;
@@ -659,7 +675,8 @@ export function gradeByPriceProxy(nearby = [], { subjectSqft = 0 } = {}) {
   if (nearby.length > candidates.length) {
     proxy = { ...proxy, reason: `most similar ${candidates.length} of ${nearby.length}: ${proxy.reason}` };
   }
-  return { grades, rehabbed, proxy };
+  const sides = nearby.some((c) => c.side) ? { sameSide, acrossUsed, acrossLeft } : null;
+  return { grades, rehabbed, proxy, sides };
 }
 
 /* ---------- the gates ---------- */
@@ -1542,6 +1559,17 @@ async function runUnderwrite(job, ctx) {
   let subject;
   let geocode = null;
   let compsRadiusMiles = UW_RADIUS_MILES;
+  // Same side of the main roads (shared/same-side.js): the map, and whether
+  // the ring's own era band had to give way to keep the comps close.
+  let barriersPromise = Promise.resolve(null);
+  let barriers = null;
+  let eraGivesWay = false;
+  const startBarriers = (point, radiusMiles) => (deps?.fetchBarriers || fetchBarriers)({ subject: point, radiusMiles })
+    .then((r) => {
+      if (!r?.context) warnings.push(`street map: ${String(r?.error || "unavailable").slice(0, 160)} — side of the main roads not checked`);
+      return r?.context || null;
+    })
+    .catch((e) => { warnings.push(`street map: ${String(e?.message || e).slice(0, 160)} — side of the main roads not checked`); return null; });
   if (compsSource === "zillow") {
     // Zillow search has no notion of a subject property, so we own that record:
     // coordinates from a free geocode, facts from the listing above.
@@ -1570,6 +1598,10 @@ async function runUnderwrite(job, ctx) {
       stories: null, subdivision: null, material: null,
     };
     got.subject = subject;
+    // The main roads around the house (same-side check), fetched under the
+    // comps pull — free, cached a day, and a map that won't load is a line on
+    // the note: the comps then carry no side and rank as before.
+    barriersPromise = startBarriers(geo, UW_RADIUS_LADDER[UW_RADIUS_LADDER.length - 1]);
     // The facts a search row doesn't carry — year built, lot, and for a
     // multifamily the unit count — bought for the most similar comps in the
     // ring with one batched detail lookup (fetchZillowFacts), cached across
@@ -1582,7 +1614,8 @@ async function runUnderwrite(job, ctx) {
       const multi = subject.homeType === "MULTI_FAMILY" && subject.units > 0;
       const limit = multi ? MAX_FACT_LOOKUPS : enrichLimit;
       if (limit > 0 && comps.length) {
-        const ranked = multi ? comps : [...comps]
+        const sided = barriers ? markSides({ subject, comps, context: barriers }) : comps;
+        const ranked = multi ? comps : [...sided]
           .map((c) => ({ c, s: similarity(subject, { ...c, distance: c.distance ?? milesBetween(data.subject || {}, c) }, { radiusMiles }).score ?? -1 }))
           .sort((a, b) => b.s - a.s).map((x) => x.c);
         const need = ranked.slice(0, limit).filter((c) => !factsCache.has(streetKey(c.address)));
@@ -1628,17 +1661,37 @@ async function runUnderwrite(job, ctx) {
     for (const radius of UW_RADIUS_LADDER) {
       if (canceled(job)) return;
       compsRadiusMiles = radius;
-      compsData = await pullAt(radius);
-      const ring = nearbyComps({
-        compsData, subjectFacts: { ...subject, distance: undefined, saleDate: undefined },
-        subjectAddress: extraction.address, radiusMiles: radius,
-      });
+      // The pull starts first and the map is awaited under it. The no-op catch
+      // only stops a failed pull from counting as unhandled while the map is
+      // still loading; `await pulled` below still throws it to the run.
+      const pulled = pullAt(radius);
+      pulled.catch(() => {});
+      barriers = await barriersPromise;
+      compsData = await pulled;
       // A full proxy stops the ladder; a gut check doesn't — it's what the
-      // last ring settles for, not a reason to skip looking wider.
-      const graded = compsCondition === "price" ? gradeByPriceProxy(ring, { subjectSqft: subject.sqft }) : null;
-      const usable = graded ? (graded.proxy.gutCheck ? 0 : graded.rehabbed.length) : ring.length;
-      if (usable >= UW_MIN_REHABBED_COMPS || radius === lastRing) break;
-      const found = graded ? graded.proxy.pool : ring.length;
+      // last ring settles for, not a reason to skip looking wider. Inside a
+      // ring the era band gives way first (same-side houses outside it come
+      // in, scored down for age): location before age, 2026-10-06.
+      const usableAt = (giveWay) => {
+        const ring = nearbyComps({
+          compsData, subjectFacts: { ...subject, distance: undefined, saleDate: undefined },
+          subjectAddress: extraction.address, radiusMiles: radius, barriers, eraGivesWay: giveWay,
+        });
+        const graded = compsCondition === "price" ? gradeByPriceProxy(ring, { subjectSqft: subject.sqft }) : null;
+        return { ring, graded, usable: graded ? (graded.proxy.gutCheck ? 0 : graded.rehabbed.length) : ring.length };
+      };
+      let at = usableAt(false);
+      eraGivesWay = false;
+      if (at.usable < UW_MIN_REHABBED_COMPS && subject.yearBuilt) {
+        const relaxed = usableAt(true);
+        if (relaxed.ring.length > at.ring.length && relaxed.usable >= UW_MIN_REHABBED_COMPS) {
+          warnings.push(`only ${at.ring.length} comp${at.ring.length === 1 ? "" : "s"} within ${radius} mi built inside ±${UW_POOL_YEAR_TOLERANCE} years — kept the search close and let in same-side houses outside that band`);
+          at = relaxed;
+          eraGivesWay = true;
+        }
+      }
+      if (at.usable >= UW_MIN_REHABBED_COMPS || radius === lastRing) break;
+      const found = at.graded ? at.graded.proxy.pool : at.ring.length;
       warnings.push(`only ${found} close match${found === 1 ? "" : "es"} within ${radius} mi — widened the search`);
     }
     if (compsData?.units) {
@@ -1659,12 +1712,22 @@ async function runUnderwrite(job, ctx) {
     });
     // County records beat a scraped listing for the subject's own facts.
     subject = { ...(compsData.subject || {}) };
+    if (subject.lat != null) barriers = await startBarriers(subject, UW_RADIUS_LADDER[UW_RADIUS_LADDER.length - 1]);
     for (const k of ["beds", "baths", "sqft", "yearBuilt", "homeType"]) {
       if (subject[k] == null && facts?.[k] != null) subject[k] = facts[k];
     }
   }
+  // The side goes on the pulled comps themselves too, so the board the editor
+  // opens on says "across Trosper Rd SW" where the run saw it — and says the
+  // map didn't load when it didn't.
+  if (compsData) {
+    const sideFrom = compsData.subject?.lat != null ? compsData.subject : subject;
+    compsData = { ...compsData,
+      comps: markSides({ subject: sideFrom, comps: compsData.comps || [], context: barriers }),
+      sides: barriers ? { status: "ok" } : { status: "unavailable" } };
+  }
   const subjectFacts = { ...subject, distance: undefined, saleDate: undefined };
-  const nearby = nearbyComps({ compsData, subjectFacts, subjectAddress: extraction.address, radiusMiles: compsRadiusMiles });
+  const nearby = nearbyComps({ compsData, subjectFacts, subjectAddress: extraction.address, radiusMiles: compsRadiusMiles, barriers, eraGivesWay });
   job.compsRadiusMiles = compsRadiusMiles;
   Object.assign(got, { subject, compsData, nearby });
 
@@ -1716,7 +1779,11 @@ async function runUnderwrite(job, ctx) {
     // best-MATCHING comps from inside that tier — compareByMatch already
     // scores beds, baths, size, era and distance, so the tightening is done by
     // the scorecard rather than by another set of hand-tuned bands.
-    ({ grades, rehabbed, proxy } = gradeByPriceProxy(nearby, { subjectSqft: subject.sqft }));
+    let sides;
+    ({ grades, rehabbed, proxy, sides } = gradeByPriceProxy(nearby, { subjectSqft: subject.sqft }));
+    if (sides?.acrossUsed) {
+      warnings.push(`only ${sides.sameSide} comp${sides.sameSide === 1 ? "" : "s"} on this side of the main roads — ${sides.acrossUsed} from across ${sides.acrossUsed === 1 ? "one" : "them"} judged too`);
+    }
   } else {
     const candidates = nearby.slice(0, UW_GRADE_CANDIDATES);
     if (candidates.length) {
@@ -1754,7 +1821,9 @@ async function runUnderwrite(job, ctx) {
   if (rehabbed.length) {
     const sims = rehabbed.map((c) => c.similarity?.score).filter((v) => v != null);
     const withYear = nearby.filter((c) => c.yearBuilt).length;
+    const across = nearby.filter(isAcross).length;
     warnings.push(`comps: ${nearby.length} in the ring, ${withYear} with a year built` +
+      (barriers ? `, ${across} across a main road` : "") +
       (sims.length ? `, ARV set match ${Math.round(sims.reduce((t, v) => t + v, 0) / sims.length)}` : ""));
   }
 
@@ -1782,8 +1851,10 @@ async function runUnderwrite(job, ctx) {
   // the note, the offer, the editor — so nobody reads a one-mile ARV as a
   // half-mile one. A function, because the buyer-view checks derive the ARV
   // again and the prefixes must survive that.
+  const acrossInArv = rehabbed.filter(isAcross);
   const withPrefixes = (a) => {
     if (a && compsRadiusMiles > UW_RADIUS_MILES) a.basis = `${a.basis} — comps widened to ${compsRadiusMiles} mi`;
+    if (a && acrossInArv.length) a.basis = `${a.basis} — ${acrossInArv.length} ${acrossLabel(acrossInArv[0])}${acrossInArv.length > 1 ? " or another main road" : ""}`;
     if (a && proxy?.gutCheck) a.basis = `gut check on ${rehabbed.length} comps — ${a.basis}`;
     return a;
   };

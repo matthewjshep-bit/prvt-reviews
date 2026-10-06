@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchSiteContext, overpassQuery, siteBox, checkSite, _resetSiteCache, OVERPASS_ENDPOINTS, SITE_MAX_COMPS } from "./site-context.js";
+import { fetchSiteContext, overpassQuery, siteBox, checkSite, _resetSiteCache, OVERPASS_ENDPOINTS, SITE_MAX_COMPS, fetchBarriers } from "./site-context.js";
 import { UNDERWRITE_CHECKS_DEFAULTS } from "./shared/underwrite-checks.js";
 
 const LAT = 47.799463, LNG = -122.335745;
@@ -112,4 +112,32 @@ test("checkSite classifies the subject and its comps from one query", async () =
   assert.equal(r.status, "ok");
   assert.equal(r.subject.flags.busy_road.how, "fronts");
   assert.deepEqual(r.comps.c1, []);
+});
+
+// The same-side map (shared/same-side.js): every run asks for it, so it has
+// to stay light and never be confused with the street check's answer.
+test("the same-side map asks for main roads, rail and rivers around the whole ring, and is cached apart from the street check", async () => {
+  _resetSiteCache();
+  const bodies = [];
+  const fetchImpl = async (url, opts) => { bodies.push(decodeURIComponent(String(opts.body))); return json(WAY); };
+  const subject = { lat: LAT, lng: LNG };
+  const r = await fetchBarriers({ subject, radiusMiles: 1, fetchImpl, pauseMs: 0 });
+  assert.equal(r.context.roads[0].name, "76th Avenue West");
+  assert.match(bodies[0], /waterway=river/);
+  assert.match(bodies[0], /railway=rail/);
+  assert.doesNotMatch(bodies[0], /landuse/, "no land use: the lines are all it reads");
+  const m = bodies[0].match(/bbox:([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)/);
+  assert.ok((Number(m[3]) - Number(m[1])) * 111320 > 2 * 1609, "a mile each way");
+  assert.ok((await fetchBarriers({ subject, radiusMiles: 1, fetchImpl, pauseMs: 0 })).cached, "the same ring is asked once a day");
+  await fetchSiteContext({ box: siteBox({ points: [subject], padMeters: 1609.34 + 100 }), fetchImpl, pauseMs: 0 });
+  assert.equal(bodies.length, 2, "the street check's own query isn't answered from the map's cache");
+  assert.match(bodies[1], /landuse/);
+});
+
+test("the same-side map down is no map, never a throw", async () => {
+  _resetSiteCache();
+  const r = await fetchBarriers({ subject: { lat: LAT, lng: LNG }, fetchImpl: async () => reply(429, "slow down"), pauseMs: 0 });
+  assert.equal(r.context, null);
+  assert.match(r.error, /429/);
+  assert.equal((await fetchBarriers({ subject: null })).context, null);
 });

@@ -65,7 +65,9 @@ const OVERPASS = { elements: [{ type: "way", tags: { highway: "secondary", name:
   geometry: [{ lat: LAT - 400 * M_LAT, lon: LNG + 12 * M_LNG }, { lat: LAT + 400 * M_LAT, lon: LNG + 12 * M_LNG }] }] };
 
 function stubFetch({ overpass = "ok" } = {}) {
-  const calls = { overpass: 0, forSale: 0, sold: 0, detail: 0 };
+  // `overpass` is the street check; `sides` the same-side map every run
+  // reads (site-context.js fetchBarriers), told apart by the rivers it asks for.
+  const calls = { overpass: 0, sides: 0, forSale: 0, sold: 0, detail: 0 };
   const original = globalThis.fetch;
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
@@ -74,7 +76,8 @@ function stubFetch({ overpass = "ok" } = {}) {
       return ok({ result: { addressMatches: [{ coordinates: { x: LNG, y: LAT }, matchedAddress: "5232 S YAKIMA AVE, TACOMA, WA, 98408" }] } });
     }
     if (u.includes("overpass")) {
-      calls.overpass++;
+      if (String(opts.body || "").includes("waterway")) calls.sides++;
+      else calls.overpass++;
       if (overpass === "down") return { ok: true, status: 200, text: async () => "<?xml version='1.0'?><osm><remark>rate limited</remark></osm>" };
       return ok(OVERPASS);
     }
@@ -128,7 +131,7 @@ test("checks switched off price exactly as before and call nothing new", async (
   assert.equal(job.checks, null);
   assert.equal(job.snapshot.checks, null);
   assert.deepEqual(job.snapshot.comps.adjustments, []);
-  assert.equal(job.arv, 415000, "the comps' own number");
+  assert.equal(job.arv, 416000, "the comps' own number (415k before distance weighed 30, 2026-10-06)");
 });
 
 test("the Yakima house is cut for the street, held to its listings and given what the scope left out", async () => {

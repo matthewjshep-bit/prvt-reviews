@@ -19,6 +19,8 @@ import { fmtMoney } from "@shared/offer-calc.js";
 import { compareByMatch, mergeSelection, milesBetween, scoreComp, similarity, similarityLabel, similarityTone } from "@shared/comp-match.js";
 import { deriveArv, timeTrend } from "@shared/arv.js";
 import { SITE_PRESETS } from "@shared/site-check.js";
+import { acrossLabel, isAcross, sameSideFirst } from "@shared/same-side.js";
+import { sameHouse } from "@shared/us-address.js";
 import { buyerView } from "@shared/underwrite-checks.js";
 import { similarityTitle, COMPS_RULES } from "./comps-copy.js";
 import { claimCompCaptures, geocode, getActives, getComps, postSiteCheck, setCaptureTarget, zillowUrl } from "./api.js";
@@ -179,11 +181,14 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
         ...(Number(baths) > 0 ? { baths: Number(baths) } : {}),
         ...(parse(subjectSqft) > 0 ? { sqft: parse(subjectSqft) } : {}),
       };
+      // The house's own side of the main roads first (shared/same-side.js),
+      // and never the house's own earlier sale.
       const pre = comps.bedBathRelaxed
         ? []
-        : (comps.comps || [])
+        : sameSideFirst((comps.comps || [])
+            .filter((c) => !sameHouse(c.address || "", address.trim()))
             .map((c) => ({ ...c, match: scoreComp(freshSubject, c), similarity: similarity(freshSubject, c, { radiusMiles: COMPS_RADIUS_MILES }) }))
-            .sort(compareByMatch)
+            .sort(compareByMatch), { min: 6 }).picked
             .slice(0, 6)
             .map((c) => c.id);
       // Re-pick the provider's own six, but never drop a Zillow capture or a
@@ -607,6 +612,12 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
                 comps are the right neighbourhood before ticking any.
               </div>
             )}
+            {state?.enabled && state.sides?.status === "unavailable" && allComps.length > 0 && (
+              <div className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                The street map didn't load, so the comps aren't sorted by which side of the main roads they're on.
+                Check that each one is in the house's own neighbourhood before ticking it.
+              </div>
+            )}
             {state?.enabled && state.widened && allComps.length > 0 && (
               <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 Not enough matching sales within a mile — the search was widened to <b>{state.widened}</b>. Time is
@@ -683,6 +694,15 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
                       title={similarityTitle(c.similarity, c.match)}>
                       {similarityLabel(c.similarity)}
                     </span>
+                    {sameHouse(c.address || "", address || "") ? (
+                      <span className="max-w-[7rem] shrink truncate rounded bg-slate-100 px-1 py-px text-[10px] font-medium text-slate-600"
+                        title="This house's own earlier sale — not a comp for itself">this house</span>
+                    ) : isAcross(c) && (
+                      <span className="max-w-[8rem] shrink truncate rounded bg-amber-50 px-1 py-px text-[10px] font-medium text-amber-700"
+                        title={`A main road is between this comp and the house: ${c.side.across.map((b) => b.name || b.kind).join(", ")}`}>
+                        {acrossLabel(c)}
+                      </span>
+                    )}
                     <span className="min-w-0 flex-1 truncate text-right text-xs text-slate-500"
                       title={c.yearBuilt ? `Built ${c.yearBuilt}` : undefined}>
                       {[

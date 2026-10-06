@@ -45,7 +45,7 @@ const BUSY_RANK = RANK.tertiary;
 /* ---------- reading Overpass ---------- */
 
 /**
- * normalizeOverpass(json) → { roads, landuse, rail } | null
+ * normalizeOverpass(json) → { roads, landuse, rail, water } | null
  *
  * Overpass `out tags geom` → just what the classifier needs. Null when the
  * answer isn't an Overpass answer (a rate-limit page, a runtime-error remark)
@@ -57,6 +57,9 @@ export function normalizeOverpass(json) {
   const roads = [];
   const landuse = [];
   const rail = [];
+  // Rivers, for the same-side check (shared/same-side.js); only the
+  // barrier query asks for them.
+  const water = [];
   for (const e of json.elements) {
     const t = e?.tags || {};
     const geometry = Array.isArray(e?.geometry) ? e.geometry.filter((p) => Number.isFinite(p?.lat) && Number.isFinite(p?.lon)) : [];
@@ -64,6 +67,7 @@ export function normalizeOverpass(json) {
     if (t.highway && rankOf(t.highway) > 0) {
       roads.push({
         cls: clsOf(t.highway),
+        link: Boolean(LINK[t.highway]),
         name: t.name || "",
         names: [t.name, t.alt_name, t.old_name, t.official_name, t.ref].filter(Boolean),
         lanes: Number(t.lanes) || null,
@@ -74,9 +78,11 @@ export function normalizeOverpass(json) {
       landuse.push({ kind: t.landuse, geometry, closed: sameSpot(geometry[0], geometry[geometry.length - 1]) });
     } else if (t.railway === "rail" && !/^(spur|yard|siding|crossover)$/.test(t.service || "")) {
       rail.push({ name: t.name || "", geometry });
+    } else if (t.waterway === "river") {
+      water.push({ name: t.name || "", geometry });
     }
   }
-  return { roads, landuse, rail };
+  return { roads, landuse, rail, water };
 }
 
 const sameSpot = (a, b) => a && b && Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lon - b.lon) < 1e-7;

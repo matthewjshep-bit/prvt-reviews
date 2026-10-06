@@ -276,7 +276,9 @@ import { similarity, inPool, similarityTone, SIM_WEIGHTS } from "./comp-match.js
 
 const NOW = Date.parse("2026-09-16T00:00:00Z");
 const SUBJECT = { beds: 3, baths: 2, sqft: 1800, yearBuilt: 1968, lotSqft: 7200 };
-const twin = (over = {}) => ({ beds: 3, baths: 2, sqft: 1800, yearBuilt: 1968, lotSqft: 7200, distance: 0.1, saleDate: "2026-07-01", ...over });
+// On the subject's side of the main roads unless a test says otherwise
+// (shared/same-side.js sets `side` from the map).
+const twin = (over = {}) => ({ beds: 3, baths: 2, sqft: 1800, yearBuilt: 1968, lotSqft: 7200, distance: 0.1, saleDate: "2026-07-01", side: { across: [] }, ...over });
 
 test("similarity: an identical house next door scores 100", () => {
   // Garage is known only for comps whose detail row was bought; both sides
@@ -291,10 +293,10 @@ test("a garage counts only when both houses' garages are known", () => {
   assert.equal(similarity(SUBJECT, twin({ garage: true }), { radiusMiles: 0.5, now: NOW }).factors.find((f) => f.key === "garage").value, null);
 });
 
-test("distance tapers from a quarter mile to the ring edge, not as a one-mile boolean", () => {
+test("distance tapers from 0.15 mi to the ring edge, not as a one-mile boolean", () => {
   const at = (d) => similarity(SUBJECT, twin({ distance: d }), { radiusMiles: 0.5, now: NOW }).score;
-  assert.equal(at(0.2), 100, "inside a quarter mile is full");
-  assert.ok(at(0.3) < at(0.2) && at(0.45) < at(0.3), "and it slides from there");
+  assert.equal(at(0.15), 100, "inside 0.15 mi is full");
+  assert.ok(at(0.2) < at(0.15) && at(0.3) < at(0.2) && at(0.45) < at(0.3), "and it slides from there");
   // Neither side carries a garage here, so it leaves the denominator.
   const known = Object.values(SIM_WEIGHTS).reduce((a, b) => a + b, 0) - SIM_WEIGHTS.garage;
   assert.equal(at(0.5), Math.round(100 * (known - SIM_WEIGHTS.distance) / known), "the ring edge is worth nothing on distance — every other point remains");

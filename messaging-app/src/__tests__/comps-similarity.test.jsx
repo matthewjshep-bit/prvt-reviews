@@ -13,7 +13,7 @@ test("the similarity tooltip shows each factor's contribution and the criteria b
   expect(title).toContain("Distance 0.4 mi — ");
   expect(title).toMatch(/Beds 3 vs 3 — 15\/15/);
   expect(title).toMatch(/Baths 2\.5 vs 2 — 7\/10/);
-  expect(title).toContain("Not knowable: lot");
+  expect(title).toContain("Not knowable: same side, lot");
   expect(title).toContain("Criteria:");
   expect(title).toContain("✓ Beds");
 });

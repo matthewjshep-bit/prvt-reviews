@@ -242,8 +242,14 @@ export function markRenovatedByPrice(comps = [], { take = 4, minPool = PRICE_PRO
 // Year built went 15 → 20 and its taper 25 → 15 years on 2026-09-24 (Matt:
 // comps as close in age as they can be). The score divides by the known
 // weights, so the weights need not add to 100.
-export const SIM_WEIGHTS = { distance: 25, sqft: 20, beds: 15, baths: 10, yearBuilt: 20, recency: 10, lot: 5, garage: 5 };
-export const SIM_DISTANCE_FULL_MI = 0.25;  // 1.0 out to here, 0 at the ring edge
+// side (2026-10-06, Matt on 2325 48th Ave SW, Tumwater): "skew towards stuff
+// that is in the same neighborhood, vicinity, same side of a main road". The
+// ARV came off new builds across Trosper Rd SW while the sales on the house's
+// own side carried nothing. `comp.side` is set by shared/same-side.js from the
+// map; with no map it's unknown and leaves the denominator, like any fact.
+// Distance went 25 → 30 and its full-credit circle 0.25 → 0.15 mi the same day.
+export const SIM_WEIGHTS = { distance: 30, side: 25, sqft: 20, beds: 15, baths: 10, yearBuilt: 20, recency: 10, lot: 5, garage: 5 };
+export const SIM_DISTANCE_FULL_MI = 0.15;  // 1.0 out to here, 0 at the ring edge
 export const SIM_SQFT_FULL_PCT = 10;       // 1.0 inside ±10% …
 export const SIM_SQFT_FULL_ABS = 300;      // … or ±300 sqft, whichever is wider (Matt's rule)
 export const SIM_SQFT_ZERO_PCT = 30;       // 0 at ±30%
@@ -271,6 +277,11 @@ export function similarity(subject = {}, comp = {}, { radiusMiles = DISTANCE_MIL
   add("distance", "Distance", SIM_WEIGHTS.distance,
     d == null ? null : taper(d, SIM_DISTANCE_FULL_MI, Math.max(radiusMiles, SIM_DISTANCE_FULL_MI + 0.05)),
     d == null ? "distance unknown" : `${Math.round(d * 100) / 100} mi`);
+
+  const across = comp.side ? (Array.isArray(comp.side.across) ? comp.side.across : []) : null;
+  add("side", "Same side", SIM_WEIGHTS.side,
+    across == null ? null : across.length ? 0 : 1,
+    across == null ? "side of the main roads unknown" : across.length ? `across ${across[0].name || "a main road"}` : "same side of the main roads");
 
   const ss = n(subject.sqft), cs = n(comp.sqft);
   if (ss == null || cs == null || ss <= 0 || cs <= 0) add("sqft", "Size", SIM_WEIGHTS.sqft, null, "sqft unknown");

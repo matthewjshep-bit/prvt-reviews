@@ -101,9 +101,10 @@ import { addressKey, addressQueryVariants, zillowUrl, zillowLookupForms } from "
 import { pullComps } from "../comps-pull.js";
 import { geocodeAddress } from "../geocode.js";
 import { pullZillowComps, pullZillowActives, mergeFacts, streetKey } from "../comps-zillow.js";
-import { checkSite } from "../site-context.js";
+import { checkSite, fetchBarriers, SIDES_MAX_RADIUS_MILES } from "../site-context.js";
 import { checksFor, summarizeChecks, checksLines } from "../shared/underwrite-checks.js";
 import { similarity, milesBetween } from "../shared/comp-match.js";
+import { markSides } from "../shared/same-side.js";
 import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
   startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs, drainUnderwriteQueue, restartVanishedUnderwrites,
@@ -1545,6 +1546,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       let data;
       let geo = null;
+      // Same side of the main roads (shared/same-side.js): the map comes under
+      // the comps pull, a person is waiting so it gets 20 seconds, and a map
+      // that won't load leaves the comps without a side — never a 500.
+      const reqRadius = Math.min(5, Math.max(0.1, parseFloat(req.query.radius) || 0.5));
+      const sidesFor = (point) => (reqRadius > SIDES_MAX_RADIUS_MILES
+        ? Promise.resolve({ context: null, error: `search wider than ${SIDES_MAX_RADIUS_MILES} mi` })
+        : fetchBarriers({ subject: point, radiusMiles: reqRadius, budgetMs: 20000, timeoutMs: 12000 })
+          .catch((e) => ({ context: null, error: String(e?.message || e) })));
+      let sidesPromise = Promise.resolve({ context: null, error: "no map" });
       if (source === "zillow") {
         if (!apifyToken) return res.json({ enabled: false, comps: [], estimate: null, subject: null });
         // Zillow's sold map has no subject record, so the centre comes from a
@@ -1553,6 +1563,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // against the county-record provider, which filled them in for you.
         geo = await geocodeAddress(address);
         if (!geo) return res.status(404).json({ error: "couldn't locate that address on the map" });
+        sidesPromise = sidesFor(geo);
         data = await pullZillowComps({
           apifyToken, lat: geo.lat, lng: geo.lng,
           beds, baths, sqft,
@@ -1573,9 +1584,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // comps, in one batched detail lookup. A person is waiting, so the
         // cost is fine; a failure is a line on the board, never a 500.
         if (UW_ENRICH_CANDIDATES > 0) {
-          const radiusMiles = Math.min(5, Math.max(0.1, parseFloat(req.query.radius) || 0.5));
+          const radiusMiles = reqRadius;
           const rough = { beds: beds || null, baths: baths || null, sqft: sqft || null };
-          const ranked = [...(data.comps || [])]
+          const map = (await sidesPromise).context;
+          const ranked = [...(map ? markSides({ subject: geo, comps: data.comps || [], context: map }) : (data.comps || []))]
             .map((c) => ({ c, s: similarity(rough, { ...c, distance: c.distance ?? milesBetween(geo, c) }, { radiusMiles }).score ?? -1 }))
             .sort((a, b) => b.s - a.s).slice(0, UW_ENRICH_CANDIDATES).map((x) => x.c);
           try {
@@ -1601,7 +1613,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       } else {
         if (!apiKey) return res.json({ enabled: false, comps: [], estimate: null, subject: null });
         data = await pullComps({ apiKey, address, months, sqft, beds, baths });
+        if (data?.subject?.lat != null) sidesPromise = sidesFor(data.subject);
       }
+      const center = geo || (data?.subject?.lat != null ? data.subject : null);
+      const sides = await sidesPromise;
+      if (sides.context && center) data = { ...data, comps: markSides({ subject: center, comps: data.comps || [], context: sides.context }) };
       // AI condition grading needs both the Anthropic key and the Apify
       // token (Zillow photos) — tell the UI whether to offer the button.
       res.json({
@@ -1612,6 +1628,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // looking at, but the operator has to be told it isn't centred on the
         // house — the pane says so above the comps.
         geo: geo ? { precision: geo.precision, matched: geo.matched || null } : null,
+        sides: sides.context ? { status: "ok" } : { status: "unavailable", error: String(sides.error || "").slice(0, 160) },
         gradeEnabled: Boolean(String(saved?.aiApiKey || "").trim() && apifyToken),
       });
     } catch (err) { fail(res, err); }

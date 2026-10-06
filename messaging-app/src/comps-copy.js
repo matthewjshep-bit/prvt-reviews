@@ -31,4 +31,4 @@ export function similarityTitle(s, m) {
 // What the board actually does, said once, under the subject record and in
 // the empty state. The old line described the retired county-record provider
 // ("same beds/baths/county, arms-length…") long after Zillow took over.
-export const COMPS_RULES = "ranked by similarity — distance first, then size, beds/baths, year built and sale date; Zillow comps are enriched with year built and lot from the listing";
+export const COMPS_RULES = "ranked by similarity — distance first, then the same side of the main roads, size, beds/baths, year built and sale date; Zillow comps are enriched with year built and lot from the listing";

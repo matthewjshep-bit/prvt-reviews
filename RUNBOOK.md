@@ -391,8 +391,8 @@ purpose: Matt's call was fewer holds, not tighter bands. What changed is who
 inside it carries the number.
 
 Every comp in the ring is scored by `similarity` in `shared/comp-match.js` — a
-0–100 closeness, not a vote count. Distance leads (full marks inside a quarter
-mile, nothing at the ring edge), then size (±10% or ±300 sqft is a full match,
+0–100 closeness, not a vote count. Distance leads (full marks inside 0.15 mi — a quarter
+mile before 2026-10-06 — nothing at the ring edge), then size (±10% or ±300 sqft is a full match,
 nothing at ±30%), beds (exact, or 40% for one off), baths, year built (full
 inside five years, nothing at 15, and weighted above beds since 2026-09-24),
 sale recency, and lot when both are known.
@@ -468,6 +468,51 @@ someone looked at the kitchen.
 route enriches the subject and its twenty most similar comps in one detail
 batch — which is also how the subject's beds/baths/size/year/lot fill in
 again — and the ARV suggestion uses the board's own time trend.
+
+**Same side of the main roads, and location before age (2026-10-06).** Matt
+on 2325 48th Ave SW, Tumwater: "it's picking stuff that is ON THE OTHER SIDE
+of a main road, we need to skew towards stuff that is in the same
+neighborhood, vicinity, same side of a main road". All four comps carrying
+that ARV were new builds across Trosper Rd SW ($860K–1.23M, ARV $922K). Six
+sales within 0.4 mi on the house's own side ($485–694K) carried nothing,
+because they were built 2005–2014, outside ±15 years of a 1989 house. That
+left the half-mile ring too thin, and the run went a mile out.
+
+- **The map.** `fetchBarriers` (`ghl-broker/site-context.js`) makes one free
+  Overpass query per run for the square holding the whole ring: OSM
+  motorway/trunk/primary/secondary/tertiary, `railway=rail` and
+  `waterway=river`. Ramps, creeks and residential streets are left out.
+  Trosper is tagged tertiary right there, so a secondary-and-up line would have
+  missed the case that asked for it.
+- **The check.** `shared/same-side.js` draws a straight line from the house to
+  each comp and records the barriers it crosses on `comp.side.across`. A
+  crossing within 30 m of either end is the house's own frontage, so it
+  doesn't count.
+- **Every run, on by default, fails open.** The map is cached a day, runs
+  under the comps pull, and never throws. When it doesn't load, comps carry no
+  `side`, rank as before, and the note says "side of the main roads not
+  checked".
+- **Ranking.** `similarity` gives "Same side" weight 25. Distance went 25 → 30,
+  with full marks only inside 0.15 mi (was a quarter mile).
+- **The ARV.** `gradeByPriceProxy` judges the house's own side first.
+  Across-the-road comps only top it up to the 6 the proxy needs, and the ARV
+  set ranks same side first. A basis that still uses one says "— 1 across
+  Trosper Rd SW".
+- **Location before age.** Inside each ring, when the ±15-year band leaves too
+  few comps to carry an ARV, same-side houses outside the band come in. They
+  are still scored down for age. Only if that fails does the run widen to the
+  next ring. The note says "kept the search close and let in same-side houses
+  outside that band".
+- **The pane.** It gets the same map from `GET /comps` (20 s budget, not past
+  1.5 mi). It pre-ticks same side first, tags a row "across Trosper Rd SW",
+  and never pre-ticks the house's own earlier sale ("this house").
+
+Tumwater replayed offline: the old logic gave $922K off the across-road lots.
+The new logic stops at half a mile with six same-side sales and gives $589K.
+That is low against the house's own $690K sale (Nov 2024) and the same-size
+Blackstone sale at $694K. Four of the six are ~900 sqft smaller, and the
+half-$/sqft size adjustment holds them down. That is the next dial if
+Tumwater-shaped houses come in short.
 
 **Wiring it.** There are two front doors. Use the first one if you have a
 qualifying bot; it is cheaper and more accurate.
