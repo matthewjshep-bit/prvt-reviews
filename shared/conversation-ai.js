@@ -739,6 +739,10 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
     // weekday; "none" sends nothing until Monday.
     weekends: "replies_only",
     quietHours: { start: "08:00", end: "20:00", timeZone: "America/Los_Angeles" },
+    // Texts the machine starts on its own (first texts, check-ins, nudges,
+    // blasts, written offers) stop here; replies to their texts keep the
+    // whole window. Matt, 2026-10-05: outreach after 5pm hurts our chances.
+    machineUntil: "17:00",
     channels: ["sms"],
     // Wait this long after a text before drafting, so three texts in a row
     // get one reply to all three. 0 = draft at once.
@@ -1184,6 +1188,7 @@ export function normalizeConversationAi(doc, seed = {}) {
         end: hhmm(qh.end, D.autoSend.quietHours.end),
         timeZone: isValidTimeZone(qh.timeZone) ? qh.timeZone : D.autoSend.quietHours.timeZone,
       },
+      machineUntil: hhmm(auto.machineUntil, D.autoSend.machineUntil),
       channels: Array.isArray(auto.channels)
         ? list(auto.channels, { max: 10, each: 10, lower: true }).filter((c) => CHANNELS.includes(c))
         : [...D.autoSend.channels],

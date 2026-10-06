@@ -627,6 +627,9 @@ export function AutoSendCard({ config, patch }) {
         <Field label="Delay, at most (seconds)"><Text type="number" value={a.delayMaxSec} onChange={(v) => set("delayMaxSec")(Number(v))} /></Field>
         <Field label="Sends from"><Text type="time" value={a.quietHours.start} onChange={setQh("start")} /></Field>
         <Field label="Until"><Text type="time" value={a.quietHours.end} onChange={setQh("end")} /></Field>
+        <Field label="Texts the machine starts stop at" hint="First texts, check-ins, nudges, blasts and written offers go out before this. Replies to their texts keep the whole window.">
+          <Text type="time" value={a.machineUntil || "17:00"} onChange={set("machineUntil")} />
+        </Field>
         <Field label="Time zone" hint="An IANA name. Outside the window a reply waits for the next opening.">
           <Text value={a.quietHours.timeZone} onChange={setQh("timeZone")} placeholder="America/Los_Angeles" />
         </Field>

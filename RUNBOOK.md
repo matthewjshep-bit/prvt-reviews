@@ -1922,6 +1922,20 @@ stands would still send, goes back to scheduled (`dialHeldReleasable`), nudges
 spread across the day as the sweep spreads them. A dry run unless `dryRun:
 false`.
 
+**The machine's own texts stop at 5pm (2026-10-05).** Matt saw check-ins
+landing at 7 and 8pm: "not send outreach texts after 5pm… feel like it hurts
+our chances". `autoSend.machineUntil` (default "17:00") shuts the window for
+anything the machine starts on its own (`MACHINE_STARTED_KINDS`, blasts,
+written offers, the walkthrough ask). `machineHours(autoSend)` in
+conversation-scheduler.js is the page's window shut at that time. Replies to
+their texts keep the whole window (8am–9pm live). It applies in three places:
+every scheduling path for those texts uses it; `spreadAcrossDay` now keeps a
+spread inside the day's window (a noon sweep fills the afternoon instead of
+rolling a third onto 8:00 tomorrow); and the 30s ticker moves a machine text
+that comes due outside its hours to the next opening (`afterHours`) rather
+than sending it. Settings → Conversation AI → "Texts the machine starts stop
+at".
+
 **A hold the reader got wrong undoes itself (2026-10-05).** First texts saying
 "your listing at 1301 225th Pl SE" were held as naming $1,301,000 until
 `SHORT_STREET` fixed the reader that morning, but a held draft is never read

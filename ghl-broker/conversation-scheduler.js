@@ -8,6 +8,8 @@
 // when due. State lives in the store, so a redeploy loses nothing and a draft
 // scheduled before a restart still goes out on time.
 
+import { answersInbound } from "./shared/follow-up.js";
+
 const DAY_MS = 86400000;
 export const STUCK_SENDING_MS = 5 * 60 * 1000;
 
@@ -59,10 +61,45 @@ export function spreadAcrossDay({ now = Date.now(), quietHours = {}, hours = 8, 
     }
   }
   const start = Math.max(open, now);
-  const end = Math.max(start, open + Math.max(0, Number(hours) || 0) * 3600000);
+  // The spread stays inside the day's window: a noon sweep spread over eight
+  // hours in a window that shuts at 5pm fills the afternoon instead of
+  // rolling a third of its texts onto 8:00 tomorrow in one burst.
+  const close = windowCloseAfter(open, quietHours);
+  const end = Math.max(start, Math.min(open + Math.max(0, Number(hours) || 0) * 3600000, close ?? Infinity));
   const at = start + (end - start) * random();
-  // The window may close before `end`; nextSendTime rolls past the close.
   return nextSendTime({ now: at, delayMs: 0, quietHours });
+}
+
+// When the sending window that `ms` falls in shuts (a minute early, so a
+// text placed there is still inside). Null with no window, or an overnight
+// one, where the old rolling still applies.
+function windowCloseAfter(ms, quietHours = {}) {
+  const tz = quietHours.timeZone || "UTC";
+  const start = hhmmToMinutes(quietHours.start);
+  const end = hhmmToMinutes(quietHours.end);
+  if (start == null || end == null || start >= end) return null;
+  const p = zonedParts(ms, tz);
+  const close = zonedToUtc({ y: p.y, m: p.m, d: p.d, hh: Math.floor(end / 60), mm: end % 60 }, tz) - 60000;
+  return close > ms ? close : null;
+}
+
+/**
+ * machineHours(autoSend) → quietHours
+ *
+ * The sending window for texts the machine starts on its own: the page's
+ * window, shut at `machineUntil` when that comes first (Matt, 2026-10-05:
+ * "not send outreach texts after 5pm"). Replies to their texts keep the
+ * whole window.
+ */
+export function machineHours(autoSend = {}) {
+  const q = autoSend?.quietHours || {};
+  const cut = hhmmToMinutes(autoSend?.machineUntil);
+  if (cut == null) return q;
+  const start = hhmmToMinutes(q.start);
+  const end = hhmmToMinutes(q.end);
+  if (start == null || end == null || start === end) return { ...q, start: "08:00", end: autoSend.machineUntil };
+  if (start > end || cut <= start || cut >= end) return q;
+  return { ...q, end: autoSend.machineUntil };
 }
 
 // Wall-clock parts of an instant in a zone, via Intl — the one tz-aware thing
@@ -148,8 +185,8 @@ export const MAX_SENDS_PER_TICK = 20;
 export const PACE_MS = 2500;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, enabledFor = null, log = () => {}, maxPerTick = MAX_SENDS_PER_TICK, paceMs = PACE_MS, random = Math.random }) {
-  const out = { sent: 0, failed: 0, recovered: 0, returned: 0, deferred: 0 };
+export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, enabledFor = null, windowFor = null, log = () => {}, maxPerTick = MAX_SENDS_PER_TICK, paceMs = PACE_MS, random = Math.random }) {
+  const out = { sent: 0, failed: 0, recovered: 0, returned: 0, deferred: 0, afterHours: 0 };
   for (const { locationId, client } of locations) {
     // Two texts never leave in the same second, and a tick sends at most a
     // score: a blast to two hundred buyers takes the morning, as it would.
@@ -182,9 +219,21 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
     if (enabledFor && scheduled.some((d) => Date.parse(d.sendAt || "") <= now)) {
       switchedOff = !(await enabledFor(locationId).catch(() => true));
     }
+    // A text the machine started, due outside its hours (scheduled before
+    // the 5pm cut, or by a path that read the wider window), waits for the
+    // next opening instead of going out tonight. Replies are never held here.
+    const auto = windowFor && scheduled.some((d) => !answersInbound(d) && Date.parse(d.sendAt || "") <= now)
+      ? await windowFor(locationId).catch(() => null) : null;
+    const machineWin = auto ? machineHours(auto) : null;
     for (const d of scheduled) {
       const due = Date.parse(d.sendAt || "");
       if (!Number.isFinite(due) || due > now || inFlight.has(d.id)) continue;
+      if (machineWin && !answersInbound(d) && Date.parse(nextSendTime({ now, delayMs: 0, quietHours: machineWin })) > now) {
+        const sendAt = spreadAcrossDay({ now, quietHours: machineWin, hours: auto.nudgeSpreadHours ?? 8, random, weekends: auto.weekends || "all" });
+        await store.updateReplyDraft(d.id, { ...d, sendAt, updatedAt: new Date(now).toISOString() }).catch(() => {});
+        out.afterHours++;
+        continue;
+      }
       if (sentThisTick >= maxPerTick) { out.deferred++; continue; }
       if (switchedOff) {
         await store.updateReplyDraft(d.id, {

@@ -217,7 +217,7 @@ export default function ConversationAi({ settings }) {
                 workflows: workflows.list,   // TIER 1/2/3 and Tier 1/2 Disposition are wired by name when the list is visible
               });
               patch({ ...st, enabled: form.enabled, dailyCap: form.dailyCap, dailyCapPerContact: form.dailyCapPerContact,
-                autoSend: { ...st.autoSend, delayMinSec: form.autoSend.delayMinSec, delayMaxSec: form.autoSend.delayMaxSec, quietHours: form.autoSend.quietHours, channels: form.autoSend.channels } });
+                autoSend: { ...st.autoSend, delayMinSec: form.autoSend.delayMinSec, delayMaxSec: form.autoSend.delayMaxSec, quietHours: form.autoSend.quietHours, machineUntil: form.autoSend.machineUntil, channels: form.autoSend.channels } });
             }}>
             Load starter playbook
           </button>
