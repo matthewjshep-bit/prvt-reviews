@@ -332,7 +332,7 @@ test("a check-in never gets the days-on-market count, never names a time or date
 // way, when we can ask them but not in an aggressive way".
 test("an agent's reply may ask for off-market houses at a natural close, lightly, when the context allows; a buyer's never", () => {
   const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
-  assert.match(sys, /OFF-MARKET: our best deals are houses agents bring us before they hit the market/);
+  assert.match(sys, /OFF-MARKET: our best deals are off-market houses agents bring us/);
   assert.match(sys, /only when the context's OFF-MARKET ASK line says you may/i);
   assert.match(sys, /never claim we have off-market deals/i);
   assert.doesNotMatch(buildSystemPrompt({ config: null, party: "investor", channel: "sms" }), /OFF-MARKET: our best deals/);
@@ -340,11 +340,28 @@ test("an agent's reply may ask for off-market houses at a natural close, lightly
 
 test("the check-in leans its ask toward off-market houses when an ask is due, and not when we asked this month", () => {
   const due = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", offMarketAskDue: true });
-  assert.match(due, /anything they come across before it hits the market/);
+  assert.match(due, /whether any off-market opportunities have come across their desk/);
   assert.match(due, /first look/);
   const recent = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", offMarketAskDue: false });
-  assert.doesNotMatch(recent, /before it hits the market/);
+  assert.doesNotMatch(recent, /off-market/);
   assert.match(recent, /anything coming up that needs work/);
+});
+
+// Matt, 2026-10-06: the asks went out as "anything before it hits the MLS".
+// "It is okay to say 'off-market' and check in if they have any off-market
+// opportunities that came across the desk."
+test("an agent is asked about off-market opportunities in that word, not 'before it hits the MLS'", () => {
+  const ask = /whether any off-market opportunities have come across their desk/;
+  const plain = /Say "off-market" itself, never "before it hits the MLS"/;
+  const sys = buildSystemPrompt({ config: normalizeConversationAi({}), party: "agent", channel: "sms" });
+  assert.match(sys, ask);
+  assert.match(sys, plain);
+  assert.doesNotMatch(sys, /never pitch "off-market deals"/, "the starter rule no longer warns the word off");
+  const due = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", offMarketAskDue: true });
+  assert.match(due, ask);
+  assert.match(due, plain);
+  const house = outboundOpening({ kind: "agent_pulse", reason: "our_house", segment: "engaged", offMarketAskDue: true, house: { street: "123 Main St", how: "passed" } });
+  assert.match(house, ask);
 });
 
 /* ---------- one house at a time (2026-10-02) ---------- */

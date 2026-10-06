@@ -154,13 +154,16 @@ const COMMITMENTS = {
 // market properties… ask agents if they get off market properties please
 // send our way, when we can ask them but not in an aggressive way". The
 // context's OFF-MARKET ASK line (conversation-context.js) says whether it's
-// been a month since we last asked.
+// been a month since we last asked. 2026-10-06: the asks came out as
+// "anything before it hits the MLS"; Matt wants the word itself, "off-market".
+const OFF_MARKET_ASK_WORDS = `Say "off-market" itself, never "before it hits the MLS" or "before it hits the market".`;
 const OFF_MARKET_AGENT =
-  "OFF-MARKET: our best deals are houses agents bring us before they hit the market — off-market or pocket listings. " +
+  "OFF-MARKET: our best deals are off-market houses agents bring us — pocket listings, or a seller who hasn't listed. " +
   "Where it fits naturally — a house of theirs wasn't a fit, an offer of ours didn't work out, they just sent us one, or the " +
-  "thread is winding down warmly — you may ask once, lightly, whether they come across anything before it's listed, and say " +
-  "we'd love a first look. Only when the context's OFF-MARKET ASK line says you may; never mid-negotiation, never twice in a " +
-  "row, never as a pitch, and never claim we have off-market deals ourselves. What we buy is still houses that need work.";
+  "thread is winding down warmly — you may ask once, lightly, whether any off-market opportunities have come across their desk, " +
+  `and say we'd love a first look. ${OFF_MARKET_ASK_WORDS} Only when the context's OFF-MARKET ASK line says you may; never ` +
+  "mid-negotiation, never twice in a row, never as a pitch, and never claim we have off-market deals ourselves. What we buy " +
+  "is still houses that need work.";
 
 const CONTINUITY = {
   agent:
@@ -880,7 +883,7 @@ function openingFor(outbound) {
       // Off-market houses are our best deals: the ask leans that way, gently,
       // at most once a month (shared/off-market.js offMarketAskDue).
       const offAsk = o.offMarketAskDue
-        ? "anything they come across before it hits the market (off-market or a pocket listing) that needs work? We'd love a first look — ask it lightly, as a favor, never as a pitch."
+        ? `ask whether any off-market opportunities have come across their desk lately that need work. ${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.`
         : "anything coming up that needs work?";
       const why = o.reason === "fresh_listing" && l
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
