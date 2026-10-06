@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spreadAcrossDay, isWeekend, pickDelayMs, nextSendTime, zonedParts, sendDueDrafts, STUCK_SENDING_MS, machineHours } from "./conversation-scheduler.js";
+import { spreadAcrossDay, isWeekend, pickDelayMs, nextSendTime, zonedParts, sendDueDrafts, STUCK_SENDING_MS, machineHours, MACHINE_BURST } from "./conversation-scheduler.js";
 
 const CFG = { autoSend: { delayMinSec: 120, delayMaxSec: 240 } };
 const QH = { start: "08:00", end: "20:00", timeZone: "America/Los_Angeles" };
@@ -281,4 +281,24 @@ test("a text the machine started that comes due after 5pm waits for tomorrow's w
   const p = pacificHour(m.sendAt);
   assert.ok(p.d === 6 && p.hh >= 8 && p.hh < 17, `moved to ${m.sendAt}`);
   assert.equal(r.afterHours, 1);
+});
+
+test("a pile of machine texts due at the same minute goes a few at a time; the rest spread across the day", async () => {
+  // 2026-10-06: ~80 check-ins rolled onto 8:00:00 sharp.
+  const eight = T("2026-10-06T15:00:00Z");   // Tuesday 8am Pacific
+  const pile = Array.from({ length: 12 }, (_, i) => draft({ id: `c${i}`, sendAt: "2026-10-06T15:00:00.000Z", intent: "agent_pulse", outbound: { kind: "agent_pulse" }, inbound: "" }));
+  const store = fakeStore([...pile, draft({ id: "r1", sendAt: "2026-10-06T15:00:00.000Z", inbound: "Still interested?" })]);
+  const sent = [];
+  const r = await sendDueDrafts({
+    store, locations: [{ locationId: "LOC", client: {} }], live: true, now: eight, paceMs: 0, random: () => 0.5,
+    send: async (args) => { sent.push(args.draftId); store.rows.set(args.draftId, { ...store.rows.get(args.draftId), status: "sent" }); },
+    windowFor: async () => ({ quietHours: PT, machineUntil: "17:00", nudgeSpreadHours: 8, weekends: "all" }),
+  });
+  assert.equal(sent.filter((id) => id.startsWith("c")).length, MACHINE_BURST);
+  assert.ok(sent.includes("r1"), "a reply is never held back");
+  assert.equal(r.respread, 12 - MACHINE_BURST);
+  for (const d of [...store.rows.values()].filter((d) => d.status === "scheduled")) {
+    const p = pacificHour(d.sendAt);
+    assert.ok(Date.parse(d.sendAt) > eight && p.d === 6 && p.hh < 17, `${d.id} → ${d.sendAt}`);
+  }
 });

@@ -1934,7 +1934,9 @@ spread inside the day's window (a noon sweep fills the afternoon instead of
 rolling a third onto 8:00 tomorrow); and the 30s ticker moves a machine text
 that comes due outside its hours to the next opening (`afterHours`) rather
 than sending it. Settings → Conversation AI → "Texts the machine starts stop
-at".
+at". A pile of machine texts due in the same tick (a rolled spread, a
+backlog after a restart) goes `MACHINE_BURST` (5) at a time; the rest are
+spread across the hours left (`respread`).
 
 **A hold the reader got wrong undoes itself (2026-10-05).** First texts saying
 "your listing at 1301 225th Pl SE" were held as naming $1,301,000 until
