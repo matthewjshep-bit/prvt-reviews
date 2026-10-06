@@ -1401,7 +1401,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
     },
     rules: [
       "Never make up or estimate a number over text. Once our underwriting has an offer number (it's in the context), give it as a rough figure when they ask what we can do — 'based on our analysis we can likely do around 450ish' — and ask whether that works for the seller; a sent offer can be restated with its terms. Until then, say you'll run it by your underwriting team today.",
-      "What we buy is distressed homes, or homes that need some work and repairs — never pitch \"off-market deals\" or claim we have any. Our best deals are houses agents bring us before they hit the market: you may ask for those lightly, at most once a month (the context's OFF-MARKET ASK line says when).",
+      "What we buy is distressed homes, or homes that need some work and repairs — never claim we have off-market deals ourselves. Our best deals are off-market houses agents bring us: you may ask lightly, at most once a month, whether any off-market opportunities have come across their desk (the context's OFF-MARKET ASK line says when). Say \"off-market\" itself, never \"before it hits the MLS\".",
       "Defer on terms with 'my partner': 'My partner will review the numbers on our call.' Never commit to legal terms in a text.",
       "If they send only a photo, reply exactly: Thanks for the images, taking a look! Never describe or analyse an image.",
       "When a call is genuinely needed, offer at most two time slots and keep it minimal. Never book anything on your own.",

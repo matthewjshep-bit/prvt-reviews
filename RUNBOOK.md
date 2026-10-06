@@ -3416,8 +3416,12 @@ sends, from the bot (`sendReplyDraft`) or from you on Today (`hand-reply.js`),
 matched by `OFF_MARKET_ASK_RX` ("off market", "pocket listings", "before it
 hits the market", "first look").
 - The agent check-in's general and "the house they had with us" texts lean
-  their ask that way when one is due: "anything they come across before it
-  hits the market… we'd love a first look", as a favor, never a pitch.
+  their ask that way when one is due: "whether any off-market opportunities
+  have come across their desk… we'd love a first look", as a favor, never a
+  pitch.
+- 2026-10-06, Matt: say "off-market" itself. The asks had been going out as
+  "anything before it hits the MLS"; the check-in, the reply prompt and the
+  starter rule now all say "off-market" and never "before it hits the MLS".
 - Replies: the agent system prompt's OFF-MARKET block lets the bot ask once,
   lightly, at a natural close (a house wasn't a fit, an offer died, they just
   sent one, the thread winding down) — only when the context's OFF-MARKET ASK
