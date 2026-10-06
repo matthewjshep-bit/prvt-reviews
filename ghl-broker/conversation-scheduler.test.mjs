@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spreadAcrossDay, isWeekend, pickDelayMs, nextSendTime, zonedParts, sendDueDrafts, STUCK_SENDING_MS } from "./conversation-scheduler.js";
+import { spreadAcrossDay, isWeekend, pickDelayMs, nextSendTime, zonedParts, sendDueDrafts, STUCK_SENDING_MS, machineHours } from "./conversation-scheduler.js";
 
 const CFG = { autoSend: { delayMinSec: 120, delayMaxSec: 240 } };
 const QH = { start: "08:00", end: "20:00", timeZone: "America/Los_Angeles" };
@@ -236,4 +236,49 @@ test("a reply due now goes even behind fifty newer deal texts waiting for next w
     send: async (args) => { sent.push(args.draftId); store.rows.set(args.draftId, { ...store.rows.get(args.draftId), status: "sent" }); } });
   assert.ok(asked?.dueBy, "asked for what's due");
   assert.deepEqual(sent, ["due"]);
+});
+
+/* ---------- the machine's own texts stop at 5pm (Matt, 2026-10-05) ---------- */
+
+// Check-ins went out at 7 and 8pm: "can we pls not send outreach texts
+// after 5pm… feel like it hurts our chances". Replies keep the full window.
+const PT = { start: "08:00", end: "21:00", timeZone: "America/Los_Angeles" };
+const pacificHour = (iso) => zonedParts(Date.parse(iso), "America/Los_Angeles");
+
+test("texts the machine starts run 8am to 5pm; the window for replies is untouched", () => {
+  assert.deepEqual(machineHours({ quietHours: PT, machineUntil: "17:00" }), { ...PT, end: "17:00" });
+  assert.deepEqual(machineHours({ quietHours: { ...PT, end: "16:00" }, machineUntil: "17:00" }), { ...PT, end: "16:00" }, "an earlier close wins");
+  assert.deepEqual(machineHours({ quietHours: PT }), PT, "no cutoff set: the window as it is");
+});
+
+test("a noon sweep spread over eight hours lands before 5pm today, not in a burst at 8am tomorrow", () => {
+  const noon = T("2026-10-06T19:00:00Z");   // Tuesday, noon Pacific
+  const win = machineHours({ quietHours: PT, machineUntil: "17:00" });
+  for (const r of [0, 0.5, 0.99]) {
+    const at = spreadAcrossDay({ now: noon, quietHours: win, hours: 8, random: () => r });
+    const p = pacificHour(at);
+    assert.equal(p.d, 6, `${at} stays today`);
+    assert.ok(p.hh >= 12 && p.hh < 17, `${at} is ${p.hh}:${String(p.mm).padStart(2, "0")} Pacific`);
+  }
+});
+
+test("a text the machine started that comes due after 5pm waits for tomorrow's window; a reply still goes", async () => {
+  const seven = T("2026-10-06T02:00:00Z");   // Monday 7pm Pacific
+  const due = new Date(seven - 1000).toISOString();
+  const store = fakeStore([
+    draft({ id: "m1", sendAt: due, intent: "agent_pulse", outbound: { kind: "agent_pulse" }, inbound: "" }),
+    draft({ id: "r1", sendAt: due, inbound: "Is it still available?" }),
+  ]);
+  const sent = [];
+  const r = await sendDueDrafts({
+    store, locations: [{ locationId: "LOC", client: {} }], live: true, now: seven, paceMs: 0, random: () => 0.5,
+    send: async (args) => { sent.push(args.draftId); store.rows.set(args.draftId, { ...store.rows.get(args.draftId), status: "sent" }); },
+    windowFor: async () => ({ quietHours: PT, machineUntil: "17:00", nudgeSpreadHours: 8, weekends: "all" }),
+  });
+  assert.deepEqual(sent, ["r1"], "the reply to their text goes");
+  const m = store.rows.get("m1");
+  assert.equal(m.status, "scheduled");
+  const p = pacificHour(m.sendAt);
+  assert.ok(p.d === 6 && p.hh >= 8 && p.hh < 17, `moved to ${m.sendAt}`);
+  assert.equal(r.afterHours, 1);
 });

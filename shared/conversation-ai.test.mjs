@@ -584,3 +584,9 @@ test("an ask for us to come up, and a seller's cold feet, are read as what they 
   for (const t of ["seller is having second thoughts and may just want to hold tight. Too low a margin.", "They got cold feet", "He's on the fence now"]) assert.equal(soundsLikeSecondThoughts(t), true, t);
   for (const t of ["Seller is good with it", "writing it up tonight", "Sorry, seller says 400 is too low, they pass", "They'll keep it as a rental", "He might just rent it"]) assert.equal(soundsLikeSecondThoughts(t), false, t);
 });
+
+test("texts the machine starts stop at 5pm Pacific unless the page says otherwise", () => {
+  assert.equal(normalizeConversationAi({}).autoSend.machineUntil, "17:00");
+  assert.equal(normalizeConversationAi({ autoSend: { machineUntil: "16:30" } }).autoSend.machineUntil, "16:30");
+  assert.equal(normalizeConversationAi({ autoSend: { machineUntil: "5pm" } }).autoSend.machineUntil, "17:00", "a bad time falls back");
+});

@@ -13,7 +13,7 @@
 import { moneyIn, conversationConfig, decideAutoSend } from "./reply-agent.js";
 import { shorthandPrices } from "./shared/current-offer.js";
 import { fmtMoney } from "./shared/offer-calc.js";
-import { spreadAcrossDay } from "./conversation-scheduler.js";
+import { spreadAcrossDay, machineHours } from "./conversation-scheduler.js";
 
 // evaluateReplyGates' words for a number in neither the record book nor
 // their message. The contract-price/fee flag is a different sentence and is
@@ -75,7 +75,7 @@ export async function releaseMisreadHolds({ store, locationId, saved = {}, sends
       open.push(...await store.listReplyDrafts(locationId, { contactId: d.contactId, status, limit: 5 }).catch(() => []));
     }
     if (open.some((o) => o.id !== d.id)) { rows.push({ draftId: d.id, released: false, reason: "another draft is open for them" }); continue; }
-    const sendAt = spreadAcrossDay({ now, quietHours: a.quietHours, hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all", random });
+    const sendAt = spreadAcrossDay({ now, quietHours: machineHours(a), hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all", random });
     if (!dryRun) {
       const ts = new Date(now).toISOString();
       const said = v.amounts.map((n) => fmtMoney(n)).join(", ");

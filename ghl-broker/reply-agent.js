@@ -93,7 +93,7 @@ import {
 } from "./conversation-prompt.js";
 import { carrierFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
-import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend } from "./conversation-scheduler.js";
+import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend, machineHours } from "./conversation-scheduler.js";
 import { refreshBlastText, refreshBundleText, defaultDataroomBaseUrl } from "./blast-refresh.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
@@ -103,15 +103,17 @@ import { meterAi } from "./ai-spend.js";
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
 const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "deal_followup", "outreach_nudge", "outreach_open", "buyer_pulse", "agent_pulse"]);
-function scheduleFor({ config, now, kind = null, intent = "", replyLength = 0, random = Math.random }) {
+export function scheduleFor({ config, now, kind = null, intent = "", replyLength = 0, random = Math.random }) {
   const a = config.autoSend || {};
+  // What the machine starts keeps its own, shorter hours (machineUntil, 5pm).
+  const hours = kind && MACHINE_STARTED_KINDS.has(kind) ? machineHours(a) : a.quietHours;
   if (kind && STARTED_KINDS.has(kind)) {
-    return spreadAcrossDay({ now, quietHours: a.quietHours, hours: a.nudgeSpreadHours ?? 8, random, weekends: a.weekends || "all" });
+    return spreadAcrossDay({ now, quietHours: hours, hours: a.nudgeSpreadHours ?? 8, random, weekends: a.weekends || "all" });
   }
-  const at = nextSendTime({ now, delayMs: pickDelayMs(config, random, { intent, replyLength }), quietHours: a.quietHours });
+  const at = nextSendTime({ now, delayMs: pickDelayMs(config, random, { intent, replyLength }), quietHours: hours });
   // A reply on a weekend goes unless the page says nothing does.
   if (a.weekends === "none" && isWeekend(Date.parse(at), a.quietHours?.timeZone || "UTC")) {
-    return spreadAcrossDay({ now: Date.parse(at), quietHours: a.quietHours, hours: 0, random, weekends: "none" });
+    return spreadAcrossDay({ now: Date.parse(at), quietHours: hours, hours: 0, random, weekends: "none" });
   }
   return at;
 }
@@ -4735,7 +4737,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       const limit = await buyerTouchLimit({ store, locationId, contactId: d.contactId, budget, now });
       if (!limit.open) {
         const config = conversationConfig(saved);
-        const sendAt = spreadAcrossDay({ now: limit.at, quietHours: config.autoSend.quietHours, hours: 0, weekends: config.autoSend.weekends || "all" });
+        const sendAt = spreadAcrossDay({ now: limit.at, quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all" });
         const ts = new Date(now).toISOString();
         const line = `waits for this buyer's weekly limit — goes ${slotWord(Date.parse(sendAt))}, with anything else new for them`;
         await store.updateReplyDraft(d.id, {

@@ -388,6 +388,8 @@ setInterval(async () => {
     const r = await sendDueDrafts({
       store, locations, live: CONVERSATION_SENDS_LIVE, send: sendReplyDraft, log: console.log,
       enabledFor: async (locationId) => conversationConfig((await store.getOfferSettings(locationId)) || {}).enabled,
+      // What the machine started waits for its own hours (machineUntil, 5pm).
+      windowFor: async (locationId) => conversationConfig((await store.getOfferSettings(locationId)) || {}).autoSend,
     });
     if (r.failed || r.recovered || r.returned) console.warn(`conversation scheduler: ${JSON.stringify(r)}`);
     // Once a day: settled drafts past the tab's retention go.

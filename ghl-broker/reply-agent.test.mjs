@@ -5728,3 +5728,25 @@ test("a deal carried in the combined text is claimed before the send, and goes b
   assert.equal(d2.status, "scheduled");
   assert.equal(d2.combinedInto, undefined);
 });
+
+/* ---------- the machine's own texts stop at 5pm (Matt, 2026-10-05) ---------- */
+
+import { scheduleFor } from "./reply-agent.js";
+import { normalizeConversationAi as normalizeAi } from "./shared/conversation-ai.js";
+import { zonedParts as wall } from "./conversation-scheduler.js";
+test("a check-in started at noon goes before 5pm Pacific; a reply at 7pm still goes tonight", () => {
+  const cfg = normalizeAi({ autoSend: { quietHours: { start: "08:00", end: "21:00", timeZone: "America/Los_Angeles" } } });
+  const pacific = (iso) => wall(Date.parse(iso), "America/Los_Angeles");
+  const noon = Date.parse("2026-10-06T19:00:00Z");   // Tuesday noon
+  for (const r of [0, 0.5, 0.99]) {
+    const p = pacific(scheduleFor({ config: cfg, now: noon, kind: "agent_pulse", random: () => r }));
+    assert.ok(p.d === 6 && p.hh >= 12 && p.hh < 17, JSON.stringify(p));
+  }
+  // A float (machine-started, not spread) at 7pm waits for the morning too.
+  const seven = Date.parse("2026-10-06T02:00:00Z");   // Monday 7pm
+  const f = pacific(scheduleFor({ config: cfg, now: seven, kind: "realm_check", random: () => 0 }));
+  assert.ok(f.d === 6 && f.hh >= 8 && f.hh < 17, JSON.stringify(f));
+  // A reply to their text keeps the evening.
+  const reply = pacific(scheduleFor({ config: cfg, now: seven, intent: "question", replyLength: 40, random: () => 0 }));
+  assert.ok(reply.d === 5 && reply.hh === 19, JSON.stringify(reply));
+});

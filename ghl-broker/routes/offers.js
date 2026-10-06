@@ -119,7 +119,7 @@ import {
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
-import { nextSendTime, spreadAcrossDay } from "../conversation-scheduler.js";
+import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STATUSES } from "../shared/showing.js";
 import { mergeParties } from "../shared/deal-parties.js";
@@ -4173,7 +4173,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const live = send && CARD_SENDS_ENABLED && cfg.enabled;
     const reason = !send ? "drafted for you" : !CARD_SENDS_ENABLED ? "sends are off on the broker (CARD_SENDS_ENABLED)" : !cfg.enabled ? "Conversation AI is switched off" : "";
     const ts = new Date(now).toISOString();
-    const sendAt = live ? nextSendTime({ now, delayMs: 0, quietHours: cfg.autoSend.quietHours }) : null;
+    const sendAt = live ? nextSendTime({ now, delayMs: 0, quietHours: machineHours(cfg.autoSend) }) : null;
     const open = await store.listReplyDrafts(locationId, { contactId: offer.contactId, status: ["draft", "scheduled"], limit: 10 }).catch(() => []);
     const stale = open.filter((d) => d.outbound?.kind === "showing_ask" && d.outbound?.offerId === offer.id);
     for (const old of stale) {
@@ -4529,7 +4529,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const why = await (async () => {
           const drafts = await store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 20 }).catch(() => []);
           if (!drafts.some((d) => d.inbound)) return "they have never replied to us";
-          const dueAt = nextSendTime({ now: Date.now(), delayMs: 0, quietHours: cfg.autoSend.quietHours });
+          const dueAt = nextSendTime({ now: Date.now(), delayMs: 0, quietHours: machineHours(cfg.autoSend) });
           if (Date.parse(dueAt) - Date.now() > 60000) return `outside the auto-send hours (next window ${dueAt})`;
           return null;
         })();
@@ -4655,7 +4655,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const fresh = (await store.getOfferSettings(locationId)) || {};
     const cfg = conversationConfig(fresh);
     if (!cfg.enabled || !CARD_SENDS_ENABLED) return { sent: 0, checked: 0 };
-    const dueAt = nextSendTime({ now, delayMs: 0, quietHours: cfg.autoSend.quietHours });
+    const dueAt = nextSendTime({ now, delayMs: 0, quietHours: machineHours(cfg.autoSend) });
     if (Date.parse(dueAt) - now > 60000) return { sent: 0, checked: 0 };
     const pending = (await store.listOffers(locationId, { limit: 300 })).filter((o) => o?.autoSendPending?.at && !o.deal).slice(0, limit);
     let sent = 0;
@@ -4706,7 +4706,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const cfg = conversationConfig(fresh);
     const af = cfg.parties.agent.sendOffer.afterFloat;
     if (!cfg.enabled || !af?.enabled || !CARD_SENDS_ENABLED) return { sent: 0, checked: 0 };
-    const dueAt = nextSendTime({ now, delayMs: 0, quietHours: cfg.autoSend.quietHours });
+    const dueAt = nextSendTime({ now, delayMs: 0, quietHours: machineHours(cfg.autoSend) });
     if (Date.parse(dueAt) - now > 60000) return { sent: 0, checked: 0 };
     const day = new Date(now).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
     const cur = await store.getJobCursor?.(locationId, PAPER_CURSOR).catch(() => null);
@@ -5721,7 +5721,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const verdict = dialHeldReleasable(d, saved, now);
         if (!verdict.ok) { if (verdict.reason !== "not held by the dial") rows.push({ draftId: d.id, intent: d.intent, released: false, reason: verdict.reason }); continue; }
         const sendAt = STARTED_KINDS.has(d.outbound?.kind)
-          ? spreadAcrossDay({ now, quietHours: a.quietHours, hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all" })
+          ? spreadAcrossDay({ now, quietHours: machineHours(a), hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all" })
           : nextSendTime({ now, delayMs: 60000, quietHours: a.quietHours });
         if (!dryRun) {
           const ts = new Date(now).toISOString();
