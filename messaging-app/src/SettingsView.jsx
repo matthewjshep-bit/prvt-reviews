@@ -783,6 +783,25 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         )}
       </section>
 
+      <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="pricing-math-settings">
+        <h2 className="mb-1 text-sm font-bold">How we got our number</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          What the agent sees behind our price: what it's worth fixed up, less closing to buy and resell, holding it
+          while the work gets done (the costs above), the work, and a <b>profit &amp; risk</b> line that makes it add
+          up exactly to the number we sent. The price itself doesn't change, and our fee is never its own line.
+          Texts name the costs and never put a figure on profit &amp; risk; the agent page, the letter and the
+          offer email show every line.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <Num label="Purchase closing" suffix="% of the price (explanation only)" value={form.buyClosingPct} onChange={set("buyClosingPct")} />
+        </div>
+        <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={form.showPricingMath !== false}
+            onChange={(e) => { setSaved(false); setForm((f) => ({ ...f, showPricingMath: e.target.checked })); }} />
+          Show how we priced it on the letter, the offer text and email, and the agent page
+        </label>
+      </section>
+
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Lowball anchoring model</h2>
         <p className="mb-3 text-xs text-slate-500">

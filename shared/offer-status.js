@@ -26,6 +26,7 @@
 // The dependencies: asset-type.js and us-address.js, both pure and import-free.
 import { assetOf } from "./asset-type.js";
 import { sameStreetLoose } from "./us-address.js";
+import { offerMath, compactMath } from "./offer-breakdown.js";
 
 export const OFFER_STATUSES = [
   { key: "draft", label: "Draft", cls: "bg-blue-100 text-blue-800", dot: "bg-blue-500" },
@@ -618,6 +619,11 @@ export function toListOffer(offer) {
   if (arv > 0) row.arv = arv;
   const repairs = Number(offer?.repairs ?? offer?.calc?.inputs?.repairs ?? fromDraft?.repairs) || 0;
   if (repairs > 0) row.repairs = repairs;
+  // math         how we got the number (shared/offer-breakdown.js): the costs
+  //              and the % of ARV, for the bot and the send texts. Kept when
+  //              re-trimming a row that already has it.
+  const math = offer?.math || compactMath(offerMath(offer));
+  if (math) row.math = math;
   const st = offer?.calc?.settings || null;
   if (offer?.terms) row.terms = offer.terms;
   else if (st) {

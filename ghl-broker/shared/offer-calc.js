@@ -72,6 +72,11 @@ export const DEFAULT_OFFER_SETTINGS = {
   taxRatePct: 1.1,           // annual property tax, % of ARV
   insuranceRatePct: 0.5,     // annual vacant/builder's-risk insurance, % of ARV
   utilitiesMonthly: 250,     // power, water, lawn, snow, minor upkeep — per month
+  // How we got our number (shared/offer-breakdown.js). Explanation only, never
+  // pricing: the purchase-side closing a flipper pays, shown beside the resale
+  // costs, and whether the letter, the text and the agent page show the math.
+  buyClosingPct: 1,
+  showPricingMath: true,
   maoPctOfArv: 70,           // % of ARV for the "mao" mode
   cashPctOfArv: 90,          // base % of ARV before deductions
   repairBuffer: 30000,       // small-repair floor: repairs < buffer → repairs + buffer
