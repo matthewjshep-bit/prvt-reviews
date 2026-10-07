@@ -2136,7 +2136,7 @@ export const OUTBOUND_KINDS = {
     },
     // The exact number and its rough forms ("around 445ish"), never rounded
     // up — and a range's bottom when we float one ("the 280s to 295").
-    floats: ({ offer, outbound }) => [...roughAmounts(offer.cashAmount), Number(outbound?.range?.low) || 0],
+    floats: realmFloats,
     // The figures behind the number when we say how we got there. Allowed,
     // never "ours": an ARV above our offer is not a price we'd pay.
     allows: ({ outbound }) => outbound?.math?.allowed || [],
@@ -2549,20 +2549,36 @@ export function whatWentOut(offer) {
 // question. The math is ours, so it rides only when the agent hasn't given
 // their own read (then the float is tied to theirs) and only when it ties to
 // the number in play.
+// What a realm check may say about our number: the exact figure, its rough
+// forms ("around 445ish", never rounded up), and a range's two ends — its top
+// is the book rounded down ("the 650s to 686" on 686,610).
+export function realmFloats({ offer, outbound }) {
+  return [...roughAmounts(offer?.cashAmount), Number(outbound?.range?.low) || 0, Number(outbound?.range?.high) || 0];
+}
+
+// Under this share of the ARV (less the work) the offer was capped or priced
+// by hand well below our formula — "we base it on about 44%" (825 Livingston
+// Bay Shore Dr, preview 2026-10-07) invites "why so low?" rather than
+// answering it. The float goes without the math.
+export const FLOAT_MATH_MIN_PCT = 60;
+
 export function floatExtras({ offer, saved, dossier = null, requote = false, theirs = false }) {
   if (requote || !offer?.cashAmount) return {};
   const rc = conversationConfig(saved || {}).parties?.agent?.realmCheck || {};
   const out = {};
   if (rc.withMath && !theirs) {
     const m = offer.math || compactMath(offerMath(offer));
-    if (m && !(m.premium > 0) && Math.abs(m.total - Number(offer.cashAmount)) < 1000) {
+    if (m && !(m.premium > 0) && Math.abs(m.total - Number(offer.cashAmount)) < 1000 && m.pctOfArv >= FLOAT_MATH_MIN_PCT) {
       const f = mathFigures(m);
       out.math = {
         ...f,
         // The short form for a two-segment text; the gate allows exactly these.
-        line: `we base it on about ${f.pct}% of the ${f.arvK} it's worth fixed up` +
+        // Short on purpose: with a range and a question it has to fit two
+        // texts (two previews came back at 305 and 308 characters).
+        line: `we base it on ${f.pct}% of the ${f.arvK} it's worth fixed up` +
           `${f.repairsK ? `, less ${f.repairsK} of work` : ""}; the rest is ` +
-          [f.closingK ? `about ${f.closingK} to buy and resell` : "", f.holdingK ? `${f.holdingK} to hold it ${f.months} months` : "", "our profit and risk"].filter(Boolean).join(", "),
+          [f.closingK ? `${f.closingK} to buy and resell` : "", f.holdingK ? `${f.holdingK} to hold` : ""].filter(Boolean).join(", ") +
+          `${f.closingK || f.holdingK ? ", and" : ""} our profit and risk`,
         allowed: mathAllowedAmounts(m),
         hidden: Math.round(m.residual) || 0,
       };

@@ -5779,7 +5779,7 @@ test("a check-in started at noon goes before 5pm Pacific; a reply at 7pm still g
 
 /* ---------- the float: how we got there, a range, one question (2026-10-07) ---------- */
 
-import { outboundDescriptor } from "./reply-agent.js";
+import { outboundDescriptor, realmFloats } from "./reply-agent.js";
 import { outboundOpening } from "./conversation-prompt.js";
 import { SETUP_QUESTIONS } from "./shared/conversation-ai.js";
 import { mathAllowedAmounts, offerMath } from "./shared/offer-breakdown.js";
@@ -5802,14 +5802,14 @@ test("the float says how we got there, a range topped by our number, and one set
 
   const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
   const d = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: on, dossier: null });
-  assert.equal(d.math.line, "we base it on about 69% of the 500 it's worth fixed up, less 50 of work; the rest is about 38 to buy and resell, 26 to hold it 5 months, our profit and risk");
+  assert.equal(d.math.line, "we base it on 69% of the 500 it's worth fixed up, less 50 of work; the rest is 38 to buy and resell, 26 to hold, and our profit and risk");
   assert.equal(d.math.hidden, 91217);
   assert.equal(d.range.words, "the 280s to 295");
   assert.ok(SETUP_QUESTIONS[d.question.key]);
   const text = outboundOpening(d);
   assert.ok(text.includes(d.math.line) && text.includes('"the 280s to 295"') && text.includes(d.question.text), text);
   assert.match(text, /never a figure on profit and risk/);
-  assert.match(text, /under 300 characters/);
+  assert.match(text, /under 280 characters/);
   assert.doesNotMatch(text, /Don't volunteer the math/);
 
   // A re-quote is their numbers already: none of it.
@@ -5938,8 +5938,49 @@ test("a float preview carries the range, our math and one question, and writes n
     deps: { draft: async (args) => { seen = args.outbound; return { ...DRAFT, intent: "realm_check", reply: "Ran 12 Elm: we base it on about 69% of the 500 it's worth fixed up, less 50 of work; the rest is about 38 to buy and resell, 26 to hold it 5 months, our profit and risk, so the 280s to 295. If that's in the ballpark, anything I won't see in the photos?" }; } },
   });
   assert.equal(seen.range.words, "the 280s to 295");
-  assert.match(seen.math.line, /^we base it on about 69%/);
+  assert.match(seen.math.line, /^we base it on 69%/);
   assert.equal(seen.question.key, "hidden_issues");
   assert.equal(p.held, false, p.flags.join("; "));
   assert.equal(store.rows.size, before, "nothing filed in the outbox");
+});
+
+/* ---------- the float fits, and says only what's ours (preview, 2026-10-07) ---------- */
+
+// 14959 22nd Ave SW: offer 686,610, the range topped at 686 — and the gate
+// held "686" as a number not in the offer book.
+test("the top of a range we float is our number, so the gate lets it through", () => {
+  const calc = calculateOffers({ address: "14959 22nd Ave SW, Burien, WA", arv: 1115000, repairs: 140000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000, });
+  const offer = { id: "o7", address: "14959 22nd Ave SW, Burien, WA", contactId: "c1", cashAmount: 686610, calc: { ...calc, inputs: { ...calc.inputs, priceOverride: 686610 } }, status: "new", createdAt: iso(1000) };
+  const outbound = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: savedWith({ range: { enabled: true, pct: 5 } }), dossier: null });
+  assert.equal(outbound.range.words, "the 650s to 686");
+  const allowed = [...new Set([686610, 687000, 685000, 680000, 650000, ...[outbound.range.low, outbound.range.high]])];
+  const g = evaluateReplyGates({ draft: { intent: "realm_check", confidence: "high", needsHuman: false, reply: "Off the top of my head we'd be somewhere around the 650s to 686 on 14959 22nd. If that's in the ballpark, any other offers in yet?" },
+    party: "agent", ourAmount: 686610, ranges: [outbound.range], allowedAmounts: allowed });
+  assert.deepEqual(g.flags, []);
+  assert.ok(realmFloats({ offer, outbound }).includes(686000), "the realm check's own floats carry the top");
+});
+
+// 825 Livingston Bay Shore Dr: a 450K offer on a 1.19M ARV (capped well under
+// our formula) floated "we base it on about 44%". Too far under our usual
+// number to explain without inviting "why so low?" — no math, range and
+// question still go.
+test("an offer far under our formula floats without the math", () => {
+  const calc = calculateOffers({ address: "825 Livingston Bay Shore Dr", arv: 1192000, repairs: 71000, priceOverride: 450000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  const offer = { id: "o8", address: "825 Livingston Bay Shore Dr", contactId: "c1", cashAmount: 450000, calc, status: "new", createdAt: iso(1000) };
+  const d = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } }), dossier: null });
+  assert.equal(d.math, undefined);
+  assert.equal(d.range.words, "the 420s to 450");
+  assert.ok(d.question);
+});
+
+// 1731 Stephen St and 3837 Driftwood Dr came back at 308 and 305 characters
+// and were held as too long for a text.
+test("with all three on, the float's math line is short and the prompt leaves out the terms", () => {
+  const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
+  const d = outboundDescriptor({ kind: "realm_check", offer: floatOffer(), subject: null, saved: on, dossier: null });
+  assert.equal(d.math.line, "we base it on 69% of the 500 it's worth fixed up, less 50 of work; the rest is 38 to buy and resell, 26 to hold, and our profit and risk");
+  assert.ok(d.math.line.length <= 140, String(d.math.line.length));
+  const text = outboundOpening(d);
+  assert.doesNotMatch(text, /As-is and a quick close/);
+  assert.match(text, /under 280 characters/);
 });

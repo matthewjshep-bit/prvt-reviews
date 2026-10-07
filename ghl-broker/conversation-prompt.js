@@ -605,7 +605,7 @@ function openingFor(outbound) {
       const ask = o.question
         ? `End with exactly one question that also asks whether it's in the ballpark, e.g. "If that's in the ballpark, ${o.question.text}" — one question mark in the whole text. `
         : "";
-      const room = o.math || o.range || o.question ? "Keep the whole text under 300 characters. " : "";
+      const room = o.math || o.range || o.question ? "Keep the whole text under 280 characters. " : "";
       // A confident underwrite leads with our number, plainly — it's where our
       // analysis lands and the written offer follows a yes.
       if (o.confident && !theirs) {
@@ -614,7 +614,7 @@ function openingFor(outbound) {
             ? number
             : `Tell them in one short text — e.g. "based on our analysis we can likely do around ${o.amountK}ish on ${o.street || o.address}" — ` +
               `rounded to the nearest thousand or down (never up). `) +
-          `As-is and a quick close if the terms are listed. ` +
+          (o.math ? "" : `As-is and a quick close if the terms are listed. `) +
           (ask || `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. `) +
           (o.math ? "" : `Don't volunteer the math (ARV, repairs) in this first text. `) +
           `Don't call it final. ${room}Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
