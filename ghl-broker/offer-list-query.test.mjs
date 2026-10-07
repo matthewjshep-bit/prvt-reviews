@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { offerListQuery, lastActivityQuery } from "./store.js";
-import { OFFER_LIST_FIELDS } from "./shared/offer-status.js";
+import { OFFER_LIST_FIELDS, leanOfferDoc } from "./shared/offer-status.js";
 
 // Every $n in the statement, in the order it appears.
 const placeholders = (text) => [...text.matchAll(/\$(\d+)/g)].map((m) => Number(m[1]));
@@ -77,4 +77,20 @@ test("the contact filter is optional and always newest-first", () => {
   assert.deepEqual(one.params, ["loc", "c1", 50]);
 
   for (const q of [all, one]) assert.match(q.text, /order by created_at desc/);
+});
+
+test("the file store trims a lean read the way Postgres does", () => {
+  const doc = {
+    id: "o1", locationId: "loc", cashAmount: 295000, status: "sent",
+    calc: { inputs: { arv: 500000 }, settings: { aiApiKey: "sk-secret" } },
+    snapshot: { subjectInfo: { homeType: "SINGLE_FAMILY" }, comps: { result: { big: true } } },
+    scope: [{ id: "paint" }],
+  };
+  const row = leanOfferDoc(doc);
+  // Only the list fields, plus the one derived key the SQL builds.
+  for (const k of Object.keys(row)) assert.ok(OFFER_LIST_FIELDS.includes(k) || k === "subjectHomeType" || k === "calc" || k === "draftInputs", k);
+  assert.equal(row.subjectHomeType, "SINGLE_FAMILY");
+  assert.equal(row.snapshot, undefined);
+  assert.equal(row.scope, undefined);
+  assert.doesNotMatch(JSON.stringify(row), /sk-secret/);
 });

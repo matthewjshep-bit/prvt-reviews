@@ -535,6 +535,22 @@ export const OFFER_LIST_FIELDS = [
   "psaPdfUrl", "contractPdfUrl", "assignmentPdfUrl", "netSheetPdfUrl",
 ];
 
+/**
+ * leanOfferDoc(doc) → what Postgres hands back for a lean read
+ *
+ * The JS twin of the projection in store.js (leanDocSql). The file backend
+ * runs every lean read through it, so a test on the JSON store sees exactly
+ * the trimmed doc production sees — a field the SQL drops is dropped here too,
+ * instead of quietly surviving in tests and missing on prod.
+ */
+export function leanOfferDoc(doc) {
+  if (!doc || typeof doc !== "object") return doc;
+  const out = {};
+  for (const k of OFFER_LIST_FIELDS) if (k in doc) out[k] = doc[k];
+  out.subjectHomeType = doc.snapshot?.subjectInfo?.homeType ?? doc.snapshot?.comps?.result?.info?.homeType ?? doc.draft?.subjectInfo?.homeType ?? null;
+  return out;
+}
+
 // Trim an offer to a table row. Two derived keys ride along:
 //
 //   expiresAt  the ⏱ marker needs calc.settings.{offerExpires,validityDays},
