@@ -22,7 +22,7 @@ import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
-import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor } from "./shared/current-offer.js";
+import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor, liveRange, rangeWords } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { emailContextText } from "./shared/gmail.js";
 import { showingContextLines } from "./shared/showing.js";
@@ -135,6 +135,8 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
   const amounts = new Set();
   // Figures the bot must never say: profit and risk, when we show our work.
   const hidden = new Set();
+  // Ranges we floated (2026-10-07): the gate holds a bottom said on its own.
+  const ranges = [];
   // Our number on each house — the come-down when there is one — for the
   // reply gate's "never more than ours" check.
   const numbers = [];
@@ -172,6 +174,10 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     // The walk only ties to the number in play when that number is the
     // book's own — not after we came down by text, and not a price set above
     // what the costs leave room for. Then the method is described, not added up.
+    // A range we floated on the book's number: its top is our number, and
+    // the bottom may be said again only as the bottom of that range.
+    const range = amount && !down ? liveRange(o) : null;
+    if (range) { amounts.add(Math.round(range.low)); ranges.push({ low: range.low, high: range.high }); }
     const math = showMath && amount ? (o.math || compactMath(offerMath(o))) : null;
     const ties = Boolean(math) && !down && !(math.premium > 0) && Math.abs(math.total - amount) < 1000;
     if (showMath) {
@@ -207,6 +213,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         // checking the numbers, and "coming shortly" would be a promise.
         : status === "draft" ? (o.autoUnderwrite?.held?.length ? "numbers held for our team's review (no number yet)" : "still being underwritten (no number yet)")
         : "no amount recorded",
+      range ? `— we floated "${rangeWords(range)}" by text ${dateWord(range.at)}: our number is ${fmtMoney(amount)}, the top of it; the bottom was never an offer on its own (never say ${Math.round(range.low / 1000)} by itself), and if they name a number inside it, a person decides` : "",
       asking ? `(asking ${fmtMoney(asking)})` : "",
       terms ? `terms: ${terms}` : "",
       showMath && ties
@@ -250,7 +257,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
   // A hidden figure that is also a figure we may say (profit and risk equal
   // to the work, say) can't be told apart in a text, so it isn't hidden.
   for (const n of hidden) if ([...amounts].some((a) => Math.abs(a - n) < 1000)) hidden.delete(n);
-  return { text: lines.join("\n"), amounts: [...amounts], stale: [...stale], hidden: [...hidden], count: rows.length, numbers };
+  return { text: lines.join("\n"), amounts: [...amounts], stale: [...stale], hidden: [...hidden], ranges, count: rows.length, numbers };
 }
 
 // The tail of a history ledger — the properties they've sent or discussed
@@ -396,7 +403,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     offMarketLines({ offers, events, now }),
   ].filter(Boolean).join("\n\n");
   return {
-    text, amounts: [...amounts].filter((n) => !book.stale.includes(n)), forbiddenAmounts: [], staleAmounts: book.stale, hiddenAmounts: book.hidden, offers: book,
+    text, amounts: [...amounts].filter((n) => !book.stale.includes(n)), forbiddenAmounts: [], staleAmounts: book.stale, hiddenAmounts: book.hidden, ranges: book.ranges, offers: book,
     summary: { offers: book.count, fields: fields.length, hook: Boolean(hookAddress), history: history.length },
   };
 }

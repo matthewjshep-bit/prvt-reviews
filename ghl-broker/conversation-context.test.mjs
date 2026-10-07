@@ -505,3 +505,16 @@ test("on the Postgres book the bot still sees the ARV behind our number", () => 
   assert.ok(ctx.amounts.includes(500000), "the ARV may be said when we show our work");
   assert.ok(ctx.amounts.includes(50000), "and so may the rehab");
 });
+
+test("a range we floated is in the book: our number is its top, and a letter after it makes it history", () => {
+  const offer = { id: "o1", address: "12 Elm St, Renton, WA", cashAmount: 295000, status: "new", createdAt: "2026-09-01T00:00:00Z",
+    proactive: { realmCheckAt: "2026-09-02T00:00:00Z", range: { low: 280000, high: 295000, step: 10000, at: "2026-09-02T00:00:00Z" } } };
+  const ctx = buildAgentContext({ offers: [offer], now: NOW });
+  assert.match(ctx.text, /we floated "the 280s to 295" by text .*our number is \$295,000, the top of it; the bottom was never an offer on its own/);
+  assert.deepEqual(ctx.ranges, [{ low: 280000, high: 295000 }]);
+  assert.ok(ctx.amounts.includes(280000), "the bottom may be said again, as the bottom of the range");
+  const lettered = { ...offer, status: "sent", sends: [{ ts: "2026-09-03T00:00:00Z", channels: ["sms"] }] };
+  const after = buildAgentContext({ offers: [lettered], now: NOW });
+  assert.doesNotMatch(after.text, /we floated/);
+  assert.deepEqual(after.ranges, []);
+});

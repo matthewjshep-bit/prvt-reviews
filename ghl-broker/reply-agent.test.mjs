@@ -5776,3 +5776,83 @@ test("a check-in started at noon goes before 5pm Pacific; a reply at 7pm still g
   const reply = pacific(scheduleFor({ config: cfg, now: seven, intent: "question", replyLength: 40, random: () => 0 }));
   assert.ok(reply.d === 5 && reply.hh === 19, JSON.stringify(reply));
 });
+
+/* ---------- the float: how we got there, a range, one question (2026-10-07) ---------- */
+
+import { outboundDescriptor } from "./reply-agent.js";
+import { outboundOpening } from "./conversation-prompt.js";
+import { SETUP_QUESTIONS } from "./shared/conversation-ai.js";
+import { mathAllowedAmounts, offerMath } from "./shared/offer-breakdown.js";
+
+const floatOffer = () => {
+  const calc = calculateOffers({ address: "12 Elm St, Renton, WA 98056", arv: 500000, repairs: 50000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  return { id: "o1", address: "12 Elm St, Renton, WA 98056", contactId: "c1", cashAmount: calc.offers.cash.amount, calc, status: "new", createdAt: iso(1000),
+    autoUnderwrite: { passed: true, compsUsed: 5 } };
+};
+const savedWith = (rc) => ({ ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi,
+  parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent,
+    realmCheck: { ...(STARTER_SAVED.conversationAi.parties.agent.realmCheck || {}), enabled: true, ...rc } } } } });
+
+test("the float says how we got there, a range topped by our number, and one setup question — when switched on", () => {
+  const offer = floatOffer();
+  const off = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: savedWith({}), dossier: null });
+  assert.equal(off.math, undefined);
+  assert.equal(off.range, undefined);
+  assert.equal(off.question, undefined);
+
+  const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
+  const d = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: on, dossier: null });
+  assert.equal(d.math.line, "we base it on about 69% of the 500 it's worth fixed up, less 50 of work; the rest is about 38 to buy and resell, 26 to hold it 5 months, our profit and risk");
+  assert.equal(d.math.hidden, 91217);
+  assert.equal(d.range.words, "the 280s to 295");
+  assert.ok(SETUP_QUESTIONS[d.question.key]);
+  const text = outboundOpening(d);
+  assert.ok(text.includes(d.math.line) && text.includes('"the 280s to 295"') && text.includes(d.question.text), text);
+  assert.match(text, /never a figure on profit and risk/);
+  assert.match(text, /under 300 characters/);
+  assert.doesNotMatch(text, /Don't volunteer the math/);
+
+  // A re-quote is their numbers already: none of it.
+  const rq = outboundDescriptor({ kind: "realm_check", offer, subject: { requote: true }, saved: on, dossier: null });
+  assert.equal(rq.math ?? rq.range ?? rq.question, undefined);
+  // They gave us their read: the float is tied to theirs, never our math.
+  const theirs = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: on, dossier: { have: { arv: { value: 520000 } } } });
+  assert.equal(theirs.math, undefined);
+  assert.equal(theirs.range.words, "the 280s to 295");
+  assert.notEqual(theirs.question?.key, "their_read", "and never asks what they already told us");
+});
+
+test("a float of the 280s to 295 with our math passes the gate; the bottom on its own never does", () => {
+  const offer = floatOffer();
+  const reply = "Ran 12 Elm: we base it on about 69% of the 500 it's worth fixed up, less 50 of work; the rest is about 38 to buy and resell, " +
+    "26 to hold it 5 months, our profit and risk, so the 280s to 295. If that's in the ballpark, anything I won't see in the photos?";
+  const base = { party: "agent", ourAmount: 295000, hiddenAmounts: [91217], ranges: [{ low: 280000, high: 295000 }],
+    allowedAmounts: [295000, 294000, 290000, 280000, ...mathAllowedAmounts(offerMath(offer))] };
+  const draft = (r) => ({ intent: "realm_check", confidence: "high", needsHuman: false, propertyAddress: "12 Elm St", reply: r });
+  assert.deepEqual(evaluateReplyGates({ ...base, draft: draft(reply) }).flags, []);
+  for (const alone of ["We could probably do 280 on 12 Elm St.", "Best case 280k on 12 Elm."]) {
+    assert.ok(evaluateReplyGates({ ...base, draft: draft(alone) }).flags.some((f) => /bottom of the range we floated/.test(f)), alone);
+  }
+  // Above the top is above our number, range or not.
+  assert.ok(evaluateReplyGates({ ...base, draft: draft("we'd be in the 290s to 310 on 12 Elm St") }).flags.some((f) => /above our/.test(f)));
+});
+
+test("a range that went out is remembered on the offer, and only when the text still says it", async () => {
+  const mk = (id) => ({ ...openDraft(), id, party: "agent", intent: "realm_check", reply: "On 12 Elm we'd land in the 280s to 295. In the ballpark?",
+    outbound: { kind: "realm_check", offerId: "o1", address: "12 Elm St", amount: 295000, range: { low: 280000, high: 295000, step: 10000 } } });
+  const store = fakeStore([mk("d1"), mk("d2")]);
+  const offers = new Map([["o1", { ...floatOffer(), proactive: { realmCheckAt: iso(500) } }]]);
+  store.getOffer = async (id) => offers.get(id) || null;
+  store.updateOffer = async (id, doc) => { offers.set(id, doc); return true; };
+  const client = { call: async () => ({ messageId: "m1" }) };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+  const { at, ...range } = offers.get("o1").proactive.range;
+  assert.deepEqual(range, { low: 280000, high: 295000, step: 10000 });
+  assert.ok(at);
+  assert.ok(offers.get("o1").proactive.realmCheckAt, "the float's own stamp is kept");
+
+  // Edited down to a single number before it went: no range to remember.
+  offers.set("o1", { ...floatOffer(), proactive: { realmCheckAt: iso(500) } });
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", text: "On 12 Elm we'd be around 295ish. In the ballpark?", live: true });
+  assert.equal(offers.get("o1").proactive.range, undefined);
+});

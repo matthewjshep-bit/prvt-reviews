@@ -592,23 +592,42 @@ function openingFor(outbound) {
           `Ask whether that works for the seller. ${CONTINUE} Set intent to realm_check.`;
       }
       const theirs = [o.theirArvK ? `an ARV around ${o.theirArvK}` : "", o.theirRehabK ? `about ${o.theirRehabK} of work` : ""].filter(Boolean).join(" and ");
+      // 2026-10-07 (the No Fluff setup call): how we got there, then the
+      // number as a range topped by ours, then one question. Each piece is
+      // behind its own switch; without them the float reads as before.
+      const how = o.math
+        ? `Start with how we got there, in one clause, using exactly these figures and no others: "${o.math.line}" — in thousands, no dollar signs, ` +
+          `never a figure on profit and risk, never the words fee, assignment, wholesale or spread. `
+        : "";
+      const number = o.range
+        ? `Give the number as a range, written exactly "${o.range.words}" — its top is our number. Never go above the top, and never say the bottom on its own. `
+        : "";
+      const ask = o.question
+        ? `End with exactly one question that also asks whether it's in the ballpark, e.g. "If that's in the ballpark, ${o.question.text}" — one question mark in the whole text. `
+        : "";
+      const room = o.math || o.range || o.question ? "Keep the whole text under 300 characters. " : "";
       // A confident underwrite leads with our number, plainly — it's where our
       // analysis lands and the written offer follows a yes.
       if (o.confident && !theirs) {
-        return `${START} Our analysis on ${o.address} is done and we're confident in it: it lands at ${o.amountK}. ` +
-          `Tell them in one short text — e.g. "based on our analysis we can likely do around ${o.amountK}ish on ${o.street || o.address}" — ` +
-          `rounded to the nearest thousand or down (never up), as-is and a quick close if the terms are listed. ` +
-          `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. Don't volunteer the math ` +
-          `(ARV, repairs) in this first text and don't call it final. Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
+        return `${START} Our analysis on ${o.address} is done and we're confident in it: it lands at ${o.amountK}. ` + how +
+          (o.range
+            ? number
+            : `Tell them in one short text — e.g. "based on our analysis we can likely do around ${o.amountK}ish on ${o.street || o.address}" — ` +
+              `rounded to the nearest thousand or down (never up). `) +
+          `As-is and a quick close if the terms are listed. ` +
+          (ask || `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. `) +
+          (o.math ? "" : `Don't volunteer the math (ARV, repairs) in this first text. `) +
+          `Don't call it final. ${room}Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
       }
-      return `${START} ${theirs ? `They came back on ${o.address} with ${theirs}.` : `We have numbers on ${o.address}.`} ` +
-        `Give them a ROUGH, OFF-THE-TOP-OF-YOUR-HEAD number — ${o.amountK} — and be explicit that is exactly what it is: ` +
-        `a first pass, not an underwritten offer. ` +
-        (theirs ? `Tie it to THEIR numbers, e.g. "with your ARV and that kind of rehab, off the top of my head we'd probably be somewhere around ${o.amountK}". ` : "") +
+      return `${START} ${theirs ? `They came back on ${o.address} with ${theirs}.` : `We have numbers on ${o.address}.`} ` + how +
+        `Give them a ROUGH, OFF-THE-TOP-OF-YOUR-HEAD number — ${o.range ? `"${o.range.words}"` : o.amountK} — and be explicit that is exactly what it is: ` +
+        `a first pass, not an underwritten offer. ` + number +
+        (theirs ? `Tie it to THEIR numbers, e.g. "with your ARV and that kind of rehab, off the top of my head we'd probably be somewhere around ${o.range ? o.range.words : o.amountK}". ` : "") +
         `NEVER present it as an offer, a maximum, or a final number — no "we can do", no "our offer is". ` +
-        `Ask whether that's in the realm for the seller. If they come back that it's nowhere close, we can run a full ` +
+        (ask || `Ask whether that's in the realm for the seller. `) +
+        `If they come back that it's nowhere close, we can run a full ` +
         `underwrite — so it's fine to say you'd be glad to dig into it properly. ` +
-        `Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
+        `${room}Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
     }
 
     // The cold open. There is no thread to continue: this is the first thing
