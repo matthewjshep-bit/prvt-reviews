@@ -5923,3 +5923,23 @@ test("the nightly audit never releases their number inside our range as a holdin
   assert.equal(out.send, false);
   assert.equal(out.code, "in_range");
 });
+
+import { previewProactive } from "./reply-agent.js";
+test("a float preview carries the range, our math and one question, and writes nothing", async () => {
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const offer = floatOffer();
+  store.listOffers = async () => [offer];
+  let seen;
+  const before = store.rows.size;
+  const p = await previewProactive({
+    client, locationId: "LOC", store, contactId: "c1", kind: "realm_check", offer,
+    saved: savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true, ask: ["hidden_issues"] } }),
+    deps: { draft: async (args) => { seen = args.outbound; return { ...DRAFT, intent: "realm_check", reply: "Ran 12 Elm: we base it on about 69% of the 500 it's worth fixed up, less 50 of work; the rest is about 38 to buy and resell, 26 to hold it 5 months, our profit and risk, so the 280s to 295. If that's in the ballpark, anything I won't see in the photos?" }; } },
+  });
+  assert.equal(seen.range.words, "the 280s to 295");
+  assert.match(seen.math.line, /^we base it on about 69%/);
+  assert.equal(seen.question.key, "hidden_issues");
+  assert.equal(p.held, false, p.flags.join("; "));
+  assert.equal(store.rows.size, before, "nothing filed in the outbox");
+});

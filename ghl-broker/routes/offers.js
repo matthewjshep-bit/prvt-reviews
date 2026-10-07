@@ -113,7 +113,7 @@ import {
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, UW_ENRICH_CANDIDATES, paperAlreadyOut,
 } from "../auto-underwrite.js";
 import {
-  startReply, startProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
+  startReply, startProactive, previewProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
   stopMachineTextsForOffer, stopDealOutreach,
 } from "../reply-agent.js";
@@ -6023,6 +6023,20 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!OPEN_STATUSES.has(effectiveStatus(offer))) return res.status(409).json({ error: `nothing to float on a ${effectiveStatus(offer)} offer` });
       if (!offer.contactId) return res.status(409).json({ error: "the offer has no contact to text" });
       const fresh = (await store.getOfferSettings(locationId)) || {};
+      // { preview: true }: draft it and show it, nothing saved or sent (one
+      // model call). `realmCheck` tries the float's switches without saving
+      // them — how a new way of floating gets read on real offers first.
+      if (req.body?.preview === true) {
+        const rcOver = req.body?.realmCheck && typeof req.body.realmCheck === "object" ? req.body.realmCheck : null;
+        const cai = fresh.conversationAi || {};
+        const agent = cai.parties?.agent || {};
+        const saved = rcOver
+          ? { ...fresh, conversationAi: { ...cai, parties: { ...(cai.parties || {}), agent: { ...agent, realmCheck: { ...(agent.realmCheck || {}), ...rcOver } } } } }
+          : fresh;
+        const p = await previewProactive({ client, locationId, saved, store, contactId: offer.contactId, kind, offer });
+        return res.json({ ok: true, kind, preview: true, skipped: p.skipped || null, contactName: p.contactName || offer.contactName || "",
+          reply: p.reply || "", chars: String(p.reply || "").length, held: Boolean(p.held), flags: p.flags || [] });
+      }
       const r = await startProactive({
         client, locationId, saved: fresh, store, contactId: offer.contactId, kind, offer,
         sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),

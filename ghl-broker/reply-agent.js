@@ -2844,7 +2844,13 @@ export async function previewProactive({ client, locationId, saved, store, conta
   const spec = OUTBOUND_KINDS[kind];
   if (!spec) return { skipped: `unknown outbound kind ${kind}` };
   const party = spec.party;
-  const ready = spec.ready({ offer, subject, config, dossier: null });
+  // The same read of their take the queued float makes (startProactive), so
+  // a preview asks the question the real one would.
+  let dossier = null;
+  if (kind === "realm_check" && offer?.address) {
+    try { dossier = propertyDossier(await store.listContactEvents(locationId, contactId, { limit: 200 }), offer.address); } catch { dossier = null; }
+  }
+  const ready = spec.ready({ offer, subject, config, dossier });
   if (ready !== true) return { skipped: ready };
   const a = await assembleConversation({
     client, locationId, saved, store, contactId, message: "", channel: "sms", explicitParty: party, now: Date.now(), warnings: [], aiApiKey,
@@ -2854,7 +2860,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
   const askedOff = optOutInTranscript(a.transcript, config.optOut);
   if (askedOff) return { skipped: `they asked to be left alone on ${askedOff.at}`, contactName: a.contactName };
   const { context } = a;
-  const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier: null });
+  const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier });
   const previewArgs = {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
     contact: { name: a.contactName || name, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
