@@ -96,6 +96,24 @@ export function floatSentAt(drafts = [], offerId) {
 }
 
 /**
+ * floatSentIndex(drafts) → Map<offerId, iso>
+ *
+ * floatSentAt for every offer at once — the Offers list reads the whole
+ * book, and one pass over the drafts beats one filter per row.
+ */
+export function floatSentIndex(drafts = []) {
+  const out = new Map();
+  for (const d of drafts || []) {
+    if (d?.status !== "sent" || d.outbound?.kind !== "realm_check" || !d.outbound?.offerId) continue;
+    const t = d.sentAt || d.updatedAt;
+    if (ms(t) == null) continue;
+    const prev = out.get(d.outbound.offerId);
+    if (!prev || String(t) > String(prev)) out.set(d.outbound.offerId, t);
+  }
+  return out;
+}
+
+/**
  * answeredSince(at, { drafts, events }) → boolean
  *
  * They said something after `at`: a text the bot drafted a reply to, a text

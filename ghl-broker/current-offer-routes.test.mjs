@@ -156,3 +156,16 @@ test("taking back an agreed price refuses a deal — that price lives on the con
   const o = await seed({ deal: { stage: "under_contract", contractPrice: 300000, createdAt: "2026-10-01T00:00:00Z" } });
   assert.equal((await req("DELETE", `/api/offers/${o.id}/agreed`)).status, 409);
 });
+
+// The Offers page's "Not sent" tab says when our number was floated
+// (Matt, 2026-10-07) — the float is a text, not a field on the offer.
+test("the offers list says when our number was floated, when activity is asked for", async () => {
+  const o = await seed({ createdAt: "2026-10-01T16:00:00Z", status: "new", sends: [] });
+  await store.createReplyDraft({ locationId: LOC, contactId: "contact-1", status: "sent", channel: "sms", reply: "x",
+    sentAt: "2026-10-02T17:00:00Z", outbound: { kind: "realm_check", offerId: o.id } });
+  const withIt = await req("GET", "/api/offers?contact_id=contact-1&lean=1&activity=1");
+  assert.equal(withIt.status, 200, JSON.stringify(withIt.json).slice(0, 300));
+  assert.equal(withIt.json.offers.find((x) => x.id === o.id).floatedAt, "2026-10-02T17:00:00Z");
+  const without = await req("GET", "/api/offers?contact_id=contact-1&lean=1");
+  assert.equal(without.json.offers.find((x) => x.id === o.id).floatedAt, undefined);
+});
