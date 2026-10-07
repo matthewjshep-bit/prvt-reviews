@@ -26,7 +26,7 @@ import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
 import ConversationAi from "./ConversationAi.jsx";
 import PipelineView from "./PipelineView.jsx";
-import InPlayView from "./InPlayView.jsx";
+import Tier1View from "./Tier1View.jsx";
 import FlowView from "./FlowView.jsx";
 import LineView from "./LineView.jsx";
 import AutopilotView from "./AutopilotView.jsx";
@@ -79,9 +79,10 @@ const NAV =
     : APP_MODE === "dashboard"
     ? [
         // The Desk (2026-10-02): one row per person — Call · Decide · Machine.
-        // In play: every agent with something live (the board is its "By house").
+        // Tier 1 (2026-10-07): GHL's Tier 1 stage, screened, worked with
+        // Pass / Offer. It replaced "In play", which counted any open offer.
         { view: "pipeline", label: "Desk" },
-        { view: "inplay", label: "In play" },
+        { view: "tier1", label: "Tier 1" },
       ]
     : APP_MODE === "autopilot"
     ? [
@@ -128,8 +129,9 @@ const APP_TITLE =
 
 // "new" is reachable but not a tab — it's the primary button in the header and
 // the target of the ?offer_id= deep link, so it still has to be a valid view.
-// "board" (Today's old tab) still opens: it is In play, by house.
-const VIEWS = new Set([...NAV.map((n) => n.view), "new", ...(APP_MODE === "dashboard" ? ["board"] : [])]);
+// "board" (Today's old tab) still opens: the lane board, by house.
+// "inplay" (2026-10-02 → 10-07) opens Tier 1, which replaced it.
+const VIEWS = new Set([...NAV.map((n) => n.view), "new", ...(APP_MODE === "dashboard" ? ["board", "inplay"] : [])]);
 
 function readParam(name) {
   try {
@@ -181,7 +183,7 @@ function BrandLockup({ settings, fallback }) {
 export default function OfferApp() {
   const [view, setView] = useState(() => {
     const v = readParam("view");
-    return VIEWS.has(v) ? v : NAV[0].view;
+    return VIEWS.has(v) ? (v === "inplay" ? "tier1" : v) : NAV[0].view;
   });
   const [initialContactId, setInitialContactId] = useState(() => readParam("contact_id"));
   const [editing, setEditing] = useState(null); // draft/offer being reopened in the form
@@ -233,7 +235,7 @@ export default function OfferApp() {
   useEffect(() => {
     const onPop = (e) => {
       const v = e.state?.view || readParam("view");
-      if (VIEWS.has(v)) setView(v);
+      if (VIEWS.has(v)) setView(v === "inplay" ? "tier1" : v);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -344,8 +346,8 @@ export default function OfferApp() {
         )}
         {view === "conversation" && <ConversationAi settings={settings} />}
         {view === "pipeline" && <PipelineView section="queue" settings={settings} />}
-        {view === "inplay" && <InPlayView settings={settings} />}
-        {view === "board" && <InPlayView settings={settings} initialMode="house" />}
+        {view === "tier1" && <Tier1View settings={settings} />}
+        {view === "board" && <PipelineView section="board" settings={settings} />}
         {view === "controls" && <AutopilotView />}
         {view === "lessons" && <LessonsTab onSettingsSaved={(s) => setSettings(s)} />}
         {view === "flow" && <FlowView />}
