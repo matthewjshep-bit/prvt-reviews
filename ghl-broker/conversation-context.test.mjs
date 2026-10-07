@@ -492,3 +492,16 @@ test("a realm yes to a higher number is not read as a yes to the number we're at
   assert.doesNotMatch(r.text, /agent said the number is in the realm/);
   assert.match(r.text, /said \$289,750 was in the realm.*NOT agreed to \$226,000/);
 });
+
+import { leanOfferDoc, toListOffer } from "./shared/offer-status.js";
+import { calculateOffers } from "./shared/offer-calc.js";
+
+test("on the Postgres book the bot still sees the ARV behind our number", () => {
+  const calc = calculateOffers({ address: "12 Elm St, Renton, WA", arv: 500000, repairs: 50000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  const full = { id: "o1", address: "12 Elm St, Renton, WA", cashAmount: calc.offers.cash.amount, status: "sent", createdAt: "2026-09-20T00:00:00Z", calc };
+  // Exactly what loadAgentContext gets back from store.listOffers({ lean: true }) on prod.
+  const ctx = buildAgentContext({ offers: [toListOffer(leanOfferDoc(full))], now: NOW, showMath: true });
+  assert.match(ctx.text, /\[our math:/);
+  assert.ok(ctx.amounts.includes(500000), "the ARV may be said when we show our work");
+  assert.ok(ctx.amounts.includes(50000), "and so may the rehab");
+});

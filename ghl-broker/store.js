@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dbEnabled, query, migrate } from "./db.js";
-import { OFFER_LIST_FIELDS, toListOffer, leanOfferDoc, effectiveStatus, OPEN_STATUSES } from "./shared/offer-status.js";
+import { OFFER_LIST_FIELDS, LEAN_CALC_SETTINGS, LEAN_CASH_FIELDS, toListOffer, leanOfferDoc, effectiveStatus, OPEN_STATUSES } from "./shared/offer-status.js";
 
 // pg hands bigint back as a string and real as a float; the API speaks numbers.
 const videoRow = (r) => ({
@@ -42,11 +42,26 @@ const uuid = () => crypto.randomUUID();
 // `subjectHomeType` rides along so a row with no kind stored can still say
 // what Zillow called it (shared/asset-type.js) — the snapshot it lives in
 // is the weight this trim exists to drop.
+//
+// `calc` is a slice: the inputs, an allowlist of the frozen settings
+// (LEAN_CALC_SETTINGS — the settings hold API keys, so never a denylist) and
+// a few cash scalars. Without it every lean row lost its ARV, repairs, list
+// price and terms, and the bot's "show our work" never had a figure to show.
+// `draftInputs` is a held draft's figures (its own key: `draft` means draft).
 function leanDocSql(ph) {
+  const only = (path, keys) => `coalesce((select jsonb_object_agg(k, v)
+             from jsonb_each(case when jsonb_typeof(doc #> '${path}') = 'object' then doc #> '${path}' end) as x(k, v)
+             where k = any(${ph(keys)}::text[])), '{}'::jsonb)`;
   return `(coalesce((select jsonb_object_agg(k, v) from jsonb_each(doc) as e(k, v)
                   where k = any(${ph(OFFER_LIST_FIELDS)}::text[])), '{}'::jsonb)
         || jsonb_build_object('subjectHomeType', coalesce(doc #>> '{snapshot,subjectInfo,homeType}',
-             doc #>> '{snapshot,comps,result,info,homeType}', doc #>> '{draft,subjectInfo,homeType}'))) as doc`;
+             doc #>> '{snapshot,comps,result,info,homeType}', doc #>> '{draft,subjectInfo,homeType}'))
+        || jsonb_build_object('calc', jsonb_build_object(
+             'inputs', doc #> '{calc,inputs}',
+             'settings', ${only("{calc,settings}", LEAN_CALC_SETTINGS)}
+               || jsonb_build_object('psa', jsonb_build_object('closingDays', doc #> '{calc,settings,psa,closingDays}')),
+             'offers', jsonb_build_object('cash', ${only("{calc,offers,cash}", LEAN_CASH_FIELDS)})),
+           'draftInputs', doc #> '{draft,inputs}')) as doc`;
 }
 
 export function offerListQuery({ locationId, contactId = null, limit = 50, lean = false }) {
