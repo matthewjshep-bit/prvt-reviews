@@ -60,7 +60,7 @@ import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone } from "./shared/held-underwrites.js";
-import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows } from "./shared/current-offer.js";
+import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
@@ -1071,7 +1071,7 @@ export function decideAutoSend({ gate, party = "agent", intent = "other", channe
 // has the thread right now. So is `bot_stopped`: you stopped the bot on them,
 // and a check-in clock, a kept-scheduled reply or an audit release would each
 // be the machine texting them anyway.
-export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed", "not_allowlisted", "stale_number"]);
+export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed", "not_allowlisted", "stale_number", "in_range"]);
 
 // The nightly audit's loosening (Matt, 2026-09-16: "fire where it can"). A
 // draft the money guard passed, that the model didn't flag for a person,
@@ -1084,9 +1084,9 @@ export const HELD_FOR_A_PERSON = new Set(["gates", "never_auto", "guard_failed",
 export const RELEASE_QUIET = new Set(["opt_out", "small_talk", "media", "partner_answer"]);
 export function releaseForAudit({ auto, gate, draft, deps }) {
   if (!deps?.releaseHeld || auto?.send) return auto;
-  // A paper hold (stale_number) is a number question, like the gates: never
-  // released as "a holding reply".
-  if (!HELD_FOR_A_PERSON.has(auto?.code) || auto.code === "gates" || auto.code === "stale_number") return auto;
+  // A paper hold (stale_number) and their number inside our range (in_range)
+  // are number questions, like the gates: never released as "a holding reply".
+  if (!HELD_FOR_A_PERSON.has(auto?.code) || ["gates", "stale_number", "in_range"].includes(auto.code)) return auto;
   // A counter that names more than our number is never "a holding reply".
   if (gate?.overOffer?.length) return auto;
   // "Locked but clean" is how the gates report a never-auto intent whose
@@ -3209,6 +3209,25 @@ async function runReply(job, ctx) {
     }
   }
 
+  // A number inside the range we floated (2026-10-07): "285 works" after
+  // "the 280s to 295". Under our number, so not a counter; a number of
+  // theirs, so not a yes to ours. A person decides — the letter at our
+  // number or a revise to theirs — and nothing files it as countered. A
+  // plain yes is still a yes at the top; above the top is still a counter.
+  let inRange = null;
+  if (party === "agent" && !isCall && ["counter", "realm_yes", "acceptance", "question", "other"].includes(draft.intent)) {
+    const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const open = currentOffers(book).filter(isNegotiable);
+    const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
+    const range = picked ? liveRange(picked) : null;
+    const hit = range ? namedInRange({ range, message: job.message }) : null;
+    if (hit) {
+      inRange = { offerId: picked.id, amount: hit.amount, low: range.low, high: range.high };
+      draft = { ...draft, intent: "realm_yes", reclassifiedFrom: draft.intent, counterAmount: 0, inRange };
+      job.intent = draft.intent;
+    }
+  }
+
   // A counter far past what we'd pay is a pass, not a negotiation. Jesse
   // (2026-09-14): "They can't take that offer. Their lowest at this time is
   // $700k" against our $550k — the band had no room (our number was already
@@ -3832,6 +3851,24 @@ async function runReply(job, ctx) {
         if (typeof deps.markPaperHeld === "function") await deps.markPaperHeld({ offerId: cur.id, check, draftId: job.id }).catch(() => {});
         warnings.push(`paper held: ${check.reason}`);
       }
+    }
+  }
+
+  // Their number inside our range waits for a person (see inRange above):
+  // the paper at our number and a revise to theirs are both one click, and
+  // neither goes by itself.
+  if (inRange && party === "agent") {
+    const theirs = fmtMoney(inRange.amount);
+    const moved = plan.auto.filter((x) => PAPER_ACTIONS.has(x.type))
+      .map((x) => ({ ...x, mode: "ask", why: `${x.why ? `${x.why} — ` : ""}at our ${fmtMoney(inRange.high)}; they named ${theirs}` }));
+    plan.auto = plan.auto.filter((x) => !PAPER_ACTIONS.has(x.type));
+    plan.suggested.push(...moved);
+    if (inRange.amount < inRange.high && !plan.suggested.some((x) => x.type === "revise_offer_to_counter")) {
+      plan.suggested.push({ id: `a-range-${job.id}`, type: "revise_offer_to_counter", mode: "ask", status: "pending", party, amount: inRange.amount,
+        via: "range", why: `they named ${theirs} inside the range we floated (${kText(inRange.low)}–${kText(inRange.high)}) — revise to it, then send the letter there` });
+    }
+    if (!a.hold?.held) {
+      auto = { send: false, code: "in_range", reason: `needs a person: they named ${theirs} inside the range we floated (${kText(inRange.low)}–${kText(inRange.high)}) — write it at theirs, or hold at ours` };
     }
   }
 

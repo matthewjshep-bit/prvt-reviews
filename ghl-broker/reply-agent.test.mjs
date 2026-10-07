@@ -5856,3 +5856,70 @@ test("a range that went out is remembered on the offer, and only when the text s
   await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", text: "On 12 Elm we'd be around 295ish. In the ballpark?", live: true });
   assert.equal(offers.get("o1").proactive.range, undefined);
 });
+
+// "285 works" after we floated "the 280s to 295" (2026-10-07). Under our
+// number, so not a counter; a number of theirs, so not a yes to ours. A
+// person decides: the letter at our number and a revise to theirs are both
+// offered, neither goes by itself, and nothing files it as countered.
+test("285 after a 280s–295 float waits for you with revise-to-285 and send-at-295, never as a counter", async () => {
+  for (const intent of ["counter", "realm_yes", "acceptance"]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = fakeStore();
+    const offer = { ...LANDED, cashAmount: 295000, status: "new", createdAt: iso(5000),
+      proactive: { realmCheckAt: iso(3000), range: { low: 280000, high: 295000, step: 10000, at: iso(3000) } } };
+    store.listOffers = async () => [offer];
+    store.getOffer = async () => offer;
+    const realm = [];
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "285 works for my seller, can you write it there?",
+      deps: {
+        draft: async () => ({ ...DRAFT, intent, counterAmount: intent === "counter" ? 285 : 0, reply: "Great, I'll get that over to you.", propertyAddress: "12 Elm St" }),
+        setOfferRealm: async (args) => { realm.push(args); return { ok: true, address: "12 Elm St, Renton, WA 98056", answer: "yes" }; },
+        markOfferAgreed: async () => { throw new Error("nothing agrees a price here"); },
+      },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    const d = await store.getReplyDraft(job.draftId);
+    assert.equal(d.intent, "realm_yes", intent);
+    assert.equal(d.autoSend?.decided, false, intent);
+    assert.match(d.autoSend?.reason || "", /they named \$285,000 inside the range we floated/, intent);
+    assert.equal(realm.length, 0, `${intent}: no realm yes is recorded at our number`);
+    const byType = (t) => d.actions.find((x) => x.type === t);
+    assert.equal(byType("revise_offer_to_counter")?.amount, 285000, intent);
+    assert.equal(byType("revise_offer_to_counter")?.mode, "ask");
+    for (const t of ["send_offer", "mark_offer_realm_yes"]) {
+      const x = byType(t);
+      if (x) assert.equal(x.mode, "ask", `${intent}: ${t} waits`);
+    }
+    assert.ok(!d.actions.some((x) => x.type === "mark_offer_countered" && x.status === "done"), `${intent}: never filed as countered`);
+  }
+});
+
+test("a plain yes to the range sends at our number, and a number above it is still a counter", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const offer = { ...LANDED, cashAmount: 295000, status: "new", createdAt: iso(5000),
+    proactive: { realmCheckAt: iso(3000), range: { low: 280000, high: 295000, step: 10000, at: iso(3000) } } };
+  store.listOffers = async () => [offer];
+  store.getOffer = async () => offer;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "yeah that works, send it over",
+    deps: { draft: async () => ({ ...DRAFT, intent: "realm_yes", reply: "Great, sending it over today.", propertyAddress: "12 Elm St" }),
+      setOfferRealm: async () => ({ ok: true, address: "12 Elm St, Renton, WA 98056", answer: "yes" }) },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.doesNotMatch(d.autoSend?.reason || "", /inside the range we floated/);
+  assert.ok(!d.actions.some((x) => x.type === "revise_offer_to_counter"));
+});
+
+import { releaseForAudit } from "./reply-agent.js";
+test("the nightly audit never releases their number inside our range as a holding reply", () => {
+  const auto = { send: false, code: "in_range", reason: "needs a person: they named $285,000 inside the range we floated" };
+  const out = releaseForAudit({ auto, gate: { ok: true, flags: [] }, draft: { intent: "realm_yes", reply: "Great, I'll get that over to you.", needsHuman: false }, deps: { releaseHeld: true } });
+  assert.equal(out.send, false);
+  assert.equal(out.code, "in_range");
+});
