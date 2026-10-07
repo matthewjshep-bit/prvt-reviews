@@ -4160,6 +4160,79 @@ test("a showing on a house the agent says isn't a flip gets no underwrite, and t
   assert.equal((d.actions || []).filter((a) => a.type === "start_underwrite").length, 0);
 });
 
+// Tier 1 is agents with a live house that needs work (Matt, 2026-10-07). The
+// "subject moved" step ran the new-property rule whenever an address was in
+// their words — so an agent who named the house AND said it wasn't a flip was
+// tagged tier-1, enrolled in TIER 1, and their GHL card moved to Tier 1.
+const tierOneActions = (actions = []) => actions.filter((a) =>
+  (a.type === "add_tags" && (a.tags || []).some((t) => /^tier-1$/i.test(String(t))))
+  || (a.type === "add_to_workflow" && /tier\s*1\b/i.test(String(a.workflowName || ""))));
+
+test("an agent who names the house and says it isn't a flip is not tagged Tier 1 or put in the TIER 1 workflow", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const message = "13814 214th St E is move in ready, certainly not a fix n flip. Come take a look!";
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true, message,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "new_property", confidence: "high", needsHuman: false,
+        propertyAddress: "13814 214th St E, Graham, WA 98338", reply: "Thanks, appreciate it." }),
+      startUnderwrite: async () => { throw new Error("no underwrite on a house that isn't a flip"); },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(tierOneActions(d.actions).map((a) => a.type), [], "no tier-1 tag and no TIER 1 workflow");
+});
+
+test("an agent pitching a house we passed on again isn't moved back to Tier 1", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const A = "4430 Sunnyside Blvd, Marysville, WA 98270";
+  store.listOffers = async () => [{ id: "o-passed", locationId: "LOC", contactId: "c1", address: A, cashAmount: 230000,
+    status: "we_passed", createdAt: iso(5 * 86400000), updatedAt: iso(2 * 86400000), sends: [{ ts: iso(5 * 86400000) }] }];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "4430 Sunnyside still needs a full gut, seller is motivated. Want to take another look?",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", needsHuman: false,
+        propertyAddress: A, reply: "Thanks for thinking of us." }),
+      startUnderwrite: async () => ({ job: { id: "uw-1" } }),
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const t1 = tierOneActions(d.actions);
+  assert.ok(t1.every((a) => a.status === "skipped"), `tier-1 actions stay off: ${JSON.stringify(t1.map((a) => [a.type, a.status]))}`);
+  assert.ok(t1.every((a) => /we passed on this house/.test(a.detail || "")));
+});
+
+test("a house we passed on from Tier 1 with no offer row isn't moved back to Tier 1 either", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const A = "88 Elm St, Tacoma, WA 98405";
+  await store.appendContactEvents("LOC", "c1", [{ type: "tier1_passed", party: "agent", at: iso(3 * 86400000), address: A, source: "tier_one" }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "88 Elm St is still sitting, needs a roof and a kitchen",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", needsHuman: false,
+        propertyAddress: A, reply: "Thanks for the heads up." }),
+      startUnderwrite: async () => ({ job: { id: "uw-2" } }),
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const t1 = tierOneActions(d.actions);
+  assert.ok(t1.length === 0 || t1.every((a) => a.status === "skipped"), JSON.stringify(t1.map((a) => [a.type, a.status])));
+});
+
 /* ---------- the current offer and the paper (2026-09-25) ---------- */
 
 // 13041 SE 208th St, Kent: five offer rows on one house, the thread at 400K

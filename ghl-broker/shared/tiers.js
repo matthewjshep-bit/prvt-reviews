@@ -73,7 +73,8 @@ export function agentTier({ offers = [], events = [], lastInboundAt = null, now 
   // or they mentioned one with no address we could use yet.
   const pricedKeys = new Set((offers || []).map((o) => addressKey(o?.address || "")).filter(Boolean));
   const recent = (e) => now - (ms(e?.at) ?? 0) <= NAMED_HOUSE_DAYS * DAY_MS;
-  const named = [...(events || [])].filter((e) => e?.type === "subject_property_set" && e.address && recent(e) && !pricedKeys.has(addressKey(e.address)))
+  // Not one they told us isn't a flip: Tier 1 is houses that need work.
+  const named = [...(events || [])].filter((e) => e?.type === "subject_property_set" && e.address && !e.data?.notOurKind && recent(e) && !pricedKeys.has(addressKey(e.address)))
     .sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
   if (named) return { tier: "t1", why: `sent us ${street(named.address)}, not priced yet`, address: named.address };
   const pending = (events || []).filter((e) => e?.type === "address_pending" && recent(e));
