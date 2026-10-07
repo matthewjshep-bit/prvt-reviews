@@ -13,7 +13,7 @@ import { buildOfferDocument } from "./offer-doc.js";
 import { calculateOffers } from "./shared/offer-calc.js";
 import { offerMath } from "./shared/offer-breakdown.js";
 
-const COMPANY = { name: "Shep Flips", signer: "Matt Shepherd", phone: "425-620-2863", email: "matt@shepflips.com", tagline: "Fair offers, fast closings" };
+const COMPANY = { name: "Shep Flips", signer: "Matt Shepherd", phone: "555-010-0100", email: "matt@example.com", tagline: "Fair offers, fast closings" };
 const MAO = { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 };
 const META = { contactName: "Sam Rivera", dateLabel: "October 7, 2026", validLabel: "October 14, 2026" };
 const letter = (inputs, settings = MAO) => {
