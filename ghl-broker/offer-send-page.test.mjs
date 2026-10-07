@@ -131,3 +131,40 @@ test("no page, no link — the send still goes", async () => {
 });
 
 test.after(() => server.close());
+
+/* ---------- how we got our number (2026-10-07) ---------- */
+
+const { calculateOffers } = await import("./shared/offer-calc.js");
+const priced = () => {
+  const calc = calculateOffers({ address: "14 Cedar Ave, Renton, WA 98055", arv: 500000, repairs: 50000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  return mkOffer({ cashAmount: calc.offers.cash.amount, calc });
+};
+
+test("the letter's text says how we got the number, in thousands, with no figure on profit and risk", async () => {
+  const o = await priced();
+  const r = await req("POST", `/api/offers/${o.id}/send`, { channels: ["sms", "email"], docs: ["image"] });
+  assert.equal(r.status, 200);
+  const sms = r.json.previews.sms.message;
+  assert.match(sms, /letter of intent on 14 Cedar Ave/);
+  assert.match(sms, /We base it on about 69% of the 500 it's worth fixed up, less the 50 of work; the rest covers about 38 to buy and resell, 26 to hold it 5 months and our profit and risk\./);
+  assert.doesNotMatch(sms.split("We base it on")[1], /\$|\b91\b/, "thousands, no dollar signs, no profit figure");
+  // The email carries every line, tied out, and never the fee.
+  const html = r.json.previews.email.html;
+  assert.match(html, /How we got to the number/);
+  for (const s of ["After-repair value", "Closing costs, buying and reselling", "Holding, 5 months", "Renovation budget", "Profit &amp; risk", "$91,217", "$295,000"]) {
+    assert.ok(html.includes(s), s);
+  }
+  assert.doesNotMatch(html, /\$30,000|assignment|wholesale/i);
+});
+
+test("with the pricing math switched off, the letter's text and email are what they were", async () => {
+  await store.saveOfferSettings(LOC, { showPricingMath: false });
+  try {
+    const o = await priced();
+    const r = await req("POST", `/api/offers/${o.id}/send`, { channels: ["sms", "email"], docs: ["image"] });
+    assert.doesNotMatch(r.json.previews.sms.message, /We base it on/);
+    assert.doesNotMatch(r.json.previews.email.html, /Profit &amp; risk/);
+  } finally {
+    await store.saveOfferSettings(LOC, {});
+  }
+});

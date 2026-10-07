@@ -66,6 +66,7 @@ import express from "express";
 import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../shared/offer-calc.js";
+import { offerMath, mathSentence } from "../shared/offer-breakdown.js";
 import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
@@ -6693,6 +6694,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         contactErr ? `contact lookup failed: ${contactErr}` : !dest ? `contact has no ${label}` : "";
 
       const firstName = (offer.contactName || "").split(" ")[0] || "there";
+      // How we got the number (shared/offer-breakdown.js), on our own words
+      // only: one sentence in the text, every line in the email. An
+      // operator's message is theirs; their send links the agent page.
+      // Settings → How we got our number switches it off.
+      const settings = message ? null : effectiveSettings(await store.getOfferSettings(locationId).catch(() => null));
+      const math = settings && settings.showPricingMath !== false ? offerMath(offer) : null;
+      const pricing = math ? mathSentence(math) : "";
       // Kept in step with defaultSendMessage() in the app's SendModal — this
       // is the fallback for callers that send no message of their own.
       // "for_record": the written offer after a float nobody answered, or with
@@ -6702,10 +6710,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // carries the terms.
       const text = message || (template === "for_record"
         ? `Hi ${firstName}, sending our written offer on ${offer.address || "your property"} over so you have it on file — ` +
-          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).` +
+          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
           ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.`
         : `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
-          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).` +
+          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
           ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?`);
 
       // The agent page — our arithmetic, the comps, the scope and what the
@@ -6717,7 +6725,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // yet — an unattended send has no one to press "Build it" first.
       let pageLink = "";
       if (!message) {
-        const settings = effectiveSettings(await store.getOfferSettings(locationId).catch(() => null));
         const room = await ensureOfferPage({ store, locationId, offer, settings, create: live });
         pageLink = room?.shareToken ? `${publicBaseUrl}/o/${room.shareToken}` : "";
       }
@@ -6748,8 +6755,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
           `If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? Happy to answer any questions.</p>`,
         ]),
+        // The whole column, tied out to the offer. "How we got to the number"
+        // is where the transcript readers stop (shared/current-offer.js), so
+        // a cost here is never read as a number we quoted.
+        ...(math && !math.premium ? [
+          `<p><strong>How we got to the number</strong></p>` +
+          `<table cellpadding="4" style="border-collapse:collapse">` +
+          math.rows.map((r) => `<tr><td>${esc(r.label)}</td><td align="right">${r.key === "arv" ? "" : r.sign === "+" ? "+" : "−"}${esc(fmtMoney(r.amount))}</td></tr>`).join("") +
+          `<tr><td><strong>Our offer</strong></td><td align="right"><strong>${esc(fmtMoney(math.total))}</strong></td></tr></table>`,
+        ] : []),
         ...(pageLink ? [
-          `<p>How we got to the number — the comps, the rehab scope and what your seller nets: ` +
+          `<p>${math && !math.premium ? "The comps, the rehab scope and what your seller nets" : "How we got to the number — the comps, the rehab scope and what your seller nets"}: ` +
           `<a href="${esc(pageLink)}">${esc(pageLink)}</a></p>`,
         ] : []),
         `<p>Attached:</p><ul>${picked.map(([, label]) => `<li>${esc(label)}</li>`).join("")}</ul>`,
