@@ -310,3 +310,16 @@ test("a pulse never checks in about a house whose deal fell through; a closed on
   assert.equal(ourHouseFor({ offers: [fell], now: NOW }), null);
   assert.equal(ourHouseFor({ offers: [fell, closed], now: NOW })?.id, "o2");
 });
+
+// Matt, 2026-10-07: a pass from Tier 1 starts the nurture — "any other
+// distressed off-market deals?" — and never brings the passed house back up.
+test("the check-in's notes never name a house we passed on, and say which to avoid", () => {
+  const a = agent({
+    lastInboundAt: ago(30),
+    offers: [passed({ id: "o2", address: "12 Pine St, Kent, WA 98031", status: "we_passed", statusAt: ago(5) }), passed({ address: "9 Oak St, Kent, WA 98031", statusAt: ago(35) })],
+    events: [{ type: "tier1_passed", address: "88 Elm St, Tacoma, WA 98405", at: ago(3) }],
+  });
+  const subj = agentPulseSubject({ agent: a, verdict: { pulseReason: "general", segment: "engaged" }, now: NOW });
+  assert.equal(subj.lastHouse.street, "9 Oak St", "the newest house we didn't pass on");
+  assert.deepEqual(subj.avoid.sort(), ["12 Pine St", "88 Elm St"]);
+});

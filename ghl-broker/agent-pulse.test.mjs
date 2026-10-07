@@ -250,3 +250,22 @@ test("an agent you stopped the bot on months ago is still not checked in on", as
   const plan = await planAgentPulse({ locationId: loc, saved: savedWith(), store });
   assert.equal(plan.picks.length, 0);
 });
+
+test("a house passed from Tier 1 is never raised as a fresh listing", async () => {
+  _resetJobs();
+  const loc = "loc-ap-tier1-passed";
+  const batch = await store.createOutreachBatch(loc, { name: "Autopilot · King, WA" });
+  await store.upsertOutreachAgents(loc, batch.id, [{ agentKey: "e:passed@example.com", doc: {
+    name: "Passed Agent", phone: "+12065550103", distressRule: "cut-or-cheap", ghl: { contactId: "ag9" },
+  } }]);
+  await store.upsertOutreachListings(loc, batch.id, [{ listingKey: "L-900", agentKey: "e:passed@example.com", doc: {
+    address: "900 Pine St, Kent, WA 98031", city: "Kent", price: 415000, daysOnMarket: 64, propertyType: "Single Family",
+    qualifies: true, score: 72, distress: { stale: true, cut: true, cheap: false },
+  } }]);
+  await recordEvent({ store, locationId: loc, contactId: "ag9", party: "agent", type: "tier1_passed", address: "900 Pine St, Kent, WA 98031",
+    at: new Date(Date.now() - 2 * DAY).toISOString(), source: "tier_one" });
+  const plan = await planAgentPulse({ locationId: loc, saved: savedWith(), store });
+  const pick = plan.picks.find((p) => p.contactId === "ag9");
+  assert.notEqual(pick?.reason, "fresh_listing", "we passed on that house");
+  assert.doesNotMatch(JSON.stringify(pick?.subject || {}), /900 Pine/);
+});

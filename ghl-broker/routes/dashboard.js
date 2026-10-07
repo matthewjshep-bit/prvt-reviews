@@ -61,6 +61,7 @@ import { LAST_ACTIVITY_TYPES, INBOUND_EVENT_TYPES as LAST_IN_TYPES } from "../sh
 import { normalizeLineTargets } from "../shared/line.js";
 import { normalizeGhlStages } from "../shared/ghl-stages.js";
 import { agentRoster } from "../agent-pulse.js";
+import { loadTierOne, passTierOne, kickTierOne, addTierOne } from "../tier-one.js";
 import { maybeSweepHandReplies } from "../hand-reply-sweep.js";
 import { startCoach, coachReport, coachForContact, applyCoachProposal, rejectCoachProposal, revertCoachProposal, fileCoachProposal, previewCoachProposal } from "../coach.js";
 
@@ -189,7 +190,7 @@ async function ghlPage(fn) {
 }
 const PACE_MS = 150; // ≈ 66 req / 10s, comfortably under the burst cap
 
-export default function createDashboardRouter({ resolveLocation, conversationDepsFor = null, handTextDepsFor = null }) {
+export default function createDashboardRouter({ resolveLocation, conversationDepsFor = null, handTextDepsFor = null, operatorStatus = null, tierOneGhl = null }) {
   const router = express.Router();
   const fail = (res, err) => {
     const code = err.http || err.status || 500;
@@ -672,18 +673,64 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   // them warm. Today → In play reads it. A heavy read (the agent check-in's
   // own load), so five minutes' cache; ?fresh=1 skips it.
   const tierCache = new Map();
+  async function rosterFor(locationId, { fresh = false, saved = null } = {}) {
+    const hit = tierCache.get(locationId);
+    if (hit && Date.now() - hit.at < 5 * 60000 && !fresh) return hit.body;
+    const s = saved || (await store.getOfferSettings(locationId)) || {};
+    const roster = await agentRoster({ locationId, saved: s, store });
+    const body = { ok: true, generatedAt: new Date().toISOString(), ...roster };
+    tierCache.set(locationId, { at: Date.now(), body });
+    return body;
+  }
   router.get("/agents/tiers", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
-      const hit = tierCache.get(locationId);
-      if (hit && Date.now() - hit.at < 5 * 60000 && req.query?.fresh !== "1") return res.json(hit.body);
+      res.json(await rosterFor(locationId, { fresh: req.query?.fresh === "1" }));
+    } catch (err) { fail(res, err); }
+  });
+
+  // The Tier 1 list (ghl-broker/tier-one.js): GHL's Tier 1 stage, each card
+  // with its house, our numbers and the machine's flags, plus agents the app
+  // reads as Tier 1 that GHL doesn't have there. Reads GHL's whole
+  // Acquisitions board, so five minutes' cache; ?fresh=1 skips it.
+  const tierOneCache = new Map();
+  const tierOneDeps = () => ({ operatorStatus, ...(tierOneGhl ? { ghl: tierOneGhl } : {}) });
+  const bustTierCaches = (locationId) => { tierOneCache.delete(locationId); tierCache.delete(locationId); };
+  router.get("/tier1", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const fresh = req.query?.fresh === "1";
+      const hit = tierOneCache.get(locationId);
+      if (hit && Date.now() - hit.at < 5 * 60000 && !fresh) return res.json(hit.body);
       const saved = (await store.getOfferSettings(locationId)) || {};
-      const roster = await agentRoster({ locationId, saved, store });
-      const body = { ok: true, generatedAt: new Date().toISOString(), ...roster };
-      tierCache.set(locationId, { at: Date.now(), body });
+      const roster = await rosterFor(locationId, { fresh, saved }).catch(() => null);
+      const out = await loadTierOne({ client, locationId, saved, store, roster, deps: tierOneDeps() });
+      const body = { generatedAt: new Date().toISOString(), ...out, tier2: roster ? { rows: (roster.rows || []).filter((r) => r.tier === "t2"), pulseOn: roster.pulseOn } : null };
+      if (out.ok) tierOneCache.set(locationId, { at: Date.now(), body });
       res.json(body);
     } catch (err) { fail(res, err); }
   });
+  const tierOneAction = (run) => async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = String(req.params.contactId || "").trim();
+      if (!contactId) return res.status(400).json({ error: "contactId required" });
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const b = req.body || {};
+      const r = await run({ client, locationId, saved, store, contactId, deps: tierOneDeps(),
+        offerId: b.offerId ? String(b.offerId) : null, address: String(b.address || "").slice(0, 200),
+        reason: String(b.reason || "").slice(0, 40), name: String(b.name || "").slice(0, 120),
+        flags: Array.isArray(b.flags) ? b.flags.slice(0, 10).map(String) : [] });
+      bustTierCaches(locationId);
+      res.json(r);
+    } catch (err) {
+      if (err?.http) return res.status(err.http).json({ error: err.message });
+      fail(res, err);
+    }
+  };
+  router.post("/tier1/:contactId/pass", tierOneAction(passTierOne));
+  router.post("/tier1/:contactId/kick", tierOneAction(kickTierOne));
+  router.post("/tier1/:contactId/add", tierOneAction(addTierOne));
 
   // Where GHL's Acquisitions cards would move if they followed the app
   // (shared/ghl-stages.js) — last morning's plan off the tier check's

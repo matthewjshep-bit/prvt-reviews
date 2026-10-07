@@ -937,9 +937,12 @@ function openingFor(outbound) {
         `Never quote them, never recite the thread, never more than one reference, never something months old as if it were last week — and never invent one: ` +
         `if the thread and the notes have nothing specific, keep it general. For this message the PERSONAL TOUCH rule's "most messages carry none" does not apply: carry exactly one when there is one. `;
       const shapes = cold ? AGENT_PULSE_COLD_SHAPES : AGENT_PULSE_SHAPES;
+      // Houses we passed on: the nurture is about the next one, never these.
+      const avoid = (o.avoid || []).filter(Boolean);
+      const avoidLine = avoid.length ? `Never bring up ${avoid.length > 1 ? `${avoid.slice(0, -1).join(", ")} or ${avoid.at(-1)}` : avoid[0]} — we passed on ${avoid.length > 1 ? "those" : "it"}. ` : "";
       return `${START} There is NO offer in this message. It is a check-in with a listing agent${cold ? " who has not written back before" : " we know"}. ` +
         `${why} ` +
-        `${reference}${material.length ? `NOTES FROM OUR HISTORY: ${material.join(" ")} ` : ""}` +
+        `${reference}${material.length ? `NOTES FROM OUR HISTORY: ${material.join(" ")} ` : ""}${avoidLine}` +
         `TONE: friendly and professional — how someone local who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
         `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
         `${cold ? "One clause on who you are: someone local who's always looking for the next project house. " : "Do NOT reintroduce yourself. "}` +

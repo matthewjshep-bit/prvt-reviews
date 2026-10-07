@@ -127,7 +127,8 @@ import { mergeParties } from "../shared/deal-parties.js";
 import { mergeAccess, accessFor } from "../shared/deal-access.js";
 import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, tickById, GATES } from "../shared/deal-checklist.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
-import { mirrorAgent, followTierStage, tierTagsToDrop } from "../ghl-mirror.js";
+import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
+import { normalizeTierOne } from "../shared/tier-one.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
@@ -3478,6 +3479,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return { offerId: full.id, address: full.address, phrase };
   }
   router.passOnOurNo = passOnOurNo;
+  // The Tier 1 list's Pass / Kick out (routes/dashboard.js → tier-one.js)
+  // records the outcome the same way the status menu does.
+  router.applyOperatorStatus = applyOperatorStatus;
 
   // The one-time look back: houses still countered above our number where a
   // person's text since the counter already said no. Body: { dryRun = true }.
@@ -4848,6 +4852,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const pulse = normalizeAgentPulse(saved?.outreachAutopilot?.pulse);
     return pulse.enabled ? pulse.replacesWorkflowIds : [];
   };
+  // GHL's Acquisitions card to Offer Out once our written offer is out. Not
+  // while the GHL mirror owns the board (it moves cards itself). Best effort:
+  // a board that can't be read never fails the send. Ids only in the log.
+  async function moveCardToOfferOut({ client, locationId, offer, saved }) {
+    if (!offer?.contactId || normalizeMirror(saved?.ghlMirror).enabled) return null;
+    const move = await followOfferOut({ client, locationId, contactId: offer.contactId });
+    if (move?.opportunityId) {
+      await recordEvent({ store, locationId, contactId: offer.contactId, party: "agent", type: "ghl_stage_moved", address: offer.address, offerId: offer.id,
+        source: "tier_one", data: { from: move.from, to: move.to, why: "our written offer went out" } }).catch(() => {});
+    } else if (move?.error) console.error(`offers: offer-out move failed loc=${locationId} offer=${offer.id}: ${move.error}`);
+    return move;
+  }
+
   const conversationDeps = ({ client, locationId, saved }) => ({
     // GHL drips picked by hand as replaced by the agent check-in, while it's
     // on: a rule's add_to_workflow keeps agents out of these.
@@ -5387,6 +5404,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         address: offer.address, offerId: offer.id, source: "conversation", ref: draftId,
         data: { channels: ch, docs: dk, by: by || (draftId ? "conversation" : "underwrite"), amount: offer.cashAmount || null, ...(forRecord ? { forRecord: true } : {}), ...(emailTo ? { emailTo } : {}) },
       }).catch(() => {});
+      // The machine's sends move the card only behind tierOne.followMachineSends (ships off).
+      if (normalizeTierOne(saved?.tierOne).followMachineSends) await moveCardToOfferOut({ client, locationId, offer, saved });
       return { ok: true, address: offer.address, channels: ch, results: r.results, emailTo: r.results?.email?.to || "" };
     },
     setOfferStatus: async ({ contactId, addressHint, status, note = "", amount = 0 }) => {
@@ -6909,6 +6928,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             address: offer.address, offerId: offer.id, source: "offer", ref: null,
             data: { channels, docs: docKeys, by: "operator", amount: offer.cashAmount || null },
           }).catch(() => {});
+          // Your written offer is out: GHL's card follows to Offer Out
+          // (shared/tier-one.js cardMove — only from the tier stages).
+          await moveCardToOfferOut({ client, locationId, offer, saved: await store.getOfferSettings(locationId).catch(() => null) });
         }
         res.json(r);
       } catch (e) {

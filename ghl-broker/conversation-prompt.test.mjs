@@ -447,3 +447,9 @@ test("the pulse carries Matt's voice and the notes that make it personal", () =>
   assert.match(t, /Our last conversation: Wants north King only/);
   assert.match(t, /About them, from our notes: Building spec homes in Shoreline/);
 });
+
+test("the check-in prompt is told not to bring up a house we passed on", () => {
+  const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", avoid: ["12 Pine St", "88 Elm St"] });
+  assert.match(t, /Never bring up 12 Pine St or 88 Elm St/);
+  assert.doesNotMatch(outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged" }), /Never bring up/);
+});

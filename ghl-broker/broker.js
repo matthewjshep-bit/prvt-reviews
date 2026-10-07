@@ -172,7 +172,8 @@ const outreachRouter = createOutreachRouter({
 });
 app.use("/api/outreach", outreachRouter);
 outreachRouter.conversationDepsFor = offersRouter.conversationDepsFor;
-const dashboardRouter = createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor, handTextDepsFor: (args) => offersRouter.handTextDepsFor?.(args) || {} });
+const dashboardRouter = createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor, handTextDepsFor: (args) => offersRouter.handTextDepsFor?.(args) || {},
+  operatorStatus: (args) => offersRouter.applyOperatorStatus?.(args) });
 app.use("/api/dashboard", dashboardRouter);
 const dispoRouter = createDispoRouter({ resolveLocation });
 // The Line view reads the buyer pulse's plan, which ranks the scored book.
