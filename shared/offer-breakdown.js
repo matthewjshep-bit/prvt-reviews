@@ -165,8 +165,9 @@ function holdingLines(hd, months, total) {
   ].filter((l) => l.amount > 0);
   if (!lines.length) return [];
   // Rounding lands on the biggest line, so the parts always add to the row.
+  // The order stays the reading order: loan, taxes, insurance, utilities.
   const off = total - lines.reduce((t, l) => t + l.amount, 0);
-  lines.sort((a, b) => b.amount - a.amount)[0].amount += off;
+  lines.reduce((big, l) => (l.amount > big.amount ? l : big), lines[0]).amount += off;
   return lines;
 }
 

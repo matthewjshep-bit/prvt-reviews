@@ -120,6 +120,8 @@ test("the closing and holding lines break down into parts that add up", () => {
     const row = m.rows.find((r) => r.key === key);
     assert.equal(row.detail.reduce((t, d) => t + d.amount, 0), row.amount, key);
   }
+  assert.deepEqual(m.rows.find((r) => r.key === "holding").detail.map((d) => d.label),
+    ["Loan interest and points", "Property taxes", "Insurance", "Utilities and upkeep"], "in reading order");
   assert.equal(m.closing.sell, 35000, "7% to resell");
   assert.ok(m.closing.buy > 0, "and a purchase closing");
   assert.ok(m.rows.every((r) => !/fee|assignment|wholesale/i.test(JSON.stringify(r))));
