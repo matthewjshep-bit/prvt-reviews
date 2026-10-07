@@ -24,6 +24,36 @@ export const REQUOTE_DEFAULTS = {
   maxRepairCutPct: 25,   // nor cut our repair estimate without bound
 };
 
+// One setup question on a float (Matt, 2026-10-07, from the No Fluff "setup
+// call"): where the seller is, what the photos don't show, and what the agent
+// thinks it needs and sells for. One per float, rotated per offer, and never
+// one they've already answered (setupQuestionFor).
+export const SETUP_QUESTIONS = {
+  other_offers: "any other offers in on it yet, and what's the seller's timeline?",
+  hidden_issues: "anything I won't see in the photos, like roof, foundation, water or septic?",
+  their_read: "what's your read on the work it needs, and where it sells once it's done?",
+};
+export const SETUP_QUESTION_KEYS = Object.keys(SETUP_QUESTIONS);
+
+// Floats a question the dossier hasn't answered: their read (arv / rehab),
+// the condition, the timeline. Starts at a hash of the offer so an agent with
+// several houses doesn't get the same question on each. null when every one
+// is answered or none is switched on.
+export function setupQuestionFor({ offerId = "", dossier = null, ask = SETUP_QUESTION_KEYS } = {}) {
+  const have = dossier?.have || {};
+  const answered = {
+    their_read: Boolean(have.arv || have.rehab),
+    hidden_issues: Boolean(have.condition || have.workNeeded),
+    other_offers: Boolean(have.timeline),
+  };
+  const open = (Array.isArray(ask) ? ask : SETUP_QUESTION_KEYS).filter((k) => SETUP_QUESTIONS[k] && !answered[k]);
+  if (!open.length) return null;
+  let h = 0;
+  for (const c of String(offerId || "")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const key = open[h % open.length];
+  return { key, text: SETUP_QUESTIONS[key] };
+}
+
 export const PARTIES = ["agent", "investor"];
 export const PARTY_LABEL = { agent: "Listing agent", investor: "Investor", unknown: "Unknown" };
 export const CONFIDENCES = ["high", "medium", "low"];
@@ -554,7 +584,16 @@ const PLAYBOOK = () => ({
   // `leadWhenConfident`: a clean, well-comped underwrite floats the number
   // itself ("based on our analysis we can likely do around 450ish") rather
   // than asking for their read first.
-  realmCheck: { enabled: false, leadWhenConfident: true },
+  // The float itself (2026-10-07), each off until Matt has previewed it:
+  // `withMath` puts one sentence of how we got the number ahead of it
+  // (shared/offer-breakdown.js); `range` floats "the 280s to 295" — the top
+  // is always our number, the bottom `pct` under it — instead of "295ish";
+  // `setupQuestion` ends it with one of SETUP_QUESTIONS.
+  realmCheck: {
+    enabled: false, leadWhenConfident: true, withMath: false,
+    range: { enabled: false, pct: 5 },
+    setupQuestion: { enabled: false, ask: [...SETUP_QUESTION_KEYS] },
+  },
   // The lessons digest from our own fell-through deals, in the agent
   // context. Off: the digest exists only once a person saved it.
   lessons: { enabled: false },
@@ -883,6 +922,14 @@ function normalizePlaybook(p, party, seed = {}) {
     realmCheck: {
       enabled: bool(src.realmCheck?.enabled, false),
       leadWhenConfident: bool(src.realmCheck?.leadWhenConfident, true),
+      withMath: bool(src.realmCheck?.withMath, false),
+      range: { enabled: bool(src.realmCheck?.range?.enabled, false), pct: int(src.realmCheck?.range?.pct, 5, 2, 15) },
+      setupQuestion: {
+        enabled: bool(src.realmCheck?.setupQuestion?.enabled, false),
+        ask: Array.isArray(src.realmCheck?.setupQuestion?.ask)
+          ? [...new Set(src.realmCheck.setupQuestion.ask.filter((k) => SETUP_QUESTION_KEYS.includes(k)))]
+          : [...SETUP_QUESTION_KEYS],
+      },
     },
     takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
     // May the bot carry the post-mortem digest (percentages only, never a
