@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  workingHoursBetween, paperWent, paperWorthy, floatSentAt, answeredSince, paperAfterSilenceDue, PAPER_FLOAT_MAX_DAYS,
+  workingHoursBetween, paperWent, paperWorthy, floatSentAt, floatSentIndex, answeredSince, paperAfterSilenceDue, PAPER_FLOAT_MAX_DAYS,
 } from "./paper-follows.js";
 
 // Friday 2026-10-02, 2pm Pacific.
@@ -97,4 +97,19 @@ test("afterFloat survives the normaliser and is never on for investors", async (
   assert.equal(on.parties.investor.sendOffer.afterFloat.onPushback, false);
   // What a save of the normalised config keeps.
   assert.deepEqual(normalizeConversationAi(on).parties.agent.sendOffer.afterFloat, on.parties.agent.sendOffer.afterFloat);
+});
+
+test("each offer's latest sent float is found; a take-check or an unsent draft isn't one", () => {
+  const drafts = [
+    floatDraft(FRI_2PM - 48 * H),
+    floatDraft(FRI_2PM),
+    floatDraft(FRI_2PM, { status: "draft" }),
+    floatDraft(FRI_2PM + H, { outbound: { kind: "take_check", offerId: "o1" } }),
+    floatDraft(FRI_2PM - H, { outbound: { kind: "realm_check", offerId: "o2" } }),
+  ];
+  const idx = floatSentIndex(drafts);
+  assert.equal(idx.get("o1"), new Date(FRI_2PM).toISOString());
+  assert.equal(idx.get("o2"), new Date(FRI_2PM - H).toISOString());
+  assert.equal(idx.get("o3"), undefined);
+  assert.equal(floatSentIndex(null).size, 0);
 });

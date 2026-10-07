@@ -73,7 +73,7 @@ import {
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
-import { paperAfterSilenceDue, paperWent, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
+import { paperAfterSilenceDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
@@ -2578,6 +2578,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const ghl = await ghlLastMessages(client, locationId).catch(() => new Map());
         mergeGhlActivity(seen, ghl, [...new Set(offers.map((o) => o?.contactId).filter(Boolean))]);
         for (const o of offers) if (o?.contactId) o.lastActivity = seen.get(o.contactId) || null;
+        // When our number was floated by text (the Offers "Not sent" tab says
+        // "Floated 5d ago"): a sent realm_check draft, not a field on the offer.
+        const floats = floatSentIndex(drafts);
+        for (const o of offers) if (o?.id) o.floatedAt = floats.get(o.id) || null;
       }
       // When each offer is next followed up, and with what
       // (shared/next-follow-up.js). Opt-in, like activity.
