@@ -1090,6 +1090,85 @@ to a number nobody decided on. Matt: "we need to stick with our prev numbers".
   contract's. The Offer pane's pencil does this before a re-quote on an
   agreed offer and says so first. Sends nothing.
 
+### How we got our number — the math behind every offer (2026-10-07)
+
+Matt benchmarked a No Fluff wholesaling video (Ed Zamora, 3–5 deals a month
+working listing agents). His setup call explains how he underwrites before any
+number, and floats a range rather than one figure. Matt: "we usually use the
+70–75% ARV − rehab number, but I want them to know what we base it off of
+(holding costs, profit margin, etc)". **Pricing did not change.** Automatic
+offers are still `mao` (maoPctOfArv × ARV − rehab − fee). What changed is
+that the agent sees what the gap between the ARV and our price is made of.
+
+- **One source: `offerMath` (`shared/offer-breakdown.js`).** It reruns the
+  back-stack cost model on the offer's own frozen settings, against the same
+  ARV and repairs, for every pricing mode. The rows are:
+  - after-repair value
+  - closing costs, buying and reselling (7% resale plus `buyClosingPct`, 1%,
+    on the flipper's purchase basis; the purchase closing is explanation
+    only, never pricing)
+  - holding (loan interest and points, taxes, insurance, utilities)
+  - the work
+  - **profit & risk**, the residual that makes the column add up exactly to
+    the price we sent. The fee sits inside it and can't be recovered by
+    subtraction. A price set above what the costs leave room for shows a
+    "premium" row. A residual over 22% of ARV (cheap houses, where the flat
+    fee dominates) gets a caption on the page.
+  - `pctOfArv` is (price + work) ÷ ARV: the "about 69%" Matt prices off.
+- **Texts name every cost and never give profit & risk a figure.** The page,
+  the letter and the email show every line. A gate (`namesHidden` in
+  `evaluateReplyGates`) holds a text that names it in any form: "$91,217",
+  "91k", or the bare "91".
+- **Where it shows:**
+  - **The bot, asked or pushed** (`parties.agent.showMath`, on in prod since
+    2026-09-17). The offer book's `[our math: …]` line now carries every
+    cost; the MATH rule walks through it and ends by asking for their numbers.
+    An offer that was capped, set by hand or came down by text gets the method
+    without the arithmetic.
+  - **The float** (`realmCheck.withMath`, off until Matt flips it). One
+    clause before the number.
+  - **The written offer.** The text that carries the letter adds
+    `mathSentence`. The email shows the whole column under "How we got to the
+    number". The agent page's breakdown is on by default (older pages keep the
+    sections they were saved with).
+  - **The letter of intent.** A "How we priced it" box beside the closing
+    paragraph, to the cent.
+  - Settings → "How we got our number": `buyClosingPct` and `showPricingMath`
+    (off removes it from the letter, the text and the email).
+- **A range topped by our number** (`realmCheck.range {enabled, pct}`, off).
+  - The float says "the 280s to 295": `floatRange` puts our number, rounded
+    down, on top, and the bottom `pct` under it on a round step. The letter
+    only ever goes at the top.
+  - A range that went out is stamped `offer.proactive.range`, live until the
+    number moves (`liveRange`).
+  - The offer book tells later replies our number is its top. The gate holds
+    the bottom said on its own.
+  - The readers in `shared/current-offer.js` skip a range's bottom and take
+    its top, so a float never holds the letter at 280 or reads 295 as a raise.
+  - **Their number inside the range** ("285 works") is `in_range`: the reply
+    waits with the letter at ours and a revise to theirs both one click away.
+    It is never filed as a counter, never a realm yes at ours, and never
+    released by the nightly audit. A plain yes sends at the top; above the
+    top is a counter, and `never_above_sent` is untouched.
+- **One setup question** (`realmCheck.setupQuestion {enabled, ask}`, off).
+  - `SETUP_QUESTIONS`:
+    - other offers and the seller's timeline
+    - "anything I won't see in the photos" (roof, foundation, water, septic)
+    - their read on the work and the value
+  - One per float, rotated by offer, never one the dossier already answers.
+  - The answers land where they always did: their take → re-quote, condition →
+    property details.
+- **The transcript readers ignore the math.** Cost words ("38 to buy and
+  resell", "26 of holding", "500 it's worth fixed up") are not prices. An
+  offer letter's text and email are read only up to their math
+  (`MATH_MARKER_RX`).
+- **Preview before switching on.** `POST /api/offers/:id/float {preview:
+  true, realmCheck: {withMath, range, setupQuestion}}` drafts the float on a
+  real offer with those switches, without saving them. It returns the text,
+  its length and the gate's flags. Nothing is filed or sent; it costs one
+  model call. Turn the switches on with one PUT of the whole conversation
+  config (GET it first).
+
 ### The current offer — one live row per house (2026-09-25)
 
 13041 SE 208th St, Kent. Five offer rows on one house: a July offer, two
@@ -3149,6 +3228,15 @@ at all. Two faults, both fixed:
   `?reveal=1` returns them only for a location with a `GHL_LOCATION_KEYS`
   entry (which the request had to present). To read a token off prod for
   debugging, set a location key first.
+- **A lean offer read is the same on both backends** (2026-10-07). The
+  Postgres lean projection (`leanDocSql` in `store.js`) keeps the list fields
+  plus an ALLOWLISTED slice of `calc`: inputs, `LEAN_CALC_SETTINGS`
+  (`calc.settings` holds API keys, so never a denylist) and
+  `LEAN_CASH_FIELDS`. It also keeps a held draft's inputs. Before this, every
+  lean row on prod lost its ARV, repairs, list price and terms, and the bot's
+  show-our-work never had a figure. `leanOfferDoc` (`shared/offer-status.js`)
+  is its JS twin: the file store runs it, so tests trim like prod. Change one,
+  change the other. Rows carry `row.math` (compactMath).
 - **Every daily sweep has a durable cursor** (`job_cursors`): follow-up,
   outreach, dispo second wave, the GHL mirror, and now the nightly
   enrichment sweep (`enrichNightly`) — a redeploy inside the trigger hour no
