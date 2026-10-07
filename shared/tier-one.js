@@ -208,3 +208,34 @@ export function cardMove({ cards = [], acq = null, keys = {}, to } = {}) {
   if (!closed && !FROM[to]?.has(at)) return { skip: `left at ${from}` };
   return { opportunityId: card.id, stageId, from, to: nameOf.get(stageId) || to, ...(closed ? { status: "open" } : {}) };
 }
+
+/* ---------- the morning clear-out (tierOne.autoKick, ships off) ---------- */
+
+// The flags sure enough for the machine to take a card off Tier 1 alone. A
+// missing house waits a week (they may still send the address); anything
+// soft — their words only, or just quiet — stays for Matt.
+const AUTO_KICK_KEYS = ["gone", "turnkey", "not_sfr", "passed"];
+export const NO_HOUSE_WAIT_DAYS = 7;
+export const ADDED_GRACE_DAYS = 7;
+
+/**
+ * autoKickPlan({ rows, now }) → [{ contactId, opportunityId, offerId, address, reason, flags }]
+ *
+ * Pure. `rows` are the Tier 1 list's rows (ghl-broker/tier-one.js loadTierOne),
+ * each with `addedAt` (last put on Tier 1 by hand) and `chasing` (an address
+ * we're still waiting on). Never a card added by hand in the last week.
+ */
+export function autoKickPlan({ rows = [], now = Date.now() } = {}) {
+  const days = (t) => { const ms = Date.parse(t || ""); return Number.isFinite(ms) ? (now - ms) / DAY_MS : Infinity; };
+  const out = [];
+  for (const r of rows || []) {
+    if (!r?.contactId || r.ok) continue;
+    if (days(r.addedAt) < ADDED_GRACE_DAYS) continue;
+    const sure = (r.flags || []).filter((f) => f.sure);
+    let reason = sure.find((f) => AUTO_KICK_KEYS.includes(f.key))?.key || "";
+    if (!reason && sure.some((f) => f.key === "no_house") && !r.chasing && days(r.inStageSince) >= NO_HOUSE_WAIT_DAYS) reason = "no_house";
+    if (!reason) continue;
+    out.push({ contactId: r.contactId, opportunityId: r.opportunityId || null, offerId: r.offer?.id || null, address: r.house?.address || "", reason, flags: (r.flags || []).map((f) => f.key) });
+  }
+  return out;
+}

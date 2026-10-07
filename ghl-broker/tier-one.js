@@ -31,7 +31,7 @@ import { recordEvent } from "./contact-record.js";
 import { mapPool } from "./map-pool.js";
 import { isTurnkeyReply } from "./reply-agent.js";
 import { stageKeys } from "./shared/ghl-stages.js";
-import { pickHouse, screenTierOne, cardMove } from "./shared/tier-one.js";
+import { pickHouse, screenTierOne, cardMove, autoKickPlan, normalizeTierOne } from "./shared/tier-one.js";
 import { annotateCurrent } from "./shared/current-offer.js";
 import { assetOf, normalizeFocusKinds } from "./shared/asset-type.js";
 import { normalizeMirror } from "./shared/ghl-mirror.js";
@@ -101,12 +101,13 @@ async function screenContact({ store, locationId, contactId, offers = [], focusK
  * belongs  agents the app reads as Tier 1 (shared/tiers.js, `roster`), clean on
  *          the screen, with no card at Tier 1 or later — candidates to add
  */
-export async function loadTierOne({ client, locationId, saved = {}, store = defaultStore, roster = null, deps = {}, now = Date.now() }) {
+export async function loadTierOne({ client, locationId, saved = {}, store = defaultStore, roster = null, read = null, deps = {}, now = Date.now() }) {
   const api = apiOf(deps);
-  const acq = acquisitionsPipeline(await pipelinesFor(client, locationId, { ghl: api, now }));
+  // `read`: the morning tier check's own read of the board, so it isn't read twice.
+  const acq = acquisitionsPipeline(read?.pipelines || await pipelinesFor(client, locationId, { ghl: api, now }));
   if (!acq) return { ok: false, error: "no Acquisitions pipeline with Tier 1/2/3 stages in GHL", rows: [], belongs: [], counts: {} };
   const keys = stageKeys(acq);
-  const opps = await api.listAcquisitionOpportunities(client, locationId, acq.id);
+  const opps = read?.opportunities || await api.listAcquisitionOpportunities(client, locationId, acq.id);
   const open = (opps || []).filter((o) => o?.contactId && String(o.status || "open") === "open");
   const tier1 = open.filter((o) => o.pipelineStageId === keys.tier1);
   const atOrPast = new Set(open.filter((o) => LATER_STAGES.some((k) => keys[k] && o.pipelineStageId === keys[k])).map((o) => o.contactId));
@@ -120,7 +121,12 @@ export async function loadTierOne({ client, locationId, saved = {}, store = defa
 
   const rowFor = async ({ contactId, name, card = null }) => {
     const offers = offersBy.get(contactId) || [];
-    const { house, screen, words } = await screenContact({ store, locationId, contactId, offers, focusKinds, cardName: card?.name || "", now });
+    const { house, screen, words, events } = await screenContact({ store, locationId, contactId, offers, focusKinds, cardName: card?.name || "", now });
+    // Put on Tier 1 by hand lately, and an address we're still waiting on:
+    // the morning clear-out leaves both alone (shared/tier-one.js autoKickPlan).
+    const addedAt = events.filter((e) => e?.type === "tier1_added").map((e) => e.at).sort().at(-1) || null;
+    const pending = events.filter((e) => e?.type === "address_pending").map((e) => e.at).sort().at(-1);
+    const chasing = Boolean(pending) && !events.some((e) => e?.type === "address_pending_closed" && String(e.at) >= String(pending));
     return {
       contactId,
       name: name || offers.find((o) => o.contactName)?.contactName || "",
@@ -133,6 +139,7 @@ export async function loadTierOne({ client, locationId, saved = {}, store = defa
       flags: screen.flags,
       lastInboundAt: words.lastInboundAt,
       lastWord: words.text ? { at: words.textAt, text: words.text.slice(0, 240) } : null,
+      addedAt, chasing,
     };
   };
 
@@ -140,6 +147,7 @@ export async function loadTierOne({ client, locationId, saved = {}, store = defa
   // Flagged cards first (they're the ones to clear), then the longest in Tier 1.
   rows.sort((a, b) => Number(a.ok) - Number(b.ok) || String(a.inStageSince || "").localeCompare(String(b.inStageSince || "")));
 
+  if (deps.skipBelongs) return { ok: true, rows, belongs: [], counts: { tier1: rows.length, flagged: rows.filter((r) => !r.ok).length }, mirrorOwnsBoard: mirrorOwnsBoard(saved) };
   const candidates = (roster?.rows || []).filter((r) => r.tier === "t1" && r.contactId && !atOrPast.has(r.contactId)).slice(0, BELONGS_MAX * 2);
   const screened = await mapPool(candidates, 6, (r) => rowFor({ contactId: r.contactId, name: r.name }));
   const belongs = screened.filter((r) => r.ok && !r.flags.some((f) => f.key === "stale") && r.house?.address).slice(0, BELONGS_MAX);
@@ -241,4 +249,37 @@ export async function addTierOne({ client, locationId, saved = {}, store = defau
   }
   console.log(`tier-one: tier1_added loc=${locationId} contact=${contactId} card=${card.created ? "created" : card.verified ? "moved" : "unverified"}`);
   return { ok: true, card };
+}
+
+/**
+ * runTierOneScreen({ client, locationId, saved, store, read, deps, now }) → { on, planned, applied, kicks, errors }
+ *
+ * The 7am tier check's last step. Always plans which Tier 1 cards are sure
+ * misses (shared/tier-one.js autoKickPlan) and keeps the plan as a report —
+ * ids and reasons, never a name. Kicks them only with tierOne.autoKick on
+ * (ships off), at most autoKickMax a morning, marked as the machine's.
+ */
+export async function runTierOneScreen({ client, locationId, saved = {}, store = defaultStore, read = null, deps = {}, now = Date.now() }) {
+  const cfg = normalizeTierOne(saved?.tierOne);
+  const out = { on: cfg.autoKick, planned: 0, applied: 0, kicks: [], errors: [] };
+  if (mirrorOwnsBoard(saved)) { out.errors.push("the GHL mirror owns the board"); return out; }
+  const list = await loadTierOne({ client, locationId, saved, store, read, deps: { ...deps, skipBelongs: true }, now });
+  if (!list.ok) { out.errors.push(list.error || "couldn't read Tier 1"); return out; }
+  const plan = autoKickPlan({ rows: list.rows, now });
+  out.planned = plan.length;
+  let left = cfg.autoKick ? cfg.autoKickMax : 0;
+  for (const k of plan) {
+    const row = { contactId: k.contactId, opportunityId: k.opportunityId, offerId: k.offerId, reason: k.reason };
+    if (left > 0) {
+      try {
+        const r = await kickTierOne({ client, locationId, saved, store, contactId: k.contactId, offerId: k.offerId, address: k.address, reason: k.reason, by: "machine", flags: k.flags, deps, now });
+        row.applied = Boolean(r.card?.opportunityId);
+        if (row.applied) out.applied++;
+        left--;
+      } catch (e) { out.errors.push(`${k.contactId}: ${String(e?.message || e).slice(0, 160)}`); }
+    }
+    if (out.kicks.length < 60) out.kicks.push(row);
+  }
+  console.log(`tier-one: morning screen loc=${locationId} on=${cfg.autoKick} planned=${out.planned} applied=${out.applied}`);
+  return out;
 }

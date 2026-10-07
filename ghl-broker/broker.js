@@ -296,7 +296,7 @@ const TICK_JOBS = [
   } },
   // Once a day: every agent's tier tag agrees with their Acquisitions card.
   { area: "tier-check", run: async ({ client, locationId, saved }) => {
-    const tiered = await maybeRunTierCheck({ client, locationId, store, saved });
+    const tiered = await maybeRunTierCheck({ client, locationId, store, saved, operatorStatus: (a) => offersRouter.applyOperatorStatus?.(a) });
     if (tiered) console.log(`tier check for ${locationId}: ${tiered.applied}/${tiered.planned} fixed of ${tiered.considered} cards${tiered.errors.length ? `, errors: ${tiered.errors[0]}` : ""}`);
   } },
   // Addresses that came in past the daily underwrite cap, once it resets.

@@ -13,6 +13,7 @@ import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mi
 import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
 import { DESK_DEFAULTS, normalizeDesk } from "@shared/call-list.js";
 import { UNDERWRITE_CHECKS_DEFAULTS, normalizeUnderwriteChecks } from "@shared/underwrite-checks.js";
+import { normalizeTierOne } from "@shared/tier-one.js";
 import { DEFAULT_OPENER_EXAMPLES, normalizeOpener } from "@shared/outreach-opener.js";
 import { tierDrips } from "@shared/agent-pulse.js";
 import FieldsManager from "./FieldsManager.jsx";
@@ -595,6 +596,9 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   };
   const lineTargets = { ...LINE_TARGET_DEFAULTS, ...(form.lineTargets || {}) };
   const desk = { ...DESK_DEFAULTS, ...(form.desk || {}) };
+  // Raw while typing (the number box can be empty), normalized on save.
+  const tierOne = { ...normalizeTierOne(form.tierOne), autoKickMax: form.tierOne?.autoKickMax ?? normalizeTierOne().autoKickMax };
+  const setTierOne = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, tierOne: { ...(f.tierOne || {}), [k]: v } })); };
   const setTouch = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), touchBudget: { ...(f.dispoAutopilot?.touchBudget || {}), [k]: v } } })); };
   const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
@@ -644,6 +648,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       if (form.underwriteChecks) clean.underwriteChecks = normalizeUnderwriteChecks(form.underwriteChecks);
       if (form.lineTargets) clean.lineTargets = normalizeLineTargets(Object.fromEntries(Object.entries(form.lineTargets).map(([k, v]) => [k, typeof v === "string" ? Number(v.replace(/[$,\s]/g, "")) : v])));
       if (form.desk) clean.desk = normalizeDesk(form.desk);
+      if (form.tierOne) clean.tierOne = normalizeTierOne(form.tierOne);
       if (clean.dispoAutopilot?.touchBudget) clean.dispoAutopilot.touchBudget = { ...clean.dispoAutopilot.touchBudget, ...Object.fromEntries(["quietPerWeek", "talkingPerWeek", "talkingDays", "bundleMax"].filter((k) => clean.dispoAutopilot.touchBudget[k] != null).map((k) => [k, Number(clean.dispoAutopilot.touchBudget[k])])) };
       if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare", "quietEveryDays", "afterDealDays"].filter((k) => clean.dispoAutopilot.pulse[k] != null && clean.dispoAutopilot.pulse[k] !== "").map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
       const r = await saveSettings(clean);
@@ -676,6 +681,26 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           deal below. "Classic 70% rule" only applies to the 70%-ARV mode. The <b>Blended</b> mode averages
           the back-stack, the 90%-ARV anchor and the 70% rule, so these figures reach it too.
         </p>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="tier-one-settings">
+        <h2 className="mb-1 text-sm font-bold">Tier 1 (GHL)</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Today → Tier 1 reads GHL's Tier 1 stage and flags cards that probably aren't a live flip. Pass, Kick out and
+          a written offer you send move the GHL card already. These two let the machine do it too. Both off by default.
+        </p>
+        <label className="mb-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={tierOne.autoKick} onChange={(e) => setTierOne("autoKick")(e.target.checked)} />
+          <span><span className="font-semibold">Clear sure misses every morning</span> — sold, not a flip in their words, not single-family, already
+            passed, or no house after a week. The card goes to Not a Good Deal. Never a card you added this week.</span>
+        </label>
+        <div className="mb-3 ml-6 w-48">
+          <Num label="At most a morning" value={tierOne.autoKickMax} onChange={setTierOne("autoKickMax")} />
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={tierOne.followMachineSends} onChange={(e) => setTierOne("followMachineSends")(e.target.checked)} />
+          <span><span className="font-semibold">The machine's written offers move the card to Offer Out</span> — as yours already do.</span>
+        </label>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="buyer-view-settings">
