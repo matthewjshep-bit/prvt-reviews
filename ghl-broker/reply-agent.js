@@ -60,6 +60,7 @@ import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone } from "./shared/held-underwrites.js";
+import { passedOnHouse, isTierOneAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
@@ -1430,7 +1431,7 @@ export function underwritableAddress(raw) {
  * the two never fight. Returns { learned: [line], written: [key] }. Never
  * throws; a field write that fails is a warning on the draft.
  */
-export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [], store = null, draftId = null, intent = "", inbound = "" }) {
+export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [], store = null, draftId = null, intent = "", inbound = "", notOurKind = false }) {
   if ((!profile && !subjectProperty) || !contactId || party === "unknown") return { learned: [], written: [] };
   const type = party === "investor" ? "investor" : "agent";
   // The record first, GHL second. Everything the model read out of this
@@ -1482,7 +1483,7 @@ export async function applyProfileUpdates({ client, locationId, contactId, party
     if (aim && addressKey(aim) !== addressKey(cur("subject_property"))) {
       writes.subject_property = aim;
       learned.push(`subject property: ${aim}`);
-      if (store && draftId) await recordEvent({ store, locationId, contactId, party: "agent", type: "subject_property_set", at: new Date(now).toISOString(), address: aim, source: "conversation", ref: draftId, data: { from: cur("subject_property") } });
+      if (store && draftId) await recordEvent({ store, locationId, contactId, party: "agent", type: "subject_property_set", at: new Date(now).toISOString(), address: aim, source: "conversation", ref: draftId, data: { from: cur("subject_property"), ...(notOurKind ? { notOurKind: true } : {}) } });
     }
   }
   if (profile?.personalDetails) {
@@ -4061,7 +4062,7 @@ async function runReply(job, ctx) {
     const filed = await applyProfileUpdates({
       client, locationId, contactId: job.contactId, party, profile: learnable, custom: a.custom,
       summary: draft.summary, subjectProperty: draft.propertyAddress, config, now, warnings,
-      store, draftId: record.id, intent: draft.intent, inbound: job.message,
+      store, draftId: record.id, intent: draft.intent, inbound: job.message, notOurKind,
     });
     if (filed.learned.length || filed.written.length) {
       record = { ...record, profileUpdates: { learned: filed.learned, written: filed.written }, warnings: warnings.slice(0, 6), updatedAt: new Date().toISOString() };
@@ -4281,7 +4282,9 @@ async function runReply(job, ctx) {
     record = { ...record, actions: record.actions.map((x) => x.type === "start_underwrite" && x.status === "pending" && !x.replaceOfferId ? { ...x, status: "skipped", detail: why } : x), updatedAt: new Date().toISOString() };
     await store.updateReplyDraft(record.id, record).catch(() => {});
   }
-  if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent)) {
+  // Not when their own words say it isn't a flip: the reply is "that one's
+  // more finished than what we buy", and Tier 1 is houses that need work.
+  if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent) && !notOurKind) {
     const already = new Set([...plan.auto, ...plan.suggested].map((a) => `${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`));
     const extra = planActions({ party, intent: "new_property", confidence: "high", playbook, minConfidence: "high" });
     const fresh = [...extra.auto, ...extra.suggested].filter((a) => !already.has(`${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`))
@@ -4290,6 +4293,23 @@ async function runReply(job, ctx) {
     if (fresh.length) {
       for (const a of fresh) (a.mode === "auto" ? plan.auto : plan.suggested).push(a);
       record = { ...record, actions: [...record.actions, ...fresh], updatedAt: new Date().toISOString() };
+      await store.updateReplyDraft(record.id, record).catch(() => {});
+    }
+  }
+
+  /* --- 4e′. a house we passed on doesn't put them back on Tier 1 --- */
+  // Tier 1 is the list Matt works by hand (GHL's stage); a pass takes the
+  // house off it. An agent pitching the same house again ("still needs a
+  // gut, want another look?") would otherwise be re-tagged and their card
+  // reopened to Tier 1 — the tier-1 rule's actions stand down for it. A
+  // different house still runs the rule. (Matt, 2026-10-07)
+  if (party === "agent" && draft.propertyAddress && [...plan.auto, ...plan.suggested].some(isTierOneAction)) {
+    const evs = (await store.listContactEvents?.(locationId, job.contactId, { types: [...TIER_ONE_OUT_EVENTS, "tier1_added"], limit: 100 }).catch(() => [])) || [];
+    const passed = passedOnHouse({ offers: bookRows, events: evs, address: draft.propertyAddress });
+    if (passed) {
+      plan.auto = plan.auto.filter((x) => !isTierOneAction(x));
+      plan.suggested = plan.suggested.filter((x) => !isTierOneAction(x));
+      record = { ...record, actions: (record.actions || []).map((x) => (isTierOneAction(x) && x.status === "pending" ? { ...x, status: "skipped", detail: passed.why } : x)), updatedAt: new Date().toISOString() };
       await store.updateReplyDraft(record.id, record).catch(() => {});
     }
   }
