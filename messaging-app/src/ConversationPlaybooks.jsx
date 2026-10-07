@@ -849,7 +849,7 @@ export function PartyPlaybooks({ config, patch, workflows }) {
               <p className={HINT}>When the outreach page (or its daily sweep) imports an agent, draft the first text from their hook listing: saw it, we buy as-is for cash, got anything that needs work? Replaces the GHL workflow template. Tick "first text about their listing" on the auto-send list to let it go by itself.</p>
             </div>
             <div>
-              <Toggle checked={pb.realmCheck?.enabled} onChange={(v) => setPb({ realmCheck: { enabled: v } })}>
+              <Toggle checked={pb.realmCheck?.enabled} onChange={(v) => setPb({ realmCheck: { ...(pb.realmCheck || {}), enabled: v } })}>
                 <span className="font-semibold">Realm check when numbers land</span>
               </Toggle>
               <p className={HINT}>When an auto-underwrite creates an offer for an agent, draft a text that floats the number as a soft one and asks if it's in the realm before the formal offer goes. It waits in the outbox like any reply; tick "floated our number" on the auto-send list to let it go by itself.</p>

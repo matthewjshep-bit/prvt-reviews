@@ -590,3 +590,14 @@ test("texts the machine starts stop at 5pm Pacific unless the page says otherwis
   assert.equal(normalizeConversationAi({ autoSend: { machineUntil: "16:30" } }).autoSend.machineUntil, "16:30");
   assert.equal(normalizeConversationAi({ autoSend: { machineUntil: "5pm" } }).autoSend.machineUntil, "17:00", "a bad time falls back");
 });
+
+// reply-agent reads realmCheck.leadWhenConfident === false, but the normaliser
+// only kept `enabled`, so switching it off never survived a save.
+test("turning off 'lead with our number' survives a save", () => {
+  const off = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: true, leadWhenConfident: false } } } });
+  assert.equal(off.parties.agent.realmCheck.leadWhenConfident, false);
+  assert.equal(off.parties.agent.realmCheck.enabled, true);
+  // Absent means today's behaviour: a confident underwrite leads with the number.
+  const on = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: true } } } });
+  assert.equal(on.parties.agent.realmCheck.leadWhenConfident, true);
+});

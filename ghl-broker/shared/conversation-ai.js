@@ -554,7 +554,10 @@ const PLAYBOOK = () => ({
   // floats the number as a soft one and asks whether it's in the realm
   // before the formal offer goes. Sends itself only if realm_check is on the
   // party's auto-send list.
-  realmCheck: { enabled: false },
+  // `leadWhenConfident`: a clean, well-comped underwrite floats the number
+  // itself ("based on our analysis we can likely do around 450ish") rather
+  // than asking for their read first.
+  realmCheck: { enabled: false, leadWhenConfident: true },
   // The lessons digest from our own fell-through deals, in the agent
   // context. Off: the digest exists only once a person saved it.
   lessons: { enabled: false },
@@ -880,7 +883,10 @@ function normalizePlaybook(p, party, seed = {}) {
       unlessTags: list(fb.unlessTags, { max: 20, each: 80, lower: true }),
     },
     showMath: bool(src.showMath, false),
-    realmCheck: { enabled: bool(src.realmCheck?.enabled, false) },
+    realmCheck: {
+      enabled: bool(src.realmCheck?.enabled, false),
+      leadWhenConfident: bool(src.realmCheck?.leadWhenConfident, true),
+    },
     takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
     // May the bot carry the post-mortem digest (percentages only, never a
     // dollar figure) into an agent negotiation? Off until a person reads it.
