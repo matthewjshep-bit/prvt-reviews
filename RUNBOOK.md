@@ -1326,6 +1326,18 @@ two location-wide reads (reply drafts and the clocks' events), done in
 - A sortable "Next follow-up" column. The group header shows the agent's
   soonest follow-up, or their gap.
 - A "No follow-up" chip: live offers with nothing coming, or one that's late.
+  (2026-10-07: under "Closed / other" — see the three tabs below.)
+- **The Offers tabs (2026-10-07, Matt: "simplify this").** Three tabs, each
+  row in one, Hot winning (`messaging-app/src/offer-tabs.js`):
+  **🔥 Hot** (`isHot`) · **Not sent** (priced, no paper: `effectiveStatus`
+  "new", floated or not — "Floated 5d ago" from the newest sent
+  `realm_check` draft, attached as `floatedAt` by `GET /api/offers?activity=1`
+  via `floatSentIndex`, else "Priced 3d ago"; oldest first, every agent
+  unfolded so each row's Send is one click) · **Sent** (sent + countered).
+  All, Deals, Passed / gone, Drafts, Off-market, No follow-up and AI review
+  are under one "Closed / other" menu. The page opens on Hot, or Not sent
+  when nothing is hot. The KPI that read "Awaiting reply" reads "Not sent ·
+  oldest Nd". The Single family chip is gone; non-SFR rows keep their pill.
 - Changing a status in the table shows "updates on reload" rather than a
   schedule worked out for the old status.
 
@@ -2180,7 +2192,83 @@ four answers under the call card, each a person's tap — the band and
 - **Walk away** — confirm, then the offer is `we_passed` (machine texts about
   it stop) and the counter draft is dismissed.
 
+### Tier 1 — GHL's stage, screened (2026-10-07)
+
+Matt: "where does the tier 1 come from in our today? It doesn't match up with
+the tier 1 in our opportunities pipeline, and that's my source of truth."
+In play (below) counted any open offer of any age as Tier 1 — 96 agents
+against GHL's 28 cards. Today's second tab is now **Tier 1**: the cards in
+GHL's Acquisitions "Tier 1" stage, read live, each with the house it's about,
+our numbers and the machine's first look. `?view=inplay` opens it;
+`?view=board` is still the lane board.
+
+- **Read:** `GET /api/dashboard/tier1` (`loadTierOne`,
+  `ghl-broker/tier-one.js`; five minutes' cache, `?fresh=1` skips it). One
+  read of the Acquisitions board; per card, the contact's events and their
+  current offer (the full doc for `priceWatch` / hold reasons). Flagged cards
+  sort first, then the longest in Tier 1. `belongs` lists agents `agentTier`
+  reads as Tier 1, clean on the screen and not stale, with no card at Tier 1
+  or later. `tier2` is the roster's Tier 2 rows.
+- **The house** (`pickHouse`, `shared/tier-one.js`): their current open
+  offer, else a house they named in the last 21 days if it's newer, else a
+  held draft, else the card's name when it reads like a street address.
+- **The screen** (`screenTierOne`). Red = sure, amber = their words only,
+  grey = soft:
+
+  | flag | when |
+  |---|---|
+  | Sold or off the market | offer `unavailable`; `priceWatch.offMarketAt` / an unresolved `listing_off_market`; Zillow status pending/sold/contingent — sure. `houseGone` in their last text — amber |
+  | Not a flip | the named house carries `notOurKind` — sure. `isTurnkeyReply` on their last text (14 days) — amber |
+  | Not single-family | asset type outside `focusKinds`, or a `not our kind of house` hold — sure |
+  | No house named | no house, or no house number — sure |
+  | Already passed | `passedOnHouse` (we passed / no longer available, or a `tier1_passed`/`tier1_kicked` event) — sure; they passed on our offer — amber |
+  | Quiet 3+ weeks | nothing from them and nothing priced in 21 days — grey, never a fail |
+
+- **Pass** (`POST /api/dashboard/tier1/:contactId/pass`): the house's open or
+  held offer → `we_passed` through the offers router's `applyOperatorStatus`
+  (ledger line, tag sync, promise settled, machine texts stopped); a
+  `tier1_passed` event with the address — so a house never priced counts too;
+  an open `address_pending` closed; the card → **Passed on Offer**, read back
+  by id; the `tier-1` tag removed. **tier-2 is never added** — GHL's "Tier
+  2+3 nurture" would text them. A deal refuses (409).
+- **Kick out** (`…/kick`, `reason`): the same, but `unavailable` when it's
+  gone (else `we_passed`), a `tier1_kicked` event, and the card → **Not a
+  Good Deal**.
+- **Add** (`…/add`): the card → Tier 1 (reopening a passed/lost one; never
+  from Offer Out or later), or a new card; a `tier1_added` event. No tag
+  write — the 7am tier check adds tier-1 to a Tier 1 card, which can start
+  the TIER 1 workflow.
+- **Offer →** opens the offer in the split pane. A written offer **you** send
+  (`POST /api/offers/:id/send`, live and sent) moves the card to **Offer
+  Out**, only from New Lead / Contacted / Tier 1-3, never with two open
+  cards, with a `ghl_stage_moved` event. The machine's sends do the same
+  only with `settings.tierOne.followMachineSends` (off).
+- **Nothing moves** while the GHL mirror is enabled (it owns the board).
+  Log lines carry ids and counts only.
+- **After a pass, the nurture is the agent check-in.** `housesFrom` counts
+  Tier 1 passes as walked away (never raised as a fresh listing for six
+  months); `agentPulseSubject` skips passed houses for `lastHouse` and lists
+  them in `avoid`, and the prompt says "Never bring up X — we passed on it."
+  The ask stays "anything coming up that needs work?", with the off-market
+  version at most monthly. `agentTier` drops a named house that was passed
+  or that the agent said isn't a flip.
+- **The bot doesn't put them back.** A not-a-flip reply that names the house
+  no longer runs the new-property rule (no tier-1 tag, no TIER 1 workflow,
+  no card move), and an agent re-pitching a house we passed on has the
+  tier-1 rule's tag/workflow actions skipped ("we passed on this house"). A
+  different house still runs it.
+- **Morning clear-out — off** (`settings.tierOne.autoKick`, Settings → Tier 1
+  (GHL)). The 7am tier check reuses its board read and plans
+  (`autoKickPlan`): sure misses only — gone, not a flip, not single-family,
+  already passed, or no house after 7 days in Tier 1 with no open address
+  chase — never a card added by hand in the last 7 days. The plan is always
+  kept on the `tierCheck` cursor as `last.tierOne` (ids and reasons). With the
+  switch on it kicks at most `autoKickMax` (10) a morning, `by: "machine"`.
+
 ### In play — every agent with something live (2026-10-02)
+
+> Superseded 2026-10-07 by **Tier 1** (above); `InPlayView.jsx` is gone and
+> `?view=inplay` opens Tier 1. `shared/in-play.js` is unused by the console.
 
 Today's second tab (it replaced "Board"; the lane board is its **By house**
 toggle, and `?view=board` still opens it). One row per agent from the Offers
@@ -2220,6 +2308,10 @@ deal's price is what `promoteToDeal` always read — the PSA's, else the
 offer's — never an "agreed" on record, which can sit above the book.
 
 ### Tier 1 / Tier 2 — kept by the app, not GHL (2026-10-02)
+
+> 2026-10-07: GHL's Tier 1 stage is the list again (Matt: "that's my source
+> of truth"), screened by the app — see **Tier 1 — GHL's stage, screened**.
+> `agentTier` still feeds the `belongs` list and Tier 2.
 
 Matt: track the tiers in the app rather than in GHL's pipeline stages, for
 agents and for buyers. GHL's tiers were tags and card stages the bot and the
@@ -2372,6 +2464,10 @@ contract stage, a lost card, a live deal's card, or an agent with two open
 cards; and never into Tier 2/3 while a published nurture workflow would text
 them on the move (`allowNurtureTrigger` overrides; an unreadable workflow
 list counts as published).
+
+Separately of this plan (2026-10-07): a written offer you send moves the
+card to Offer Out, and Tier 1's Pass / Kick out / Add move cards on your
+press — see **Tier 1 — GHL's stage, screened**.
 
 ### Today's three groups, and the brake (2026-09-17)
 
@@ -2856,6 +2952,9 @@ The verdicts, in order:
   agent calls finished; anything that might need work still gets the number.
   The sweep's `TURNKEY_TEXT` reads "move in ready" with a space and "not a
   fix n flip" too.
+  2026-10-07: such a reply that names the house no longer runs the
+  new-property rule (no tier-1 tag, no TIER 1 workflow), and the named house
+  carries `notOurKind` — see **Tier 1 — GHL's stage, screened**.
   Their numbers are read by house, not by the full address key: Shelley
   Elenbaas' 100k (2026-09-21) was filed under the thread's "161st Court NE,
   Redmond, WA", the rerun looked under the listing's "161st Ct NE, Redmond,
@@ -3303,7 +3402,7 @@ Custom Menu Links, each one job, each component in exactly one place:
 
 | Menu link | URL | Tabs |
 |---|---|---|
-| Today (the old Overview link — rename it) | `https://<site>/dashboard?location_id={{location.id}}` | Desk (2026-10-02: one row per person down the left in Call · Decide · The machine is on it, today's numbers on top, and one person at a time as offer · conversation · call card; `&row=<id>` opens the person a row folds into) · In play (every agent with something live, Tier 1 / Tier 2; "By house" is the old Board; `?view=board` still opens it) |
+| Today (the old Overview link — rename it) | `https://<site>/dashboard?location_id={{location.id}}` | Desk (2026-10-02: one row per person down the left in Call · Decide · The machine is on it, today's numbers on top, and one person at a time as offer · conversation · call card; `&row=<id>` opens the person a row folds into) · Tier 1 (2026-10-07: GHL's Tier 1 stage screened, Pass / Offer →, Belongs, Tier 2; `?view=inplay` opens it; `?view=board` is the lane board) |
 | Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Controls (the dial + every switch) · Conversation AI |
 | Reports | `https://<site>/reports?location_id={{location.id}}` | Flow · Activity (charts) · Lessons (outcomes + fell-through lessons) |
 
@@ -4489,7 +4588,7 @@ Matt: focus the app on single-family residences. Multi-family stays a kind an of
 - **The agent bot** reads `agentFocusRule` beside its other rules: we buy single-family houses only. A house that is plainly a condo, townhouse, mobile home, multi-family or land gets a kind no and an ask for single-family fixers, never "let me run numbers". The exception is a house outside the focus that we chose to price (`pricedOutsideFocus` in `conversation-context.js`: its current offer has a number and the house isn't passed, withdrawn or gone). The rule names it, and the bot talks numbers on it like any other house.
 - **Outreach:** the autopilot's default types are `Single Family` only (`DEFAULT_PROPERTY_TYPES`). The live setting was already that. The Agent Outreach page already defaulted to it.
 - **Seeing it:**
-  - A **Single family** chip on Offers.
+  - A **Single family** chip on Offers (removed 2026-10-07: single family is the kind of house, not a stage of an offer; non-SFR rows keep their pill).
   - A **Single family only** toggle on Deals.
   - On Line, a **Single family vs other kinds** card: the funnel by kind, with houses nobody typed in their own column (`kindStats` in `shared/line.js`, built on `funnelBy` in `shared/off-market.js`).
   - Lean list rows carry the kind: stored on the offer, else Zillow's `homeType`. Postgres returns `subjectHomeType` in the lean SQL for that, so older offers sort into it with no backfill.

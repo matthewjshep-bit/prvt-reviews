@@ -214,3 +214,54 @@ test("no name or message text in the logs", async () => {
   assert.ok(lines.some((l) => /tier-one:/.test(l)), "it does log");
   assert.doesNotMatch(all, /Sam Lee|divorce|214th/);
 });
+
+/* ---------- the morning clear-out (tierOne.autoKick, ships off) ---------- */
+
+const { runTierOneScreen } = await import("./tier-one.js");
+
+async function morning({ autoKick, autoKickMax }) {
+  const LOC = `loc-tier-one-am-${++seq}`;
+  _resetPipelineCache();
+  const ghl = ghlBoard([
+    { id: "opA", contactId: "a1", name: "A", pipelineStageId: "s-t1" },
+    { id: "opB", contactId: "b1", name: "B", pipelineStageId: "s-t1" },
+    { id: "opC", contactId: "c1", name: "C", pipelineStageId: "s-t1" },
+    { id: "opD", contactId: "d1", name: "D", pipelineStageId: "s-t1" },
+  ]);
+  const pending = (contactId, address) => offer(LOC, { contactId, address, priceWatch: { status: "PENDING" } });
+  await pending("a1", "1 Gone St, Kent, WA 98031");
+  await pending("b1", "2 Gone St, Kent, WA 98031");
+  await pending("c1", "3 Gone St, Kent, WA 98031");
+  await recordEvent({ store, locationId: LOC, contactId: "c1", party: "agent", type: "tier1_added", at: ago(2), address: "3 Gone St, Kent, WA 98031", source: "tier_one" });
+  await offer(LOC, { contactId: "d1", address: "4 Live St, Kent, WA 98031" });
+  await said(LOC, "d1", "needs a full gut");
+  const statusCalls = [];
+  const operatorStatus = async ({ offer: o, status }) => { statusCalls.push([o.contactId, status]); await store.updateOffer(o.id, { ...o, status }); return []; };
+  const saved = { tierOne: { autoKick, autoKickMax } };
+  const r = await runTierOneScreen({ client: ghl.client, locationId: LOC, saved, store, deps: { operatorStatus } });
+  return { r, ghl, statusCalls, LOC };
+}
+
+test("with the switch off the morning run only reports", async () => {
+  const { r, ghl, statusCalls } = await morning({ autoKick: false });
+  assert.equal(r.on, false);
+  assert.equal(r.planned, 2, "the two gone houses; not the one added this week, not the live one");
+  assert.equal(r.applied, 0);
+  assert.deepEqual(statusCalls, []);
+  assert.deepEqual(ghl.calls.filter(([m]) => m !== "GET"), []);
+  assert.deepEqual(r.kicks.map((k) => k.reason), ["gone", "gone"]);
+  assert.doesNotMatch(JSON.stringify(r), /Gone St|"A"|"B"/, "ids and reasons only");
+});
+
+test("with it on it clears at most autoKickMax, marked as the machine's, and never a card you added this week", async () => {
+  const { r, ghl, statusCalls, LOC } = await morning({ autoKick: true, autoKickMax: 1 });
+  assert.equal(r.planned, 2);
+  assert.equal(r.applied, 1);
+  assert.deepEqual(statusCalls.map(([, s]) => s), ["unavailable"]);
+  assert.equal([...ghl.board.values()].filter((c) => c.pipelineStageId === "s-bad").length, 1);
+  assert.equal(ghl.board.get("opC").pipelineStageId, "s-t1", "added by hand this week");
+  assert.equal(ghl.board.get("opD").pipelineStageId, "s-t1", "a live house stays");
+  const kicked = r.kicks.find((k) => k.applied);
+  const events = await store.listContactEvents(LOC, kicked.contactId, { limit: 50 });
+  assert.equal(events.find((e) => e.type === "tier1_kicked")?.data?.by, "machine");
+});

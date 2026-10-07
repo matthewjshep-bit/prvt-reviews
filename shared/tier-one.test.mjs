@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { passedOnHouse, isTierOneAction, pickHouse, screenTierOne, cardMove, normalizeTierOne } from "./tier-one.js";
+import { passedOnHouse, isTierOneAction, pickHouse, screenTierOne, cardMove, normalizeTierOne, autoKickPlan } from "./tier-one.js";
 import { stageKeys } from "./ghl-stages.js";
 
 const NOW = Date.parse("2026-10-07T18:00:00Z");
@@ -130,4 +130,21 @@ test("a sent offer moves a tier card to Offer Out, never Negotiations back", () 
 test("the switches ship off", () => {
   assert.deepEqual(normalizeTierOne(undefined), { autoKick: false, autoKickMax: 10, followMachineSends: false });
   assert.deepEqual(normalizeTierOne({ autoKick: "yes", autoKickMax: 500 }), { autoKick: false, autoKickMax: 50, followMachineSends: false });
+});
+
+test("only a sure miss is cleared on its own; a missing address waits a week, and a card you added is left a week", () => {
+  const row = (flags, extra = {}) => ({ contactId: extra.contactId || "c", opportunityId: "op", ok: false, inStageSince: ago(2), flags, house: { address: H }, ...extra });
+  const sure = (key) => ({ key, sure: true });
+  const soft = (key) => ({ key, sure: false });
+  const plan = autoKickPlan({ now: NOW, rows: [
+    row([sure("gone")], { contactId: "gone" }),
+    row([soft("gone")], { contactId: "words-only" }),
+    row([soft("stale")], { contactId: "quiet", ok: true }),
+    row([sure("no_house")], { contactId: "no-house-new" }),
+    row([sure("no_house")], { contactId: "no-house-old", inStageSince: ago(9) }),
+    row([sure("no_house")], { contactId: "no-house-chasing", inStageSince: ago(9), chasing: true }),
+    row([sure("turnkey")], { contactId: "added", addedAt: ago(3) }),
+    row([sure("not_sfr")], { contactId: "townhouse" }),
+  ] });
+  assert.deepEqual(plan.map((k) => [k.contactId, k.reason]), [["gone", "gone"], ["no-house-old", "no_house"], ["townhouse", "not_sfr"]]);
 });

@@ -23,6 +23,7 @@ import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { planStageMoves, normalizeGhlStages } from "./shared/ghl-stages.js";
 import { openPromises } from "./shared/promise-resolver.js";
 import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
+import { runTierOneScreen } from "./tier-one.js";
 
 export const CURSOR_NAME = "tierCheck";
 export const CHECK_HOUR = 7;             // PT
@@ -213,7 +214,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
 
 /** The tick's call: once a day from 7am PT. */
 const inFlight = new Set();
-export async function maybeRunTierCheck({ client, locationId, store = defaultStore, ghl = null, saved = {}, now = Date.now() }) {
+export async function maybeRunTierCheck({ client, locationId, store = defaultStore, ghl = null, saved = {}, operatorStatus = null, tierOneDeps = null, now = Date.now() }) {
   // Once a day; a run a deploy killed, or one that failed, comes back later
   // that day (daily-gate.js).
   const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: localHour(now), startHour: CHECK_HOUR,
@@ -226,9 +227,14 @@ export async function maybeRunTierCheck({ client, locationId, store = defaultSto
     // kept as a report, moved only with ghlStages.mode "on".
     const stageMoves = await runStagePlan({ client, locationId, store, saved, ghl, read: r.read, dryRun: false, now })
       .catch((e) => ({ errors: [String(e?.message || e).slice(0, 160)] }));
+    // GHL's Tier 1 stage screened (ghl-broker/tier-one.js): sure misses are
+    // planned every morning and taken off only with tierOne.autoKick on.
+    const tierOne = await runTierOneScreen({ client, locationId, saved, store, read: r.read, now,
+      deps: { ...(tierOneDeps || {}), ...(operatorStatus ? { operatorStatus } : {}) } })
+      .catch((e) => ({ errors: [String(e?.message || e).slice(0, 160)] }));
     const summary = { considered: r.considered, planned: r.planned, applied: r.applied, errors: r.errors.slice(0, 5),
       fixes: r.fixes.slice(0, 40).map((f) => ({ name: f.name, add: f.add, remove: f.remove, moved: !!f.moveTo, why: f.why })),
-      stageMoves: { ...stageMoves, at: iso(now) } };
+      stageMoves: { ...stageMoves, at: iso(now) }, tierOne: { ...tierOne, at: iso(now) } };
     await closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, last: summary });
     return r;
   } catch (e) {
