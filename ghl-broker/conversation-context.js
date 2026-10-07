@@ -12,6 +12,7 @@
 // The loaders do I/O; the builders are pure and tested.
 
 import { fmtMoney } from "./shared/offer-calc.js";
+import { offerMath, compactMath, mathAllowedAmounts } from "./shared/offer-breakdown.js";
 import { isOffMarket, offMarketAskDaysAgo, OFF_MARKET_ASK_EVERY_DAYS } from "./shared/off-market.js";
 import { effectiveStatus, offerHeat, agreedAboveOurNumber, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused, priceAgreed } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
@@ -132,6 +133,8 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
   const older = new Set();
   const lines = [];
   const amounts = new Set();
+  // Figures the bot must never say: profit and risk, when we show our work.
+  const hidden = new Set();
   // Our number on each house — the come-down when there is one — for the
   // reply gate's "never more than ours" check.
   const numbers = [];
@@ -164,17 +167,21 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     if (t.earnestMoney) amounts.add(Math.round(t.earnestMoney));
     const arv = Number(o.arv ?? o.calc?.inputs?.arv) || 0;
     const repairs = Number(o.repairs ?? o.calc?.inputs?.repairs) || 0;
-    // Showing our work: the percent of ARV the offer starts from, and the two
-    // stepping stones the bot may say out loud on the way to the number.
-    const pct = Number(o.calc?.settings?.maoPctOfArv) || 0;
-    const atPct = arv && pct ? Math.round(arv * pct / 100) : 0;
-    // What's left between (pct × ARV − rehab) and the offer is our costs and
-    // margin. It's never named; it only has to be plausible as that. A gap
-    // that is negative or huge means the offer was capped or overridden and
-    // the arithmetic shouldn't be walked through.
-    const gap = atPct && amount ? atPct - repairs - amount : 0;
-    const ties = Boolean(atPct && amount) && gap >= 0 && gap <= Math.max(60000, amount * 0.08);
-    if (showMath) { for (const n of [arv, repairs, atPct, atPct && repairs ? atPct - repairs : 0]) if (n > 0) amounts.add(n); }
+    // Showing our work (shared/offer-breakdown.js): what it's worth fixed up,
+    // less closing, holding and the work, and profit and risk is what's left.
+    // The walk only ties to the number in play when that number is the
+    // book's own — not after we came down by text, and not a price set above
+    // what the costs leave room for. Then the method is described, not added up.
+    const math = showMath && amount ? (o.math || compactMath(offerMath(o))) : null;
+    const ties = Boolean(math) && !down && !(math.premium > 0) && Math.abs(math.total - amount) < 1000;
+    if (showMath) {
+      for (const n of [arv, repairs]) if (n > 0) amounts.add(n);
+      if (ties) {
+        for (const n of mathAllowedAmounts(math)) amounts.add(n);
+        // Profit and risk is never given a figure; the gate holds a text that does.
+        if (math.residual > 0) hidden.add(math.residual);
+      }
+    }
     // A counter on the book is always THEIRS. "countered at $650,000" read
     // as ours once — say whose it is.
     const counters = (o.statusHistory || []).filter((h) => h?.status === "countered").slice(-2)
@@ -202,11 +209,15 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         : "no amount recorded",
       asking ? `(asking ${fmtMoney(asking)})` : "",
       terms ? `terms: ${terms}` : "",
-      showMath && (arv || repairs)
-        ? `[our math: ARV ${arv ? fmtMoney(arv) : "n/a"}${atPct ? `; ${pct}% of ARV = ${fmtMoney(atPct)}` : ""}; rehab ${repairs ? fmtMoney(repairs) : "n/a"}` +
-          `${atPct && repairs ? `; less rehab = ${fmtMoney(atPct - repairs)}` : ""}; after our costs and margin = the offer` +
-          `${ties ? "" : " — the figures don't tie exactly (the number was capped or set by hand): describe the method, don't do the arithmetic out loud"}]`
-        : "",
+      showMath && ties
+        ? `[our math: we base it on about ${math.pctOfArv}% of what it's worth fixed up, less the work — ARV ${fmtMoney(math.arv)}; ` +
+          `closing to buy and resell about ${fmtMoney(math.closing)} (agents' commissions and closing); ` +
+          `holding about ${fmtMoney(math.holding)} for ${math.months} months (loan interest and points, taxes, insurance, utilities); ` +
+          `rehab ${math.repairs ? fmtMoney(math.repairs) : "none"}; what's left is our profit and risk (never give it a figure) = the offer]`
+        : showMath && (arv || repairs)
+          ? `[our math: ARV ${arv ? fmtMoney(arv) : "n/a"}; rehab ${repairs ? fmtMoney(repairs) : "n/a"}; less closing, holding and our profit and risk = the offer` +
+            ` — the figures don't tie to the number in play (it was capped, set by hand, or we came down since): describe the method, don't do the arithmetic out loud]`
+          : "",
       up
         ? `— WE TEXTED ${fmtMoney(up.amount)} ${dateWord(up.ts)} ("${up.text}"), but the offer was never revised to it. ` +
           `It is NOT our number: never repeat it, confirm it, or treat a yes as agreement to it. A person is settling the price — say you're confirming with your partner`
@@ -236,7 +247,10 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
   // An older row's number is stale unless the live book says it too.
   for (const n of older) if (!amounts.has(n)) stale.add(n);
   for (const n of stale) amounts.delete(n);
-  return { text: lines.join("\n"), amounts: [...amounts], stale: [...stale], count: rows.length, numbers };
+  // A hidden figure that is also a figure we may say (profit and risk equal
+  // to the work, say) can't be told apart in a text, so it isn't hidden.
+  for (const n of hidden) if ([...amounts].some((a) => Math.abs(a - n) < 1000)) hidden.delete(n);
+  return { text: lines.join("\n"), amounts: [...amounts], stale: [...stale], hidden: [...hidden], count: rows.length, numbers };
 }
 
 // The tail of a history ledger — the properties they've sent or discussed
@@ -364,7 +378,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
         "nearest thousand or down to a round number (never up), with no dollar sign, and ask whether that works " +
         "for the seller. A yes means our letter of intent goes over and we ask them to write the official offer on NWMLS forms for us to sign. " +
         (showMath
-          ? "If they ask how we got there or push on the number, follow the MATH rule (show our work; never our margin or how we exit). "
+          ? "If they ask how we got there or push on the number, follow the MATH rule: walk them through the [our math] line beside it (never a figure on profit and risk, never how we exit). "
           : "Don't explain how we got there (ARV, repairs, fees). ") +
         "Don't volunteer it before you have their own read unless they ask. " +
         "An offer marked SENT is on paper: if they ask for the number or the terms, restate it " +
@@ -382,7 +396,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     offMarketLines({ offers, events, now }),
   ].filter(Boolean).join("\n\n");
   return {
-    text, amounts: [...amounts].filter((n) => !book.stale.includes(n)), forbiddenAmounts: [], staleAmounts: book.stale, offers: book,
+    text, amounts: [...amounts].filter((n) => !book.stale.includes(n)), forbiddenAmounts: [], staleAmounts: book.stale, hiddenAmounts: book.hidden, offers: book,
     summary: { offers: book.count, fields: fields.length, hook: Boolean(hookAddress), history: history.length },
   };
 }

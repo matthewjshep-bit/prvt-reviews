@@ -265,19 +265,24 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   }
   if (party === "agent") {
     parts.push(playbook.showMath
-      // Matt, 2026-09-17: show our work. The method is ours to share; the one
-      // piece that is never named is what we make and how we exit.
+      // Matt, 2026-09-17: show our work. 2026-10-07: "we usually use the
+      // 70-75% ARV − rehab number, but I want them to know what we base it
+      // off of (holding costs, profit margin, etc)". The costs are named and
+      // added up; the one figure never said is what's left (it holds our
+      // margin), and how we exit is never named at all.
       ? "MATH — SHOW OUR WORK (this overrides any earlier line about never explaining the math): when an agent asks how we got to a number, " +
-        "pushes back on it, or says it's low, walk them through it plainly, like a colleague. The method, always the same: we start at the percent of " +
-        "the After Repair Value shown beside the offer in the context (usually 75% of ARV — what it's worth fixed up), subtract the rehab, and what's " +
-        "left after our costs and margin is the number. Use the ARV and rehab figures shown beside that offer in the context — never invent or round " +
-        "them into different figures — e.g. \"we have it around 745 fixed up, 75% of that is about 559, less about 27 of work, and after our costs and " +
-        "margin we land at 501\". Two or three short sentences, numbers in thousands, no dollar signs. Then turn it into the useful question: if they " +
-        "see a higher ARV or a lighter rehab, ask for their numbers and say we'll re-run it on them. " +
-        "NEVER say assignment, assign, wholesale, wholesaler, fee, spread or end buyer, never state or hint at the size of our margin, and never itemise " +
-        "what is inside 'our costs and margin' — if asked, it's closing, holding and the risk we take on as-is. If the context line says the figures " +
-        "don't tie exactly, describe the method without doing the arithmetic out loud. Don't volunteer the math unprompted on a first float; it's for " +
-        "when they ask or push."
+        "pushes back on it, or says it's low, walk them through it plainly, like a colleague, from the [our math] line beside that offer in the " +
+        "context. The method is always the same: we base our number on about 70 to 75% of what the house is worth fixed up, less the work, and " +
+        "that gap is real costs: closing to buy it and to resell it (agents' commissions and closing), holding it while the work gets done (loan " +
+        "interest and points, taxes, insurance, utilities), and the profit that makes the risk of buying it as-is worth taking. Use the figures " +
+        "exactly as that line shows them, never invented or rounded into different ones, in thousands with no dollar signs, e.g. \"we base it on " +
+        "about 69% of the 500 it's worth fixed up, less the 50 of work; the rest is about 38 to buy and resell, 26 to hold it 5 months, and our " +
+        "profit and risk, which lands us at 295\". Two or three short sentences. NEVER put a figure on profit and risk; if they ask what it is, " +
+        "it's the return that makes it worth buying a house as-is, sight unseen, with the financing and the risk that come with it. NEVER say " +
+        "assignment, assign, wholesale, wholesaler, fee, spread or end buyer. Explaining is not arguing: never push back on their figures, and " +
+        "after a no, one sentence of the method is plenty before you ask for their number. Then turn it into the useful question: if they see " +
+        "a higher value or lighter work, ask for their numbers and say we'll re-run it on them. If the line says the figures don't tie, " +
+        "describe the method without doing the arithmetic out loud."
       : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and that your partner reviews the numbers.");
   }
   if (party === "agent") {

@@ -811,6 +811,25 @@ export function moneyIn(text) {
 }
 
 /**
+ * namesHidden(text, hidden) → the hidden figures the text says, any way at all
+ *
+ * Profit and risk (shared/offer-breakdown.js) is the one line of our math a
+ * text never gives a figure — it holds our margin. Said as "$91,217", "91k",
+ * or the bare "91" we text thousands as. The bare reading is deliberately
+ * eager (a false hold beats a leak), short of a count of days or months.
+ * Pure.
+ */
+export function namesHidden(text, hidden = []) {
+  const targets = (hidden || []).map((n) => Math.round(Number(n) || 0)).filter((n) => n >= 10000);
+  if (!targets.length) return [];
+  const t = String(text || "");
+  const said = new Set(moneyIn(t));
+  const BARE = /(?<![\d,.$])\b(\d{2,3})\b(?![\d,.]|\s*(?:%|[kKmM]\b|days?\b|weeks?\b|months?\b|years?\b|yrs?\b|hours?\b|mins?\b|minutes?\b|am\b|pm\b))/g;
+  for (const m of t.matchAll(BARE)) said.add(Number(m[1]) * 1000);
+  return targets.filter((h) => [...said].some((n) => Math.abs(n - h) < 1000));
+}
+
+/**
  * Everything that has to be true before a drafted reply could go out with
  * nobody reading it. Pure — this is the function to read if you want to know
  * what the agent would and wouldn't say on its own.
@@ -847,7 +866,7 @@ export function callsThemOurName(reply, { selfName = "", contactName = "", signO
 const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 
 export function evaluateReplyGates({
-  draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], inboundMessage = "", channel = "sms", style = null,
+  draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], hiddenAmounts = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", ourAmount = 0,
   vacantOk = false, carrierCheck = false, houseWords = "",
 }) {
@@ -916,6 +935,9 @@ export function evaluateReplyGates({
     // 10917 48th St E, 2026-09-27: "cash means no lender". We use hard money.
     const cash = claimsAllCash(draft.reply);
     if (cash) flags.push(`the draft says "${cash}" — we buy with a hard money loan, not all cash`);
+    // Showing our work names the costs; what's left is never given a figure.
+    const margin = namesHidden(draft.reply, hiddenAmounts);
+    if (margin.length) flags.push(`the draft puts a figure on our profit and risk (about ${Math.round(margin[0] / 1000)}K) — show the costs, never what's left`);
   }
   // What the house is like to get into. Rajesh Kasturi, 2026-09-29: "it's
   // open right now" went to a buyer about a house nobody had said was open.
@@ -2690,7 +2712,7 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   const forbiddenAmounts = extraForbidden.length
     ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
     : context.forbiddenAmounts;
-  return (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
+  return (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: context.hiddenAmounts || [], inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
     houseWords: houseWordsFor(context?.deals, a.transcript) });
@@ -3394,7 +3416,7 @@ async function runReply(job, ctx) {
 
   const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft: d, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
-    inboundMessage: inboundText, channel: job.channel, style: config.style,
+    hiddenAmounts: context.hiddenAmounts || [], inboundMessage: inboundText, channel: job.channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: ourNumberFor(context.offers?.numbers, d.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
@@ -4514,7 +4536,7 @@ export async function previewConversation({
     });
   if (SILENT_INTENTS.has(draft.intent)) return optOutView(draft.confidence, draft.summary || "the model read an opt-out");
   const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
-    draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [], inboundMessage: message, channel, style: config.style,
+    draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [], hiddenAmounts: context.hiddenAmounts || [], inboundMessage: message, channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),

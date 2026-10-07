@@ -1,4 +1,5 @@
 import test from "node:test";
+import { calculateOffers } from "./shared/offer-calc.js";
 import assert from "node:assert/strict";
 import { normalizeDispoAutopilot } from "./dispo-autopilot.js";
 import {
@@ -1426,9 +1427,34 @@ test("'in the realm' notes the offer and tags the agent; the math stays hidden u
   let seen2;
   await startReply({ client, locationId: "LOC", saved: shown, store, contactId: "c1", message: "why so low?", deps: { draft: async (args) => { seen2 = args; return DRAFT; } } });
   await settle();
-  assert.match(seen2.context.text, /\[our math: ARV \$620,000.*rehab \$55,000.*after our costs and margin = the offer/);
+  // No calc on this row: the figures are there, the costs can't be, so the
+  // method is described and not added up.
+  assert.match(seen2.context.text, /\[our math: ARV \$620,000; rehab \$55,000; less closing, holding and our profit and risk = the offer — the figures don't tie/);
   assert.doesNotMatch(seen2.context.text, /assign|wholesale|\bfee\b/i, "what we make and how we exit is never in the math line");
   assert.ok(seen2.context.amounts.includes(620000) && seen2.context.amounts.includes(55000));
+
+  // A priced offer: every cost, in Matt's framing, and profit and risk with no figure.
+  const calc = calculateOffers({ address: "12 Elm St, Renton, WA 98056", arv: 500000, repairs: 50000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  store.listOffers = async () => [{ ...LANDED, cashAmount: calc.offers.cash.amount, calc }];
+  _resetJobs();
+  let seen3;
+  await startReply({ client, locationId: "LOC", saved: shown, store, contactId: "c1", message: "how did you get to 295?", deps: { draft: async (args) => { seen3 = args; return DRAFT; } } });
+  await settle();
+  assert.match(seen3.context.text, /\[our math: we base it on about 69% of what it's worth fixed up, less the work — ARV \$500,000; closing to buy and resell about \$38,245 .*holding about \$25,538 for 5 months .*rehab \$50,000; what's left is our profit and risk \(never give it a figure\) = the offer\]/);
+  assert.doesNotMatch(seen3.context.text, /91,217/, "profit and risk has no figure in the prompt");
+  for (const n of [500000, 50000, 38245, 38000, 25538, 26000]) assert.ok(seen3.context.amounts.includes(n), String(n));
+  assert.deepEqual(seen3.context.hiddenAmounts, [91217], "the gate holds a text that names profit and risk");
+});
+
+test("a text that puts a figure on our profit and risk is held", () => {
+  const draft = { intent: "question", confidence: "high", needsHuman: false, propertyAddress: "12 Elm St" };
+  const ok = evaluateReplyGates({ draft: { ...draft, reply: "We base it on about 69% of the 500 it's worth fixed up, less the 50 of work; the rest is about 38 to buy and resell, 26 to hold it 5 months, and our profit and risk, which lands us at 295." },
+    party: "agent", allowedAmounts: [295000, 500000, 50000, 38000, 26000], hiddenAmounts: [91217], ourAmount: 295000 });
+  assert.deepEqual(ok.flags, []);
+  for (const reply of ["...and about 91 is our profit and risk, so 295.", "the other 91k is our margin for the risk", "Profit and risk comes to $91,217."]) {
+    const held = evaluateReplyGates({ draft: { ...draft, reply }, party: "agent", allowedAmounts: [295000], hiddenAmounts: [91217], ourAmount: 295000 });
+    assert.ok(held.flags.some((f) => /figure on our profit and risk/.test(f)), reply);
+  }
 });
 
 test("a cap of 0 is no cap, on the location and on the contact", async () => {

@@ -1461,7 +1461,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "underwriting team today and see if we can get back to you with an offer.' Once our offer number is in " +
           "the context and they ask what we can do: 'Based on our analysis we can likely do around 450ish' — " +
           "rounded to the nearest thousand or down, never up, no dollar sign — and ask if that works for the " +
-          "seller. Never explain the math. A SENT offer is on paper: restate its number and terms if asked.\n" +
+          "seller. Explain the math only the way the MATH rule says. A SENT offer is on paper: restate its number and terms if asked.\n" +
           "HANDOFF: once an address and details are confirmed, or they ask for a call: 'Perfect, will review the " +
           "numbers and give you a call if it makes sense.'\n" +
           "A NO ON AN OFFER: never argue the math. Ask once what the seller would take; only if they turn that down " +
