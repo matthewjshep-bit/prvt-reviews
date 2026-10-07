@@ -867,7 +867,7 @@ export function PartyPlaybooks({ config, patch, workflows }) {
                     <Toggle checked={rc.withMath} onChange={(v) => setRc({ withMath: v })}>
                       Say how we got there first
                     </Toggle>
-                    <p className={HINT}>"We base it on about 69% of the 500 it's worth fixed up, less 50 of work; the rest is about 38 to buy and resell, 26 to hold it 5 months, our profit and risk." Never a figure on profit &amp; risk, never the fee. Not when they've given us their own read.</p>
+                    <p className={HINT}>"We base it on 69% of the 500k it's worth fixed up, less 50k of rehab work; the rest is 38k to buy and resell, 26k of lender holding costs, and our profit and risk margin." Never a figure on profit &amp; risk, never the fee. Not when they've given us their own read, or when the offer is far under our formula. A float with the math may run to 340 characters.</p>
                     <Toggle checked={rc.range?.enabled} onChange={(v) => setRc({ range: { ...(rc.range || { pct: 5 }), enabled: v } })}>
                       Float a range topped by our number
                     </Toggle>

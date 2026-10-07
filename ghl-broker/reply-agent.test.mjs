@@ -5779,7 +5779,7 @@ test("a check-in started at noon goes before 5pm Pacific; a reply at 7pm still g
 
 /* ---------- the float: how we got there, a range, one question (2026-10-07) ---------- */
 
-import { outboundDescriptor, realmFloats } from "./reply-agent.js";
+import { outboundDescriptor, realmFloats, floatGate } from "./reply-agent.js";
 import { outboundOpening } from "./conversation-prompt.js";
 import { SETUP_QUESTIONS } from "./shared/conversation-ai.js";
 import { mathAllowedAmounts, offerMath } from "./shared/offer-breakdown.js";
@@ -5802,14 +5802,14 @@ test("the float says how we got there, a range topped by our number, and one set
 
   const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
   const d = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: on, dossier: null });
-  assert.equal(d.math.line, "we base it on 69% of the 500 it's worth fixed up, less 50 of work; the rest is 38 to buy and resell, 26 to hold, and our profit and risk");
+  assert.equal(d.math.line, "we base it on 69% of the 500k it's worth fixed up, less 50k of rehab work; the rest is 38k to buy and resell, 26k of lender holding costs, and our profit and risk margin");
   assert.equal(d.math.hidden, 91217);
   assert.equal(d.range.words, "the 280s to 295");
   assert.ok(SETUP_QUESTIONS[d.question.key]);
   const text = outboundOpening(d);
   assert.ok(text.includes(d.math.line) && text.includes('"the 280s to 295"') && text.includes(d.question.text), text);
   assert.match(text, /never a figure on profit and risk/);
-  assert.match(text, /under 280 characters/);
+  assert.match(text, /under 340 characters/);
   assert.doesNotMatch(text, /Don't volunteer the math/);
 
   // A re-quote is their numbers already: none of it.
@@ -5978,9 +5978,35 @@ test("an offer far under our formula floats without the math", () => {
 test("with all three on, the float's math line is short and the prompt leaves out the terms", () => {
   const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
   const d = outboundDescriptor({ kind: "realm_check", offer: floatOffer(), subject: null, saved: on, dossier: null });
-  assert.equal(d.math.line, "we base it on 69% of the 500 it's worth fixed up, less 50 of work; the rest is 38 to buy and resell, 26 to hold, and our profit and risk");
-  assert.ok(d.math.line.length <= 140, String(d.math.line.length));
+  assert.equal(d.math.line, "we base it on 69% of the 500k it's worth fixed up, less 50k of rehab work; the rest is 38k to buy and resell, 26k of lender holding costs, and our profit and risk margin");
+  assert.ok(d.math.line.length <= 175, String(d.math.line.length));
   const text = outboundOpening(d);
   assert.doesNotMatch(text, /As-is and a quick close/);
-  assert.match(text, /under 280 characters/);
+  assert.match(text, /under 340 characters/);
+});
+
+// Matt, 2026-10-07, on the Queen St preview: "add a slight bit more context" —
+// k on the figures, "rehab work", "lender holding costs", "profit and risk
+// margin". That runs past 300 characters, so a float carrying the math may
+// run to 340 (three segments); every other text keeps the configured limit.
+const QUEEN = "Underwriting's back on Queen: we base it on 72% of the 1.1M it's worth fixed up, less 90k of rehab work; the rest is 85k to buy and resell, 55k of lender holding costs, and our profit and risk margin. Landing in the 670s to 706. If that's in the ballpark, what's your read on the work it needs, and where it sells once it's done?";
+
+test("the float's math reads the way Matt wrote it, with k on the figures", () => {
+  const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
+  const d = outboundDescriptor({ kind: "realm_check", offer: floatOffer(), subject: null, saved: on, dossier: null });
+  assert.equal(d.math.line, "we base it on 69% of the 500k it's worth fixed up, less 50k of rehab work; the rest is 38k to buy and resell, 26k of lender holding costs, and our profit and risk margin");
+  assert.match(outboundOpening(d), /under 340 characters/);
+});
+
+test("Matt's Queen St float passes the gate at its length, and a reply still keeps the 300 limit", () => {
+  const calc = calculateOffers({ address: "909 Queen St", arv: 1102000, repairs: 90000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  const offer = { id: "q1", address: "909 Queen St, Mount Vernon, WA", contactId: "c1", cashAmount: calc.offers.cash.amount, calc, status: "new", createdAt: iso(1000) };
+  const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
+  const outbound = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: on, dossier: null });
+  assert.ok(QUEEN.length > 300 && QUEEN.length <= 340, String(QUEEN.length));
+  const style = { maxSmsChars: 300, noDollarSigns: true };
+  const g = floatGate({ offer, outbound, style, amounts: [] })({ intent: "realm_check", confidence: "high", needsHuman: false, propertyAddress: "909 Queen St", reply: QUEEN });
+  assert.deepEqual(g.flags, []);
+  const reply = evaluateReplyGates({ draft: { intent: "question", confidence: "high", needsHuman: false, reply: QUEEN }, party: "agent", style, allowedAmounts: [] });
+  assert.ok(reply.flags.some((f) => /too long/.test(f)), "a reply is held over 300 as before");
 });

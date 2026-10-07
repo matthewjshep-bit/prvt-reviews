@@ -284,3 +284,10 @@ test("a number they name inside our range is read as in range, never above", () 
   assert.equal(namedInRange({ range: r, message: "they need 310" }), null, "above is a counter");
   assert.equal(namedInRange({ range: r, message: "closing in 14 days works" }), null);
 });
+
+test("'55k of lender holding costs' is a cost, not a price we quoted", () => {
+  const t = "[2026-10-02 10:00] US sms: On 12 Elm St we base it on 69% of the 500k it's worth fixed up, less 50k of rehab work; the rest is 38k to buy and resell, 26k of lender holding costs, and our profit and risk margin. Landing in the 280s to 295.";
+  assert.equal(ourComeDown(ELM, t), null);
+  assert.equal(lastQuoteOnHouse(ELM, t)?.amount, 295000);
+  assert.equal(paperCheck({ offer: ELM, transcript: t }).ok, true);
+});

@@ -596,7 +596,7 @@ function openingFor(outbound) {
       // number as a range topped by ours, then one question. Each piece is
       // behind its own switch; without them the float reads as before.
       const how = o.math
-        ? `Start with how we got there, in one clause, using exactly these figures and no others: "${o.math.line}" — in thousands, no dollar signs, ` +
+        ? `Start with how we got there, in one clause, using exactly these figures and words: "${o.math.line}" — thousands with a k, no dollar signs, ` +
           `never a figure on profit and risk, never the words fee, assignment, wholesale or spread. `
         : "";
       const number = o.range
@@ -605,7 +605,7 @@ function openingFor(outbound) {
       const ask = o.question
         ? `End with exactly one question that also asks whether it's in the ballpark, e.g. "If that's in the ballpark, ${o.question.text}" — one question mark in the whole text. `
         : "";
-      const room = o.math || o.range || o.question ? "Keep the whole text under 280 characters. " : "";
+      const room = o.math ? "Keep the whole text under 340 characters. " : o.range || o.question ? "Keep the whole text under 280 characters. " : "";
       // A confident underwrite leads with our number, plainly — it's where our
       // analysis lands and the written offer follows a yes.
       if (o.confident && !theirs) {

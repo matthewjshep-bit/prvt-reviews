@@ -220,7 +220,7 @@ const quotedPart = (text) => {
 // The costs we name when we show our work (2026-10-07): "38 to buy and
 // resell", "26 of holding", "50 for the work", "500 it's worth fixed up".
 // A number named as one of them is the math, not a price on the house.
-const COST_AFTER = "to\\s+(?:buy|sell|resell|hold|carry|close)\\b|(?:in|of|for|on)\\s+(?:the\\s+)?(?:closing|holding|carry(?:ing)?|commissions?|costs?|profit|margin|rehab|repairs?|work|reno(?:vation)?)\\b|" +
+const COST_AFTER = "to\\s+(?:buy|sell|resell|hold|carry|close)\\b|(?:in|of|for|on)\\s+(?:the\\s+)?(?:lender\\s+)?(?:closing|holding|carry(?:ing)?|commissions?|costs?|profit|margin|rehab|repairs?|work|reno(?:vation)?)\\b|" +
   "closing\\b|holding\\b|carry(?:ing)?\\b|resale\\b|commissions?\\b|costs?\\b|profit\\b|margin\\b|it'?s\\s+worth\\b|worth\\b|all\\s+(?:fixed|done)\\b|" +
   "(?:when|once)\\s+(?:it'?s\\s+)?(?:fixed|done|finished|renovated)\\b";
 const COST_BEFORE = "\\bclosing(?:\\s+costs?)?|\\bholding(?:\\s+costs?)?|\\bcarry(?:ing)?(?:\\s+costs?)?|\\bresale(?:\\s+costs?)?|\\bresell(?:ing)?|" +

@@ -2549,6 +2549,28 @@ export function whatWentOut(offer) {
 // question. The math is ours, so it rides only when the agent hasn't given
 // their own read (then the float is tied to theirs) and only when it ties to
 // the number in play.
+// "500" → "500k"; "1.1M" stays.
+const withK = (k) => (/M$/.test(k) ? k : `${k}k`);
+
+// A float carrying the math runs longer than a reply (Matt's wording,
+// 2026-10-07): up to FLOAT_MATH_MAX_CHARS, three segments. Every other text
+// keeps the configured limit.
+export const FLOAT_MATH_MAX_CHARS = 340;
+export function styleFor(kind, outbound, style) {
+  if (kind !== "realm_check" || !outbound?.math) return style;
+  return { ...(style || {}), maxSmsChars: Math.max(Number(style?.maxSmsChars) || 0, FLOAT_MATH_MAX_CHARS) };
+}
+
+// The realm check's gate on its own (tests, previews): its floats and allows
+// on top of the book, the float's length.
+export function floatGate({ offer, outbound, style = null, amounts = [], party = "agent" }) {
+  const spec = OUTBOUND_KINDS.realm_check;
+  const allowed = [...new Set([...amounts, ...spec.floats({ offer, outbound }), ...spec.allows({ offer, outbound })].filter(Boolean))];
+  return (d) => evaluateReplyGates({ draft: d, party, allowedAmounts: allowed, hiddenAmounts: outbound?.math?.hidden ? [outbound.math.hidden] : [],
+    ranges: outbound?.range ? [outbound.range] : [], channel: "sms", style: styleFor("realm_check", outbound, style),
+    ourAmount: Math.max(Number(offer?.cashAmount) || 0, ...realmFloats({ offer, outbound })) });
+}
+
 // What a realm check may say about our number: the exact figure, its rough
 // forms ("around 445ish", never rounded up), and a range's two ends — its top
 // is the book rounded down ("the 650s to 686" on 686,610).
@@ -2575,10 +2597,12 @@ export function floatExtras({ offer, saved, dossier = null, requote = false, the
         // The short form for a two-segment text; the gate allows exactly these.
         // Short on purpose: with a range and a question it has to fit two
         // texts (two previews came back at 305 and 308 characters).
-        line: `we base it on ${f.pct}% of the ${f.arvK} it's worth fixed up` +
-          `${f.repairsK ? `, less ${f.repairsK} of work` : ""}; the rest is ` +
-          [f.closingK ? `${f.closingK} to buy and resell` : "", f.holdingK ? `${f.holdingK} to hold` : ""].filter(Boolean).join(", ") +
-          `${f.closingK || f.holdingK ? ", and" : ""} our profit and risk`,
+        // Matt's wording (2026-10-07): k on the figures, "rehab work",
+        // "lender holding costs", "profit and risk margin".
+        line: `we base it on ${f.pct}% of the ${withK(f.arvK)} it's worth fixed up` +
+          `${f.repairsK ? `, less ${withK(f.repairsK)} of rehab work` : ""}; the rest is ` +
+          [f.closingK ? `${withK(f.closingK)} to buy and resell` : "", f.holdingK ? `${withK(f.holdingK)} of lender holding costs` : ""].filter(Boolean).join(", ") +
+          `${f.closingK || f.holdingK ? ", and" : ""} our profit and risk margin`,
         allowed: mathAllowedAmounts(m),
         hidden: Math.round(m.residual) || 0,
       };
@@ -2783,7 +2807,7 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   const forbiddenAmounts = extraForbidden.length
     ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
     : context.forbiddenAmounts;
-  return (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: config.style, selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
+  return (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
     houseWords: houseWordsFor(context?.deals, a.transcript) });
