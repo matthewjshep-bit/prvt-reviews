@@ -31,6 +31,13 @@ test("a house the agent said isn't a flip doesn't make them Tier 1", () => {
   assert.equal(agentTier({ events: [named], lastInboundAt: ago(1), now: NOW }).tier, "t2");
 });
 
+test("a house passed from Tier 1 leaves them Tier 2", () => {
+  const named = { type: "subject_property_set", at: ago(3), address: "88 Elm St, Tacoma, WA 98405" };
+  const passed = { type: "tier1_passed", at: ago(1), address: "88 Elm St, Tacoma, WA 98405" };
+  assert.equal(agentTier({ events: [named, passed], lastInboundAt: ago(3), now: NOW }).tier, "t2");
+  assert.equal(agentTier({ events: [named, { ...passed, address: "1 Other Rd, Kent, WA" }], lastInboundAt: ago(3), now: NOW }).tier, "t1", "another house still counts");
+});
+
 test("Tier 2 has written back with nothing in hand; cold never has; an opt-out is neither", () => {
   assert.deepEqual(agentTier({ offers: [offer({ status: "passed" })], lastInboundAt: ago(30), now: NOW }), { tier: "t2", why: "nothing in hand (passed on 12 Elm St)" });
   assert.equal(agentTier({ lastInboundAt: ago(200), now: NOW }).tier, "t2");

@@ -79,12 +79,13 @@ const byContact = (rows) => {
 };
 
 /**
- * housesFrom(offers) → { live: Set<addressKey>, walked: Map<addressKey, at> }
+ * housesFrom(offers, events) → { live: Set<addressKey>, walked: Map<addressKey, at> }
  *
  * A house with any live offer or deal of ours is that offer's business, and a
- * house we walked away from isn't raised with anyone for six months.
+ * house we walked away from isn't raised with anyone for six months — passed
+ * on its offer, or passed / kicked off the Tier 1 list with no offer at all.
  */
-export function housesFrom(offers = []) {
+export function housesFrom(offers = [], events = []) {
   const live = new Set();
   const walked = new Map();
   for (const o of offers || []) {
@@ -97,6 +98,11 @@ export function housesFrom(offers = []) {
       const at = o.statusAt || o.createdAt || "";
       if (!walked.has(k) || String(at) > String(walked.get(k))) walked.set(k, at);
     }
+  }
+  for (const e of events || []) {
+    if (!e?.address || (e.type !== "tier1_passed" && e.type !== "tier1_kicked")) continue;
+    const k = addressKey(e.address);
+    if (k && (!walked.has(k) || String(e.at || "") > String(walked.get(k)))) walked.set(k, e.at || "");
   }
   return { live, walked };
 }
@@ -138,7 +144,7 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   ]);
 
   const annotated = annotateCurrent(offers || []).filter(Boolean);
-  const houses = housesFrom(annotated);
+  const houses = housesFrom(annotated, evRead.events);
   const offersBy = byContact(annotated);
   const eventsBy = byContact(evRead.events);
   for (const [id, list] of stops) eventsBy.set(id, mergeEvents(eventsBy.get(id) || [], list));

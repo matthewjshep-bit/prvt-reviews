@@ -106,6 +106,8 @@ export const AGENT_PULSE_EVENT_TYPES = [
   "outreach_enrolled", "outreach_sent", "outreach_left", "workflow_enrolled", "workflow_left",
   "drive_stopped", "drive_resumed", "listing_off_market", "listing_back_on_market", "offer_sent",
   "offmarket_asked",
+  // Houses passed or kicked off the Tier 1 list: never raised again.
+  "tier1_passed", "tier1_kicked", "tier1_added",
 ];
 export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided"];
 // What counts as them having written back (store.lastContactActivity with
@@ -444,7 +446,13 @@ export function agentPulseSubject({ agent = {}, verdict = {}, now = Date.now() }
   const h = verdict.house || null;
   const how = !h ? "" : h.deal ? (h.deal.stage === "closed" ? "closed" : "fell through") : effectiveStatus(h) === "no_response" ? "never heard back" : "passed";
   const at = (o) => o?.statusAt || o?.createdAt || "";
-  const newest = (agent.offers || []).filter((o) => o && o.address && effectiveStatus(o) !== "draft")
+  // A house we passed on (or that's gone, or that came off the Tier 1 list)
+  // is never the check-in's material: the nurture is about what's next.
+  const avoid = [...new Set([
+    ...(agent.offers || []).filter((o) => o?.address && ["we_passed", "unavailable"].includes(effectiveStatus(o))).map((o) => street(o.address)),
+    ...(agent.events || []).filter((e) => e?.address && (e.type === "tier1_passed" || e.type === "tier1_kicked")).map((e) => street(e.address)),
+  ].filter(Boolean))];
+  const newest = (agent.offers || []).filter((o) => o && o.address && effectiveStatus(o) !== "draft" && !avoid.includes(street(o.address)))
     .sort((a, b) => String(at(b)).localeCompare(String(at(a))))[0] || null;
   const areas = factList(agent.facts, "agent_market_area", now).map((f) => f.what);
   return {
@@ -460,6 +468,7 @@ export function agentPulseSubject({ agent = {}, verdict = {}, now = Date.now() }
     lastHouse: newest ? { street: street(newest.address), how: houseHow(newest), daysAgo: ms(at(newest)) != null ? Math.max(0, Math.floor((now - ms(at(newest))) / DAY_MS)) : null } : null,
     aboutThem: factList(agent.facts, "personal_details", now),
     areas,
+    avoid,
     // Asked about off-market houses in the last month? Then not this time.
     offMarketAskDue: offMarketAskDue(agent.events || [], now),
   };

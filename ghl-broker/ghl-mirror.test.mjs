@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mirrorOffer, reconcileLocation, mirrorAgent, reconcileAgents, tierStageMove, followTierStage, _resetPipelineCache, tierTagsToDrop } from "./ghl-mirror.js";
+import { mirrorOffer, reconcileLocation, mirrorAgent, reconcileAgents, tierStageMove, followTierStage, _resetPipelineCache, tierTagsToDrop, followOfferOut } from "./ghl-mirror.js";
 
 const cfg = { enabled: true,
   acquisitions: { mode: "lanes", pipelineId: "pA", stages: { ready: "s-ready", sent: "s-sent", dead: "s-dead", won: "s-won" } },
@@ -216,4 +216,22 @@ test("adding a tier tag takes the other tier tags off, except on a card past the
   assert.deepEqual(tierTagsToDrop({ tags: ["tier-3"], move: { skip: "left at Offer Out (past the tier stages)" } }), []);
   assert.deepEqual(tierTagsToDrop({ tags: ["tier-1"], move: { error: "401" } }), []);
   assert.deepEqual(tierTagsToDrop({ tags: ["seller-accepted"], move: {} }), []);
+});
+
+// Matt, 2026-10-07: once our written offer is out, GHL's card says so.
+test("a sent offer moves a Tier 1 card to Offer Out; Negotiations and two open cards are left alone", async () => {
+  _resetPipelineCache();
+  const updates = [];
+  const api = (cards) => ({
+    listPipelines: async () => ACQ_PIPES,
+    searchOpportunities: async () => cards,
+    updateOpportunity: async (_c, id, body) => { updates.push([id, body]); return {}; },
+  });
+  const r = await followOfferOut({ client: {}, locationId: "L-out", contactId: "c1", ghl: api([opp({ stageId: "t1" })]) });
+  assert.equal(r.stageId, "out");
+  assert.deepEqual(updates, [["op1", { stageId: "out" }]]);
+  assert.match((await followOfferOut({ client: {}, locationId: "L-out", contactId: "c1", ghl: api([opp({ stageId: "neg" })]) })).skip, /Negotiations/);
+  assert.match((await followOfferOut({ client: {}, locationId: "L-out", contactId: "c1", ghl: api([opp({ stageId: "t1" }), opp({ id: "op2", stageId: "t2" })]) })).skip, /two open cards/);
+  assert.match((await followOfferOut({ client: {}, locationId: "L-out", contactId: "c1", ghl: api([]) })).skip, /no open card/);
+  assert.equal(updates.length, 1);
 });

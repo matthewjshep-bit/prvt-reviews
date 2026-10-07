@@ -734,6 +734,13 @@ export async function createOpportunity(client, { locationId, pipelineId, contac
   return { id: String(data?.opportunity?.id || data?.id || "") };
 }
 
+// One card, read back after a move: /opportunities/search lags by seconds.
+export async function getOpportunity(client, id) {
+  const data = await client.call(`/opportunities/${encodeURIComponent(id)}`);
+  const o = data?.opportunity || data || {};
+  return { id: String(o.id || id), contactId: String(o.contactId || o.contact?.id || ""), pipelineId: String(o.pipelineId || ""), stageId: String(o.pipelineStageId || ""), status: String(o.status || "") };
+}
+
 export async function updateOpportunity(client, id, { name, stageId = "", status = "", value = null }) {
   const body = { ...(name ? { name } : {}), ...(stageId ? { pipelineStageId: stageId } : {}), ...(status ? { status } : {}), ...(value != null ? { monetaryValue: value } : {}) };
   return client.call(`/opportunities/${encodeURIComponent(id)}`, { method: "PUT", body });

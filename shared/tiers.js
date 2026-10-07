@@ -71,7 +71,9 @@ export function agentTier({ offers = [], events = [], lastInboundAt = null, now 
   const pricedKeys = new Set((offers || []).map((o) => addressKey(o?.address || "")).filter(Boolean));
   const recent = (e) => now - (ms(e?.at) ?? 0) <= NAMED_HOUSE_DAYS * DAY_MS;
   // Not one they told us isn't a flip: Tier 1 is houses that need work.
-  const named = [...(events || [])].filter((e) => e?.type === "subject_property_set" && e.address && !e.data?.notOurKind && recent(e) && !pricedKeys.has(addressKey(e.address)))
+  // Nor one passed or kicked off the Tier 1 list (shared/tier-one.js).
+  const passedKeys = new Set((events || []).filter((e) => (e?.type === "tier1_passed" || e?.type === "tier1_kicked") && e.address).map((e) => addressKey(e.address)));
+  const named = [...(events || [])].filter((e) => e?.type === "subject_property_set" && e.address && !e.data?.notOurKind && recent(e) && !pricedKeys.has(addressKey(e.address)) && !passedKeys.has(addressKey(e.address)))
     .sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
   if (named) return { tier: "t1", why: `sent us ${street(named.address)}, not priced yet`, address: named.address };
   const pending = (events || []).filter((e) => e?.type === "address_pending" && recent(e));
