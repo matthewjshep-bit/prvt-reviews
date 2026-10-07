@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   houseKey, pricedAt, resolveHouse, currentOffers, currentOfferFor, annotateCurrent,
   isSuperseded, ourComeDown, ourMoveUp, paperCheck, lastQuoteOnHouse, machineRaise, holdNumber,
+  floatRange, rangeWords, namedInRange,
 } from "./current-offer.js";
 
 // 13041 SE 208th St, Kent (2026-09-25): five rows on one house, the thread at
@@ -241,4 +242,45 @@ test("the math table in our offer email is never read as us coming down", () => 
   assert.equal(lastQuoteOnHouse(CHEAP, email)?.amount, 80000);
   assert.equal(paperCheck({ offer: CHEAP, transcript: email }).ok, true);
   assert.equal(holdNumber({ offer: CHEAP, transcript: email }).amount, 80000);
+});
+
+/* ---------- a range topped by our number (2026-10-07) ---------- */
+
+test("a range we floated is never read as us coming down to its bottom", () => {
+  for (const said of [
+    "On 12 Elm St we'd likely land somewhere in the 280s to 295.",
+    "On 12 Elm St we'd land somewhere around 280k to 295k.",
+    "around 280 to 295 on 12 Elm St, if that's in the ballpark",
+    "On 12 Elm St we'd be between 280 and 295.",
+    "12 Elm St: $280,000-$295,000 is where we'd land",
+  ]) {
+    const t = `[2026-10-02 10:00] US sms: ${said}`;
+    assert.equal(ourComeDown(ELM, t), null, said);
+    assert.equal(lastQuoteOnHouse(ELM, t)?.amount, 295000, said);
+    assert.equal(holdNumber({ offer: ELM, transcript: t }).amount, 295000, said);
+    assert.equal(machineRaise(ELM, t), null, said);
+    assert.equal(paperCheck({ offer: ELM, transcript: t }).ok, true, said);
+  }
+  // A lower number on its own is still us coming down.
+  assert.equal(ourComeDown(ELM, "[2026-10-02 10:00] US sms: could we do 280k on 12 Elm St?")?.amount, 280000);
+});
+
+test("the range is topped by our number, rounded down, and words like a text", () => {
+  assert.deepEqual(floatRange(295000, 5), { low: 280000, high: 295000, step: 10000 });
+  assert.equal(rangeWords(floatRange(295000, 5)), "the 280s to 295");
+  assert.deepEqual(floatRange(295240, 5), { low: 280000, high: 295000, step: 10000 }, "never above the book");
+  assert.equal(rangeWords(floatRange(80000, 5)), "75 to 80");
+  assert.equal(rangeWords(floatRange(407500, 5)), "the 380s to 407");
+  assert.equal(rangeWords(floatRange(1250000, 5)), "1.18M to 1.25M");
+  assert.equal(floatRange(0, 5), null);
+});
+
+test("a number they name inside our range is read as in range, never above", () => {
+  const r = { low: 280000, high: 295000 };
+  assert.equal(namedInRange({ range: r, message: "285 works for my seller" })?.amount, 285000);
+  assert.equal(namedInRange({ range: r, message: "they'd do 287,500" })?.amount, 287500);
+  assert.equal(namedInRange({ range: r, message: "the low 280s works" })?.amount, 280000);
+  assert.equal(namedInRange({ range: r, message: "295 works" }), null, "the top is our number: a plain yes");
+  assert.equal(namedInRange({ range: r, message: "they need 310" }), null, "above is a counter");
+  assert.equal(namedInRange({ range: r, message: "closing in 14 days works" }), null);
 });

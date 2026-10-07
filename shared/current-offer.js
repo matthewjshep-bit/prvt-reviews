@@ -226,15 +226,105 @@ const COST_AFTER = "to\\s+(?:buy|sell|resell|hold|carry|close)\\b|(?:in|of|for|o
 const COST_BEFORE = "\\bclosing(?:\\s+costs?)?|\\bholding(?:\\s+costs?)?|\\bcarry(?:ing)?(?:\\s+costs?)?|\\bresale(?:\\s+costs?)?|\\bresell(?:ing)?|" +
   "\\bprofit(?:\\s*(?:&|and)\\s*risk)?|\\brisk|\\bmargin|\\b(?:renovation\\s+)?budget|\\bcommissions?|\\bcosts?";
 
+/* ---------- a range topped by our number (2026-10-07) ---------- */
+
+// "the 280s to 295": the top is our number (the book, rounded DOWN to the
+// thousand — never above it), the bottom `pct` under it on a round step. The
+// bottom is never an offer on its own; the letter only ever goes at the top.
+const rangeK = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(2)}M` : `${Math.round(n / 1000)}`);
+export function floatRange(amount, pct = 5) {
+  const high = Math.floor((Number(amount) || 0) / 1000) * 1000;
+  if (high <= 0) return null;
+  const step = high >= 200000 ? 10000 : 5000;
+  const low = Math.floor((high * (1 - Math.max(0, Number(pct) || 0) / 100)) / step) * step;
+  if (low <= 0 || low >= high) return null;
+  return { low, high, step };
+}
+export function rangeWords(r) {
+  if (!r?.low || !r?.high) return "";
+  if (r.high >= 1e6) return `${rangeK(r.low)} to ${rangeK(r.high)}`;
+  return (r.step || 10000) >= 10000 ? `the ${rangeK(r.low)}s to ${rangeK(r.high)}` : `${rangeK(r.low)} to ${rangeK(r.high)}`;
+}
+
+// A money token the way a range is written: "$280,000", "280k", "280", "280s".
+const RANGE_TOKEN = "\\$?\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|\\$?\\d+(?:\\.\\d+)?\\s?[kKmM]?s?";
+const RANGE_RXS = [
+  new RegExp(`(?:\\bthe\\s+)?(${RANGE_TOKEN})\\s*(?:to|-|\u2013|\u2014|through|thru)\\s*(${RANGE_TOKEN})`, "gi"),
+  new RegExp(`\\bbetween\\s+(${RANGE_TOKEN})\\s+and\\s+(${RANGE_TOKEN})`, "gi"),
+];
+function rangeDollars(tok) {
+  const raw = String(tok || "").replace(/[$,\s]/g, "").replace(/s$/i, "");
+  const suffix = raw.slice(-1).toLowerCase();
+  const n = Number(suffix === "k" || suffix === "m" ? raw.slice(0, -1) : raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (suffix === "k") return Math.round(n * 1e3);
+  if (suffix === "m") return Math.round(n * 1e6);
+  if (/,/.test(tok) || n >= 10000) return Math.round(n);
+  return n >= 10 && n < 10000 ? Math.round(n * 1000) : 0;
+}
+/**
+ * rangeLows(text) → [{ start, end, low, high }] — where a price range starts:
+ * "280k to 295k", "the 280s to 295", "between 280 and 295", "$280,000-$295,000".
+ * The bottom of a range is not a price on its own, so the readers skip it.
+ */
+export function rangeLows(text = "") {
+  const t = String(text || "");
+  const out = [];
+  for (const rx of RANGE_RXS) {
+    for (const m of t.matchAll(rx)) {
+      const low = rangeDollars(m[1]);
+      const high = rangeDollars(m[2]);
+      if (low < 10000 || high <= low || high > low * 1.25) continue;
+      const start = m.index + m[0].indexOf(m[1]);
+      const hiStart = m.index + m[0].lastIndexOf(m[2]);
+      out.push({ start, end: start + m[1].length, low, high, hiStart, hiEnd: hiStart + m[2].length });
+    }
+  }
+  return out;
+}
+const inLow = (lows, i) => lows.some((r) => i >= r.start && i < r.end);
+
+/**
+ * liveRange(offer) → { low, high, at } | null — the range we floated on this
+ * offer, while its number hasn't moved since (a letter, a revision or a
+ * re-quote after it makes the range history).
+ */
+export function liveRange(o) {
+  const r = o?.proactive?.range;
+  if (!r?.low || !r?.high || !r.at) return null;
+  return ms(r.at) >= pricedAt(o) ? r : null;
+}
+
+/**
+ * namedInRange({ range, message }) → { amount } | null
+ *
+ * A number they name inside the range we floated and under its top: "285
+ * works", "the low 280s", "they'd do 287,500". At the top is a plain yes to
+ * our number; above it is a counter. Neither is this.
+ */
+export function namedInRange({ range = null, message = "" } = {}) {
+  if (!range?.low || !range?.high) return null;
+  const t = String(message || "");
+  const seen = [];
+  for (const m of t.matchAll(/(?<![\d,.$])(\$?\d{1,3}(?:,\d{3})+|\$?\d{2,4}(?:\.\d+)?\s?[kK]?s?)(?![\d,.])/g)) {
+    const rest = t.slice(m.index + m[0].length, m.index + m[0].length + 12);
+    if (/^\s*(?:days?|weeks?|months?|years?|hours?|mins?|minutes?|am|pm|%|sq|beds?|baths?)\b/i.test(rest) || SHORT_STREET.test(rest)) continue;
+    const n = rangeDollars(m[1]);
+    if (n >= range.low && n < range.high) seen.push(n);
+  }
+  return seen.length ? { amount: seen[0] } : null;
+}
+
 // The figures behind a price, said beside it: "$507K ARV, $110K in rehab".
 // A number named as the ARV, the rehab, the repairs or the work is the math,
 // not what we'd pay.
 const MATH_AFTER = new RegExp(`^\\s*(?:arv\\b|after[- ]repair|(?:in|of|for)\\s+(?:rehab|repairs?|work)\\b|rehab\\b|repairs?\\b|(?:worth\\s+)?of\\s+work\\b|${COST_AFTER})`, "i");
 const MATH_BEFORE = new RegExp(`(?:\\barv|after[- ]repair value|\\brehab|\\brepairs?|\\bwork|${COST_BEFORE})\\s*(?:is|of|at|=|:|around|about|~)?\\s*$`, "i");
-const priceMoney = (text) => [...String(text || "").matchAll(LINE_MONEY_RX)]
+const priceMoney = (text) => { const lows = rangeLows(text); return [...String(text || "").matchAll(LINE_MONEY_RX)]
+  .filter((m) => !inLow(lows, m.index))
   .filter((m) => !MATH_AFTER.test(text.slice(m.index + m[0].length, m.index + m[0].length + 24))
     && !MATH_BEFORE.test(text.slice(Math.max(0, m.index - 24), m.index)))
-  .map((m) => toDollars(m[0])).filter((n) => n > 0);
+  .map((m) => toDollars(m[0])).filter((n) => n > 0); };
 
 /**
  * ourComeDown(offer, transcript) → { amount, ts, text } | null
@@ -331,13 +421,16 @@ const NOT_OURS_BEFORE = new RegExp("(?:\\barv|after[- ]repair value|\\brehab|\\b
 export function pricesWeName(text = "", reference = 0) {
   const t = String(text || "");
   const out = new Set();
-  const ours = (start, end) => !NOT_OURS_AFTER.test(t.slice(end, end + 28)) && !NOT_OURS_BEFORE.test(t.slice(Math.max(0, start - 28), start));
+  const lows = rangeLows(t);
+  const ours = (start, end) => !inLow(lows, start) && !NOT_OURS_AFTER.test(t.slice(end, end + 28)) && !NOT_OURS_BEFORE.test(t.slice(Math.max(0, start - 28), start));
   for (const m of t.matchAll(LINE_MONEY_RX)) {
     if (!ours(m.index, m.index + m[0].length)) continue;
     const n = toDollars(m[0]);
     if (n > 0) out.add(n);
   }
   for (const h of shorthandHits(t, reference)) if (ours(h.start, h.end)) out.add(h.v);
+  // A range's top is the price it names ("between 280 and 295" is 295).
+  for (const r of lows) if (ours(r.hiStart, r.hiEnd)) out.add(r.high);
   return [...out];
 }
 
