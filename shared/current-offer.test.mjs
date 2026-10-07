@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   houseKey, pricedAt, resolveHouse, currentOffers, currentOfferFor, annotateCurrent,
-  isSuperseded, ourComeDown, paperCheck, lastQuoteOnHouse, machineRaise, holdNumber,
+  isSuperseded, ourComeDown, ourMoveUp, paperCheck, lastQuoteOnHouse, machineRaise, holdNumber,
 } from "./current-offer.js";
 
 // 13041 SE 208th St, Kent (2026-09-25): five rows on one house, the thread at
@@ -203,4 +203,42 @@ test("Hold holds at the number that last went out, not a re-quote nobody sent", 
   assert.equal(holdNumber({ offer: o }).amount, 690000);
   // Sent again at the new number: that's the number now.
   assert.equal(holdNumber({ offer: { ...o, sends: [...o.sends, { ts: "2026-10-02T22:00:00Z" }] } }).amount, 705000);
+});
+
+/* ---------- the math behind the number is not a number we quoted ---------- */
+
+// Showing our work (2026-10-07) puts the ARV, the work and the costs in the
+// same texts as our number. None of them is a price on the house.
+const ELM = { id: "elm", contactId: "a", address: "12 Elm St, Renton, WA 98056", cashAmount: 295000, createdAt: "2026-10-01T00:00:00Z",
+  status: "sent", sends: [{ ts: "2026-10-01T00:00:00Z" }] };
+const MATH_REPLIES = [
+  "On 12 Elm St we base it on around 500 it's worth fixed up, less about 50 of work, then about 38 to buy and resell and 26 to hold it 5 months plus our profit and risk, which lands us at 295.",
+  "Sure, on 12 Elm St: around 500 all fixed up, about 38 in closing costs, 26 of holding, 50 for the work, and what's left is our profit and risk. That's how we get to 295.",
+  "On 12 Elm St it's worth about 500 when it's done; we take off 38 to buy and resell it and around 26 carrying it, so we land at 295.",
+];
+
+test("the math in our text is never read as a price we quoted or a raise", () => {
+  for (const text of MATH_REPLIES) {
+    const t = `[2026-10-02 10:00] US sms: ${text}`;
+    assert.equal(ourMoveUp(ELM, t), null, text);
+    assert.equal(ourComeDown(ELM, t), null, text);
+    assert.equal(lastQuoteOnHouse(ELM, t)?.amount, 295000, text);
+    assert.equal(paperCheck({ offer: ELM, transcript: t }).ok, true, text);
+  }
+});
+
+// A cheap house: an 80K offer on a 200K ARV with 40K of work. The table in
+// our offer email names the renovation at half our number.
+const CHEAP = { id: "cheap", contactId: "a", address: "9 Oak St, Tacoma, WA 98404", cashAmount: 80000, createdAt: "2026-10-01T00:00:00Z",
+  status: "sent", sends: [{ ts: "2026-10-01T00:00:00Z" }] };
+
+test("the math table in our offer email is never read as us coming down", () => {
+  const email = "[2026-10-02 10:00] US email: Hi Sam, Please find our letter of intent on 9 Oak St attached — $80,000, close on your timeline. " +
+    "How we got to the number: After-repair value $200,000 Closing costs, buying and reselling $14,780 Holding, 5 months $9,622 " +
+    "Renovation budget $40,000 Profit & risk $55,598 Purchase price $80,000";
+  assert.equal(ourComeDown(CHEAP, email), null);
+  assert.equal(ourMoveUp(CHEAP, email), null);
+  assert.equal(lastQuoteOnHouse(CHEAP, email)?.amount, 80000);
+  assert.equal(paperCheck({ offer: CHEAP, transcript: email }).ok, true);
+  assert.equal(holdNumber({ offer: CHEAP, transcript: email }).amount, 80000);
 });

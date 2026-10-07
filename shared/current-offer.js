@@ -201,11 +201,36 @@ const toDollars = (m) => {
 };
 export const lineMoney = (text) => [...String(text || "").matchAll(LINE_MONEY_RX)].map((m) => toDollars(m[0])).filter((n) => n > 0);
 
+// The texts that carry our offer documents. They restate the book's number,
+// and since 2026-10-07 they also carry the math behind it — so a reader
+// either skips them or reads only what comes before the math (quotedPart).
+// Looser than reply-agent's OUR_OFFER_TEXT_RX (no "on" needed): a reader
+// skipping one of ours by mistake costs nothing, one misread as a price does.
+export const OFFER_DOC_TEXT_RX = /\b(?:here's our (?:revised )?(?:written cash offer|letter of intent)|sending our written offer|please find our (?:letter of intent|written (?:cash )?offer))\b/i;
+// Where the math starts in a text of ours: "How we got there: …", "we base
+// it on about 69% of …" (shared/offer-breakdown.js mathSentence and the
+// offer email's table).
+export const MATH_MARKER_RX = /\b(?:how we got (?:there|to (?:the|this|that) number)|how we priced it|we base it on)\b/i;
+const quotedPart = (text) => {
+  if (!OFFER_DOC_TEXT_RX.test(text)) return text;
+  const m = MATH_MARKER_RX.exec(text);
+  return m ? text.slice(0, m.index) : text;
+};
+
+// The costs we name when we show our work (2026-10-07): "38 to buy and
+// resell", "26 of holding", "50 for the work", "500 it's worth fixed up".
+// A number named as one of them is the math, not a price on the house.
+const COST_AFTER = "to\\s+(?:buy|sell|resell|hold|carry|close)\\b|(?:in|of|for|on)\\s+(?:the\\s+)?(?:closing|holding|carry(?:ing)?|commissions?|costs?|profit|margin|rehab|repairs?|work|reno(?:vation)?)\\b|" +
+  "closing\\b|holding\\b|carry(?:ing)?\\b|resale\\b|commissions?\\b|costs?\\b|profit\\b|margin\\b|it'?s\\s+worth\\b|worth\\b|all\\s+(?:fixed|done)\\b|" +
+  "(?:when|once)\\s+(?:it'?s\\s+)?(?:fixed|done|finished|renovated)\\b";
+const COST_BEFORE = "\\bclosing(?:\\s+costs?)?|\\bholding(?:\\s+costs?)?|\\bcarry(?:ing)?(?:\\s+costs?)?|\\bresale(?:\\s+costs?)?|\\bresell(?:ing)?|" +
+  "\\bprofit(?:\\s*(?:&|and)\\s*risk)?|\\brisk|\\bmargin|\\b(?:renovation\\s+)?budget|\\bcommissions?|\\bcosts?";
+
 // The figures behind a price, said beside it: "$507K ARV, $110K in rehab".
 // A number named as the ARV, the rehab, the repairs or the work is the math,
 // not what we'd pay.
-const MATH_AFTER = /^\s*(?:arv\b|after[- ]repair|(?:in|of|for)\s+(?:rehab|repairs?|work)\b|rehab\b|repairs?\b|(?:worth\s+)?of\s+work\b)/i;
-const MATH_BEFORE = /(?:\barv|after[- ]repair value|\brehab|\brepairs?|\bwork)\s*(?:is|of|at|=|:|around|about|~)?\s*$/i;
+const MATH_AFTER = new RegExp(`^\\s*(?:arv\\b|after[- ]repair|(?:in|of|for)\\s+(?:rehab|repairs?|work)\\b|rehab\\b|repairs?\\b|(?:worth\\s+)?of\\s+work\\b|${COST_AFTER})`, "i");
+const MATH_BEFORE = new RegExp(`(?:\\barv|after[- ]repair value|\\brehab|\\brepairs?|\\bwork|${COST_BEFORE})\\s*(?:is|of|at|=|:|around|about|~)?\\s*$`, "i");
 const priceMoney = (text) => [...String(text || "").matchAll(LINE_MONEY_RX)]
   .filter((m) => !MATH_AFTER.test(text.slice(m.index + m[0].length, m.index + m[0].length + 24))
     && !MATH_BEFORE.test(text.slice(Math.max(0, m.index - 24), m.index)))
@@ -235,7 +260,7 @@ export function ourComeDown(o, transcript = "") {
     const text = m[3].trim();
     // A message that carries the offer documents restates the book, not a
     // new number.
-    if (/\bhere's our (revised )?(written cash offer|letter of intent)\b/i.test(text)) continue;
+    if (OFFER_DOC_TEXT_RX.test(text)) continue;
     // Under the book's number, not absurdly under it, and not the book's
     // own number said the way people text it ("71k" for 71,075).
     // Rounded ("71k" for 71,075) or cut short ("227K" for 227,552) — within
@@ -291,9 +316,10 @@ export function shorthandPrices(text = "", reference = 0) {
   return [...new Set(shorthandHits(String(text || ""), reference).map((h) => h.v))];
 }
 
-// Not a price we'd pay: the list price, their price, and the value or the work.
-const NOT_OURS_AFTER = /^\s*(?:arv\b|after[- ]repair|(?:in|of|for)\s+(?:rehab|repairs?|work)\b|rehab\b|repairs?\b|(?:worth\s+)?of\s+work\b|done\b|fixed\b|finished\b|renovated\b|retail\b|once\b|after\s+(?:the\s+)?(?:work|reno|rehab|repairs)|emd\b|earnest\b|deposit\b|is\s+(?:way\s+|well\s+|a\s+(?:bit|lot)\s+|too\s+)?(?:past|over|above|beyond|out\s+of|more\s+than|too))/i;
-const NOT_OURS_BEFORE = /(?:\barv|after[- ]repair value|\brehab|\brepairs?|\bwork|\blist(?:ed|ing)?(?:\s+price)?|\basking(?:\s+price)?|\bpriced|\bon\s+price|\bthe\s+market|\bworth|\bvalue|\b(?:came|come|dropped|reduced|cut|down)\s+(?:down\s+)?to|\breads?\s+(?:like|as))\s*(?:is|of|at|=|:|around|about|~|for)?\s*$/i;
+// Not a price we'd pay: the list price, their price, and the value or the
+// work — or a cost we name when we show our work.
+const NOT_OURS_AFTER = new RegExp("^\\s*(?:arv\\b|after[- ]repair|(?:in|of|for)\\s+(?:rehab|repairs?|work)\\b|rehab\\b|repairs?\\b|(?:worth\\s+)?of\\s+work\\b|done\\b|fixed\\b|finished\\b|renovated\\b|retail\\b|once\\b|after\\s+(?:the\\s+)?(?:work|reno|rehab|repairs)|emd\\b|earnest\\b|deposit\\b|is\\s+(?:way\\s+|well\\s+|a\\s+(?:bit|lot)\\s+|too\\s+)?(?:past|over|above|beyond|out\\s+of|more\\s+than|too)|" + COST_AFTER + ")", "i");
+const NOT_OURS_BEFORE = new RegExp("(?:\\barv|after[- ]repair value|\\brehab|\\brepairs?|\\bwork|\\blist(?:ed|ing)?(?:\\s+price)?|\\basking(?:\\s+price)?|\\bpriced|\\bon\\s+price|\\bthe\\s+market|\\bworth|\\bvalue|\\b(?:came|come|dropped|reduced|cut|down)\\s+(?:down\\s+)?to|\\breads?\\s+(?:like|as)|" + COST_BEFORE + ")\\s*(?:is|of|at|=|:|around|about|~|for)?\\s*$", "i");
 
 /**
  * pricesWeName(text, reference) → [dollars]
@@ -338,7 +364,7 @@ export function ourMoveUp(o, transcript = "") {
     const ts = Date.parse(`${m[1]}T${m[2]}:00Z`);
     if (!Number.isFinite(ts) || ts < since) continue;
     const text = m[3].trim();
-    if (/\bhere's our (revised )?(written cash offer|letter of intent)\b/i.test(text)) continue;
+    if (OFFER_DOC_TEXT_RX.test(text)) continue;
     const higher = pricesWeName(text, amount).filter((n) => n > amount + slack && n <= amount * 3);
     if (!higher.length) continue;
     const n = Math.max(...higher);
@@ -375,7 +401,8 @@ export function lastQuoteOnHouse(o, transcript = "") {
     const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US \w+: (.*)$/.exec(line);
     if (!m) continue;
     const ts = Date.parse(`${m[1]}T${m[2]}:00Z`);
-    const text = m[3].trim();
+    // An offer letter's text names our number first and the math after it.
+    const text = quotedPart(m[3].trim());
     if (!Number.isFinite(ts) || !namesHouse(text, o.address)) continue;
     const prices = pricesWeName(text, amount).filter((n) => n >= amount * 0.4 && n <= amount * 3);
     if (!prices.length) continue;

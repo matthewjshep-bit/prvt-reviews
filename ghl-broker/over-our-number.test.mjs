@@ -193,3 +193,21 @@ test("the offer book says the 650 counter was theirs, and the 650 we texted is n
   assert.doesNotMatch(book.text, /HOT/);
   assert.ok(!book.amounts.includes(650000));
 });
+
+/* ---------- showing our work ---------- */
+
+// The ARV and the costs are said beside our number when we show our work
+// (2026-10-07). The ARV is above our number and is not a price.
+test("our math in a reply is not a price above our offer", () => {
+  for (const reply of [
+    "We base it on around 500 it's worth fixed up, less about 50 of work, then about 38 to buy and resell and 26 to hold it 5 months plus our profit and risk, which lands us at 295.",
+    "Around 500 all fixed up, about 38 in closing costs, 26 of holding, 50 for the work, and what's left is our profit and risk. That's how we get to 295.",
+  ]) {
+    const r = evaluateReplyGates({
+      draft: draft({ intent: "question", reply }), party: "agent", ourAmount: 295000,
+      allowedAmounts: [295000, 500000, 50000, 38000, 26000], inboundMessage: "how did you get to that number?",
+    });
+    assert.deepEqual(r.flags, [], reply);
+    assert.deepEqual(pricesWeName(reply, 295000), [295000], reply);
+  }
+});
