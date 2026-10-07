@@ -42,11 +42,12 @@ const money = (n) => `$${Math.round(num(n)).toLocaleString("en-US")}`;
 // A package that can hide its own offer is a blank page with a header.
 export const OFFER_SECTION_KEYS = ["breakdown", "comps", "scope", "netsheet", "note", "documents"];
 
-// Everything on except the breakdown. Showing your working is a per-offer
-// judgement — persuasive to an agent who's pushing back on price, needless
-// noise on an offer that's already close to asking.
+// Everything on. The breakdown was opt-in until 2026-10-07, when Matt asked
+// that every agent see what our number is based on — closing, holding, the
+// work, and profit & risk (shared/offer-breakdown.js). A page can still turn
+// it off; pages built before then keep the sections they were saved with.
 export const DEFAULT_OFFER_SECTIONS = {
-  breakdown: false, comps: true, scope: true, netsheet: true, note: true, documents: true,
+  breakdown: true, comps: true, scope: true, netsheet: true, note: true, documents: true,
 };
 
 export function normalizeOfferSections(input) {
@@ -277,6 +278,8 @@ const OFFER_CSS = `
 .stack tr.tot td{border-top:2px solid #0F172A;font-weight:800;padding-top:11px;font-size:15px}
 .stack td.r{font-variant-numeric:tabular-nums;text-align:right;padding-right:0}
 .stack .op{color:#94A3B8;width:14px;padding-right:6px;text-align:center}
+.stack tr.det td{color:#64748B;font-size:13px;padding-top:0;padding-bottom:4px}
+.stack tr.det td.l{padding-left:14px}
 td a{color:#2563EB;text-decoration:none;border-bottom:1px solid rgba(37,99,235,.3)}
 .note p{margin:0 0 10px;font-size:14px}.note p:last-child{margin:0}
 .netrow{display:flex;flex-wrap:wrap;gap:1px;background:#E2E8F0;border:1px solid #E2E8F0;border-radius:8px;overflow:hidden}
@@ -346,16 +349,23 @@ function termsSection(snap) {
 function breakdownSection(snap) {
   const b = snap.breakdown;
   if (!b || !b.rows?.length) return "";
+  // Each cost, then the parts it's made of (closing: resale and purchase;
+  // holding: loan, taxes, insurance, utilities), smaller and indented.
   const rows = b.rows.map((r) => `<tr>
     <td class="op">${r.sign === "+" ? "" : "−"}</td>
     <td>${esc(r.label)}</td>
-    <td class="r">${money(r.amount)}</td></tr>`).join("");
+    <td class="r">${money(r.amount)}</td></tr>` +
+    (Array.isArray(r.detail) && r.detail.length > 1 ? r.detail.map((d) => `<tr class="det">
+    <td class="op"></td>
+    <td class="l">${esc(d.label)}</td>
+    <td class="r">${money(d.amount)}</td></tr>`).join("") : "")).join("");
   return `<div class="card">
     <h2>How we got to this number</h2>
     <table class="stack">${rows}
       <tr class="tot"><td class="op"></td><td>Our offer</td><td class="r">${money(b.total)}</td></tr>
     </table>
     <p class="muted" style="margin-top:12px">${esc(b.basis)}</p>
+    ${b.caption ? `<p class="muted" style="margin-top:6px">${esc(b.caption)}</p>` : ""}
   </div>`;
 }
 
