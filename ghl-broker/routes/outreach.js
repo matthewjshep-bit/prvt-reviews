@@ -391,7 +391,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * without it, the pull's own median (a county or zip pull is one market).
    */
   async function ingestCohort({ locationId, client, batch, listings, params, medianFor = null, warnings }) {
-    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false, zillow = null } = params;
+    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false, zillow = null, propertyType = "" } = params;
     const isDistressed = (sig) => (distressRule === "cut-or-cheap" ? sig.priced : sig.any);
     // Cohort medians come from the FULL pull (pre-filter) so they describe the
     // market, not the filtered slice.
@@ -424,6 +424,15 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         `year built filter (${maxYearBuilt} or older) kept ${pool.length} of ${before}` +
         (unknownYear ? ` — ${unknownYear} with no year built were kept` : "")
       );
+    }
+    // The types asked for, checked on each listing: RentCast was asked
+    // already, but a cached page can predate the setting (Matt, 2026-10-08:
+    // no manufactured homes). A listing with no type is kept.
+    if (propertyType) {
+      const want = new Set(String(propertyType).split("|").map((t) => t.trim().toLowerCase()).filter(Boolean));
+      const before = pool.length;
+      pool = pool.filter((l) => !l.propertyType || want.has(String(l.propertyType).toLowerCase()));
+      if (pool.length < before) warnings.push(`property type filter (${String(propertyType).replace(/\|/g, ", ")}) kept ${pool.length} of ${before}`);
     }
     // Rural: two acres or more (Matt, 2026-10-08) — harder to comp, and our
     // buyers don't want it, so it is never a reason to text an agent. RentCast
@@ -698,7 +707,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const r = await ingestCohort({
         locationId, client, batch, listings: mine, warnings: w, medianFor,
         params: { maxPrice: p.maxPrice, maxYearBuilt: p.maxYearBuilt, distressOnly: p.distressOnly, distressRule: p.distressRule,
-          staleDom: p.staleDom, priceBandPct: 0, sweep: true, zillow },
+          staleDom: p.staleDom, priceBandPct: 0, sweep: true, zillow, propertyType: p.propertyType },
       });
       warnings.push(...w.filter((x) => !/kept \d+ of/.test(x)).map((x) => `${c.key}: ${x}`));
       out.push({ key: c.key, batchId: batch.id, batchName: batch.name, listingsFetched: mine.length, listingsKept: r.pool.length,
@@ -803,7 +812,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
 
     const { pool, agentRows, agentsNew, medianPpsf, medianPrice } = await ingestCohort({
       locationId, client, batch, listings, warnings,
-      params: { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep: body.metro === true || body.metro === "true",
+      params: { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, propertyType, sweep: body.metro === true || body.metro === "true",
         zillow: body.metro === true || body.metro === "true" ? zillowFor(settings) : null },
     });
     await store.recordOutreachPull(locationId, {

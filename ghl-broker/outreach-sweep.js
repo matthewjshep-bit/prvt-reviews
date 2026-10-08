@@ -247,11 +247,12 @@ export function pullQuery(oa) {
  * would be talking over), and a phone. The most distressed book first —
  * that is the whole thesis of the outreach — then the biggest.
  *
- * `maxPrice` and `distressRule` are checked on the row itself, not trusted to
+ * `maxPrice`, `distressRule` and `propertyTypes` are checked on the row itself, not trusted to
  * the pull: the batch keeps agents from earlier pulls made under looser
  * filters, and a row counted by another rule (or none) doesn't qualify.
  */
-export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null } = {}) {
+export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null, propertyTypes = [] } = {}) {
+  const types = new Set((propertyTypes || []).map((t) => String(t).toLowerCase()));
   const ok = rows.filter((r) => {
     const d = r?.doc || {};
     if (r.status !== "new") return false;
@@ -263,6 +264,10 @@ export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, require
     // A rural hook (two acres or more) from a pull made before the rural
     // filter is not a reason to text them either (Matt, 2026-10-08).
     if (isRuralLot(d.hook?.lotSize)) return false;
+    // Nor is a hook of a type outside the setting (Matt, 2026-10-08: no
+    // manufactured homes): rows from pulls made before single-family-only
+    // still sit in the batches. No type on record goes ahead.
+    if (types.size && d.hook?.propertyType && !types.has(String(d.hook.propertyType).toLowerCase())) return false;
     return true;
   });
   ok.sort((a, b) =>
@@ -491,7 +496,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
       : await store.listOutreachAgents(locationId, { batchId, status: "new", limit: 1000 });
     job.candidates = (job.candidates || 0) + rows.length;
     const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
-      maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null })
+      maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null, propertyTypes: oa.propertyTypes })
       .filter((r) => !seenAgents.has(r.agentKey) && !seenPhones.has(String(r.doc?.phone)));
     for (const r of fresh) { seenAgents.add(r.agentKey); seenPhones.add(String(r.doc?.phone)); }
     if (fresh.length) groups.push({ key, batchId, picked: fresh });
