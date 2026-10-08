@@ -317,22 +317,40 @@ test("a factor nobody knows drops out of the denominator instead of scoring zero
   assert.equal(similarity({}, {}, { now: NOW }).score, null, "nothing knowable is no score, not zero");
 });
 
-// 2026-09-24, Matt: comps should be as close in age as they can be. Live ARV
-// sets were landing at "built ±9–15 yrs" because a 12-years-apart comp still
-// kept most of its year credit and year was worth less than beds.
-test("a comp built 15 years apart gets no credit for its age, and 10 apart gets half", () => {
+// 2026-09-24, Matt: comps should be as close in age as they can be — then
+// 2026-10-08 on 3037 Massey Rd, Everson (Zillow: built 1900): loosen the year
+// built and skew towards the sale right next to the house. Age now tapers
+// out over 30 years and is worth less than distance by a wide margin.
+test("a comp built 30 years apart gets no credit for its age, and 15 apart keeps most of it", () => {
   const yearValue = (yearBuilt) => similarity(SUBJECT, twin({ yearBuilt }), { radiusMiles: 0.5, now: NOW })
     .factors.find((f) => f.key === "yearBuilt").value;
   assert.equal(yearValue(1968 + 5), 1, "inside five years is the same era");
-  assert.equal(yearValue(1968 + 10), 0.5);
-  assert.equal(yearValue(1968 - 15), 0);
-  assert.ok(SIM_WEIGHTS.yearBuilt > SIM_WEIGHTS.beds, "age outranks a bedroom count the pool already holds to ±1");
+  assert.equal(yearValue(1968 + 15), 0.6);
+  assert.equal(yearValue(1968 - 30), 0);
+  assert.ok(SIM_WEIGHTS.distance >= 3 * SIM_WEIGHTS.yearBuilt, "how close the house is outweighs its age");
 });
 
-test("between two otherwise equal comps, the one closer in age ranks first", () => {
-  const near = similarity(SUBJECT, twin({ yearBuilt: 1972, distance: 0.3 }), { radiusMiles: 0.5, now: NOW }).score;
-  const far = similarity(SUBJECT, twin({ yearBuilt: 1981, distance: 0.1 }), { radiusMiles: 0.5, now: NOW }).score;
-  assert.ok(near > far, `4 yrs apart at 0.3 mi (${near}) should beat 13 yrs apart next door (${far})`);
+test("the sale next door beats one farther out that is closer in age", () => {
+  const nextDoor = similarity(SUBJECT, twin({ yearBuilt: 1983, distance: 0.1 }), { radiusMiles: 0.5, now: NOW }).score;
+  const fartherOut = similarity(SUBJECT, twin({ yearBuilt: 1968, distance: 0.35 }), { radiusMiles: 0.5, now: NOW }).score;
+  assert.ok(nextDoor > fartherOut, `15 yrs apart next door (${nextDoor}) should beat the same-age house 0.35 mi out (${fartherOut})`);
+});
+
+test("half a mile out on a one-mile ring loses to a quarter mile out, even 15 years apart", () => {
+  const close = similarity(SUBJECT, twin({ yearBuilt: 1983, distance: 0.25 }), { radiusMiles: 1, now: NOW }).score;
+  const far = similarity(SUBJECT, twin({ yearBuilt: 1968, distance: 0.5 }), { radiusMiles: 1, now: NOW }).score;
+  assert.ok(close > far, `${close} vs ${far}`);
+});
+
+// Zillow writes 1900 when it doesn't know. On 3037 Massey Rd that "1900" put
+// every sale within a mile outside the era band and the run held on 0 comps.
+test("a year built of 1900 is Zillow not knowing, so it neither ranks nor filters", () => {
+  const old = { ...SUBJECT, yearBuilt: 1900 };
+  const s = similarity(old, twin({ yearBuilt: 1985 }), { radiusMiles: 0.5, now: NOW });
+  assert.equal(s.factors.find((f) => f.key === "yearBuilt").value, null);
+  assert.equal(inPool(old, twin({ yearBuilt: 1985 })).ok, true);
+  assert.equal(inPool(SUBJECT, twin({ yearBuilt: 1900 })).ok, true, "a comp's 1900 is unknown too");
+  assert.equal(scoreComp(old, twin({ yearBuilt: 1985 })).checks.find((c) => c.key === "year").ok, null);
 });
 
 test("year built counts once a comp carries it, and not before", () => {
@@ -378,9 +396,9 @@ test("similarityTone is coarse on purpose", () => {
 
 test("inPool is the loose gate and abstains on unknowns", () => {
   assert.deepEqual(inPool(SUBJECT, twin()), { ok: true, misses: [] });
-  assert.deepEqual(inPool(SUBJECT, twin({ beds: 4, baths: 3, sqft: 2200, yearBuilt: 1980 })), { ok: true, misses: [] }, "one bed, one bath, 22% and 12 years are all inside");
+  assert.deepEqual(inPool(SUBJECT, twin({ beds: 4, baths: 3, sqft: 2200, yearBuilt: 1995 })), { ok: true, misses: [] }, "one bed, one bath, 22% and 27 years are all inside");
   assert.deepEqual(inPool(SUBJECT, twin({ beds: 5 })).misses, ["beds"]);
-  assert.deepEqual(inPool(SUBJECT, twin({ yearBuilt: 1990 })).misses, ["yearBuilt"]);
+  assert.deepEqual(inPool(SUBJECT, twin({ yearBuilt: 2000 })).misses, ["yearBuilt"]);
   assert.deepEqual(inPool(SUBJECT, twin({ sqft: 2400 })).misses, ["sqft"]);
   assert.equal(inPool(SUBJECT, twin({ yearBuilt: null, sqft: null })).ok, true, "what nobody knows can't miss");
 });

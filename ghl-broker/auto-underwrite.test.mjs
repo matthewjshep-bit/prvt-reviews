@@ -894,10 +894,10 @@ test("the 3/2 built 1968 next door outranks the 4/3 across town, whatever its $/
   assert.equal(out[0].similarity.score, 100);
 });
 
-test("a comp more than fifteen years off the subject's era leaves the pool; one with no year stays", () => {
-  const out = ring([house("old", { yearBuilt: 1940 }), house("new", { yearBuilt: 2004 }), house("noYear", { yearBuilt: null }), house("ok", { yearBuilt: 1980 })]);
-  assert.deepEqual(out.map((c) => c.id).sort(), ["noYear", "ok"]);
-  assert.equal(UW_POOL_YEAR_TOLERANCE, 15);
+test("a comp more than thirty years off the subject's era leaves the pool; one with no year stays", () => {
+  const out = ring([house("old", { yearBuilt: 1930 }), house("new", { yearBuilt: 2004 }), house("fifteenOff", { yearBuilt: 1983 }), house("noYear", { yearBuilt: null }), house("ok", { yearBuilt: 1980 })]);
+  assert.deepEqual(out.map((c) => c.id).sort(), ["fifteenOff", "noYear", "ok"]);
+  assert.equal(UW_POOL_YEAR_TOLERANCE, 30);
 });
 
 test("the ring pool's time trend reaches deriveArv; the four ARV comps don't set it", async () => {

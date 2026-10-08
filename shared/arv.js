@@ -263,8 +263,9 @@ function spreadOf(pool, subjectSqft, subjectYearBuilt) {
   const sims = pool.map((c) => (c.similarity == null ? null : num(c.similarity?.score ?? c.similarity))).filter((v) => v != null);
   const dists = pool.map((c) => num(c.distance)).filter((d) => d > 0);
   const sizes = subjectSqft > 0 ? pool.map((c) => num(c.sqft)).filter((v) => v > 0).map((v) => Math.abs(v - subjectSqft) / subjectSqft * 100) : [];
-  const years = pool.map((c) => num(c.yearBuilt)).filter((v) => v > 0);
-  const gap = subjectYearBuilt > 0 ? subjectYearBuilt : 0;
+  // 1900 and earlier is Zillow not knowing (comp-match.js year()), not an age.
+  const years = pool.map((c) => num(c.yearBuilt)).filter((v) => v > 1900);
+  const gap = subjectYearBuilt > 1900 ? subjectYearBuilt : 0;
   return {
     avgSimilarity: sims.length ? Math.round(sims.reduce((t, v) => t + v, 0) / sims.length) : null,
     maxDistance: dists.length ? Math.round(Math.max(...dists) * 10) / 10 : null,

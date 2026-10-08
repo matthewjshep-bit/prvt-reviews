@@ -134,8 +134,10 @@ export const UW_POOL_BEDS_TOLERANCE = 1;
 export const UW_POOL_BATHS_TOLERANCE = 1;
 export const UW_POOL_SQFT_PCT = 0.30;
 // The pool's era band — only knowable once the comps' year built has been
-// bought (below); a comp with no year passes, as everywhere.
-export const UW_POOL_YEAR_TOLERANCE = 15;
+// bought (below); a comp with no year passes, as everywhere. ±15 → ±30 on
+// 2026-10-08 (3037 Massey Rd, Everson): the house next door matters more than
+// its age, and the ranking already scores age down.
+export const UW_POOL_YEAR_TOLERANCE = 30;
 // Most similar first (2026-09-16). The pool above is as wide as it was, so
 // runs don't hold more often; what changed is who inside it carries the
 // number. The price proxy used to rank the WHOLE ring by $/sqft and call the
@@ -1688,7 +1690,14 @@ async function runUnderwrite(job, ctx) {
       eraGivesWay = false;
       if (at.usable < UW_MIN_REHABBED_COMPS && subject.yearBuilt) {
         const relaxed = usableAt(true);
-        if (relaxed.ring.length > at.ring.length && relaxed.usable >= UW_MIN_REHABBED_COMPS) {
+        // A ring the era band emptied takes the same-side houses even when
+        // they only make a gut check — a rough number off the sales next door
+        // beats a hold (3037 Massey Rd, Everson, 2026-10-08: four 3/2s nearby,
+        // all thrown out for being newer, and the agent heard "comps are thin").
+        const gutOnly = (x) => Boolean(x.graded?.proxy?.gutCheck);
+        const rescues = relaxed.usable >= UW_MIN_REHABBED_COMPS ||
+          (at.usable === 0 && !gutOnly(at) && gutOnly(relaxed));
+        if (relaxed.ring.length > at.ring.length && rescues) {
           warnings.push(`only ${at.ring.length} comp${at.ring.length === 1 ? "" : "s"} within ${radius} mi built inside ±${UW_POOL_YEAR_TOLERANCE} years — kept the search close and let in same-side houses outside that band`);
           at = relaxed;
           eraGivesWay = true;
