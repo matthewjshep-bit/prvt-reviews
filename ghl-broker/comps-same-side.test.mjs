@@ -125,10 +125,11 @@ test("the ARV comes from the house's own side of Trosper Rd, not the new builds 
   assert.ok(snap.filter(isMimi).every((c) => c.side?.across?.[0]?.name === "Trosper Road Southwest"), "the board says which road");
 });
 
-test("the age band gives way before the search goes a mile out", async () => {
+// The 2005–2014 sales sat outside the old ±15-year band; since 2026-10-08 the
+// band is ±30 and they are in the pool outright, so no give-way is needed.
+test("the age band never sends the search a mile out", async () => {
   const { job } = await run();
   assert.equal(job.compsRadiusMiles, 0.5, job.warnings.join(" | "));
-  assert.ok(job.warnings.some((w) => /let in same-side houses outside that band/.test(w)), job.warnings.join(" | "));
   assert.ok(!job.warnings.some((w) => /widened the search/.test(w)));
 });
 

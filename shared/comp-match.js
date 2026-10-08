@@ -30,6 +30,16 @@ const n = (v) => {
   return Number.isFinite(x) ? x : null;
 };
 
+// Year built, or null when it isn't really known. Zillow writes 1900 for a
+// house whose year it doesn't have; on 3037 Massey Rd, Everson (2026-10-08)
+// that placeholder put every sale within a mile outside the era band and the
+// run held on 0 comps. So 1900 and earlier abstain, like any unknown fact.
+export const YEAR_PLACEHOLDER_AT_OR_BEFORE = 1900;
+const year = (v) => {
+  const y = n(v);
+  return y != null && y > YEAR_PLACEHOLDER_AT_OR_BEFORE ? y : null;
+};
+
 // Normalize a free-text fact (subdivision, construction material) for
 // comparison: providers vary on case, punctuation and filler words.
 const norm = (v) => {
@@ -107,7 +117,7 @@ export function scoreComp(subject = {}, comp = {}, opts = {}) {
     cs == null ? "comp sqft unknown" : `${cs.toLocaleString()} vs ${ss ? ss.toLocaleString() : "?"} sqft`);
 
   // Era — ±10 years.
-  const sy = n(subject.yearBuilt), cy = n(comp.yearBuilt);
+  const sy = year(subject.yearBuilt), cy = year(comp.yearBuilt);
   add("year", `Built ±${yearTolerance} yrs`,
     sy == null || cy == null ? null : Math.abs(sy - cy) <= yearTolerance,
     cy == null ? "comp year unknown" : `${cy} vs ${sy ?? "?"}`);
@@ -248,13 +258,18 @@ export function markRenovatedByPrice(comps = [], { take = 4, minPool = PRICE_PRO
 // own side carried nothing. `comp.side` is set by shared/same-side.js from the
 // map; with no map it's unknown and leaves the denominator, like any fact.
 // Distance went 25 → 30 and its full-credit circle 0.25 → 0.15 mi the same day.
-export const SIM_WEIGHTS = { distance: 30, side: 25, sqft: 20, beds: 15, baths: 10, yearBuilt: 20, recency: 10, lot: 5, garage: 5 };
+// 2026-10-08, Matt on 3037 Massey Rd, Everson: "loosen comps built in year and
+// skew towards one right near to the subject". Year built 20 → 10 with its
+// taper out to 30 years (was 15), so distance now counts three times age.
+// Distance itself stays at 30: at 40 a 5/4 next door outranked an exact 3/2
+// four tenths of a mile away.
+export const SIM_WEIGHTS = { distance: 30, side: 25, sqft: 20, beds: 15, baths: 10, yearBuilt: 10, recency: 10, lot: 5, garage: 5 };
 export const SIM_DISTANCE_FULL_MI = 0.15;  // 1.0 out to here, 0 at the ring edge
 export const SIM_SQFT_FULL_PCT = 10;       // 1.0 inside ±10% …
 export const SIM_SQFT_FULL_ABS = 300;      // … or ±300 sqft, whichever is wider (Matt's rule)
 export const SIM_SQFT_ZERO_PCT = 30;       // 0 at ±30%
 export const SIM_YEAR_FULL = 5;            // 1.0 inside ±5 years
-export const SIM_YEAR_ZERO = 15;           // 0 at ±15 — the pool's own era edge
+export const SIM_YEAR_ZERO = 30;           // 0 at ±30 — the pool's own era edge
 export const SIM_RECENCY_FULL_MO = 6;      // 1.0 inside six months
 export const SIM_RECENCY_ZERO_MO = 24;     // 0 at two years
 export const SIM_LOT_ZERO_PCT = 50;        // 0 at a lot half or twice the size
@@ -305,7 +320,7 @@ export function similarity(subject = {}, comp = {}, { radiusMiles = DISTANCE_MIL
     add("baths", "Baths", SIM_WEIGHTS.baths, gap === 0 ? 1 : gap <= 0.5 ? 0.7 : gap <= 1 ? 0.3 : 0, `${cba} vs ${sba}`);
   }
 
-  const sy = n(subject.yearBuilt), cy = n(comp.yearBuilt);
+  const sy = year(subject.yearBuilt), cy = year(comp.yearBuilt);
   if (sy == null || cy == null) add("yearBuilt", "Year built", SIM_WEIGHTS.yearBuilt, null, "year built unknown");
   else add("yearBuilt", "Year built", SIM_WEIGHTS.yearBuilt, taper(Math.abs(sy - cy), SIM_YEAR_FULL, SIM_YEAR_ZERO), `${cy} vs ${sy}`);
 
@@ -346,9 +361,9 @@ export function similarityTone(s) {
  * wide as the pull bands already are (beds ±1, baths ±1, size ±25%) plus era
  * ±15 years now that year built can be known, so runs don't hold more often;
  * the accuracy comes from the ranking above, not from a tighter door. Unknown
- * facts pass, as everywhere in this file.
+ * facts pass, as everywhere in this file. Era widened to ±30 on 2026-10-08.
  */
-export function inPool(subject = {}, comp = {}, { bedsTol = 1, bathsTol = 1, sqftPct = 25, yearTol = 15 } = {}) {
+export function inPool(subject = {}, comp = {}, { bedsTol = 1, bathsTol = 1, sqftPct = 25, yearTol = 30 } = {}) {
   const misses = [];
   const sb = n(subject.beds), cb = n(comp.beds);
   if (sb != null && cb != null && Math.abs(Math.round(sb) - Math.round(cb)) > bedsTol) misses.push("beds");
@@ -356,7 +371,7 @@ export function inPool(subject = {}, comp = {}, { bedsTol = 1, bathsTol = 1, sqf
   if (sba != null && cba != null && Math.abs(sba - cba) > bathsTol) misses.push("baths");
   const ss = n(subject.sqft), cs = n(comp.sqft);
   if (ss != null && cs != null && ss > 0 && cs > 0 && Math.abs(cs - ss) / ss > sqftPct / 100) misses.push("sqft");
-  const sy = n(subject.yearBuilt), cy = n(comp.yearBuilt);
+  const sy = year(subject.yearBuilt), cy = year(comp.yearBuilt);
   if (sy != null && cy != null && Math.abs(sy - cy) > yearTol) misses.push("yearBuilt");
   return { ok: misses.length === 0, misses };
 }
