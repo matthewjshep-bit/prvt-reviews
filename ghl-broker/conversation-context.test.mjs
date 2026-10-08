@@ -518,3 +518,17 @@ test("a range we floated is in the book: our number is its top, and a letter aft
   assert.doesNotMatch(after.text, /we floated/);
   assert.deepEqual(after.ranges, []);
 });
+
+test("a rural house we priced anyway counts as chosen, so the bot talks numbers on it", async () => {
+  const { pricedOutsideFocus } = await import("./conversation-context.js");
+  const at = "2026-10-08T17:00:00Z";
+  const offers = [
+    { id: "r", contactId: "c1", address: "21800 Farm Rd SE, Maple Valley, WA 98038", createdAt: at, status: "new", cashAmount: 400000,
+      snapshot: { subjectInfo: { homeType: "SINGLE_FAMILY", lotSqft: 5 * 43560 } } },
+    { id: "t", contactId: "c1", address: "1 Elm St, Kent, WA 98030", createdAt: at, status: "new", cashAmount: 300000,
+      snapshot: { subjectInfo: { homeType: "SINGLE_FAMILY", lotSqft: 7200 } } },
+    // A lean row carries the lot as subjectLotSqft.
+    { id: "lean", contactId: "c1", address: "4 Ash St, Kent, WA 98030", createdAt: at, status: "sent", cashAmount: 250000, subjectHomeType: "SINGLE_FAMILY", subjectLotSqft: 3 * 43560 },
+  ];
+  assert.deepEqual(pricedOutsideFocus(offers, ["sfr"]).sort(), ["21800 Farm Rd SE, Maple Valley, WA 98038", "4 Ash St, Kent, WA 98030"]);
+});

@@ -570,6 +570,9 @@ export function leanOfferDoc(doc) {
   const out = {};
   for (const k of OFFER_LIST_FIELDS) if (k in doc) out[k] = doc[k];
   out.subjectHomeType = doc.snapshot?.subjectInfo?.homeType ?? doc.snapshot?.comps?.result?.info?.homeType ?? doc.draft?.subjectInfo?.homeType ?? null;
+  // The lot, so a rural house (two acres or more) reads as one on a lean row.
+  const lot = Number(doc.snapshot?.subjectInfo?.lotSqft ?? doc.draft?.subjectInfo?.lotSqft);
+  out.subjectLotSqft = Number.isFinite(lot) && lot > 0 ? lot : null;
   // The figures behind the number. toListOffer reads them and drops them —
   // they reach the row as arv/repairs/askingPrice/terms/math, never as calc.
   const calc = doc.calc;

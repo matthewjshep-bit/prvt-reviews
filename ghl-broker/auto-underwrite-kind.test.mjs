@@ -24,7 +24,7 @@ const { KIND_HOLD } = await import("./shared/asset-type.js");
 await store.init();
 
 const ADDRESS = "1510 Maple Lane, Kent, WA 98030";
-function stubFetch(homeType) {
+function stubFetch(homeType, more = {}) {
   const calls = { detail: 0, search: 0 };
   const original = globalThis.fetch;
   globalThis.fetch = async (url, opts = {}) => {
@@ -38,7 +38,7 @@ function stubFetch(homeType) {
       if (body.includes("searchUrls")) { calls.search++; return ok([]); }
       calls.detail++;
       return ok([{ address: { streetAddress: "1510 Maple Ln", city: "Kent", state: "WA", zipcode: "98030" }, homeType,
-        bedrooms: 3, bathrooms: 2, livingArea: 1440, yearBuilt: 1978, listingPhotos: [] }]);
+        bedrooms: 3, bathrooms: 2, livingArea: 1440, yearBuilt: 1978, listingPhotos: [], ...more }]);
     }
     return ok({ features: [] });
   };
@@ -143,4 +143,40 @@ test("a Retry of an Underwrite anyway run still prices it anyway", async () => {
   const { retryArgs } = await import("./auto-underwrite.js");
   assert.equal(retryArgs({ id: "uw-1", contactId: "c1", address: ADDRESS, anyKind: true, offerId: "draft1" }).anyKind, true);
   assert.equal(retryArgs({ id: "uw-2", contactId: "c1", address: ADDRESS, offerId: "draft1" }).anyKind, false);
+});
+
+// Matt, 2026-10-08: rural (two acres or more) is harder to comp and our
+// buyers don't want it. Held before the comps are bought, like a mobile home;
+// the held sweep passes it and tells the agent.
+test("a house on five acres is held as rural, before any comp search is bought", async () => {
+  _resetJobs();
+  const { RURAL_HOLD } = await import("./shared/asset-type.js");
+  const { calls, restore } = stubFetch("SINGLE_FAMILY", { lotAreaValue: 5, lotAreaUnits: "Acres" });
+  try {
+    const { job } = await startUnderwrite({ client, locationId: "LOC-rural", saved, store, contactId: "agent-r1", address: ADDRESS,
+      deps: { createOffer: async () => { throw new Error("no offer for a rural house"); } } });
+    assert.ok(await until(() => ["held", "done", "error"].includes(job.status)), `still ${job.status}/${job.phase}`);
+    assert.equal(job.status, "held", job.error || "");
+    assert.ok(RURAL_HOLD.test(job.held[0]), job.held[0]);
+    assert.match(job.held[0], /sits on 5 acres/);
+    assert.equal(calls.search, 0, "no comp search was bought");
+  } finally { restore(); }
+});
+
+test("a house on a quarter acre goes on to the comps", async () => {
+  _resetJobs();
+  const { RURAL_HOLD } = await import("./shared/asset-type.js");
+  const { calls, restore } = stubFetch("SINGLE_FAMILY", { lotAreaValue: 0.25, lotAreaUnits: "Acres" });
+  try {
+    const { job } = await startUnderwrite({ client, locationId: "LOC-rural-small", saved, store, contactId: "agent-r2", address: ADDRESS,
+      deps: { createOffer: async () => { throw new Error("not reached in this test"); } } });
+    assert.ok(await until(() => ["held", "done", "error"].includes(job.status) || calls.search > 0), `still ${job.status}/${job.phase}`);
+    // The earlier runs' sold search is cached for this box, so it may not be
+    // bought again — getting past the hold to the comps is what counts.
+    const pastHold = calls.search > 0 || (job.held || []).some((h) => /comps?|ARV|sold search/i.test(h));
+    assert.ok(pastHold, `it reached the comps (${job.status}: ${JSON.stringify(job.held || job.error)})`);
+    assert.ok(!(job.held || []).some((h) => RURAL_HOLD.test(h)));
+    cancelJob(job.id);
+    await until(() => job.status !== "running");
+  } finally { restore(); }
 });

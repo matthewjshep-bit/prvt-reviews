@@ -84,13 +84,16 @@ test("the file store trims a lean read the way Postgres does", () => {
   const doc = {
     id: "o1", locationId: "loc", cashAmount: 295000, status: "sent",
     calc: { inputs: { arv: 500000 }, settings: { aiApiKey: "sk-secret" } },
-    snapshot: { subjectInfo: { homeType: "SINGLE_FAMILY" }, comps: { result: { big: true } } },
+    snapshot: { subjectInfo: { homeType: "SINGLE_FAMILY", lotSqft: 217800 }, comps: { result: { big: true } } },
     scope: [{ id: "paint" }],
   };
   const row = leanOfferDoc(doc);
-  // Only the list fields, plus the one derived key the SQL builds.
-  for (const k of Object.keys(row)) assert.ok(OFFER_LIST_FIELDS.includes(k) || k === "subjectHomeType" || k === "calc" || k === "draftInputs", k);
+  // Only the list fields, plus the derived keys the SQL builds.
+  for (const k of Object.keys(row)) assert.ok(OFFER_LIST_FIELDS.includes(k) || k === "subjectHomeType" || k === "subjectLotSqft" || k === "calc" || k === "draftInputs", k);
   assert.equal(row.subjectHomeType, "SINGLE_FAMILY");
+  // The lot rides along so a rural house reads as one (2026-10-08), on both backends.
+  assert.equal(row.subjectLotSqft, 217800);
+  assert.match(offerListQuery({ locationId: "loc", lean: true }).text, /'subjectLotSqft'/);
   assert.equal(row.snapshot, undefined);
   assert.equal(row.scope, undefined);
   assert.doesNotMatch(JSON.stringify(row), /sk-secret/);

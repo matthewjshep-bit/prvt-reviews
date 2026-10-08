@@ -31,7 +31,7 @@ import { showingSummary } from "./showing.js";
 import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
 import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
 import { accessFor } from "./deal-access.js";
-import { KIND_HOLD } from "./asset-type.js";
+import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
 
 const DAY_MS = 86400000;
 // How long a hand-made offer nobody sent stays a decision on the Desk.
@@ -351,9 +351,11 @@ export function buildPipeline({
       // Not our kind of house (shared/asset-type.js): single-family only for
       // now, so the question is whether to price it at all. "Underwrite
       // anyway" runs the underwriter again past that hold.
-      const kindHeld = held.find((h) => KIND_HOLD.test(String(h || "")));
+      // Rural (two acres or more, 2026-10-08) is the same question.
+      const ruralHeld = held.find((h) => RURAL_HOLD.test(String(h || "")));
+      const kindHeld = ruralHeld || held.find((h) => KIND_HOLD.test(String(h || "")));
       card.actionIds.push(push({ ...base, kind: "underwrite_held", severity: "soon",
-        title: kindHeld ? `Not single-family: ${card.address}` : `Underwrite held on ${card.address}`, detail: held.join(" · "),
+        title: ruralHeld ? `Rural: ${card.address}` : kindHeld ? `Not single-family: ${card.address}` : `Underwrite held on ${card.address}`, detail: held.join(" · "),
         ops: kindHeld
           ? [{ key: "underwrite_anyway", label: "Underwrite anyway", intent: "secondary" }, { key: "drop", label: "Pass on it", intent: "primary" }]
           : [{ key: "open_editor", label: "Open and fix", intent: "primary" }, { key: "drop", label: "Drop it", intent: "danger" }] }));

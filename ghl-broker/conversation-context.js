@@ -27,7 +27,7 @@ import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey
 import { emailContextText } from "./shared/gmail.js";
 import { showingContextLines } from "./shared/showing.js";
 import { accessFor, accessLines } from "./shared/deal-access.js";
-import { assetOf, assetPhrase, kindHold, normalizeAsset } from "./shared/asset-type.js";
+import { assetOf, assetPhrase, isRuralLot, kindHold, normalizeAsset } from "./shared/asset-type.js";
 import { buyerFacts } from "./shared/underwrite-checks.js";
 import { blastNote, pickedRehabLevel } from "./shared/blast-text.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
@@ -444,12 +444,15 @@ const homeTypeOf = (o = {}) => {
   const snap = o.snapshot || o.draft || {};
   return snap.subjectInfo?.homeType || snap.comps?.result?.info?.homeType || o.subjectHomeType || (set ? RAW_HOME_TYPE[set.type] : "");
 };
+// The lot the underwrite read (a lean row carries it as subjectLotSqft).
+const lotOf = (o = {}) => (o.snapshot || o.draft || {}).subjectInfo?.lotSqft ?? o.subjectLotSqft ?? null;
 const CLOSED_HOUSE = new Set(["passed", "expired", "withdrawn", "we_passed", "unavailable"]);
 
 /**
  * pricedOutsideFocus(offers, focusKinds) → addresses
  *
- * This agent's houses outside what we buy (shared/asset-type.js kindHold)
+ * This agent's houses outside what we buy (shared/asset-type.js kindHold,
+ * or rural: ruralHold)
  * that we priced anyway — "Underwrite anyway" on Today, or an offer built by
  * hand: the house's current offer has a number and the house isn't closed.
  * The agent-side focus rule names them so the bot talks numbers on them
@@ -460,7 +463,7 @@ export function pricedOutsideFocus(offers = [], focusKinds = undefined) {
   for (const list of groupHouses((offers || []).filter((o) => o && o.address)).values()) {
     const { current } = resolveHouse(list);
     if (!current || !(Number(current.cashAmount) > 0) || CLOSED_HOUSE.has(effectiveStatus(current))) continue;
-    if (kindHold(homeTypeOf(current), focusKinds)) out.push(current.address);
+    if (kindHold(homeTypeOf(current), focusKinds) || isRuralLot(lotOf(current))) out.push(current.address);
   }
   return out;
 }

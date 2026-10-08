@@ -148,3 +148,13 @@ test("only a sure miss is cleared on its own; a missing address waits a week, an
   ] });
   assert.deepEqual(plan.map((k) => [k.contactId, k.reason]), [["gone", "gone"], ["no-house-old", "no_house"], ["townhouse", "not_sfr"]]);
 });
+
+test("a house on two acres or more is flagged rural, sure enough to take off Tier 1", () => {
+  const held = screenTierOne({ house: house({ autoUnderwrite: { held: ["rural — it sits on 5.2 acres (we buy houses on under 2 acres)"] } }), lastInboundAt: ago(1), now: NOW });
+  assert.deepEqual(keysOf(held.flags), ["rural"]);
+  assert.equal(held.flags[0].sure, true);
+  assert.match(held.flags[0].why, /sits on 5\.2 acres/);
+  const lot = screenTierOne({ house: house({ snapshot: { subjectInfo: { lotSqft: 3 * 43560 } } }), lastInboundAt: ago(1), now: NOW });
+  assert.deepEqual(keysOf(lot.flags), ["rural"]);
+  assert.deepEqual(keysOf(screenTierOne({ house: house({ snapshot: { subjectInfo: { lotSqft: 8000 } } }), lastInboundAt: ago(1), now: NOW }).flags), []);
+});

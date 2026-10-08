@@ -9,6 +9,7 @@
 // by `cardMove`.
 
 import { addressKey, sameStreetLoose, parseUsAddress } from "./us-address.js";
+import { RURAL_HOLD, isRuralLot, acresText } from "./asset-type.js";
 
 // A pass or a kick-out from the Tier 1 list, written as a contact event with
 // the house's address — so a house we never priced still counts as passed.
@@ -84,6 +85,7 @@ export const TIER_ONE_FLAGS = Object.freeze({
   gone: "Sold or off the market",
   turnkey: "Not a flip",
   not_sfr: "Not single-family",
+  rural: "Rural (2+ acres)",
   no_house: "No house named",
   passed: "Already passed",
   stale: "Quiet 3+ weeks",
@@ -160,6 +162,12 @@ export function screenTierOne({ house = null, offers = [], events = [], focusKin
   const kindHeld = (offer?.autoUnderwrite?.held || []).some((h) => /^not our kind of house\b/i.test(String(h)));
   if (kindHeld || (assetType && !focusKinds.includes(assetType))) add("not_sfr", kindHeld ? "the underwrite held it: not our kind of house" : `it's ${assetType.replace(/_/g, "-")}`, true);
 
+  // Rural: two acres or more (Matt, 2026-10-08) — the underwrite held it, or
+  // the lot on the offer says so.
+  const ruralHeld = (offer?.autoUnderwrite?.held || []).find((h) => RURAL_HOLD.test(String(h)));
+  const lot = offer?.snapshot?.subjectInfo?.lotSqft ?? offer?.draft?.subjectInfo?.lotSqft ?? null;
+  if (ruralHeld || isRuralLot(lot)) add("rural", ruralHeld ? `the underwrite held it: ${String(ruralHeld).split(" (")[0].replace(/^rural — /, "")}` : `it sits on ${acresText(lot)} acres`, true);
+
   const passed = passedOnHouse({ offers, events, address });
   if (passed) add("passed", passed.why, true);
   else if (offer?.status === "passed") add("passed", "they passed on our offer", false);
@@ -214,7 +222,7 @@ export function cardMove({ cards = [], acq = null, keys = {}, to } = {}) {
 // The flags sure enough for the machine to take a card off Tier 1 alone. A
 // missing house waits a week (they may still send the address); anything
 // soft — their words only, or just quiet — stays for Matt.
-const AUTO_KICK_KEYS = ["gone", "turnkey", "not_sfr", "passed"];
+const AUTO_KICK_KEYS = ["gone", "turnkey", "not_sfr", "rural", "passed"];
 export const NO_HOUSE_WAIT_DAYS = 7;
 export const ADDED_GRACE_DAYS = 7;
 

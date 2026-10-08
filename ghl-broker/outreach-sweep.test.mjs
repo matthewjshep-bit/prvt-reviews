@@ -481,3 +481,27 @@ test("a running sweep keeps saying it's alive on the cursor", async () => {
   await settle();
   assert.ok(beatAtImport, "the cursor was stamped before the import began");
 });
+
+// Matt, 2026-10-08: a rural hook from a pull made before the rural filter
+// is not a reason to text them either.
+test("an agent whose hook sits on two acres or more is not picked, however distressed", () => {
+  const rows = [
+    row("farm", { distressedCount: 5, hook: { address: "1 Farm Rd", score: 99, price: 300000, lotSize: 5 * 43560 } }),
+    row("town", { distressedCount: 1, hook: { address: "2 Town St", score: 10, price: 300000, lotSize: 7200 } }),
+    row("unknown", { distressedCount: 1, hook: { address: "3 Ash St", score: 10, price: 300000 } }),
+  ];
+  assert.deepEqual(pickAgentsToImport(rows, { cap: 10 }).map((r) => r.agentKey).sort(), ["town", "unknown"]);
+});
+
+// Matt, 2026-10-08: no manufactured homes. Agents queued from pulls made
+// before single-family-only still sit in the batches; their hook's type is
+// checked against the setting when they're picked.
+test("an agent whose hook is a manufactured home is not picked when outreach is single-family only", () => {
+  const rows = [
+    row("mobile", { distressedCount: 5, hook: { address: "1 Park Ln", score: 99, price: 200000, propertyType: "Manufactured" } }),
+    row("house", { distressedCount: 1, hook: { address: "2 Elm St", score: 10, price: 300000, propertyType: "Single Family" } }),
+    row("untyped", { distressedCount: 1, hook: { address: "3 Ash St", score: 10, price: 300000 } }),
+  ];
+  assert.deepEqual(pickAgentsToImport(rows, { cap: 10, propertyTypes: ["Single Family"] }).map((r) => r.agentKey).sort(), ["house", "untyped"]);
+  assert.equal(pickAgentsToImport(rows, { cap: 10 }).length, 3, "no types given, no type check");
+});
