@@ -730,15 +730,16 @@ function openingFor(outbound) {
         `the answer, leave nothing in it out, and do NOT say you'll check on anything else. ${CONTINUE} Set intent to partner_answer.`;
 
     // We're passing on a house the underwriter held (held-underwrites.js):
-    // not single-family, outside the towns we buy in, or no number we could
-    // stand behind after we asked them for theirs.
+    // not single-family, rural (two acres or more), outside the towns we buy
+    // in, or no number we could stand behind after we asked them for theirs.
     case "kind_pass":
       return `${START} We looked at ${o.address} for this agent and we're passing on it: ` +
         (o.why === "area" ? "it's outside the area we buy in."
           : o.why === "numbers" ? "we couldn't get to a number we'd stand behind — not enough to go on to price it (we asked them for their read and didn't get a number)."
+          : o.why === "rural" ? `it's a rural property${/sits on [\d.]+ acres/.test(o.heldReason || "") ? ` — it ${o.heldReason.match(/sits on [\d.]+ acres/)[0]}` : ""}, and we can't do rural — our buyers want houses on under 2 acres, where there are sales nearby to compare them to.`
           : `it isn't a single-family house${o.heldReason ? ` (${o.heldReason})` : ""}, and right now we only buy single-family.`) +
         ` In one or two lines, say so plainly and thank them, and ask them to keep us in mind for ` +
-        (o.why === "area" ? "fixers closer in. " : o.why === "numbers" ? "the next fixer, especially one with photos or a seller price in mind. " : "single-family fixers. ") +
+        (o.why === "area" ? "fixers closer in. " : o.why === "rural" ? "fixers in town on a normal-size lot. " : o.why === "numbers" ? "the next fixer, especially one with photos or a seller price in mind. " : "single-family fixers. ") +
         `Do NOT name any number, do NOT apologise at length, and do NOT promise to look again. ${CONTINUE} Set intent to kind_pass.`;
 
     // Our numbers are stuck on something they can answer. Ask for exactly

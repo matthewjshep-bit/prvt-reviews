@@ -244,3 +244,15 @@ test("an ask is asked once: an answer without a number is a call, and silence or
   // Before any ask, it still asks.
   assert.equal(triage({ offer: photos(2), drafts: [inbound("ok")] }).action, "ask");
 });
+
+// Matt, 2026-10-08: rural (two acres or more) is passed and the agent hears
+// why — no day to wait, unlike a house that isn't single-family.
+test("a rural house is passed at the next check and the agent hears it's rural", async () => {
+  const { triageHeldUnderwrite, heldOnTheMachine } = await import("./held-underwrites.js");
+  const now = Date.parse("2026-10-08T20:00:00Z");
+  const offer = { id: "r1", address: "21800 Farm Rd SE, Maple Valley, WA 98038", contactId: "a1", status: "draft", createdAt: "2026-10-08T19:00:00Z",
+    autoUnderwrite: { finishedAt: "2026-10-08T19:00:00Z", held: ["rural — it sits on 5.2 acres (we buy houses on under 2 acres)"] } };
+  const t = triageHeldUnderwrite({ offer, now });
+  assert.deepEqual([t.action, t.status, t.passNote], ["retire", "we_passed", "rural"]);
+  assert.match(heldOnTheMachine(offer, { now }).what, /passed at the 7pm check — rural: it sits on 5\.2 acres; we buy under 2 acres/);
+});

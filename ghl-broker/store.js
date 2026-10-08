@@ -56,6 +56,8 @@ function leanDocSql(ph) {
                   where k = any(${ph(OFFER_LIST_FIELDS)}::text[])), '{}'::jsonb)
         || jsonb_build_object('subjectHomeType', coalesce(doc #>> '{snapshot,subjectInfo,homeType}',
              doc #>> '{snapshot,comps,result,info,homeType}', doc #>> '{draft,subjectInfo,homeType}'))
+        || jsonb_build_object('subjectLotSqft', (select case when v ~ '^[0-9]+([.][0-9]+)?$' then nullif(v::numeric, 0) end
+             from (select coalesce(doc #>> '{snapshot,subjectInfo,lotSqft}', doc #>> '{draft,subjectInfo,lotSqft}') as v) lot))
         || jsonb_build_object('calc', jsonb_build_object(
              'inputs', doc #> '{calc,inputs}',
              'settings', ${only("{calc,settings}", LEAN_CALC_SETTINGS)}

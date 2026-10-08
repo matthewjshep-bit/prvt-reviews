@@ -111,3 +111,24 @@ test("a house we chose to price anyway is named, so the bot talks numbers on it 
   assert.match(r, /talk numbers on it like any other house/);
   assert.equal(agentFocusRule(["sfr"], { pricedAnyway: [] }), agentFocusRule(["sfr"]), "nothing priced anyway, nothing added");
 });
+
+// Matt, 2026-10-08: rural is harder to comp and our buyers don't want it.
+test("a house on two acres or more is rural; under two acres, or no lot on record, is not", async () => {
+  const { isRuralLot, ruralHold, RURAL_HOLD } = await import("./asset-type.js");
+  assert.equal(isRuralLot(2 * 43560), true, "two acres exactly is rural");
+  assert.equal(isRuralLot(5 * 43560), true);
+  assert.equal(isRuralLot(1.9 * 43560), false);
+  assert.equal(isRuralLot(null), false, "no lot on record goes ahead");
+  assert.equal(isRuralLot(""), false);
+  assert.equal(ruralHold(7200), "");
+  const why = ruralHold(226512);
+  assert.ok(RURAL_HOLD.test(why), why);
+  assert.match(why, /sits on 5\.2 acres \(we buy houses on under 2 acres\)/);
+});
+
+test("the agent bot is told we can't do rural houses on two acres or more", async () => {
+  const { agentFocusRule } = await import("./asset-type.js");
+  const rule = agentFocusRule(["sfr"]);
+  assert.match(rule, /we don't buy rural houses — anything on 2 acres or more/);
+  assert.match(rule, /say kindly that we can't do rural properties/);
+});

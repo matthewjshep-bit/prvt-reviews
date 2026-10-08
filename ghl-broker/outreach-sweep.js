@@ -15,6 +15,7 @@
 
 import { store as defaultStore } from "./store.js";
 import { normalizeOpener } from "./shared/outreach-opener.js";
+import { isRuralLot } from "./shared/asset-type.js";
 
 export const CURSOR_NAME = "outreach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -259,6 +260,9 @@ export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, require
     if (requireDistress && !(Number(d.distressedCount) > 0)) return false;
     if (requireDistress && distressRule && d.distressRule !== distressRule) return false;
     if (maxPrice && !(Number(d.hook?.price) > 0 && Number(d.hook.price) <= maxPrice)) return false;
+    // A rural hook (two acres or more) from a pull made before the rural
+    // filter is not a reason to text them either (Matt, 2026-10-08).
+    if (isRuralLot(d.hook?.lotSize)) return false;
     return true;
   });
   ok.sort((a, b) =>

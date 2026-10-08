@@ -453,3 +453,13 @@ test("the check-in prompt is told not to bring up a house we passed on", () => {
   assert.match(t, /Never bring up 12 Pine St or 88 Elm St/);
   assert.doesNotMatch(outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged" }), /Never bring up/);
 });
+
+// Matt, 2026-10-08: a rural house (two acres or more) is passed, and the
+// agent hears that's why.
+test("the pass on a rural house says we can't do rural and names the acreage", () => {
+  const t = outboundOpening({ kind: "kind_pass", address: "21800 Farm Rd SE, Maple Valley, WA 98038", why: "rural",
+    heldReason: "rural — it sits on 5.2 acres (we buy houses on under 2 acres)" });
+  assert.match(t, /it's a rural property — it sits on 5\.2 acres, and we can't do rural/);
+  assert.match(t, /fixers in town on a normal-size lot/);
+  assert.doesNotMatch(t, /single-family/);
+});

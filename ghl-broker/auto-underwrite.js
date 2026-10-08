@@ -36,7 +36,7 @@ import { withAllowance } from "./shared/rehab-checks.js";
 import { gradeComps } from "./comps-grade.js";
 import { recordError } from "./app-errors.js";
 import { fetchZillowPhotos, fetchListingPhotos, fetchZillowFacts, MAX_FACT_LOOKUPS, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
-import { kindHold } from "./shared/asset-type.js";
+import { kindHold, ruralHold } from "./shared/asset-type.js";
 import { deriveArv, timeTrend, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
@@ -1519,7 +1519,11 @@ async function runUnderwrite(job, ctx) {
   // are paid for — as a person's call on Today. "Underwrite anyway" there
   // starts an anyKind run, and a run from the editor is a fill run; both skip
   // this.
-  const kindHeld = job.fill || job.anyKind ? "" : kindHold(facts?.homeType, saved?.focusKinds);
+  //
+  // Rural (shared/asset-type.js ruralHold). Matt, 2026-10-08: two acres or
+  // more is harder to comp and our buyers don't want it. Held at the same
+  // point, and the held sweep passes it and tells the agent (held-underwrites.js).
+  const kindHeld = job.fill || job.anyKind ? "" : kindHold(facts?.homeType, saved?.focusKinds) || ruralHold(facts?.lotSqft);
   if (kindHeld) {
     const subjectOnly = {
       lat: resolved?.lat ?? null, lng: resolved?.lng ?? null,

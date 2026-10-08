@@ -31,6 +31,7 @@ import { scoreListing, medianPricePerSqft, distressSignals, medianIndex } from "
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { countyName } from "../shared/outreach-opener.js";
+import { isRuralLot, RURAL_LOT_ACRES } from "../shared/asset-type.js";
 import { previewProactive, machineRoomToday } from "../reply-agent.js";
 import { fetchZillowAgentContacts } from "../rehab-scan.js";
 import { streetKey } from "../comps-zillow.js";
@@ -423,6 +424,14 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         `year built filter (${maxYearBuilt} or older) kept ${pool.length} of ${before}` +
         (unknownYear ? ` — ${unknownYear} with no year built were kept` : "")
       );
+    }
+    // Rural: two acres or more (Matt, 2026-10-08) — harder to comp, and our
+    // buyers don't want it, so it is never a reason to text an agent. RentCast
+    // gives the lot in square feet; a listing with no lot on record is kept.
+    {
+      const before = pool.length;
+      pool = pool.filter((l) => !isRuralLot(l.lotSize));
+      if (pool.length < before) warnings.push(`rural filter (under ${RURAL_LOT_ACRES} acres) kept ${pool.length} of ${before}`);
     }
     if (distressOnly) {
       const before = pool.length;

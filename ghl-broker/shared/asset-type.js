@@ -217,6 +217,39 @@ export function kindHold(homeType, focusKinds = FOCUS_KINDS_DEFAULT) {
   return `${KIND_HOLD_PREFIX} — ${word} (${want})`;
 }
 
+/* ---------- rural ---------- */
+
+// Matt, 2026-10-08: "filter out rural properties… these are harder to comp
+// and thus investors won't want them. We need to do under 2 acres." A house
+// on two acres or more is rural: kept out of outreach, held by the
+// underwriter before comps are bought, and passed with a note to the agent.
+// No lot on record goes ahead, the same way an untyped house does.
+export const RURAL_LOT_ACRES = 2;
+export const SQFT_PER_ACRE = 43560;
+export const RURAL_LOT_SQFT = RURAL_LOT_ACRES * SQFT_PER_ACRE;
+
+// What every rural hold reason starts with (held-underwrites.js keys on it).
+export const RURAL_HOLD_PREFIX = "rural";
+export const RURAL_HOLD = /^rural\b/i;
+
+/** isRuralLot(lotSqft) → true when the lot is two acres or more. */
+export function isRuralLot(lotSqft) {
+  const n = Number(lotSqft);
+  return Number.isFinite(n) && n >= RURAL_LOT_SQFT;
+}
+
+/** acresText(lotSqft) → "5.2" (one decimal, trailing .0 dropped). */
+export function acresText(lotSqft) {
+  const a = Math.round((Number(lotSqft) / SQFT_PER_ACRE) * 10) / 10;
+  return String(a);
+}
+
+/** ruralHold(lotSqft) → the hold reason, or "" to go ahead. */
+export function ruralHold(lotSqft) {
+  if (!isRuralLot(lotSqft)) return "";
+  return `${RURAL_HOLD_PREFIX} — it sits on ${acresText(lotSqft)} acres (we buy houses on under ${RURAL_LOT_ACRES} acres)`;
+}
+
 /**
  * agentFocusRule(focusKinds) → the line the agent-side bot reads about what
  * we buy. Single-family only (the default): a condo, a townhouse, a mobile
@@ -236,7 +269,11 @@ export function agentFocusRule(focusKinds = FOCUS_KINDS_DEFAULT, { pricedAnyway 
     ...(focus.includes("multi_family") ? [] : ["multi-family"]), "land"].join(", ");
   return `WHAT WE BUY RIGHT NOW: ${buy} only. If the agent's house is plainly one of these — ${skip} — don't promise numbers on it: ` +
     `say kindly that we're only buying ${buy} right now and ask if they have any ${focus.includes("sfr") ? "single-family fixers" : buy} coming up. ` +
-    "If you can't tell what kind of house it is, treat it as a house." +
+    "If you can't tell what kind of house it is, treat it as a house. " +
+    `RURAL: we don't buy rural houses — anything on ${RURAL_LOT_ACRES} acres or more, acreage, a farm or a ranch. Our buyers want houses ` +
+    `on under ${RURAL_LOT_ACRES} acres where there are sales nearby to compare them to. If the agent says the house sits on ${RURAL_LOT_ACRES}+ acres ` +
+    "or is plainly rural, don't promise numbers on it: say kindly that we can't do rural properties and ask if they have any fixers in town. " +
+    "If you can't tell the lot size, treat it as a normal lot." +
     (pricedAnyway.length
       ? ` EXCEPT: we chose to price ${pricedAnyway.slice(0, 3).map((a) => String(a).split(",")[0]).join(", ")} anyway — ` +
         `${pricedAnyway.length === 1 ? "talk numbers on it" : "talk numbers on those"} like any other house.`

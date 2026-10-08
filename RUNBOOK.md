@@ -2220,6 +2220,7 @@ our numbers and the machine's first look. `?view=inplay` opens it;
   | Sold or off the market | offer `unavailable`; `priceWatch.offMarketAt` / an unresolved `listing_off_market`; Zillow status pending/sold/contingent — sure. `houseGone` in their last text — amber |
   | Not a flip | the named house carries `notOurKind` — sure. `isTurnkeyReply` on their last text (14 days) — amber |
   | Not single-family | asset type outside `focusKinds`, or a `not our kind of house` hold — sure |
+  | Rural (2+ acres) | a `rural` hold, or the offer's `subjectInfo.lotSqft` is 2 acres or more — sure |
   | No house named | no house, or no house number — sure |
   | Already passed | `passedOnHouse` (we passed / no longer available, or a `tier1_passed`/`tier1_kicked` event) — sure; they passed on our offer — amber |
   | Quiet 3+ weeks | nothing from them and nothing priced in 21 days — grey, never a fail |
@@ -2259,7 +2260,7 @@ our numbers and the machine's first look. `?view=inplay` opens it;
   different house still runs it.
 - **Morning clear-out — off** (`settings.tierOne.autoKick`, Settings → Tier 1
   (GHL)). The 7am tier check reuses its board read and plans
-  (`autoKickPlan`): sure misses only — gone, not a flip, not single-family,
+  (`autoKickPlan`): sure misses only — gone, not a flip, not single-family, rural,
   already passed, or no house after 7 days in Tier 1 with no open address
   chase — never a card added by hand in the last 7 days. The plan is always
   kept on the `tierCheck` cursor as `last.tierOne` (ids and reasons). With the
@@ -2421,10 +2422,11 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
     number, a price drop, the first text.
   - Held underwrites:
     - Not single-family: passed after 24h, unless you pressed Underwrite anyway.
+    - Rural (2 acres or more): passed at the next check, with no 24h wait.
     - A town we've never priced in and that isn't on the map
       (`knownCitiesFrom`; the city comes from `parseUsAddress`): passed,
       but only after anything their numbers could clear has been asked.
-    - Both get one `kind_pass` text.
+    - Each gets one `kind_pass` text, which says why: not single-family, rural or out of area.
     - An address the map couldn't place: one ask to confirm the street.
     - `heldOnTheMachine` shows the plain ones as Machine rows tonight.
   - A held reply the 7pm check will send (`releasableHeld`) is a Machine row
@@ -4571,6 +4573,16 @@ A sweep of the six live deals that day found 12 replies like that.
   - Either way, only for a buyer who was sent a live deal (on it, or carrying its blast tag) or who named one.
 - **Never moved:** a committed or soft-committed buyer.
 - Being on a deal as evaluating does not quiet the bot. Only a committed buyer holds it (`WORKING_INVESTOR_STATUSES`).
+
+### Rural: two acres or more (2026-10-08)
+
+Matt: "filter out rural properties when we reach out to agents, these are harder to comp and thus investors won't want them. We need to do under 2 acres of land, and make sure we're telling agents that if the property is rural we can't do it and mark as we passed."
+
+- **The rule.** `shared/asset-type.js` is the one definition: `isRuralLot` is true from `RURAL_LOT_SQFT` (2 × 43,560 sqft) up. `ruralHold` returns `rural — it sits on N acres (we buy houses on under 2 acres)`. A house with no lot on record goes ahead, the same way an untyped house does.
+- **Outreach.** `ingestCohort` (routes/outreach.js) drops listings whose RentCast `lotSize` is rural from the qualifying pool, and says so in the pull's warnings. An agent whose only qualifying listing is rural is excluded, and a rural listing is never the hook. `listingCount` still counts the agent's whole book. `pickAgentsToImport` also refuses a stored row whose `hook.lotSize` is rural, which covers pulls made before the filter.
+- **Underwrite.** Rural is held at the same point as `kindHold`, right after the subject lookup and before comps or photos are bought. Underwrite anyway (`anyKind`) and form fills skip it.
+- **Pass.** `triageHeldUnderwrite` retires a rural hold to `we_passed` at the next check, with no 24h wait. The held sweep then sends `kind_pass` with `why: "rural"`: "we can't do rural — our buyers want houses on under 2 acres", and an ask for fixers in town. On the Desk the card reads "Rural: address" (Underwrite anyway / Pass on it). Tier 1 flags it `rural` (sure), and the morning auto-kick takes it off.
+- **Bot.** `agentFocusRule` tells the agent bot that we don't buy rural houses, acreage, farms or ranches. When an agent says 2+ acres, the bot says no kindly and doesn't promise numbers. A rural house we priced on purpose is named by `pricedOutsideFocus`, and lean rows carry `subjectLotSqft` for that in both store backends.
 
 ### Single-family focus (2026-10-01)
 
