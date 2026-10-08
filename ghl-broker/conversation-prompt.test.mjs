@@ -188,16 +188,43 @@ test("the agent prompt says we buy with a hard money loan, a 10 to 14 day inspec
 
 test("a check-in on an offer they passed on re-quoted our old price, and every one was held for a person", () => {
   const t = outboundOpening({ kind: "passed_checkin", address: "3817 Bells Beach Rd, Langley, WA", stepIndex: 2 });
-  assert.match(t, /do NOT name any number/i, "an old price is not in the offer book, and saying it again recommits us to it");
+  assert.match(t, /Do NOT name that house, its street or any number/, "an old price is not in the offer book, and saying it again recommits us to it");
   assert.doesNotMatch(t, /You may mention the number/);
-  assert.match(t, /still available/);
+});
+
+// Matt, 2026-10-08: seven texts in a month asking an agent whether 163rd
+// closed, when the seller had taken another offer in August. "We don't know
+// what happened to specific properties and often they get sold. When we check
+// in we need to just ask about any other distressed properties, off market or
+// not — personable, professional, even slightly funny."
+test("a check-in after a passed house asks about other houses that need work, never whether that one sold", () => {
+  const t = outboundOpening({ kind: "passed_checkin", address: "11435 163rd Avenue Southeast, Renton, WA 98059", stepIndex: 3 });
+  assert.match(t, /it is NOT about 11435 163rd Avenue Southeast/);
+  assert.match(t, /Do NOT ask about it: not whether it sold, closed or is still available, not what the seller did, not whether they'd revisit our number/);
+  assert.match(t, /ask whether any other distressed properties — houses that need work — have come across their desk, on the market or off/);
+  assert.match(t, /a little funny/);
+  assert.match(t, /don't repeat the wording or the joke of the last one/);
+  assert.match(t, /"last nudge"/, "no last-chance language");
+  assert.doesNotMatch(t, /would they come closer to where we were/);
 });
 
 test("a check-in on an offer that went quiet doesn't tell them they passed", () => {
   const t = outboundOpening({ kind: "passed_checkin", address: "3817 Bells Beach Rd, Langley, WA", stepIndex: 1, quiet: true });
   assert.match(t, /never heard back/);
   assert.doesNotMatch(t, /passed on our offer/);
-  assert.match(t, /do NOT name any number/i);
+  assert.match(t, /Do NOT name that house, its street or any number/);
+});
+
+test("a passed house back on the market is still the news, by name", () => {
+  const t = outboundOpening({ kind: "passed_checkin", address: "3817 Bells Beach Rd, Langley, WA", relisted: true });
+  assert.match(t, /it's back on the market now/);
+  assert.match(t, /3817 Bells Beach Rd/);
+});
+
+test("the agent check-in sounds personable, professional and a little funny", () => {
+  const t = outboundOpening({ kind: "agent_pulse", reason: "nothing", segment: "engaged" });
+  assert.match(t, /PERSONALITY: personable and professional, and a little funny/);
+  assert.match(t, /never sarcasm, never at the agent's, a seller's or a house's expense/);
 });
 
 test("the model is told today's date, so the 18th is never 'past month end'", () => {
@@ -251,8 +278,9 @@ test("a nudge on a number we only floated never says we sent an offer", () => {
   // The letter went: the words are exactly what they were.
   const paper = outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper" });
   assert.match(paper, /We sent this agent an offer on 12 Elm St and they haven't answered/);
+  // A passed-offer check-in no longer says what went out: it isn't about that house.
   const passed = outboundOpening({ kind: "passed_checkin", address: "12 Elm St", went: "number", quiet: true });
-  assert.match(passed, /floated where we'd be on 12 Elm St by text \(nothing in writing\) and never heard back/);
+  assert.doesNotMatch(passed, /We sent this agent an offer/);
 });
 
 test("the listing check-in names the street, never the price", () => {
@@ -381,11 +409,13 @@ test("a nudge on a ladder that keeps asking never says it's the last check", () 
 test("a house they passed on rides on the live offer's nudge as one line, never a number or a second question", () => {
   const t = outboundOpening({ kind: "offer_nudge", address: "10625 SE 304th Way", went: "number", step: 7, stepIndex: 2, stepCount: 3,
     aside: { street: "28422 Military Road South", quiet: false } });
-  assert.match(t, /Then ONE short closing line about 28422 Military Road South, another house of theirs they passed on/);
-  assert.match(t, /A statement, not a question\. No number, nothing about price\. 10625 SE 304th Way stays the subject/);
+  // Matt, 2026-10-08: the line is about the next house, never the passed one
+  // (we don't know what happened to it, and it has usually sold).
+  assert.match(t, /Then ONE short closing line: if anything else that needs work comes across their desk, on the market or off, we'd love a look/);
+  assert.match(t, /A statement, not a question\. Do NOT name 28422 Military Road South or any other house, and no number\. 10625 SE 304th Way stays the subject/);
+  assert.doesNotMatch(t, /shakes loose/);
   assert.match(t, /Set intent to offer_nudge\.$/);
   assert.doesNotMatch(outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper" }), /closing line/);
-  assert.match(outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper", aside: { street: "3 Oak Ave", quiet: true } }), /we never heard back on/);
 });
 
 /* ---------- a buyer who spoke up (2026-10-05) ---------- */

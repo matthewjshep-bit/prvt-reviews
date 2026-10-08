@@ -156,6 +156,16 @@ const COMMITMENTS = {
 // context's OFF-MARKET ASK line (conversation-context.js) says whether it's
 // been a month since we last asked. 2026-10-06: the asks came out as
 // "anything before it hits the MLS"; Matt wants the word itself, "off-market".
+// How a check-in should sound (Matt, 2026-10-08): "personable, professional,
+// even slightly funny". The same rules as the first text's PERSONALITY line,
+// leaned a little further toward the funny side, because these go to agents
+// who already know us.
+const CHECKIN_PERSONALITY =
+  "PERSONALITY: personable and professional, and a little funny — aim for one light touch of humour when it comes naturally: " +
+  "a wry line, a bit of self-deprecation, or the \"honestly, the uglier the better\" kind of line about the houses WE like. " +
+  "Never a pun, never a joke that needs a setup, never sarcasm, never at the agent's, a seller's or a house's expense. " +
+  "If nothing comes naturally, warm and plain is fine.";
+
 const OFF_MARKET_ASK_WORDS = `Say "off-market" itself, never "before it hits the MLS" or "before it hits the market".`;
 const OFF_MARKET_AGENT =
   "OFF-MARKET: our best deals are off-market houses agents bring us — pocket listings, or a seller who hasn't listed. " +
@@ -516,8 +526,10 @@ function nudgePressure(outbound) {
 // (shared/agent-focus.js): the light touch, at most once a month.
 function nudgeAside(o) {
   if (!o?.aside?.street) return "";
-  return `Then ONE short closing line about ${o.aside.street}, another house of theirs ${o.aside.quiet ? "we never heard back on" : "they passed on"}: ` +
-    `we're still around if it ever shakes loose. A statement, not a question. No number, nothing about price. ` +
+  // Not the old house itself (Matt, 2026-10-08: we don't know what happened
+  // to it, and it has usually sold) — the next one.
+  return `Then ONE short closing line: if anything else that needs work comes across their desk, on the market or off, we'd love a look. ` +
+    `A statement, not a question. Do NOT name ${o.aside.street} or any other house, and no number. ` +
     `${o.address} stays the subject; that line is an afterthought. `;
 }
 
@@ -813,16 +825,21 @@ function openingFor(outbound) {
           `Do NOT name any number: not the one we offered, not theirs, not a new one. Say "our number" or "where we were". Never hint that we'd go higher — ` +
           `movement on ours is a person's call. Keep it light and easy to ignore. ${CONTINUE} Set intent to passed_checkin.`;
       }
-      return `${START} ${o.went === "number" || o.went === "read"
-        ? (o.quiet ? `We floated where we'd be on ${o.address} by text (nothing in writing) and never heard back.` : `This agent passed on where we'd be on ${o.address} (floated by text, nothing in writing).`)
-        : o.quiet
-        ? `We made this agent an offer on ${o.address} and never heard back.`
-        : `This agent passed on our offer on ${o.address}.`} It's been a while — check back in, in one or ` +
-        `two lines: is it still available, has anything changed with the seller, would they come closer to where we were? ` +
-        `Do NOT name any number: not the one we offered (it is weeks old and saying it again recommits us to it), not ` +
-        `theirs, not a new one. Say "our number" or "where we were". Never hint that we'd go higher — movement on ours ` +
-        `is a person's call. Never re-argue why the number is what it is. ` +
-        `Keep it light and easy to ignore; ${o.stepIndex > 1 ? "don't repeat the wording of the last check-in. " : ""}` +
+      // Matt, 2026-10-08: "we don't know what happened to specific properties
+      // and often they get sold. When we check in we need to just ask about any
+      // other distressed properties, off market or not." Seven texts asking
+      // whether 163rd closed, to an agent whose seller took another offer in
+      // August, is what this replaced. The old house is context, never the ask.
+      return `${START} There is NO offer in this message and it is NOT about ${o.address}. ` +
+        `${o.quiet ? "We made this agent an offer on that house a while back and never heard back" : "That house didn't come together with this agent a while back"}, ` +
+        `and we don't know what happened to it since — it has most likely sold. Do NOT ask about it: not whether it sold, closed or is ` +
+        `still available, not what the seller did, not whether they'd revisit our number. Do NOT name that house, its street or any number. ` +
+        `Check in on THEM instead: ask whether any other distressed properties — houses that need work — have come across their desk, ` +
+        `on the market or off. ${OFF_MARKET_ASK_WORDS} ` +
+        `${CHECKIN_PERSONALITY} ` +
+        `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters, ending on one easy question. Open with their first name, once. ` +
+        `No exclamation-mark cheer, no emojis, no flattery. Do NOT say "I'm reaching out", "touching base", "just checking in", "circling back" or "last nudge". ` +
+        `${o.stepIndex > 1 ? "We've checked in before: don't repeat the wording or the joke of the last one, and don't apologise for checking in again. " : ""}` +
         `${CONTINUE} Set intent to passed_checkin.`;
 
     // The check-in between deals (shared/buyer-pulse.js). Matt, 2026-09-18:
@@ -945,6 +962,7 @@ function openingFor(outbound) {
         `${why} ` +
         `${reference}${material.length ? `NOTES FROM OUR HISTORY: ${material.join(" ")} ` : ""}${avoidLine}` +
         `TONE: friendly and professional — how someone local who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
+        `${CHECKIN_PERSONALITY} ` +
         `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
         `${cold ? "One clause on who you are: someone local who's always looking for the next project house. " : "Do NOT reintroduce yourself. "}` +
         `${shapes[(Number(o.variant) || 0) % shapes.length]} ` +

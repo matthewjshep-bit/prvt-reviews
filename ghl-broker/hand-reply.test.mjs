@@ -77,8 +77,10 @@ test("no message text reaches the event or a log", async () => {
   } finally { Object.assign(console, orig); }
   const events = await store.listContactEvents(LOC, "c4", { types: ["hand_reply"] });
   assert.equal(events.length, 1, "a failed send writes no event");
-  assert.doesNotMatch(JSON.stringify(events), /555|Elm|Call me/);
-  assert.doesNotMatch(lines.join("\n"), /555|Elm|Call me/);
+  // The phone as written, not "555" alone: a random event id can hold those
+  // three digits (it failed about one run in three on that).
+  assert.doesNotMatch(JSON.stringify(events), /206-555-0100|Elm|Call me/);
+  assert.doesNotMatch(lines.join("\n"), /206-555-0100|Elm|Call me/);
 });
 
 test("an empty or overlong text, or no contact, is a 400", async () => {

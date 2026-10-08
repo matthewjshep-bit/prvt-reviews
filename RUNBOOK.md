@@ -2676,6 +2676,23 @@ for itself:
   offer's number is not in the book, so the gate held every one, five in a
   day. The prompt now names no number at all ("where we were"): an August
   price said again in September recommits us to it.
+  **2026-10-08:** it no longer asks about the house at all. An agent got
+  seven texts in a month asking whether 163rd had closed, but his seller had
+  taken another offer in August. Matt: "we don't know what happened to
+  specific properties and often they get sold. When we check in, just ask
+  about any other distressed properties, off market or not, in a personable,
+  professional, even slightly funny way."
+  - **The ask.** The prompt says the old house is NOT the subject. It asks
+    whether other houses that need work, on the market or off, have come
+    across their desk. `CHECKIN_PERSONALITY` covers the passed check-in and
+    `agent_pulse`.
+  - **The gate.** `namesHouse` checks for the house number (3+ digits) or
+    the street word. A draft that names it fails the gate, is redrafted once
+    with the reason, and is dropped with a timeline note if it still names
+    it. A relisted house is exempt, because there the house is the news.
+  - **The aside.** A passed house's line on a live offer's nudge now says
+    "if anything else that needs work crosses your desk, on or off market,
+    we'd love a look" and names no house.
 - **Nothing to say back.** "That was an auto dial" is small talk with an empty
   reply. With no actions no draft is saved; with a routing tag stamped on the
   way a row was saved and waited. Now it closes itself (`dismissed`, flag

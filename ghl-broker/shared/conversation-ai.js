@@ -134,7 +134,7 @@ export const INTENT_GLOSS = {
     outreach_open: "the text it starts when a new agent is imported: came across their listing, looking for a flip in that county, is it a bit of a project?",
     outreach_nudge: "a follow-up on that first text when nothing came back",
     hot_push: "once a price is agreed and nothing is on paper: can you write it up on NWMLS forms for us to sign? what do you need from us?",
-    passed_checkin: "every ten days after they pass on an offer: still sitting? would the seller come closer to our number?",
+    passed_checkin: "every ten days after they pass on an offer: anything else that needs work come across their desk, on the market or off? (never asks about that house — it has usually sold)",
     call_followup: "the text sent right after a phone call, drafted from the transcript: what we took from it and the next step",
     promise_due: "when we told them we'd come back with a number or an answer and nothing went out in time: an honest update, and their value and repairs if our numbers are stuck",
     checkin_due: "when they said when to check back (\"this Wednesday\", \"in a few weeks\") or offered to send us deals: a light 'anything land that needs work?'",

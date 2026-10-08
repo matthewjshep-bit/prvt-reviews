@@ -4930,6 +4930,59 @@ test("an agent check-in that names any number never goes out: written again with
   assert.equal((await fixed.getReplyDraft(j2.draftId)).status, "scheduled");
 });
 
+// Matt, 2026-10-08: an agent got seven texts in a month asking whether 163rd
+// had closed — the seller had taken another offer in August. A check-in on a
+// passed house asks about other houses that need work; one that still names
+// the old house is written again, told why, and dropped if it names it again.
+test("a check-in on a passed house that asks whether it sold never goes out: written again without it, or dropped", async () => {
+  const { namesHouse } = await import("./reply-agent.js");
+  assert.equal(namesHouse("Austin, any movement on 163rd?", "11435 163rd Avenue Southeast, Renton, WA 98059"), "163rd");
+  assert.equal(namesHouse("Dana, did 12 Elm close?", "12 Elm St, Renton, WA"), "Elm", "a two-digit house number is too short to trust; the street still counts");
+  assert.equal(namesHouse("Hey Dana, anything ugly cross your desk lately, on or off market?", "12 Elm St, Renton, WA"), "");
+  assert.equal(namesHouse("Seen anything on NE 4th?", "1200 NE 8th St, Bellevue, WA"), "", "a direction word alone is not the street");
+
+  const LADDERS_ON = structuredClone(STARTER_SAVED);
+  LADDERS_ON.conversationAi.parties.agent.followUp = { ...(LADDERS_ON.conversationAi.parties.agent.followUp || {}), enabled: true,
+    ladders: { ...(LADDERS_ON.conversationAi.parties.agent.followUp?.ladders || {}), passed_checkin: { enabled: true, steps: [10, 20] } } };
+  const PASSED = { ...LANDED, status: "passed" };
+  const { client } = ghlStubFor(["agent"]);
+  const ASKS_IF_SOLD = "Hey Dana, did 12 Elm end up closing with that other buyer? Anything else coming up?";
+
+  _resetJobs();
+  const store = fakeStore();
+  const { job } = await startProactive({ client, locationId: "LOC", saved: LADDERS_ON, store, contactId: "c1", kind: "passed_checkin", offer: PASSED, subject: { step: 10, steps: [10, 20] }, sendsEnabled: true,
+    deps: { releaseHeld: true, releaseReason: "test", now: () => NOW, random: () => 0, draft: async () => ({ ...DRAFT, intent: "passed_checkin", reply: ASKS_IF_SOLD }) } });
+  await settle();
+  assert.equal(job.status, "held", job.error);
+  assert.match(job.heldReason, /dropped, not sent: named the house we passed on \(Elm\)/);
+  assert.equal(job.draftId, null, "nothing waits on you");
+
+  _resetJobs();
+  const fixed = fakeStore();
+  const asked = [];
+  const { job: j2 } = await startProactive({ client, locationId: "LOC", saved: LADDERS_ON, store: fixed, contactId: "c1", kind: "passed_checkin", offer: PASSED, subject: { step: 10, steps: [10, 20] }, sendsEnabled: true,
+    deps: { releaseHeld: true, releaseReason: "test", now: () => NOW, random: () => 0, draft: async (args) => { asked.push(args.outbound.fix || null); return { ...DRAFT, intent: "passed_checkin",
+      reply: asked.length === 1 ? ASKS_IF_SOLD : "Hey Dana, anything ugly cross your desk lately, on the market or off? Honestly the worse it looks, the more I like it." }; } } });
+  await settle();
+  assert.equal(asked.length, 2);
+  assert.match(String(asked[1]), /named the house we passed on/, "the second draft was told what tripped the first");
+  assert.ok(j2.draftId, j2.heldReason);
+  assert.doesNotMatch((await fixed.getReplyDraft(j2.draftId)).reply, /Elm/);
+});
+
+test("a passed house back on the market may be named: that's the news", async () => {
+  const LADDERS_ON = structuredClone(STARTER_SAVED);
+  LADDERS_ON.conversationAi.parties.agent.followUp = { ...(LADDERS_ON.conversationAi.parties.agent.followUp || {}), enabled: true,
+    ladders: { ...(LADDERS_ON.conversationAi.parties.agent.followUp?.ladders || {}), passed_checkin: { enabled: true, steps: [10, 20] } } };
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startProactive({ client, locationId: "LOC", saved: LADDERS_ON, store, contactId: "c1", kind: "passed_checkin", offer: { ...LANDED, status: "passed" }, subject: { step: 10, steps: [10, 20], relisted: true }, sendsEnabled: true,
+    deps: { releaseHeld: true, releaseReason: "test", now: () => NOW, random: () => 0, draft: async () => ({ ...DRAFT, intent: "passed_checkin", reply: "Hey Dana, saw 12 Elm is back on the market. Would the seller look at our offer now?" }) } });
+  await settle();
+  assert.ok(job.draftId, job.heldReason);
+});
+
 test("an agent check-in sends itself only with the pulse's own switch", async () => {
   _resetJobs();
   const clean = { ...DRAFT, reply: "Hey Dana, anything coming up that needs work, or anything off market?" };

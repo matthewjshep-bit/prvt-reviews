@@ -2768,9 +2768,9 @@ function outboundSummary({ kind, offer, outbound }) {
     case "hot_push": return `Pushes the agreed price on ${where} toward paper: asks them to write it up on NWMLS forms for us to sign${rung}.`;
     case "kind_pass": return `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : outbound.why === "numbers" ? "we couldn't get to a number on it" : outbound.why === "rural" ? "it's rural, and we buy houses on under 2 acres" : "we only buy single-family right now"}.`;
     case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
-    case "passed_checkin": return outbound.quiet
-      ? `Checks back in on ${where} — we never heard back on our offer; asks if it's still available and where the seller is${rung}.`
-      : `Checks back in on ${where} — they passed; asks if the seller would come closer to our number${rung}.`;
+    case "passed_checkin": return outbound.relisted
+      ? `Saw ${where} is back on the market; asks if the seller would look at our offer now${rung}.`
+      : `Checks in after ${where} — asks if any other houses that need work, on the market or off, have come across their desk${rung}.`;
     case "outreach_open": return `First text: came across their listing at ${where}${outbound.county ? `, looking for a flip in ${outbound.county} County` : ""}, asks if it's a bit of a project.`;
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;
@@ -2798,6 +2798,23 @@ function outboundSummary({ kind, offer, outbound }) {
 // it may say, on top of the record book — and what it forbids is subtracted
 // even though the book has it. A nudge floats nothing, so its allowance is
 // exactly the book; `onlyFloats` (a check-in) allows nothing at all.
+/**
+ * namesHouse(text, address) → the words it used ("163rd", "11435"), or ""
+ *
+ * Whether a text names a house: its number, or its street name (the first
+ * word that isn't a direction — "163rd" of "163rd Avenue Southeast",
+ * "Flintstone" of "704 Flintstone Dr"). A check-in on a passed house must not
+ * (Matt, 2026-10-08): we don't know what happened to it, and it usually sold.
+ */
+const DIRECTION_WORD = /^(n|s|e|w|ne|nw|se|sw|north|south|east|west|northeast|northwest|southeast|southwest)\.?$/i;
+export function namesHouse(text = "", address = "") {
+  const { houseNo, street } = parseUsAddress(String(address || ""));
+  const core = String(street || "").split(/\s+/).find((w) => w && !DIRECTION_WORD.test(w)) || "";
+  const t = String(text || "");
+  const said = (w) => w && w.length >= 3 && new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(t);
+  return [houseNo, core].filter(said).join(", ");
+}
+
 function outboundGateFor({ spec, offer, subject, context, config, party, a, kind = "", outbound = null }) {
   const floats = spec.floats({ offer, subject, outbound }).filter(Boolean);
   const allows = (spec.allows?.({ offer, subject, outbound }) || []).filter(Boolean);
@@ -2808,10 +2825,19 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   const forbiddenAmounts = extraForbidden.length
     ? [...new Set([...(context.forbiddenAmounts || []), ...extraForbidden])]
     : context.forbiddenAmounts;
-  return (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
+  // A check-in on a passed house asks about the next one, never that house
+  // (unless it's back on the market — then the house is the news).
+  const oldHouse = kind === "passed_checkin" && !outbound?.relisted ? (offer?.address || subject?.address || "") : "";
+  const gate = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
     houseWords: houseWordsFor(context?.deals, a.transcript) });
+  if (!oldHouse) return gate;
+  return (d) => {
+    const g = gate(d);
+    const named = namesHouse(d?.reply, oldHouse);
+    return named ? { ...g, ok: false, flags: [...(g.flags || []), `named the house we passed on (${named}): a check-in asks about other houses that need work, never that one`] } : g;
+  };
 }
 
 /**
