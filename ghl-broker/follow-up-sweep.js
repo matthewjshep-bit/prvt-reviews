@@ -246,11 +246,16 @@ export async function passedCandidates({ store, locationId, config, now = Date.n
     // the relist, under a subject id of their own so the new rungs get fresh
     // claims. Without it, the old ladder simply resumes.
     const relisted = relistOn && !gone && lastBack ? lastBack : null;
+    // Matt, 2026-10-08: no series of check-ins on a passed house — we don't
+    // know what happened to it and it has usually sold. The agent check-in
+    // (agent-pulse.js, every 21 days) asks them for the next one instead.
+    // Only a house back on the market gets a check-in of its own; the rest
+    // are kept only for the one line on a live offer's nudge.
     const startedAt = relisted || passedAt;
     out.push({
       kind: "passed_checkin", party: "agent", contactId: o.contactId,
       subjectId: relisted ? `${o.id}@relist-${String(relisted).slice(0, 10)}` : o.id,
-      offerId: o.id, address: o.address, startedAt, offMarketAt: gone, relisted: Boolean(relisted),
+      offerId: o.id, address: o.address, startedAt, offMarketAt: gone, relisted: Boolean(relisted), asideOnly: !relisted,
       quiet: effectiveStatus(o) === "no_response",
       sentSteps: (o.followUps || []).filter((f) => f?.kind === "passed_checkin" && (!relisted || String(f.at || "") > String(relisted))).map((f) => f.step),
       ladder,
@@ -727,6 +732,11 @@ async function runSweep(job, ctx) {
       asides.get(c.contactId).push({ ...c, step: d.step });
       job.skipped++;
       push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: c.rides });
+      continue;
+    }
+    if (c.asideOnly) {
+      job.skipped++;
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: "a passed house gets no check-ins of its own: the agent check-in asks for their next one" });
       continue;
     }
 

@@ -93,13 +93,15 @@ test("a queued text is the next follow-up, whatever the ladder says", () => {
   assert.match(n.label, /price drop/);
 });
 
-test("a passed offer shows its check-in from the day they passed; a gone-quiet one says so", () => {
+// Matt, 2026-10-08: no check-ins on a passed house; the agent check-in asks
+// for their next one. A house back on the market is the exception.
+test("a passed offer has no check-in of its own; the column says the agent check-in has them", () => {
   const passed = offer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
   const n = next(passed);
-  assert.equal(n.kind, "passed_checkin");
-  assert.equal(n.at.slice(0, 10), "2026-09-11");
+  assert.equal(n.kind, "stopped");
+  assert.equal(n.label, "Agent check-in asks for their next one");
   const quiet = next(offer({ status: "no_response", statusHistory: [{ status: "no_response", ts: at(0) }] }));
-  assert.match(quiet.label, /never heard back/);
+  assert.equal(quiet.kind, "stopped");
 });
 
 test("a passed house that went off the market has nothing coming, and says why", () => {
@@ -215,7 +217,7 @@ test("a house they passed on says it rides on the live offer's nudge, not a chec
   assert.equal(n.label, "Rides on the 10625 SE 304th Way nudge");
   assert.equal(n.at, null);
   assert.equal(n.who, "machine");
-  assert.equal(next(passed).kind, "passed_checkin", "nothing live: its own check-in");
+  assert.equal(next(passed).kind, "stopped", "nothing live: still no check-in of its own (2026-10-08)");
   assert.equal(next(live, { focus: live }).kind, "offer_nudge", "the live offer keeps its nudge");
 });
 

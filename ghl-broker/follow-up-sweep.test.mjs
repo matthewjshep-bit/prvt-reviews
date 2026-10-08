@@ -719,13 +719,27 @@ test("an open offer the agent answered and then went quiet is still asked about"
   assert.deepEqual(closer.started.map((s) => s.kind), ["offer_nudge"], "an 'ok thanks' left unanswered is not a reply we owe");
 });
 
-const CHECKIN_SAVED = { aiApiKey: "k", conversationAi: configWith({ agent: { followUp: { enabled: true, ladders: {
+const CHECKIN_SAVED = { aiApiKey: "k", conversationAi: configWith({ agent: { followUp: { enabled: true, relist: true, ladders: {
   offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 0 }, passed_checkin: { enabled: true, steps: [10, 20, 30] } } } } }) };
+// Matt, 2026-10-08: a passed house gets no check-ins of its own unless it
+// comes back on the market. These tests use a relisted house to exercise the
+// rules every check-in still obeys.
+const BACK_ON = [{ contactId: "c1", type: "listing_back_on_market", at: at(0.01), offerId: "o1", data: {} }];
+
+test("a passed house gets no check-ins of its own: the agent check-in asks for the next one", async () => {
+  _resetJobs();
+  const passed = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
+  const store = fakeStore({ offers: [passed] });
+  const { job, started } = spySweep(store, { now: T0 + 10.2 * DAY, opts: { saved: CHECKIN_SAVED } });
+  await settle();
+  assert.equal(started.length, 0);
+  assert.match(job.results.find((r) => r.kind === "passed_checkin").reason, /no check-ins of its own: the agent check-in asks for their next one/);
+});
 
 test("an offer that went quiet gets a check-in like a passed one", async () => {
   _resetJobs();
   const quiet = anOffer({ status: "no_response", statusAt: at(0), sends: [{ ts: at(-14) }], statusHistory: [{ status: "sent", ts: at(-14) }, { status: "no_response", ts: at(0) }] });
-  const store = fakeStore({ offers: [quiet] });
+  const store = fakeStore({ offers: [quiet], events: BACK_ON });
   const { job, started } = spySweep(store, { now: T0 + 10.2 * DAY, opts: { saved: CHECKIN_SAVED } });
   await settle();
   assert.equal(job.status, "done", job.error);
@@ -773,7 +787,7 @@ test("a check-in waits while their text is held for you, and its rung isn't spen
   _resetJobs();
   const passed = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
   const held = heldText();
-  const store = fakeStore({ offers: [passed], drafts: [held] });
+  const store = fakeStore({ offers: [passed], drafts: [held], events: BACK_ON });
   const { job, started } = spySweep(store, { now: T0 + 10.2 * DAY, opts: { saved: CHECKIN_SAVED } });
   await settle();
   assert.equal(job.status, "done", job.error);
@@ -793,7 +807,7 @@ test("a check-in doesn't replace your own check-in waiting in the outbox", async
   _resetJobs();
   const passed = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
   const mine = heldText({ id: "m1", inbound: "", intent: "check_in", outbound: { kind: "check_in", offerId: "o1", address: passed.address }, reply: "Any movement on 12 Elm?", createdAt: at(9), updatedAt: at(9) });
-  const store = fakeStore({ offers: [passed], drafts: [mine] });
+  const store = fakeStore({ offers: [passed], drafts: [mine], events: BACK_ON });
   const { job, started } = spySweep(store, { now: T0 + 10.2 * DAY, opts: { saved: CHECKIN_SAVED } });
   await settle();
   assert.equal(started.length, 0);
@@ -804,7 +818,7 @@ test("an older machine nudge nobody sent doesn't hold the next one", async () =>
   _resetJobs();
   const passed = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
   const stale = heldText({ id: "n1", inbound: "", intent: "offer_nudge", outbound: { kind: "offer_nudge", offerId: "o1", address: passed.address }, reply: "Any update?", createdAt: at(-2), updatedAt: at(-2) });
-  const store = fakeStore({ offers: [passed], drafts: [stale] });
+  const store = fakeStore({ offers: [passed], drafts: [stale], events: BACK_ON });
   const { started } = spySweep(store, { now: T0 + 10.2 * DAY, opts: { saved: CHECKIN_SAVED } });
   await settle();
   assert.deepEqual(started.map((s) => [s.kind, s.subject.step]), [["passed_checkin", 10]]);
@@ -979,13 +993,13 @@ test("a check-in on a passed house waits while a live offer is out, even on a mo
   assert.match(job.results.find((r) => r.kind === "passed_checkin").reason, /the live offer on 12 Elm St/);
 });
 
-test("once nothing is live, the passed house gets its check-in on its own again", async () => {
+test("once nothing is live, a passed house still gets no check-in of its own (2026-10-08)", async () => {
   _resetJobs();
   const settled = anOffer({ status: "passed", statusAt: at(0), statusHistory: [{ status: "passed", ts: at(0) }] });
   const store = fakeStore({ offers: [settled, passedOn()] });
   const { started } = spySweep(store, { now: T0 + 3.2 * DAY, opts: { saved: FOCUS_SAVED } });
   await settle();
-  assert.deepEqual(started.map((s) => [s.kind, s.offer.id, s.subject.step]), [["passed_checkin", "mil", 30]]);
+  assert.deepEqual(started, [], "the agent check-in owns them now");
 });
 
 test("one text a morning per agent: the house they're on goes, the other waits", async () => {

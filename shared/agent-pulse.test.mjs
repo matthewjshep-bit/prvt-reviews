@@ -50,11 +50,11 @@ test("an agent who ever replied is checked in on every 21 days", () => {
 test("an agent another clock owns waits until that clock ends", () => {
   const open = passed({ status: "sent", statusHistory: [], sends: [{ ts: ago(2) }] });
   assert.equal(evaluateAgent(agent({ lastInboundAt: ago(60), offers: [open], current: [open] }), ctx()).status, "owned");
-  // Passed 25 days ago: the check-ins (days 10, 20, 30) still own them.
-  const recent = passed({ statusAt: ago(25), statusHistory: [{ status: "passed", ts: ago(25) }], followUps: [{ kind: "passed_checkin", step: 10, at: ago(15) }, { kind: "passed_checkin", step: 20, at: ago(5) }] });
+  // Passed 25 days ago: a passed house has no check-ins of its own any more
+  // (2026-10-08), so nothing owns them — the pulse does.
+  const recent = passed({ statusAt: ago(25), statusHistory: [{ status: "passed", ts: ago(25) }] });
   const owned = evaluateAgent(agent({ lastInboundAt: ago(60), offers: [recent], current: [recent] }), ctx());
-  assert.equal(owned.status, "owned");
-  assert.match(owned.reason, /check back in/);
+  assert.notEqual(owned.status, "owned", owned.reason);
   // Passed 40 days ago, every rung sent: the pulse picks them up, about that house.
   const done = passed({ followUps: [10, 20, 30].map((d) => ({ kind: "passed_checkin", step: d, at: ago(40 - d) })) });
   const v = evaluateAgent(agent({ lastInboundAt: ago(60), offers: [done], current: [done], events: [{ type: "follow_up_sent", at: ago(22) }] }), ctx());

@@ -252,7 +252,10 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
         reason: "one house at a time: a house they passed on gets one line on the live offer's nudge, at most once a month" });
     }
     const relisted = fu.relist && lastBack ? lastBack : null;
-    const start = relisted || passed;
+    // No series on a passed house (Matt, 2026-10-08): the agent check-in asks
+    // for their next one. Only a relisted house is texted about again.
+    if (!relisted) return out("stopped", { label: "Agent check-in asks for their next one", reason: "a passed house gets no check-ins of its own; we don't know what happened to it" });
+    const start = relisted;
     const r = nextRungAt({ steps: L.steps, repeatEvery: L.repeatEvery, startedAt: start, sentSteps: (offer.followUps || []).filter((f) => f?.kind === "passed_checkin" && (!relisted || String(f.at || "") > String(relisted))).map((f) => f.step), now, pace });
     if (r) {
       // A live conversation pauses the check-in; it resumes three days after they last wrote.
