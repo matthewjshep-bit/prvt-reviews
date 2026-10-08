@@ -5,6 +5,7 @@
 // template schema (percent coordinates, letter canvas 1224×1584).
 
 import { fmtMoney } from "./shared/offer-calc.js";
+import { offerMath } from "./shared/offer-breakdown.js";
 
 const LETTER = { width: 1224, height: 1584 };
 
@@ -448,6 +449,12 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   const firstName = (meta.contactName || "").trim().split(/\s+/)[0] || "";
   const signer = company.signer || company.name || "The Buyer";
   const layers = [];
+  // How we priced it (shared/offer-breakdown.js): what it's worth fixed up,
+  // less closing, holding and the work, and profit & risk is what's left — to
+  // the cent, so it ties to the price printed above. Matt, 2026-10-07: the
+  // agent should see what our number is based on. When it's shown, the
+  // closing paragraph and signature take the left column and the box the right.
+  const math = settings.showPricingMath !== false ? offerMath({ calc }, { exact: true }) : null;
 
   /* ---- top accent bar + letterhead ---- */
   layers.push({ id: uid("bar"), type: "shape", shape: "rect", x: 0, y: 0, width: 100, height: 0.55, fill: GOLD, visible: true });
@@ -519,7 +526,9 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   ];
   // Six rows fit at the classic spacing; more rows compress so the validity
   // paragraph and signature stay on the page.
-  const rowH = terms.length <= 6 ? 3.1 : Math.max(2.35, 18.6 / terms.length);
+  // With the pricing box the terms give up 1.8 of height, at any row count.
+  const termsH = math ? 16.8 : 18.6;
+  const rowH = terms.length <= 6 ? termsH / 6 : Math.max(math ? 2.1 : 2.35, termsH / terms.length);
   const rowLines = rowH >= 3 ? 2 : 1;
   for (const [k, v] of terms) {
     layers.push(text(8, y, 19, rowH + 1.1, k, { size: 20, weight: "bold", color: DARK, lineHeight: 1.25, maxLines: rowLines, autoFit: rowLines === 1 }));
@@ -529,21 +538,23 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
 
   /* ---- validity + closing paragraph ---- */
   y += 0.8;
-  layers.push(text(8, y, 84, 8,
+  if (math) layers.push(...pricingBox(math, { top: y }));
+  const colW = math ? 40 : 84;
+  layers.push(text(8, y, colW, math ? 13 : 8,
     `This offer is valid through ${meta.validLabel || "the date above"}. It is presented in good faith to open a ` +
     `conversation — final terms would be set out in a mutually signed purchase and sale agreement. My goal is a ` +
     `simple, private sale on the timeline that works best for you; I'd welcome the chance to talk it through ` +
     `whenever you're ready.`,
-    { size: 22, lineHeight: 1.42, maxLines: 5 }));
+    math ? { size: 20, lineHeight: 1.42, maxLines: 8 } : { size: 22, lineHeight: 1.42, maxLines: 5 }));
 
   /* ---- signature ---- */
-  y += 8.2;
-  layers.push(text(8, y, 84, 2.2, "Sincerely,", { size: 22 }));
+  y += math ? 13.4 : 8.2;
+  layers.push(text(8, y, colW, 2.2, "Sincerely,", { size: 22 }));
   y += 2.6;
-  layers.push(text(8, y, 84, 2.5, signer, { font: "Source Serif", weight: "bold", size: 28, color: DARK, autoFit: true, maxLines: 1 }));
+  layers.push(text(8, y, colW, 2.5, signer, { font: "Source Serif", weight: "bold", size: 28, color: DARK, autoFit: true, maxLines: 1 }));
   const sigLine = [company.name, company.email || company.phone].filter(Boolean).join(" · ");
   if (sigLine) {
-    layers.push(text(8, y + 2.6, 84, 1.9, sigLine, { size: 18, color: MUTED, autoFit: true, maxLines: 1 }));
+    layers.push(text(8, y + 2.6, colW, 1.9, sigLine, { size: 18, color: MUTED, autoFit: true, maxLines: 1 }));
   }
 
   /* ---- fine print ---- */
@@ -562,6 +573,32 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
     dataSources: [],
     layers,
   };
+}
+
+// The "How we priced it" box: offerMath's rows (no detail lines — the agent
+// page and the email carry those) and the purchase price, in a tinted panel
+// on the right of the letter's closing paragraph. Layers in draw order.
+const BOX = { x: 51, w: 41, rowH: 2.05 };
+export function pricingBox(math, { top }) {
+  const pad = 1.6;
+  const height = 3.4 + math.rows.length * BOX.rowH + 0.6 + 2.6;
+  const out = [{
+    id: uid("box"), type: "shape", shape: "rect", x: BOX.x, y: top, width: BOX.w, height,
+    fill: "rgba(165,128,42,0.06)", stroke: RULE, strokeWidth: 2, cornerRadius: 10, visible: true,
+  }];
+  out.push(text(BOX.x + pad, top + 1.0, BOX.w - 2 * pad, 1.9, sp("How we priced it"), { size: 16, color: GOLD, weight: "bold", autoFit: true, maxLines: 1 }));
+  let ry = top + 3.4;
+  for (const r of math.rows) {
+    out.push(text(BOX.x + pad, ry, 26, 1.9, r.label, { size: 17, color: INK, autoFit: true, maxLines: 1 }));
+    const sign = r.key === "arv" ? "" : r.sign === "+" ? "+" : "−";
+    out.push(text(BOX.x + 27.5, ry, 12, 1.9, `${sign}${fmtMoney(r.amount)}`, { size: 17, color: INK, align: "right", autoFit: true, maxLines: 1 }));
+    ry += BOX.rowH;
+  }
+  out.push(rule(ry + 0.2, BOX.x + pad, BOX.w - 2 * pad));
+  ry += 0.6;
+  out.push(text(BOX.x + pad, ry, 26, 2.1, "Purchase price", { size: 18, weight: "bold", color: DARK, autoFit: true, maxLines: 1 }));
+  out.push(text(BOX.x + 27.5, ry, 12, 2.1, fmtMoney(math.total), { size: 18, weight: "bold", color: DARK, align: "right", autoFit: true, maxLines: 1 }));
+  return out;
 }
 
 // Seller Net Comparison — the "no buyer's commission" pitch as a one-pager,

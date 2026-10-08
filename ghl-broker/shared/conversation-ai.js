@@ -27,6 +27,36 @@ export const REQUOTE_DEFAULTS = {
   maxRepairCutPct: 25,   // nor cut our repair estimate without bound
 };
 
+// One setup question on a float (Matt, 2026-10-07, from the No Fluff "setup
+// call"): where the seller is, what the photos don't show, and what the agent
+// thinks it needs and sells for. One per float, rotated per offer, and never
+// one they've already answered (setupQuestionFor).
+export const SETUP_QUESTIONS = {
+  other_offers: "any other offers in on it yet, and what's the seller's timeline?",
+  hidden_issues: "anything I won't see in the photos, like roof, foundation, water or septic?",
+  their_read: "what's your read on the work it needs, and where it sells once it's done?",
+};
+export const SETUP_QUESTION_KEYS = Object.keys(SETUP_QUESTIONS);
+
+// Floats a question the dossier hasn't answered: their read (arv / rehab),
+// the condition, the timeline. Starts at a hash of the offer so an agent with
+// several houses doesn't get the same question on each. null when every one
+// is answered or none is switched on.
+export function setupQuestionFor({ offerId = "", dossier = null, ask = SETUP_QUESTION_KEYS } = {}) {
+  const have = dossier?.have || {};
+  const answered = {
+    their_read: Boolean(have.arv || have.rehab),
+    hidden_issues: Boolean(have.condition || have.workNeeded),
+    other_offers: Boolean(have.timeline),
+  };
+  const open = (Array.isArray(ask) ? ask : SETUP_QUESTION_KEYS).filter((k) => SETUP_QUESTIONS[k] && !answered[k]);
+  if (!open.length) return null;
+  let h = 0;
+  for (const c of String(offerId || "")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const key = open[h % open.length];
+  return { key, text: SETUP_QUESTIONS[key] };
+}
+
 export const PARTIES = ["agent", "investor"];
 export const PARTY_LABEL = { agent: "Listing agent", investor: "Investor", unknown: "Unknown" };
 export const CONFIDENCES = ["high", "medium", "low"];
@@ -554,7 +584,19 @@ const PLAYBOOK = () => ({
   // floats the number as a soft one and asks whether it's in the realm
   // before the formal offer goes. Sends itself only if realm_check is on the
   // party's auto-send list.
-  realmCheck: { enabled: false },
+  // `leadWhenConfident`: a clean, well-comped underwrite floats the number
+  // itself ("based on our analysis we can likely do around 450ish") rather
+  // than asking for their read first.
+  // The float itself (2026-10-07), each off until Matt has previewed it:
+  // `withMath` puts one sentence of how we got the number ahead of it
+  // (shared/offer-breakdown.js); `range` floats "the 280s to 295" — the top
+  // is always our number, the bottom `pct` under it — instead of "295ish";
+  // `setupQuestion` ends it with one of SETUP_QUESTIONS.
+  realmCheck: {
+    enabled: false, leadWhenConfident: true, withMath: false,
+    range: { enabled: false, pct: 5 },
+    setupQuestion: { enabled: false, ask: [...SETUP_QUESTION_KEYS] },
+  },
   // The lessons digest from our own fell-through deals, in the agent
   // context. Off: the digest exists only once a person saved it.
   lessons: { enabled: false },
@@ -880,7 +922,18 @@ function normalizePlaybook(p, party, seed = {}) {
       unlessTags: list(fb.unlessTags, { max: 20, each: 80, lower: true }),
     },
     showMath: bool(src.showMath, false),
-    realmCheck: { enabled: bool(src.realmCheck?.enabled, false) },
+    realmCheck: {
+      enabled: bool(src.realmCheck?.enabled, false),
+      leadWhenConfident: bool(src.realmCheck?.leadWhenConfident, true),
+      withMath: bool(src.realmCheck?.withMath, false),
+      range: { enabled: bool(src.realmCheck?.range?.enabled, false), pct: int(src.realmCheck?.range?.pct, 5, 2, 15) },
+      setupQuestion: {
+        enabled: bool(src.realmCheck?.setupQuestion?.enabled, false),
+        ask: Array.isArray(src.realmCheck?.setupQuestion?.ask)
+          ? [...new Set(src.realmCheck.setupQuestion.ask.filter((k) => SETUP_QUESTION_KEYS.includes(k)))]
+          : [...SETUP_QUESTION_KEYS],
+      },
+    },
     takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
     // May the bot carry the post-mortem digest (percentages only, never a
     // dollar figure) into an agent negotiation? Off until a person reads it.
@@ -1401,7 +1454,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
     },
     rules: [
       "Never make up or estimate a number over text. Once our underwriting has an offer number (it's in the context), give it as a rough figure when they ask what we can do — 'based on our analysis we can likely do around 450ish' — and ask whether that works for the seller; a sent offer can be restated with its terms. Until then, say you'll run it by your underwriting team today.",
-      "What we buy is distressed homes, or homes that need some work and repairs — never pitch \"off-market deals\" or claim we have any. Our best deals are houses agents bring us before they hit the market: you may ask for those lightly, at most once a month (the context's OFF-MARKET ASK line says when).",
+      "What we buy is distressed homes, or homes that need some work and repairs — never claim we have off-market deals ourselves. Our best deals are off-market houses agents bring us: you may ask lightly, at most once a month, whether any off-market opportunities have come across their desk (the context's OFF-MARKET ASK line says when). Say \"off-market\" itself, never \"before it hits the MLS\".",
       "Defer on terms with 'my partner': 'My partner will review the numbers on our call.' Never commit to legal terms in a text.",
       "If they send only a photo, reply exactly: Thanks for the images, taking a look! Never describe or analyse an image.",
       "When a call is genuinely needed, offer at most two time slots and keep it minimal. Never book anything on your own.",
@@ -1455,7 +1508,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "underwriting team today and see if we can get back to you with an offer.' Once our offer number is in " +
           "the context and they ask what we can do: 'Based on our analysis we can likely do around 450ish' — " +
           "rounded to the nearest thousand or down, never up, no dollar sign — and ask if that works for the " +
-          "seller. Never explain the math. A SENT offer is on paper: restate its number and terms if asked.\n" +
+          "seller. Explain the math only the way the MATH rule says. A SENT offer is on paper: restate its number and terms if asked.\n" +
           "HANDOFF: once an address and details are confirmed, or they ask for a call: 'Perfect, will review the " +
           "numbers and give you a call if it makes sense.'\n" +
           "A NO ON AN OFFER: never argue the math. Ask once what the seller would take; only if they turn that down " +

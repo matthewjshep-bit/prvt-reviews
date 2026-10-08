@@ -12,6 +12,8 @@ import { mirrorPlan, mirrorDiff, normalizeMirror, tierFrom, agentPlan } from "./
 import { searchOpportunities, createOpportunity, updateOpportunity, getContact, listPipelines } from "./ghl.js";
 import { LIVE_DEAL_STAGES, OPEN_STATUSES, effectiveStatus } from "./shared/offer-status.js";
 import { currentOffers } from "./shared/current-offer.js";
+import { stageKeys } from "./shared/ghl-stages.js";
+import { cardMove } from "./shared/tier-one.js";
 
 export const CURSOR_NAME = "ghlMirror";
 export const MAX_WRITES_PER_TICK = 60;
@@ -285,6 +287,41 @@ export function tierStageMove({ tags = [], pipelines = [], opportunities = [] } 
  *
  * Best effort; never throws. Pipelines are read once an hour per location.
  */
+/** pipelinesFor(client, locationId, { ghl, now }) → GHL's pipelines, read once an hour per location. */
+export async function pipelinesFor(client, locationId, { ghl = null, now = Date.now() } = {}) {
+  const api = ghl || { listPipelines };
+  let cached = pipelineCache.get(locationId);
+  if (!cached || now - cached.at > PIPELINE_TTL_MS) {
+    cached = { at: now, pipelines: await api.listPipelines(client, locationId) };
+    pipelineCache.set(locationId, cached);
+  }
+  return cached.pipelines;
+}
+
+/**
+ * followOfferOut({ client, locationId, contactId, ghl, now }) → the move made, or { skip } / { error }
+ *
+ * Our written offer went out: the agent's Acquisitions card moves to Offer Out
+ * — only from New Lead, Contacted or Tier 1/2/3 (shared/tier-one.js cardMove),
+ * never back from Negotiations or a contract, never with two open cards.
+ * Best effort; never throws.
+ */
+export async function followOfferOut({ client, locationId, contactId, ghl = null, now = Date.now() }) {
+  const api = ghl || { listPipelines, searchOpportunities, updateOpportunity };
+  try {
+    const acq = acquisitionsPipeline(await pipelinesFor(client, locationId, { ghl: api, now }));
+    if (!acq) return { skip: "no pipeline with Tier 1/2/3 stages" };
+    const cards = (await api.searchOpportunities(client, locationId, { contactId, pipelineId: acq.id }))
+      .map((c) => ({ ...c, pipelineStageId: c.stageId }));
+    const move = cardMove({ cards, acq, keys: stageKeys(acq), to: "offerOut" });
+    if (move.skip || move.create) return move.skip ? move : { skip: "no open card in Acquisitions" };
+    await api.updateOpportunity(client, move.opportunityId, { stageId: move.stageId });
+    return move;
+  } catch (e) {
+    return { error: String(e?.message || e).slice(0, 160) };
+  }
+}
+
 export async function followTierStage({ client, locationId, contactId, tags = [], ghl = null, now = Date.now() }) {
   const api = ghl || { listPipelines, searchOpportunities, updateOpportunity };
   try {

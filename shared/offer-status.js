@@ -26,6 +26,7 @@
 // The dependencies: asset-type.js and us-address.js, both pure and import-free.
 import { assetOf } from "./asset-type.js";
 import { sameStreetLoose } from "./us-address.js";
+import { offerMath, compactMath } from "./offer-breakdown.js";
 
 export const OFFER_STATUSES = [
   { key: "draft", label: "Draft", cls: "bg-blue-100 text-blue-800", dot: "bg-blue-500" },
@@ -532,6 +533,54 @@ export const OFFER_LIST_FIELDS = [
   "psaPdfUrl", "contractPdfUrl", "assignmentPdfUrl", "netSheetPdfUrl",
 ];
 
+// The slice of `calc` a lean row keeps. `calc.settings` is a full
+// effectiveSettings copy — every API key and the whole conversationAi blob —
+// so this is an ALLOWLIST, never a denylist: the cost model the agent-facing
+// math reruns (shared/offer-breakdown.js offerMath) and the letter's terms.
+// Never wholesaleFee: the column is built so the fee can't be read off it.
+export const LEAN_CALC_SETTINGS = [
+  "underwriteMode", "sellingCostPct", "flipProfitPct", "holdMonths", "holdingModel", "holdMonthlyCost",
+  "loanToCostPct", "loanRatePct", "loanPointsPct", "taxRatePct", "insuranceRatePct", "utilitiesMonthly",
+  "buyClosingPct", "showPricingMath",
+  "offerExpires", "validityDays", "earnestMoney", "termFinancing", "termCondition", "termPossession",
+];
+// Of calc.offers.cash: the number and whether it can be explained. Never
+// `breakdown` (it has a fee row) or `wholesaleFee`.
+export const LEAN_CASH_FIELDS = ["amount", "mode", "underwater", "overridden"];
+
+const pickKeys = (obj, keys) => {
+  const out = {};
+  if (obj && typeof obj === "object" && !Array.isArray(obj)) for (const k of keys) if (k in obj) out[k] = obj[k];
+  return out;
+};
+
+/**
+ * leanOfferDoc(doc) → what Postgres hands back for a lean read
+ *
+ * The JS twin of the projection in store.js (leanDocSql). The file backend
+ * runs every lean read through it, so a test on the JSON store sees exactly
+ * the trimmed doc production sees — a field the SQL drops is dropped here too,
+ * instead of quietly surviving in tests and missing on prod.
+ */
+export function leanOfferDoc(doc) {
+  if (!doc || typeof doc !== "object") return doc;
+  const out = {};
+  for (const k of OFFER_LIST_FIELDS) if (k in doc) out[k] = doc[k];
+  out.subjectHomeType = doc.snapshot?.subjectInfo?.homeType ?? doc.snapshot?.comps?.result?.info?.homeType ?? doc.draft?.subjectInfo?.homeType ?? null;
+  // The figures behind the number. toListOffer reads them and drops them —
+  // they reach the row as arv/repairs/askingPrice/terms/math, never as calc.
+  const calc = doc.calc;
+  out.calc = {
+    inputs: calc?.inputs ?? null,
+    settings: { ...pickKeys(calc?.settings, LEAN_CALC_SETTINGS), psa: { closingDays: calc?.settings?.psa?.closingDays ?? null } },
+    offers: { cash: pickKeys(calc?.offers?.cash, LEAN_CASH_FIELDS) },
+  };
+  // A held draft has no calc; its figures sit on the draft. Its own key,
+  // never `draft` — isDraftOffer reads that.
+  out.draftInputs = doc.draft?.inputs ?? null;
+  return out;
+}
+
 // Trim an offer to a table row. Two derived keys ride along:
 //
 //   expiresAt  the ⏱ marker needs calc.settings.{offerExpires,validityDays},
@@ -558,15 +607,23 @@ export function toListOffer(offer) {
   //              agent who just named it, and its money guard flags any number
   //              it can't see — so without this every "your $525k asking"
   //              read as an invented figure.
-  const asking = Number(offer?.askingPrice ?? offer?.calc?.inputs?.askingPrice ?? offer?.inputs?.askingPrice) || 0;
+  //              On Postgres the trim keeps a slice of calc for this
+  //              (leanOfferDoc); a held draft keeps them on draft.inputs.
+  const fromDraft = offer?.draftInputs || offer?.draft?.inputs || null;
+  const asking = Number(offer?.askingPrice ?? offer?.calc?.inputs?.askingPrice ?? offer?.inputs?.askingPrice ?? fromDraft?.askingPrice) || 0;
   if (asking > 0) row.askingPrice = asking;
   // arv / repairs / terms  what the Conversation AI needs to explain an offer
   //              (behind its own switch) and to confirm the terms on the
   //              letter — a few numbers instead of the whole calc blob.
-  const arv = Number(offer?.arv ?? offer?.calc?.inputs?.arv) || 0;
+  const arv = Number(offer?.arv ?? offer?.calc?.inputs?.arv ?? fromDraft?.arv) || 0;
   if (arv > 0) row.arv = arv;
-  const repairs = Number(offer?.repairs ?? offer?.calc?.inputs?.repairs) || 0;
+  const repairs = Number(offer?.repairs ?? offer?.calc?.inputs?.repairs ?? fromDraft?.repairs) || 0;
   if (repairs > 0) row.repairs = repairs;
+  // math         how we got the number (shared/offer-breakdown.js): the costs
+  //              and the % of ARV, for the bot and the send texts. Kept when
+  //              re-trimming a row that already has it.
+  const math = offer?.math || compactMath(offerMath(offer));
+  if (math) row.math = math;
   const st = offer?.calc?.settings || null;
   if (offer?.terms) row.terms = offer.terms;
   else if (st) {

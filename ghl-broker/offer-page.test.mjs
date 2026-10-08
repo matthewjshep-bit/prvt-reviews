@@ -28,6 +28,7 @@ process.env.DATAROOM_FEED_LOCATIONS = "loc-op-test";
 process.env.DATAROOM_FEED_TTL_MS = "0";
 
 const { default: express } = await import("express");
+const { calculateOffers } = await import("./shared/offer-calc.js");
 const { store } = await import("./store.js");
 const { createOfferPageRouter, createOfferPagePublicRouter } = await import("./routes/offer-page.js");
 const { createDataroomRouter, createDataroomPublicRouter } = await import("./routes/dataroom.js");
@@ -125,21 +126,36 @@ test("a draft has no page to build", async () => {
   assert.equal(r.status, 400);
 });
 
-test("sections switch content on and off, and the breakdown is off by default", async () => {
+// Matt, 2026-10-07: every agent sees what our number is based on.
+test("sections switch content on and off, and the breakdown is on by default", async () => {
   const { page, token } = await build();
-  assert.equal(page.snapshot.sections.breakdown, false, "showing your working is opt-in");
+  assert.equal(page.snapshot.sections.breakdown, true, "how we got the number shows unless a person turns it off");
   let r = await req("GET", `/o/${token}`);
-  assert.doesNotMatch(r.text, /How we got to this number/);
+  assert.match(r.text, /How we got to this number/);
   assert.match(r.text, /What the seller nets/);
   assert.match(r.text, /comparable sales/i);
 
   await req("PUT", `/api/offer-pages/${page.id}`, {
-    sections: { breakdown: true, comps: false, scope: false, netsheet: false, note: false, documents: false },
+    sections: { breakdown: false, comps: false, scope: false, netsheet: false, note: false, documents: false },
   });
   r = await req("GET", `/o/${token}`);
-  assert.match(r.text, /How we got to this number/);
+  assert.doesNotMatch(r.text, /How we got to this number/);
   assert.doesNotMatch(r.text, /What the seller nets/);
   assert.doesNotMatch(r.text, /Renovation scope of work/);
+});
+
+test("a 70%-rule offer shows every cost behind it, with profit and risk last", async () => {
+  const calc = calculateOffers({ address: "7374 Lazy S Ln NE, Bremerton, WA", arv: 500000, repairs: 50000, askingPrice: 399000 },
+    { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  const { token } = await build({ offer: { cashAmount: calc.offers.cash.amount, calc } });
+  const r = await req("GET", `/o/${token}`);
+  for (const line of ["After-repair value", "Closing costs, buying and reselling", "Resale: agents and closing (7%)", "Purchase closing (1%)",
+    "Holding, 5 months", "Loan interest and points", "Property taxes", "Renovation budget", "Profit &amp; risk", "Our offer"]) {
+    assert.match(r.text, new RegExp(line.replace(/[()]/g, "\\$&")), line);
+  }
+  assert.match(r.text, /\$295,000/);
+  assert.match(r.text, /\$91,217/, "the page shows every line, profit and risk included");
+  assert.doesNotMatch(r.text, /\$30,000\b|assignment fee|wholesale/i, "never the fee");
 });
 
 test("the note is operator-authored and survives a refresh", async () => {

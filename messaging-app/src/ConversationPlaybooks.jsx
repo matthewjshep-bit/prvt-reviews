@@ -7,6 +7,7 @@ import { Lock, Plus, Trash2, X } from "lucide-react";
 import {
   INTENTS, INTENT_LABEL, INTENT_GLOSS, NEVER_AUTO, PARTY_LABEL, ACTION_LABEL, ACTION_TYPES, OFFER_DOC_KEYS, OFFER_DOC_LABEL,
   INTERNAL_ACTIONS, INTERNAL_ACTIONS_FOR, ASK_ONLY_ACTIONS, TOKENS, OUTBOUND_INTENTS, autoEligible,
+  SETUP_QUESTIONS, SETUP_QUESTION_KEYS,
 } from "@shared/conversation-ai.js";
 import { FOLLOW_UP_KINDS, kindsFor } from "@shared/follow-up.js";
 import { BTN } from "./ui.jsx";
@@ -849,10 +850,50 @@ export function PartyPlaybooks({ config, patch, workflows }) {
               <p className={HINT}>When the outreach page (or its daily sweep) imports an agent, draft the first text from their hook listing: saw it, we buy as-is for cash, got anything that needs work? Replaces the GHL workflow template. Tick "first text about their listing" on the auto-send list to let it go by itself.</p>
             </div>
             <div>
-              <Toggle checked={pb.realmCheck?.enabled} onChange={(v) => setPb({ realmCheck: { enabled: v } })}>
+              <Toggle checked={pb.realmCheck?.enabled} onChange={(v) => setPb({ realmCheck: { ...(pb.realmCheck || {}), enabled: v } })}>
                 <span className="font-semibold">Realm check when numbers land</span>
               </Toggle>
               <p className={HINT}>When an auto-underwrite creates an offer for an agent, draft a text that floats the number as a soft one and asks if it's in the realm before the formal offer goes. It waits in the outbox like any reply; tick "floated our number" on the auto-send list to let it go by itself.</p>
+              {pb.realmCheck?.enabled && (() => {
+                const rc = pb.realmCheck || {};
+                const setRc = (next) => setPb({ realmCheck: { ...rc, ...next } });
+                const sq = rc.setupQuestion || { enabled: false, ask: SETUP_QUESTION_KEYS };
+                const asks = new Set(sq.ask || []);
+                return (
+                  <div className="mt-2 grid gap-1.5 border-l-2 border-slate-200 pl-3" data-testid="realm-check-float">
+                    <Toggle checked={rc.leadWhenConfident !== false} onChange={(v) => setRc({ leadWhenConfident: v })}>
+                      Lead with our number when the underwrite is confident
+                    </Toggle>
+                    <Toggle checked={rc.withMath} onChange={(v) => setRc({ withMath: v })}>
+                      Say how we got there first
+                    </Toggle>
+                    <p className={HINT}>"We base it on 69% of the 500k it's worth fixed up, less 50k of rehab work; the rest is 38k to buy and resell, 26k of lender holding costs, and our profit and risk margin." Never a figure on profit &amp; risk, never the fee. Not when they've given us their own read, or when the offer is far under our formula. A float with the math may run to 340 characters.</p>
+                    <Toggle checked={rc.range?.enabled} onChange={(v) => setRc({ range: { ...(rc.range || { pct: 5 }), enabled: v } })}>
+                      Float a range topped by our number
+                    </Toggle>
+                    {rc.range?.enabled && (
+                      <label className="flex items-center gap-2 text-xs text-slate-500">
+                        Bottom of the range
+                        <span className="w-16"><Text type="number" value={rc.range?.pct ?? 5} onChange={(v) => setRc({ range: { ...(rc.range || {}), pct: Number(v) } })} /></span>
+                        % under our number
+                      </label>
+                    )}
+                    <p className={HINT}>"The 280s to 295" instead of "295ish". The top is always our number and the letter only ever goes at the top; the bottom is never said on its own. A number they name inside the range waits for you.</p>
+                    <Toggle checked={sq.enabled} onChange={(v) => setRc({ setupQuestion: { ...sq, enabled: v } })}>
+                      End with one setup question
+                    </Toggle>
+                    {sq.enabled && SETUP_QUESTION_KEYS.map((k) => (
+                      <label key={k} className="ml-5 flex items-center gap-2 text-xs text-slate-600">
+                        <input type="checkbox" checked={asks.has(k)} onChange={(e) => {
+                          const next = SETUP_QUESTION_KEYS.filter((x) => (x === k ? e.target.checked : asks.has(x)));
+                          setRc({ setupQuestion: { ...sq, ask: next } });
+                        }} />
+                        {SETUP_QUESTIONS[k]}
+                      </label>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
             <div>
               <Toggle checked={pb.takeCheck?.enabled} onChange={(v) => setPb({ takeCheck: { enabled: v } })}>

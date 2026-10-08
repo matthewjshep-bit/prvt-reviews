@@ -376,6 +376,17 @@ export const listOffers = ({ contactId = "", limit = 50, lean = false, activity 
 // (shared/tiers.js). Cached five minutes on the broker; fresh skips it.
 export const getAgentTiers = (fresh = false) =>
   fetch(`${API_BASE}/api/dashboard/agents/tiers?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
+// The Tier 1 list: GHL's Tier 1 stage, each card screened — { rows, belongs,
+// counts, tier2, mirrorOwnsBoard } (ghl-broker/tier-one.js). Cached five
+// minutes on the broker; fresh skips it.
+export const getTierOne = (fresh = false) =>
+  fetch(`${API_BASE}/api/dashboard/tier1?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
+// Pass: we passed on the house, its GHL card → Passed on Offer, tier-1 off.
+export const tierOnePass = (contactId, body = {}) => post(`/api/dashboard/tier1/${encodeURIComponent(contactId)}/pass`, body);
+// Kick out: it never belonged (gone, turnkey, no house) — card → Not a Good Deal.
+export const tierOneKick = (contactId, body = {}) => post(`/api/dashboard/tier1/${encodeURIComponent(contactId)}/kick`, body);
+// Add: the app reads them as Tier 1 and GHL doesn't — card → Tier 1.
+export const tierOneAdd = (contactId, body = {}) => post(`/api/dashboard/tier1/${encodeURIComponent(contactId)}/add`, body);
 // "Hold our number" on a counter: { amount, text, from } — the words at the
 // lowest number we've put to them on the house. Reads only; sends nothing.
 export const getHoldText = (id) =>

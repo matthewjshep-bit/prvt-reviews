@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dbEnabled, query, migrate } from "./db.js";
-import { OFFER_LIST_FIELDS, toListOffer, effectiveStatus, OPEN_STATUSES } from "./shared/offer-status.js";
+import { OFFER_LIST_FIELDS, LEAN_CALC_SETTINGS, LEAN_CASH_FIELDS, toListOffer, leanOfferDoc, effectiveStatus, OPEN_STATUSES } from "./shared/offer-status.js";
 
 // pg hands bigint back as a string and real as a float; the API speaks numbers.
 const videoRow = (r) => ({
@@ -35,18 +35,39 @@ const uuid = () => crypto.randomUUID();
 // what makes "load every offer for the location" affordable, which is the
 // difference between the history page showing your book and showing the newest
 // hundred rows of it.
+// The lean projection itself, shared by every lean read. Its JS twin is
+// leanOfferDoc (shared/offer-status.js), which the file backend runs, so the
+// two backends trim alike — change one, change the other.
+//
+// `subjectHomeType` rides along so a row with no kind stored can still say
+// what Zillow called it (shared/asset-type.js) — the snapshot it lives in
+// is the weight this trim exists to drop.
+//
+// `calc` is a slice: the inputs, an allowlist of the frozen settings
+// (LEAN_CALC_SETTINGS — the settings hold API keys, so never a denylist) and
+// a few cash scalars. Without it every lean row lost its ARV, repairs, list
+// price and terms, and the bot's "show our work" never had a figure to show.
+// `draftInputs` is a held draft's figures (its own key: `draft` means draft).
+function leanDocSql(ph) {
+  const only = (path, keys) => `coalesce((select jsonb_object_agg(k, v)
+             from jsonb_each(case when jsonb_typeof(doc #> '${path}') = 'object' then doc #> '${path}' end) as x(k, v)
+             where k = any(${ph(keys)}::text[])), '{}'::jsonb)`;
+  return `(coalesce((select jsonb_object_agg(k, v) from jsonb_each(doc) as e(k, v)
+                  where k = any(${ph(OFFER_LIST_FIELDS)}::text[])), '{}'::jsonb)
+        || jsonb_build_object('subjectHomeType', coalesce(doc #>> '{snapshot,subjectInfo,homeType}',
+             doc #>> '{snapshot,comps,result,info,homeType}', doc #>> '{draft,subjectInfo,homeType}'))
+        || jsonb_build_object('calc', jsonb_build_object(
+             'inputs', doc #> '{calc,inputs}',
+             'settings', ${only("{calc,settings}", LEAN_CALC_SETTINGS)}
+               || jsonb_build_object('psa', jsonb_build_object('closingDays', doc #> '{calc,settings,psa,closingDays}')),
+             'offers', jsonb_build_object('cash', ${only("{calc,offers,cash}", LEAN_CASH_FIELDS)})),
+           'draftInputs', doc #> '{draft,inputs}')) as doc`;
+}
+
 export function offerListQuery({ locationId, contactId = null, limit = 50, lean = false }) {
   const params = [locationId];
   const ph = (v) => `$${params.push(v)}`; // bind v, return its placeholder
-  // `subjectHomeType` rides along so a row with no kind stored can still say
-  // what Zillow called it (shared/asset-type.js) — the snapshot it lives in
-  // is the weight this trim exists to drop.
-  const col = lean
-    ? `(coalesce((select jsonb_object_agg(k, v) from jsonb_each(doc) as e(k, v)
-                  where k = any(${ph(OFFER_LIST_FIELDS)}::text[])), '{}'::jsonb)
-        || jsonb_build_object('subjectHomeType', coalesce(doc #>> '{snapshot,subjectInfo,homeType}',
-             doc #>> '{snapshot,comps,result,info,homeType}', doc #>> '{draft,subjectInfo,homeType}'))) as doc`
-    : "doc";
+  const col = lean ? leanDocSql(ph) : "doc";
   const where = contactId ? ` and contact_id = ${ph(contactId)}` : "";
   return {
     text: `select ${col} from offers
@@ -93,8 +114,7 @@ export function lastActivityQuery({ locationId, types = null, limit = 5000, inbo
 export function followUpQuery({ locationId, statuses = [...OPEN_STATUSES], before, since = null, limit = 200, offset = 0 }) {
   const params = [locationId];
   const ph = (v) => `$${params.push(v)}`;
-  const lean = `coalesce((select jsonb_object_agg(k, v) from jsonb_each(doc) as e(k, v)
-                  where k = any(${ph(OFFER_LIST_FIELDS)}::text[])), '{}'::jsonb) as doc`;
+  const lean = leanDocSql(ph);
   const where = [`location_id = $1`, `status = any(${ph(statuses)}::text[])`];
   // A row whose status_at never got written (an offer that predates the
   // column and has no statusAt in its doc either) is a candidate, not a
@@ -1421,7 +1441,9 @@ const fileStore = (() => {
         .filter((o) => o.locationId === locationId && (!contactId || o.contactId === contactId))
         .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
-      return lean ? rows.map(toListOffer) : rows;
+      // Trimmed the way Postgres trims (leanOfferDoc), so a test here sees
+      // the row production sees.
+      return lean ? rows.map((o) => toListOffer(leanOfferDoc(o))) : rows;
     },
     async listDeals(locationId, { limit = 200 } = {}) {
       ensure();
@@ -1442,7 +1464,7 @@ const fileStore = (() => {
         .filter((o) => !since || !at(o) || at(o) >= since)
         .sort((a, b) => String(at(a)).localeCompare(String(at(b))) || String(a.id || "").localeCompare(String(b.id || "")))
         .slice(Math.max(0, offset), Math.max(0, offset) + limit)
-        .map(toListOffer);
+        .map((o) => toListOffer(leanOfferDoc(o)));
     },
     // Nothing to fill: the file backend reads status off the doc every time.
     async backfillOfferStatusColumns() { return 0; },

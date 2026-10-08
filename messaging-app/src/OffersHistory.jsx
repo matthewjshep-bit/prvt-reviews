@@ -21,11 +21,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { isOffMarket } from "@shared/off-market.js";
 import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
 import {
-  DEAD_STATUSES, OFFER_STATUS, OFFER_STATUS_KEYS, effectiveStatus, isAiGenerated, isHot, needsAiReview,
+  OFFER_STATUS, OFFER_STATUS_KEYS, effectiveStatus, isAiGenerated, needsAiReview,
   toListOffer,
 } from "@shared/offer-status.js";
 import {
@@ -50,9 +49,10 @@ import { REPLY_BOX_ID } from "./ConversationPanel.jsx";
 import { TEACH_EVENT } from "./RowFeedback.jsx";
 import { offerKey, siblingsKey } from "./OfferPanel.jsx";
 import { forget, forgetPrefix } from "./work-data.js";
-import NextFollowUp, { groupNext, needsFollowUp, nextSortKey } from "./NextFollowUp.jsx";
+import NextFollowUp, { groupNext, nextSortKey } from "./NextFollowUp.jsx";
+import { TABS, OTHER, viewFor, defaultTab, notSentAge, waitingSince } from "./offer-tabs.js";
 import {
-  ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow,
+  ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow, Menu,
   SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, StatusPill, TableCard,
   compareBy, rowActivation, useSort,
 } from "./ui.jsx";
@@ -84,46 +84,12 @@ function SentBadge({ offer }) {
   );
 }
 
-/* ---------- filters ---------- */
+/* ---------- tabs ---------- */
 
-// Each chip is one question you actually ask the list. `test` runs against a
-// single offer; counts come from running them over the search-filtered set, so
-// a chip's number always matches what clicking it shows.
-const FILTERS = [
-  { key: "all", label: "All", test: () => true },
-  // Close to a contract: the price is agreed, or you flagged it. First after
-  // All because it is the list you open the page for.
-  // The funnel chips count each house once, by its current offer (shared/
-  // current-offer.js): a superseded row is history, and "All" still has it.
-  { key: "hot", label: "🔥 Hot", title: "Close to a contract — the price is agreed, or you flagged it", test: (o) => !o.supersededBy && isHot(o) },
-  // How the house came to us: off-market houses agents brought us are our
-  // best deals (shared/off-market.js). Deals included.
-  { key: "offmarket", label: "Off-market", title: "Houses an agent brought us off the market — marked by you, or by the machine from their words or Zillow", test: (o) => !o.supersededBy && o.status !== "draft" && isOffMarket(o) },
-  // The kind of house we're buying right now (shared/asset-type.js): single
-  // family, as Zillow or you typed it. Deals included.
-  { key: "sfr", label: "Single family", title: "Single-family houses — what we're buying right now", test: (o) => !o.supersededBy && o.status !== "draft" && normalizeAsset(o.asset)?.type === "sfr" },
-  { key: "unsent", label: "Not sent", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "new" && o.status !== "draft" },
-  { key: "waiting", label: "Awaiting reply", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "sent" },
-  { key: "countered", label: "Countered", test: (o) => !o.deal && !o.supersededBy && effectiveStatus(o) === "countered" },
-  { key: "dead", label: "Passed / gone", title: "They passed, we passed, no reply, or the house is no longer available", test: (o) => !o.deal && DEAD_STATUSES.has(effectiveStatus(o)) },
-  { key: "deals", label: "Deals", test: (o) => Boolean(o.deal) },
-  { key: "drafts", label: "Drafts", test: (o) => o.status === "draft" },
-  // A live offer with no follow-up coming, or one that's late. Every offer
-  // should have a next touch or a reason it doesn't (2026-09-29).
-  { key: "nofollow", label: "No follow-up", title: "Live offers with nothing scheduled, or a follow-up that's overdue", test: (o) => needsFollowUp(o) },
-  // A different axis from the six above — those ask where an offer is in the
-  // funnel, this asks who made it and whether anyone has looked. It sits last
-  // and wears its own colour so it doesn't read as another funnel state, and
-  // it is hidden entirely for locations that never run the automation.
-  {
-    key: "ai",
-    label: "AI review",
-    tone: "ai",
-    title: "Auto-underwritten offers nobody has acted on yet — held drafts, and offers built but not sent",
-    test: needsAiReview,
-    onlyWhenUsed: true,
-  },
-];
+// Three tabs — Hot · Not sent · Sent — and a "Closed / other" menu for the
+// rest (offer-tabs.js; Matt, 2026-10-07). Counts come from running each test
+// over the search-filtered set, so a tab's number always matches what
+// clicking it shows.
 
 /* ---------- sorting ---------- */
 
@@ -148,6 +114,8 @@ const SORTS = {
   activity: { natural: "desc", of: (o) => o.lastActivity?.at || null },
   // Soonest first; nothing coming sinks (compareBy), whichever way you click.
   next: { natural: "asc", of: nextSortKey },
+  // Not sent: the offer that has waited longest for paper first.
+  waiting: { natural: "asc", of: waitingSince },
 };
 
 // One agent, one group. Offers with no contact record still collapse together
@@ -192,7 +160,9 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
   const [offerPaging, setOfferPaging] = useState(null); // offer open in OfferPageModal
   const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
   const [q, setQ] = useState("");
-  const [filter, setFilter] = useState("waiting"); // open on the offers you're owed a reply on
+  // null until you pick one: the page opens on Hot, or Not sent when nothing
+  // is hot (defaultTab), decided once the book is here.
+  const [filter, setFilter] = useState(null);
   const [sort, toggleSort] = useSort({ key: "date", dir: "desc" }); // newest first, as the API returns them
   const [queueIds, setQueueIds] = useState(null); // the rows the popout's arrows walk, frozen at open
   const [expanded, setExpanded] = useState(() => new Set()); // group keys open
@@ -224,6 +194,9 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
   // hidden rows in the batch, or "mark 12 passed" quietly touches rows you
   // can't see. Same rule Agent Outreach uses.
   useEffect(() => { setPicked(new Set()); }, [q, filter]);
+  // Hot and Not sent open every agent (each row's Send is the point); the
+  // others start folded. A new tab starts from its own default.
+  useEffect(() => { setExpanded(new Set()); }, [filter]);
 
   /* ---------- the split ---------- */
 
@@ -291,7 +264,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
     // activity, and say the schedule is recomputed on reload rather than show
     // one worked out for the old status.
     setOffers((list) => (list || []).map((o) => (o.id === updated.id
-      ? { ...toListOffer(updated), lastActivity: o.lastActivity,
+      ? { ...toListOffer(updated), lastActivity: o.lastActivity, floatedAt: o.floatedAt,
           nextFollowUp: o.nextFollowUp && effectiveStatus(o) !== effectiveStatus(updated) ? { stale: true } : o.nextFollowUp }
       : o)));
     setSelected(patch);
@@ -401,7 +374,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
     try {
       const r = await setOfferStatusBulk(ids, status);
       const byId = new Map((r.offers || []).map((o) => [o.id, toListOffer(o)]));
-      setOffers((list) => (list || []).map((o) => byId.get(o.id) || o));
+      setOffers((list) => (list || []).map((o) => (byId.has(o.id) ? { ...byId.get(o.id), lastActivity: o.lastActivity, floatedAt: o.floatedAt } : o)));
       setPicked(new Set());
       const failed = (r.results || []).filter((x) => !x.ok);
       if (failed.length) {
@@ -477,27 +450,40 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
         ].some((v) => (v || "").toLowerCase().includes(needle)));
 
   const usesAi = book.some(isAiGenerated);
-  const chips = FILTERS
-    .filter((f) => !f.onlyWhenUsed || usesAi)
-    .map((f) => ({
-      key: f.key, label: f.label, tone: f.tone, title: f.title,
-      count: searched.filter(f.test).length,
-    }));
-  const activeFilter = FILTERS.find((f) => f.key === filter) || FILTERS[0];
+  const view = filter ?? defaultTab(book);
+  const chips = TABS.map((f) => ({ key: f.key, label: f.label, title: f.title, count: searched.filter(f.test).length }));
+  const others = OTHER.filter((f) => !f.onlyWhenUsed || usesAi);
+  const activeFilter = viewFor(view);
+  const inOther = others.some((f) => f.key === view);
+  const otherMenu = (
+    <Menu label="Closed and other offers"
+      trigger={<span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ${inOther ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+        {inOther ? activeFilter.label : "Closed / other"} <ChevronDown size={12} aria-hidden="true" />
+      </span>}
+      items={others.map((f) => ({ key: f.key, label: `${f.label} · ${searched.filter(f.test).length}`, title: f.title,
+        selected: f.key === view, onSelect: () => setFilter(f.key) }))} />
+  );
+  // Hot and Not sent open with every agent unfolded; `expanded` then holds the
+  // ones you folded, not the ones you opened.
+  const autoOpen = view === "hot" || view === "unsent";
+  const openGroup = (key) => setExpanded((prev) => { const n = new Set(prev); autoOpen ? n.delete(key) : n.add(key); return n; });
+  // Not sent reads oldest first until you click a column.
+  const sortBy = view === "unsent" && sort.key === "date" && sort.dir === "desc" ? { key: "waiting", dir: "asc" } : sort;
   // Sorted BEFORE grouping, which is what makes the groups follow the sort:
   // an agent lands wherever their leading offer lands, exactly as they used to
   // land by their most recent one (see the grouping note below).
   const shown = searched
     .filter(activeFilter.test)
     .slice()
-    .sort(compareBy(sort.key, sort.dir, (o, key) => (SORTS[key] || SORTS.date).of(o)));
+    .sort(compareBy(sortBy.key, sortBy.dir, (o, key) => (SORTS[key] || SORTS.date).of(o)));
 
   // KPIs run over every offer for the location, not the filtered view — they're
   // the state of the business, not of the current query.
   const real = book.filter((o) => o.status !== "draft" && !o.supersededBy);
   const monthAgo = Date.now() - 30 * 86400000;
   const recent = real.filter((o) => new Date(o.createdAt || 0).getTime() >= monthAgo).length;
-  const waiting = real.filter((o) => !o.deal && effectiveStatus(o) === "sent").length;
+  const unsentRows = real.filter(TABS[1].test);
+  const oldestWait = unsentRows.reduce((m, o) => Math.min(m, waitingSince(o) ?? Infinity), Infinity);
   // Reply rate: of everything that actually went out, how much came back with
   // an answer of any kind. "No response" is a non-reply, so it sits in the
   // denominator only — which is the point of tracking it separately.
@@ -506,7 +492,8 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
   const liveDeals = real.filter((o) => o.deal && LIVE_STAGES.has(o.deal.stage)).length;
   const kpis = [
     { label: "Offers (30d)", value: recent, hint: "Non-draft offers created in the last 30 days" },
-    { label: "Awaiting reply", value: waiting, hint: "Sent, no outcome recorded yet" },
+    { label: "Not sent", value: unsentRows.length ? `${unsentRows.length} · oldest ${Math.max(0, Math.floor((Date.now() - oldestWait) / 86400000))}d` : 0,
+      hint: "Priced but not on paper yet — every agent should have our number on file" },
     { label: "Reply rate", value: delivered ? `${Math.round((replied / delivered) * 100)}%` : "—", hint: `${replied} answered of ${delivered} sent` },
     { label: "Live deals", value: liveDeals, hint: "Under contract, buyer found, or assigned" },
   ];
@@ -555,7 +542,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
   const neighbor = (dir) => railStep(railRows, openId, dir);
   const goTo = (id) => { if (id) { setOpenId(id); writeOfferParam(id); } };
   const closeSplit = () => {
-    if (openOffer) setExpanded((prev) => new Set(prev).add(groupKeyOf(openOffer)));
+    if (openOffer) openGroup(groupKeyOf(openOffer));
     setClosedId(openId); setOpenId(null); setRailIds(null); writeOfferParam(null);
   };
   splitNav.current = openOffer ? {
@@ -565,7 +552,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
   } : null;
   // Arrowing to another agent's offer opens their group underneath, so closing
   // the popout leaves you looking at the row you stopped on.
-  const stepTo = (o) => { setExpanded((prev) => new Set(prev).add(groupKeyOf(o))); openDetail(o); };
+  const stepTo = (o) => { openGroup(groupKeyOf(o)); openDetail(o); };
 
   // The windows the table and the split share (Details, Send, the generators).
   const modals = (
@@ -633,7 +620,8 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
       <>
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <button type="button" className={BTN} onClick={closeSplit} title="Back to the table (Esc)"><ChevronLeft size={13} aria-hidden="true" /> Table</button>
-          <FilterChips value={filter} onChange={setFilter} options={chips} label="Filter offers by status" />
+          <FilterChips value={view} onChange={setFilter} options={chips} label="Filter offers by status" />
+          {otherMenu}
           <SearchInput value={q} onChange={setQ} className="ml-auto min-w-[16rem] flex-1 sm:max-w-sm"
             placeholder="Search by contact, address, amount, or date…" label="Search offers" />
         </div>
@@ -665,7 +653,8 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
       </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <FilterChips value={filter} onChange={setFilter} options={chips} label="Filter offers by status" />
+        <FilterChips value={view} onChange={setFilter} options={chips} label="Filter offers by status" />
+        {otherMenu}
         <SearchInput value={q} onChange={setQ} className="ml-auto min-w-[16rem] flex-1 sm:max-w-sm"
           placeholder="Search by contact, address, amount, or date…" label="Search offers" />
       </div>
@@ -693,7 +682,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
       {shown.length === 0 ? (
         <EmptyState action={<button type="button" className={BTN_PRIMARY} onClick={clearFilters}>Clear filters</button>}>
           {needle ? `No offers match "${q.trim()}"` : "Nothing in this view"}
-          {filter !== "all" && needle ? ` in ${activeFilter.label.toLowerCase()}` : ""}.
+          {view !== "all" && needle ? ` in ${activeFilter.label.toLowerCase()}` : ""}.
         </EmptyState>
       ) : (
       <TableCard>
@@ -723,7 +712,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
           </thead>
           <tbody>
             {groups.map((g) => {
-              const isOpen = needle ? true : expanded.has(g.key);
+              const isOpen = needle ? true : autoOpen ? !expanded.has(g.key) : expanded.has(g.key);
               // The offer that put this agent where they are in the list —
               // their newest by default, their priciest when you sort by cash.
               const lead = g.offers[0];
@@ -845,6 +834,12 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
                   )}
                   <AttachWarning offer={o} />
                   <SentBadge offer={o} />
+                  {!draft && !o.deal && !old && effectiveStatus(o) === "new" && (
+                    <span className={`ml-1.5 whitespace-nowrap text-[11px] ${o.floatedAt ? "text-amber-700" : "text-slate-400"}`}
+                      title={o.floatedAt ? "Our number went out by text — the written offer hasn't" : "Priced, never floated or sent"}>
+                      {notSentAge(o)}
+                    </span>
+                  )}
                 </td>
                 {/* Muted on the child rows: it is a fact about the agent,
                     inherited by every offer of theirs, not about this house. */}

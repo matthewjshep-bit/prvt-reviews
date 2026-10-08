@@ -23,7 +23,7 @@ import { BTN, BTN_PRIMARY, CopyButton, ErrorBar, Spinner } from "./ui.jsx";
 // reads the page.
 const SECTIONS = [
   ["note", "Your note", "A short message at the top, in your words"],
-  ["breakdown", "How we got to this number", "The arithmetic behind the offer — never shows your fee"],
+  ["breakdown", "How we got to this number", "Closing, holding, the work and profit & risk, adding up to the offer — never shows your fee"],
   ["netsheet", "What the seller nets", "Your offer vs. the list price needed to net the same"],
   ["comps", "Comparable sales", "The comps the ARV was built from"],
   ["scope", "Renovation scope", "The line-item budget behind the repair number"],

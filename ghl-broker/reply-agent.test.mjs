@@ -1,4 +1,5 @@
 import test from "node:test";
+import { calculateOffers } from "./shared/offer-calc.js";
 import assert from "node:assert/strict";
 import { normalizeDispoAutopilot } from "./dispo-autopilot.js";
 import {
@@ -1426,9 +1427,34 @@ test("'in the realm' notes the offer and tags the agent; the math stays hidden u
   let seen2;
   await startReply({ client, locationId: "LOC", saved: shown, store, contactId: "c1", message: "why so low?", deps: { draft: async (args) => { seen2 = args; return DRAFT; } } });
   await settle();
-  assert.match(seen2.context.text, /\[our math: ARV \$620,000.*rehab \$55,000.*after our costs and margin = the offer/);
+  // No calc on this row: the figures are there, the costs can't be, so the
+  // method is described and not added up.
+  assert.match(seen2.context.text, /\[our math: ARV \$620,000; rehab \$55,000; less closing, holding and our profit and risk = the offer — the figures don't tie/);
   assert.doesNotMatch(seen2.context.text, /assign|wholesale|\bfee\b/i, "what we make and how we exit is never in the math line");
   assert.ok(seen2.context.amounts.includes(620000) && seen2.context.amounts.includes(55000));
+
+  // A priced offer: every cost, in Matt's framing, and profit and risk with no figure.
+  const calc = calculateOffers({ address: "12 Elm St, Renton, WA 98056", arv: 500000, repairs: 50000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  store.listOffers = async () => [{ ...LANDED, cashAmount: calc.offers.cash.amount, calc }];
+  _resetJobs();
+  let seen3;
+  await startReply({ client, locationId: "LOC", saved: shown, store, contactId: "c1", message: "how did you get to 295?", deps: { draft: async (args) => { seen3 = args; return DRAFT; } } });
+  await settle();
+  assert.match(seen3.context.text, /\[our math: we base it on about 69% of what it's worth fixed up, less the work — ARV \$500,000; closing to buy and resell about \$38,245 .*holding about \$25,538 for 5 months .*rehab \$50,000; what's left is our profit and risk \(never give it a figure\) = the offer\]/);
+  assert.doesNotMatch(seen3.context.text, /91,217/, "profit and risk has no figure in the prompt");
+  for (const n of [500000, 50000, 38245, 38000, 25538, 26000]) assert.ok(seen3.context.amounts.includes(n), String(n));
+  assert.deepEqual(seen3.context.hiddenAmounts, [91217], "the gate holds a text that names profit and risk");
+});
+
+test("a text that puts a figure on our profit and risk is held", () => {
+  const draft = { intent: "question", confidence: "high", needsHuman: false, propertyAddress: "12 Elm St" };
+  const ok = evaluateReplyGates({ draft: { ...draft, reply: "We base it on about 69% of the 500 it's worth fixed up, less the 50 of work; the rest is about 38 to buy and resell, 26 to hold it 5 months, and our profit and risk, which lands us at 295." },
+    party: "agent", allowedAmounts: [295000, 500000, 50000, 38000, 26000], hiddenAmounts: [91217], ourAmount: 295000 });
+  assert.deepEqual(ok.flags, []);
+  for (const reply of ["...and about 91 is our profit and risk, so 295.", "the other 91k is our margin for the risk", "Profit and risk comes to $91,217."]) {
+    const held = evaluateReplyGates({ draft: { ...draft, reply }, party: "agent", allowedAmounts: [295000], hiddenAmounts: [91217], ourAmount: 295000 });
+    assert.ok(held.flags.some((f) => /figure on our profit and risk/.test(f)), reply);
+  }
 });
 
 test("a cap of 0 is no cap, on the location and on the contact", async () => {
@@ -4134,6 +4160,79 @@ test("a showing on a house the agent says isn't a flip gets no underwrite, and t
   assert.equal((d.actions || []).filter((a) => a.type === "start_underwrite").length, 0);
 });
 
+// Tier 1 is agents with a live house that needs work (Matt, 2026-10-07). The
+// "subject moved" step ran the new-property rule whenever an address was in
+// their words — so an agent who named the house AND said it wasn't a flip was
+// tagged tier-1, enrolled in TIER 1, and their GHL card moved to Tier 1.
+const tierOneActions = (actions = []) => actions.filter((a) =>
+  (a.type === "add_tags" && (a.tags || []).some((t) => /^tier-1$/i.test(String(t))))
+  || (a.type === "add_to_workflow" && /tier\s*1\b/i.test(String(a.workflowName || ""))));
+
+test("an agent who names the house and says it isn't a flip is not tagged Tier 1 or put in the TIER 1 workflow", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const message = "13814 214th St E is move in ready, certainly not a fix n flip. Come take a look!";
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true, message,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "new_property", confidence: "high", needsHuman: false,
+        propertyAddress: "13814 214th St E, Graham, WA 98338", reply: "Thanks, appreciate it." }),
+      startUnderwrite: async () => { throw new Error("no underwrite on a house that isn't a flip"); },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.deepEqual(tierOneActions(d.actions).map((a) => a.type), [], "no tier-1 tag and no TIER 1 workflow");
+});
+
+test("an agent pitching a house we passed on again isn't moved back to Tier 1", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const A = "4430 Sunnyside Blvd, Marysville, WA 98270";
+  store.listOffers = async () => [{ id: "o-passed", locationId: "LOC", contactId: "c1", address: A, cashAmount: 230000,
+    status: "we_passed", createdAt: iso(5 * 86400000), updatedAt: iso(2 * 86400000), sends: [{ ts: iso(5 * 86400000) }] }];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "4430 Sunnyside still needs a full gut, seller is motivated. Want to take another look?",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", needsHuman: false,
+        propertyAddress: A, reply: "Thanks for thinking of us." }),
+      startUnderwrite: async () => ({ job: { id: "uw-1" } }),
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const t1 = tierOneActions(d.actions);
+  assert.ok(t1.every((a) => a.status === "skipped"), `tier-1 actions stay off: ${JSON.stringify(t1.map((a) => [a.type, a.status]))}`);
+  assert.ok(t1.every((a) => /we passed on this house/.test(a.detail || "")));
+});
+
+test("a house we passed on from Tier 1 with no offer row isn't moved back to Tier 1 either", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const A = "88 Elm St, Tacoma, WA 98405";
+  await store.appendContactEvents("LOC", "c1", [{ type: "tier1_passed", party: "agent", at: iso(3 * 86400000), address: A, source: "tier_one" }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "88 Elm St is still sitting, needs a roof and a kitchen",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", needsHuman: false,
+        propertyAddress: A, reply: "Thanks for the heads up." }),
+      startUnderwrite: async () => ({ job: { id: "uw-2" } }),
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const t1 = tierOneActions(d.actions);
+  assert.ok(t1.length === 0 || t1.every((a) => a.status === "skipped"), JSON.stringify(t1.map((a) => [a.type, a.status])));
+});
+
 /* ---------- the current offer and the paper (2026-09-25) ---------- */
 
 // 13041 SE 208th St, Kent: five offer rows on one house, the thread at 400K
@@ -5749,4 +5848,238 @@ test("a check-in started at noon goes before 5pm Pacific; a reply at 7pm still g
   // A reply to their text keeps the evening.
   const reply = pacific(scheduleFor({ config: cfg, now: seven, intent: "question", replyLength: 40, random: () => 0 }));
   assert.ok(reply.d === 5 && reply.hh === 19, JSON.stringify(reply));
+});
+
+/* ---------- the float: how we got there, a range, one question (2026-10-07) ---------- */
+
+import { outboundDescriptor, realmFloats, floatGate } from "./reply-agent.js";
+import { outboundOpening } from "./conversation-prompt.js";
+import { SETUP_QUESTIONS } from "./shared/conversation-ai.js";
+import { mathAllowedAmounts, offerMath } from "./shared/offer-breakdown.js";
+
+const floatOffer = () => {
+  const calc = calculateOffers({ address: "12 Elm St, Renton, WA 98056", arv: 500000, repairs: 50000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  return { id: "o1", address: "12 Elm St, Renton, WA 98056", contactId: "c1", cashAmount: calc.offers.cash.amount, calc, status: "new", createdAt: iso(1000),
+    autoUnderwrite: { passed: true, compsUsed: 5 } };
+};
+const savedWith = (rc) => ({ ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi,
+  parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent,
+    realmCheck: { ...(STARTER_SAVED.conversationAi.parties.agent.realmCheck || {}), enabled: true, ...rc } } } } });
+
+test("the float says how we got there, a range topped by our number, and one setup question — when switched on", () => {
+  const offer = floatOffer();
+  const off = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: savedWith({}), dossier: null });
+  assert.equal(off.math, undefined);
+  assert.equal(off.range, undefined);
+  assert.equal(off.question, undefined);
+
+  const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
+  const d = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: on, dossier: null });
+  assert.equal(d.math.line, "we base it on 69% of the 500k it's worth fixed up, less 50k of rehab work; the rest is 38k to buy and resell, 26k of lender holding costs, and our profit and risk margin");
+  assert.equal(d.math.hidden, 91217);
+  assert.equal(d.range.words, "the 280s to 295");
+  assert.ok(SETUP_QUESTIONS[d.question.key]);
+  const text = outboundOpening(d);
+  assert.ok(text.includes(d.math.line) && text.includes('"the 280s to 295"') && text.includes(d.question.text), text);
+  assert.match(text, /never a figure on profit and risk/);
+  assert.match(text, /under 340 characters/);
+  assert.doesNotMatch(text, /Don't volunteer the math/);
+
+  // A re-quote is their numbers already: none of it.
+  const rq = outboundDescriptor({ kind: "realm_check", offer, subject: { requote: true }, saved: on, dossier: null });
+  assert.equal(rq.math ?? rq.range ?? rq.question, undefined);
+  // They gave us their read: the float is tied to theirs, never our math.
+  const theirs = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: on, dossier: { have: { arv: { value: 520000 } } } });
+  assert.equal(theirs.math, undefined);
+  assert.equal(theirs.range.words, "the 280s to 295");
+  assert.notEqual(theirs.question?.key, "their_read", "and never asks what they already told us");
+});
+
+test("a float of the 280s to 295 with our math passes the gate; the bottom on its own never does", () => {
+  const offer = floatOffer();
+  const reply = "Ran 12 Elm: we base it on about 69% of the 500 it's worth fixed up, less 50 of work; the rest is about 38 to buy and resell, " +
+    "26 to hold it 5 months, our profit and risk, so the 280s to 295. If that's in the ballpark, anything I won't see in the photos?";
+  const base = { party: "agent", ourAmount: 295000, hiddenAmounts: [91217], ranges: [{ low: 280000, high: 295000 }],
+    allowedAmounts: [295000, 294000, 290000, 280000, ...mathAllowedAmounts(offerMath(offer))] };
+  const draft = (r) => ({ intent: "realm_check", confidence: "high", needsHuman: false, propertyAddress: "12 Elm St", reply: r });
+  assert.deepEqual(evaluateReplyGates({ ...base, draft: draft(reply) }).flags, []);
+  for (const alone of ["We could probably do 280 on 12 Elm St.", "Best case 280k on 12 Elm."]) {
+    assert.ok(evaluateReplyGates({ ...base, draft: draft(alone) }).flags.some((f) => /bottom of the range we floated/.test(f)), alone);
+  }
+  // Above the top is above our number, range or not.
+  assert.ok(evaluateReplyGates({ ...base, draft: draft("we'd be in the 290s to 310 on 12 Elm St") }).flags.some((f) => /above our/.test(f)));
+});
+
+test("a range that went out is remembered on the offer, and only when the text still says it", async () => {
+  const mk = (id) => ({ ...openDraft(), id, party: "agent", intent: "realm_check", reply: "On 12 Elm we'd land in the 280s to 295. In the ballpark?",
+    outbound: { kind: "realm_check", offerId: "o1", address: "12 Elm St", amount: 295000, range: { low: 280000, high: 295000, step: 10000 } } });
+  const store = fakeStore([mk("d1"), mk("d2")]);
+  const offers = new Map([["o1", { ...floatOffer(), proactive: { realmCheckAt: iso(500) } }]]);
+  store.getOffer = async (id) => offers.get(id) || null;
+  store.updateOffer = async (id, doc) => { offers.set(id, doc); return true; };
+  const client = { call: async () => ({ messageId: "m1" }) };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+  const { at, ...range } = offers.get("o1").proactive.range;
+  assert.deepEqual(range, { low: 280000, high: 295000, step: 10000 });
+  assert.ok(at);
+  assert.ok(offers.get("o1").proactive.realmCheckAt, "the float's own stamp is kept");
+
+  // Edited down to a single number before it went: no range to remember.
+  offers.set("o1", { ...floatOffer(), proactive: { realmCheckAt: iso(500) } });
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", text: "On 12 Elm we'd be around 295ish. In the ballpark?", live: true });
+  assert.equal(offers.get("o1").proactive.range, undefined);
+});
+
+// "285 works" after we floated "the 280s to 295" (2026-10-07). Under our
+// number, so not a counter; a number of theirs, so not a yes to ours. A
+// person decides: the letter at our number and a revise to theirs are both
+// offered, neither goes by itself, and nothing files it as countered.
+test("285 after a 280s–295 float waits for you with revise-to-285 and send-at-295, never as a counter", async () => {
+  for (const intent of ["counter", "realm_yes", "acceptance"]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = fakeStore();
+    const offer = { ...LANDED, cashAmount: 295000, status: "new", createdAt: iso(5000),
+      proactive: { realmCheckAt: iso(3000), range: { low: 280000, high: 295000, step: 10000, at: iso(3000) } } };
+    store.listOffers = async () => [offer];
+    store.getOffer = async () => offer;
+    const realm = [];
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "285 works for my seller, can you write it there?",
+      deps: {
+        draft: async () => ({ ...DRAFT, intent, counterAmount: intent === "counter" ? 285 : 0, reply: "Great, I'll get that over to you.", propertyAddress: "12 Elm St" }),
+        setOfferRealm: async (args) => { realm.push(args); return { ok: true, address: "12 Elm St, Renton, WA 98056", answer: "yes" }; },
+        markOfferAgreed: async () => { throw new Error("nothing agrees a price here"); },
+      },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    const d = await store.getReplyDraft(job.draftId);
+    assert.equal(d.intent, "realm_yes", intent);
+    assert.equal(d.autoSend?.decided, false, intent);
+    assert.match(d.autoSend?.reason || "", /they named \$285,000 inside the range we floated/, intent);
+    assert.equal(realm.length, 0, `${intent}: no realm yes is recorded at our number`);
+    const byType = (t) => d.actions.find((x) => x.type === t);
+    assert.equal(byType("revise_offer_to_counter")?.amount, 285000, intent);
+    assert.equal(byType("revise_offer_to_counter")?.mode, "ask");
+    for (const t of ["send_offer", "mark_offer_realm_yes"]) {
+      const x = byType(t);
+      if (x) assert.equal(x.mode, "ask", `${intent}: ${t} waits`);
+    }
+    assert.ok(!d.actions.some((x) => x.type === "mark_offer_countered" && x.status === "done"), `${intent}: never filed as countered`);
+  }
+});
+
+test("a plain yes to the range sends at our number, and a number above it is still a counter", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const offer = { ...LANDED, cashAmount: 295000, status: "new", createdAt: iso(5000),
+    proactive: { realmCheckAt: iso(3000), range: { low: 280000, high: 295000, step: 10000, at: iso(3000) } } };
+  store.listOffers = async () => [offer];
+  store.getOffer = async () => offer;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "yeah that works, send it over",
+    deps: { draft: async () => ({ ...DRAFT, intent: "realm_yes", reply: "Great, sending it over today.", propertyAddress: "12 Elm St" }),
+      setOfferRealm: async () => ({ ok: true, address: "12 Elm St, Renton, WA 98056", answer: "yes" }) },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.doesNotMatch(d.autoSend?.reason || "", /inside the range we floated/);
+  assert.ok(!d.actions.some((x) => x.type === "revise_offer_to_counter"));
+});
+
+import { releaseForAudit } from "./reply-agent.js";
+test("the nightly audit never releases their number inside our range as a holding reply", () => {
+  const auto = { send: false, code: "in_range", reason: "needs a person: they named $285,000 inside the range we floated" };
+  const out = releaseForAudit({ auto, gate: { ok: true, flags: [] }, draft: { intent: "realm_yes", reply: "Great, I'll get that over to you.", needsHuman: false }, deps: { releaseHeld: true } });
+  assert.equal(out.send, false);
+  assert.equal(out.code, "in_range");
+});
+
+import { previewProactive } from "./reply-agent.js";
+test("a float preview carries the range, our math and one question, and writes nothing", async () => {
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const offer = floatOffer();
+  store.listOffers = async () => [offer];
+  let seen;
+  const before = store.rows.size;
+  const p = await previewProactive({
+    client, locationId: "LOC", store, contactId: "c1", kind: "realm_check", offer,
+    saved: savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true, ask: ["hidden_issues"] } }),
+    deps: { draft: async (args) => { seen = args.outbound; return { ...DRAFT, intent: "realm_check", reply: "Ran 12 Elm: we base it on about 69% of the 500 it's worth fixed up, less 50 of work; the rest is about 38 to buy and resell, 26 to hold it 5 months, our profit and risk, so the 280s to 295. If that's in the ballpark, anything I won't see in the photos?" }; } },
+  });
+  assert.equal(seen.range.words, "the 280s to 295");
+  assert.match(seen.math.line, /^we base it on 69%/);
+  assert.equal(seen.question.key, "hidden_issues");
+  assert.equal(p.held, false, p.flags.join("; "));
+  assert.equal(store.rows.size, before, "nothing filed in the outbox");
+});
+
+/* ---------- the float fits, and says only what's ours (preview, 2026-10-07) ---------- */
+
+// 14959 22nd Ave SW: offer 686,610, the range topped at 686 — and the gate
+// held "686" as a number not in the offer book.
+test("the top of a range we float is our number, so the gate lets it through", () => {
+  const calc = calculateOffers({ address: "14959 22nd Ave SW, Burien, WA", arv: 1115000, repairs: 140000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000, });
+  const offer = { id: "o7", address: "14959 22nd Ave SW, Burien, WA", contactId: "c1", cashAmount: 686610, calc: { ...calc, inputs: { ...calc.inputs, priceOverride: 686610 } }, status: "new", createdAt: iso(1000) };
+  const outbound = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: savedWith({ range: { enabled: true, pct: 5 } }), dossier: null });
+  assert.equal(outbound.range.words, "the 650s to 686");
+  const allowed = [...new Set([686610, 687000, 685000, 680000, 650000, ...[outbound.range.low, outbound.range.high]])];
+  const g = evaluateReplyGates({ draft: { intent: "realm_check", confidence: "high", needsHuman: false, reply: "Off the top of my head we'd be somewhere around the 650s to 686 on 14959 22nd. If that's in the ballpark, any other offers in yet?" },
+    party: "agent", ourAmount: 686610, ranges: [outbound.range], allowedAmounts: allowed });
+  assert.deepEqual(g.flags, []);
+  assert.ok(realmFloats({ offer, outbound }).includes(686000), "the realm check's own floats carry the top");
+});
+
+// 825 Livingston Bay Shore Dr: a 450K offer on a 1.19M ARV (capped well under
+// our formula) floated "we base it on about 44%". Too far under our usual
+// number to explain without inviting "why so low?" — no math, range and
+// question still go.
+test("an offer far under our formula floats without the math", () => {
+  const calc = calculateOffers({ address: "825 Livingston Bay Shore Dr", arv: 1192000, repairs: 71000, priceOverride: 450000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  const offer = { id: "o8", address: "825 Livingston Bay Shore Dr", contactId: "c1", cashAmount: 450000, calc, status: "new", createdAt: iso(1000) };
+  const d = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } }), dossier: null });
+  assert.equal(d.math, undefined);
+  assert.equal(d.range.words, "the 420s to 450");
+  assert.ok(d.question);
+});
+
+// 1731 Stephen St and 3837 Driftwood Dr came back at 308 and 305 characters
+// and were held as too long for a text.
+test("with all three on, the float's math line is short and the prompt leaves out the terms", () => {
+  const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
+  const d = outboundDescriptor({ kind: "realm_check", offer: floatOffer(), subject: null, saved: on, dossier: null });
+  assert.equal(d.math.line, "we base it on 69% of the 500k it's worth fixed up, less 50k of rehab work; the rest is 38k to buy and resell, 26k of lender holding costs, and our profit and risk margin");
+  assert.ok(d.math.line.length <= 175, String(d.math.line.length));
+  const text = outboundOpening(d);
+  assert.doesNotMatch(text, /As-is and a quick close/);
+  assert.match(text, /under 340 characters/);
+});
+
+// Matt, 2026-10-07, on the Queen St preview: "add a slight bit more context" —
+// k on the figures, "rehab work", "lender holding costs", "profit and risk
+// margin". That runs past 300 characters, so a float carrying the math may
+// run to 340 (three segments); every other text keeps the configured limit.
+const QUEEN = "Underwriting's back on Queen: we base it on 72% of the 1.1M it's worth fixed up, less 90k of rehab work; the rest is 85k to buy and resell, 55k of lender holding costs, and our profit and risk margin. Landing in the 670s to 706. If that's in the ballpark, what's your read on the work it needs, and where it sells once it's done?";
+
+test("the float's math reads the way Matt wrote it, with k on the figures", () => {
+  const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
+  const d = outboundDescriptor({ kind: "realm_check", offer: floatOffer(), subject: null, saved: on, dossier: null });
+  assert.equal(d.math.line, "we base it on 69% of the 500k it's worth fixed up, less 50k of rehab work; the rest is 38k to buy and resell, 26k of lender holding costs, and our profit and risk margin");
+  assert.match(outboundOpening(d), /under 340 characters/);
+});
+
+test("Matt's Queen St float passes the gate at its length, and a reply still keeps the 300 limit", () => {
+  const calc = calculateOffers({ address: "909 Queen St", arv: 1102000, repairs: 90000 }, { underwriteMode: "mao", maoPctOfArv: 75, wholesaleFee: 30000 });
+  const offer = { id: "q1", address: "909 Queen St, Mount Vernon, WA", contactId: "c1", cashAmount: calc.offers.cash.amount, calc, status: "new", createdAt: iso(1000) };
+  const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
+  const outbound = outboundDescriptor({ kind: "realm_check", offer, subject: null, saved: on, dossier: null });
+  assert.ok(QUEEN.length > 300 && QUEEN.length <= 340, String(QUEEN.length));
+  const style = { maxSmsChars: 300, noDollarSigns: true };
+  const g = floatGate({ offer, outbound, style, amounts: [] })({ intent: "realm_check", confidence: "high", needsHuman: false, propertyAddress: "909 Queen St", reply: QUEEN });
+  assert.deepEqual(g.flags, []);
+  const reply = evaluateReplyGates({ draft: { intent: "question", confidence: "high", needsHuman: false, reply: QUEEN }, party: "agent", style, allowedAmounts: [] });
+  assert.ok(reply.flags.some((f) => /too long/.test(f)), "a reply is held over 300 as before");
 });

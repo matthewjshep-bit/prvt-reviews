@@ -23,3 +23,17 @@ test("the booking and auto-send cards render on a default config", () => {
   expect(auto).toContain("Quick replies");
   expect(auto).toContain("Weekends");
 });
+
+test("the realm check's float switches show under it, off until ticked", () => {
+  const config = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: true } } } });
+  const html = renderToStaticMarkup(<PartyPlaybooks config={config} patch={() => {}} workflows={{ list: [], loading: false }} />);
+  expect(html).toContain("Say how we got there first");
+  expect(html).toContain("Float a range topped by our number");
+  expect(html).toContain("End with one setup question");
+  const on = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } } } } });
+  const html2 = renderToStaticMarkup(<PartyPlaybooks config={on} patch={() => {}} workflows={{ list: [], loading: false }} />);
+  expect(html2).toContain("% under our number");
+  expect(html2).toContain("anything I won&#x27;t see in the photos");
+  const off = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: false } } } });
+  expect(renderToStaticMarkup(<PartyPlaybooks config={off} patch={() => {}} workflows={{ list: [], loading: false }} />)).not.toContain("Float a range topped by our number");
+});

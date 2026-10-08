@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   houseKey, pricedAt, resolveHouse, currentOffers, currentOfferFor, annotateCurrent,
-  isSuperseded, ourComeDown, paperCheck, lastQuoteOnHouse, machineRaise, holdNumber,
+  isSuperseded, ourComeDown, ourMoveUp, paperCheck, lastQuoteOnHouse, machineRaise, holdNumber,
+  floatRange, rangeWords, namedInRange,
 } from "./current-offer.js";
 
 // 13041 SE 208th St, Kent (2026-09-25): five rows on one house, the thread at
@@ -203,4 +204,90 @@ test("Hold holds at the number that last went out, not a re-quote nobody sent", 
   assert.equal(holdNumber({ offer: o }).amount, 690000);
   // Sent again at the new number: that's the number now.
   assert.equal(holdNumber({ offer: { ...o, sends: [...o.sends, { ts: "2026-10-02T22:00:00Z" }] } }).amount, 705000);
+});
+
+/* ---------- the math behind the number is not a number we quoted ---------- */
+
+// Showing our work (2026-10-07) puts the ARV, the work and the costs in the
+// same texts as our number. None of them is a price on the house.
+const ELM = { id: "elm", contactId: "a", address: "12 Elm St, Renton, WA 98056", cashAmount: 295000, createdAt: "2026-10-01T00:00:00Z",
+  status: "sent", sends: [{ ts: "2026-10-01T00:00:00Z" }] };
+const MATH_REPLIES = [
+  "On 12 Elm St we base it on around 500 it's worth fixed up, less about 50 of work, then about 38 to buy and resell and 26 to hold it 5 months plus our profit and risk, which lands us at 295.",
+  "Sure, on 12 Elm St: around 500 all fixed up, about 38 in closing costs, 26 of holding, 50 for the work, and what's left is our profit and risk. That's how we get to 295.",
+  "On 12 Elm St it's worth about 500 when it's done; we take off 38 to buy and resell it and around 26 carrying it, so we land at 295.",
+];
+
+test("the math in our text is never read as a price we quoted or a raise", () => {
+  for (const text of MATH_REPLIES) {
+    const t = `[2026-10-02 10:00] US sms: ${text}`;
+    assert.equal(ourMoveUp(ELM, t), null, text);
+    assert.equal(ourComeDown(ELM, t), null, text);
+    assert.equal(lastQuoteOnHouse(ELM, t)?.amount, 295000, text);
+    assert.equal(paperCheck({ offer: ELM, transcript: t }).ok, true, text);
+  }
+});
+
+// A cheap house: an 80K offer on a 200K ARV with 40K of work. The table in
+// our offer email names the renovation at half our number.
+const CHEAP = { id: "cheap", contactId: "a", address: "9 Oak St, Tacoma, WA 98404", cashAmount: 80000, createdAt: "2026-10-01T00:00:00Z",
+  status: "sent", sends: [{ ts: "2026-10-01T00:00:00Z" }] };
+
+test("the math table in our offer email is never read as us coming down", () => {
+  const email = "[2026-10-02 10:00] US email: Hi Sam, Please find our letter of intent on 9 Oak St attached — $80,000, close on your timeline. " +
+    "How we got to the number: After-repair value $200,000 Closing costs, buying and reselling $14,780 Holding, 5 months $9,622 " +
+    "Renovation budget $40,000 Profit & risk $55,598 Purchase price $80,000";
+  assert.equal(ourComeDown(CHEAP, email), null);
+  assert.equal(ourMoveUp(CHEAP, email), null);
+  assert.equal(lastQuoteOnHouse(CHEAP, email)?.amount, 80000);
+  assert.equal(paperCheck({ offer: CHEAP, transcript: email }).ok, true);
+  assert.equal(holdNumber({ offer: CHEAP, transcript: email }).amount, 80000);
+});
+
+/* ---------- a range topped by our number (2026-10-07) ---------- */
+
+test("a range we floated is never read as us coming down to its bottom", () => {
+  for (const said of [
+    "On 12 Elm St we'd likely land somewhere in the 280s to 295.",
+    "On 12 Elm St we'd land somewhere around 280k to 295k.",
+    "around 280 to 295 on 12 Elm St, if that's in the ballpark",
+    "On 12 Elm St we'd be between 280 and 295.",
+    "12 Elm St: $280,000-$295,000 is where we'd land",
+  ]) {
+    const t = `[2026-10-02 10:00] US sms: ${said}`;
+    assert.equal(ourComeDown(ELM, t), null, said);
+    assert.equal(lastQuoteOnHouse(ELM, t)?.amount, 295000, said);
+    assert.equal(holdNumber({ offer: ELM, transcript: t }).amount, 295000, said);
+    assert.equal(machineRaise(ELM, t), null, said);
+    assert.equal(paperCheck({ offer: ELM, transcript: t }).ok, true, said);
+  }
+  // A lower number on its own is still us coming down.
+  assert.equal(ourComeDown(ELM, "[2026-10-02 10:00] US sms: could we do 280k on 12 Elm St?")?.amount, 280000);
+});
+
+test("the range is topped by our number, rounded down, and words like a text", () => {
+  assert.deepEqual(floatRange(295000, 5), { low: 280000, high: 295000, step: 10000 });
+  assert.equal(rangeWords(floatRange(295000, 5)), "the 280s to 295");
+  assert.deepEqual(floatRange(295240, 5), { low: 280000, high: 295000, step: 10000 }, "never above the book");
+  assert.equal(rangeWords(floatRange(80000, 5)), "75 to 80");
+  assert.equal(rangeWords(floatRange(407500, 5)), "the 380s to 407");
+  assert.equal(rangeWords(floatRange(1250000, 5)), "1.18M to 1.25M");
+  assert.equal(floatRange(0, 5), null);
+});
+
+test("a number they name inside our range is read as in range, never above", () => {
+  const r = { low: 280000, high: 295000 };
+  assert.equal(namedInRange({ range: r, message: "285 works for my seller" })?.amount, 285000);
+  assert.equal(namedInRange({ range: r, message: "they'd do 287,500" })?.amount, 287500);
+  assert.equal(namedInRange({ range: r, message: "the low 280s works" })?.amount, 280000);
+  assert.equal(namedInRange({ range: r, message: "295 works" }), null, "the top is our number: a plain yes");
+  assert.equal(namedInRange({ range: r, message: "they need 310" }), null, "above is a counter");
+  assert.equal(namedInRange({ range: r, message: "closing in 14 days works" }), null);
+});
+
+test("'55k of lender holding costs' is a cost, not a price we quoted", () => {
+  const t = "[2026-10-02 10:00] US sms: On 12 Elm St we base it on 69% of the 500k it's worth fixed up, less 50k of rehab work; the rest is 38k to buy and resell, 26k of lender holding costs, and our profit and risk margin. Landing in the 280s to 295.";
+  assert.equal(ourComeDown(ELM, t), null);
+  assert.equal(lastQuoteOnHouse(ELM, t)?.amount, 295000);
+  assert.equal(paperCheck({ offer: ELM, transcript: t }).ok, true);
 });

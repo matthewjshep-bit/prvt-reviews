@@ -66,13 +66,14 @@ import express from "express";
 import crypto from "node:crypto";
 import { store } from "../store.js";
 import { calculateOffers, effectiveSettings, fmtMoney, netComparison } from "../shared/offer-calc.js";
+import { offerMath, mathSentence } from "../shared/offer-breakdown.js";
 import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
-import { paperAfterSilenceDue, paperWent, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
+import { paperAfterSilenceDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
@@ -113,7 +114,7 @@ import {
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, UW_ENRICH_CANDIDATES, paperAlreadyOut,
 } from "../auto-underwrite.js";
 import {
-  startReply, startProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
+  startReply, startProactive, previewProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
   stopMachineTextsForOffer, stopDealOutreach,
 } from "../reply-agent.js";
@@ -127,7 +128,8 @@ import { mergeParties } from "../shared/deal-parties.js";
 import { mergeAccess, accessFor } from "../shared/deal-access.js";
 import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, tickById, GATES } from "../shared/deal-checklist.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
-import { mirrorAgent, followTierStage, tierTagsToDrop } from "../ghl-mirror.js";
+import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
+import { normalizeTierOne } from "../shared/tier-one.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
@@ -2594,6 +2596,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const ghl = await ghlLastMessages(client, locationId).catch(() => new Map());
         mergeGhlActivity(seen, ghl, [...new Set(offers.map((o) => o?.contactId).filter(Boolean))]);
         for (const o of offers) if (o?.contactId) o.lastActivity = seen.get(o.contactId) || null;
+        // When our number was floated by text (the Offers "Not sent" tab says
+        // "Floated 5d ago"): a sent realm_check draft, not a field on the offer.
+        const floats = floatSentIndex(drafts);
+        for (const o of offers) if (o?.id) o.floatedAt = floats.get(o.id) || null;
       }
       // When each offer is next followed up, and with what
       // (shared/next-follow-up.js). Opt-in, like activity.
@@ -3490,6 +3496,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return { offerId: full.id, address: full.address, phrase };
   }
   router.passOnOurNo = passOnOurNo;
+  // The Tier 1 list's Pass / Kick out (routes/dashboard.js → tier-one.js)
+  // records the outcome the same way the status menu does.
+  router.applyOperatorStatus = applyOperatorStatus;
 
   // The one-time look back: houses still countered above our number where a
   // person's text since the counter already said no. Body: { dryRun = true }.
@@ -4860,6 +4869,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const pulse = normalizeAgentPulse(saved?.outreachAutopilot?.pulse);
     return pulse.enabled ? pulse.replacesWorkflowIds : [];
   };
+  // GHL's Acquisitions card to Offer Out once our written offer is out. Not
+  // while the GHL mirror owns the board (it moves cards itself). Best effort:
+  // a board that can't be read never fails the send. Ids only in the log.
+  async function moveCardToOfferOut({ client, locationId, offer, saved }) {
+    if (!offer?.contactId || normalizeMirror(saved?.ghlMirror).enabled) return null;
+    const move = await followOfferOut({ client, locationId, contactId: offer.contactId });
+    if (move?.opportunityId) {
+      await recordEvent({ store, locationId, contactId: offer.contactId, party: "agent", type: "ghl_stage_moved", address: offer.address, offerId: offer.id,
+        source: "tier_one", data: { from: move.from, to: move.to, why: "our written offer went out" } }).catch(() => {});
+    } else if (move?.error) console.error(`offers: offer-out move failed loc=${locationId} offer=${offer.id}: ${move.error}`);
+    return move;
+  }
+
   const conversationDeps = ({ client, locationId, saved }) => ({
     // GHL drips picked by hand as replaced by the agent check-in, while it's
     // on: a rule's add_to_workflow keeps agents out of these.
@@ -5399,6 +5421,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         address: offer.address, offerId: offer.id, source: "conversation", ref: draftId,
         data: { channels: ch, docs: dk, by: by || (draftId ? "conversation" : "underwrite"), amount: offer.cashAmount || null, ...(forRecord ? { forRecord: true } : {}), ...(emailTo ? { emailTo } : {}) },
       }).catch(() => {});
+      // The machine's sends move the card only behind tierOne.followMachineSends (ships off).
+      if (normalizeTierOne(saved?.tierOne).followMachineSends) await moveCardToOfferOut({ client, locationId, offer, saved });
       return { ok: true, address: offer.address, channels: ch, results: r.results, emailTo: r.results?.email?.to || "" };
     },
     setOfferStatus: async ({ contactId, addressHint, status, note = "", amount = 0 }) => {
@@ -6039,6 +6063,20 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!OPEN_STATUSES.has(effectiveStatus(offer))) return res.status(409).json({ error: `nothing to float on a ${effectiveStatus(offer)} offer` });
       if (!offer.contactId) return res.status(409).json({ error: "the offer has no contact to text" });
       const fresh = (await store.getOfferSettings(locationId)) || {};
+      // { preview: true }: draft it and show it, nothing saved or sent (one
+      // model call). `realmCheck` tries the float's switches without saving
+      // them — how a new way of floating gets read on real offers first.
+      if (req.body?.preview === true) {
+        const rcOver = req.body?.realmCheck && typeof req.body.realmCheck === "object" ? req.body.realmCheck : null;
+        const cai = fresh.conversationAi || {};
+        const agent = cai.parties?.agent || {};
+        const saved = rcOver
+          ? { ...fresh, conversationAi: { ...cai, parties: { ...(cai.parties || {}), agent: { ...agent, realmCheck: { ...(agent.realmCheck || {}), ...rcOver } } } } }
+          : fresh;
+        const p = await previewProactive({ client, locationId, saved, store, contactId: offer.contactId, kind, offer });
+        return res.json({ ok: true, kind, preview: true, skipped: p.skipped || null, contactName: p.contactName || offer.contactName || "",
+          reply: p.reply || "", chars: String(p.reply || "").length, held: Boolean(p.held), flags: p.flags || [] });
+      }
       const r = await startProactive({
         client, locationId, saved: fresh, store, contactId: offer.contactId, kind, offer,
         sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
@@ -6710,6 +6748,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         contactErr ? `contact lookup failed: ${contactErr}` : !dest ? `contact has no ${label}` : "";
 
       const firstName = (offer.contactName || "").split(" ")[0] || "there";
+      // How we got the number (shared/offer-breakdown.js), on our own words
+      // only: one sentence in the text, every line in the email. An
+      // operator's message is theirs; their send links the agent page.
+      // Settings → How we got our number switches it off.
+      const settings = message ? null : effectiveSettings(await store.getOfferSettings(locationId).catch(() => null));
+      const math = settings && settings.showPricingMath !== false ? offerMath(offer) : null;
+      const pricing = math ? mathSentence(math) : "";
       // Kept in step with defaultSendMessage() in the app's SendModal — this
       // is the fallback for callers that send no message of their own.
       // "for_record": the written offer after a float nobody answered, or with
@@ -6719,10 +6764,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // carries the terms.
       const text = message || (template === "for_record"
         ? `Hi ${firstName}, sending our written offer on ${offer.address || "your property"} over so you have it on file — ` +
-          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).` +
+          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
           ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.`
         : `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
-          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).` +
+          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
           ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?`);
 
       // The agent page — our arithmetic, the comps, the scope and what the
@@ -6734,7 +6779,6 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // yet — an unattended send has no one to press "Build it" first.
       let pageLink = "";
       if (!message) {
-        const settings = effectiveSettings(await store.getOfferSettings(locationId).catch(() => null));
         const room = await ensureOfferPage({ store, locationId, offer, settings, create: live });
         pageLink = room?.shareToken ? `${publicBaseUrl}/o/${room.shareToken}` : "";
       }
@@ -6765,8 +6809,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
           `If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? Happy to answer any questions.</p>`,
         ]),
+        // The whole column, tied out to the offer. "How we got to the number"
+        // is where the transcript readers stop (shared/current-offer.js), so
+        // a cost here is never read as a number we quoted.
+        ...(math && !math.premium ? [
+          `<p><strong>How we got to the number</strong></p>` +
+          `<table cellpadding="4" style="border-collapse:collapse">` +
+          math.rows.map((r) => `<tr><td>${esc(r.label)}</td><td align="right">${r.key === "arv" ? "" : r.sign === "+" ? "+" : "−"}${esc(fmtMoney(r.amount))}</td></tr>`).join("") +
+          `<tr><td><strong>Our offer</strong></td><td align="right"><strong>${esc(fmtMoney(math.total))}</strong></td></tr></table>`,
+        ] : []),
         ...(pageLink ? [
-          `<p>How we got to the number — the comps, the rehab scope and what your seller nets: ` +
+          `<p>${math && !math.premium ? "The comps, the rehab scope and what your seller nets" : "How we got to the number — the comps, the rehab scope and what your seller nets"}: ` +
           `<a href="${esc(pageLink)}">${esc(pageLink)}</a></p>`,
         ] : []),
         `<p>Attached:</p><ul>${picked.map(([, label]) => `<li>${esc(label)}</li>`).join("")}</ul>`,
@@ -6892,6 +6945,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             address: offer.address, offerId: offer.id, source: "offer", ref: null,
             data: { channels, docs: docKeys, by: "operator", amount: offer.cashAmount || null },
           }).catch(() => {});
+          // Your written offer is out: GHL's card follows to Offer Out
+          // (shared/tier-one.js cardMove — only from the tier stages).
+          await moveCardToOfferOut({ client, locationId, offer, saved: await store.getOfferSettings(locationId).catch(() => null) });
         }
         res.json(r);
       } catch (e) {

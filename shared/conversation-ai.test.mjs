@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  normalizeConversationAi, CONVERSATION_AI_DEFAULTS, INTENTS, NEVER_AUTO, autoEligible, OUTBOUND_INTENTS,
+  normalizeConversationAi, CONVERSATION_AI_DEFAULTS, INTENTS, NEVER_AUTO, autoEligible, OUTBOUND_INTENTS, SETUP_QUESTIONS, setupQuestionFor,
   draftStats, substituteTokens, actionAllowedFor, isValidTimeZone,
   normalizePassReason, summarizeFeedback, ASK_ONLY_ACTIONS, HUMAN_ACTIVE_MIN_FLOOR, writeUpTermsText,
   recodePassReason,
@@ -589,4 +589,37 @@ test("texts the machine starts stop at 5pm Pacific unless the page says otherwis
   assert.equal(normalizeConversationAi({}).autoSend.machineUntil, "17:00");
   assert.equal(normalizeConversationAi({ autoSend: { machineUntil: "16:30" } }).autoSend.machineUntil, "16:30");
   assert.equal(normalizeConversationAi({ autoSend: { machineUntil: "5pm" } }).autoSend.machineUntil, "17:00", "a bad time falls back");
+});
+
+// reply-agent reads realmCheck.leadWhenConfident === false, but the normaliser
+// only kept `enabled`, so switching it off never survived a save.
+test("turning off 'lead with our number' survives a save", () => {
+  const off = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: true, leadWhenConfident: false } } } });
+  assert.equal(off.parties.agent.realmCheck.leadWhenConfident, false);
+  assert.equal(off.parties.agent.realmCheck.enabled, true);
+  // Absent means today's behaviour: a confident underwrite leads with the number.
+  const on = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: true } } } });
+  assert.equal(on.parties.agent.realmCheck.leadWhenConfident, true);
+});
+
+test("the float's new switches default off and survive a save", () => {
+  const d = normalizeConversationAi(null).parties.agent.realmCheck;
+  assert.equal(d.withMath, false);
+  assert.deepEqual(d.range, { enabled: false, pct: 5 });
+  assert.equal(d.setupQuestion.enabled, false);
+  assert.deepEqual(d.setupQuestion.ask, ["other_offers", "hidden_issues", "their_read"]);
+  const on = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: true, withMath: true, range: { enabled: true, pct: 40 }, setupQuestion: { enabled: true, ask: ["hidden_issues", "bogus"] } } } } }).parties.agent.realmCheck;
+  assert.equal(on.withMath, true);
+  assert.deepEqual(on.range, { enabled: true, pct: 15 }, "a range is never wider than 15%");
+  assert.deepEqual(on.setupQuestion, { enabled: true, ask: ["hidden_issues"] });
+});
+
+test("one setup question per float, never one they've answered", () => {
+  const q = setupQuestionFor({ offerId: "o1" });
+  assert.ok(SETUP_QUESTIONS[q.key]);
+  assert.equal(setupQuestionFor({ offerId: "o1" }).key, q.key, "the same offer always asks the same one");
+  const askedAll = new Set(["o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8"].map((id) => setupQuestionFor({ offerId: id }).key));
+  assert.ok(askedAll.size > 1, "different houses get different questions");
+  assert.equal(setupQuestionFor({ offerId: "o1", dossier: { have: { arv: { value: 1 } } }, ask: ["their_read"] }), null);
+  assert.equal(setupQuestionFor({ offerId: "o1", dossier: { have: { condition: { value: "rough" }, timeline: { value: "asap" } } }, ask: ["hidden_issues", "other_offers", "their_read"] }).key, "their_read");
 });

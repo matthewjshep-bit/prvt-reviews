@@ -154,13 +154,16 @@ const COMMITMENTS = {
 // market properties… ask agents if they get off market properties please
 // send our way, when we can ask them but not in an aggressive way". The
 // context's OFF-MARKET ASK line (conversation-context.js) says whether it's
-// been a month since we last asked.
+// been a month since we last asked. 2026-10-06: the asks came out as
+// "anything before it hits the MLS"; Matt wants the word itself, "off-market".
+const OFF_MARKET_ASK_WORDS = `Say "off-market" itself, never "before it hits the MLS" or "before it hits the market".`;
 const OFF_MARKET_AGENT =
-  "OFF-MARKET: our best deals are houses agents bring us before they hit the market — off-market or pocket listings. " +
+  "OFF-MARKET: our best deals are off-market houses agents bring us — pocket listings, or a seller who hasn't listed. " +
   "Where it fits naturally — a house of theirs wasn't a fit, an offer of ours didn't work out, they just sent us one, or the " +
-  "thread is winding down warmly — you may ask once, lightly, whether they come across anything before it's listed, and say " +
-  "we'd love a first look. Only when the context's OFF-MARKET ASK line says you may; never mid-negotiation, never twice in a " +
-  "row, never as a pitch, and never claim we have off-market deals ourselves. What we buy is still houses that need work.";
+  "thread is winding down warmly — you may ask once, lightly, whether any off-market opportunities have come across their desk, " +
+  `and say we'd love a first look. ${OFF_MARKET_ASK_WORDS} Only when the context's OFF-MARKET ASK line says you may; never ` +
+  "mid-negotiation, never twice in a row, never as a pitch, and never claim we have off-market deals ourselves. What we buy " +
+  "is still houses that need work.";
 
 const CONTINUITY = {
   agent:
@@ -262,19 +265,24 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   }
   if (party === "agent") {
     parts.push(playbook.showMath
-      // Matt, 2026-09-17: show our work. The method is ours to share; the one
-      // piece that is never named is what we make and how we exit.
+      // Matt, 2026-09-17: show our work. 2026-10-07: "we usually use the
+      // 70-75% ARV − rehab number, but I want them to know what we base it
+      // off of (holding costs, profit margin, etc)". The costs are named and
+      // added up; the one figure never said is what's left (it holds our
+      // margin), and how we exit is never named at all.
       ? "MATH — SHOW OUR WORK (this overrides any earlier line about never explaining the math): when an agent asks how we got to a number, " +
-        "pushes back on it, or says it's low, walk them through it plainly, like a colleague. The method, always the same: we start at the percent of " +
-        "the After Repair Value shown beside the offer in the context (usually 75% of ARV — what it's worth fixed up), subtract the rehab, and what's " +
-        "left after our costs and margin is the number. Use the ARV and rehab figures shown beside that offer in the context — never invent or round " +
-        "them into different figures — e.g. \"we have it around 745 fixed up, 75% of that is about 559, less about 27 of work, and after our costs and " +
-        "margin we land at 501\". Two or three short sentences, numbers in thousands, no dollar signs. Then turn it into the useful question: if they " +
-        "see a higher ARV or a lighter rehab, ask for their numbers and say we'll re-run it on them. " +
-        "NEVER say assignment, assign, wholesale, wholesaler, fee, spread or end buyer, never state or hint at the size of our margin, and never itemise " +
-        "what is inside 'our costs and margin' — if asked, it's closing, holding and the risk we take on as-is. If the context line says the figures " +
-        "don't tie exactly, describe the method without doing the arithmetic out loud. Don't volunteer the math unprompted on a first float; it's for " +
-        "when they ask or push."
+        "pushes back on it, or says it's low, walk them through it plainly, like a colleague, from the [our math] line beside that offer in the " +
+        "context. The method is always the same: we base our number on about 70 to 75% of what the house is worth fixed up, less the work, and " +
+        "that gap is real costs: closing to buy it and to resell it (agents' commissions and closing), holding it while the work gets done (loan " +
+        "interest and points, taxes, insurance, utilities), and the profit that makes the risk of buying it as-is worth taking. Use the figures " +
+        "exactly as that line shows them, never invented or rounded into different ones, in thousands with no dollar signs, e.g. \"we base it on " +
+        "about 69% of the 500 it's worth fixed up, less the 50 of work; the rest is about 38 to buy and resell, 26 to hold it 5 months, and our " +
+        "profit and risk, which lands us at 295\". Two or three short sentences. NEVER put a figure on profit and risk; if they ask what it is, " +
+        "it's the return that makes it worth buying a house as-is, sight unseen, with the financing and the risk that come with it. NEVER say " +
+        "assignment, assign, wholesale, wholesaler, fee, spread or end buyer. Explaining is not arguing: never push back on their figures, and " +
+        "after a no, one sentence of the method is plenty before you ask for their number. Then turn it into the useful question: if they see " +
+        "a higher value or lighter work, ask for their numbers and say we'll re-run it on them. If the line says the figures don't tie, " +
+        "describe the method without doing the arithmetic out loud."
       : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and that your partner reviews the numbers.");
   }
   if (party === "agent") {
@@ -584,23 +592,42 @@ function openingFor(outbound) {
           `Ask whether that works for the seller. ${CONTINUE} Set intent to realm_check.`;
       }
       const theirs = [o.theirArvK ? `an ARV around ${o.theirArvK}` : "", o.theirRehabK ? `about ${o.theirRehabK} of work` : ""].filter(Boolean).join(" and ");
+      // 2026-10-07 (the No Fluff setup call): how we got there, then the
+      // number as a range topped by ours, then one question. Each piece is
+      // behind its own switch; without them the float reads as before.
+      const how = o.math
+        ? `Start with how we got there, in one clause, using exactly these figures and words: "${o.math.line}" — thousands with a k, no dollar signs, ` +
+          `never a figure on profit and risk, never the words fee, assignment, wholesale or spread. `
+        : "";
+      const number = o.range
+        ? `Give the number as a range, written exactly "${o.range.words}" — its top is our number. Never go above the top, and never say the bottom on its own. `
+        : "";
+      const ask = o.question
+        ? `End with exactly one question that also asks whether it's in the ballpark, e.g. "If that's in the ballpark, ${o.question.text}" — one question mark in the whole text. `
+        : "";
+      const room = o.math ? "Keep the whole text under 340 characters. " : o.range || o.question ? "Keep the whole text under 280 characters. " : "";
       // A confident underwrite leads with our number, plainly — it's where our
       // analysis lands and the written offer follows a yes.
       if (o.confident && !theirs) {
-        return `${START} Our analysis on ${o.address} is done and we're confident in it: it lands at ${o.amountK}. ` +
-          `Tell them in one short text — e.g. "based on our analysis we can likely do around ${o.amountK}ish on ${o.street || o.address}" — ` +
-          `rounded to the nearest thousand or down (never up), as-is and a quick close if the terms are listed. ` +
-          `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. Don't volunteer the math ` +
-          `(ARV, repairs) in this first text and don't call it final. Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
+        return `${START} Our analysis on ${o.address} is done and we're confident in it: it lands at ${o.amountK}. ` + how +
+          (o.range
+            ? number
+            : `Tell them in one short text — e.g. "based on our analysis we can likely do around ${o.amountK}ish on ${o.street || o.address}" — ` +
+              `rounded to the nearest thousand or down (never up). `) +
+          (o.math ? "" : `As-is and a quick close if the terms are listed. `) +
+          (ask || `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. `) +
+          (o.math ? "" : `Don't volunteer the math (ARV, repairs) in this first text. `) +
+          `Don't call it final. ${room}Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
       }
-      return `${START} ${theirs ? `They came back on ${o.address} with ${theirs}.` : `We have numbers on ${o.address}.`} ` +
-        `Give them a ROUGH, OFF-THE-TOP-OF-YOUR-HEAD number — ${o.amountK} — and be explicit that is exactly what it is: ` +
-        `a first pass, not an underwritten offer. ` +
-        (theirs ? `Tie it to THEIR numbers, e.g. "with your ARV and that kind of rehab, off the top of my head we'd probably be somewhere around ${o.amountK}". ` : "") +
+      return `${START} ${theirs ? `They came back on ${o.address} with ${theirs}.` : `We have numbers on ${o.address}.`} ` + how +
+        `Give them a ROUGH, OFF-THE-TOP-OF-YOUR-HEAD number — ${o.range ? `"${o.range.words}"` : o.amountK} — and be explicit that is exactly what it is: ` +
+        `a first pass, not an underwritten offer. ` + number +
+        (theirs ? `Tie it to THEIR numbers, e.g. "with your ARV and that kind of rehab, off the top of my head we'd probably be somewhere around ${o.range ? o.range.words : o.amountK}". ` : "") +
         `NEVER present it as an offer, a maximum, or a final number — no "we can do", no "our offer is". ` +
-        `Ask whether that's in the realm for the seller. If they come back that it's nowhere close, we can run a full ` +
+        (ask || `Ask whether that's in the realm for the seller. `) +
+        `If they come back that it's nowhere close, we can run a full ` +
         `underwrite — so it's fine to say you'd be glad to dig into it properly. ` +
-        `Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
+        `${room}Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
     }
 
     // The cold open. There is no thread to continue: this is the first thing
@@ -880,7 +907,7 @@ function openingFor(outbound) {
       // Off-market houses are our best deals: the ask leans that way, gently,
       // at most once a month (shared/off-market.js offMarketAskDue).
       const offAsk = o.offMarketAskDue
-        ? "anything they come across before it hits the market (off-market or a pocket listing) that needs work? We'd love a first look — ask it lightly, as a favor, never as a pitch."
+        ? `ask whether any off-market opportunities have come across their desk lately that need work. ${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.`
         : "anything coming up that needs work?";
       const why = o.reason === "fresh_listing" && l
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
@@ -910,9 +937,12 @@ function openingFor(outbound) {
         `Never quote them, never recite the thread, never more than one reference, never something months old as if it were last week — and never invent one: ` +
         `if the thread and the notes have nothing specific, keep it general. For this message the PERSONAL TOUCH rule's "most messages carry none" does not apply: carry exactly one when there is one. `;
       const shapes = cold ? AGENT_PULSE_COLD_SHAPES : AGENT_PULSE_SHAPES;
+      // Houses we passed on: the nurture is about the next one, never these.
+      const avoid = (o.avoid || []).filter(Boolean);
+      const avoidLine = avoid.length ? `Never bring up ${avoid.length > 1 ? `${avoid.slice(0, -1).join(", ")} or ${avoid.at(-1)}` : avoid[0]} — we passed on ${avoid.length > 1 ? "those" : "it"}. ` : "";
       return `${START} There is NO offer in this message. It is a check-in with a listing agent${cold ? " who has not written back before" : " we know"}. ` +
         `${why} ` +
-        `${reference}${material.length ? `NOTES FROM OUR HISTORY: ${material.join(" ")} ` : ""}` +
+        `${reference}${material.length ? `NOTES FROM OUR HISTORY: ${material.join(" ")} ` : ""}${avoidLine}` +
         `TONE: friendly and professional — how someone local who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
         `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
         `${cold ? "One clause on who you are: someone local who's always looking for the next project house. " : "Do NOT reintroduce yourself. "}` +
