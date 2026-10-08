@@ -100,12 +100,23 @@ export function normalizeBlastEmail(v = {}) {
 // the Facebook group buyers are told where we found them). Keyed by source tag.
 const SOURCE_INTROS = { "dispo-source-fb-warei": "found you through the WA real estate Facebook group" };
 
+// Buyers off the county sale and parcel records (dispo-source-county) never
+// heard of us. Matt, 2026-10-08: "hey saw you buy mobile homes in the area
+// from xyz, im a local investor" — what we saw, where, and who's writing.
+function countyIntro(tags) {
+  const mobile = tags.includes("dispo-type-mobile-home") || tags.includes("dispo-asset-manufactured");
+  const city = (tags.find((t) => t.startsWith("dispo-city-")) || "").slice("dispo-city-".length)
+    .split("-").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+  return `saw in the county records you've bought ${mobile ? "mobile homes" : "houses"} ${city ? `around ${city}` : "in the area"}. I'm Matt, a local investor`;
+}
+
 /** blastIntro({ tags, lastRepliedAt }) → the how-we-found-you line for a buyer who has never written back, or "". */
 export function blastIntro(inv = {}) {
   if (inv.lastRepliedAt) return "";
   const tags = (inv.tags || []).map((t) => String(t || "").toLowerCase());
   for (const t of tags) if (SOURCE_INTROS[t]) return SOURCE_INTROS[t];
-  return tags.some((t) => t.startsWith("dispo-source-fb")) ? "found you through a real estate Facebook group" : "";
+  if (tags.some((t) => t.startsWith("dispo-source-fb"))) return "found you through a real estate Facebook group";
+  return tags.includes("dispo-source-county") ? countyIntro(tags) : "";
 }
 
 /**

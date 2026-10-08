@@ -79,6 +79,26 @@ test("the operator's one line for a blast rides in the text and on the draft, so
   assert.equal(d.outbound.note, "3bd 1952 rambler on a quarter acre with an 840 sqft garage, ADU upside");
 });
 
+test("a buyer we found in county records is told where we found them and who we are", async () => {
+  // 9311 12th Pl SE (2026-10-08): fifty-one manufactured home owners off the
+  // Snohomish parcel roll got "Hey Colby, got 9311 … under contract" from a
+  // stranger. Matt: lead with where we found them, and that I'm a local investor.
+  const store = fakeStore();
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } } };
+  const lake = { id: "o3", address: "9311 12th Pl SE, Lake Stevens, WA 98258", cashAmount: 200000, arv: 370000, repairs: 50000,
+    asset: { type: "manufactured", land: "own_lot", by: "you" },
+    deal: { stage: "under_contract", contractPrice: 200000, assignmentFee: 18000, investors: [] } };
+  await queueBlastDrafts({ store, locationId: "L", offer: lake, now: NOW, sendsEnabled: true, blastsEnabled: true, saved, investors: [
+    { contactId: "c1", name: "Colby H", phone: "+12065550101", tags: ["investor", "dispo-source-county", "dispo-type-mobile-home", "dispo-city-arlington", "dispo-region-snohomish"] },
+    { contactId: "c2", name: "Kim T", phone: "+12065550102", tags: ["investor", "dispo-source-county", "dispo-asset-sfr", "dispo-city-mill-creek"] },
+    { contactId: "c3", name: "Pat R", phone: "+12065550103", tags: ["investor", "dispo-source-county", "dispo-type-mobile-home", "dispo-city-arlington"], lastRepliedAt: "2026-10-01T00:00:00Z" },
+  ] });
+  const [mh, sfr, talked] = [...store.rows.values()];
+  assert.match(mh.reply, /^Hey Colby — saw in the county records you've bought mobile homes around Arlington\. I'm Matt, a local investor\. Got 9311 12th Pl SE/);
+  assert.match(sfr.reply, /^Hey Kim — saw in the county records you've bought houses around Mill Creek\. I'm Matt, a local investor\. /);
+  assert.doesNotMatch(talked.reply, /county records/, "a buyer who has written back already knows us");
+});
+
 test("a buyer with no phone is emailed the deal as a draft that waits for you; a phone is still texted", async () => {
   // 1510 Maple Lane (2026-10-01): fourteen of the twenty mobile home buyers
   // have only an email, and a blast could only text.
