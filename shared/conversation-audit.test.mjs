@@ -413,3 +413,31 @@ test("a row about a held draft steps aside once that draft is closed", () => {
   const kept = stillOwed(rows, { drafts: [{ id: "d1", contactId: "c1", status: "dismissed" }, { id: "d2", contactId: "c2", status: "draft" }] });
   assert.deepEqual(kept.map((r) => r.id), ["open"]);
 });
+
+// Matt, 2026-10-08: a clean "other" sat on the Desk all day as "a reply the
+// bot couldn't place is a person's call", though the 7pm audit would send it.
+// By day it goes too, once he switches driver.daytime.releaseOther on.
+const heldOther = (over = {}) => draft({ status: "draft", intent: "other", gateClean: true, autoSendable: false, needsHuman: false, sentAt: null,
+  reply: "Thanks — let me take a look and come back to you.", createdAt: ago(3),
+  autoSend: { decided: false, reason: "a reply the bot couldn't place is a person's call" }, flags: ["a reply the bot couldn't place is a person's call"], ...over });
+const dayCfg = (releaseOther) => normalizeConversationAi({ version: 2, driver: { daytime: { enabled: true, releaseOther } } });
+const releasedBy = (r) => r.findings.filter((f) => f.action?.type === "release").map((f) => f.draftId);
+const dayAudit = (d, releaseOther = true) => auditConversations({ drafts: [d], events: [], offers: [], config: dayCfg(releaseOther), now: NOW, mode: "day", releaseMinAgeMin: 120 });
+
+test("a reply the bot couldn't place goes out in the daytime release when every gate is clean", () => {
+  const d = heldOther();
+  assert.deepEqual(releasedBy(dayAudit(d)), [d.id]);
+  // Off (the default), it waits for the 7pm audit as before.
+  assert.deepEqual(releasedBy(dayAudit(d, false)), []);
+  assert.equal(normalizeConversationAi({ version: 2 }).driver.daytime.releaseOther, false, "ships off");
+  assert.equal(dayCfg(true).driver.daytime.releaseOther, true, "kept on save");
+  // Every other way it could be held still holds it, and no other person's call goes.
+  for (const over of [{ gateClean: false }, { needsHuman: true }, { reply: "  " }, { createdAt: ago(1) },
+    { intent: "counter" }, { intent: "acceptance" }, { intent: "wants_call" }, { intent: "scheduling" }, { intent: "proof_of_funds" }]) {
+    assert.deepEqual(releasedBy(dayAudit(heldOther(over))), [], JSON.stringify(over));
+  }
+});
+
+test("an investor reply the bot couldn't place still waits for Matt", () => {
+  assert.deepEqual(releasedBy(dayAudit(heldOther({ party: "investor" }))), []);
+});

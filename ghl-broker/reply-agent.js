@@ -47,7 +47,7 @@ import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
-import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
+import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { normalizeOpener, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
@@ -70,6 +70,7 @@ import { batcherFor } from "./draft-batch.js";
 import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
 import { signedContractIn, themLines } from "./shared/contract-signed.js";
 import { sameStreet, sameHouse } from "./shared/us-address.js";
+import { releasableHeld } from "./shared/conversation-audit.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
@@ -252,7 +253,7 @@ export async function draftReply({
   message, transcript = "", offers = { text: "", amounts: [], count: 0 }, contact = {},
   underwriting = [], instructions = "", signer = "", aiApiKey, companyContact = {},
   party = "agent", config = null, context = null, channel = "sms", outbound = null, booking = false, inboundKind = "text", call = null,
-  batch = null, shadowModel = null, now = Date.now(),
+  batch = null, shadowModel = null, now = Date.now(), fix = null,
 }) {
   const client = new Anthropic({ apiKey: aiApiKey, timeout: 120_000 });
   const cfg = config || normalizeConversationAi(null);
@@ -262,7 +263,7 @@ export async function draftReply({
       : "",
   };
   const system = buildSystemPrompt({ config: cfg, party, channel });
-  const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound, inboundKind, call, companyContact });
+  const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound, inboundKind, call, companyContact, fix });
   const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
   const params = draftParams({ model: REPLY_MODEL, system, user, schema: schemaFor(party, { outbound, booking: Boolean(booking) }), effort: draftEffort(outbound) });
 
@@ -290,7 +291,9 @@ export async function draftReply({
     ? await Promise.race([shadowRun, new Promise((r) => { graceTimer = setTimeout(() => r({ model: shadowOn, error: "shadow still running when the real draft was done" }), SHADOW_GRACE_MS); })])
     : null;
   clearTimeout(graceTimer);
-  const usage = meterAi(outbound ? "draft_machine" : "draft_reply", response, { model: REPLY_MODEL, batched });
+  // A reply written again because a gate caught it is its own line on the
+  // spend ledger, so what the redraft costs can be read apart.
+  const usage = meterAi(outbound ? "draft_machine" : fix?.length ? "draft_regate" : "draft_reply", response, { model: REPLY_MODEL, batched });
   return { ...parseDraft(response, intents, cfg, outbound), usage, ...(shadow ? { shadow } : {}) };
 }
 
@@ -1028,6 +1031,37 @@ export function personsCall(intent = "") {
   const what = String(intent || "").replace(/_/g, " ");
   if (!what || what === "other") return "a reply the bot couldn't place is a person's call";
   return `${/^[aeiou]/i.test(what) ? "an" : "a"} ${what} is a person's call`;
+}
+
+/**
+ * redraftOnGate({ draft, gate, gateFor, config, redraft }) → { draft, gate }
+ *
+ * A reply a content gate caught is written once more, with what caught it
+ * fed back as corrections. Only the fixable kind: words and numbers in the
+ * reply. A draft the model itself sent to a person (needsHuman), wasn't sure
+ * of, or left empty is a person's whatever it says, and costs no second call.
+ * Neither does one held only by its intent's lock ("a counter is a person's
+ * call"). The rewrite is judged by the same gates, unchanged; only its words
+ * are taken — the intent, address and numbers read off their text stay the
+ * first read's. Still caught: the first draft and its reasons stand.
+ */
+export async function redraftOnGate({ draft, gate, gateFor, config = null, redraft }) {
+  if (!draft || !gate || typeof redraft !== "function" || typeof gateFor !== "function") return { draft, gate };
+  if (gate.ok || (gate.locked && gate.clean)) return { draft, gate };
+  const minConfidence = config?.autoSend?.minConfidence || "high";
+  // The model's own "a person should see this" is never argued with by a
+  // second draft, whether or not the page holds on it.
+  if (draft.needsHuman) return { draft, gate };
+  if ((CONFIDENCE_RANK[draft.confidence] ?? 0) < (CONFIDENCE_RANK[minConfidence] ?? 2)) return { draft, gate };
+  if (!String(draft.reply || "").trim() || RELEASE_QUIET.has(draft.intent)) return { draft, gate };
+  const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
+  if (!tripped.length) return { draft, gate };
+  const again = await Promise.resolve().then(() => redraft(tripped)).catch(() => null);
+  if (!String(again?.reply || "").trim()) return { draft: { ...draft, redraftHeld: { for: tripped, flags: ["the redraft came back empty"] } }, gate };
+  const next = { ...draft, reply: again.reply, redraftedFor: tripped, replyBeforeRedraft: draft.reply };
+  const g2 = gateFor(next);
+  if (g2.ok || (g2.locked && g2.clean)) return { draft: next, gate: g2 };
+  return { draft: { ...draft, redraftHeld: { for: tripped, flags: (g2.flags || []).filter((f) => f !== g2.locked).slice(0, 6) } }, gate };
 }
 
 /**
@@ -2481,7 +2515,10 @@ export async function startProactive({
     const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
     if (gone) return { skipped: fellThroughLine(gone), job: null };
     const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues, kind });
-    if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
+    // The holding reply this number answers: the float carries on from it
+    // (floatAnswersHeldReply). Anything else waiting holds the float.
+    if (waiting && floatAnswersHeldReply({ held: waiting, kind, offer, now: typeof deps.now === "function" ? deps.now() : Date.now() })) continues = waiting.id;
+    else if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
     // One house at a time, three days apart, two a week (shared/agent-focus.js).
     // The sweep asks before it claims; this is every other door asking too.
     if (spec.party === "agent") {
@@ -2555,6 +2592,34 @@ export async function startProactive({
   );
   return { skipped: null, job };
 }
+/**
+ * floatAnswersHeldReply({ held, kind, offer, now }) → boolean
+ *
+ * An agent texts about a house, our holding reply ("let me run the numbers")
+ * is held for a person, and the underwrite it started lands an offer. Until
+ * 2026-10-08 the float stood down for that very reply, and nothing tried it
+ * again unless the timers were on — and they too wait for the reply to be
+ * dealt with — so the offer sat with no float (proactive: null). The number
+ * is the answer that reply promised, so the float carries on from it (takes
+ * its place) when all of these hold: it is a float of our read or number;
+ * the held row answers their text, is still a draft, and is about this house;
+ * it came in before the offer existed (a newer text is a new question); and
+ * it is a reply the 7pm audit would send as it stands (releasableHeld:
+ * every gate clean, nothing for a person) and no person's call (a counter,
+ * an acceptance, a call). Anything else still holds the float.
+ */
+const FLOAT_KINDS = new Set(["take_check", "realm_check"]);
+export function floatAnswersHeldReply({ held, kind, offer, now = Date.now() }) {
+  if (!held || !FLOAT_KINDS.has(kind) || !offer?.address) return false;
+  if (held.status !== "draft" || !answersInbound(held) || held.outbound?.kind) return false;
+  const heldAt = Date.parse(held.createdAt || ""), offerAt = Date.parse(offer.createdAt || "");
+  if (!Number.isFinite(heldAt) || !Number.isFinite(offerAt) || heldAt >= offerAt) return false;
+  if (!held.propertyAddress || !sameHouse(held.propertyAddress, offer.address)) return false;
+  const party = held.party || "agent";
+  if (party !== "agent" || (NEVER_AUTO.agent.includes(held.intent) && held.intent !== "other")) return false;
+  return releasableHeld(held, { loose: true, mode: "night", now });
+}
+
 // The kinds that put a price on a house in front of the agent.
 const NUMBER_FLOATS = new Set(["realm_check", "hot_push"]);
 // "850K", not "$850K": a dollar sign in a text trips carrier spam filters, and
@@ -3331,12 +3396,15 @@ async function runReply(job, ctx) {
   /* --- 2. the draft --- */
   job.phase = "drafting";
   let draft;
+  // What the model was asked, kept for the one redraft a content gate earns
+  // (redraftOnGate, below). Null for the canned photo line.
+  let replyArgs = null;
   if (job.attachments > 0 && !String(job.message || "").trim()) {
     // A bare photo gets the canned line and no model call — the rule is
     // "never analyse the image", and the surest way not to is not to look.
     draft = mediaDraft(config);
   } else {
-    draft = await deps.draft({
+    replyArgs = {
       message: inboundText,
       transcript: a.transcript,
       offers: context.offers || { text: "", amounts: [], count: 0 },
@@ -3347,7 +3415,8 @@ async function runReply(job, ctx) {
       aiApiKey,
       party, config, context: draftContext, channel: job.channel, booking: Boolean(bookingText),
       inboundKind: job.inboundKind || "text", call: job.call || null,
-    });
+    };
+    draft = await deps.draft(replyArgs);
   }
   job.intent = draft.intent;
   job.summary = draft.summary;
@@ -3692,7 +3761,15 @@ async function runReply(job, ctx) {
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, inboundText),
   });
-  const gate = gateFor(draft);
+  let gate = gateFor(draft);
+  // A draft a content gate caught — a number not in the book, "cash close",
+  // "assignment", too long — is written once more, told exactly what held
+  // it. The same gates judge the rewrite: clean, it carries on as any clean
+  // draft would; still caught, the first draft and its reasons stay for Matt.
+  if (replyArgs && !a.hold?.held) {
+    const r = await redraftOnGate({ draft, gate, gateFor, config, redraft: (fix) => deps.draft({ ...replyArgs, fix }) });
+    draft = r.draft; gate = r.gate;
+  }
   let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   // The text after a call is its own allowlist slot on top of the intent's:
   // a question asked on the phone still needs "text after a call" ticked.
@@ -4176,6 +4253,10 @@ async function runReply(job, ctx) {
     // The model's own words, kept when the reply was rewritten to say the
     // offer went out, so step 5 can put them back if it didn't.
     ...(draft.replyBeforeSend ? { replyBeforeSend: draft.replyBeforeSend } : {}),
+    // Written once more because a gate caught the first one (redraftOnGate):
+    // what caught it, and — when the rewrite was caught too — that it was.
+    ...(draft.redraftedFor ? { redraftedFor: draft.redraftedFor, replyBeforeRedraft: draft.replyBeforeRedraft || "" } : {}),
+    ...(draft.redraftHeld ? { redraftHeld: draft.redraftHeld } : {}),
     agentTake,
     propertyDetails: propertyDetails || null,
     autoSendable: gate.ok,

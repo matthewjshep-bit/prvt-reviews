@@ -691,9 +691,13 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   //             the working day as well, so a stalled thread doesn't wait for
   //             7pm. By day it never releases a person's call, and never a
   //             held reply younger than releaseMinAgeMin.
+  //             releaseOther: the one person's call it may release (Matt,
+  //             2026-10-08) — an agent's reply the bot couldn't place
+  //             (intent `other`) whose every gate is clean. Off until he
+  //             switches it on; investors and every other intent unchanged.
   driver: {
     promises: { enabled: false },
-    daytime: { enabled: false, startHour: 9, endHour: 18, everyHours: 2, releaseMinAgeMin: 120, heldSweep: false },
+    daytime: { enabled: false, startHour: 9, endHour: 18, everyHours: 2, releaseMinAgeMin: 120, heldSweep: false, releaseOther: false },
     // Rows on Today the machine clears by itself after a wait (shared/
     // pipeline.js timerMoves). They ride the daytime pass, so they need it on.
     timers: { enabled: false, floatAfterHours: 4, goneQuietDays: 14 },
@@ -1159,6 +1163,7 @@ export function normalizeConversationAi(doc, seed = {}) {
           everyHours: int(t.everyHours, DT.everyHours, 1, 6),
           releaseMinAgeMin: int(t.releaseMinAgeMin, DT.releaseMinAgeMin, 30, 720),
           heldSweep: bool(t.heldSweep, DT.heldSweep),
+          releaseOther: bool(t.releaseOther, DT.releaseOther),
         },
         timers: (() => {
           const m = v.timers && typeof v.timers === "object" ? v.timers : {};

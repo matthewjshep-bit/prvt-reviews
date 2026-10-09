@@ -1085,7 +1085,7 @@ function openingFor(outbound) {
 
 export function buildUserContext({
   party = "agent", contact = {}, signer = "", instructions = "", context = { text: "" }, companyContact = {},
-  underwriting = [], transcript = "", message = "", outbound = null, inboundKind = "text", call = null, now = Date.now(),
+  underwriting = [], transcript = "", message = "", outbound = null, inboundKind = "text", call = null, now = Date.now(), fix = null,
 } = {}) {
   // The model has no clock. Gabe Spruell's check-in (2026-09-18) read "give me
   // a shout end of the month" in the thread and opened with "we're past month
@@ -1131,6 +1131,12 @@ export function buildUserContext({
       ? `THE THREAD SO FAR (US = our team, THEM = ${them}):\n${String(transcript).slice(-14000)}`
       : "THE THREAD SO FAR: (no earlier messages available)",
     opening || `NEWEST INBOUND MESSAGE FROM ${label === "CONTACT" ? "THEM" : `THE ${label}`} (this is what you are replying to):\n"${String(message || "").slice(0, 2000)}"`,
+    // A reply a gate held, written once more (redraftOnGate): what held it,
+    // said plainly, as corrections.
+    !outbound && Array.isArray(fix) && fix.length
+      ? `YOUR LAST DRAFT OF THIS REPLY WAS HELD: ${fix.map((f) => `"${String(f).slice(0, 200)}"`).join("; ")}. ` +
+        "Write it again so none of that is true. Quote only numbers from our offers above or their own message, keep it short, and change nothing else about what you mean."
+      : "",
     opening ? (isCall ? "Write the text that follows the call." : "Write the message.") : "Write the reply.",
   ].filter(Boolean).join("\n\n");
 }
