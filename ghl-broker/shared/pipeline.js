@@ -128,6 +128,7 @@ export function groupFor(a) {
 // What the driver does next, in the row's words.
 const DRIVER_NEXT = {
   send_number: "sends the number on the next pass",
+  send_paper: "sends the written offer on the next pass",
   start_underwrite: "starts the underwrite on the next pass",
   ask_numbers: "asks for their numbers on the next pass",
   rerun: "re-runs on their numbers on the next pass",
@@ -137,6 +138,7 @@ const DRIVER_NEXT = {
 // `ask_numbers` and `start_underwrite` have no button yet: the row says so.
 const PROMISE_OPS = {
   send_number: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "float_realm", label: "Float the number", intent: "secondary" }],
+  send_paper: [{ key: "open_editor", label: "Open and send", intent: "primary" }],
   rerun: [{ key: "rerun_held", label: "Re-run on their numbers", intent: "primary" }, { key: "open_editor", label: "Open and fix", intent: "secondary" }],
   ask_numbers: [{ key: "open_editor", label: "Open and fix", intent: "secondary" }],
   wait: [],
@@ -146,6 +148,7 @@ const PROMISE_OPS = {
 const NEEDS_OFFER = new Set(["float_take", "float_realm", "rerun_held", "open_editor"]);
 const PROMISE_MOVE_LABEL = {
   send_number: "the number is ready and hasn't gone out",
+  send_paper: "we said we'd send the written offer and it hasn't gone",
   rerun: "they gave us their numbers",
   ask_numbers: "needs their value or repairs",
   wait: "waiting",
@@ -687,7 +690,7 @@ export function buildPipeline({
     push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", contactId: p.contactId, contactName: named,
       address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0,
       draftId: null, fromDraftId: p.draftId || null, ...(question ? { question } : {}), group, ...(next ? { next } : {}),
-      title: `${who}: we owe them ${p.what === "number" ? "a number" : "an answer"}${p.address ? ` on ${String(p.address).split(",")[0]}` : ""}`,
+      title: `${who}: we owe them ${p.what === "number" ? "a number" : p.what === "paper" ? "the written offer" : "an answer"}${p.address ? ` on ${String(p.address).split(",")[0]}` : ""}`,
       detail: [stopped ? (hold.kind === "paused" ? holdLine(hold) : `you stopped it${hold.reason ? `: ${hold.reason.slice(0, 80)}` : ""}`) : "", PROMISE_MOVE_LABEL[v.move] || "", heldReason ? `underwrite held: ${heldReason}` : "", p.text ? `we said "${String(p.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
       // Settled some other way (a call, a no that never reached the offer):
       // the row can always be closed by hand, with why. Marking the offer

@@ -27,7 +27,7 @@ import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { addressKey } from "./shared/us-address.js";
 import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
 import { triageHeldUnderwrite } from "./shared/held-underwrites.js";
-import { openPromises, resolvePromise, normalizePromiseDismissal, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
+import { openPromises, resolvePromise, normalizePromiseDismissal, promiseWhat, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
 import { driveOpenPromises, promiseClaimed } from "./promise-driver.js";
 import { waitingReason } from "./outbox-guard.js";
 
@@ -141,9 +141,12 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
     const since = open[0]?.at || owed.at;
     const address = [...open].reverse().find((p) => p.address)?.address || owed?.address || "";
 
-    // Kept: our numbers went out after the earliest open promise.
+    // What we owe: a number, the written offer ("can have it over today"), or an answer.
+    const what = promiseWhat([...open, ...(owed ? [owed] : [])]);
+    // Kept: our numbers went out after the earliest open promise. The written
+    // offer is kept only by the written offer (an offer_sent), not a float.
     const sent = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 30 }).catch(() => []);
-    const numbers = sent.find((d) => d?.status === "sent" && NUMBER_KINDS.has(d.outbound?.kind || d.intent)
+    const numbers = what === "paper" ? null : sent.find((d) => d?.status === "sent" && NUMBER_KINDS.has(d.outbound?.kind || d.intent)
       && String(d.sentAt || d.updatedAt || "") > String(since));
     const offer = list.find((e) => e.type === "offer_sent" && String(e.at) > String(since));
     if (numbers || offer) {
@@ -187,7 +190,6 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
     const book = await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []);
     const held = (book || []).find((o) => o && effectiveStatus(o) === "draft" && (!key || addressKey(o.address || "") === key) && aiHoldReasons(o).length);
     const heldReason = held ? String(aiHoldReasons(held)[0]).split(" — ")[0].slice(0, 120) : "";
-    const what = open.some((p) => p.data?.what === "number") ? "number" : "answer";
 
     // Their text (or your own draft) is waiting in the outbox: whoever answers
     // it keeps the promise or says so. Nothing is claimed; the next tick looks again.
@@ -208,6 +210,9 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
     // the number, started the underwrite, asked for theirs. One voice at a
     // time; Today still carries the row, where it reads as waiting.
     if (mine && promiseClaimed(list, mine)) { out.results.push({ contactId, address, status: "owed", reason: "the driver is on it" }); continue; }
+    // The written offer is kept by sending it, not by a text saying we're
+    // still on it: Today carries the row, and the driver (when it's on) sends it.
+    if (what === "paper") { out.results.push({ contactId, address, status: "owed", reason: "the written offer is owed — on Today" }); continue; }
 
     const r = await start({
       client, locationId, saved, store, contactId, kind: "promise_due", offer: null,

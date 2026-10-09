@@ -14,7 +14,9 @@
 // Pure: the runner (ghl-broker/routes/offers.js sendPaperAfterSilence) reads
 // the offers, drafts and timeline and asks these.
 
-import { effectiveStatus } from "./offer-status.js";
+import { effectiveStatus, priceAgreed } from "./offer-status.js";
+import { sameStreet } from "./us-address.js";
+import { GONE_TEXT } from "./held-underwrites.js";
 
 export const WORK_TZ = "America/Los_Angeles";
 const HOUR = 3600000;
@@ -64,17 +66,47 @@ export function paperWent(offer) {
   return (offer?.sends || []).some((s) => s?.ts && (!s.results || Object.values(s.results).some((r) => r?.ok)));
 }
 
+// A rough number: priced on the agent's own figures because our comps were
+// thin (`agent_numbers`), or a first pass marked rough. Paper only after
+// they said yes to it (2026-10-08).
+export const ROUGH_BASES = new Set(["agent_numbers", "rough"]);
+
+// A reply about this house: it named it, or named none.
+function aboutHouse(d, offer) {
+  const a = String(d?.propertyAddress || "").trim();
+  return !a || !offer?.address || sameStreet(a, offer.address);
+}
+
 /**
- * paperWorthy(offer) → boolean
+ * saidYesOn(offer, { drafts, events }) → boolean
+ *
+ * The agent told us the number on THIS offer works: a realm yes or an agreed
+ * price on the offer itself, a realm_yes / acceptance on the timeline tied to
+ * it, or a reply the bot read as realm_yes / acceptance about this house
+ * since the offer was made.
+ */
+export function saidYesOn(offer, { drafts = [], events = [] } = {}) {
+  if (!offer) return false;
+  if (priceAgreed(offer)) return true;
+  if ((events || []).some((e) => e?.offerId === offer.id && ["realm_yes", "offer_accepted"].includes(e.type))) return true;
+  const since = ms(offer.createdAt) ?? 0;
+  return (drafts || []).some((d) => ["realm_yes", "acceptance"].includes(d?.intent) && String(d.inbound || "").trim()
+    && (ms(d.createdAt) ?? 0) >= since && aboutHouse(d, offer));
+}
+
+/**
+ * paperWorthy(offer, { saidYes }) → boolean
  *
  * A number we'd put in writing unasked: a person's own offer, a clean
- * underwrite, or a held one a person published. Not a rough number built on
- * the agent's own figures (`basis: "agent_numbers"`), and not a held draft.
+ * underwrite, or a held one a person published. A rough number — built on
+ * the agent's own figures (`basis: "agent_numbers"`) or marked `rough` — only
+ * once they said yes to it (`saidYes`, see saidYesOn): silence, a no or a
+ * neutral answer never puts it on paper. Never a held draft.
  */
-export function paperWorthy(offer) {
+export function paperWorthy(offer, { saidYes = false } = {}) {
   const au = offer?.autoUnderwrite;
   if (!au) return true;
-  if (au.basis === "agent_numbers") return false;
+  if (ROUGH_BASES.has(au.basis)) return saidYes === true;
   return au.passed === true || Boolean(au.publishedAt);
 }
 
@@ -149,4 +181,61 @@ export function paperAfterSilenceDue({ offer, drafts = [], events = [], silenceH
   const hours = workingHoursBetween(ms(floatAt), now);
   if (hours < silenceHours) return no("not a working day since the float yet", { floatAt, hours });
   return { due: true, reason: "", floatAt, hours };
+}
+
+// What ends the neutral rule: they passed, it's gone, they want out, or they
+// named their own number (a counter is a person's — NEVER_AUTO).
+const NOT_NEUTRAL_INTENTS = new Set(["rejection", "counter", "opt_out"]);
+const OUT_TEXT = /\b(?:stop|unsubscribe|remove me|do not (?:text|contact)|don'?t (?:text|contact))\b/i;
+const PASS_TEXT = /\b(?:not interested|no thanks|no thank you|(?:we|i|they|seller)(?:'ll| will)? pass(?:ing)?|hard pass|not (?:gonna|going to) work|won'?t work)\b/i;
+// The reply to their answer is still with a person (or about to go): the
+// paper waits with it, the way the pushback paper does.
+const OPEN_DRAFT = new Set(["pending", "draft", "scheduled", "queued", "sending"]);
+const YES_INTENTS = new Set(["realm_yes", "acceptance"]);
+
+/**
+ * paperAfterAnswerDue({ offer, drafts, events, now }) → { due, reason, floatAt, kind }
+ *
+ * Whether the written offer should follow a float the agent answered with
+ * something other than a pass (`sendOffer.afterFloat.onNeutral`, 2026-10-08).
+ * "Can't answer for the seller, call my colleague" was an answer, and got no
+ * paper; neither did "I actually agree on those numbers" on an offer priced
+ * on her own figures. Every refusal says why.
+ *
+ * Neutral: every answer since the float, about this house, is not a no, a
+ * counter, an opt-out, a pass, or a house that sold or went pending, and our
+ * reply to none of them is still waiting. A call since the float is the
+ * conversation's. A yes counts too (`kind: "yes"`), and only a yes lets a
+ * rough number (paperWorthy) go to paper.
+ */
+export function paperAfterAnswerDue({ offer, drafts = [], events = [], now = Date.now() } = {}) {
+  const no = (reason, extra = {}) => ({ due: false, reason, floatAt: null, kind: null, ...extra });
+  if (!offer || offer.deal) return no("a deal, not an offer");
+  const status = effectiveStatus(offer);
+  if (!["new", "sent"].includes(status)) return no(`the offer is ${status}`);
+  if (offer.counterHold?.at) return no("a counter is held for a person");
+  if (!(Number(offer.cashAmount) > 0)) return no("no number on the offer");
+  if (paperWent(offer)) return no("the written offer already went");
+  if (offer.paperAfterFloat) return no("already tried once");
+  const floatAt = floatSentAt(drafts, offer.id);
+  if (!floatAt) return no("our number never went out by text");
+  const floatMs = ms(floatAt);
+  if (now - floatMs > PAPER_FLOAT_MAX_DAYS * 24 * HOUR) return no("the float is more than two weeks old", { floatAt });
+  if ((events || []).some((e) => e?.type === "unsubscribed")) return no("they unsubscribed", { floatAt });
+  if ((events || []).some((e) => e?.type === "call_summary" && (ms(e.at) ?? 0) > floatMs)) return no("a call since the float — the conversation has it", { floatAt });
+  const answers = (drafts || []).filter((d) => String(d?.inbound || "").trim() && (ms(d.createdAt) ?? 0) > floatMs
+    && (!d.party || d.party === "agent") && aboutHouse(d, offer));
+  if (!answers.length) return no("no answer since the float", { floatAt });
+  for (const d of answers) {
+    const text = String(d.inbound || "");
+    if (NOT_NEUTRAL_INTENTS.has(d.intent)) return no(`they answered with a ${String(d.intent).replace(/_/g, " ")}`, { floatAt });
+    if (GONE_TEXT.test(text)) return no("they said the house sold or went pending", { floatAt });
+    if (OUT_TEXT.test(text)) return no("they asked us to stop", { floatAt });
+    if (PASS_TEXT.test(text)) return no("they passed", { floatAt });
+    if (Number(d.counterAmount) > 0 || d.inRange) return no("they named a number of their own", { floatAt });
+    if (OPEN_DRAFT.has(d.status)) return no("our reply to their answer is still waiting", { floatAt });
+  }
+  const saidYes = saidYesOn(offer, { drafts, events });
+  if (!paperWorthy(offer, { saidYes })) return no("not a number we put in writing unasked", { floatAt });
+  return { due: true, reason: "", floatAt, kind: saidYes || answers.some((d) => YES_INTENTS.has(d.intent)) ? "yes" : "neutral" };
 }

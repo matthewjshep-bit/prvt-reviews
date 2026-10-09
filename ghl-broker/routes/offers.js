@@ -73,7 +73,7 @@ import {
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
-import { paperAfterSilenceDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
+import { paperAfterSilenceDue, paperAfterAnswerDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
@@ -154,7 +154,7 @@ import {
   findOrCreateCustomFieldByKey, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail,
   customFieldIdKeyMap, contactCustomRecord, listCustomFieldsRaw, deleteCustomField, getContactNotes,
   searchContactsByTag, listWorkflows, listLocationTags, searchAllContactsByTags, listCalendars, createAppointment,
-  getLatestInboundMessage, getUnansweredInbound,
+  getLatestInboundMessage, getUnansweredInbound, smsUnsubscribed,
 } from "../ghl.js";
 import {
   enrichFieldDefs, enrichTagVocab, ENRICH_TAG_GROUPS, inferContactType,
@@ -4726,6 +4726,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // inside the auto-send hours, at most `dailyCap` a day, never to a stopped
   // thread, and only on the house's current offer. The claim is written before
   // the send so a crash or a second tick can't send it twice.
+  // `afterFloat.onNeutral` (2026-10-08): the same send, on the same claim and
+  // cap, after an ANSWER that wasn't a pass, a counter, an opt-out or a sold
+  // house (paperAfterAnswerDue) — and, after an answer, never to a contact
+  // GHL has on do-not-disturb or a bot-off tag.
   const PAPER_CURSOR = "paperAfterFloat";
   router.sendPaperAfterSilence = async ({ client, locationId, now = Date.now(), limit = 5 }) => {
     const fresh = (await store.getOfferSettings(locationId)) || {};
@@ -4751,18 +4755,30 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         store.listReplyDrafts(locationId, { contactId: offer.contactId, limit: 30 }).catch(() => []),
         store.listContactEvents(locationId, offer.contactId, { limit: 200 }).catch(() => []),
       ]);
-      const due = paperAfterSilenceDue({ offer, drafts, events, silenceHours: af.silenceHours, now });
-      if (!due.due) continue;
+      // Silence first; then (onNeutral, 2026-10-08) an answer that wasn't a
+      // pass — "can't answer for the seller", or a yes on a rough number.
+      const quiet = paperAfterSilenceDue({ offer, drafts, events, silenceHours: af.silenceHours, now });
+      const answered = !quiet.due && af.onNeutral ? paperAfterAnswerDue({ offer, drafts, events, now }) : null;
+      const due = quiet.due ? quiet : answered;
+      if (!due?.due) continue;
       // They unsubscribed, or a person stopped the bot on them (shared/bot-hold.js): nothing goes.
       if (events.some((e) => e?.type === "unsubscribed")) continue;
       if ((await holdFor({ store, locationId, contactId: offer.contactId, offerId: offer.id, now })).held) continue;
-      const claim = { at: new Date(now).toISOString(), floatAt: due.floatAt, status: "sending" };
+      // After an answer, GHL's word too: do-not-disturb, or a bot-off tag.
+      if (answered?.due) {
+        let contact = null;
+        try { contact = await getContact(client, offer.contactId); } catch { contact = null; }
+        if (!contact || smsUnsubscribed(contact)) continue;
+        const botOff = (cfg.routing?.botOffTags || []).map((t) => String(t).toLowerCase());
+        if ((contact.tags || []).some((t) => botOff.includes(String(t).toLowerCase()))) continue;
+      }
+      const claim = { at: new Date(now).toISOString(), floatAt: due.floatAt, status: "sending", ...(answered?.due ? { after: answered.kind } : {}) };
       const before = await store.getOffer(offer.id);
       if (!before || before.paperAfterFloat) continue;
       await store.updateOffer(before.id, { ...before, paperAfterFloat: claim });
       const r = await conversationDeps({ client, locationId, saved: fresh }).sendOfferDocs({
         contactId: offer.contactId, addressHint: offer.address, offerId: offer.id, unattended: true,
-        channels: ["sms", "email"], forRecord: true, by: "after_float",
+        channels: ["sms", "email"], forRecord: true, by: answered?.due ? "after_answer" : "after_float",
       }).catch((e) => ({ ok: false, reason: String(e?.message || e) }));
       const status = r.ok ? (r.dryRun ? "dry" : r.unchanged ? "already" : "sent") : r.held ? "held" : "refused";
       // Read again: the send wrote its ledger onto the offer.
@@ -4778,7 +4794,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       today++;
       await store.setJobCursor?.(locationId, PAPER_CURSOR, { at: new Date(now).toISOString(), doc: { day, count: today } }).catch(() => {});
       await createContactNote(client, offer.contactId, {
-        body: `Sent our written offer on ${offer.address} (${fmtMoney(offer.cashAmount)}) by ${(r.channels || []).join(" and ")} for their records — a working day after the number went out with no answer.`,
+        body: `Sent our written offer on ${offer.address} (${fmtMoney(offer.cashAmount)}) by ${(r.channels || []).join(" and ")} for their records — ${answered?.due
+          ? (answered.kind === "yes" ? "they said the number works." : "they answered the number without a pass.")
+          : "a working day after the number went out with no answer."}`,
       }).catch(() => {});
     }
     return { sent, checked };

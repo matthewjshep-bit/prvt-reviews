@@ -140,7 +140,7 @@ export function dealMoments({ contactId = "", offer = null, events = [], drafts 
       case "call_booked": add(e.at, "call_booked", "call booked", "us"); break;
       case "email_received": add(e.at, "they_emailed", "they emailed", "them"); break;
       case "email_sent": add(e.at, "we_emailed", "we emailed", "us"); break;
-      case "promise_made": add(e.at, "promised", e.data?.what === "number" ? "we promised a number" : "we promised an answer", "machine"); break;
+      case "promise_made": add(e.at, "promised", e.data?.what === "number" ? "we promised a number" : e.data?.what === "paper" ? "we promised the written offer" : "we promised an answer", "machine"); break;
       case "listing_off_market": add(e.at, "off_market", "listing went off the market", "them"); break;
       case "listing_back_on_market": add(e.at, "back_on_market", "back on the market", "them"); break;
       case "unsubscribed": add(e.at, "unsubscribed", "they unsubscribed", "them"); break;
