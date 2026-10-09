@@ -42,7 +42,7 @@ import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenova
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
-import { offMarketSignals } from "./shared/off-market.js";
+import { offMarketSignals, OFF_MARKET_TAG } from "./shared/off-market.js";
 import { leadSourceOf, theirNumberCheck } from "./shared/lead-source.js";
 import { buyerCeiling } from "./shared/post-mortem.js";
 import { markSides, sameSideFirst, isAcross, acrossLabel } from "./shared/same-side.js";
@@ -1093,6 +1093,12 @@ async function setTag(client, contactId, tag, warnings) {
   } catch (e) {
     warnings.push(`tag ${tag}: ${e.message}`);
   }
+}
+
+// A tag beside the underwrite's own (setTag swaps those; this only adds).
+async function addTag(client, contactId, tag, warnings) {
+  try { await addContactTags(client, contactId, [tag]); }
+  catch (e) { warnings.push(`tag ${tag}: ${e.message}`); }
 }
 
 async function note(client, contactId, body, warnings) {
@@ -2234,7 +2240,10 @@ async function runUnderwrite(job, ctx) {
     if (check) offer.autoUnderwrite.theirNumber = check;
   }
   const offSignal = job.offMarketCue || offMarketSignals({ listing: got.listing, agentBrought: lead?.source === "agent_brought" });
-  if (offSignal && offer.offMarket?.by !== "you") offer.offMarket = { ...offSignal, by: "machine", at: new Date().toISOString() };
+  if (offSignal && offer.offMarket?.by !== "you") {
+    offer.offMarket = { ...offSignal, by: "machine", at: new Date().toISOString() };
+    if (job.contactId) await addTag(client, job.contactId, OFF_MARKET_TAG, warnings);
+  }
   await store.updateOffer(offer.id, offer).catch(() => {});
   if (rescued) job.held = [rescued.basis];
   // A held reason on the job is what makes the conversation float it as rough.
@@ -2434,8 +2443,11 @@ async function leadFor(job, ctx, address, events = null) {
 async function saveDraft(job, ctx, { extraction, held, partial, cleared = false }) {
   const { locationId, store } = ctx;
   // A held house the agent brought still goes to the Desk as a call
-  // (call_brought): it is marked here the way a priced one is.
+  // (call_brought): it is marked here the way a priced one is — off-market
+  // too, by the same signals, and the agent gets the GHL tag.
   const lead = await leadFor(job, ctx, extraction.address || "");
+  const offSignal = job.offMarketCue || offMarketSignals({ listing: partial?.listing ?? job._got?.listing ?? null, agentBrought: lead?.source === "agent_brought" });
+  if (offSignal && job.contactId && ctx.client) await addTag(ctx.client, job.contactId, OFF_MARKET_TAG, job.warnings || []);
   const draft = {
     ...buildSnapshot({
       extraction, partial,
@@ -2453,12 +2465,14 @@ async function saveDraft(job, ctx, { extraction, held, partial, cleared = false 
     draft,
     checks: summarizeChecks(draft),
     autoUnderwrite: { ...auditTrail(job, extraction, { ok: cleared, held }), held, ...(lead ? { leadSource: lead.source } : {}) },
+    ...(offSignal ? { offMarket: { ...offSignal, by: "machine", at: new Date().toISOString() } } : {}),
     updatedAt: new Date().toISOString(),
   };
   if (job.replaceOfferId) {
     const prior = await store.getOffer?.(job.replaceOfferId).catch(() => null);
     if (prior && prior.status === "draft" && prior.locationId === locationId) {
-      const doc = { ...prior, ...record, id: prior.id || job.replaceOfferId, createdAt: prior.createdAt };
+      const doc = { ...prior, ...record, id: prior.id || job.replaceOfferId, createdAt: prior.createdAt,
+        ...(prior.offMarket?.by === "you" ? { offMarket: prior.offMarket } : {}) };
       await store.updateOffer(doc.id, doc);
       return doc;
     }
