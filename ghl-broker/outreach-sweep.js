@@ -16,6 +16,7 @@
 import { store as defaultStore } from "./store.js";
 import { normalizeOpener } from "./shared/outreach-opener.js";
 import { isRuralLot } from "./shared/asset-type.js";
+import { isOldHouse } from "./outreach-score.js";
 
 export const CURSOR_NAME = "outreach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -151,8 +152,9 @@ export const DEFAULT_MIN_DAYS_ON_MARKET = 45;
 export const DEFAULT_MAX_LIST_PRICE = 1500000;
 // What counts as distress for the sweep. The query already asks for listings
 // 45+ days old, so "stale" is true of every one of them and proves nothing:
-// it takes a price cut or a price under the market's $/sqft.
-export const SWEEP_DISTRESS_RULE = "cut-or-cheap";
+// it takes a price cut or an older house. A price under the market's $/sqft
+// ("cut-or-cheap", until 2026-10) found finished houses in slow towns.
+export const SWEEP_DISTRESS_RULE = "cut-or-old";
 // Requests left for the Pull button, on top of what the sweep spends.
 export const DEFAULT_RESERVE_REQUESTS = 2;
 // The most one run may spend, however far behind the month is. Ten was the
@@ -250,8 +252,19 @@ export function pullQuery(oa) {
  * `maxPrice`, `distressRule` and `propertyTypes` are checked on the row itself, not trusted to
  * the pull: the batch keeps agents from earlier pulls made under looser
  * filters, and a row counted by another rule (or none) doesn't qualify.
+ * Under "cut-or-old" the stored hook itself is read again (a price cut, or
+ * built before OLD_HOUSE_YEAR), so a row from a "cut-or-cheap" pull whose
+ * hook was cut or old still goes, and a cheap finished house doesn't.
+ * `maxYearBuilt` (> 0) drops a hook built after it; no year on record goes
+ * ahead, as it does in the pull.
  */
-export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null, propertyTypes = [] } = {}) {
+export function hookMeetsCutOrOld(hook = {}) {
+  const cut = hook.priceCut === true
+    || (Array.isArray(hook.components) && hook.components.some((c) => c?.key === "cuts" && Number(c.points) > 0));
+  return cut || isOldHouse(hook.yearBuilt);
+}
+
+export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null, propertyTypes = [], maxYearBuilt = 0 } = {}) {
   const types = new Set((propertyTypes || []).map((t) => String(t).toLowerCase()));
   const ok = rows.filter((r) => {
     const d = r?.doc || {};
@@ -259,7 +272,13 @@ export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, require
     if (r.contactId || d.ghl?.contactId) return false;
     if (!d.phone) return false;
     if (requireDistress && !(Number(d.distressedCount) > 0)) return false;
-    if (requireDistress && distressRule && d.distressRule !== distressRule) return false;
+    if (requireDistress && distressRule === "cut-or-old") {
+      // A row from any price-signal pull is read again by its hook; a
+      // stale-only ("any") or unlabelled row stays out, as it did before.
+      if (!["cut-or-old", "cut-or-cheap"].includes(d.distressRule)) return false;
+      if (!hookMeetsCutOrOld(d.hook)) return false;
+    } else if (requireDistress && distressRule && d.distressRule !== distressRule) return false;
+    if (maxYearBuilt > 0 && Number(d.hook?.yearBuilt) > maxYearBuilt) return false;
     if (maxPrice && !(Number(d.hook?.price) > 0 && Number(d.hook.price) <= maxPrice)) return false;
     // A rural hook (two acres or more) from a pull made before the rural
     // filter is not a reason to text them either (Matt, 2026-10-08).
@@ -496,7 +515,8 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
       : await store.listOutreachAgents(locationId, { batchId, status: "new", limit: 1000 });
     job.candidates = (job.candidates || 0) + rows.length;
     const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
-      maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null, propertyTypes: oa.propertyTypes })
+      maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null, propertyTypes: oa.propertyTypes,
+      maxYearBuilt: oa.maxYearBuilt })
       .filter((r) => !seenAgents.has(r.agentKey) && !seenPhones.has(String(r.doc?.phone)));
     for (const r of fresh) { seenAgents.add(r.agentKey); seenPhones.add(String(r.doc?.phone)); }
     if (fresh.length) groups.push({ key, batchId, picked: fresh });

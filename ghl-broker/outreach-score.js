@@ -30,9 +30,19 @@ export function priceCuts(listing) {
   return { count, totalDropPct };
 }
 
+// Built before this is an older house: the work a fixer wants is likely
+// still to do. A finished house in a slow town is cheap, not distressed.
+export const OLD_HOUSE_YEAR = 1980;
+
+export function isOldHouse(yearBuilt) {
+  const y = Number(yearBuilt) || 0;
+  return y > 1800 && y < OLD_HOUSE_YEAR;
+}
+
 // Distress = ANY of: stale (DOM ≥ staleDom), a price-cut history, or priced
 // ≤90% of the cohort's median $/sqft. OR semantics — the signals are
-// alternatives, not requirements.
+// alternatives, not requirements. `old` (year known, before OLD_HOUSE_YEAR)
+// is the other half of the sweep's "cut-or-old" rule.
 export function distressSignals(listing, { medianPpsf = 0, staleDom = 45 } = {}) {
   const stale = staleDom > 0 && Number(listing.daysOnMarket) >= staleDom;
   const cut = priceCuts(listing).count > 0;
@@ -41,7 +51,19 @@ export function distressSignals(listing, { medianPpsf = 0, staleDom = 45 } = {})
   const cheap = price > 0 && sqft > 0 && medianPpsf > 0 && price / sqft <= 0.9 * medianPpsf;
   // `priced`: a signal in the price itself (a cut, or cheap for the market),
   // for pulls where every listing is already stale by query.
-  return { stale, cut, cheap, any: stale || cut || cheap, priced: cut || cheap };
+  const old = isOldHouse(listing.yearBuilt);
+  return { stale, cut, cheap, old, any: stale || cut || cheap, priced: cut || cheap };
+}
+
+/**
+ * meetsDistressRule(sig, rule) — a listing's signals read by a pull's rule:
+ * "cut-or-old" (a price cut or an older house), "cut-or-cheap" (a price cut
+ * or a cheap $/sqft), else "any" (stale, cut or cheap).
+ */
+export function meetsDistressRule(sig = {}, rule = "any") {
+  if (rule === "cut-or-old") return Boolean(sig.cut || sig.old);
+  if (rule === "cut-or-cheap") return Boolean(sig.cut || sig.cheap);
+  return Boolean(sig.stale || sig.cut || sig.cheap);
 }
 
 export function scoreListing(listing, { medianPpsf = 0 } = {}) {

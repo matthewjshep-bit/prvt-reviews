@@ -129,11 +129,17 @@ export function blockedByTags(tags = [], botOffTags = []) {
 /**
  * listingDistressed(doc, rule) — the pull's own reading: a listing that
  * passed the sweep's filters and is distressed by the agent row's rule
- * (routes/outreach.js: "cut-or-cheap" needs a price cut or a cheap $/sqft).
+ * (routes/outreach.js: "cut-or-cheap" needs a price cut or a cheap $/sqft,
+ * "cut-or-old" a price cut or a house built before 1980 — OLD_HOUSE_YEAR in
+ * ghl-broker/outreach-score.js).
  */
 export function listingDistressed(doc = {}, rule = null) {
   if (!doc?.qualifies) return false;
   const d = doc.distress || {};
+  if (rule === "cut-or-old") {
+    const y = Number(doc.yearBuilt) || 0;
+    return Boolean(d.cut || d.old || (y > 1800 && y < 1980));
+  }
   return rule === "cut-or-cheap" ? Boolean(d.cut || d.cheap) : Boolean(d.stale || d.cut || d.cheap);
 }
 
