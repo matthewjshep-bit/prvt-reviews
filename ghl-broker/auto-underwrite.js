@@ -43,6 +43,7 @@ import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
 import { offMarketSignals, OFF_MARKET_TAG } from "./shared/off-market.js";
+import { agentRuledOut } from "./shared/held-underwrites.js";
 import { leadSourceOf, theirNumberCheck } from "./shared/lead-source.js";
 import { buyerCeiling } from "./shared/post-mortem.js";
 import { markSides, sameSideFirst, isAcross, acrossLabel } from "./shared/same-side.js";
@@ -1477,6 +1478,18 @@ async function runUnderwrite(job, ctx) {
   job.extractionNote = extraction.note;
   job.addressSource = extraction.source;
   got.extraction = extraction;
+
+  // A house the agent already told us is not a project gets no number from
+  // the machine (shared/held-underwrites.js agentRuledOut). An agent's
+  // Walker Park Rd (2026-10-08): she said "not a project", then mentioned a
+  // different house with no address; the TIER 1 workflow underwrote the
+  // Subject Property field — Walker Park — and it was floated and papered.
+  // Held, the nightly triage retires it as turnkey. A person still can.
+  if (job.contactId && extraction.address && !["operator", "anyway"].includes(extraction.source)) {
+    const evs = (await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => [])) || [];
+    const out = agentRuledOut(evs, extraction.address);
+    if (out) return finishHeld(job, ctx, { extraction, held: [`turnkey per the agent — ${out.why}`], partial: {} });
+  }
 
   if (!extraction.address) {
     return finishHeld(job, ctx, { extraction, held: ["no property address in the message"], partial: {} });

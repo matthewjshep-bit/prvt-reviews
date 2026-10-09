@@ -268,3 +268,14 @@ test("a house the agent brought is never retired because the agent's GHL card sa
   const here = inbound("Honestly it's turnkey");
   assert.equal(triage({ drafts: [here], brought: true }).action, "retire", "said about this very house");
 });
+
+test("a house the agent said is not a project is ruled out for the machine — her latest word on it counts", async () => {
+  const { agentRuledOut } = await import("./held-underwrites.js");
+  const pd = (data, d = 1, address = "2027 SE Walker Park Rd, Shelton, WA 98584") => ({ type: "property_details", address, at: ago(d), data });
+  const said = [pd({ condition: "great home, large sq ft, waterfront with dock", workNeeded: "none, not a project" })];
+  assert.match(agentRuledOut(said, "2027 Se Walker Park Rd, Shelton, WA").why, /isn't a project/);
+  assert.equal(agentRuledOut(said, "123 Other St, Shelton, WA"), null, "only that house");
+  assert.equal(agentRuledOut([...said, pd({ workNeeded: "actually needs a new roof" }, 0)], "2027 Se Walker Park Rd, Shelton, WA"), null, "she changed her read");
+  assert.ok(agentRuledOut([pd({ condition: "turnkey, move-in ready" })], "2027 Se Walker Park Rd"), "turnkey");
+  assert.equal(agentRuledOut([pd({ condition: "needs paint and flooring", workNeeded: "cosmetic" })], "2027 Se Walker Park Rd"), null);
+});

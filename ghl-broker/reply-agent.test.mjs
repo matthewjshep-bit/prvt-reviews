@@ -4251,6 +4251,26 @@ test("a house we passed on from Tier 1 with no offer row isn't moved back to Tie
   assert.ok(t1.length === 0 || t1.every((a) => a.status === "skipped"), JSON.stringify(t1.map((a) => [a.type, a.status])));
 });
 
+test("an agent who mentions a new house with no address isn't put in TIER 1 until we have it — TIER 1 underwrote the house she'd ruled out", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "I have one that was being flipped. Almost done but the owner moved out of state and needs to sell",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "new_property", confidence: "high", needsHuman: false, propertyAddress: "", reply: "Got it, that could work. What's the address?" }),
+      startUnderwrite: async () => { throw new Error("no underwrite without an address"); },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const t1 = tierOneActions(d.actions);
+  assert.ok(t1.length > 0 && t1.every((a) => a.status === "skipped"), JSON.stringify(t1.map((a) => [a.type, a.status])));
+  assert.ok(t1.every((a) => /waiting for the address/.test(a.detail || "")));
+});
+
 /* ---------- the current offer and the paper (2026-09-25) ---------- */
 
 // 13041 SE 208th St, Kent: five offer rows on one house, the thread at 400K
@@ -4551,6 +4571,25 @@ const withMessages = (base, messages) => ({
   },
 });
 const hoursAgo = (h) => new Date(Date.now() - h * 3600000).toISOString();
+
+test("no number floats by itself on a house the agent said is not a project", async () => {
+  _resetJobs();
+  const client = withMessages(ghlStubFor(["agent"]).client, []);
+  const walker = { id: "o-810", address: "2027 SE Walker Park Rd, Shelton, WA 98584", contactId: "c1", cashAmount: 810000, status: "new", createdAt: new Date().toISOString(),
+    autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+  const store = fakeStore();
+  store.listOffers = async () => [walker];
+  await store.appendContactEvents("LOC", "c1", [{ type: "property_details", party: "agent", at: hoursAgo(20), address: walker.address, source: "conversation",
+    data: { condition: "great home, large sq ft, waterfront with dock", workNeeded: "none, not a project" } }]);
+  let drafted = false;
+  const r = await startProactive({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: walker, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return { ...DRAFT, intent: "realm_check", reply: "We'd land in the 760s to 810." }; } },
+  });
+  assert.equal(r.job, null);
+  assert.match(r.skipped, /isn't a project/);
+  assert.equal(drafted, false);
+});
 
 test("a re-underwrite above the number we already texted on the house is not floated to the agent", async () => {
   _resetJobs();

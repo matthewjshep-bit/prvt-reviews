@@ -82,3 +82,8 @@ test("the pass says what we buy and names one seller that becomes a deal, so age
     assert.match(p, /estate|into care|move by a date/, p);
   }
 });
+
+test("\"it is not a project, it's a great home\" is a turnkey answer", () => {
+  assert.equal(qualifyStep({ words: "It is not a project. Its a great home. Large sq ft and a dock." }).move, "pass");
+  assert.equal(qualifyStep({ words: "Big project, it's a lot of house" }).move, "ask");
+});

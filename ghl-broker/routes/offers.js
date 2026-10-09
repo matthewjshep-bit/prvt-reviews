@@ -168,6 +168,7 @@ import { normalizeAgentPulse } from "../shared/agent-pulse.js";
 import { ensureOfferPage, refreshOfferPages } from "../offer-page.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
 import { OFF_MARKET_TAG } from "../shared/off-market.js";
+import { agentRuledOut } from "../shared/held-underwrites.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
@@ -5426,6 +5427,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!check.ok) {
         await markPaperHeld(offer, check, draftId);
         return { ok: false, held: true, address: offer.address, reason: check.reason };
+      }
+      // Nobody pressed anything, and the agent said this house is not a
+      // project: no paper on it by itself (Walker Park Rd, 2026-10-09).
+      if (unattended) {
+        const ruledOut = agentRuledOut(await store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []), offer.address);
+        if (ruledOut) {
+          const why = { reason: `${ruledOut.why} — no paper goes out on it by itself` };
+          await markPaperHeld(offer, why, draftId);
+          return { ok: false, held: true, address: offer.address, reason: why.reason };
+        }
       }
       const since = afterCounter ? offer.counterBand?.acceptedAt : null;
       if (afterCounter && !since) return { ok: false, reason: "the offer was not re-issued at their number" };

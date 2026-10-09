@@ -45,3 +45,17 @@ test("a person pressing the letter on the draft is deciding — the stop doesn't
   const r = await deps.sendOfferDocs({ contactId: "agent-s", addressHint: "1 Main St", transcript: "" });
   assert.notEqual(r.reason, "you stopped the bot on them");
 });
+
+test("no letter goes by itself on a house the agent said is not a project", async () => {
+  await store.createOffer({
+    id: crypto.randomUUID(), locationId: LOC, contactId: "agent-t", contactName: "Agent",
+    address: "2027 SE Walker Park Rd, Shelton, WA 98584", cashAmount: 810000, calc: { settings: {}, inputs: {}, offers: {} },
+    createdAt: new Date().toISOString(), status: "new", statusHistory: [],
+  });
+  await recordEvent({ store, locationId: LOC, contactId: "agent-t", type: "property_details", address: "2027 SE Walker Park Rd, Shelton, WA 98584",
+    at: new Date(Date.now() - 3600000).toISOString(), source: "conversation", data: { condition: "great home, waterfront with a dock", workNeeded: "none, not a project" } });
+  const r = await deps.sendOfferDocs({ contactId: "agent-t", addressHint: "2027 SE Walker Park", transcript: "", unattended: true });
+  assert.equal(r.ok, false);
+  assert.equal(r.held, true);
+  assert.match(r.reason, /isn't a project/);
+});
