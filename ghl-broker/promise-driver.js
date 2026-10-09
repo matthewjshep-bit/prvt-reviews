@@ -7,6 +7,9 @@
 //
 //   send_number       the offer is priced and nothing went out → float it, the
 //                     way a finished underwrite floats it (deps.floatOffer)
+//   send_paper        we said "can have it over today" and the written offer
+//                     hasn't gone → send it for their records
+//                     (deps.sendOfferDocs, the after-float / pushback send)
 //   start_underwrite  we promised a number and nothing ever ran → start it
 //                     (deps.startUnderwrite: daily cap, queue if capped, a dry
 //                     run unless AUTO_UNDERWRITE_ENABLED)
@@ -43,7 +46,7 @@ const iso = (ms) => new Date(ms).toISOString();
 // The reply agent may start the underwrite itself in the minute after it
 // promises a number ("number first"); give it room before starting another.
 export const DRIVER_GRACE_MIN = 30;
-const ACTING = new Set(["send_number", "start_underwrite", "ask_numbers", "rerun"]);
+const ACTING = new Set(["send_number", "send_paper", "start_underwrite", "ask_numbers", "rerun"]);
 
 /**
  * driveOpenPromises({ client, locationId, saved, store, sendsEnabled, deps, now, only })
@@ -120,7 +123,10 @@ export async function driveOpenPromises({ client = null, locationId, saved = {},
 
       // Floating the number is a text the machine starts: it waits, unclaimed,
       // while their text or your own draft is in the outbox.
-      if (v.move === "send_number") {
+      // The written offer we said we'd send goes the same way: and only when
+      // sends are on, so a dry run never uses up the claim.
+      if (v.move === "send_number" || v.move === "send_paper") {
+        if (v.move === "send_paper" && !sendsEnabled) { row.status = "skipped"; row.reason = "sends are off on the broker"; continue; }
         const waiting = await waitingReason({ store, locationId, contactId: p.contactId });
         if (waiting) { row.status = "waiting"; row.reason = waiting; continue; }
       }
@@ -137,6 +143,18 @@ export async function driveOpenPromises({ client = null, locationId, saved = {},
         if (typeof deps.floatOffer !== "function") { row.status = "skipped"; row.reason = "the float is not wired"; continue; }
         const r = await deps.floatOffer({ offerId: v.offerId });
         if (r?.skipped) { row.status = "skipped"; row.reason = r.skipped; } else { row.status = "started"; row.jobId = r?.job?.id || null; out.started++; }
+      } else if (v.move === "send_paper") {
+        // The same send the written offer takes after a float or with the
+        // reply to a no (routes/offers.js sendOfferDocs): pinned to the offer,
+        // "for your records" words, text and email, refused on a stopped
+        // thread or a number the thread has moved past.
+        if (typeof deps.sendOfferDocs !== "function") { row.status = "skipped"; row.reason = "offer sends are not wired"; continue; }
+        const r = await deps.sendOfferDocs({
+          contactId: p.contactId, addressHint: p.address || "", offerId: v.offerId, unattended: true,
+          channels: ["sms", "email"], forRecord: true, by: "promise",
+        }).catch((e) => ({ ok: false, reason: String(e?.message || e) }));
+        if (r?.ok && !r.dryRun && !r.unchanged) { row.status = "started"; out.started++; }
+        else { row.status = "skipped"; row.reason = String(r?.reason || (r?.dryRun ? "sends are off" : r?.unchanged ? "it had already gone" : "not sent")).slice(0, 160); }
       } else {
         if (typeof deps.startUnderwrite !== "function") { row.status = "skipped"; row.reason = "the underwriter is not wired"; continue; }
         const r = await deps.startUnderwrite({ contactId: p.contactId, message: "", address: p.address, askingPrice: 0, replaceOfferId: null });

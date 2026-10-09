@@ -607,9 +607,12 @@ const PLAYBOOK = () => ({
   // (send_offer) with its own ask/auto mode.
   // `afterFloat` (2026-10-02): the written offer follows a floated number —
   // after `silenceHours` working hours with no answer, and (`onPushback`)
-  // with the reply to a no. Agents only, off until switched on.
+  // with the reply to a no. `onNeutral` (2026-10-08): after any other answer
+  // that isn't a pass, a counter or a sold house (shared/paper-follows.js
+  // paperAfterAnswerDue), on the same tick and daily cap as the silence one.
+  // Agents only, off until switched on.
   sendOffer: { onClearUnderwrite: false, channels: ["sms"], docs: ["image", "pdf"],
-    afterFloat: { enabled: false, silenceHours: 24, onPushback: false, dailyCap: 20 } },
+    afterFloat: { enabled: false, silenceHours: 24, onPushback: false, onNeutral: false, dailyCap: 20 } },
   // The first text to a listing agent the outreach page imported, drafted by
   // the bot from the hook listing instead of sent by a GHL workflow template.
   // Sends itself only if outreach_open is on the party's auto-send list.
@@ -691,9 +694,13 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   //             the working day as well, so a stalled thread doesn't wait for
   //             7pm. By day it never releases a person's call, and never a
   //             held reply younger than releaseMinAgeMin.
+  //             releaseOther: the one person's call it may release (Matt,
+  //             2026-10-08) — an agent's reply the bot couldn't place
+  //             (intent `other`) whose every gate is clean. Off until he
+  //             switches it on; investors and every other intent unchanged.
   driver: {
     promises: { enabled: false },
-    daytime: { enabled: false, startHour: 9, endHour: 18, everyHours: 2, releaseMinAgeMin: 120, heldSweep: false },
+    daytime: { enabled: false, startHour: 9, endHour: 18, everyHours: 2, releaseMinAgeMin: 120, heldSweep: false, releaseOther: false },
     // Rows on Today the machine clears by itself after a wait (shared/
     // pipeline.js timerMoves). They ride the daytime pass, so they need it on.
     timers: { enabled: false, floatAfterHours: 4, goneQuietDays: 14 },
@@ -958,6 +965,7 @@ function normalizePlaybook(p, party, seed = {}) {
           enabled: party === "agent" && bool(af.enabled, false),
           silenceHours: int(af.silenceHours, 24, 4, 240),
           onPushback: party === "agent" && bool(af.onPushback, false),
+          onNeutral: party === "agent" && bool(af.onNeutral, false),
           dailyCap: int(af.dailyCap, 20, 1, 200),
         },
       };
@@ -1158,6 +1166,7 @@ export function normalizeConversationAi(doc, seed = {}) {
           everyHours: int(t.everyHours, DT.everyHours, 1, 6),
           releaseMinAgeMin: int(t.releaseMinAgeMin, DT.releaseMinAgeMin, 30, 720),
           heldSweep: bool(t.heldSweep, DT.heldSweep),
+          releaseOther: bool(t.releaseOther, DT.releaseOther),
         },
         timers: (() => {
           const m = v.timers && typeof v.timers === "object" ? v.timers : {};

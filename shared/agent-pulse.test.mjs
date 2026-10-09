@@ -94,6 +94,8 @@ test("a listing counts only when the pull found it distressed, still up, and new
   assert.equal(listingDistressed({ qualifies: true, distress: { stale: true } }, "cut-or-cheap"), false, "stale alone isn't cut-or-cheap");
   assert.equal(listingDistressed({ qualifies: true, distress: { cheap: true } }, "cut-or-cheap"), true);
   assert.equal(listingDistressed({ qualifies: false, distress: { cut: true } }, null), false);
+  assert.equal(listingDistressed({ qualifies: true, yearBuilt: 2015, distress: { stale: true, cheap: true } }, "cut-or-old"), false, "a cheap finished house isn't cut-or-old");
+  assert.equal(listingDistressed({ qualifies: true, yearBuilt: 1962, distress: { stale: true } }, "cut-or-old"), true, "an older house is");
   assert.equal(freshListingFor({ listings: [listing({ firstSeen: ago(30) })], settings: S, now: NOW }), null, "first seen a month ago isn't fresh");
   assert.equal(freshListingFor({ listings: [listing({ lastSeen: ago(45) })], settings: S, now: NOW }), null, "not seen on a pull lately — likely gone");
 });

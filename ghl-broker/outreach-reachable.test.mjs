@@ -130,7 +130,7 @@ test("agents already in GHL or without a phone don't crowd the day's pick out of
   _resetJobs();
   const loc = "loc-crowd";
   const batch = await store.createOutreachBatch(loc, { name: "Autopilot · Pierce, WA" });
-  const good = (k) => ({ agentKey: k, doc: { name: k, phone: `20655${String(Math.random()).slice(2, 7)}`, distressedCount: 1, distressRule: "cut-or-cheap", hook: { address: `${k} St`, price: 400000, score: 50 }, ghl: {} } });
+  const good = (k) => ({ agentKey: k, doc: { name: k, phone: `20655${String(Math.random()).slice(2, 7)}`, distressedCount: 1, distressRule: "cut-or-old", hook: { priceCut: true, address: `${k} St`, price: 400000, score: 50 }, ghl: {} } });
   await store.upsertOutreachAgents(loc, batch.id, ["g1", "g2", "g3", "g4", "g5"].map(good));
   await new Promise((r) => setTimeout(r, 5));
   // 1,200 newer rows nobody can be picked from: in GHL already, or no phone.
@@ -163,7 +163,7 @@ test("an agent imported from another county's batch isn't picked again here", as
 
 test("two rows with one phone are picked once in a run", async () => {
   _resetJobs();
-  const row = (k, phone) => ({ agentKey: k, status: "new", contactId: null, doc: { name: k, phone, distressedCount: 1, distressRule: "cut-or-cheap", hook: { address: "1 St", price: 400000, score: 50 }, ghl: {} } });
+  const row = (k, phone) => ({ agentKey: k, status: "new", contactId: null, doc: { name: k, phone, distressedCount: 1, distressRule: "cut-or-old", hook: { priceCut: true, address: "1 St", price: 400000, score: 50 }, ghl: {} } });
   const byBatch = { "b-King": [row("e:yo@acme.com", "2065550102")], "b-Pierce": [row("n:yolanda-young|acme", "2065550102"), row("p:2065550177", "2065550177")] };
   const fake = {
     cursors: new Map(),

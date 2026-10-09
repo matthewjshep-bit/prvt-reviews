@@ -67,6 +67,41 @@ test("today's promises read as promises, and today's plain replies don't", () =>
   assert.equal(detectPromise("Ran the Bateman numbers. As-is with a quick close we could likely do around 600k."), null);
 });
 
+test("saying we'll have it over today is a promise of the written offer", () => {
+  assert.equal(detectPromise("Totally understand. I can have it over today so you have it on file."), "paper");
+  assert.equal(detectPromise("Sounds good, I'll send it over this afternoon."), "paper");
+  assert.equal(detectPromise("Great — I'll send our written offer over shortly."), "paper");
+  assert.equal(detectPromise("We'll get our offer in today."), "paper");
+  assert.equal(detectPromise("I'll have our offer to you by 3."), "paper");
+  assert.equal(detectPromise("Let me send over the formal offer now."), "paper");
+  assert.equal(detectPromise("Feel free to send it over when you get a chance."), null, "asks them");
+  assert.equal(detectPromise("Let me run it by underwriting and I'll send it over."), "number", "a number first");
+});
+
+const paperPromise = (hoursAgo) => promise(hoursAgo, { data: { what: "paper", draftId: `d${hoursAgo}`,
+  dueAt: new Date(Date.parse(at(hoursAgo)) + PROMISE_DUE_HOURS * HOUR).toISOString(), text: "Totally understand. I can have it over today." } });
+
+test("a promise to send it over is kept once the offer went out", async () => {
+  const store = fakeStore({ events: [paperPromise(5), { id: "os1", contactId: "c1", type: "offer_sent", at: at(2), data: { by: "conversation" } }] });
+  const s = starter();
+  const r = await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, listUnderwriteJobs: () => [] } });
+  assert.equal(r.kept, 1);
+  assert.equal(s.calls.length, 0);
+});
+
+test("a promise to send it over isn't kept by a float, and owes a row on Today, not a 'still working on it' text", async () => {
+  const store = fakeStore({
+    events: [paperPromise(5)],
+    drafts: [{ id: "rc1", contactId: "c1", status: "sent", intent: "realm_check", outbound: { kind: "realm_check" }, sentAt: at(2) }],
+  });
+  const s = starter();
+  const r = await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, listUnderwriteJobs: () => [] } });
+  assert.equal(r.kept, 0);
+  assert.equal(r.owed, 1);
+  assert.equal(s.calls.length, 0, "no promise_due text about the paper");
+  assert.equal(store.events.find((e) => e.type === "promise_owed").data.what, "paper");
+});
+
 /* ---------- the sweep ---------- */
 
 test("a due promise with nothing sent is owed: recorded, and a promise_due text that carries what we said", async () => {

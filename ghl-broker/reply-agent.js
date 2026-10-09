@@ -42,12 +42,12 @@ import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
-import { paperWent, paperWorthy, floatSentAt } from "./shared/paper-follows.js";
+import { paperWent, paperWorthy, floatSentAt, isRoughNumber } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
-import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
+import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { normalizeOpener, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
@@ -69,7 +69,8 @@ import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
 import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
 import { signedContractIn, themLines } from "./shared/contract-signed.js";
-import { sameStreet } from "./shared/us-address.js";
+import { sameStreet, sameHouse } from "./shared/us-address.js";
+import { releasableHeld } from "./shared/conversation-audit.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
@@ -252,7 +253,7 @@ export async function draftReply({
   message, transcript = "", offers = { text: "", amounts: [], count: 0 }, contact = {},
   underwriting = [], instructions = "", signer = "", aiApiKey, companyContact = {},
   party = "agent", config = null, context = null, channel = "sms", outbound = null, booking = false, inboundKind = "text", call = null,
-  batch = null, shadowModel = null, now = Date.now(),
+  batch = null, shadowModel = null, now = Date.now(), fix = null,
 }) {
   const client = new Anthropic({ apiKey: aiApiKey, timeout: 120_000 });
   const cfg = config || normalizeConversationAi(null);
@@ -262,7 +263,7 @@ export async function draftReply({
       : "",
   };
   const system = buildSystemPrompt({ config: cfg, party, channel });
-  const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound, inboundKind, call, companyContact });
+  const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound, inboundKind, call, companyContact, fix });
   const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
   const params = draftParams({ model: REPLY_MODEL, system, user, schema: schemaFor(party, { outbound, booking: Boolean(booking) }), effort: draftEffort(outbound) });
 
@@ -290,7 +291,9 @@ export async function draftReply({
     ? await Promise.race([shadowRun, new Promise((r) => { graceTimer = setTimeout(() => r({ model: shadowOn, error: "shadow still running when the real draft was done" }), SHADOW_GRACE_MS); })])
     : null;
   clearTimeout(graceTimer);
-  const usage = meterAi(outbound ? "draft_machine" : "draft_reply", response, { model: REPLY_MODEL, batched });
+  // A reply written again because a gate caught it is its own line on the
+  // spend ledger, so what the redraft costs can be read apart.
+  const usage = meterAi(outbound ? "draft_machine" : fix?.length ? "draft_regate" : "draft_reply", response, { model: REPLY_MODEL, batched });
   return { ...parseDraft(response, intents, cfg, outbound), usage, ...(shadow ? { shadow } : {}) };
 }
 
@@ -1031,6 +1034,37 @@ export function personsCall(intent = "") {
 }
 
 /**
+ * redraftOnGate({ draft, gate, gateFor, config, redraft }) → { draft, gate }
+ *
+ * A reply a content gate caught is written once more, with what caught it
+ * fed back as corrections. Only the fixable kind: words and numbers in the
+ * reply. A draft the model itself sent to a person (needsHuman), wasn't sure
+ * of, or left empty is a person's whatever it says, and costs no second call.
+ * Neither does one held only by its intent's lock ("a counter is a person's
+ * call"). The rewrite is judged by the same gates, unchanged; only its words
+ * are taken — the intent, address and numbers read off their text stay the
+ * first read's. Still caught: the first draft and its reasons stand.
+ */
+export async function redraftOnGate({ draft, gate, gateFor, config = null, redraft }) {
+  if (!draft || !gate || typeof redraft !== "function" || typeof gateFor !== "function") return { draft, gate };
+  if (gate.ok || (gate.locked && gate.clean)) return { draft, gate };
+  const minConfidence = config?.autoSend?.minConfidence || "high";
+  // The model's own "a person should see this" is never argued with by a
+  // second draft, whether or not the page holds on it.
+  if (draft.needsHuman) return { draft, gate };
+  if ((CONFIDENCE_RANK[draft.confidence] ?? 0) < (CONFIDENCE_RANK[minConfidence] ?? 2)) return { draft, gate };
+  if (!String(draft.reply || "").trim() || RELEASE_QUIET.has(draft.intent)) return { draft, gate };
+  const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
+  if (!tripped.length) return { draft, gate };
+  const again = await Promise.resolve().then(() => redraft(tripped)).catch(() => null);
+  if (!String(again?.reply || "").trim()) return { draft: { ...draft, redraftHeld: { for: tripped, flags: ["the redraft came back empty"] } }, gate };
+  const next = { ...draft, reply: again.reply, redraftedFor: tripped, replyBeforeRedraft: draft.reply };
+  const g2 = gateFor(next);
+  if (g2.ok || (g2.locked && g2.clean)) return { draft: next, gate: g2 };
+  return { draft: { ...draft, redraftHeld: { for: tripped, flags: (g2.flags || []).filter((f) => f !== g2.locked).slice(0, 6) } }, gate };
+}
+
+/**
  * decideAutoSend({ gate, party, intent, channel, config, sendsEnabled, humanActive, hold })
  *
  * The page's switches, on top of the gates. Returns { send, reason } with the
@@ -1367,6 +1401,25 @@ export function knownOfferFor(rows = [], address = "", now = Date.now()) {
     const days = (now - ts) / 86400000;
     return o.status === "draft" ? days <= KNOWN_DRAFT_DAYS : days <= KNOWN_OFFER_DAYS;
   }) || null;
+}
+
+/**
+ * rerunsRoughOffer({ known, book, events }) → boolean
+ *
+ * A rough first pass (isRoughNumber) is a number we said was rough: once the
+ * agent tells us more about the house — their value, their repairs, the
+ * work — the underwrite runs again on it, the way a held draft does. Only
+ * while it is still the house's current offer (a re-run already landed
+ * otherwise) and nothing went out on paper (then it is a person's to re-price).
+ */
+export function rerunsRoughOffer({ known = null, book = [], events = [] } = {}) {
+  if (!known || !isRoughNumber(known) || paperWent(known) || known.deal) return false;
+  const current = currentOfferFor(book, known);
+  if (current && current.id !== known.id) return false;
+  const since = Date.parse(known.updatedAt || known.createdAt || "") || 0;
+  return (events || []).some((e) => ["agent_estimate", "property_details"].includes(e?.type)
+    && e.address && (propertyKey(e.address) === propertyKey(known.address || "") || sameHouse(e.address, known.address || ""))
+    && (Date.parse(e.at || "") || 0) > since);
 }
 
 // The offer the message is about. Exact address key first, then a loose
@@ -2188,8 +2241,10 @@ export const OUTBOUND_KINDS = {
       // goes first and this waits for their answer.
       const takeOn = config?.parties?.agent?.takeCheck?.enabled;
       const haveTheirs = Boolean(dossier?.have?.arv || dossier?.have?.rehab);
-      // …unless the underwrite is confident: then our number leads.
-      if (takeOn && !haveTheirs && !leadsWithNumber({ offer, config })) return "no read from the agent yet — the take check goes first";
+      // …unless the underwrite is confident: then our number leads. A rough
+      // first pass goes too: it was promised, and it asks for their read
+      // itself (floatExtras' their_read question).
+      if (takeOn && !haveTheirs && !leadsWithNumber({ offer, config }) && !isRoughNumber(offer)) return "no read from the agent yet — the take check goes first";
       return true;
     },
     // The exact number and its rough forms ("around 445ish"), never rounded
@@ -2460,7 +2515,10 @@ export async function startProactive({
     const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
     if (gone) return { skipped: fellThroughLine(gone), job: null };
     const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues, kind });
-    if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
+    // The holding reply this number answers: the float carries on from it
+    // (floatAnswersHeldReply). Anything else waiting holds the float.
+    if (waiting && floatAnswersHeldReply({ held: waiting, kind, offer, now: typeof deps.now === "function" ? deps.now() : Date.now() })) continues = waiting.id;
+    else if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
     // One house at a time, three days apart, two a week (shared/agent-focus.js).
     // The sweep asks before it claims; this is every other door asking too.
     if (spec.party === "agent") {
@@ -2534,6 +2592,34 @@ export async function startProactive({
   );
   return { skipped: null, job };
 }
+/**
+ * floatAnswersHeldReply({ held, kind, offer, now }) → boolean
+ *
+ * An agent texts about a house, our holding reply ("let me run the numbers")
+ * is held for a person, and the underwrite it started lands an offer. Until
+ * 2026-10-08 the float stood down for that very reply, and nothing tried it
+ * again unless the timers were on — and they too wait for the reply to be
+ * dealt with — so the offer sat with no float (proactive: null). The number
+ * is the answer that reply promised, so the float carries on from it (takes
+ * its place) when all of these hold: it is a float of our read or number;
+ * the held row answers their text, is still a draft, and is about this house;
+ * it came in before the offer existed (a newer text is a new question); and
+ * it is a reply the 7pm audit would send as it stands (releasableHeld:
+ * every gate clean, nothing for a person) and no person's call (a counter,
+ * an acceptance, a call). Anything else still holds the float.
+ */
+const FLOAT_KINDS = new Set(["take_check", "realm_check"]);
+export function floatAnswersHeldReply({ held, kind, offer, now = Date.now() }) {
+  if (!held || !FLOAT_KINDS.has(kind) || !offer?.address) return false;
+  if (held.status !== "draft" || !answersInbound(held) || held.outbound?.kind) return false;
+  const heldAt = Date.parse(held.createdAt || ""), offerAt = Date.parse(offer.createdAt || "");
+  if (!Number.isFinite(heldAt) || !Number.isFinite(offerAt) || heldAt >= offerAt) return false;
+  if (!held.propertyAddress || !sameHouse(held.propertyAddress, offer.address)) return false;
+  const party = held.party || "agent";
+  if (party !== "agent" || (NEVER_AUTO.agent.includes(held.intent) && held.intent !== "other")) return false;
+  return releasableHeld(held, { loose: true, mode: "night", now });
+}
+
 // The kinds that put a price on a house in front of the agent.
 const NUMBER_FLOATS = new Set(["realm_check", "hot_push"]);
 // "850K", not "$850K": a dollar sign in a text trips carrier spam filters, and
@@ -2547,8 +2633,11 @@ const kText = (n) => `${Math.round(n / 1000)}K`;
  * think the property is worth and costs, there is nothing to draw out and
  * the cash number can go; otherwise float the ARV/rehab read first.
  */
-export function chooseProactiveKind({ events = [], address = "", leadWithNumber = false } = {}) {
-  if (leadWithNumber) return "realm_check";
+// A rough first pass (shared/paper-follows.js isRoughNumber) floats as a
+// realm check too: the agent was promised a number, and the float itself
+// asks for their read.
+export function chooseProactiveKind({ events = [], address = "", leadWithNumber = false, rough = false } = {}) {
+  if (leadWithNumber || rough) return "realm_check";
   const d = address ? propertyDossier(events, address) : null;
   return d && (d.have.arv || d.have.rehab) ? "realm_check" : "take_check";
 }
@@ -2646,6 +2735,17 @@ export function floatExtras({ offer, saved, dossier = null, requote = false, the
   if (requote || !offer?.cashAmount) return {};
   const rc = conversationConfig(saved || {}).parties?.agent?.realmCheck || {};
   const out = {};
+  // A rough first pass (2026-10-08): always a range, never the math (the
+  // math reads as a number we stand behind), and the question is their read
+  // — that is what re-runs it.
+  if (isRoughNumber(offer)) {
+    const r = floatRange(offer.cashAmount, rc.range?.pct);
+    if (r) out.range = { ...r, words: rangeWords(r) };
+    const q = setupQuestionFor({ offerId: offer.id || offer.address || "", dossier, ask: ["their_read"] })
+      || (rc.setupQuestion?.enabled ? setupQuestionFor({ offerId: offer.id || offer.address || "", dossier, ask: rc.setupQuestion.ask }) : null);
+    if (q) out.question = q;
+    return out;
+  }
   if (rc.withMath && !theirs) {
     const m = offer.math || compactMath(offerMath(offer));
     if (m && !(m.premium > 0) && Math.abs(m.total - Number(offer.cashAmount)) < 1000 && m.pctOfArv >= FLOAT_MATH_MIN_PCT) {
@@ -3296,12 +3396,15 @@ async function runReply(job, ctx) {
   /* --- 2. the draft --- */
   job.phase = "drafting";
   let draft;
+  // What the model was asked, kept for the one redraft a content gate earns
+  // (redraftOnGate, below). Null for the canned photo line.
+  let replyArgs = null;
   if (job.attachments > 0 && !String(job.message || "").trim()) {
     // A bare photo gets the canned line and no model call — the rule is
     // "never analyse the image", and the surest way not to is not to look.
     draft = mediaDraft(config);
   } else {
-    draft = await deps.draft({
+    replyArgs = {
       message: inboundText,
       transcript: a.transcript,
       offers: context.offers || { text: "", amounts: [], count: 0 },
@@ -3312,7 +3415,8 @@ async function runReply(job, ctx) {
       aiApiKey,
       party, config, context: draftContext, channel: job.channel, booking: Boolean(bookingText),
       inboundKind: job.inboundKind || "text", call: job.call || null,
-    });
+    };
+    draft = await deps.draft(replyArgs);
   }
   job.intent = draft.intent;
   job.summary = draft.summary;
@@ -3657,7 +3761,15 @@ async function runReply(job, ctx) {
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, inboundText),
   });
-  const gate = gateFor(draft);
+  let gate = gateFor(draft);
+  // A draft a content gate caught — a number not in the book, "cash close",
+  // "assignment", too long — is written once more, told exactly what held
+  // it. The same gates judge the rewrite: clean, it carries on as any clean
+  // draft would; still caught, the first draft and its reasons stay for Matt.
+  if (replyArgs && !a.hold?.held) {
+    const r = await redraftOnGate({ draft, gate, gateFor, config, redraft: (fix) => deps.draft({ ...replyArgs, fix }) });
+    draft = r.draft; gate = r.gate;
+  }
   let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   // The text after a call is its own allowlist slot on top of the intent's:
   // a question asked on the phone still needs "text after a call" ticked.
@@ -4141,6 +4253,10 @@ async function runReply(job, ctx) {
     // The model's own words, kept when the reply was rewritten to say the
     // offer went out, so step 5 can put them back if it didn't.
     ...(draft.replyBeforeSend ? { replyBeforeSend: draft.replyBeforeSend } : {}),
+    // Written once more because a gate caught the first one (redraftOnGate):
+    // what caught it, and — when the rewrite was caught too — that it was.
+    ...(draft.redraftedFor ? { redraftedFor: draft.redraftedFor, replyBeforeRedraft: draft.replyBeforeRedraft || "" } : {}),
+    ...(draft.redraftHeld ? { redraftHeld: draft.redraftHeld } : {}),
     agentTake,
     propertyDetails: propertyDetails || null,
     autoSendable: gate.ok,
@@ -4416,6 +4532,29 @@ async function runReply(job, ctx) {
       rerunHeld = namedKnown;
       plan.auto = plan.auto.map((x) => (x.type === "start_underwrite" ? { ...x, replaceOfferId: namedKnown.id, why: "they told us more since it held — run it again" } : x));
       record = { ...record, actions: (record.actions || []).map((x) => (x.type === "start_underwrite" && x.status === "pending" ? { ...x, replaceOfferId: namedKnown.id } : x)), updatedAt: new Date().toISOString() };
+      await store.updateReplyDraft(record.id, record).catch(() => {});
+    }
+  }
+  // A rough first pass is the same: we said it was rough and asked for their
+  // read, so their read re-runs it (rerunsRoughOffer) — whether or not a rule
+  // planned an underwrite on this message. Not when a re-quote on their
+  // numbers is already planned, and not on a house we've been told isn't ours
+  // or are still qualifying.
+  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !qualifyHeld
+      && ![...plan.auto, ...plan.suggested].some((x) => x.type === "requote_from_agent_numbers")) {
+    const evs = (await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => [])) || [];
+    if (rerunsRoughOffer({ known: namedKnown, book: bookRows, events: evs })) {
+      rerunHeld = namedKnown;
+      const why = "they gave us their read on our rough number — run it again";
+      if (plan.auto.some((x) => x.type === "start_underwrite")) {
+        plan.auto = plan.auto.map((x) => (x.type === "start_underwrite" ? { ...x, replaceOfferId: namedKnown.id, why } : x));
+        record = { ...record, actions: (record.actions || []).map((x) => (x.type === "start_underwrite" && x.status === "pending" ? { ...x, replaceOfferId: namedKnown.id } : x)), updatedAt: new Date().toISOString() };
+      } else {
+        const action = { id: `a-rough-${job.id}`, type: "start_underwrite", mode: "auto", status: "pending", party, replaceOfferId: namedKnown.id, why };
+        plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
+        plan.auto.push(action);
+        record = { ...record, actions: [...(record.actions || []).filter((x) => !(x.type === "start_underwrite" && x.status === "pending")), action], updatedAt: new Date().toISOString() };
+      }
       await store.updateReplyDraft(record.id, record).catch(() => {});
     }
   }

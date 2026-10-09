@@ -398,7 +398,7 @@ function sweepFake(rows) {
 }
 const ranked = Array.from({ length: 12 }, (_, i) => ({
   agentKey: `k${i}`, status: "new", contactId: null,
-  doc: { name: `k${i}`, phone: `206555040${String(i).padStart(2, "0")}`, distressedCount: 12 - i, distressRule: "cut-or-cheap", listingCount: 1, hook: { address: `${i} St`, score: 50, price: 400000 }, ghl: {} },
+  doc: { name: `k${i}`, phone: `206555040${String(i).padStart(2, "0")}`, distressedCount: 12 - i, distressRule: "cut-or-old", listingCount: 1, hook: { priceCut: true, address: `${i} St`, score: 50, price: 400000 }, ghl: {} },
 }));
 
 test("with room for 5 more machine texts today, the sweep creates 5 agents, not 100 it can't text", async () => {

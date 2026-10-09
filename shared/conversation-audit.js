@@ -319,7 +319,7 @@ export function auditConversations({
       // person has had the day to look; at 11am a reply held ten minutes ago
       // is a decision they may be about to make. And a person's call (a
       // counter, an acceptance) is never released by day at all.
-      const releasable = releasableHeld(newest, { loose, mode, releaseMinAgeMin, now });
+      const releasable = releasableHeld(newest, { loose, mode, releaseMinAgeMin, releaseOther: config.driver?.daytime?.releaseOther === true, now });
       add({ kind: age >= HELD_AGING_HOURS ? "held_aging" : "unanswered_inbound", contactId: c, contactName: who(c), party: newest.party,
         address: newest.propertyAddress || "", anchorAt: newest.createdAt, draftId: newest.id,
         dueAt: releasable ? iso(now) : clock?.data?.dueAt || unansweredCheckIn(now).dueAt,
@@ -524,20 +524,26 @@ export function auditActions(last, { now = Date.now(), names = {} } = {}) {
 }
 
 /**
- * releasableHeld(draft, { loose, mode, releaseMinAgeMin, now }) → boolean
+ * releasableHeld(draft, { loose, mode, releaseMinAgeMin, releaseOther, now }) → boolean
  *
  * Whether the audit releases this held reply as "a holding reply the guard
  * passed" — the night's rule, and by day the stricter one (old enough, never
  * a person's-call intent). Pure, so the Desk can show such a draft with the
  * machine ("goes out at the 7pm check") instead of on Matt's list.
  */
-export function releasableHeld(d, { loose = true, mode = "night", releaseMinAgeMin = 120, now = Date.now() } = {}) {
+export function releasableHeld(d, { loose = true, mode = "night", releaseMinAgeMin = 120, releaseOther = false, now = Date.now() } = {}) {
   if (!d || d.status !== "draft" || QUIET_INTENTS.has(d.intent)) return false;
   const reason = d.autoSend?.reason || (d.flags || [])[0] || "held";
   const t = ms(d.createdAt);
   const age = t == null ? 0 : Math.round((now - t) / 3600000);
   const ageMin = Math.floor((now - (ms(d.createdAt) ?? now)) / 60000);
-  const dayOk = mode !== "day" || (ageMin >= releaseMinAgeMin && !(NEVER_AUTO[d.party || "agent"] || []).includes(d.intent));
+  // By day a person's call waits for a person — except an agent's reply the
+  // bot couldn't place (Matt, 2026-10-08, driver.daytime.releaseOther): with
+  // every gate clean it is a holding reply like any other. Never an
+  // investor's, never a counter, an acceptance or a call.
+  const otherOk = releaseOther === true && (d.party || "agent") === "agent" && d.intent === "other" && String(d.reply || "").trim() !== "";
+  const personsCall = (NEVER_AUTO[d.party || "agent"] || []).includes(d.intent) && !otherOk;
+  const dayOk = mode !== "day" || (ageMin >= releaseMinAgeMin && !personsCall);
   return Boolean(loose) && dayOk && (d.gateClean === true || d.autoSendable === true) && !d.needsHuman && age <= RELEASE_MAX_AGE_HOURS
     && !/you replied to them/.test(reason) && !/^needs a person:/.test(reason);
 }

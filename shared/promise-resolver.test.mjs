@@ -136,3 +136,31 @@ test("a number the bot promised on the first-text house doesn't start an underwr
   const other = { ...promise, address: "77 Birch Ln, Everett, WA 98201" };
   assert.equal(resolvePromise({ promise: other, events, qualifyFirst: true }).move, "start_underwrite", "a house they brought us is kept as before");
 });
+
+/* ---------- 2026-10-08: "can have it over today" ---------- */
+
+const paperPromise = (over = {}) => promise({ what: "paper", text: "Totally understand. I can have it over today. What email works best?", ...over });
+
+test("saying we'll have it over today sends the written offer", () => {
+  const v = resolve({ promise: paperPromise(), offers: [priced({ proactive: { realmCheckAt: ago(20) } })] });
+  assert.equal(v.move, "send_paper", v.reason);
+  assert.equal(v.offerId, "o1");
+  // An answer since, or a question back to them, doesn't settle it: only the paper does.
+  const answered = [{ status: "sent", inbound: "ok thanks", reply: "Sure thing.", intent: "other", createdAt: ago(2), sentAt: ago(2) }];
+  assert.equal(resolve({ promise: paperPromise(), offers: [priced()], drafts: answered }).move, "send_paper");
+});
+
+test("a promise to send it over is kept once the offer went out", () => {
+  const sent = priced({ sends: [{ ts: ago(2), results: { sms: { ok: true } } }] });
+  assert.equal(resolve({ promise: paperPromise(), offers: [sent] }).move, "not_owed");
+  const before = priced({ sends: [{ ts: ago(30), results: { sms: { ok: true } } }] });
+  assert.equal(resolve({ promise: paperPromise(), offers: [before] }).move, "send_paper", "an older send doesn't keep a newer promise");
+});
+
+test("a promise to send a rough number's paper waits for their yes", () => {
+  const rough = priced({ autoUnderwrite: { passed: false, basis: "agent_numbers" } });
+  assert.equal(resolve({ promise: paperPromise(), offers: [rough] }).move, "yours");
+  const yes = [{ status: "sent", inbound: "I agree on those numbers", intent: "realm_yes", propertyAddress: HOUSE, createdAt: ago(1) }];
+  assert.equal(resolve({ promise: paperPromise(), offers: [rough], drafts: yes }).move, "send_paper");
+  assert.equal(resolve({ promise: paperPromise(), offers: [priced({ status: "we_passed" })] }).move, "yours", "not on a dead offer");
+});

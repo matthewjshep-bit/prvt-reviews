@@ -16,6 +16,16 @@
 import { effectiveStatus, isAiGenerated, needsAiReview } from "./offer-status.js";
 import { EVENT_LABEL, AI_SOURCES } from "./contact-record.js";
 import { paperWent } from "./paper-follows.js";
+import { addressKey } from "./us-address.js";
+
+// A deal_promoted that is really a loss: the house went to someone else
+// (2026-10-08: 4 of 11 in two weeks). Read off the note, never the phrase —
+// our own promotion's ledger phrase is "under contract".
+const LOST_HOUSE_RX = /\bno longer available\b|\bnot available\b|\bunder contract (?:with|to) (?:someone|somebody|another|other|a different)\b|\b(?:already|went) (?:pending|under contract)\b|\bsold\b/i;
+export const promotedButLost = (e) => {
+  const d = e?.data || {};
+  return LOST_HOUSE_RX.test([d.note, d.reason, d.summary, e?.note, e?.detail].filter(Boolean).join(" "));
+};
 
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const inWin = (t, a, b) => t != null && t >= a && t < b;
@@ -48,7 +58,7 @@ export function machineDid(ev) {
   const d = ev?.data || {};
   if (d.auto === true) return true;
   if (d.auto === false) return false;
-  if (ev.type === "offer_sent") return ["conversation", "underwrite", "after_float", "for_record"].includes(d.by);
+  if (ev.type === "offer_sent") return ["conversation", "underwrite", "after_float", "after_answer", "for_record", "promise"].includes(d.by);
   // The daily outreach autopilot imports into its own batch, "Autopilot ·
   // King, WA", and stamps nothing else — so every agent it found read as
   // found by hand (Matt, 2026-09-14: "why does it say 0 by machine").
@@ -122,6 +132,11 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   const botAnswered = new Set(drafts.filter((d) => d?.status === "sent" && d.autoSent && d.contactId && inWin(ms(d.sentAt || d.updatedAt), a, b)).map((d) => d.contactId));
   const isRealSend = (e) => Array.isArray(e?.data?.channels) ? e.data.channels.length > 0 : Boolean(e?.data?.by);
   const sentByEvent = new Set(); // offers whose send is already counted from the timeline
+  // Under contract: once per offer (or contact + house without one); a stage
+  // change back into under_contract writes another deal_promoted. An offer
+  // that now reads "no longer available" isn't ours either.
+  const contracted = new Set();
+  const goneOffers = new Set(offers.filter((o) => o?.id && effectiveStatus(o) === "unavailable").map((o) => o.id));
   for (const e of events) {
     const t = ms(e.at);
     if (!inWin(t, a, b)) continue;
@@ -152,7 +167,14 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
       // floated read as "you offered" (2026-09-17: 37 of 69 had never been sent).
       case "offer_sent": if (isRealSend(e)) { bump("offered", m, feedRow(e, names)); if (e.offerId) sentByEvent.add(e.offerId); } break;
       case "realm_yes": break; // shown on the float's sub-line
-      case "deal_promoted": bump("contract", false, feedRow(e, names)); break;
+      case "deal_promoted": {
+        if (promotedButLost(e) || (e.offerId && goneOffers.has(e.offerId))) break;
+        const key = e.offerId || `${e.contactId || ""}|${addressKey(e.address || "") || String(e.address || "").trim().toLowerCase()}`;
+        if (contracted.has(key)) break;
+        contracted.add(key);
+        bump("contract", false, feedRow(e, names));
+        break;
+      }
       case "blast_sent": {
         blastedBuyers++;
         const key = e.offerId || e.address;
@@ -316,7 +338,8 @@ export function feedDetail(e) {
     case "offer_countered": return d.amount ? `at $${Number(d.amount).toLocaleString("en-US")}` : "";
     case "offer_sent": return [d.channels?.join(" + "),
       d.by === "underwrite" ? "after a clean underwrite" : d.by === "conversation" ? "from a reply"
-        : d.by === "after_float" ? "for their records, a working day after the number" : d.by === "for_record" ? "for their records, with the reply to a no" : ""].filter(Boolean).join(" · ");
+        : d.by === "after_float" ? "for their records, a working day after the number" : d.by === "for_record" ? "for their records, with the reply to a no"
+        : d.by === "after_answer" ? "for their records, after they answered the number" : d.by === "promise" ? "for their records, as we said we would" : ""].filter(Boolean).join(" · ");
     case "deal_stage": return String(d.stage || "").replace(/_/g, " ");
     case "call_booked": return d.label || "";
     case "dataroom_viewed": return d.viewCount > 1 ? `view ${d.viewCount}` : "first view";

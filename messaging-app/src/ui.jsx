@@ -58,6 +58,8 @@ export function AiPill({ offer, small = true }) {
   const uw = offer?.autoUnderwrite;
   if (!uw) return null;
   const held = uw.held || [];
+  // A rough first pass (2026-10-08): priced past a hold, floated as rough.
+  const rough = uw.basis === "rough" && !uw.publishedAt;
   const lines = [
     `Auto-underwritten${uw.startedAt ? ` ${String(uw.startedAt).slice(0, 10)}` : ""}${uw.dryRun ? " (dry run)" : ""}`,
     uw.address
@@ -75,10 +77,11 @@ export function AiPill({ offer, small = true }) {
       ? `${uw.compsUsedCount} renovated comps (${uw.compsSource === "realestateapi" ? "RealEstateAPI" : "Zillow"}, condition by ${uw.conditionSource === "ai" ? "photo scan" : "$/sqft"}) · ${uw.photosAnalyzed ?? 0} photos scanned`
       : "",
     held.length ? `\nHeld for review:\n${held.map((h) => `• ${h}`).join("\n")}` : "",
+    rough ? `\nRough first pass — priced past:\n${(uw.rough || []).map((h) => `• ${h}`).join("\n")}` : "",
   ].filter(Boolean);
   return (
     <Pill
-      label={held.length ? "AI · review" : "AI"}
+      label={held.length ? "AI · review" : rough ? "AI · rough" : "AI"}
       small={small}
       title={lines.join("\n")}
       cls={held.length ? "bg-amber-100 text-amber-800" : "bg-violet-100 text-violet-800"}

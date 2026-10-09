@@ -305,3 +305,34 @@ test("the reply rate is of agents first-texted in the window", () => {
   assert.equal(s.replied.conversion, 25, "one of the four we first texted");
   assert.equal(s.replied.sub, "1 of 4 first-texted agents replied");
 });
+
+// 2026-10-08: 4 of 11 "Under contract" in two weeks were houses that went to
+// someone else — a deal_promoted whose note said so — and a stage change back
+// into under_contract wrote a second one for the same offer.
+test("a house that went to someone else isn't counted as under contract", () => {
+  const events = [
+    { id: "p1", contactId: "a1", type: "deal_promoted", at: at(40), source: "deal", offerId: "o1", address: "1 A St", data: { stage: "under_contract" } },
+    { id: "p2", contactId: "a2", type: "deal_promoted", at: at(39), source: "deal", address: "2 B St", data: { note: "no longer available" } },
+    { id: "p3", contactId: "a3", type: "deal_promoted", at: at(38), source: "deal", address: "3 C St", data: { note: "Under contract with someone else" } },
+    { id: "p4", contactId: "a4", type: "deal_promoted", at: at(37), source: "deal", address: "4 D St", data: { note: "not available, sold" } },
+    { id: "p5", contactId: "a5", type: "deal_promoted", at: at(36), source: "deal", offerId: "o5", address: "5 E St" },
+  ];
+  // The offer itself says it's gone, whatever the event's note.
+  const offers = [{ id: "o5", contactId: "a5", address: "5 E St", status: "unavailable", createdAt: at(60) }];
+  const s = Object.fromEntries(buildFlow({ events, offers, ...win }).stages.map((x) => [x.key, x]));
+  assert.equal(s.contract.count, 1);
+});
+
+test("a deal promoted twice counts once", () => {
+  const events = [
+    { id: "p1", contactId: "a1", type: "deal_promoted", at: at(40), source: "deal", offerId: "o1", address: "1 A St", data: { stage: "under_contract" } },
+    { id: "p2", contactId: "a1", type: "deal_promoted", at: at(20), source: "deal", offerId: "o1", address: "1 A St", data: { stage: "under_contract" } },
+    // No offer id: one per contact and house.
+    { id: "p3", contactId: "a2", type: "deal_promoted", at: at(30), source: "deal", address: "2 B St, Kent, WA" },
+    { id: "p4", contactId: "a2", type: "deal_promoted", at: at(10), source: "deal", address: "2 b st, kent, wa" },
+  ];
+  const r = buildFlow({ events, ...win, itemsFor: "contract" });
+  const s = Object.fromEntries(r.stages.map((x) => [x.key, x]));
+  assert.equal(s.contract.count, 2);
+  assert.equal(r.items.length, 2);
+});
