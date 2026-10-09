@@ -21,6 +21,8 @@
 // Pure. The reply agent (ghl-broker/reply-agent.js) applies it when
 // parties.agent.qualifyFirst is on.
 
+import { sameStreet } from "./us-address.js";
+
 // Trouble that makes a house a flip on its own.
 const STRONG = [
   ["foundation", /\bfoundation\b|\bstructural\b|\bsettl(?:ed|ing)\b|\bsinking\b|\bpost[\s-]and[\s-]block\b|\buneven\s+floors?\b|\bdip\s+in\s+the\s+floor/i],
@@ -136,4 +138,23 @@ export function qualifyStep({ words = "", asked = false, passed = false, agentRe
   if (passed) return { move: "closed", read, reply: "Appreciate it. Keep me in mind if anything rougher comes up." };
   if (asked) return { move: "pass", read, reply: pick(QUALIFY_PASSES, variant) };
   return { move: "ask", read, reply: pick(QUALIFY_ASKS, variant) };
+}
+
+/**
+ * stillQualifying({ address, contactId, events, drafts }) → boolean
+ *
+ * The house is the one our first text opened with, and no reply has found
+ * it a flip yet. A number "promised" on it (the bot's own "let me run it by
+ * underwriting") is not a reason to underwrite it: the question decides
+ * that (shared/promise-resolver.js).
+ */
+export function stillQualifying({ address = "", contactId = "", events = [], drafts = [] } = {}) {
+  if (!String(address || "").trim()) return false;
+  const ice = (events || [])
+    .filter((e) => e && (!contactId || !e.contactId || e.contactId === contactId)
+      && (e.type === "outreach_sent" || (e.type === "outreach_enrolled" && e.data?.kind !== "followup")) && e.address)
+    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0];
+  if (!ice || !sameStreet(ice.address, address)) return false;
+  return !(drafts || []).some((d) => d && (!contactId || d.contactId === contactId)
+    && d.qualify?.stage === "qualified" && sameStreet(d.qualify.address || "", address));
 }
