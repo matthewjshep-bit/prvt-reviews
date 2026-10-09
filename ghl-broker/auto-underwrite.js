@@ -56,7 +56,7 @@ import { SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { learnFacts, recordEvent } from "./contact-record.js";
 import { currentFacts } from "./shared/contact-record.js";
 import { propertyDossier } from "./shared/contact-record.js";
-import { VALUE_HOLD, WORK_HOLD } from "./shared/held-underwrites.js";
+import { VALUE_HOLD, WORK_HOLD, STRUCTURAL_HOLD } from "./shared/held-underwrites.js";
 import { mostRecentlyMentioned } from "./shared/us-address.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { meterAi } from "./ai-spend.js";
@@ -859,6 +859,90 @@ export function agentNumbersRescue({
     needRepairs ? `their ${k(theirRehab)} repairs` : "",
   ].filter(Boolean).join(" and ");
   return { value, fix, capped, basis: `priced on the agent's numbers — ${used} — because ${String(held[0]).split(" — ")[0]}` };
+}
+
+/* ---------- a rough number instead of a hold (2026-10-08) ---------- */
+
+// The bot tells an agent "I'll get you a number", the run holds on something
+// only WE are missing — the square footage, a thin photo set, thin comps, a
+// scope past the band — and the agent hears nothing until the nightly sweep
+// retires the house. Matt (2026-10-08): price a rough first pass instead,
+// float it as a range that says it's rough, ask for their read, and let
+// their numbers re-run it.
+//
+// What only a person can settle still holds: no address, an address read
+// with less than high confidence, a ZIP or city centroid, no property record,
+// no ARV at all. Kind and rural holds never reach this (they stop the run
+// before the comps). On by default: it sends nothing by itself — the float
+// is still the realm check's own switches and gates.
+export const roughNumbersOn = (saved) => saved?.roughNumbers?.enabled !== false;
+
+// A hold the rough number may go past. Everything else is a real hold.
+const ROUGH_NEVER = /no ARV|address was read with|could only be placed at the centre|couldn't locate|didn't resolve to a property record|no property address|^dry run|AUTO_UNDERWRITE_ENABLED|^stopped early/i;
+const PHOTO_HOLD = /listing photos? to scan/i;
+export function roughable(reason = "") {
+  const s = String(reason || "");
+  if (ROUGH_NEVER.test(s)) return false;
+  return VALUE_HOLD.test(s) || WORK_HOLD.test(s) || STRUCTURAL_HOLD.test(s);
+}
+
+// What the work probably is, from what the agent said and the listing's
+// words, else from how far under the ARV it's listed. Unknown is medium.
+const HEAVY_WORDS = /\bgut\b|full (remodel|rehab|renovation)|down to the studs|tear ?down|fire|smoke damage|foundation|structural|\bmold\b|everything|major|heavy|uninhabitable|condemned|hoard/i;
+const LIGHT_WORDS = /cosmetic|paint|carpet|light (work|rehab|updates?)|minor|just (needs|dated)|lipstick|refresh/i;
+export function roughTier({ said = "", listPrice = 0, arv = 0 } = {}) {
+  const t = String(said || "");
+  if (HEAVY_WORDS.test(t)) return "heavy";
+  if (LIGHT_WORDS.test(t)) return "light";
+  const list = Number(listPrice) || 0;
+  const value = Number(arv) || 0;
+  if (list > 0 && value > 0) {
+    const r = list / value;
+    if (r <= 0.6) return "heavy";
+    if (r <= 0.8) return "medium";
+    return "light";
+  }
+  return "medium";
+}
+
+// The top of the tier's band for the house size (the heavy top scales past
+// 2,500 sqft, as the gate's does). Rough means budget high, not low.
+export function tierRepairs(sqft, tier = "medium") {
+  const band = rehabBand(sqft);
+  if (!band) return 0;
+  if (tier === "heavy") return heavyCeiling(sqft);
+  return (band[tier] || band.medium)[1];
+}
+
+// The subject's size when nobody had it: the middle of the comps' sizes.
+export function medianSqft(comps = []) {
+  const xs = (comps || []).map((c) => Number(c?.sqft) || 0).filter((v) => v > 0).sort((a, b) => a - b);
+  if (!xs.length) return 0;
+  const m = xs.length >> 1;
+  return Math.round(xs.length % 2 ? xs[m] : (xs[m - 1] + xs[m]) / 2);
+}
+
+/**
+ * roughNumber({ held, arv, sqft, repairs, said, listPrice }) → { fix, tier, repairsSource, reasons } | null
+ *
+ * Every hold one the rough number may go past, an ARV, and a size: the
+ * repairs to price on. A thin photo set (or none scanned) budgets the top of
+ * the condition tier, never under what the scan did find; otherwise the scope
+ * as scanned, uncapped. Pure.
+ */
+export function roughNumber({ held = [], arv = 0, sqft = 0, repairs = 0, said = "", listPrice = 0 } = {}) {
+  if (!held.length || !(Number(arv) > 0) || !(Number(sqft) > 0)) return null;
+  if (!held.every(roughable)) return null;
+  let fix = Math.round(Number(repairs) || 0);
+  let tier = null;
+  let repairsSource = "scan";
+  if (held.some((h) => PHOTO_HOLD.test(String(h))) || !(fix > 0)) {
+    tier = roughTier({ said, listPrice, arv });
+    fix = Math.max(fix, tierRepairs(sqft, tier));
+    repairsSource = "tier";
+  }
+  if (!(fix > 0)) return null;
+  return { fix, tier, repairsSource, reasons: [...held] };
 }
 
 /**
@@ -1744,6 +1828,22 @@ async function runUnderwrite(job, ctx) {
   job.compsRadiusMiles = compsRadiusMiles;
   Object.assign(got, { subject, compsData, nearby });
 
+  // No size on the listing: a rough number takes the comps' middle size
+  // (roughNumber, below) rather than holding. The search already ran with no
+  // size band; this only gives the ARV and the repair budget a size to work
+  // to, and the offer says where it came from.
+  const roughOn = !job.fill && roughNumbersOn(saved);
+  let sqftSource = Number(subject?.sqft) > 0 ? "listing" : null;
+  let sqftFilled = 0;
+  if (roughOn && subject && subject.lat != null && !(Number(subject.sqft) > 0)) {
+    sqftFilled = medianSqft(nearby.length ? nearby : compsData?.comps || []);
+    if (sqftFilled > 0) {
+      subject.sqft = sqftFilled;
+      sqftSource = "comps";
+      warnings.push(`square footage unknown — used the comps' middle size, ${sqftFilled.toLocaleString("en-US")} sqft, for a rough number`);
+    }
+  }
+
   // The buyer-view checks' two lookups start here and run under the grading
   // and the photo scan: the street (OpenStreetMap, free, ~2 s) and today's
   // listings (one more Zillow pull, ~$0.15). Either one failing is a line on
@@ -2024,14 +2124,35 @@ async function runUnderwrite(job, ctx) {
     job.agentNumbers = true;
     warnings.push(rescued.basis);
   }
+  // Still held, and nothing of theirs to price on: a rough first pass on
+  // what we have, when every hold is one it may go past (roughNumber). A size
+  // taken from the comps makes the number rough even when nothing else held.
+  const sqftHeld = "the subject's square footage is unknown — comps can't be size-matched and the ARV can't be size-adjusted";
+  const said = [dossier?.have?.condition?.value, dossier?.have?.workNeeded?.value, listing?.remarks].filter(Boolean).join(" ");
+  let rough = null;
+  if (roughOn && !rescued) {
+    if (!gate.ok) rough = roughNumber({ held: gate.held, arv: arvForOffer, sqft, repairs, said, listPrice: rescueCap });
+    else if (sqftFilled) rough = { fix: repairs, tier: null, repairsSource: "scan", reasons: [] };
+    if (rough && sqftFilled) rough.reasons = [`${sqftHeld.split(" — ")[0]} — priced on the comps' middle size, ${sqftFilled.toLocaleString("en-US")} sqft`, ...rough.reasons];
+    if (rough && !(rough.fix > 0)) rough = null;
+  }
+  if (rough) {
+    repairs = rough.fix;
+    job.arvBasis = `rough first pass — ${String(rough.reasons[0] || "").split(" — ")[0]}${job.arvBasis ? ` — ${job.arvBasis}` : ""}`;
+    job.rough = true;
+    warnings.push(`rough number: ${rough.reasons.map((r) => String(r).split(" — ")[0]).join("; ")}` +
+      (rough.repairsSource === "tier" ? ` — repairs budgeted at the top of the ${rough.tier} band, ${fmtMoney(rough.fix)}` : ""));
+  }
+  // Held after all: a size the comps lent is not a size we know — say so.
+  const heldReasons = sqftFilled && !gate.ok ? [sqftHeld, ...gate.held] : gate.held;
   // Manufactured homes and luxury listings are priced, but aren't the core.
   const nonCore = String(subject?.homeType || "").toUpperCase() === "MANUFACTURED" || (job.listPrice || 0) >= UW_NON_CORE_LIST;
-  const cleared = gate.ok || Boolean(rescued);
+  const cleared = (gate.ok && !sqftFilled) || Boolean(rescued) || Boolean(rough);
 
   if (!cleared || job.dryRun || !AUTO_UNDERWRITE_ENABLED) {
     const held = cleared
       ? [AUTO_UNDERWRITE_ENABLED ? "dry run — nothing was published" : "AUTO_UNDERWRITE_ENABLED is not set on the broker"]
-      : gate.held;
+      : heldReasons;
     return finishHeld(job, ctx, { extraction, held, partial, cleared });
   }
 
@@ -2088,8 +2209,12 @@ async function runUnderwrite(job, ctx) {
 
   const offer = result.offer;
   offer.autoUnderwrite = {
-    ...auditTrail(job, extraction, rescued ? { ok: false } : gate),
+    ...auditTrail(job, extraction, rescued || rough ? { ok: false } : gate),
     ...(rescued ? { basis: "agent_numbers", rescuedFrom: gate.held.slice(0, 4) } : {}),
+    // A rough first pass: priced, floated as a range that says so, never paper
+    // on its own (shared/paper-follows.js), re-run on their numbers.
+    ...(rough ? { basis: "rough", rough: rough.reasons.slice(0, 6), numberConfidence: "low",
+      ...(sqftSource ? { sqftSource } : {}), repairsSource: rough.repairsSource, ...(rough.tier ? { repairsTier: rough.tier } : {}) } : {}),
     ...(nonCore ? { nonCore: true } : {}),
   };
   // Off-market (shared/off-market.js): the agent said so, or Zillow shows it
@@ -2099,6 +2224,8 @@ async function runUnderwrite(job, ctx) {
   if (offSignal && offer.offMarket?.by !== "you") offer.offMarket = { ...offSignal, by: "machine", at: new Date().toISOString() };
   await store.updateOffer(offer.id, offer).catch(() => {});
   if (rescued) job.held = [rescued.basis];
+  // A held reason on the job is what makes the conversation float it as rough.
+  if (rough) job.held = [job.arvBasis];
 
   job.status = "done";
   job.phase = "";

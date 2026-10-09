@@ -42,7 +42,7 @@ import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
-import { paperWent, paperWorthy, floatSentAt } from "./shared/paper-follows.js";
+import { paperWent, paperWorthy, floatSentAt, isRoughNumber } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
@@ -69,7 +69,7 @@ import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
 import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
 import { signedContractIn, themLines } from "./shared/contract-signed.js";
-import { sameStreet } from "./shared/us-address.js";
+import { sameStreet, sameHouse } from "./shared/us-address.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
@@ -1369,6 +1369,25 @@ export function knownOfferFor(rows = [], address = "", now = Date.now()) {
   }) || null;
 }
 
+/**
+ * rerunsRoughOffer({ known, book, events }) → boolean
+ *
+ * A rough first pass (isRoughNumber) is a number we said was rough: once the
+ * agent tells us more about the house — their value, their repairs, the
+ * work — the underwrite runs again on it, the way a held draft does. Only
+ * while it is still the house's current offer (a re-run already landed
+ * otherwise) and nothing went out on paper (then it is a person's to re-price).
+ */
+export function rerunsRoughOffer({ known = null, book = [], events = [] } = {}) {
+  if (!known || !isRoughNumber(known) || paperWent(known) || known.deal) return false;
+  const current = currentOfferFor(book, known);
+  if (current && current.id !== known.id) return false;
+  const since = Date.parse(known.updatedAt || known.createdAt || "") || 0;
+  return (events || []).some((e) => ["agent_estimate", "property_details"].includes(e?.type)
+    && e.address && (propertyKey(e.address) === propertyKey(known.address || "") || sameHouse(e.address, known.address || ""))
+    && (Date.parse(e.at || "") || 0) > since);
+}
+
 // The offer the message is about. Exact address key first, then a loose
 // containment match on the street line — the same two-step the routes use.
 function pickOfferByAddress(offers, hint) {
@@ -2188,8 +2207,10 @@ export const OUTBOUND_KINDS = {
       // goes first and this waits for their answer.
       const takeOn = config?.parties?.agent?.takeCheck?.enabled;
       const haveTheirs = Boolean(dossier?.have?.arv || dossier?.have?.rehab);
-      // …unless the underwrite is confident: then our number leads.
-      if (takeOn && !haveTheirs && !leadsWithNumber({ offer, config })) return "no read from the agent yet — the take check goes first";
+      // …unless the underwrite is confident: then our number leads. A rough
+      // first pass goes too: it was promised, and it asks for their read
+      // itself (floatExtras' their_read question).
+      if (takeOn && !haveTheirs && !leadsWithNumber({ offer, config }) && !isRoughNumber(offer)) return "no read from the agent yet — the take check goes first";
       return true;
     },
     // The exact number and its rough forms ("around 445ish"), never rounded
@@ -2547,8 +2568,11 @@ const kText = (n) => `${Math.round(n / 1000)}K`;
  * think the property is worth and costs, there is nothing to draw out and
  * the cash number can go; otherwise float the ARV/rehab read first.
  */
-export function chooseProactiveKind({ events = [], address = "", leadWithNumber = false } = {}) {
-  if (leadWithNumber) return "realm_check";
+// A rough first pass (shared/paper-follows.js isRoughNumber) floats as a
+// realm check too: the agent was promised a number, and the float itself
+// asks for their read.
+export function chooseProactiveKind({ events = [], address = "", leadWithNumber = false, rough = false } = {}) {
+  if (leadWithNumber || rough) return "realm_check";
   const d = address ? propertyDossier(events, address) : null;
   return d && (d.have.arv || d.have.rehab) ? "realm_check" : "take_check";
 }
@@ -2646,6 +2670,17 @@ export function floatExtras({ offer, saved, dossier = null, requote = false, the
   if (requote || !offer?.cashAmount) return {};
   const rc = conversationConfig(saved || {}).parties?.agent?.realmCheck || {};
   const out = {};
+  // A rough first pass (2026-10-08): always a range, never the math (the
+  // math reads as a number we stand behind), and the question is their read
+  // — that is what re-runs it.
+  if (isRoughNumber(offer)) {
+    const r = floatRange(offer.cashAmount, rc.range?.pct);
+    if (r) out.range = { ...r, words: rangeWords(r) };
+    const q = setupQuestionFor({ offerId: offer.id || offer.address || "", dossier, ask: ["their_read"] })
+      || (rc.setupQuestion?.enabled ? setupQuestionFor({ offerId: offer.id || offer.address || "", dossier, ask: rc.setupQuestion.ask }) : null);
+    if (q) out.question = q;
+    return out;
+  }
   if (rc.withMath && !theirs) {
     const m = offer.math || compactMath(offerMath(offer));
     if (m && !(m.premium > 0) && Math.abs(m.total - Number(offer.cashAmount)) < 1000 && m.pctOfArv >= FLOAT_MATH_MIN_PCT) {
@@ -4416,6 +4451,29 @@ async function runReply(job, ctx) {
       rerunHeld = namedKnown;
       plan.auto = plan.auto.map((x) => (x.type === "start_underwrite" ? { ...x, replaceOfferId: namedKnown.id, why: "they told us more since it held — run it again" } : x));
       record = { ...record, actions: (record.actions || []).map((x) => (x.type === "start_underwrite" && x.status === "pending" ? { ...x, replaceOfferId: namedKnown.id } : x)), updatedAt: new Date().toISOString() };
+      await store.updateReplyDraft(record.id, record).catch(() => {});
+    }
+  }
+  // A rough first pass is the same: we said it was rough and asked for their
+  // read, so their read re-runs it (rerunsRoughOffer) — whether or not a rule
+  // planned an underwrite on this message. Not when a re-quote on their
+  // numbers is already planned, and not on a house we've been told isn't ours
+  // or are still qualifying.
+  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !qualifyHeld
+      && ![...plan.auto, ...plan.suggested].some((x) => x.type === "requote_from_agent_numbers")) {
+    const evs = (await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => [])) || [];
+    if (rerunsRoughOffer({ known: namedKnown, book: bookRows, events: evs })) {
+      rerunHeld = namedKnown;
+      const why = "they gave us their read on our rough number — run it again";
+      if (plan.auto.some((x) => x.type === "start_underwrite")) {
+        plan.auto = plan.auto.map((x) => (x.type === "start_underwrite" ? { ...x, replaceOfferId: namedKnown.id, why } : x));
+        record = { ...record, actions: (record.actions || []).map((x) => (x.type === "start_underwrite" && x.status === "pending" ? { ...x, replaceOfferId: namedKnown.id } : x)), updatedAt: new Date().toISOString() };
+      } else {
+        const action = { id: `a-rough-${job.id}`, type: "start_underwrite", mode: "auto", status: "pending", party, replaceOfferId: namedKnown.id, why };
+        plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
+        plan.auto.push(action);
+        record = { ...record, actions: [...(record.actions || []).filter((x) => !(x.type === "start_underwrite" && x.status === "pending")), action], updatedAt: new Date().toISOString() };
+      }
       await store.updateReplyDraft(record.id, record).catch(() => {});
     }
   }

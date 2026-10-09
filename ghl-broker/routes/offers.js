@@ -73,7 +73,7 @@ import {
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
-import { paperAfterSilenceDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS } from "../shared/paper-follows.js";
+import { paperAfterSilenceDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS, sendsItselfOnClear, isRoughNumber } from "../shared/paper-follows.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
@@ -4542,9 +4542,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // talked to us, only inside the auto-send hours, and only when the
       // number isn't being floated first. Anything else falls through to the
       // float below.
-      // An offer priced on the agent's own numbers (our comps were thin) is a
-      // rough number to float, never paper that sends itself.
-      const agentNumbers = offer.autoUnderwrite?.basis === "agent_numbers";
+      // An offer priced on the agent's own numbers (our comps were thin), or a
+      // rough first pass priced past a hold, is a number to float, never paper
+      // that sends itself.
+      const agentNumbers = !sendsItselfOnClear(offer);
       // You stopped the bot on them (shared/bot-hold.js): the letter doesn't
       // send itself and isn't queued for the retry. The float below waits
       // too, so the offer stays "priced, not floated" until you Resume.
@@ -4609,7 +4610,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       return { skipped: "our offer there has already gone out", kind: null, job: null };
     }
     const timeline = events || await store.listContactEvents(locationId, offer.contactId, { limit: 200 }).catch(() => []);
-    const kind = chooseProactiveKind({ events: timeline, address: offer.address, leadWithNumber });
+    const kind = chooseProactiveKind({ events: timeline, address: offer.address, leadWithNumber, rough: isRoughNumber(offer) });
     const r = await startProactive({
       client, locationId, saved: fresh, store, contactId: offer.contactId, kind,
       offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),

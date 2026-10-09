@@ -69,13 +69,40 @@ export function paperWent(offer) {
  *
  * A number we'd put in writing unasked: a person's own offer, a clean
  * underwrite, or a held one a person published. Not a rough number built on
- * the agent's own figures (`basis: "agent_numbers"`), and not a held draft.
+ * the agent's own figures (`basis: "agent_numbers"`), not a rough first pass
+ * priced past a hold (`basis: "rough"`), and not a held draft.
  */
 export function paperWorthy(offer) {
   const au = offer?.autoUnderwrite;
   if (!au) return true;
-  if (au.basis === "agent_numbers") return false;
+  if (au.basis === "agent_numbers" || au.basis === "rough") return false;
   return au.passed === true || Boolean(au.publishedAt);
+}
+
+/**
+ * isRoughNumber(offer) → boolean
+ *
+ * A rough first pass (2026-10-08): the underwrite held on something only we
+ * were missing — the size, the photos, thin comps — and priced past it
+ * rather than leave a promised number unanswered. It floats as a rough range
+ * asking for their read, never as paper, and their numbers re-run it. A
+ * person publishing it makes it theirs.
+ */
+export function isRoughNumber(offer) {
+  const au = offer?.autoUnderwrite;
+  return Boolean(au && au.basis === "rough" && !au.publishedAt);
+}
+
+/**
+ * sendsItselfOnClear(offer) → boolean
+ *
+ * May the written offer go out by itself the moment the underwrite lands
+ * (sendOffer.onClearUnderwrite)? Not on the agent's own figures and not on a
+ * rough first pass: both are numbers to float, not paper.
+ */
+export function sendsItselfOnClear(offer) {
+  const au = offer?.autoUnderwrite;
+  return !au || (au.basis !== "agent_numbers" && au.basis !== "rough");
 }
 
 /**
