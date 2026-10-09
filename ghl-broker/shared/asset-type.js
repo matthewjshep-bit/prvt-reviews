@@ -185,6 +185,13 @@ export function buyerTypeFit(buyer = {}, asset = null) {
 // anything else is held for a person ("not our kind of house").
 export const FOCUS_KINDS_DEFAULT = ["sfr"];
 
+// What we buy, in the words the bot says it to an agent (Matt, 2026-10-09:
+// single-family only). About 15 houses agents brought us died on kind or
+// area — park homes, condos, 10–21 acres, $4M luxury — after a round-trip
+// nobody needed. Said once, early: the pass after "it's turnkey" and the
+// first check-in.
+export const OUR_BOX_WORDS = "single-family houses that need work, under about a million";
+
 /** normalizeFocusKinds(v) → the kinds the machine underwrites; never empty. */
 export function normalizeFocusKinds(v) {
   const out = (Array.isArray(v) ? v : []).map(asType).filter(Boolean);

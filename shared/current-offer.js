@@ -560,16 +560,38 @@ export function machineRaise(o, transcript = "") {
   const amount = Number(o?.cashAmount) || 0;
   const q = lastQuoteOnHouse(o, transcript);
   if (!q || amount <= q.amount + Math.max(1000, amount * 0.005)) return null;
+  return settledSince(o) > q.ts ? null : q;
+}
+
+/**
+ * machineCut(offer, transcript) → { amount, ts, text } | null
+ *
+ * The mirror of machineRaise: the offer's number is BELOW the last price we
+ * put to the agent on its house, and no person has stood behind the lower
+ * number since. 2026-10-09, reading every house an agent brought us: a
+ * re-run that came back under what we had already floated (571K → 522K,
+ * 400K → 214K on a wrong ARV) soured agents who were sending us houses. A
+ * machine never takes back its own number either; a person does.
+ */
+export function machineCut(o, transcript = "") {
+  const amount = Number(o?.cashAmount) || 0;
+  const q = lastQuoteOnHouse(o, transcript);
+  if (!q || amount >= q.amount - Math.max(1000, q.amount * 0.005)) return null;
+  return settledSince(o) > q.ts ? null : q;
+}
+
+// When a person last stood behind the offer's own number: a send, a
+// revision or re-quote, a pin, or a row they made or published.
+function settledSince(o) {
   const uw = o.autoUnderwrite;
   const personMade = !uw || uw.publishedAt;
-  const settled = maxOf([
+  return maxOf([
     lastSentAt(o),
     ...(o.revisions || []).map((r) => ms(r?.ts)),
     ...(o.requotes || []).map((r) => ms(r?.ts)),
     o.pin?.at && !o.pin.off ? ms(o.pin.at) : 0,
     personMade ? maxOf([ms(o.createdAt), ms(uw?.publishedAt)]) : 0,
   ]);
-  return settled > q.ts ? null : q;
 }
 
 const kText = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(2)}M` : `${Math.round(n / 1000)}K`);
@@ -612,6 +634,15 @@ export function paperCheck({ offer = null, offers = null, transcript = "" } = {}
     return {
       ok: false, comeDown: raise,
       reason: `we last texted ${kText(raise.amount)} on ${new Date(raise.ts).toISOString().slice(0, 10)} and this offer came in above it at ${fmtMoney(Number(offer.cashAmount) || 0)} — re-quote it at ${kText(raise.amount)}, or a person decides to go up`,
+    };
+  }
+  // …and below it: paper under what they last heard would take our number
+  // back, which only a person does.
+  const cut = machineCut(offer, transcript);
+  if (cut) {
+    return {
+      ok: false, cut,
+      reason: `we last texted ${kText(cut.amount)} on ${new Date(cut.ts).toISOString().slice(0, 10)} and this offer came in below it at ${fmtMoney(Number(offer.cashAmount) || 0)} — a person decides whether to take our number back`,
     };
   }
   return { ok: true, reason: "" };

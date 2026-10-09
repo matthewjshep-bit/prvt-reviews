@@ -27,6 +27,7 @@ import { recordEvent } from "./contact-record.js";
 import { getContact, searchOpportunities, listPipelines, createContactNote, removeContactTags, smsUnsubscribed } from "./ghl.js";
 import { UW_TAGS } from "./auto-underwrite.js";
 import { waitingReason } from "./outbox-guard.js";
+import { leadSourceOf } from "./shared/lead-source.js";
 
 const iso = (t) => new Date(t).toISOString();
 const wait = (msec) => new Promise((r) => setTimeout(r, msec));
@@ -132,11 +133,12 @@ export async function sweepHeldUnderwrites({
 
   for (const [contactId, mine] of byContact) {
     const siblings = offers.filter((o) => o?.contactId === contactId);
-    let events = [], drafts = [], contact = null, opportunities = [];
+    let events = [], drafts = [], contact = null, opportunities = [], hooks = [];
     if (contactId) {
-      [events, drafts] = await Promise.all([
+      [events, drafts, hooks] = await Promise.all([
         store.listContactEvents(locationId, contactId, { limit: 300 }).catch(() => []),
         store.listReplyDrafts(locationId, { contactId, limit: 40 }).catch(() => []),
+        typeof store.listOutreachHooks === "function" ? store.listOutreachHooks(locationId, { contactId }).catch(() => []) : [],
       ]);
       try {
         const c = await getContact(client, contactId);
@@ -149,7 +151,8 @@ export async function sweepHeldUnderwrites({
 
     let closed = 0;
     for (const o of mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))) {
-      const t = triageHeldUnderwrite({ offer: o, siblings, events, drafts, contact, opportunities, botOffTags, now, knownCities });
+      const brought = o.autoUnderwrite?.leadSource === "agent_brought" || leadSourceOf({ offer: o, hooks, events }).source === "agent_brought";
+      const t = triageHeldUnderwrite({ offer: o, siblings, events, drafts, contact, opportunities, botOffTags, now, knownCities, brought });
       const kind = KIND_OF[t.action];
       // A wait with a date (asked, passes in a week) is reported, so the
       // Desk can say when; any other wait is nothing to say.

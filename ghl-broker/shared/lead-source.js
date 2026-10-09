@@ -163,3 +163,27 @@ export function theirNumberCheck({ seller = 0, ceiling = 0, minFee = MIN_FEE } =
   const room = c - s;
   return { seller: s, ceiling: c, room, fits: room >= minFee };
 }
+
+/* ---------- agents who think like investors ---------- */
+
+// The agents behind the deals with committed buyers (2026-10-09) asked about
+// a finder's fee or assigning on day one, owned rentals, or offered to write
+// it up and represent us. Their own words, never ours.
+export const INVESTOR_MINDED_RX = new RegExp([
+  "finder'?s?\\s+fees?", "(?:pay|paying)\\s+(?:a\\s+)?referral",
+  "do\\s+you\\s+(?:assign|wholesale|do\\s+assignments)", "are\\s+you\\s+(?:a\\s+)?wholesaler", "work\\s+with\\s+wholesalers",
+  "(?:my|our)\\s+(?:own\\s+)?(?:rentals?|rental\\s+propert(?:y|ies)|flips?)", "i\\s+(?:have|own)\\s+(?:a\\s+(?:couple|few)\\s+(?:of\\s+)?|some\\s+|several\\s+)?rentals?", "i\\s+(?:also\\s+)?(?:flip|invest\\s+in|buy)\\s+(?:houses|homes|properties)",
+  "(?:happy|glad|can)\\s+(?:to\\s+)?(?:represent\\s+you|write\\s+(?:it|it\\s+up|the\\s+offer)\\s+for\\s+you)", "represent\\s+you\\s+as\\s+(?:your\\s+)?buyer",
+  "partner\\s+(?:with\\s+you\\s+)?on\\s+(?:a|the)\\s+flip",
+].map((p) => `\\b${p}`).join("|"), "i");
+
+/** investorMindedCue(text) → the phrase that shows it, or "". */
+export function investorMindedCue(text = "") {
+  const m = String(text || "").match(INVESTOR_MINDED_RX);
+  return m ? m[0].trim().toLowerCase() : "";
+}
+
+// A house that is someone else's contract being sold on: 9 came to us through
+// agents, none reached a committed buyer (daisy chains at retail, a 10k hard
+// deposit on Yakima).
+export const ASSIGNMENT_RX = /\b(?:assignment|assigning\s+(?:the|their|my)\s+contract|wholesaler|wholesale\s+deal|under\s+contract\s+with\s+an?\s+investor|double\s+clos(?:e|ing)|investorlift)\b/i;

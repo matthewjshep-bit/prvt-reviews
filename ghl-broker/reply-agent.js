@@ -62,7 +62,7 @@ import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcce
 import { houseGone } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { qualifyStep, QUALIFY_ASK_RX } from "./shared/flip-read.js";
-import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
+import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
@@ -104,6 +104,7 @@ import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
 import { meterAi } from "./ai-spend.js";
+import { investorMindedCue } from "./shared/lead-source.js";
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
@@ -1522,6 +1523,11 @@ export async function applyProfileUpdates({ client, locationId, contactId, party
     await learnFacts({ store, locationId, contactId, party: type, facts });
     const events = [];
     if (summary) events.push({ type: "text_summary", at, source: "conversation", ref, address: subjectProperty || "", data: { summary: summary.slice(0, 500), intent, inbound: String(inbound || "").slice(0, 300) } });
+    // An agent who thinks like an investor (a finder's fee, assigning, their
+    // own rentals, offering to represent us): once per agent, read by the
+    // check-in and the Desk (shared/lead-source.js investorMindedCue).
+    const minded = type === "agent" ? investorMindedCue(inbound) : "";
+    if (minded) events.push({ type: "investor_minded", at, source: "conversation", ref, dedupeKey: `investor_minded:${contactId}`, data: { cue: minded } });
     if (profile?.dealHistoryLine && profile.dealHistoryLine.includes("|")) {
       const line = /^\d{4}-\d{2}-\d{2}/.test(profile.dealHistoryLine) ? profile.dealHistoryLine : `${at.slice(0, 10)} | ${profile.dealHistoryLine}`;
       const ev = eventFromLedgerLine(line, { party: type, source: "conversation", ref });
@@ -2570,6 +2576,10 @@ export async function startProactive({
     const raise = machineRaise(offer, thread);
     if (raise) {
       return { skipped: `we last texted ${kText(raise.amount)} on ${offer.address} and this number is ${kText(Number(offer.cashAmount))} — the machine never raises our own number; a person decides to go up`, raise, job: null };
+    }
+    const cut = machineCut(offer, thread);
+    if (cut) {
+      return { skipped: `we last texted ${kText(cut.amount)} on ${offer.address} and this number is ${kText(Number(offer.cashAmount))} — the machine never takes our number back; a person decides to go down`, cut, job: null };
     }
   }
 

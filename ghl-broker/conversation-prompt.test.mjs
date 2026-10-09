@@ -500,3 +500,12 @@ test("when an agent brings us a house, the bot gets the address with a promise n
   assert.match(sys, /worth fixed up and what it needs, and the seller's situation and timing/);
   assert.doesNotMatch(buildSystemPrompt({ config: null, party: "investor", channel: "sms" }), /A HOUSE THEY BRING US/);
 });
+
+test("a check-in names one kind of seller that becomes a deal, and tells a new agent what we buy — once", () => {
+  const fresh = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", variant: 0, offersWithUs: 0, dealsWithUs: 0 });
+  assert.match(fresh, /name one kind of seller we're good for, in a few words: an estate that hasn't been listed\. One, never a list\./);
+  assert.match(fresh, /what we buy: single-family houses that need work, under about a million/);
+  const known = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", variant: 1, offersWithUs: 3, dealsWithUs: 0 });
+  assert.match(known, /a parent moving into care/);
+  assert.doesNotMatch(known, /what we buy:/, "an agent we've worked houses with already knows");
+});

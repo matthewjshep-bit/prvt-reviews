@@ -3797,6 +3797,52 @@ house came.
   - Their opener is told the listing looks finished and leans on the
     other-fixers line.
 
+### Converting the houses agents bring (2026-10-09)
+
+Read from all 131 houses agents brought us (87 threads):
+- **What converted:** the seller's number known early, a gap of 2–19%, a call within hours, no
+  competition, and a seller with a reason and a date (estate, POA, a move by a set month).
+- **What died:** a 20%+ gap, multiple offers, buy-box surprises.
+- **Self-inflicted losses:**
+  - 20 houses closed unpriced because the agent's GHL card said Tier 3;
+  - numbers we floated, then cut;
+  - slow or withheld numbers.
+
+**What changed.**
+- **The cold-stage retire.** The held-underwrite triage
+  (`shared/held-underwrites.js`) no longer retires a house the agent *brought*
+  (`brought`, from `autoUnderwrite.leadSource` or `leadSourceOf`) for the agent's cold or Tier 3
+  card. A lost or abandoned opportunity still retires it. On a brought house, "turnkey" retires it
+  only when said about that house's own address.
+- **Held drafts.** They carry `autoUnderwrite.leadSource` too, so a held brought house is a
+  `call_brought` Desk row: "no number yet (thin comps)", and the call asks for what the hold is
+  missing.
+- **No machine cuts.** `machineCut` (`shared/current-offer.js`) mirrors `machineRaise`: a number
+  below the last one we texted on the house is never floated (`startProactive`) or papered
+  (`paperCheck` → `cut`) unless a person stood behind it (send, revision, re-quote, pin, or a row
+  they made).
+- **`call_gap`** (`shared/call-list.js`): the seller's number (`property_details.sellerAsk`, read
+  120 days back by the pipeline route as `asks`) within `desk.gapPct` (15) of ours.
+  - It covers live floated/sent houses, and houses lost in the last `desk.revisitDays` (60) that
+    weren't lost for kind or area.
+  - The row shows the middle and whether it still leaves the fee under `buyerCeiling().noFee`.
+  - It never sends a number.
+- **Our box, once.** `OUR_BOX_WORDS` (`shared/asset-type.js`): "single-family houses that need work,
+  under about a million" (Matt: single-family only).
+  - It is in every `QUALIFY_PASSES` text, each with one kind of seller that converts.
+  - The agent check-in names one `SELLER_SITUATIONS` entry in passing, and says the box to agents
+    we've never priced a house for.
+- **Investor-minded agents.** `investor_minded` events (`investorMindedCue`: a finder's fee,
+  assigning, their own rentals or flips, offering to represent us), recorded once per agent from
+  their own text.
+  - They make the agent segment `source` in the check-in.
+  - They get one `call_investor` Desk row within 30 days.
+- **Assignments.** `ASSIGNMENT_RX` flags a brought house that's a wholesaler's assignment on the
+  `call_brought` row (0 of 9 reached a buyer). It is a flag only; nothing passes automatically.
+
+Not built: moving the agent's card to Tier 1 on a brought house. `followTierStage` already moves it
+when the bot adds the tier-1 tag, so the leak was the retire rule.
+
 ### Every agent on a clock: the agent check-in (2026-09-29)
 
 Matt: "reach out to these agents proactively and frequently, every 3 weeks or

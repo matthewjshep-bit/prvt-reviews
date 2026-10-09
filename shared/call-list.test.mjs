@@ -311,3 +311,45 @@ test("an agent who brings us a house gets a call within the hour, not a text thr
   const passedOn = { ...brought, status: "we_passed" };
   assert.equal(callList({ offers: [passedOn], now: NOW }).filter((x) => x.kind === "call_brought").length, 0);
 });
+
+test("a house the agent brought that our underwrite held is still a call — what the hold is missing is what you ask for", () => {
+  const held = offer({ id: "h9", contactId: "c8", contactName: "Lee K", address: "6814 49th Ave E, Tacoma, WA", status: "draft", cashAmount: null, createdAt: ago(0.1), sends: [],
+    autoUnderwrite: { leadSource: "agent_brought", held: ["only 1 priced comps — the price proxy needs 6 to have a top tier"] } });
+  const r = callList({ offers: [held], now: NOW }).find((x) => x.kind === "call_brought");
+  assert.ok(r);
+  assert.match(r.title, /no number yet \(only 1 priced comps\)/);
+  assert.match(r.call.goal, /what our underwrite is missing/);
+});
+
+test("a seller 7% under our number is a call, not a dead thread — live or lost in the last two months", () => {
+  const ask = (address, sellerAsk, d = 2, contactId = "c5") => ({ type: "property_details", contactId, address, at: ago(d), data: { sellerAsk } });
+  const live = offer({ id: "g1", contactId: "c5", contactName: "Dana R", address: "10511 Moller Dr NW, Gig Harbor, WA", cashAmount: 607500, status: "sent", arv: 900000, repairs: 60000 });
+  const rows = callList({ offers: [live], cards: [card({ lane: "sent", contactId: "c5", contactName: "Dana R", offerId: "g1", address: live.address, cashAmount: 607500 })], asks: [ask(live.address, 650000)], now: NOW });
+  const r = rows.find((x) => x.kind === "call_gap");
+  assert.ok(r, "a call row");
+  assert.match(r.title, /their 650K vs our 607.5K on 10511 Moller Dr NW — 7% apart/);
+  assert.equal(r.gap.middle, 629000);
+  assert.match(r.call.goal, /Never above our number/);
+
+  const far = callList({ offers: [live], cards: [card({ lane: "sent", contactId: "c5", offerId: "g1", address: live.address, cashAmount: 607500 })], asks: [ask(live.address, 800000)], now: NOW });
+  assert.equal(far.filter((x) => x.kind === "call_gap").length, 0, "24% apart is not a call");
+
+  const lost = { ...live, id: "g2", status: "passed", statusAt: ago(10) };
+  assert.match(callList({ offers: [lost], asks: [ask(live.address, 650000)], now: NOW }).find((x) => x.kind === "call_gap").title, /and we let it go/);
+  assert.equal(callList({ offers: [{ ...lost, statusAt: ago(90) }], asks: [ask(live.address, 650000)], now: NOW }).filter((x) => x.kind === "call_gap").length, 0, "lost months ago");
+  assert.equal(callList({ offers: [{ ...lost, statusNote: "outside the area we buy in" }], asks: [ask(live.address, 650000)], now: NOW }).filter((x) => x.kind === "call_gap").length, 0, "lost for what it is");
+  assert.equal(normalizeDesk({}).gapPct, 15);
+});
+
+test("an agent who talks like an investor gets one relationship call, and a brought house that's a wholesaler's assignment says so", () => {
+  const ev = { type: "investor_minded", contactId: "c7", at: ago(1), data: { cue: "finder's fee" } };
+  const rows = callList({ offers: [offer({ id: "x", contactId: "c7", contactName: "Sam T", status: "passed" })], events: [ev], now: NOW });
+  const r = rows.find((x) => x.kind === "call_investor");
+  assert.ok(r);
+  assert.match(r.title, /talks like an investor \("finder's fee"\)/);
+  assert.equal(callList({ events: [ev, { type: "call_summary", contactId: "c7", at: ago(0.5), data: { connected: true, durationSec: 120 } }], now: NOW }).filter((x) => x.kind === "call_investor").length, 0, "once you've talked, it's done");
+
+  const brought = offer({ id: "w1", contactId: "c6", contactName: "Lee K", address: "1823 Maple St, Everett, WA", status: "new", createdAt: ago(0.1), sends: [], autoUnderwrite: { leadSource: "agent_brought" } });
+  const drafts = [{ id: "d", contactId: "c6", inbound: "Investor has it under contract, selling the assignment at 400", createdAt: ago(0.1) }];
+  assert.match(callList({ offers: [brought], drafts, now: NOW }).find((x) => x.kind === "call_brought").title, /a wholesaler's assignment/);
+});

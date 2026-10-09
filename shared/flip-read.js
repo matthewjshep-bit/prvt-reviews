@@ -22,6 +22,7 @@
 // parties.agent.qualifyFirst is on.
 
 import { sameStreet } from "./us-address.js";
+import { OUR_BOX_WORDS } from "./asset-type.js";
 
 // Trouble that makes a house a flip on its own.
 const STRONG = [
@@ -136,10 +137,14 @@ export const QUALIFY_ASKS = [
 export const QUALIFY_ASK_RX = /\b(?:big[\s-]ticket\s+stuff|real\s+repairs\s+like|the\s+big\s+stuff\s+like)\b[\s\S]*\bseller/i;
 
 // The pass. The house was the icebreaker; the ask is the point.
+// Each says what we buy (OUR_BOX_WORDS) and names ONE kind of seller that
+// becomes a deal — the sellers behind the deals with committed buyers: an
+// estate, a parent moving into care, someone who has to move by a date
+// (2026-10-09).
 export const QUALIFY_PASSES = [
-  "Thanks for the honest read. Sounds a bit too nice for us, we're after the ones that really need work. Anything rough crossing your desk, on market or off-market?",
-  "Appreciate it. That one sounds lighter than what we go after, we like them ugly. Got anything else that needs real work, listed or off-market?",
-  "Good to know, thanks. Probably more finished than our sweet spot. If anything distressed comes across your desk, on the MLS or off-market, I'd love a first look.",
+  `Thanks, sounds too nice for us. We buy ${OUR_BOX_WORDS}. Anything like that, on or off-market? An unlisted estate is perfect.`,
+  `Appreciate it. Lighter than we go for: ${OUR_BOX_WORDS}. Anything like that, listed or off-market? Even a parent moving into care.`,
+  `Good to know. We buy ${OUR_BOX_WORDS}. If a seller who has to move by a date crosses your desk, on or off-market, I'd love a look.`,
 ];
 
 const pick = (list, variant) => list[Math.abs(Math.round(Number(variant) || 0)) % list.length];

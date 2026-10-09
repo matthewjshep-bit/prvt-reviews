@@ -11,6 +11,7 @@ import { heldInPlainWords } from "./shared/held-underwrites.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { CARRIER_RULE } from "./shared/carrier-words.js";
 import { OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
+import { OUR_BOX_WORDS } from "./shared/asset-type.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -167,6 +168,15 @@ const CHECKIN_PERSONALITY =
   "If nothing comes naturally, warm and plain is fine.";
 
 const OFF_MARKET_ASK_WORDS = `Say "off-market" itself, never "before it hits the MLS" or "before it hits the market".`;
+// The sellers behind the deals with committed buyers (2026-10-09), as the
+// check-in may name one: never a list, never all of them.
+const SELLER_SITUATIONS = [
+  "an estate that hasn't been listed",
+  "a parent moving into care whose family wants it simple",
+  "a seller who has to move by a certain date",
+  "a client who'd rather not put it on the market",
+];
+
 const OFF_MARKET_AGENT =
   "OFF-MARKET: our best deals are off-market houses agents bring us — pocket listings, or a seller who hasn't listed. " +
   "Where it fits naturally — a house of theirs wasn't a fit, an offer of ours didn't work out, they just sent us one, or the " +
@@ -941,9 +951,15 @@ function openingFor(outbound) {
       const ago = (d) => (d == null ? "" : d <= 1 ? "a day ago" : `${d} days ago`);
       // Off-market houses are our best deals: the ask leans that way, gently,
       // at most once a month (shared/off-market.js offMarketAskDue).
-      const offAsk = o.offMarketAskDue
+      // One kind of seller that becomes a deal, named in passing (2026-10-09:
+      // the sellers behind every deal with a committed buyer), and — for an
+      // agent we've never put a number to — what we buy, once.
+      const situation = SELLER_SITUATIONS[(Number(o.variant) || 0) % SELLER_SITUATIONS.length];
+      const fits = ` If it fits naturally, name one kind of seller we're good for, in a few words: ${situation}. One, never a list.` +
+        (!o.offersWithUs && !o.dealsWithUs ? ` Say once, in a clause, what we buy: ${OUR_BOX_WORDS}.` : "");
+      const offAsk = (o.offMarketAskDue
         ? `ask whether any off-market opportunities have come across their desk lately that need work. ${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.`
-        : "anything coming up that needs work?";
+        : "anything coming up that needs work?") + fits;
       const why = o.reason === "fresh_listing" && l
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
           `Ask, plainly, whether it's a bit of a project — if it needs work it may be one we'd want to take a look at. Name the street; never its price or any number.`
