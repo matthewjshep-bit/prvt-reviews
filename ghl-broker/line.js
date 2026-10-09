@@ -20,6 +20,7 @@ import { planBuyerPulse } from "./buyer-pulse.js";
 import { conversationConfig } from "./reply-agent.js";
 import { allEventsSince } from "./contact-events.js";
 import { isDealRoom } from "./routes/dataroom.js";
+import { leadSourcesFor, LEAD_EVENT_TYPES } from "./shared/lead-source.js";
 
 const DAY_MS = 86400000;
 const iso = (t) => new Date(t).toISOString();
@@ -57,7 +58,7 @@ export async function lineFor({ store, locationId, saved = {}, now = Date.now(),
   const settings = effectiveSettings(saved || {});
   const config = conversationConfig(saved || {});
   const since30 = iso(now - 30 * DAY_MS);
-  const [offersRaw, dealDocs, openDrafts, dealEvents, cursors, errors, flowRead, flowDrafts] = await Promise.all([
+  const [offersRaw, dealDocs, openDrafts, dealEvents, cursors, errors, flowRead, flowDrafts, hooks, leadEvents] = await Promise.all([
     store.listOffers(locationId, { limit: 5000, lean: true }).catch(() => []),
     // The whole deal documents, for what buyers paid: the lean list above is
     // trimmed in SQL on Postgres and carries no ARV or repairs.
@@ -68,11 +69,16 @@ export async function lineFor({ store, locationId, saved = {}, now = Date.now(),
     typeof store.listAppErrorsSince === "function" ? store.listAppErrorsSince(locationId, iso(now - 7 * DAY_MS), { limit: 500 }).catch(() => []) : [],
     flow ? allEventsSince(store, locationId, since30, { types: flow.eventTypes }).catch(() => ({ events: [], truncated: false })) : null,
     flow ? store.listReplyDrafts(locationId, { since: since30, limit: 4000 }).catch(() => []) : [],
+    // How each house came to us: every agent's opening listing, and our
+    // texts that named a house or asked for the next one (a year back).
+    typeof store.listOutreachHooks === "function" ? store.listOutreachHooks(locationId).catch(() => []) : [],
+    store.listContactEventsSince(locationId, iso(now - 365 * DAY_MS), { types: LEAD_EVENT_TYPES, limit: 50000 }).catch(() => []),
   ]);
 
   // Offers: the current row on each house, with the one answer the Offers
   // tab shows for what comes next.
-  const offers = annotateCurrent(offersRaw);
+  const leads = leadSourcesFor({ offers: offersRaw, hooks, events: leadEvents });
+  const offers = annotateCurrent(offersRaw.map((o) => (leads.has(o.id) ? { ...o, leadSource: leads.get(o.id) } : o)));
   await attachNextFollowUps({ store, locationId, saved, offers, now }).catch(() => {});
 
   // Stations: Flow's own counts, for the last week and the last month.

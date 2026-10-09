@@ -707,6 +707,20 @@ const pgStore = {
     );
     return rows;
   },
+  // The listing each imported agent was first texted about, oldest import
+  // first — what shared/lead-source.js reads to tell "the house we opened
+  // with" from "a house the agent brought us".
+  async listOutreachHooks(locationId, { contactId = null } = {}) {
+    const { rows } = await query(
+      `select contact_id as "contactId", doc->'hook'->>'address' as address, imported_at as "importedAt"
+         from outreach_agents
+        where location_id = $1 and contact_id is not null and coalesce(doc->'hook'->>'address', '') <> ''
+          and ($2::text is null or contact_id = $2)
+        order by imported_at asc nulls last`,
+      [locationId, contactId]
+    );
+    return rows.map((r) => ({ ...r, importedAt: r.importedAt ? new Date(r.importedAt).toISOString() : null }));
+  },
   async getOutreachAgent(locationId, batchId, agentKey) {
     const { rows } = await query(
       `select agent_key as "agentKey", status, contact_id as "contactId",
@@ -1896,6 +1910,13 @@ const fileStore = (() => {
         .filter((a) => a.locationId === locationId && a.doc?.phone && !a.doc?.phoneFrom
           && (keys.has(a.agentKey) || names.has(nameOffice(a.doc))))
         .map((a) => ({ agentKey: a.agentKey, phone: a.doc.phone, nameOffice: nameOffice(a.doc) }));
+    },
+    async listOutreachHooks(locationId, { contactId = null } = {}) {
+      ensure();
+      return Object.values(data.outreachAgents)
+        .filter((a) => a.locationId === locationId && a.contactId && a.doc?.hook?.address && (!contactId || a.contactId === contactId))
+        .map((a) => ({ contactId: a.contactId, address: a.doc.hook.address, importedAt: a.importedAt || null }))
+        .sort((a, b) => String(a.importedAt || "~").localeCompare(String(b.importedAt || "~")));
     },
     async getOutreachAgent(locationId, batchId, agentKey) {
       ensure();

@@ -33,6 +33,7 @@ import {
   normalizeAgentPulse, pickPulseAgents, blockedByTags, tierDrips, evaluateAgent,
   AGENT_PULSE_EVENT_TYPES, AGENT_PULSE_LEDGER_TYPES, INBOUND_EVENT_TYPES,
 } from "./shared/agent-pulse.js";
+import { leadSourcesFor } from "./shared/lead-source.js";
 
 export const CURSOR_NAME = "agentPulse";
 export const WINDOW_HOURS = 5;
@@ -142,8 +143,12 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
       : [],
     botEventsByContact({ store, locationId }),
   ]);
+  // Every agent's opening listing, to tell the houses they brought us from
+  // the ones we texted them about (shared/lead-source.js).
+  const hooks = typeof store.listOutreachHooks === "function" ? await store.listOutreachHooks(locationId).catch(() => []) : [];
+  const leads = leadSourcesFor({ offers: offers || [], hooks, events: [...(evRead.events || []), ...(ledgerRead.events || [])] });
 
-  const annotated = annotateCurrent(offers || []).filter(Boolean);
+  const annotated = annotateCurrent((offers || []).map((o) => (o && leads.has(o.id) ? { ...o, leadSource: leads.get(o.id) } : o))).filter(Boolean);
   const houses = housesFrom(annotated, evRead.events);
   const offersBy = byContact(annotated);
   const eventsBy = byContact(evRead.events);
@@ -353,7 +358,8 @@ export function startAgentPulse({
         sendsEnabled: Boolean(sendsEnabled),
         deps: {
           ...deps,
-          releaseHeld: plan.settings.autoSend,
+          // The thank-you after a close is yours to send unless you said otherwise.
+          releaseHeld: plan.settings.autoSend && (p.reason !== "deal_thanks" || plan.settings.thanksAutoSend),
           releaseReason: "the agent check-in may send itself (Settings → Agent Outreach)",
           onSettled: (j) => { if (!j?.draftId) voidClaim(j?.heldReason || j?.error || "nothing was drafted"); },
         },

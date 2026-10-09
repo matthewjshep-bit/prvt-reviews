@@ -126,7 +126,7 @@ function AgentPulsePreview() {
       {state.error ? <p className="mt-2 text-xs text-red-600">{state.error}</p> : null}
       {c ? (
         <p className="mt-2 text-xs text-slate-600">
-          {c.pool.toLocaleString()} agents: {c.bySegment.partner} you've done business with, {c.bySegment.engaged.toLocaleString()} who've written back, {c.bySegment.cold.toLocaleString()} who never have.
+          {c.pool.toLocaleString()} agents: {c.bySegment.partner} you've done business with, {(c.bySegment.source || 0).toLocaleString()} who've brought us a house, {c.bySegment.engaged.toLocaleString()} who've written back, {c.bySegment.cold.toLocaleString()} who never have.
           {" "}Due today: {c.due.fresh_listing} about a new listing, {c.due.our_house} about a house they had with us, {c.due.general} just checking in{c.dueNoSeat ? ` (${c.dueNoSeat} wait for a seat)` : ""}.
           {" "}Left alone: {owned.toLocaleString()} another clock has, {c.notDue.toLocaleString()} not due, {stopped} stopped, {c.coldDropped} gone quiet for good.
           {c.coverage?.pool ? ` ${Math.round((c.coverage.touched / c.coverage.pool) * 100)}% of the agents who've written back heard from us in the window.` : ""}
@@ -640,6 +640,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       if (form.outreachAutopilot) {
         const pulse = form.outreachAutopilot.pulse;
         clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12, followUpDays: Number(form.outreachAutopilot.followUpDays) || 14,
+          turnkeyShare: Math.min(100, Math.max(0, Number(form.outreachAutopilot.turnkeyShare) || 0)),
           ...(form.outreachAutopilot.opener ? { opener: normalizeOpener(form.outreachAutopilot.opener) } : {}),
           ...(pulse ? { pulse: { ...pulse, dailyCap: pulse.dailyCap === "" || pulse.dailyCap == null || !Number.isFinite(Number(pulse.dailyCap)) ? 20 : Number(pulse.dailyCap), everyDays: Number(pulse.everyDays) || 21, coldEveryDays: Number(pulse.coldEveryDays) || 60,
             coldMaxUnanswered: Number(pulse.coldMaxUnanswered) || 3, engagedMaxUnanswered: pulse.engagedMaxUnanswered === "" || pulse.engagedMaxUnanswered == null ? 6 : Number(pulse.engagedMaxUnanswered) } } : {}) };
@@ -1236,6 +1237,19 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                   </span>
                 </span>
               </label>
+              {form.outreachAutopilot?.requireDistress !== false && (
+                <label className="col-span-2 block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Share of first texts to agents with turnkey listings</span>
+                  <span className="flex items-center gap-2">
+                    <input type="number" min={0} max={100} className={`${INPUT_CLS} w-24`} value={form.outreachAutopilot?.turnkeyShare ?? 0}
+                      onChange={(e) => setOutreachAuto("turnkeyShare")(e.target.value === "" ? 0 : Math.min(100, Math.max(0, Number(e.target.value) || 0)))} />
+                    <span className="text-sm text-slate-500">%</span>
+                  </span>
+                  <span className="mt-1 block text-xs text-slate-500">
+                    The off-market deals with committed buyers started on turnkey listings: the agent said "it's turnkey", we asked about their other fixers, and they brought us their next house. This share of the day goes to those agents, and their first text leans on that ask. 0 = distressed listings only.
+                  </span>
+                </label>
+              )}
               <label className="col-span-2 flex items-start gap-2 text-sm text-slate-700">
                 <input type="checkbox" className="mt-1" checked={Boolean(form.outreachAutopilot?.followUpEnabled)}
                   onChange={(e) => setOutreachAuto("followUpEnabled")(e.target.checked)} />
@@ -1298,6 +1312,16 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                     Let them send themselves
                     <span className="block text-xs text-slate-500">
                       A check-in that names no number and passes every check goes on its own, spread across the afternoon. Off: each waits in the outbox for you.
+                    </span>
+                  </span>
+                </label>
+                <label className="col-span-2 flex items-start gap-2 text-sm text-slate-700">
+                  <input type="checkbox" className="mt-1" checked={Boolean(form.outreachAutopilot?.pulse?.thanksAutoSend)}
+                    onChange={(e) => setAgentPulse("thanksAutoSend")(e.target.checked)} />
+                  <span>
+                    Let the thank-you after a close send itself
+                    <span className="block text-xs text-slate-500">
+                      A few days after a deal of theirs closes, the agent is thanked and asked whether anything else like it has crossed their desk. Skipped when you already texted them since the close. Off: it waits in the outbox for you.
                     </span>
                   </span>
                 </label>

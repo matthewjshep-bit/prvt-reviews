@@ -17,6 +17,7 @@
 import { effectiveStatus, OPEN_STATUSES } from "./offer-status.js";
 import { offMarketStats, funnelBy } from "./off-market.js";
 import { normalizeAsset } from "./asset-type.js";
+import { sourceAgents } from "./lead-source.js";
 
 const HOUR_MS = 3600000;
 const DAY_MS = 24 * HOUR_MS;
@@ -382,7 +383,7 @@ export function realizedPricing({ scorecards = [], settings = {} } = {}) {
 
 /**
  * buildLine({ week, month, offers, actions, agentPlan, buyerPlan, cursors, errors, scorecards, settings, targets, now })
- *   → { targets, stations, method, cycle, leaks, leakTotal, backlog, coverage, jobs, errors, pricing, sources }
+ *   → { targets, stations, method, cycle, leaks, leakTotal, backlog, coverage, jobs, errors, pricing, sources, kinds, paths }
  */
 export function buildLine({
   week = [], month = [], offers = [], actions = [], agentPlan = null, buyerPlan = null,
@@ -412,7 +413,21 @@ export function buildLine({
     // Single family vs everything else (Matt, 2026-10-01: focus on SFR).
     // A house Zillow never typed is its own column, not guessed into a side.
     kinds: { days90: kindStats(offers, { now, days: 90 }), allTime: kindStats(offers, { now }) },
+    // How each house came to us (shared/lead-source.js): the listing we
+    // opened with, or a house the agent brought. Matt, 2026-10-09: the deals
+    // with committed buyers were the agents' next houses, not our listings.
+    paths: { days90: pathStats(offers, { now, days: 90 }), allTime: pathStats(offers, { now }), agents: sourceAgents(offers) },
   };
+}
+
+/**
+ * pathStats(offers, { now, days }) → { agent_brought, hook, direct, unknown }
+ *
+ * The funnel by how the house came to us. Offers carry `leadSource` (the
+ * runner annotates them); one without it counts as unknown.
+ */
+export function pathStats(offers = [], { now = Date.now(), days = null } = {}) {
+  return funnelBy(offers, (o) => o.leadSource?.source || "unknown", { now, days, sides: ["agent_brought", "hook", "direct", "unknown"] });
 }
 
 /** kindStats(offers, { now, days }) → { sfr, other, untyped } — the funnel by kind of house (shared/asset-type.js). */

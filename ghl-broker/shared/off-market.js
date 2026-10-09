@@ -44,6 +44,11 @@ export const OFF_MARKET_CUE_RX = new RegExp([
   "(?:hasn'?t|has not|never) (?:been )?(?:listed|hit (?:the )?(?:market|mls)|gone on (?:the )?(?:market|mls))",
   "before (?:it|we|they) (?:list|lists|hit|hits|go|goes) (?:it )?(?:on )?(?:the )?(?:market|mls)?",
   "private (?:listing|sale)", "whisper listing", "quiet listing", "exclusive listing",
+  // The way the off-market houses with committed buyers actually came
+  // (2026-10-09): a friend's house, a friend who told them about a seller,
+  // word of mouth, a house that was never listed.
+  "(?:my|a) friend (?:of mine )?(?:has|owns|is (?:looking|thinking|wanting) to sell|told me)",
+  "word[\\s-]of[\\s-]mouth",
 ].map((p) => `\\b${p}`).join("|"), "i");
 
 /** offMarketCue(text) → the phrase that says it, or "". */
@@ -67,21 +72,30 @@ const PRE_MARKET_STATUSES = new Set(["COMING_SOON", "OFF_MARKET", "PRE_MARKET"])
  * house coming soon or off the market. Nothing said and a listing found (or
  * no lookup at all) is "not known" — never "listed" by guess.
  */
-export function offMarketSignals({ message = "", transcript = "", listing = null } = {}) {
+export function offMarketSignals({ message = "", transcript = "", listing = null, agentBrought = false } = {}) {
   const said = offMarketCue(message) || theirLines(transcript).map(offMarketCue).find(Boolean) || "";
   if (said) return { value: true, why: `they said "${said.toLowerCase()}"` };
   const status = String(listing?.status || "").toUpperCase();
   if (PRE_MARKET_STATUSES.has(status)) return { value: true, why: status === "COMING_SOON" ? "coming soon on Zillow" : "not listed on Zillow" };
+  // A house the agent brought us (not the listing we texted about) that
+  // Zillow knows and doesn't show for sale: the friend's house, the estate
+  // that never got listed. Without a lookup it stays "not known".
+  if (agentBrought && listing && status && !LISTED_STATUSES.has(status)) return { value: true, why: "an agent brought it and Zillow doesn't show it for sale" };
   return null;
 }
 
+// Zillow's words for a house anyone can buy (or has just bought) on the market.
+const LISTED_STATUSES = new Set(["FOR_SALE", "PENDING", "CONTINGENT", "ACTIVE", "UNDER_CONTRACT", "FOR_AUCTION"]);
+
 /* ---------- off-market vs listed ---------- */
 
-const blank = () => ({ offers: 0, sent: 0, countered: 0, agreed: 0, contract: 0, closed: 0 });
+const blank = () => ({ offers: 0, sent: 0, countered: 0, agreed: 0, contract: 0, buyer: 0, closed: 0 });
+// A deal with a committed buyer: the ones that close (Matt, 2026-10-09).
+const BUYER_STAGES = new Set(["buyer_found", "assigned", "closed"]);
 const pct = (n, d) => (d > 0 ? Math.round((n / d) * 1000) / 10 : null);
 
 /**
- * funnelBy(offers, sideOf, { now, days, sides }) → { [side]: { offers, sent, countered, agreed, contract, closed, contractRate } }
+ * funnelBy(offers, sideOf, { now, days, sides }) → { [side]: { offers, sent, countered, agreed, contract, buyer, closed, contractRate } }
  *
  * The house-by-house funnel, split by whatever `sideOf(offer)` says — off-
  * market or listed, single family or another kind (shared/line.js). Each
@@ -102,6 +116,7 @@ export function funnelBy(offers = [], sideOf = () => "all", { now = Date.now(), 
     if (seen.has("countered") || o.counter || status === "countered") side.countered++;
     if (o.deal || priceAgreed(o) || seen.has("accepted") || status === "accepted") side.agreed++;
     if (o.deal) side.contract++;
+    if (o.deal && BUYER_STAGES.has(o.deal.stage)) side.buyer++;
     if (o.deal && ["closed", "assigned"].includes(o.deal.stage)) side.closed++;
   }
   for (const side of Object.values(out)) side.contractRate = pct(side.contract, side.offers);

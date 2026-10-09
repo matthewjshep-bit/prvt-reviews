@@ -306,7 +306,11 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     // sweep's pages are all stale by query, so there it takes a price cut or
     // an older house (a cheap $/sqft found finished houses in slow towns).
     const distressRule = ["cut-or-cheap", "cut-or-old"].includes(body.distressRule) ? body.distressRule : "any";
-    return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule };
+    // Keep agents whose listings are all turnkey too, flagged, for the
+    // sweep's turnkey seats (outreachAutopilot.turnkeyShare): every deal with
+    // a committed buyer that an agent brought started on a turnkey listing.
+    const keepTurnkey = body.keepTurnkey === true || body.keepTurnkey === "true";
+    return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule, keepTurnkey };
   }
 
   // The Zillow phone lookup for one sweep pull: on or off, how many, and the
@@ -392,7 +396,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * without it, the pull's own median (a county or zip pull is one market).
    */
   async function ingestCohort({ locationId, client, batch, listings, params, medianFor = null, warnings }) {
-    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false, zillow = null, propertyType = "" } = params;
+    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false, zillow = null, propertyType = "", keepTurnkey = false } = params;
     const isDistressed = (sig) => meetsDistressRule(sig, distressRule);
     // Cohort medians come from the FULL pull (pre-filter) so they describe the
     // market, not the filtered slice.
@@ -443,6 +447,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       pool = pool.filter((l) => !isRuralLot(l.lotSize));
       if (pool.length < before) warnings.push(`rural filter (under ${RURAL_LOT_ACRES} acres) kept ${pool.length} of ${before}`);
     }
+    // Everything that passed the other filters, before distress: with
+    // keepTurnkey an agent whose listings are all finished still joins the
+    // batch, flagged `turnkey`, and the pick gives them only the turnkey seats.
+    const basePool = pool;
     if (distressOnly) {
       const before = pool.length;
       const medianWord = medianFor ? "its ZIP's (or county's) $/sqft median" : `$${Math.round(medianPpsf)}/sqft median`;
@@ -466,7 +474,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     // Group the FULL pull by agent — filters decide which agents qualify and
     // which listing becomes the hook, but activity counts (listingCount) must
     // reflect the agent's whole book of business in this market.
-    const qualifying = new Set(pool);
+    const distressedSet = new Set(pool);
+    const qualifying = new Set(distressOnly && keepTurnkey ? basePool : pool);
     const byAgent = new Map();
     let droppedNoAgent = 0;
     for (const l of listings) {
@@ -482,7 +491,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         yearBuilt: l.yearBuilt, sqft: l.squareFootage, propertyType: l.propertyType,
         beds: l.bedrooms ?? null, baths: l.bathrooms ?? null, lotSize: l.lotSize ?? null,
         mlsName: l.mlsName, mlsNumber: l.mlsNumber, score, components,
-        distress: { stale, cut, cheap, old }, qualifies: qualifying.has(l),
+        distress: { stale, cut, cheap, old }, qualifies: qualifying.has(l), distressPass: distressedSet.has(l),
       };
       const g = byAgent.get(idc.agentKey) || { identity: idc, listings: [] };
       // Prefer the richest identity seen (a later listing may add email/phone).
@@ -515,7 +524,11 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const officePhone = normPhone(
         listings.find((l) => agentIdentity(l).agentKey === agentKey)?.listingOffice?.phone
       );
-      const hook = qual.slice().sort((a, b) => b.score - a.score)[0];
+      // The hook is their best distressed listing; an agent kept for the
+      // turnkey seats has none, so their best listing stands in.
+      const hard = qual.filter((x) => x.distressPass);
+      const turnkey = distressOnly && keepTurnkey && !hard.length;
+      const hook = (hard.length ? hard : qual).slice().sort((a, b) => b.score - a.score)[0];
       for (const { listingKey: lk, ...docListing } of g.listings)
         listingRows.push({ listingKey: lk, agentKey, doc: docListing });
       agentRows.push({
@@ -534,12 +547,15 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
             sqft: hook.sqft ?? null, beds: hook.beds ?? null, lotSize: hook.lotSize ?? null, priceCut: Boolean(hook.distress?.cut),
             dom: hook.daysOnMarket, propertyType: hook.propertyType, yearBuilt: hook.yearBuilt,
             score: hook.score, components: hook.components,
+            // Finished, kept for the turnkey seats: the opener leans on the ask for their other fixers.
+            ...(turnkey ? { turnkey: true } : {}),
           },
           listingCount: g.listings.length,
           // Only listings that passed the filters count — a distressed listing
           // over the price cap is not a reason to text this agent.
-          distressedCount: qual.filter((x) => isDistressed(x.distress)).length,
+          distressedCount: qual.filter((x) => x.distressPass && isDistressed(x.distress)).length,
           distressRule,
+          ...(turnkey ? { turnkey: true } : {}),
           ...(maxPrice ? { maxPrice } : {}),
         },
       });
@@ -710,7 +726,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const r = await ingestCohort({
         locationId, client, batch, listings: mine, warnings: w, medianFor,
         params: { maxPrice: p.maxPrice, maxYearBuilt: p.maxYearBuilt, distressOnly: p.distressOnly, distressRule: p.distressRule,
-          staleDom: p.staleDom, priceBandPct: 0, sweep: true, zillow, propertyType: p.propertyType },
+          staleDom: p.staleDom, priceBandPct: 0, sweep: true, zillow, propertyType: p.propertyType, keepTurnkey: p.keepTurnkey },
       });
       warnings.push(...w.filter((x) => !/kept \d+ of/.test(x)).map((x) => `${c.key}: ${x}`));
       out.push({ key: c.key, batchId: batch.id, batchName: batch.name, listingsFetched: mine.length, listingsKept: r.pool.length,
@@ -737,7 +753,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
     if (body.statewide === true) return runStatewidePull(locationId, client, body, settings, maxRequestsCap);
 
-    const { zips, county, city, state, daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule } =
+    const { zips, county, city, state, daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule, keepTurnkey } =
       pullParams(body, settings, maxRequestsCap);
     // Precedence: zips (one query each) → county (one circular query around
     // the county centroid, post-filtered to the county line) → city/state.
@@ -815,7 +831,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
 
     const { pool, agentRows, agentsNew, medianPpsf, medianPrice } = await ingestCohort({
       locationId, client, batch, listings, warnings,
-      params: { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, propertyType, sweep: body.metro === true || body.metro === "true",
+      params: { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, propertyType, keepTurnkey, sweep: body.metro === true || body.metro === "true",
         zillow: body.metro === true || body.metro === "true" ? zillowFor(settings) : null },
     });
     await store.recordOutreachPull(locationId, {

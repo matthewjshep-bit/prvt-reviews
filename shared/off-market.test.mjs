@@ -45,7 +45,7 @@ test("off-market and listed are counted station by station, each house once, and
     { id: "d1", status: "draft", offMarket: { value: true } },
     listed("old", { createdAt: ago(200) }),
   ], { now: NOW, days: 90 });
-  assert.deepEqual(r.offMarket, { offers: 3, sent: 3, countered: 1, agreed: 2, contract: 2, closed: 1, contractRate: 66.7 });
+  assert.deepEqual(r.offMarket, { offers: 3, sent: 3, countered: 1, agreed: 2, contract: 2, buyer: 1, closed: 1, contractRate: 66.7 });
   assert.equal(r.listed.offers, 3);
   assert.equal(r.listed.contract, 0);
   assert.equal(r.listed.contractRate, 0);
@@ -63,4 +63,18 @@ test("we ask an agent for off-market houses at most once a month", () => {
   assert.equal(offMarketAskDaysAgo(asked, NOW), 12);
   assert.equal(offMarketAskDue(asked, NOW), false);
   assert.equal(offMarketAskDue([{ type: "offmarket_asked", at: ago(31) }], NOW), true);
+});
+
+test("a friend's house or a word-of-mouth tip from the agent reads as off-market", () => {
+  for (const said of ["My friend has a house on a double lot", "a friend of mine told me he's looking to sell", "it was just word of mouth"]) {
+    assert.ok(offMarketCue(said), said);
+  }
+  assert.equal(offMarketCue("my friend said the open house went well"), "", "a friend in passing is not a house");
+});
+
+test("a house the agent brought that Zillow doesn't show for sale is off-market; one listed is not", () => {
+  assert.deepEqual(offMarketSignals({ listing: { status: "RECENTLY_SOLD" }, agentBrought: true }), { value: true, why: "an agent brought it and Zillow doesn't show it for sale" });
+  assert.equal(offMarketSignals({ listing: { status: "FOR_SALE" }, agentBrought: true }), null);
+  assert.equal(offMarketSignals({ listing: { status: "RECENTLY_SOLD" } }), null, "the listing we texted about is never guessed off-market");
+  assert.equal(offMarketSignals({ listing: null, agentBrought: true }), null, "no lookup, not known");
 });

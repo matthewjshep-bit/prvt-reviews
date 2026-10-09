@@ -194,6 +194,11 @@ export function normalizeOutreachAutopilot(v = {}) {
     // Matt's own first texts, the voice the bot writes them in.
     opener: normalizeOpener(o.opener),
     requireDistress: o.requireDistress !== false,
+    // The share of the day's first texts (0–100) that go to agents whose
+    // listings are all finished (Matt, 2026-10-09: 25). The three
+    // off-market deals with committed buyers started on turnkey listings;
+    // the house was the agent's next one. 0 = distress only, as before.
+    turnkeyShare: Math.min(100, Math.max(0, Math.round(Number(o.turnkeyShare)) || 0)),
     workflowId: workflowIdFrom(o.workflowId),
     counties: countiesFrom(o.counties),
     followUpEnabled: o.followUpEnabled === true,
@@ -241,8 +246,12 @@ export function pullQuery(oa) {
   };
 }
 
+// Ask the pull to keep turnkey-only agents (flagged) when there are seats for
+// them. Not part of pullQuery: the saved page places don't start over for it.
+export const keepTurnkeyFor = (oa) => (oa.requireDistress && oa.turnkeyShare > 0 ? { keepTurnkey: true } : {});
+
 /**
- * pickAgentsToImport(rows, { cap, requireDistress }) → [row]
+ * pickAgentsToImport(rows, { cap, requireDistress, turnkeyShare }) → [row]
  *
  * Who gets a text today. Only agents nobody has touched: status "new" (not
  * imported, not skipped), no existing GHL contact (a match means a thread we
@@ -264,13 +273,17 @@ export function hookMeetsCutOrOld(hook = {}) {
   return cut || isOldHouse(hook.yearBuilt);
 }
 
-export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null, propertyTypes = [], maxYearBuilt = 0 } = {}) {
+export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null, propertyTypes = [], maxYearBuilt = 0, turnkeyShare = 0 } = {}) {
   const types = new Set((propertyTypes || []).map((t) => String(t).toLowerCase()));
+  const reachable = (r) => r?.status === "new" && !r.contactId && !r.doc?.ghl?.contactId && Boolean(r.doc?.phone);
+  // Same market rules as everyone else: the price cap, no rural, the types.
+  const inMarket = (d) => (!maxPrice || (Number(d.hook?.price) > 0 && Number(d.hook.price) <= maxPrice))
+    && !isRuralLot(d.hook?.lotSize)
+    && !(types.size && d.hook?.propertyType && !types.has(String(d.hook.propertyType).toLowerCase()));
   const ok = rows.filter((r) => {
     const d = r?.doc || {};
-    if (r.status !== "new") return false;
-    if (r.contactId || d.ghl?.contactId) return false;
-    if (!d.phone) return false;
+    if (!reachable(r)) return false;
+    if (requireDistress && d.turnkey) return false;
     if (requireDistress && !(Number(d.distressedCount) > 0)) return false;
     if (requireDistress && distressRule === "cut-or-old") {
       // A row from any price-signal pull is read again by its hook; a
@@ -293,7 +306,27 @@ export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, require
     (Number(b.doc?.distressedCount) || 0) - (Number(a.doc?.distressedCount) || 0) ||
     (Number(b.doc?.hook?.score) || 0) - (Number(a.doc?.hook?.score) || 0) ||
     (Number(b.doc?.listingCount) || 0) - (Number(a.doc?.listingCount) || 0));
-  return ok.slice(0, Math.max(0, cap));
+  const share = requireDistress ? Math.min(100, Math.max(0, Number(turnkeyShare) || 0)) / 100 : 0;
+  if (!share) return ok.slice(0, Math.max(0, cap));
+  // The turnkey seats: agents kept only for them (routes/outreach.js), the
+  // biggest book first. Woven in at the share — the import walks the list in
+  // order and stops at the day's number, so the order is the split. Never
+  // more than the share: when the distressed agents run out, so does the list.
+  const turnkey = rows.filter((r) => reachable(r) && r.doc?.turnkey && inMarket(r.doc))
+    .sort((a, b) => (Number(b.doc?.listingCount) || 0) - (Number(a.doc?.listingCount) || 0) || (Number(b.doc?.hook?.score) || 0) - (Number(a.doc?.hook?.score) || 0));
+  return weave(ok, turnkey, share).slice(0, Math.max(0, cap));
+}
+
+// weave(main, side, share) → main with side woven in so that, at every point,
+// side makes up `share` of the list so far (rounded down).
+export function weave(main = [], side = [], share = 0) {
+  const out = [];
+  let i = 0, j = 0;
+  for (let k = 1; i < main.length; k++) {
+    const sideHere = j < side.length && Math.floor(k * share) > Math.floor((k - 1) * share);
+    out.push(sideHere ? side[j++] : main[i++]);
+  }
+  return out;
 }
 
 /* ---------- the RentCast meter ---------- */
@@ -516,7 +549,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     job.candidates = (job.candidates || 0) + rows.length;
     const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
       maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null, propertyTypes: oa.propertyTypes,
-      maxYearBuilt: oa.maxYearBuilt })
+      maxYearBuilt: oa.maxYearBuilt, turnkeyShare: oa.turnkeyShare })
       .filter((r) => !seenAgents.has(r.agentKey) && !seenPhones.has(String(r.doc?.phone)));
     for (const r of fresh) { seenAgents.add(r.agentKey); seenPhones.add(String(r.doc?.phone)); }
     if (fresh.length) groups.push({ key, batchId, picked: fresh });
@@ -533,7 +566,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     // Stop before a pull, not after it: a run with nothing left spends nothing.
     if (attempt > 0 && (left <= 0 || pickedTotal >= wanted)) break;
     job.phase = "pulling";
-    const query = { ...pullQuery(oa), maxRequests: Math.max(1, left) };
+    const query = { ...pullQuery(oa), ...keepTurnkeyFor(oa), maxRequests: Math.max(1, left) };
     let county = null;
     let key = null;
     const turn = (startTurn + attempt) % n;
@@ -690,7 +723,7 @@ async function readState({ oa, job, locationId, client, store, deps, now, left, 
   job.phase = "pulling";
   job.county = state;
   const pull = await deps.runPull(locationId, client, {
-    ...pullQuery(oa), statewide: true, state, counties, batchIds, offset, maxRequests: Math.max(1, left),
+    ...pullQuery(oa), ...keepTurnkeyFor(oa), statewide: true, state, counties, batchIds, offset, maxRequests: Math.max(1, left),
   }, { maxRequestsCap: MAX_REQUESTS_PER_RUN });
   const used = Number(pull.requestsUsed) || 0;
   job.pull = {

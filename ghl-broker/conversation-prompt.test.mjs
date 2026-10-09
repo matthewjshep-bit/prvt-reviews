@@ -493,3 +493,10 @@ test("the pass on a rural house says we can't do rural and names the acreage", (
   assert.match(t, /fixers in town on a normal-size lot/);
   assert.doesNotMatch(t, /single-family/);
 });
+
+test("when an agent brings us a house, the bot gets the address with a promise not to bother the seller, and their read on value and work", () => {
+  const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
+  assert.match(sys, /A HOUSE THEY BRING US[^]*won't approach, drive by or bother the seller/);
+  assert.match(sys, /worth fixed up and what it needs, and the seller's situation and timing/);
+  assert.doesNotMatch(buildSystemPrompt({ config: null, party: "investor", channel: "sms" }), /A HOUSE THEY BRING US/);
+});

@@ -455,3 +455,9 @@ test("a dry run reads the room but texts nobody", async () => {
   assert.equal(retried, false);
   assert.equal(seen.createLimit, 3);
 });
+
+test("every first text asks for their other fixers — the deals with committed buyers were the agent's next house, not the listing", () => {
+  const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES });
+  assert.match(t.split("HOW MATT WRITES")[0], /END with one short line[^.]*other fixers on their radar in King\. That line is required/);
+  assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => /other fixers|anything else that needs work/i.test(x)), "each example asks for the next house");
+});

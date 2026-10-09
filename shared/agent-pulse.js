@@ -12,6 +12,7 @@
 // This is the clock that owns an agent when nothing else does.
 //
 //   partner   a deal with us, an agreed price, or a yes to a number — ever
+//   source    they brought us a house we never texted them about (2026-10-09)
 //   engaged   they have written back at least once
 //   cold      never answered
 //
@@ -48,6 +49,9 @@ const clamp = (x, d, lo, hi) => { const k = Math.round(Number(x)); return Number
 
 export const AGENT_PULSE_DEFAULTS = {
   enabled: false, autoSend: false,
+  // The thank-you after a deal closes (dealToThank) stays a draft for you
+  // unless this is on, whatever autoSend says.
+  thanksAutoSend: false,
   dailyCap: 20, everyDays: 21, quietDays: 7,
   freshDays: 14, listingSeenDays: 30,
   coldEveryDays: 60, coldMaxUnanswered: 3, engagedMaxUnanswered: 6,
@@ -81,6 +85,7 @@ export function normalizeAgentPulse(v = {}) {
   return {
     enabled: o.enabled === true,
     autoSend: o.autoSend === true,
+    thanksAutoSend: o.thanksAutoSend === true,
     dailyCap: clamp(o.dailyCap, D.dailyCap, 0, AGENT_PULSE_MAX_DAILY_CAP),
     everyDays: clamp(o.everyDays, D.everyDays, 7, 90),
     quietDays: clamp(o.quietDays, D.quietDays, 2, 30),
@@ -144,12 +149,19 @@ export function listingDistressed(doc = {}, rule = null) {
 }
 
 /**
- * agentSegment({ offers, lastInboundAt }) → "partner" | "engaged" | "cold"
+ * agentSegment({ offers, lastInboundAt }) → "partner" | "source" | "engaged" | "cold"
+ *
+ * "source" (2026-10-09): they brought us a house we never texted them about
+ * (offer.leadSource, shared/lead-source.js) — how every off-market deal with
+ * a committed buyer came. Ranked with partners, and never dropped for silence.
  */
 export function agentSegment({ offers = [], lastInboundAt = null } = {}) {
   if ((offers || []).some((o) => o && (o.deal || priceAgreed(o) || o.realm?.answer === "yes"))) return "partner";
+  if ((offers || []).some((o) => o && broughtUs(o))) return "source";
   return lastInboundAt ? "engaged" : "cold";
 }
+const broughtUs = (o) => o.leadSource?.source === "agent_brought" || o.autoUnderwrite?.leadSource === "agent_brought";
+const TOP_SEGMENTS = new Set(["partner", "source"]);
 
 /**
  * agentStops({ drafts, events, tags, botOffTags, now }) → reason | null
@@ -286,6 +298,36 @@ export function ourHouseFor({ offers = [], drafts = [], events = [], config = {}
   return ended.sort((a, b) => String(b.statusAt || b.createdAt || "").localeCompare(String(a.statusAt || a.createdAt || "")))[0] || null;
 }
 
+// How long after a close the thank-you is still timely.
+export const DEAL_THANKS_DAYS = 30;
+// Give the close a couple of days to settle before the bot says anything.
+const DEAL_THANKS_AFTER_DAYS = 2;
+const CLOSED_STAGES = new Set(["closed", "assigned"]);
+
+/**
+ * dealToThank({ offers, events, ledger, now }) → the offer (with closedAt) | null
+ *
+ * Matt, 2026-10-09: after Vashon closed, Matt's "let me know if you get any
+ * fixers across your desk" and the check-in that followed brought the next
+ * house (4747 46th). A deal of theirs that closed in the last
+ * DEAL_THANKS_DAYS, with no text of ours since the close (yours counts: a
+ * thank-you you sent by hand is the thank-you) and no thank-you check-in on
+ * it yet.
+ */
+export function dealToThank({ offers = [], events = [], ledger = [], now = Date.now() } = {}) {
+  const closedAt = (o) => (o.deal?.stageHistory || []).filter((h) => CLOSED_STAGES.has(h?.stage)).map((h) => h.ts || h.at).filter(Boolean).sort().at(-1)
+    || o.deal?.closedAt || o.deal?.updatedAt || o.statusAt || null;
+  const thanked = new Set((ledger || []).filter((e) => e?.type === "agent_pulse_sent" && e.data?.reason === "deal_thanks" && e.address).map((e) => addressKey(e.address)));
+  const ourTexts = (events || []).filter((e) => OUR_TEXT_TYPES.has(e?.type)).map((e) => ms(e.at)).filter((t) => t != null);
+  const due = (offers || []).filter((o) => o?.deal && CLOSED_STAGES.has(o.deal.stage) && o.address).map((o) => ({ ...o, closedAt: closedAt(o) })).filter((o) => {
+    const t = ms(o.closedAt);
+    if (t == null || now - t > DEAL_THANKS_DAYS * DAY_MS || now - t < DEAL_THANKS_AFTER_DAYS * DAY_MS) return false;
+    if (thanked.has(addressKey(o.address))) return false;
+    return !ourTexts.some((x) => x > t);
+  });
+  return due.sort((a, b) => String(b.closedAt).localeCompare(String(a.closedAt)))[0] || null;
+}
+
 /**
  * evaluateAgent(agent, ctx) → { status, reason, segment, pulseReason, listing, house, priority }
  *
@@ -312,7 +354,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const voided = new Set(ledger.filter((e) => e.type === "agent_pulse_voided").map((e) => e.data?.claimKey || e.ref).filter(Boolean));
   const texted = ledger.filter((e) => e.type === "agent_pulse_texted" && (!agent.lastInboundAt || String(e.at) > String(agent.lastInboundAt)));
   const unanswered = texted.length;
-  const downgraded = segment !== "cold" && s.engagedMaxUnanswered > 0 && unanswered >= s.engagedMaxUnanswered;
+  const downgraded = segment !== "cold" && segment !== "source" && s.engagedMaxUnanswered > 0 && unanswered >= s.engagedMaxUnanswered;
   const lastPulseAt = latest(ledger.filter((e) => e.type === "agent_pulse_sent" && !voided.has(e.dedupeKey)).map((e) => e.at));
   const lastTouchAt = latest(events.filter((e) => OUR_TEXT_TYPES.has(e.type)).map((e) => e.at));
   const since = latest([lastTouchAt, agent.lastInboundAt, lastPulseAt]);
@@ -344,7 +386,11 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     return out("due", "", { segment: coldSeg, pulseReason: "fresh_listing", listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
   }
 
-  const tier = segment === "partner" ? 0 : 1;
+  const tier = TOP_SEGMENTS.has(segment) ? 0 : 1;
+  // A deal of theirs just closed: thank them and ask for the next one, ahead
+  // of everything else today.
+  const thanks = dealToThank({ offers: agent.offers || agent.current || [], events, ledger, now });
+  if (thanks) return out("due", "", { segment, pulseReason: "deal_thanks", house: thanks, priority: [-1, -(ms(thanks.closedAt) ?? 0)] });
   if (listing && quietFor(quietDays)) {
     return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
   }
@@ -365,8 +411,8 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
 export function pickPulseAgents({ agents = [], settings = {}, config = {}, houses = {}, outreachFollowUpDays = 14, seats = null, now = Date.now() } = {}) {
   const s = normalizeAgentPulse(settings);
   const counts = {
-    pool: agents.length, bySegment: { partner: 0, engaged: 0, cold: 0 }, stopped: {}, owned: {}, notDue: 0, coldDropped: 0,
-    due: { fresh_listing: 0, our_house: 0, general: 0 }, dueNoSeat: 0,
+    pool: agents.length, bySegment: { partner: 0, source: 0, engaged: 0, cold: 0 }, stopped: {}, owned: {}, notDue: 0, coldDropped: 0,
+    due: { deal_thanks: 0, fresh_listing: 0, our_house: 0, general: 0 }, dueNoSeat: 0,
     fresh: { withListing: 0 }, coverage: { touched: 0, pool: 0 },
   };
   const due = [];

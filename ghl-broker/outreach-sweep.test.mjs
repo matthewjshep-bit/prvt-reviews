@@ -12,7 +12,7 @@ const row = (k, doc = {}, extra = {}) => ({ agentKey: k, status: "new", contactI
 
 test("settings coerce to safe defaults", () => {
   assert.deepEqual(normalizeOutreachAutopilot(undefined), {
-    enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", opener: { examples: DEFAULT_OPENER_EXAMPLES }, requireDistress: true,
+    enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", opener: { examples: DEFAULT_OPENER_EXAMPLES }, requireDistress: true, turnkeyShare: 0,
     workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14,
     minDaysOnMarket: 45, propertyTypes: ["Single Family"], maxYearBuilt: 0, reserveRequests: 2,
     monthlyRequests: 0, cycleDay: 1, maxListPrice: 1500000, coverage: "counties",
@@ -504,4 +504,36 @@ test("an agent whose hook is a manufactured home is not picked when outreach is 
   ];
   assert.deepEqual(pickAgentsToImport(rows, { cap: 10, propertyTypes: ["Single Family"] }).map((r) => r.agentKey).sort(), ["house", "untyped"]);
   assert.equal(pickAgentsToImport(rows, { cap: 10 }).length, 3, "no types given, no type check");
+});
+
+test("a quarter of the day's first texts go to agents with turnkey listings — the off-market deals with buyers started on turnkey listings", () => {
+  const hard = ["a", "b", "c", "d", "e", "f", "g", "h", "i"].map((k) => row(k));
+  const finished = ["t1", "t2", "t3", "t4"].map((k, i) => row(k, { turnkey: true, distressedCount: 0, listingCount: 1 + i, hook: { address: `${k} St`, score: 10, price: 500000, turnkey: true } }));
+  const noPhone = row("t9", { turnkey: true, distressedCount: 0, phone: "", hook: { address: "x", price: 400000 } });
+  const tooDear = row("t8", { turnkey: true, distressedCount: 0, hook: { address: "y", price: 2500000 } });
+  const rows = [...hard, ...finished, noPhone, tooDear];
+  const off = pickAgentsToImport(rows, { cap: 50 });
+  assert.ok(off.every((r) => !r.doc.turnkey), "share 0: distress only, as before");
+  const picked = pickAgentsToImport(rows, { cap: 50, turnkeyShare: 25, maxPrice: 1500000 }).map((r) => r.agentKey);
+  assert.deepEqual(picked.filter((k) => k.startsWith("t")), ["t4", "t3"], "the biggest book first; never more than the share (2 of 11)");
+  assert.equal(picked.indexOf("t4"), 3, "every fourth seat");
+  assert.ok(!picked.includes("t9") && !picked.includes("t8"), "a phone and the market's price cap still apply");
+  assert.equal(normalizeOutreachAutopilot({}).turnkeyShare, 0, "ships at 0");
+  assert.equal(normalizeOutreachAutopilot({ turnkeyShare: 250 }).turnkeyShare, 100);
+  assert.equal(normalizeOutreachAutopilot({ turnkeyShare: "25" }).turnkeyShare, 25);
+});
+
+test("the pull keeps turnkey agents only when there are seats for them, and the saved page places don't start over", async () => {
+  _resetJobs();
+  const queries = [];
+  const deps = { runPull: async (loc, client, q) => { queries.push(q); return { batchId: "b1", warnings: [] }; }, importAgents: async () => ({}) };
+  startOutreachSweep({ locationId: "loc-tk", client: {}, saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true, turnkeyShare: 25 } }, store: fakeStore([]), deps });
+  await settle();
+  assert.equal(queries[0]?.keepTurnkey, true);
+  assert.equal(pullQuery(normalizeOutreachAutopilot({ turnkeyShare: 25 })).keepTurnkey, undefined, "not part of the query signature");
+  _resetJobs();
+  queries.length = 0;
+  startOutreachSweep({ locationId: "loc-tk2", client: {}, saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true } }, store: fakeStore([]), deps });
+  await settle();
+  assert.equal(queries[0]?.keepTurnkey, undefined);
 });

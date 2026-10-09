@@ -17,11 +17,14 @@
 // 2026-10-05: Matt wanted more personality ("personable, concise, friendly,
 // even humorous"), so the last three have a little more of him in them. The
 // humour is about us and what we like, never about their listing.
+// 2026-10-09: every one ends asking for their other fixers. The deals with
+// committed buyers (Issaquah, Snohomish 23706, 7034 S K) were each the
+// agent's next house, offered within minutes of that line or a check-in.
 export const DEFAULT_OPENER_EXAMPLES = [
-  "Hi {first}, came across your listing at {street}. I'm in Seattle and looking for my next flip project anywhere in {county} County. Is this one a bit of a project, or pretty turnkey? And if you've got other fixers on your radar in {county}, I'm all ears.",
-  "Hey {first}, {street} caught my eye. I flip houses around Seattle and have a soft spot for ones that need a little love, looking anywhere in {county} County. Is this one a bit of a project? Honestly, the uglier the better.",
-  "Hi {first}, saw your {town} listing on {street}, looks like it has some character. I'm after my next flip in {county} County. Fixer, or already pretty turnkey? Either answer helps.",
-  "Hey {first}, I'm someone who gets way too excited about original kitchens. Came across {street} and wondered if it needs some work? Looking for my next flip anywhere in {county} County.",
+  "Hi {first}, came across your listing at {street}. I'm local in Seattle and buy places to fix up around {county} County. Is this one a bit of a project, or pretty turnkey? And if you've got other fixers on your radar, I'm all ears.",
+  "Hey {first}, {street} caught my eye. I flip houses around Seattle and have a soft spot for ones that need a little love. Is this one a project? Either way, if you've got other fixers on your radar in {county} County, I'm all ears.",
+  "Hi {first}, saw your {town} listing on {street}, looks like it has some character. Fixer, or already pretty turnkey? I'm after my next flip in {county} County, so if you know of anything else that needs work, I'd love to hear.",
+  "Hey {first}, I'm someone who gets way too excited about original kitchens. Does {street} need some work? Looking for my next flip in {county} County, so if you've got other fixers on your radar, I'm all ears.",
 ];
 
 export const OPENER_MAX_EXAMPLES = 8;
