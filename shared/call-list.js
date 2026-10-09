@@ -24,6 +24,9 @@ import { agentSegment } from "./agent-pulse.js";
 import { IRRITATED_RX } from "./thread-health.js";
 import { handsWriteUpBack } from "./conversation-ai.js";
 import { holdState } from "./counter-hold.js";
+import { flipRead } from "./flip-read.js";
+import { offMarketCue } from "./off-market.js";
+import { sameStreet } from "./us-address.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -85,6 +88,31 @@ const PER_TRY = 15;
 const PER_DAY = 1, MAX_AGE_PENALTY = 30;
 
 const FIRST_REPLY_INTENTS = new Set(["deal_available", "new_property", "investor_open"]);
+// A price in their words: "$425,000", "425k", "1.2M", "425,000". A street
+// number never reads as one (no $, no k/m, no thousands comma).
+const PRICE_RX = /\$\s?\d|\b\d{1,4}(?:\.\d+)?\s?(?:k|m|mm)\b|\b\d{1,3},\d{3}\b/i;
+
+/**
+ * firstReplyLead({ ins, iceAddress }) → why it's a lead, or "" (Matt,
+ * 2026-10-08: a first-reply call only for real leads; "it's turnkey" is the
+ * bot's to answer, not a call). Their words read as a flip or off-market
+ * (shared/flip-read.js, shared/off-market.js), the qualify step found it a
+ * flip, they put a number on a house, they asked to talk, or they brought
+ * us a house other than the one our first text named.
+ */
+export function firstReplyLead({ ins = [], iceAddress = "" } = {}) {
+  const list = (ins || []).filter(Boolean);
+  if (list.some((d) => d.intent === "wants_call")) return "they asked to talk";
+  if (list.some((d) => d.qualify?.stage === "qualified")) return "reads as a flip";
+  const words = list.map((d) => String(d.inbound || "")).join("\n");
+  const rehab = Math.max(0, ...list.map((d) => Number(d.agentTake?.rehab) || 0));
+  if (flipRead(words, { agentRehab: rehab }).qualifies) return "reads as a flip";
+  if (offMarketCue(words)) return "off-market";
+  if (list.some((d) => Number(d.counterAmount) > 0 || Number(d.agentTake?.arv) > 0) || PRICE_RX.test(words)) return "put a number on it";
+  const ice = String(iceAddress || "").trim();
+  if (ice && list.some((d) => String(d.propertyAddress || "").trim() && !sameStreet(d.propertyAddress, ice))) return "brought us a house";
+  return "";
+}
 // A phone number in their text: "(360) 555-0161 here!"
 const PHONE_RX = /\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/;
 // The paperwork is on its way to us to sign.
@@ -317,14 +345,20 @@ export function callList({
     // Their first word ever: nothing earlier on the timeline either.
     const earlier = (eventsBy.get(c) || []).some((e) => (e.type === "text_summary" || callEventConnected(e)) && (ms(e.at) ?? 0) < (ms(firstIn.createdAt) ?? 0) - 60000);
     if (earlier) continue;
-    const named = ins.find((d) => FIRST_REPLY_INTENTS.has(d.intent) || String(d.propertyAddress || "").trim());
+    const named = ins.find((d) => FIRST_REPLY_INTENTS.has(d.intent) || d.intent === "wants_call" || String(d.propertyAddress || "").trim());
     if (!named) continue;
+    // Only a lead is a call; a turnkey "it's nice" is the bot's to answer.
+    const iceAddress = (eventsBy.get(c) || [])
+      .filter((e) => (e.type === "outreach_sent" || (e.type === "outreach_enrolled" && e.data?.kind !== "followup")) && e.address)
+      .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0]?.address || "";
+    const lead = firstReplyLead({ ins, iceAddress });
+    if (!lead) continue;
     const priorOffer = (offersBy.get(c) || []).some((o) => (ms(o.createdAt) ?? 0) < (ms(firstIn.createdAt) ?? 0));
     if (priorOffer) continue;
     const name = named.contactName || nameOf(c, offersBy, draftsBy);
     const house = String(named.propertyAddress || "").trim();
     add("call_first_reply", { contactId: c, contactName: name, address: house, since: firstIn.createdAt,
-      why: house ? `first reply, about ${street(house)}` : "first reply, open to working with investors",
+      why: house ? `first reply, about ${street(house)} — ${lead}` : `first reply — ${lead}`,
       goal: "Relationship intro: who they are, what they list, and how they like to work with investors.",
       opener: `Hi ${first(name)}, it's Matt — thanks for getting back to me${house ? ` about ${street(house)}` : ""}. Wanted to put a voice to the name.` });
   }

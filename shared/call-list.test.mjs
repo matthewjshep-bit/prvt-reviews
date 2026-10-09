@@ -103,13 +103,45 @@ test("they called and nobody picked up: call them back first", () => {
 });
 
 test("a new agent's first reply about a house is a relationship call; a reply after months of talk isn't", () => {
-  const events = [{ type: "outreach_sent", contactId: "n1", at: ago(3) }];
+  // Our first text was about another house: 4th Ave is one they brought us.
+  const events = [{ type: "outreach_sent", contactId: "n1", at: ago(3), address: "88 Elm St, Kent, WA" }];
   const drafts = [{ id: "f", contactId: "n1", contactName: "Nadia P", party: "agent", intent: "deal_available", inbound: "I have one on 4th Ave", propertyAddress: "210 4th Ave, Kent, WA", createdAt: ago(0.5) }];
   const r = callList({ events, drafts, now: NOW });
   assert.equal(r[0]?.kind, "call_first_reply");
   assert.match(r[0].call.why, /210 4th Ave/);
   const older = [...events, { type: "text_summary", contactId: "n1", at: ago(40), data: { inbound: "hey" } }];
   assert.equal(callList({ events: older, drafts, now: NOW }).length, 0);
+});
+
+// Matt, 2026-10-08: ~78 of 86 Call rows were first replies, most of them
+// "it's turnkey" about the house our first text named. A first reply is a
+// call only when it's a lead.
+const iceEvents = [{ type: "outreach_sent", contactId: "n1", at: ago(3), address: "210 4th Ave, Kent, WA 98032" }];
+const firstReply = (over = {}) => ({ id: "f", contactId: "n1", contactName: "Nadia P", party: "agent", intent: "deal_available", propertyAddress: "210 4th Ave, Kent, WA", createdAt: ago(0.5), ...over });
+
+test("an agent who says the house is turnkey isn't put on the call list", () => {
+  for (const inbound of ["It's turnkey, not a fix", "Move-in ready! New roof and updated kitchen", "Not a fixer, it's in great shape"]) {
+    const r = callList({ events: iceEvents, drafts: [firstReply({ inbound })], now: NOW });
+    assert.equal(r.filter((x) => x.kind === "call_first_reply").length, 0, inbound);
+  }
+});
+
+test("an agent who says it's a project is", () => {
+  const r = callList({ events: iceEvents, drafts: [firstReply({ inbound: "Yes it's a project, foundation issues and the roof leaks" })], now: NOW });
+  assert.equal(r[0]?.kind, "call_first_reply");
+  // The qualify step already found it a flip: a lead whatever the words.
+  const q = callList({ events: iceEvents, drafts: [firstReply({ inbound: "see my last", qualify: { stage: "qualified", address: "210 4th Ave, Kent, WA" } })], now: NOW });
+  assert.equal(q[0]?.kind, "call_first_reply");
+  // Off-market, or a number on it, is a lead too.
+  assert.equal(callList({ events: iceEvents, drafts: [firstReply({ inbound: "I have a pocket listing nearby" })], now: NOW })[0]?.kind, "call_first_reply");
+  assert.equal(callList({ events: iceEvents, drafts: [firstReply({ inbound: "Seller would take 425k" })], now: NOW })[0]?.kind, "call_first_reply");
+  // Our question went and the answer was vague: no call.
+  assert.equal(callList({ events: iceEvents, drafts: [firstReply({ inbound: "could use some love", qualify: { stage: "ask", address: "210 4th Ave, Kent, WA" } })], now: NOW }).length, 0);
+});
+
+test("an agent who asks for a call is", () => {
+  const r = callList({ events: iceEvents, drafts: [firstReply({ intent: "wants_call", propertyAddress: "", inbound: "Give me a call when you can" })], now: NOW });
+  assert.equal(r[0]?.kind, "call_first_reply");
 });
 
 test("an engaged agent who went quiet on our offer is a call; a cold one is left to the texts", () => {
