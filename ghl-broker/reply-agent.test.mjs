@@ -6136,3 +6136,100 @@ test("Matt's Queen St float passes the gate at its length, and a reply still kee
   const reply = evaluateReplyGates({ draft: { intent: "question", confidence: "high", needsHuman: false, reply: QUEEN }, party: "agent", style, allowedAmounts: [] });
   assert.ok(reply.flags.some((f) => /too long/.test(f)), "a reply is held over 300 as before");
 });
+
+/* ---------- the first text is an icebreaker (shared/flip-read.js) ---------- */
+
+// Matt, 2026-10-08: on Oct 6–8, 159 of 505 agent replies started an
+// underwrite, most on the house our first text opened with, on answers like
+// "Cosmetic fixer". Agents sell; one short question first.
+import { QUALIFY_ASK_RX } from "./shared/flip-read.js";
+const ICE = "48 Cedar Hollow Rd, Shelton, WA 98584";
+const QUALIFY_SAVED = { ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi,
+  parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent, qualifyFirst: { enabled: true } } } } };
+async function iceStore(sent = []) {
+  const store = fakeStore(sent);
+  await store.appendContactEvents("LOC", "c1", [{ type: "outreach_sent", party: "agent", at: iso(2 * 86400000), address: ICE, source: "conversation" }]);
+  return store;
+}
+function threadClient(lines) {
+  const base = ghlStubFor(["agent"]);
+  const t0 = Date.now();
+  return { call: async (p, o = {}) => {
+    if (p.startsWith("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+    if (p.startsWith("/conversations/cv1/messages")) return { messages: { messages: lines.map(([dir, body], i) => ({
+      messageType: "TYPE_SMS", direction: dir, dateAdded: new Date(t0 - (lines.length - i) * 3600000).toISOString(), body })), nextPage: false } };
+    return base.client.call(p, o);
+  } };
+}
+const OPENER = "Hi Sam, came across your listing at 48 Cedar Hollow Rd. Is this one a bit of a project, or pretty turnkey?";
+async function replyTo(message, { saved = QUALIFY_SAVED, intent = "deal_available", address = ICE, lines = [["outbound", OPENER]], sent = [] } = {}) {
+  _resetJobs();
+  const store = await iceStore(sent);
+  const uw = [];
+  const { job } = await startReply({
+    client: threadClient(lines), locationId: "LOC", saved, store, contactId: "c1", sendsEnabled: true, message,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent, confidence: "high", needsHuman: false, propertyAddress: address,
+        reply: "Good to know. I'll run the numbers with underwriting today and get back to you." }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-q" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return { d: await store.getReplyDraft(job.draftId), uw, store };
+}
+
+test("an agent who calls the first-text house a 'cosmetic fixer' gets one question, not an underwrite", async () => {
+  const { d, uw, store } = await replyTo("Cosmetic fixer");
+  assert.equal(uw.length, 0, "no credits on a sales line");
+  assert.match(d.reply, QUALIFY_ASK_RX);
+  assert.doesNotMatch(d.reply, /run the numbers|underwriting/, "no promise of a number");
+  assert.equal(d.qualify.stage, "ask");
+  assert.equal(d.autoSendable, true, `the question sends itself: ${JSON.stringify(d.flags)}`);
+  assert.deepEqual(tierOneActions(d.actions).map((a) => a.type), [], "not Tier 1 yet");
+  const set = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "subject_property_set");
+  assert.ok(!set || set.data?.qualifying === "ask", "the app's Tier 1 leaves it out while we ask");
+});
+
+test("an agent who volunteers that the foundation has settled gets underwritten right away", async () => {
+  const { d, uw } = await replyTo("Post and block foundation, one corner has settled and the floors are uneven");
+  assert.equal(uw.length, 1);
+  assert.equal(d.qualify.stage, "qualified");
+});
+
+test("a vague answer to our question is a polite pass that asks what else they have, on or off market", async () => {
+  const { d, uw } = await replyTo("Mostly paint and floors, seller just wants list", {
+    lines: [["outbound", OPENER], ["inbound", "Cosmetic fixer"], ["outbound", "Good to know. Is it big-ticket stuff like roof, foundation or systems, or more paint and flooring? And what's got the seller selling?"]],
+  });
+  assert.equal(uw.length, 0);
+  assert.equal(d.intent, "investor_open");
+  assert.equal(d.qualify.stage, "pass");
+  assert.equal(d.autoSendable, true, `the pass sends itself: ${JSON.stringify(d.flags)}`);
+  assert.match(d.reply, /off-market/);
+});
+
+test("a real answer to our question underwrites", async () => {
+  const { d, uw } = await replyTo("Roof is shot and the kitchen is original. Seller inherited it.", {
+    sent: [{ id: "q1", locationId: "LOC", contactId: "c1", status: "sent", createdAt: iso(3600000), reply: "…", qualify: { stage: "ask", address: ICE } }],
+  });
+  assert.equal(uw.length, 1);
+  assert.equal(d.qualify.stage, "qualified");
+});
+
+test("'come take a look' at the first-text house gets our question, not a showing or a number", async () => {
+  const { d, uw } = await replyTo("You should come take a look!", { intent: "wants_walkthrough" });
+  assert.equal(uw.length, 0);
+  assert.match(d.reply, QUALIFY_ASK_RX);
+  assert.equal(d.intent, "deal_available");
+});
+
+test("a house the agent brings up themselves underwrites right away", async () => {
+  const { uw } = await replyTo("Got another one, 77 Birch Ln Everett, needs some work", { intent: "new_property", address: "77 Birch Ln, Everett, WA 98201" });
+  assert.equal(uw.length, 1);
+});
+
+test("with qualify-first off, the first-text house underwrites as before", async () => {
+  const { d, uw } = await replyTo("Cosmetic fixer", { saved: STARTER_SAVED });
+  assert.equal(uw.length, 1);
+  assert.equal(d.qualify, undefined);
+});

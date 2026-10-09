@@ -895,6 +895,14 @@ export function PartyPlaybooks({ config, patch, workflows }) {
                 );
               })()}
             </div>
+            {party === "agent" && (
+              <div>
+                <Toggle checked={pb.qualifyFirst?.enabled} onChange={(v) => setPb({ qualifyFirst: { enabled: v } })}>
+                  <span className="font-semibold">Qualify the first-text house before underwriting</span>
+                </Toggle>
+                <p className={HINT}>The house our first text names is an icebreaker. "It's a project" or "cosmetic fixer" about it gets one short question (big repairs or a refresh, and why the seller's selling) instead of an underwrite. A vague answer gets a polite pass and an ask for anything distressed, on market or off. Specific trouble (foundation, hoarder, estate, two big repairs) underwrites right away, and so does any house they bring up themselves.</p>
+              </div>
+            )}
             <div>
               <Toggle checked={pb.takeCheck?.enabled} onChange={(v) => setPb({ takeCheck: { enabled: v } })}>
                 <span className="font-semibold">Float our read first</span>
