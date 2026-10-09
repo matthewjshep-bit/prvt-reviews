@@ -113,8 +113,11 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
   const may = !dryRun && config.enabled;
   // Loose: what the audit starts may send a holding reply the guard passed
   // even when its intent is a person's call (releaseForAudit in reply-agent.js).
+  // By day it never is: a person's call waits for a person, bar an agent's
+  // reply the bot couldn't place when driver.daytime.releaseOther is on.
   const loose = config.nightlyAudit?.loose !== false;
-  const runDeps = { ...deps, releaseHeld: loose };
+  const runDeps = { ...deps, releaseHeld: loose,
+    ...(day ? { releaseByDay: true, releaseOther: daytime.releaseOther === true } : {}) };
 
   // The held underwrites, same pass: dropped, closed out, re-run on the
   // agent's numbers, or asked about (held-underwrites.js). Its findings ride
