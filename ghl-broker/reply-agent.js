@@ -1129,6 +1129,15 @@ export function releaseForAudit({ auto, gate, draft, deps }) {
   // reply passed every money check — the shape decideAutoSend itself accepts.
   const clean = Boolean(gate?.ok || (gate?.locked && gate?.clean));
   if (!clean || draft?.needsHuman || RELEASE_QUIET.has(draft?.intent) || !String(draft?.reply || "").trim()) return auto;
+  // By day (the daytime pass's redraft) a person's call waits for a person —
+  // the same rule releasableHeld keeps for its own releases. The one
+  // exception is an agent's reply the bot couldn't place, when
+  // driver.daytime.releaseOther is on (Matt, 2026-10-08).
+  if (deps.releaseByDay) {
+    const party = draft?.party || "agent";
+    const otherOk = deps.releaseOther === true && party === "agent" && draft?.intent === "other";
+    if ((NEVER_AUTO[party] || NEVER_AUTO.agent).includes(draft?.intent) && !otherOk) return auto;
+  }
   return { ...auto, send: true, code: "", reason: deps.releaseReason || "released by the nightly audit — a holding reply, nothing committed", released: true };
 }
 

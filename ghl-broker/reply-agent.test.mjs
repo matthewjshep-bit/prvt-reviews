@@ -3733,6 +3733,24 @@ test("a never-auto intent's reply passes the gates as locked-but-clean, and the 
   assert.equal(releaseForAudit({ auto: { send: false, code: "gates", reason: "needs a person: names 500k" }, gate: dirty, draft, deps: { releaseHeld: true } }).send, false);
 });
 
+test("a counter the daytime pass redrafts still waits for Matt — by day a person's call is never released", async () => {
+  const { releaseForAudit } = await import("./reply-agent.js");
+  const locked = { ok: false, flags: ["a counter is a person's call"], locked: "a counter is a person's call", clean: true };
+  const held = { send: false, code: "never_auto", reason: "a counter is a person's call" };
+  const day = { releaseHeld: true, releaseByDay: true };
+  for (const intent of ["counter", "acceptance", "wants_call", "scheduling", "proof_of_funds"]) {
+    const draft = { party: "agent", intent, reply: "Let me run that by my partner.", needsHuman: false };
+    assert.equal(releaseForAudit({ auto: held, gate: locked, draft, deps: day }).send, false, `${intent} by day`);
+    assert.equal(releaseForAudit({ auto: held, gate: locked, draft, deps: { releaseHeld: true } }).send, true, `${intent} at 7pm, as before`);
+  }
+  const other = { party: "agent", intent: "other", reply: "Thanks, I'll take a look.", needsHuman: false };
+  assert.equal(releaseForAudit({ auto: held, gate: locked, draft: other, deps: day }).send, false, "a reply it couldn't place waits by day unless switched on");
+  assert.equal(releaseForAudit({ auto: held, gate: locked, draft: other, deps: { ...day, releaseOther: true } }).send, true, "and goes when it is");
+  assert.equal(releaseForAudit({ auto: held, gate: locked, draft: { ...other, party: "investor" }, deps: { ...day, releaseOther: true } }).send, false, "never an investor's by day");
+  assert.equal(releaseForAudit({ auto: { send: false, code: "not_allowlisted", reason: "off the list" }, gate: { ok: true, flags: [] }, draft: { party: "agent", intent: "question", reply: "Sure thing.", needsHuman: false }, deps: day }).send, true,
+    "a reply held only because its intent is off the list still goes by day");
+});
+
 test("the list price said in words is their floor, and a soft floor out of reach is a pass, not a round", async () => {
   // Bryce Buri (2026-09-16): our 900k, "far too low", asked where the seller
   // needs to be — "Current list price". No digits in the message; the list
