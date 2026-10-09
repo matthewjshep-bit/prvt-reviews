@@ -90,13 +90,25 @@ export const DEFAULT_LADDERS = {
 // somebody has to keep it.
 export const PROMISE_DUE_HOURS = 4;
 
+// "Can have it over today", "I'll send our written offer over", "I'll get
+// our offer in", "I'll have our offer to you" (2026-10-08: the bot said it
+// and nothing tracked it). We say it, about the paper; "feel free to send it
+// over" asks THEM, and "send it over to my partner" isn't to them.
+const WE_WILL = String.raw`(?:i'?ll|i\s+will|i\s+can|we'?ll|we\s+will|we\s+can|i'?m\s+going\s+to|we'?re\s+going\s+to|let\s+me|happy\s+to|can)\s+(?:\w+\s+){0,2}?`;
+const THE_PAPER = String.raw`(?:our|the)\s+(?:written\s+|formal\s+|official\s+)?(?:offer|loi|letter(?:\s+of\s+intent)?)`;
+const PAPER_PROMISE = [
+  new RegExp(String.raw`\b${WE_WILL}(?:send|get|have|shoot)\s+(?:it|that|${THE_PAPER})\s+(?:over|in|to\s+you|your\s+way)\b(?!\s+to\s+(?:my|our|the|him|her|them)\b)`, "i"),
+  new RegExp(String.raw`\b${WE_WILL}(?:send|get|shoot)\s+over\s+${THE_PAPER}`, "i"),
+];
+
 /**
- * detectPromise(text) → "number" | "answer" | null
+ * detectPromise(text) → "number" | "paper" | "answer" | null
  *
  * Whether a reply WE sent commits us to coming back. "number" when it's our
  * numbers ("get back to you with a number", "run it by underwriting", "have a
- * number back to you today"); "answer" when it's anything else ("let me run
- * that by my partner and get back to you this afternoon").
+ * number back to you today"); "paper" when it's the written offer ("can have
+ * it over today", "I'll send our offer over"); "answer" when it's anything
+ * else ("let me run that by my partner and get back to you this afternoon").
  */
 export function detectPromise(text = "") {
   const t = String(text || "");
@@ -107,6 +119,7 @@ export function detectPromise(text = "") {
     /\bnumbers?\s+re-?run\b/i,
   ];
   if (number.some((re) => re.test(t))) return "number";
+  if (PAPER_PROMISE.some((re) => re.test(t))) return "paper";
   if (/\b(?:get|come|circle)\s+back\s+to\s+you\b|\bback\s+to\s+you\s+(?:today|this\s+afternoon|tonight|tomorrow|later)\b/i.test(t)) return "answer";
   return null;
 }

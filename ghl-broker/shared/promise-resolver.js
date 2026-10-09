@@ -21,6 +21,7 @@ import { aiHoldReasons, effectiveStatus, OPEN_STATUSES } from "./offer-status.js
 import { detectPromise } from "./follow-up.js";
 import { currentOffers } from "./current-offer.js";
 import { stillQualifying } from "./flip-read.js";
+import { paperWorthy, saidYesOn } from "./paper-follows.js";
 
 const HOUR_MS = 3600000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -28,7 +29,20 @@ const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t
 // Older than this, the thread has moved on and a "we owe you" would be odd.
 export const PROMISE_WINDOW_HOURS = 72;
 
-export const PROMISE_MOVES = ["send_number", "start_underwrite", "ask_numbers", "rerun", "wait", "not_owed", "yours"];
+export const PROMISE_MOVES = ["send_number", "send_paper", "start_underwrite", "ask_numbers", "rerun", "wait", "not_owed", "yours"];
+
+/**
+ * promiseWhat(events) → "number" | "paper" | "answer"
+ *
+ * What a run of promise events owes, strongest first: a number we haven't
+ * got beats the written offer, which beats an answer.
+ */
+export function promiseWhat(events = []) {
+  const kinds = (events || []).map((p) => p?.data?.what);
+  if (kinds.includes("number")) return "number";
+  if (kinds.includes("paper")) return "paper";
+  return "answer";
+}
 
 // promise_made keeps the first 200 characters of what we said
 // (reply-agent.js sendReplyDraft). A text that long may have been cut before
@@ -82,7 +96,7 @@ export function openPromises(events = [], { now = Date.now(), windowHours = PROM
       contactId,
       since: made[0]?.at || owed.at,
       address: [...made].reverse().find((p) => p.address)?.address || owed?.address || "",
-      what: [...made, owed].some((p) => p?.data?.what === "number") ? "number" : "answer",
+      what: promiseWhat([...made, owed]),
       text: String(newest.data?.text || ""),
       draftId: newest.data?.draftId || null,
       asksThem: newest.data?.asksThem === true,
@@ -116,6 +130,24 @@ export function resolvePromise({ promise, offers = [], drafts = [], jobs = [], h
   const mine = (offers || []).filter((o) => o && (!p.contactId || o.contactId === p.contactId) && onHouse(o.address));
   const held = mine.find((o) => effectiveStatus(o) === "draft" && aiHoldReasons(o).length) || null;
   const base = { offerId: null };
+
+  // 0. "Can have it over today" (2026-10-08): the written offer is owed, and
+  //    only the written offer keeps it — not an answer, not a question back.
+  //    On the house's current priced offer, while it's open, and only a number
+  //    we'd put in writing (shared/paper-follows.js: a rough one after a yes).
+  if (p.what === "paper") {
+    const open = currentOffers(mine).filter((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o)) && Number(o.cashAmount) > 0);
+    if (!address && open.length > 1) return { ...base, move: "yours", reason: "more than one open offer and we never said which house" };
+    const offer = open[0] || null;
+    if (!offer) return { ...base, move: "yours", reason: "no open priced offer on that house to send" };
+    const wentSince = (offer.sends || []).some((s) => s?.ts && String(s.ts) > String(p.since || "")
+      && (!s.results || Object.values(s.results).some((r) => r?.ok)));
+    if (wentSince) return { move: "not_owed", offerId: offer.id, reason: "the written offer went out" };
+    if (!paperWorthy(offer, { saidYes: saidYesOn(offer, { drafts, events }) })) {
+      return { move: "yours", offerId: offer.id, reason: "a rough number on their own figures — paper only after they say yes" };
+    }
+    return { move: "send_paper", offerId: offer.id, reason: "we said we'd send the written offer and it hasn't gone" };
+  }
 
   // 1. They wrote, and we gave them a real answer. Only an owed ANSWER closes
   //    this way: a promised number is kept by a number.

@@ -171,3 +171,35 @@ test("a number promised on a phone call still goes out; a call before the promis
   assert.equal(s2.calls.float.length, 0, "a call after the promise: the person has it");
   assert.ok(r.results.some((x) => x.status === "stopped" && x.reason === "person_has_it"), JSON.stringify(r.results));
 });
+
+// 2026-10-08: the bot texted "can have it over today" and nothing tracked it.
+const paperMade = (hoursAgo) => made(hoursAgo, {}, { what: "paper", text: "Totally understand. I can have it over today." });
+const withSend = (s) => {
+  s.calls.paper = [];
+  s.deps.sendOfferDocs = async (a) => { s.calls.paper.push(a); return { ok: true, channels: a.channels, address: HOUSE }; };
+  return s;
+};
+
+test("saying we'll have it over today sends the written offer, once, for their records", async () => {
+  const store = fakeStore({ events: [paperMade(5)], offers: [priced({ proactive: { realmCheckAt: at(20) } })] });
+  const s = withSend(spies());
+  const r = await drive(store, s.deps);
+  assert.equal(r.results[0].move, "send_paper");
+  assert.equal(r.results[0].status, "started");
+  assert.deepEqual(s.calls.paper, [{ contactId: "c1", addressHint: HOUSE, offerId: "o1", unattended: true, channels: ["sms", "email"], forRecord: true, by: "promise" }]);
+  assert.equal(s.calls.float.length, 0, "not a float");
+  await drive(store, s.deps, { now: NOW + 900000 });
+  assert.equal(s.calls.paper.length, 1, "the next tick finds it claimed");
+});
+
+test("the written offer we promised waits for the driver's switch and for sends", async () => {
+  const off = withSend(spies());
+  await drive(fakeStore({ events: [paperMade(5)], offers: [priced()] }), off.deps, { saved: saved(false) });
+  assert.equal(off.calls.paper.length, 0, "driver.promises off");
+  const dry = withSend(spies());
+  const store = fakeStore({ events: [paperMade(5)], offers: [priced()] });
+  const r = await drive(store, dry.deps, { sendsEnabled: false });
+  assert.equal(dry.calls.paper.length, 0, "sends off");
+  assert.equal(r.results[0].reason, "sends are off on the broker");
+  assert.equal(store.events.length, 1, "and nothing is claimed");
+});

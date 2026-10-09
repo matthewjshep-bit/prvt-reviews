@@ -134,3 +134,55 @@ test("the day's number caps it", async () => {
   assert.equal(r2.sent, 0, "one a day");
   await store.saveOfferSettings(LOC, saved);
 });
+
+/* ---------- 2026-10-08: an answer that wasn't a pass (afterFloat.onNeutral) ---------- */
+
+const THURSDAY = Date.parse("2026-10-08T18:00:00Z");
+async function answeredWith(contactId, inbound, extra = {}, offerExtra = {}) {
+  const offer = await floated(contactId, offerExtra);
+  await store.createReplyDraft({
+    locationId: LOC, contactId, status: "sent", party: "agent", intent: "question", channel: "sms", inbound,
+    reply: "Understood, thanks.", createdAt: "2026-10-05T17:00:00.000Z", sentAt: "2026-10-05T17:01:00.000Z", ...extra,
+  });
+  return offer;
+}
+const withNeutral = async (on) => {
+  const saved = await store.getOfferSettings(LOC);
+  await store.saveOfferSettings(LOC, { ...saved, conversationAi: { enabled: true, parties: { agent: { sendOffer: { afterFloat: { enabled: true, onNeutral: on } } } } } });
+};
+
+test("an agent who can't answer for the seller still gets our written offer", async () => {
+  const offer = await answeredWith("agent-colleague", "I can't answer for the seller, call my colleague");
+  await withNeutral(false);
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: THURSDAY });
+  assert.equal(sent.filter((m) => m.contactId === "agent-colleague").length, 0, "the switch is off by default");
+  await withNeutral(true);
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: THURSDAY });
+  const sms = sent.find((m) => m.contactId === "agent-colleague" && m.type === "SMS");
+  assert.ok(sms, "a text went");
+  assert.match(sms.message, /so you have it on file/);
+  const after = await store.getOffer(offer.id);
+  assert.equal(after.paperAfterFloat.status, "sent");
+  assert.equal(after.paperAfterFloat.after, "neutral");
+  const ev = (await store.listContactEvents(LOC, "agent-colleague", { limit: 50 })).find((e) => e.type === "offer_sent");
+  assert.equal(ev.data.by, "after_answer");
+  assert.equal(machineDid(ev), true);
+});
+
+test("an agent who agrees with numbers built on her own figures gets the written offer", async () => {
+  await withNeutral(true);
+  const rough = { autoUnderwrite: { passed: false, basis: "agent_numbers" } };
+  await answeredWith("agent-agrees", "I actually agree on those numbers", { intent: "realm_yes" }, rough);
+  await answeredWith("agent-rough-neutral", "let me see what the seller says", {}, rough);
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: THURSDAY + 60000 });
+  assert.ok(sent.some((m) => m.contactId === "agent-agrees" && m.type === "SMS"), "a yes puts the rough number on paper");
+  assert.equal(sent.filter((m) => m.contactId === "agent-rough-neutral").length, 0, "a neutral answer doesn't");
+});
+
+test("a pass after a float doesn't send paper on the neutral rule", async () => {
+  await withNeutral(true);
+  await answeredWith("agent-no", "seller won't go that low, we'll pass", { intent: "rejection" });
+  await answeredWith("agent-sold", "that one is pending now");
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: THURSDAY + 120000 });
+  assert.equal(sent.filter((m) => ["agent-no", "agent-sold"].includes(m.contactId)).length, 0);
+});

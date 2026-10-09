@@ -472,7 +472,7 @@ test("send_offer keeps its own mode and options through a save, and the clean-un
   assert.deepEqual(a, { type: "send_offer", mode: "auto", channels: ["email"], docs: ["pdf"] });
   assert.deepEqual(b, { type: "send_offer", mode: "ask", channels: ["sms"], docs: ["image", "pdf"] });
   assert.deepEqual(c.parties.agent.sendOffer, { onClearUnderwrite: true, channels: ["sms"], docs: ["scope"],
-    afterFloat: { enabled: false, silenceHours: 24, onPushback: false, dailyCap: 20 } });
+    afterFloat: { enabled: false, silenceHours: 24, onPushback: false, onNeutral: false, dailyCap: 20 } });
   assert.equal(normalizeConversationAi({}).parties.agent.sendOffer.onClearUnderwrite, false);
   // an investor playbook never carries it
   const inv = normalizeConversationAi({ parties: { investor: { intentRules: { interested: { mode: "auto", actions: [{ type: "send_offer" }] } } } } });
