@@ -167,6 +167,7 @@ import { buildDataroomForOffer, isDealRoom } from "./dataroom.js";
 import { normalizeAgentPulse } from "../shared/agent-pulse.js";
 import { ensureOfferPage, refreshOfferPages } from "../offer-page.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
+import { OFF_MARKET_TAG } from "../shared/off-market.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
@@ -3582,13 +3583,29 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const ctx = await loadDealOffer(req, res, { requireDeal: false });
       if (!ctx) return;
-      const { offer } = ctx;
+      const { offer, client } = ctx;
       const ts = new Date().toISOString();
       const value = req.body?.offMarket !== false;
-      offer.offMarket = { value, by: "you", why: dealStr(req.body?.note, 160) || (value ? "you marked it off-market" : "you marked it listed"), at: ts };
+      // by "machine": a read of the thread done for you (the 2026-10-09
+      // backfill), which a mark of yours always overrides; never over yours.
+      const by = req.body?.by === "machine" ? "machine" : "you";
+      if (by === "machine" && offer.offMarket?.by === "you") return res.json({ ok: true, offer, offMarket: offer.offMarket, kept: "your own mark" });
+      offer.offMarket = { value, by, why: dealStr(req.body?.note, 160) || (value ? "you marked it off-market" : "you marked it listed"), at: ts };
       offer.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
-      res.json({ ok: true, offer, offMarket: offer.offMarket });
+      // The agent's GHL tag follows: on when a house of theirs is off-market,
+      // off when you mark their last one listed. Best effort.
+      let tag = null;
+      if (offer.contactId) {
+        try {
+          if (value) { await addContactTags(client, offer.contactId, [OFF_MARKET_TAG]); tag = "added"; }
+          else {
+            const theirs = await store.listOffers(offer.locationId, { contactId: offer.contactId, limit: 200, lean: true }).catch(() => []);
+            if (!theirs.some((o) => o.id !== offer.id && o.offMarket?.value === true)) { await removeContactTags(client, offer.contactId, [OFF_MARKET_TAG]); tag = "removed"; }
+          }
+        } catch (e) { tag = `failed: ${String(e?.message || e).slice(0, 80)}`; }
+      }
+      res.json({ ok: true, offer, offMarket: offer.offMarket, tag });
     } catch (err) { fail(res, err); }
   });
 

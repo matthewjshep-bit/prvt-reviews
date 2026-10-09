@@ -3685,6 +3685,16 @@ on the lean rows (`OFFER_LIST_FIELDS`).
   is left unmarked — never "listed" by guess. Our own lines never count.
 - The Offers tab: an "off-market" pill on the row and an Off-market filter.
 
+- 2026-10-09: nothing had ever been marked (0 of 569). Three changes:
+  - A house an agent brought that Zillow finds with no for-sale status (or none at all) is
+    off-market (machine); a failed lookup stays unknown.
+  - Held drafts are marked by the same signals.
+  - The ~31 houses a thread read found off-market were backfilled as the machine's marks via
+    `PATCH /api/offers/:id/off-market { by: "machine" }`, which never overrides yours.
+- **The GHL tag `off-market`** (`OFF_MARKET_TAG`) goes on the agent's contact whenever a house of
+  theirs is marked off-market, by the underwrite or by the route. Marking their last one listed by
+  hand takes it off. It was a brand-new tag, so no workflow listened for it at launch.
+
 **Tracking.** Reports → Line → "Off-market vs listed": offers, in front of
 the agent, countered, price agreed, under contract, closed, and the share of
 offers that became contracts — last 90 days or all time, each house once —

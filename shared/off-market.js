@@ -77,7 +77,9 @@ export function offMarketSignals({ message = "", transcript = "", listing = null
   // A house the agent brought us (not the listing we texted about) that
   // Zillow knows and doesn't show for sale: the friend's house, the estate
   // that never got listed. Without a lookup it stays "not known".
-  if (agentBrought && listing && status && !LISTED_STATUSES.has(status)) return { value: true, why: "an agent brought it and Zillow doesn't show it for sale" };
+  // Zillow found the house but gives it no for-sale status at all: the same.
+  // A lookup that failed (no listing object) stays "not known".
+  if (agentBrought && listing && !LISTED_STATUSES.has(status)) return { value: true, why: "an agent brought it and Zillow doesn't show it for sale" };
   return null;
 }
 
@@ -149,6 +151,13 @@ export function offMarketStats(offers = [], { now = Date.now(), days = null, nam
     agents: [...agents.values()].sort((a, b) => b.contracts - a.contracts || b.offers - a.offers || a.name.localeCompare(b.name)).slice(0, 10),
   };
 }
+
+/* ---------- the GHL tag ---------- */
+
+// On the agent's contact when a house they brought is marked off-market (by
+// the machine or by you), so GHL can filter and run workflows on the agents
+// who bring us off-market houses. Added, never removed by the machine.
+export const OFF_MARKET_TAG = "off-market";
 
 /* ---------- asking for them ---------- */
 

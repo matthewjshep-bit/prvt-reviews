@@ -78,3 +78,10 @@ test("a house the agent brought that Zillow doesn't show for sale is off-market;
   assert.equal(offMarketSignals({ listing: { status: "RECENTLY_SOLD" } }), null, "the listing we texted about is never guessed off-market");
   assert.equal(offMarketSignals({ listing: null, agentBrought: true }), null, "no lookup, not known");
 });
+
+test("a house an agent brought that Zillow found with no for-sale status at all is off-market; a failed lookup is not known", () => {
+  assert.equal(offMarketSignals({ listing: { status: null }, agentBrought: true })?.value, true);
+  assert.equal(offMarketSignals({ listing: { status: "OTHER" }, agentBrought: true })?.value, true);
+  assert.equal(offMarketSignals({ listing: null, agentBrought: true }), null);
+  assert.equal(offMarketSignals({ listing: { status: null } }), null, "our own listing is never guessed");
+});

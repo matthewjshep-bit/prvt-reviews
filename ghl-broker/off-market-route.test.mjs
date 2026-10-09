@@ -40,3 +40,14 @@ test("you can mark an offer off-market and back, your mark says it's yours, and 
   const off = await patch(o.id, { offMarket: false });
   assert.deepEqual({ value: off.offMarket.value, by: off.offMarket.by }, { value: false, by: "you" });
 });
+
+test("a thread-read mark goes on as the machine's, never over yours; the agent gets the off-market tag in GHL", async () => {
+  const o = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "sam", address: "501 10th St SE, Puyallup, WA 98372", cashAmount: 224250, status: "sent", statusHistory: [] });
+  const m = await patch(o.id, { offMarket: true, by: "machine", note: "read from the thread: estate, never listed" });
+  assert.deepEqual({ value: m.offMarket.value, by: m.offMarket.by }, { value: true, by: "machine" });
+  assert.equal(m.tag, "added");
+  await patch(o.id, { offMarket: false });
+  const kept = await patch(o.id, { offMarket: true, by: "machine", note: "backfill" });
+  assert.equal(kept.kept, "your own mark");
+  assert.deepEqual({ value: kept.offMarket.value, by: kept.offMarket.by }, { value: false, by: "you" });
+});
