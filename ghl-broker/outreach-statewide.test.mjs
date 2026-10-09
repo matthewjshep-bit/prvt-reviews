@@ -142,7 +142,7 @@ const fakeStore = (byBatch = {}) => ({
   async getJobCursor(l, k) { return this.cursors.get(`${l}|${k}`) || null; },
   async setJobCursor(l, k, v) { this.cursors.set(`${l}|${k}`, v); return v; },
 });
-const agentRow = (k) => ({ agentKey: k, status: "new", contactId: null, doc: { name: k, phone: `206${k.length}${k.charCodeAt(0)}${k.charCodeAt(k.length - 1)}000`.slice(0, 10), distressedCount: 1, distressRule: "cut-or-cheap", hook: { price: 400000, score: 50 }, ghl: {} } });
+const agentRow = (k) => ({ agentKey: k, status: "new", contactId: null, doc: { name: k, phone: `206${k.length}${k.charCodeAt(0)}${k.charCodeAt(k.length - 1)}000`.slice(0, 10), distressedCount: 1, distressRule: "cut-or-old", hook: { priceCut: true, price: 400000, score: 50 }, ghl: {} } });
 const corridor = [{ county: "King", state: "WA" }, { county: "Pierce", state: "WA" }, { county: "Thurston", state: "WA" }];
 const oct2 = Date.parse("2026-10-02T17:05:00Z");
 

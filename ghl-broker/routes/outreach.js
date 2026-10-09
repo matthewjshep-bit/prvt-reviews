@@ -27,7 +27,7 @@ import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, s
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { scoreListing, medianPricePerSqft, distressSignals, medianIndex } from "../outreach-score.js";
+import { scoreListing, medianPricePerSqft, distressSignals, meetsDistressRule, OLD_HOUSE_YEAR, medianIndex } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { countyName } from "../shared/outreach-opener.js";
@@ -302,9 +302,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     // A price ceiling — asked of RentCast (price=*:N) and checked again after.
     const rawMaxPrice = Math.round(Number(body.maxPrice));
     const maxPrice = Number.isFinite(rawMaxPrice) && rawMaxPrice > 0 ? rawMaxPrice : 0;
-    // "any" (stale, cut, or cheap) or "cut-or-cheap": the sweep's pages are all
-    // stale by query, so there only a price signal is distress.
-    const distressRule = body.distressRule === "cut-or-cheap" ? "cut-or-cheap" : "any";
+    // "any" (stale, cut, or cheap), "cut-or-cheap", or "cut-or-old": the
+    // sweep's pages are all stale by query, so there it takes a price cut or
+    // an older house (a cheap $/sqft found finished houses in slow towns).
+    const distressRule = ["cut-or-cheap", "cut-or-old"].includes(body.distressRule) ? body.distressRule : "any";
     return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule };
   }
 
@@ -392,7 +393,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    */
   async function ingestCohort({ locationId, client, batch, listings, params, medianFor = null, warnings }) {
     const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false, zillow = null, propertyType = "" } = params;
-    const isDistressed = (sig) => (distressRule === "cut-or-cheap" ? sig.priced : sig.any);
+    const isDistressed = (sig) => meetsDistressRule(sig, distressRule);
     // Cohort medians come from the FULL pull (pre-filter) so they describe the
     // market, not the filtered slice.
     const medianPpsf = medianPricePerSqft(listings);
@@ -447,9 +448,11 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const medianWord = medianFor ? "its ZIP's (or county's) $/sqft median" : `$${Math.round(medianPpsf)}/sqft median`;
       pool = pool.filter((l) => isDistressed(distressSignals(l, { medianPpsf: ppsfOf(l), staleDom })));
       warnings.push(
-        distressRule === "cut-or-cheap"
-          ? `distress filter (price cut, or ≤90% of ${medianWord}) kept ${pool.length} of ${before}`
-          : `distress filter (${staleDom}+ DOM, price cut, or ≤90% of ${medianWord}) kept ${pool.length} of ${before}`
+        distressRule === "cut-or-old"
+          ? `distress filter (price cut, or built before ${OLD_HOUSE_YEAR}) kept ${pool.length} of ${before}`
+          : distressRule === "cut-or-cheap"
+            ? `distress filter (price cut, or ≤90% of ${medianWord}) kept ${pool.length} of ${before}`
+            : `distress filter (${staleDom}+ DOM, price cut, or ≤90% of ${medianWord}) kept ${pool.length} of ${before}`
       );
     }
     if (priceBandPct && medianPrice) {
@@ -470,7 +473,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const idc = agentIdentity(l);
       if (!idc.agentKey) { droppedNoAgent++; continue; }
       const { score, components } = scoreListing(l, { medianPpsf: ppsfOf(l) });
-      const { stale, cut, cheap } = distressSignals(l, { medianPpsf: ppsfOf(l), staleDom });
+      const { stale, cut, cheap, old } = distressSignals(l, { medianPpsf: ppsfOf(l), staleDom });
       const key = listingKey(l);
       const address = l.formattedAddress || [l.addressLine1, l.city, l.state, l.zipCode].filter(Boolean).join(", ");
       const docListing = {
@@ -479,7 +482,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         yearBuilt: l.yearBuilt, sqft: l.squareFootage, propertyType: l.propertyType,
         beds: l.bedrooms ?? null, baths: l.bathrooms ?? null, lotSize: l.lotSize ?? null,
         mlsName: l.mlsName, mlsNumber: l.mlsNumber, score, components,
-        distress: { stale, cut, cheap }, qualifies: qualifying.has(l),
+        distress: { stale, cut, cheap, old }, qualifies: qualifying.has(l),
       };
       const g = byAgent.get(idc.agentKey) || { identity: idc, listings: [] };
       // Prefer the richest identity seen (a later listing may add email/phone).
@@ -535,7 +538,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           listingCount: g.listings.length,
           // Only listings that passed the filters count — a distressed listing
           // over the price cap is not a reason to text this agent.
-          distressedCount: qual.filter((x) => isDistressed({ any: x.distress.stale || x.distress.cut || x.distress.cheap, priced: x.distress.cut || x.distress.cheap })).length,
+          distressedCount: qual.filter((x) => isDistressed(x.distress)).length,
           distressRule,
           ...(maxPrice ? { maxPrice } : {}),
         },

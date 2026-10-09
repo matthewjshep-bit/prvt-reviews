@@ -1232,7 +1232,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                 <span>
                   Only agents with a distressed listing
                   <span className="block text-xs text-slate-500">
-                    A price cut, or priced ≤90% of the market's $/sqft. Days on market alone doesn't count — every listing the sweep pulls is already that old.
+                    A price cut, or a house built before 1980. A cheap $/sqft alone doesn't count (that finds finished houses in slow towns), and neither does days on market — every listing the sweep pulls is already that old.
                   </span>
                 </span>
               </label>
