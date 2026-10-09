@@ -175,6 +175,17 @@ const OFF_MARKET_AGENT =
   "mid-negotiation, never twice in a row, never as a pitch, and never claim we have off-market deals ourselves. What we buy " +
   "is still houses that need work.";
 
+// How the deals with committed buyers were secured once the agent named a
+// house of their own (2026-10-09): a friend's place whose seller wanted no
+// visitors, an estate, a POA. We asked for the address and
+// promised not to approach the seller, asked what they thought it was worth
+// fixed up and what it needed, and asked the seller's situation and timing.
+const AGENT_BROUGHT =
+  "A HOUSE THEY BRING US (not the one our first text named): that is the lead. Get the address if they haven't given it, and " +
+  "say plainly we won't approach, drive by or bother the seller without their say-so — sellers behind these houses often want " +
+  "it quiet. Ask what they think it's worth fixed up and what it needs, and the seller's situation and timing. Keep it to one " +
+  "or two short texts; Matt calls them next.";
+
 const CONTINUITY = {
   agent:
     "CONTINUITY: the offers and properties listed above are your memory of working with this person. They are a " +
@@ -259,7 +270,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     "if it were yesterday, and never anything that would read as surveillance or as a script."
   );
   if (CONTINUITY[party]) parts.push(CONTINUITY[party]);
-  if (party === "agent") parts.push(OFF_MARKET_AGENT);
+  if (party === "agent") parts.push(OFF_MARKET_AGENT, AGENT_BROUGHT);
   parts.push(COMMITMENTS[party] || COMMITMENTS.unknown);
   // The one commitment the calendar lets it keep. The times it may name are
   // handed to it per message under TIMES YOU MAY PROPOSE; the guard checks
@@ -676,8 +687,14 @@ function openingFor(outbound) {
       return `${START} This is the FIRST text this listing agent has ever had from us, about their listing at ` +
         `${o.address}. Write it the way Matt texts: a friendly local flipper who is easy to talk to, warm and a little ` +
         `funny, never a pitch. Two or three short sentences that: mention their listing on ${street}, say who you are, say ` +
-        `you're looking anywhere in ${where}, and ask ONE question about whether it needs work. You may add one ` +
-        `short line asking about other fixers they know of ${o.county ? `in ${o.county}` : "around there"}. ` +
+        `you're looking anywhere in ${where}, and ask ONE question about whether it needs work. Then END with one short ` +
+        `line, in your own words, asking whether they have other fixers on their radar ${o.county ? `in ${o.county}` : "around there"}. ` +
+        `That line is required: the listing is only the door. ` +
+        `Three of our four deals with committed buyers were the agent's NEXT house, which they brought up because we asked. ` +
+        (o.turnkey
+          ? `THIS LISTING LOOKS FINISHED: don't call it a fixer or ask about it as if it were one. Ask lightly whether it's more of a ` +
+            `project than it looks, and let the line about their other fixers carry the text. `
+          : "") +
         (notice || town
           ? `WHAT TO NOTICE: ${notice || `it's in ${town}`}${notice && town ? ` (it's in ${town}; naming the town is fine too)` : ""}. ` +
             `Work that in once, in your own words, so it's obvious you actually looked at the listing. No other detail, never ` +
@@ -930,6 +947,9 @@ function openingFor(outbound) {
       const why = o.reason === "fresh_listing" && l
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
           `Ask, plainly, whether it's a bit of a project — if it needs work it may be one we'd want to take a look at. Name the street; never its price or any number.`
+        : o.reason === "deal_thanks" && h
+        ? `${h.street} just closed with them. Thank them for working it with us, in a few plain words, then ask whether anything else like that ` +
+          `one has crossed their desk, listed or not. That is the whole text. `
         : o.reason === "our_house" && h
         ? `Last time it was ${h.street}, which ${h.how === "closed" ? "closed" : h.how === "fell through" ? "fell through" : h.how === "never heard back" ? "we never heard back on" : "didn't work out"}. ` +
           `Check in on THEM, not that house: ${offAsk}`

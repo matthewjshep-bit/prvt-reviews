@@ -43,6 +43,8 @@ import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
 import { offMarketSignals } from "./shared/off-market.js";
+import { leadSourceOf, theirNumberCheck } from "./shared/lead-source.js";
+import { buyerCeiling } from "./shared/post-mortem.js";
 import { markSides, sameSideFirst, isAcross, acrossLabel } from "./shared/same-side.js";
 import { addressKey, completeAddress, sameStreet, sameHouse } from "./shared/us-address.js";
 import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed } from "./shared/offer-status.js";
@@ -2220,7 +2222,21 @@ async function runUnderwrite(job, ctx) {
   // Off-market (shared/off-market.js): the agent said so, or Zillow shows it
   // coming soon or not listed. Our best deals — marked the moment they land.
   // A mark you set by hand is never overwritten.
-  const offSignal = job.offMarketCue || offMarketSignals({ listing: got.listing });
+  // How the house came to us (shared/lead-source.js): the listing we opened
+  // with, or one the agent brought — what the Desk's call row keys on.
+  const hooks = job.contactId && typeof store?.listOutreachHooks === "function"
+    ? await store.listOutreachHooks(locationId, { contactId: job.contactId }).catch(() => [])
+    : [];
+  const lead = job.contactId ? leadSourceOf({ offer: { contactId: job.contactId, address: offer.address || extraction.address, createdAt: new Date().toISOString() }, hooks, events: contactEvents || [] }) : null;
+  if (lead) offer.autoUnderwrite.leadSource = lead.source;
+  // A house the agent brought: does the seller's own number leave our fee
+  // under what a flipper pays? A flag for the Desk's call, never a send.
+  if (lead?.source === "agent_brought") {
+    const ceiling = buyerCeiling({ offer: { ...offer, arv: offer.calc?.inputs?.arv, repairs: offer.calc?.inputs?.repairs }, settings: saved || {}, fee: 0 });
+    const check = ceiling.computable ? theirNumberCheck({ seller: extraction.askingPrice || job.askingPrice, ceiling: ceiling.noFee }) : null;
+    if (check) offer.autoUnderwrite.theirNumber = check;
+  }
+  const offSignal = job.offMarketCue || offMarketSignals({ listing: got.listing, agentBrought: lead?.source === "agent_brought" });
   if (offSignal && offer.offMarket?.by !== "you") offer.offMarket = { ...offSignal, by: "machine", at: new Date().toISOString() };
   await store.updateOffer(offer.id, offer).catch(() => {});
   if (rescued) job.held = [rescued.basis];

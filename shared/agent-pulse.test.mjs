@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeAgentPulse, evaluateAgent, pickPulseAgents, agentSegment, agentStops, agentOwner,
-  freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor,
+  freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor, dealToThank,
 } from "./agent-pulse.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
@@ -324,4 +324,41 @@ test("the check-in's notes never name a house we passed on, and say which to avo
   const subj = agentPulseSubject({ agent: a, verdict: { pulseReason: "general", segment: "engaged" }, now: NOW });
   assert.equal(subj.lastHouse.street, "9 Oak St", "the newest house we didn't pass on");
   assert.deepEqual(subj.avoid.sort(), ["12 Pine St", "88 Elm St"]);
+});
+
+test("an agent who brought us a house we never texted about is a source: checked in on first, and never dropped for going quiet", () => {
+  const brought = { id: "o1", contactId: "a1", address: "9 Oak Ave, Tacoma, WA", status: "we_passed", leadSource: { source: "agent_brought" } };
+  assert.equal(agentSegment({ offers: [brought] }), "source");
+  assert.equal(agentSegment({ offers: [{ ...brought, leadSource: null, autoUnderwrite: { leadSource: "agent_brought" } }] }), "source", "stamped at underwrite counts too");
+  assert.equal(agentSegment({ offers: [{ ...brought, leadSource: { source: "hook" } }], lastInboundAt: "2026-09-01T00:00:00Z" }), "engaged", "the listing we opened with is not theirs");
+  assert.equal(agentSegment({ offers: [{ ...brought, deal: { stage: "closed" } }] }), "partner", "a deal still makes a partner");
+});
+
+test("a source agent who goes quiet is still checked in on, first in line", () => {
+  const brought = passed({ leadSource: { source: "agent_brought" } });
+  const quiet = agent({ lastInboundAt: ago(300), offers: [brought], current: [brought], ledger: [120, 99, 78, 57, 36, 22].map((d) => ({ type: "agent_pulse_texted", at: ago(d) })) });
+  const v = evaluateAgent(quiet, ctx());
+  assert.equal(v.segment, "source");
+  assert.equal(v.status, "due");
+  assert.equal(v.priority[0], 2, "ranked with partners (2 + tier 0)");
+});
+
+test("an agent whose deal just closed is thanked and asked for the next one — unless someone already texted them since the close", () => {
+  const closed = passed({ id: "v1", address: "21904 Vashon Hwy SW, Vashon, WA 98070", status: "accepted",
+    deal: { stage: "closed", stageHistory: [{ stage: "under_contract", ts: ago(30) }, { stage: "closed", ts: ago(5) }] } });
+  const a = agent({ lastInboundAt: ago(5), offers: [closed], current: [closed] });
+  const v = evaluateAgent(a, ctx());
+  assert.equal(v.status, "due");
+  assert.equal(v.pulseReason, "deal_thanks");
+  assert.equal(v.house.id, "v1");
+  assert.equal(v.priority[0], -1, "ahead of everything else today");
+
+  const byHand = { ...a, events: [{ type: "hand_reply", at: ago(4) }] };
+  assert.equal(dealToThank({ offers: [closed], events: byHand.events, now: NOW }), null, "your own thank-you is the thank-you");
+  const already = [{ type: "agent_pulse_sent", at: ago(3), address: closed.address, data: { reason: "deal_thanks" } }];
+  assert.equal(dealToThank({ offers: [closed], ledger: already, now: NOW }), null, "once per deal");
+  assert.equal(dealToThank({ offers: [{ ...closed, deal: { stage: "closed", stageHistory: [{ stage: "closed", ts: ago(1) }] } }], now: NOW }), null, "a day for the close to settle");
+  assert.equal(dealToThank({ offers: [{ ...closed, deal: { stage: "closed", stageHistory: [{ stage: "closed", ts: ago(45) }] } }], now: NOW }), null, "a month on, it's an ordinary check-in");
+  assert.equal(dealToThank({ offers: [{ ...closed, deal: { stage: "fell_through", stageHistory: [{ stage: "fell_through", ts: ago(5) }] } }], now: NOW }), null);
+  assert.equal(normalizeAgentPulse({ autoSend: true }).thanksAutoSend, false, "the thank-you stays a draft unless you say so");
 });

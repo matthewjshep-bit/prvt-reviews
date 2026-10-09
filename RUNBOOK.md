@@ -3714,6 +3714,89 @@ hits the market", "first look").
   playbook needs the same two edits (Conversation AI tab), or its old rule
   outvotes the ask.
 
+### Source like the deals with committed buyers (2026-10-09)
+
+Matt: the deals with committed buyers are the ones closing; find how we
+sourced them and make it repeatable. The four, read from the threads:
+- **Vashon**: Matt called on the listing.
+- **Issaquah**: the opener on a turnkey listing ended asking about their
+  other fixers. The agent said it was finished and offered an unlisted POA
+  house a minute later.
+- **Snohomish 23706**: after we said it was too finished for us and sent
+  two "any fixers?" check-ins about two weeks apart, the agent sent a
+  friend's house.
+- **7034 S K**: the agent named two other houses at once. Four weeks later
+  a check-in got an off-market estate.
+
+So the listing is the door and the deal is the agent's next house. All four
+had a life-event seller, a call within about two hours, a written offer the
+same day, and a price near the seller's number that still fit the buyer
+ceiling.
+
+**How a house came to us.** `shared/lead-source.js` `leadSourceOf` sorts
+each house into one of three:
+- `hook`: the listing our outreach opened with, or one of theirs we texted
+  about since.
+- `agent_brought`: an agent we reached out to brought a house we never
+  raised. `checkin` is true when it came within 10 days of a check-in.
+- `direct`: no outreach to that agent on record.
+
+It is derived on read from:
+- each imported agent's hook, via `store.listOutreachHooks`, which reads
+  `outreach_agents` (`doc.hook.address`, `contact_id`, `imported_at`);
+- the contact events: outreach, pulse, check-in and off-market asks.
+
+Nothing is stored for old offers. The underwrite stamps
+`autoUnderwrite.leadSource` on new ones.
+
+Reports → Line → **"How deals came to us"** shows the funnel by source,
+including a new **Committed buyer** station (`funnelBy` `buyer`: deal stage
+buyer_found / assigned / closed). Below it is the list of agents who bring
+houses (`sourceAgents`), with how many days after our first text the first
+house came.
+
+**What changed to repeat it.**
+- **Opener.** Every default example ends asking for their other fixers, and
+  the `outreach_open` rule makes that line required. The rule describes the
+  line and never quotes it, so the texts don't all read the same.
+- **"It's turnkey".** A clear turnkey first answer skips the qualify question
+  and gets the open-door pass at once (`saysTurnkey` in `shared/flip-read.js`;
+  any "needs", "fixer" or "repairs" cancels it).
+- **Life-event sellers.** STRONG now has "life event": executor, POA / power
+  of attorney, conservator, a spouse or parent who died, assisted living,
+  memory care, nursing home.
+- **Off-market reads.** `OFF_MARKET_CUE_RX` now also reads "my friend has",
+  "a friend of mine told me" and "word of mouth". An agent-brought house that
+  Zillow knows and doesn't show for sale is off-market (machine).
+- **Source agents.** An agent who brought a house is segment **source**,
+  checked in on with partners first and never dropped for silence
+  (`agentSegment`).
+- **The call.** An agent-brought house becomes a **Call** row for two days
+  (`call_brought` in `shared/call-list.js`), ranked just under hot. It says
+  "a seller going through a life event" when their words do. When the
+  seller's number leaves 10k under the buyer ceiling it says "their 250K
+  works — a buyer pays up to 329K". That comes from `autoUnderwrite.theirNumber`,
+  `theirNumberCheck` against `buyerCeiling().noFee`. It is a flag only:
+  nothing sends above our number.
+- **The prompt.** The agent system prompt's A HOUSE THEY BRING US rule:
+  - get the address, promising not to approach or bother the seller;
+  - ask their value fixed up, what it needs, and the seller's situation and
+    timing.
+- **The thank-you.** `deal_thanks` is a one-time check-in two to thirty days
+  after a deal of theirs closes: thank them, ask for anything else like it.
+  It is skipped when anyone texted them since the close. It stays a draft
+  unless `outreachAutopilot.pulse.thanksAutoSend` is on (off by default).
+- **Turnkey seats.** `outreachAutopilot.turnkeyShare` (0–100, ships 0; Matt
+  said 25):
+  - The sweep asks the pull to keep agents whose listings are all finished
+    (`keepTurnkey`, sent beside the query and not part of its signature, so
+    the saved page places don't start over). They are flagged
+    `doc.turnkey` / `hook.turnkey`.
+  - `pickAgentsToImport` weaves them in at the share, biggest book first,
+    never more than the share.
+  - Their opener is told the listing looks finished and leans on the
+    other-fixers line.
+
 ### Every agent on a clock: the agent check-in (2026-09-29)
 
 Matt: "reach out to these agents proactively and frequently, every 3 weeks or

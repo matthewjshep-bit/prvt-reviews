@@ -288,3 +288,26 @@ test("a yes you re-priced below yourself isn't a 'settle the number' call", () =
   const stale = offer({ cashAmount: 226000, hot: { at: ago(3), by: "conversation", signal: "warm" }, agreed: { at: ago(3), via: "realm_yes", amount: 289750 } });
   assert.match(callList({ offers: [stale], cards: [card({ cashAmount: 226000 })], now: NOW, machine: MACHINE })[0].title, /settle the number/);
 });
+
+test("an agent who brings us a house gets a call within the hour, not a text thread — every off-market deal with a buyer had one", () => {
+  const brought = offer({ id: "b1", contactId: "c9", contactName: "Dana R", address: "23706 138th Dr SE, Snohomish, WA 98296", status: "new", createdAt: ago(0.05), sends: [],
+    autoUnderwrite: { leadSource: "agent_brought", theirNumber: { seller: 250000, ceiling: 329250, room: 79250, fits: true } } });
+  const drafts = [{ id: "d1", contactId: "c9", inbound: "A friend of mine owns a place on a double lot. The brother is POA, she's going into assisted living", createdAt: ago(0.06) }];
+  const rows = callList({ offers: [brought], drafts, now: NOW });
+  const r = rows.find((x) => x.kind === "call_brought");
+  assert.ok(r, "a call row");
+  assert.equal(r.section, "call");
+  assert.match(r.title, /brought us 23706 138th Dr SE — a seller going through a life event — their 250K works/);
+  assert.match(r.call.goal, /won't approach or bother the seller/);
+  assert.match(r.call.goal, /Never above our number/);
+  assert.match(r.call.opener, /^Hi Dana, it's Matt/);
+  assert.ok(KIND_STRENGTH.indexOf("call_brought") < KIND_STRENGTH.indexOf("call_counter"));
+  assert.ok(CALL_KINDS.some((k) => k.key === "call_brought"));
+
+  const ours = { ...brought, autoUnderwrite: { leadSource: "hook" } };
+  assert.equal(callList({ offers: [ours], now: NOW }).filter((x) => x.kind === "call_brought").length, 0, "the listing we texted about is not one they brought");
+  const stale = { ...brought, createdAt: ago(3) };
+  assert.equal(callList({ offers: [stale], now: NOW }).filter((x) => x.kind === "call_brought").length, 0, "after two days it's the machine's thread");
+  const passedOn = { ...brought, status: "we_passed" };
+  assert.equal(callList({ offers: [passedOn], now: NOW }).filter((x) => x.kind === "call_brought").length, 0);
+});

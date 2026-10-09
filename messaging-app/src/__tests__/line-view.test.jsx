@@ -58,3 +58,21 @@ test("the Line shows off-market beside listed, and who brings them", () => {
   expect(html).toContain("1 under contract");
   expect(html).toContain("100%");
 });
+
+test("the Line shows the houses agents brought us apart from the listings we texted about, and who brings them", () => {
+  const data = buildLine({
+    now: NOW,
+    offers: [
+      { id: "b1", contactId: "lee", contactName: "Lee K", status: "accepted", createdAt: "2026-09-02T00:00:00Z", deal: { stage: "buyer_found" },
+        leadSource: { source: "agent_brought", daysToHouse: 0 } },
+      { id: "h1", contactId: "sam", status: "sent", createdAt: "2026-09-20T00:00:00Z", sends: [{ ts: "2026-09-21T00:00:00Z" }], leadSource: { source: "hook" } },
+    ],
+  });
+  const html = renderToStaticMarkup(<LineBody data={data} />);
+  expect(html).toContain("How deals came to us");
+  expect(html).toContain("Agent brought it");
+  expect(html).toContain("Committed buyer");
+  expect(html).toContain("Lee K");
+  expect(html).toContain("1 with a buyer");
+  expect(html).toContain("first house 0d after our first text");
+});

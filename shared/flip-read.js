@@ -10,7 +10,7 @@
 //      repairs, a 50k+ budget) → underwrite now. Specific bad news is not the
 //      oversell.
 //   2. Anything vaguer → ONE text: big repairs or a refresh, and what's the
-//      seller's situation.
+//      seller's situation. A plain "it's turnkey" skips straight to 3.
 //   3. Their answer to that still doesn't qualify → a polite pass that asks
 //      what else they've got, on market or off. That is the real point of
 //      the thread.
@@ -35,6 +35,11 @@ const STRONG = [
   ["unfinished", /\bunfinished\b|\bnever\s+(?:been\s+)?(?:finished|completed)\b|\bnot\s+(?:been\s+)?(?:finished|completed)\b|\bhalf[\s-](?:done|finished)\b/i],
   ["can't finance", /\bcash\s+only\b|\bwon'?t\s+(?:finance|qualify|appraise)\b|\bnot\s+financeable\b|\bcan'?t\s+(?:be\s+)?financed?\b/i],
   ["vacant and neglected", /\bvacant\s+(?:for\s+)?(?:years|a\s+long\s+time)\b|\babandoned\b|\bsquatters?\b|\bneglected\b/i],
+  // The sellers behind every deal with a committed buyer (2026-10-09): a
+  // brother holding POA for a sister in assisted living, an executor son
+  // after his mother died, a frail owner the family is moving out. They want
+  // certainty and timing, not top dollar.
+  ["life event", /\bexecut(?:or|rix)\b|\bpower\s+of\s+attorney\b|\bPOA\b|\bconservator(?:ship)?\b|\bguardianship\b|\b(?:wife|husband|mother|mom|father|dad|sister|brother|owner|spouse)\s+(?:just\s+)?(?:died|passed)\b|\bassisted\s+living\b|\bmemory\s+care\b|\bnursing\s+home\b/i],
 ];
 
 // Big-ticket work. Two of these is a real scope; one with a reason to sell is too.
@@ -51,7 +56,7 @@ const MAJOR = [
 // Why the seller has to sell. Alone it is not a flip; with real work it is.
 const MOTIVATION = [
   ["in a hurry", /\basap\b|\bquick(?:ly)?\s+(?:sale|close)\b|\bneeds?\s+to\s+(?:sell|close)\b|\bmotivated\b|\burgent\b/i],
-  ["moving on", /\brelocat(?:e|ing|ed)\b|\bout\s+of\s+state\b|\bmoving\s+(?:out|away|to)\b|\bassisted\s+living\b|\bnursing\s+home\b|\belderly\b|\btired\s+landlord\b/i],
+  ["moving on", /\brelocat(?:e|ing|ed)\b|\bout\s+of\s+state\b|\bmoving\s+(?:out|away|to)\b|\belderly\b|\bfrail\b|\btired\s+landlord\b/i],
   ["sitting", /\bsat\s+on\b|\bbeen\s+sitting\b|\bsitting\s+(?:on|for)\b|\bprice\s+(?:cut|drop|reduc)|\breduced\b|\bno\s+offers\b|\bfell\s+through\b|\bwalked\s+away\b/i],
 ];
 
@@ -102,6 +107,24 @@ export function flipRead(text = "", { agentRehab = 0 } = {}) {
   return { strong, major, motivation, qualifies: Boolean(why), why };
 }
 
+// "It's turnkey", "move-in ready", "they fixed it up": the agent telling us
+// plainly it isn't a flip. Two of the agents behind deals with committed
+// buyers said so in their first reply and offered their next house a minute
+// later, once we left the door open — a second question about the same
+// listing only stands in the way.
+const TURNKEY = [
+  ["turnkey", /\bturn[\s-]?key\b|\bmove[\s-]?in[\s-]?ready\b|\bfixed\s+(?:it\s+)?up\b|\b(?:it|this(?:\s+one)?|the\s+(?:house|home|property|place)|everything|\d+\w*)\s*(?:is|was|'s|has\s+been)\s+(?:been\s+)?(?:fully\s+|completely\s+|totally\s+|nicely\s+|all\s+)?(?:updated|remodeled|remodelled|renovated|redone)\b|\b(?:fully|completely|totally)\s+(?:updated|remodeled|remodelled|renovated)\b/i],
+];
+// "…but it needs a roof", "a light fixer": any talk of work left means it's
+// not the plain "it's done" this reads for.
+const WORK_LEFT_RX = /\bneed(?:s|ing|ed)?\b|\bfixer\b|\bproject\b|\brepairs?\b|\bTLC\b|\bwork\s+(?:to\s+do|left)\b/i;
+
+/** saysTurnkey(text) → true when their words say plainly the house is done. */
+export function saysTurnkey(text = "") {
+  const t = String(text || "");
+  return hits(TURNKEY, t).length > 0 && !WORK_LEFT_RX.test(t);
+}
+
 // Our one question. A few wordings, so a day of them doesn't read as a form.
 export const QUALIFY_ASKS = [
   "Good to know. Is it big-ticket stuff like roof, foundation or systems, or more paint and flooring? And what's got the seller selling?",
@@ -136,7 +159,7 @@ export function qualifyStep({ words = "", asked = false, passed = false, agentRe
   const read = flipRead(words, { agentRehab });
   if (read.qualifies) return { move: "underwrite", read, reply: "" };
   if (passed) return { move: "closed", read, reply: "Appreciate it. Keep me in mind if anything rougher comes up." };
-  if (asked) return { move: "pass", read, reply: pick(QUALIFY_PASSES, variant) };
+  if (asked || saysTurnkey(words)) return { move: "pass", read, reply: pick(QUALIFY_PASSES, variant) };
   return { move: "ask", read, reply: pick(QUALIFY_ASKS, variant) };
 }
 

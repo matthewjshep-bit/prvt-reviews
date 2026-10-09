@@ -53,3 +53,23 @@ test("every wording of our question is one we recognise in the thread, and every
   for (const q of QUALIFY_ASKS) { assert.match(q, QUALIFY_ASK_RX); assert.ok(q.length <= 160, q); }
   for (const p of QUALIFY_PASSES) { assert.doesNotMatch(p, QUALIFY_ASK_RX); assert.ok(p.length <= 180, p); assert.doesNotMatch(p, /[—$]/); }
 });
+
+test("an agent who says it's turnkey gets the open door, not a second question about the same listing", () => {
+  // Both agents who did this offered their next house a minute later.
+  for (const said of ["This one's turnkey, the sellers redid it before listing.", "This is turnkey, move in ready.", "54th is updated. Check out another one in Tacoma"]) {
+    const step = qualifyStep({ words: said, variant: 0 });
+    assert.equal(step.move, "pass", said);
+    assert.match(step.reply, /off-market|off market/i, "the pass asks for what else they've got");
+  }
+  for (const vague of ["The kitchen was remodeled but the rest needs work", "it needs to be updated", "Updated kitchen, original baths", "not turnkey, needs a roof"]) {
+    assert.equal(qualifyStep({ words: vague }).move, "ask", vague);
+  }
+});
+
+test("a seller going through a life event is a real lead on its own — POA, executor, a spouse who died, assisted living", () => {
+  for (const said of ["Her brother is the POA, she's in assisted living now", "Son is the executor", "His wife died last year and he wants it gone", "power of attorney is handling it"]) {
+    assert.deepEqual(flipRead(said).strong, ["life event"], said);
+    assert.equal(qualifyStep({ words: said }).move, "underwrite", said);
+  }
+  assert.deepEqual(flipRead("seller is elderly").strong, [], "age alone is a reason to sell, not a flip");
+});

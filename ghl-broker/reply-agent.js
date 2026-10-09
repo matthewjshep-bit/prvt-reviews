@@ -2895,7 +2895,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       county: countyName(subject?.county), city: String(subject?.city || ""),
       examples: normalizeOpener(saved?.outreachAutopilot?.opener).examples, variant: Number(subject?.variant) || 0,
       // One real thing about the house for the text to notice.
-      details: houseDetails({ ...(subject?.house || {}), city: subject?.city || subject?.house?.city || "", dom: Number(subject?.hookDom) || subject?.house?.dom || 0 }) };
+      details: houseDetails({ ...(subject?.house || {}), city: subject?.city || subject?.house?.city || "", dom: Number(subject?.hookDom) || subject?.house?.dom || 0 }),
+      // A finished listing, texted for the agent rather than the house (the turnkey seats).
+      turnkey: subject?.house?.turnkey === true };
   }
   // The nudges. They carry what the message is ABOUT and no numbers at all.
   return { ...base,
@@ -2942,6 +2944,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;
     case "agent_pulse":
       if (outbound.reason === "fresh_listing") return `Checks in about their listing at ${outbound.listing?.street || where}: would the seller look at an as-is cash offer?`;
+      if (outbound.reason === "deal_thanks") return `Thanks them for ${outbound.house?.street || where} closing and asks whether anything else like it has come across their desk.`;
       if (outbound.reason === "our_house") return `Checks back in on ${outbound.house?.street || where} (${outbound.house?.how || "it ended"}) and asks what else is coming up.`;
       return "Checks in: anything coming up that needs work, or off market?";
     case "showing_reminder": return `Reminds them about the walkthrough at ${outbound.street || where} tomorrow, ${outbound.windowLabel}.`;

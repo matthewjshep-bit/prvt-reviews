@@ -225,7 +225,7 @@ function Kinds({ kinds }) {
   const [span, setSpan] = useState("days90");
   const d = kinds?.[span];
   if (!d) return null;
-  const rows = [["offers", "Offers"], ["sent", "In front of the agent"], ["countered", "Countered"], ["agreed", "Price agreed"], ["contract", "Under contract"], ["closed", "Closed"]];
+  const rows = [["offers", "Offers"], ["sent", "In front of the agent"], ["countered", "Countered"], ["agreed", "Price agreed"], ["contract", "Under contract"], ["buyer", "Committed buyer"], ["closed", "Closed"]];
   const cols = [["sfr", "Single family"], ["other", "Other kinds"], ["untyped", "Not typed"]];
   return (
     <Card title="Single family vs other kinds" right={
@@ -268,7 +268,7 @@ function Sources({ sources }) {
   const [span, setSpan] = useState("days90");
   const d = sources?.[span];
   if (!d) return null;
-  const rows = [["offers", "Offers"], ["sent", "In front of the agent"], ["countered", "Countered"], ["agreed", "Price agreed"], ["contract", "Under contract"], ["closed", "Closed"]];
+  const rows = [["offers", "Offers"], ["sent", "In front of the agent"], ["countered", "Countered"], ["agreed", "Price agreed"], ["contract", "Under contract"], ["buyer", "Committed buyer"], ["closed", "Closed"]];
   return (
     <Card title="Off-market vs listed" right={
       <span className="inline-flex gap-1 text-[11px]">
@@ -316,6 +316,67 @@ function Sources({ sources }) {
   );
 }
 
+// How each house came to us (shared/lead-source.js). Matt, 2026-10-09: the
+// deals with committed buyers were the agents' next houses, not the listing
+// we texted them about. This says whether the line still finds them, and who
+// brings them.
+const PATH_COLS = [["agent_brought", "Agent brought it"], ["hook", "Listing we texted about"], ["direct", "We went after it"]];
+function Paths({ paths }) {
+  const [span, setSpan] = useState("days90");
+  const d = paths?.[span];
+  if (!d) return null;
+  const cols = d.unknown?.offers ? [...PATH_COLS, ["unknown", "No agent"]] : PATH_COLS;
+  const rows = [["offers", "Offers"], ["sent", "In front of the agent"], ["agreed", "Price agreed"], ["contract", "Under contract"], ["buyer", "Committed buyer"], ["closed", "Closed"]];
+  const agents = paths.agents || [];
+  return (
+    <Card title="How deals came to us" right={
+      <span className="inline-flex gap-1 text-[11px]">
+        {[["days90", "Last 90 days"], ["allTime", "All time"]].map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setSpan(k)}
+            className={`rounded-md px-2 py-0.5 ${span === k ? "bg-slate-800 text-white" : "text-slate-500 hover:bg-slate-100"}`}>{label}</button>
+        ))}
+      </span>
+    }>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+            <th className="py-1 pr-3 font-semibold" />
+            {cols.map(([k, label], i) => <th key={k} className={`py-1 ${i < cols.length - 1 ? "pr-3" : ""} text-right font-semibold ${k === "agent_brought" ? "text-violet-700" : ""}`}>{label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([k, label]) => (
+            <tr key={k} className="border-t border-slate-100">
+              <td className="py-1 pr-3 text-slate-700">{label}</td>
+              {cols.map(([c], i) => <td key={c} className={`py-1 ${i < cols.length - 1 ? "pr-3" : ""} text-right tabular-nums ${c === "agent_brought" ? "font-semibold text-violet-800" : ""}`}>{n(d[c]?.[k])}</td>)}
+            </tr>
+          ))}
+          <tr className="border-t border-slate-200">
+            <td className="py-1 pr-3 text-slate-700">Offers that became contracts</td>
+            {cols.map(([c], i) => <td key={c} className={`py-1 ${i < cols.length - 1 ? "pr-3" : ""} text-right tabular-nums ${c === "agent_brought" ? "font-semibold text-violet-800" : ""}`}>{pctText(d[c]?.contractRate)}</td>)}
+          </tr>
+        </tbody>
+      </table>
+      <div className="mt-3 text-xs font-semibold text-slate-600">Agents who bring us houses</div>
+      {agents.length ? (
+        <ul className="mt-1 space-y-0.5 text-sm">
+          {agents.map((a) => (
+            <li key={a.contactId} className="text-slate-700">
+              <span className="font-medium">{a.name || "An agent"}</span>
+              <span className="text-slate-400">
+                {` · ${n(a.houses)} ${a.houses === 1 ? "house" : "houses"}`}
+                {a.contracts ? ` · ${n(a.contracts)} under contract` : ""}
+                {a.buyers ? ` · ${n(a.buyers)} with a buyer` : ""}
+                {a.firstHouseDays != null ? ` · first house ${days(a.firstHouseDays)} after our first text` : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : <div className="mt-1 text-sm text-slate-400">No agent has brought us a house yet.</div>}
+    </Card>
+  );
+}
+
 // The page under the toolbar, from one /line response. Its own export so it
 // renders without a fetch (the test renders it from buildLine's output).
 export function LineBody({ data }) {
@@ -323,6 +384,7 @@ export function LineBody({ data }) {
   return (
     <>
       <Leaks leaks={data.leaks} total={data.leakTotal} backlog={data.backlog} />
+      <Paths paths={data.paths} />
       <Kinds kinds={data.kinds} />
       <Sources sources={data.sources} />
       <Stations stations={data.stations} method={data.method} />

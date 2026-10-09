@@ -21,7 +21,7 @@
 //
 // Pure. The route reads; this decides.
 
-import { effectiveStatus, pushesToPaper, priceAgreed } from "./offer-status.js";
+import { effectiveStatus, pushesToPaper, priceAgreed, DEAD_STATUSES } from "./offer-status.js";
 import { callEventConnected } from "./talked-to.js";
 import { agentSegment } from "./agent-pulse.js";
 import { IRRITATED_RX } from "./thread-health.js";
@@ -72,6 +72,7 @@ export function normalizeDesk(v = {}) {
 
 export const CALL_KINDS = [
   { key: "call_hot",         label: "Hot: get it written up" },
+  { key: "call_brought",     label: "They brought us a house" },
   // Rows the call list hands the machine or a decision (2026-10-04).
   { key: "paper_to_sign",    label: "Paperwork to sign" },
   { key: "hot_machine",      label: "Hot: the machine is pushing to paper" },
@@ -84,7 +85,7 @@ export const CALL_KINDS = [
   { key: "call_partner",     label: "Relationship check-in" },
 ];
 // They called you: ring back first — they reached out.
-const BASE = { call_missed: 105, call_hot: 100, call_counter: 90, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_partner: 30 };
+const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_partner: 30 };
 // Points off for each call that didn't connect since the row's reason, and
 // for each day their last word has aged (hot, counters, quiet threads).
 const PER_TRY = 15;
@@ -121,6 +122,8 @@ const PHONE_RX = /\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/;
 // The paperwork is on its way to us to sign.
 const SENT_TO_SIGN_RX = /\b(?:docusign|authentisign|dotloop|e-?sign(?:ature)?)\b|\bsent (?:it|you|the (?:offer|paperwork|forms?|contract|psa))(?: over)? (?:for|to) (?:your )?sign(?:ature|ing)?\b|\bready (?:for you )?to sign\b|\bfor your signature\b/i;
 const LIVE_LANES = new Set(["floated", "sent", "countered", "hot"]);
+// A house an agent brought stays a call this long after it landed.
+const BROUGHT_FRESH_DAYS = 2;
 
 /**
  * callList({ offers, cards, actions, drafts, events, lastIn, lastAny, unsubscribed, settings, now })
@@ -306,6 +309,33 @@ export function callList({
         ? `Hi ${first(card.contactName)}, it's Matt — on ${where}, are we close at ${kText(ours)}? If so, could you write it up on the NWMLS forms and represent us?`
         : `Hi ${first(card.contactName)}, Matt here — wanted to hear what the seller said on ${where}.`,
       agePenaltyFrom: lastWord(c) });
+  }
+
+  /* 2b. An agent brought us a house: call within the hour.
+   * Matt, 2026-10-09: every deal with a committed buyer that an agent brought
+   * (Issaquah, Snohomish 23706, 7034 S K) had a phone call within about two
+   * hours of the address: their read on value and work, the seller's story
+   * and timing, the promise not to bother the seller, a written offer the
+   * same day. */
+  for (const o of offers || []) {
+    if (o?.autoUnderwrite?.leadSource !== "agent_brought" || !o.contactId || o.deal) continue;
+    if (now - (ms(o.createdAt) ?? 0) > BROUGHT_FRESH_DAYS * DAY_MS) continue;
+    const c = o.contactId;
+    if (unsubscribed.has(c) || irritated(c) || DEAD_STATUSES.has(effectiveStatus(o))) continue;
+    const where = street(o.address);
+    const words = theirWords(c).filter((d) => (ms(d.createdAt) ?? 0) >= (ms(o.createdAt) ?? 0) - 2 * DAY_MS).map((d) => d.inbound).join("\n");
+    const life = flipRead(words).strong.find((x) => x === "life event" || x === "estate or probate") || "";
+    const their = o.autoUnderwrite?.theirNumber || null;
+    const number = their?.fits
+      ? `their ${kText(their.seller)} works — a buyer pays up to ${kText(their.ceiling)}`
+      : their ? `their ${kText(their.seller)} against a buyer ceiling of ${kText(their.ceiling)}` : "";
+    add("call_brought", { contactId: c, contactName: o.contactName || nameOf(c, offersBy, draftsBy), offerId: o.id, address: o.address, since: o.createdAt,
+      why: [`brought us ${where}`, life ? (life === "life event" ? "a seller going through a life event" : "an estate") : "", number].filter(Boolean).join(" — "),
+      goal: `Call within the hour. Hear the seller's situation and timing, ask what they think ${where} is worth fixed up and what it needs, ` +
+        `say we won't approach or bother the seller, and get a written offer out today${their?.fits ? ` — their number leaves our fee under what a buyer pays` : ""}. ` +
+        `Never above our number without deciding it yourself.`,
+      opener: `Hi ${first(o.contactName)}, it's Matt — thanks for sending ${where} my way. Got a couple minutes to talk it through?`,
+      extra: { brought: { life: life || null, theirNumber: their } }, agePenaltyFrom: ms(o.createdAt) });
   }
 
   /* 3. A counter above our number: a call lands a number a text doesn't. */
