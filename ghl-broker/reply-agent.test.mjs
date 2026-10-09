@@ -2657,6 +2657,10 @@ test("floorFirmness tells a wall from an opening", () => {
   assert.equal(floorFirmness("Their lowest at this time is $700k."), "plain");
   assert.equal(floorFirmness("I could get them to 950 but no way on that number"), "soft", "a number they can deliver is an opening");
   assert.equal(floorFirmness("I can probably get the seller down to 610"), "soft");
+  assert.equal(floorFirmness("Seller needs 1.2M, can't go any less."), "firm");
+  assert.equal(floorFirmness("Seller can’t go lower"), "firm");
+  assert.equal(floorFirmness("They cannot take less than 450"), "firm");
+  assert.equal(floorFirmness("He won’t go any lower"), "firm");
 });
 
 test("a soft floor far over ours keeps the negotiation open: their number filed, their value and repairs asked for", async () => {
@@ -2755,16 +2759,17 @@ const holdRun = async ({ message, draft, on = true }) => {
   const offer = { ...HELD_OFFER };
   const store = negotiationStore(offer);
   const marks = [];
+  const statuses = [];
   const { job } = await startReply({
     client, locationId: "LOC", saved: HOLD_SAVED(on), store, contactId: "c1", message, sendsEnabled: true,
     deps: {
       draft: async () => ({ ...DRAFT, confidence: "high", propertyAddress: "12 Elm St", ...draft }),
-      setOfferStatus: async ({ status }) => ({ ok: true, address: offer.address, status }),
+      setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status }; },
       markCounterHold: async (a) => { marks.push(a); return { ok: true }; },
     },
   });
   await settle();
-  return { job, d: await store.getReplyDraft(job.draftId), marks };
+  return { job, d: await store.getReplyDraft(job.draftId), marks, statuses };
 };
 
 test("a counter above our number gets our number once, then we move on", async () => {
@@ -2782,6 +2787,30 @@ test("a counter above our number gets our number once, then we move on", async (
     draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner and get back to you." } });
   assert.notEqual(off.d.status, "scheduled");
   assert.equal(off.marks.length, 0);
+});
+
+// 184th St SE (2026-10-07): a counter 5% over our number that the seller
+// "can't go any less than", against our 1,138,000. Inside the pass line, so the
+// bot held our number and the offer sat on "countered" with check-ins still
+// to come. A seller who can't come down to our number has passed on it.
+test("an agent who says the seller can't go any lower than their counter has passed: we hold our number once and the offer is marked they passed", async () => {
+  for (const message of ["Seller needs 315, can't go any less.", "Seller can’t go any lower than 315", "315 is firm"]) {
+    const { job, d, marks, statuses } = await holdRun({ message,
+      draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner." } });
+    assert.equal(job.status, "done", job.error);
+    assert.match(d.reply, /hold at 300,000/, message);
+    assert.equal(d.status, "scheduled", message);
+    assert.equal(marks.length, 1, `${message}: the hold is still on the record`);
+    assert.ok(statuses.includes("passed"), `${message}: ${JSON.stringify(statuses)}`);
+    assert.ok(statuses.indexOf("countered") < statuses.indexOf("passed"), "their number is filed first");
+  }
+  // A plain counter is a negotiation: held, the check-ins follow, not passed.
+  const plain = await holdRun({ message: "Seller says 315", draft: { intent: "counter", counterAmount: 315000, reply: "Let me see." } });
+  assert.match(plain.d.reply, /hold at 300,000/);
+  assert.ok(!plain.statuses.includes("passed"), JSON.stringify(plain.statuses));
+  // With the hold off it waits for a person, and nothing is filed dead.
+  const off = await holdRun({ on: false, message: "Seller needs 315, can't go any less.", draft: { intent: "counter", counterAmount: 315000, reply: "Let me see." } });
+  assert.ok(!off.statuses.includes("passed"), JSON.stringify(off.statuses));
 });
 
 test("'make an offer closer to where they are' with no number is held at ours too", async () => {
