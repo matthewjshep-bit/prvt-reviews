@@ -619,6 +619,12 @@ const PLAYBOOK = () => ({
   // they just gave us, and float what falls out. Concedes nothing: it is the
   // move to exhaust before anything ever auto-concedes on price.
   requote: { ...REQUOTE_DEFAULTS },
+  // Agent only. The first text is an icebreaker, not a lead (Matt,
+  // 2026-10-08): agents sell, so "it's a project" about the house we opened
+  // with buys one short question, not an underwrite. Specific bad news
+  // underwrites at once; a vague answer to the question is a polite pass and
+  // an ask for what else they have. See shared/flip-read.js.
+  qualifyFirst: { enabled: false },
   // The one door through NEVER_AUTO. When the agent counters at or under what
   // our own calculator would have produced at its most generous, the bot may
   // say yes in words — and then hand off. It never mints a deal and never
@@ -971,6 +977,9 @@ function normalizePlaybook(p, party, seed = {}) {
       // Agent only: a buyer's price is the investor band's business.
       enabled: party === "agent" && bool(src.counterHold?.enabled, false),
       checkIns: int(src.counterHold?.checkIns, 2, 1, 6),
+    },
+    qualifyFirst: {
+      enabled: party === "agent" && bool(src.qualifyFirst?.enabled, false),
     },
     requote: {
       enabled: bool(src.requote?.enabled, false),
@@ -1510,6 +1519,11 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "numbers and give you a call if it makes sense.'\n" +
           "A NO ON AN OFFER: never argue the math. Ask once what the seller would take; only if they turn that down " +
           "too, reply 'Understood, thanks for your time!' and stop.\n" +
+          "ICEBREAKER: the house our first text named is a way to start talking, not a lead. Agents sell, so " +
+          "'it's a project' is not an answer: before any number, ask in ONE short text whether it's big-ticket work " +
+          "(roof, foundation, systems) or a refresh, and what the seller's situation is. If it's light, pass politely " +
+          "and ask what else distressed they have, on market or off-market. A house they bring up themselves is " +
+          "different: get the address and run it.\n" +
           "TURNKEY: if the listing is turnkey, ask whether they have anything else sitting that needs work, and " +
           "whether it's cool to stay in touch.\n" +
           "PICK BACK UP: when an offer we made them died — they passed, the seller went another way, it went " +

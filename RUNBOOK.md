@@ -2972,6 +2972,35 @@ agent check-in may name it as how a house ended ("it sold").
 **Not changed.** The price watch's own "went pending/sold" read still writes
 `listing_off_market` and stops check-ins; it doesn't set the status.
 
+### The first text is an icebreaker — qualify before underwriting (2026-10-08)
+
+Switch: `conversationAi.parties.agent.qualifyFirst.enabled` (default **off**).
+Rules: `shared/flip-read.js`. Gate: `qualifyIcebreaker` in `ghl-broker/reply-agent.js`.
+
+The house our first text opened with (the newest `outreach_sent`, or the
+workflow cohort's `outreach_enrolled`) is a way to start talking, not a lead.
+With the switch on, a reply about that house, before we have any offer on it, goes:
+
+1. **Their words name real trouble → underwrite now**, as before. That covers
+   foundation/structural, water/mold, fire, a hoarder, estate/probate,
+   foreclosure, unlivable/gut, unfinished, or can't-finance. Two big-ticket
+   items (roof, kitchen, baths, heating, electrical, plumbing,
+   windows/siding) count too, as does one big item plus a reason to sell, or a
+   rehab budget of their own of 50k or more. Negated or already-done items don't count.
+2. **Anything vaguer → one text**, our question: big-ticket work or a refresh,
+   and what's the seller's situation. There's no underwrite, no Tier 1 tag or
+   workflow, and the subject event carries `qualifying: "ask"` so the app's
+   Tier 1 leaves it out.
+3. **Their answer to that still doesn't qualify → a polite pass** that asks
+   for anything distressed on or off market (intent `investor_open`, Tier 2).
+   Once we've passed, a later reply that still doesn't qualify gets a one-line
+   close.
+
+Their words are every line they've sent since the first text. A showing offer
+("come take a look") on the icebreaker house gets the question, not "number
+first". A house the agent brings up themselves underwrites right away, and so
+does any house we already priced. The draft row carries `qualify: {stage, address, why}`.
+
 ### Held underwrites — the nightly triage (2026-09-16)
 
 "Underwrites that need a look" held 49 rows and Matt wasn't going to get to

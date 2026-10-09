@@ -49,7 +49,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
-import { normalizeOpener, countyName, stripSignOff, houseDetails, overusedPhrases, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
+import { normalizeOpener, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -61,6 +61,7 @@ import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
+import { qualifyStep, QUALIFY_ASK_RX } from "./shared/flip-read.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
@@ -1431,7 +1432,7 @@ export function underwritableAddress(raw) {
  * the two never fight. Returns { learned: [line], written: [key] }. Never
  * throws; a field write that fails is a warning on the draft.
  */
-export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [], store = null, draftId = null, intent = "", inbound = "", notOurKind = false }) {
+export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [], store = null, draftId = null, intent = "", inbound = "", notOurKind = false, qualifying = "" }) {
   if ((!profile && !subjectProperty) || !contactId || party === "unknown") return { learned: [], written: [] };
   const type = party === "investor" ? "investor" : "agent";
   // The record first, GHL second. Everything the model read out of this
@@ -1483,7 +1484,7 @@ export async function applyProfileUpdates({ client, locationId, contactId, party
     if (aim && addressKey(aim) !== addressKey(cur("subject_property"))) {
       writes.subject_property = aim;
       learned.push(`subject property: ${aim}`);
-      if (store && draftId) await recordEvent({ store, locationId, contactId, party: "agent", type: "subject_property_set", at: new Date(now).toISOString(), address: aim, source: "conversation", ref: draftId, data: { from: cur("subject_property"), ...(notOurKind ? { notOurKind: true } : {}) } });
+      if (store && draftId) await recordEvent({ store, locationId, contactId, party: "agent", type: "subject_property_set", at: new Date(now).toISOString(), address: aim, source: "conversation", ref: draftId, data: { from: cur("subject_property"), ...(notOurKind ? { notOurKind: true } : {}), ...(qualifying ? { qualifying } : {}) } });
     }
   }
   if (profile?.personalDetails) {
@@ -1564,6 +1565,62 @@ export function theirLatestWords(transcript = "", message = "") {
   const msg = String(message || "").trim();
   if (msg && !since.includes(msg)) since.push(msg);
   return since.join("\n");
+}
+
+/**
+ * theirWordsSince(transcript, sinceMs, message) → their lines from `sinceMs`
+ * on, this message included: everything they've told us about the house
+ * since our first text, read as one answer.
+ */
+export function theirWordsSince(transcript = "", sinceMs = 0, message = "") {
+  const out = [];
+  for (const line of String(transcript || "").split("\n")) {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\]\s+THEM\b[^:]*:\s?(.*)$/.exec(line);
+    if (!m || !m[3].trim()) continue;
+    const ts = Date.parse(`${m[1]}T${m[2]}:00Z`);
+    if (Number.isFinite(ts) && ts + 60000 < sinceMs) continue;
+    out.push(m[3].trim());
+  }
+  const msg = String(message || "").trim();
+  if (msg && !out.includes(msg)) out.push(msg);
+  return out.join("\n");
+}
+
+/**
+ * icebreakerHouse(events) → { address, at } | null
+ *
+ * The listing our first text opened with: the app's outreach_sent, or the
+ * GHL workflow's outreach_enrolled for the cohort it texted.
+ */
+export function icebreakerHouse(events = []) {
+  const e = (events || [])
+    .filter((x) => (x?.type === "outreach_sent" || (x?.type === "outreach_enrolled" && x.data?.kind !== "followup")) && x.address)
+    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0];
+  return e ? { address: e.address, at: Date.parse(e.at || "") || 0 } : null;
+}
+
+/**
+ * qualifyIcebreaker({ ... }) → null | { stage, address, why, reply }
+ *
+ * shared/flip-read.js applied to a reply about the house our first text
+ * opened with. null when it isn't that house, it's already priced, or the
+ * switch is off. Stage "qualified" lets everything run as before; "ask",
+ * "pass" and "closed" carry the reply and hold the underwrite.
+ */
+export async function qualifyIcebreaker({ store, locationId, contactId, draft, message, transcript, now = Date.now(), agentRehab = 0 }) {
+  const evs = (await store.listContactEvents?.(locationId, contactId, { types: ["outreach_sent", "outreach_enrolled"], limit: 50 }).catch(() => [])) || [];
+  const ice = icebreakerHouse(evs);
+  if (!ice) return null;
+  const key = addressKey(ice.address);
+  if (!key || addressKey(draft.propertyAddress || ice.address) !== key) return null;
+  const book = await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []);
+  if (knownOfferFor(book, ice.address, now)) return null;
+  const sent = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 30 }).catch(() => []);
+  const ours = (stage) => sent.some((d) => d.qualify?.stage === stage && addressKey(d.qualify.address || "") === key);
+  const asked = ours("ask") || String(transcript || "").split("\n").some((l) => /^\[[^\]]*\]\s+US\b/.test(l) && QUALIFY_ASK_RX.test(l));
+  const passed = ours("pass");
+  const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: openerVariant(contactId, 3) });
+  return { stage: step.move === "underwrite" ? "qualified" : step.move, address: ice.address, why: step.read.why, reply: step.reply };
 }
 
 export function lastOutbound(transcript = "") {
@@ -3438,6 +3495,37 @@ async function runReply(job, ctx) {
     job.intent = draft.intent;
   }
 
+  // Qualify first (shared/flip-read.js, Matt 2026-10-08). The house our
+  // first text opened with is an icebreaker: "it's a project" or "come take
+  // a look" about it buys one short question, not an underwrite, and a vague
+  // answer to that is a pass and an ask for what else they've got. Specific
+  // trouble underwrites at once. A house they bring up themselves isn't
+  // read here, and neither is one we've already priced.
+  let qualify = null;
+  if (party === "agent" && !isCall && !notOurKind && config.parties.agent.qualifyFirst?.enabled
+      && !SILENT_INTENTS.has(draft.intent)
+      && (["deal_available", "new_property", "wants_walkthrough"].includes(draft.intent) || isShowingOffer(job.message))
+      && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)) {
+    const take = draft.agentTake ?? normalizeAgentTake(draft) ?? agentTakeFromText(job.message);
+    qualify = await qualifyIcebreaker({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: take?.rehab || 0 })
+      .catch((e) => { warnings.push(`qualify: ${e.message}`); return null; });
+    if (qualify && qualify.stage !== "qualified") {
+      draft = {
+        ...draft,
+        intent: qualify.stage === "ask" ? "deal_available" : "investor_open",
+        reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
+        propertyAddress: draft.propertyAddress || qualify.address,
+        needsHuman: false,
+        reply: qualify.reply,
+        qualify: { stage: qualify.stage, address: qualify.address, why: qualify.why },
+      };
+      job.intent = draft.intent;
+    } else if (qualify) {
+      draft = { ...draft, qualify: { stage: "qualified", address: qualify.address, why: qualify.why } };
+    }
+  }
+  const qualifyHeld = Boolean(qualify && qualify.stage !== "qualified");
+
   // Number first. An agent offering a showing, a tour or a time on a house we
   // have no number on gets a number before anybody books anything — Matt,
   // 2026-09-14: "even if he asks for a time to schedule, lets push back and
@@ -3448,7 +3536,7 @@ async function runReply(job, ctx) {
   // reply that says so. A house we already priced is left alone: the offer is
   // the conversation there.
   let numberFirst = null;
-  if (party === "agent" && !SILENT_INTENTS.has(draft.intent)
+  if (party === "agent" && !qualifyHeld && !SILENT_INTENTS.has(draft.intent)
       && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)
       // A showing, not a call: "give me a call tomorrow" stays with the calendar.
       && (draft.intent === "wants_walkthrough" || isShowingOffer(job.message))
@@ -3627,6 +3715,11 @@ async function runReply(job, ctx) {
   if (notOurKind) {
     plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite");
     plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
+  }
+  // Still qualifying the icebreaker house: no credits, and no Tier 1 yet.
+  if (qualifyHeld) {
+    plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite" && !isTierOneAction(x));
+    plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite" && !isTierOneAction(x));
   }
   if (numberFirst) {
     const extra = numberFirst.replaceOfferId ? { replaceOfferId: numberFirst.replaceOfferId } : {};
@@ -4042,6 +4135,9 @@ async function runReply(job, ctx) {
     // have it, and so the row can show it whether or not they ran.
     passReason: draft.passReason || null,
     ...(draft.walkthrough ? { walkthrough: draft.walkthrough } : {}),
+    // Where the icebreaker house stands (shared/flip-read.js): the next
+    // reply reads whether our question or our pass already went.
+    ...(draft.qualify ? { qualify: draft.qualify } : {}),
     // The model's own words, kept when the reply was rewritten to say the
     // offer went out, so step 5 can put them back if it didn't.
     ...(draft.replyBeforeSend ? { replyBeforeSend: draft.replyBeforeSend } : {}),
@@ -4112,7 +4208,7 @@ async function runReply(job, ctx) {
     const filed = await applyProfileUpdates({
       client, locationId, contactId: job.contactId, party, profile: learnable, custom: a.custom,
       summary: draft.summary, subjectProperty: draft.propertyAddress, config, now, warnings,
-      store, draftId: record.id, intent: draft.intent, inbound: job.message, notOurKind,
+      store, draftId: record.id, intent: draft.intent, inbound: job.message, notOurKind, qualifying: qualifyHeld ? draft.qualify.stage : "",
     });
     if (filed.learned.length || filed.written.length) {
       record = { ...record, profileUpdates: { learned: filed.learned, written: filed.written }, warnings: warnings.slice(0, 6), updatedAt: new Date().toISOString() };
@@ -4334,7 +4430,7 @@ async function runReply(job, ctx) {
   }
   // Not when their own words say it isn't a flip: the reply is "that one's
   // more finished than what we buy", and Tier 1 is houses that need work.
-  if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent) && !notOurKind) {
+  if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent) && !notOurKind && !qualifyHeld) {
     const already = new Set([...plan.auto, ...plan.suggested].map((a) => `${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`));
     const extra = planActions({ party, intent: "new_property", confidence: "high", playbook, minConfidence: "high" });
     const fresh = [...extra.auto, ...extra.suggested].filter((a) => !already.has(`${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`))
