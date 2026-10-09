@@ -119,7 +119,32 @@ export const houseGone = (text = "", intent = "") => {
   const t = String(text || "");
   return GONE_TEXT.test(t) && (intent === "rejection" || OVER_PLAIN.test(t));
 };
-const TURNKEY_TEXT = /\b(turn[\s-]?key|move[\s-]?in[\s-]?ready|fully (updated|renovated|remodeled)|completely (renovated|remodeled|updated)|not (really |certainly )?an? (fixer|flip|fix[\s-]*(n|and|&|'n'?)[\s-]*flip)|isn'?t an? (fixer|flip)|no work needed)\b/i;
+// 2026-10-09: "It is not a project. Its a great home" read as nothing, and
+// the house got priced, floated and papered. "Not a project" is a no too.
+export const TURNKEY_TEXT = /\b(turn[\s-]?key|move[\s-]?in[\s-]?ready|fully (updated|renovated|remodeled)|completely (renovated|remodeled|updated)|not (really |certainly )?an? (fixer|flip|project|fix[\s-]*(n|and|&|'n'?)[\s-]*flip)|isn'?t an? (fixer|flip|project)|no work needed)\b/i;
+
+/**
+ * agentRuledOut(events, address) → { why } | null
+ *
+ * The agent told us THIS house is not a project — turnkey, move-in ready,
+ * "not a project", no work needed — and it's on the record as the house's
+ * own details (property_details: condition or workNeeded). Nothing the
+ * machine does by itself puts a number on it: no underwrite from the
+ * workflow, no float, no paper. A person can still (Underwrite anyway, a
+ * hand-made offer, a send they press).
+ */
+export function agentRuledOut(events = [], address = "") {
+  if (!String(address || "").trim()) return null;
+  // Their latest word on the house: "turnkey" then "actually it needs a
+  // roof" is a house with work.
+  const latest = (events || [])
+    .filter((e) => e?.type === "property_details" && e.address && sameStreet(e.address, address) && (e.data?.workNeeded || e.data?.condition))
+    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0];
+  if (!latest) return null;
+  const said = [latest.data.workNeeded, latest.data.condition].map((x) => String(x || "")).filter(Boolean).join(" — ");
+  return TURNKEY_TEXT.test(said) || /^\s*none\b/i.test(String(latest.data.workNeeded || ""))
+    ? { why: `the agent said it isn't a project ("${said.slice(0, 60)}")` } : null;
+}
 const COLD_STAGE = /^tier\s*3\b|passed on offer|^lost\b|not a good deal/i;
 const CLOSED_OPP = /^(lost|abandoned|abandon)$/i;
 
@@ -186,8 +211,8 @@ export function triageHeldUnderwrite({
   const houseEvents = events.filter((e) => e?.address && onThisHouse(e.address));
   const passedEv = houseEvents.find((e) => e.type === "offer_passed" || e.type === "offer_we_passed");
   if (passedEv) return { ...base, action: "retire", status: passedEv.type === "offer_passed" ? "passed" : "we_passed", reason: passedEv.type === "offer_passed" ? "they passed on this house" : "we passed on this house" };
-  const turnkeyEv = houseEvents.find((e) => e.type === "property_details" && TURNKEY_TEXT.test(String(e.data?.condition || "")));
-  if (turnkeyEv) return { ...base, action: "retire", status: "we_passed", reason: `turnkey per the agent ("${String(turnkeyEv.data.condition).slice(0, 60)}")` };
+  const turnkeyEv = houseEvents.find((e) => e.type === "property_details" && TURNKEY_TEXT.test(`${e.data?.condition || ""} ${e.data?.workNeeded || ""}`));
+  if (turnkeyEv) return { ...base, action: "retire", status: "we_passed", reason: `turnkey per the agent ("${String(turnkeyEv.data.condition || turnkeyEv.data.workNeeded).slice(0, 60)}")` };
   const said = drafts
     .filter((d) => d && String(d.inbound || "").trim() && aboutThisHouse(d.propertyAddress) && after(d.createdAt))
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));

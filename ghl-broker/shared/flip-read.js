@@ -117,11 +117,11 @@ export function flipRead(text = "", { agentRehab = 0 } = {}) {
 // later, once we left the door open — a second question about the same
 // listing only stands in the way.
 const TURNKEY = [
-  ["turnkey", /\bturn[\s-]?key\b|\bmove[\s-]?in[\s-]?ready\b|\bfixed\s+(?:it\s+)?up\b|\b(?:it|this(?:\s+one)?|the\s+(?:house|home|property|place)|everything|\d+\w*)\s*(?:is|was|'s|has\s+been)\s+(?:been\s+)?(?:fully\s+|completely\s+|totally\s+|nicely\s+|all\s+)?(?:updated|remodeled|remodelled|renovated|redone)\b|\b(?:fully|completely|totally)\s+(?:updated|remodeled|remodelled|renovated)\b/i],
+  ["turnkey", /\bturn[\s-]?key\b|\bmove[\s-]?in[\s-]?ready\b|\bnot\s+(?:really\s+)?a\s+project\b|\bisn'?t\s+a\s+project\b|\bfixed\s+(?:it\s+)?up\b|\b(?:it|this(?:\s+one)?|the\s+(?:house|home|property|place)|everything|\d+\w*)\s*(?:is|was|'s|has\s+been)\s+(?:been\s+)?(?:fully\s+|completely\s+|totally\s+|nicely\s+|all\s+)?(?:updated|remodeled|remodelled|renovated|redone)\b|\b(?:fully|completely|totally)\s+(?:updated|remodeled|remodelled|renovated)\b/i],
 ];
 // "…but it needs a roof", "a light fixer": any talk of work left means it's
 // not the plain "it's done" this reads for.
-const WORK_LEFT_RX = /\bneed(?:s|ing|ed)?\b|\bfixer\b|\bproject\b|\brepairs?\b|\bTLC\b|\bwork\s+(?:to\s+do|left)\b/i;
+const WORK_LEFT_RX = /\bneed(?:s|ing|ed)?\b|\bfixer\b|(?<!\bnot\s(?:really\s)?a\s|\bisn'?t\sa\s)\bproject\b|\brepairs?\b|\bTLC\b|\bwork\s+(?:to\s+do|left)\b/i;
 
 /** saysTurnkey(text) → true when their words say plainly the house is done. */
 export function saysTurnkey(text = "") {

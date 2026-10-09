@@ -105,6 +105,7 @@ import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
 import { meterAi } from "./ai-spend.js";
 import { investorMindedCue } from "./shared/lead-source.js";
+import { agentRuledOut } from "./shared/held-underwrites.js";
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
@@ -2577,6 +2578,10 @@ export async function startProactive({
     if (raise) {
       return { skipped: `we last texted ${kText(raise.amount)} on ${offer.address} and this number is ${kText(Number(offer.cashAmount))} — the machine never raises our own number; a person decides to go up`, raise, job: null };
     }
+    // A house the agent said is not a project (shared/held-underwrites.js):
+    // no number floats on it by itself.
+    const ruledOut = agentRuledOut(await store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []), offer.address);
+    if (ruledOut) return { skipped: `${offer.address}: ${ruledOut.why} — no number goes out on it by itself`, ruledOut, job: null };
     const cut = machineCut(offer, thread);
     if (cut) {
       return { skipped: `we last texted ${kText(cut.amount)} on ${offer.address} and this number is ${kText(Number(offer.cashAmount))} — the machine never takes our number back; a person decides to go down`, cut, job: null };
@@ -4619,6 +4624,22 @@ async function runReply(job, ctx) {
       record = { ...record, actions: (record.actions || []).map((x) => (isTierOneAction(x) && x.status === "pending" ? { ...x, status: "skipped", detail: passed.why } : x)), updatedAt: new Date().toISOString() };
       await store.updateReplyDraft(record.id, record).catch(() => {});
     }
+  }
+
+  // A new house with no address: Tier 1 waits for the address. GHL's TIER 1
+  // workflow underwrites the contact's Subject Property field, which still
+  // names the house before — an agent (2026-10-08) said Walker Park Rd
+  // was "not a project", then mentioned an almost-done flip with no address,
+  // and TIER 1 priced Walker Park at 810K; it was floated and papered. The
+  // reply asks for the address; the message that gives it runs Tier 1 on it.
+  if (party === "agent" && !String(draft.propertyAddress || "").trim()
+    && (draft.intent === "new_property" || draft.intent === "deal_available")
+    && [...plan.auto, ...plan.suggested].some(isTierOneAction)) {
+    const why = "waiting for the address: Tier 1 runs on the house once we have it";
+    plan.auto = plan.auto.filter((x) => !isTierOneAction(x));
+    plan.suggested = plan.suggested.filter((x) => !isTierOneAction(x));
+    record = { ...record, actions: (record.actions || []).map((x) => (isTierOneAction(x) && x.status === "pending" ? { ...x, status: "skipped", detail: why } : x)), updatedAt: new Date().toISOString() };
+    await store.updateReplyDraft(record.id, record).catch(() => {});
   }
 
   /* --- 4f. a new house runs Tier 1 again --- */
