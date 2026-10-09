@@ -606,7 +606,11 @@ export function isShowingOffer(message = "") {
  */
 export function floorFirmness(message = "") {
   const t = String(message || "");
-  if (/\b(?:won'?t|will\s+not|not\s+going\s+to)\s+(?:entertain|consider|accept|take|go\s+(?:below|under|lower))|\bno\s+need\s+to\s+(?:submit|send|write)|\bfirm\b|non[\s-]?negotiable|bottom\s+line|not\s+a\s+(?:penny|dollar)\s+(?:less|under|below)/i.test(t)) return "firm";
+  if (/\b(?:won['’]?t|will\s+not|not\s+going\s+to)\s+(?:entertain|consider|accept|take|go\s+(?:below|under|lower))|\bno\s+need\s+to\s+(?:submit|send|write)|\bfirm\b|non[\s-]?negotiable|bottom\s+line|not\s+a\s+(?:penny|dollar)\s+(?:less|under|below)/i.test(t)) return "firm";
+  // "Can't go any less than that" (184th St SE, 2026-10-07): the seller
+  // can't come down, said plainly. Texts from a phone carry a curly
+  // apostrophe.
+  if (/\b(?:can['’]?t|cannot|can\s+not|won['’]?t|will\s+not|not\s+going\s+to)\s+(?:go|do|take|accept)\s+(?:any(?:thing)?\s+)?(?:less|lower|below|under)\b/i.test(t)) return "firm";
   if (/\bwould\s+(?:\w+\s+){0,2}consider|\bmost\s+likely|\bprobably\s+(?:work|consider|take|do|make)|\bstarts?\s+with\s+an?\b|\bmake\s+(?:something|it)\s+work|\bopen\s+to\b|\bif\s+you\s+(?:were|can|could|came|come|got|get)\b|\bin\s+the\s+(?:ballpark|neighborhood|range)\b|\bmight\s+(?:work|take|consider|do)\b/i.test(t)
     // "I could get them to 950 but no way on that number" (Lori Mcdonald,
     // 2026-09-14): a number they can deliver is an opening, whatever follows.
@@ -3596,7 +3600,10 @@ async function runReply(job, ctx) {
       const where = String(full.address || "").split(",")[0].trim() || "the house";
       // Said once; a second ask that didn't move gets the short version.
       const again = Boolean(full.counterHold?.at) && !(theirs > 0 && theirs < (Number(full.counterHold.theirs) || Infinity));
-      counterHold = { offerId: full.id, ours: hold.amount, theirs, again };
+      // "Can't go any less than that": there's nothing for a check-in to move.
+      // Our number goes once all the same, and the offer is theirs to pass on.
+      const firm = theirs > 0 && floorFirmness(job.originalMessage || job.message) === "firm";
+      counterHold = { offerId: full.id, ours: hold.amount, theirs, again, ...(firm ? { firm: true } : {}) };
       // holdNumber's words, written like a text: a dollar sign trips the
       // carrier filters (the gates hold it), so the number goes bare.
       const n = hold.amount.toLocaleString("en-US");
@@ -3843,6 +3850,14 @@ async function runReply(job, ctx) {
   if (softFloor && !plan.auto.some((x) => x.type === "mark_offer_countered")) {
     plan.auto.push({ id: `a-soft-${job.id}`, type: "mark_offer_countered", mode: "auto", status: "pending", party,
       why: "they named a number but sound open — asked for their value and repairs" });
+  }
+  // Their floor is firm and over our number (Matt, 2026-10-09, 184th St SE:
+  // "this should be they passed"). The hold is the last word on it; the
+  // offer is marked they passed instead of riding the check-in clock. Only
+  // when the hold goes out — a hold waiting for a person is theirs to call.
+  if (auto.counterHold && draft.counterHold?.firm && !plan.auto.some((x) => x.type === "mark_offer_passed")) {
+    plan.auto.push({ id: `a-firm-${job.id}`, type: "mark_offer_passed", mode: "auto", status: "pending", party,
+      why: `their floor is firm at ${fmtMoney(draft.counterHold.theirs)}, over our ${fmtMoney(draft.counterHold.ours)} — we held; they passed` });
   }
   // A seller saying yes is the most important text of the week. Whatever the
   // guard decides about replying, the contact is tagged so it can't sit.
