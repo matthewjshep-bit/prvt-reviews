@@ -1175,7 +1175,7 @@ test("three texts in a row become one draft, and the same text twice is one mess
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
   let drafts = 0;
-  const deps = { draft: async () => { drafts++; return DRAFT; }, debounceMs: 60 };
+  const deps = { draft: async () => { drafts++; return { ...DRAFT, reply: "Got it, thanks — looking at 12 Elm now." }; }, debounceMs: 60 };
   const a = await startReply({ client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "hey", deps });
   const b = await startReply({ client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "it's 12 elm", deps });
   const c = await startReply({ client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "needs a full reno", deps });
@@ -6232,4 +6232,105 @@ test("with qualify-first off, the first-text house underwrites as before", async
   const { d, uw } = await replyTo("Cosmetic fixer", { saved: STARTER_SAVED });
   assert.equal(uw.length, 1);
   assert.equal(d.qualify, undefined);
+});
+
+/* ---------- a gate hold earns one redraft (2026-10-08) ---------- */
+
+// Desk rows sat as "needs a person: the draft names $224,000, which is not in
+// the offer book" and "the draft says 'cash close'" — words the model could
+// have fixed itself if it had been told what was wrong.
+const replyWithRedraft = async (drafts, { saved = AUTO_SAVED } = {}) => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => OFFERS;
+  const calls = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "still interested?", sendsEnabled: true,
+    deps: { draft: async (args) => { calls.push(args); return drafts[Math.min(calls.length, drafts.length) - 1]; }, now: () => NOW, random: () => 0 },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return { d: await store.getReplyDraft(job.draftId), calls };
+};
+
+test("a draft that names a number not in the offer book is redrafted and sent when the redraft is clean", async () => {
+  const { d, calls } = await replyWithRedraft([
+    { ...DRAFT, reply: "Yes — we can do $430,000 on 12 Elm." },
+    { ...DRAFT, reply: "Yes, still interested — our 410k on 12 Elm stands." },
+  ]);
+  assert.equal(calls.length, 2, "one redraft, no more");
+  assert.equal(calls[0].fix, undefined);
+  assert.match(calls[1].fix.join(" · "), /\$430,000, which is not in the offer book/);
+  assert.equal(d.reply, "Yes, still interested — our 410k on 12 Elm stands.");
+  assert.equal(d.status, "scheduled", d.autoSend.reason);
+  assert.equal(d.autoSendable, true);
+  assert.deepEqual(d.flags, []);
+  assert.match(d.redraftedFor.join(" · "), /not in the offer book/);
+});
+
+test("a redraft that still breaks a gate stays held for Matt", async () => {
+  const { d, calls } = await replyWithRedraft([
+    { ...DRAFT, reply: "Yes — we can do $430,000 on 12 Elm." },
+    { ...DRAFT, reply: "Yes — cash close at $430,000 on 12 Elm." },
+  ]);
+  assert.equal(calls.length, 2, "one redraft, no more");
+  assert.equal(d.status, "draft");
+  assert.equal(d.reply, "Yes — we can do $430,000 on 12 Elm.", "the first draft stands");
+  assert.match(d.flags.join(" · "), /\$430,000, which is not in the offer book/);
+  assert.match(d.autoSend.reason, /^needs a person: /);
+  assert.equal(d.redraftedFor, undefined);
+  assert.ok(d.redraftHeld?.flags?.length, "the row says the redraft was tried");
+});
+
+/* ---------- the float a held reply was waiting for (2026-10-08) ---------- */
+
+// Their text asked us to look at a house; our holding reply ("let me run the
+// numbers") was held for Matt; the underwrite it started landed an offer —
+// and the float stood down for that very reply. Nothing re-tries it unless the
+// timers are on, and even they wait until the held reply is dealt with, so
+// the offer sat with no float (proactive: null). The number IS the answer
+// that reply promised: the float carries on from it.
+const heldPromise = (over = {}) => waitingReply({ inbound: "Take a look at 12 Elm St — needs work.", intent: "new_property",
+  reply: "Thanks, let me run the numbers on 12 Elm and come back to you.", propertyAddress: "12 Elm St", gateClean: true, needsHuman: false,
+  autoSend: { decided: false, reason: "new property is not on the agent auto-send list" }, createdAt: iso(60_000), ...over });
+const floatOver = async (held) => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = withTheirTake(fakeStore([held]));
+  store.listOffers = async () => [LANDED];
+  const r = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED, deps: { draft: async () => REALM_REPLY } });
+  await settle();
+  return { r, held: await store.getReplyDraft(held.id) };
+};
+
+test("an offer the held reply was waiting on still gets floated", async () => {
+  const { r, held } = await floatOver(heldPromise());
+  assert.ok(r.job, r.skipped);
+  assert.equal(r.job.status, "done", r.job.error);
+  assert.equal(held.status, "superseded", "the float is the answer the holding reply promised");
+});
+
+test("a held reply the float doesn't answer still holds the float", async () => {
+  for (const over of [
+    { createdAt: iso(500) },                       // came in after the offer: a new text, not the one the underwrite answers
+    { propertyAddress: "40 Oak Ave" },             // another house
+    { gateClean: false },                          // a gate caught it: Matt's to read
+    { needsHuman: true },
+    { intent: "counter" },                         // a person's call
+    { autoSend: { decided: false, reason: "needs a person: the draft names $430,000, which is not in the offer book" } },
+  ]) {
+    const { r, held } = await floatOver(heldPromise(over));
+    assert.equal(r.job, null, JSON.stringify(over));
+    assert.equal(r.blocked?.draftId, "r1", JSON.stringify(over));
+    assert.equal(held.status, "draft");
+  }
+});
+
+test("a draft held only because it is a person's call, or that the model sent to a person, costs no second call", async () => {
+  const counter = await replyWithRedraft([{ ...DRAFT, intent: "counter", reply: "Thanks — let me look at it with my partner." }]);
+  assert.equal(counter.calls.length, 1);
+  const human = await replyWithRedraft([{ ...DRAFT, needsHuman: true, humanReason: "they asked about terms", reply: "We can do $430,000." }]);
+  assert.equal(human.calls.length, 1);
+  assert.equal(human.d.status, "draft");
 });
