@@ -362,3 +362,10 @@ test("an agent whose deal just closed is thanked and asked for the next one — 
   assert.equal(dealToThank({ offers: [{ ...closed, deal: { stage: "fell_through", stageHistory: [{ stage: "fell_through", ts: ago(5) }] } }], now: NOW }), null);
   assert.equal(normalizeAgentPulse({ autoSend: true }).thanksAutoSend, false, "the thank-you stays a draft unless you say so");
 });
+
+test("an agent who talks like an investor is a source before they've sent a house", () => {
+  const a = agent({ lastInboundAt: ago(30), events: [{ type: "investor_minded", at: ago(30), data: { cue: "finder's fee" } }] });
+  const v = evaluateAgent(a, ctx());
+  assert.equal(v.segment, "source");
+  assert.equal(v.priority[0], 2, "ranked with partners");
+});

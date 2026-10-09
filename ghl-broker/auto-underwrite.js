@@ -2224,10 +2224,7 @@ async function runUnderwrite(job, ctx) {
   // A mark you set by hand is never overwritten.
   // How the house came to us (shared/lead-source.js): the listing we opened
   // with, or one the agent brought — what the Desk's call row keys on.
-  const hooks = job.contactId && typeof store?.listOutreachHooks === "function"
-    ? await store.listOutreachHooks(locationId, { contactId: job.contactId }).catch(() => [])
-    : [];
-  const lead = job.contactId ? leadSourceOf({ offer: { contactId: job.contactId, address: offer.address || extraction.address, createdAt: new Date().toISOString() }, hooks, events: contactEvents || [] }) : null;
+  const lead = await leadFor(job, ctx, offer.address || extraction.address, contactEvents);
   if (lead) offer.autoUnderwrite.leadSource = lead.source;
   // A house the agent brought: does the seller's own number leave our fee
   // under what a flipper pays? A flag for the Desk's call, never a send.
@@ -2416,8 +2413,29 @@ export async function saveLoadedDraft(job, ctx) {
 // (keeping that record's id and createdAt) rather than stacking a second copy
 // of the same house in History — but only while it is still a draft: once a
 // person has turned it into an offer, it is theirs, and this writes a new one.
+/**
+ * leadFor(job, ctx, address, events) → leadSourceOf() | null
+ *
+ * The agent's opening listing and their timeline against this address. A
+ * read that fails is "not known", never a guess.
+ */
+async function leadFor(job, ctx, address, events = null) {
+  const { locationId, store } = ctx;
+  if (!job.contactId || !address) return null;
+  try {
+    const [hooks, evs] = await Promise.all([
+      typeof store?.listOutreachHooks === "function" ? store.listOutreachHooks(locationId, { contactId: job.contactId }).catch(() => []) : [],
+      events || (typeof store?.listContactEvents === "function" ? store.listContactEvents(locationId, job.contactId, { limit: 200 }).catch(() => []) : []),
+    ]);
+    return leadSourceOf({ offer: { contactId: job.contactId, address, createdAt: new Date().toISOString() }, hooks, events: evs || [] });
+  } catch { return null; }
+}
+
 async function saveDraft(job, ctx, { extraction, held, partial, cleared = false }) {
   const { locationId, store } = ctx;
+  // A held house the agent brought still goes to the Desk as a call
+  // (call_brought): it is marked here the way a priced one is.
+  const lead = await leadFor(job, ctx, extraction.address || "");
   const draft = {
     ...buildSnapshot({
       extraction, partial,
@@ -2434,7 +2452,7 @@ async function saveDraft(job, ctx, { extraction, held, partial, cleared = false 
     cashAmount: null,
     draft,
     checks: summarizeChecks(draft),
-    autoUnderwrite: { ...auditTrail(job, extraction, { ok: cleared, held }), held },
+    autoUnderwrite: { ...auditTrail(job, extraction, { ok: cleared, held }), held, ...(lead ? { leadSource: lead.source } : {}) },
     updatedAt: new Date().toISOString(),
   };
   if (job.replaceOfferId) {

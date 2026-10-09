@@ -80,7 +80,7 @@ const PIPELINE_EVENT_TYPES = [
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
   "underwrite_dropped",
-  "drive_stopped", "drive_resumed", "hand_reply",
+  "drive_stopped", "drive_resumed", "hand_reply", "investor_minded",
 ];
 
 const DAY_MS = 86400000;
@@ -529,8 +529,12 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const deskSettings = normalizeDesk(saved?.desk);
       const touches = await lastTouches(locationId).catch(() => ({ lastIn: new Map(), lastAny: new Map() }));
       const unsubscribedIds = new Set(botEvents.filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
+      // What sellers told us they need (property_details sellerAsk), for the
+      // "their number is close to ours" call.
+      const asks = await store.listContactEventsSince(locationId, new Date(now - 120 * DAY_MS).toISOString(), { types: ["property_details"], limit: 5000 })
+        .then((rows) => rows.filter((e) => Number(e?.data?.sellerAsk) > 0)).catch(() => []);
       const callRows = nameRows(callList({ offers, cards: out.cards, actions: out.actions, drafts: [...drafts, ...recentDrafts], events,
-        lastIn: touches.lastIn, lastAny: touches.lastAny, unsubscribed: unsubscribedIds, settings: deskSettings, now, machine: machineDrives(config) }), names);
+        lastIn: touches.lastIn, lastAny: touches.lastAny, unsubscribed: unsubscribedIds, settings: deskSettings, now, machine: machineDrives(config), asks }), names);
       // A hot offer the machine keeps nudging says when, or that it has
       // stood down (2026-10-05: 12502 SE 73rd Pl read "the next nudge on the
       // offer" while Matt had the thread). The Offers column's own rule, one

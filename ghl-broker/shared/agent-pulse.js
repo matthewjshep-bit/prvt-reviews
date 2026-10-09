@@ -111,7 +111,7 @@ export const AGENT_PULSE_EVENT_TYPES = [
   "text_summary", "call_summary", "follow_up_sent", "hand_reply", "unsubscribed",
   "promise_made", "promise_owed", "promise_kept",
   "checkin_requested", "checkin_sent", "address_pending", "address_pending_closed", "subject_property_set", "address_chase_sent",
-  "outreach_enrolled", "outreach_sent", "outreach_left", "workflow_enrolled", "workflow_left",
+  "outreach_enrolled", "outreach_sent", "outreach_left", "workflow_enrolled", "workflow_left", "investor_minded",
   "drive_stopped", "drive_resumed", "listing_off_market", "listing_back_on_market", "offer_sent",
   "offmarket_asked",
   // Houses passed or kicked off the Tier 1 list: never raised again.
@@ -354,6 +354,9 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
 
   // Where they stand with us, and how many of our check-ins met silence.
   let segment = agentSegment({ offers: agent.offers || agent.current || [], lastInboundAt: agent.lastInboundAt });
+  // An agent who talks like an investor is a source before they've sent a
+  // house (shared/lead-source.js investorMindedCue).
+  if ((segment === "engaged" || segment === "cold") && events.some((e) => e?.type === "investor_minded")) segment = "source";
   const voided = new Set(ledger.filter((e) => e.type === "agent_pulse_voided").map((e) => e.data?.claimKey || e.ref).filter(Boolean));
   const texted = ledger.filter((e) => e.type === "agent_pulse_texted" && (!agent.lastInboundAt || String(e.at) > String(agent.lastInboundAt)));
   const unanswered = texted.length;

@@ -30,6 +30,8 @@ import { holdState } from "./counter-hold.js";
 import { flipRead } from "./flip-read.js";
 import { offMarketCue } from "./off-market.js";
 import { sameStreet } from "./us-address.js";
+import { buyerCeiling } from "./post-mortem.js";
+import { ASSIGNMENT_RX } from "./lead-source.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -52,6 +54,11 @@ export const DESK_DEFAULTS = Object.freeze({
   relationshipPerDay: 2,   // at most this many partner check-ins on the list
   firstReplyDays: 3,       // a new agent's first reply stays a call this long
   triesBeforeMachine: 2,   // calls that didn't connect before texting takes over again
+  // The seller's own number this close to ours is a call (Matt, 2026-10-09:
+  // 15%). Every contract closed at a 2–19% gap; 14 houses died within 15%
+  // with nobody picking up the phone.
+  gapPct: 15,
+  revisitDays: 60,         // a house lost within the gap stays worth one call this long
 });
 
 /** normalizeDesk(v) → every setting, a whole number in its range. */
@@ -65,6 +72,8 @@ export function normalizeDesk(v = {}) {
     relationshipPerDay: n(o.relationshipPerDay, d.relationshipPerDay, 0, 10),
     firstReplyDays: n(o.firstReplyDays, d.firstReplyDays, 1, 14),
     triesBeforeMachine: n(o.triesBeforeMachine, d.triesBeforeMachine, 1, 5),
+    gapPct: n(o.gapPct, d.gapPct, 0, 30),
+    revisitDays: n(o.revisitDays, d.revisitDays, 0, 180),
   };
 }
 
@@ -79,13 +88,15 @@ export const CALL_KINDS = [
   { key: "counter_held",     label: "Counter: held at our number" },
   { key: "call_missed",      label: "They called you" },
   { key: "call_counter",     label: "Counter above our number" },
+  { key: "call_gap",         label: "Their number is close to ours" },
   { key: "call_first_reply", label: "New agent, first reply" },
   { key: "call_quiet",       label: "Gone quiet: a call beats another text" },
   { key: "call_phone_only",  label: "Phone only" },
   { key: "call_partner",     label: "Relationship check-in" },
+  { key: "call_investor",    label: "Investor-minded agent" },
 ];
 // They called you: ring back first — they reached out.
-const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_partner: 30 };
+const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_investor: 45, call_partner: 30 };
 // Points off for each call that didn't connect since the row's reason, and
 // for each day their last word has aged (hot, counters, quiet threads).
 const PER_TRY = 15;
@@ -122,6 +133,7 @@ const PHONE_RX = /\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/;
 // The paperwork is on its way to us to sign.
 const SENT_TO_SIGN_RX = /\b(?:docusign|authentisign|dotloop|e-?sign(?:ature)?)\b|\bsent (?:it|you|the (?:offer|paperwork|forms?|contract|psa))(?: over)? (?:for|to) (?:your )?sign(?:ature|ing)?\b|\bready (?:for you )?to sign\b|\bfor your signature\b/i;
 const LIVE_LANES = new Set(["floated", "sent", "countered", "hot"]);
+const NOT_OUR_HOUSE_RX = /outside the area|rural|acres|manufactured|mobile home|condo|townho|multi-family|duplex|not our kind|wholesaler/i;
 // A house an agent brought stays a call this long after it landed.
 const BROUGHT_FRESH_DAYS = 2;
 
@@ -154,7 +166,7 @@ const BROUGHT_FRESH_DAYS = 2;
 export function callList({
   offers = [], cards = [], actions = [], drafts = [], events = [],
   lastIn = new Map(), lastAny = new Map(), unsubscribed = new Set(), settings = {}, now = Date.now(),
-  machine = {},
+  machine = {}, asks = [],
 } = {}) {
   const cfg = normalizeDesk(settings);
   const offersById = new Map((offers || []).filter((o) => o?.id).map((o) => [o.id, o]));
@@ -325,17 +337,24 @@ export function callList({
     const where = street(o.address);
     const words = theirWords(c).filter((d) => (ms(d.createdAt) ?? 0) >= (ms(o.createdAt) ?? 0) - 2 * DAY_MS).map((d) => d.inbound).join("\n");
     const life = flipRead(words).strong.find((x) => x === "life event" || x === "estate or probate") || "";
+    // Someone else's contract being sold on: none of the 9 agents brought
+    // us reached a committed buyer. Worth it only at their number under the
+    // buyer ceiling; otherwise a quick, polite pass is the call.
+    const assignment = ASSIGNMENT_RX.test(words);
     const their = o.autoUnderwrite?.theirNumber || null;
+    // Held: no number yet. The call gets what the hold needs from them.
+    const heldWhy = effectiveStatus(o) === "draft" ? String((o.autoUnderwrite?.held || [])[0] || "").split(" — ")[0] : "";
     const number = their?.fits
       ? `their ${kText(their.seller)} works — a buyer pays up to ${kText(their.ceiling)}`
       : their ? `their ${kText(their.seller)} against a buyer ceiling of ${kText(their.ceiling)}` : "";
     add("call_brought", { contactId: c, contactName: o.contactName || nameOf(c, offersBy, draftsBy), offerId: o.id, address: o.address, since: o.createdAt,
-      why: [`brought us ${where}`, life ? (life === "life event" ? "a seller going through a life event" : "an estate") : "", number].filter(Boolean).join(" — "),
+      why: [`brought us ${where}`, life ? (life === "life event" ? "a seller going through a life event" : "an estate") : "", assignment ? "a wholesaler's assignment (none of these has closed for us)" : "", number, heldWhy ? `no number yet (${heldWhy})` : ""].filter(Boolean).join(" — "),
       goal: `Call within the hour. Hear the seller's situation and timing, ask what they think ${where} is worth fixed up and what it needs, ` +
+        (heldWhy ? `which is what our underwrite is missing, ` : "") +
         `say we won't approach or bother the seller, and get a written offer out today${their?.fits ? ` — their number leaves our fee under what a buyer pays` : ""}. ` +
         `Never above our number without deciding it yourself.`,
       opener: `Hi ${first(o.contactName)}, it's Matt — thanks for sending ${where} my way. Got a couple minutes to talk it through?`,
-      extra: { brought: { life: life || null, theirNumber: their } }, agePenaltyFrom: ms(o.createdAt) });
+      extra: { brought: { life: life || null, theirNumber: their, assignment } }, agePenaltyFrom: ms(o.createdAt) });
   }
 
   /* 3. A counter above our number: a call lands a number a text doesn't. */
@@ -366,6 +385,45 @@ export function callList({
       goal: `Land a number. Ours ${kText(ours)}, theirs ${kText(theirs)} (${kText(theirs - ours)} apart)${ceiling ? `; the buyer ceiling is ${kText(ceiling)}` : ""}. Never above what we sent without deciding it yourself.`,
       opener: `Hi ${first(card.contactName)}, it's Matt — got your ${kText(theirs)} on ${street(card.address)}. Easier to talk it through than text.`,
       extra: { counter }, agePenaltyFrom: lastWord(c) });
+  }
+
+  /* 3b. Their number is close to ours: a call closes a gap a text doesn't.
+   * The seller's number as the agent told it (`asks`: property_details
+   * events with data.sellerAsk), on a house where ours is live, or one we
+   * lost in the last `revisitDays`. Never a number sent: the row is a call. */
+  if (cfg.gapPct > 0) {
+    const askOf = (c, address) => (asks || [])
+      .filter((e) => e?.contactId === c && Number(e.data?.sellerAsk) > 0 && e.address && sameStreet(e.address, address))
+      .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0] || null;
+    const live = liveCards.filter((c) => c.lane === "floated" || c.lane === "sent").map((card) => ({ card, o: offersById.get(card.offerId) || {}, lost: false }));
+    const lost = (offers || []).filter((o) => o?.contactId && !o.deal && o.isCurrent !== false && DEAD_STATUSES.has(effectiveStatus(o)) && effectiveStatus(o) !== "unavailable"
+      && now - (ms(o.statusAt) ?? 0) <= cfg.revisitDays * DAY_MS
+      // Lost for what it IS (a park home, acreage, out of the area) is not a gap a call closes.
+      && !(o.asset?.type && o.asset.type !== "sfr") && !NOT_OUR_HOUSE_RX.test(String(o.statusNote || "")))
+      .map((o) => ({ card: { contactId: o.contactId, contactName: o.contactName, offerId: o.id, address: o.address, cashAmount: o.cashAmount }, o, lost: true }));
+    for (const { card, o, lost: gone } of [...live, ...lost]) {
+      const c = card.contactId;
+      if (taken.has(c) || unsubscribed.has(c) || irritated(c)) continue;
+      const ours = Number(card.cashAmount) || 0;
+      const ask = askOf(c, card.address);
+      const theirs = Number(ask?.data?.sellerAsk) || 0;
+      if (!ours || !(theirs > ours)) continue;
+      const gap = (theirs - ours) / theirs;
+      if (gap * 100 > cfg.gapPct) continue;
+      const pct = Math.round(gap * 100);
+      const middle = Math.round((ours + theirs) / 2 / 1000) * 1000;
+      const ceiling = buyerCeiling({ offer: { ...o, arv: o.arv, repairs: o.repairs }, settings: {}, fee: 0 });
+      const roomAt = (n) => (ceiling.computable ? ceiling.noFee - n : null);
+      const fits = roomAt(middle) != null && roomAt(middle) >= 10000;
+      const where = street(card.address);
+      add("call_gap", { contactId: c, contactName: card.contactName || nameOf(c, offersBy, draftsBy), offerId: card.offerId, address: card.address, since: ask.at,
+        why: `their ${kText(theirs)} vs our ${kText(ours)} on ${where} — ${pct}% apart${gone ? ", and we let it go" : ""}`,
+        goal: `Close the gap by phone. Meeting in the middle is about ${kText(middle)}` +
+          (ceiling.computable ? (fits ? `, which still leaves our fee under the ${kText(ceiling.noFee)} a buyer pays` : `, which is past what a buyer pays (${kText(ceiling.noFee)}) less our fee`) : "") +
+          `. Hear what the seller needs and what else moves them (timing, as-is, a quick close). Never above our number without deciding it yourself.`,
+        opener: `Hi ${first(card.contactName)}, it's Matt — on ${where}, we're closer than it looks. Got a minute to see if we can bridge it?`,
+        extra: { gap: { ours, theirs, pct, middle, ceiling: ceiling.computable ? ceiling.noFee : null, fits, lost: gone } }, agePenaltyFrom: ms(ask.at) });
+    }
   }
 
   /* 4. A new agent's first reply: put a voice to the name. */
@@ -423,6 +481,21 @@ export function callList({
       why: `texts are off for them; ${street(card.address)} is still open`,
       goal: `Texting is off for them — settle ${street(card.address)} by phone, or let it go.`,
       opener: `Hi ${first(card.contactName)}, Matt here — calling rather than texting about ${street(card.address)}.` });
+  }
+
+  /* 6b. An agent who thinks like an investor: one relationship call.
+   * They asked about a finder's fee or assigning, own rentals, or offered to
+   * represent us — how the agents behind the deals with committed buyers
+   * started (2026-10-09). Once: a connected call after it clears it. */
+  for (const e of (events || []).filter((x) => x?.type === "investor_minded" && x.contactId)) {
+    const c = e.contactId;
+    if (taken.has(c) || unsubscribed.has(c) || irritated(c)) continue;
+    if (now - (ms(e.at) ?? 0) > 30 * DAY_MS) continue;
+    const name = nameOf(c, offersBy, draftsBy);
+    add("call_investor", { contactId: c, contactName: name, since: e.at,
+      why: `talks like an investor ("${String(e.data?.cue || "").slice(0, 40)}") — worth a relationship call`,
+      goal: "Put a voice to the name: how they work with investors, what they and their clients have coming, and that we'd love them to write it up and represent us. These agents bring the off-market houses.",
+      opener: `Hi ${first(name)}, it's Matt — wanted to put a voice to the name. Sounds like you think about these the way we do.` });
   }
 
   /* 7. Partners — agents we've done business with — gone quiet a while. */

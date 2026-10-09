@@ -79,3 +79,12 @@ test("their number works when it leaves our fee under what a buyer pays; it neve
   assert.equal(theirNumberCheck({ seller: 0, ceiling: 500000 }), null, "no number from them, nothing to say");
   assert.equal(theirNumberCheck({ seller: 300000, ceiling: 0 }), null, "no ARV, no ceiling");
 });
+
+test("an agent who asks about finder fees, owns rentals or offers to represent us reads as investor-minded; small talk doesn't", async () => {
+  const { investorMindedCue, ASSIGNMENT_RX } = await import("./lead-source.js");
+  for (const said of ["Do you work with wholesalers or pay a finder's fee on homes?", "I can lower my list fee, I have a couple rentals myself", "Happy to represent you on it",
+    "Do you assign contracts?", "I also flip houses on the side", "Would love to partner on a flip"]) assert.ok(investorMindedCue(said), said);
+  for (const said of ["The seller is flexible", "It's a rental right now, tenant until November", "Thanks for the offer"]) assert.equal(investorMindedCue(said), "", said);
+  assert.ok(ASSIGNMENT_RX.test("They got it at 200 and are selling the assignment at 215"));
+  assert.ok(!ASSIGNMENT_RX.test("Seller is an estate, son is executor"));
+});

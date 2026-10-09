@@ -769,6 +769,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <Num label="Partner check-ins at most" suffix="a day" value={desk.relationshipPerDay} onChange={setDesk("relationshipPerDay")} />
           <Num label="A new agent's first reply stays a call" suffix="days" value={desk.firstReplyDays} onChange={setDesk("firstReplyDays")} />
           <Num label="Calls with no answer before texting takes over" value={desk.triesBeforeMachine} onChange={setDesk("triesBeforeMachine")} />
+          <Num label="Their number this close to ours is a call" suffix="% (0 = off)" value={desk.gapPct} onChange={setDesk("gapPct")} />
+          <Num label="A house lost that close stays worth a call" suffix="days" value={desk.revisitDays} onChange={setDesk("revisitDays")} />
         </div>
       </section>
 

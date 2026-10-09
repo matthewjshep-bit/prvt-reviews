@@ -73,3 +73,12 @@ test("a seller going through a life event is a real lead on its own — POA, exe
   }
   assert.deepEqual(flipRead("seller is elderly").strong, [], "age alone is a reason to sell, not a flip");
 });
+
+test("the pass says what we buy and names one seller that becomes a deal, so agents stop bringing park homes and acreage", async () => {
+  const { OUR_BOX_WORDS } = await import("./asset-type.js");
+  assert.match(OUR_BOX_WORDS, /^single-family/);
+  for (const p of QUALIFY_PASSES) {
+    assert.ok(p.includes(OUR_BOX_WORDS), p);
+    assert.match(p, /estate|into care|move by a date/, p);
+  }
+});

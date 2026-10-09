@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   houseKey, pricedAt, resolveHouse, currentOffers, currentOfferFor, annotateCurrent,
-  isSuperseded, ourComeDown, ourMoveUp, paperCheck, lastQuoteOnHouse, machineRaise, holdNumber,
+  isSuperseded, ourComeDown, ourMoveUp, paperCheck, lastQuoteOnHouse, machineRaise, machineCut, holdNumber,
   floatRange, rangeWords, namedInRange,
 } from "./current-offer.js";
 
@@ -290,4 +290,16 @@ test("'55k of lender holding costs' is a cost, not a price we quoted", () => {
   assert.equal(ourComeDown(ELM, t), null);
   assert.equal(lastQuoteOnHouse(ELM, t)?.amount, 295000);
   assert.equal(paperCheck({ offer: ELM, transcript: t }).ok, true);
+});
+
+test("a number we floated is never cut without you — a re-run under what the agent last heard holds for a person", () => {
+  const lower = { ...REUNDERWRITE, cashAmount: 162000 };
+  assert.equal(machineCut(lower, CH_THREAD).amount, 186000);
+  const check = paperCheck({ offer: lower, transcript: CH_THREAD });
+  assert.equal(check.ok, false);
+  assert.equal(check.cut.amount, 186000);
+  assert.match(check.reason, /last texted 186K .* below it at \$162,000 — a person decides/);
+  assert.equal(machineCut({ ...lower, revisions: [{ ts: "2026-09-26T01:00:00Z", from: 186000, to: 162000 }] }, CH_THREAD), null, "you revised it down yourself");
+  assert.equal(machineCut({ ...lower, cashAmount: 185500 }, CH_THREAD), null, "the same number said the way people text it");
+  assert.equal(machineCut({ ...lower, cashAmount: 192250 }, CH_THREAD), null, "going up is machineRaise's");
 });

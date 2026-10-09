@@ -137,13 +137,15 @@ const CLOSED_OPP = /^(lost|abandoned|abandon)$/i;
  *   drafts         this contact's reply drafts, any status
  *   contact        { tags: [], dnd: bool } from GHL, or null when unread
  *   opportunities  [{ stageName, status }] from GHL, or []
+ *   brought        the agent brought us this house (shared/lead-source.js):
+ *                  their card's cold stage is not a reason to close it
  *   botOffTags     the routing's bot-off tags (lower-case)
  *   knownCities    Set of city slugs we buy in (knownCitiesFrom), or null to
  *                  skip the area check
  */
 export function triageHeldUnderwrite({
   offer, siblings = [], events = [], drafts = [], contact = null, opportunities = [], botOffTags = ["stop bot", "bot-off"], now = Date.now(),
-  knownCities = null,
+  knownCities = null, brought = false,
 } = {}) {
   const held = aiHoldReasons(offer);
   const cls = classifyHolds(held);
@@ -175,7 +177,12 @@ export function triageHeldUnderwrite({
   if (events.some((e) => e?.type === "unsubscribed")) return { ...base, action: "retire", status: "we_passed", reason: "they unsubscribed" };
   const off = tags.find((t) => botOffTags.includes(t));
   if (off) return { ...base, action: "retire", status: "we_passed", reason: `the bot is off for this contact (tag: ${off})` };
-  const opp = opportunities.find((o) => CLOSED_OPP.test(String(o?.status || "")) || COLD_STAGE.test(String(o?.stageName || "")));
+  // The agent's card in a cold stage is about the agent, not this house: a
+  // house they BROUGHT us (shared/lead-source.js) is never retired for it.
+  // 2026-10-09: 20 brought houses were closed this way, never priced — the
+  // agents had said "it's turnkey" about our opener (TIER 3) and then sent
+  // their next house, the way every off-market deal with a buyer came.
+  const opp = opportunities.find((o) => CLOSED_OPP.test(String(o?.status || "")) || (!brought && COLD_STAGE.test(String(o?.stageName || ""))));
   if (opp) return { ...base, action: "retire", status: "we_passed", reason: CLOSED_OPP.test(String(opp.status || "")) ? `GHL opportunity ${String(opp.status).toLowerCase()}` : `GHL stage: ${opp.stageName}` };
 
   const after = (t) => (ms(t) ?? 0) >= heldAt - 60 * 60000;   // the hold's own inbound counts
@@ -193,7 +200,11 @@ export function triageHeldUnderwrite({
       ? { ...base, action: "retire", status: "unavailable", reason: `it's no longer available (they said "${clip(over.inbound)}")` }
       : { ...base, action: "retire", status: "passed", reason: `they said "${clip(over.inbound)}"` };
   }
-  const turnkey = said.find((d) => TURNKEY_TEXT.test(d.inbound));
+  // On a house they brought, "turnkey" retires it only when they said it
+  // about THIS house: on 2026-10-02 an agent called her other listing
+  // turnkey and the fixer she had just sent us was closed out. Their
+  // unaddressed "it's turnkey" is about the listing we opened with.
+  const turnkey = said.find((d) => TURNKEY_TEXT.test(d.inbound) && (brought ? onThisHouse(d.propertyAddress) : true));
   if (turnkey) return { ...base, action: "retire", status: "we_passed", reason: `turnkey per the agent ("${clip(turnkey.inbound)}")` };
 
   const lastIn = latestInbound(drafts, events);

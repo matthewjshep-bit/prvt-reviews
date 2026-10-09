@@ -256,3 +256,15 @@ test("a rural house is passed at the next check and the agent hears it's rural",
   assert.deepEqual([t.action, t.status, t.passNote], ["retire", "we_passed", "rural"]);
   assert.match(heldOnTheMachine(offer, { now }).what, /passed at the 7pm check — rural: it sits on 5\.2 acres; we buy under 2 acres/);
 });
+
+test("a house the agent brought is never retired because the agent's GHL card says Tier 3 — 20 brought houses died that way unpriced", () => {
+  const cold = [{ stageName: "Tier 3- Cold/Keep Warm", status: "open" }];
+  assert.notEqual(triage({ opportunities: cold, brought: true }).action, "retire");
+  assert.equal(triage({ opportunities: [{ stageName: "Tier 1 - Hot", status: "lost" }], brought: true }).action, "retire", "a lost opportunity still closes it");
+  // Their "it's turnkey" about the listing we opened with is not about the house they brought.
+  const other = inbound("That one is turnkey, sorry", { propertyAddress: "" });
+  assert.notEqual(triage({ drafts: [other], brought: true }).action, "retire");
+  assert.equal(triage({ drafts: [other] }).action, "retire", "on our own listing, their unaddressed turnkey still closes it");
+  const here = inbound("Honestly it's turnkey");
+  assert.equal(triage({ drafts: [here], brought: true }).action, "retire", "said about this very house");
+});
