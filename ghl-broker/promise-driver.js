@@ -106,7 +106,7 @@ export async function driveOpenPromises({ client = null, locationId, saved = {},
       }
 
       const jobs = (jobsFor(locationId, { contactId: p.contactId }) || []).map((j) => ({ ...j, contactId: j.contactId || p.contactId }));
-      const v = resolvePromise({ promise: p, offers, drafts, jobs, heldTriageByOffer, now });
+      const v = resolvePromise({ promise: p, offers, drafts, jobs, heldTriageByOffer, events: timeline, qualifyFirst: Boolean(config.parties?.agent?.qualifyFirst?.enabled), now });
       row.move = v.move;
       if (!ACTING.has(v.move)) { row.status = "left"; row.reason = v.reason || ""; continue; }
 

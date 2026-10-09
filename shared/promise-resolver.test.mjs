@@ -121,3 +121,18 @@ test("a dismissal reason is one of ours, with a short note", () => {
   assert.equal(normalizePromiseDismissal("handled_by_call").code, "handled_by_call");
   assert.ok(PROMISE_DISMISS_REASONS.includes("deal_dead"));
 });
+
+// 2026-10-08: with qualify-first on, the bot's own "let me run it by
+// underwriting" about the house our first text named would have made the
+// promise driver start the underwrite the question is there to stop.
+test("a number the bot promised on the first-text house doesn't start an underwrite while we're still asking about it", () => {
+  const ICE = "48 Cedar Hollow Rd, Shelton, WA 98584";
+  const promise = { contactId: "c1", since: "2026-10-08T18:00:00Z", address: ICE, what: "number", text: "Let me run it by underwriting today." };
+  const events = [{ type: "outreach_sent", contactId: "c1", at: "2026-10-07T17:00:00Z", address: ICE }];
+  assert.equal(resolvePromise({ promise, events, qualifyFirst: true }).move, "not_owed");
+  assert.equal(resolvePromise({ promise, events, qualifyFirst: false }).move, "start_underwrite", "switch off: as before");
+  const qualified = [{ contactId: "c1", status: "sent", qualify: { stage: "qualified", address: ICE } }];
+  assert.equal(resolvePromise({ promise, events, drafts: qualified, qualifyFirst: true }).move, "start_underwrite", "once it qualifies, the promise is kept");
+  const other = { ...promise, address: "77 Birch Ln, Everett, WA 98201" };
+  assert.equal(resolvePromise({ promise: other, events, qualifyFirst: true }).move, "start_underwrite", "a house they brought us is kept as before");
+});

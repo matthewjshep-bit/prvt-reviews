@@ -653,7 +653,7 @@ export function buildPipeline({
     const v = resolvePromise({
       promise: p, offers: mine, jobs,
       drafts: [...sentDrafts, ...drafts].filter((d) => d?.contactId === p.contactId),
-      heldTriageByOffer, now,
+      heldTriageByOffer, events, qualifyFirst: Boolean(config?.parties?.agent?.qualifyFirst?.enabled), now,
     });
     if (v.move === "not_owed") continue;
     // The investor book only knows buyers; an agent's name is on their

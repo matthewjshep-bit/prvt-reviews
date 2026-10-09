@@ -20,6 +20,7 @@ import { sameStreet } from "./us-address.js";
 import { aiHoldReasons, effectiveStatus, OPEN_STATUSES } from "./offer-status.js";
 import { detectPromise } from "./follow-up.js";
 import { currentOffers } from "./current-offer.js";
+import { stillQualifying } from "./flip-read.js";
 
 const HOUR_MS = 3600000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -108,7 +109,7 @@ const QUIET_INTENTS = new Set(["small_talk", "media", "opt_out"]);
  *               house, when there is one — handed in so both stay pure
  *   heldTriageByOffer  the same, keyed by offer id, when the caller has several
  */
-export function resolvePromise({ promise, offers = [], drafts = [], jobs = [], heldTriage = null, heldTriageByOffer = null, now = Date.now() } = {}) {
+export function resolvePromise({ promise, offers = [], drafts = [], jobs = [], heldTriage = null, heldTriageByOffer = null, events = [], qualifyFirst = false, now = Date.now() } = {}) {
   const p = promise || {};
   const address = String(p.address || "").trim();
   const onHouse = (a) => !address || (Boolean(a) && sameStreet(a, address));
@@ -151,6 +152,13 @@ export function resolvePromise({ promise, offers = [], drafts = [], jobs = [], h
     if (t?.action === "ask") return { move: "ask_numbers", offerId: held.id, needs: t.needs || [], reason };
     if (t?.action === "wait") return { move: "wait", offerId: held.id, needs: t.needs || [], reason };
     return { move: "yours", offerId: held.id, reason: reason || "the underwrite held" };
+  }
+
+  // 6′. The house our first text named, still being qualified
+  //     (shared/flip-read.js): the bot's "let me run it by underwriting" is
+  //     not a reason to spend on it. The one question decides that.
+  if (p.what === "number" && qualifyFirst && stillQualifying({ address, contactId: p.contactId, events, drafts })) {
+    return { ...base, move: "not_owed", reason: "still asking about the work on the house our first text named" };
   }
 
   // 6. Nothing ever ran on that house.
