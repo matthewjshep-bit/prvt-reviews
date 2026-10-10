@@ -12,6 +12,7 @@
 
 import { DEFAULT_LADDERS, ON_EXHAUSTED, MAX_REPEAT_DAYS, kindsFor, normalizeSteps } from "./follow-up.js";
 import { BOOKING_DEFAULTS } from "./booking.js";
+import { CONTACT_CARD_DEFAULTS, normalizeContactCard } from "./contact-card.js";
 
 // The re-quote guard's defaults. They live here rather than in requote.js
 // because requote.js reaches offer-calc, and offer-calc reaches back here to
@@ -770,6 +771,10 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   gmail: { enabled: false, lookbackDays: 60 },
   optOut: { enabled: true, keywords: DEFAULT_OPT_OUT_KEYWORDS, tags: ["dnc"], removeTags: [], workflowId: "" },
   media: { reply: "Thanks for the images, taking a look!" },
+  // Matt's contact card (shared/contact-card.js): its own text right after a
+  // reply to someone who asked who we are, or to an agent whose house didn't
+  // work. Off until he switches it on.
+  contactCard: { ...CONTACT_CARD_DEFAULTS },
   // Intents that get a heads-up instead of a reply. These can never
   // auto-send (see NEVER_AUTO), so a draft for one is a text nobody will
   // ever send: in the two weeks to 2026-09-12 they produced 42 drafts and
@@ -1240,6 +1245,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       workflowId: str(optOut.workflowId, 80),
     },
     media: { reply: str(media.reply, 300) || D.media.reply },
+    contactCard: normalizeContactCard(d.contactCard),
     notifyOnly: "notifyOnly" in d
       ? list(d.notifyOnly, { max: 20, each: 40, lower: true })
       : [...D.notifyOnly],

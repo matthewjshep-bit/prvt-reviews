@@ -114,6 +114,8 @@ export const EVENT_TYPES = [
   "cadence_set",
   // They texted STOP, or GHL has them on DND (reply-agent markUnsubscribed).
   "unsubscribed",
+  // Matt's contact card went to them in its own text (shared/contact-card.js).
+  "contact_card_sent",
 ];
 
 export const EVENT_LABEL = {
@@ -152,6 +154,7 @@ export const EVENT_LABEL = {
   email_sent: "we emailed them",
   drive_stopped: "you stopped the bot", drive_resumed: "the bot is back on", cadence_set: "you changed how often we check in",
   unsubscribed: "they unsubscribed",
+  contact_card_sent: "we sent our contact card",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -190,6 +193,7 @@ export const EVENT_ICON = {
   offmarket_asked: "Crosshair",
   drive_stopped: "CirclePause", drive_resumed: "CirclePlay", cadence_set: "Gauge",
   unsubscribed: "UserX",
+  contact_card_sent: "Contact",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

@@ -106,6 +106,7 @@ import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
 import { meterAi } from "./ai-spend.js";
 import { investorMindedCue } from "./shared/lead-source.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
+import { followWithCard, defaultCardBaseUrl, mintCardToken } from "./contact-card.js";
 
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
@@ -163,7 +164,17 @@ export function conversationConfig(saved = {}) {
 // and the coach's Apply both come through here.
 export async function saveConversationConfig(store, locationId, config) {
   const saved = (await store.getOfferSettings(locationId)) || {};
-  const next = normalizeConversationAi(config);
+  // A page from before the contact card existed sends no contactCard: the
+  // saved one stands rather than being wiped by the defaults.
+  const incoming = config && typeof config === "object" && !("contactCard" in config) && saved.conversationAi?.contactCard
+    ? { ...config, contactCard: saved.conversationAi.contactCard } : config;
+  const next = normalizeConversationAi(incoming);
+  // The card's public link (/card/<token>) is minted once, the first time a
+  // card is saved, and kept after that.
+  if (next.contactCard.vcard && !next.contactCard.token) {
+    const had = normalizeConversationAi(saved.conversationAi).contactCard.token;
+    next.contactCard = { ...next.contactCard, token: had || mintCardToken() };
+  }
   await store.saveOfferSettings(locationId, { ...saved, conversationAi: next });
   return next;
 }
@@ -4302,6 +4313,9 @@ async function runReply(job, ctx) {
     // Where the icebreaker house stands (shared/flip-read.js): the next
     // reply reads whether our question or our pass already went.
     ...(draft.qualify ? { qualify: draft.qualify } : {}),
+    // They told us it isn't our kind of house: a pass on it, which the
+    // contact card reads (shared/contact-card.js).
+    ...(notOurKind ? { notOurKind: true } : {}),
     // The model's own words, kept when the reply was rewritten to say the
     // offer went out, so step 5 can put them back if it didn't.
     ...(draft.replyBeforeSend ? { replyBeforeSend: draft.replyBeforeSend } : {}),
@@ -5070,7 +5084,7 @@ const readRecentThread = async (client, locationId, contactId) => {
   } catch { return ""; }
 };
 
-export async function sendReplyDraft({ client, store, locationId, draftId, text, live, auto = false, reason = null, readThread = readRecentThread, now = Date.now(), dataroomBaseUrl = defaultDataroomBaseUrl() }) {
+export async function sendReplyDraft({ client, store, locationId, draftId, text, live, auto = false, reason = null, readThread = readRecentThread, now = Date.now(), dataroomBaseUrl = defaultDataroomBaseUrl(), cardBaseUrl = defaultCardBaseUrl() }) {
   const d = await store.getReplyDraft(draftId);
   if (!d || d.locationId !== locationId) throw Object.assign(new Error("no such draft"), { http: 404 });
   const sendable = OPEN_STATUSES.has(d.status) || (auto && d.status === "sending");
@@ -5436,12 +5450,15 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       }).catch(() => {});
     }
   }
+  // Matt's contact card, in its own text right behind this one, when they
+  // asked who we are or an agent's house didn't work (shared/contact-card.js).
+  const card = await followWithCard({ client, store, locationId, draft: updated, body, auto, baseUrl: cardBaseUrl, now });
   if (auto && d.noteOnAutoSend !== false) {
     await createContactNote(client, d.contactId, {
       body: `Conversation AI sent this reply itself (${d.party || "agent"} · ${String(d.intent || "").replace(/_/g, " ")}):\n\n${body}`,
     }).catch(() => {});
   }
-  return { ok: true, dryRun: false, draft: updated };
+  return { ok: true, dryRun: false, draft: updated, ...(card.sent ? { contactCard: card.why } : {}) };
 }
 
 /**

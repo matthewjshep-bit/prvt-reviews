@@ -43,6 +43,7 @@ import { maybeRunShowingSweep } from "./showing-sweep.js";
 import { maybeSweepHandReplies } from "./hand-reply-sweep.js";
 import { startAiSpendMeter } from "./ai-spend.js";
 import { openerVariant } from "./shared/outreach-opener.js";
+import { createContactCardPublicRouter } from "./contact-card.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -196,6 +197,9 @@ app.use("/d", createDataroomPublicRouter({ publicBaseUrl: DATAROOM_BASE_URL }));
 // Same deal for /o: the share token is the credential, so it sits outside the
 // location gate. It refuses dataroom tokens, and /d refuses these.
 app.use("/o", createOfferPagePublicRouter());
+// Matt's contact card, fetched by the carrier when the card's text goes
+// (contact-card.js). The token in the path is the credential.
+app.use("/card", createContactCardPublicRouter({ store, locations: () => sweepLocations() }));
 
 store.init().catch((e) => console.error("store init failed:", e.message));
 // Every Claude call is added to the day's spend ledger from here on

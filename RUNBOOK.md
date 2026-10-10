@@ -3272,6 +3272,45 @@ each conversation's messages, and group outbound `TYPE_SMS` by the `Error
 NNNNN` in `error` — read gently (two at a time, back off on 429), the broker
 shares GHL's rate limit.
 
+### Matt's contact card (2026-10-09)
+
+Matt: share my contact card "when people ask or if an initial deal doesn't work,
+saying to save my contact info and I'll be in touch." The card is a .vcf that goes
+in **its own text, right behind the bot's reply**, as an MMS attachment
+(`ghl-broker/contact-card.js` `followWithCard`, called at the end of
+`sendReplyDraft`). It goes on both paths: an auto-send and your Send on the Desk.
+
+The rules are in `shared/contact-card.js` `cardMoment`:
+
+- **They asked** who we are or how to reach us ("what's your email", "who is this",
+  "send me your info", "do you have a website"). Agent or buyer. On its own,
+  "your number" is a price, so it doesn't count as an ask. A second ask within
+  `askRepeatDays` (7) gets no second card.
+- **The house didn't work**: an agent's `rejection`, our `kind_pass`, a
+  "not our kind of house" reply (`draft.notOurKind`), or the icebreaker pass
+  (`qualify.stage: "pass"`). **Once per agent, ever.** The text says "save it
+  and I'll be in touch".
+- **Never** on a cold first text (`outreach_open`, `blast_open`), because an attachment
+  in a cold text is what the carriers block (30007). Never on email.
+
+Each card that goes writes a `contact_card_sent` event on the contact record.
+"Once ever" and "not twice in a week" are both read from those events. A card
+that
+fails to send is logged and leaves the reply's own send alone.
+
+**Where the card lives:** `settings.conversationAi.contactCard` (`vcard`,
+`fileName`, `onAsk`, `onPass`, `askText`, `passText`, `askRepeatDays`), set under
+Conversation AI → Contact card. Matt's phone number stays out of the repo. The
+first save mints `token`. The carrier fetches the card from
+`GET /card/<token>` on the broker (`PUBLIC_BASE_URL`, outside the location gate,
+because the token is the credential). That route serves `text/vcard` with a
+`Content-Disposition` file name, so the phone shows "Matt Shepherd.vcf" instead of
+`text_1.vcf`. The link works whether or not sending is switched on, so the card can be tried
+first. A page saved from a bundle older than the card sends no `contactCard`
+key, and `saveConversationConfig` keeps the saved card in that case.
+
+**Ships off** (`contactCard.enabled: false`). The autonomy dial doesn't touch it.
+
 ### The written offer follows the float (2026-10-02)
 
 Matt: "send them our offer in the official email text form so that they have
