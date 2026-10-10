@@ -10,7 +10,7 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "agent-pulse-test-"
 
 const { store } = await import("./store.js");
 const { recordEvent } = await import("./contact-record.js");
-const { planAgentPulse, startAgentPulse, maybeRunAgentPulse, _resetJobs, CURSOR_NAME } = await import("./agent-pulse.js");
+const { planAgentPulse, startAgentPulse, maybeRunAgentPulse, _resetJobs, CURSOR_NAME, tierCardsFrom, pulseTierCards } = await import("./agent-pulse.js");
 const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
 await store.init();
 
@@ -268,4 +268,21 @@ test("a house passed from Tier 1 is never raised as a fresh listing", async () =
   const pick = plan.picks.find((p) => p.contactId === "ag9");
   assert.notEqual(pick?.reason, "fresh_listing", "we passed on that house");
   assert.doesNotMatch(JSON.stringify(pick?.subject || {}), /900 Pine/);
+});
+
+test("everyone on a Tier 2 or Tier 3 card in GHL is in the check-in's plan, counted from the day the card moved", async () => {
+  const acq = { id: "acq", tierStages: { "tier-1": "s1", "tier-2": "s2", "tier-3": "s3" } };
+  const old = new Date(Date.now() - 30 * DAY).toISOString();
+  const cards = tierCardsFrom({ acq, opportunities: [
+    { contactId: "card-only", pipelineStageId: "s3", status: "open", lastStageChangeAt: old, updatedAt: new Date().toISOString() },
+    { contactId: "won", pipelineStageId: "s2", status: "won", lastStageChangeAt: old },
+    { contactId: "t1", pipelineStageId: "s1", status: "open", lastStageChangeAt: old },
+  ] });
+  assert.deepEqual([...cards.keys()], ["card-only"], "open Tier 2/3 cards only");
+  assert.equal(cards.get("card-only").movedAt, old, "the stage move, not the last edit");
+  const loc = "loc-ap-cards";
+  const plan = await planAgentPulse({ locationId: loc, saved: savedWith({ everyDays: 14 }), store, tierCards: cards });
+  assert.deepEqual(plan.picks.map((p) => p.contactId), ["card-only"], "a card with no contact record still gets the check-in");
+  assert.equal(plan.counts.ghlTier.t3, 1);
+  assert.equal(await pulseTierCards({ call: async () => { throw new Error("GHL down"); } }, "loc-ap-cards-down"), null, "a failed read plans without the cards");
 });

@@ -19,7 +19,9 @@
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive, previewProactive, markUnsubscribed } from "./reply-agent.js";
-import { getContact, smsUnsubscribed, removeContactFromWorkflow, searchAllContactsByTags, listWorkflows } from "./ghl.js";
+import { getContact, smsUnsubscribed, removeContactFromWorkflow, searchAllContactsByTags, listWorkflows, listPipelines } from "./ghl.js";
+import { acquisitionsPipeline } from "./ghl-mirror.js";
+import { listAcquisitionOpportunities } from "./tier-check.js";
 import { workHour, isWorkday, normalizeOutreachAutopilot } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
 import { botEventsByContact } from "./bot-hold.js";
@@ -60,6 +62,41 @@ export async function pulseWorkflows(client, locationId, deps = {}) {
     const list = await listWorkflows(client, locationId);
     workflowCache.set(locationId, { at: Date.now(), list });
     return list;
+  } catch { return null; }
+}
+
+// GHL's Tier 2 / Tier 3 cards (Matt, 2026-10-09: the nurture drip is off and
+// the app does all of it): contactId → { tier, movedAt }, the day the card
+// moved there. Ten minutes' cache, like the workflow list. A read that fails
+// gives null and the check-in plans without the cards.
+const TIER_CARDS_TTL_MS = 10 * 60 * 1000;
+const tierCardCache = new Map();
+export function tierCardsFrom({ acq = null, opportunities = [] } = {}) {
+  const out = new Map();
+  if (!acq?.tierStages) return out;
+  const tierOf = new Map([[acq.tierStages["tier-2"], "t2"], [acq.tierStages["tier-3"], "t3"]]);
+  for (const o of opportunities || []) {
+    const tier = tierOf.get(o?.pipelineStageId);
+    const contactId = o?.contactId || o?.contact?.id;
+    if (!tier || !contactId || (o.status && o.status !== "open")) continue;
+    // The stage move, never updatedAt: any edit to the card moves that.
+    const movedAt = o.lastStageChangeAt || o.createdAt || null;
+    const had = out.get(contactId);
+    if (!had || String(movedAt || "") > String(had.movedAt || "")) out.set(contactId, { tier, movedAt });
+  }
+  return out;
+}
+export async function pulseTierCards(client, locationId, deps = {}) {
+  if (typeof deps.tierCards === "function") return deps.tierCards().catch(() => null);
+  const hit = tierCardCache.get(locationId);
+  if (hit && Date.now() - hit.at < TIER_CARDS_TTL_MS) return hit.cards;
+  if (!client) return null;
+  try {
+    const acq = acquisitionsPipeline(await listPipelines(client, locationId));
+    if (!acq) return null;
+    const cards = tierCardsFrom({ acq, opportunities: await listAcquisitionOpportunities(client, locationId, acq.id) });
+    tierCardCache.set(locationId, { at: Date.now(), cards });
+    return cards;
   } catch { return null; }
 }
 
@@ -122,7 +159,7 @@ export function housesFrom(offers = [], events = []) {
  * ledger, last word and fresh listings. The check-in plans from it; the
  * tiers (agentRoster) read it too.
  */
-export async function loadPulseAgents({ locationId, saved = {}, store = defaultStore, now = Date.now() }) {
+export async function loadPulseAgents({ locationId, saved = {}, store = defaultStore, now = Date.now(), tierCards = null }) {
   const settings = agentPulseSettings(saved);
   const config = conversationConfig(saved);
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
@@ -166,7 +203,9 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   // or drafted (Matt, 2026-10-09: every agent with an offer is followed up).
   // An offer contact with no profile has no tags here; the runner checks
   // each one in GHL before it claims them.
-  const ids = new Set([...(profiles || []).map((p) => p.contactId), ...(listings || []).map((l) => l.contactId), ...offersBy.keys()]);
+  // And everyone on a Tier 2 or Tier 3 card in GHL (pulseTierCards).
+  const cards = tierCards instanceof Map ? tierCards : new Map();
+  const ids = new Set([...(profiles || []).map((p) => p.contactId), ...(listings || []).map((l) => l.contactId), ...offersBy.keys(), ...cards.keys()]);
 
   const agents = [];
   for (const id of ids) {
@@ -178,13 +217,14 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
       offers: mine, current: mine.filter((o) => o.isCurrent !== false),
       drafts: draftsBy.get(id) || [], events: eventsBy.get(id) || [], ledger: ledgerBy.get(id) || [],
       lastInboundAt: inboundBy.get(id) || null, listings: listingsBy.get(id) || [],
+      ghlTier: cards.get(id) || null,
     });
   }
   return { agents, settings, config, oa, houses, ledgerRead, evRead };
 }
 
-export async function planAgentPulse({ locationId, saved = {}, store = defaultStore, now = Date.now(), workflows = null }) {
-  const { agents, settings, config, oa, houses, ledgerRead, evRead } = await loadPulseAgents({ locationId, saved, store, now });
+export async function planAgentPulse({ locationId, saved = {}, store = defaultStore, now = Date.now(), workflows = null, tierCards = null }) {
+  const { agents, settings, config, oa, houses, ledgerRead, evRead } = await loadPulseAgents({ locationId, saved, store, now, tierCards });
 
   // The day's cap is the DAY's: a retry, or a second press of Run now, only
   // gets the seats still empty. A voided claim gave its seat back.
@@ -201,7 +241,7 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   const drips = tierDrips({ pulse: settings, conversationAi: saved.conversationAi, workflows });
   const planSettings = { ...settings, replacesWorkflowIds: drips.map((d) => d.id) };
   const plan = pickPulseAgents({ agents: agents.filter((a) => !triedToday.has(a.contactId)), settings: planSettings, config, houses, outreachFollowUpDays: oa.followUpDays, seats, now });
-  return { ...plan, settings, drips, claimedToday, seats, truncated: Boolean(evRead.truncated || ledgerRead.truncated) };
+  return { ...plan, settings, drips, claimedToday, seats, tierCardsRead: tierCards instanceof Map, truncated: Boolean(evRead.truncated || ledgerRead.truncated) };
 }
 
 // What keeps a Tier 2 agent warm, in a few words (shared/agent-pulse.js
@@ -286,7 +326,7 @@ export function startAgentPulse({
   const finish = (patch) => { Object.assign(job, patch, { finishedAt: new Date().toISOString() }); try { onDone?.(job); } catch { /* the caller's */ } };
 
   (async () => {
-    const plan = await planAgentPulse({ locationId, saved, store, now, workflows: await pulseWorkflows(client, locationId, deps) });
+    const plan = await planAgentPulse({ locationId, saved, store, now, workflows: await pulseWorkflows(client, locationId, deps), tierCards: await pulseTierCards(client, locationId, deps) });
     const picks = limit != null ? plan.picks.slice(0, Math.max(0, Math.round(Number(limit)) || 0)) : plan.picks;
     job.counts = plan.counts;
     job.picked = picks.length;
@@ -405,7 +445,7 @@ export async function maybeRunAgentPulse({ client, locationId, saved = {}, store
  * model call each, so a handful at most.
  */
 export async function previewAgentPulse({ client, locationId, saved = {}, store = defaultStore, limit = 3, deps = {}, now = Date.now() }) {
-  const plan = await planAgentPulse({ locationId, saved, store, now, workflows: await pulseWorkflows(client, locationId, deps) });
+  const plan = await planAgentPulse({ locationId, saved, store, now, workflows: await pulseWorkflows(client, locationId, deps), tierCards: await pulseTierCards(client, locationId, deps) });
   const preview = typeof deps.previewProactive === "function" ? deps.previewProactive : previewProactive;
   const n = Math.max(1, Math.min(5, Math.round(Number(limit)) || 3));
   const previews = [];

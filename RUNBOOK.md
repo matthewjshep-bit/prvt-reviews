@@ -4024,6 +4024,26 @@ The plan also reads every offer contact, not only contact profiles and
 listing agents (`loadPulseAgents`). The runner's GHL preflight checks the tags
 of a contact with no profile.
 
+**Tier 2 and Tier 3 from the app (2026-10-09).** Matt confirmed GHL's "Tier
+2+3 nurture" sends nothing now: "we need to be doing everything from the
+app". The plan reads GHL's Acquisitions board (`pulseTierCards`, ten
+minutes' cache) and puts every open Tier 2/3 card's contact in the pool, with
+the day the card moved (`lastStageChangeAt`, never `updatedAt`). For those
+agents:
+- The first check-in comes `everyDays` (14 live) after the move, or after our
+  last word, whichever is later. A card that moved more than 14 days ago with
+  nothing since goes on the next run.
+- A card agent who never wrote back is checked in on like an offered one,
+  until `coldMaxUnanswered` (3) go unanswered.
+
+`GET /api/outreach/pulse` adds `counts.ghlTier` (t2, t3, due) and
+`tierCardsRead`. `?agents=1` adds one line per agent, with no names:
+- status and reason;
+- `dueAt`, when the next check-in goes;
+- the tier and when the card moved.
+
+If the board can't be read, the run plans without the cards.
+
 ### The daily sweep (outreach autopilot)
 
 Settings → Agent Outreach → "Run outreach every day on its own". Once a

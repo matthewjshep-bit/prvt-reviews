@@ -23,7 +23,7 @@
 // recorded to power the month-to-date meter in the UI.
 
 import express from "express";
-import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, startLeaveDrips, getLeaveDripsJob, pulseWorkflows, CURSOR_NAME as AGENT_PULSE_CURSOR } from "../agent-pulse.js";
+import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, startLeaveDrips, getLeaveDripsJob, pulseWorkflows, pulseTierCards, CURSOR_NAME as AGENT_PULSE_CURSOR } from "../agent-pulse.js";
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
@@ -1478,12 +1478,14 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     try {
       const { locationId, client } = resolveLocation(req);
       const saved = await getSettings(locationId);
-      const plan = await planAgentPulse({ locationId, saved, store, workflows: await pulseWorkflows(client, locationId) });
+      const plan = await planAgentPulse({ locationId, saved, store, workflows: await pulseWorkflows(client, locationId), tierCards: await pulseTierCards(client, locationId) });
       const cursor = await store.getJobCursor?.(locationId, AGENT_PULSE_CURSOR).catch(() => null);
       res.json({
         ok: true, settings: plan.settings, counts: plan.counts, claimedToday: plan.claimedToday, seats: plan.seats, truncated: plan.truncated,
         picks: plan.picks.map((p) => ({ contactId: p.contactId, name: p.name, segment: p.segment, reason: p.reason, address: p.subject?.address || "", subject: p.subject })),
-        sendsEnabled: PULSE_SENDS_LIVE, tz: WORK_TZ,
+        sendsEnabled: PULSE_SENDS_LIVE, tz: WORK_TZ, tierCardsRead: plan.tierCardsRead,
+        // ?agents=1: one line per agent (no names) — what the check-in will do and when.
+        ...(req.query?.agents === "1" ? { agents: plan.verdicts } : {}),
         // The GHL drips it replaces (the tier nurture), and the one-time
         // clean-up that takes everyone out of them.
         drips: plan.drips || [], leaveDrips: getLeaveDripsJob(locationId),
