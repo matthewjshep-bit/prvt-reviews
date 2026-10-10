@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeAgentPulse, evaluateAgent, pickPulseAgents, agentSegment, agentStops, agentOwner,
-  freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor, dealToThank, openOfferIdle,
+  freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor, dealToThank, openOfferIdle, tierCard,
 } from "./agent-pulse.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
@@ -427,4 +427,41 @@ test("an agent who talks like an investor is a source before they've sent a hous
   const v = evaluateAgent(a, ctx());
   assert.equal(v.segment, "source");
   assert.equal(v.priority[0], 2, "ranked with partners");
+});
+
+test("an agent on a Tier 2 or Tier 3 card gets the app's check-in 14 days after the card moved there, now if that day has passed", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const at = (d) => ({ tier: "t3", movedAt: ago(d) });
+  // Never wrote back, moved to Tier 3 five days ago: not yet, and the plan says when.
+  const early = evaluateAgent(agent({ ghlTier: at(5) }), ctx({ settings: S14 }));
+  assert.equal(early.status, "not_due", early.reason);
+  assert.match(early.reason, /moved to Tier 3 within 14 days/);
+  assert.equal(early.dueAt, ago(-9), "fourteen days from the move");
+  // Moved twenty days ago and nothing since: it goes on the next run.
+  const late = evaluateAgent(agent({ ghlTier: at(20) }), ctx({ settings: S14 }));
+  assert.equal(late.status, "due", late.reason);
+  assert.equal(late.pulseReason, "general");
+  // We talked after the move: fourteen days from that instead.
+  const talked = evaluateAgent(agent({ ghlTier: { tier: "t2", movedAt: ago(20) }, lastInboundAt: ago(4) }), ctx({ settings: S14 }));
+  assert.equal(talked.dueAt, ago(-10));
+  // Off any card and never wrote back: listings only, as before.
+  assert.equal(evaluateAgent(agent({ ghlTier: { tier: "t1", movedAt: ago(20) } }), ctx({ settings: S14 })).status, "not_due");
+  assert.equal(tierCard(agent({ ghlTier: { tier: "t1" } })), null);
+  // Three of ours unanswered and a never-replied card agent rests.
+  const three = agent({ ghlTier: at(90), ledger: [ago(60), ago(45), ago(30)].map((t) => ({ type: "agent_pulse_texted", at: t })) });
+  assert.equal(evaluateAgent(three, ctx({ settings: S14 })).status, "cold_dropped");
+});
+
+test("the plan lists every agent with what the check-in will do and when, and counts the Tier 2 and 3 cards", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const { verdicts, counts } = pickPulseAgents({ agents: [
+    agent({ contactId: "t2-due", ghlTier: { tier: "t2", movedAt: ago(30) } }),
+    agent({ contactId: "t3-wait", ghlTier: { tier: "t3", movedAt: ago(2) } }),
+  ], settings: S14, config: CONFIG, now: NOW });
+  assert.deepEqual(counts.ghlTier, { t2: 1, t3: 1, due: 1 });
+  const by = Object.fromEntries(verdicts.map((v) => [v.contactId, v]));
+  assert.equal(by["t2-due"].status, "due");
+  assert.equal(by["t3-wait"].dueAt, ago(-12));
+  assert.equal(by["t3-wait"].tier, "t3");
+  assert.ok(verdicts.every((v) => !("name" in v)), "no names in the list");
 });

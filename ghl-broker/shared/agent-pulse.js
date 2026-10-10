@@ -50,6 +50,7 @@ import { botHold, paceOf, paceScale } from "./bot-hold.js";
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
+const iso = (t) => new Date(t).toISOString();
 const latest = (xs) => xs.filter(Boolean).sort().at(-1) || null;
 const clamp = (x, d, lo, hi) => { const k = Math.round(Number(x)); return Number.isFinite(k) ? Math.min(hi, Math.max(lo, k)) : d; };
 
@@ -381,6 +382,19 @@ export function dealToThank({ offers = [], events = [], ledger = [], now = Date.
 }
 
 /**
+ * tierCard(agent) → { tier: "t2" | "t3", movedAt } | null
+ *
+ * Matt, 2026-10-09: "there is no outreach going out now from tiers 2 and 3
+ * and we need to be doing everything from the app" — the "Tier 2+3 nurture"
+ * drip is off. Every agent on a Tier 2 or Tier 3 card hears from the
+ * check-in, the first time `everyDays` after the day the card moved there.
+ */
+export function tierCard(agent = {}) {
+  const c = agent?.ghlTier;
+  return c && (c.tier === "t2" || c.tier === "t3") ? { tier: c.tier, movedAt: c.movedAt || null } : null;
+}
+
+/**
  * evaluateAgent(agent, ctx) → { status, reason, segment, pulseReason, listing, house, priority }
  *
  *   agent  { contactId, name, tags, offers (all), current (current rows),
@@ -412,7 +426,11 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const downgraded = segment !== "cold" && segment !== "source" && s.engagedMaxUnanswered > 0 && unanswered >= s.engagedMaxUnanswered;
   const lastPulseAt = latest(ledger.filter((e) => e.type === "agent_pulse_sent" && !voided.has(e.dedupeKey)).map((e) => e.at));
   const lastTouchAt = latest(events.filter((e) => OUR_TEXT_TYPES.has(e.type)).map((e) => e.at));
-  const since = latest([lastTouchAt, agent.lastInboundAt, lastPulseAt]);
+  // Their card in GHL's Tier 2 or Tier 3 (agent.ghlTier, read off the
+  // Acquisitions board): the check-in comes `everyDays` after the day they
+  // moved there, or after our last word, whichever is later.
+  const card = tierCard(agent);
+  const since = latest([lastTouchAt, agent.lastInboundAt, lastPulseAt, card?.movedAt]);
   // Check in less / more with them (shared/bot-hold.js): the three weeks and
   // the cold pings stretch or shrink; the quiet days after any text only grow.
   const { rung, floor } = paceScale(paceOf({ events }).factor);
@@ -420,6 +438,8 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const coldEveryDays = Math.round(s.coldEveryDays * rung);
   const quietDays = Math.round(s.quietDays * floor);
   const quietFor = (days) => !since || now - (ms(since) ?? 0) >= days * DAY_MS;
+  // When a wait ends, for the plan's per-agent list.
+  const after = (t, days) => (ms(t) == null ? null : new Date(ms(t) + days * DAY_MS).toISOString());
 
   const pinged = new Set(ledger.filter((e) => e.type === "listing_pinged").map((e) => e.data?.listingKey).filter(Boolean));
   for (const e of ledger) if (e.type === "listing_ping_voided" && e.data?.listingKey) pinged.delete(e.data.listingKey);
@@ -433,7 +453,9 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   // like one who wrote back — the next one is the point, not that house —
   // until `coldMaxUnanswered` check-ins have met silence (Matt, 2026-10-09:
   // "every single agent who has an offer"). Then the cold rule has them.
-  const offered = segment === "cold" && (agent.offers || agent.current || []).some(Boolean) && unanswered < s.coldMaxUnanswered;
+  // The same goes for an agent on a Tier 2 or Tier 3 card: GHL's nurture
+  // drip is off and the app does all of it (Matt, 2026-10-09).
+  const offered = segment === "cold" && ((agent.offers || agent.current || []).some(Boolean) || Boolean(card)) && unanswered < s.coldMaxUnanswered;
   if ((segment === "cold" && !offered) || downgraded) {
     const coldSeg = segment === "cold" ? "cold" : `${segment} gone quiet`;
     if (unanswered >= s.coldMaxUnanswered + (downgraded ? s.engagedMaxUnanswered : 0)) {
@@ -441,8 +463,8 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     }
     if (!listing) return out("not_due", "only a new listing of theirs is a reason to text", { segment: coldSeg });
     const lastPing = latest(texted.map((e) => e.at));
-    if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", `pinged within ${coldEveryDays} days`, { segment: coldSeg });
-    if (!quietFor(quietDays)) return out("not_due", `touched within ${quietDays} days`, { segment: coldSeg });
+    if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", `pinged within ${coldEveryDays} days`, { segment: coldSeg, dueAt: after(lastPing, coldEveryDays) });
+    if (!quietFor(quietDays)) return out("not_due", `touched within ${quietDays} days`, { segment: coldSeg, dueAt: after(since, quietDays) });
     return out("due", "", { segment: coldSeg, pulseReason: "fresh_listing", listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
   }
 
@@ -454,7 +476,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   if (listing && quietFor(quietDays)) {
     return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
   }
-  if (!quietFor(everyDays)) return out("not_due", `talked within ${everyDays} days`, { segment });
+  if (!quietFor(everyDays)) return out("not_due", card && since === card.movedAt ? `moved to Tier ${card.tier.slice(1)} within ${everyDays} days` : `talked within ${everyDays} days`, { segment, dueAt: after(since, everyDays) });
   const house = ourHouseFor({ offers: agent.current || [], drafts, events, config, now });
   const overdue = since ? now - (ms(since) ?? 0) : Infinity;
   return out("due", "", { segment, pulseReason: house ? "our_house" : "general", house, priority: [2 + tier, -overdue] });
@@ -474,10 +496,17 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
     pool: agents.length, bySegment: { partner: 0, source: 0, engaged: 0, cold: 0 }, stopped: {}, owned: {}, notDue: 0, coldDropped: 0,
     due: { deal_thanks: 0, fresh_listing: 0, our_house: 0, general: 0 }, dueNoSeat: 0,
     fresh: { withListing: 0 }, coverage: { touched: 0, pool: 0 },
+    ghlTier: { t2: 0, t3: 0, due: 0 },
   };
   const due = [];
+  // One line per agent (no names): what the check-in will do and when.
+  const verdicts = [];
   for (const a of agents) {
     const v = evaluateAgent(a, { settings: s, config, houses, outreachFollowUpDays, now });
+    const card = tierCard(a);
+    if (card) { counts.ghlTier[card.tier]++; if (v.status === "due") counts.ghlTier.due++; }
+    verdicts.push({ contactId: a.contactId, status: v.status, reason: v.reason || v.pulseReason || "", segment: v.segment || null,
+      dueAt: v.status === "due" ? iso(now) : v.dueAt || null, tier: card?.tier || null, movedAt: card?.movedAt || null });
     const seg = agentSegment({ offers: a.offers || a.current || [], lastInboundAt: a.lastInboundAt });
     counts.bySegment[seg]++;
     if (seg !== "cold") {
@@ -513,7 +542,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   // The next in line after the day's seats: an agent skipped before being
   // claimed (unsubscribed in GHL, tagged off, no phone) hands the seat on.
   const spares = cap === Infinity ? [] : due.slice(cap, cap + Math.max(5, Math.ceil(s.dailyCap / 2))).map(toPick);
-  return { picks, spares, counts };
+  return { picks, spares, counts, verdicts };
 }
 
 const street = (address) => String(address || "").split(",")[0].trim();
