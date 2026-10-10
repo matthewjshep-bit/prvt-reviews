@@ -509,14 +509,14 @@ const PULSE_SHAPES = [
 // The agent check-in's phrasings, rotated per text so a day's batch doesn't
 // read as a template (the buyer pulse learned this on its first live day).
 // Three ways into the same text, rotated so a day's check-ins don't open
-// alike. With history every shape carries the one reference; a stranger's
-// leads with the listing.
+// alike. The general check-in names no house; one about a fresh listing
+// leads with it.
 const AGENT_PULSE_SHAPES = [
-  "SHAPE FOR THIS ONE: the reference first, in a clause, then the question.",
-  "SHAPE FOR THIS ONE: the question first, with the reference tucked into it.",
-  "SHAPE FOR THIS ONE: a short thanks or well-wish tied to the reference, then the question.",
+  "SHAPE FOR THIS ONE: a short, warm opener in a few words, then the question.",
+  "SHAPE FOR THIS ONE: the question first, plainly, then a light line on the kind of house we like (the uglier the better).",
+  "SHAPE FOR THIS ONE: one wry, friendly line, then the question.",
 ];
-const AGENT_PULSE_COLD_SHAPES = [
+const AGENT_PULSE_LISTING_SHAPES = [
   "SHAPE FOR THIS ONE: open with the listing, then the question.",
   "SHAPE FOR THIS ONE: open with the question; the listing in a clause.",
   "SHAPE FOR THIS ONE: shortest version that still has their first name, the street and the question — one sentence if you can.",
@@ -938,65 +938,39 @@ function openingFor(outbound) {
 
     // The agent's own clock (shared/agent-pulse.js). Matt, 2026-09-29:
     // "reach out to these agents proactively and frequently, every 3 weeks or
-    // so, to see if they have any new listings or leads" — and 2026-09-30:
-    // "make it reference pieces of the conversation we've had if any, make it
-    // personalized, concise, friendly, professional, like we're building a
-    // relationship". So for an agent we know, the history IS the message: one
-    // real thing from it, then the question. A stranger gets the listing.
+    // so, to see if they have any new listings or leads". 2026-10-09: "make
+    // sure it's personable yet generic and not referencing the past property
+    // and checking in about any other distressed or off market properties" —
+    // except an offer we're following up, which is the offer nudge's job, not
+    // this one's. So: no house from before, ever; personable comes from the
+    // tone, their first name and at most the area they work. A fresh listing
+    // of theirs is still named — that one is news, not history.
     case "agent_pulse": {
       const l = o.listing || null;
-      const h = o.house || null;
-      const lh = o.lastHouse || null;
       const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
-      const ago = (d) => (d == null ? "" : d <= 1 ? "a day ago" : `${d} days ago`);
-      // Off-market houses are our best deals: the ask leans that way, gently,
-      // at most once a month (shared/off-market.js offMarketAskDue).
       // One kind of seller that becomes a deal, named in passing (2026-10-09:
       // the sellers behind every deal with a committed buyer), and — for an
       // agent we've never put a number to — what we buy, once.
       const situation = SELLER_SITUATIONS[(Number(o.variant) || 0) % SELLER_SITUATIONS.length];
       const fits = ` If it fits naturally, name one kind of seller we're good for, in a few words: ${situation}. One, never a list.` +
         (!o.offersWithUs && !o.dealsWithUs ? ` Say once, in a clause, what we buy: ${OUR_BOX_WORDS}.` : "");
-      const offAsk = (o.offMarketAskDue
-        ? `ask whether any off-market opportunities have come across their desk lately that need work. ${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.`
-        : "anything coming up that needs work?") + fits;
-      const why = o.reason === "fresh_listing" && l
+      const offAsk = `ask whether anything distressed — a house that needs work, listed or not — or anything off-market has come across their desk lately. ` +
+        `${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.${fits}`;
+      const listingText = o.reason === "fresh_listing" && l;
+      const why = listingText
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
           `Ask, plainly, whether it's a bit of a project — if it needs work it may be one we'd want to take a look at. Name the street; never its price or any number.`
-        : o.reason === "deal_thanks" && h
-        ? `${h.street} just closed with them. Thank them for working it with us, in a few plain words, then ask whether anything else like that ` +
-          `one has crossed their desk, listed or not. That is the whole text. `
-        : o.reason === "our_house" && h
-        ? `Last time it was ${h.street}, which ${h.how === "closed" ? "closed" : h.how === "fell through" ? "fell through" : h.how === "never heard back" ? "we never heard back on" : "didn't work out"}. ` +
-          `Check in on THEM, not that house: ${offAsk}`
-        : `No house in particular. Check in: ${offAsk}`;
-      // What there is to mention, each with how long ago, so nothing old is
-      // told as if it were last week.
-      const material = cold ? [] : [
-        o.lastSummary ? `What we last talked about: ${o.lastSummary}.` : "",
-        lh && !(h && h.street === lh.street) ? `The last house we had with them: ${lh.street} (${[lh.how, ago(lh.daysAgo)].filter(Boolean).join(", ")}).` : "",
-        (o.aboutThem || []).length ? `What they've told us about themselves: ${(o.aboutThem || []).map((x) => `${x.what}${x.daysAgo != null ? ` (${ago(x.daysAgo)})` : ""}`).join("; ")}.` : "",
-        (o.areas || []).length ? `Areas they work: ${(o.areas || []).join(", ")}.` : "",
-        o.nextAction ? `What we meant to do next with them: ${o.nextAction}.` : "",
-        o.dealsWithUs ? "We have done a deal together — this is a friend, write like it." : "",
-      ].filter(Boolean);
-      const reference = cold ? "" : o.reason === "fresh_listing" && l
-        ? `YOUR HISTORY WITH THEM: the listing is the point of this text. READ THE THREAD: a few words that show you remember them are welcome only if they fit ` +
-          `naturally in the same sentence as the listing (e.g. "know the Tacoma one wasn't a fit, but…") — never tack it on as an aside ("aside from…", "besides the … you shared"), ` +
-          `never a personal detail next to a sales question, never invented. If it doesn't fit in a few natural words, leave it out. `
-        : `THE ONE REFERENCE: this is a relationship check-in, and your history with them is the point. READ THE THREAD, then open with ONE real, specific thing from it or from the notes below, said in your own words in a clause — ` +
-        `in this order of preference: something they told us that's still open (a listing or a seller they mentioned, a property they said was coming, their timing); ` +
-        `the last house we talked about and how it went (by street, never a number); something personal they shared, only if it's recent enough to still be true and it reads warm, not nosy; their market. ` +
-        `Prefer the newest. It must read the way a person would naturally say it — never tack it on as an aside; if it doesn't fit in one natural clause, leave it out. ` +
-        `Never quote them, never recite the thread, never more than one reference, never something months old as if it were last week — and never invent one: ` +
-        `if the thread and the notes have nothing specific, keep it general. For this message the PERSONAL TOUCH rule's "most messages carry none" does not apply: carry exactly one when there is one. `;
-      const shapes = cold ? AGENT_PULSE_COLD_SHAPES : AGENT_PULSE_SHAPES;
-      // Houses we passed on: the nurture is about the next one, never these.
-      const avoid = (o.avoid || []).filter(Boolean);
-      const avoidLine = avoid.length ? `Never bring up ${avoid.length > 1 ? `${avoid.slice(0, -1).join(", ")} or ${avoid.at(-1)}` : avoid[0]} — we passed on ${avoid.length > 1 ? "those" : "it"}. ` : "";
+        : o.reason === "deal_thanks"
+        ? `A deal we worked with them just closed. Thank them for working it with us, in a few plain words — never name the house or its street — then ${offAsk}`
+        : `A general check-in, about no house in particular: ${offAsk}`;
+      const generic = `KEEP IT GENERIC: never mention, name or hint at any house, listing, offer or deal from before${listingText ? " (the listing above is the only house in this text)" : ""} — ` +
+        `no street, no "that last one", no "the one on …", no how one went. We don't know what happened to those houses, and this text is about what's next. ` +
+        `Personable comes from the tone and their first name${(o.areas || []).length && !cold ? `, and if it fits in a few words, the area they work (${(o.areas || []).join(", ")})` : ""}` +
+        `${o.dealsWithUs ? " — we have done a deal together, so write it like a text to a friend" : ""}. Never recite the thread, never a personal detail, never invented. `;
+      const shapes = listingText ? AGENT_PULSE_LISTING_SHAPES : AGENT_PULSE_SHAPES;
       return `${START} There is NO offer in this message. It is a check-in with a listing agent${cold ? " who has not written back before" : " we know"}. ` +
         `${why} ` +
-        `${reference}${material.length ? `NOTES FROM OUR HISTORY: ${material.join(" ")} ` : ""}${avoidLine}` +
+        `${generic}` +
         `TONE: friendly and professional — how someone local who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
         `${CHECKIN_PERSONALITY} ` +
         `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
@@ -1005,9 +979,9 @@ function openingFor(outbound) {
         `${cold ? (o.offersWithUs ? "One clause on who you are: the local buyer who looked at one of their listings a while back and is always after the next project house. " : "One clause on who you are: someone local who's always looking for the next project house. ") : "Do NOT reintroduce yourself. "}` +
         `${shapes[(Number(o.variant) || 0) % shapes.length]} ` +
         `${o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}" ` : ""}` +
-        `Do NOT name a price, a number, a percentage, an ARV or a link — a street address is fine, but never a dollar figure, and never a count of days, a time of day or a date ("sitting a while", not "84 days"; "a while back", not "that 4pm"). Do NOT promise an offer or say what we'd pay. ` +
+        `Do NOT name a price, a number, a percentage, an ARV or a link${listingText ? " — the listing's street is fine, but never a dollar figure" : ""}, and never a count of days, a time of day or a date ("sitting a while", not "84 days"). Do NOT promise an offer or say what we'd pay. ` +
         `Do NOT say "I'm reaching out", "touching base" or "just checking in". Easy to ignore, easy to answer in a line. ` +
-        `${cold ? "" : `${CONTINUE} `}Set intent to agent_pulse.`;
+        `Set intent to agent_pulse.`;
     }
 
     case "blast_nudge":
