@@ -122,7 +122,7 @@ export function housesFrom(offers = [], events = []) {
  * ledger, last word and fresh listings. The check-in plans from it; the
  * tiers (agentRoster) read it too.
  */
-export async function loadPulseAgents({ locationId, saved = {}, store = defaultStore, now = Date.now(), includeOfferContacts = false }) {
+export async function loadPulseAgents({ locationId, saved = {}, store = defaultStore, now = Date.now() }) {
   const settings = agentPulseSettings(saved);
   const config = conversationConfig(saved);
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
@@ -162,9 +162,11 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   // A buyer the pull happened to match (some buyers list houses too) is the
   // buyer pulse's, not this one's.
   const investorIds = new Set((investors || []).map((p) => p.contactId));
-  // The check-in plans from profiles and listing agents only; the roster also
-  // counts anyone we made an offer to (includeOfferContacts) — reading, never texting.
-  const ids = new Set([...(profiles || []).map((p) => p.contactId), ...(listings || []).map((l) => l.contactId), ...(includeOfferContacts ? offersBy.keys() : [])]);
+  // Contact profiles, listing agents, and anyone we made an offer to, sent
+  // or drafted (Matt, 2026-10-09: every agent with an offer is followed up).
+  // An offer contact with no profile has no tags here; the runner checks
+  // each one in GHL before it claims them.
+  const ids = new Set([...(profiles || []).map((p) => p.contactId), ...(listings || []).map((l) => l.contactId), ...offersBy.keys()]);
 
   const agents = [];
   for (const id of ids) {
@@ -222,7 +224,7 @@ function careLine(v, pulseOn) {
  * contact record; nothing here is logged.
  */
 export async function agentRoster({ locationId, saved = {}, store = defaultStore, now = Date.now() }) {
-  const { agents, settings, config, oa, houses } = await loadPulseAgents({ locationId, saved, store, now, includeOfferContacts: true });
+  const { agents, settings, config, oa, houses } = await loadPulseAgents({ locationId, saved, store, now });
   const counts = { t1: 0, t2: 0, cold: 0, opted_out: 0 };
   const rows = [];
   for (const a of agents) {

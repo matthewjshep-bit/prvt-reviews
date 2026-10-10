@@ -3989,6 +3989,41 @@ tick "Let them send themselves".
 when an agent offers a second time (the key used to be one per contact,
 ever). While a chain is running, it keeps its own clock.
 
+**Every agent with an offer (2026-10-09).** Matt: "make sure that every single
+agent who has an offer, whether it is sent or just drafted, has the
+appropriate follow-up going out to them". The live book had 316 agents with an
+offer. Four things left some of them with nothing coming:
+
+- **An open offer held the agent with nothing coming.** `agentOwner` read any
+  open offer as "an open offer" owning them. Two kinds had no clock: a no the
+  machine stands down on (the first no asks what the seller would take and
+  keeps the offer open, and when that goes unanswered nothing moves it), and a
+  priced number nobody sent. `openOfferIdle` lets those agents go to the
+  check-in. That covers a no or pending/sold (`HOUSE_OVER_REASONS` in
+  `shared/thread-health.js`) with no follow-up coming, and a person's unsent
+  float more than `UNSENT_STALE_DAYS` (7) overdue. The send-time backstop
+  (`ghl-broker/agent-focus.js`) drops the same offer as the "one house at a
+  time" focus, for `agent_pulse` only.
+- **GHL's TIER 1/2/3 enrollments held agents for 21 days.** Those workflows
+  only move the Acquisitions card. A workflow named exactly `TIER 1`, `TIER 2`
+  or `TIER 3` (`CARD_ONLY_WORKFLOW_RX`) never owns an agent; 165 were held on
+  10-09. If one of them ever sends texts, rename it or put its id in
+  `pulse.quietWorkflowIds`. That list works the other way round (quiet
+  workflows never own anyone), so only a rename fixes it.
+- **Answered, read as cold.** `agentSegment` now reads an offer only their
+  answer could have moved (`offerHasTheirAnswer` in `shared/tiers.js`: passed,
+  countered, a counter, a yes or no, sold) as engaged, the same way the tiers
+  do.
+- **Offered, never answered.** A cold agent with any offer row, sent or
+  drafted, gets the regular check-in (`everyDays`), not listing pings only,
+  until `coldMaxUnanswered` (3) check-ins go unanswered. After that the cold
+  rule drops them. The text introduces us in one clause as the buyer who
+  looked at one of their listings.
+
+The plan also reads every offer contact, not only contact profiles and
+listing agents (`loadPulseAgents`). The runner's GHL preflight checks the tags
+of a contact with no profile.
+
 ### The daily sweep (outreach autopilot)
 
 Settings → Agent Outreach → "Run outreach every day on its own". Once a

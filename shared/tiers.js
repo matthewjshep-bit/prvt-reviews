@@ -45,6 +45,19 @@ export const NAMED_HOUSE_DAYS = 21;
 export const HELD_DAYS = 21;
 
 /**
+ * offerHasTheirAnswer(offer) → boolean
+ *
+ * An offer only their answer could have moved: a deal, a counter, a yes or
+ * no to a number, they passed, it sold. The record of an agent who wrote
+ * back, even when the timeline doesn't hold their text (rows from before the
+ * timeline existed, a call, an email). The check-in reads it the same way
+ * (shared/agent-pulse.js agentSegment).
+ */
+export function offerHasTheirAnswer(o) {
+  return Boolean(o && (o.deal || Number(o.counter?.amount) > 0 || o.realm?.answer || ["countered", "passed", "accepted", "unavailable"].includes(effectiveStatus(o))));
+}
+
+/**
  * agentTier({ offers, events, lastInboundAt, now }) → { tier, why, address? }
  *
  *   offers         the agent's offers (current rows; drafts included for held underwrites)
@@ -85,7 +98,7 @@ export function agentTier({ offers = [], events = [], lastInboundAt = null, now 
   // Written back: their last word on the timeline, or an offer only their
   // answer could have moved (a counter, a yes, a pass, a deal) — the record
   // of a partner from before the timeline existed.
-  const answered = (offers || []).some((o) => o && (o.deal || Number(o.counter?.amount) > 0 || o.realm?.answer || ["countered", "passed", "accepted", "unavailable"].includes(effectiveStatus(o))));
+  const answered = (offers || []).some(offerHasTheirAnswer);
   if (lastInboundAt || answered) {
     const dead = live.find((o) => !o.deal && !OPEN_STATUSES.has(effectiveStatus(o)));
     return { tier: "t2", why: dead ? `nothing in hand (${effectiveStatus(dead).replace(/_/g, " ")} on ${street(dead.address)})` : "nothing in hand" };
