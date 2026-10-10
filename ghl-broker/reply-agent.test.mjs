@@ -5056,6 +5056,35 @@ test("a check-in on a passed house that asks whether it sold never goes out: wri
   assert.doesNotMatch((await fixed.getReplyDraft(j2.draftId)).reply, /Elm/);
 });
 
+// Matt, 2026-10-09: "make sure it's personable yet generic and not
+// referencing the past property". A check-in that names any house we've had
+// with them is written again, told why, and dropped if it still does.
+test("an agent check-in that brings up a past house is written again without it, or dropped", async () => {
+  const { client } = ghlStubFor(["agent"]);
+  const subject = { ...AGENT_CHECKIN_SUBJECT, reason: "general", pastHouses: ["12 Elm St, Renton, WA 98055", "11435 163rd Avenue Southeast, Renton, WA 98059"] };
+  const NAMES_IT = "Hey Dana, know 163rd didn't work out — anything distressed or off-market come across your desk lately?";
+  _resetJobs();
+  const store = fakeStore();
+  store.listOffers = async () => [LANDED];
+  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "agent_pulse", subject, sendsEnabled: true,
+    deps: { releaseHeld: true, releaseReason: "test", now: () => NOW, random: () => 0, draft: async () => ({ ...DRAFT, reply: NAMES_IT }) } });
+  await settle();
+  assert.equal(job.status, "held", job.error);
+  assert.match(job.heldReason, /dropped, not sent: named a house from before \(163rd\)/);
+
+  _resetJobs();
+  const fixed = fakeStore();
+  fixed.listOffers = async () => [LANDED];
+  const asked = [];
+  const { job: j2 } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: fixed, contactId: "c1", kind: "agent_pulse", subject, sendsEnabled: true,
+    deps: { releaseHeld: true, releaseReason: "test", now: () => NOW, random: () => 0, draft: async (args) => { asked.push(args.outbound.fix || null); return { ...DRAFT,
+      reply: asked.length === 1 ? NAMES_IT : "Hey Dana, anything distressed or off-market come across your desk lately? The uglier the better." }; } } });
+  await settle();
+  assert.equal(asked.length, 2);
+  assert.match(String(asked[1]), /the check-in is generic/);
+  assert.ok(j2.draftId, j2.heldReason);
+});
+
 test("a passed house back on the market may be named: that's the news", async () => {
   const LADDERS_ON = structuredClone(STARTER_SAVED);
   LADDERS_ON.conversationAi.parties.agent.followUp = { ...(LADDERS_ON.conversationAi.parties.agent.followUp || {}), enabled: true,

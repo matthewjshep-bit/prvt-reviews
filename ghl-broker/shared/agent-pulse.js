@@ -610,6 +610,13 @@ export function agentPulseSubject({ agent = {}, verdict = {}, now = Date.now() }
     aboutThem: factList(agent.facts, "personal_details", now),
     areas,
     avoid,
+    // Every house we've had with them, for the gate that holds a check-in
+    // naming one (ghl-broker/reply-agent.js): the check-in is generic
+    // (Matt, 2026-10-09). Never shown to the drafter.
+    pastHouses: [...new Set([
+      ...(agent.offers || []).map((o) => o?.address),
+      ...(agent.events || []).filter((e) => e?.type === "tier1_passed" || e?.type === "tier1_kicked" || e?.type === "subject_property_set").map((e) => e?.address),
+    ].filter(Boolean).map(String))].filter((a) => !l || street(a) !== street(l.address)).slice(0, 30),
     // Asked about off-market houses in the last month? Then not this time.
     offMarketAskDue: offMarketAskDue(agent.events || [], now),
   };

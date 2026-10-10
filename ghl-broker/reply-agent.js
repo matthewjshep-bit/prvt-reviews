@@ -2963,9 +2963,8 @@ function outboundSummary({ kind, offer, outbound }) {
     case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;
     case "agent_pulse":
       if (outbound.reason === "fresh_listing") return `Checks in about their listing at ${outbound.listing?.street || where}: would the seller look at an as-is cash offer?`;
-      if (outbound.reason === "deal_thanks") return `Thanks them for ${outbound.house?.street || where} closing and asks whether anything else like it has come across their desk.`;
-      if (outbound.reason === "our_house") return `Checks back in on ${outbound.house?.street || where} (${outbound.house?.how || "it ended"}) and asks what else is coming up.`;
-      return "Checks in: anything coming up that needs work, or off market?";
+      if (outbound.reason === "deal_thanks") return "Thanks them for the deal that just closed and asks whether anything distressed or off-market has come across their desk.";
+      return "Checks in: anything distressed or off-market come across their desk lately?";
     case "showing_reminder": return `Reminds them about the walkthrough at ${outbound.street || where} tomorrow, ${outbound.windowLabel}.`;
     case "showing_followup": return `Asks how ${outbound.street || where} looked after the walkthrough (${outbound.windowLabel}) and whether they want it.`;
     case "blast_nudge":   return `Follows up on ${where} — we sent it and heard nothing${rung}.`;
@@ -3016,15 +3015,26 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   // A check-in on a passed house asks about the next one, never that house
   // (unless it's back on the market — then the house is the news).
   const oldHouse = kind === "passed_checkin" && !outbound?.relisted ? (offer?.address || subject?.address || "") : "";
+  // The agent check-in is generic (Matt, 2026-10-09): it names none of the
+  // houses we've had with them. A fresh listing of theirs is left out of
+  // the list (shared/agent-pulse.js pastHouses).
+  const pastHouses = kind === "agent_pulse" ? (Array.isArray(subject?.pastHouses) ? subject.pastHouses : []).filter(Boolean) : [];
   const gate = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
     houseWords: houseWordsFor(context?.deals, a.transcript) });
+  if (pastHouses.length) {
+    return (d) => {
+      const g = gate(d);
+      const named = pastHouses.map((h) => namesHouse(d?.reply, h)).find(Boolean);
+      return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named a house from before (${named}): the check-in is generic — ask about distressed or off-market houses, never one we've had with them`] } : g;
+    };
+  }
   if (!oldHouse) return gate;
   return (d) => {
     const g = gate(d);
     const named = namesHouse(d?.reply, oldHouse);
-    return named ? { ...g, ok: false, flags: [...(g.flags || []), `named the house we passed on (${named}): a check-in asks about other houses that need work, never that one`] } : g;
+    return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named the house we passed on (${named}): a check-in asks about other houses that need work, never that one`] } : g;
   };
 }
 

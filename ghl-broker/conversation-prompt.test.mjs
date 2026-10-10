@@ -291,8 +291,8 @@ test("the listing check-in names the street, never the price", () => {
   assert.match(t, /never its price or any number/);
   assert.match(t, /One clause on who you are/, "a cold agent gets a one-clause intro");
   const known = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", dealsWithUs: 1 });
-  assert.match(known, /anything coming up that needs work/);
-  assert.match(known, /this is a friend/);
+  assert.match(known, /anything distressed/);
+  assert.match(known, /text to a friend/);
   assert.match(known, /do NOT reintroduce yourself/i);
 });
 
@@ -312,36 +312,38 @@ test("the walkthrough reminder names the street and window, says only what the a
 // Matt, 2026-09-30: "make it reference pieces of the conversation we've had if
 // any, make it personalized, concise, friendly, professional, like we're
 // building a relationship".
-test("a check-in with history opens on one real thing from the conversation, sounds like Matt, and names no number", () => {
+test("the check-in is generic: no house from before, personable from the tone and their area, and it asks about distressed or off-market houses", () => {
   const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged",
     lastHouse: { street: "9 Oak St", how: "passed", daysAgo: 35 },
     aboutThem: [{ what: "daughter just started at UW", daysAgo: 40 }],
     areas: ["South King"], lastSummary: "said a Burien fixer might list after the holidays",
     voice: "Keep it short. Sign off -Matt." });
-  assert.match(t, /ONE real, specific thing/);
-  assert.match(t, /9 Oak St \(passed, 35 days ago\)/);
-  assert.match(t, /daughter just started at UW \(40 days ago\)/);
-  assert.match(t, /said a Burien fixer might list after the holidays/);
-  assert.match(t, /South King/);
+  assert.match(t, /KEEP IT GENERIC: never mention, name or hint at any house, listing, offer or deal from before/);
+  assert.doesNotMatch(t, /9 Oak St/, "the last house is never handed to the drafter");
+  assert.doesNotMatch(t, /daughter/, "no personal detail");
+  assert.doesNotMatch(t, /Burien fixer/, "no thread recital");
+  assert.match(t, /South King/, "the area they work, in a few words");
+  assert.match(t, /anything distressed — a house that needs work, listed or not — or anything off-market/);
   assert.match(t, /friendly and professional/i);
-  assert.match(t, /never invent/i);
   assert.match(t, /HOW MATT WANTS THESE TO SOUND[^]*Keep it short\. Sign off -Matt\./);
   assert.match(t, /Do NOT name a price/);
-  assert.doesNotMatch(t, /colour only, never quote it back/, "the history is the point now, not colour to hide");
-  const cold = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing: { street: "123 Main St", city: "Kent" } });
-  assert.doesNotMatch(cold, /ONE real, specific thing/, "a stranger has no history to lean on");
-  assert.match(cold, /123 Main St in Kent/);
+  assert.doesNotMatch(t, /Reference the thread/);
+  const house = outboundOpening({ kind: "agent_pulse", reason: "our_house", segment: "engaged", house: { street: "123 Main St", how: "passed" } });
+  assert.doesNotMatch(house, /123 Main St/, "a house whose clocks ended is never brought up");
+  const thanks = outboundOpening({ kind: "agent_pulse", reason: "deal_thanks", segment: "partner", house: { street: "4747 46th Ave S", how: "closed" } });
+  assert.doesNotMatch(thanks, /4747/);
+  assert.match(thanks, /never name the house or its street/);
 });
 
 // The first samples: "…had a price cut and is still sitting, aside from the
 // landscaping story you shared." A reference that doesn't fit in one natural
 // clause reads like a form letter; the listing is already the point.
-test("with a listing to ask about, history is a few natural words or nothing, never an aside", () => {
+test("a check-in about a fresh listing names only that listing, never a house from before", () => {
   const t = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged",
-    listing: { street: "4706 64th St E", city: "Tacoma", dom: 70, cut: true }, aboutThem: [{ what: "redoing their backyard", daysAgo: 12 }] });
-  assert.match(t, /the listing is the point/i);
-  assert.match(t, /never tack it on as an aside/i);
-  assert.match(t, /leave it out/i);
+    listing: { street: "4706 64th St E", city: "Tacoma", dom: 70, cut: true }, lastHouse: { street: "9 Oak St", how: "passed" }, aboutThem: [{ what: "redoing their backyard", daysAgo: 12 }] });
+  assert.match(t, /4706 64th St E in Tacoma/);
+  assert.match(t, /the listing above is the only house in this text/);
+  assert.doesNotMatch(t, /9 Oak St|backyard/);
 });
 
 // The first live batch, 2026-09-30: "…been sitting a bit, 84 days now",
@@ -366,13 +368,13 @@ test("an agent's reply may ask for off-market houses at a natural close, lightly
   assert.doesNotMatch(buildSystemPrompt({ config: null, party: "investor", channel: "sms" }), /OFF-MARKET: our best deals/);
 });
 
-test("the check-in leans its ask toward off-market houses when an ask is due, and not when we asked this month", () => {
-  const due = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", offMarketAskDue: true });
-  assert.match(due, /whether any off-market opportunities have come across their desk/);
-  assert.match(due, /first look/);
-  const recent = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", offMarketAskDue: false });
-  assert.doesNotMatch(recent, /off-market/);
-  assert.match(recent, /anything coming up that needs work/);
+test("every general check-in asks about distressed or off-market houses, whether or not we asked this month", () => {
+  for (const offMarketAskDue of [true, false]) {
+    const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", offMarketAskDue });
+    assert.match(t, /anything distressed/);
+    assert.match(t, /anything off-market has come across their desk/);
+    assert.match(t, /first look/);
+  }
 });
 
 // Matt, 2026-10-06: the asks went out as "anything before it hits the MLS".
@@ -386,10 +388,8 @@ test("an agent is asked about off-market opportunities in that word, not 'before
   assert.match(sys, plain);
   assert.doesNotMatch(sys, /never pitch "off-market deals"/, "the starter rule no longer warns the word off");
   const due = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", offMarketAskDue: true });
-  assert.match(due, ask);
+  assert.match(due, /anything off-market has come across their desk/);
   assert.match(due, plain);
-  const house = outboundOpening({ kind: "agent_pulse", reason: "our_house", segment: "engaged", offMarketAskDue: true, house: { street: "123 Main St", how: "passed" } });
-  assert.match(house, ask);
 });
 
 /* ---------- one house at a time (2026-10-02) ---------- */
@@ -478,11 +478,6 @@ test("the pulse carries Matt's voice and the notes that make it personal", () =>
   assert.match(t, /About them, from our notes: Building spec homes in Shoreline/);
 });
 
-test("the check-in prompt is told not to bring up a house we passed on", () => {
-  const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", avoid: ["12 Pine St", "88 Elm St"] });
-  assert.match(t, /Never bring up 12 Pine St or 88 Elm St/);
-  assert.doesNotMatch(outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged" }), /Never bring up/);
-});
 
 // Matt, 2026-10-08: a rural house (two acres or more) is passed, and the
 // agent hears that's why.
