@@ -27,6 +27,8 @@
 // of theirs, `coldEveryDays` apart, and never after `coldMaxUnanswered` pings
 // with nothing back. An engaged agent `engagedMaxUnanswered` pulses into
 // silence is treated as cold (0 = never). Matt's decisions, 2026-09-29.
+// A cold agent we made an offer to, sent or drafted, is checked in on like an
+// engaged one until `coldMaxUnanswered` check-ins go unanswered (2026-10-09).
 //
 // The one-owner rule: an agent another clock owns is left to it — an open
 // offer and its nudges, the push to paper, check-ins on a passed offer, a
@@ -39,7 +41,8 @@
 import { effectiveStatus, OPEN_STATUSES, DEAD_STATUSES, dealIsOver, priceAgreed } from "./offer-status.js";
 import { threadTimes } from "./follow-up.js";
 import { nextFollowUp } from "./next-follow-up.js";
-import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT } from "./thread-health.js";
+import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT, HOUSE_OVER_REASONS, threadHealth } from "./thread-health.js";
+import { offerHasTheirAnswer } from "./tiers.js";
 import { addressKey, sameStreet } from "./us-address.js";
 import { offMarketAskDue } from "./off-market.js";
 import { botHold, paceOf, paceScale } from "./bot-hold.js";
@@ -161,7 +164,10 @@ export function listingDistressed(doc = {}, rule = null) {
 export function agentSegment({ offers = [], lastInboundAt = null } = {}) {
   if ((offers || []).some((o) => o && (o.deal || priceAgreed(o) || o.realm?.answer === "yes"))) return "partner";
   if ((offers || []).some((o) => o && broughtUs(o))) return "source";
-  return lastInboundAt ? "engaged" : "cold";
+  // An offer only their answer could have moved (they passed, countered, it
+  // sold) is a reply, even when the timeline doesn't hold their text — the
+  // tiers read it the same way (shared/tiers.js).
+  return lastInboundAt || (offers || []).some(offerHasTheirAnswer) ? "engaged" : "cold";
 }
 const broughtUs = (o) => o.leadSource?.source === "agent_brought" || o.autoUnderwrite?.leadSource === "agent_brought";
 const TOP_SEGMENTS = new Set(["partner", "source"]);
@@ -191,6 +197,45 @@ export function agentStops({ drafts = [], events = [], tags = [], botOffTags = [
   return null;
 }
 
+// GHL's TIER 1 / TIER 2 / TIER 3 workflows (the playbook's tier rules enroll
+// agents in them) move the agent's Acquisitions card and send nothing; the
+// tier texts were the separate "Tier 2+3 nurture" (2026-09-30), since put to
+// Draft. An enrollment in one held the agent for 21 days with no text coming:
+// 165 agents on 2026-10-09, 72 of them with an offer from us.
+export const CARD_ONLY_WORKFLOW_RX = /^\s*tier\s*[123]\s*$/i;
+
+// A number a person priced and never sent is theirs to send for a week; after
+// that it is not a conversation the agent is waiting on.
+export const UNSENT_STALE_DAYS = 7;
+
+/**
+ * openOfferIdle({ offer, drafts, events, config, now }) → reason | null
+ *
+ * An open offer with nothing coming on it and nothing to wait for. Matt,
+ * 2026-10-09: every agent with an offer, sent or just drafted, is followed up
+ * regularly — on the offer, or for their next off-market house. Two kinds of
+ * open offer held the agent for good with nothing coming:
+ *   - a no the machine stands down on. The first no asks what the seller
+ *     would take and keeps the offer open; when that goes unanswered nothing
+ *     moves it again (four on 2026-10-09, the oldest from 9/24);
+ *   - a priced number a person never sent, a week on (seven, back to July).
+ * Either way the agent check-in asks for their next one. Anything else
+ * coming on the offer — a nudge, the push to paper, a float, a promise, a
+ * reply owed, a person's thread — keeps the agent with the offer.
+ */
+export function openOfferIdle({ offer, drafts = [], events = [], config = {}, now = Date.now() } = {}) {
+  if (!offer) return null;
+  const next = nextFollowUp({ offer, drafts, events, config, now });
+  if (next.kind === "none") {
+    const h = threadHealth({ offer, drafts, events, now });
+    if (!h.drive && HOUSE_OVER_REASONS.has(h.reason)) return `the machine stands down: ${h.detail}`;
+  }
+  if (next.kind === "float" && next.who === "you" && next.at && now - (ms(next.at) ?? now) > UNSENT_STALE_DAYS * DAY_MS) {
+    return "our number never went out";
+  }
+  return null;
+}
+
 /**
  * agentOwner({ offers, drafts, events, config, settings, outreachFollowUpDays, now }) → owner | null
  *
@@ -211,7 +256,10 @@ export function agentOwner({ offers = [], drafts = [], events = [], config = {},
       if (now - (ms(o.createdAt) ?? 0) < 14 * DAY_MS) return "a held underwrite";
       continue;
     }
-    if (OPEN_STATUSES.has(status) && !o.deal) return "an open offer";
+    if (OPEN_STATUSES.has(status) && !o.deal) {
+      if (openOfferIdle({ offer: o, drafts, events, config, now })) continue;
+      return "an open offer";
+    }
     const next = nextFollowUp({ offer: o, drafts, events, config, now });
     if (["queued", "reply_owed", "promise", "checkin_due", "float", "offer_nudge", "hot_push", "passed_checkin"].includes(next.kind)) {
       return String(next.label || next.kind).toLowerCase();
@@ -242,7 +290,8 @@ export function agentOwner({ offers = [], drafts = [], events = [], config = {},
   // Any other GHL workflow the app put them in, unless it's known not to text
   // or it's a drip this check-in replaces (the TIER 2/3 check-ins).
   const quiet = new Set([...s.quietWorkflowIds, ...s.replacesWorkflowIds]);
-  for (const w of byTime.filter((e) => e.type === "workflow_enrolled" && !quiet.has(String(e.data?.workflowId || "")))) {
+  for (const w of byTime.filter((e) => e.type === "workflow_enrolled" && !quiet.has(String(e.data?.workflowId || ""))
+      && !CARD_ONLY_WORKFLOW_RX.test(String(e.data?.workflowName || "")))) {
     const out = byTime.some((e) => e.type === "workflow_left" && e.data?.workflowId === w.data?.workflowId && after(e, w.at));
     if (!out && now - (ms(w.at) ?? 0) < s.ghlWorkflowDays * DAY_MS) return `a GHL workflow${w.data?.workflowName ? ` (${String(w.data.workflowName).slice(0, 40)})` : ""}`;
   }
@@ -380,7 +429,12 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     .map((e) => String(e.address || "")).filter(Boolean);
   const listing = freshListingFor({ listings: agent.listings || [], pinged, raised, houses, settings: s, now });
 
-  if (segment === "cold" || downgraded) {
+  // An agent we've made an offer to, sent or just drafted, is followed up
+  // like one who wrote back — the next one is the point, not that house —
+  // until `coldMaxUnanswered` check-ins have met silence (Matt, 2026-10-09:
+  // "every single agent who has an offer"). Then the cold rule has them.
+  const offered = segment === "cold" && (agent.offers || agent.current || []).some(Boolean) && unanswered < s.coldMaxUnanswered;
+  if ((segment === "cold" && !offered) || downgraded) {
     const coldSeg = segment === "cold" ? "cold" : `${segment} gone quiet`;
     if (unanswered >= s.coldMaxUnanswered + (downgraded ? s.engagedMaxUnanswered : 0)) {
       return out("cold_dropped", `${unanswered} check-ins with nothing back`, { segment: coldSeg });

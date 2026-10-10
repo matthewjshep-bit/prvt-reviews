@@ -1000,7 +1000,9 @@ function openingFor(outbound) {
         `TONE: friendly and professional — how someone local who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
         `${CHECKIN_PERSONALITY} ` +
         `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
-        `${cold ? "One clause on who you are: someone local who's always looking for the next project house. " : "Do NOT reintroduce yourself. "}` +
+        // A quiet agent we made an offer to (shared/agent-pulse.js, 2026-10-09)
+        // has heard of us: the clause says so, never which house or number.
+        `${cold ? (o.offersWithUs ? "One clause on who you are: the local buyer who looked at one of their listings a while back and is always after the next project house. " : "One clause on who you are: someone local who's always looking for the next project house. ") : "Do NOT reintroduce yourself. "}` +
         `${shapes[(Number(o.variant) || 0) % shapes.length]} ` +
         `${o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}" ` : ""}` +
         `Do NOT name a price, a number, a percentage, an ARV or a link — a street address is fine, but never a dollar figure, and never a count of days, a time of day or a date ("sitting a while", not "84 days"; "a while back", not "that 4pm"). Do NOT promise an offer or say what we'd pay. ` +

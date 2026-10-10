@@ -6,6 +6,7 @@
 // check-in — so nothing texts an agent around them. startProactive asks it.
 
 import { focusOf, focusHolds, machineTexts, spacingHolds, UNPROMPTED_AGENT_KINDS, OFF_FOCUS_KINDS } from "./shared/agent-focus.js";
+import { threadHealth, HOUSE_OVER_REASONS } from "./shared/thread-health.js";
 
 /**
  * agentTurnReason({ store, locationId, contactId, kind, address, config, now })
@@ -24,7 +25,14 @@ export async function agentTurnReason({ store, locationId, contactId, kind = "",
       ? store.listOffers(locationId, { contactId, limit: 200, lean: true }).catch(() => [])
       : [],
   ]);
-  const focus = OFF_FOCUS_KINDS.has(kind) ? focusOf(offers || [], { contactId }) : null;
+  let focus = OFF_FOCUS_KINDS.has(kind) ? focusOf(offers || [], { contactId }) : null;
+  // A live offer they said no to, that the machine has stopped working, is
+  // not what we talk to them about any more: the check-in asks for their
+  // next one (shared/agent-pulse.js openOfferIdle).
+  if (focus && kind === "agent_pulse") {
+    const h = threadHealth({ offer: focus, drafts: drafts || [], now });
+    if (!h.drive && HOUSE_OVER_REASONS.has(h.reason)) focus = null;
+  }
   return focusHolds({ kind, address, focus })
     || spacingHolds({ kind, sent: machineTexts(drafts || []), now, minHours: fu.minHoursBetween, perWeek: fu.maxPerContactPerWeek });
 }

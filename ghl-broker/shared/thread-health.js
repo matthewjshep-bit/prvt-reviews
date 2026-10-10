@@ -34,6 +34,13 @@ export const STOP_LABEL = {
   two_unanswered: "two texts from us, nothing back",
 };
 
+// The stops that say the house is over for us, not just paused: they said
+// no (and the first-no ask went nowhere), or it went pending or sold. An
+// open offer the machine stands down on for one of these is no conversation
+// to wait on — the agent check-in asks for their next one
+// (shared/agent-pulse.js openOfferIdle, ghl-broker/agent-focus.js).
+export const HOUSE_OVER_REASONS = new Set(["rejected", "pending_or_sold"]);
+
 // How many texts of ours, with nothing back, before the machine stops adding
 // to them. The next move is a phone call, which is a person's.
 export const UNANSWERED_LIMIT = 2;

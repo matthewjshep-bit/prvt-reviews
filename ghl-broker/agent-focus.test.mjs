@@ -43,6 +43,14 @@ test("a check-in on a house they passed on waits while their live offer is out, 
     "nothing live: the check-in may go");
 });
 
+test("the agent check-in goes out when the live offer is one they said no to and the machine stopped working", async () => {
+  const no = { id: "no", locationId: "LOC", contactId: "c1", status: "sent", inbound: "Seller won't do that, thanks", intent: "rejection", reply: "What would they take?",
+    createdAt: ago(10), updatedAt: ago(10), sentAt: ago(10) };
+  assert.equal(await agentTurnReason({ store: storeWith({ drafts: [no] }), locationId: "LOC", contactId: "c1", kind: "agent_pulse", config, now: NOW }), null);
+  assert.match(await agentTurnReason({ store: storeWith({ drafts: [no] }), locationId: "LOC", contactId: "c1", kind: "passed_checkin", address: PASSED.address, config, now: NOW }),
+    /one house at a time/, "only the agent check-in: a passed house still rides on the live offer");
+});
+
 test("the audit's nudge two days after our last unprompted text waits; a number they're owed never does", async () => {
   const store = storeWith({ drafts: [sentText(2)] });
   assert.match(await agentTurnReason({ store, locationId: "LOC", contactId: "c1", kind: "offer_nudge", config, now: NOW }), /we texted them 48h ago — unprompted texts are 72h apart/);

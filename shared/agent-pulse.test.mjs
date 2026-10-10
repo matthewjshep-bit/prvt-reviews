@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeAgentPulse, evaluateAgent, pickPulseAgents, agentSegment, agentStops, agentOwner,
-  freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor, dealToThank,
+  freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor, dealToThank, openOfferIdle,
 } from "./agent-pulse.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
@@ -230,11 +230,70 @@ test("the check-in replaces the tier nurture drip, never the TIER workflows that
   assert.deepEqual(tierDrips({ pulse: {}, conversationAi: TIER_CAI }), [], "without GHL's workflow list it guesses nothing");
 });
 
-test("once the check-in replaces the drips, an agent the bot put in TIER 3 is the check-in's, not the drip's", () => {
-  const inTier = agent({ lastInboundAt: ago(60), events: [{ type: "workflow_enrolled", at: ago(5), data: { workflowId: "wf-t3", workflowName: "TIER 3" } }] });
-  assert.equal(evaluateAgent(inTier, ctx()).reason, "a GHL workflow (TIER 3)", "a drip nobody replaced still has them");
-  const replacing = normalizeAgentPulse({ enabled: true, replacesWorkflowIds: ["wf-t3"] });
-  assert.equal(evaluateAgent(inTier, ctx({ settings: replacing })).status, "due");
+test("once the check-in replaces the drips, an agent in one is the check-in's, not the drip's", () => {
+  const inDrip = agent({ lastInboundAt: ago(60), events: [{ type: "workflow_enrolled", at: ago(5), data: { workflowId: "wf-n", workflowName: "Tier 2+3 nurture" } }] });
+  assert.equal(evaluateAgent(inDrip, ctx()).reason, "a GHL workflow (Tier 2+3 nurture)", "a drip nobody replaced still has them");
+  const replacing = normalizeAgentPulse({ enabled: true, replacesWorkflowIds: ["wf-n"] });
+  assert.equal(evaluateAgent(inDrip, ctx({ settings: replacing })).status, "due");
+});
+
+test("an agent the bot put in TIER 1, 2 or 3 still gets the check-in, because those workflows only move the card", () => {
+  for (const name of ["TIER 1", "TIER 2", "TIER 3", "tier 2"]) {
+    const inTier = agent({ lastInboundAt: ago(60), events: [{ type: "workflow_enrolled", at: ago(5), data: { workflowId: `wf-${name}`, workflowName: name } }] });
+    const v = evaluateAgent(inTier, ctx());
+    assert.equal(v.status, "due", `${name}: ${v.reason}`);
+  }
+});
+
+test("an agent who said no to an open offer and never gave a number gets the check-in instead of silence", () => {
+  // The first no keeps the offer open and asks what the seller would take.
+  // They never answered; the nudges stand down on a no. Before 2026-10-09
+  // "an open offer" held the agent for good with nothing coming.
+  const floated = { id: "o-no", contactId: "a1", address: "2553 Mackenzie Rd, Bellingham, WA 98226", cashAmount: 338000, status: "new",
+    createdAt: ago(25), statusHistory: [], proactive: { realmCheckAt: ago(25) }, declinedOnce: { at: ago(24) } };
+  const drafts = [
+    { id: "d-float", status: "sent", outbound: { kind: "realm_check", offerId: "o-no" }, reply: "float", createdAt: ago(25), sentAt: ago(25) },
+    { id: "d-no", status: "sent", inbound: "Seller won't go that low, thanks", intent: "rejection", reply: "What would they take?", createdAt: ago(24), sentAt: ago(24) },
+  ];
+  const v = evaluateAgent(agent({ lastInboundAt: ago(24), offers: [floated], current: [floated], drafts }), ctx());
+  assert.notEqual(v.status, "owned", v.reason);
+  assert.equal(v.status, "due", v.reason);
+  assert.match(openOfferIdle({ offer: floated, drafts, config: CONFIG, now: NOW }) || "", /stands down/);
+  // A live nudge on it still keeps the agent with the offer.
+  const sent = { ...floated, id: "o-live", status: "sent", declinedOnce: null, sends: [{ ts: ago(2) }] };
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(60), offers: [sent], current: [sent] }), ctx()).reason, "an open offer");
+});
+
+test("an agent whose priced offer we never sent gets the check-in once the number has sat a week", () => {
+  const unsent = { id: "o-unsent", contactId: "a1", address: "2227 Sidney Ave, Port Orchard, WA 98366", cashAmount: 300600, status: "new", createdAt: ago(50), statusHistory: [] };
+  const v = evaluateAgent(agent({ lastInboundAt: ago(60), offers: [unsent], current: [unsent] }), ctx());
+  assert.equal(v.status, "due", v.reason);
+  const fresh = { ...unsent, createdAt: ago(3) };
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(60), offers: [fresh], current: [fresh] }), ctx()).reason, "an open offer", "this week it's still yours to send");
+});
+
+test("an agent whose offer shows their answer is not cold, even with no text of theirs on the timeline", () => {
+  assert.equal(agentSegment({ offers: [passed()] }), "engaged");
+  assert.equal(agentSegment({ offers: [passed({ status: "countered", counter: { amount: 350000 } })] }), "engaged");
+  assert.equal(agentSegment({ offers: [passed({ status: "we_passed" })] }), "cold", "our own pass isn't their answer");
+  const v = evaluateAgent(agent({ offers: [passed()], current: [passed()] }), ctx());
+  assert.equal(v.status, "due", v.reason);
+  assert.equal(v.segment, "engaged");
+});
+
+test("an agent we made an offer to who never wrote back is still checked in on, until three check-ins go unanswered", () => {
+  const ours = passed({ status: "we_passed", statusHistory: [{ status: "we_passed", ts: ago(40) }] });
+  const quiet = agent({ offers: [ours], current: [ours], events: [{ type: "follow_up_sent", at: ago(30) }] });
+  const v = evaluateAgent(quiet, ctx());
+  assert.equal(v.status, "due", v.reason);
+  assert.equal(v.pulseReason, "general");
+  assert.equal(v.segment, "cold", "the text still introduces us in a clause");
+  assert.equal(evaluateAgent({ ...quiet, ledger: [{ type: "agent_pulse_sent", at: ago(10) }, { type: "agent_pulse_texted", at: ago(10) }] }, ctx()).status, "not_due", "every 21 days, not every day");
+  const drafted = { id: "o-d", contactId: "a1", address: "9 Oak St, Kent, WA 98031", status: "draft", createdAt: ago(30) };
+  assert.equal(evaluateAgent(agent({ offers: [drafted], current: [drafted], events: [{ type: "follow_up_sent", at: ago(30) }] }), ctx()).status, "due", "a drafted offer counts too");
+  const three = { ...quiet, ledger: [ago(70), ago(49), ago(28)].map((at) => ({ type: "agent_pulse_texted", at })) };
+  assert.equal(evaluateAgent(three, ctx()).status, "cold_dropped", "three unanswered check-ins and they rest");
+  assert.equal(evaluateAgent(agent({ events: [{ type: "follow_up_sent", at: ago(30) }] }), ctx()).status, "not_due", "no offer, never wrote: listings only, as before");
 });
 
 test("the check-in carries what it can mention: the last house, the areas they work, and what they've told us, each dated", () => {
