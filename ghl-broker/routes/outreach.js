@@ -1519,7 +1519,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     try {
       const { locationId, client } = resolveLocation(req);
       const saved = await getSettings(locationId);
-      const r = await previewAgentPulse({ client, locationId, saved, store, limit: req.body?.limit ?? 3 });
+      const r = await previewAgentPulse({ client, locationId, saved, store, limit: req.body?.limit ?? 3, reason: String(req.body?.reason || "").slice(0, 40) });
       res.json({ ok: true, ...r });
     } catch (err) { fail(res, err); }
   });

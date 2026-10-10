@@ -286,3 +286,15 @@ test("everyone on a Tier 2 or Tier 3 card in GHL is in the check-in's plan, coun
   assert.equal(plan.counts.ghlTier.t3, 1);
   assert.equal(await pulseTierCards({ call: async () => { throw new Error("GHL down"); } }, "loc-ap-cards-down"), null, "a failed read plans without the cards");
 });
+
+test("sample check-ins can be asked for by kind: only general ones when that's what you want to read", async () => {
+  const loc = "loc-ap-sample-kind";
+  await repliedAgent(loc, "gen1");
+  const seen = [];
+  const r = await previewAgentPulse({ client, locationId: loc, saved: savedWith(), store, limit: 3, reason: "fresh_listing",
+    deps: { previewProactive: async (args) => { seen.push(args.contactId); return { reply: "x" }; } } });
+  assert.deepEqual(r.previews, [], "no fresh listing, no sample");
+  const g = await previewAgentPulse({ client, locationId: loc, saved: savedWith(), store, limit: 3, reason: "general",
+    deps: { previewProactive: async (args) => { seen.push(args.contactId); return { reply: "x" }; } } });
+  assert.deepEqual(g.previews.map((p) => p.reason), ["general"]);
+});

@@ -444,7 +444,7 @@ export async function maybeRunAgentPulse({ client, locationId, saved = {}, store
  * claim, no draft row, nothing sent (reply-agent.js previewProactive). One
  * model call each, so a handful at most.
  */
-export async function previewAgentPulse({ client, locationId, saved = {}, store = defaultStore, limit = 3, deps = {}, now = Date.now() }) {
+export async function previewAgentPulse({ client, locationId, saved = {}, store = defaultStore, limit = 3, reason = "", deps = {}, now = Date.now() }) {
   const plan = await planAgentPulse({ locationId, saved, store, now, workflows: await pulseWorkflows(client, locationId, deps), tierCards: await pulseTierCards(client, locationId, deps) });
   const preview = typeof deps.previewProactive === "function" ? deps.previewProactive : previewProactive;
   const n = Math.max(1, Math.min(5, Math.round(Number(limit)) || 3));
@@ -452,7 +452,8 @@ export async function previewAgentPulse({ client, locationId, saved = {}, store 
   // A pick that wouldn't be drafted (unsubscribed, a person has the thread)
   // is shown with why, and the next in line is written in its place.
   let drafted = 0;
-  const line = [...plan.picks, ...(plan.spares || [])].slice(0, n + 4);
+  // `reason` ("general", "fresh_listing", …): samples of that kind only.
+  const line = [...plan.picks, ...(plan.spares || [])].filter((p) => !reason || p.reason === reason).slice(0, n + 4);
   for (const [i, p] of line.entries()) {
     if (drafted >= n) break;
     const r = await preview({ client, locationId, saved, store, contactId: p.contactId, kind: "agent_pulse", offer: null, subject: { ...p.subject, variant: i } })
