@@ -3960,15 +3960,19 @@ takes everyone tagged tier-2/tier-3 out at once — GHL has no API that lists a
 workflow's members. "Not Now Nurture" is a second published nurture; tick it
 only if it texts agents.
 
-**How it sounds.** An agent we know gets one real, specific thing from the
-history first — something they told us that's still open, the last house and
-how it went, something personal they shared (only if recent), or their market
-— then the question; never quoted, never invented, never more than one, and
-never a number. The subject carries `lastHouse`, `aboutThem` (the record's
-"About them", newest first, each with days ago), `areas` and the last
-conversation summary. A stranger gets the listing. `pulse.voice` (Settings,
-600 characters) is Matt's own note on the voice, passed to the drafter.
-**Write 3 sample check-ins** (`POST /api/outreach/pulse/preview {limit}`)
+**How it sounds (changed 2026-10-09).** Matt: "personable yet generic and not
+referencing the past property and checking in about any other distressed or
+off market properties", except an offer we're following up, which is the offer
+nudge's job. The check-in never mentions, names or hints at a house, listing,
+offer or deal from before, including in a thank-you after a close. Every
+general check-in asks whether anything distressed or off-market has come
+across their desk. Its warmth comes from the tone, their first name, and at
+most the area they work. A fresh listing of theirs is still named, because
+it is news, not history. The subject carries `pastHouses`, which the drafter
+never sees. A draft naming one of those houses (`namesHouse`) is written
+again once and dropped if it still names one. `pulse.voice` (Settings, 600
+characters) is Matt's own note on the voice, passed to the drafter.
+**Write 3 sample check-ins** (`POST /api/outreach/pulse/preview {limit, reason}`, `reason` e.g. "general")
 drafts the next ones from their real threads with the saved settings —
 `reply-agent.js previewProactive`, which writes nothing and sends nothing.
 
