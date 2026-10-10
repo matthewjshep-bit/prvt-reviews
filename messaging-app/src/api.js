@@ -4,6 +4,9 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE || "https://offers.shepflips.com";
 
+// The public link a saved contact card is served from (ghl-broker/contact-card.js).
+export const contactCardUrl = (token) => (token ? `${API_BASE}/card/${token}` : "");
+
 export function getLocationId() {
   try {
     return new URLSearchParams(window.location.search).get("location_id") || "";

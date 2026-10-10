@@ -11,6 +11,8 @@ import {
 } from "@shared/conversation-ai.js";
 import { FOLLOW_UP_KINDS, kindsFor } from "@shared/follow-up.js";
 import { BTN } from "./ui.jsx";
+import { isVcard } from "@shared/contact-card.js";
+import { contactCardUrl } from "./api.js";
 
 export const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -798,6 +800,53 @@ export function MediaCard({ config, patch }) {
       <Field label="Reply to a bare photo">
         <Text value={config.media.reply} onChange={(v) => patch({ media: { ...config.media, reply: v } })} placeholder="Thanks for the images, taking a look!" />
       </Field>
+    </Section>
+  );
+}
+
+// Matt's contact card (shared/contact-card.js): its own text, right after a
+// reply to someone who asked who we are, or to an agent whose house didn't
+// work. Never on a cold first text.
+export function ContactCardCard({ config, patch }) {
+  const c = config.contactCard;
+  const set = (k) => (v) => patch({ contactCard: { ...c, [k]: v } });
+  const [err, setErr] = useState("");
+  const load = async (file) => {
+    setErr("");
+    if (!file) return;
+    const text = await file.text();
+    if (!isVcard(text)) { setErr("That file isn't a contact card (.vcf)."); return; }
+    patch({ contactCard: { ...c, vcard: text.trim(), fileName: c.fileName === "contact.vcf" ? file.name : c.fileName } });
+  };
+  const link = contactCardUrl(c.token);
+  return (
+    <Section title="Contact card"
+      intro="Your .vcf goes in its own text right behind the bot's reply, so they can save you in one tap. Two moments only: they asked who you are or how to reach you, or an agent's house didn't work (they said no, or we passed), once per agent, with the save-me line. Never on a first cold text.">
+      <Toggle checked={c.enabled} onChange={set("enabled")}>Send my contact card when it makes sense</Toggle>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Field label="The card" hint={c.vcard ? "A card is loaded. Choose another file to replace it." : "Export it from your phone (Contacts → Share Contact) and choose the .vcf here."}>
+          <input type="file" accept=".vcf,text/vcard,text/x-vcard" className="block text-sm" onChange={(e) => load(e.target.files?.[0])} />
+          {err && <p className="mt-1 text-xs text-rose-600">{err}</p>}
+        </Field>
+        <Field label="File name on their phone">
+          <Text value={c.fileName} onChange={set("fileName")} placeholder="Matt Shepherd.vcf" />
+        </Field>
+        <Field label="Text with the card when they ask">
+          <Text value={c.askText} onChange={set("askText")} />
+        </Field>
+        <Field label="Text with the card when a house didn't work">
+          <Text value={c.passText} onChange={set("passText")} />
+        </Field>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-4">
+        <Toggle checked={c.onAsk} onChange={set("onAsk")}>When they ask who we are or how to reach us</Toggle>
+        <Toggle checked={c.onPass} onChange={set("onPass")}>When an agent's house didn't work</Toggle>
+      </div>
+      {c.vcard && (
+        <p className={HINT}>
+          {link ? <>Served at <a className="text-blue-600 underline" href={link} target="_blank" rel="noreferrer">{link}</a>.</> : "Save to get the card's link."}
+        </p>
+      )}
     </Section>
   );
 }

@@ -9,7 +9,7 @@ import React from "react";
 import {
   Send, RefreshCw, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
   MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
-  Calculator, ClipboardList, Circle, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX, Gauge, CircleSlash,
+  Calculator, ClipboardList, Circle, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX, Gauge, CircleSlash, Contact,
 } from "lucide-react";
 import { EVENT_LABEL, EVENT_ICON, AI_SOURCES, FACT_KEYS, PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
 import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
@@ -21,7 +21,7 @@ import { offerEditorUrl } from "./api.js";
 const ICONS = {
   Send, RefreshCw, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
   MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
-  Calculator, ClipboardList, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX, Gauge, CircleSlash,
+  Calculator, ClipboardList, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX, Gauge, CircleSlash, Contact,
 };
 export const EventIcon = ({ type, size = 13 }) => { const I = ICONS[EVENT_ICON[type]] || Circle; return <I size={size} className="shrink-0" />; };
 
