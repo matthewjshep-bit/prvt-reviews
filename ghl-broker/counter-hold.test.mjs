@@ -91,3 +91,15 @@ test("a skipped check-in is tried again tomorrow, our answer restarts the clock,
   const off = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: false }, counterHold: { enabled: true } } } });
   assert.deepEqual(await runCounterHolds({ locationId: "L", store: fakeStore([heldOffer({ at: ago(4) })]), config: off, deps: flaky, now: NOW }), []);
 });
+
+// The morning sweep's counter check-in waited for a person (counter_nudge is
+// not on the auto-send list) and was still counted toward the pass, so a
+// held counter could be passed on two texts nobody sent.
+test("the check-in after we hold our number on a counter sends by itself instead of waiting for a person", async () => {
+  const started = [];
+  const deps = { startProactive: async (a) => { started.push(a); return { job: { id: "p1" } }; }, markCounterHoldNudge: async () => ({ ok: true }) };
+  await runCounterHolds({ locationId: "L", store: fakeStore([heldOffer({ at: ago(4) })]), config: CFG(), deps, now: NOW });
+  assert.equal(started[0].kind, "counter_nudge");
+  assert.equal(started[0].deps.releaseHeld, true, "released when its gates are clean, like the nightly audit's own");
+  assert.match(started[0].deps.releaseReason, /names no number of ours/);
+});
