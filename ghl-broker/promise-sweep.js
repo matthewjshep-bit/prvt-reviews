@@ -30,6 +30,7 @@ import { triageHeldUnderwrite } from "./shared/held-underwrites.js";
 import { openPromises, resolvePromise, normalizePromiseDismissal, promiseWhat, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
 import { driveOpenPromises, promiseClaimed } from "./promise-driver.js";
 import { waitingReason } from "./outbox-guard.js";
+import { callEventConnected } from "./shared/talked-to.js";
 
 const HOUR_MS = 3600000;
 
@@ -364,6 +365,14 @@ export const ADDRESS_CHASE_DAYS = [2, 5, 9, 14, 21, 30];
 export const ADDRESS_CHASE_WINDOW_DAYS = 60;
 // They're mid-conversation, so the bot is already talking to them.
 export const ADDRESS_CHASE_QUIET_HOURS = 36;
+// A person working the thread: your own text, or a call (Kyle R.,
+// 2026-10-05 — Matt gave a number by phone and text; the chase kept asking).
+// A call counts when it connected or when we placed it; their missed call
+// (a bare call_summary and an inbound call_attempt) doesn't.
+const YOU_TOOK_IT = ["hand_reply", "call_summary", "call_attempt"];
+const youTookIt = (e) => e.type === "hand_reply"
+  || (e.type === "call_summary" && callEventConnected(e))
+  || (e.type === "call_attempt" && (e.source === "operator" || e.data?.direction === "outbound"));
 const DAY_MS = 86400000;
 
 // When each rung falls: days from the message, or from the time they named.
@@ -388,7 +397,7 @@ export async function runAddressChase({ client, locationId, saved = {}, store, s
   const start = typeof deps.startProactive === "function" ? deps.startProactive : startProactive;
 
   const events = await store.listContactEventsSince(locationId, iso(now - ADDRESS_CHASE_WINDOW_DAYS * DAY_MS), {
-    types: ["address_pending", "address_pending_closed", "address_chase_sent", "subject_property_set", "text_summary", "call_summary"], limit: 5000,
+    types: ["address_pending", "address_pending_closed", "address_chase_sent", "subject_property_set", "text_summary", "call_summary", ...YOU_TOOK_IT], limit: 5000,
   }).catch(() => []);
   const byContact = new Map();
   for (const e of events) {
@@ -406,6 +415,20 @@ export async function runAddressChase({ client, locationId, saved = {}, store, s
     if (list.some((e) => after(e) && (e.type === "subject_property_set" || e.type === "address_pending_closed"))) {
       out.found++;
       out.results.push({ contactId, status: "closed" });
+      continue;
+    }
+    // You called or texted them yourself since: the house is yours to work,
+    // and the machine asking again talks over you. Written down, so the Desk,
+    // the tiers and the audit read it closed too.
+    const yours = list.find((e) => after(e) && youTookIt(e));
+    if (yours) {
+      await recordEvent({
+        store, locationId, contactId, party: "agent", type: "address_pending_closed", at: iso(now), address: "",
+        source: "conversation", dedupeKey: `address_pending_closed:${contactId}:${pending.at}:you`,
+        data: { reason: "you_took_it", by: yours.type, pendingAt: pending.at },
+      }).catch(() => {});
+      out.found++;
+      out.results.push({ contactId, status: "closed", reason: `you ${yours.type === "hand_reply" ? "texted" : "called"} them yourself` });
       continue;
     }
     const rungs = addressChaseRungs(pending);

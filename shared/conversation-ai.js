@@ -490,6 +490,15 @@ export function soundsLikeSecondThoughts(message = "") {
   return SECOND_THOUGHTS_RX.test(String(message || ""));
 }
 
+// They're confused by us or tired of repeating themselves (Kyle R.,
+// 2026-10-10: we'd already given him our number, he said, and what was the
+// miscommunication?). The bot answered and asked a third time for an address. A thread crossed up like that is a person's.
+const CROSSED_UP_RX = /\bmis-?communicat|\bconfus(?:ed|ing)\b|\bas I (?:said|mentioned|told you)\b|\b(?:I|we) already (?:told|said|gave|answered)\b|\byou(?:'ve| have)? already (?:said|gave|given|told|offered|have|asked)\b|\bI thought you (?:already|said)\b|\bdid you (?:even )?read\b|\bnot sure what (?:you(?:'re| are)|the) (?:asking|talking|problem|issue|miscommunication)/i;
+/** soundsCrossedUp(message) → true when they're confused by us or repeating themselves. */
+export function soundsCrossedUp(message = "") {
+  return CROSSED_UP_RX.test(String(message || ""));
+}
+
 export const OFFER_DOC_KEYS = ["image", "pdf", "psa", "scope", "comps", "netsheet"];
 export const OFFER_DOC_LABEL = {
   image: "offer letter (image)", pdf: "offer letter (PDF)", psa: "purchase & sale agreement",

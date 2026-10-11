@@ -166,6 +166,30 @@ test("the poller finds calls that ended since the cursor and reads each once", a
   assert.equal(await maybeSweepCalls({ client, locationId: "L", saved: { aiApiKey: "k", conversationAi: { enabled: true, callIntake: { enabled: false } } }, store, now }), 0);
 });
 
+// Kyle R., 2026-10-05: Matt's call ran about five minutes. GHL
+// stamps a call with its start and lists it once it ends, so a sweep during
+// the call moved the cursor past it, and the call was never read.
+test("a call still going when the poller looks is read once it ends, and a call already read isn't read again", async () => {
+  _resetJobs();
+  const callAt = "2026-10-05T20:28:00Z";
+  const client = { call: async (path) => {
+    if (path.startsWith("/conversations/search")) return { conversations: [{ id: "cv1", contactId: "a1", lastMessageDate: "2026-10-05T20:35:00Z", lastMessageType: "TYPE_SMS" }] };
+    if (path.includes("/conversations/cv1/")) return { messages: [{ id: "k9", messageType: "TYPE_CALL", direction: "outbound", dateAdded: callAt }] };
+    return { messages: [] };
+  } };
+  const mkStore = (events = []) => ({ cursors: new Map([["L|calls", { at: "2026-10-05T20:31:00.000Z" }]]), events: [...events],
+    async getJobCursor(l, k) { return this.cursors.get(`${l}|${k}`) || null; }, async setJobCursor(l, k, v) { this.cursors.set(`${l}|${k}`, v); },
+    async listContactEvents() { return this.events; }, async appendContactEvents(l, id, rows) { this.events.push(...rows); return { inserted: rows.length, skipped: 0 }; },
+    async getContactProfile() { return null; }, async upsertContactProfile() { return {}; } });
+  const saved = { aiApiKey: "k", conversationAi: { enabled: true } };
+  const deps = { findCall: async () => ({ id: "k9", direction: "outbound", at: callAt, durationSec: 300 }), transcript: async () => null, maxPolls: 1, pollMs: 1 };
+  const now = Date.parse("2026-10-05T20:46:00Z");
+  assert.equal(await maybeSweepCalls({ client, locationId: "L", saved, store: mkStore(), now, deps }), 1, "the call that started before the last look is still read");
+  _resetJobs();
+  const read = mkStore([{ type: "call_summary", dedupeKey: "call:k9", at: callAt }]);
+  assert.equal(await maybeSweepCalls({ client, locationId: "L", saved, store: read, now, deps }), 0, "read already: not started again");
+});
+
 test("they called and nobody picked up: an attempt for the call list, and still them reaching out for the ladders", async () => {
   _resetJobs();
   const store = fakeStore();

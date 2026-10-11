@@ -45,7 +45,7 @@ import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, 
 import { paperWent, paperWorthy, floatSentAt, isRoughNumber } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, soundsLikeSecondThoughts, soundsCrossedUp } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
@@ -1081,6 +1081,13 @@ export async function redraftOnGate({ draft, gate, gateFor, config = null, redra
   return { draft: { ...draft, redraftHeld: { for: tripped, flags: (g2.flags || []).filter((f) => f !== g2.locked).slice(0, 6) } }, gate };
 }
 
+// Why a person has the thread, in the words the outbox and the job show.
+export function humanActiveLine(h) {
+  const n = h?.minutesAgo ?? 0;
+  const ago = `${n} minute${n === 1 ? "" : "s"} ago`;
+  return h?.by === "call" ? `you called them ${ago} — you have the thread` : `you replied to them ${ago} — you have the thread`;
+}
+
 /**
  * decideAutoSend({ gate, party, intent, channel, config, sendsEnabled, humanActive, hold })
  *
@@ -1096,7 +1103,7 @@ export function decideAutoSend({ gate, party = "agent", intent = "other", channe
   if (hold?.held) return { send: false, code: "bot_stopped", reason: `${holdLine(hold)} — it waits for you` };
   if (!gate?.ok && !(gate?.locked && gate?.clean)) return { send: false, code: "gates", reason: gate?.flags?.[0] ? `needs a person: ${gate.flags[0]}` : "the gates did not pass" };
   if (!config?.enabled) return { send: false, code: "bot_off", reason: "Conversation AI is switched off" };
-  if (humanActive) return { send: false, code: "human_active", reason: `you replied to them ${humanActive.minutesAgo} minute${humanActive.minutesAgo === 1 ? "" : "s"} ago — you have the thread` };
+  if (humanActive) return { send: false, code: "human_active", reason: humanActiveLine(humanActive) };
   if (!sendsEnabled) return { send: false, code: "sends_off", reason: "sends are off on the broker (CARD_SENDS_ENABLED)" };
   const playbook = config.parties?.[party];
   if (!playbook) return { send: false, code: "unknown_party", reason: "an unknown contact never auto-sends" };
@@ -1707,11 +1714,17 @@ export async function qualifyIcebreaker({ store, locationId, contactId, draft, m
   return { stage: step.move === "underwrite" ? "qualified" : step.move, address: ice.address, why: step.read.why, reply: step.reply };
 }
 
+// A call is a line too: "[…] US call" bare, or "[…] US call TRANSCRIPT:"
+// with the words below it (enrich.js buildTranscript). Kyle R.,
+// 2026-10-05: the colon-only match never saw Matt's call, and the bot texted
+// three minutes into it.
 export function lastOutbound(transcript = "") {
   let found = null;
   for (const line of String(transcript || "").split("\n")) {
-    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US \w+: (.*)$/.exec(line);
-    if (m) found = { ts: Date.parse(`${m[1]}T${m[2]}:00Z`), text: m[3].trim() };
+    const call = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US call(?:$|:| TRANSCRIPT:)/.exec(line);
+    if (call) { found = { ts: Date.parse(`${call[1]}T${call[2]}:00Z`), text: "", channel: "call" }; continue; }
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US (\w+): (.*)$/.exec(line);
+    if (m) found = { ts: Date.parse(`${m[1]}T${m[2]}:00Z`), text: m[4].trim(), channel: m[3] };
   }
   return found;
 }
@@ -1854,6 +1867,8 @@ export async function humanHasThread({ store, client = null, locationId, contact
   if (!minutes || !contactId) return null;
   const last = lastOutbound(transcript);
   if (!last || !Number.isFinite(last.ts) || now - last.ts > minutes * 60000) return null;
+  // A call we placed is a person on the line; no template dials.
+  if (last.channel === "call") return { at: new Date(last.ts).toISOString(), minutesAgo: Math.max(0, Math.round((now - last.ts) / 60000)), by: "call" };
   const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 10 }).catch(() => []);
   const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
   // GHL may put the stop line on the end of what we sent ("…I'm all ears.
@@ -3409,7 +3424,7 @@ async function runReply(job, ctx) {
   if (a.humanActive) {
     job.status = "held";
     job.phase = "";
-    job.heldReason = `you replied to them ${a.humanActive.minutesAgo} minute${a.humanActive.minutesAgo === 1 ? "" : "s"} ago — you have the thread`;
+    job.heldReason = humanActiveLine(a.humanActive);
     // The thread is Matt's, but what they said about the deal still goes on
     // it: Kenneth Patton's four questions about 1510 Maple Lane (2026-10-01)
     // came while Matt was answering him, and none of them reached the deal.
@@ -3855,6 +3870,11 @@ async function runReply(job, ctx) {
       && moneyIn(draft.reply).every((n) => n <= draft.counterHold.ours)) {
     auto = { ...auto, send: true, code: "", reason: "our number, held — hold, then pass", counterHold: true };
   }
+  // Confused by us or repeating themselves (Kyle R., 2026-10-10): the
+  // machine already lost the thread once, so it doesn't answer for you.
+  if (auto.send && party === "agent" && soundsCrossedUp(theirLatestWords(a.transcript, job.message))) {
+    auto = { ...auto, send: false, code: "needs_you", reason: "they sound confused, or say they already told us — you take this one" };
+  }
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
@@ -3888,6 +3908,14 @@ async function runReply(job, ctx) {
   }
   // Not our kind of house, in their words: no rule spends a credit on it.
   if (notOurKind) {
+    plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite");
+    plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
+  }
+  // A house is coming and they gave no address (Kyle R., 2026-10-05: a flip
+  // "if you're interested"). The underwrite would fall back to the Subject
+  // Property — the last house, which he'd called turnkey — and quote it. The
+  // address chase asks; the underwrite starts when the address lands.
+  if (party === "agent" && addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now })) {
     plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite");
     plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
   }

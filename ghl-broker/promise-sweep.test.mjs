@@ -331,6 +331,34 @@ test("the chase stops when the address arrives or they opt out, and waits while 
   assert.equal(s.calls.length, 0);
 });
 
+// Kyle R., 2026-10-05: he mentioned a flip coming, Matt called him and texted
+// our number. The chase still asked for the address on 10/07 and 10/10, and
+// he asked what the miscommunication was.
+test("once you've called or texted them yourself, the machine stops asking for the address", async () => {
+  for (const yours of [
+    { contactId: "ag", type: "hand_reply", at: at(45), source: "operator", data: { via: "ghl", channel: "sms" } },
+    { contactId: "ag", type: "call_summary", at: at(45), source: "call", data: { direction: "outbound", transcribed: true, summary: "talked about the house" } },
+    { contactId: "ag", type: "call_attempt", at: at(45), source: "call", data: { direction: "outbound", outcome: "voicemail" } },
+    { contactId: "ag", type: "call_attempt", at: at(45), source: "operator", data: {} },
+  ]) {
+    const s = starter();
+    const store = fakeStore({ events: [pending(50), yours] });
+    const r = await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+    assert.equal(r.sent, 0, `${yours.type} ends the chase`);
+    assert.equal(s.calls.length, 0);
+    assert.ok(store.events.some((e) => e.type === "address_pending_closed" && e.data?.reason === "you_took_it"), `${yours.type} is written down as closed, so the Desk and tiers see it too`);
+  }
+  // Their missed call isn't you working it.
+  const missed = fakeStore({ events: [pending(50),
+    { contactId: "ag", type: "call_attempt", at: at(45), source: "call", data: { direction: "inbound", outcome: "no_answer" } },
+    { contactId: "ag", type: "call_summary", at: at(45), source: "call", data: { direction: "inbound", summary: "(they called, missed)", transcribed: false } }] });
+  assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store: missed, now: NOW, deps: starter() })).sent, 1, "a missed call from them doesn't end it");
+  // Yours from before they mentioned it doesn't count.
+  const s = starter();
+  const before = fakeStore({ events: [{ contactId: "ag", type: "hand_reply", at: at(60), source: "operator", data: {} }, pending(50)] });
+  assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store: before, now: NOW, deps: s })).sent, 1);
+});
+
 test("a time they named ('in a few weeks') is the first check-in", async () => {
   const store = fakeStore({ events: [pending(50, { firstDueAt: new Date(NOW + 5 * DAY).toISOString(), phrase: "a few weeks" })] });
   const s = starter();

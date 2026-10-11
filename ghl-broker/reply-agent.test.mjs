@@ -674,6 +674,33 @@ test("an allowlisted intent on an auto-send party is scheduled a few minutes out
   assert.match(notes[0], /will send it itself at/);
 });
 
+// Kyle R., 2026-10-10: he said we'd already given him our number and asked
+// what the miscommunication was. The bot answered by itself and asked for
+// the address a third time.
+test("when an agent sounds confused or fed up with us, the reply waits for you", async () => {
+  for (const message of [
+    "You already sent me a number, like I said. Not sure what the miscommunication is",
+    "I thought you already said you were at 400",
+    "Like I already told you, it's turnkey",
+    "Did you even read my last text?",
+  ]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = fakeStore();
+    store.listOffers = async () => OFFERS;
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message, sendsEnabled: true,
+      deps: { draft: async () => DRAFT, now: () => NOW, random: () => 0 },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    const d = await store.getReplyDraft(job.draftId);
+    assert.equal(d.status, "draft", message);
+    assert.equal(d.autoSend.decided, false);
+    assert.match(d.autoSend.reason, /confused|already told us/);
+  }
+});
+
 test("with sends off on the broker nothing is scheduled, and the draft says why", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
@@ -1221,6 +1248,25 @@ test("when a person replied to them minutes ago, the bot drafts but never sends 
   assert.match(decideAutoSend({ gate: { ok: true, flags: [] }, party: "agent", intent: "question", config: cfg, sendsEnabled: true, humanActive: h }).reason, /you replied to them \d+ minutes ago/);
 });
 
+// Kyle R., 2026-10-05: Matt called him and the bot texted him asking for the
+// address three minutes in. A call reads "[…] US call" with
+// no colon (or "US call TRANSCRIPT:"), so the hand-reply check never saw it.
+test("when you called them minutes ago, the bot doesn't text over your call", async () => {
+  const stamp = new Date(Date.now() - 3 * 60000).toISOString().slice(0, 16).replace("T", " ");
+  const store = fakeStore([]);
+  for (const transcript of [
+    `[${stamp}] THEM sms: we are priced right\n[${stamp}] US call`,
+    `[${stamp}] THEM sms: we are priced right\n[${stamp}] US call TRANSCRIPT:\nSpeaker 1: Hello.\nSpeaker 2: Hey, this is Matt.`,
+  ]) {
+    assert.equal(lastOutbound(transcript).channel, "call");
+    const h = await humanHasThread({ store, locationId: "LOC", contactId: "c1", transcript, minutes: 30 });
+    assert.ok(h && h.minutesAgo <= 4, "a call is a person on the thread");
+    assert.equal(h.by, "call");
+    const cfg = conversationConfig(AUTO_SAVED);
+    assert.match(decideAutoSend({ gate: { ok: true, flags: [] }, party: "agent", intent: "question", config: cfg, sendsEnabled: true, humanActive: h }).reason, /you called them \d+ minutes? ago — you have the thread/);
+  }
+});
+
 test("what the bot learns is filed to the same fields the sweep keeps, merged not overwritten", async () => {
   const calls = [];
   const client = {
@@ -1714,6 +1760,28 @@ test("their take arriving hands off to the realm check, and a confirmed address 
   assert.ok(calls.some((c) => c[0] === "startUnderwrite" && c[1] === "12 Elm St, Renton, WA 98056"), `the new_property rule kicks the underwrite off: ${JSON.stringify(calls)}`);
   const d = await store.getReplyDraft(job.draftId);
   assert.ok(d.actions.some((a) => a.type === "start_underwrite" && a.status === "done"), JSON.stringify(d.actions.map((a) => [a.type, a.status, a.detail || a.error])));
+});
+
+// Kyle R., 2026-10-05: a flip coming, no address. The underwrite fell back to
+// his Subject Property — a house he'd called turnkey — and a number on that
+// house went out.
+test("a new house with no address yet isn't underwritten as the old house on file", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "Got a fix and flip coming up in Kent if you're interested",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "new_property", propertyAddress: "", reply: "Interested, yes. What's the address?" }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw1", dryRun: true } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(uw.length, 0, "nothing to underwrite until the address comes");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal((d.actions || []).filter((a) => a.type === "start_underwrite" && a.status !== "skipped").length, 0, JSON.stringify(d.actions.map((a) => [a.type, a.status])));
 });
 
 test("the two holds that kept biting are settings now, liberal by default", async () => {
