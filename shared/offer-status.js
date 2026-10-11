@@ -497,6 +497,10 @@ export const OFFER_LIST_FIELDS = [
   // Heat (offerHeat): the hand-set flag and the agreed price it is derived from,
   // and the take-back that cancels every agreed marker before it (priceAgreed).
   "hot", "agreed", "agreedCleared", "pin", "paperHeld",
+  // The nightly sweep's close-out ({at, by, reason}): a house it passed on
+  // unpriced reopens on the agent's numbers (shared/held-underwrites.js
+  // reopensOnTheirNumbers), and the bot has to be able to tell.
+  "retired",
   // Off-market (shared/off-market.js): {value, by, why, at} — our best deals.
   "offMarket",
   // The kind of house (shared/asset-type.js): {type, land, by, at}, so the

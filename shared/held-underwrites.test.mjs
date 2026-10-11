@@ -279,3 +279,51 @@ test("a house the agent said is not a project is ruled out for the machine — h
   assert.ok(agentRuledOut([pd({ condition: "turnkey, move-in ready" })], "2027 Se Walker Park Rd"), "turnkey");
   assert.equal(agentRuledOut([pd({ condition: "needs paint and flooring", workNeeded: "cosmetic" })], "2027 Se Walker Park Rd"), null);
 });
+
+// 1425 33rd St SE, Auburn (2026-10-10): the agent called it cosmetic and said
+// houses at that price "have to be turnkey" to sell — the finished house, so
+// this one needs the work. Read as "turnkey", it was held, swept to
+// we_passed, and the bot told him twice we'd moved on while he gave us numbers.
+test("an agent saying the house has to be turnkey to sell is telling us it needs work, not that it's turnkey", async () => {
+  const { agentRuledOut, saysTurnkey } = await import("./held-underwrites.js");
+  const words = "Looks mostly cosmetic from the photos, and homes at that price are selling. But it has to be turn key.";
+  assert.equal(saysTurnkey(words), false);
+  assert.equal(saysTurnkey("houses at that price need to be turnkey to sell"), false);
+  assert.equal(saysTurnkey("it must be turnkey to sell at that price"), false);
+  assert.equal(saysTurnkey("This one is pretty turnkey with tenants in place."), true, "still reads a real turnkey");
+  const filed = { type: "property_details", address: "2500 Alder St, Milton, WA 98354", at: ago(1),
+    data: { condition: "mostly cosmetic", workNeeded: "cosmetic work; houses at that price need to be turnkey to sell" } };
+  assert.equal(agentRuledOut([filed], "2500 Alder St, Milton, WA 98354"), null);
+  assert.notEqual(triage({ events: [filed], drafts: [inbound(words, { intent: "deal_available" })] }).action, "retire");
+});
+
+test("an agent who called it turnkey and then gives us a rehab number has told us it needs work", async () => {
+  const { agentRuledOut } = await import("./held-underwrites.js");
+  const turnkey = { type: "property_details", address: "2500 Alder St, Milton, WA 98354", at: ago(2), data: { condition: "turnkey" } };
+  const take = est({ arv: 490000, rehab: 75000 }, { address: "2500 Alder St, Milton, WA 98354", at: ago(1) });
+  assert.ok(agentRuledOut([turnkey], "2500 Alder St, Milton, WA 98354"));
+  assert.equal(agentRuledOut([turnkey, take], "2500 Alder St, Milton, WA 98354"), null);
+});
+
+test("a house the sweep passed on before we ever priced it reopens on the agent's numbers; one that isn't our kind of house does not", async () => {
+  const { reopensOnTheirNumbers } = await import("./held-underwrites.js");
+  const swept = (reason, over = {}) => ({ id: "p1", address: "1425 33rd St SE, Auburn, WA 98002", status: "we_passed", cashAmount: null,
+    retired: { at: ago(1), by: "held-sweep", reason }, ...over });
+  assert.equal(reopensOnTheirNumbers(swept('turnkey per the agent ("mostly cosmetic")')), true);
+  assert.equal(reopensOnTheirNumbers(swept("held 14 days and nothing since")), true);
+  assert.equal(reopensOnTheirNumbers(swept("our ask for their numbers never went out, and a week has passed")), true);
+  assert.equal(reopensOnTheirNumbers(swept("we asked for their read a week ago and heard nothing")), true);
+  assert.equal(reopensOnTheirNumbers(swept("not our kind of house — an apartment (single-family only right now)")), false, "a condo stays passed");
+  assert.equal(reopensOnTheirNumbers(swept("on 2.5 acres — rural, our buyers don't want it")), false);
+  assert.equal(reopensOnTheirNumbers(swept("they unsubscribed")), false);
+  assert.equal(reopensOnTheirNumbers(swept("held 14 days and nothing since", { cashAmount: 400000 })), false, "a number of ours went out: a person re-prices");
+  assert.equal(reopensOnTheirNumbers({ ...swept("held 14 days and nothing since"), retired: null }), false, "a pass a person made stays theirs");
+  assert.equal(reopensOnTheirNumbers(swept("held 14 days and nothing since", { status: "passed" })), false, "their pass isn't ours to reopen");
+});
+
+test("a re-run on a house the sweep passed on isn't closed again by that old pass", () => {
+  const old = { type: "offer_we_passed", address: "2500 Alder St, Milton, WA 98354", at: ago(3), data: { by: "held-sweep", reason: "turnkey per the agent" } };
+  assert.notEqual(triage({ events: [old] }).reason, "we passed on this house");
+  const mine = { type: "offer_we_passed", address: "2500 Alder St, Milton, WA 98354", at: ago(3), data: { by: "you" } };
+  assert.equal(triage({ events: [mine] }).reason, "we passed on this house", "a pass a person made still closes it");
+});

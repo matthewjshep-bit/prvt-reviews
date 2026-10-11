@@ -6517,3 +6517,55 @@ test("a draft held only because it is a person's call, or that the model sent to
   assert.equal(human.calls.length, 1);
   assert.equal(human.d.status, "draft");
 });
+
+/* ---------- a house we passed on before pricing it reopens on their numbers ---------- */
+
+// Matt, 2026-10-11, on 1425 33rd St SE: the sweep passed on it unpriced (a
+// misread "turnkey"); the agent came back with a buy price, a rehab figure and
+// a resale range, and the bot said we'd moved on. "Even though we passed, if
+// the numbers work out we should proceed."
+const sweptStore = (reason) => {
+  const store = fakeStore();
+  const at = new Date(Date.now() - 16 * 3600000).toISOString();
+  store.listOffers = async () => [{ id: "p1", address: "1425 33rd St SE, Auburn, WA 98002", status: "we_passed", cashAmount: null,
+    createdAt: new Date(Date.now() - 23 * 3600000).toISOString(), updatedAt: at, statusAt: at,
+    retired: { at, by: "held-sweep", reason } }];
+  return store;
+};
+const THEIR_TAKE = "I'd guess around 300 to buy, 75k of work, and it resells in the high 400s.";
+
+test("an agent's numbers on a house the sweep passed on before pricing it run the underwrite again", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = sweptStore('turnkey per the agent ("mostly cosmetic")');
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: THEIR_TAKE,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", propertyAddress: "1425 33rd St SE, Auburn, WA 98002",
+        reply: "Appreciate the numbers, I'll run it on those today.", agentArv: 490000, agentRehab: 75000, agentTakeNote: "300 buy, 75 rehab, high 400s exit" }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-11" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(uw.length, 1, "the house runs again on their numbers");
+  assert.equal(uw[0].replaceOfferId, "p1");
+});
+
+test("an agent's numbers on a condo we passed on don't reopen it", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = sweptStore("not our kind of house — an apartment (single-family only right now)");
+  const uw = [];
+  await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: THEIR_TAKE,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", propertyAddress: "1425 33rd St SE, Auburn, WA 98002",
+        reply: "Thanks, we've moved on from that one.", agentArv: 490000, agentRehab: 75000 }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-12" } }; },
+    },
+  });
+  await settle();
+  assert.equal(uw.length, 0);
+});
