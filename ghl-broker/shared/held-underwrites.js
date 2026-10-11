@@ -122,9 +122,39 @@ export const houseGone = (text = "", intent = "") => {
   const t = String(text || "");
   return GONE_TEXT.test(t) && (intent === "rejection" || OVER_PLAIN.test(t));
 };
-// 2026-10-09: "It is not a project. Its a great home" read as nothing, and
-// the house got priced, floated and papered. "Not a project" is a no too.
-export const TURNKEY_TEXT = /\b(turn[\s-]?key|move[\s-]?in[\s-]?ready|fully (updated|renovated|remodeled)|completely (renovated|remodeled|updated)|not (really |certainly )?an? (fixer|flip|project|fix[\s-]*(n|and|&|'n'?)[\s-]*flip)|isn'?t an? (fixer|flip|project)|no work needed)\b/i;
+/**
+ * saysTurnkey(text) → boolean
+ *
+ * The agent told us the house needs nothing: turnkey, renovated, remodeled,
+ * move-in ready, "not a project". Deliberately NOT true when the same words
+ * say it needs work ("renovated kitchen but it's a project", "could use some
+ * fix ups"), or put the turnkey word behind a negation or a "has to be".
+ * The reply agent reads the same words (isTurnkeyReply).
+ */
+// "certainly not a fix n flip", "not a fixer", "it's not a flip", "not a
+// project": the agent telling us, in our own words, it isn't what we buy
+// (Ryan Bowen, 13814 214th St E, 2026-10-05; 2026-10-09 "It is not a
+// project. Its a great home" got priced, floated and papered).
+const NOT_A_FLIP = /\b(?:not|isn'?t|is\s+not|wouldn'?t\s+be)\s+(?:really\s+|certainly\s+|exactly\s+|quite\s+)?(?:a\s+|an\s+)?(?:fixer(?:[\s-]?upper)?|fix[\s-]*(?:n|and|&|'n'?|n')[\s-]*flip|flip(?:per)?|project)\b/gi;
+export function saysTurnkey(text = "") {
+  const t = String(text || "");
+  NOT_A_FLIP.lastIndex = 0;
+  const notFlip = NOT_A_FLIP.test(t);
+  // Read "needs work" with those phrases taken out: "not a fixer" says fixer.
+  const rest = notFlip ? t.replace(NOT_A_FLIP, " ") : t;
+  const done = /\b(turn[\s-]?key|move[\s-]?in[\s-]?ready|(?:fully|completely|recently|totally|newly|just)\s+(?:renovated|remodell?ed|updated|redone|flipped)|(?:was|been|is|it's|its)\s+(?:renovated|remodell?ed|flipped)|no\s+work\s+(?:needed|to\s+do|required)|doesn'?t\s+need\s+(?:any(?:thing)?\s+)?work|nothing\s+to\s+(?:do|fix))\b/i;
+  const needsWork = /\b(needs?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+)?(?:work|tlc|love|repairs?|updating)|fix[\s-]?ups?|fixer|project|tlc|dated|as[\s-]?is|handyman|rough|distressed|cosmetics?|(?:never|not|poorly)\s+maintained|deferred\s+maintenance)\b/i;
+  if (needsWork.test(rest)) return false;
+  if (notFlip) return true;
+  if (!done.test(t)) return false;
+  // "No, it's not turnkey, but it's all cosmetic" (Paul Redal, 2026-09-21)
+  // answers our own "project or turnkey?" with a no. A turnkey word with a
+  // negation just ahead of it is the opposite of turnkey — and so is "it has
+  // to be turn key" (1425 33rd St SE, 2026-10-10): the finished house has to
+  // be, to sell, so this one needs the work.
+  const negated = new RegExp(`\\b(?:not|isn'?t|is\\s+not|wasn'?t|never|hardly|far\\s+from|no\\s+longer|nothing(?:\\s+has|\\s+was)?(?:\\s+been)?|hasn'?t\\s+been|needs?\\s+to\\s+be|has\\s+to\\s+be|have\\s+to\\s+be|must\\s+be|got\\s+to\\s+be|gotta\\s+be)\\s+(?:\\w+\\s+){0,2}?(?:${done.source})`, "i");
+  return !negated.test(t);
+}
 
 /**
  * agentRuledOut(events, address) → { why } | null
@@ -139,14 +169,37 @@ export const TURNKEY_TEXT = /\b(turn[\s-]?key|move[\s-]?in[\s-]?ready|fully (upd
 export function agentRuledOut(events = [], address = "") {
   if (!String(address || "").trim()) return null;
   // Their latest word on the house: "turnkey" then "actually it needs a
-  // roof" is a house with work.
+  // roof" is a house with work — and so is "turnkey" then a rehab number.
   const latest = (events || [])
-    .filter((e) => e?.type === "property_details" && e.address && sameStreet(e.address, address) && (e.data?.workNeeded || e.data?.condition))
+    .filter((e) => e?.address && sameStreet(e.address, address) && (
+      (e.type === "property_details" && (e.data?.workNeeded || e.data?.condition))
+      || (e.type === "agent_estimate" && Number(e.data?.rehab) > 0)))
     .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0];
-  if (!latest) return null;
+  if (!latest || latest.type === "agent_estimate") return null;
   const said = [latest.data.workNeeded, latest.data.condition].map((x) => String(x || "")).filter(Boolean).join(" — ");
-  return TURNKEY_TEXT.test(said) || /^\s*none\b/i.test(String(latest.data.workNeeded || ""))
-    ? { why: `the agent said it isn't a project ("${said.slice(0, 60)}")` } : null;
+  return saysTurnkey(said) || /^\s*none\b/i.test(String(latest.data.workNeeded || ""))
+    ? { why: `the agent said it isn't a project ("${said.slice(0, 60)}")`, said: String(latest.data.condition || latest.data.workNeeded) } : null;
+}
+
+// What the nightly sweep passes on when a held house was never priced and
+// went quiet, or was misread as turnkey: nothing about the house itself.
+const QUIET_PASS = /^(turnkey per the agent|held \d+ days and nothing since|we asked for their read a week ago|our ask for their numbers (never went out|didn't go out))/i;
+
+/**
+ * reopensOnTheirNumbers(offer) → boolean
+ *
+ * Matt, 2026-10-11 (1425 33rd St SE): "even though we passed,
+ * if the numbers work out we should proceed." A house the nightly sweep
+ * passed on before any number of ours went out — quiet, or read as turnkey —
+ * isn't closed to the agent's own numbers: they run it again. A pass on the
+ * kind of house (a condo, rural, out of the area), a pass a person made, and
+ * a house we already put a number on stay what they are.
+ */
+export function reopensOnTheirNumbers(offer = null) {
+  if (!offer || effectiveStatus(offer) !== "we_passed") return false;
+  if (offer.retired?.by !== "held-sweep" || !QUIET_PASS.test(String(offer.retired.reason || ""))) return false;
+  if (Number(offer.cashAmount) > 0) return false;
+  return !(offer.sends || []).some((s) => Object.values(s?.results || {}).some((r) => r?.ok));
 }
 const COLD_STAGE = /^tier\s*3\b|passed on offer|^lost\b|not a good deal/i;
 const CLOSED_OPP = /^(lost|abandoned|abandon)$/i;
@@ -212,10 +265,13 @@ export function triageHeldUnderwrite({
 
   const after = (t) => (ms(t) ?? 0) >= heldAt - 60 * 60000;   // the hold's own inbound counts
   const houseEvents = events.filter((e) => e?.address && onThisHouse(e.address));
-  const passedEv = houseEvents.find((e) => e.type === "offer_passed" || e.type === "offer_we_passed");
+  // A pass the sweep made on an earlier, never-priced row is not this re-run's
+  // pass: the agent's numbers reopened it (reopensOnTheirNumbers).
+  const passedEv = houseEvents.find((e) => (e.type === "offer_passed" || e.type === "offer_we_passed")
+    && !(e.data?.by === "held-sweep" && (ms(e.at) ?? 0) < heldAt));
   if (passedEv) return { ...base, action: "retire", status: passedEv.type === "offer_passed" ? "passed" : "we_passed", reason: passedEv.type === "offer_passed" ? "they passed on this house" : "we passed on this house" };
-  const turnkeyEv = houseEvents.find((e) => e.type === "property_details" && TURNKEY_TEXT.test(`${e.data?.condition || ""} ${e.data?.workNeeded || ""}`));
-  if (turnkeyEv) return { ...base, action: "retire", status: "we_passed", reason: `turnkey per the agent ("${String(turnkeyEv.data.condition || turnkeyEv.data.workNeeded).slice(0, 60)}")` };
+  const ruledOut = agentRuledOut(houseEvents, address);
+  if (ruledOut) return { ...base, action: "retire", status: "we_passed", reason: `turnkey per the agent ("${ruledOut.said.slice(0, 60)}")` };
   const said = drafts
     .filter((d) => d && String(d.inbound || "").trim() && aboutThisHouse(d.propertyAddress) && after(d.createdAt))
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
@@ -229,7 +285,7 @@ export function triageHeldUnderwrite({
   // about THIS house: on 2026-10-02 an agent called her other listing
   // turnkey and the fixer she had just sent us was closed out. Their
   // unaddressed "it's turnkey" is about the listing we opened with.
-  const turnkey = said.find((d) => TURNKEY_TEXT.test(d.inbound) && (brought ? onThisHouse(d.propertyAddress) : true));
+  const turnkey = said.find((d) => saysTurnkey(d.inbound) && (brought ? onThisHouse(d.propertyAddress) : true));
   if (turnkey) return { ...base, action: "retire", status: "we_passed", reason: `turnkey per the agent ("${clip(turnkey.inbound)}")` };
 
   const lastIn = latestInbound(drafts, events);

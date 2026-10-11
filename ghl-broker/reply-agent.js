@@ -59,7 +59,7 @@ import { agentTurnReason } from "./agent-focus.js";
 import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
-import { houseGone } from "./shared/held-underwrites.js";
+import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { qualifyStep, QUALIFY_ASK_RX } from "./shared/flip-read.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
@@ -560,31 +560,11 @@ export function parseDraft(response, intents, cfg, outbound = null) {
  * isTurnkeyReply(message) → boolean
  *
  * The agent told us the house needs nothing: turnkey, renovated, remodeled,
- * move-in ready. Deliberately NOT true when the same message says it needs
- * work ("renovated kitchen but it's a project", "could use some fix ups").
+ * move-in ready, "not a project". The words are read in one place
+ * (shared/held-underwrites.js saysTurnkey) so the nightly sweep and the
+ * underwriter read them the way the bot does.
  */
-// "certainly not a fix n flip", "not a fixer", "it's not a flip", "not a
-// project": the agent telling us, in our own words, it isn't what we buy
-// (Ryan Bowen, 13814 214th St E, 2026-10-05).
-const NOT_A_FLIP = /\b(?:not|isn'?t|is\s+not|wouldn'?t\s+be)\s+(?:really\s+|certainly\s+|exactly\s+|quite\s+)?(?:a\s+|an\s+)?(?:fixer(?:[\s-]?upper)?|fix[\s-]*(?:n|and|&|'n'?|n')[\s-]*flip|flip(?:per)?|project)\b/gi;
-export function isTurnkeyReply(message = "") {
-  const t = String(message || "");
-  NOT_A_FLIP.lastIndex = 0;
-  const notFlip = NOT_A_FLIP.test(t);
-  // Read "needs work" with those phrases taken out: "not a fixer" says fixer.
-  const rest = notFlip ? t.replace(NOT_A_FLIP, " ") : t;
-  const done = /\b(turn[\s-]?key|move[\s-]?in[\s-]?ready|(?:fully|completely|recently|totally|newly|just)\s+(?:renovated|remodell?ed|updated|redone|flipped)|(?:was|been|is|it's|its)\s+(?:renovated|remodell?ed|flipped)|no\s+work\s+(?:needed|to\s+do|required)|doesn'?t\s+need\s+(?:any(?:thing)?\s+)?work|nothing\s+to\s+(?:do|fix))\b/i;
-  const needsWork = /\b(needs?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+)?(?:work|tlc|love|repairs?|updating)|fix[\s-]?ups?|fixer|project|tlc|dated|as[\s-]?is|handyman|rough|distressed|cosmetics?|(?:never|not|poorly)\s+maintained|deferred\s+maintenance)\b/i;
-  if (needsWork.test(rest)) return false;
-  if (notFlip) return true;
-  if (!done.test(t)) return false;
-  // "No, it's not turnkey, but it's all cosmetic" (Paul Redal, 2026-09-21)
-  // answers our own "project or turnkey?" with a no — and read as turnkey, so a
-  // house that needs work went to Tier 2 with no underwrite. A turnkey word
-  // with a negation just ahead of it is the opposite of turnkey.
-  const negated = new RegExp(`\\b(?:not|isn'?t|is\\s+not|wasn'?t|never|hardly|far\\s+from|no\\s+longer|nothing(?:\\s+has|\\s+was)?(?:\\s+been)?|hasn'?t\\s+been|needs?\\s+to\\s+be)\\s+(?:\\w+\\s+){0,2}?(?:${done.source})`, "i");
-  return !negated.test(t);
-}
+export const isTurnkeyReply = (message = "") => saysTurnkey(message);
 
 /**
  * isShowingOffer(message) → boolean
@@ -4626,6 +4606,33 @@ async function runReply(job, ctx) {
       rerunHeld = namedKnown;
       plan.auto = plan.auto.map((x) => (x.type === "start_underwrite" ? { ...x, replaceOfferId: namedKnown.id, why: "they told us more since it held — run it again" } : x));
       record = { ...record, actions: (record.actions || []).map((x) => (x.type === "start_underwrite" && x.status === "pending" ? { ...x, replaceOfferId: namedKnown.id } : x)), updatedAt: new Date().toISOString() };
+      await store.updateReplyDraft(record.id, record).catch(() => {});
+    }
+  }
+  // A house the nightly sweep passed on before we ever priced it — gone
+  // quiet, or read as turnkey — reopens on the agent's own numbers. Matt,
+  // 2026-10-11, on 1425 33rd St SE: "even though we passed, if the numbers
+  // work out we should proceed." It is an ordinary underwrite
+  // from here: its number goes out only the way any number does.
+  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !qualifyHeld && reopensOnTheirNumbers(namedKnown)) {
+    const since = Date.parse(namedKnown.retired?.at || namedKnown.statusAt || "") || 0;
+    const evs = (await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => [])) || [];
+    const told = evs.some((e) => e?.type === "agent_estimate" && e.address
+      && (propertyKey(e.address) === propertyKey(namedKnown.address || "") || sameHouse(e.address, namedKnown.address || ""))
+      && (Number(e.data?.arv) > 0 || Number(e.data?.rehab) > 0)
+      && (Date.parse(e.at || "") || 0) > since);
+    if (told) {
+      rerunHeld = namedKnown;
+      const why = "they gave us their numbers on a house we passed on before pricing it — run it again";
+      if (plan.auto.some((x) => x.type === "start_underwrite")) {
+        plan.auto = plan.auto.map((x) => (x.type === "start_underwrite" ? { ...x, replaceOfferId: namedKnown.id, why } : x));
+        record = { ...record, actions: (record.actions || []).map((x) => (x.type === "start_underwrite" && x.status === "pending" ? { ...x, replaceOfferId: namedKnown.id } : x)), updatedAt: new Date().toISOString() };
+      } else {
+        const action = { id: `a-reopen-${job.id}`, type: "start_underwrite", mode: "auto", status: "pending", party, replaceOfferId: namedKnown.id, why };
+        plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
+        plan.auto.push(action);
+        record = { ...record, actions: [...(record.actions || []).filter((x) => !(x.type === "start_underwrite" && x.status === "pending")), action], updatedAt: new Date().toISOString() };
+      }
       await store.updateReplyDraft(record.id, record).catch(() => {});
     }
   }

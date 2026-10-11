@@ -391,7 +391,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     // is our decision to walk. The bot had been asking whether the seller
     // would come closer and promising a number by the afternoon.
     parts.push(
-      "WE PASSED: when the offer book marks a house \"we passed on it\", we walked away from that one and it is closed on " +
+      "WE PASSED: when the offer book marks a house \"we passed on it\" (and not OPEN TO THEIR NUMBERS — follow the book on those), we walked away from that one and it is closed on " +
       "our side. Never chase it: do not ask whether the seller has moved, do not float or restate a number, do not say " +
       "you're running numbers or checking with a partner, and do not promise anything on it. If they bring it up, say " +
       "once, warmly and plainly, that we've moved on from that one for now, and ask whether they have anything else " +

@@ -532,3 +532,17 @@ test("a rural house we priced anyway counts as chosen, so the bot talks numbers 
   ];
   assert.deepEqual(pricedOutsideFocus(offers, ["sfr"]).sort(), ["21800 Farm Rd SE, Maple Valley, WA 98038", "4 Ash St, Kent, WA 98030"]);
 });
+
+// 1425 33rd St SE (2026-10-11): the sweep passed on it before we priced it,
+// on a misread "turnkey". The book told the bot we walked away, so it told
+// the agent twice we'd moved on while he was giving us his numbers.
+test("a house the sweep passed on before we priced it is open to the agent's numbers, not a walk-away", () => {
+  const swept = { id: "p1", address: "1425 33rd St SE, Auburn, WA 98002", cashAmount: null, status: "we_passed", createdAt: "2026-10-10T19:05:28Z",
+    retired: { at: "2026-10-11T02:08:29Z", by: "held-sweep", reason: 'turnkey per the agent ("mostly cosmetic")' } };
+  const r = summarizeOffers([swept], { now: Date.parse("2026-10-11T18:00:00Z") });
+  assert.doesNotMatch(r.text, /WE WALKED AWAY/);
+  assert.match(r.text, /OPEN TO THEIR NUMBERS/);
+  const condo = { ...swept, id: "p2", address: "1740 NE 86th St, Seattle, WA 98115",
+    retired: { ...swept.retired, reason: "not our kind of house — an apartment (single-family only right now)" } };
+  assert.match(summarizeOffers([condo]).text, /WE WALKED AWAY/, "a condo stays walked away from");
+});
