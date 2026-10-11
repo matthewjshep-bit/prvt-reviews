@@ -189,6 +189,11 @@ async function run(job, { client, locationId, saved, store, sendsEnabled, deps }
 export const CALLS_CURSOR = "calls";
 export const CALL_SWEEP_LOOKBACK_MS = 24 * 3600000;
 export const MAX_CALLS_PER_SWEEP = 20;
+// GHL stamps a call with when it started and lists it once it ends. A sweep
+// during a call moved the cursor past it and it was never read (Kyle R.,
+// 2026-10-05, a five-minute call). Each look reaches back this far;
+// a call already read is known by its event and skipped.
+export const CALL_SWEEP_OVERLAP_MS = 2 * 3600000;
 
 /**
  * findNewCalls({ client, locationId, sinceMs, now }) → [{ contactId, id, direction, at, durationSec }]
@@ -235,7 +240,7 @@ export async function maybeSweepCalls({ client, locationId, saved = {}, store = 
   const cursor = await store.getJobCursor?.(locationId, CALLS_CURSOR).catch(() => null);
   const sinceMs = cursor?.at ? Date.parse(cursor.at) : now - 2 * 3600000;   // first run: the last two hours only
   let calls;
-  try { calls = await (deps.findNewCalls || findNewCalls)({ client, locationId, sinceMs, now }); }
+  try { calls = await (deps.findNewCalls || findNewCalls)({ client, locationId, sinceMs: sinceMs - CALL_SWEEP_OVERLAP_MS, now }); }
   catch (e) {
     if (e?.status === 401 || e?.status === 403) log(`call sweep ${locationId}: the token lacks conversations.readonly`);
     else log(`call sweep ${locationId}: ${e?.message}`);
@@ -246,6 +251,10 @@ export async function maybeSweepCalls({ client, locationId, saved = {}, store = 
   for (const c of calls) {
     newest = Math.max(newest, Date.parse(c.at) || 0);
     if (!c.contactId) continue;
+    if (Date.parse(c.at) <= sinceMs) {
+      const seen = await store.listContactEvents?.(locationId, c.contactId, { types: ["call_summary", "call_attempt"], limit: 50 }).catch(() => null);
+      if (!seen || seen.some((e) => e.dedupeKey === `call:${c.id}` || e.dedupeKey === `call_attempt:${c.id}`)) continue;
+    }
     const r = await startCallIntake({ client, locationId, saved, store, contactId: c.contactId, messageId: c.id, direction: c.direction, sendsEnabled, deps, now });
     if (!r.skipped) started++;
   }

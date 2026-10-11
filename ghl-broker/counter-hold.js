@@ -71,7 +71,13 @@ export async function runCounterHolds({ client, locationId, saved, store, config
     const start = deps.startProactive;
     const r = typeof start === "function"
       ? await start({ client, locationId, saved, store, contactId: o.contactId, kind: "counter_nudge", offer: full || o,
-        subject: { address: o.address, held: { ours: o.counterHold.ours, step: n, of: hold?.checkIns || 2 } }, sendsEnabled, deps }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }))
+        subject: { address: o.address, held: { ours: o.counterHold.ours, step: n, of: hold?.checkIns || 2 } }, sendsEnabled,
+        // Matt, 2026-10-04: hold, check in, pass — the machine's, no Desk row.
+        // counter_nudge isn't on the playbook's auto-send list (the nightly
+        // audit releases its own), so without this the morning's check-in
+        // waited for a person and was still counted toward the pass. Released
+        // only when every gate is clean; it names no number of ours.
+        deps: { ...deps, releaseHeld: true, releaseReason: "the counter hold's check-in: asks for room, names no number of ours" } }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }))
       : { skipped: "check-ins are not wired" };
     if (r?.skipped) { out.push({ ...base, status: "skipped", reason: r.skipped }); continue; }
     await deps.markCounterHoldNudge?.({ offerId: o.id }).catch(() => {});
