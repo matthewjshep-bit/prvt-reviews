@@ -30,8 +30,9 @@ const fmtTyped = (v) => {
   return d ? Number(d).toLocaleString("en-US") : "";
 };
 
-// RentCast's property types (mirrors PROPERTY_TYPES in ghl-broker/outreach-sweep.js).
-const OUTREACH_PROPERTY_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse", "Condo", "Apartment", "Land"];
+// RentCast's property types (mirrors PROPERTY_TYPES in ghl-broker/outreach-sweep.js),
+// less Manufactured: we don't buy mobile homes (Matt, 2026-10-13).
+const OUTREACH_PROPERTY_TYPES = ["Single Family", "Multi-Family", "Townhouse", "Condo", "Apartment", "Land"];
 const OUTREACH_DEFAULT_TYPES = ["Single Family"];
 
 // A GHL workflow by name, or a pasted id/builder URL when the list can't load
@@ -1013,7 +1014,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <div className="mt-4">
           <span className="block text-xs font-medium text-slate-600">Houses the auto-underwrite prices on its own</span>
           <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1">
-            {[["sfr", "Single family"], ["multi_family", "Multi-family (2-4 units)"], ["manufactured", "Mobile / manufactured"]].map(([k, label]) => {
+            {[["sfr", "Single family"], ["multi_family", "Multi-family (2-4 units)"]].map(([k, label]) => {
               const on = (form.focusKinds?.length ? form.focusKinds : ["sfr"]).includes(k);
               return (
                 <label key={k} className="flex items-center gap-1.5 text-sm">
@@ -1030,7 +1031,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <p className="mt-1 text-xs text-slate-400">
             Anything else an agent texts (a townhouse, a condo, land, or a kind not ticked here) is held before
             comps are bought and shows on Today as "Not single-family" with Underwrite anyway / Pass on it. The
-            bot tells agents what we buy. A house Zillow can't type goes ahead.
+            bot tells agents what we buy. A house Zillow can't type goes ahead. Mobile and manufactured homes
+            are never bought: they're passed at the next check and the bot says no when an agent asks.
           </p>
         </div>
       </section>

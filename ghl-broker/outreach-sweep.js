@@ -142,9 +142,10 @@ export function runsLeftInMonth(now = Date.now(), { weekdaysOnly = true, tz = WO
 
 // RentCast's property types, spelled its way.
 export const PROPERTY_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse", "Condo", "Apartment", "Land"];
-// Single-family houses only (Matt, 2026-10-01: focus on SFR). Multi-family,
-// manufactured and townhouses can still be ticked in Settings; they aren't
-// the default, and the auto-underwrite holds them anyway (settings.focusKinds).
+// Single-family houses only (Matt, 2026-10-01: focus on SFR). Multi-family
+// and townhouses can still be ticked in Settings; they aren't the default,
+// and the auto-underwrite holds them anyway (settings.focusKinds).
+// Manufactured is never kept, ticked or not (Matt, 2026-10-13).
 export const DEFAULT_PROPERTY_TYPES = ["Single Family"];
 export const DEFAULT_MIN_DAYS_ON_MARKET = 45;
 // The most a hook listing may ask. Above it the agent is not our buyer's
@@ -185,7 +186,7 @@ export function normalizeOutreachAutopilot(v = {}) {
   const monthly = Math.round(Number(o.monthlyRequests));
   const cycleDay = Math.round(Number(o.cycleDay));
   const types = (Array.isArray(o.propertyTypes) ? o.propertyTypes : String(o.propertyTypes ?? "").split("|"))
-    .map((t) => PROPERTY_TYPES.find((p) => p.toLowerCase() === String(t).trim().toLowerCase())).filter(Boolean);
+    .map((t) => PROPERTY_TYPES.find((p) => p.toLowerCase() === String(t).trim().toLowerCase())).filter((t) => t && t !== "Manufactured");
   return {
     enabled: o.enabled === true,
     dailyCap: Number.isFinite(cap) ? Math.min(MAX_DAILY_CAP, Math.max(1, cap)) : DEFAULT_DAILY_CAP,
@@ -275,10 +276,13 @@ export function hookMeetsCutOrOld(hook = {}) {
 
 export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null, propertyTypes = [], maxYearBuilt = 0, turnkeyShare = 0 } = {}) {
   const types = new Set((propertyTypes || []).map((t) => String(t).toLowerCase()));
+  // Never a mobile home, whatever is ticked (Matt, 2026-10-13).
+  const mobile = (d) => String(d.hook?.propertyType || "").toLowerCase() === "manufactured";
   const reachable = (r) => r?.status === "new" && !r.contactId && !r.doc?.ghl?.contactId && Boolean(r.doc?.phone);
   // Same market rules as everyone else: the price cap, no rural, the types.
   const inMarket = (d) => (!maxPrice || (Number(d.hook?.price) > 0 && Number(d.hook.price) <= maxPrice))
     && !isRuralLot(d.hook?.lotSize)
+    && !mobile(d)
     && !(types.size && d.hook?.propertyType && !types.has(String(d.hook.propertyType).toLowerCase()));
   const ok = rows.filter((r) => {
     const d = r?.doc || {};
@@ -300,6 +304,7 @@ export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, require
     // manufactured homes): rows from pulls made before single-family-only
     // still sit in the batches. No type on record goes ahead.
     if (types.size && d.hook?.propertyType && !types.has(String(d.hook.propertyType).toLowerCase())) return false;
+    if (mobile(d)) return false;
     return true;
   });
   ok.sort((a, b) =>
