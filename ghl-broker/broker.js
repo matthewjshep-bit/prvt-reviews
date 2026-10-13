@@ -30,6 +30,7 @@ import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation
 import { releaseMisreadHolds } from "./misread-holds.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunTierCheck, syncChangedCards } from "./tier-check.js";
+import { maybeUnderwriteTierOne } from "./tier-one.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeRunBookSync } from "./investor-sync.js";
 import { maybeRunBuyerPulse } from "./buyer-pulse.js";
@@ -308,6 +309,13 @@ const TICK_JOBS = [
   { area: "card-sync", run: async ({ client, locationId, saved }) => {
     const synced = await syncChangedCards({ client, locationId, store, saved });
     if (synced?.moved || synced?.errors?.length) console.log(`cards follow offers for ${locationId}: ${synced.moved} moved of ${synced.contacts} changed${synced.errors.length ? `, errors: ${synced.errors[0]}` : ""}`);
+  } },
+  // Tier 1 → Draft: a Tier 1 card with a house and nothing priced underwrites
+  // itself, hourly in the day (tier-one.js). Off until tierOne.autoUnderwrite.
+  { area: "tier-one-underwrite", run: async ({ client, locationId, saved }) => {
+    const r = await maybeUnderwriteTierOne({ client, locationId, saved, store,
+      deps: { startUnderwrite: offersRouter.conversationDepsFor({ locationId, client, saved }).startUnderwrite } });
+    if (r?.started) console.log(`tier 1 underwrites for ${locationId}: ${r.started} started of ${r.planned}`);
   } },
   // Addresses that came in past the daily underwrite cap, once it resets.
   { area: "underwrite-queue", run: async ({ client, locationId }) => {

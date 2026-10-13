@@ -58,20 +58,26 @@ export function isTierOneAction(a = {}) {
 
 /* ---------- the Tier 1 list: GHL's stage, screened ---------- */
 
-// Switches. Both ship off: the list and its buttons need neither.
+// Switches. All ship off: the list and its buttons need none of them.
 //   autoKick            the 7am tier check moves sure misses out of Tier 1
 //   autoKickMax         at most this many a morning
 //   followMachineSends  a written offer the machine sends moves the card to
 //                       Offer Out (one you send by hand always does)
-export const TIER_ONE_DEFAULTS = Object.freeze({ autoKick: false, autoKickMax: 10, followMachineSends: false });
+//   autoUnderwrite      a Tier 1 card with a house and no number underwrites
+//                       itself — Tier 1 → Draft (Matt's diagram, 2026-10-13)
+//   underwriteMax       at most this many started a day
+export const TIER_ONE_DEFAULTS = Object.freeze({ autoKick: false, autoKickMax: 10, followMachineSends: false, autoUnderwrite: false, underwriteMax: 10 });
 
 export function normalizeTierOne(v = {}) {
   const o = v && typeof v === "object" ? v : {};
   const n = Math.round(Number(o.autoKickMax));
+  const u = Math.round(Number(o.underwriteMax));
   return {
     autoKick: o.autoKick === true,
     autoKickMax: Number.isFinite(n) && o.autoKickMax != null && o.autoKickMax !== "" ? Math.min(50, Math.max(1, n)) : TIER_ONE_DEFAULTS.autoKickMax,
     followMachineSends: o.followMachineSends === true,
+    autoUnderwrite: o.autoUnderwrite === true,
+    underwriteMax: Number.isFinite(u) && o.underwriteMax != null && o.underwriteMax !== "" ? Math.min(50, Math.max(1, u)) : TIER_ONE_DEFAULTS.underwriteMax,
   };
 }
 
@@ -247,6 +253,27 @@ export function autoKickPlan({ rows = [], now = Date.now() } = {}) {
     if (!reason && sure.some((f) => f.key === "no_house") && !r.chasing && days(r.inStageSince) >= NO_HOUSE_WAIT_DAYS) reason = "no_house";
     if (!reason) continue;
     out.push({ contactId: r.contactId, opportunityId: r.opportunityId || null, offerId: r.offer?.id || null, address: r.house?.address || "", reason, flags: (r.flags || []).map((f) => f.key) });
+  }
+  return out;
+}
+
+/* ---------- Tier 1 → Draft (tierOne.autoUnderwrite, ships off) ---------- */
+
+/**
+ * autoUnderwritePlan({ rows, max }) → [{ contactId, address, source }]
+ *
+ * Pure. The Tier 1 cards to price by themselves: clean on the screen, a
+ * house we know the address of, nothing priced or held for it yet, the
+ * agent's only open card. A house named in their words or the card's name
+ * both count; a card with no house waits for one.
+ */
+export function autoUnderwritePlan({ rows = [], max = TIER_ONE_DEFAULTS.underwriteMax } = {}) {
+  const out = [];
+  for (const r of rows || []) {
+    if (out.length >= max) break;
+    if (!r?.contactId || !r.ok || r.offer || !r.house?.address || (r.openCards || 0) > 1) continue;
+    if (!/^\s*\d+\s+\S+/.test(String(r.house.address))) continue;
+    out.push({ contactId: r.contactId, address: r.house.address, source: r.house.source || "" });
   }
   return out;
 }

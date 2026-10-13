@@ -31,7 +31,8 @@ import { recordEvent } from "./contact-record.js";
 import { mapPool } from "./map-pool.js";
 import { isTurnkeyReply } from "./reply-agent.js";
 import { stageKeys, normalizeGhlStages } from "./shared/ghl-stages.js";
-import { pickHouse, screenTierOne, cardMove, autoKickPlan, normalizeTierOne } from "./shared/tier-one.js";
+import { pickHouse, screenTierOne, cardMove, autoKickPlan, autoUnderwritePlan, normalizeTierOne } from "./shared/tier-one.js";
+import { localHour } from "./promise-sweep.js";
 import { annotateCurrent } from "./shared/current-offer.js";
 import { assetOf, normalizeFocusKinds } from "./shared/asset-type.js";
 import { normalizeMirror } from "./shared/ghl-mirror.js";
@@ -287,4 +288,54 @@ export async function runTierOneScreen({ client, locationId, saved = {}, store =
   }
   console.log(`tier-one: morning screen loc=${locationId} on=${cfg.autoKick} planned=${out.planned} applied=${out.applied}`);
   return out;
+}
+
+/* ---------- Tier 1 → Draft: a Tier 1 card prices itself ---------- */
+
+// Matt's diagram (2026-10-13): Tier 1 (a property identified) → Draft (the
+// auto-underwrite gets the number). A Tier 1 card with a house and nothing
+// priced starts its own underwrite — the same start the conversation makes,
+// so AUTO_UNDERWRITE_ENABLED, the daily underwrite cap and the 24h dedupe all
+// still hold. Once an hour, 8am–5pm Pacific, at most tierOne.underwriteMax a
+// day. Off until tierOne.autoUnderwrite. The cursor is written before the run
+// and a run left "running" over half an hour is taken as dead and retried.
+export const TIER1_UW_CURSOR = "tierOneUnderwrite";
+const UW_HOURS = [8, 17];
+const UW_GAP_MS = 3600 * 1000;
+const UW_STALE_MS = 30 * 60 * 1000;
+const UW_MAX_TRIES = 12;
+
+export async function maybeUnderwriteTierOne({ client, locationId, saved = {}, store = defaultStore, deps = {}, now = Date.now() }) {
+  const cfg = normalizeTierOne(saved?.tierOne);
+  if (!cfg.autoUnderwrite || typeof deps.startUnderwrite !== "function") return null;
+  const hour = localHour(now);
+  if (hour < UW_HOURS[0] || hour >= UW_HOURS[1]) return null;
+  const day = new Date(now).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  const cur = await store.getJobCursor?.(locationId, TIER1_UW_CURSOR).catch(() => null);
+  const doc = cur?.doc?.day === day ? cur.doc : { day, started: 0, tries: 0 };
+  const at = Date.parse(cur?.at || "") || 0;
+  if (doc.running && now - at < UW_STALE_MS) return null;
+  if (!doc.running && now - at < UW_GAP_MS) return null;
+  if (doc.started >= cfg.underwriteMax || doc.tries >= UW_MAX_TRIES) return null;
+  const tries = doc.tries + 1;
+  await store.setJobCursor?.(locationId, TIER1_UW_CURSOR, { at: new Date(now).toISOString(), doc: { ...doc, tries, running: true } });
+  const last = { considered: 0, planned: 0, started: 0, skipped: [] };
+  let started = doc.started;
+  try {
+    const list = await loadTierOne({ client, locationId, saved, store, deps: { ...deps, skipBelongs: true }, now });
+    const plan = autoUnderwritePlan({ rows: list.rows || [], max: cfg.underwriteMax - started });
+    last.considered = (list.rows || []).length;
+    last.planned = plan.length;
+    for (const p of plan) {
+      const r = await deps.startUnderwrite({ contactId: p.contactId, message: "", address: p.address }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 120) }));
+      if (r?.skipped) { last.skipped.push({ contactId: p.contactId, why: String(r.skipped).slice(0, 120) }); continue; }
+      started++; last.started++;
+      await recordEvent({ store, locationId, contactId: p.contactId, party: "agent", type: "tier1_underwrite", address: p.address, source: "tier_one",
+        data: { source: p.source } }).catch(() => {});
+    }
+    console.log(`tier-one underwrite loc=${locationId} considered=${last.considered} planned=${last.planned} started=${last.started}`);
+    return last;
+  } finally {
+    await store.setJobCursor?.(locationId, TIER1_UW_CURSOR, { at: new Date(now).toISOString(), doc: { day, started, tries, running: false, last } }).catch(() => {});
+  }
 }

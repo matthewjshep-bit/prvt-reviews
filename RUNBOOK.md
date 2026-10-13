@@ -2289,6 +2289,16 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
 - The board finder (`acquisitionsPipeline`) needs only Tier 1 and Tier 2, so
   deleting Tier 3 in GHL breaks nothing.
 
+**Tier 1 → Draft by itself** (Settings → Tier 1 → "Price Tier 1 houses by
+themselves", `tierOne.autoUnderwrite`, **off**; `underwriteMax` 10 a day).
+Hourly 8am–5pm Pacific (`maybeUnderwriteTierOne`, ghl-broker/tier-one.js,
+cursor `tierOneUnderwrite`, written before the run, a run left running over
+30 minutes retried, 12 tries a day): a clean Tier 1 card with a house address
+(named in their words, or the card's name) and nothing priced or held starts
+the conversation's own `startUnderwrite` — so `AUTO_UNDERWRITE_ENABLED`, the
+daily underwrite cap and the 24h dedupe all hold. A `tier1_underwrite` event
+goes on the contact. The Tier 1 tab's Underwrite button is unchanged.
+
 **The move off the old stages (once).** Settings → "GHL pipeline follows the
 offers" → Check / Move (`POST /api/dashboard/ghl/pipeline/migrate {apply}`,
 `ghl-broker/acq-migrate.js`, plan `planMigration`). Every card in New Lead,

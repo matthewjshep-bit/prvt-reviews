@@ -598,7 +598,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const lineTargets = { ...LINE_TARGET_DEFAULTS, ...(form.lineTargets || {}) };
   const desk = { ...DESK_DEFAULTS, ...(form.desk || {}) };
   // Raw while typing (the number box can be empty), normalized on save.
-  const tierOne = { ...normalizeTierOne(form.tierOne), autoKickMax: form.tierOne?.autoKickMax ?? normalizeTierOne().autoKickMax };
+  const tierOne = { ...normalizeTierOne(form.tierOne), autoKickMax: form.tierOne?.autoKickMax ?? normalizeTierOne().autoKickMax,
+    underwriteMax: form.tierOne?.underwriteMax ?? normalizeTierOne().underwriteMax };
   const setTierOne = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, tierOne: { ...(f.tierOne || {}), [k]: v } })); };
   const ghlStages = normalizeGhlStages(form.ghlStages);
   const setGhlStages = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, ghlStages: { ...(f.ghlStages || {}), [k]: v } })); };
@@ -692,7 +693,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <h2 className="mb-1 text-sm font-bold">Tier 1 (GHL)</h2>
         <p className="mb-3 text-xs text-slate-500">
           Today → Tier 1 reads GHL's Tier 1 stage and flags cards that probably aren't a live flip. Pass, Kick out and
-          a written offer you send move the GHL card already. These two let the machine do it too. Both off by default.
+          a written offer you send move the GHL card already. These let the machine do it too. All off by default.
         </p>
         <label className="mb-2 flex items-center gap-2 text-sm">
           <input type="checkbox" checked={tierOne.autoKick} onChange={(e) => setTierOne("autoKick")(e.target.checked)} />
@@ -706,6 +707,14 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <input type="checkbox" checked={tierOne.followMachineSends} onChange={(e) => setTierOne("followMachineSends")(e.target.checked)} />
           <span><span className="font-semibold">The machine's written offers move the card to Offer Out</span> — as yours already do.</span>
         </label>
+        <label className="mt-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={tierOne.autoUnderwrite} onChange={(e) => setTierOne("autoUnderwrite")(e.target.checked)} />
+          <span><span className="font-semibold">Price Tier 1 houses by themselves</span> — a clean Tier 1 card with an address and nothing priced starts its
+            own underwrite (Tier 1 → Draft), hourly 8am–5pm, under the usual underwrite limits.</span>
+        </label>
+        <div className="mt-2 ml-6 w-48">
+          <Num label="At most a day" value={tierOne.underwriteMax} onChange={setTierOne("underwriteMax")} />
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="ghl-stages-settings">

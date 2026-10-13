@@ -286,3 +286,48 @@ test("with it on it clears at most autoKickMax, marked as the machine's, and nev
   const events = await store.listContactEvents(LOC, kicked.contactId, { limit: 50 });
   assert.equal(events.find((e) => e.type === "tier1_kicked")?.data?.by, "machine");
 });
+
+/* ---------- Tier 1 → Draft (tierOne.autoUnderwrite, ships off) ---------- */
+
+const { maybeUnderwriteTierOne } = await import("./tier-one.js");
+// Tuesday 2026-10-13, 10am Pacific.
+const TEN_AM = Date.parse("2026-10-13T17:00:00Z");
+
+async function tierOneBoard() {
+  const LOC = `loc-tier-one-uw-${++seq}`;
+  _resetPipelineCache();
+  const ghl = ghlBoard([
+    { id: "opN", contactId: "named", name: "N", pipelineStageId: "s-t1" },
+    { id: "opP", contactId: "priced", name: "P", pipelineStageId: "s-t1" },
+  ]);
+  await recordEvent({ store, locationId: LOC, contactId: "named", party: "agent", type: "subject_property_set", at: new Date(TEN_AM - DAY).toISOString(), address: "41 Fixer Ave, Kent, WA 98031", source: "conversation" });
+  await said(LOC, "named", "needs a full gut, seller wants out");
+  await offer(LOC, { contactId: "priced", address: "7 Done St, Kent, WA 98031" });
+  return { LOC, ghl };
+}
+
+test("a Tier 1 card with a house and no number starts its own underwrite, once an hour in the day, only when switched on", async () => {
+  const { LOC, ghl } = await tierOneBoard();
+  const started = [];
+  const deps = { startUnderwrite: async (a) => { started.push(a); return { job: { id: "j" } }; } };
+  assert.equal(await maybeUnderwriteTierOne({ client: ghl.client, locationId: LOC, saved: {}, store, deps, now: TEN_AM }), null, "off by default");
+  const on = { tierOne: { autoUnderwrite: true } };
+  const r = await maybeUnderwriteTierOne({ client: ghl.client, locationId: LOC, saved: on, store, deps, now: TEN_AM });
+  assert.equal(r.started, 1);
+  assert.deepEqual(started.map((a) => [a.contactId, a.address]), [["named", "41 Fixer Ave, Kent, WA 98031"]]);
+  assert.equal(await maybeUnderwriteTierOne({ client: ghl.client, locationId: LOC, saved: on, store, deps, now: TEN_AM + 10 * 60000 }), null, "not again within the hour");
+  assert.equal(await maybeUnderwriteTierOne({ client: ghl.client, locationId: LOC, saved: on, store, deps, now: Date.parse("2026-10-14T02:00:00Z") }), null, "not after 5pm");
+  const cur = await store.getJobCursor(LOC, "tierOneUnderwrite");
+  assert.equal(cur.doc.running, false);
+  assert.equal(cur.doc.started, 1);
+});
+
+test("a run left running by a deploy is retried after half an hour", async () => {
+  const { LOC, ghl } = await tierOneBoard();
+  await store.setJobCursor(LOC, "tierOneUnderwrite", { at: new Date(TEN_AM - 40 * 60000).toISOString(), doc: { day: "2026-10-13", started: 0, tries: 1, running: true } });
+  const started = [];
+  const r = await maybeUnderwriteTierOne({ client: ghl.client, locationId: LOC, saved: { tierOne: { autoUnderwrite: true } }, store,
+    deps: { startUnderwrite: async (a) => { started.push(a); return {}; } }, now: TEN_AM });
+  assert.equal(r.started, 1);
+  assert.equal((await store.getJobCursor(LOC, "tierOneUnderwrite")).doc.tries, 2);
+});
