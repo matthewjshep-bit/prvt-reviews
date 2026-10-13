@@ -163,6 +163,18 @@ test("old-stage cards land by the facts: live offers where they put them, replie
   assert.equal(r.moves.find((m) => m.contactId === "closed").status, undefined, "a closed card keeps its status");
 });
 
+// Matt, 2026-10-13: "Tier 2 should combine all the previous tier 3's into tier 2".
+// 307 live Tier 3 cards had never replied and would have been closed.
+test("every Tier 3 card with nothing live joins Tier 2 open, even an agent who never replied", () => {
+  const r = planMigration({ acq: OLD_ACQ, now: NOW, replied: new Set(),
+    opportunities: [card("cold", "s-t3"), card("live", "s-t3"), card("lead", "s-new")],
+    offers: [offer("live")] });
+  const by = Object.fromEntries(r.moves.map((m) => [m.contactId, [m.to, m.status || "open"]]));
+  assert.deepEqual(by.cold, ["Tier 2", "open"]);
+  assert.deepEqual(by.live, ["Offer Out", "open"], "a live offer still puts them where it does");
+  assert.deepEqual(by.lead, ["Tier 2", "abandoned"], "a New Lead who never replied is still closed");
+});
+
 test("the migration moves nothing into Tier 2 while a texting nurture is published, and leaves two open cards to a person", () => {
   const nurtureLive = [{ id: "w", name: "Tier 2+3 nurture" }];
   const r = planMigration({ acq: OLD_ACQ, now: NOW, nurtureLive, replied: new Set(["t"]),

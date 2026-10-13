@@ -273,8 +273,10 @@ export function boardCounts({ acq = null, opportunities = [] } = {}) {
  * 2026-10-13: "map by facts"):
  *   - with offers: where targetStage puts them (a closed deal → Contract, won)
  *   - no offers, they've written to us (`replied` has them) → Tier 2
- *   - no offers, never replied → Tier 2 with the card closed as abandoned;
- *     they stay in outreach
+ *   - Tier 3 with nothing live → Tier 2, open, replied or not (Matt,
+ *     2026-10-13: "Tier 2 should combine all the previous tier 3's")
+ *   - any other old stage, no offers, never replied → Tier 2 with the card
+ *     closed as abandoned; they stay in outreach
  * A closed card keeps its status and goes to Tier 2, so the old stage empties.
  * Two open cards on a contact are listed for a person, not moved.
  */
@@ -315,6 +317,7 @@ export function planMigration({ acq = null, opportunities = [], offers = [], rep
         to = t.to; why = t.why;
         if (t.won) newStatus = "won";
       } else if (replied.has(contactId)) { to = "tier2"; why = "replied, nothing live"; }
+      else if (stageKeyOf(keys, c.pipelineStageId) === "tier3") { to = "tier2"; why = "Tier 3 joins Tier 2"; }
       else { to = "tier2"; newStatus = "abandoned"; why = "never replied: card closed, they stay in outreach"; }
       if (!keys[to]) continue;
       const move = { contactId, opportunityId: c.id, from, to: CARD_STAGE_LABEL[to], toStageId: keys[to], why, ...(newStatus ? { status: newStatus } : {}) };

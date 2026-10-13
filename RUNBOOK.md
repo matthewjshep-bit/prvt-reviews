@@ -2305,6 +2305,8 @@ offers" → Check / Move (`POST /api/dashboard/ghl/pipeline/migrate {apply}`,
 Contacted, Tier 3, Negotiations, Passed on Offer, Not a Good Deal, Contract
 Sent (when Contract Signed is kept) or Lost lands by the facts: live offers
 where `targetStage` puts them; no offers but they've written to us → Tier 2;
+**every Tier 3 card with nothing live → Tier 2, open, replied or not** (Matt:
+"Tier 2 should combine all the previous tier 3's"); any other old stage,
 never replied → Tier 2 with the card closed `abandoned` (they stay in
 outreach). Closed cards keep their status and go to Tier 2 (won → Contract),
 so the old stages empty. Two open cards are listed, not moved. Nothing opens
