@@ -23,6 +23,7 @@ import { syncContactGmail, contactEmails } from "../gmail-sync.js";
 import { sendHandReply } from "../hand-reply.js";
 import { contactTimeline } from "../contact-timeline.js";
 import { CALL_OUTCOMES } from "../shared/talked-to.js";
+import { SETTLED_EVENT, normalizeSettle, ourNumberInText, ourPassInText } from "../shared/settled-by-you.js";
 
 const DAY_MS = 86400000;
 
@@ -197,7 +198,24 @@ export default function createContactsRouter({ resolveLocation, onHandText = nul
         source: type === "call_summary" ? "call" : "operator", ref: null, dedupeKey: null,
         data: type === "note" ? { text } : { summary: text },
       });
-      res.json({ ok: true, event: r.event });
+      // A call you logged where you priced the house or passed on it
+      // (shared/settled-by-you.js): `settled` { verdict, amount, house } when
+      // the form says so, else the number or the pass your own words give.
+      let settled = null;
+      if (type === "call_summary" && req.body?.party !== "investor") {
+        const amount = ourNumberInText(text);
+        const said = normalizeSettle(req.body?.settled)
+          || (amount ? { verdict: "priced", amount, house: "" } : ourPassInText(text) ? { verdict: "passed", amount: 0, house: "" } : null);
+        if (said) {
+          const s = await recordEvent({
+            store, locationId, contactId, party: "agent", type: SETTLED_EVENT, at, address: str(req.body?.address, 200),
+            offerId: str(req.body?.offerId, 64) || null, source: "operator", ref: null, dedupeKey: `settled_by_you:note:${contactId}:${at}`,
+            data: { by: "note", ...said },
+          });
+          settled = s.event || null;
+        }
+      }
+      res.json({ ok: true, event: r.event, ...(settled ? { settled } : {}) });
     } catch (err) { fail(res, err); }
   });
 

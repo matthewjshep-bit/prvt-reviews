@@ -135,6 +135,7 @@ import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
 import { normalizeAsset, assetFromSnapshot, assetOf } from "../shared/asset-type.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
+import { SETTLED_EVENT, SETTLED_DAYS, ourNumberInText, ourPassInText } from "../shared/settled-by-you.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType, propertyDossier } from "../shared/contact-record.js";
 import { issueDataroomInvite } from "../dataroom.js";
 import { buildBookmarklet, buildZgrabScript } from "../zgrab.js";
@@ -3498,6 +3499,59 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return { offerId: full.id, address: full.address, phrase };
   }
   router.passOnOurNo = passOnOurNo;
+
+  /**
+   * noteHandSettle({ locationId, contactId, text, at, via, channel }) → { address, house, verdict, amount } | null
+   *
+   * Kyle R., 2026-10-05: after talking a no-address flip through by phone,
+   * Matt texted "$1.17M is what im seeing on my end", and the machine kept
+   * asking for the address to run comps. A text a PERSON sent that names our
+   * number, or says the house isn't a fit, settles that house
+   * (shared/settled-by-you.js). Which house: the one the text names, else a
+   * house they told us about with no address yet, else their one live offer.
+   * Nothing is written when it isn't clear. The words are not kept.
+   */
+  async function noteHandSettle({ locationId, contactId, text, at = new Date().toISOString(), via = "", channel = "sms" }) {
+    if (channel !== "sms" || !contactId) return null;
+    const amount = ourNumberInText(text);
+    const passed = amount ? "" : ourPassInText(text);
+    if (!amount && !passed) return null;
+    const when = Date.parse(at) || Date.now();
+    const [offers, events] = await Promise.all([
+      store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []),
+      store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []),
+    ]);
+    const live = currentOffers(offers || []).filter((o) => o && OPEN_STATUSES.has(effectiveStatus(o)));
+    const named = housesNamed(text);
+    let address = "";
+    let house = "";
+    if (named.length) {
+      address = live.find((o) => named.includes(String(o.address || "").trim().split(/\s+/)[0]))?.address || "";
+    } else {
+      const fresh = (e) => { const t = Date.parse(e?.at || ""); return t <= when + 60000 && when - t <= SETTLED_DAYS * 86400000; };
+      const pending = (events || []).filter((e) => e?.type === "address_pending" && fresh(e)).sort((x, y) => String(x.at).localeCompare(String(y.at))).at(-1);
+      const landed = pending && (events || []).some((e) => e?.type === "subject_property_set" && String(e.at) > String(pending.at));
+      if (pending && !landed) house = String(pending.data?.hint || "").slice(0, 120) || "the house they told us about";
+      else if (live.length === 1) address = live[0].address || "";
+    }
+    if (!address && !house) return null;
+    const verdict = amount ? "priced" : "passed";
+    await recordEvent({
+      store, locationId, contactId, party: "agent", type: SETTLED_EVENT, at: new Date(when).toISOString(), address,
+      source: "operator", dedupeKey: `settled_by_you:text:${contactId}:${new Date(when).toISOString()}`,
+      data: { by: "text", verdict, amount, house, ...(via ? { via } : {}) },
+    });
+    return { address, house, verdict, amount };
+  }
+  router.noteHandSettle = noteHandSettle;
+  // Everything a person's own text can settle: a pass on a counter, and the
+  // house it priced or passed on. Returns the pass, as passOnOurNo did.
+  async function onPersonText(args) {
+    const passed = await passOnOurNo(args).catch(() => null);
+    await noteHandSettle(args).catch((e) => console.error("settled by hand:", e?.message));
+    return passed;
+  }
+  router.onPersonText = onPersonText;
   // The Tier 1 list's Pass / Kick out (routes/dashboard.js → tier-one.js)
   // records the outcome the same way the status menu does.
   router.applyOperatorStatus = applyOperatorStatus;
@@ -3551,7 +3605,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   });
   // The hand-reply sweep's hook (hand-reply-sweep.js onHandText).
   router.handTextDepsFor = ({ locationId, client }) => ({
-    onHandText: (t) => passOnOurNo({ locationId, client, contactId: t.contactId, text: t.body, at: t.at, via: "typed in GHL", channel: t.channel }),
+    onHandText: (t) => onPersonText({ locationId, client, contactId: t.contactId, text: t.body, at: t.at, via: "typed in GHL", channel: t.channel }),
   });
 
   // Heat: flag an offer as close to a contract, or cool one the signals made
@@ -6259,7 +6313,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // number, the house they countered on is ours to pass.
         let passed = null;
         if (out?.ok && out.dryRun === false && out.draft?.contactId) {
-          passed = await passOnOurNo({ locationId, client, contactId: out.draft.contactId, text: out.draft.sentText || b.text || out.draft.reply, via: "sent from the app", channel: out.draft.channel || "sms" }).catch(() => null);
+          passed = await onPersonText({ locationId, client, contactId: out.draft.contactId, text: out.draft.sentText || b.text || out.draft.reply, via: "sent from the app", channel: out.draft.channel || "sms" }).catch(() => null);
         }
         res.json({ ...out, sendsEnabled: CARD_SENDS_ENABLED, ...(passed ? { wePassed: passed } : {}) });
       } catch (err) { fail(res, err); }

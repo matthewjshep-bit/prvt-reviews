@@ -31,6 +31,7 @@ import { assetOf, assetPhrase, isRuralLot, kindHold, normalizeAsset } from "./sh
 import { buyerFacts } from "./shared/underwrite-checks.js";
 import { blastNote, pickedRehabLevel } from "./shared/blast-text.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
+import { settlesFrom, settledContextText } from "./shared/settled-by-you.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -377,7 +378,13 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     }
   }
 
+  // A house Matt priced or passed on himself, on the phone or by text
+  // (shared/settled-by-you.js). His number is one the reply may say.
+  const settled = settlesFrom(events, { now });
+  for (const s of settled) if (s.amount) amounts.add(s.amount);
+
   const text = [
+    settledContextText(settled),
     book.count
       ? `OUR OFFERS TO THIS AGENT (newest first — the only numbers you may quote):\n${book.text}\n` +
         // The operator's "never quote a number" rules are about numbers we
@@ -409,7 +416,8 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
   ].filter(Boolean).join("\n\n");
   return {
     text, amounts: [...amounts].filter((n) => !book.stale.includes(n)), forbiddenAmounts: [], staleAmounts: book.stale, hiddenAmounts: book.hidden, ranges: book.ranges, offers: book,
-    summary: { offers: book.count, fields: fields.length, hook: Boolean(hookAddress), history: history.length },
+    settled,
+    summary: { offers: book.count, fields: fields.length, hook: Boolean(hookAddress), history: history.length, settled: settled.length },
   };
 }
 

@@ -58,6 +58,7 @@ import { holdFor } from "./bot-hold.js";
 import { agentTurnReason } from "./agent-focus.js";
 import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
+import { SETTLED_EVENT, normalizeSettle, asksAboutSettled, settleHoldsUnderwrite, settledWithoutAddress, settleStopsMachineText } from "./shared/settled-by-you.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
@@ -88,7 +89,7 @@ import {
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { endsWithQuestionToThem } from "./shared/promise-resolver.js";
-import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn } from "./shared/follow-up.js";
+import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, ADDRESS_PENDING_INTENTS, takingItToSeller, unansweredCheckIn } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts,
@@ -278,7 +279,7 @@ export async function draftReply({
   const system = buildSystemPrompt({ config: cfg, party, channel });
   const user = buildUserContext({ party, contact, signer, instructions, context: ctx, underwriting, transcript, message, outbound, inboundKind, call, companyContact, fix });
   const intents = outbound ? [outbound.kind] : (INTENTS[party] || INTENTS.agent);
-  const params = draftParams({ model: REPLY_MODEL, system, user, schema: schemaFor(party, { outbound, booking: Boolean(booking) }), effort: draftEffort(outbound) });
+  const params = draftParams({ model: REPLY_MODEL, system, user, schema: schemaFor(party, { outbound, booking: Boolean(booking), call: !outbound && inboundKind === "call" }), effort: draftEffort(outbound) });
 
   // The shadow: the same request on another model, stored beside the real
   // draft and never sent (config.ai.shadowModel until config.ai.shadowUntil).
@@ -550,6 +551,8 @@ export function parseDraft(response, intents, cfg, outbound = null) {
     // previously offered one this message picked. Checked, not trusted.
     offeredSlots: Array.isArray(p.offeredSlots) ? p.offeredSlots.map(String).slice(0, 5) : [],
     chosenSlot: String(p.chosenSlot || "").trim().slice(0, 40),
+    // Calls only: what WE decided on the house (shared/settled-by-you.js).
+    ourCallVerdict: normalizeSettle(p.ourCallVerdict),
   };
 }
 
@@ -3188,6 +3191,15 @@ async function runProactive(job, ctx) {
     return;
   }
   const { context } = a;
+  // A house you settled yourself (shared/settled-by-you.js): no chase, no
+  // promise text or promise check-in on a house with no address, and nothing
+  // more on a house you passed on. No model call is spent finding that out.
+  const settles = party === "agent" ? context?.settled || [] : [];
+  const settled = ctx.machine ? settleStopsMachineText({ kind, subject, address: offer?.address || "", settles, now }) : "";
+  if (settled) {
+    job.status = "held"; job.phase = ""; job.heldReason = settled; job.finishedAt = new Date().toISOString();
+    return;
+  }
   const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier });
 
   job.phase = "drafting";
@@ -3240,8 +3252,20 @@ async function runProactive(job, ctx) {
       return;
     }
   }
+  // The text asks for a settled house's address, or offers to price it
+  // again: nobody asked for it, so it's dropped, and the timeline says so.
+  // A float or a first text is marked gone when queued, so it waits for you
+  // instead (KEEP_FOR_A_PERSON).
+  const askedAgain = ctx.machine && settles.length ? asksAboutSettled(draft.reply) : "";
+  if (askedAgain && !KEEP_FOR_A_PERSON.has(kind)) {
+    await recordEvent({ store, locationId, contactId: job.contactId, party, type: "note", at: new Date(now).toISOString(), source: "conversation",
+      dedupeKey: `machine_text_dropped:${job.id}`, data: { note: `${kind.replace(/_/g, " ")} not sent — it asked about a house you settled ("${askedAgain}")`, phrase: "the machine dropped its own text" } }).catch(() => {});
+    job.status = "held"; job.phase = ""; job.heldReason = `dropped, not sent: it asked about a house you settled ("${askedAgain}")`; job.finishedAt = new Date().toISOString();
+    return;
+  }
   let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   auto = releaseForAudit({ auto, gate, draft, deps });
+  if (askedAgain && auto.send) auto = { ...auto, send: false, code: "needs_you", reason: `you settled this house yourself, and the draft asks about it again ("${askedAgain}")` };
 
   job.phase = "saving";
   const open = [];
@@ -3855,6 +3879,18 @@ async function runReply(job, ctx) {
   if (auto.send && party === "agent" && soundsCrossedUp(theirLatestWords(a.transcript, job.message))) {
     auto = { ...auto, send: false, code: "needs_you", reason: "they sound confused, or say they already told us — you take this one" };
   }
+  // A house you settled yourself, by phone or by text — before, or on this
+  // call (shared/settled-by-you.js; Kyle R., 2026-10-10: "I still need the
+  // actual address to run comps and confirm it"). A reply that asks for it
+  // again waits for you. A house they're bringing us now is theirs to ask about.
+  const settles = party === "agent" ? [
+    ...(isCall && draft.ourCallVerdict ? [{ ...draft.ourCallVerdict, at: job.call?.at || new Date(now).toISOString(), by: "call", address: "" }] : []),
+    ...(context?.settled || []),
+  ] : [];
+  const askedAgain = settles.length && !ADDRESS_PENDING_INTENTS.has(draft.intent) ? asksAboutSettled(draft.reply) : "";
+  if (auto.send && askedAgain) {
+    auto = { ...auto, send: false, code: "needs_you", reason: `you settled this house yourself, and the draft asks about it again ("${askedAgain}")` };
+  }
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
@@ -3913,6 +3949,16 @@ async function runReply(job, ctx) {
       plan.auto.push({ id: `a-nf-${job.id}`, type: "start_underwrite", mode: "auto", status: "pending", party, ...extra,
         why: "they offered a showing — get them a number first" });
     }
+  }
+  // You settled this house yourself (on this call, or before): the machine
+  // doesn't price it over you. Underwrite stays one press away.
+  const settleWhy = party === "agent"
+    ? (isCall && draft.ourCallVerdict ? "you settled it on this call" : settleHoldsUnderwrite({ settles, propertyAddress: draft.propertyAddress, now }))
+    : "";
+  if (settleWhy && plan.auto.some((x) => x.type === "start_underwrite")) {
+    const held = plan.auto.find((x) => x.type === "start_underwrite");
+    plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite");
+    if (!plan.suggested.some((x) => x.type === "start_underwrite")) plan.suggested.push({ ...held, mode: "ask", why: settleWhy });
   }
   // The re-quote toggle has to mean something on its own. Without this it is
   // inert unless the operator also wires the action onto a rule by hand, and a
@@ -4386,6 +4432,19 @@ async function runReply(job, ctx) {
       address: draft.propertyAddress || "", source: "call", ref: job.call.messageId || record.id, dedupeKey: job.call.dedupeKey || `call:${job.call.messageId}`,
       data: { summary: String(draft.summary || "").slice(0, 500), intent: draft.intent, direction: job.call.direction, durationSec: job.call.durationSec, transcribed: true, draftId: record.id },
     });
+    // We priced it or passed on it on the phone: that house is settled
+    // (shared/settled-by-you.js). The address is kept only when the call
+    // said its street number — the model fills propertyAddress from the
+    // record too, and Kyle's no-address flip read as his old house.
+    if (party === "agent" && draft.ourCallVerdict) {
+      const street = String(draft.propertyAddress || "").trim().match(/^\d+/)?.[0] || "";
+      const address = street && new RegExp(`\\b${street}\\b`).test(inboundText) ? draft.propertyAddress : "";
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: SETTLED_EVENT, at: job.call.at || new Date(now).toISOString(),
+        address, source: "call", ref: job.call.messageId || record.id, dedupeKey: `settled_by_you:call:${job.call.messageId || record.id}`,
+        data: { by: "call", ...draft.ourCallVerdict, draftId: record.id },
+      }).catch((e) => warnings.push(`settled: ${String(e?.message || e).slice(0, 120)}`));
+    }
   }
 
   /* --- 4b. what we learned about them --- */
@@ -4468,7 +4527,10 @@ async function runReply(job, ctx) {
   let chaseHasDate = false;
   let chaseStarted = false;
   if (party === "agent") {
-    const pend = addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });
+    // A house you settled with no address: a house with no address in their
+    // next texts is that one, and its address is not needed.
+    const settledLoose = settledWithoutAddress(settles, { now });
+    const pend = settledLoose ? null : addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });
     if (pend) {
       chaseHasDate = Boolean(pend.firstDueAt);
       chaseStarted = true;

@@ -518,3 +518,35 @@ test("a promise we owe waits while their newer text is waiting on you", async ()
   assert.equal(r.owed, 0, "not filed as owed while a person has the thread");
   assert.match(r.results[0].reason, /their text is waiting on you/);
 });
+
+/* ---------- a house you settled yourself ---------- */
+
+// Kyle R., 2026-10-05..10: Matt priced a no-address flip by phone and text;
+// the bot later promised "the written offer" on it, and the audit booked a
+// promise check-in on top.
+const settledByYou = (hoursAgo, over = {}) => ({ contactId: "c1", type: "settled_by_you", at: at(hoursAgo), address: "", source: "operator",
+  data: { by: "text", verdict: "priced", amount: 1170000, house: "a flip in Bellevue" }, ...over });
+
+test("a promise about no house in particular isn't owed once you've settled the house yourself", async () => {
+  const store = fakeStore({ events: [promise(30, { address: "", data: { ...promise(30).data, what: "paper", text: "I still need the address to run comps and confirm it" } })] });
+  const settled = [settledByYou(80)];
+  store.listContactEvents = async (_loc, contactId, { types = null } = {}) => settled.filter((e) => e.contactId === contactId && (!types || types.includes(e.type)));
+  const s = starter();
+  const r = await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0, "no promise text");
+  assert.equal(r.owed, 0);
+  assert.ok(store.events.some((e) => e.type === "promise_kept" && e.data?.by === "settled_by_you"), "the Desk row clears");
+  // A promise on a house that has an address is still owed.
+  const other = fakeStore({ events: [promise(30)] });
+  other.listContactEvents = store.listContactEvents;
+  assert.equal((await runPromiseSweep({ locationId: "LOC", saved: SAVED, store: other, now: NOW, deps: starter() })).owed, 1);
+});
+
+test("the address chase stops once you've settled the house yourself", async () => {
+  const s = starter();
+  const store = fakeStore({ events: [pending(50), settledByYou(45, { contactId: "ag" })] });
+  const r = await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 0);
+  assert.equal(s.calls.length, 0);
+  assert.ok(store.events.some((e) => e.type === "address_pending_closed" && e.data?.by === "settled_by_you"));
+});

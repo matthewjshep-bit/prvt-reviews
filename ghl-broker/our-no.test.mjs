@@ -107,3 +107,29 @@ test("we decline in a person's words, not in a hold or a showing time", () => {
   assert.equal(weDecline("Best we can do is 450"), null);
   assert.equal(weDecline("Can't get there today, tomorrow at noon?"), null);
 });
+
+// Kyle R., 2026-10-05: after talking a flip through by phone, Matt texted
+// "$1.17M is what im seeing on my end". The house had no address in the
+// app, and the machine kept asking for one to run comps.
+test("a number you text for a house with no address yet settles that house", async () => {
+  const { recordEvent } = await import("./contact-record.js");
+  await recordEvent({ store, locationId: LOC, contactId: "kyle", party: "agent", type: "address_pending", at: "2026-10-05T20:17:10Z", address: "",
+    source: "conversation", dedupeKey: "address_pending:kyle:1", data: { hint: "a flip coming up in Bellevue" } });
+  const r = await router.onPersonText({ locationId: LOC, client, contactId: "kyle", text: "$1.17M is what im seeing on my end", at: "2026-10-05T20:35:08Z", via: "typed in GHL" });
+  assert.equal(r, null, "no counter to pass on");
+  const ev = (await store.listContactEvents(LOC, "kyle", { types: ["settled_by_you"] }))[0];
+  assert.ok(ev, "settled");
+  assert.ok(!ev.address, "no address");
+  assert.deepEqual({ by: ev.data.by, verdict: ev.data.verdict, amount: ev.data.amount, house: ev.data.house },
+    { by: "text", verdict: "priced", amount: 1170000, house: "a flip coming up in Bellevue" });
+  // Their price asked back, or a text with no house to pin it to, settles nothing.
+  assert.equal(await router.noteHandSettle({ locationId: LOC, client, contactId: "kyle", text: "they're listed at 550k right?" }), null);
+  assert.equal(await router.noteHandSettle({ locationId: LOC, client, contactId: "nobody", text: "I can do 450k" }), null);
+});
+
+test("a number you text on their one live offer settles that house", async () => {
+  const o = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "dana", contactName: "Dana", address: "12 Elm St, Renton, WA 98056",
+    status: "sent", cashAmount: 410000, statusHistory: [], createdAt: "2026-10-01T00:00:00Z", sends: [{ ts: "2026-10-01T01:00:00Z" }] });
+  const s = await router.noteHandSettle({ locationId: LOC, client, contactId: "dana", text: "Talked to my partner, best I can do is 425k" });
+  assert.deepEqual(s, { address: o.address, house: "", verdict: "priced", amount: 425000 });
+});

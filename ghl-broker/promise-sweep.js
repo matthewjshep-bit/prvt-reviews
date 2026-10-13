@@ -31,6 +31,7 @@ import { openPromises, resolvePromise, normalizePromiseDismissal, promiseWhat, P
 import { driveOpenPromises, promiseClaimed } from "./promise-driver.js";
 import { waitingReason } from "./outbox-guard.js";
 import { callEventConnected } from "./shared/talked-to.js";
+import { SETTLED_EVENT, SETTLED_DAYS, settlesFrom, settledWithoutAddress } from "./shared/settled-by-you.js";
 
 const HOUR_MS = 3600000;
 
@@ -172,6 +173,22 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
       });
       out.results.push({ contactId, address, status: "not_owed" });
       continue;
+    }
+    // A promise about no house in particular, while a house you settled
+    // yourself has no address (shared/settled-by-you.js; Kyle R.,
+    // 2026-10-10: the bot promised the written offer on a house Matt had
+    // already priced by phone). Nothing is owed; the Desk row clears.
+    if (!address) {
+      const timeline = await store.listContactEvents?.(locationId, contactId, { types: [SETTLED_EVENT], limit: 20 }).catch(() => []) || [];
+      const loose = settledWithoutAddress(settlesFrom(timeline, { now }), { now, days: SETTLED_DAYS });
+      if (loose) {
+        await recordEvent({
+          store, locationId, contactId, party: "agent", type: "promise_kept", at: iso(now), address,
+          source: "conversation", dedupeKey: `promise_kept:${contactId}:${since}`, data: { by: SETTLED_EVENT },
+        });
+        out.results.push({ contactId, address, status: "not_owed", reason: "you settled the house yourself" });
+        continue;
+      }
     }
     // Already said so once. Today carries it from here; no second text.
     if (owed) { out.results.push({ contactId, address, status: "owed", reason: "already told them" }); continue; }
@@ -369,8 +386,10 @@ export const ADDRESS_CHASE_QUIET_HOURS = 36;
 // 2026-10-05 — Matt gave a number by phone and text; the chase kept asking).
 // A call counts when it connected or when we placed it; their missed call
 // (a bare call_summary and an inbound call_attempt) doesn't.
-const YOU_TOOK_IT = ["hand_reply", "call_summary", "call_attempt"];
-const youTookIt = (e) => e.type === "hand_reply"
+// A house you priced or passed on yourself (shared/settled-by-you.js) is
+// closed too, whoever wrote it down.
+const YOU_TOOK_IT = ["hand_reply", "call_summary", "call_attempt", SETTLED_EVENT];
+const youTookIt = (e) => e.type === "hand_reply" || e.type === SETTLED_EVENT
   || (e.type === "call_summary" && callEventConnected(e))
   || (e.type === "call_attempt" && (e.source === "operator" || e.data?.direction === "outbound"));
 const DAY_MS = 86400000;
@@ -428,7 +447,7 @@ export async function runAddressChase({ client, locationId, saved = {}, store, s
         data: { reason: "you_took_it", by: yours.type, pendingAt: pending.at },
       }).catch(() => {});
       out.found++;
-      out.results.push({ contactId, status: "closed", reason: `you ${yours.type === "hand_reply" ? "texted" : "called"} them yourself` });
+      out.results.push({ contactId, status: "closed", reason: yours.type === SETTLED_EVENT ? "you settled the house yourself" : `you ${yours.type === "hand_reply" ? "texted" : "called"} them yourself` });
       continue;
     }
     const rungs = addressChaseRungs(pending);

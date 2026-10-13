@@ -1118,7 +1118,12 @@ export function buildUserContext({
       `a pass, a time, an address), propertyAddress is the house discussed, counterAmount / agentArv / agentRehab are numbers THEY said. ` +
       `Then write the TEXT we send right after hanging up: one or two lines — what we took from it and the one next step ` +
       `("I'll get you numbers on Cedar by tomorrow", "sending the package now"). Do NOT recap the call. If nothing needs ` +
-      `saying, leave reply empty.`
+      `saying, leave reply empty.` +
+      (party === "agent"
+        ? ` If WE gave a number for the house on the call or said it isn't a fit, fill ourCallVerdict: that house is settled. ` +
+          `Then the text never asks for its address, photos or details and never offers to run comps or confirm the number; ` +
+          `it stands on what we said ("that's where I'm at, let me know if the seller budges").`
+        : "")
     : "";
   const opening = outboundOpening(outbound) || callHead;
   return [
@@ -1176,15 +1181,32 @@ export function profileSchemaFor(party = "agent") {
   return { type: "object", additionalProperties: false, required: Object.keys(props), properties: props };
 }
 
-export function schemaFor(party = "agent", { profile = true, outbound = null, booking = false } = {}) {
+// What WE decided on a call (shared/settled-by-you.js). Calls only, so a
+// text's schema, and its cache entry, are unchanged.
+const OUR_CALL_VERDICT_SCHEMA = {
+  type: "object", additionalProperties: false,
+  required: ["verdict", "amount", "house"],
+  properties: {
+    verdict: { type: "string", enum: ["", "priced", "passed"], description:
+      "What WE (the US lines) decided on this call about the house discussed. 'priced': we gave them our number for it, " +
+      "even a rough, back-of-the-napkin or 'my max is' number. 'passed': we told them it isn't a fit or we'll pass. " +
+      "Empty when we decided neither (still gathering details, or only they gave numbers)." },
+    amount: { type: "integer", description: "The number WE gave for the house, whole dollars ('1.17' or '1.175' on a house that size means 1,170,000 / 1,175,000); 0 if none" },
+    house: { type: "string", description: "A few words naming the house as said on the call (street, neighborhood or city); empty if none" },
+  },
+};
+
+export function schemaFor(party = "agent", { profile = true, outbound = null, booking = false, call = false } = {}) {
   const intents = INTENTS[party] || INTENTS.agent;
+  const callVerdict = call && party === "agent";
   return {
     type: "object",
     additionalProperties: false,
     required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount",
       ...(party === "investor" ? ["passReason", "walkthrough"] : []), ...(party === "agent" ? ["propertyDetails", "agentArv", "agentRehab", "agentTakeNote", "dealSignal"] : []), ...(profile ? ["profile"] : []),
-      ...(booking ? ["offeredSlots", "chosenSlot"] : [])],
+      ...(booking ? ["offeredSlots", "chosenSlot"] : []), ...(callVerdict ? ["ourCallVerdict"] : [])],
     properties: {
+      ...(callVerdict ? { ourCallVerdict: OUR_CALL_VERDICT_SCHEMA } : {}),
       ...(profile ? { profile: profileSchemaFor(party) } : {}),
       ...(booking ? {
         offeredSlots: { type: "array", items: { type: "string" }, description: "ISO values of the TIMES YOU MAY PROPOSE that the reply names; empty if none" },

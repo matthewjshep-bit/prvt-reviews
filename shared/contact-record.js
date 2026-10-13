@@ -116,6 +116,9 @@ export const EVENT_TYPES = [
   "unsubscribed",
   // Matt's contact card went to them in its own text (shared/contact-card.js).
   "contact_card_sent",
+  // You priced a house or passed on it yourself, by phone or by text
+  // (shared/settled-by-you.js): the machine stands behind it and stops asking.
+  "settled_by_you",
 ];
 
 export const EVENT_LABEL = {
@@ -155,6 +158,7 @@ export const EVENT_LABEL = {
   drive_stopped: "you stopped the bot", drive_resumed: "the bot is back on", cadence_set: "you changed how often we check in",
   unsubscribed: "they unsubscribed",
   contact_card_sent: "we sent our contact card",
+  settled_by_you: "you settled the house yourself",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -194,6 +198,7 @@ export const EVENT_ICON = {
   drive_stopped: "CirclePause", drive_resumed: "CirclePlay", cadence_set: "Gauge",
   unsubscribed: "UserX",
   contact_card_sent: "Contact",
+  settled_by_you: "Handshake",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

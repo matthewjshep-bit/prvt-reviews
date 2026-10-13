@@ -3163,6 +3163,38 @@ conversation. The call's own follow-up text comes from the reply agent, not a
 driver, and is not held by it; and a number promised **on** that call is still
 sent by the promise driver (`via: "call"`, a promise made at or after the call).
 
+**A house you settle yourself stays settled (2026-10-13).** Kyle R.: Matt
+talked a no-address flip through on the phone and texted $1.17M. The app had
+no address for it, so the machine asked for the address twice, offered to "run
+comps and confirm it", and promised the written offer. A **`settled_by_you`**
+event (`shared/settled-by-you.js`; `data: { by, verdict: "priced" | "passed",
+amount, house }`) records a house a person priced or passed on. Three things
+write it:
+- **the call reader**, from the transcript (`ourCallVerdict`, a field in the
+  schema for calls only). The address is kept only when the call said its
+  street number.
+- **a text a person sent** (typed in GHL, or sent from the app) that names
+  our number or says it isn't a fit (`noteHandSettle`, beside `passOnOurNo`).
+  The house is the one the text names, else an open no-address house
+  (`address_pending`), else their one live offer. Nothing is written when the
+  house isn't clear.
+- **a call logged by hand** (`POST /api/contacts/:id/events
+  {type: "call_summary", settled?: {verdict, amount, house}}`). Without
+  `settled`, the note's own number or pass is read.
+
+For 60 days the bot's context opens with "HOUSES MATT SETTLED HIMSELF", and
+his number is one the reply may say. Then:
+- A reply that asks for a settled house's address, or offers to run comps or
+  confirm the number, waits for you (`needs_you`).
+- No underwrite starts by itself on that house. **Underwrite** stays one
+  press away.
+- On a house with no address, for 14 days a house with no address in their
+  texts starts no address chase.
+- The address chase closes.
+- A promise about no house in particular is kept (`by: "settled_by_you"`).
+- The `address_chase`, `promise_due` and promise check-in texts don't start.
+- A house you passed on gets no more machine texts.
+
 ### Booking calls (the calendar as a guard)
 
 Conversation AI page → "Booking calls". Pick a calendar (needs

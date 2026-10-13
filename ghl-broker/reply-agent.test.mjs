@@ -6569,3 +6569,89 @@ test("an agent's numbers on a condo we passed on don't reopen it", async () => {
   await settle();
   assert.equal(uw.length, 0);
 });
+
+/* ---------- a house you settled yourself ---------- */
+
+// Kyle R., 2026-10-05: Matt talked a no-address Bellevue flip through on the
+// phone and texted "$1.17M is what im seeing on my end". On 10/10 the bot
+// answered by itself: "I still need the actual address to run comps and
+// confirm it", then promised the written offer.
+const SETTLED_TEXT = (at) => ({ type: "settled_by_you", at, address: "", source: "operator",
+  data: { by: "text", verdict: "priced", amount: 1170000, house: "said they have a flip coming up in Bellevue, no address yet" } });
+
+test("after you price a house yourself, the bot doesn't ask for its address to run comps and confirm your number", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.events.set("LOC|c1", [SETTLED_TEXT(new Date(NOW - 5 * 86400000).toISOString())]);
+  let seen;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message: "Any update from your end on that one?", sendsEnabled: true,
+    deps: {
+      draft: async (args) => { seen = args; return { ...DRAFT, propertyAddress: "", reply: "1.17 still stands, but I still need the actual address to run comps and confirm it. Can you send it over?" }; },
+      now: () => NOW, random: () => 0,
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.match(seen.context.text, /HOUSES MATT SETTLED HIMSELF/);
+  assert.match(seen.context.text, /Matt gave them \$1,170,000 by text on Aug 30\. That IS our number on it\./);
+  assert.ok(seen.context.amounts.includes(1170000), "his number is one the reply may say");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft");
+  assert.equal(d.autoSend.decided, false);
+  assert.match(d.autoSend.reason, /you settled this house yourself/);
+  // and nobody starts chasing an address it doesn't need
+  assert.equal((await store.listContactEvents("LOC", "c1", { types: ["address_pending"] })).length, 0);
+});
+
+test("a call where we priced the house writes it down, starts no underwrite and no address chase", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const uw = [];
+  const transcript = "THEM: it needs a full kitchen and a roof\nUS: honestly I'm at about one point one seven five max on that one\nTHEM: ok I'll take it to the seller";
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: transcript, channel: "sms",
+    inboundKind: "call", call: { messageId: "m-kyle", direction: "outbound", at: new Date(NOW - 60000).toISOString(), durationSec: 300, dedupeKey: "call:m-kyle", transcript },
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "new_property", propertyAddress: "17942 122nd Street Ct E, Bonney Lake, WA", reply: "Good talking. 1.175 is where I'm at, let me know what the seller says.",
+        ourCallVerdict: { verdict: "priced", amount: 1175000, house: "the Bellevue flip" } }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw1", dryRun: true } }; },
+      now: () => NOW,
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const [ev] = await store.listContactEvents("LOC", "c1", { types: ["settled_by_you"] });
+  assert.ok(ev, "the call's verdict is on the record");
+  assert.equal(ev.data.by, "call");
+  assert.equal(ev.data.amount, 1175000);
+  assert.equal(ev.address, "", "the old house on file the model reached for is not the house on the call");
+  assert.equal(uw.length, 0, "no underwrite over your number");
+  const d = await store.getReplyDraft(job.draftId);
+  assert.ok((d.actions || []).every((a) => a.type !== "start_underwrite" || a.mode === "ask"), JSON.stringify((d.actions || []).map((a) => [a.type, a.mode])));
+  assert.equal((await store.listContactEvents("LOC", "c1", { types: ["address_pending"] })).length, 0);
+});
+
+test("the address chase and the promise check-in don't go on a house you settled", async () => {
+  const { startProactive } = await import("./reply-agent.js");
+  for (const [kind, subject] of [
+    ["address_chase", { address: "", hint: "a flip in Bellevue", rung: 2, rungs: 6 }],
+    ["checkin_due", { address: "", phrase: "", sourceKind: "promise" }],
+  ]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = fakeStore();
+    store.events.set("LOC|c1", [SETTLED_TEXT(new Date(Date.now() - 5 * 86400000).toISOString())]);
+    let drafted = 0;
+    const r = await startProactive({
+      client, locationId: "LOC", saved: CHECKINS_ON, store, contactId: "c1", kind, offer: null, subject, sendsEnabled: true,
+      deps: { draft: async () => { drafted++; return { ...DRAFT, intent: kind, reply: "Any word on that one?" }; } },
+    });
+    if (r.job) await settle();
+    const why = r.skipped || r.job?.heldReason || "";
+    assert.match(why, /you settled .* yourself/, `${kind}: ${why}`);
+    assert.equal(drafted, 0, `${kind}: no model call spent`);
+  }
+});
