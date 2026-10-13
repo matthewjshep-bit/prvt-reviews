@@ -4801,7 +4801,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       ]);
       // Silence first; then (onNeutral, 2026-10-08) an answer that wasn't a
       // pass — "can't answer for the seller", or a yes on a rough number.
-      const quiet = paperAfterSilenceDue({ offer, drafts, events, silenceHours: af.silenceHours, now });
+      const quiet = paperAfterSilenceDue({ offer, drafts, events, silenceHours: af.silenceHours, withFloat: af.withFloat, now });
       const answered = !quiet.due && af.onNeutral ? paperAfterAnswerDue({ offer, drafts, events, now }) : null;
       const due = quiet.due ? quiet : answered;
       if (!due?.due) continue;
@@ -4840,7 +4840,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await createContactNote(client, offer.contactId, {
         body: `Sent our written offer on ${offer.address} (${fmtMoney(offer.cashAmount)}) by ${(r.channels || []).join(" and ")} for their records — ${answered?.due
           ? (answered.kind === "yes" ? "they said the number works." : "they answered the number without a pass.")
-          : "a working day after the number went out with no answer."}`,
+          : af.withFloat ? "right after the number went out by text." : "a working day after the number went out with no answer."}`,
       }).catch(() => {});
     }
     return { sent, checked };

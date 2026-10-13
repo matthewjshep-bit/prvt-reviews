@@ -975,6 +975,15 @@ export function PartyPlaybooks({ config, patch, workflows }) {
             )}
             {party === "agent" && (
               <div>
+                <Toggle checked={pb.sendOffer?.afterFloat?.withFloat}
+                  onChange={(v) => setPb({ sendOffer: { ...(pb.sendOffer || {}), afterFloat: { ...(pb.sendOffer?.afterFloat || {}), withFloat: v } } })}>
+                  <span className="font-semibold">Send the written offer with the float — don't wait</span>
+                </Toggle>
+                <p className={HINT}>The letter follows our number within about 15 minutes instead of a working day later, so the agent has it in front of them. Same rules otherwise: once per offer, only a number we'd put in writing, inside the auto-send hours, the daily limit above. If they answer first, the reply path decides. Needs "Send the written offer after a quiet float" on too.</p>
+              </div>
+            )}
+            {party === "agent" && (
+              <div>
                 <Toggle checked={pb.sendOffer?.afterFloat?.onPushback}
                   onChange={(v) => setPb({ sendOffer: { ...(pb.sendOffer || {}), afterFloat: { ...(pb.sendOffer?.afterFloat || {}), onPushback: v } } })}>
                   <span className="font-semibold">Send the written offer with the reply to a no</span>

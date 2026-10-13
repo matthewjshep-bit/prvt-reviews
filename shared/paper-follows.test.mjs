@@ -32,6 +32,19 @@ test("a floated number nobody answered gets the written offer after 24 working h
   assert.equal(monday2pm.floatAt, new Date(FRI_2PM).toISOString());
 });
 
+// Matt, 2026-10-13: "we should also just send out the offer here so they have it".
+test("with the float switched on, the written offer follows the number on the next tick instead of a working day later", () => {
+  const drafts = [floatDraft()];
+  const tenMinLater = FRI_2PM + 10 * 60000;
+  assert.equal(paperAfterSilenceDue({ offer: offer(), drafts, now: tenMinLater }).due, false, "off: it waits a working day");
+  const r = paperAfterSilenceDue({ offer: offer(), drafts, withFloat: true, now: tenMinLater });
+  assert.equal(r.due, true);
+  assert.equal(r.floatAt, new Date(FRI_2PM).toISOString());
+  // Still only once the number actually went, and never a number we'd not put in writing.
+  assert.equal(paperAfterSilenceDue({ offer: offer(), drafts: [{ ...floatDraft(), status: "scheduled" }], withFloat: true, now: tenMinLater }).due, false);
+  assert.equal(paperAfterSilenceDue({ offer: offer({ autoUnderwrite: { passed: false, held: ["agent_numbers"] } }), drafts, withFloat: true, now: tenMinLater }).due, false);
+});
+
 test("the clock starts when the number went out, not when it was drafted", () => {
   // Drafted Friday, approved and sent Monday at 9am.
   const sentMonday = Date.parse("2026-10-05T16:00:00Z");
@@ -88,12 +101,12 @@ test("a send where every channel failed isn't paper out", () => {
 test("afterFloat survives the normaliser and is never on for investors", async () => {
   const { normalizeConversationAi } = await import("./conversation-ai.js");
   const fresh = normalizeConversationAi({});
-  assert.deepEqual(fresh.parties.agent.sendOffer.afterFloat, { enabled: false, silenceHours: 24, onPushback: false, onNeutral: false, dailyCap: 20 });
+  assert.deepEqual(fresh.parties.agent.sendOffer.afterFloat, { enabled: false, silenceHours: 24, withFloat: false, onPushback: false, onNeutral: false, dailyCap: 20 });
   const on = normalizeConversationAi({ parties: {
     agent: { sendOffer: { afterFloat: { enabled: true, silenceHours: "48", onPushback: true, onNeutral: true, dailyCap: 500 } } },
     investor: { sendOffer: { afterFloat: { enabled: true, onPushback: true, onNeutral: true } } },
   } });
-  assert.deepEqual(on.parties.agent.sendOffer.afterFloat, { enabled: true, silenceHours: 48, onPushback: true, onNeutral: true, dailyCap: 200 });
+  assert.deepEqual(on.parties.agent.sendOffer.afterFloat, { enabled: true, silenceHours: 48, withFloat: false, onPushback: true, onNeutral: true, dailyCap: 200 });
   assert.equal(on.parties.investor.sendOffer.afterFloat.enabled, false);
   assert.equal(on.parties.investor.sendOffer.afterFloat.onPushback, false);
   assert.equal(on.parties.investor.sendOffer.afterFloat.onNeutral, false);

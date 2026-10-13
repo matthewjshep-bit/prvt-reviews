@@ -3356,6 +3356,15 @@ follow-up sweep and the Next follow-up column read `paperWent` now, so a
 nudge never says "we sent you an offer" after one. The nudge clock restarts
 from the paper.
 
+**With the float, no wait (2026-10-13)** ("Send the written offer with the
+float — don't wait", `afterFloat.withFloat`, needs `afterFloat.enabled`).
+Matt: a number we texted counts as Sent, "we should also just send out the
+offer here so they have it". `paperAfterSilenceDue` drops the working-day
+wait, so the letter goes on the next 15-minute tick after the float text
+leaves. Everything else above still holds: current offer, `paperWorthy`,
+`paperCheck`, once per offer, auto-send hours, `dailyCap`. If they answered in
+that window, the reply path (`onPushback` / `onNeutral`) has it. Ships off.
+
 **With the reply to a no** ("Send the written offer with the reply to a
 no", `afterFloat.onPushback`, needs `afterFloat.enabled` too). Matt: "even if
 it doesn't make sense for the agent or if the number they say they have some
