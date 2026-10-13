@@ -163,13 +163,13 @@ test("old-stage cards land by the facts: live offers where they put them, replie
   assert.equal(r.moves.find((m) => m.contactId === "closed").status, undefined, "a closed card keeps its status");
 });
 
-test("the migration never opens a card into a texting nurture, and leaves two open cards to a person", () => {
+test("the migration moves nothing into Tier 2 while a texting nurture is published, and leaves two open cards to a person", () => {
   const nurtureLive = [{ id: "w", name: "Tier 2+3 nurture" }];
   const r = planMigration({ acq: OLD_ACQ, now: NOW, nurtureLive, replied: new Set(["t"]),
     opportunities: [card("t", "s-t3"), card("s", "s-new"), card("two", "s-neg"), { ...card("two", "s-t1"), id: "opp-two-b" }],
     offers: [] });
   assert.match(r.moves.find((m) => m.contactId === "t").blocked, /nurture/);
-  assert.equal(r.moves.find((m) => m.contactId === "s").blocked, undefined, "a closed card can't start it");
+  assert.match(r.moves.find((m) => m.contactId === "s").blocked, /nurture/, "a card being closed could still fire a stage-change trigger");
   assert.deepEqual(r.manual.map((m) => m.contactId), ["two"]);
   assert.equal(r.moves.some((m) => m.contactId === "two"), false);
 });

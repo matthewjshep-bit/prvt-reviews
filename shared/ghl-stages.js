@@ -315,8 +315,9 @@ export function planMigration({ acq = null, opportunities = [], offers = [], rep
       else { to = "tier2"; newStatus = "abandoned"; why = "never replied: card closed, they stay in outreach"; }
       if (!keys[to]) continue;
       const move = { contactId, opportunityId: c.id, from, to: CARD_STAGE_LABEL[to], toStageId: keys[to], why, ...(newStatus ? { status: newStatus } : {}) };
-      // Only an open card landing in Tier 2 can start GHL's nurture.
-      if (to === "tier2" && status === "open" && newStatus !== "abandoned" && (nurtureLive || []).length && !cfg.allowNurtureTrigger) {
+      // Any card landing in Tier 2 — open or closed — could fire a stage-change
+      // trigger in GHL, so none moves there while a nurture is published.
+      if (to === "tier2" && (nurtureLive || []).length && !cfg.allowNurtureTrigger) {
         move.blocked = `${nurtureLive.map((w) => w.name).join(", ")} is published and would text them on this move`;
         counts.blocked++;
       } else counts.planned++;
