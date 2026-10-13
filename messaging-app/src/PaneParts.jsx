@@ -20,7 +20,7 @@ import { annotateCurrent } from "@shared/current-offer.js";
 import { Menu, StatusMenu } from "./ui.jsx";
 import { useOpenContact } from "./ContactLink.jsx";
 import ContactLink from "./ContactLink.jsx";
-import { getContactTimeline, ghlContactUrl, setOfferStatus } from "./api.js";
+import { getContactTimeline, getGhlCard, ghlContactUrl, setOfferStatus } from "./api.js";
 import { OfferPanelBody, loadSiblings, siblingsKey, useOfferSide, useRequote } from "./OfferPanel.jsx";
 import ConversationPanel, { ConversationPanelBody } from "./ConversationPanel.jsx";
 import CoachIdeas, { coachKey, loadCoach } from "./CoachIdeas.jsx";
@@ -111,6 +111,29 @@ export function usePane({ item, targets, bodies = null, feedback = null, onDone 
 }
 
 /** The person (their name opens their record) · the house, and the strip under it. */
+// Where the agent sits on GHL's Acquisitions board, beside their name
+// (Matt, 2026-10-13). Agents only; a buyer has no card there.
+const GHL_STAGE_CLS = {
+  tier2: "bg-slate-100 text-slate-700", tier1: "bg-amber-100 text-amber-800",
+  offerOut: "bg-blue-100 text-blue-800", contract: "bg-emerald-100 text-emerald-800",
+};
+export const ghlCardKey = (contactId) => (contactId ? `ghlcard:${contactId}` : null);
+export function GhlStagePill({ contactId, party }) {
+  const on = Boolean(contactId) && party !== "investor";
+  const { data, loading } = useLoad(on ? ghlCardKey(contactId) : null, () => getGhlCard(contactId), { maxAgeMs: 120000 });
+  if (!on) return null;
+  if (loading) return <span className="ml-2 inline-block h-4 w-16 animate-pulse rounded-full bg-slate-100 align-middle" aria-hidden="true" />;
+  const stage = data?.stage;
+  const closed = data?.status && data.status !== "open";
+  const label = stage ? `GHL: ${stage}${closed ? ` (${data.status})` : ""}` : "GHL: no card";
+  return (
+    <span className={`ml-2 inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 align-middle text-[11px] font-semibold ${stage ? GHL_STAGE_CLS[data.key] || "bg-slate-100 text-slate-700" : "bg-slate-50 text-slate-400"}`}
+      title={data?.name ? `GHL Acquisitions stage: ${data.name}${data.cards > 1 ? ` · ${data.cards} cards` : ""}` : "No card on GHL's Acquisitions board"}>
+      {label}
+    </span>
+  );
+}
+
 export function PaneHeading({ item, targets, pane, fallback = "" }) {
   const street = String(item.address || pane.side.offer?.address || "").split(",")[0].trim();
   const name = pane.name;
@@ -118,7 +141,7 @@ export function PaneHeading({ item, targets, pane, fallback = "" }) {
     <div className="min-w-0">
       <h2 className="mt-1 text-base font-bold leading-snug text-slate-900">
         {targets.contactId && name
-          ? <><ContactLink contactId={targets.contactId} name={name} party={targets.party} className="font-bold">{name}</ContactLink>{street ? <span> · {street}</span> : null}</>
+          ? <><ContactLink contactId={targets.contactId} name={name} party={targets.party} className="font-bold">{name}</ContactLink>{street ? <span> · {street}</span> : null}<GhlStagePill contactId={targets.contactId} party={targets.party} /></>
           : (fallback || street || name || "Untitled")}
       </h2>
       {targets.contactId && <MomentStrip timeline={pane.timeline} onHistory={pane.openContact} />}

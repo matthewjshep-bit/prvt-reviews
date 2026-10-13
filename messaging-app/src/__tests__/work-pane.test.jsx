@@ -138,7 +138,8 @@ test("the header carries the offer's status menu, the Bot menu, Edit offer and C
   expect(html).toContain('aria-label="Bot: Bot"');   // no timeline yet: a plain Bot menu, Stop still works
   expect(html).toContain("Edit offer");
   expect(html).toMatch(/> Call<\/button>/);
-  expect(html).toMatch(/<h2[^>]*>.*>Dana <svg.*<\/a><span> · 12 Elm St<\/span><\/h2>/s);
+  // The name, the house, then where the agent sits on GHL's board (loading here).
+  expect(html).toMatch(/<h2[^>]*>.*>Dana <svg.*<\/a><span> · 12 Elm St<\/span><span[^>]*animate-pulse[^>]*><\/span><\/h2>/s);
   expect(html).not.toMatch(/>\s*Record\s*</);
   expect(html).not.toContain("Offers with");   // one offer: nothing to switch between
 });

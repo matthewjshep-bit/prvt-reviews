@@ -38,7 +38,7 @@ const H = 3600000;
 const ago = (h) => new Date(Date.now() - h * H).toISOString();
 const HOUSE = "18612 51st Ave SE, Bothell, WA 98012";
 
-test("one person's owed number, held underwrite and last night's 'still owed' are one Desk row; a counter is a call", async () => {
+test("one person's owed number and last night's 'still owed' are one row on Today; a counter above ours is a decision", async () => {
   await store.saveOfferSettings(LOC, { lineTargets: { offersPerDay: 10, dealsPerMonth: 2 } });
   // The held underwrite on Hanna's house.
   const heldOffer = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "hanna", contactName: "Hanna F", address: HOUSE, status: "draft",
@@ -63,14 +63,15 @@ test("one person's owed number, held underwrite and last night's 'still owed' ar
   const r = await (await fetch(`${B}/api/dashboard/pipeline`)).json();
   assert.equal(r.ok, true, r.error);
   assert.ok(r.desk, "the Desk rides on the same response");
-  assert.deepEqual(r.desk.sections.map((s) => s.key), ["call", "decide", "machine"]);
+  // Today is one list, Needs you (Matt, 2026-10-13).
+  assert.deepEqual(r.desk.sections.map((s) => [s.key, s.label]), [["decide", "Needs you"]]);
+  assert.ok(r.desk.rows.every((x) => x.section === "decide"));
   const hanna = r.desk.rows.filter((x) => x.contactId === "hanna");
   assert.equal(hanna.length, 1, "Hanna is one row");
-  assert.ok(hanna[0].reasonIds.length >= 3, `promise, held underwrite and still-owed all fold in (${hanna[0].reasonIds.join(", ")})`);
-  assert.ok(hanna[0].reasonIds.includes(`underwrite_held:${heldOffer.id}`));
+  assert.ok(hanna[0].reasonIds.length >= 2, `the promise and still-owed fold in (${hanna[0].reasonIds.join(", ")})`);
+  assert.equal(hanna[0].reasonIds.includes(`underwrite_held:${heldOffer.id}`), false, "the held underwrite is on Offers → Draft, not Today");
   const kel = r.desk.rows.find((x) => x.contactId === "kel");
-  assert.equal(kel.section, "call", "a counter above our number is a call");
-  assert.equal(r.desk.rows[0].section, "call", "Call comes first");
+  assert.ok(kel, "a counter above our number is on Today");
   const nameless = r.desk.rows.find((x) => x.contactId === "nameless");
   assert.equal(nameless.contactName, "Mallory D", "named off GHL, not 'An agent'");
   assert.equal(r.desk.kpis.calls.talked, 1);
@@ -80,23 +81,12 @@ test("one person's owed number, held underwrite and last night's 'still owed' ar
   assert.ok(r.actions.length >= r.desk.rows.length);
 });
 
-test("a hot offer is a call with a brief, a no-answer is remembered, and a connected call clears it", async () => {
-  const hot = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "mary", contactName: "Maryanne A", address: "9311 12th Pl SE, Lake Stevens, WA 98258",
+// Matt, 2026-10-13: "get rid of the call section". A hot offer is the
+// machine's hot push now, not a call on Today.
+test("a hot offer isn't a call on Today", async () => {
+  await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "mary", contactName: "Maryanne A", address: "9311 12th Pl SE, Lake Stevens, WA 98258",
     status: "sent", cashAmount: 197500, statusHistory: [], createdAt: ago(200), sends: [{ ts: ago(150) }], realm: { answer: "yes", ts: ago(20) } });
-  const get = async () => (await (await fetch(`${B}/api/dashboard/pipeline`)).json()).desk.rows;
-  let row = (await get()).find((x) => x.contactId === "mary");
-  assert.equal(row.kind, "call_hot");
-  assert.equal(row.section, "call");
-  assert.match(row.call.goal, /NWMLS/);
-  assert.equal(row.call.houses[0].offerId, hot.id);
-  // Every Call row has a brief, whoever built it.
-  for (const r of (await get()).filter((x) => x.section === "call")) assert.ok(r.call?.opener, `${r.kind} has an opener`);
-
-  await recordEvent({ store, locationId: LOC, contactId: "mary", party: "agent", type: "call_attempt", at: new Date().toISOString(), source: "operator", dedupeKey: "ca1", data: { outcome: "no_answer" } });
-  row = (await get()).find((x) => x.contactId === "mary");
-  assert.equal(row.call.tries, 1);
-
-  await recordEvent({ store, locationId: LOC, contactId: "mary", party: "agent", type: "call_summary", at: new Date(Date.now() + 1000).toISOString(), source: "call", ref: "m2", dedupeKey: "call:m2",
-    data: { summary: "She'll write it up tonight.", transcribed: true, durationSec: 410 } });
-  assert.equal((await get()).some((x) => x.kind === "call_hot" && x.contactId === "mary"), false, "talked: off the list");
+  const rows = (await (await fetch(`${B}/api/dashboard/pipeline`)).json()).desk.rows;
+  assert.equal(rows.some((x) => x.contactId === "mary"), false);
+  assert.equal(rows.some((x) => String(x.kind).startsWith("call_") && x.kind !== "call_counter"), false, "no call rows at all");
 });

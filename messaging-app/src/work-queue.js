@@ -8,7 +8,7 @@
 
 import { ACTION_GROUPS, ACTION_KINDS } from "@shared/pipeline.js";
 import { AUDIT_ACTION_KINDS } from "@shared/conversation-audit.js";
-import { DESK_SECTIONS } from "@shared/desk.js";
+import { DESK_SECTIONS, TODAY_SECTIONS } from "@shared/desk.js";
 import { CALL_KINDS } from "@shared/call-list.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
 import { OPEN_STATUSES, effectiveStatus } from "@shared/offer-status.js";
@@ -26,7 +26,8 @@ const GROUP_HINT = { yours: "Decisions only you make.", stuck: "The machine trie
 // the Desk's read `section`.
 export const TODAY_GROUPS = GROUP_ORDER.map((key) => ({ key, field: "group", label: GROUP_LABEL[key], hint: GROUP_HINT[key], folds: key === "machine",
   ...(key === "yours" ? { empty: "Nothing is waiting on you." } : {}) }));
-export const DESK_GROUPS = DESK_SECTIONS.map((s) => ({ ...s, field: "section", empty: s.key === "call" ? "Nobody to call right now." : s.key === "decide" ? "Nothing to decide." : undefined }));
+// Today is one list, "Needs you" (Matt, 2026-10-13: only urgent work only he can do).
+export const DESK_GROUPS = TODAY_SECTIONS.map((s) => ({ ...s, field: "section", empty: "Nothing needs you right now." }));
 export const SECTION_LABEL = { ...GROUP_LABEL, ...Object.fromEntries(DESK_SECTIONS.map((s) => [s.key, s.label])) };
 
 // Which group a row is in. An action with no group (an older broker) is

@@ -40,12 +40,12 @@ import { buildFlow, FLOW_STAGES } from "../shared/flow.js";
 import { buildDigest } from "../shared/digest.js";
 import { lessons, dealScorecard } from "../shared/post-mortem.js";
 import { effectiveSettings } from "../shared/offer-calc.js";
-import { listPipelines, getContact } from "../ghl.js";
+import { listPipelines, getContact, searchOpportunities } from "../ghl.js";
 import { mapPool } from "../map-pool.js";
-import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR, acquisitionsPipeline } from "../ghl-mirror.js";
+import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR, acquisitionsPipeline, pipelinesFor } from "../ghl-mirror.js";
 import { runStagePlan, listAcquisitionOpportunities } from "../tier-check.js";
 import { runMigration } from "../acq-migrate.js";
-import { boardCounts } from "../shared/ghl-stages.js";
+import { boardCounts, stageKeys, stageKeyOf, CARD_STAGE_LABEL } from "../shared/ghl-stages.js";
 import { stageCounts } from "../shared/offer-stage.js";
 import { annotateCurrent } from "../shared/current-offer.js";
 import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_UNDERWRITE_ENABLED } from "../auto-underwrite.js";
@@ -58,7 +58,7 @@ import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize as summarizeAudit } from "../shared/conversation-audit.js";
-import { foldDesk, heldVerdicts, nameRows, deskKpis, DESK_SECTIONS, pacificStart, machineDrives } from "../shared/desk.js";
+import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives } from "../shared/desk.js";
 import { knownCitiesFrom, heldOnTheMachine } from "../shared/held-underwrites.js";
 import { callList, briefFor, normalizeDesk } from "../shared/call-list.js";
 import { attachNextFollowUpsFor } from "../next-follow-up.js";
@@ -652,8 +652,11 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // Decide · Machine, and today against the line's targets. `actions`
       // stays as it was for the board and for a console that predates it.
       const { actions: shownCalls } = applyDismissals(callRows, dismissedDoc, now);
-      const desk = foldDesk([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer: heldVerdicts(audit), callCap: deskSettings.callCap });
-      for (const r of desk.rows) if (r.section === "call" && !r.call) r.call = briefFor(r, { cards: out.cards, offers });
+      // Today is only what needs Matt (2026-10-13): no Call or Machine
+      // section; a counter above our number stays, as a decision.
+      const heldByOffer = heldVerdicts(audit);
+      const desk = foldDesk(urgentReasons([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer }), { drafts, heldByOffer, callCap: deskSettings.callCap });
+      for (const r of desk.rows) if (r.kind === "call_counter" && !r.call) r.call = briefFor(r, { cards: out.cards, offers });
       const kpis = deskKpis({ offers, cards: out.cards, events, targets: normalizeLineTargets(saved?.lineTargets), now });
       res.json({
         dismissedCount: dismissedRows.length,
@@ -672,7 +675,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         drafts,
         ...out,
         actions: shownActions.map(withFeedback),
-        desk: { sections: DESK_SECTIONS, rows: desk.rows, counts: desk.counts, kpis },
+        desk: { sections: TODAY_SECTIONS, rows: desk.rows, counts: desk.counts, kpis },
       });
     } catch (err) { fail(res, err); }
   });
@@ -751,6 +754,26 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   // left for the migration. Read-only; five minutes cached, ?fresh=1 skips it.
   // Ids and stage names only.
   const pipelineCache = new Map();
+  // One agent's Acquisitions card, for the name line in Today's pane and the
+  // Offers split (Matt, 2026-10-13: "have the opportunity stage that the
+  // agent is in"). One GHL read; the pipelines are cached an hour. No card →
+  // stage null. Ids and stage names only.
+  router.get("/ghl/card", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = String(req.query.contact_id || "").trim().slice(0, 64);
+      if (!contactId) return res.status(400).json({ error: "contact_id required" });
+      const acq = acquisitionsPipeline(await pipelinesFor(client, locationId));
+      if (!acq) return res.json({ ok: true, stage: null });
+      const cards = await searchOpportunities(client, locationId, { contactId, pipelineId: acq.id });
+      const card = cards.find((c) => c.status === "open") || cards[0] || null;
+      if (!card) return res.json({ ok: true, stage: null });
+      const key = stageKeyOf(stageKeys(acq), card.stageId);
+      const name = (acq.stages || []).find((x) => x.id === card.stageId)?.name || "";
+      res.json({ ok: true, stage: CARD_STAGE_LABEL[key] || name || null, key: key || null, name, status: card.status || "open", opportunityId: card.id, cards: cards.length });
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/ghl/pipeline", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);

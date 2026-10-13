@@ -53,15 +53,17 @@ test("an emailed deal held for you is not 'goes out at the 7pm check'; a held re
 
   const rows = await desk();
   const emailRow = rows.find((r) => r.draftId === email.id);
-  const replyRow = rows.find((r) => r.draftId === reply.id);
-  assert.ok(emailRow && replyRow, "both are on the Desk");
+  assert.ok(emailRow, "the held deal email is on Today");
   assert.equal(emailRow.section, "decide", "Settings holds it for you: it's yours");
   assert.notEqual(emailRow.next?.what, "goes out at the 7pm check");
-  assert.equal(replyRow.section, "machine");
-  assert.equal(replyRow.next?.what, "goes out at the 7pm check");
+  // The reply the 7pm check sends is the machine's (Matt, 2026-10-13: Today is only what needs you).
+  assert.equal(rows.some((r) => r.draftId === reply.id), false, "the machine's 7pm reply isn't on Today");
 });
 
-test("a held underwrite after its one ask says when it passes, or is a call when they answered without a number", async () => {
+// Matt, 2026-10-13: Today is only what needs him. A held underwrite is a
+// draft — the Offers page's Draft tab has it — whether the machine is
+// waiting on their number or it would once have been a call.
+test("a held underwrite isn't on Today, waiting on their number or answered without one", async () => {
   const PHOTOS = "only 1 listing photo to scan — 4 required for a scope of work";
   const held = (contactId, address) => store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId, contactName: contactId, address, status: "draft",
     statusHistory: [], createdAt: ago(100), autoUnderwrite: { jobId: "j", held: [PHOTOS], finishedAt: ago(100) } });
@@ -76,11 +78,6 @@ test("a held underwrite after its one ask says when it passes, or is a call when
   ] } } });
 
   const rows = await desk();
-  const w = rows.find((r) => r.offerId === waiting.id);
-  const c = rows.find((r) => r.offerId === calling.id);
-  assert.equal(w.section, "machine");
-  assert.equal(w.next?.at, passAt, "it says when it passes");
-  assert.match(w.next?.what || "", /passes unless they send a number/);
-  assert.equal(c.section, "call");
-  assert.match(c.detail, /without a number — worth a call/);
+  assert.equal(rows.some((r) => r.offerId === waiting.id), false);
+  assert.equal(rows.some((r) => r.offerId === calling.id), false);
 });

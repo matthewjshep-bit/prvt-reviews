@@ -6,7 +6,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { foldDesk, sectionFor, foldKey, heldVerdicts, deskKpis, pacificStart, nameRows, DESK_SECTIONS, KIND_STRENGTH, isCounterDraft } from "./desk.js";
+import { foldDesk, sectionFor, foldKey, heldVerdicts, deskKpis, pacificStart, nameRows, DESK_SECTIONS, KIND_STRENGTH, isCounterDraft, urgentReasons, TODAY_SECTIONS } from "./desk.js";
 import { addDismissal, isDismissed } from "./today-dismiss.js";
 import { ACTION_KINDS } from "./pipeline.js";
 
@@ -132,3 +132,48 @@ test("a dismissal made when the row said 'An agent' still holds once it has a na
   const [kept] = nameRows([promise()], { c1: "Someone Else" });
   assert.equal(kept.contactName, "Hanna F", "a name the row already has is kept");
 });
+
+/* ---------- Today: only what needs you (Matt, 2026-10-13) ---------- */
+
+// Live Today on 2026-10-13: 34 Call rows (first replies, gaps, houses they
+// brought), 25 Machine rows, and Decide mixing replies waiting on him with
+// held underwrites, priced offers and check-ins the machine wrote.
+test("Today keeps only what needs Matt: replies waiting, owed numbers, a counter above ours, paper and deal steps due", () => {
+  const drafts = [
+    { id: "reply", intent: "other" },
+    { id: "pulse", intent: "agent_pulse", outbound: { kind: "agent_pulse" } },
+    { id: "float", intent: "realm_check", outbound: { kind: "realm_check", offerId: "o9" } },
+    { id: "blast", intent: "blast_open", outbound: { kind: "blast_open" } },
+  ];
+  const call = (kind, cid, over = {}) => ({ id: `${kind}:${cid}`, kind, severity: "now", contactId: cid, contactName: cid, ops: [], ...over });
+  const reasons = [
+    call("call_first_reply", "fr"), call("call_gap", "gap"), call("call_brought", "br"), call("call_missed", "ms"),
+    call("call_counter", "ctr", { offerId: "oc" }),
+    draftRow("reply"), draftRow("pulse", { severity: "soon" }), draftRow("float", { severity: "soon" }), draftRow("blast", { severity: "soon" }),
+    promise(), held({ contactId: "h2", id: "underwrite_held:o2", offerId: "o2" }),
+    { id: "offer_ready:o3", kind: "offer_ready", severity: "soon", contactId: "c3", offerId: "o3", ops: [] },
+    { id: "audit:unanswered_inbound:c4", kind: "audit_owed", findingKind: "unanswered_inbound", severity: "now", contactId: "c4", ops: [] },
+    { id: "audit:float_unanswered:c5", kind: "audit_owed", findingKind: "float_unanswered", severity: "soon", contactId: "c5", ops: [] },
+    { id: "closing_soon:o6", kind: "closing_soon", severity: "now", offerId: "o6", ops: [] },
+    { id: "closing_soon:o7", kind: "closing_soon", severity: "soon", offerId: "o7", ops: [] },
+    { id: "hot_machine:o8", kind: "hot_machine", severity: "fyi", contactId: "c8", offerId: "o8", ops: [] },
+  ];
+  const kept = urgentReasons(reasons, { drafts });
+  assert.deepEqual(kept.map((r) => r.id).sort(), [
+    "audit:unanswered_inbound:c4", "call_counter:ctr", "closing_soon:o6", "draft_waiting:blast", "draft_waiting:reply", "promise_owed:c1:2026-10-02T18:00:00Z",
+  ]);
+  assert.ok(kept.every((r) => r.section === "decide"));
+  const { rows, counts } = foldDesk(kept, { drafts });
+  assert.deepEqual(Object.keys(counts).filter((k) => counts[k]), ["decide"]);
+  assert.equal(rows.length, 6);
+  assert.deepEqual(TODAY_SECTIONS.map((s) => [s.key, s.label]), [["decide", "Needs you"]]);
+});
+
+test("a person whose strongest reason was a call still shows for the decision under it", () => {
+  const kept = urgentReasons([{ id: "call_brought:c1", kind: "call_brought", severity: "now", contactId: "c1", ops: [] }, promise()]);
+  const { rows } = foldDesk(kept);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "promise_owed");
+  assert.deepEqual(rows[0].also, []);
+});
+

@@ -2151,6 +2151,29 @@ and percentages pass.
 them again. It never writes one: its validator refuses fees, earnest money and
 amounts, which is exactly what these answers contain.
 
+### Today — only what needs you (2026-10-13)
+
+Matt: "get rid of the call section … Today should ONLY be for urgent, crucial
+tasks only I should do." Today is one list, **Needs you** (`TODAY_SECTIONS`,
+`urgentReasons` in shared/desk.js, applied before the fold so a person whose
+strongest reason was a call still shows for the decision under it). On it:
+a reply waiting on him (the bot couldn't place it or may not send it), a text
+nobody answered, a number or answer we owe, a counter above our number (the
+CallCard's Hold / Meet / Walk away), paper to sign, a hand-off, a buyer's
+agreed price, a held deal blast, a closing that's due. Off it: the call list
+(first replies, gaps, houses they brought, hot offers, missed calls), the
+machine's own work, held underwrites and priced-not-sent offers (Offers →
+Draft), texts the machine started (check-ins, first texts, buyer pulses,
+floats — the Conversation outbox), deal housekeeping not yet due. The call
+list only ever fed this screen, so nothing about who gets texted changed. The
+Settings section for the call list is gone. Live snapshot: 85 rows → 18.
+
+**GHL stage beside the name.** The work pane's name line (Today and the
+Offers split, `GhlStagePill` in PaneParts.jsx) shows the agent's Acquisitions
+card — "GHL: Tier 2", "GHL: Offer Out", "GHL: no card" — from
+`GET /api/dashboard/ghl/card?contact_id=` (one GHL read, cached two minutes in
+the page). Buyers don't get one.
+
 ### The Desk — one row per person, Call · Decide · Machine (2026-10-02)
 
 Matt's day ran across three places (Today, GHL's Tier 1 stage, the Offers
