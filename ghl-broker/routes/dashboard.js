@@ -42,7 +42,11 @@ import { lessons, dealScorecard } from "../shared/post-mortem.js";
 import { effectiveSettings } from "../shared/offer-calc.js";
 import { listPipelines, getContact } from "../ghl.js";
 import { mapPool } from "../map-pool.js";
-import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR } from "../ghl-mirror.js";
+import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR, acquisitionsPipeline } from "../ghl-mirror.js";
+import { runStagePlan, listAcquisitionOpportunities } from "../tier-check.js";
+import { boardCounts } from "../shared/ghl-stages.js";
+import { stageCounts } from "../shared/offer-stage.js";
+import { annotateCurrent } from "../shared/current-offer.js";
 import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_UNDERWRITE_ENABLED } from "../auto-underwrite.js";
 import { draftStats } from "../shared/conversation-ai.js";
 import { detectAutonomy, AUTONOMY_LABEL } from "../shared/autonomy.js";
@@ -740,6 +744,36 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   // (shared/ghl-stages.js) — last morning's plan off the tier check's
   // cursor. Optional: the app's own tiers (Today → In play) are the record,
   // and ghlStages.mode stays "off" unless someone wants GHL's board to match.
+  // The pipeline at a glance (Matt's diagram, 2026-10-13): GHL's four stages
+  // over the offers' three, and what would move if GHL followed the offers —
+  // planned moves, cards to make, cards a person moved since, old-stage cards
+  // left for the migration. Read-only; five minutes cached, ?fresh=1 skips it.
+  // Ids and stage names only.
+  const pipelineCache = new Map();
+  router.get("/ghl/pipeline", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const fresh = req.query.fresh === "1";
+      const hit = pipelineCache.get(locationId);
+      if (!fresh && hit && Date.now() - hit.at < 5 * 60 * 1000) return res.json(hit.body);
+      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      const pipelines = await listPipelines(client, locationId);
+      const acq = acquisitionsPipeline(pipelines);
+      if (!acq) return res.json({ ok: false, error: "no Acquisitions pipeline with Tier 1 and Tier 2 stages in GHL" });
+      const opportunities = await listAcquisitionOpportunities(client, locationId, acq.id);
+      const [plan, offers] = await Promise.all([
+        runStagePlan({ client, locationId, store, saved, read: { pipelines, opportunities }, dryRun: true }),
+        store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []),
+      ]);
+      const current = annotateCurrent(offers || []).filter((o) => !o.supersededBy);
+      const body = { ok: true, at: new Date().toISOString(), mode: plan.mode,
+        ghl: boardCounts({ acq, opportunities }), offers: stageCounts(current),
+        plan: { counts: plan.counts || {}, moves: plan.moves || [], creates: plan.creates || [], youMoved: plan.youMoved || [], errors: plan.errors || [] } };
+      pipelineCache.set(locationId, { at: Date.now(), body });
+      res.json(body);
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/ghl/stage-report", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);

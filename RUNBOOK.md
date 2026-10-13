@@ -2242,6 +2242,53 @@ four answers under the call card, each a person's tap — the band and
 - **Walk away** — confirm, then the offer is `we_passed` (machine texts about
   it stop) and the counter draft is dismissed.
 
+### The pipeline — GHL follows the offers (2026-10-13)
+
+Matt's diagram: GHL's Acquisitions board is the source of truth for where an
+agent is, in four stages, and the stage of their offers drives it.
+
+| GHL stage | Means | Set when, across the agent's current offers |
+|---|---|---|
+| Tier 2 | replied, nothing live — the app's check-in is the nurture | every offer passed (they passed, we passed, gone, no reply, deal fell through) |
+| Tier 1 | a property identified | a draft: priced and not out, or a held underwrite ≤ 21 days |
+| Offer Out | our number is out | Sent (written offer, or a number texted), Countered or Hot |
+| Contract | under contract | Accepted / a live deal. A closed deal marks the card **won** |
+
+The offers' own stages are Draft · Sent · Responded (Passed · Countered · Hot ·
+Accepted) — see the Offers tabs. The highest card stage across the agent's
+houses wins, so a pass on one house never drops an agent whose other house is
+out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`).
+
+- **Newest wins.** A card moves only when the agent's newest offer event
+  (`offerStageAt`: status, send, float, heat, deal stage) is later than the
+  card's `lastStageChangeAt`. A card you drag in GHL after that stays put and
+  is reported as "moved by hand".
+- **Never:** two open cards (a person's call), a won card (a new house makes a
+  new card), a card still in a stage that's going away (the migration), or a
+  move into Tier 2 while a published "nurture" workflow would text them
+  (`allowNurtureTrigger` overrides). A card is made for an agent with
+  something live and no card, never just for Tier 2. A lost or abandoned card
+  is reopened instead.
+- **Who moves it** (`ghl-broker/tier-check.js`):
+  - `syncAgentCard`, one agent, right after your status change, promote, hot
+    flag, send, Tier 1 Pass/Kick, or the conversation's status change;
+  - `syncChangedCards`, every 15 minutes (`cardSync` cursor), for every
+    agent whose offers moved since the last run — the sweeps, timers and
+    triage that write statuses elsewhere;
+  - `runStagePlan`, every morning at 7am PT, the whole board, capped at
+    `maxMovesPerRun`.
+- **Tags follow the card** when it's on: the 7am check sets tier-1 for Tier 1,
+  Offer Out and Contract and tier-2 for Tier 2, and a tag the bot adds no
+  longer moves a card. The bot still adds its tags and enrolls TIER 1 (that
+  workflow starts the underwrite) — make sure no GHL workflow moves the card.
+- **Tier 1 Pass / Kick out** set the offer and hand the card to the rule.
+- **Report:** `GET /api/dashboard/ghl/pipeline` (Offers page strip): GHL
+  counts per stage, offer counts per stage, and what would move. Read-only.
+- **Switch:** Settings → "GHL pipeline follows the offers"
+  (`ghlStages.mode`, **off**). The old 7am report is the same plan.
+- The board finder (`acquisitionsPipeline`) needs only Tier 1 and Tier 2, so
+  deleting Tier 3 in GHL breaks nothing.
+
 ### Tier 1 — GHL's stage, screened (2026-10-07)
 
 Matt: "where does the tier 1 come from in our today? It doesn't match up with

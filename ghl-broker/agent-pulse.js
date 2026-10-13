@@ -74,7 +74,7 @@ const tierCardCache = new Map();
 export function tierCardsFrom({ acq = null, opportunities = [] } = {}) {
   const out = new Map();
   if (!acq?.tierStages) return out;
-  const tierOf = new Map([[acq.tierStages["tier-2"], "t2"], [acq.tierStages["tier-3"], "t3"]]);
+  const tierOf = new Map([[acq.tierStages["tier-2"], "t2"], [acq.tierStages["tier-3"], "t3"]].filter(([id]) => id));
   for (const o of opportunities || []) {
     const tier = tierOf.get(o?.pipelineStageId);
     const contactId = o?.contactId || o?.contact?.id;

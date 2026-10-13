@@ -137,3 +137,95 @@ test("switched on, it moves the card and puts the move on their record; a dry ru
   assert.deepEqual(moved, [{ id: "op-sent1", stageId: "out" }]);
   assert.equal(store.events[0].type, "ghl_stage_moved");
 });
+
+/* ---------- the card follows the offers (Matt's diagram, 2026-10-13) ---------- */
+
+const { syncAgentCard, syncChangedCards, _resetWorkflowCache } = await import("./tier-check.js");
+const FOUR = [{ id: "pA", name: "Acquisitions", stages: [
+  { id: "t1", name: "Tier 1" }, { id: "t2", name: "Tier 2" }, { id: "out", name: "Offer Out" }, { id: "cs", name: "Contract Signed" },
+] }];
+const cardGhl = ({ cards = [], workflows = [], moved = [], made = [], fail = false } = {}) => ({
+  listPipelines: async () => FOUR,
+  listWorkflows: async () => workflows,
+  searchOpportunities: async () => { if (fail) throw new Error("GHL 502"); return cards; },
+  updateOpportunity: async (_c, id, body) => { moved.push({ id, ...body }); },
+  createOpportunity: async (_c, body) => { made.push(body); return { id: "new-card" }; },
+});
+const cardStore = (offers = [], saved = { ghlStages: { mode: "on" } }) => ({
+  events: [], cursors: new Map(),
+  async getOfferSettings() { return saved; },
+  async listOffers(_l, { contactId } = {}) { return offers.filter((o) => !contactId || o.contactId === contactId); },
+  async appendContactEvents(_l, contactId, rows) { this.events.push(...rows.map((r) => ({ contactId, ...r }))); return { inserted: rows.length }; },
+  async getContactProfile() { return null; }, async upsertContactProfile() { return {}; },
+  async getJobCursor(l, k) { return this.cursors.get(`${l}|${k}`) || null; },
+  async setJobCursor(l, k, v) { this.cursors.set(`${l}|${k}`, v); },
+});
+const NOW13 = Date.parse("2026-10-13T20:00:00Z");
+const sentOffer = (contactId, over = {}) => ({ id: `o-${contactId}`, contactId, contactName: "An Agent", address: "1 Elm St", cashAmount: 300000,
+  status: "sent", createdAt: "2026-10-10T00:00:00Z", sends: [{ ts: "2026-10-13T19:00:00Z" }], ...over });
+
+test("the offer going out moves the agent's card from Tier 1 to Offer Out and notes it on their record", async () => {
+  _resetWorkflowCache();
+  const moved = [];
+  const store = cardStore([sentOffer("c1")]);
+  const r = await syncAgentCard({ client: {}, locationId: "L-sync1", contactId: "c1", store,
+    ghl: cardGhl({ moved, cards: [{ id: "op1", pipelineId: "pA", stageId: "t1", status: "open" }] }), now: NOW13 });
+  assert.equal(r.applied?.to, "Offer Out");
+  assert.deepEqual(moved, [{ id: "op1", stageId: "out" }]);
+  assert.equal(store.events[0].type, "ghl_stage_moved");
+  assert.equal(JSON.stringify(store.events).includes("An Agent"), false, "no names on the record line");
+});
+
+test("with GHL not following the offers, nothing is read from GHL and nothing moves", async () => {
+  const moved = [];
+  const store = cardStore([sentOffer("c1")], { ghlStages: { mode: "off" } });
+  const r = await syncAgentCard({ client: {}, locationId: "L-sync2", contactId: "c1", store,
+    ghl: { ...cardGhl({ moved }), listPipelines: async () => { throw new Error("should not read"); } }, now: NOW13 });
+  assert.match(r.skip, /ghlStages off/);
+  assert.equal(moved.length, 0);
+});
+
+test("a pass sends the card back to Tier 2 unless a texting nurture would fire, and a GHL failure never throws", async () => {
+  _resetWorkflowCache();
+  const passed = sentOffer("c2", { status: "passed", statusAt: "2026-10-13T19:30:00Z" });
+  const moved = [];
+  const ok = await syncAgentCard({ client: {}, locationId: "L-sync3", contactId: "c2", store: cardStore([passed]),
+    ghl: cardGhl({ moved, cards: [{ id: "op2", pipelineId: "pA", stageId: "out", status: "open" }], workflows: [{ id: "w", name: "Tier 2+3 nurture", status: "draft" }] }), now: NOW13 });
+  assert.equal(ok.applied?.to, "Tier 2");
+  _resetWorkflowCache();
+  const held = await syncAgentCard({ client: {}, locationId: "L-sync4", contactId: "c2", store: cardStore([passed]),
+    ghl: cardGhl({ cards: [{ id: "op2", pipelineId: "pA", stageId: "out", status: "open" }], workflows: [{ id: "w", name: "Tier 2+3 nurture", status: "published" }] }), now: NOW13 });
+  assert.match(held.move.blocked, /nurture/);
+  const broken = await syncAgentCard({ client: {}, locationId: "L-sync5", contactId: "c2", store: cardStore([passed]), ghl: cardGhl({ fail: true }), now: NOW13 });
+  assert.match(broken.error, /502/);
+});
+
+test("an agent with a live offer and no card gets one, at the stage the offer puts them", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const r = await syncAgentCard({ client: {}, locationId: "L-sync6", contactId: "c3", store: cardStore([sentOffer("c3")]), ghl: cardGhl({ made }), now: NOW13 });
+  assert.equal(r.applied?.to, "Offer Out");
+  assert.deepEqual(made.map((m) => [m.contactId, m.stageId, m.name]), [["c3", "out", "An Agent"]]);
+});
+
+test("every 15 minutes, only agents whose offers moved since the last run are synced; the first run only sets the clock", async () => {
+  _resetWorkflowCache();
+  const moved = [];
+  const offers = [sentOffer("old", { sends: [{ ts: "2026-10-01T00:00:00Z" }], createdAt: "2026-09-30T00:00:00Z" }), sentOffer("fresh")];
+  const store = cardStore(offers);
+  const ghl = { ...cardGhl({ moved }), searchOpportunities: async (_c, _l, { contactId }) => [{ id: `op-${contactId}`, pipelineId: "pA", stageId: "t1", status: "open" }] };
+  const first = await syncChangedCards({ client: {}, locationId: "L-tick", store, saved: { ghlStages: { mode: "on" } }, ghl, now: Date.parse("2026-10-13T19:30:00Z") });
+  assert.equal(first.contacts, 0);
+  offers[1].sends = [{ ts: "2026-10-13T19:45:00Z" }];
+  const second = await syncChangedCards({ client: {}, locationId: "L-tick", store, saved: { ghlStages: { mode: "on" } }, ghl, now: NOW13 });
+  assert.deepEqual([second.contacts, second.moved], [1, 1]);
+  assert.deepEqual(moved, [{ id: "op-fresh", stageId: "out" }]);
+  assert.equal(await syncChangedCards({ client: {}, locationId: "L-tick", store, saved: {}, ghl, now: NOW13 }), null, "off: no run at all");
+});
+
+test("when GHL follows the offers, a tag the bot added never moves the card; the tags follow the card", () => {
+  const lori = opp("lori", "t3", ["agent", "tier-1", "tier-3"]);
+  const fixes = planTierFixes({ pipelines: PIPES, opportunities: [lori], followsOffers: true,
+    tagEvents: [{ contactId: "lori", at: "2026-09-15T11:00:00Z", data: { tag: "tier-1" } }] });
+  assert.deepEqual([fixes[0].moveTo, fixes[0].remove, fixes[0].add], [null, ["tier-1"], []]);
+});

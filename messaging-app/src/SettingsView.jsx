@@ -14,6 +14,7 @@ import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
 import { DESK_DEFAULTS, normalizeDesk } from "@shared/call-list.js";
 import { UNDERWRITE_CHECKS_DEFAULTS, normalizeUnderwriteChecks } from "@shared/underwrite-checks.js";
 import { normalizeTierOne } from "@shared/tier-one.js";
+import { normalizeGhlStages } from "@shared/ghl-stages.js";
 import { DEFAULT_OPENER_EXAMPLES, normalizeOpener } from "@shared/outreach-opener.js";
 import { tierDrips } from "@shared/agent-pulse.js";
 import FieldsManager from "./FieldsManager.jsx";
@@ -599,6 +600,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   // Raw while typing (the number box can be empty), normalized on save.
   const tierOne = { ...normalizeTierOne(form.tierOne), autoKickMax: form.tierOne?.autoKickMax ?? normalizeTierOne().autoKickMax };
   const setTierOne = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, tierOne: { ...(f.tierOne || {}), [k]: v } })); };
+  const ghlStages = normalizeGhlStages(form.ghlStages);
+  const setGhlStages = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, ghlStages: { ...(f.ghlStages || {}), [k]: v } })); };
   const setTouch = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), touchBudget: { ...(f.dispoAutopilot?.touchBudget || {}), [k]: v } } })); };
   const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
@@ -650,6 +653,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       if (form.lineTargets) clean.lineTargets = normalizeLineTargets(Object.fromEntries(Object.entries(form.lineTargets).map(([k, v]) => [k, typeof v === "string" ? Number(v.replace(/[$,\s]/g, "")) : v])));
       if (form.desk) clean.desk = normalizeDesk(form.desk);
       if (form.tierOne) clean.tierOne = normalizeTierOne(form.tierOne);
+      if (form.ghlStages) clean.ghlStages = normalizeGhlStages(form.ghlStages);
       if (clean.dispoAutopilot?.touchBudget) clean.dispoAutopilot.touchBudget = { ...clean.dispoAutopilot.touchBudget, ...Object.fromEntries(["quietPerWeek", "talkingPerWeek", "talkingDays", "bundleMax"].filter((k) => clean.dispoAutopilot.touchBudget[k] != null).map((k) => [k, Number(clean.dispoAutopilot.touchBudget[k])])) };
       if (clean.dispoAutopilot?.pulse) clean.dispoAutopilot.pulse = { ...clean.dispoAutopilot.pulse, ...Object.fromEntries(["dailyCap", "everyDays", "quietDays", "conversedShare", "quietEveryDays", "afterDealDays"].filter((k) => clean.dispoAutopilot.pulse[k] != null && clean.dispoAutopilot.pulse[k] !== "").map((k) => [k, Number(clean.dispoAutopilot.pulse[k])])) };
       const r = await saveSettings(clean);
@@ -701,6 +705,24 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={tierOne.followMachineSends} onChange={(e) => setTierOne("followMachineSends")(e.target.checked)} />
           <span><span className="font-semibold">The machine's written offers move the card to Offer Out</span> — as yours already do.</span>
+        </label>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="ghl-stages-settings">
+        <h2 className="mb-1 text-sm font-bold">GHL pipeline follows the offers</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Four stages: Tier 2 (replied, nothing live) → Tier 1 (a house being priced) → Offer Out (our number is out, they
+          countered, or it's hot) → Contract (under contract; a closed deal marks the card won). Each agent's card moves when
+          their offers do. A card you drag in GHL after that stays where you put it. Read the Offers page's pipeline report
+          and finish the move off the old stages before switching this on.
+        </p>
+        <label className="mb-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={ghlStages.mode === "on"} onChange={(e) => setGhlStages("mode")(e.target.checked ? "on" : "off")} />
+          <span><span className="font-semibold">Move each agent's GHL card with their offers</span> — and make a card for an agent with a live offer and none.</span>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={ghlStages.allowNurtureTrigger} onChange={(e) => setGhlStages("allowNurtureTrigger")(e.target.checked)} />
+          <span>Move into Tier 2 even while a "nurture" workflow is published in GHL — <span className="font-semibold">it will text them</span>.</span>
         </label>
       </section>
 

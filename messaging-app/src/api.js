@@ -384,6 +384,10 @@ export const getAgentTiers = (fresh = false) =>
 // minutes on the broker; fresh skips it.
 export const getTierOne = (fresh = false) =>
   fetch(`${API_BASE}/api/dashboard/tier1?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
+// GHL's four stages over the offers' three, and what would move if GHL
+// followed the offers. Read-only; cached five minutes on the broker.
+export const getGhlPipeline = (fresh = false) =>
+  fetch(`${API_BASE}/api/dashboard/ghl/pipeline?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
 // Pass: we passed on the house, its GHL card → Passed on Offer, tier-1 off.
 export const tierOnePass = (contactId, body = {}) => post(`/api/dashboard/tier1/${encodeURIComponent(contactId)}/pass`, body);
 // Kick out: it never belonged (gone, turnkey, no house) — card → Not a Good Deal.

@@ -24,13 +24,13 @@
 // offers router's applyOperatorStatus). Log lines carry ids and counts only.
 
 import { store as defaultStore } from "./store.js";
-import { listPipelines, searchOpportunities, updateOpportunity, createOpportunity, getOpportunity, removeContactTags } from "./ghl.js";
+import { listPipelines, searchOpportunities, updateOpportunity, createOpportunity, getOpportunity, removeContactTags, listWorkflows } from "./ghl.js";
 import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
-import { listAcquisitionOpportunities } from "./tier-check.js";
+import { listAcquisitionOpportunities, syncAgentCard } from "./tier-check.js";
 import { recordEvent } from "./contact-record.js";
 import { mapPool } from "./map-pool.js";
 import { isTurnkeyReply } from "./reply-agent.js";
-import { stageKeys } from "./shared/ghl-stages.js";
+import { stageKeys, normalizeGhlStages } from "./shared/ghl-stages.js";
 import { pickHouse, screenTierOne, cardMove, autoKickPlan, normalizeTierOne } from "./shared/tier-one.js";
 import { annotateCurrent } from "./shared/current-offer.js";
 import { assetOf, normalizeFocusKinds } from "./shared/asset-type.js";
@@ -43,7 +43,7 @@ const WORDS_DAYS = 14;          // their last text counts for the screen this lo
 const BELONGS_MAX = 40;
 const LATER_STAGES = ["tier1", "offerOut", "negotiations", "contract"];
 
-const defaultGhl = { listPipelines, searchOpportunities, updateOpportunity, createOpportunity, getOpportunity, removeContactTags, listAcquisitionOpportunities };
+const defaultGhl = { listPipelines, searchOpportunities, updateOpportunity, createOpportunity, getOpportunity, removeContactTags, listAcquisitionOpportunities, listWorkflows };
 const apiOf = (deps = {}) => ({ ...defaultGhl, ...(deps.ghl || {}) });
 
 export const mirrorOwnsBoard = (saved = {}) => normalizeMirror(saved?.ghlMirror).enabled;
@@ -210,8 +210,13 @@ async function closeHouse({ client, locationId, saved, store, contactId, offerId
   if (pending && !found.events.some((e) => e?.type === "address_pending_closed" && String(e.at) >= String(pending.at))) {
     await recordEvent({ store, locationId, contactId, party: "agent", type: "address_pending_closed", source: "tier_one", data: { why } });
   }
-  const card = await moveCard({ client, locationId, contactId, to, deps, now }).catch((e) => ({ error: String(e?.message || e).slice(0, 160) }));
-  if (card.opportunityId) {
+  // GHL follows the offers (ghlStages "on"): the one rule places the card —
+  // Tier 2 once nothing of theirs is live, or wherever their other house is.
+  const follows = normalizeGhlStages(saved?.ghlStages).mode === "on";
+  const card = follows
+    ? await syncAgentCard({ client, locationId, contactId, store, saved, ghl: api, now }).then((r) => (r.applied ? { ...r.applied, verified: true } : r))
+    : await moveCard({ client, locationId, contactId, to, deps, now }).catch((e) => ({ error: String(e?.message || e).slice(0, 160) }));
+  if (card.opportunityId && !follows) {
     await recordEvent({ store, locationId, contactId, party: "agent", type: "ghl_stage_moved", address: house, source: "tier_one", data: { from: card.from, to: card.to, why } });
   }
   // Off GHL's Tier 1 by tag too. Never tier-2: GHL starts its nurture on it.
@@ -225,13 +230,13 @@ async function closeHouse({ client, locationId, saved, store, contactId, offerId
   return { ok: true, address: house, offerId: found.offer?.id || null, offerStatus, card, tagRemoved };
 }
 
-/** passTierOne — we looked and it isn't ours: we passed, card → Passed on Offer. */
+/** passTierOne — we looked and it isn't ours: we passed, card → Passed on Offer (→ Tier 2 when GHL follows the offers). */
 export function passTierOne({ client, locationId, saved = {}, store = defaultStore, contactId, offerId = null, address = "", by = "you", flags = [], deps = {}, now = Date.now() }) {
   return closeHouse({ client, locationId, saved, store, contactId, offerId, address, status: "we_passed", eventType: "tier1_passed", to: "passed",
     why: "passed from Tier 1", by, flags, deps, now });
 }
 
-/** kickTierOne — it never belonged (gone, turnkey, no house): card → Not a Good Deal. */
+/** kickTierOne — it never belonged (gone, turnkey, no house): card → Not a Good Deal (→ Tier 2 when GHL follows the offers). */
 export function kickTierOne({ client, locationId, saved = {}, store = defaultStore, contactId, offerId = null, address = "", reason = "", by = "you", flags = [], deps = {}, now = Date.now() }) {
   const gone = reason === "gone";
   return closeHouse({ client, locationId, saved, store, contactId, offerId, address, status: gone ? "unavailable" : "we_passed", eventType: "tier1_kicked", to: "notGood",

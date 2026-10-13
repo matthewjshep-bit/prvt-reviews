@@ -29,7 +29,7 @@ import { maybeRunPromiseSweep } from "./promise-sweep.js";
 import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation-audit.js";
 import { releaseMisreadHolds } from "./misread-holds.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
-import { maybeRunTierCheck } from "./tier-check.js";
+import { maybeRunTierCheck, syncChangedCards } from "./tier-check.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeRunBookSync } from "./investor-sync.js";
 import { maybeRunBuyerPulse } from "./buyer-pulse.js";
@@ -302,6 +302,12 @@ const TICK_JOBS = [
   { area: "tier-check", run: async ({ client, locationId, saved }) => {
     const tiered = await maybeRunTierCheck({ client, locationId, store, saved, operatorStatus: (a) => offersRouter.applyOperatorStatus?.(a) });
     if (tiered) console.log(`tier check for ${locationId}: ${tiered.applied}/${tiered.planned} fixed of ${tiered.considered} cards${tiered.errors.length ? `, errors: ${tiered.errors[0]}` : ""}`);
+  } },
+  // Every 15 minutes: agents whose offers moved get their GHL card moved to
+  // match (tier-check.js syncChangedCards). Only with ghlStages "on".
+  { area: "card-sync", run: async ({ client, locationId, saved }) => {
+    const synced = await syncChangedCards({ client, locationId, store, saved });
+    if (synced?.moved || synced?.errors?.length) console.log(`cards follow offers for ${locationId}: ${synced.moved} moved of ${synced.contacts} changed${synced.errors.length ? `, errors: ${synced.errors[0]}` : ""}`);
   } },
   // Addresses that came in past the daily underwrite cap, once it resets.
   { area: "underwrite-queue", run: async ({ client, locationId }) => {

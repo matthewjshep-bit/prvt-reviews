@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mirrorOffer, reconcileLocation, mirrorAgent, reconcileAgents, tierStageMove, followTierStage, _resetPipelineCache, tierTagsToDrop, followOfferOut } from "./ghl-mirror.js";
+import { mirrorOffer, reconcileLocation, mirrorAgent, reconcileAgents, tierStageMove, followTierStage, _resetPipelineCache, tierTagsToDrop, followOfferOut, acquisitionsPipeline } from "./ghl-mirror.js";
 
 const cfg = { enabled: true,
   acquisitions: { mode: "lanes", pipelineId: "pA", stages: { ready: "s-ready", sent: "s-sent", dead: "s-dead", won: "s-won" } },
@@ -178,6 +178,14 @@ test("a card past the tiers is left where it is, and one already there isn't tou
   assert.match(tierStageMove({ tags: ["tier-1"], pipelines: ACQ_PIPES, opportunities: [opp({ stageId: "t1" })] }).skip, /already/);
   assert.match(tierStageMove({ tags: ["seller-accepted"], pipelines: ACQ_PIPES, opportunities: [opp()] }).skip, /no tier tag/);
   assert.match(tierStageMove({ tags: ["tier-1"], pipelines: ACQ_PIPES, opportunities: [opp({ pipelineId: "pD", stageId: "d2" })] }).skip, /no Acquisitions opportunity/);
+});
+
+// Matt, 2026-10-13: four stages — Tier 1, Tier 2, Offer Out, Contract. Once
+// Tier 3 is deleted in GHL, every card mover still has to find the board.
+test("the Acquisitions board is still found once Tier 3 is deleted", () => {
+  const four = [{ id: "pA", name: "Acquisitions", stages: [{ id: "t1", name: "Tier 1" }, { id: "t2", name: "Tier 2" }, { id: "out", name: "Offer Out" }, { id: "cs", name: "Contract Signed" }] }, ACQ_PIPES[1]];
+  assert.equal(acquisitionsPipeline(four)?.id, "pA");
+  assert.match(tierStageMove({ tags: ["tier-3"], pipelines: four, opportunities: [opp({ stageId: "t1" })] }).skip, /no tier-3 stage/);
 });
 
 test("tier 1 reopens a passed or lost card; tier 2 and 3 don't", () => {

@@ -130,6 +130,8 @@ import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, ti
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
 import { normalizeTierOne } from "../shared/tier-one.js";
+import { normalizeGhlStages } from "../shared/ghl-stages.js";
+import { syncAgentCard } from "../tier-check.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
@@ -3240,6 +3242,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (e) {
       console.error(`offers: agent offer tag sync failed contact=${contactId}:`, e?.message);
     }
+    // Every status write that reconciles the tag moves the card too.
+    followCard({ client, locationId, contactId });
+  }
+
+  // The agent's GHL card follows their offers (Matt's diagram, 2026-10-13;
+  // tier-check.js syncAgentCard, only with ghlStages "on"). Not awaited: GHL
+  // never holds up a click. The 15-minute tick (syncChangedCards) catches the
+  // writes that don't come through here.
+  function followCard({ client, locationId, contactId }) {
+    if (!contactId || !client) return;
+    syncAgentCard({ client, locationId, contactId, store })
+      .then((r) => { if (r?.error) console.error(`offers: card follow failed loc=${locationId} contact=${contactId}: ${r.error}`); })
+      .catch(() => {});
   }
 
   // Promote an offer to an active deal. Shared by POST /:id/deal and by
@@ -3593,6 +3608,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.hot = want ? { at: ts, by: "operator", note: dealStr(req.body?.note, 200) } : { off: true, at: ts };
       offer.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
+      if (want !== was) followCard({ client, locationId, contactId: offer.contactId });
       if (want !== was && offer.contactId) {
         await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
           historyLine(ts, offer.address, want ? "flagged hot — close to a contract" : "no longer hot", dealStr(req.body?.note, 120)),
@@ -4936,6 +4952,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // a board that can't be read never fails the send. Ids only in the log.
   async function moveCardToOfferOut({ client, locationId, offer, saved }) {
     if (!offer?.contactId || normalizeMirror(saved?.ghlMirror).enabled) return null;
+    // GHL follows the offers: the one rule decides (Offer Out, or Contract, or stays).
+    if (normalizeGhlStages(saved?.ghlStages).mode === "on") { followCard({ client, locationId, contactId: offer.contactId }); return null; }
     const move = await followOfferOut({ client, locationId, contactId: offer.contactId });
     if (move?.opportunityId) {
       await recordEvent({ store, locationId, contactId: offer.contactId, party: "agent", type: "ghl_stage_moved", address: offer.address, offerId: offer.id,
@@ -5307,6 +5325,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     onTagsChanged: async ({ contactId, tags = [], party = null, change = "added" }) => {
       if (!tags.some((t) => TIER_TAGS.includes(String(t).toLowerCase()))) return;
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      // GHL follows the offers: a tag never moves the card (tier-check.js
+      // sets the tags from the card each morning).
+      if (normalizeGhlStages(fresh.ghlStages).mode === "on") return;
       const config = normalizeMirror(fresh.ghlMirror);
       if (!config.enabled || config.acquisitions.mode !== "tiers") {
         // Mirror off: the agent's Acquisitions card still follows a tier tag
@@ -5493,8 +5514,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         address: offer.address, offerId: offer.id, source: "conversation", ref: draftId,
         data: { channels: ch, docs: dk, by: by || (draftId ? "conversation" : "underwrite"), amount: offer.cashAmount || null, ...(forRecord ? { forRecord: true } : {}), ...(emailTo ? { emailTo } : {}) },
       }).catch(() => {});
-      // The machine's sends move the card only behind tierOne.followMachineSends (ships off).
-      if (normalizeTierOne(saved?.tierOne).followMachineSends) await moveCardToOfferOut({ client, locationId, offer, saved });
+      // The machine's sends move the card only behind tierOne.followMachineSends (ships
+      // off), or when GHL follows the offers (ghlStages "on").
+      if (normalizeTierOne(saved?.tierOne).followMachineSends || normalizeGhlStages(saved?.ghlStages).mode === "on") await moveCardToOfferOut({ client, locationId, offer, saved });
       return { ok: true, address: offer.address, channels: ch, results: r.results, emailTo: r.results?.email?.to || "" };
     },
     setOfferStatus: async ({ contactId, addressHint, status, note = "", amount = 0 }) => {
