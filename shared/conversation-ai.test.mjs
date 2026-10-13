@@ -472,13 +472,20 @@ test("send_offer keeps its own mode and options through a save, and the clean-un
   assert.deepEqual(a, { type: "send_offer", mode: "auto", channels: ["email"], docs: ["pdf"] });
   assert.deepEqual(b, { type: "send_offer", mode: "ask", channels: ["sms"], docs: ["image", "pdf"] });
   assert.deepEqual(c.parties.agent.sendOffer, { onClearUnderwrite: true, channels: ["sms"], docs: ["scope"],
-    afterFloat: { enabled: false, silenceHours: 24, onPushback: false, onNeutral: false, dailyCap: 20 } });
+    afterFloat: { enabled: false, silenceHours: 24, withFloat: false, onPushback: false, onNeutral: false, dailyCap: 20 } });
   assert.equal(normalizeConversationAi({}).parties.agent.sendOffer.onClearUnderwrite, false);
   // an investor playbook never carries it
   const inv = normalizeConversationAi({ parties: { investor: { intentRules: { interested: { mode: "auto", actions: [{ type: "send_offer" }] } } } } });
   assert.deepEqual(inv.parties.investor.intentRules.interested?.actions || [], []);
 });
 
+
+test("sending the written offer with the float survives a save, ships off, and never rides an investor playbook", () => {
+  const on = normalizeConversationAi({ parties: { agent: { sendOffer: { afterFloat: { enabled: true, withFloat: true } } }, investor: { sendOffer: { afterFloat: { enabled: true, withFloat: true } } } } });
+  assert.equal(on.parties.agent.sendOffer.afterFloat.withFloat, true);
+  assert.equal(on.parties.investor.sendOffer.afterFloat.withFloat, false);
+  assert.equal(normalizeConversationAi({}).parties.agent.sendOffer.afterFloat.withFloat, false);
+});
 
 // Angela Jaeger, 2026-09-16: Matt texted her at 11:00, the bot answered over
 // the top of him at 11:03 ("I'm an assistant on Matt's team keeping up with

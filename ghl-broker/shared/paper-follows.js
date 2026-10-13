@@ -191,7 +191,7 @@ export function answeredSince(at, { drafts = [], events = [] } = {}) {
  * Whether the written offer should follow a float nobody answered. Every
  * refusal says why, for the runner's log and the tests.
  */
-export function paperAfterSilenceDue({ offer, drafts = [], events = [], silenceHours = 24, now = Date.now() } = {}) {
+export function paperAfterSilenceDue({ offer, drafts = [], events = [], silenceHours = 24, withFloat = false, now = Date.now() } = {}) {
   const no = (reason, extra = {}) => ({ due: false, reason, floatAt: null, hours: 0, ...extra });
   if (!offer || offer.deal) return no("a deal, not an offer");
   const status = effectiveStatus(offer);
@@ -205,7 +205,8 @@ export function paperAfterSilenceDue({ offer, drafts = [], events = [], silenceH
   if (now - ms(floatAt) > PAPER_FLOAT_MAX_DAYS * 24 * HOUR) return no("the float is more than two weeks old", { floatAt });
   if (answeredSince(floatAt, { drafts, events })) return no("they answered — the conversation has it", { floatAt });
   const hours = workingHoursBetween(ms(floatAt), now);
-  if (hours < silenceHours) return no("not a working day since the float yet", { floatAt, hours });
+  // withFloat: the letter goes with the number, not a working day after it.
+  if (!withFloat && hours < silenceHours) return no("not a working day since the float yet", { floatAt, hours });
   return { due: true, reason: "", floatAt, hours };
 }
 

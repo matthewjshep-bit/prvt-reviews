@@ -617,9 +617,11 @@ const PLAYBOOK = () => ({
   // with the reply to a no. `onNeutral` (2026-10-08): after any other answer
   // that isn't a pass, a counter or a sold house (shared/paper-follows.js
   // paperAfterAnswerDue), on the same tick and daily cap as the silence one.
-  // Agents only, off until switched on.
+  // `withFloat` (2026-10-13, Matt: "we should also just send out the offer
+  // here so they have it"): no silence wait — the letter follows the float
+  // on the next tick. Agents only, off until switched on.
   sendOffer: { onClearUnderwrite: false, channels: ["sms"], docs: ["image", "pdf"],
-    afterFloat: { enabled: false, silenceHours: 24, onPushback: false, onNeutral: false, dailyCap: 20 } },
+    afterFloat: { enabled: false, silenceHours: 24, withFloat: false, onPushback: false, onNeutral: false, dailyCap: 20 } },
   // The first text to a listing agent the outreach page imported, drafted by
   // the bot from the hook listing instead of sent by a GHL workflow template.
   // Sends itself only if outreach_open is on the party's auto-send list.
@@ -975,6 +977,7 @@ function normalizePlaybook(p, party, seed = {}) {
         afterFloat: {
           enabled: party === "agent" && bool(af.enabled, false),
           silenceHours: int(af.silenceHours, 24, 4, 240),
+          withFloat: party === "agent" && bool(af.withFloat, false),
           onPushback: party === "agent" && bool(af.onPushback, false),
           onNeutral: party === "agent" && bool(af.onNeutral, false),
           dailyCap: int(af.dailyCap, 20, 1, 200),
