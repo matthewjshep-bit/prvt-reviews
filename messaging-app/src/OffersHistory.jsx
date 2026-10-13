@@ -52,6 +52,7 @@ import { offerKey, siblingsKey } from "./OfferPanel.jsx";
 import { forget, forgetPrefix } from "./work-data.js";
 import NextFollowUp, { groupNext, nextSortKey } from "./NextFollowUp.jsx";
 import { TABS, SUBS, OTHER, viewFor, defaultTab, tabOf, notSentAge, waitingSince } from "./offer-tabs.js";
+import PipelineStrip from "./PipelineStrip.jsx";
 import {
   ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow, Menu,
   SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, StatusPill, TableCard,
@@ -660,6 +661,8 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
       <div className="mb-3">
         <KpiRow items={kpis} />
       </div>
+
+      <PipelineStrip offerCounts={Object.fromEntries(chips.map((c) => [c.key, c.count]))} stage={tabOf(view)} onStage={setFilter} />
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {stageChips}

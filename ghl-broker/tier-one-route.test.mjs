@@ -140,6 +140,27 @@ test("Pass marks we passed, moves the card to Passed on Offer, takes tier-1 off 
   } finally { h.close(); }
 });
 
+// Matt's diagram (2026-10-13): passed → back to Tier 2, the nurture — unless
+// the agent has another live house, which keeps the card where that puts it.
+test("with GHL following the offers, Pass sends the card to Tier 2, or wherever their other live house puts it", async () => {
+  const h = await harness({ cards: [{ id: "op1", contactId: "c1", name: "Sam Lee", pipelineStageId: "s-t1" }], saved: { ghlStages: { mode: "on" } } });
+  try {
+    const o = await offer(h.LOC);
+    const r = await h.req("POST", "/api/dashboard/tier1/c1/pass", { offerId: o.id });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(h.ghl.board.get("op1").pipelineStageId, "s-t2");
+    const events = await store.listContactEvents(h.LOC, "c1", { limit: 50 });
+    assert.ok(events.some((e) => e.type === "ghl_stage_moved" && e.data?.to === "Tier 2"));
+  } finally { h.close(); }
+  const h2 = await harness({ cards: [{ id: "op2", contactId: "c1", name: "Sam Lee", pipelineStageId: "s-t1" }], saved: { ghlStages: { mode: "on" } } });
+  try {
+    const o = await offer(h2.LOC);
+    await offer(h2.LOC, { address: "88 Elm St, Tacoma, WA 98405" });
+    await h2.req("POST", "/api/dashboard/tier1/c1/pass", { offerId: o.id });
+    assert.equal(h2.ghl.board.get("op2").pipelineStageId, "s-out", "their other house is out");
+  } finally { h2.close(); }
+});
+
 test("a pass on a house never priced is recorded, so the check-in and the bot leave it alone", async () => {
   const h = await harness({ cards: [{ id: "op4", contactId: "c4", name: "Ana Bee", pipelineStageId: "s-t1" }] });
   try {

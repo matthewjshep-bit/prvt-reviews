@@ -724,7 +724,9 @@ export async function searchOpportunities(client, locationId, { contactId, pipel
   if (pipelineId) q.set("pipeline_id", pipelineId);
   const data = await client.call(`/opportunities/search?${q.toString()}`);
   const rows = Array.isArray(data?.opportunities) ? data.opportunities : [];
-  return rows.map((o) => ({ id: String(o.id || ""), name: String(o.name || ""), pipelineId: String(o.pipelineId || ""), stageId: String(o.pipelineStageId || ""), status: String(o.status || ""), value: Number(o.monetaryValue) || 0 })).filter((o) => o.id);
+  // lastStageChangeAt: who moved the card last, a person or the offers (shared/ghl-stages.js).
+  return rows.map((o) => ({ id: String(o.id || ""), name: String(o.name || ""), pipelineId: String(o.pipelineId || ""), stageId: String(o.pipelineStageId || ""), status: String(o.status || ""), value: Number(o.monetaryValue) || 0,
+    ...(o.lastStageChangeAt ? { lastStageChangeAt: String(o.lastStageChangeAt) } : {}) })).filter((o) => o.id);
 }
 
 // Needs opportunities.write.

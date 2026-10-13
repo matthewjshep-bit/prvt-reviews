@@ -239,8 +239,9 @@ const pipelineCache = new Map();
 /**
  * acquisitionsPipeline(pipelines) → { id, stages, tierStages: { "tier-1": stageId, ... } } | null
  *
- * The pipeline carrying all three tier stages that isn't the dispositions one,
- * preferring a name that says acquisitions.
+ * The pipeline carrying the Tier 1 and Tier 2 stages that isn't the
+ * dispositions one, preferring a name that says acquisitions. Tier 3 is
+ * optional: Matt's four-stage board (2026-10-13) drops it.
  */
 export function acquisitionsPipeline(pipelines = []) {
   const withTiers = (pipelines || [])
@@ -253,7 +254,7 @@ export function acquisitionsPipeline(pipelines = []) {
       }
       return { ...p, tierStages };
     })
-    .filter((p) => Object.keys(p.tierStages).length === 3);
+    .filter((p) => p.tierStages["tier-1"] && p.tierStages["tier-2"]);
   return withTiers.find((p) => /acqui/i.test(p.name || "")) || withTiers[0] || null;
 }
 
@@ -273,6 +274,7 @@ export function tierStageMove({ tags = [], pipelines = [], opportunities = [] } 
   if (!mine.length) return { skip: "no Acquisitions opportunity on the contact" };
   const opp = mine.find((o) => o.status === "open") || mine[0];
   const target = acq.tierStages[tier];
+  if (!target) return { skip: `no ${tier} stage in the pipeline` };
   const stageName = String((acq.stages || []).find((s) => s.id === opp.stageId)?.name || "").trim();
   const closed = opp.status && opp.status !== "open";
   if (opp.stageId === target && !closed) return { skip: `already in ${stageName}` };
