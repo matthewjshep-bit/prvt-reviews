@@ -8,7 +8,7 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { getBuyerPulse, runBuyerPulse, sampleBuyerPulse, getAgentPulse, sampleAgentPulse, sampleFirstTexts, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
+import { getBuyerPulse, runBuyerPulse, sampleBuyerPulse, getAgentPulse, sampleAgentPulse, sampleFirstTexts, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, migratePipeline, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
 import { DESK_DEFAULTS, normalizeDesk } from "@shared/call-list.js";
@@ -724,6 +724,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <input type="checkbox" checked={ghlStages.allowNurtureTrigger} onChange={(e) => setGhlStages("allowNurtureTrigger")(e.target.checked)} />
           <span>Move into Tier 2 even while a "nurture" workflow is published in GHL — <span className="font-semibold">it will text them</span>.</span>
         </label>
+        <OldStagesMove />
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="buyer-view-settings">
@@ -1800,6 +1801,44 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         {error && <span className="text-sm text-red-700">{error}</span>}
       </div>
       {showFields && <FieldsManager onClose={() => setShowFields(false)} />}
+    </div>
+  );
+}
+
+// The one-time move off GHL's old stages (New Lead, Contacted, Tier 3,
+// Negotiations, Passed on Offer, Not a Good Deal, Contract Sent, Lost). Check
+// first; Move takes up to 300 a press. Then delete the empty stages in GHL.
+function OldStagesMove() {
+  const [r, setR] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const run = (apply) => { setBusy(apply ? "move" : "check"); setErr(""); migratePipeline(apply).then(setR).catch((e) => setErr(e.message)).finally(() => setBusy("")); };
+  const c = r?.counts || {};
+  return (
+    <div className="mt-4 border-t border-slate-100 pt-3" data-testid="old-stages-move">
+      <div className="mb-2 text-xs text-slate-500">
+        <span className="font-semibold text-slate-700">Move off the old stages, once.</span> Live offers go where they put the agent, replied
+        agents to Tier 2, never-replied agents' cards are closed (they stay in outreach). Then delete the empty stages in GHL.
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-50" disabled={Boolean(busy)} onClick={() => run(false)}>
+          {busy === "check" ? "Checking…" : "Check"}
+        </button>
+        {r && c.planned > 0 && (
+          <button type="button" className="rounded-lg bg-slate-800 px-3 py-1 text-xs font-medium text-white hover:bg-slate-700" disabled={Boolean(busy)} onClick={() => run(true)}>
+            {busy === "move" ? "Moving…" : `Move ${Math.min(300, c.planned)} now`}
+          </button>
+        )}
+        {err && <span className="text-xs text-red-700">{err}</span>}
+      </div>
+      {r && (
+        <div className="mt-2 text-xs text-slate-600">
+          <div>{c.old || 0} cards in old stages · {c.planned || 0} to move · {c.blocked || 0} held back by a nurture workflow · {c.manual || 0} with two open cards{r.apply ? ` · ${r.applied} moved, ${r.left} left` : ""}</div>
+          <ul className="mt-1 list-disc pl-5">
+            {Object.entries(c.byMove || {}).sort((a, b) => b[1] - a[1]).map(([k, n]) => <li key={k}>{k}: {n}</li>)}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

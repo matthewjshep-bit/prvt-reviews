@@ -138,3 +138,38 @@ test("ships off", () => {
   assert.equal(normalizeGhlStages({}).mode, "off");
   assert.equal(normalizeGhlStages({ mode: "on" }).mode, "on");
 });
+
+/* ---------- the one-time move off the old stages ---------- */
+
+const { planMigration } = await import("./ghl-stages.js");
+
+test("old-stage cards land by the facts: live offers where they put them, replied in Tier 2, never replied closed", () => {
+  const r = planMigration({ acq: OLD_ACQ, now: NOW, replied: new Set(["talked"]),
+    opportunities: [
+      card("neg", "s-neg"), card("ng", "s-ng"), card("talked", "s-t3"), card("silent", "s-new"),
+      card("deal", "s-sent"), card("closed", "s-lost", { status: "lost" }), card("kept", "s-t1"),
+    ],
+    offers: [
+      offer("neg", { status: "countered", counter: { amount: 320000 } }),
+      offer("ng", { status: "we_passed" }),
+      offer("deal", { status: "accepted", deal: { stage: "under_contract" } }),
+    ] });
+  const by = Object.fromEntries(r.moves.map((m) => [m.contactId, [m.to, m.status || "open"]]));
+  assert.deepEqual(by, {
+    neg: ["Offer Out", "open"], ng: ["Tier 2", "open"], talked: ["Tier 2", "open"], silent: ["Tier 2", "abandoned"],
+    deal: ["Contract", "open"], closed: ["Tier 2", "open"],
+  });
+  assert.equal(by.kept, undefined, "a card already in one of the four stages isn't the migration's");
+  assert.equal(r.moves.find((m) => m.contactId === "closed").status, undefined, "a closed card keeps its status");
+});
+
+test("the migration never opens a card into a texting nurture, and leaves two open cards to a person", () => {
+  const nurtureLive = [{ id: "w", name: "Tier 2+3 nurture" }];
+  const r = planMigration({ acq: OLD_ACQ, now: NOW, nurtureLive, replied: new Set(["t"]),
+    opportunities: [card("t", "s-t3"), card("s", "s-new"), card("two", "s-neg"), { ...card("two", "s-t1"), id: "opp-two-b" }],
+    offers: [] });
+  assert.match(r.moves.find((m) => m.contactId === "t").blocked, /nurture/);
+  assert.equal(r.moves.find((m) => m.contactId === "s").blocked, undefined, "a closed card can't start it");
+  assert.deepEqual(r.manual.map((m) => m.contactId), ["two"]);
+  assert.equal(r.moves.some((m) => m.contactId === "two"), false);
+});

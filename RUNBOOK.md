@@ -2289,6 +2289,23 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
 - The board finder (`acquisitionsPipeline`) needs only Tier 1 and Tier 2, so
   deleting Tier 3 in GHL breaks nothing.
 
+**The move off the old stages (once).** Settings → "GHL pipeline follows the
+offers" → Check / Move (`POST /api/dashboard/ghl/pipeline/migrate {apply}`,
+`ghl-broker/acq-migrate.js`, plan `planMigration`). Every card in New Lead,
+Contacted, Tier 3, Negotiations, Passed on Offer, Not a Good Deal, Contract
+Sent (when Contract Signed is kept) or Lost lands by the facts: live offers
+where `targetStage` puts them; no offers but they've written to us → Tier 2;
+never replied → Tier 2 with the card closed `abandoned` (they stay in
+outreach). Closed cards keep their status and go to Tier 2 (won → Contract),
+so the old stages empty. Two open cards are listed, not moved. Nothing opens
+into Tier 2 while a nurture workflow is published. 300 a press; the summary
+is on the `pipelineMigrate` cursor. Order:
+1. In GHL, set "Tier 2+3 nurture" and the TIER 2/3 workflows to Draft, and
+   check no workflow is triggered by a stage change on the stages going away.
+2. Check, read the counts, then Move until nothing is left.
+3. Delete the empty stages in GHL by hand.
+4. Switch "GHL pipeline follows the offers" on.
+
 ### Tier 1 — GHL's stage, screened (2026-10-07)
 
 Matt: "where does the tier 1 come from in our today? It doesn't match up with

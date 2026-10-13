@@ -260,3 +260,73 @@ export function boardCounts({ acq = null, opportunities = [] } = {}) {
   }
   return out;
 }
+
+/* ---------- the one-time move off the old stages ---------- */
+
+/**
+ * planMigration({ acq, opportunities, offers, replied, nurtureLive, settings, now })
+ *   → { moves: [{ contactId, opportunityId, from, to, toStageId, status?, why, blocked? }], manual: [{ contactId, why }], counts }
+ *
+ * Every card still in a stage that goes away (New Lead, Contacted, Tier 3,
+ * Negotiations, Passed on Offer, Not a Good Deal, Contract Sent when Contract
+ * Signed is kept, Lost) lands in one of the four, by the facts (Matt,
+ * 2026-10-13: "map by facts"):
+ *   - with offers: where targetStage puts them (a closed deal → Contract, won)
+ *   - no offers, they've written to us (`replied` has them) → Tier 2
+ *   - no offers, never replied → Tier 2 with the card closed as abandoned;
+ *     they stay in outreach
+ * A closed card keeps its status and goes to Tier 2, so the old stage empties.
+ * Two open cards on a contact are listed for a person, not moved.
+ */
+export function planMigration({ acq = null, opportunities = [], offers = [], replied = new Set(), nurtureLive = [], settings = {}, now = Date.now() } = {}) {
+  const cfg = normalizeGhlStages(settings);
+  const counts = { old: 0, planned: 0, blocked: 0, manual: 0, closed: 0, byMove: {} };
+  const out = { moves: [], manual: [], counts };
+  if (!acq?.id) return out;
+  const keys = stageKeys(acq);
+  if (!keys.tier1 || !keys.tier2) return out;
+  const nameOf = new Map((acq.stages || []).map((s) => [s.id, String(s.name || "").trim()]));
+  const offersBy = new Map();
+  for (const o of offers || []) { if (!o?.contactId) continue; if (!offersBy.has(o.contactId)) offersBy.set(o.contactId, []); offersBy.get(o.contactId).push(o); }
+  const cardsBy = new Map();
+  for (const c of opportunities || []) {
+    if (!c?.contactId || (c.pipelineId && c.pipelineId !== acq.id)) continue;
+    if (!cardsBy.has(c.contactId)) cardsBy.set(c.contactId, []);
+    cardsBy.get(c.contactId).push(c);
+  }
+  const isOld = (c) => !CARD_STAGES.includes(stageKeyOf(keys, c.pipelineStageId));
+  for (const [contactId, cards] of cardsBy) {
+    const old = cards.filter(isOld);
+    if (!old.length) continue;
+    counts.old += old.length;
+    const open = cards.filter((c) => String(c.status || "open") === "open");
+    if (open.length > 1 && open.some(isOld)) { counts.manual++; out.manual.push({ contactId, why: "two open cards — a person's call" }); }
+    const t = targetStage({ offers: offersBy.get(contactId) || [], now });
+    for (const c of old) {
+      const from = nameOf.get(c.pipelineStageId) || c.pipelineStageId;
+      const status = String(c.status || "open");
+      let to, why, newStatus = null;
+      if (status !== "open") {
+        counts.closed++;
+        to = /^won$/i.test(status) && keys.contract ? "contract" : "tier2";
+        why = `closed (${status}): out of the old stage`;
+      } else if (open.length > 1) continue;
+      else if (t.to) {
+        to = t.to; why = t.why;
+        if (t.won) newStatus = "won";
+      } else if (replied.has(contactId)) { to = "tier2"; why = "replied, nothing live"; }
+      else { to = "tier2"; newStatus = "abandoned"; why = "never replied: card closed, they stay in outreach"; }
+      if (!keys[to]) continue;
+      const move = { contactId, opportunityId: c.id, from, to: CARD_STAGE_LABEL[to], toStageId: keys[to], why, ...(newStatus ? { status: newStatus } : {}) };
+      // Only an open card landing in Tier 2 can start GHL's nurture.
+      if (to === "tier2" && status === "open" && newStatus !== "abandoned" && (nurtureLive || []).length && !cfg.allowNurtureTrigger) {
+        move.blocked = `${nurtureLive.map((w) => w.name).join(", ")} is published and would text them on this move`;
+        counts.blocked++;
+      } else counts.planned++;
+      const k = `${from}→${move.to}${newStatus ? ` (${newStatus})` : ""}`;
+      counts.byMove[k] = (counts.byMove[k] || 0) + 1;
+      out.moves.push(move);
+    }
+  }
+  return out;
+}

@@ -44,6 +44,7 @@ import { listPipelines, getContact } from "../ghl.js";
 import { mapPool } from "../map-pool.js";
 import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR, acquisitionsPipeline } from "../ghl-mirror.js";
 import { runStagePlan, listAcquisitionOpportunities } from "../tier-check.js";
+import { runMigration } from "../acq-migrate.js";
 import { boardCounts } from "../shared/ghl-stages.js";
 import { stageCounts } from "../shared/offer-stage.js";
 import { annotateCurrent } from "../shared/current-offer.js";
@@ -771,6 +772,17 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         plan: { counts: plan.counts || {}, moves: plan.moves || [], creates: plan.creates || [], youMoved: plan.youMoved || [], errors: plan.errors || [] } };
       pipelineCache.set(locationId, { at: Date.now(), body });
       res.json(body);
+    } catch (err) { fail(res, err); }
+  });
+
+  // The one-time move off the old stages (acq-migrate.js). A report unless
+  // the body says { apply: true }; then at most 300 cards a press.
+  router.post("/ghl/pipeline/migrate", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const r = await runMigration({ client, locationId, store, apply: req.body?.apply === true });
+      pipelineCache.delete(locationId);
+      res.json({ ok: !r.errors.length || r.applied > 0, ...r });
     } catch (err) { fail(res, err); }
   });
 
