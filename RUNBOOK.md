@@ -1372,17 +1372,22 @@ two location-wide reads (reply drafts and the clocks' events), done in
   soonest follow-up, or their gap.
 - A "No follow-up" chip: live offers with nothing coming, or one that's late.
   (2026-10-07: under "Closed / other" — see the three tabs below.)
-- **The Offers tabs (2026-10-07, Matt: "simplify this").** Three tabs, each
-  row in one, Hot winning (`messaging-app/src/offer-tabs.js`):
-  **🔥 Hot** (`isHot`) · **Not sent** (priced, no paper: `effectiveStatus`
-  "new", floated or not — "Floated 5d ago" from the newest sent
-  `realm_check` draft, attached as `floatedAt` by `GET /api/offers?activity=1`
-  via `floatSentIndex`, else "Priced 3d ago"; oldest first, every agent
-  unfolded so each row's Send is one click) · **Sent** (sent + countered).
-  All, Deals, Passed / gone, Drafts, Off-market, No follow-up and AI review
-  are under one "Closed / other" menu. The page opens on Hot, or Not sent
-  when nothing is hot. The KPI that read "Awaiting reply" reads "Not sent ·
-  oldest Nd". The Single family chip is gone; non-SFR rows keep their pill.
+- **The Offers tabs — Draft · Sent · Responded (2026-10-13, Matt's diagram).**
+  The three stages of an offer (`shared/offer-stage.js` `offerStage`, derived
+  on read; the stored statuses are unchanged) in `messaging-app/src/offer-tabs.js`:
+  **Draft** (held drafts and priced offers whose number hasn't gone out;
+  oldest first, every agent unfolded) · **Sent** (the written offer went, or
+  our number went by text — `floatSentAt`, stamped on the offer when a
+  `realm_check` draft actually sends; older floats get it from
+  `POST /api/offers/backfill/float-sent {apply:true}`, or `floatedAt` attached
+  by `?activity=1`) · **Responded**, with one chip per answer: 🔥 Hot ·
+  Countered · Accepted (a live or closed deal) · Passed (they passed, we
+  passed, gone, no reply after the follow-ups, or a deal that fell through —
+  Matt: no reply counts as passed). A row a newer one on the house replaced
+  is in no stage. All offers, Off-market, No follow-up and AI review sit
+  under "Other". The page opens on Hot, or Draft when nothing is hot. The
+  board's lanes sit under the same three headers. The agent's GHL card
+  follows the stage — see "The pipeline".
 - Changing a status in the table shows "updates on reload" rather than a
   schedule worked out for the old status.
 

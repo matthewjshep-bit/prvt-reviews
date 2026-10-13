@@ -46,14 +46,16 @@ const streetKey = (address) => addressKey(String(address || "").split(",")[0]);
 
 /* ---------- the vocabulary ---------- */
 
+// `stage` is the offer stage each lane sits under on the board (Draft · Sent ·
+// Responded, shared/offer-stage.js); the lanes are the detail inside it.
 export const AGENT_LANES = [
-  { key: "underwriting", label: "Underwriting", hint: "the robot is pricing it right now" },
-  { key: "needs_review", label: "Needs review", hint: "an underwrite stopped on a quality gate" },
-  { key: "ready",        label: "Not sent",     hint: "priced, nothing has gone out" },
-  { key: "floated",      label: "Floated",      hint: "our read or a soft number is out; waiting on theirs" },
-  { key: "sent",         label: "Sent",         hint: "the offer is with the agent" },
-  { key: "countered",    label: "Countered",    hint: "they came back with a number" },
-  { key: "hot",          label: "Hot",          hint: "close to a contract — the price is agreed, or you flagged it" },
+  { key: "underwriting", stage: "draft",     label: "Underwriting", hint: "the robot is pricing it right now" },
+  { key: "needs_review", stage: "draft",     label: "Needs review", hint: "an underwrite stopped on a quality gate" },
+  { key: "ready",        stage: "draft",     label: "Not sent",     hint: "priced, nothing has gone out" },
+  { key: "floated",      stage: "sent",      label: "Floated",      hint: "our read or a soft number is out; waiting on theirs" },
+  { key: "sent",         stage: "sent",      label: "Sent",         hint: "the offer is with the agent" },
+  { key: "countered",    stage: "responded", label: "Countered",    hint: "they came back with a number" },
+  { key: "hot",          stage: "responded", label: "Hot",          hint: "close to a contract — the price is agreed, or you flagged it" },
 ];
 export const DISPO_LANES = [
   { key: "under_contract", label: "Under contract", hint: "ours to sell" },

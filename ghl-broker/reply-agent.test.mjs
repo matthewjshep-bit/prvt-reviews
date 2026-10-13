@@ -6166,6 +6166,22 @@ test("a range that went out is remembered on the offer, and only when the text s
   assert.equal(offers.get("o1").proactive.range, undefined);
 });
 
+// Matt, 2026-10-13: a number we texted counts as Sent, so the card goes to
+// Offer Out. The drafted-at stamp (proactive.realmCheckAt) isn't enough — a
+// float can sit unsent for days — so the send itself stamps the offer.
+test("a number texted to the agent marks the offer floated when it actually goes, not when it was drafted", async () => {
+  const d = { ...openDraft(), id: "d1", party: "agent", intent: "realm_check", reply: "On 12 Elm we could likely do around 295ish. In the ballpark?",
+    outbound: { kind: "realm_check", offerId: "o1", address: "12 Elm St", amount: 295000 } };
+  const store = fakeStore([d]);
+  const offers = new Map([["o1", { ...floatOffer(), proactive: { realmCheckAt: iso(500) } }]]);
+  store.getOffer = async (id) => offers.get(id) || null;
+  store.updateOffer = async (id, doc) => { offers.set(id, doc); return true; };
+  assert.equal(offers.get("o1").floatSentAt, undefined);
+  await sendReplyDraft({ client: { call: async () => ({ messageId: "m1" }) }, store, locationId: "LOC", draftId: "d1", live: true });
+  assert.ok(offers.get("o1").floatSentAt, "the offer knows our number went");
+  assert.equal(offers.get("o1").proactive.range, undefined, "no range was floated");
+});
+
 // "285 works" after we floated "the 280s to 295" (2026-10-07). Under our
 // number, so not a counter; a number of theirs, so not a yes to ours. A
 // person decides: the letter at our number and a revise to theirs are both

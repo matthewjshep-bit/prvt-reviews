@@ -500,6 +500,9 @@ export const OFFER_LIST_FIELDS = [
   // Heat (offerHeat): the hand-set flag and the agreed price it is derived from,
   // and the take-back that cancels every agreed marker before it (priceAgreed).
   "hot", "agreed", "agreedCleared", "pin", "paperHeld",
+  // When our number went out by text (a sent realm check): the offer is Sent
+  // from then (shared/offer-stage.js) and its agent's card is at Offer Out.
+  "floatSentAt",
   // The nightly sweep's close-out ({at, by, reason}): a house it passed on
   // unpriced reopens on the agent's numbers (shared/held-underwrites.js
   // reopensOnTheirNumbers), and the bot has to be able to tell.

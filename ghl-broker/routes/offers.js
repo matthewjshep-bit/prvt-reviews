@@ -2561,6 +2561,31 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // One-time: offers floated before `floatSentAt` existed (2026-10-13) get it
+  // from their sent realm-check drafts, so they read as Sent. A dry run
+  // unless `apply: true`; ids and counts only.
+  router.post("/backfill/float-sent", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const apply = req.body?.apply === true;
+      const drafts = await store.listReplyDrafts(locationId, { limit: 4000 });
+      const floats = floatSentIndex(drafts);
+      const lean = await store.listOffers(locationId, { limit: 5000, lean: true });
+      const todo = lean.filter((o) => o?.id && floats.has(o.id) && !o.floatSentAt);
+      let written = 0;
+      if (apply) {
+        for (const row of todo) {
+          const o = await store.getOffer(row.id).catch(() => null);
+          if (!o || o.floatSentAt) continue;
+          o.floatSentAt = floats.get(o.id);
+          await store.updateOffer(o.id, o);
+          written++;
+        }
+      }
+      res.json({ ok: true, apply, floated: floats.size, missing: todo.length, written, offerIds: todo.map((o) => o.id).slice(0, 50) });
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
