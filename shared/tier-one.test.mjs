@@ -128,8 +128,8 @@ test("a sent offer moves a tier card to Offer Out, never Negotiations back", () 
 });
 
 test("the switches ship off", () => {
-  assert.deepEqual(normalizeTierOne(undefined), { autoKick: false, autoKickMax: 10, followMachineSends: false });
-  assert.deepEqual(normalizeTierOne({ autoKick: "yes", autoKickMax: 500 }), { autoKick: false, autoKickMax: 50, followMachineSends: false });
+  assert.deepEqual(normalizeTierOne(undefined), { autoKick: false, autoKickMax: 10, followMachineSends: false, autoUnderwrite: false, underwriteMax: 10 });
+  assert.deepEqual(normalizeTierOne({ autoKick: "yes", autoKickMax: 500 }), { autoKick: false, autoKickMax: 50, followMachineSends: false, autoUnderwrite: false, underwriteMax: 10 });
 });
 
 test("only a sure miss is cleared on its own; a missing address waits a week, and a card you added is left a week", () => {
@@ -158,3 +158,25 @@ test("a house on two acres or more is flagged rural, sure enough to take off Tie
   assert.deepEqual(keysOf(lot.flags), ["rural"]);
   assert.deepEqual(keysOf(screenTierOne({ house: house({ snapshot: { subjectInfo: { lotSqft: 8000 } } }), lastInboundAt: ago(1), now: NOW }).flags), []);
 });
+
+/* ---------- Tier 1 → Draft (2026-10-13) ---------- */
+
+const { autoUnderwritePlan } = await import("./tier-one.js");
+
+test("a clean Tier 1 card with an address and nothing priced is underwritten by itself; one with a number, a held draft, no address or a flag waits", () => {
+  const row = (contactId, over = {}) => ({ contactId, ok: true, offer: null, openCards: 1, house: { address: "12 Elm St, Tacoma, WA", source: "named" }, ...over });
+  const plan = autoUnderwritePlan({ max: 5, rows: [
+    row("go"),
+    row("card", { house: { address: "88 Oak Ave", source: "card" } }),
+    row("priced", { offer: { id: "o1", cashAmount: 300000 } }),
+    row("held", { offer: { id: "o2", status: "draft" }, house: { address: "1 Pine St", source: "held" } }),
+    row("nohouse", { house: null }),
+    row("vague", { house: { address: "the one on Elm", source: "named" } }),
+    row("flagged", { ok: false }),
+    row("twocards", { openCards: 2 }),
+  ] });
+  assert.deepEqual(plan.map((p) => p.contactId), ["go", "card"]);
+  assert.equal(autoUnderwritePlan({ max: 1, rows: [row("a"), row("b")] }).length, 1, "at most max");
+  assert.equal(normalizeTierOne({ autoUnderwrite: true }).autoUnderwrite, true);
+});
+
