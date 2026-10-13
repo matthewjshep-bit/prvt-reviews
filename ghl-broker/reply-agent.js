@@ -60,7 +60,8 @@ import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
-import { passedOnHouse, isTierOneAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
+import { passedOnHouse, isTierOneAction, isLowerTierAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
+import { normalizeGhlStages } from "./shared/ghl-stages.js";
 import { qualifyStep, QUALIFY_ASK_RX } from "./shared/flip-read.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
@@ -4681,6 +4682,18 @@ async function runReply(job, ctx) {
       record = { ...record, actions: [...record.actions, ...fresh], updatedAt: new Date().toISOString() };
       await store.updateReplyDraft(record.id, record).catch(() => {});
     }
+  }
+
+  /* --- 4e°. GHL follows the offers: no tier-2/3 tag, no TIER 2/3 workflow --- */
+  // Matt's four stages (2026-10-13): Tier 3 is folded into Tier 2 and the
+  // offers move the card. A tier-3 tag on a "no" would start GHL's TIER 3
+  // workflow, which drags the card back into a stage that's gone.
+  if (party === "agent" && normalizeGhlStages(saved?.ghlStages).mode === "on" && [...plan.auto, ...plan.suggested].some(isLowerTierAction)) {
+    const why = "the pipeline follows the offers — Tier 2/3 come from the offers, not a tag";
+    plan.auto = plan.auto.filter((x) => !isLowerTierAction(x));
+    plan.suggested = plan.suggested.filter((x) => !isLowerTierAction(x));
+    record = { ...record, actions: (record.actions || []).map((x) => (isLowerTierAction(x) && x.status === "pending" ? { ...x, status: "skipped", detail: why } : x)), updatedAt: new Date().toISOString() };
+    await store.updateReplyDraft(record.id, record).catch(() => {});
   }
 
   /* --- 4e′. a house we passed on doesn't put them back on Tier 1 --- */

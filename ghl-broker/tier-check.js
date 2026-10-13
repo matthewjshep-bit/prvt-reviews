@@ -167,7 +167,10 @@ export async function runTierCheck({ client, locationId, store = defaultStore, g
 
 // A published "Tier 2+3 nurture" style workflow: GHL starts it by itself
 // when a card lands in Tier 2/3, and it texts (shared/agent-pulse.js tierDrips).
-const NURTURE_RX = /nurture/i;
+// The agent nurture GHL starts on a Tier 2/3 stage move ("Tier 2+3 nurture").
+// Not every workflow called a nurture: "Not Now Nurture" is a seller drip
+// with nothing to do with the Acquisitions board (Matt, 2026-10-13).
+const NURTURE_RX = /^(?=.*nurture)(?=.*tier)/i;
 const nurtureWorkflows = (list) => (Array.isArray(list) ? list : [])
   .filter((w) => w?.id && NURTURE_RX.test(String(w.name || "")) && !/dispo/i.test(String(w.name || "")) && String(w.status || "").toLowerCase() !== "draft")
   .map((w) => ({ id: String(w.id), name: String(w.name || "") }));

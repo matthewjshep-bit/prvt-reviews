@@ -164,10 +164,14 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
   const card = open[0];
   const at = stageKeyOf(k, card.pipelineStageId);
   const from = nameOf.get(card.pipelineStageId) || at || card.pipelineStageId;
-  if (!CARD_STAGES.includes(at)) return { skip: `in ${from} — the migration moves it`, old: true };
+  // Tier 3 is folded into Tier 2 (Matt, 2026-10-13): a card that still lands
+  // there — a GHL workflow, a drag — is moved on, whoever put it there.
+  const folded = at === "tier3";
+  if (!CARD_STAGES.includes(at) && !folded) return { skip: `in ${from} — the migration moves it`, old: true };
 
   let to = t.to;
   let why = t.why;
+  if (!to && folded) { to = "tier2"; why = "Tier 3 joins Tier 2"; }
   if (!to) {
     // No offers: a Tier 1 card nothing came of goes back to nurture after a while.
     if (at !== "tier1" || openPromise) return { skip: "no offers" };
@@ -182,7 +186,7 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
 
   // Newest wins: a person moved the card after the last thing the offers did.
   const cardAt = ms(card.lastStageChangeAt);
-  if (t.to && cardAt != null && t.at != null && cardAt > t.at && (to !== at || t.won)) {
+  if (!folded && t.to && cardAt != null && t.at != null && cardAt > t.at && (to !== at || t.won)) {
     return { youMoved: { ...base, opportunityId: card.id, from, wanted: label(to) } };
   }
   if (to === at) {

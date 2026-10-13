@@ -2279,8 +2279,16 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
     `maxMovesPerRun`.
 - **Tags follow the card** when it's on: the 7am check sets tier-1 for Tier 1,
   Offer Out and Contract and tier-2 for Tier 2, and a tag the bot adds no
-  longer moves a card. The bot still adds its tags and enrolls TIER 1 (that
-  workflow starts the underwrite) — make sure no GHL workflow moves the card.
+  longer moves a card. The bot's tier-2/tier-3 tags and TIER 2/TIER 3
+  enrollments stand down (reply-agent 4e°, `isLowerTierAction`); it still adds
+  tier-1 and enrolls TIER 1, which starts the underwrite.
+- **Tier 2 is the agent nurture** (Matt): everyone with nothing live,
+  former Tier 3s included, replied or not. The app's agent check-in is the
+  nurture. A card that still lands in Tier 3 (a workflow, a drag) is moved on
+  to Tier 2 or wherever the offers put it.
+- **The nurture guard** only stops on an agent nurture — a published workflow
+  whose name says both "tier" and "nurture" ("Tier 2+3 nurture"). "Not Now
+  Nurture" is a seller drip and doesn't count.
 - **Tier 1 Pass / Kick out** set the offer and hand the card to the rule.
 - **Report:** `GET /api/dashboard/ghl/pipeline` (Offers page strip): GHL
   counts per stage, offer counts per stage, and what would move. Read-only.

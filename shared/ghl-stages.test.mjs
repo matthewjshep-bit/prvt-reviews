@@ -129,6 +129,16 @@ test("never two open cards, and never a card in a stage that's going away", () =
   assert.equal(r.counts.old, 1);
 });
 
+// Matt, 2026-10-13: Tier 3 is folded into Tier 2. A GHL workflow or a drag
+// that still puts a card there doesn't get to keep it there.
+test("a card that lands in Tier 3 is moved on, to Tier 2 or wherever the offers put it, whoever moved it there", () => {
+  const r = planStageMoves({ acq: OLD_ACQ, now: NOW,
+    opportunities: [card("cold", "s-t3", { lastStageChangeAt: ago(0.1) }), card("live", "s-t3", { lastStageChangeAt: ago(0.1) })],
+    offers: [offer("live")] });
+  assert.deepEqual(to(r), { cold: "Tier 2", live: "Offer Out" });
+  assert.equal(r.youMoved.length, 0);
+});
+
 test("board counts open cards per kept stage and lumps the rest as old", () => {
   const c = boardCounts({ acq: OLD_ACQ, opportunities: [card("a", "s-t1"), card("b", "s-t2"), card("c", "s-out"), card("d", "s-cs"), card("e", "s-neg"), card("f", "s-sent"), card("g", "s-t2", { status: "lost" })] });
   assert.deepEqual(c, { tier2: 1, tier1: 1, offerOut: 1, contract: 1, old: 2, closed: 1 });
@@ -184,4 +194,15 @@ test("the migration moves nothing into Tier 2 while a texting nurture is publish
   assert.match(r.moves.find((m) => m.contactId === "s").blocked, /nurture/, "a card being closed could still fire a stage-change trigger");
   assert.deepEqual(r.manual.map((m) => m.contactId), ["two"]);
   assert.equal(r.moves.some((m) => m.contactId === "two"), false);
+});
+
+test("the bot's tier-2/3 tag and TIER 2/3 workflow are the lower-tier moves; TIER 1, leaving a tier and dispositions aren't", async () => {
+  const { isLowerTierAction } = await import("./tier-one.js");
+  assert.equal(isLowerTierAction({ type: "add_tags", tags: ["tier-3"] }), true);
+  assert.equal(isLowerTierAction({ type: "add_tags", tags: ["Tier-2"] }), true);
+  assert.equal(isLowerTierAction({ type: "add_to_workflow", workflowName: "TIER 3" }), true);
+  assert.equal(isLowerTierAction({ type: "add_tags", tags: ["tier-1"] }), false);
+  assert.equal(isLowerTierAction({ type: "add_to_workflow", workflowName: "TIER 1" }), false);
+  assert.equal(isLowerTierAction({ type: "add_to_workflow", workflowName: "Tier 2 Disposition" }), false);
+  assert.equal(isLowerTierAction({ type: "remove_tags", tags: ["tier-2", "tier-3"] }), false);
 });
