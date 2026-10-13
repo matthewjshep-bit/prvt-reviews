@@ -23,6 +23,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Pencil, Send, Spa
 import { fmtMoney } from "@shared/offer-calc.js";
 import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
+import { floatedAt } from "@shared/offer-stage.js";
 import {
   OFFER_STATUS, OFFER_STATUS_KEYS, effectiveStatus, isAiGenerated, needsAiReview,
   toListOffer,
@@ -50,7 +51,7 @@ import { TEACH_EVENT } from "./RowFeedback.jsx";
 import { offerKey, siblingsKey } from "./OfferPanel.jsx";
 import { forget, forgetPrefix } from "./work-data.js";
 import NextFollowUp, { groupNext, nextSortKey } from "./NextFollowUp.jsx";
-import { TABS, OTHER, viewFor, defaultTab, notSentAge, waitingSince } from "./offer-tabs.js";
+import { TABS, SUBS, OTHER, viewFor, defaultTab, tabOf, notSentAge, waitingSince } from "./offer-tabs.js";
 import {
   ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow, Menu,
   SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, StatusPill, TableCard,
@@ -86,8 +87,9 @@ function SentBadge({ offer }) {
 
 /* ---------- tabs ---------- */
 
-// Three tabs — Hot · Not sent · Sent — and a "Closed / other" menu for the
-// rest (offer-tabs.js; Matt, 2026-10-07). Counts come from running each test
+// The three stages — Draft · Sent · Responded, with Responded's answers as a
+// second row of chips — and an "Other" menu for the cuts across them
+// (offer-tabs.js; Matt, 2026-10-13). Counts come from running each test
 // over the search-filtered set, so a tab's number always matches what
 // clicking it shows.
 
@@ -160,7 +162,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
   const [offerPaging, setOfferPaging] = useState(null); // offer open in OfferPageModal
   const [settings, setSettings] = useState(null); // fetched lazily for contract prefills
   const [q, setQ] = useState("");
-  // null until you pick one: the page opens on Hot, or Not sent when nothing
+  // null until you pick one: the page opens on Hot, or Draft when nothing
   // is hot (defaultTab), decided once the book is here.
   const [filter, setFilter] = useState(null);
   const [sort, toggleSort] = useSort({ key: "date", dir: "desc" }); // newest first, as the API returns them
@@ -452,23 +454,30 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
   const usesAi = book.some(isAiGenerated);
   const view = filter ?? defaultTab(book);
   const chips = TABS.map((f) => ({ key: f.key, label: f.label, title: f.title, count: searched.filter(f.test).length }));
+  const subChips = SUBS.map((f) => ({ key: f.key, label: f.label, title: f.title, count: searched.filter(f.test).length }));
+  const stageChips = (
+    <>
+      <FilterChips value={tabOf(view)} onChange={setFilter} options={chips} label="Filter offers by stage" />
+      {tabOf(view) === "responded" && <FilterChips value={view} onChange={setFilter} options={subChips} label="Filter responded offers by answer" />}
+    </>
+  );
   const others = OTHER.filter((f) => !f.onlyWhenUsed || usesAi);
   const activeFilter = viewFor(view);
   const inOther = others.some((f) => f.key === view);
   const otherMenu = (
     <Menu label="Closed and other offers"
       trigger={<span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ${inOther ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-        {inOther ? activeFilter.label : "Closed / other"} <ChevronDown size={12} aria-hidden="true" />
+        {inOther ? activeFilter.label : "Other"} <ChevronDown size={12} aria-hidden="true" />
       </span>}
       items={others.map((f) => ({ key: f.key, label: `${f.label} · ${searched.filter(f.test).length}`, title: f.title,
         selected: f.key === view, onSelect: () => setFilter(f.key) }))} />
   );
-  // Hot and Not sent open with every agent unfolded; `expanded` then holds the
+  // Hot and Draft open with every agent unfolded; `expanded` then holds the
   // ones you folded, not the ones you opened.
-  const autoOpen = view === "hot" || view === "unsent";
+  const autoOpen = view === "hot" || view === "draft";
   const openGroup = (key) => setExpanded((prev) => { const n = new Set(prev); autoOpen ? n.delete(key) : n.add(key); return n; });
-  // Not sent reads oldest first until you click a column.
-  const sortBy = view === "unsent" && sort.key === "date" && sort.dir === "desc" ? { key: "waiting", dir: "asc" } : sort;
+  // Draft reads oldest first until you click a column.
+  const sortBy = view === "draft" && sort.key === "date" && sort.dir === "desc" ? { key: "waiting", dir: "asc" } : sort;
   // Sorted BEFORE grouping, which is what makes the groups follow the sort:
   // an agent lands wherever their leading offer lands, exactly as they used to
   // land by their most recent one (see the grouping note below).
@@ -482,7 +491,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
   const real = book.filter((o) => o.status !== "draft" && !o.supersededBy);
   const monthAgo = Date.now() - 30 * 86400000;
   const recent = real.filter((o) => new Date(o.createdAt || 0).getTime() >= monthAgo).length;
-  const unsentRows = real.filter(TABS[1].test);
+  const unsentRows = book.filter(TABS[0].test);
   const oldestWait = unsentRows.reduce((m, o) => Math.min(m, waitingSince(o) ?? Infinity), Infinity);
   // Reply rate: of everything that actually went out, how much came back with
   // an answer of any kind. "No response" is a non-reply, so it sits in the
@@ -492,8 +501,8 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
   const liveDeals = real.filter((o) => o.deal && LIVE_STAGES.has(o.deal.stage)).length;
   const kpis = [
     { label: "Offers (30d)", value: recent, hint: "Non-draft offers created in the last 30 days" },
-    { label: "Not sent", value: unsentRows.length ? `${unsentRows.length} · oldest ${Math.max(0, Math.floor((Date.now() - oldestWait) / 86400000))}d` : 0,
-      hint: "Priced but not on paper yet — every agent should have our number on file" },
+    { label: "Draft", value: unsentRows.length ? `${unsentRows.length} · oldest ${Math.max(0, Math.floor((Date.now() - oldestWait) / 86400000))}d` : 0,
+      hint: "Priced, our number not out yet — every agent should have our number on file" },
     { label: "Reply rate", value: delivered ? `${Math.round((replied / delivered) * 100)}%` : "—", hint: `${replied} answered of ${delivered} sent` },
     { label: "Live deals", value: liveDeals, hint: "Under contract, buyer found, or assigned" },
   ];
@@ -620,7 +629,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
       <>
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <button type="button" className={BTN} onClick={closeSplit} title="Back to the table (Esc)"><ChevronLeft size={13} aria-hidden="true" /> Table</button>
-          <FilterChips value={view} onChange={setFilter} options={chips} label="Filter offers by status" />
+          {stageChips}
           {otherMenu}
           <SearchInput value={q} onChange={setQ} className="ml-auto min-w-[16rem] flex-1 sm:max-w-sm"
             placeholder="Search by contact, address, amount, or date…" label="Search offers" />
@@ -653,7 +662,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
       </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <FilterChips value={view} onChange={setFilter} options={chips} label="Filter offers by status" />
+        {stageChips}
         {otherMenu}
         <SearchInput value={q} onChange={setQ} className="ml-auto min-w-[16rem] flex-1 sm:max-w-sm"
           placeholder="Search by contact, address, amount, or date…" label="Search offers" />
@@ -835,8 +844,8 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
                   <AttachWarning offer={o} />
                   <SentBadge offer={o} />
                   {!draft && !o.deal && !old && effectiveStatus(o) === "new" && (
-                    <span className={`ml-1.5 whitespace-nowrap text-[11px] ${o.floatedAt ? "text-amber-700" : "text-slate-400"}`}
-                      title={o.floatedAt ? "Our number went out by text — the written offer hasn't" : "Priced, never floated or sent"}>
+                    <span className={`ml-1.5 whitespace-nowrap text-[11px] ${floatedAt(o) ? "text-amber-700" : "text-slate-400"}`}
+                      title={floatedAt(o) ? "Our number went out by text — the written offer hasn't" : "Priced, never floated or sent"}>
                       {notSentAge(o)}
                     </span>
                   )}

@@ -7,6 +7,7 @@
 
 import React, { useState } from "react";
 import { AGENT_LANES, DISPO_LANES, HIDDEN_LANES } from "@shared/pipeline.js";
+import { OFFER_STAGES } from "@shared/offer-stage.js";
 import { BTN, BTN_DANGER, BTN_PRIMARY, Pill, rowActivation } from "./ui.jsx";
 import { DraftRow } from "./ConversationOutbox.jsx";
 import ContactLink from "./ContactLink.jsx";
@@ -155,7 +156,14 @@ export default function PipelineBoard({ cards = [], actions = [], drafts = [], s
       <div className="flex min-w-max gap-3">
         <div className="flex gap-3 rounded-2xl bg-blue-50/40 p-3">
           <div className="-mr-1 w-5 shrink-0 [writing-mode:vertical-rl] rotate-180 text-center text-[11px] font-semibold uppercase tracking-widest text-blue-400">Acquisition</div>
-          {AGENT_LANES.map((l) => <LaneColumn key={l.key} lane={l} cards={byLane(l.key)} {...shared} />)}
+          {OFFER_STAGES.map((st) => (
+            <div key={st.key} className="flex flex-col gap-1.5">
+              <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-blue-500" title={st.title}>{st.label}</div>
+              <div className="flex gap-3">
+                {AGENT_LANES.filter((l) => l.stage === st.key).map((l) => <LaneColumn key={l.key} lane={l} cards={byLane(l.key)} {...shared} />)}
+              </div>
+            </div>
+          ))}
         </div>
         <div className="flex gap-3 rounded-2xl bg-emerald-50/40 p-3">
           <div className="-mr-1 w-5 shrink-0 [writing-mode:vertical-rl] rotate-180 text-center text-[11px] font-semibold uppercase tracking-widest text-emerald-500">Disposition</div>

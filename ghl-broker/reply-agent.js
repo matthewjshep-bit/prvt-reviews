@@ -5443,18 +5443,24 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null },
     }).catch(() => {});
   }
-  // A range actually went (2026-10-07): the offer remembers it, so the next
-  // reply knows the bottom was never an offer and a number inside it waits
-  // for a person. Only when the text that went still says the range.
-  if (d.outbound?.kind === "realm_check" && d.outbound.range?.low && d.outbound.offerId
-    && rangeLows(body).some((r) => Math.abs(r.low - d.outbound.range.low) < 1000)) {
+  // Our number actually went by text: the offer is Sent from here
+  // (shared/offer-stage.js), and its agent's card follows. `floatSentAt` is
+  // the same fact floatSentIndex reads off the drafts, kept on the offer so
+  // every lean read has it.
+  //
+  // A range that went (2026-10-07) is remembered too, so the next reply knows
+  // the bottom was never an offer and a number inside it waits for a person.
+  // Only when the text that went still says the range.
+  if (d.outbound?.kind === "realm_check" && d.outbound.offerId) {
+    const withRange = d.outbound.range?.low && rangeLows(body).some((r) => Math.abs(r.low - d.outbound.range.low) < 1000);
     try {
       const o = await store.getOffer(d.outbound.offerId);
       if (o) {
-        o.proactive = { ...(o.proactive || {}), range: { low: d.outbound.range.low, high: d.outbound.range.high, step: d.outbound.range.step || 10000, at: ts } };
+        o.floatSentAt = ts;
+        if (withRange) o.proactive = { ...(o.proactive || {}), range: { low: d.outbound.range.low, high: d.outbound.range.high, step: d.outbound.range.step || 10000, at: ts } };
         await store.updateOffer(o.id, o);
       }
-    } catch (e) { console.error(`reply-agent: could not note the range on ${d.outbound.offerId}:`, e?.message); }
+    } catch (e) { console.error(`reply-agent: could not note the float on ${d.outbound.offerId}:`, e?.message); }
   }
   // The buyer pulse actually went: "two in a row with no answer" counts
   // these, never the day's claim (shared/buyer-pulse.js, 2026-10-05).
