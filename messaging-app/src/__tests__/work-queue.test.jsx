@@ -125,13 +125,13 @@ test("while their offers load, the pane doesn't say there are none", () => {
   expect(html).not.toContain("No offer yet");
 });
 
-test("the Desk's rows are worked Call, then Decide, then the machine, in the broker's order inside each", async () => {
+// Matt, 2026-10-13: Today is one list, "Needs you" — no Call, no Machine.
+test("Today is one list, Needs you, worked in the broker's order", async () => {
   const { DESK_GROUPS, rowFor, reasonsOf, groupOf } = await import("../work-queue.js");
-  const rows = [
-    { id: "m", section: "machine" }, { id: "d1", section: "decide" }, { id: "c1", section: "call" }, { id: "d2", section: "decide" }, { id: "c2", section: "call" }, { id: "x" },
-  ];
-  expect(orderRows(rows, DESK_GROUPS).map((r) => r.id)).toEqual(["c1", "c2", "x", "d1", "d2", "m"]);   // no section: the first group
-  expect(groupOf({ id: "x" }, DESK_GROUPS)).toBe("call");
+  expect(DESK_GROUPS.map((g) => [g.key, g.label])).toEqual([["decide", "Needs you"]]);
+  const rows = [{ id: "d1", section: "decide" }, { id: "x" }, { id: "d2", section: "decide" }];
+  expect(orderRows(rows, DESK_GROUPS).map((r) => r.id)).toEqual(["d1", "x", "d2"]);
+  expect(groupOf({ id: "x" }, DESK_GROUPS)).toBe("decide");
   expect(groupOf({ group: "stuck" })).toBe("stuck");
   expect(groupOf({})).toBe("yours");
   const person = { id: "p", reasonIds: ["p", "q"], also: [{ id: "q" }], quiet: [{ id: "z" }] };

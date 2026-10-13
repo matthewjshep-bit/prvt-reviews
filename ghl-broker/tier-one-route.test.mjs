@@ -331,3 +331,21 @@ test("a run left running by a deploy is retried after half an hour", async () =>
   assert.equal(r.started, 1);
   assert.equal((await store.getJobCursor(LOC, "tierOneUnderwrite")).doc.tries, 2);
 });
+
+/* ---------- the agent's GHL stage beside their name (2026-10-13) ---------- */
+
+test("one agent's GHL stage is read for the name line: the open card, its four-stage label, or none", async () => {
+  const h = await harness({ cards: [
+    { id: "opA", contactId: "a1", name: "A", pipelineStageId: "s-out" },
+    { id: "opB", contactId: "b1", name: "B", pipelineStageId: "s-t2", status: "lost" },
+  ] });
+  try {
+    const a = await h.req("GET", "/api/dashboard/ghl/card?contact_id=a1");
+    assert.deepEqual([a.json.stage, a.json.key, a.json.status, a.json.opportunityId], ["Offer Out", "offerOut", "open", "opA"]);
+    const b = await h.req("GET", "/api/dashboard/ghl/card?contact_id=b1");
+    assert.deepEqual([b.json.stage, b.json.status], ["Tier 2", "lost"]);
+    assert.equal((await h.req("GET", "/api/dashboard/ghl/card?contact_id=nobody")).json.stage, null);
+    assert.equal((await h.req("GET", "/api/dashboard/ghl/card")).status, 400);
+    assert.deepEqual(h.ghl.calls.filter(([m]) => m !== "GET"), [], "reading moves nothing");
+  } finally { h.close(); }
+});

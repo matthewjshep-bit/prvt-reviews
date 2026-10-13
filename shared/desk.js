@@ -116,6 +116,52 @@ export function sectionFor(a, { draftsById = new Map(), heldByOffer = new Map() 
   }
 }
 
+/* ---------- Today: only what needs you (Matt, 2026-10-13) ---------- */
+
+// "Get rid of the call section … Today should ONLY be for urgent, crucial
+// tasks only I should do." One list, "Needs you". A reason is on it when a
+// person is waiting on us (a reply the bot couldn't place or may not send, a
+// text nobody answered), we owe someone a number or an answer, or it's a
+// price, paper or deal step only Matt decides. Not on it: the call list
+// (except a counter above our number — a price decision), the machine's own
+// work, held underwrites and priced-not-sent offers (the Offers page's Draft
+// tab holds those), a text the machine started itself (a check-in, a first
+// text, a buyer pulse, a float — the Conversation outbox has them), and deal
+// housekeeping that isn't due. A deal blast Settings holds for him stays:
+// selling a house under contract is his.
+export const TODAY_SECTIONS = [
+  { key: "decide", label: "Needs you", hint: "Urgent, and only you can do it." },
+];
+const NOT_URGENT_OUTBOUND = new Set(["agent_pulse", "outreach_open", "buyer_pulse", "realm_check", "take_check"]);
+const URGENT_KINDS = new Set([
+  "call_counter", "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting",
+  "promise_owed", "audit_owed", "closing_soon", "closing_task_due",
+]);
+
+/**
+ * urgentReasons(reasons, { drafts, heldByOffer }) → the reasons that belong on Today, each placed in "decide"
+ *
+ * Runs before foldDesk, so a person whose strongest reason was a call still
+ * shows for the decision folded under it.
+ */
+export function urgentReasons(reasons = [], { drafts = [], heldByOffer = new Map() } = {}) {
+  const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
+  const held = heldByOffer instanceof Map ? heldByOffer : new Map(Object.entries(heldByOffer || {}));
+  const out = [];
+  for (const a of reasons || []) {
+    if (!a || !URGENT_KINDS.has(a.kind)) continue;
+    if (a.kind !== "call_counter" && sectionFor(a, { draftsById, heldByOffer: held }) === "machine") continue;
+    if (a.kind === "closing_soon" && a.severity !== "now") continue;
+    if (a.kind === "draft_waiting") {
+      const d = draftsById.get(a.draftId);
+      // A text the machine started (a check-in, a first text, a float): nobody is waiting on it.
+      if (NOT_URGENT_OUTBOUND.has(d?.outbound?.kind) && !isCounterDraft(d)) continue;
+    }
+    out.push({ ...a, section: "decide" });
+  }
+  return out;
+}
+
 /** foldKey(reason) → the row it belongs to: a person, a deal, an offer, or itself. */
 export function foldKey(a) {
   if (DEAL_KINDS.has(a?.kind) && a.offerId) return `deal:${a.offerId}`;

@@ -11,7 +11,7 @@ import {
 import { getBuyerPulse, runBuyerPulse, sampleBuyerPulse, getAgentPulse, sampleAgentPulse, sampleFirstTexts, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, migratePipeline, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
-import { DESK_DEFAULTS, normalizeDesk } from "@shared/call-list.js";
+import { normalizeDesk } from "@shared/call-list.js";
 import { UNDERWRITE_CHECKS_DEFAULTS, normalizeUnderwriteChecks } from "@shared/underwrite-checks.js";
 import { normalizeTierOne } from "@shared/tier-one.js";
 import { normalizeGhlStages } from "@shared/ghl-stages.js";
@@ -584,7 +584,6 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const setMirrorStage = (side, key, stageId) => setMirrorSide(side, { stages: { ...(((form.ghlMirror || {})[side] || {}).stages || {}), [key]: stageId } });
   const setDispoAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), [k]: v } })); };
   const setLine = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, lineTargets: { ...(f.lineTargets || {}), [k]: v } })); };
-  const setDesk = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, desk: { ...(f.desk || {}), [k]: v } })); };
   // The buyer-view checks: raw while typing, normalized (and clamped) on save.
   const uwcRaw = form.underwriteChecks || {};
   const uwcVal = (sec, k) => (sec ? (uwcRaw[sec]?.[k] ?? UNDERWRITE_CHECKS_DEFAULTS[sec][k]) : (uwcRaw[k] ?? UNDERWRITE_CHECKS_DEFAULTS[k]));
@@ -596,7 +595,6 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
     });
   };
   const lineTargets = { ...LINE_TARGET_DEFAULTS, ...(form.lineTargets || {}) };
-  const desk = { ...DESK_DEFAULTS, ...(form.desk || {}) };
   // Raw while typing (the number box can be empty), normalized on save.
   const tierOne = { ...normalizeTierOne(form.tierOne), autoKickMax: form.tierOne?.autoKickMax ?? normalizeTierOne().autoKickMax,
     underwriteMax: form.tierOne?.underwriteMax ?? normalizeTierOne().underwriteMax };
@@ -786,23 +784,6 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <Num label="Fee per deal" suffix="$" money value={lineTargets.feePerDeal} onChange={setLine("feePerDeal")} />
           <Num label="Touch every agent who's replied" suffix="days" value={lineTargets.agentTouchDays} onChange={setLine("agentTouchDays")} />
           <Num label="Touch every buyer" suffix="days" value={lineTargets.buyerTouchDays} onChange={setLine("buyerTouchDays")} />
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <h2 className="mb-1 text-sm font-bold">The Desk's call list</h2>
-        <p className="mb-3 text-xs text-slate-500">
-          Who Today → Desk puts under Call. Hot offers, counters, missed calls and first replies always qualify; these set how many
-          show, when a partner agent is due a check-in, and when a call that keeps not connecting goes back to texting. Nothing here sends anything.
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <Num label="Calls shown before “more”" value={desk.callCap} onChange={setDesk("callCap")} />
-          <Num label="Partner check-in after" suffix="days quiet" value={desk.relationshipDays} onChange={setDesk("relationshipDays")} />
-          <Num label="Partner check-ins at most" suffix="a day" value={desk.relationshipPerDay} onChange={setDesk("relationshipPerDay")} />
-          <Num label="A new agent's first reply stays a call" suffix="days" value={desk.firstReplyDays} onChange={setDesk("firstReplyDays")} />
-          <Num label="Calls with no answer before texting takes over" value={desk.triesBeforeMachine} onChange={setDesk("triesBeforeMachine")} />
-          <Num label="Their number this close to ours is a call" suffix="% (0 = off)" value={desk.gapPct} onChange={setDesk("gapPct")} />
-          <Num label="A house lost that close stays worth a call" suffix="days" value={desk.revisitDays} onChange={setDesk("revisitDays")} />
         </div>
       </section>
 

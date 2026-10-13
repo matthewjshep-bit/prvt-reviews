@@ -388,6 +388,9 @@ export const getTierOne = (fresh = false) =>
 // followed the offers. Read-only; cached five minutes on the broker.
 export const getGhlPipeline = (fresh = false) =>
   fetch(`${API_BASE}/api/dashboard/ghl/pipeline?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
+// One agent's GHL Acquisitions card: { stage: "Tier 2" | "Tier 1" | "Offer Out" | "Contract" | other name | null }.
+export const getGhlCard = (contactId) =>
+  fetch(`${API_BASE}/api/dashboard/ghl/card?${locq()}&contact_id=${encodeURIComponent(contactId)}`).then(j);
 // The one-time move off GHL's old stages: a report, or { apply: true } to move
 // up to 300 cards a press.
 export const migratePipeline = (apply = false) => post("/api/dashboard/ghl/pipeline/migrate", { apply });
