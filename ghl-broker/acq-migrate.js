@@ -20,7 +20,10 @@ import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
 
 export const MIGRATE_CURSOR = "pipelineMigrate";
 export const MIGRATE_MAX = 300;
-const NURTURE_RX = /nurture/i;
+// The agent nurture GHL starts on a Tier 2/3 stage move ("Tier 2+3 nurture").
+// Not every workflow called a nurture: "Not Now Nurture" is a seller drip
+// with nothing to do with the Acquisitions board (Matt, 2026-10-13).
+const NURTURE_RX = /^(?=.*nurture)(?=.*tier)/i;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**

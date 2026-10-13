@@ -53,6 +53,19 @@ export function isTierOneAction(a = {}) {
   return false;
 }
 
+// The bot's Tier 2/3 moves: the tier-2 or tier-3 tag, and the TIER 2 / TIER 3
+// workflows, which only move the GHL card. Once GHL follows the offers
+// (shared/ghl-stages.js, Matt's four stages, 2026-10-13), the offers say
+// where an agent is and Tier 3 is gone, so these stand down. Leaving the
+// lower tiers (the tier-1 rule's remove_tags / remove_from_workflow) still
+// runs; TIER 1 stays — it starts the underwrite.
+export function isLowerTierAction(a = {}) {
+  const tags = (a.tags || []).map((t) => String(t).toLowerCase());
+  if (a.type === "add_tags") return tags.some((t) => t === "tier-2" || t === "tier-3");
+  if (a.type === "add_to_workflow") return /^\s*tier\s*[23]\s*$/i.test(String(a.workflowName || ""));
+  return false;
+}
+
 /* ---------- the Tier 1 list: GHL's stage, screened ---------- */
 
 // Switches. All ship off: the list and its buttons need none of them.

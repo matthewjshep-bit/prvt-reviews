@@ -6585,3 +6585,27 @@ test("an agent's numbers on a condo we passed on don't reopen it", async () => {
   await settle();
   assert.equal(uw.length, 0);
 });
+
+// Matt, 2026-10-13: four stages; Tier 3 is folded into Tier 2, and Tier 2 is
+// the agent nurture the app's check-in runs. A "no" used to add tier-3 and
+// enroll TIER 3, which dragged the GHL card back into the stage being removed.
+test("once GHL follows the offers, an agent's no adds no tier-3 tag and no TIER 3 workflow", async () => {
+  const lower = (actions) => (actions || []).filter((a) => (a.type === "add_tags" && (a.tags || []).some((t) => /^tier-[23]$/i.test(t)))
+    || (a.type === "add_to_workflow" && /^\s*tier\s*[23]\s*$/i.test(a.workflowName || "")));
+  const run = async (saved) => {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = fakeStore();
+    const { job } = await startReply({
+      client, locationId: "LOC", saved, store, contactId: "c1", sendsEnabled: true, message: "Not interested, thanks",
+      deps: { draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", needsHuman: false, propertyAddress: "", reply: "Understood, thanks for letting me know." }) },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    return lower((await store.getReplyDraft(job.draftId)).actions);
+  };
+  const before = await run(STARTER_SAVED);
+  assert.ok(before.length > 0 && before.every((a) => a.status !== "skipped"), `off: the old tier-3 move still runs ${JSON.stringify(before.map((a) => [a.type, a.status]))}`);
+  const after = await run({ ...STARTER_SAVED, ghlStages: { mode: "on" } });
+  assert.ok(after.length > 0 && after.every((a) => a.status === "skipped" && /pipeline follows the offers/.test(a.detail || "")), JSON.stringify(after.map((a) => [a.type, a.status])));
+});
