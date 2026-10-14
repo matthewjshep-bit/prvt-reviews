@@ -298,3 +298,27 @@ test("sample check-ins can be asked for by kind: only general ones when that's w
     deps: { previewProactive: async (args) => { seen.push(args.contactId); return { reply: "x" }; } } });
   assert.deepEqual(g.previews.map((p) => p.reason), ["general"]);
 });
+
+// 2026-10-14: the Line read an open offer's whole thread and said "the
+// machine stands down: they passed"; the check-in read four days of drafts,
+// missed the no, saw a nudge coming and left the agent to "an open offer".
+test("an agent who said no to an open offer ten days ago gets the check-in, though the no is older than four days", async () => {
+  _resetJobs();
+  const loc = "loc-ap-old-no";
+  const now = Date.now();
+  const at = (days) => new Date(now - days * DAY).toISOString();
+  const saved = { ...savedWith(), conversationAi: normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: {
+    offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 7 },
+  } } } } }) };
+  await store.upsertContactProfile(loc, "ag-no", { party: "agent", name: "Pat Agent" });
+  const made = await store.createOffer({ locationId: loc, contactId: "ag-no", address: "41 Alder Ln, Shelton, WA 98584", cashAmount: 210000,
+    status: "sent", statusAt: at(20), sends: [{ ts: at(20) }] });
+  await store.updateOffer(made.id, { ...made, createdAt: at(20) });
+  const no = await store.createReplyDraft({ locationId: loc, contactId: "ag-no", status: "sent", inbound: "Seller won't go that low, thanks",
+    intent: "rejection", reply: "What would they take?", sentAt: at(10) });
+  await store.updateReplyDraft(no.id, { ...no, createdAt: at(10), updatedAt: at(10) });
+  const plan = await planAgentPulse({ locationId: loc, saved, store, now });
+  const v = plan.verdicts.find((x) => x.contactId === "ag-no");
+  assert.notEqual(v?.reason, "an open offer", JSON.stringify(v));
+  assert.deepEqual(plan.picks.map((p) => [p.contactId, p.reason]), [["ag-no", "general"]]);
+});

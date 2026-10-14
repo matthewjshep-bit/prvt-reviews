@@ -4094,8 +4094,8 @@ runs it) owns an agent when nothing else does:
 - **One voice.** An agent another clock owns is left to it. That covers:
   - a live deal, an open offer, or a held underwrite under 14 days old;
   - any follow-up the Offers column shows as coming;
-  - anything waiting in the outbox, a promise, a check-in they asked for, or
-    an address chase;
+  - anything waiting in the outbox (a held draft for a week at most), a
+    promise, a check-in they asked for, or an address chase;
   - the outreach first-text workflow (until its follow-up is due) or its
     follow-up (`ghlWorkflowDays`, 21);
   - any GHL workflow the app enrolled them in (now recorded as
@@ -4249,6 +4249,42 @@ agents:
 - the tier and when the card moved.
 
 If the board can't be read, the run plans without the cards.
+
+**Offers stuck open let the agent go (2026-10-14).** The Line listed open
+offers the machine had stood down on 8–13 days back ("they passed"), and
+others where the agent wrote and nothing answered it. The check-in left every
+one of them to "an open offer", for good. Three fixes:
+- **The plan reads the offer's thread.** It used to read four days of drafts,
+  so a no from last week was missed, a nudge looked to be coming, and the agent
+  stayed owned. An agent with an open offer now gets their newest 20 drafts
+  from the last 130 days, the way the Offers column reads them.
+- **Nothing coming plus a quiet week releases the agent.** `openOfferIdle`
+  now covers any open offer with nothing coming (Next follow-up "None
+  scheduled" for any reason: the push to paper ran out, a reply nobody
+  answered, follow-ups switched off), and a house you pressed Stop on. These
+  release once there has been no text either way for `STOOD_DOWN_QUIET_DAYS`
+  (7). That counts their texts, ours, calls, sends and nudges on the offer,
+  and the offer's own date. The agent stays with the offer when any of these
+  hold:
+  - a text in the last week;
+  - an offer made this week;
+  - a person on the thread (`person_has_it`);
+  - a pause with a date;
+  - anything still coming on the offer.
+
+  A no or pending/sold still releases at once. The send-time door
+  (`ghl-broker/agent-focus.js`) asks the same function.
+- **A held draft owns the agent for a week, not forever.** A held reply or a
+  person's draft created `STALE_HELD_DAYS` (7) ago, or a queued text whose send
+  time has passed, no longer owns the agent (`staleHeld` in
+  `shared/follow-up.js`). It stays on the Desk. The agent check-in no longer
+  waits behind it (`blockingDraft` with kind `agent_pulse`) and does not
+  replace it (`supersededBy`). Every other machine text still waits on it.
+
+A released agent gets the general check-in. An open offer is never the
+check-in's house, and the past-house gate holds a draft that names it. "You
+have the thread" was already bounded: 3 days after your last hand reply
+(`PERSON_HAS_IT_DAYS`).
 
 ### The daily sweep (outreach autopilot)
 
