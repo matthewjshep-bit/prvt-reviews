@@ -592,6 +592,25 @@ test("an ask for us to come up, and a seller's cold feet, are read as what they 
   for (const t of ["Seller is good with it", "writing it up tonight", "Sorry, seller says 400 is too low, they pass", "They'll keep it as a rental", "He might just rent it"]) assert.equal(soundsLikeSecondThoughts(t), false, t);
 });
 
+// The first no stays open only while we ask for their number. 1638 119th St
+// S (2026-10-13): the reply said goodbye, and the offer sat "sent" for good.
+test("a reply that asks for the seller's number is told from one that says goodbye", async () => {
+  const { asksForTheirNumber } = await import("./conversation-ai.js");
+  for (const t of [
+    "Understood. Any chance they'd counter?",
+    "Got it. What would the seller actually take?",
+    "No worries. Is there a number that would work for them?",
+    "Fair enough, would they put a number in front of us?",
+  ]) assert.equal(asksForTheirNumber(t), true, t);
+  for (const t of [
+    "Got it, sounds like that one's locked up already. If it falls through keep us in mind. Anything else sitting on your desk, on or off market?",
+    "Understood, thanks for the look.",
+    "Sorry this one didn't work out. Keep us in mind for the next one?",
+    "Counter offers are welcome anytime. Anything else that needs work?",
+    "",
+  ]) assert.equal(asksForTheirNumber(t), false, t);
+});
+
 test("texts the machine starts stop at 5pm Pacific unless the page says otherwise", () => {
   assert.equal(normalizeConversationAi({}).autoSend.machineUntil, "17:00");
   assert.equal(normalizeConversationAi({ autoSend: { machineUntil: "16:30" } }).autoSend.machineUntil, "16:30");

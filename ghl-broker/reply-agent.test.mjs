@@ -2593,11 +2593,62 @@ test("an agent saying the house sold marks it no longer available — not their 
 
   // The seller saying no is still a no — the first one asks for their number.
   _resetJobs();
-  const { job: j2 } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "too low, the seller isn't interested", deps });
+  const asks = { ...deps, draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", reply: "Understood. Any chance they'd counter?", propertyAddress: "12 Elm St" }) };
+  const { job: j2 } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "too low, the seller isn't interested", deps: asks });
   await settle();
   const d2 = await store.getReplyDraft(j2.draftId);
   assert.ok(d2.actions.some((a) => a.type === "note_first_decline"), `${d2.actions.map((a) => a.type)}`);
   assert.ok(!d2.actions.some((a) => a.type === "mark_offer_unavailable"));
+});
+
+// 1638 119th St S (2026-10-13): the agent said no, the reply said goodbye
+// ("keep us in mind"), and the offer was only stamped as a first no. Nothing
+// would ever ask for their number, so no second no came, the offer stayed
+// "sent", and the 7am card sweep moved him to Offer Out.
+test("a no the bot answers with goodbye, not an ask for their number, closes the offer", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...NEGOTIATION_OFFER };
+  const store = negotiationStore(offer);
+  const noted = [];
+  const statuses = [];
+  const deps = {
+    draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high",
+      reply: "Got it, appreciate you looking at it. Keep us in mind for the next one. Anything else sitting on your desk?", propertyAddress: "12 Elm St" }),
+    noteFirstDecline: async ({ offerId }) => { noted.push(offerId); return { ok: true, address: offer.address }; },
+    setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status }; },
+  };
+  const { job } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "too low, the seller isn't interested", deps });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  const types = d.actions.map((a) => a.type);
+  assert.ok(types.includes("mark_offer_passed"), `their no closes it: ${types}`);
+  assert.ok(!types.includes("note_first_decline"), `no first-no stamp when nothing asks for their number: ${types}`);
+  assert.deepEqual(noted, []);
+});
+
+test("an agent whose seller already has an offer in short-sale approval marks the house no longer available", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...NEGOTIATION_OFFER };
+  const store = negotiationStore(offer);
+  const noted = [];
+  const statuses = [];
+  const deps = {
+    draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high",
+      reply: "Got it, sounds like that one's locked up already. If it falls through keep us in mind.", propertyAddress: "12 Elm St" }),
+    noteFirstDecline: async ({ offerId }) => { noted.push(offerId); return { ok: true, address: offer.address }; },
+    setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status, stopped: 0 }; },
+  };
+  const { job } = await startReply({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "There's already an offer at 340 working through the short sale process", deps });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  const types = d.actions.map((a) => a.type);
+  assert.equal(d.actions.find((a) => a.type === "mark_offer_unavailable")?.status, "done", `${types}`);
+  assert.ok(!types.includes("mark_offer_passed"), `not their pass: ${types}`);
+  assert.ok(!types.includes("note_first_decline"), `${types}`);
+  assert.deepEqual(statuses, ["unavailable"]);
+  assert.deepEqual(noted, []);
 });
 
 // Matt, 2026-09-14: "if we counter and they say no, mark as 'they passed'."

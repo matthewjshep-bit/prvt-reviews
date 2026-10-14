@@ -117,10 +117,18 @@ export const OVER_PLAIN = /\b(it'?s|it is|this (one|property|house|listing)|that
 // other offers", is still a house for sale. The reply agent reads the same
 // words on a live offer (houseGone).
 export const GONE_TEXT = /\b(pending|sold(?!\s+as[- ]is)|under contract|off the market|no longer (available|for sale|on the market)|accepted (an|another) offer|withdrawn)\b/i;
+// An offer already in short-sale (bank) approval is a house that's taken,
+// the same as pending. 1638 119th St S (2026-10-13): an agent saying the
+// seller already had an offer working through short-sale approval was read
+// as a first no and the offer stayed sent. A short sale still taking offers
+// ("any offer will need short sale approval") is not gone: the offer has to
+// be one they already have.
+export const TAKEN_TEXT = /\b(?:have|has|got|there'?s|there is|is)\s+(?:already\s+|now\s+)?(?:an|one|a)\s+(?:accepted\s+)?offer\b[^.!?\n]{0,60}?\b(?:short[- ]?sale|bank|lender)\b[^.!?\n]{0,15}?\b(?:approval|process)\b|\bapproval\s+(?:on|for)\s+(?:the|their|our)\s+(?:current|existing|accepted)\s+offer\b|\b(?:have|has|got)\s+(?:already\s+)?an\s+accepted\s+offer\b/i;
 // Strict on its own (OVER_PLAIN names the house); loose on a rejection.
 export const houseGone = (text = "", intent = "") => {
   const t = String(text || "");
-  return GONE_TEXT.test(t) && (intent === "rejection" || OVER_PLAIN.test(t));
+  return (GONE_TEXT.test(t) && (intent === "rejection" || OVER_PLAIN.test(t)))
+    || (TAKEN_TEXT.test(t) && intent === "rejection");
 };
 /**
  * saysTurnkey(text) → boolean
