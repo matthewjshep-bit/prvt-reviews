@@ -119,6 +119,9 @@ export const EVENT_TYPES = [
   "unsubscribed",
   // Matt's contact card went to them in its own text (shared/contact-card.js).
   "contact_card_sent",
+  // Their phone answered with an auto-reply naming another number to text
+  // (shared/brush-offs.js autoReplyNumber): our texts aren't reaching them.
+  "texts_elsewhere",
 ];
 
 export const EVENT_LABEL = {
@@ -158,6 +161,7 @@ export const EVENT_LABEL = {
   drive_stopped: "you stopped the bot", drive_resumed: "the bot is back on", cadence_set: "you changed how often we check in",
   unsubscribed: "they unsubscribed",
   contact_card_sent: "we sent our contact card",
+  texts_elsewhere: "an auto-reply says their texts go to another number",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -197,6 +201,7 @@ export const EVENT_ICON = {
   drive_stopped: "CirclePause", drive_resumed: "CirclePlay", cadence_set: "Gauge",
   unsubscribed: "UserX",
   contact_card_sent: "Contact",
+  texts_elsewhere: "CircleSlash",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];
@@ -226,6 +231,10 @@ export const FACT_KEYS = {
   brokerage:             { kind: "scalar", party: "agent",    cap: 5,  label: "Brokerage" },
   suggested_next_action: { kind: "scalar", party: "both",     cap: 20, label: "Next action" },
   last_convo_summary:    { kind: "scalar", party: "both",     cap: 20, ghlMax: 500, label: "Last conversation" },
+  // How often they asked us to check in, in days: "every 2–3 months" is 75,
+  // "you're on my email list" 90 (shared/brush-offs.js cadenceRequest). The
+  // agent check-in waits at least this long. App-only: no GHL field.
+  checkinEvery:          { kind: "scalar", party: "agent",    cap: 20, days: true, ghl: false, label: "Check in every (days)" },
 };
 export const factKeysFor = (party) =>
   Object.keys(FACT_KEYS).filter((k) => FACT_KEYS[k].party === "both" || FACT_KEYS[k].party === party);
@@ -431,6 +440,10 @@ function coerceValue(key, value) {
     const n = Number(v.replace(/[$,\s]/g, ""));
     return Number.isFinite(n) && n > 0 ? String(Math.round(n)) : "";
   }
+  if (def.days) {
+    const n = Math.round(Number(v.replace(/[^\d.]/g, "")));
+    return Number.isFinite(n) && n >= 7 && n <= 365 ? String(n) : "";
+  }
   if (def.values) {
     v = v.toLowerCase().replace(/[\s-]+/g, "_");
     return def.values.includes(v) ? v : "";
@@ -519,6 +532,7 @@ export function factsAsCustom(facts) {
 export function factsFromCustom(custom = {}, party = "agent", { source = "import", at = new Date().toISOString(), ref = null } = {}) {
   const out = [];
   for (const key of factKeysFor(party)) {
+    if (FACT_KEYS[key].ghl === false) continue;
     const raw = custom?.[key];
     if (raw == null || norm(raw) === "") continue;
     const def = FACT_KEYS[key];

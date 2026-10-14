@@ -44,7 +44,7 @@ export const KIND_STRENGTH = [
   "call_hot", "call_brought", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
   "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "audit_owed",
   "call_first_reply", "call_quiet", "ladder_exhausted",
-  "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "stage_lag",
+  "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "texts_elsewhere", "stage_lag",
   "deal_no_buyers", "deal_no_dataroom", "showing_no_window", "underwrite_dropped",
   "call_phone_only", "call_investor", "call_partner",
   "gone_quiet", "showing_soon", "blast_no_opens", "underwrite_failed", "draft_scheduled",
@@ -136,6 +136,8 @@ const NOT_URGENT_OUTBOUND = new Set(["agent_pulse", "outreach_open", "buyer_puls
 const URGENT_KINDS = new Set([
   "call_counter", "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting",
   "promise_owed", "audit_owed", "closing_soon", "closing_task_due",
+  // Nothing we text them arrives until their number changes (2026-10-14).
+  "texts_elsewhere",
 ]);
 
 /**

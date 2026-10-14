@@ -84,7 +84,7 @@ const PIPELINE_EVENT_TYPES = [
   "follow_up_sent", "text_summary", "call_summary", "call_attempt",
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
-  "underwrite_dropped",
+  "underwrite_dropped", "texts_elsewhere",
   "drive_stopped", "drive_resumed", "hand_reply", "investor_minded",
 ];
 

@@ -4286,6 +4286,64 @@ check-in's house, and the past-house gate holds a draft that names it. "You
 have the thread" was already bounded: 3 days after your last hand reply
 (`PERSON_HAS_IT_DAYS`).
 
+### How often they asked, and when to stop asking (2026-10-14)
+
+Reading 2,014 threads turned up agents who told us how often to check in,
+and we kept the 21-day clock anyway: "check in no more than every 2–3
+months" (texted a month later), "check back in a couple months" (texted
+three weeks later, then two weeks after that), "you are on my email list so
+you don't need to check in", "I have enough wholesalers". The address chase
+kept asking after "please don't keep asking me". Brokerage auto-replies
+(Redfin, the eXp desk) read as the agent writing back. The pure detectors
+are in `shared/brush-offs.js`.
+
+- **Cadence.** `cadenceRequest(text)` reads an agent's own text into days:
+  - "every 2–3 months" is 75; "check back in a couple months" is 60; "a few
+    months" is 90; "once a month" is 30;
+  - "you're on my email list" or "don't need to check in" is 90;
+  - "enough wholesalers", "too far apart to remain in contact", "don't work
+    with wholesalers" or "pocket listings are illegal" is 120.
+
+  The reply agent stores it as the fact `checkinEvery` (agent only, newest
+  wins, app-only, no GHL field; you can edit or remove it in the drawer).
+  The agent check-in waits at least that long for every kind of check-in,
+  a fresh listing of theirs included, and the plan's reason reads "they
+  asked for a check-in every N days". The same text never starts the weekly
+  "I'll send you deals" chain, and the check-in sweep ends a running chain
+  once the fact is there. It also never books the two-morning clock under a
+  held reply.
+- **"Check back in N months"** also books a dated check-in that far out
+  (`checkin_requested`, kind `date`). A request now stands until 45 days
+  after it was made, or two weeks past its due date, whichever is later
+  (`requestStands`). The sweep reads requests up to `CHECKIN_LONGEST_DAYS`
+  back.
+- **The address chase stops on a no.** `refusesAddress(text)` covers "please
+  don't keep asking", "you can see them when they're on the market", "I can't
+  give the address until it lists", "can't share that", a bare "no" or "not
+  yet", and "no, I'll tell you when". When their newest text since the chase
+  started is one of these, the chase is closed (`address_pending_closed`,
+  `reason: they_refused`, with `why`). A no that goes on with a lead is not a
+  refusal. The chase also never starts on a text that refuses, or on land
+  ("I still have a vacant lot", `notAHouse`): that closes with
+  `reason: not_a_house`.
+- **Auto-replies aren't replies.** `isAutoReply(text)` covers:
+  - Redfin's "different number for texting" and the eXp desk menu;
+  - "Thank you for your message, we will get back to you shortly";
+  - out of office, Driving Focus, and a brokerage's SMS opt-in or CRM text.
+
+  `startReply` drops these before anything runs. Nothing is drafted and no
+  text summary is written, so the unanswered count doesn't reset, nothing
+  waits on you, and no check-in is booked. `reply_not_needed` with
+  `intent: auto_reply` settles it for the nightly audit, which also drops
+  one on its own ("an auto-reply, not a person"). When the auto-reply names
+  another number (`autoReplyNumber`), a `texts_elsewhere` event puts "Their
+  texts go to another number" on Today, with the number. Update the contact
+  in GHL or call, then dismiss it. The row clears after 30 days or when they
+  text for real. The number goes only in the event and on the row, never in
+  a log line.
+
+No switch: these only make the machine text less.
+
 ### The daily sweep (outreach autopilot)
 
 Settings → Agent Outreach → "Run outreach every day on its own". Once a

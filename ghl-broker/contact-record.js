@@ -172,6 +172,9 @@ export async function projectToGhl({ client, store, locationId, contactId, party
         const events = await store.listContactEvents(locationId, contactId, { limit: 2000 });
         const lines = renderLedger(ledgerEvents(events.slice().reverse(), key === "agent_deal_history" ? "agent" : "investor")).split("\n").filter(Boolean);
         value = mergeHistory(cur[key] || "", lines);
+      } else if (FACT_KEYS[key]?.ghl === false) {
+        // An app-only fact (checkinEvery): no GHL field to write, or to make.
+        skipped.push(key); continue;
       } else if (FACT_KEYS[key]) {
         const rendered = renderFactField(profile?.facts, key);
         if (!rendered && !blankIfEmpty) { skipped.push(key); continue; }
