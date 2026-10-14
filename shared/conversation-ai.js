@@ -479,6 +479,18 @@ export function asksUsToComeUp(message = "") {
   return COME_UP_RX.test(String(message || ""));
 }
 
+// The reply asks for the seller's number: "any chance they'd counter?",
+// "what would the seller take?". Only a question counts — "counter offers
+// are welcome" asks nothing. A first no stays open only while this is asked
+// (reply-agent.js); 1638 119th St S (2026-10-13) said goodbye instead and the
+// offer sat "sent" with nothing left to close it.
+const THEIR_NUMBER_RX = /\bcounter\b|\b(?:would|will|could)\s+(?:the\s+)?(?:sellers?|they|she|he)\s+(?:actually\s+|realistically\s+)?(?:take|accept|need|do|want)\b|\b(?:a|any|their|the)\s+(?:number|price)\b[^?]*\b(?:work|in front|take|accept|need)\b|\bbottom line\b|\bwhere\s+(?:would|do|does)\s+(?:the\s+)?(?:sellers?|they|she|he)\s+(?:need|want|land)\b/i;
+/** asksForTheirNumber(reply) → true when a question in it asks what the seller would take. */
+export function asksForTheirNumber(reply = "") {
+  const questions = String(reply || "").match(/[^.!?\n]*\?/g) || [];
+  return questions.some((q) => THEIR_NUMBER_RX.test(q));
+}
+
 // The seller wavering on a number they'd liked: "seller is having second
 // thoughts and may just want to hold tight. Too low a margin." Not a no, not
 // a counter — and not the moment to ask what's holding up the paperwork.

@@ -45,7 +45,7 @@ import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, 
 import { paperWent, paperWorthy, floatSentAt, isRoughNumber } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, soundsLikeSecondThoughts, soundsCrossedUp } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, soundsLikeSecondThoughts, soundsCrossedUp } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
@@ -4128,8 +4128,10 @@ async function runReply(job, ctx) {
       full.declinedOnce?.at || (full.requotes || []).length || full.counterBand?.acceptedAt || (full.revisions || []).length
     ));
     // A counter too far over to negotiate already told us their number — there
-    // is nothing left to ask for, so it closes on the first message.
-    if (full && !weMoved && draft.reclassifiedFrom !== "counter") {
+    // is nothing left to ask for, so it closes on the first message. And the
+    // hold is only for a reply that asks: one that says goodbye (1638 119th St
+    // S, 2026-10-13) never draws a second no, and the offer sat "sent" for good.
+    if (full && !weMoved && draft.reclassifiedFrom !== "counter" && asksForTheirNumber(draft.reply)) {
       plan.auto = plan.auto.filter((x) => !closes(x));
       plan.suggested = plan.suggested.filter((x) => !closes(x));
       plan.auto.push({ id: `a-no1-${job.id}`, type: "note_first_decline", mode: "auto", status: "pending", party, offerId: full.id,

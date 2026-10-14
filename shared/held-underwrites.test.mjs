@@ -221,6 +221,26 @@ test("the reply agent's read of a house that's gone: loose on a no, strict other
   assert.equal(houseGone("Seller is not interested", "rejection"), false, "a no is theirs, not gone");
 });
 
+// 1638 119th St S (2026-10-13): the seller already had an offer working
+// through short-sale approval, and that was read as a first no, the offer stayed sent, and the 7am
+// card sweep moved the agent to Offer Out. A house with an offer already in
+// short-sale approval is taken, the same as pending.
+test("an offer already in short-sale approval means the house is gone; a short sale still for sale does not", async () => {
+  const { houseGone } = await import("./held-underwrites.js");
+  for (const t of [
+    "There's already an offer at 340 working through the short sale process",
+    "Still waiting on approval for the current offer",
+    "There's an offer waiting on short sale approval",
+    "They already have an accepted offer",
+  ]) assert.equal(houseGone(t, "rejection"), true, t);
+  for (const t of [
+    "Short sale",
+    "Any offer will need short sale approval",
+    "Seller has a couple of offers, still taking more",
+    "Short sale, bank approval can take a few months",
+  ]) assert.equal(houseGone(t, "rejection"), false, t);
+});
+
 test("an ask is asked once: an answer without a number is a call, and silence or an ask that never went passes a week on, telling them", () => {
   // 3228 S 164th St (2026-10-05): asked, she described the work but gave no
   // number, and the sweep read "ask" every night against a claim that never
