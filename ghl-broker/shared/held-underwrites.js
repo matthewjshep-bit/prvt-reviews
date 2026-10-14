@@ -110,7 +110,7 @@ const TEST_ADDRESS = /\btest\b|\bprobe\b/i;
 // still very much for sale — the first dry run (2026-09-16) would have
 // retired both.
 export const OVER_TEXT = /\b(pending|sold(?!\s+as[- ]is)|under contract|off the market|no longer (available|for sale|on the market)|already (has|have|got|accepted) (an|another|multiple)? ?offers?|accepted (an|another) offer|not interested|won'?t sell|isn'?t selling|not (going to|gonna) sell|withdrawn|cancell?ed)\b/i;
-export const OVER_PLAIN = /\b(it'?s|it is|this (one|property|house|listing)|that (one|property|house|listing)|the (property|house|listing)|she'?s|he'?s|they'?re|seller is)\s+(is |was |went |has gone |are |went )?(already |now |just )?(pending|under contract|sold(?!\s+as[- ]is)|off the market|no longer (available|for sale)|not interested|withdrawn)\b/i;
+export const OVER_PLAIN = /\b(it'?s|it is|this (one|property|house|listing)|that (one|property|house|listing)|the (property|house|listing)|she'?s|he'?s|they'?re|seller is)\s+(is |was |went |has gone |are |went )?(already |now |just |currently |still )?(pending|under contract|sold(?!\s+as[- ]is)|off the market|no longer (available|for sale)|not interested|withdrawn)\b/i;
 // Of those, the ones that say the house itself is gone. 2617 Cottage Rd E
 // (2026-09-15): "already pending" was filed as their pass, and a passed house
 // gets a check-in every ten days. Gone is nobody's pass — the house is no

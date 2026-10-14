@@ -2273,7 +2273,7 @@ agent is, in four stages, and the stage of their offers drives it.
 | GHL stage | Means | Set when, across the agent's current offers |
 |---|---|---|
 | Tier 2 | replied, nothing live — the app's check-in is the nurture | every offer passed (they passed, we passed, gone, no reply, deal fell through) |
-| Tier 1 | a property identified | a draft: priced and not out, or a held underwrite — while live (something on it, or a word from them, in the last `staleTier1Days`, 10) |
+| Tier 1 | a property identified | a draft: priced and not out, or a held underwrite — while live (something on the offer in the last `staleTier1Days`, 10) |
 | Offer Out | our number is out | Sent (written offer, or a number texted), Countered or Hot |
 | Contract | under contract | Accepted / a live deal. A closed deal marks the card **won** |
 
@@ -2286,13 +2286,16 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   (`offerStageAt`: status, send, float, heat, deal stage) is later than the
   card's `lastStageChangeAt`. A card you drag in GHL after that stays put and
   is reported as "moved by hand". A move the app made — this planner, the
-  migration, the Tier 1 list (`ghl_stage_moved`), or a GHL workflow the bot
-  enrolled them in (`workflow_enrolled`), within 10 minutes of the card's
-  move (`APP_MOVE_SLACK_MS`) — is never read as yours (2026-10-14: the
-  migration's own move into Tier 1 pinned Eric B. and Korey P. there).
+  migration, the Tier 1 list (`ghl_stage_moved`, within 10 minutes of the
+  card's move, `APP_MOVE_SLACK_MS`) — is never read as yours (2026-10-14:
+  the migration's own move into Tier 1 pinned Eric B. and Korey P. there).
+  A move by a GHL TIER workflow the bot enrolled them in stands like yours:
+  it was the conversation's read at the time ("she's listing next week" →
+  TIER 2), and an unsent number mustn't drag the card back up.
 - **A number we never sent goes stale (2026-10-14).** A `new` row or a held
-  draft is Tier 1 only while live: an offer event on it, or a word from the
-  agent, in the last `staleTier1Days` (10). After that the agent is Tier 2
+  draft is Tier 1 only while live: an offer event on it (a re-run, a float,
+  a send, a status) in the last `staleTier1Days` (10) — their texts about
+  something else don't count. After that the agent is Tier 2
   ("priced but never sent…"). Eric B. had sat in Tier 1 55 days on an
   August row; Cheryl P. on a duplicate of a house we'd passed.
 - **Never:** two open cards (a person's call), a won card (a new house makes a

@@ -175,9 +175,10 @@ const nurtureWorkflows = (list) => (Array.isArray(list) ? list : [])
   .filter((w) => w?.id && NURTURE_RX.test(String(w.name || "")) && !/dispo/i.test(String(w.name || "")) && String(w.status || "").toLowerCase() !== "draft")
   .map((w) => ({ id: String(w.id), name: String(w.name || "") }));
 
-// What the app does to a card: its own moves, and the GHL workflows the bot
-// puts someone in (TIER 1 moved the card by itself, seconds later).
-export const APP_MOVE_EVENT_TYPES = ["ghl_stage_moved", "workflow_enrolled"];
+// What the app does to a card: its own moves (this planner, the migration,
+// the Tier 1 list). Not the bot's TIER workflows: those followed the
+// conversation at the time, and stand as a person's move would.
+export const APP_MOVE_EVENT_TYPES = ["ghl_stage_moved"];
 export function appMovesByContact(events = []) {
   const out = new Map();
   for (const e of events || []) {
