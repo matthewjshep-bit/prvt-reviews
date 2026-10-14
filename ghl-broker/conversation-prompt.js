@@ -772,6 +772,14 @@ function openingFor(outbound) {
     // not single-family, rural (two acres or more), outside the towns we buy
     // in, or no number we could stand behind after we asked them for theirs.
     case "kind_pass":
+      // A house we told them we'd come back on, closed out with nothing sent
+      // (held-underwrites.js, 2026-10-14). They're owed the answer.
+      if (o.why === "promised") {
+        return `${START} We told this agent we'd come back to them with ${o.owed === "paper" ? "our written offer" : o.owed === "answer" ? "an answer" : "a number"} on ${o.address}, and we haven't. ` +
+          `We're passing on it: ${o.passReason || "we couldn't get to a number we'd stand behind"}. In two short lines: own that we owe them an answer, ` +
+          `say plainly we're out on this one and give that one reason, and ask them to send the next fixer they come across, on or off market. ` +
+          `Do NOT name any number, do NOT apologise at length, and do NOT promise to look again. ${CONTINUE} Set intent to kind_pass.`;
+      }
       return `${START} We looked at ${o.address} for this agent and we're passing on it: ` +
         (o.why === "area" ? "it's outside the area we buy in."
           : o.why === "numbers" ? "we couldn't get to a number we'd stand behind — not enough to go on to price it (we asked them for their read and didn't get a number)."

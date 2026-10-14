@@ -553,7 +553,7 @@ export function releasableHeld(d, { loose = true, mode = "night", releaseMinAgeM
 const ANSWERED_BY_A_REPLY = new Set(["unanswered_inbound", "held_aging"]);
 // Rows that ask for a text to someone. Nothing reaches a person who
 // unsubscribed, so none of these is a call to make.
-const TEXTING_KINDS = new Set(["audit_owed", "draft_waiting", "draft_scheduled", "promise_owed", "offer_ready"]);
+const TEXTING_KINDS = new Set(["audit_owed", "draft_waiting", "draft_scheduled", "promise_owed", "number_owed", "offer_ready"]);
 
 /**
  * stillOwed(rows, { drafts, unsubscribed }) → rows

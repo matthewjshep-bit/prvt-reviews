@@ -521,6 +521,24 @@ test("sending the first cold text writes outreach_sent — the ladder's trigger 
   assert.equal((await store2.listContactEvents("LOC", "c1", { types: ["outreach_sent"] })).length, 0);
 });
 
+// 2026-10-14: a number we promised stays owed until one goes out — so the
+// text that carries it has to say so.
+test("a reply that sends our number keeps the number we promised; one that promises again keeps nothing", async () => {
+  const priced = { ...openDraft(), party: "agent", inbound: "Any word on it?", reply: "Ran it. We'd be at 410k as-is, 14-day close.", propertyAddress: "12 Elm St, Renton, WA" };
+  const again = { ...openDraft(), id: "d2", contactId: "c2", party: "agent", inbound: "Seller wants 480k", reply: "Got it, 480k. Let me run that by underwriting and get back to you with a number tomorrow." };
+  const store = fakeStore([priced, again]);
+  const client = { call: async () => ({ messageId: "m1" }) };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+  const kept = await store.listContactEvents("LOC", "c1", { types: ["promise_kept"] });
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].data.by, "our_number");
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true });
+  assert.equal((await store.listContactEvents("LOC", "c2", { types: ["promise_kept"] })).length, 0);
+  const made = await store.listContactEvents("LOC", "c2", { types: ["promise_made"] });
+  assert.equal(made.length, 1);
+  assert.equal(made[0].data.what, "number");
+});
+
 test("an email draft goes out as an email with the address as its subject", async () => {
   const store = fakeStore([{ ...openDraft(), channel: "email", reply: "First line.\n\nSecond <para>." }]);
   const calls = [];

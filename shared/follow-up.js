@@ -94,10 +94,13 @@ export const PROMISE_DUE_HOURS = 4;
 // our offer in", "I'll have our offer to you" (2026-10-08: the bot said it
 // and nothing tracked it). We say it, about the paper; "feel free to send it
 // over" asks THEM, and "send it over to my partner" isn't to them.
-const WE_WILL = String.raw`(?:i'?ll|i\s+will|i\s+can|we'?ll|we\s+will|we\s+can|i'?m\s+going\s+to|we'?re\s+going\s+to|let\s+me|happy\s+to|can)\s+(?:\w+\s+){0,2}?`;
+// "Can you send it over?" asks them, and "so I can get it in front of
+// underwriting" is about our numbers, not the paper (2026-10-14 replay: both
+// read as a promise of the written offer).
+const WE_WILL = String.raw`(?:i'?ll|i\s+will|i\s+can|we'?ll|we\s+will|we\s+can|i'?m\s+going\s+to|we'?re\s+going\s+to|let\s+me|happy\s+to|can)\s+(?:(?!you\b)\w+\s+){0,2}?`;
 const THE_PAPER = String.raw`(?:our|the)\s+(?:written\s+|formal\s+|official\s+)?(?:offer|loi|letter(?:\s+of\s+intent)?)`;
 const PAPER_PROMISE = [
-  new RegExp(String.raw`\b${WE_WILL}(?:send|get|have|shoot)\s+(?:it|that|${THE_PAPER})\s+(?:over|in|to\s+you|your\s+way)\b(?!\s+to\s+(?:my|our|the|him|her|them)\b)`, "i"),
+  new RegExp(String.raw`\b${WE_WILL}(?:send|get|have|shoot)\s+(?:it|that|${THE_PAPER})\s+(?:over|in(?!\s+front)|to\s+you|your\s+way)\b(?!\s+to\s+(?:my|our|the|him|her|them)\b)`, "i"),
   new RegExp(String.raw`\b${WE_WILL}(?:send|get|shoot)\s+over\s+${THE_PAPER}`, "i"),
 ];
 
@@ -115,13 +118,37 @@ export function detectPromise(text = "") {
   const number = [
     /\b(?:number|numbers|figure|offer)\b[^.?!]{0,40}\bback\s+to\s+you\b/i,
     /\b(?:get|come|circle)\s+back\s+(?:to\s+you\s+)?with\s+(?:a|an|the|our)\s+(?:\w+\s+)?(?:number|figure|offer|price)\b/i,
-    /\b(?:run|re-?run|running)\s+(?:it|this|that|the\s+(?:numbers|address)|[\w-]+)\s+(?:by|past|through)\s+(?:my\s+|our\s+|the\s+)?underwriting\b/i,
+    /\b(?:run|re-?run|running)\s+(?:it|this|that|the\s+(?:numbers|address)|(?:[\w-]+\s+){0,3}[\w-]+)\s+(?:by|past|through)\s+(?:my\s+|our\s+|the\s+)?underwriting\b/i,
     /\bnumbers?\s+re-?run\b/i,
+    // "I'll come back to you today with a number", "will have a number for
+    // you this afternoon" (2026-10-14: read as a bare "answer").
+    /\b(?:get|come|circle)\s+back\s+to\s+you\b[^.?!]{0,30}?\bwith\s+(?:a|an|the|our)\s+(?:\w+\s+)?(?:number|figure|offer|price)\b/i,
+    /\b(?:have|get)\s+(?:a|our|the)\s+(?:\w+\s+)?(?:number|numbers|figure)\s+(?:back\s+)?(?:to|for)\s+you\b/i,
   ];
   if (number.some((re) => re.test(t))) return "number";
+  // "…and get back to you with where we'd land", "let me run it and get back
+  // to you": our numbers — unless it's a partner's call, which is an answer
+  // the owner gives (isDeflection, the answer box).
+  const ours = [
+    /\b(?:get|come|circle)\s+back\s+(?:to\s+you\s+)?[^.?!]{0,30}?\bwith\s+where\s+we(?:'d|\s+would|'ll|\s+will)?\s+(?:land|be|stand|come\s+out)\b/i,
+    /\b(?:run|re-?run|running)\s+(?:it|this|that|them|those|the\s+numbers|those\s+numbers|numbers)\s+(?:today\s+|now\s+)?(?:and|&)\s+(?:i'?ll\s+|we'?ll\s+)?(?:get|come|circle)\s+back\b/i,
+  ];
+  if (!/\bpartner\b/i.test(t) && ours.some((re) => re.test(t))) return "number";
   if (PAPER_PROMISE.some((re) => re.test(t))) return "paper";
   if (/\b(?:get|come|circle)\s+back\s+to\s+you\b|\bback\s+to\s+you\s+(?:today|this\s+afternoon|tonight|tomorrow|later)\b/i.test(t)) return "answer";
   return null;
+}
+
+/**
+ * isConditionalPromise(text) → boolean
+ *
+ * "I'll run it by underwriting and circle back if it pencils out", "…and
+ * see if we can get back to you with an offer": a look we promised, not a
+ * number. Still a promise for the sweep's same-day clock, but nothing we
+ * owe a week later (shared/promise-owed.js).
+ */
+export function isConditionalPromise(text = "") {
+  return /\b(?:circle\s+back|get\s+back(?:\s+to\s+you)?|reach\s+(?:back\s+)?out|follow\s+up|give\s+you\s+a\s+(?:quick\s+)?call|come\s+back(?:\s+to\s+you)?)\s+if\b|\bif\s+it\s+(?:pencils|makes\s+sense|looks\s+like\s+a\s+fit|(?:'s|is)\s+a\s+fit|works\s+for\s+us)\b|\bsee\s+if\s+(?:we\s+can|it\s+(?:pencils|works|makes\s+sense))\b|\bif\s+(?:they|the\s+sellers?|she|he|you)\s+(?:\w+\s+){0,3}?(?:come|get)\s+back\b/i.test(String(text || ""));
 }
 
 /**

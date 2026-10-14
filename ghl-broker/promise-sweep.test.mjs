@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runPromiseSweep, maybeRunPromiseSweep, settlePromise, localHour } from "./promise-sweep.js";
+import { runPromiseSweep, maybeRunPromiseSweep, settlePromise, localHour, notePromiseInHandText } from "./promise-sweep.js";
 import { detectPromise, PROMISE_DUE_HOURS } from "./shared/follow-up.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { buildPipeline } from "./shared/pipeline.js";
@@ -76,6 +76,53 @@ test("saying we'll have it over today is a promise of the written offer", () => 
   assert.equal(detectPromise("Let me send over the formal offer now."), "paper");
   assert.equal(detectPromise("Feel free to send it over when you get a chance."), null, "asks them");
   assert.equal(detectPromise("Let me run it by underwriting and I'll send it over."), "number", "a number first");
+});
+
+// 2026-10-14: promises in real threads that read as a mere "answer", so
+// nothing held them as a number we owed.
+test("the ways we promise a number in real threads all read as a number", () => {
+  assert.equal(detectPromise("Thanks, I'll come back to you today with a number."), "number");
+  assert.equal(detectPromise("Will have a number for you this afternoon."), "number");
+  assert.equal(detectPromise("Got the photos. Let me run it and get back to you."), "number");
+  assert.equal(detectPromise("Numbers are with my team right now. I'll come back to you today with where we'd land on it."), "number");
+  assert.equal(detectPromise("Appreciate that. Before we set up a time, let me run the numbers on 12 Elm St with my team so nobody's time gets wasted. I'll come back to you today with where we'd be."), "number");
+  assert.equal(detectPromise("Thanks Pat, I'll run both of these by my underwriting team today and get back to you."), "number");
+  assert.equal(detectPromise("Let me re-run it with the higher rehab number before I throw one out. I'll come back to you today with where we land."), "number");
+  assert.equal(detectPromise("Great, I'll send the LOI over this afternoon."), "paper");
+  assert.equal(detectPromise("Let's get it in front of them then. I'll send our letter of intent over today."), "paper");
+  // A partner question stays an answer (the answer box keeps it).
+  assert.equal(detectPromise("Still interested. 608 is where our numbers landed. Let me run it by my partner and get back to you today on whether there's any room."), "answer");
+  assert.equal(detectPromise("Let me confirm a closing date and come back to you this afternoon."), "answer");
+});
+
+test("a number you promised by hand is owed on Today, and a price you text keeps it — no machine text in your name", async () => {
+  const store = fakeStore();
+  const r = await notePromiseInHandText({ store, locationId: "L", contactId: "c1", text: "Thanks Pat, I'll get back to you today with a number on it.", at: at(50) });
+  assert.equal(r.made, true);
+  const made = store.events.find((e) => e.type === "promise_made");
+  assert.equal(made.data.by, "you");
+  assert.equal(made.data.text, undefined, "the words stay in GHL");
+  // The sweep never texts "still working on it" for you.
+  const st = starter();
+  const swept = await runPromiseSweep({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: st, now: NOW });
+  assert.equal(st.calls.length, 0);
+  assert.equal(swept.owed, 0);
+  // Today does carry it.
+  const board = buildPipeline({ events: store.events, now: NOW, contactNames: { c1: "Pat Agent" } });
+  const row = board.actions.find((a) => a.kind === "number_owed");
+  assert.ok(row);
+  assert.match(row.detail, /you said it yourself/);
+  // A price you text later keeps it.
+  const k = await notePromiseInHandText({ store, locationId: "L", contactId: "c1", text: "Ran it, we'd be at 410k as-is.", at: at(1) });
+  assert.equal(k.kept, true);
+  assert.equal(buildPipeline({ events: store.events, now: NOW }).actions.some((a) => a.kind === "number_owed"), false);
+  // An email carries the thread under it: not read.
+  assert.deepEqual(await notePromiseInHandText({ store, locationId: "L", contactId: "c2", text: "I'll get back to you today with a number.", at: at(1), channel: "email" }), { made: false, kept: false });
+});
+
+test("asking them for the address, or to send something over, is not a promise of paper", () => {
+  assert.notEqual(detectPromise("Good to hear. What's the address so I can get it in front of underwriting today?"), "paper");
+  assert.equal(detectPromise("Right, I still need the actual address to run comps and confirm it. Can you send it over?"), null);
 });
 
 const paperPromise = (hoursAgo) => promise(hoursAgo, { data: { what: "paper", draftId: `d${hoursAgo}`,
