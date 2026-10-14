@@ -383,6 +383,41 @@ test("an offer in escrow with a backup marks the house gone", () => {
   assert.equal(houseGone("The seller wants out of escrow on his other house first", ""), false);
 });
 
+// 2026-10-14: houses we'd promised a number on were closed out by this sweep
+// with nothing sent, and the agent was never told.
+test("a house we retire after promising a number is passed with a note for the agent", () => {
+  const old = held({ createdAt: ago(STALE_DAYS + 2), updatedAt: ago(STALE_DAYS + 2), autoUnderwrite: { held: [THIN], finishedAt: ago(STALE_DAYS + 2) } });
+  const promised = { type: "promise_made", contactId: "c1", address: "2500 Alder St, Milton, WA 98354", at: ago(STALE_DAYS + 1), data: { what: "number", text: "I'll run it by underwriting today and get back to you with a number." } };
+  let t = triage({ offer: old, events: [promised] });
+  assert.equal(t.action, "retire"); assert.equal(t.status, "we_passed");
+  assert.equal(t.passNote, "promised", "they hear we're out");
+  assert.equal(t.promised.what, "number");
+  // Nothing promised and nothing of theirs waiting: retired quietly, as before.
+  t = triage({ offer: old });
+  assert.equal(t.passNote, undefined);
+  // A promise already kept, or about another house, isn't this one's.
+  t = triage({ offer: old, events: [promised, { type: "promise_kept", contactId: "c1", at: ago(STALE_DAYS), data: { by: "dismissed" } }] });
+  assert.equal(t.passNote, undefined);
+  t = triage({ offer: old, events: [{ ...promised, address: "83 Olympic Dr NW, Shoreline, WA 98177" }] });
+  assert.equal(t.passNote, undefined);
+  // Their last word on the house, never answered, is owed an answer too.
+  t = triage({ offer: old, drafts: [inbound("Did you get a chance to run it? Seller is motivated.", { status: "dismissed", createdAt: ago(STALE_DAYS + 1) })] });
+  assert.equal(t.action, "retire"); assert.equal(t.passNote, "promised");
+  assert.equal(t.promised.what, "answer");
+  // Answered, it isn't.
+  t = triage({ offer: old, drafts: [inbound("Did you get a chance to run it?", { status: "sent", createdAt: ago(STALE_DAYS + 1) })] });
+  assert.equal(t.passNote, undefined);
+});
+
+test("a retire that already tells them, or one we may not text, gets no second note", () => {
+  const promised = { type: "promise_made", contactId: "c1", address: "2500 Alder St, Milton, WA 98354", at: ago(1), data: { what: "number" } };
+  assert.equal(triage({ events: [promised, { type: "unsubscribed", contactId: "c1", at: ago(0.5) }] }).passNote, undefined);
+  assert.equal(triage({ events: [promised], contact: { tags: ["stop bot"], dnd: false } }).passNote, undefined);
+  const told = inbound("Is it a fit?", { reply: "Probably not enough meat on it for us, appreciate you sending it.", sentText: "Probably not enough meat on it for us, appreciate you sending it.", createdAt: ago(0.5) });
+  const t = triage({ events: [promised], drafts: [told] });
+  assert.equal(t.action, "retire"); assert.equal(t.passNote, undefined, "we already told them");
+});
+
 test("'it's currently under contract' marks the house gone", () => {
   assert.equal(houseGone("It's currently under contract as a short sale.", "status_check"), true);
   assert.equal(houseGone("It's still pending", ""), true);

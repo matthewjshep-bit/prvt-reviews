@@ -27,7 +27,9 @@ import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { addressKey } from "./shared/us-address.js";
 import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
 import { triageHeldUnderwrite } from "./shared/held-underwrites.js";
-import { openPromises, resolvePromise, normalizePromiseDismissal, promiseWhat, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
+import { openPromises, resolvePromise, normalizePromiseDismissal, promiseWhat, endsWithQuestionToThem, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
+import { keepsOurWord, OWED_WINDOW_DAYS } from "./shared/promise-owed.js";
+import { detectPromise, isConditionalPromise, PROMISE_DUE_HOURS } from "./shared/follow-up.js";
 import { driveOpenPromises, promiseClaimed } from "./promise-driver.js";
 import { waitingReason } from "./outbox-guard.js";
 import { callEventConnected } from "./shared/talked-to.js";
@@ -53,7 +55,10 @@ const HOUR_MS = 3600000;
  */
 export async function settlePromise({ store, locationId, contactId, address = "", by = "operator", reason = null, offerId = null, now = Date.now() }) {
   if (!contactId) return { settled: false };
-  const events = await store.listContactEventsSince(locationId, new Date(now - PROMISE_WINDOW_HOURS * HOUR_MS).toISOString(), {
+  // As far back as Today's owed row reaches (promise-owed.js), so its
+  // Dismiss, and an outcome on the house, close a promise a week old too.
+  const back = Math.max(PROMISE_WINDOW_HOURS, OWED_WINDOW_DAYS * 24);
+  const events = await store.listContactEventsSince(locationId, new Date(now - back * HOUR_MS).toISOString(), {
     types: ["promise_made", "promise_owed", "promise_kept"], limit: 5000,
   }).catch(() => []);
   const list = events.filter((e) => e?.contactId === contactId).sort((a, b) => String(a.at).localeCompare(String(b.at)));
@@ -73,6 +78,38 @@ export async function settlePromise({ store, locationId, contactId, address = ""
   });
   return { settled: Boolean(r?.inserted) };
 }
+/**
+ * notePromiseInHandText({ store, locationId, contactId, text, at, channel }) → { made, kept }
+ *
+ * A text you typed yourself (the composer, or GHL) is our word too
+ * (2026-10-14: several of the numbers nobody delivered were promised by
+ * hand). "I'll get back to you today with a number" opens a promise, a price
+ * or a pass keeps one — the same events the bot's sends write. Only what
+ * it was (number / the written offer) is kept, never the words. Texts only:
+ * an email carries the thread quoted under it.
+ */
+export async function notePromiseInHandText({ store, locationId, contactId, text, at = new Date().toISOString(), channel = "sms" }) {
+  const body = String(text || "");
+  if (!contactId || channel !== "sms" || !body.trim()) return { made: false, kept: false };
+  const keeps = keepsOurWord(body);
+  let kept = false;
+  if (keeps) {
+    const r = await recordEvent({
+      store, locationId, contactId, party: "agent", type: "promise_kept", at: new Date(Date.parse(at) - 1).toISOString(), address: "",
+      source: "operator", dedupeKey: `promise_kept:${contactId}:you:${at}`, data: { by: `you_${keeps}` },
+    }).catch(() => ({ inserted: 0 }));
+    kept = Boolean(r?.inserted);
+  }
+  const what = detectPromise(body);
+  if (what !== "number" && what !== "paper") return { made: false, kept };
+  const r = await recordEvent({
+    store, locationId, contactId, party: "agent", type: "promise_made", at, address: "",
+    source: "operator", dedupeKey: `promise_made:${contactId}:you:${at}`,
+    data: { what, by: "you", dueAt: new Date(Date.parse(at) + PROMISE_DUE_HOURS * HOUR_MS).toISOString(), asksThem: endsWithQuestionToThem(body), ...(isConditionalPromise(body) ? { conditional: true } : {}) },
+  }).catch(() => ({ inserted: 0 }));
+  return { made: Boolean(r?.inserted), kept };
+}
+
 /**
  * heldTriageForPromises({ store, locationId, offers, events, config, now }) → { offerId: verdict }
  *
@@ -140,7 +177,9 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
   for (const [contactId, list] of byContact) {
     list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
     const lastKept = list.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
-    const open = list.filter((e) => e.type === "promise_made" && String(e.at) > lastKept);
+    // A promise you typed yourself is yours to keep: no "still working on
+    // it" text in your name. Today's owed row carries it (promise-owed.js).
+    const open = list.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && String(e.at) > lastKept);
     const owed = list.filter((e) => e.type === "promise_owed" && String(e.at) >= lastKept).at(-1) || null;
     if (!open.length && !owed) continue;
     out.considered++;

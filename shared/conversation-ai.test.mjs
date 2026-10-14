@@ -649,3 +649,11 @@ test("one setup question per float, never one they've answered", () => {
   assert.equal(setupQuestionFor({ offerId: "o1", dossier: { have: { arv: { value: 1 } } }, ask: ["their_read"] }), null);
   assert.equal(setupQuestionFor({ offerId: "o1", dossier: { have: { condition: { value: "rough" }, timeline: { value: "asap" } } }, ask: ["hidden_issues", "other_offers", "their_read"] }).key, "their_read");
 });
+
+// 2026-10-14: the pass on a house we promised a number on ships off.
+test("the pass on a house we promised a number on is off until switched on, and the switch survives a save", () => {
+  assert.equal(normalizeConversationAi({}).heldTriage.passOnRetire, false);
+  assert.equal(normalizeConversationAi({ heldTriage: { passOnRetire: true } }).heldTriage.passOnRetire, true);
+  assert.equal(normalizeConversationAi({ heldTriage: { passOnRetire: "yes" } }).heldTriage.passOnRetire, false);
+  assert.equal(normalizeConversationAi(normalizeConversationAi({ heldTriage: { passOnRetire: true } })).heldTriage.passOnRetire, true);
+});

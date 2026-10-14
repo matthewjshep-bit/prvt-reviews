@@ -88,6 +88,22 @@ test("a person whose only reasons are the machine's sits with the machine, folde
   assert.equal(DESK_SECTIONS.find((s) => s.key === "machine").folds, true);
 });
 
+// 2026-10-14: a number we promised and never sent is Matt's to keep, on Today.
+test("a number we still owe past the day is on Today as a decision, named for the agent", () => {
+  const owed = { id: "number_owed:c1:2026-10-07T18:00:00Z", kind: "number_owed", severity: "now", group: "yours", contactId: "c1", title: "Owed: a number to an agent on 12 Elm St", ops: [] };
+  const [named] = nameRows([owed], { c1: "Pat Agent" });
+  assert.equal(named.title, "Owed: a number to Pat on 12 Elm St");
+  const kept = urgentReasons([named]);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].section, "decide");
+  // Last night's "still owed" finding only repeats it.
+  const audit = { id: "audit:promise_open_overdue:c1", kind: "audit_owed", findingKind: "promise_open_overdue", severity: "soon", contactId: "c1", ops: [] };
+  const { rows } = foldDesk(urgentReasons([named, audit]));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "number_owed");
+  assert.deepEqual(rows[0].also, []);
+});
+
 test("every row kind has a section", () => {
   for (const k of ACTION_KINDS) {
     const s = sectionFor({ kind: k.key, group: "yours", severity: "soon" });

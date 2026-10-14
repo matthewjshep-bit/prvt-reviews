@@ -90,7 +90,8 @@ import {
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { endsWithQuestionToThem } from "./shared/promise-resolver.js";
-import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn, detectLeadTiming, leadIsTheNet } from "./shared/follow-up.js";
+import { keepsOurWord } from "./shared/promise-owed.js";
+import { detectPromise, isConditionalPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn, detectLeadTiming, leadIsTheNet } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts,
@@ -2856,7 +2857,10 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "" };
   }
   if (kind === "kind_pass") {
-    return { ...base, address: offer?.address || subject?.address || "", why: ["area", "numbers", "rural"].includes(subject?.why) ? subject.why : "kind", heldReason: String(subject?.heldReason || "").slice(0, 160) };
+    const why = ["area", "numbers", "rural", "promised"].includes(subject?.why) ? subject.why : "kind";
+    return { ...base, address: offer?.address || subject?.address || "", why, heldReason: String(subject?.heldReason || "").slice(0, 160),
+      // A house we owed them a number on (held-underwrites.js, 2026-10-14).
+      ...(why === "promised" ? { owed: ["number", "paper", "answer"].includes(subject?.owed) ? subject.owed : "number", passReason: String(subject?.reason || "").slice(0, 160) } : {}) };
   }
   if (kind === "take_ask") {
     const needs = Array.isArray(subject?.needs) && subject.needs.length ? subject.needs : ["value", "work"];
@@ -2993,7 +2997,9 @@ function outboundSummary({ kind, offer, outbound }) {
     case "counter_nudge": return `Their ${outbound.theirsK || "counter"} on ${where} sat ${outbound.days}d — asks if the seller has any room, names no number of ours.`;
     case "partner_answer": return "Your answer to a question the bot couldn't answer, in its voice.";
     case "hot_push": return `Pushes the agreed price on ${where} toward paper: asks them to write it up on NWMLS forms for us to sign${rung}.`;
-    case "kind_pass": return `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : outbound.why === "numbers" ? "we couldn't get to a number on it" : outbound.why === "rural" ? "it's rural, and we buy houses on under 2 acres" : "we only buy single-family right now"}.`;
+    case "kind_pass": return outbound.why === "promised"
+      ? `We owed them ${outbound.owed === "paper" ? "the written offer" : outbound.owed === "answer" ? "an answer" : "a number"} on ${where}: says we're out${outbound.passReason ? ` (${outbound.passReason})` : ""} and asks for the next one.`
+      : `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : outbound.why === "numbers" ? "we couldn't get to a number on it" : outbound.why === "rural" ? "it's rural, and we buy houses on under 2 acres" : "we only buy single-family right now"}.`;
     case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
     case "passed_checkin": return outbound.relisted
       ? `Saw ${where} is back on the market; asks if the seller would look at our offer now${rung}.`
@@ -3279,6 +3285,11 @@ async function runProactive(job, ctx) {
   }
   let auto = decideAutoSend({ gate, party, intent: kind, channel: "sms", config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   auto = releaseForAudit({ auto, gate, draft, deps });
+  // A caller whose own switch is off (held-underwrites.js: the pass on a
+  // house we owed them a number on, heldTriage.passOnRetire) wants the draft
+  // to wait for a person — and "needs a person" is what keeps the 7pm audit
+  // from releasing it later (releasableHeld).
+  if (deps.holdForAPerson) auto = { send: false, code: "switch_off", reason: `needs a person: ${String(deps.holdForAPerson).slice(0, 160)}` };
 
   job.phase = "saving";
   const open = [];
@@ -5620,6 +5631,19 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   }
   // A reply that promised to come back starts a clock (promise-sweep.js). The
   // numbers themselves, and the promise_due text, promise nothing new.
+  // A text that delivers what we promised — a price, or our pass — keeps it
+  // (shared/promise-owed.js keepsOurWord), so neither Today's owed rows nor
+  // the sweep chase a number that already went. A millisecond ahead of a
+  // promise the same text makes ("we'd be at 598k … I'll get the offer
+  // over"), which stays open.
+  const keeps = d.party === "agent" ? (["realm_check", "take_check", "kind_pass"].includes(d.outbound?.kind) ? "sent" : keepsOurWord(body)) : null;
+  if (keeps) {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "agent", type: "promise_kept", at: new Date(Date.parse(ts) - 1).toISOString(),
+      address: d.propertyAddress || d.outbound?.address || "", source: "conversation", ref: d.id,
+      dedupeKey: `promise_kept:${d.contactId}:sent:${d.id}`, data: { by: keeps === "sent" ? d.outbound.kind : `our_${keeps}`, draftId: d.id },
+    }).catch(() => {});
+  }
   if (d.party === "agent" && !["realm_check", "take_check", "promise_due"].includes(d.outbound?.kind || d.intent)) {
     const what = detectPromise(body);
     if (what) {
@@ -5627,7 +5651,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         store, locationId, contactId: d.contactId, party: "agent", type: "promise_made", at: ts,
         address: d.propertyAddress || d.outbound?.address || "", source: "conversation", ref: d.id,
         dedupeKey: `promise_made:${d.id}`,
-        data: { what, draftId: d.id, dueAt: new Date(Date.parse(ts) + PROMISE_DUE_HOURS * 3600000).toISOString(), text: body.slice(0, 200), asksThem: endsWithQuestionToThem(body) },
+        data: { what, draftId: d.id, dueAt: new Date(Date.parse(ts) + PROMISE_DUE_HOURS * 3600000).toISOString(), text: body.slice(0, 200), asksThem: endsWithQuestionToThem(body), ...(isConditionalPromise(body) ? { conditional: true } : {}) },
       }).catch(() => {});
     }
   }

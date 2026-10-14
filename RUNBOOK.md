@@ -2110,6 +2110,67 @@ held triage from the contact's timeline and drafts only. GHL is not asked, so
 the tag and stage checks are skipped on the row; the nightly sweep makes them
 before anything is actually done.
 
+### A promised number stays owed until it's delivered (2026-10-14)
+
+**Why.** Reading 2,014 threads turned up at least 15 where we told an agent
+"I'll get back to you today with a number" (or the LOI) and nothing
+followed. The promise row above drops off Today after 72 hours. Several of
+the houses were then closed out by the nightly held-underwrite sweep, stale
+or no answer, with nothing sent. The agent was never told. These were the
+agents who answer us.
+
+**The row.** `shared/promise-owed.js` `owedPromises`, pure. A `promise_made`
+of a **number** or **the written offer** that is 24h old (`OWED_AFTER_HOURS`)
+becomes a "Needs you" row, kind `number_owed`: "Owed: a number to Pat on
+12 Elm St". The detail says when we promised ("promised Oct 7, again Oct 9")
+and what we said. It doesn't expire at 72h; it reads back 60 days
+(`OWED_WINDOW_DAYS`). While the 72-hour `promise_owed` row is up for that
+person, that row speaks for them. The buttons are the resolver's (float,
+open and send, re-run) plus Dismiss-with-why.
+
+It clears when:
+- a text of ours on that house names a price (≥ $50k; "449kish" counts) or
+  passes (`keepsOurWord`);
+- a float or `kind_pass` goes out, or the written offer goes out;
+- they passed, the house is gone, it's a deal, or a person marked it we passed;
+- there's a `promise_kept` after it: the sweep, a status you set, or Dismiss.
+
+A house the held sweep closed out by itself does **not** clear it. The agent
+hasn't heard yet. Not owed at all: an "answer" promise (the 72h row's
+business), a number promise that ended on a question to them, and a
+conditional one ("…circle back if it pencils out", "see if we can",
+`isConditionalPromise`).
+
+**The send writes the keep.** `sendReplyDraft` records `promise_kept`
+(`by: our_number | our_pass | realm_check | take_check | kind_pass`) for any
+agent text that delivers. A text that promises again keeps nothing ("Got it,
+480k, let me run that…" is their number said back).
+
+**Your own texts count.** The composer and texts typed in GHL go through
+`notePromiseInHandText` (promise-sweep.js, via the offers router's
+`onHandText`). A promise opens a `promise_made` with `by: "you"`, and a price
+or pass keeps one. Only what kind of promise it was is stored, never the
+words. The sweep, the driver and the 72h row ignore `by: "you"`, so no "still
+working on it" text ever goes out in your name. Only the owed row carries it.
+
+**Detection widened.** `detectPromise` now reads "I'll come back to you today
+with a number", "will have a number for you this afternoon", "let me run it
+and get back to you", "…with where we'd land", and "run both of these by
+underwriting" as a number. When a partner is named, it stays an answer, for
+the answer box. "Can you send it over?" and "so I can get it in front of
+underwriting" are no longer read as promising the paper.
+
+**Retiring a house we owed tells them.** See the held-underwrite triage,
+"promised" below.
+
+**Replay (2026-10-14, 968 saved threads).** 115 threads have a firm promise
+of a number or the offer from us. In 55 of them, at least one promise saw no
+price, offer or pass from us within 48h. Of those, 44 were in the last 60
+days and 28 never got one at all. On deploy, expect up to about that many
+`number_owed` rows. Only promises recorded since `promise_made` existed
+(bot sends from 2026-09-14) show, and your own typed promises only from now
+on.
+
 ### Answers the bot didn't have (2026-09-17)
 
 **Why.** Three of Today's "we owe them an answer" rows were the bot saying "let
@@ -3179,6 +3240,20 @@ The verdicts, in order:
   held **14 days** with no word → `we_passed`; we asked for their read
   **7 days** ago and heard nothing → `we_passed`. The `uw-needs-review` tag
   comes off once nothing of theirs is held.
+  **Promised (2026-10-14).** Sometimes the sweep closes a house out by itself
+  (stale, no answer, turnkey; `QUIET_PASS`) while we still owe that agent a
+  number or the offer on it (`owedOnHouse`, shared/promise-owed.js), or while
+  their last text about it was never answered. Then the verdict carries
+  `passNote: "promised"`, and a `kind_pass` is drafted with `why: "promised"`.
+  It owns that we owe them, says we're out with one honest reason
+  (`passReasonInWords`, never the sweep's own "held 15 days"), and asks for
+  the next fixer. It names no number. **Switch:
+  `conversationAi.heldTriage.passOnRetire`, off by default.** When it's off,
+  the draft is held for you. It shows on Today as a draft beside the
+  `number_owed` row, and the audit never releases it. When it's on, it goes
+  the way the other pass notes go (released by the audit). Retires that
+  already tell them, or that we may not text (unsubscribed, bot-off, a GHL
+  stage, "we told them we're passing"), get no second note.
   **Not a flip, in their words (2026-10-05).** Ryan Bowen texted "move in
   ready… certainly not a fix n flip", then "You should come take a look!",
   and "number first" underwrote 13814 214th St E anyway. `isTurnkeyReply` now

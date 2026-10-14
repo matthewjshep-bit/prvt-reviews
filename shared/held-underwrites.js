@@ -40,6 +40,7 @@ import { aiHoldReasons, effectiveStatus, DEAD_STATUSES } from "./offer-status.js
 import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
 import { WA_CITY_COORDS } from "./wa-city-coords.js";
 import { ourReplyPasses, threadPassed } from "./flip-read.js";
+import { owedOnHouse } from "./promise-owed.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -69,6 +70,21 @@ export function heldInPlainWords(reason = "") {
   if (WORK_HOLD.test(s)) return /photo/i.test(s) ? "there aren't enough listing photos to see what it needs" : "the work looks heavy and you want to pin it down";
   if (VALUE_HOLD.test(s)) return "the comps came back thin";
   return "you're missing a piece you need to finish it";
+}
+
+/**
+ * passReasonInWords(verdict) → the short honest reason we give an agent when
+ * the sweep closes out a house we owed them a number on ("promised").
+ * Never the sweep's own reason ("held 15 days and nothing since"): that is
+ * ours, not theirs.
+ */
+export function passReasonInWords(t = {}) {
+  if (/^turnkey per the agent/i.test(String(t.reason || ""))) return "it's more finished than the fixers we buy";
+  const s = String(t.heldReason || "");
+  if (/square footage is unknown/i.test(s)) return "we couldn't pin down the square footage to price it";
+  if (WORK_HOLD.test(s)) return /photo/i.test(s) ? "there wasn't enough in the photos to size the work" : "the work looked heavier than we could price with confidence";
+  if (VALUE_HOLD.test(s)) return "there weren't enough good sales nearby to price it with confidence";
+  return "we couldn't get to a number we'd stand behind";
 }
 
 /**
@@ -240,7 +256,20 @@ const CLOSED_OPP = /^(lost|abandoned|abandon)$/i;
  *                  knownAddressesFor): a street the map missed is finished
  *                  from these before the agent is asked
  */
-export function triageHeldUnderwrite({
+export function triageHeldUnderwrite(args = {}) {
+  const t = triageCore(args);
+  // 2026-10-14: houses we'd told the agent we'd price were closed out here
+  // quietly, and the agent who was waiting on us never heard. A close the
+  // sweep makes by itself (stale, no answer, turnkey), on a house we owe a
+  // number on or whose last word from them we never answered, tells them:
+  // we're out, why, send the next one. Behind heldTriage.passOnRetire it
+  // sends itself; otherwise it waits for you (ghl-broker/held-underwrites.js).
+  if (t.action !== "retire" || t.status !== "we_passed" || t.passNote || !QUIET_PASS.test(t.reason)) return t;
+  const owed = owedOnHouse({ events: args.events, drafts: args.drafts, offers: args.siblings, address: args.offer?.address, now: args.now ?? Date.now() });
+  return owed ? { ...t, passNote: "promised", promised: owed } : t;
+}
+
+function triageCore({
   offer, siblings = [], events = [], drafts = [], contact = null, opportunities = [], botOffTags = ["stop bot", "bot-off"], now = Date.now(),
   knownCities = null, brought = false, knownAddresses = [],
 } = {}) {

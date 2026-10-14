@@ -851,6 +851,10 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // today, checked at `hour` Pacific — answered where the dial allows, owed
   // where it isn't, on Today either way. Matt, 2026-09-16.
   nightlyAudit: { enabled: true, hour: 19, loose: true, heldSweep: true },
+  // The held-underwrite sweep closing out a house we promised the agent a
+  // number on (2026-10-14): `passOnRetire` lets the "we're out, send the next
+  // one" text send itself. Off, it is drafted and waits for you.
+  heldTriage: { passOnRetire: false },
   // The nightly coach (shared/coach.js): reads the day's edits, dismissals and
   // audit findings an hour after the audit and PROPOSES examples, rules and
   // instructions. It never applies one; a person does, from Today. Off until
@@ -1179,6 +1183,10 @@ export function normalizeConversationAi(doc, seed = {}) {
       return { enabled: bool(a.enabled, D.nightlyAudit.enabled), hour: int(a.hour, D.nightlyAudit.hour, 17, 23), loose: bool(a.loose, D.nightlyAudit.loose),
         // The held-underwrite pass (shared/held-underwrites.js) rides on the audit.
         heldSweep: bool(a.heldSweep, D.nightlyAudit.heldSweep) };
+    })(),
+    heldTriage: (() => {
+      const h = d.heldTriage && typeof d.heldTriage === "object" ? d.heldTriage : {};
+      return { passOnRetire: bool(h.passOnRetire, D.heldTriage.passOnRetire) };
     })(),
     coach: (() => {
       const c = d.coach && typeof d.coach === "object" ? d.coach : {};

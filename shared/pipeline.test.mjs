@@ -801,3 +801,68 @@ test("a hand-made offer nobody sent is a decision for a week, then history", () 
   const old = build({ offers: [offer({ status: "new", sends: [], statusAt: D(45), createdAt: D(45) })] });
   assert.equal(old.actions.some((a) => a.kind === "offer_ready"), false);
 });
+
+/* ---------- a number we promised, still owed past the day (2026-10-14) ---------- */
+
+// Fifteen threads read on 2026-10-14: "I'll get back to you today with a
+// number", and nothing followed. The Today row fell off after 72 hours, and
+// the agents who were cooperating heard nothing.
+const made = (hoursAgo, over = {}, data = {}) => ({
+  type: "promise_made", contactId: "a1", at: H(hoursAgo), address: "12 Elm St, Renton, WA",
+  data: { what: "number", text: "Good to know. I'll run it by underwriting today and get back to you with where we'd land.", draftId: `d${hoursAgo}`, ...data }, ...over,
+});
+const owedRow = (r) => r.actions.find((a) => a.kind === "number_owed");
+
+test("a number we promised today still shows as owed two days later", () => {
+  const r = build({ events: [made(48)], contactNames: { a1: "Pat Agent" } });
+  const row = owedRow(r);
+  assert.ok(row, "an Owed row");
+  assert.equal(row.title, "Owed: a number to Pat on 12 Elm St");
+  assert.equal(row.group, "yours");
+  assert.equal(row.severity, "now");
+  assert.match(row.detail, /promised Sep 6/);
+  assert.ok(row.ops.some((o) => o.key === "dismiss_promise"), "it can be dismissed, with why");
+});
+
+test("a number we promised a week ago is still owed: the row doesn't expire after three days", () => {
+  const r = build({ events: [made(24 * 7), made(24 * 5, {}, { text: "Still on it, I'll have a number back to you today." })], contactNames: { a1: "Pat Agent" } });
+  const row = owedRow(r);
+  assert.ok(row);
+  assert.match(row.detail, /promised Sep 1, again Sep 3/);
+});
+
+test("a promise not a day old isn't owed yet, and one that asked them a question isn't owed at all", () => {
+  assert.equal(owedRow(build({ events: [made(6)] })), undefined);
+  assert.equal(owedRow(build({ events: [made(48, {}, { asksThem: true })] })), undefined);
+});
+
+test("the owed row clears once we send a number", () => {
+  const sent = draft({ id: "d9", status: "sent", inbound: "Any word?", reply: "Ran it. We'd be at 265k as-is, 14-day close.", createdAt: H(20), sentAt: H(20) });
+  assert.equal(owedRow(build({ events: [made(48)], sentDrafts: [sent] })), undefined);
+  // Their own number said back while we promise again keeps nothing.
+  const echo = draft({ id: "d8", status: "sent", inbound: "Seller wants 480k", reply: "Got it, 480k. Let me run that and get back to you with a number tomorrow.", createdAt: H(20), sentAt: H(20) });
+  assert.ok(owedRow(build({ events: [made(48)], sentDrafts: [echo] })));
+});
+
+test("the owed row clears when the offer goes out, we float it, we pass, or it's settled", () => {
+  const sentOffer = offer({ status: "sent", sends: [{ ts: H(10), channels: ["sms"] }] });
+  assert.equal(owedRow(build({ events: [made(48)], offers: [sentOffer] })), undefined, "the written offer went");
+  const floated = offer({ status: "new", sends: [], proactive: { realmCheckAt: H(10) } });
+  assert.equal(owedRow(build({ events: [made(48)], offers: [floated] })), undefined, "the number was floated");
+  const pass = draft({ id: "d7", status: "sent", reply: "We're passing on 12 Elm St, it's lighter than what we go after. Send me the next one.", outbound: { kind: "kind_pass", address: "12 Elm St, Renton, WA" }, createdAt: H(10), sentAt: H(10) });
+  assert.equal(owedRow(build({ events: [made(48)], sentDrafts: [pass] })), undefined, "we told them we're out");
+  assert.equal(owedRow(build({ events: [made(48), { type: "promise_kept", contactId: "a1", at: H(1), data: { by: "dismissed" } }] })), undefined, "dismissed");
+});
+
+test("a house the nightly sweep closed out quietly is still owed, until the agent hears it", () => {
+  const retired = offer({ status: "we_passed", statusAt: H(10), sends: [], cashAmount: null, retired: { at: H(10), by: "held-sweep", reason: "held 15 days and nothing since" } });
+  assert.ok(owedRow(build({ events: [made(24 * 16)], offers: [retired] })));
+  const yours = offer({ status: "we_passed", statusAt: H(10), sends: [], cashAmount: null });
+  assert.equal(owedRow(build({ events: [made(24 * 16)], offers: [yours] })), undefined, "a pass a person made");
+});
+
+test("an owed row inside the first three days stands aside for the promise row already there", () => {
+  const r = build({ events: [made(30), owed({ at: H(26) })] });
+  assert.ok(promiseRow(r));
+  assert.equal(owedRow(r), undefined);
+});

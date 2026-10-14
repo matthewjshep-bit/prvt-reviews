@@ -85,7 +85,9 @@ export function openPromises(events = [], { now = Date.now(), windowHours = PROM
   for (const [contactId, list] of byContact) {
     list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
     const lastKept = list.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
-    const made = list.filter((e) => e.type === "promise_made" && String(e.at) > lastKept);
+    // One you typed yourself is not the machine's to drive or text about
+    // (owedPromises in promise-owed.js keeps it on Today instead).
+    const made = list.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && String(e.at) > lastKept);
     const owed = list.filter((e) => e.type === "promise_owed" && String(e.at) >= lastKept).at(-1) || null;
     if (!made.length && !owed) continue;
     const newest = made.at(-1) || owed;

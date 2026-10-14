@@ -502,6 +502,19 @@ test("the pass on a rural house says we can't do rural and names the acreage", (
   assert.doesNotMatch(t, /single-family/);
 });
 
+// 2026-10-14: a house we owed the agent a number on, closed out by the sweep.
+test("the pass on a house we promised a number on owns that we owe them, gives the reason, and asks for the next one", async () => {
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  const o = outboundDescriptor({ kind: "kind_pass", offer: null, saved: {}, subject: { address: "12 Elm St, Renton, WA", why: "promised", owed: "number", reason: "there weren't enough good sales nearby to price it with confidence", heldReason: "held 15 days and nothing since" } });
+  assert.equal(o.why, "promised");
+  const t = outboundOpening(o);
+  assert.match(t, /we'd come back to them with a number on 12 Elm St/);
+  assert.match(t, /We're passing on it: there weren't enough good sales nearby/);
+  assert.match(t, /send the next fixer/);
+  assert.match(t, /Do NOT name any number/);
+  assert.doesNotMatch(t, /held 15 days/, "the sweep's own reason is ours, not theirs");
+});
+
 test("when an agent brings us a house, the bot gets the address with a promise not to bother the seller, and their read on value and work", () => {
   const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
   assert.match(sys, /A HOUSE THEY BRING US[^]*won't approach, drive by or bother the seller/);
