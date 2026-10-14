@@ -644,6 +644,17 @@ test("the replier backfill reads a GHL thread: their text is a reply, a stop or 
   assert.equal(JSON.stringify(classifyReplierThread({ messages: [ours, msg("inbound", "STOP", 49)] })).includes("STOP"), false, "an opt-out carries no words of theirs");
 });
 
+// The replier backfill and the reply agent read auto-replies the same way
+// (shared/brush-offs.js isAutoReply): a brokerage desk that answered for
+// them is not an agent who wrote back.
+test("the replier backfill knows a brokerage desk's auto-reply the reply agent already drops", () => {
+  const ours = msg("outbound", "Hi Pat, is 1 Elm St a project or pretty turnkey?", 50);
+  for (const t of [
+    "Thank you for your message, we will get back to you shortly. Thank you.",
+    "Thank you for messaging Big Brokerage. We're excited to connect with you and will be with you in just a moment.",
+  ]) assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", t, 49)] }).kind, "auto_reply", t);
+});
+
 // The run is weekdays only: a Saturday or Sunday slot would just pile onto
 // Monday's run.
 test("no first check-in lands on a weekend", () => {

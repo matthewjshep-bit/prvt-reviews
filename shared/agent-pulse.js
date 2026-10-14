@@ -45,7 +45,7 @@ import { offerHasTheirAnswer } from "./tiers.js";
 import { addressKey, sameStreet } from "./us-address.js";
 import { offMarketAskDue } from "./off-market.js";
 import { botHold, paceOf, paceScale } from "./bot-hold.js";
-import { cadenceDays, requestStands } from "./brush-offs.js";
+import { cadenceDays, requestStands, isAutoReply } from "./brush-offs.js";
 import { optOutInTranscript, CONVERSATION_AI_DEFAULTS } from "./conversation-ai.js";
 
 const DAY_MS = 86400000;
@@ -826,7 +826,7 @@ export function classifyReplierThread({ messages = [], contact = null, optOut = 
   const stopLine = (t) => (STOP_TAIL_RX.test(t) && t.split(/\s+/).length <= 6) || NO_NEED_RX.test(t);
   if (optOutInTranscript(transcript, optOut || CONVERSATION_AI_DEFAULTS.optOut) || texts.some((x) => stopLine(x.text))) return { kind: "opted_out", why: "said stop", ...base };
   const calls = inbound.length - texts.length;
-  if (!calls && texts.every((x) => AUTO_REPLY_RX.test(x.text))) return { kind: "auto_reply", why: "auto-reply only", ...base };
+  if (!calls && texts.every((x) => AUTO_REPLY_RX.test(x.text) || isAutoReply(x.text))) return { kind: "auto_reply", why: "auto-reply only", ...base };
   if (texts.slice(-3).some((x) => IRRITATED_RX.test(x.text))) return { kind: "annoyed", why: "sounds annoyed", ...base };
   return { kind: "engaged", why: "replied", ...base, lastText: (texts.at(-1)?.text || "").slice(0, 300) };
 }
