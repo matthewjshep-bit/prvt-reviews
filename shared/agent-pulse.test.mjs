@@ -476,3 +476,80 @@ test("a check-in house carries its city and ZIP, and the text still names it by 
   assert.equal(subj.listing.street, "123 Main St");
   assert.equal(subj.listing.city, "Kent");
 });
+
+// Offers stuck open (2026-10-14): the Line listed offers still "new" where the
+// machine stood down 8–13 days back, and others where the agent replied and
+// nothing answered it. "An open offer" held each agent from the check-in for
+// good. A stood-down offer with no text either way for a week lets them go.
+const stuck = (over = {}) => ({ id: "o-stuck", contactId: "a1", address: "41 Alder Ln, Shelton, WA 98584", cashAmount: 210000, status: "sent",
+  createdAt: ago(45), statusAt: ago(45), statusHistory: [], sends: [{ ts: ago(45) }], ...over });
+// They wrote back; nobody answered it, and the bot's held reply was set aside.
+const unanswered = (days) => ({ id: `in-${days}`, status: "superseded", inbound: "Let me run it by the seller", intent: "other", createdAt: ago(days), updatedAt: ago(days) });
+const OFF = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: false } } } });
+
+test("an agent whose offer the machine stood down on two weeks ago is on the regular check-in clock, not held by the offer", () => {
+  const drafts = [unanswered(14)];
+  const v = evaluateAgent(agent({ lastInboundAt: ago(14), offers: [stuck()], current: [stuck()], drafts }), ctx());
+  assert.notEqual(v.status, "owned", v.reason);
+  assert.equal(v.status, "not_due", "they wrote 14 days ago: the check-in comes at 21");
+  assert.match(openOfferIdle({ offer: stuck(), drafts, config: CONFIG, lastInboundAt: ago(14), now: NOW }) || "", /nothing has answered it/);
+  // Three weeks on, the check-in is due.
+  const later = evaluateAgent(agent({ lastInboundAt: ago(22), offers: [stuck()], current: [stuck()], drafts: [unanswered(22)] }), ctx());
+  assert.equal(later.status, "due", later.reason);
+});
+
+test("an agent whose offer the machine stood down on for any reason gets the regular check-in once nobody has texted for a week", () => {
+  // Follow-ups switched off: nothing will ever move the offer.
+  const off = evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()] }), ctx({ config: OFF }));
+  assert.equal(off.status, "due", off.reason);
+  // You stopped the bot on that house (not the whole thread).
+  const stopped = [{ type: "drive_stopped", offerId: "o-stuck", at: ago(20), data: { reason: "" } }];
+  const v = evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()], events: stopped }), ctx());
+  assert.equal(v.status, "due", v.reason);
+  // A pause has a date: the offer keeps them until it.
+  const paused = [{ type: "drive_stopped", offerId: "o-stuck", at: ago(20), data: { until: ago(-5) } }];
+  const p = evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()], events: paused }), ctx());
+  assert.equal(p.reason, "an open offer", "paused until next week");
+});
+
+test("an agent mid-negotiation this week is still owned by the offer", () => {
+  const talked = [{ type: "text_summary", at: ago(3), data: { inbound: "Seller might do 230" } }];
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(3), offers: [stuck()], current: [stuck()], events: talked }), ctx({ config: OFF })).reason, "an open offer");
+  // Our own text five days ago counts too.
+  const ours = [{ type: "follow_up_sent", at: ago(5) }];
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()], events: ours }), ctx({ config: OFF })).reason, "an open offer");
+  // A person picked it up two days ago: theirs, whatever the clock says.
+  const byHand = [{ type: "hand_reply", at: ago(2) }];
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()], events: byHand }), ctx({ config: OFF })).reason, "an open offer");
+  // An offer made this week is fresh business, even with nothing said on it.
+  const fresh = stuck({ createdAt: ago(4), statusAt: ago(4), sends: [{ ts: ago(4) }] });
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), offers: [fresh], current: [fresh] }), ctx({ config: OFF })).reason, "an open offer");
+  // A nudge still coming keeps them with the offer, however quiet.
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(60), offers: [stuck()], current: [stuck()] }), ctx()).reason, "an open offer");
+});
+
+test("a held draft from a month ago doesn't silence the agent", () => {
+  const old = { id: "d-old", status: "draft", inbound: "any update?", createdAt: ago(30), updatedAt: ago(30) };
+  const v = evaluateAgent(agent({ lastInboundAt: ago(30), drafts: [old] }), ctx());
+  assert.equal(v.status, "due", v.reason);
+  // On an open offer too: the held reply was the only thing keeping it "owed".
+  const onOffer = evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()], drafts: [old] }), ctx());
+  assert.equal(onOffer.status, "due", onOffer.reason);
+  // This week's held reply still owns them.
+  const fresh = { ...old, createdAt: ago(2), updatedAt: ago(2) };
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(2), drafts: [fresh] }), ctx()).reason, "their text is waiting on you");
+  // A text queued for next week is coming, however long ago it was written.
+  const queued = { id: "d-q", status: "scheduled", inbound: "", outbound: { kind: "checkin_due" }, createdAt: ago(20), sendAt: ago(-3) };
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), drafts: [queued] }), ctx()).reason, "a text is waiting in the outbox");
+});
+
+test("an agent let go from a stuck offer gets the general check-in, which never names that house", () => {
+  const a = agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()] });
+  const v = evaluateAgent(a, ctx({ config: OFF }));
+  assert.equal(v.status, "due", v.reason);
+  assert.equal(v.pulseReason, "general");
+  assert.equal(v.house || null, null, "an open offer is never the check-in's house");
+  const subject = agentPulseSubject({ agent: a, verdict: v, now: NOW });
+  assert.equal(subject.house, null);
+  assert.ok(subject.pastHouses.includes(stuck().address), "the gate holds a check-in that names it");
+});

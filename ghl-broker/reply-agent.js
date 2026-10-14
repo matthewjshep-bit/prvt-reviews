@@ -47,7 +47,7 @@ import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, soundsLikeSecondThoughts, soundsCrossedUp } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
-import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound } from "./shared/follow-up.js";
+import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound, supersededBy } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { normalizeOpener, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
@@ -3264,11 +3264,12 @@ async function runProactive(job, ctx) {
     job.status = "held"; job.phase = ""; job.heldReason = blockingReason(blocker); job.finishedAt = new Date().toISOString();
     return;
   }
-  for (const old of open) {
-    // A deal text queued for this buyer is its own thing — it may be
-    // waiting days for their week (shared/buyer-touch.js) — and another
-    // machine text never replaces it.
-    if (old.outbound?.kind === "blast_open") continue;
+  // A deal text queued for this buyer is its own thing — it may be waiting
+  // days for their week (shared/buyer-touch.js) — and another machine text
+  // never replaces it. Nor does the agent check-in replace a reply held a
+  // week (shared/follow-up.js supersededBy): that one stays on the Desk.
+  const replaced = supersededBy(open, { kind });
+  for (const old of replaced) {
     await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
   }
   const ts = new Date().toISOString();
@@ -3292,7 +3293,7 @@ async function runProactive(job, ctx) {
     autoSendable: gate.ok, gateClean: Boolean(gate.ok || (gate.locked && gate.clean)), flags: gate.flags, party, partySource: "offer", matchedTags: a.matchedTags,
     contextSummary: context.summary || {}, offersInContext: context.offers?.count ?? 0,
     autoSend: { decided: auto.send, reason: auto.reason }, humanActive: a.humanActive || null, actions: [],
-    supersededIds: open.map((o) => o.id), warnings: warnings.slice(0, 6), noteOnAutoSend: config.notes?.onAutoSend !== false,
+    supersededIds: replaced.map((o) => o.id), warnings: warnings.slice(0, 6), noteOnAutoSend: config.notes?.onAutoSend !== false,
     promptVersion: 3, updatedAt: ts,
   });
   job.draftId = record.id;

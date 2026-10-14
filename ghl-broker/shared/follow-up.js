@@ -523,10 +523,36 @@ const OWN_DRAFT_WORD = { check_in: "check-in", partner_answer: "answer", showing
 // doesn't hold these up, and they never replace it.
 export const SERVICE_KINDS = new Set(["showing_reminder", "showing_followup"]);
 
-export function blockingDraft(open = [], { continues = null, kind = null } = {}) {
+export function blockingDraft(open = [], { continues = null, kind = null, now = Date.now() } = {}) {
   return (open || []).find((d) => d && (d.status === "draft" || d.status === "scheduled")
     && d.id !== continues && !MACHINE_STARTED_KINDS.has(d.outbound?.kind)
-    && !(SERVICE_KINDS.has(kind) && d.status === "scheduled" && d.outbound?.kind === "blast_open")) || null;
+    && !(SERVICE_KINDS.has(kind) && d.status === "scheduled" && d.outbound?.kind === "blast_open")
+    && !(kind === "agent_pulse" && staleHeld(d, now))) || null;
+}
+
+// A draft held a week, or a text queued long ago whose send time has passed,
+// is forgotten business: it stays on the Desk for you, but it no longer
+// speaks for the agent. Until 2026-10-14 a held reply of any age kept the
+// agent check-in away for good (shared/agent-pulse.js agentOwner).
+export const STALE_HELD_DAYS = 7;
+/** staleHeld(draft, now) → true for an open draft written STALE_HELD_DAYS ago that isn't still going out. */
+export function staleHeld(d, now = Date.now()) {
+  if (!d || (d.status !== "draft" && d.status !== "scheduled")) return false;
+  if (d.status === "scheduled" && (ms(d.sendAt) ?? 0) > now) return false;
+  const t = ms(d.createdAt);
+  return t != null && now - t >= STALE_HELD_DAYS * DAY_MS;
+}
+
+/**
+ * supersededBy(open, { kind, now }) → the open drafts a new machine text replaces
+ *
+ * All of them, except a deal text queued for a buyer (it waits for their
+ * week) and, for the agent check-in, a stale held row — the check-in goes
+ * out past it, and it stays on the Desk for you.
+ */
+export function supersededBy(open = [], { kind = null, now = Date.now() } = {}) {
+  return (open || []).filter((d) => d && d.outbound?.kind !== "blast_open"
+    && !(kind === "agent_pulse" && staleHeld(d, now) && !MACHINE_STARTED_KINDS.has(d.outbound?.kind)));
 }
 
 /** Why the machine stood down, in the words a skipped row shows. */

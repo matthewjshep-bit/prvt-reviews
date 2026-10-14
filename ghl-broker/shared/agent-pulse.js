@@ -33,13 +33,15 @@
 // The one-owner rule: an agent another clock owns is left to it — an open
 // offer and its nudges, the push to paper, check-ins on a passed offer, a
 // promise, a check-in they asked for, an address chase, the outreach
-// workflows, anything waiting in the outbox, a live deal, a thread you picked
-// up. The pulse picks them up the day it ends: one voice per agent.
+// workflows, anything waiting in the outbox (a held draft for a week), a live
+// deal, a thread you picked up. The pulse picks them up the day it ends: one
+// voice per agent. An open offer with nothing coming and a quiet week ends too
+// (openOfferIdle).
 //
 // Pure. The runner (ghl-broker/agent-pulse.js) reads; this decides.
 
 import { effectiveStatus, OPEN_STATUSES, DEAD_STATUSES, dealIsOver, priceAgreed } from "./offer-status.js";
-import { threadTimes } from "./follow-up.js";
+import { threadTimes, staleHeld } from "./follow-up.js";
 import { nextFollowUp } from "./next-follow-up.js";
 import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT, HOUSE_OVER_REASONS, threadHealth } from "./thread-health.js";
 import { offerHasTheirAnswer } from "./tiers.js";
@@ -220,21 +222,60 @@ export const UNSENT_STALE_DAYS = 7;
  *     would take and keeps the offer open; when that goes unanswered nothing
  *     moves it again (four on 2026-10-09, the oldest from 9/24);
  *   - a priced number a person never sent, a week on (seven, back to July).
- * Either way the agent check-in asks for their next one. Anything else
- * coming on the offer — a nudge, the push to paper, a float, a promise, a
- * reply owed, a person's thread — keeps the agent with the offer.
+ * Either way the agent check-in asks for their next one.
+ *
+ * 2026-10-14: the Line still listed open offers the machine had stood down on
+ * 8–13 days back, and others where the agent wrote and nothing answered it.
+ * Any offer with nothing coming — the push to paper ran out, a reply nobody
+ * answered, follow-ups switched off, you stopped the bot on that house — lets
+ * the agent go once there has been no text either way for STOOD_DOWN_QUIET_DAYS.
+ * A text this week, an offer made this week, a person on the thread, a pause
+ * with a date, or anything still coming on the offer — a nudge, the push to
+ * paper, a float, a promise, a reply held this week — keeps the agent with it.
+ * `drafts` are read with stale held rows forgotten (forgetStaleHeld).
  */
-export function openOfferIdle({ offer, drafts = [], events = [], config = {}, now = Date.now() } = {}) {
+export const STOOD_DOWN_QUIET_DAYS = 7;
+export function openOfferIdle({ offer, drafts = [], events = [], config = {}, lastInboundAt = null, now = Date.now() } = {}) {
   if (!offer) return null;
-  const next = nextFollowUp({ offer, drafts, events, config, now });
-  if (next.kind === "none") {
-    const h = threadHealth({ offer, drafts, events, now });
-    if (!h.drive && HOUSE_OVER_REASONS.has(h.reason)) return `the machine stands down: ${h.detail}`;
+  const list = forgetStaleHeld(drafts, now);
+  const next = nextFollowUp({ offer, drafts: list, events, config, now });
+  const stoodDown = next.kind === "none" || (next.kind === "stopped" && !next.until);
+  if (!stoodDown) {
+    if (next.kind === "float" && next.who === "you" && next.at && now - (ms(next.at) ?? now) > UNSENT_STALE_DAYS * DAY_MS) {
+      return "our number never went out";
+    }
+    return null;
   }
-  if (next.kind === "float" && next.who === "you" && next.at && now - (ms(next.at) ?? now) > UNSENT_STALE_DAYS * DAY_MS) {
-    return "our number never went out";
-  }
-  return null;
+  const h = threadHealth({ offer, drafts: list, events, now });
+  if (next.kind === "none" && !h.drive && HOUSE_OVER_REASONS.has(h.reason)) return `the machine stands down: ${h.detail}`;
+  if (h.reason === "person_has_it") return null;
+  const last = lastWordAt({ offer, drafts: list, events, lastInboundAt });
+  if (last != null && now - last < STOOD_DOWN_QUIET_DAYS * DAY_MS) return null;
+  return `nothing coming on it and no text for ${STOOD_DOWN_QUIET_DAYS} days: ${next.reason || next.label}`;
+}
+
+/**
+ * forgetStaleHeld(drafts, now) → drafts
+ *
+ * A held reply or a person's draft a week old (shared/follow-up.js staleHeld)
+ * is not something the agent is waiting on: it stays on the Desk, and the
+ * pulse reads it as set aside. Their text in it still counts as their text.
+ */
+export function forgetStaleHeld(drafts = [], now = Date.now()) {
+  return (drafts || []).map((d) => (staleHeld(d, now) ? { ...d, status: "set_aside" } : d));
+}
+
+// Any text either way with this agent, or anything done on the offer itself.
+const WORD_EVENT_TYPES = new Set([...OUR_TEXT_TYPES, "text_summary", "call_summary", "email_received", "offer_sent"]);
+function lastWordAt({ offer = {}, drafts = [], events = [], lastInboundAt = null } = {}) {
+  const times = [
+    lastInboundAt, offer.createdAt, offer.statusAt, offer.proactive?.realmCheckAt, offer.proactive?.takeCheckAt,
+    ...(offer.sends || []).map((s) => s?.ts || s?.at),
+    ...(offer.followUps || []).map((f) => f?.at),
+    ...(drafts || []).filter((d) => d && (d.status === "sent" || String(d.inbound || "").trim())).map((d) => (d.status === "sent" ? d.sentAt || d.updatedAt || d.createdAt : d.createdAt)),
+    ...(events || []).filter((e) => e && WORD_EVENT_TYPES.has(e.type)).map((e) => e.at),
+  ].map(ms).filter((t) => t != null);
+  return times.length ? Math.max(...times) : null;
 }
 
 /**
@@ -243,8 +284,10 @@ export function openOfferIdle({ offer, drafts = [], events = [], config = {}, no
  * The clock that has this agent right now, in words, or null when nothing
  * does. `offers` are this agent's CURRENT rows (shared/current-offer.js).
  */
-export function agentOwner({ offers = [], drafts = [], events = [], config = {}, settings = {}, outreachFollowUpDays = 14, now = Date.now() } = {}) {
+export function agentOwner({ offers = [], drafts: allDrafts = [], events = [], config = {}, settings = {}, outreachFollowUpDays = 14, lastInboundAt = null, now = Date.now() } = {}) {
   const s = normalizeAgentPulse(settings);
+  // A held draft owns the agent for a week, not for good (forgetStaleHeld).
+  const drafts = forgetStaleHeld(allDrafts, now);
   // Offers first: a live deal, an open offer, and whatever clock the Offers
   // column says is coming on each (the same answer, from the same code).
   for (const o of offers || []) {
@@ -258,7 +301,7 @@ export function agentOwner({ offers = [], drafts = [], events = [], config = {},
       continue;
     }
     if (OPEN_STATUSES.has(status) && !o.deal) {
-      if (openOfferIdle({ offer: o, drafts, events, config, now })) continue;
+      if (openOfferIdle({ offer: o, drafts, events, config, lastInboundAt, now })) continue;
       return "an open offer";
     }
     const next = nextFollowUp({ offer: o, drafts, events, config, now });
@@ -412,7 +455,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
 
   const stop = agentStops({ drafts, events, tags: agent.tags || [], botOffTags: config?.routing?.botOffTags || [], now });
   if (stop) return out("stopped", stop);
-  const owner = agentOwner({ offers: agent.current || [], drafts, events, config, settings: s, outreachFollowUpDays, now });
+  const owner = agentOwner({ offers: agent.current || [], drafts, events, config, settings: s, outreachFollowUpDays, lastInboundAt: agent.lastInboundAt, now });
   if (owner) return out("owned", owner);
 
   // Where they stand with us, and how many of our check-ins met silence.

@@ -41,6 +41,8 @@ export const CURSOR_NAME = "agentPulse";
 export const WINDOW_HOURS = 5;
 const DAY_MS = 86400000;
 const EVENTS_DAYS = 130;
+// Per agent with an open offer, as many as the Offers column reads.
+const THREAD_DRAFTS = 20;
 const LEDGER_DAYS = 400;
 const iso = (ms) => new Date(ms).toISOString();
 const pacificDay = (ms) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(ms));
@@ -166,7 +168,7 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   // The stop events come with no time window (ghl-broker/bot-hold.js): the
   // pulse's own read keeps 130 days, and a stop pressed in May still holds.
   // Not caught — a plan that can't tell who is stopped texts no one.
-  const [profiles, investors, offers, evRead, ledgerRead, openDrafts, recentDrafts, inbound, listings, stops] = await Promise.all([
+  const [profiles, investors, offers, evRead, ledgerRead, openDrafts, recentDrafts, threadDrafts, inbound, listings, stops] = await Promise.all([
     store.listContactProfiles(locationId, { party: "agent", limit: 20000 }).catch(() => []),
     store.listContactProfiles(locationId, { party: "investor", limit: 20000 }).catch(() => []),
     store.listOffers(locationId, { limit: 5000, lean: true }).catch(() => []),
@@ -174,6 +176,9 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
     allEventsSince(store, locationId, iso(now - LEDGER_DAYS * DAY_MS), { types: AGENT_PULSE_LEDGER_TYPES }, { ceiling: 100000 }).catch(() => ({ events: [] })),
     store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 5000 }).catch(() => []),
     store.listReplyDrafts(locationId, { since: iso(now - 4 * DAY_MS), limit: 2000 }).catch(() => []),
+    // The thread behind an open offer, read the way the Offers column reads
+    // it (ghl-broker/next-follow-up.js): a no ten days back is still the no.
+    store.listReplyDrafts(locationId, { since: iso(now - EVENTS_DAYS * DAY_MS), limit: 4000 }).catch(() => []),
     store.lastContactActivity(locationId, { types: INBOUND_EVENT_TYPES, inboundOnly: true, limit: 50000 }).catch(() => []),
     typeof store.listFreshAgentListings === "function"
       ? store.listFreshAgentListings(locationId, { since: iso(now - settings.freshDays * DAY_MS), seenSince: iso(now - settings.listingSeenDays * DAY_MS) }).catch(() => [])
@@ -191,8 +196,15 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   const eventsBy = byContact(evRead.events);
   for (const [id, list] of stops) eventsBy.set(id, mergeEvents(eventsBy.get(id) || [], list));
   const ledgerBy = byContact(ledgerRead.events);
-  const seenDraft = new Set((openDrafts || []).map((d) => d.id));
-  const draftsBy = byContact([...(openDrafts || []), ...(recentDrafts || []).filter((d) => !seenDraft.has(d.id))]);
+  // Four days of drafts for everyone; an agent with an open offer gets their
+  // newest THREAD_DRAFTS too. Until 2026-10-14 the pulse saw only four days
+  // and missed a no from last week: a nudge looked to be coming and "an open
+  // offer" held the agent from the check-in for good.
+  const openOfferContacts = new Set(annotated.filter((o) => o.isCurrent !== false && !o.deal && o.status !== "draft" && OPEN_STATUSES.has(effectiveStatus(o))).map((o) => o.contactId));
+  const threadBy = byContact((threadDrafts || []).filter((d) => openOfferContacts.has(d?.contactId)));
+  const seenDraft = new Set();
+  const draftsBy = byContact([...(openDrafts || []), ...(recentDrafts || []), ...[...threadBy.values()].flatMap((list) => list.slice(0, THREAD_DRAFTS))]
+    .filter((d) => d?.id && !seenDraft.has(d.id) && seenDraft.add(d.id)));
   const inboundBy = new Map((inbound || []).map((r) => [r.contactId, r.at]));
   const listingsBy = byContact(listings);
   const profileBy = new Map((profiles || []).map((p) => [p.contactId, p]));
