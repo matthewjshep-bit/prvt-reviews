@@ -384,7 +384,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
   const awaiting = housesAwaitingAddress({ events, offers, now });
   const awaitingLines = awaiting.map((h) => {
     if (h.sellerAsk) amounts.add(Math.round(h.sellerAsk));
-    return `- ${h.address}${h.sellerAsk ? `, asking ${fmtMoney(h.sellerAsk)}` : ""}${h.note ? ` — ${h.note}` : ""} (named ${String(h.at || "").slice(0, 10)})`;
+    return `- ${h.address || `${h.label} (no street yet)`}${h.sellerAsk ? `, asking ${fmtMoney(h.sellerAsk)}` : ""}${h.note ? ` — ${h.note}` : ""} (named ${String(h.at || "").slice(0, 10)})`;
   });
 
   const text = [

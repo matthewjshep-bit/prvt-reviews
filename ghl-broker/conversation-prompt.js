@@ -1240,7 +1240,7 @@ export function schemaFor(party = "agent", { profile = true, outbound = null, bo
           type: "array",
           description:
             "EVERY property THEY bring up in this message, one entry each, including the one in propertyAddress — " +
-            "even when they give only a street (\"one on Pine St in Shelton\", \"a triplex on Alder Street\"). " +
+            "even when they give only a street (\"one on Pine St in Shelton\", \"a triplex on Alder Street\") or only a town (\"one in Duvall\" → \"Duvall\"). " +
             "Empty when they name no property.",
           items: {
             type: "object", additionalProperties: false, required: ["address", "sellerAsk", "note"],

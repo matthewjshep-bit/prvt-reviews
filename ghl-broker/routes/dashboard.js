@@ -85,7 +85,7 @@ const PIPELINE_EVENT_TYPES = [
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
   "underwrite_dropped",
-  "drive_stopped", "drive_resumed", "hand_reply", "investor_minded",
+  "drive_stopped", "drive_resumed", "hand_reply", "investor_minded", "referral_mentioned",
 ];
 
 const DAY_MS = 86400000;

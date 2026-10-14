@@ -564,3 +564,12 @@ test("houses they named without a number are listed for the next reply until the
     events: [...events, { type: "house_mentioned", at: new Date().toISOString(), address: "1412 Pine St, Shelton", data: {} }] });
   assert.doesNotMatch(later.text, /DON'T HAVE AN ADDRESS/);
 });
+
+// 2026-10-14: "some Stanwood houses", no street at all. The next reply
+// still has to know we're waiting on where they are.
+test("houses they named only by town are listed for the next reply by what they called them", () => {
+  const at = new Date(Date.now() - 3600000).toISOString();
+  const events = [{ type: "house_mentioned", at, address: "", data: { label: "the Stanwood houses", area: "Stanwood", town: "Stanwood", note: "need a lot of work" } }];
+  const ctx = buildAgentContext({ offers: [], events });
+  assert.match(ctx.text, /- the Stanwood houses \(no street yet\) — need a lot of work/);
+});

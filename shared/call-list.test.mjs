@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { callList, briefFor, normalizeDesk, kText, DESK_DEFAULTS, CALL_KINDS } from "./call-list.js";
-import { foldDesk, KIND_STRENGTH } from "./desk.js";
+import { foldDesk, KIND_STRENGTH, urgentReasons } from "./desk.js";
 
 const NOW = Date.parse("2026-10-02T20:00:00Z");
 const ago = (d) => new Date(NOW - d * 86400000).toISOString();
@@ -352,4 +352,26 @@ test("an agent who talks like an investor gets one relationship call, and a brou
   const brought = offer({ id: "w1", contactId: "c6", contactName: "Lee K", address: "1823 Maple St, Everett, WA", status: "new", createdAt: ago(0.1), sends: [], autoUnderwrite: { leadSource: "agent_brought" } });
   const drafts = [{ id: "d", contactId: "c6", inbound: "Investor has it under contract, selling the assignment at 400", createdAt: ago(0.1) }];
   assert.match(callList({ offers: [brought], drafts, now: NOW }).find((x) => x.kind === "call_brought").title, /a wholesaler's assignment/);
+});
+
+// 2026-10-14: "Contact <a colleague> at John L Scott, she has one coming
+// up" got a thank-you and nothing else. The person they named is a stranger
+// to us; whether to reach out is Matt's.
+test("an agent who points us to someone with a house raises a referral row on Today, and texts nobody", () => {
+  const ev = { type: "referral_mentioned", contactId: "c8", at: ago(1), source: "conversation",
+    data: { name: "Sara Example", brokerage: "John L Scott", relation: "", phone: "(555) 555-0100", phrase: "Contact Sara Example at John L Scott, she has one coming up" } };
+  const rows = callList({ offers: [offer({ id: "y", contactId: "c8", contactName: "Pat Agent", status: "passed" })], events: [ev], now: NOW });
+  const r = rows.find((x) => x.kind === "referral");
+  assert.ok(r);
+  assert.equal(r.section, "decide");
+  assert.equal(r.title, "Referral: Sara Example (John L Scott) — Pat says they have one");
+  assert.match(r.detail, /\(555\) 555-0100/);
+  assert.match(r.detail, /mention Pat/);
+  assert.deepEqual(r.ops, [], "no button sends anything");
+  assert.ok(CALL_KINDS.some((k) => k.key === "referral"));
+  assert.deepEqual(urgentReasons([r]).map((x) => x.kind), ["referral"], "it's on Today");
+
+  const relative = { ...ev, data: { name: "", brokerage: "", relation: "husband's client", phone: "", phrase: "my husband's client wants to sell" } };
+  assert.equal(callList({ events: [relative], now: NOW }).find((x) => x.kind === "referral").title, "Referral: their husband's client — the agent says they have one");
+  assert.equal(callList({ events: [{ ...ev, at: ago(40) }], now: NOW }).filter((x) => x.kind === "referral").length, 0, "a month on, it's old news");
 });

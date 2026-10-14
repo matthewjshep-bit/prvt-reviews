@@ -3152,6 +3152,70 @@ new_property, investor_open, media, wants_call, scheduling):
 Still one chase per contact: an address landing for one house closes the
 chase for the rest. The context block keeps the others in front of the bot.
 
+#### Calls, houses with no street, and referrals (2026-10-14)
+
+Reading 2,014 threads turned up three more leaks: a house named on a call was
+never kept; a house named by town only ("some Stanwood houses", "I got one in
+Medina, 2 in Stanwood") or by what it is ("two more parcels next to" a
+listing, "he wants to sell his flips") was never asked about; and an agent who
+pointed us at someone else ("contact <name> at John L Scott, she has one coming
+up") got a thank-you and nothing more. Still no switch.
+
+- **Calls.** The same capture runs on a call transcript. When GHL labels the
+  sides (`THEM:` / `US:`), only their lines are read (`callWords`). A house in
+  the model's `houses` counts only if their lines name its street or town
+  (`saidIn`). A call's
+  intent doesn't gate it, and houses already in their offer book are left out.
+  The text after the call gets the address ask, and the address chase starts.
+  `house_mentioned.data.heard` is `them`, `unlabelled` or `text`. With no
+  speaker labels, our own words are mixed in. Those houses are kept and asked
+  about, but **never underwritten**. On a labelled call, a numbered house
+  in their lines can still get its own `start_underwrite`, as in a text.
+- **No street at all** (`areaMentions`). The house is kept as a
+  `house_mentioned` with `address: ""` and these fields:
+  - `data.label`: how the ask names it ("the Stanwood houses").
+  - `data.area`: the town, or "next to 5206 W Werner Rd".
+  - `data.town`: the town when one was said.
+
+  Two kinds count:
+  - A town we know (the buyer-map list plus a few) after a "have / got /
+    there's / listed" with "one", "another", a number or a house noun.
+  - "a/some <Town> <house noun>" with a lead word nearby.
+
+  The first-text house's town counts only with "another" or "more". A
+  copula ("it's a Lacey rambler") never counts. Neither does a tapback
+  quoting our text. Such a house stays on the context list until a numbered
+  house in that town comes in from them. With no town ("his flips"), any
+  numbered house closes it. "Federal Way" with no number is the town, not a
+  street.
+- **Referrals** (`referralMention`). These count:
+  - "contact / call / text / reach out to / go through <Name> (at <Brokerage>)"
+  - "<Name> at <Brokerage> has one"
+  - "my partner/colleague <Name>" with a lead cue
+  - "my husband's client wants to sell"
+  - "my wholesale partner is looking for you"
+
+  Each writes one `referral_mentioned` event per person named (`data.name`,
+  `brokerage`, `relation`, `phone`, `phrase`). Only the agent's own words
+  count: a text, or their side of a labelled call. That event raises a
+  **`referral` row on Today** (`shared/call-list.js`): "Referral: <Name>
+  (<brokerage>) — <agent> says they have one". The row shows their words, the
+  phone if they gave one, and "mention <agent>". It lasts 21 days, or until
+  you Dismiss it. **Nothing ever texts the person they named.** Reaching
+  out is Matt's call.
+
+Replay on the saved threads (5,210 agent texts, 362 call transcripts):
+
+| Detector | Agent texts | Calls | False positives |
+| --- | --- | --- | --- |
+| `referralMention` | 7 | 0 | none clear; 2 are a partner holding details on a house already in play |
+| `areaMentions` | 43 | 6 | 1, on a call: an agent's own project |
+
+About four of the 43 texts gave the number in the next sentence. The model's
+`houses` usually carries it, and a numbered house in the same town drops the
+town-only one. Still missed on calls: "I'll have one up there", with the
+town said by the other speaker, and a bare "he'll email other properties".
+
 ### Held underwrites — the nightly triage (2026-09-16)
 
 "Underwrites that need a look" held 49 rows and Matt wasn't going to get to

@@ -48,7 +48,9 @@ export function eventLine(ev) {
     case "offer_countered": return d.amount ? `at ${money(d.amount)}` : d.note || "";
     case "dataroom_viewed": return d.viewCount > 1 ? `view ${d.viewCount}` : "first view";
     case "property_details": return PROPERTY_DETAIL_FIELDS.filter((f) => d[f.key] != null).map((f) => `${f.label.toLowerCase()}: ${f.number ? money(d[f.key]) : f.values ? String(d[f.key]).replace(/_/g, " ") : d[f.key]}`).join(" · ");
-    case "house_mentioned": return [d.sellerAsk ? `asking ${money(d.sellerAsk)}` : "", d.note || "", d.needsAddress ? "no house number yet" : ""].filter(Boolean).join(" · ");
+    case "house_mentioned": return [ev.address ? "" : d.label || "", d.sellerAsk ? `asking ${money(d.sellerAsk)}` : "", d.note || "",
+      d.needsAddress ? (ev.address ? "no house number yet" : "no street yet") : "", d.heard === "unlabelled" ? "on a call (either side)" : d.heard === "them" ? "on a call" : ""].filter(Boolean).join(" · ");
+    case "referral_mentioned": return [d.name || (d.relation ? `their ${d.relation}` : ""), d.brokerage || "", d.phone || ""].filter(Boolean).join(" · ");
     case "agent_estimate": return [d.arv ? `worth ${money(d.arv)} done` : "", d.rehab ? `about ${money(d.rehab)} of work` : ""].filter(Boolean).join(" · ") + (d.note ? ` — “${d.note}”` : "");
     case "enrich_run": return d.summary || "";
     case "import": return d.batchName ? `from batch ${d.batchName}` : "";

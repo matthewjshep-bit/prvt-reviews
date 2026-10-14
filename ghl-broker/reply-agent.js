@@ -63,7 +63,7 @@ import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-und
 import { passedOnHouse, isTierOneAction, isLowerTierAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
 import { qualifyStep, QUALIFY_ASK_RX } from "./shared/flip-read.js";
-import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS } from "./shared/mentioned-houses.js";
+import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
@@ -3677,8 +3677,20 @@ async function runReply(job, ctx) {
   // Only on a text that reads as a lead: "the one on Pine St sold" is not
   // a house to ask about.
   const iceHouse = party === "agent" ? await firstTextHouse(store, locationId, job.contactId) : null;
-  const namedHouses = party === "agent" && HOUSE_LEAD_INTENTS.has(draft.intent)
-    ? housesInText({ houses: draft.houses, message: job.message, except: iceHouse ? [iceHouse.address] : [] })
+  // On a call (2026-10-14: "I'll have one up in Mount Vernon in a few
+  // weeks" was said on the phone and never kept) only their side counts
+  // when the transcript says whose words are whose; a call covers many
+  // things, so its intent doesn't gate it, and a house already in our book
+  // is the one we were talking about. With no speaker labels our own words
+  // are in there too: the houses are kept and asked about, never underwritten.
+  const heard = isCall ? callWords(inboundText) : { words: job.message, labelled: true };
+  const callBook = isCall && party === "agent"
+    ? ((await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => [])) || []).map((o) => o?.address).filter(Boolean)
+    : [];
+  const namedHouses = party === "agent" && (isCall ? !SILENT_INTENTS.has(draft.intent) : HOUSE_LEAD_INTENTS.has(draft.intent))
+    // The model reads both sides of a call: on a labelled one, only the houses they said.
+    ? housesInText({ houses: isCall && heard.labelled ? (draft.houses || []).filter((h) => saidIn(heard.words, h?.address)) : draft.houses,
+      message: heard.words, except: [...(iceHouse ? [iceHouse.address] : []), ...callBook] })
     : [];
   const housesWithoutNumber = namedHouses.filter((h) => h.needsAddress);
 
@@ -3709,8 +3721,9 @@ async function runReply(job, ctx) {
 
   // A house they named with no number: the reply asks where it is. The model
   // is told to; this is the backstop for a reply that forgot (a list of two
-  // ran against "one property per message").
-  if (party === "agent" && !isCall && housesWithoutNumber.length && !qualifyHeld
+  // ran against "one property per message"). After a call too: the text
+  // after hanging up is where the ask goes.
+  if (party === "agent" && housesWithoutNumber.length && !qualifyHeld
       && !SILENT_INTENTS.has(draft.intent) && draft.intent !== "opt_out" && !asksForAddress(draft.reply)) {
     const ask = addressAsk(housesWithoutNumber);
     const said = String(draft.reply || "").trim();
@@ -3949,9 +3962,10 @@ async function runReply(job, ctx) {
   // triplex is 88 Alder St"): the rule underwrites the one in
   // propertyAddress, and each of the others runs beside it the same way.
   // Only when the rule already starts one, only streets in their own words,
-  // and never a house already in the book.
-  if (party === "agent" && plan.auto.some((x) => x.type === "start_underwrite" && !x.address)) {
-    const extra = namedHouses.filter((h) => h.from === "model" && !h.needsAddress && !sameStreet(h.address, draft.propertyAddress) && lastMention(job.message, h.address) >= 0);
+  // and never a house already in the book. On a call, only one they said
+  // in their own lines: with no speaker labels it gets the address ask, never an underwrite.
+  if (party === "agent" && (!isCall || heard.labelled) && plan.auto.some((x) => x.type === "start_underwrite" && !x.address)) {
+    const extra = namedHouses.filter((h) => h.from === "model" && !h.needsAddress && !sameStreet(h.address, draft.propertyAddress) && lastMention(heard.words, h.address) >= 0);
     if (extra.length) {
       const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
       for (const h of extra.filter((x) => !knownOfferFor(rows, x.address, now)).slice(0, 3)) {
@@ -4527,19 +4541,39 @@ async function runReply(job, ctx) {
     // Every house they named, address or not, is a row on their timeline:
     // "Pine St, Shelton, asking 410K, a 1920s rambler" is a lead even
     // before the number comes (2026-10-13).
+    // A house named with no street at all ("some Stanwood houses") has no
+    // address; it is kept by what they called it (data.label), and its town.
     for (const h of namedHouses) {
       await recordEvent({
         store, locationId, contactId: job.contactId, party: "agent", type: "house_mentioned", at: new Date(now).toISOString(),
         address: h.address, source: isCall ? "call" : "conversation", ref: record.id,
-        dedupeKey: `house_mentioned:${job.contactId}:${addressKey(h.address)}:${record.id}`,
-        data: { sellerAsk: h.sellerAsk || 0, note: h.note || "", needsAddress: h.needsAddress },
+        dedupeKey: `house_mentioned:${job.contactId}:${h.address ? addressKey(h.address) : `area:${String(h.label || "").toLowerCase()}`}:${record.id}`,
+        data: { sellerAsk: h.sellerAsk || 0, note: h.note || "", needsAddress: h.needsAddress,
+          ...(h.address ? {} : { label: h.label || "", area: h.area || "", ...(h.town ? { town: h.town } : {}) }),
+          // Whose words: a text, their side of a call, or a call with no speaker labels.
+          heard: isCall ? (heard.labelled ? "them" : "unlabelled") : "text" },
       }).catch(() => {});
     }
     // A house with no number starts the chase too, even when propertyAddress
     // holds the street; its hint names each one the way they did.
     let pend = addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });
     if (housesWithoutNumber.length && draft.intent !== "opt_out") {
-      pend = { ...(pend || { firstDueAt: null, phrase: "" }), hint: addressHint(housesWithoutNumber), houses: housesWithoutNumber.map((h) => h.address) };
+      pend = { ...(pend || { firstDueAt: null, phrase: "" }), hint: addressHint(housesWithoutNumber), houses: housesWithoutNumber.map((h) => h.address || h.label) };
+    }
+    // Someone else they pointed us to for a house (2026-10-14: "contact
+    // <a colleague> at <a brokerage>, she has one coming up" was answered
+    // and forgotten). A Decide row for Matt (shared/call-list.js); nothing
+    // ever texts the person they named. Their side of a call only.
+    const referral = draft.intent !== "opt_out" && heard.labelled
+      ? referralMention(isCall ? heard.words : (job.originalMessage || job.message), { self: a.contactName || "" })
+      : null;
+    if (referral) {
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: "referral_mentioned", at: new Date(now).toISOString(),
+        address: "", source: isCall ? "call" : "conversation", ref: record.id,
+        dedupeKey: `referral_mentioned:${job.contactId}:${referralKey(referral)}`,
+        data: { name: referral.name, brokerage: referral.brokerage, relation: referral.relation, phone: referral.phone, phrase: referral.phrase },
+      }).catch(() => {});
     }
     if (pend) {
       chaseHasDate = Boolean(pend.firstDueAt);
