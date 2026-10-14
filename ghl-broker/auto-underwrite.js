@@ -44,6 +44,7 @@ import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
 import { offMarketSignals, OFF_MARKET_TAG } from "./shared/off-market.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
+import { threadPassed } from "./shared/flip-read.js";
 import { leadSourceOf, theirNumberCheck } from "./shared/lead-source.js";
 import { buyerCeiling } from "./shared/post-mortem.js";
 import { markSides, sameSideFirst, isAcross, acrossLabel } from "./shared/same-side.js";
@@ -122,6 +123,20 @@ export function capToList({ cash = 0, listPrice = 0, pct = UW_MAX_PCT_OF_LIST } 
   if (!(list > 0) || !(amount > 0)) return { capped: false, amount, cap: 0 };
   const cap = Math.round((list * share) / 100);
   return amount > cap ? { capped: true, amount: cap, cap } : { capped: false, amount, cap };
+}
+
+// Our own number above the list price is not a steal: the comps or the scope
+// are wrong. 31 N Colony Surf Dr (2026-10-13) came to $375,750 on a $255,000
+// listing off a gut check that took in a $1M sale across US 101; the cap
+// above turned it into $229,500 and it went out. Over the list it holds for a
+// person; between the cap and the list it is still capped. The words stay
+// clear of VALUE_HOLD (shared/held-underwrites.js) so the held sweep never
+// asks the agent to fix it with their numbers.
+export function overListHold({ cash = 0, listPrice = 0 } = {}) {
+  const list = Math.round(Number(listPrice) || 0);
+  const amount = Math.round(Number(cash) || 0);
+  if (!(list > 0) || !(amount > list)) return "";
+  return `our number (${fmtMoney(amount)}) came out above the ${fmtMoney(list)} list price — the comps or the scope are off, so a person should look before it goes anywhere`;
 }
 export const UW_MAX_ARV_COMPS = 4;         // 3–4 comps carry the ARV
 export const UW_GRADE_CANDIDATES = 6;      // how many we pay Apify+Claude to grade
@@ -1598,6 +1613,9 @@ async function runUnderwrite(job, ctx) {
       warnings);
     return;
   }
+  // The thread passed on it, or is still asking its one question: nothing to
+  // price, and no comps bought for it.
+  if (await stopForThread(job, ctx, extraction.address)) return;
 
   /* --- 2. the subject --- */
   job.phase = "subject";
@@ -2190,12 +2208,14 @@ async function runUnderwrite(job, ctx) {
   const listForCap = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
   const pctOfList = Number(saved?.maxOfferPctOfList) > 0 ? Number(saved.maxOfferPctOfList) : UW_MAX_PCT_OF_LIST;
   let listCap = { capped: false, amount: 0, cap: 0 };
+  let overList = "";
   if (listForCap > 0) {
     try {
       const expected = calculateOffers(
         { address: extraction.address, arv: arvForOffer, repairs, askingPrice: listForCap, priceOverride: 0 },
         { ...(saved || {}), underwriteMode: UW_MODE },
       ).offers.cash.amount;
+      overList = overListHold({ cash: expected, listPrice: listForCap });
       listCap = capToList({ cash: expected, listPrice: listForCap, pct: pctOfList });
       if (listCap.capped) {
         warnings.push(`our number (${fmtMoney(expected)}) was over ${pctOfList}% of the ${fmtMoney(listForCap)} list price — capped at ${fmtMoney(listCap.cap)}`);
@@ -2205,6 +2225,10 @@ async function runUnderwrite(job, ctx) {
       warnings.push(`list-price cap not checked: ${String(e?.message || e).slice(0, 120)}`);
     }
   }
+  if (overList) return finishHeld(job, ctx, { extraction, held: [overList], partial });
+  // Again at the last step: the bot's pass can land while the comps and the
+  // photo scan run (31 N Colony Surf Dr, 2026-10-13).
+  if (await stopForThread(job, ctx, extraction.address)) return;
 
   const result = await deps.createOffer({
     locationId,
@@ -2371,6 +2395,34 @@ export async function restartVanishedUnderwrites({ store, locationId, start, now
 // exactly the shape the New Offer page restores from. Opening it lands the
 // operator mid-form with the work done; the review is "tick two more comps",
 // not "start over".
+/**
+ * stopForThread(job, ctx, address) → true when the run stopped
+ *
+ * The bot's newest read of the house says not to price it (shared/flip-read.js
+ * threadPassed): the run ends done with no offer, so nothing floats and no
+ * paper follows. Read fresh each time — the pass can land while the run is
+ * going. A person pressing Underwrite, Underwrite anyway or the offer form
+ * prices it whatever the bot said.
+ */
+async function stopForThread(job, ctx, address) {
+  if (job.fill || job.anyKind || job.origin === "operator") return false;
+  const { client, locationId, store } = ctx;
+  const drafts = await store.listReplyDrafts?.(locationId, { contactId: job.contactId, status: ["draft", "scheduled", "sent"], limit: 30 }).catch(() => []);
+  const passed = threadPassed({ address, drafts: drafts || [] });
+  if (!passed) return false;
+  job.status = "done";
+  job.phase = "";
+  job.passedInThread = passed.stage;
+  job.finishedAt = new Date().toISOString();
+  await setTag(client, job.contactId, UW_TAGS.done, job.warnings);
+  await note(client, job.contactId,
+    passed.stage === "ask"
+      ? `Not underwriting ${address}: the bot asked what it needs and hasn't heard a flip yet.`
+      : `Not underwriting ${address}: the bot passed on it in the thread.`,
+    job.warnings);
+  return true;
+}
+
 async function finishHeld(job, ctx, { extraction, held, partial, cleared = false }) {
   const { client } = ctx;
   const warnings = job.warnings;
