@@ -96,7 +96,7 @@ export function lastActivityQuery({ locationId, types = null, limit = 5000, inbo
     + (inboundOnly ? ` and (type <> 'text_summary' or coalesce(data->>'inbound', '') <> '')` : "");
   return {
     text: `select distinct on (contact_id)
-                  contact_id as "contactId", type, at, source, data
+                  contact_id as "contactId", party, type, at, source, data
              from contact_events
             where location_id = $1 and contact_id is not null${where}
             order by contact_id, at desc
@@ -2210,7 +2210,7 @@ const fileStore = (() => {
         }
       }
       return [...newest.values()]
-        .map((e) => ({ contactId: e.contactId, type: e.type, at: e.at, source: e.source || "", data: e.data || {} }))
+        .map((e) => ({ contactId: e.contactId, party: e.party || null, type: e.type, at: e.at, source: e.source || "", data: e.data || {} }))
         .slice(0, limit);
     },
     async listOfferOutcomesSince(locationId, sinceIso, { limit = 5000 } = {}) {

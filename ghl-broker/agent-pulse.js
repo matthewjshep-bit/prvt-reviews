@@ -50,6 +50,8 @@ const pacificDay = (ms) => new Intl.DateTimeFormat("en-CA", { timeZone: "America
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The tags the tier nurture goes with; who the one-time clean-up reads.
 export const TIER_DRIP_TAGS = ["tier-2", "tier-3"];
+// Timeline events that only an agent's thread has: the outreach opener.
+const AGENT_SIGNAL_TYPES = new Set(["outreach_enrolled", "outreach_sent", "outreach_left"]);
 
 // GHL's workflow list, for finding the nurture drip by name. Ten minutes is
 // plenty: workflows are renamed by hand, rarely. A read that fails gives null,
@@ -157,10 +159,11 @@ export function housesFrom(offers = [], events = []) {
 /**
  * loadPulseAgents({ locationId, saved, store, now }) → { agents, settings, config, oa, houses, ledgerRead, evRead }
  *
- * Every agent the app knows (contact profiles, listing agents, and anyone we
- * made an offer to), each with their offers, drafts, timeline, check-in
- * ledger, last word and fresh listings. The check-in plans from it; the
- * tiers (agentRoster) read it too.
+ * Every agent the app knows (contact profiles, listing agents, anyone we
+ * made an offer to, Tier 2/3 cards, and any agent who has written back),
+ * each with their offers, drafts, timeline, check-in ledger, last word and
+ * fresh listings. The check-in plans from it; the tiers (agentRoster) read
+ * it too.
  */
 export async function loadPulseAgents({ locationId, saved = {}, store = defaultStore, now = Date.now(), tierCards = null }) {
   const settings = agentPulseSettings(saved);
@@ -212,7 +215,7 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   const seenDraft = new Set();
   const draftsBy = byContact([...(openDrafts || []), ...(recentDrafts || []), ...[...threadBy.values()].flatMap((list) => list.slice(0, THREAD_DRAFTS))]
     .filter((d) => d?.id && !seenDraft.has(d.id) && seenDraft.add(d.id)));
-  const inboundBy = new Map((inbound || []).map((r) => [r.contactId, r.at]));
+  const inboundRow = new Map((inbound || []).filter((r) => r?.contactId).map((r) => [r.contactId, r]));
   const listingsBy = byContact(listings);
   const profileBy = new Map((profiles || []).map((p) => [p.contactId, p]));
   // A buyer the pull happened to match (some buyers list houses too) is the
@@ -225,6 +228,24 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   // And everyone on a Tier 2 or Tier 3 card in GHL (pulseTierCards).
   const cards = tierCards instanceof Map ? tierCards : new Map();
   const ids = new Set([...(profiles || []).map((p) => p.contactId), ...(listings || []).map((l) => l.contactId), ...offersBy.keys(), ...cards.keys()]);
+  // And every agent who has written back (2026-10-14: 104 who replied sat
+  // outside all of the above, and nothing would ever text them again). Only
+  // someone we know is an agent: the reply was filed as an agent's, or we
+  // imported them from the outreach pull, or their timeline has our opener.
+  // Never a buyer, and never an unknown caller.
+  const hooked = new Set((hooks || []).map((h) => h?.contactId).filter(Boolean));
+  const repliers = new Set();
+  for (const [id, r] of inboundRow) {
+    if (ids.has(id) || investorIds.has(id) || (r.party && r.party !== "agent")) continue;
+    if (r.party === "agent" || hooked.has(id) || (eventsBy.get(id) || []).some((e) => AGENT_SIGNAL_TYPES.has(e?.type))) repliers.add(id);
+  }
+  for (const id of repliers) ids.add(id);
+  // The day each of them joined (agent_pulse_joined, written by the first
+  // real run that saw them), so their first check-in is spread from it.
+  const joinedBy = new Map();
+  for (const e of ledgerRead.events || []) {
+    if (e?.type === "agent_pulse_joined" && e.contactId && (!joinedBy.has(e.contactId) || String(e.at) < String(joinedBy.get(e.contactId)))) joinedBy.set(e.contactId, e.at);
+  }
 
   const agents = [];
   for (const id of ids) {
@@ -235,8 +256,13 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
       contactId: id, name: p.name || "", tags: p.tags || [], facts: p.facts || {},
       offers: mine, current: mine.filter((o) => o.isCurrent !== false),
       drafts: draftsBy.get(id) || [], events: eventsBy.get(id) || [], ledger: ledgerBy.get(id) || [],
-      lastInboundAt: inboundBy.get(id) || null, listings: listingsBy.get(id) || [],
+      lastInboundAt: inboundRow.get(id)?.at || null, listings: listingsBy.get(id) || [],
       ghlTier: cards.get(id) || null,
+      // When they joined the check-in, for spreading the first one: the
+      // replier backfill's run, or the day the runner first saw their reply.
+      // Joined by a reply and not yet written down: the planner counts today.
+      joinedAt: inboundRow.get(id)?.data?.joinedAt || joinedBy.get(id) || null,
+      joinedByReply: repliers.has(id),
     });
   }
   return { agents, settings, config, oa, houses, ledgerRead, evRead };
@@ -260,7 +286,10 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   const drips = tierDrips({ pulse: settings, conversationAi: saved.conversationAi, workflows });
   const planSettings = { ...settings, replacesWorkflowIds: drips.map((d) => d.id) };
   const plan = pickPulseAgents({ agents: agents.filter((a) => !triedToday.has(a.contactId)), settings: planSettings, config, houses, outreachFollowUpDays: oa.followUpDays, seats, now });
-  return { ...plan, settings, drips, claimedToday, seats, tierCardsRead: tierCards instanceof Map, truncated: Boolean(evRead.truncated || ledgerRead.truncated) };
+  // Repliers in the pool by their reply alone with no join day on record:
+  // the run writes one for each (agent_pulse_joined), so their spread holds.
+  const unjoined = agents.filter((a) => a.joinedByReply && !a.joinedAt).map((a) => a.contactId);
+  return { ...plan, settings, drips, claimedToday, seats, unjoined, tierCardsRead: tierCards instanceof Map, truncated: Boolean(evRead.truncated || ledgerRead.truncated) };
 }
 
 // What keeps a Tier 2 agent warm, in a few words (shared/agent-pulse.js
@@ -352,6 +381,15 @@ export function startAgentPulse({
     const config = conversationConfig(saved);
     job.autoSend = Boolean(plan.settings.autoSend && sendsEnabled && config.enabled);
     const botOff = config.routing?.botOffTags || [];
+    // Every replier who joined by their reply, picked or not: the day they
+    // joined, once, so their first check-in stays on its spread day.
+    if (!dryRun) {
+      for (const contactId of plan.unjoined || []) {
+        await recordEvent({ store, locationId, contactId, party: "agent", type: "agent_pulse_joined", at: iso(now), source: "sweep",
+          dedupeKey: `agent_pulse_joined:${contactId}`, data: { by: "reply" } }).catch(() => {});
+      }
+      job.joined = (plan.unjoined || []).length;
+    }
     // A different way in for each text, continuing across the day's runs.
     let n = Number(plan.claimedToday) || 0;
     // The day's picks, then the spares: an agent skipped before being claimed

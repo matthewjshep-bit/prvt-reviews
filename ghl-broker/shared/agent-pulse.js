@@ -49,6 +49,7 @@ import { addressKey, sameStreet } from "./us-address.js";
 import { offMarketAskDue } from "./off-market.js";
 import { botHold, paceOf, paceScale } from "./bot-hold.js";
 import { cadenceDays, requestStands } from "./brush-offs.js";
+import { optOutInTranscript, CONVERSATION_AI_DEFAULTS } from "./conversation-ai.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -124,7 +125,7 @@ export const AGENT_PULSE_EVENT_TYPES = [
   // Houses passed or kicked off the Tier 1 list: never raised again.
   "tier1_passed", "tier1_kicked", "tier1_added",
 ];
-export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided"];
+export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided", "agent_pulse_joined"];
 // What counts as them having written back (store.lastContactActivity with
 // inboundOnly — a text summary only when it summarises THEIR text).
 export const INBOUND_EVENT_TYPES = [
@@ -461,10 +462,45 @@ export function tierCard(agent = {}) {
 }
 
 /**
+ * checkInSlot(contactId, days) → 0 … days-1
+ *
+ * A slot of its own for an agent, the same every time it's asked: FNV-1a of
+ * the contact id. What spreads a crowd that joins the check-in at once.
+ */
+export function checkInSlot(contactId = "", days = 21) {
+  const n = Math.max(1, Math.round(Number(days)) || 1);
+  let h = 0x811c9dc5;
+  for (const ch of String(contactId || "")) { h ^= ch.charCodeAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h % n;
+}
+
+const pacificWeekday = (t) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short" }).format(new Date(t));
+const isWeekend = (t) => { const d = pacificWeekday(t); return d === "Sat" || d === "Sun"; };
+
+/**
+ * firstCheckInAt({ contactId, joinedAt, everyDays }) → ISO | null
+ *
+ * When an agent who joined the check-in on `joinedAt` gets their first one:
+ * their own weekday (Pacific) within the `everyDays` from it. The run is
+ * weekdays only, so a weekend slot would only pile onto Monday. Null without
+ * a join date.
+ */
+export function firstCheckInAt({ contactId = "", joinedAt = null, everyDays = 21 } = {}) {
+  const t = ms(joinedAt);
+  if (t == null) return null;
+  const n = Math.max(1, Math.round(Number(everyDays)) || 1);
+  const workdays = [];
+  for (let d = 0; d < n; d++) if (!isWeekend(t + d * DAY_MS)) workdays.push(d);
+  if (!workdays.length) return iso(t);
+  return iso(t + workdays[checkInSlot(contactId, workdays.length)] * DAY_MS);
+}
+
+/**
  * evaluateAgent(agent, ctx) → { status, reason, segment, pulseReason, listing, house, priority }
  *
  *   agent  { contactId, name, tags, offers (all), current (current rows),
- *            drafts, events, ledger, lastInboundAt, listings, facts }
+ *            drafts, events, ledger, lastInboundAt, listings, facts,
+ *            joinedAt, joinedByReply }
  *   ctx    { settings, config, houses, outreachFollowUpDays, now }
  *
  * status: "stopped" | "owned" | "not_due" | "cold_dropped" | "due".
@@ -550,6 +586,18 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
   }
   if (!quietFor(everyDays)) return out("not_due", waitWhy(everyDays, card && since === card.movedAt ? `moved to Tier ${card.tier.slice(1)} within ${everyDays} days` : `talked within ${everyDays} days`), { segment, dueAt: after(since, everyDays) });
+  // Joined the check-in long after their last word (the repliers, 2026-10-14):
+  // the first one lands on their own day in the next `everyDays`, not all on
+  // the morning they joined. Only the first: once checked in on, or once
+  // anyone has talked since, the clock above decides.
+  // `joinedAt`: the runner's agent_pulse_joined, or the replier backfill's
+  // run. One who joined by their reply and isn't written down yet joins
+  // today, so a preview spreads them from today, as the next run will.
+  const joinedAt = agent.joinedAt || (agent.joinedByReply ? iso(now) : null);
+  const firstAt = firstCheckInAt({ contactId: agent.contactId, joinedAt, everyDays });
+  if (firstAt && !lastPulseAt && !texted.length && !(since && String(since) > String(joinedAt)) && now < ms(firstAt)) {
+    return out("not_due", `joined the check-in; first one spread over ${everyDays} days`, { segment, dueAt: firstAt });
+  }
   const house = ourHouseFor({ offers: agent.current || [], drafts, events, config, now });
   const overdue = since ? now - (ms(since) ?? 0) : Infinity;
   return out("due", "", { segment, pulseReason: house ? "our_house" : "general", house, priority: [2 + tier, -overdue] });
@@ -730,4 +778,58 @@ export function tierDrips({ pulse = {}, conversationAi = null, workflows = null 
     .filter((w) => w?.id && String(w.status || "").toLowerCase() !== "draft" && NURTURE_RX.test(String(w.name || "")) && TIER_RX.test(String(w.name || "")) && !DISPO_RX.test(String(w.name || "")))
     .map((w) => ({ id: String(w.id), name: String(w.name || "") }))
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/* ---------- the repliers outside the pool (ghl-broker/replier-backfill.js) ---------- */
+
+// Phone-side auto-replies: a text that came from their phone, not from them.
+// Only a thread with nothing else from them is "auto_reply".
+export const AUTO_REPLY_RX = /\b(?:do not disturb while driving|i(?:'|’)?m driving with do not disturb|auto[- ]?(?:reply|response|responder)|this is an automated|automated (?:message|response|reply)|(?:does not|doesn'?t|cannot|can'?t|unable to|not able to) (?:receive|accept|read|respond to) (?:text|sms)|(?:text|sms)(?: messages?)? (?:are|is) not (?:monitored|received|accepted)|out of (?:the )?office|(?:on vacation|out of town) (?:until|through|thru)|(?:use|have) a different number for text(?:ing|s)?|thank you for contacting the [\w\s]{0,30}(?:desk|line|team)\b[^]*\bpress \d)\b/i;
+// A stop at the END of a short text ("not my listing, pls stop"), and a
+// polite "don't text me": optOutInTranscript only reads a stop that leads.
+const STOP_TAIL_RX = /\bstop\W*$/i;
+const NO_NEED_RX = /\bno need to (?:message|text|contact) me\b/i;
+const smsDnd = (c) => c?.dnd === true || ["active", "permanent"].includes(String(c?.dndSettings?.SMS?.status || "").toLowerCase());
+const replyChannel = (m) => {
+  const t = String(m?.messageType || m?.type || "").toUpperCase();
+  if (t.includes("ACTIVITY") || t.includes("OPPORTUNITY")) return null;
+  if (t.includes("CALL")) return "call";
+  if (t.includes("SMS")) return "sms";
+  return null;
+};
+
+/**
+ * classifyReplierThread({ messages, contact, optOut }) → { kind, why, lastInboundAt, channel, inbound, lastText? }
+ *
+ * One agent's GHL thread (raw conversation messages, any order), read for
+ * the one-time replier backfill. `kind`:
+ *   none       nothing from them by text or call
+ *   opted_out  SMS DND in GHL, a do-not-text tag, or a stop in their own
+ *              words anywhere in the thread (optOutInTranscript: "STOP",
+ *              "wrong number", "take me off your list")
+ *   auto_reply every text from them is their phone answering for them
+ *   annoyed    one of their last three texts sounds annoyed
+ *   engaged    a person wrote back (or called): they join the check-in
+ * Only `engaged` carries a word of theirs (`lastText`, ≤300 chars) — for the
+ * timeline event, never a log line.
+ */
+export function classifyReplierThread({ messages = [], contact = null, optOut = CONVERSATION_AI_DEFAULTS.optOut } = {}) {
+  const inbound = (messages || [])
+    .map((m) => ({ m, channel: replyChannel(m), at: ms(m?.dateAdded) }))
+    .filter((x) => x.channel && x.at != null && String(x.m?.direction || "").toLowerCase() === "inbound")
+    .filter((x) => x.channel === "call" || String(x.m?.body || "").trim())
+    .sort((a, b) => a.at - b.at);
+  const last = inbound.at(-1);
+  const base = { lastInboundAt: last ? iso(last.at) : null, channel: last?.channel || null, inbound: inbound.length };
+  if (!last) return { kind: "none", why: "no reply", ...base };
+  if (smsDnd(contact)) return { kind: "opted_out", why: "dnd", ...base };
+  if (blockedByTags(contact?.tags || [])) return { kind: "opted_out", why: "tag", ...base };
+  const texts = inbound.filter((x) => x.channel === "sms").map((x) => ({ at: x.at, text: String(x.m.body || "").replace(/\s+/g, " ").trim() }));
+  const transcript = texts.map((x) => `[${iso(x.at).slice(0, 16).replace("T", " ")}] THEM sms: ${x.text}`).join("\n");
+  const stopLine = (t) => (STOP_TAIL_RX.test(t) && t.split(/\s+/).length <= 6) || NO_NEED_RX.test(t);
+  if (optOutInTranscript(transcript, optOut || CONVERSATION_AI_DEFAULTS.optOut) || texts.some((x) => stopLine(x.text))) return { kind: "opted_out", why: "said stop", ...base };
+  const calls = inbound.length - texts.length;
+  if (!calls && texts.every((x) => AUTO_REPLY_RX.test(x.text))) return { kind: "auto_reply", why: "auto-reply only", ...base };
+  if (texts.slice(-3).some((x) => IRRITATED_RX.test(x.text))) return { kind: "annoyed", why: "sounds annoyed", ...base };
+  return { kind: "engaged", why: "replied", ...base, lastText: (texts.at(-1)?.text || "").slice(0, 300) };
 }

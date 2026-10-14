@@ -4506,6 +4506,64 @@ are in `shared/brush-offs.js`.
 
 No switch: these only make the machine text less.
 
+**Agents who wrote back join it (2026-10-14).** Of the 1,049 agents we had
+texted who sat outside the pool, 104 had replied at least once. They had no
+profile, offer, card or fresh listing, so nothing would ever text them again.
+Matt: all of them go into the check-in.
+- **Who.** `loadPulseAgents` adds anyone with a reply on the timeline
+  (`store.lastContactActivity`, inbound only), if we know they're an agent:
+  - the reply was filed as an agent's;
+  - or we imported them from the outreach pull;
+  - or their timeline has our opener.
+
+  A buyer or an unknown caller never joins. They come in as engaged, and
+  opt-outs, stops, annoyed replies and the runner's GHL check (DND, tags)
+  apply as for everyone.
+- **Spread, not one burst.** Their last word is weeks old, so they would all
+  be due the morning they join. Instead each agent's first check-in falls on
+  their own weekday (Pacific) within `everyDays` of joining
+  (`firstCheckInAt`, picked from their contact id). Weekends are skipped
+  because the run is weekdays only. This applies only to the first check-in.
+  Once they've been checked in on, or anyone has talked since, the normal
+  clock takes over. A fresh listing of theirs is still raised at once.
+- **The day they joined.** A replier who joins by their reply counts from
+  today in every plan and preview until a real run writes it down. The first
+  real run (`startAgentPulse`, not a dry run) records `agent_pulse_joined`
+  for every such replier, picked or not, with `at` = now and dedupe key
+  `agent_pulse_joined:<id>`. Later plans read their day from that event, so
+  the spread holds from whenever the change first runs. The backfill below
+  counts from the day it runs (`data.joinedAt` on its marker).
+- **The backfill, once.** Many of the 104 answered a GHL workflow text
+  before the app read inbound texts, so the app has no reply on record for
+  them. `ghl-broker/scripts/backfill-replier-profiles.mjs`
+  (`ghl-broker/replier-backfill.js`) reads the GHL thread of every outreach
+  agent who isn't in the pool and isn't a buyer, three at a time. It sorts
+  each one (`classifyReplierThread`):
+  - **replied:** gets an agent profile and their last word on the timeline
+    (a `text_summary`, or a `call_summary` for a call, with source `backfill`
+    and dedupe key `replier_backfill:<id>`);
+  - **opted out:** STOP, wrong number, "take me off", a stop at the end of a
+    short text, SMS DND or a do-not-text tag. These are marked through
+    `markUnsubscribed`, which adds the `unsubscribed` tag and event;
+  - **left alone:** auto-replies only (a "Do Not Disturb While Driving"
+    reply, or a brokerage desk line) and annoyed replies.
+
+  A replay over the saved 2026-10-14 threads found 72 replied, 31 opted out
+  and 2 auto-replies.
+
+  Run it from `ghl-broker/` with `DATABASE_URL`, `GHL_TOKEN` and
+  `GHL_LOCATION_ID` set; the broker's Render Shell has all three. Run it
+  after the deploy that carries it:
+  1. `node scripts/backfill-replier-profiles.mjs` is the dry run, and the
+     default. It reads only and prints counts only: no names, phones or
+     words. Check that the opted-out count holds the stops.
+  2. `node scripts/backfill-replier-profiles.mjs --write` writes.
+     `--limit N` runs a slice first.
+
+  It's safe to run again: written contacts are in the pool and get skipped.
+  Afterwards, `GET /api/outreach/pulse?agents=1` should show the engaged pool
+  up by about 70, with their `dueAt` spread over the next `everyDays`.
+
 ### The daily sweep (outreach autopilot)
 
 Settings → Agent Outreach → "Run outreach every day on its own". Once a

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   normalizeAgentPulse, evaluateAgent, pickPulseAgents, agentSegment, agentStops, agentOwner,
   freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor, dealToThank, openOfferIdle, tierCard,
+  firstCheckInAt, classifyReplierThread,
 } from "./agent-pulse.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
@@ -574,4 +575,100 @@ test("an agent let go from a stuck offer gets the general check-in, which never 
   const subject = agentPulseSubject({ agent: a, verdict: v, now: NOW });
   assert.equal(subject.house, null);
   assert.ok(subject.pastHouses.includes(stuck().address), "the gate holds a check-in that names it");
+});
+
+// 2026-10-14: 104 agents who wrote back sat outside the check-in pool, and
+// nothing would ever text them again. They join it all at once, weeks after
+// their last word — so every one of them would be due the same morning.
+test("fifty repliers added at once are spread over two weeks, not due the same day", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const joinedAt = ago(0);
+  const repliers = Array.from({ length: 50 }, (_, i) => agent({ contactId: `rp-${i}x${i * 7}`, lastInboundAt: ago(60 + i), joinedAt }));
+  const onDay = (d) => repliers.map((a) => evaluateAgent(a, ctx({ settings: S14, now: NOW + d * DAY + 3600000 }))).filter((v) => v.status === "due").length;
+  assert.ok(onDay(0) <= 10, `${onDay(0)} due on the day they joined`);
+  const firsts = new Set(repliers.map((a) => evaluateAgent(a, ctx({ settings: S14 })).dueAt || "now"));
+  assert.ok(firsts.size >= 8, `first check-ins land on ${firsts.size} different days`);
+  assert.equal(onDay(14), 50, "and every one is due within the two weeks");
+  // Waiting, each one says when — and says it the same way every day.
+  const waiting = evaluateAgent(repliers.find((a) => Date.parse(firstCheckInAt({ contactId: a.contactId, joinedAt, everyDays: 14 })) > NOW + 3 * DAY), ctx({ settings: S14 }));
+  assert.equal(waiting.status, "not_due");
+  assert.equal(waiting.segment, "engaged");
+  assert.equal(evaluateAgent(repliers[3], ctx({ settings: S14, now: NOW + 2 * 3600000 })).dueAt, evaluateAgent(repliers[3], ctx({ settings: S14 })).dueAt);
+});
+
+test("the spread only holds back a replier's first check-in, never one who has talked since or been checked in on", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const joinedAt = ago(1);
+  const id = Array.from({ length: 40 }, (_, i) => `slot-${i}`).find((x) => Date.parse(firstCheckInAt({ contactId: x, joinedAt, everyDays: 14 })) > NOW + 2 * DAY);
+  assert.ok(Date.parse(firstCheckInAt({ contactId: id, joinedAt, everyDays: 14 })) > NOW);
+  assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60), joinedAt }), ctx({ settings: S14 })).status, "not_due");
+  const checked = agent({ contactId: id, lastInboundAt: ago(60), joinedAt, ledger: [{ type: "agent_pulse_sent", at: ago(20), dedupeKey: "k" }] });
+  assert.equal(evaluateAgent(checked, ctx({ settings: S14 })).status, "due", "already on the clock: the clock decides");
+  assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60) }), ctx({ settings: S14 })).status, "due", "no join date: nothing to spread");
+  assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60), joinedAt, listings: [listing()] }), ctx({ settings: S14 })).pulseReason, "fresh_listing", "a fresh listing of theirs is news now");
+});
+
+test("a replier who said stop, or sounds annoyed, is not checked in on when they join", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const stopped = agent({ lastInboundAt: ago(60), joinedAt: ago(30), events: [{ type: "unsubscribed", at: ago(30) }] });
+  assert.equal(evaluateAgent(stopped, ctx({ settings: S14 })).status, "stopped");
+  const annoyed = agent({ lastInboundAt: ago(60), joinedAt: ago(30), events: [{ type: "text_summary", at: ago(60), data: { inbound: "how many times do I have to say no" } }] });
+  assert.equal(evaluateAgent(annoyed, ctx({ settings: S14 })).status, "stopped");
+});
+
+const msg = (direction, body, daysAgo, messageType = "TYPE_SMS") => ({ direction, body, messageType, dateAdded: ago(daysAgo) });
+test("the replier backfill reads a GHL thread: their text is a reply, a stop or DND is an opt-out, an auto-reply is not a person", () => {
+  const ours = msg("outbound", "Hi Pat, is 1 Elm St a project or pretty turnkey?", 50);
+  const none = classifyReplierThread({ messages: [ours, msg("inbound", "", 49, "TYPE_ACTIVITY_OPPORTUNITY")] });
+  assert.equal(none.kind, "none");
+  const replied = classifyReplierThread({ messages: [ours, msg("inbound", "Pretty turnkey, sorry. Will keep you in mind", 49)] });
+  assert.equal(replied.kind, "engaged");
+  assert.equal(replied.lastInboundAt, ago(49));
+  assert.equal(replied.channel, "sms");
+  assert.match(replied.lastText, /keep you in mind/);
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "", 40, "TYPE_CALL")] }).kind, "engaged", "a call from them counts");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "STOP", 49)] }).kind, "opted_out");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "Wrong number", 49)] }).kind, "opted_out");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "Not right now", 49), msg("inbound", "please take me off your list", 45)] }).kind, "opted_out");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "Stop by the open house Saturday!", 49)] }).kind, "engaged", "a word in a sentence is not a stop");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "That's not my listing pls stop", 49)] }).kind, "opted_out", "a stop at the end of a short text");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "No need to message me looking for houses. Bye", 49)] }).kind, "opted_out");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "You've reached Big Brokerage, but we use a different number for texting.", 49)] }).kind, "auto_reply");
+  const dnd = classifyReplierThread({ messages: [ours, msg("inbound", "sure", 49)], contact: { dndSettings: { SMS: { status: "active" } } } });
+  assert.deepEqual([dnd.kind, dnd.why], ["opted_out", "dnd"]);
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "sure", 49)], contact: { tags: ["DNC"] } }).kind, "opted_out");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "I'm driving with Do Not Disturb While Driving turned on. I'll see your message when I get where I'm going.", 49)] }).kind, "auto_reply");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "This number does not accept text messages.", 49)] }).kind, "auto_reply");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "I'm driving with Do Not Disturb While Driving turned on.", 49), msg("inbound", "ok what's your number", 48)] }).kind, "engaged", "a real text after the auto-reply");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "how many times do I have to tell you no", 49)] }).kind, "annoyed");
+  assert.equal(JSON.stringify(classifyReplierThread({ messages: [ours, msg("inbound", "STOP", 49)] })).includes("STOP"), false, "an opt-out carries no words of theirs");
+});
+
+// The run is weekdays only: a Saturday or Sunday slot would just pile onto
+// Monday's run.
+test("no first check-in lands on a weekend", () => {
+  // Joined on a Friday, a Saturday and a Monday (noon Pacific).
+  for (const joinedAt of ["2026-10-16T19:00:00Z", "2026-10-17T19:00:00Z", "2026-10-19T19:00:00Z"]) {
+    const days = new Map();
+    for (let i = 0; i < 300; i++) {
+      const at = firstCheckInAt({ contactId: `wk-${i}-${i * 13}`, joinedAt, everyDays: 14 });
+      const wd = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short" }).format(new Date(at));
+      assert.ok(wd !== "Sat" && wd !== "Sun", `${joinedAt}: a first check-in on ${wd}`);
+      assert.ok(Date.parse(at) - Date.parse(joinedAt) < 14 * DAY, "within the two weeks");
+      days.set(at.slice(0, 10), (days.get(at.slice(0, 10)) || 0) + 1);
+    }
+    assert.equal(days.size, 10, "all ten weekdays of the two weeks are used");
+    assert.ok(Math.max(...days.values()) < 60, "and none takes a pile");
+  }
+});
+
+test("a replier who joined by their reply and isn't written down yet is spread from today, every day the same way once the run writes it", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const ids = Array.from({ length: 40 }, (_, i) => `jr-${i}`);
+  const fresh = ids.map((id) => evaluateAgent(agent({ contactId: id, lastInboundAt: ago(90), joinedByReply: true }), ctx({ settings: S14 })));
+  assert.ok(fresh.filter((v) => v.status === "due").length <= 10, "not all due today");
+  for (const v of fresh.filter((v) => v.status === "not_due")) assert.ok(Date.parse(v.dueAt) < NOW + 14 * DAY, "each within two weeks of today");
+  // Written down today: a week later the same agents keep their days.
+  const later = ids.map((id) => evaluateAgent(agent({ contactId: id, lastInboundAt: ago(90), joinedByReply: true, joinedAt: ago(0) }), ctx({ settings: S14, now: NOW + 7 * DAY })));
+  assert.deepEqual(later.map((v) => v.dueAt || null).filter(Boolean), fresh.map((v) => v.dueAt || null).filter((d) => d && Date.parse(d) > NOW + 7 * DAY));
 });

@@ -322,3 +322,107 @@ test("an agent who said no to an open offer ten days ago gets the check-in, thou
   assert.notEqual(v?.reason, "an open offer", JSON.stringify(v));
   assert.deepEqual(plan.picks.map((p) => [p.contactId, p.reason]), [["ag-no", "general"]]);
 });
+
+// 2026-10-14: 104 agents who wrote back sat outside the check-in pool — no
+// profile, no offer, no card, no fresh listing — so nothing would ever text
+// them again. A reply on the timeline puts them in it.
+const T0 = Date.parse("2026-11-03T20:00:00Z"); // a Tuesday, noon Pacific
+const inboundOnly = async (loc, id, { party = "agent", daysAgo = 40, inbound = "not right now, maybe later", type = "text_summary", now = T0, more = [] } = {}) => {
+  await store.appendContactEvents(loc, id, [{ type, party, at: new Date(now - daysAgo * DAY).toISOString(), source: "conversation",
+    dedupeKey: `in:${id}`, data: type === "text_summary" ? { inbound } : {} }, ...more]);
+};
+const replierSaved = () => savedWith({ everyDays: 14, dailyCap: 0 });
+const verdictsOf = async (loc, now = T0) => {
+  const plan = await planAgentPulse({ locationId: loc, saved: replierSaved(), store, now });
+  return { plan, by: Object.fromEntries(plan.verdicts.map((v) => [v.contactId, v])) };
+};
+const runOnce = async (loc, now) => {
+  _resetJobs();
+  const job = startAgentPulse({ client, locationId: loc, saved: replierSaved(), store, now,
+    deps: { getContact: reachable, startProactive: async () => ({ job: { id: "j", draftId: "d" } }) } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return job;
+};
+
+test("an agent who replied to us but has no profile or offer is in the check-in pool", async () => {
+  const loc = "loc-ap-repliers";
+  await inboundOnly(loc, "rp-agent");
+  // No party on the reply, but we imported them from the outreach pull.
+  await inboundOnly(loc, "rp-hooked", { party: null, type: "call_summary" });
+  const batch = await store.createOutreachBatch(loc, { name: "Autopilot · Pierce, WA" });
+  await store.upsertOutreachAgents(loc, batch.id, [{ agentKey: "e:hooked@example.com", doc: { name: "Pat Agent", hook: { address: "1 Elm St, Tacoma, WA 98402" } } }]);
+  await store.setOutreachAgentStatus(loc, batch.id, "e:hooked@example.com", { status: "imported", contactId: "rp-hooked", importedAt: new Date(T0 - 60 * DAY).toISOString() });
+  const { plan, by } = await verdictsOf(loc);
+  for (const id of ["rp-agent", "rp-hooked"]) {
+    assert.equal(by[id]?.segment, "engaged", `${id}: ${JSON.stringify(plan.counts)}`);
+    assert.ok(Date.parse(by[id].dueAt) < T0 + 14 * DAY, `${id} has a first check-in within two weeks`);
+  }
+  await runOnce(loc, T0);
+  const later = await verdictsOf(loc, T0 + 15 * DAY);
+  assert.equal(later.by["rp-agent"].status, "due");
+  assert.equal(later.by["rp-hooked"].status, "due", "an outreach agent who called us back");
+  assert.ok(later.plan.picks.some((p) => p.contactId === "rp-agent" && p.reason === "general"));
+});
+
+test("a caller or texter we can't tell is an agent, or a buyer, stays out of the agent check-in", async () => {
+  const loc = "loc-ap-not-agents";
+  await inboundOnly(loc, "rp-unknown", { party: null });
+  await inboundOnly(loc, "rp-buyer-event", { party: "investor" });
+  await inboundOnly(loc, "rp-buyer");
+  await store.upsertContactProfile(loc, "rp-buyer", { party: "investor", name: "Buyer" });
+  const { by } = await verdictsOf(loc);
+  assert.deepEqual(Object.keys(by), []);
+});
+
+test("a replier who said stop is not checked in on", async () => {
+  const loc = "loc-ap-replier-stop";
+  await inboundOnly(loc, "rp-stop", { inbound: "Stop", more: [{ type: "unsubscribed", party: "agent", at: new Date(T0 - 39 * DAY).toISOString(), source: "ghl", dedupeKey: "unsubscribed:rp-stop", data: { via: "dnd" } }] });
+  await inboundOnly(loc, "rp-annoyed", { inbound: "how many times do I have to tell you no" });
+  const { plan, by } = await verdictsOf(loc);
+  assert.equal(by["rp-stop"].status, "stopped");
+  assert.equal(by["rp-annoyed"].status, "stopped");
+  assert.equal(plan.picks.length, 0);
+});
+
+test("repliers seen for the first time a week after the deploy are still spread over the next two weeks", async () => {
+  const loc = "loc-ap-replier-spread";
+  const seen = T0 + 7 * DAY;
+  for (let i = 0; i < 30; i++) await inboundOnly(loc, `rp-many-${i}`, { daysAgo: 50 + i, now: seen });
+  const first = await verdictsOf(loc, seen);
+  assert.equal(Object.keys(first.by).length, 30, "all thirty are in the pool");
+  assert.ok(first.plan.picks.length <= 8, `${first.plan.picks.length} due the first morning`);
+  assert.ok(first.plan.verdicts.every((v) => v.dueAt && Date.parse(v.dueAt) < seen + 14 * DAY), "every first check-in within two weeks of the day they were seen");
+  assert.ok(new Set(first.plan.verdicts.map((v) => String(v.dueAt).slice(0, 10))).size >= 7, "on many days");
+  assert.deepEqual(first.plan.unjoined.length, 30);
+
+  // The first real run writes the day each joined — all of them, not only
+  // the ones it picked — so the spread holds from that day on.
+  const job = await runOnce(loc, seen);
+  assert.equal(job.joined, 30);
+  const joined = (await Promise.all(Array.from({ length: 30 }, (_, i) => store.listContactEvents(loc, `rp-many-${i}`, { limit: 20 }))))
+    .map((evs) => evs.filter((e) => e.type === "agent_pulse_joined"));
+  assert.ok(joined.every((j) => j.length === 1 && j[0].at === new Date(seen).toISOString()));
+  const next = await verdictsOf(loc, seen + DAY);
+  assert.equal(next.plan.unjoined.length, 0);
+  const waitingThen = first.plan.verdicts.filter((v) => v.status === "not_due" && Date.parse(v.dueAt) > seen + DAY);
+  assert.ok(waitingThen.length >= 15);
+  for (const v of waitingThen) assert.equal(next.by[v.contactId].dueAt, v.dueAt, "the same day as the first plan said");
+  await runOnce(loc, seen + DAY);
+  assert.equal((await store.listContactEvents(loc, "rp-many-0", { limit: 20 })).filter((e) => e.type === "agent_pulse_joined").length, 1, "written once");
+  // Two weeks on, every one is due: the ones never checked in on because
+  // their day has come, the two runs' picks because their 14 days are up.
+  const later = await verdictsOf(loc, seen + 15 * DAY);
+  assert.equal(later.plan.picks.length, 30);
+
+  // The backfill's own join date (on its marker) counts from the day it ran.
+  const loc2 = "loc-ap-replier-backfilled";
+  const ran = T0 + 100 * DAY;
+  for (let i = 0; i < 30; i++) {
+    await store.upsertContactProfile(loc2, `bf-${i}`, { party: "agent" });
+    await store.appendContactEvents(loc2, `bf-${i}`, [{ type: "text_summary", party: "agent", at: new Date(ran - 60 * DAY).toISOString(), source: "backfill",
+      dedupeKey: `replier_backfill:bf-${i}`, data: { inbound: "maybe next year", backfill: true, joinedAt: new Date(ran).toISOString() } }]);
+  }
+  assert.ok((await verdictsOf(loc2, ran + 3600000)).plan.picks.length <= 8, "backfilled repliers are spread from the run");
+  assert.ok((await verdictsOf(loc2, ran + 7 * DAY)).plan.picks.length < 30, "and still spread a week on");
+});
