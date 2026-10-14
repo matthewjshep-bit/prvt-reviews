@@ -4257,7 +4257,9 @@ and 31 named one, and every one got the generic 14-day "anything distressed or o
   ("last spring", "since March", "listed in September", "of last year"), our offer expiring, or a
   bare "May"/"March" with no lead-in.
 - **Booking.** The reply agent files `checkin_requested` with `kind: "lead"` and
-  `lead: { what, when, said, via }` instead of the plain check-in for that message. On a call it
+  `lead: { what, when, said, via }` instead of the plain check-in for that message. A bare "check
+  back in a couple months" with no lead in it is their cadence (`checkinEvery`), booked as a plain
+  `kind: "date"` check-in, not a lead. On a call it
   reads the THEM lines of the transcript (an unlabelled one: lead words only, no "check back", since
   our side is in it). The isCall exclusion still holds for everything else. A house coming with no
   address and a lead under 21 days out makes that day the address chase's first ask; further out
