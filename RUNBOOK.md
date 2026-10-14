@@ -4091,9 +4091,11 @@ and 31 named one, and every one got the generic 14-day "anything distressed or o
 - **Who goes first.** An offer's clock (`offerOwner`, shared/agent-pulse.js: a live deal, an open
   offer still being asked about, a held underwrite) keeps them; the lead waits, unclaimed, and goes
   after. It's dropped 30 days past its day, after another check-in in the last three days waits, and
-  if they spoke in the 14 days before its day the conversation has it. Until it goes, the agent
-  check-in stands down ("a lead they told us about"). A lead more than 7 days out doesn't replace
-  the "nobody answered them" net under a held reply.
+  if they spoke in the 14 days before its day the conversation has it. A far-off lead never means
+  months of silence: the regular agent check-in keeps its clock, generic as always, and only stands
+  down ("a lead they told us about") once the lead's day is within `everyDays`, so the two don't
+  land together. A lead more than 7 days out doesn't replace the "nobody answered them" net under a
+  held reply.
 - **Sends.** No new switch. It rides `checkin_due`'s existing auto-send rule.
 - **Replay (2026-10-14, read-only):** 36 hits in 5,538 texts and 252 calls across 31 agents: 9 within
   a week, 19 in 8–30 days, 4 in 31–90, 4 further. Two read as live-deal chatter ("undergoing
@@ -4140,8 +4142,8 @@ runs it) owns an agent when nothing else does:
   - a live deal, an open offer, or a held underwrite under 14 days old;
   - any follow-up the Offers column shows as coming;
   - anything waiting in the outbox, a promise, a check-in they asked for, a
-    lead they gave us a date for (until its day, up to 13 months), or an
-    address chase;
+    lead they gave us a date for (only once its day is within `everyDays`),
+    or an address chase;
   - the outreach first-text workflow (until its follow-up is due) or its
     follow-up (`ghlWorkflowDays`, 21);
   - any GHL workflow the app enrolled them in (now recorded as

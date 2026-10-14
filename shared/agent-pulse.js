@@ -288,9 +288,13 @@ export function agentOwner({ offers = [], drafts = [], events = [], config = {},
   const req = byTime.filter((e) => e.type === "checkin_requested" && e.data?.kind !== "lead").at(-1);
   if (req && now - (ms(req.at) ?? 0) < 45 * DAY_MS && !byTime.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)
       && !byTime.some((e) => (e.type === "text_summary" || e.type === "call_summary") && after(e, req.at))) return "a check-in they asked for";
-  // A lead they told us the timing of ("relisting in the spring"): the
-  // check-in on its day is theirs, not a generic one every few weeks.
-  if (leadCheckInPending(byTime, now)) return "a lead they told us about";
+  // A lead they told us the timing of ("relisting in the spring") has them
+  // only in the run-up to its day, so the two texts don't land together.
+  // Further out the regular check-in keeps its clock (Matt: every agent who
+  // replied hears from us every few weeks) and stays generic; the lead's own
+  // check-in still goes on its day (promise-sweep.js).
+  const lead = leadCheckInPending(byTime, now);
+  if (lead && (ms(lead.data?.dueAt) ?? 0) - now <= s.everyDays * DAY_MS) return "a lead they told us about";
   // A property they said was coming, still being chased.
   const pending = byTime.filter((e) => e.type === "address_pending").at(-1);
   if (pending && now - (ms(pending.at) ?? 0) < 32 * DAY_MS
