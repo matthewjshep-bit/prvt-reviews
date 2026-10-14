@@ -47,6 +47,14 @@ const pacificDay = (ms) => new Intl.DateTimeFormat("en-CA", { timeZone: "America
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The tags the tier nurture goes with; who the one-time clean-up reads.
 export const TIER_DRIP_TAGS = ["tier-2", "tier-3"];
+// The day agents who had written back joined the check-in by their reply
+// alone (2026-10-14: 104 were outside the pool). Their first check-ins are
+// spread over the `everyDays` after it (shared/agent-pulse.js
+// firstCheckInAt), not all due the morning of the deploy. The replier
+// backfill stamps its own run time on its marker instead.
+export const REPLIERS_JOINED_AT = "2026-10-15T15:00:00.000Z";
+// Timeline events that only an agent's thread has: the outreach opener.
+const AGENT_SIGNAL_TYPES = new Set(["outreach_enrolled", "outreach_sent", "outreach_left"]);
 
 // GHL's workflow list, for finding the nurture drip by name. Ten minutes is
 // plenty: workflows are renamed by hand, rarely. A read that fails gives null,
@@ -154,10 +162,11 @@ export function housesFrom(offers = [], events = []) {
 /**
  * loadPulseAgents({ locationId, saved, store, now }) → { agents, settings, config, oa, houses, ledgerRead, evRead }
  *
- * Every agent the app knows (contact profiles, listing agents, and anyone we
- * made an offer to), each with their offers, drafts, timeline, check-in
- * ledger, last word and fresh listings. The check-in plans from it; the
- * tiers (agentRoster) read it too.
+ * Every agent the app knows (contact profiles, listing agents, anyone we
+ * made an offer to, Tier 2/3 cards, and any agent who has written back),
+ * each with their offers, drafts, timeline, check-in ledger, last word and
+ * fresh listings. The check-in plans from it; the tiers (agentRoster) read
+ * it too.
  */
 export async function loadPulseAgents({ locationId, saved = {}, store = defaultStore, now = Date.now(), tierCards = null }) {
   const settings = agentPulseSettings(saved);
@@ -193,7 +202,7 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   const ledgerBy = byContact(ledgerRead.events);
   const seenDraft = new Set((openDrafts || []).map((d) => d.id));
   const draftsBy = byContact([...(openDrafts || []), ...(recentDrafts || []).filter((d) => !seenDraft.has(d.id))]);
-  const inboundBy = new Map((inbound || []).map((r) => [r.contactId, r.at]));
+  const inboundRow = new Map((inbound || []).filter((r) => r?.contactId).map((r) => [r.contactId, r]));
   const listingsBy = byContact(listings);
   const profileBy = new Map((profiles || []).map((p) => [p.contactId, p]));
   // A buyer the pull happened to match (some buyers list houses too) is the
@@ -206,6 +215,18 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   // And everyone on a Tier 2 or Tier 3 card in GHL (pulseTierCards).
   const cards = tierCards instanceof Map ? tierCards : new Map();
   const ids = new Set([...(profiles || []).map((p) => p.contactId), ...(listings || []).map((l) => l.contactId), ...offersBy.keys(), ...cards.keys()]);
+  // And every agent who has written back (2026-10-14: 104 who replied sat
+  // outside all of the above, and nothing would ever text them again). Only
+  // someone we know is an agent: the reply was filed as an agent's, or we
+  // imported them from the outreach pull, or their timeline has our opener.
+  // Never a buyer, and never an unknown caller.
+  const hooked = new Set((hooks || []).map((h) => h?.contactId).filter(Boolean));
+  const repliers = new Set();
+  for (const [id, r] of inboundRow) {
+    if (ids.has(id) || investorIds.has(id) || (r.party && r.party !== "agent")) continue;
+    if (r.party === "agent" || hooked.has(id) || (eventsBy.get(id) || []).some((e) => AGENT_SIGNAL_TYPES.has(e?.type))) repliers.add(id);
+  }
+  for (const id of repliers) ids.add(id);
 
   const agents = [];
   for (const id of ids) {
@@ -216,8 +237,11 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
       contactId: id, name: p.name || "", tags: p.tags || [], facts: p.facts || {},
       offers: mine, current: mine.filter((o) => o.isCurrent !== false),
       drafts: draftsBy.get(id) || [], events: eventsBy.get(id) || [], ledger: ledgerBy.get(id) || [],
-      lastInboundAt: inboundBy.get(id) || null, listings: listingsBy.get(id) || [],
+      lastInboundAt: inboundRow.get(id)?.at || null, listings: listingsBy.get(id) || [],
       ghlTier: cards.get(id) || null,
+      // When they joined the check-in, for spreading the first one: the
+      // replier backfill's run, or the day repliers joined by their reply.
+      joinedAt: inboundRow.get(id)?.data?.joinedAt || (repliers.has(id) ? REPLIERS_JOINED_AT : null),
     });
   }
   return { agents, settings, config, oa, houses, ledgerRead, evRead };
