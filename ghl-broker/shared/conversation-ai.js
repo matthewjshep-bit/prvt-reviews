@@ -533,6 +533,9 @@ export const ACTION_LABEL = {
   // Injected by the reply agent only: the agent said the house sold or came
   // off the market (shared/held-underwrites.js houseGone).
   mark_offer_unavailable: "Mark the house no longer available",
+  // Injected by the reply agent only: our reply passed on the house, so a
+  // number we priced on it and never sent closes (we passed).
+  retire_unsent_offer: "Close a number we never sent on a house we passed on",
   mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
   record_deal_feedback: "File what they said about the deal as feedback",
   revise_offer_to_counter: "Re-issue the offer at their number",

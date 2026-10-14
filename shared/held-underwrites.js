@@ -34,11 +34,12 @@
 //   call    asked, and they wrote back without the number — a phone call
 //   yours   a person's call
 
-import { addressKey, sameStreet, parseUsAddress } from "./us-address.js";
+import { addressKey, sameStreet, parseUsAddress, completeAddress } from "./us-address.js";
 import { propertyDossier } from "./contact-record.js";
 import { aiHoldReasons, effectiveStatus, DEAD_STATUSES } from "./offer-status.js";
 import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
 import { WA_CITY_COORDS } from "./wa-city-coords.js";
+import { ourReplyPasses, threadPassed } from "./flip-read.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -121,11 +122,21 @@ export const GONE_TEXT = /\b(pending|sold(?!\s+as[- ]is)|under contract|off the 
 // ("any offer will need short sale approval") is not gone: the offer has to
 // be one they already have.
 export const TAKEN_TEXT = /\b(?:have|has|got|there'?s|there is|is)\s+(?:already\s+|now\s+)?(?:an|one|a)\s+(?:accepted\s+)?offer\b[^.!?\n]{0,60}?\b(?:short[- ]?sale|bank|lender)\b[^.!?\n]{0,15}?\b(?:approval|process)\b|\bapproval\s+(?:on|for)\s+(?:the|their|our)\s+(?:current|existing|accepted)\s+offer\b|\b(?:have|has|got)\s+(?:already\s+)?an\s+accepted\s+offer\b/i;
+// In escrow with someone else, and we'd be the backup: taken, the same as
+// pending. 19021 46th Ave S (2026-10-05): "a full price offer is in escrow,
+// the other one is the backup" left our offer
+// open, and the house sat in Tier 1. Read on any intent, but only when the
+// escrow is someone else's ("another offer", "the full price offer", "in
+// escrow with another buyer", "you'd be backup"): "we're in escrow!" on a
+// deal of ours is good news, and a deal is never marked by this anyway
+// (pickOfferForStatus skips deals).
+export const ESCROW_TEXT = /\b(?:another|other|their|a\s+different|(?:the|a|an)\s+(?:full[- ]price|cash|higher|better))\s+(?:buyer'?s?\s+)?offers?\s+(?:is\s+|went\s+|are\s+)?(?:now\s+|already\s+)?(?:in|into)\s+escrow\b|\bin\s+escrow\s+with\s+(?:another|a\s+different|other|someone)\b|\b(?:taking|accepting)\s+back[- ]?up\s+offers?\b|\b(?:considered|you'?re|you\s+are|you'?d\s+be|you\s+would\s+be|yours\s+(?:is|would\s+be))\s+(?:the\s+|a\s+|in\s+)?back[- ]?up\b/i;
 // Strict on its own (OVER_PLAIN names the house); loose on a rejection.
 export const houseGone = (text = "", intent = "") => {
   const t = String(text || "");
   return (GONE_TEXT.test(t) && (intent === "rejection" || OVER_PLAIN.test(t)))
-    || (TAKEN_TEXT.test(t) && intent === "rejection");
+    || (TAKEN_TEXT.test(t) && intent === "rejection")
+    || ESCROW_TEXT.test(t);
 };
 /**
  * saysTurnkey(text) → boolean
@@ -225,10 +236,13 @@ const CLOSED_OPP = /^(lost|abandoned|abandon)$/i;
  *   botOffTags     the routing's bot-off tags (lower-case)
  *   knownCities    Set of city slugs we buy in (knownCitiesFrom), or null to
  *                  skip the area check
+ *   knownAddresses full addresses we hold for this agent (auto-underwrite.js
+ *                  knownAddressesFor): a street the map missed is finished
+ *                  from these before the agent is asked
  */
 export function triageHeldUnderwrite({
   offer, siblings = [], events = [], drafts = [], contact = null, opportunities = [], botOffTags = ["stop bot", "bot-off"], now = Date.now(),
-  knownCities = null, brought = false,
+  knownCities = null, brought = false, knownAddresses = [],
 } = {}) {
   const held = aiHoldReasons(offer);
   const cls = classifyHolds(held);
@@ -275,6 +289,17 @@ export function triageHeldUnderwrite({
   const passedEv = houseEvents.find((e) => (e.type === "offer_passed" || e.type === "offer_we_passed")
     && !(e.data?.by === "held-sweep" && (ms(e.at) ?? 0) < heldAt));
   if (passedEv) return { ...base, action: "retire", status: passedEv.type === "offer_passed" ? "passed" : "we_passed", reason: passedEv.type === "offer_passed" ? "they passed on this house" : "we passed on this house" };
+  // We already told them we're passing on it (Matt, 2026-10-14). Dana F.'s
+  // Welfare Ave: "probably not enough meat for us", then an
+  // underwrite held on the map, then "can you confirm the full address?" at
+  // the 7pm check — on a house we'd turned down that afternoon.
+  const ourWord = drafts
+    .filter((d) => d && d.status === "sent" && d.propertyAddress && onThisHouse(d.propertyAddress))
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  const qualified = threadPassed({ address, drafts });
+  if ((qualified && qualified.stage !== "ask") || (ourWord && ourReplyPasses(ourWord.sentText || ourWord.reply))) {
+    return { ...base, action: "retire", status: "we_passed", reason: "we told them we're passing on this house" };
+  }
   const ruledOut = agentRuledOut(houseEvents, address);
   if (ruledOut) return { ...base, action: "retire", status: "we_passed", reason: `turnkey per the agent ("${ruledOut.said.slice(0, 60)}")` };
   const said = drafts
@@ -325,8 +350,17 @@ export function triageHeldUnderwrite({
   }
 
   /* --- 3b. an address the map couldn't place ("818 Popular, Edmonds") --- */
-  // Ask them to confirm the street; their answer re-runs it.
+  // First, the address we already hold: a listing of theirs from RentCast,
+  // our outreach text, a house in the book (`knownAddresses`). The same
+  // number on the same street with a city on it is this house — re-run on
+  // that, and nobody is asked (Matt, 2026-10-14: "we should have that
+  // information from RentCast"). Only a street we can't place is asked about.
   const miss = held.find((h) => MAP_MISS.test(String(h || "")));
+  const placed = miss
+    ? completeAddress(address, { candidates: knownAddresses }).find((a) => a !== address && parseUsAddress(a).city)
+    : null;
+  if (placed) return { ...base, action: "rerun", address: placed, needs: [], reason: `${clip(miss)} — re-run as ${placed.split(",").slice(0, 2).join(",")}` };
+  // Ask them to confirm the street; their answer re-runs it.
   if (miss) {
     const lastText = latestInbound(drafts, events);
     if (asked != null && (lastText == null || lastText < asked)) return { ...base, action: "wait", needs: ["address"], reason: "asked them to confirm the address, waiting" };
@@ -485,7 +519,7 @@ export function heldOnTheMachine(offer, { knownCities = null, now = Date.now() }
     const heldAt = ms(offer?.autoUnderwrite?.finishedAt) ?? ms(offer?.updatedAt) ?? ms(offer?.createdAt) ?? now;
     return { what: "passed unless you underwrite it anyway — we buy single-family only", at: new Date(heldAt + KIND_PASS_HOURS * 3600000).toISOString() };
   }
-  if (held.some((h) => MAP_MISS.test(String(h || "")))) return { what: "asks them to confirm the street address at the 7pm check" };
+  if (held.some((h) => MAP_MISS.test(String(h || "")))) return { what: "finds it from their listing, or asks them to confirm the street, at the 7pm check" };
   // Outside our area, when nothing their numbers could clear is in the way.
   if (!cls.rescuable && outsideArea(address, knownCities)) return { what: `passed at the 7pm check — outside the area we buy in (${cityName(cityOf(address))})` };
   return null;

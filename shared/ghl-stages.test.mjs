@@ -206,3 +206,26 @@ test("the bot's tier-2/3 tag and TIER 2/3 workflow are the lower-tier moves; TIE
   assert.equal(isLowerTierAction({ type: "add_to_workflow", workflowName: "Tier 2 Disposition" }), false);
   assert.equal(isLowerTierAction({ type: "remove_tags", tags: ["tier-2", "tier-3"] }), false);
 });
+
+// Matt, 2026-10-14: Eric B. sat in Tier 1 for 55 days on an August row we
+// priced and never sent; Cheryl P. on a duplicate of a house
+// we'd passed on. A number that never went out is Tier 1 only while live.
+test("a priced offer never sent and quiet 10 days leaves Tier 1", () => {
+  const stale = offer("e", { status: "new", sends: [], createdAt: ago(55) });
+  const t = targetStage({ offers: [stale], now: NOW, lastIn: ago(55) });
+  assert.equal(t.to, "tier2");
+  assert.match(t.why, /never sent/);
+  assert.equal(targetStage({ offers: [offer("e2", { status: "new", sends: [], createdAt: ago(4) })], now: NOW }).to, "tier1", "a fresh one stays");
+  assert.equal(targetStage({ offers: [offer("e3", { status: "new", sends: [], createdAt: ago(30) })], now: NOW, lastIn: ago(2) }).to, "tier1", "they wrote this week: still live");
+  assert.equal(targetStage({ offers: [offer("e4", { status: "draft", sends: [], createdAt: ago(15) })], now: NOW }).to, "tier2", "a held draft gone quiet too");
+});
+
+test("a card the app moved itself is not read as one you moved", () => {
+  const moved = ago(1);
+  const stale = offer("k", { status: "new", sends: [], createdAt: ago(55) });
+  const theirs = planCard({ acq: ACQ, cards: [card("k", "s-t1", { lastStageChangeAt: moved })], offers: [stale], contactId: "k", lastIn: ago(55), now: NOW });
+  assert.ok(theirs.youMoved, "with no record of ours, a newer card move is yours");
+  const ours = planCard({ acq: ACQ, cards: [card("k", "s-t1", { lastStageChangeAt: moved })], offers: [stale], contactId: "k", lastIn: ago(55),
+    appMoves: [new Date(Date.parse(moved) + 4000).toISOString()], now: NOW });
+  assert.equal(ours.move?.to, "Tier 2", JSON.stringify(ours));
+});

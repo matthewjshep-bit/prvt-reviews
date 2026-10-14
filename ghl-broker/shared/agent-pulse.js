@@ -599,7 +599,12 @@ export function agentPulseSubject({ agent = {}, verdict = {}, now = Date.now() }
   return {
     reason: verdict.pulseReason,
     segment: verdict.segment,
-    address: l ? street(l.address) : h ? street(h.address) : "",
+    // The whole address, city and ZIP: the reply to this text is about this
+    // house, and an underwrite that starts from it has to find it on a map.
+    // "5413 Welfare Ave NE" alone held as "couldn't locate", and the agent
+    // was asked for the city we'd had from RentCast (2026-10-13). The text
+    // itself names the listing by street (listing.street, listing.city).
+    address: l ? String(l.address || "").trim() : h ? String(h.address || "").trim() : "",
     listing: l ? { street: street(l.address), city: l.city || cityOf(l.address), dom: Number(l.daysOnMarket) || 0, cut: Boolean(l.distress?.cut), type: String(l.propertyType || "") } : null,
     house: h ? { street: street(h.address), how } : null,
     dealsWithUs: (agent.offers || []).filter((o) => o?.deal).length,

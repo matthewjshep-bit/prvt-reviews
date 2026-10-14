@@ -97,3 +97,30 @@ test("an agent saying it sold marks the house no longer available, on the live o
   assert.equal(r.ok, false, "a reply still never walks us away from a house");
   assert.match(r.reason, /not a status this can set/);
 });
+
+// Matt, 2026-10-14 (Korey P.): the bot answered "it's turnkey" with "mostly
+// after places needing real work", and an underwrite it had started anyway
+// left a priced offer that never went out. That row kept him in Tier 1.
+test("an agent who said turnkey and got a pass has no offer waiting", async () => {
+  const unsent = await mkOffer({ contactId: "a-turnkey", address: "13427 169th Street Ct E, Puyallup, WA 98374", status: "new" });
+  const held = await mkOffer({ contactId: "a-turnkey", address: "13427 169th St Ct E, Puyallup, WA 98374", status: "draft", cashAmount: 0 });
+  const r = await deps.retireUnsentOffers({ contactId: "a-turnkey", addressHint: "13427 169th Street Ct E" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.retired, 2);
+  for (const o of [unsent, held]) {
+    const row = await store.getOffer(o.id);
+    assert.equal(row.status, "we_passed");
+    assert.equal(row.retired?.by, "conversation");
+  }
+});
+
+test("a pass in our reply never closes a number that went out, or another house", async () => {
+  const floated = await mkOffer({ contactId: "a-out", address: "1804 13th Ave, Milton, WA 98354", status: "new", floatSentAt: new Date().toISOString() });
+  const sent = await mkOffer({ contactId: "a-out", address: "1804 13th Ave, Milton, WA 98354", status: "sent" });
+  const other = await mkOffer({ contactId: "a-out", address: "99 Other St, Milton, WA 98354", status: "new" });
+  const r = await deps.retireUnsentOffers({ contactId: "a-out", addressHint: "1804 13th Ave" });
+  assert.equal(r.ok, false);
+  assert.equal((await store.getOffer(floated.id)).status, "new");
+  assert.equal((await store.getOffer(sent.id)).status, "sent");
+  assert.equal((await store.getOffer(other.id)).status, "new");
+});

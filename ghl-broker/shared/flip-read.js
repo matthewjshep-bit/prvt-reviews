@@ -174,7 +174,8 @@ export function qualifyStep({ words = "", asked = false, passed = false, agentRe
 /**
  * stillQualifying({ address, contactId, events, drafts }) → boolean
  *
- * The house is the one our first text opened with, and no reply has found
+ * The house is the one our first text (or a check-in about a fresh listing
+ * of theirs) opened with, and no reply has found
  * it a flip yet. A number "promised" on it (the bot's own "let me run it by
  * underwriting") is not a reason to underwrite it: the question decides
  * that (shared/promise-resolver.js).
@@ -183,11 +184,43 @@ export function stillQualifying({ address = "", contactId = "", events = [], dra
   if (!String(address || "").trim()) return false;
   const ice = (events || [])
     .filter((e) => e && (!contactId || !e.contactId || e.contactId === contactId)
-      && (e.type === "outreach_sent" || (e.type === "outreach_enrolled" && e.data?.kind !== "followup")) && e.address)
+      && (e.type === "outreach_sent" || (e.type === "outreach_enrolled" && e.data?.kind !== "followup")
+        || (e.type === "agent_pulse_texted" && (e.data?.listingKey || e.data?.reason === "fresh_listing"))) && e.address)
     .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0];
   if (!ice || !sameStreet(ice.address, address)) return false;
   return !(drafts || []).some((d) => d && (!contactId || d.contactId === contactId)
     && d.qualify?.stage === "qualified" && sameStreet(d.qualify.address || "", address));
+}
+
+// Our own reply passing on the house (Matt, 2026-10-14). The model tags "it
+// needs a refresh" as deal_available, writes "probably not enough meat for us
+// on that one" — and the intent alone ran Tier 1 and an underwrite: Dana F.'s
+// Welfare Ave, Korey P.'s turnkey Puyallup, Loren K., Lan N., Rachel B.
+// Read our words, not the intent.
+const OUR_PASS_RX = [
+  /\bnot\s+(?:quite\s+)?enough\s+meat\b/i,
+  /\bnot\s+(?:quite\s+|really\s+)?(?:the|a)\s+heavy\s+lift\b/i,
+  /\bnot\s+(?:quite\s+)?(?:distressed|rough)\s+enough\b/i,
+  /\b(?:pretty|too|a\s+bit)\s+light\s+for\s+us\b/i,
+  /\ba\s+light\s+one\s+for\s+us\b/i,
+  /\blighter\s+than\s+(?:we|what\s+we)\s+(?:go|buy|usually)/i,
+  /\b(?:is|are)n'?t\s+(?:really\s+|quite\s+)?(?:our\s+lane|a\s+fit\s+for\s+us|for\s+us|what\s+we(?:'re|\s+are)\s+after)\b/i,
+  /\bnot\s+(?:really\s+|quite\s+)?(?:our\s+lane|a\s+fit\s+for\s+us|one\s+for\s+us|what\s+we(?:'re|\s+are)\s+(?:after|looking\s+for))\b/i,
+  /\b(?:too|more)\s+(?:turnkey|finished|nice)\s+(?:for\s+us|than\s+what\s+we)\b/i,
+  /\b(?:mostly|usually|really)\s+after\s+(?:places|houses|homes|stuff|properties)\s+(?:that\s+)?need(?:ing|s)?\s+(?:real\s+|more\s+)?work\b/i,
+  /\boutside\s+the\s+box\s+for\s+us\b/i,
+  /\b(?:we(?:'d|'ve|\s+have|\s+had)?|i(?:'ve)?)\s+(?:already\s+)?moved\s+on\s+from\s+(?:that|this)\s+one\b/i,
+  /\b(?:we'?ll|we\s+will|going\s+to|gonna)\s+pass\s+on\s+(?:that|this|it)\b/i,
+];
+// The same reply still chasing a house — ours or another one ("pass on 184th,
+// keep me posted on that Mount Vernon one though"). Then it isn't a pass.
+const STILL_CHASING_RX = /\bworth\s+(?:once\s+it'?s\s+)?fixed\s+up\b|\bwhat'?s\s+the\s+(?:full\s+|street\s+|unit\s+)?address\b|\bunderwriting\b|\brun\s+(?:the\s+|those\s+)?numbers\b|\bgood\s+fit\s+for\s+us\b|\bmore\s+our\s+speed\b|\bsounds\s+like\s+our\s+lane\b|\bARV\b|\bas-is,?\s+(?:cash|quick)/i;
+
+/** ourReplyPasses(reply) → true when our reply turns the house down and isn't still chasing one. */
+export function ourReplyPasses(reply = "") {
+  const t = String(reply || "");
+  if (!t.trim()) return false;
+  return OUR_PASS_RX.some((rx) => rx.test(t)) && !STILL_CHASING_RX.test(t);
 }
 
 // A reply that is the bot's word to the agent: going out, gone, or waiting on

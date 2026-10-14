@@ -465,3 +465,14 @@ test("the plan lists every agent with what the check-in will do and when, and co
   assert.equal(by["t3-wait"].tier, "t3");
   assert.ok(verdicts.every((v) => !("name" in v)), "no names in the list");
 });
+
+// 2026-10-13, 5413 Welfare Ave NE: the check-in carried the street alone, so
+// the reply's underwrite couldn't find it on a map and the agent was asked
+// for a city RentCast had given us. The text still names it by street.
+test("a check-in house carries its city and ZIP, and the text still names it by street", () => {
+  const v = evaluateAgent(agent({ lastInboundAt: ago(60), listings: [listing()] }), ctx());
+  const subj = agentPulseSubject({ agent: agent(), verdict: v });
+  assert.equal(subj.address, "123 Main St, Kent, WA 98031");
+  assert.equal(subj.listing.street, "123 Main St");
+  assert.equal(subj.listing.city, "Kent");
+});

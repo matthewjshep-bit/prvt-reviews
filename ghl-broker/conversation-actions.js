@@ -157,6 +157,15 @@ const EXECUTORS = {
     if (r.unchanged) return `${r.address} was already marked no longer available`;
     return `${r.address} marked no longer available${r.stopped ? ` — ${r.stopped} queued text${r.stopped === 1 ? "" : "s"} about it stopped` : ""}`;
   },
+  // Our reply passed on the house (reply-agent.js, ourReplyPasses): a number
+  // we priced on it and never sent closes as we_passed. Never an offer that
+  // went out. Injected only, never on a rule.
+  async retire_unsent_offer({ deps, contactId, draft }) {
+    if (typeof deps?.retireUnsentOffers !== "function") throw new Error("closing unsent offers is not wired on this broker");
+    const r = await deps.retireUnsentOffers({ contactId, addressHint: draft?.propertyAddress || "", note: String(draft?.summary || "").slice(0, 200) });
+    if (!r?.ok) return r?.reason || "no unsent offer on that house";
+    return `${r.retired} unsent offer${r.retired === 1 ? "" : "s"} on ${r.address} closed — we passed`;
+  },
   async mark_offer_realm_yes({ deps, contactId, draft }) {
     if (typeof deps?.setOfferRealm !== "function") throw new Error("offer realm is not wired on this broker");
     const r = await deps.setOfferRealm({ contactId, addressHint: draft?.propertyAddress || "", answer: "yes", note: String(draft?.summary || "").slice(0, 200) });

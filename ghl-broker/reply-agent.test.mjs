@@ -6660,3 +6660,79 @@ test("once GHL follows the offers, an agent's no adds no tier-3 tag and no TIER 
   const after = await run({ ...STARTER_SAVED, ghlStages: { mode: "on" } });
   assert.ok(after.length > 0 && after.every((a) => a.status === "skipped" && /pipeline follows the offers/.test(a.detail || "")), JSON.stringify(after.map((a) => [a.type, a.status])));
 });
+
+/* ---------- our own reply passing on the house (2026-10-14) ---------- */
+
+// Matt, 2026-10-14: "the agents are saying it's not a fit and we're still
+// keeping it in Tier 1". Dana F.: a check-in named her Welfare Ave
+// listing, she said it needed a refresh, the bot wrote "probably not enough
+// meat for us" — tagged deal_available, so the tier-1 tag, the TIER 1
+// workflow and an underwrite all ran on a house we'd just turned down.
+const WELFARE = "5413 Welfare Ave NE, Bainbridge Island, WA 98110";
+async function ourReplyIs(reply, { saved = STARTER_SAVED, intent = "deal_available", address = WELFARE, message = "Needs a refresh, new carpet and some updates", events = [] } = {}) {
+  _resetJobs();
+  const store = fakeStore();
+  if (events.length) await store.appendContactEvents("LOC", "c1", events);
+  const uw = [];
+  const { job } = await startReply({
+    client: threadClient([["outbound", "Dana, noticed 5413 Welfare Ave NE has been on the market a bit, is that one a project or pretty move-in ready?"]]),
+    locationId: "LOC", saved, store, contactId: "c1", sendsEnabled: true, message,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent, confidence: "high", needsHuman: false, propertyAddress: address, reply }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-p" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return { d: await store.getReplyDraft(job.draftId), uw, store };
+}
+
+test("a reply that says not enough meat runs no tier-1 rule and starts no underwrite", async () => {
+  const { d, uw, store } = await ourReplyIs("Sounds mostly cosmetic, probably not enough meat for us on that one. Got anything more distressed sitting right now, on market or off-market?");
+  assert.equal(uw.length, 0, "no underwrite on a house we turned down");
+  assert.deepEqual(tierOneActions(d.actions).filter((a) => a.status !== "skipped"), [], "not Tier 1");
+  assert.equal(d.intent, "investor_open");
+  assert.equal(d.qualify?.stage, "pass", "stamped passed, so a racing underwrite stops (threadPassed)");
+  assert.match(d.qualify?.why || "", /our reply passed/);
+  assert.ok((d.actions || []).some((a) => a.type === "retire_unsent_offer"), "a number we never sent on it closes");
+  const set = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "subject_property_set");
+  assert.ok(!set || set.data?.qualifying === "pass", "the app's own Tier 1 leaves it out");
+});
+
+test("a reply that passes on one house and chases another still runs the other", async () => {
+  const { d, uw } = await ourReplyIs("Appreciate the rundown, think we'll pass on 184th given the subdivide angle. Keep me posted on that Mount Vernon one though, sounds like a good fit for us.",
+    { intent: "new_property", address: "18064 Mariposa Ln, Mount Vernon, WA 98274", message: "Also have one in Mount Vernon, 18064 Mariposa Ln, needs a full gut" });
+  assert.equal(uw.length, 1);
+  assert.equal(d.intent, "new_property");
+});
+
+test("a reply that wants the house is untouched", async () => {
+  const { d, uw } = await ourReplyIs("Good to know. What do you think it'd be worth fixed up, and what would you budget for the work?", { message: "Needs a new roof and the kitchen is original" });
+  assert.equal(uw.length, 1);
+  assert.equal(d.intent, "deal_available");
+});
+
+// The check-in's listing is an icebreaker like the first text's: one question
+// before any underwrite (Matt, 2026-10-08), whichever of our texts named it.
+test("a check-in listing gets our one question, not an underwrite", async () => {
+  const { d, uw } = await ourReplyIs("Good to know. I'll run the numbers with underwriting today and get back to you.", {
+    saved: QUALIFY_SAVED,
+    // Before 2026-10-14 the check-in event held the street alone.
+    events: [{ type: "agent_pulse_texted", party: "agent", at: iso(3600000), address: "5413 Welfare Ave NE", source: "conversation", data: { reason: "fresh_listing", listingKey: "lk-1" } }],
+  });
+  assert.equal(uw.length, 0);
+  assert.equal(d.qualify?.stage, "ask");
+  assert.match(d.reply, QUALIFY_ASK_RX);
+  assert.deepEqual(tierOneActions(d.actions).filter((a) => a.status !== "skipped"), []);
+});
+
+// GHL's TIER 1 workflow moved the card on the model's intent; with GHL
+// following the offers, the offer the underwrite makes is what moves it.
+test("with ghlStages on the bot adds no tier-1 tag or TIER 1 workflow, and still underwrites", async () => {
+  const { d, uw } = await ourReplyIs("Got it, sounds like a real fixer. What do you think it's worth fixed up?", {
+    saved: { ...STARTER_SAVED, ghlStages: { mode: "on" } }, intent: "new_property", message: "New one: 5413 Welfare Ave NE, roof leaks and the foundation is cracked",
+  });
+  assert.equal(uw.length, 1, "the underwrite still runs");
+  const t1 = tierOneActions(d.actions);
+  assert.ok(t1.length > 0 && t1.every((a) => a.status === "skipped" && /pipeline follows the offers/.test(a.detail || "")), JSON.stringify(t1.map((a) => [a.type, a.status])));
+});
