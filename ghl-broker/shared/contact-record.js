@@ -122,6 +122,9 @@ export const EVENT_TYPES = [
   // Their phone answered with an auto-reply naming another number to text
   // (shared/brush-offs.js autoReplyNumber): our texts aren't reaching them.
   "texts_elsewhere",
+  // An agent offered to work together on terms — a list-back, being our
+  // buyer's agent, a fee, their deal list (shared/partner-terms.js).
+  "partner_terms",
 ];
 
 export const EVENT_LABEL = {
@@ -162,6 +165,7 @@ export const EVENT_LABEL = {
   unsubscribed: "they unsubscribed",
   contact_card_sent: "we sent our contact card",
   texts_elsewhere: "an auto-reply says their texts go to another number",
+  partner_terms: "they offered to work together",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -202,6 +206,7 @@ export const EVENT_ICON = {
   unsubscribed: "UserX",
   contact_card_sent: "Contact",
   texts_elsewhere: "CircleSlash",
+  partner_terms: "Handshake",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

@@ -108,6 +108,7 @@ import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
 import { meterAi } from "./ai-spend.js";
 import { investorMindedCue } from "./shared/lead-source.js";
+import { partnerTerms, partnerTermsLine, PARTNER_TERMS_LABEL } from "./shared/partner-terms.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
 import { followWithCard, defaultCardBaseUrl, mintCardToken } from "./contact-card.js";
 
@@ -923,6 +924,11 @@ export function evaluateReplyGates({
   // Showing our work never means showing how we exit or what we make. The
   // prompt says so; this is the backstop that holds the text if it slips.
   if (party === "agent") {
+    // They offered to work together on terms (shared/partner-terms.js): a
+    // list-back, being our buyer's agent, a fee, their deal list, buying
+    // themselves. Matt answers terms; no intent, guard or audit sends it.
+    const terms = draft.partnerTerms?.kind ? PARTNER_TERMS_LABEL[draft.partnerTerms.kind] : "";
+    if (terms) flags.push(`they ${terms} — partner terms are yours to answer`);
     // "and/or assigns" is how the buyer is written on the contract, not a
     // word about how we exit.
     const slip = draft.reply.replace(/\band\/or assigns\b/gi, "").match(/\b(assign(?:ment|ing|ed|s)?|wholesal(?:e|er|ing)|end buyer|our fee|my fee|spread)\b/i);
@@ -3483,11 +3489,28 @@ async function runReply(job, ctx) {
     return;
   }
 
+  /* --- 1a. an agent offering to work together, on terms --- */
+  // 2026-10-14: ~17 agents offered a list-back, to be our buyer's agent, a
+  // referral fee, their wholesale list, or said they buy — and got "keep me
+  // in mind". Their burst, texts only (on a call Matt heard it himself). The
+  // reply is held for Matt below, and the Desk raises a partner row from the
+  // event (shared/call-list.js call_partner_terms). One who says they buy is
+  // investor-minded too, by the same key the reply's own read uses.
+  const terms = party === "agent" && !isCall ? partnerTerms(theirLatestWords(a.transcript, job.originalMessage || job.message)) : null;
+  if (terms) {
+    const at = new Date(now).toISOString();
+    const events = [{ type: "partner_terms", at, source: "conversation", ref: job.id, dedupeKey: `partner_terms:${job.contactId}:${terms.kind}:${at.slice(0, 10)}`,
+      data: { kind: terms.kind, phrase: terms.phrase, kinds: terms.kinds, addToBuyers: terms.addToBuyers } }];
+    if (terms.addToBuyers) events.push({ type: "investor_minded", at, source: "conversation", ref: job.id, dedupeKey: `investor_minded:${job.contactId}`, data: { cue: terms.phrase.slice(0, 80) } });
+    await recordEvents({ store, locationId, contactId: job.contactId, party: "agent", events }).catch(() => {});
+  }
+
   /* --- 1b. the calendar, when a time is on the table --- */
   const booking = await prepareBooking({ client, store, locationId, contactId: job.contactId, party, message: job.message, config, now, deps }).catch(() => null);
   if (booking?.error) warnings.push(`calendar: ${booking.error}`);
   const bookingText = booking ? bookingContextText(booking) : "";
-  const draftContext = bookingText ? { ...context, text: [context.text, bookingText].filter(Boolean).join("\n\n") } : context;
+  const extraText = [bookingText, partnerTermsLine(terms)].filter(Boolean).join("\n\n");
+  const draftContext = extraText ? { ...context, text: [context.text, extraText].filter(Boolean).join("\n\n") } : context;
 
   /* --- 2. the draft --- */
   job.phase = "drafting";
@@ -3852,6 +3875,11 @@ async function runReply(job, ctx) {
     return;
   }
 
+  // Partner terms are Matt's: the reply waits for him whatever else rewrote
+  // it above, and a person's flag keeps a redraft from being spent on it.
+  if (terms) {
+    draft = { ...draft, partnerTerms: terms, needsHuman: true, humanReason: `they ${PARTNER_TERMS_LABEL[terms.kind]} — the terms are yours to answer` };
+  }
   const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft: d, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
     hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: inboundText, channel: job.channel, style: config.style,
@@ -4402,6 +4430,8 @@ async function runReply(job, ctx) {
     // Where the icebreaker house stands (shared/flip-read.js): the next
     // reply reads whether our question or our pass already went.
     ...(draft.qualify ? { qualify: draft.qualify } : {}),
+    // What they offered to work together on (shared/partner-terms.js).
+    ...(draft.partnerTerms ? { partnerTerms: draft.partnerTerms } : {}),
     // They told us it isn't our kind of house: a pass on it, which the
     // contact card reads (shared/contact-card.js).
     ...(notOurKind ? { notOurKind: true } : {}),

@@ -29,6 +29,7 @@ import { offMarketCue } from "./off-market.js";
 import { sameStreet } from "./us-address.js";
 import { buyerCeiling } from "./post-mortem.js";
 import { ASSIGNMENT_RX } from "./lead-source.js";
+import { PARTNER_TERMS_LABEL } from "./partner-terms.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -91,9 +92,10 @@ export const CALL_KINDS = [
   { key: "call_phone_only",  label: "Phone only" },
   { key: "call_partner",     label: "Relationship check-in" },
   { key: "call_investor",    label: "Investor-minded agent" },
+  { key: "call_partner_terms", label: "Partner terms: yours to answer" },
 ];
 // They called you: ring back first — they reached out.
-const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_investor: 45, call_partner: 30 };
+const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_investor: 45, call_partner: 30, call_partner_terms: 80 };
 // Points off for each call that didn't connect since the row's reason, and
 // for each day their last word has aged (hot, counters, quiet threads).
 const PER_TRY = 15;
@@ -478,6 +480,33 @@ export function callList({
       why: `texts are off for them; ${street(card.address)} is still open`,
       goal: `Texting is off for them — settle ${street(card.address)} by phone, or let it go.`,
       opener: `Hi ${first(card.contactName)}, Matt here — calling rather than texting about ${street(card.address)}.` });
+  }
+
+  /* 6a. An agent who offered to work together, on terms (2026-10-14).
+   * A list-back, being our buyer's agent, a referral or buyer broker fee,
+   * their deal list, or they buy themselves (shared/partner-terms.js). The
+   * bot held its reply; the terms are Matt's. Two weeks, then it's history;
+   * a call or a text from you after it clears it. Ahead of 6b: the same
+   * person is one row, and what they offered is the more specific. */
+  const PARTNER_DAYS = 14;
+  for (const e of [...(events || [])].filter((x) => x?.type === "partner_terms" && x.contactId && PARTNER_TERMS_LABEL[x.data?.kind])
+    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))) {
+    const c = e.contactId;
+    if (taken.has(c) || unsubscribed.has(c) || irritated(c)) continue;
+    if (now - (ms(e.at) ?? 0) > PARTNER_DAYS * DAY_MS) continue;
+    const name = nameOf(c, offersBy, draftsBy);
+    const d = e.data;
+    const phrase = String(d.phrase || "").slice(0, 120);
+    // The reply the bot held for them, newest first.
+    const held = (draftsBy.get(c) || []).filter((x) => x.partnerTerms && ["draft", "scheduled"].includes(x.status || "draft"))
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] || null;
+    add("call_partner_terms", { contactId: c, contactName: name, since: e.at, draftId: held?.id || null,
+      why: `${PARTNER_TERMS_LABEL[d.kind]}${phrase ? ` — "${phrase}"` : ""}`,
+      goal: "They offered to work together; the terms are yours to answer. Hear how they like to work, say how you'd set it up, " +
+        "and send (or rewrite) the reply the bot held" + (d.addToBuyers ? ". They buy too: add them to the buyer list." : "."),
+      opener: `Hi ${first(name)}, it's Matt — saw your note about working together. Easier to talk it through than text.`,
+      extra: { partner: { kind: d.kind, phrase, kinds: Array.isArray(d.kinds) ? d.kinds : [d.kind], addToBuyers: Boolean(d.addToBuyers) } },
+      agePenaltyFrom: ms(e.at) });
   }
 
   /* 6b. An agent who thinks like an investor: one relationship call.
