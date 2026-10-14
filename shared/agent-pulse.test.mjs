@@ -63,6 +63,17 @@ test("an agent another clock owns waits until that clock ends", () => {
   assert.equal(v.house.id, "o1");
 });
 
+test("springtime means a check-in in March, not the generic one every few weeks: the lead owns the agent till its day", () => {
+  const lead = { type: "checkin_requested", at: ago(60), data: { kind: "lead", dueAt: ago(-120), phrase: "in the spring", lead: { what: "relisting it" } } };
+  // Sixty days on, and they texted about something else in between.
+  const v = evaluateAgent(agent({ lastInboundAt: ago(30), events: [lead, { type: "text_summary", at: ago(30) }] }), ctx());
+  assert.equal(v.status, "owned");
+  assert.equal(v.reason, "a lead they told us about");
+  // Asked about on its day: the generic check-in has them again.
+  const asked = agent({ lastInboundAt: ago(60), events: [{ ...lead, data: { ...lead.data, dueAt: ago(2) } }, { type: "checkin_sent", at: ago(2), data: { requestAt: lead.at, kind: "lead" } }] });
+  assert.notEqual(evaluateAgent(asked, ctx()).reason, "a lead they told us about");
+});
+
 test("a text waiting in the outbox, a promise, a check-in they asked for and the outreach workflow each own the agent", () => {
   const held = agent({ lastInboundAt: ago(60), drafts: [{ id: "d", status: "draft", inbound: "any update?", createdAt: ago(1) }] });
   assert.equal(evaluateAgent(held, ctx()).reason, "their text is waiting on you");

@@ -4055,6 +4055,51 @@ Read from all 131 houses agents brought us (87 threads):
 Not built: moving the agent's card to Tier 1 on a brought house. `followTierStage` already moves it
 when the bot adds the tier-1 tag, so the leak was the retire rule.
 
+### A lead with a date gets a check-in on that date, naming it (2026-10-14)
+
+Reading 2,014 threads on 2026-10-14: 17 agents told us when a lead would be ready ("relisting in
+springtime", "should know by end of the month", "coming closer to Nov 1", "not for about a year")
+and 31 named one, and every one got the generic 14-day "anything distressed or off-market?" text.
+`checkInRequested` only heard "check back" plus a weekday or a week, and calls were never read.
+
+- **The reader.** `detectLeadTiming(text, now)` (shared/follow-up.js) needs a lead and a time in the
+  same sentence:
+  - leads: short sale, probate, estate, hoarder, foreclosure, an expiring listing, relisting, pulling
+    it, one coming up, listing it / going on the market / going live, off-market or unlisted, a
+    fixer, a tenant moving out, the seller deciding, "should know", or "check back / circle back /
+    hit me up / free to talk after";
+  - times: tomorrow, this/next week, next month, in N days/weeks/months, end of the month, a month
+    name (next time it comes round), early/mid/late, seasons (Mar 15, Jun 15, Sep 15, Dec 15),
+    after the holidays / new year (Jan 5), about a year, a weekday, a date, "soon" (two weeks, low).
+- **The date.** The earliest one wins. A deadline ("by", "end of", "expires", "should know") is
+  asked about two days after it, an "after" the day after. Never sooner than two days out, never on a
+  weekend (Monday), never more than 13 months out.
+- **It won't fire on:** a tapback quoting our own text ("Liked “I'll check back…”"), what they think
+  WE could do ("if you fixed it up and relisted it"), a deal closing ("closing soon"), the past
+  ("last spring", "since March", "listed in September", "of last year"), our offer expiring, or a
+  bare "May"/"March" with no lead-in.
+- **Booking.** The reply agent files `checkin_requested` with `kind: "lead"` and
+  `lead: { what, when, said, via }` instead of the plain check-in for that message. On a call it
+  reads the THEM lines of the transcript (an unlabelled one: lead words only, no "check back", since
+  our side is in it). The isCall exclusion still holds for everything else. A house coming with no
+  address and a lead under 21 days out makes that day the address chase's first ask; further out
+  there's no chase, the lead's own check-in asks.
+- **Its own track.** `runCheckInSweep` (promise-sweep.js) reads leads 13 months back, apart from the
+  newest-request rule: a later "nobody answered them" clock doesn't replace a lead. It goes on its
+  day as `checkin_due` with `sourceKind: "lead"`, and the text asks about that lead ("Did the bank
+  come back on the short sale?"), not the generic question.
+- **Who goes first.** An offer's clock (`offerOwner`, shared/agent-pulse.js: a live deal, an open
+  offer still being asked about, a held underwrite) keeps them; the lead waits, unclaimed, and goes
+  after. It's dropped 30 days past its day, after another check-in in the last three days waits, and
+  if they spoke in the 14 days before its day the conversation has it. Until it goes, the agent
+  check-in stands down ("a lead they told us about"). A lead more than 7 days out doesn't replace
+  the "nobody answered them" net under a held reply.
+- **Sends.** No new switch. It rides `checkin_due`'s existing auto-send rule.
+- **Replay (2026-10-14, read-only):** 36 hits in 5,538 texts and 252 calls across 31 agents: 9 within
+  a week, 19 in 8–30 days, 4 in 31–90, 4 further. Two read as live-deal chatter ("undergoing
+  foreclosure, close within a couple of days", "seller decides Monday"); both would wait behind
+  the open offer.
+
 ### Every agent on a clock: the agent check-in (2026-09-29)
 
 Matt: "reach out to these agents proactively and frequently, every 3 weeks or
@@ -4094,8 +4139,9 @@ runs it) owns an agent when nothing else does:
 - **One voice.** An agent another clock owns is left to it. That covers:
   - a live deal, an open offer, or a held underwrite under 14 days old;
   - any follow-up the Offers column shows as coming;
-  - anything waiting in the outbox, a promise, a check-in they asked for, or
-    an address chase;
+  - anything waiting in the outbox, a promise, a check-in they asked for, a
+    lead they gave us a date for (until its day, up to 13 months), or an
+    address chase;
   - the outreach first-text workflow (until its follow-up is due) or its
     follow-up (`ghlWorkflowDays`, 21);
   - any GHL workflow the app enrolled them in (now recorded as

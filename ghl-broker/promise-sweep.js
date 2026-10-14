@@ -31,6 +31,10 @@ import { openPromises, resolvePromise, normalizePromiseDismissal, promiseWhat, P
 import { driveOpenPromises, promiseClaimed } from "./promise-driver.js";
 import { waitingReason } from "./outbox-guard.js";
 import { callEventConnected } from "./shared/talked-to.js";
+import { leadCheckInPending, LEAD_MAX_DAYS, LEAD_STALE_DAYS } from "./shared/follow-up.js";
+import { offerOwner } from "./shared/agent-pulse.js";
+import { annotateCurrent } from "./shared/current-offer.js";
+import { allEventsSince } from "./contact-events.js";
 
 const HOUR_MS = 3600000;
 
@@ -266,7 +270,9 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
 
   for (const [contactId, list] of byContact) {
     list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
-    const req = list.filter((e) => e.type === "checkin_requested").at(-1);
+    // A lead with a date has its own track, below: it neither replaces this
+    // one nor is replaced by it.
+    const req = list.filter((e) => e.type === "checkin_requested" && e.data?.kind !== "lead").at(-1);
     if (!req) continue;
     if (list.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)) continue;
     if (Date.parse(req.data?.dueAt || "") > now) continue;
@@ -350,6 +356,57 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
         data: { kind: "source", phrase: "", dueAt: iso(now + SOURCE_REPEAT_DAYS * 86400000), left: left - 1 },
       });
     }
+  }
+
+  /* --- a lead they told us the timing of --- */
+  // "Relisting in the spring", "should know by end of the month" (reply-agent.js,
+  // shared/follow-up.js detectLeadTiming). Booked up to thirteen months out, so
+  // read that far back; their texts and calls come from the window above.
+  const leadRead = await allEventsSince(store, locationId, iso(now - (LEAD_MAX_DAYS + LEAD_STALE_DAYS) * 86400000),
+    { types: ["checkin_requested", "checkin_sent"] }, { ceiling: 100000 }).catch(() => ({ events: [] }));
+  const leadsBy = new Map();
+  for (const e of leadRead.events || []) {
+    if (!e?.contactId) continue;
+    if (!leadsBy.has(e.contactId)) leadsBy.set(e.contactId, []);
+    leadsBy.get(e.contactId).push(e);
+  }
+  for (const [contactId, mine] of leadsBy) {
+    if (!mine.some((e) => e.type === "checkin_requested" && e.data?.kind === "lead")) continue;
+    const talk = (byContact.get(contactId) || []).filter((e) => ["text_summary", "call_summary", "hand_reply"].includes(e.type));
+    const all = [...mine, ...talk];
+    const req = leadCheckInPending(all, now);
+    if (!req || Date.parse(req.data?.dueAt || "") > now) continue;
+    out.considered++;
+    // One check-in at a time: another went to them in the last three days.
+    const recent = all.some((e) => e.type === "checkin_sent" && Date.parse(e.at) > now - 3 * 86400000);
+    if (recent || out.results.some((x) => x.contactId === contactId && (x.status === "sent" || x.status === "re-answered"))) {
+      out.results.push({ contactId, status: "waiting", reason: "another check-in just went to them" });
+      continue;
+    }
+    // An offer's own clock (a live deal, an open offer being asked about, a
+    // held underwrite) keeps them; the lead goes after it lets go.
+    const rows = await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []);
+    const current = annotateCurrent(rows || []).filter((o) => o && o.isCurrent !== false && o.contactId === contactId);
+    const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 20 }).catch(() => []);
+    // (The lead itself is not an offer's clock: without this it would wait on itself.)
+    const offerEvents = [...(byContact.get(contactId) || [])].filter((e) => !(e.type === "checkin_requested" && e.data?.kind === "lead"));
+    const holder = offerOwner({ offers: current, drafts, events: offerEvents, config, now });
+    if (holder) { out.results.push({ contactId, status: "waiting", reason: holder }); continue; }
+    const waitingOn = await waitingReason({ store, locationId, contactId, continues: null });
+    if (waitingOn) { out.results.push({ contactId, status: "waiting", reason: waitingOn }); continue; }
+    const claim = await recordEvent({
+      store, locationId, contactId, party: "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
+      source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,
+      data: { requestAt: req.at, kind: "lead", phrase: req.data?.phrase || "" },
+    });
+    if (!claim.inserted) continue;
+    const r = await start({
+      client, locationId, saved, store, contactId, kind: "checkin_due", offer: null, continues: null,
+      subject: { address: req.address || "", phrase: req.data?.phrase || "", sourceKind: "lead", lead: { ...(req.data?.lead || {}), toldAt: req.at } },
+      sendsEnabled, deps,
+    }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
+    if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });
+    else { out.sent++; out.results.push({ contactId, status: "sent", kind: "lead", jobId: r?.job?.id || null }); }
   }
   return out;
 }

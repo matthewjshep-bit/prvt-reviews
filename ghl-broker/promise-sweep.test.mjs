@@ -270,6 +270,71 @@ test("a text of ours from before they were left waiting covers nothing", async (
   assert.equal(r.sent, 1);
 });
 
+/* ---------- a lead they told us the timing of ---------- */
+
+const DAY_MS = 24 * HOUR;
+const leadReq = (daysAgo, dueInDays, more = {}) => ({
+  contactId: "c9", type: "checkin_requested", at: new Date(NOW - daysAgo * DAY_MS).toISOString(), address: "",
+  dedupeKey: `checkin_requested:lead:c9:${daysAgo}`,
+  data: { kind: "lead", phrase: "in the spring", dueAt: new Date(NOW + dueInDays * DAY_MS).toISOString(),
+    lead: { what: "relisting it", said: "Taken off market, relisting in the spring.", via: "text" }, ...more },
+});
+
+test("springtime means a check-in in March, not every two weeks: a lead booked five months ago goes on its day, naming it", async () => {
+  const store = fakeStore({ events: [leadReq(150, -0.1)] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1, JSON.stringify(r.results));
+  assert.equal(s.calls[0].kind, "checkin_due");
+  assert.equal(s.calls[0].subject.sourceKind, "lead");
+  assert.equal(s.calls[0].subject.lead.what, "relisting it");
+  const again = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW + HOUR, deps: s });
+  assert.equal(again.sent, 0, "claimed: asked once");
+});
+
+test("a lead isn't asked about before its day", async () => {
+  const store = fakeStore({ events: [leadReq(10, 60)] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 0);
+  assert.equal(s.calls.length, 0);
+});
+
+test("a newer 'nobody answered them' clock doesn't wipe out the lead", async () => {
+  const store = fakeStore({ events: [
+    leadReq(40, -0.1),
+    { contactId: "c9", type: "text_summary", at: at(24 * 30), data: {} },
+    // Booked after the lead, and not due yet.
+    request(24 * 30 - 0.01, { kind: "unanswered", phrase: "", dueAt: at(-24) }),
+  ] });
+  const s = starter();
+  await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.filter((c) => c.subject.sourceKind === "lead").length, 1, "the lead still goes");
+});
+
+test("an open offer still being asked about keeps them; the lead check-in waits and goes after", async () => {
+  const offer = { id: "o1", contactId: "c9", address: "12 Elm St, Kent, WA 98031", status: "sent", cashAmount: 300000,
+    createdAt: at(48), statusAt: at(48), sends: [{ ts: at(48) }] };
+  const saved = { ...SAVED, conversationAi: normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true,
+    ladders: { offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 7 } } } } } }) };
+  const store = fakeStore({ events: [leadReq(20, -0.1)], offers: [offer] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0, JSON.stringify(r.results));
+  assert.equal(r.results[0].status, "waiting");
+  // They passed on it: the offer lets go, and the lead goes.
+  offer.status = "passed"; offer.statusAt = at(1); offer.statusHistory = [{ status: "passed", ts: at(1) }];
+  const r2 = await runCheckInSweep({ locationId: "LOC", saved, store, now: NOW, deps: s });
+  assert.equal(r2.sent, 1, JSON.stringify(r2.results));
+});
+
+test("they brought the lead up themselves in the run-up to its day: no check-in on top", async () => {
+  const store = fakeStore({ events: [leadReq(30, -0.1), { contactId: "c9", type: "text_summary", at: at(24 * 5), data: {} }] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0, JSON.stringify(r.results));
+});
+
 /* ---------- the address they haven't sent yet ---------- */
 
 import { runAddressChase, ADDRESS_CHASE_DAYS } from "./promise-sweep.js";
