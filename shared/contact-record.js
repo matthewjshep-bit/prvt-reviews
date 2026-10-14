@@ -107,6 +107,9 @@ export const EVENT_TYPES = [
   // or an agent added to it; and a GHL card the app moved (data.from/to).
   "tier1_passed", "tier1_kicked", "tier1_added", "ghl_stage_moved",
   "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate", "property_details",
+  // A house they named in a text, address or not (shared/mentioned-houses.js):
+  // data.sellerAsk, data.note, data.needsAddress.
+  "house_mentioned",
   // Stop / Pause and Resume on the work pane (shared/bot-hold.js): while a
   // stop holds, nothing goes to them by itself. data.until ends a pause.
   "drive_stopped", "drive_resumed",
@@ -136,7 +139,7 @@ export const EVENT_LABEL = {
   enrich_run: "AI enrichment ran", tag_added: "tag added", tag_removed: "tag removed",
   tier1_passed: "passed on it from Tier 1", tier1_kicked: "taken off Tier 1", tier1_added: "put on Tier 1", ghl_stage_moved: "GHL card moved",
   subject_property_set: "subject property set", fact_learned: "learned about them", fact_removed: "fact removed",
-  import: "imported", agent_estimate: "agent's own take", property_details: "property details",
+  import: "imported", agent_estimate: "agent's own take", property_details: "property details", house_mentioned: "they named a house",
   follow_up_sent: "we followed up",
   outreach_sent: "we reached out about their listing",
   outreach_enrolled: "added to an outreach workflow",
@@ -168,7 +171,7 @@ export const EVENT_ICON = {
   call_summary: "Phone", text_summary: "MessageSquare", note: "StickyNote",
   enrich_run: "Sparkles", tag_added: "Tag", tag_removed: "Tag",
   tier1_passed: "XCircle", tier1_kicked: "CircleSlash", tier1_added: "CheckCircle2", ghl_stage_moved: "ArrowLeftRight",
-  subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator", property_details: "ClipboardList",
+  subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator", property_details: "ClipboardList", house_mentioned: "Home",
   follow_up_sent: "BellRing",
   property_financed: "Landmark",
   outreach_sent: "Send",

@@ -453,7 +453,8 @@ export async function runAddressChase({ client, locationId, saved = {}, store, s
     if (!claim.inserted) continue;
     const r = await start({
       client, locationId, saved, store, contactId, kind: "address_chase", offer: null,
-      subject: { address: "", hint: pending.data?.hint || "", phrase: pending.data?.phrase || "", rung: due + 1, rungs: rungs.length },
+      subject: { address: "", hint: pending.data?.hint || "", phrase: pending.data?.phrase || "", rung: due + 1, rungs: rungs.length,
+        houses: Array.isArray(pending.data?.houses) ? pending.data.houses : [] },
       sendsEnabled, deps,
     }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
     if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });

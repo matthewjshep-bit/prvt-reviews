@@ -6361,15 +6361,16 @@ function threadClient(lines) {
   } };
 }
 const OPENER = "Hi Sam, came across your listing at 48 Cedar Hollow Rd. Is this one a bit of a project, or pretty turnkey?";
-async function replyTo(message, { saved = QUALIFY_SAVED, intent = "deal_available", address = ICE, lines = [["outbound", OPENER]], sent = [] } = {}) {
+async function replyTo(message, { saved = QUALIFY_SAVED, intent = "deal_available", address = ICE, lines = [["outbound", OPENER]], sent = [],
+  reply = "Good to know. I'll run the numbers with underwriting today and get back to you.", houses } = {}) {
   _resetJobs();
   const store = await iceStore(sent);
   const uw = [];
   const { job } = await startReply({
     client: threadClient(lines), locationId: "LOC", saved, store, contactId: "c1", sendsEnabled: true, message,
     deps: {
-      draft: async () => ({ ...DRAFT, intent, confidence: "high", needsHuman: false, propertyAddress: address,
-        reply: "Good to know. I'll run the numbers with underwriting today and get back to you." }),
+      draft: async () => ({ ...DRAFT, intent, confidence: "high", needsHuman: false, propertyAddress: address, reply,
+        ...(houses ? { houses } : {}) }),
       startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-q" } }; },
     },
   });
@@ -6431,6 +6432,98 @@ test("with qualify-first off, the first-text house underwrites as before", async
   const { d, uw } = await replyTo("Cosmetic fixer", { saved: STARTER_SAVED });
   assert.equal(uw.length, 1);
   assert.equal(d.qualify, undefined);
+});
+
+/* ---------- an agent names other houses, without the house number (2026-10-13) ---------- */
+
+// A listing agent we'd passed on (the first-text house) wrote back with two
+// more of theirs: one on a street in town and a triplex on another,
+// each with an asking price. No house numbers. The reply read it as more talk about the first-text house and
+// sent the canned "keep me in mind" line; neither house was kept, and
+// nobody asked where they are.
+const PASSED_ICE = [{ id: "p1", locationId: "LOC", contactId: "c1", status: "sent", createdAt: iso(3600000), reply: "…", qualify: { stage: "pass", address: ICE } }];
+const TWO_MORE = "Got one on Pine St in Shelton too, a 1920s rambler, they want about 410K. " +
+  "Also a house split into a triplex over on Alder Street, around 720K";
+const TWO_HOUSES = [
+  { address: "Pine St, Shelton", sellerAsk: 410000, note: "1920s rambler" },
+  { address: "Alder Street", sellerAsk: 720000, note: "triplex, seller would carry the note" },
+];
+const kept = async (store) => (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "house_mentioned");
+
+test("an agent who names two more houses by street only is asked for both addresses, and both houses are kept", async () => {
+  const { d, uw, store } = await replyTo(TWO_MORE, {
+    intent: "new_property", address: "", houses: TWO_HOUSES, sent: PASSED_ICE,
+    reply: "Both sound worth a look. What are the addresses on the Pine St one and the Alder St triplex?",
+  });
+  assert.notEqual(d.qualify?.stage, "closed", "not read as more talk about the first-text house");
+  assert.doesNotMatch(d.reply, /keep me in mind/i);
+  assert.match(d.reply, /Pine St/);
+  assert.match(d.reply, /Alder/);
+  assert.equal(uw.length, 0, "no underwrite without a house number");
+  const houses = await kept(store);
+  assert.deepEqual(houses.map((e) => e.address).sort(), ["Alder Street", "Pine St, Shelton"]);
+  const pine = houses.find((e) => /Pine/.test(e.address));
+  assert.equal(pine.data.sellerAsk, 410000);
+  assert.equal(pine.data.needsAddress, true);
+  const pend = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "address_pending");
+  assert.ok(pend, "the address chase starts");
+  assert.match(pend.data.hint, /Pine St/);
+  assert.match(pend.data.hint, /Alder/);
+});
+
+test("the two houses are still kept when the model lists none of them", async () => {
+  const { d, store } = await replyTo(TWO_MORE, {
+    intent: "deal_available", address: "", sent: PASSED_ICE,
+    reply: "Nice, what are the addresses on those two?",
+  });
+  assert.notEqual(d.qualify?.stage, "closed");
+  assert.equal(d.reply, "Nice, what are the addresses on those two?");
+  assert.deepEqual((await kept(store)).map((e) => e.address).sort(), ["Alder Street", "Pine St, Shelton"]);
+});
+
+test("a reply that forgets to ask where the houses are gets the ask added", async () => {
+  const { d } = await replyTo(TWO_MORE, {
+    intent: "new_property", address: "", houses: TWO_HOUSES, sent: PASSED_ICE,
+    reply: "Appreciate you thinking of me.",
+  });
+  assert.match(d.reply, /^Appreciate you thinking of me\./);
+  assert.match(d.reply, /address/i);
+  assert.match(d.reply, /Pine St/);
+  assert.match(d.reply, /Alder St/);
+});
+
+test("a street with no house number is not underwritten, even when the model calls it the property", async () => {
+  const { uw, store } = await replyTo(TWO_MORE, {
+    intent: "new_property", address: "Pine St, Shelton", houses: TWO_HOUSES, sent: PASSED_ICE,
+    reply: "What are the addresses on the Pine St one and the Alder St triplex?",
+  });
+  assert.equal(uw.length, 0);
+  assert.ok((await store.listContactEvents("LOC", "c1")).some((e) => e.type === "address_pending"));
+});
+
+test("when the addresses come back, every house they named is underwritten, not just one", async () => {
+  const { uw, store } = await replyTo("Pine is 1412 Pine St Shelton and the triplex is 88 Alder St Shelton", {
+    intent: "new_property", address: "1412 Pine St, Shelton, WA", sent: PASSED_ICE,
+    houses: [{ address: "1412 Pine St, Shelton, WA", sellerAsk: 0, note: "" }, { address: "88 Alder St, Shelton, WA", sellerAsk: 0, note: "triplex" }],
+    reply: "Thanks, running numbers on both today.",
+  });
+  assert.deepEqual(uw.map((u) => u.address).sort(), ["1412 Pine St, Shelton, WA", "88 Alder St, Shelton, WA"]);
+  assert.deepEqual((await kept(store)).map((e) => e.data.needsAddress), [false, false]);
+});
+
+test("a house they say is gone is not asked about or kept as a lead", async () => {
+  const { d, store } = await replyTo("Sorry, the one on Pine St in Shelton already sold", {
+    intent: "rejection", address: "", sent: PASSED_ICE, houses: [{ address: "Pine St, Shelton", sellerAsk: 0, note: "sold" }],
+    reply: "No worries, thanks for letting me know.",
+  });
+  assert.equal(d.reply, "No worries, thanks for letting me know.");
+  assert.deepEqual(await kept(store), []);
+  assert.ok(!(await store.listContactEvents("LOC", "c1")).some((e) => e.type === "address_pending"));
+});
+
+test("talk about the first-text house alone still gets our one question", async () => {
+  const { d } = await replyTo("It's on a quiet street, cosmetic fixer", { houses: [] });
+  assert.equal(d.qualify.stage, "ask");
 });
 
 /* ---------- a gate hold earns one redraft (2026-10-08) ---------- */

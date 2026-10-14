@@ -3113,6 +3113,45 @@ Their words are every line they've sent since the first text. A showing offer
 first". A house the agent brings up themselves underwrites right away, and so
 does any house we already priced. The draft row carries `qualify: {stage, address, why}`.
 
+### Every house an agent names is kept, and a missing address is asked for (2026-10-13)
+
+Rules: `shared/mentioned-houses.js`. Wiring: `runReply` in `ghl-broker/reply-agent.js`.
+No switch. It sends only through the reply's existing auto-send rules.
+
+An agent we'd passed on (the first-text house) wrote back with two more of
+theirs: one on a street in town and a triplex, each with
+an asking price. Neither had a house number. The
+empty `propertyAddress` was read as the first-text house, the qualify step
+had already passed on it, and the canned "keep me in mind" line went out.
+Neither house was kept, and nothing asked where they were.
+
+Now, on an agent text that reads as a lead (`HOUSE_LEAD_INTENTS`: deal_available,
+new_property, investor_open, media, wants_call, scheduling):
+
+- The draft lists every house they named in `houses` (`{address, sellerAsk, note}`).
+  Streets the model missed are caught from their words (`streetMentions`).
+  The first-text house and office addresses in a signature are left out.
+- Each house becomes a `house_mentioned` event (`data.sellerAsk`, `data.note`,
+  `data.needsAddress`), shown on the timeline as "they named a house".
+- If they named any house that isn't the first-text one, the qualify step
+  leaves the message alone.
+- A house with no number:
+  - **No underwrite.** That holds even when the model put the bare street in
+    `propertyAddress`.
+  - **The reply asks for the exact address of each one.** If the model's
+    reply forgot to, the ask is added to the end.
+  - **The address chase starts**, with a hint that names each house and its
+    ask (`address_pending.data.houses`). The chase text asks for each house by name.
+- The agent context lists "HOUSES THEY NAMED THAT WE DON'T HAVE AN ADDRESS
+  FOR YET" (last 60 days) until the number or an offer on that street shows up.
+- When several numbered houses come in one text, each house the model listed
+  that has its street line in their own words gets its own `start_underwrite`
+  (an `address` and `askingPrice` on the action). This happens only when the
+  rule already starts one, and never for a house already in the offer book.
+
+Still one chase per contact: an address landing for one house closes the
+chase for the rest. The context block keeps the others in front of the bot.
+
 ### Held underwrites — the nightly triage (2026-09-16)
 
 "Underwrites that need a look" held 49 rows and Matt wasn't going to get to

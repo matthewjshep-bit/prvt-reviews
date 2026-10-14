@@ -63,6 +63,7 @@ import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-und
 import { passedOnHouse, isTierOneAction, isLowerTierAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
 import { qualifyStep, QUALIFY_ASK_RX } from "./shared/flip-read.js";
+import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
@@ -535,6 +536,8 @@ export function parseDraft(response, intents, cfg, outbound = null) {
     humanReason: String(p.humanReason || "").trim().slice(0, 300),
     summary: String(p.summary || "").trim().slice(0, 300),
     propertyAddress: String(p.propertyAddress || "").trim().slice(0, 200),
+    // Agents only: every house they named in this message, address or not.
+    houses: normalizeMentionedHouses(p.houses),
     counterAmount: Math.max(0, Number(p.counterAmount) || 0),
     // Investors only, and only when they turned something down.
     passReason: normalizePassReason(p.passReason),
@@ -1671,6 +1674,12 @@ export function icebreakerHouse(events = []) {
   return e ? { address: e.address, at: Date.parse(e.at || "") || 0 } : null;
 }
 
+// The first-text house for a contact, off their timeline.
+export async function firstTextHouse(store, locationId, contactId) {
+  const evs = (await store.listContactEvents?.(locationId, contactId, { types: ["outreach_sent", "outreach_enrolled"], limit: 50 }).catch(() => [])) || [];
+  return icebreakerHouse(evs);
+}
+
 /**
  * qualifyIcebreaker({ ... }) → null | { stage, address, why, reply }
  *
@@ -1679,10 +1688,13 @@ export function icebreakerHouse(events = []) {
  * switch is off. Stage "qualified" lets everything run as before; "ask",
  * "pass" and "closed" carry the reply and hold the underwrite.
  */
-export async function qualifyIcebreaker({ store, locationId, contactId, draft, message, transcript, now = Date.now(), agentRehab = 0 }) {
-  const evs = (await store.listContactEvents?.(locationId, contactId, { types: ["outreach_sent", "outreach_enrolled"], limit: 50 }).catch(() => [])) || [];
-  const ice = icebreakerHouse(evs);
+export async function qualifyIcebreaker({ store, locationId, contactId, draft, message, transcript, now = Date.now(), agentRehab = 0, ice: given }) {
+  const ice = given !== undefined ? given : await firstTextHouse(store, locationId, contactId);
   if (!ice) return null;
+  // They named another house of theirs (2026-10-13: a street name and a
+  // triplex, no numbers). An empty propertyAddress isn't
+  // the first-text house then; those houses are the lead.
+  if (housesInText({ houses: draft.houses, message, except: [ice.address] }).length) return null;
   const key = addressKey(ice.address);
   if (!key || addressKey(draft.propertyAddress || ice.address) !== key) return null;
   const book = await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []);
@@ -2939,8 +2951,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       fromK: Number(subject?.from) > 0 ? kText(Number(subject.from)) : "", toK: Number(subject?.to) > 0 ? kText(Number(subject.to)) : "",
       offerStatus: subject?.status || "", ourK: Number(offer?.cashAmount) > 0 ? kText(Number(offer.cashAmount)) : "" } : {}),
     ...(kind === "checkin_due" ? { phrase: subject?.phrase || "", sourceKind: subject?.sourceKind || "date" } : {}),
-    ...(kind === "address_chase" ? { hint: String(subject?.hint || "").slice(0, 160), phrase: subject?.phrase || "",
-      rung: Number(subject?.rung) || 1, rungs: Number(subject?.rungs) || 1 } : {}) };
+    ...(kind === "address_chase" ? { hint: String(subject?.hint || "").slice(0, 300), phrase: subject?.phrase || "",
+      rung: Number(subject?.rung) || 1, rungs: Number(subject?.rungs) || 1,
+      houses: (Array.isArray(subject?.houses) ? subject.houses : []).map(String).slice(0, 5) } : {}) };
 }
 
 // The one-liner the outbox row shows when the model didn't write its own.
@@ -2981,7 +2994,9 @@ function outboundSummary({ kind, offer, outbound }) {
       if (outbound.sourceKind === "source") return "Weekly check-in with an agent who offered to send us deals: anything new that needs work?";
       if (outbound.sourceKind === "unanswered") return `Comes back to them${where ? ` on ${where}` : ""} — their last text never got an answer from us.`;
       return `The check-in they asked for${outbound.phrase ? ` ("${outbound.phrase}")` : ""}: anything land that needs work?`;
-    case "address_chase": return `Asks again for the address of the property they said was coming (check-in ${outbound.rung} of ${outbound.rungs}).`;
+    case "address_chase": return outbound.houses?.length
+      ? `Asks again for the addresses of the houses they named: ${outbound.houses.join(", ")} (check-in ${outbound.rung} of ${outbound.rungs}).`
+      : `Asks again for the address of the property they said was coming (check-in ${outbound.rung} of ${outbound.rungs}).`;
     case "price_drop": return `The list price on ${where} came down${outbound.fromK ? ` from ${outbound.fromK}` : ""} to ${outbound.toK}; asks if the seller would look at cash closer to ours now.`;
     case "promise_due": return `Keeps our word on ${where}: we said we'd come back with ${outbound.what === "number" ? "a number" : "an answer"} and nothing went out${outbound.heldReason ? " (the underwrite held)" : ""}.`;
     default: return `Starts a message about ${where}${rung}.`;
@@ -3656,13 +3671,24 @@ async function runReply(job, ctx) {
   // answer to that is a pass and an ask for what else they've got. Specific
   // trouble underwrites at once. A house they bring up themselves isn't
   // read here, and neither is one we've already priced.
+  // Every house they named that isn't the first-text one (2026-10-13): each
+  // is kept (4c″), one with no number is asked for, and the qualify step
+  // below leaves the message alone.
+  // Only on a text that reads as a lead: "the one on Pine St sold" is not
+  // a house to ask about.
+  const iceHouse = party === "agent" ? await firstTextHouse(store, locationId, job.contactId) : null;
+  const namedHouses = party === "agent" && HOUSE_LEAD_INTENTS.has(draft.intent)
+    ? housesInText({ houses: draft.houses, message: job.message, except: iceHouse ? [iceHouse.address] : [] })
+    : [];
+  const housesWithoutNumber = namedHouses.filter((h) => h.needsAddress);
+
   let qualify = null;
   if (party === "agent" && !isCall && !notOurKind && config.parties.agent.qualifyFirst?.enabled
       && !SILENT_INTENTS.has(draft.intent)
       && (["deal_available", "new_property", "wants_walkthrough"].includes(draft.intent) || isShowingOffer(job.message))
       && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)) {
     const take = draft.agentTake ?? normalizeAgentTake(draft) ?? agentTakeFromText(job.message);
-    qualify = await qualifyIcebreaker({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: take?.rehab || 0 })
+    qualify = await qualifyIcebreaker({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: take?.rehab || 0, ice: iceHouse })
       .catch((e) => { warnings.push(`qualify: ${e.message}`); return null; });
     if (qualify && qualify.stage !== "qualified") {
       draft = {
@@ -3680,6 +3706,16 @@ async function runReply(job, ctx) {
     }
   }
   const qualifyHeld = Boolean(qualify && qualify.stage !== "qualified");
+
+  // A house they named with no number: the reply asks where it is. The model
+  // is told to; this is the backstop for a reply that forgot (a list of two
+  // ran against "one property per message").
+  if (party === "agent" && !isCall && housesWithoutNumber.length && !qualifyHeld
+      && !SILENT_INTENTS.has(draft.intent) && draft.intent !== "opt_out" && !asksForAddress(draft.reply)) {
+    const ask = addressAsk(housesWithoutNumber);
+    const said = String(draft.reply || "").trim();
+    draft = { ...draft, reply: said ? `${said} ${ask}` : ask, addressAsked: housesWithoutNumber.map((h) => h.address) };
+  }
 
   // Number first. An agent offering a showing, a tour or a time on a house we
   // have no number on gets a number before anybody books anything — Matt,
@@ -3896,7 +3932,11 @@ async function runReply(job, ctx) {
   // "if you're interested"). The underwrite would fall back to the Subject
   // Property — the last house, which he'd called turnkey — and quote it. The
   // address chase asks; the underwrite starts when the address lands.
-  if (party === "agent" && addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now })) {
+  // "Pine St, Shelton" is what the message is about, but it's a street, not
+  // a house: the underwriter can't place it and would fall back to the
+  // Subject Property. The reply asks for the number instead.
+  if (party === "agent" && (addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now })
+      || (housesWithoutNumber.length && !underwritableAddress(draft.propertyAddress)))) {
     plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite");
     plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
   }
@@ -3904,6 +3944,21 @@ async function runReply(job, ctx) {
   if (qualifyHeld) {
     plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite" && !isTierOneAction(x));
     plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite" && !isTierOneAction(x));
+  }
+  // Two houses with numbers in one text ("Pine is 1412 Pine St and the
+  // triplex is 88 Alder St"): the rule underwrites the one in
+  // propertyAddress, and each of the others runs beside it the same way.
+  // Only when the rule already starts one, only streets in their own words,
+  // and never a house already in the book.
+  if (party === "agent" && plan.auto.some((x) => x.type === "start_underwrite" && !x.address)) {
+    const extra = namedHouses.filter((h) => h.from === "model" && !h.needsAddress && !sameStreet(h.address, draft.propertyAddress) && lastMention(job.message, h.address) >= 0);
+    if (extra.length) {
+      const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+      for (const h of extra.filter((x) => !knownOfferFor(rows, x.address, now)).slice(0, 3)) {
+        plan.auto.push({ id: `a-uw-${job.id}-${addressKey(h.address).slice(0, 24)}`, type: "start_underwrite", mode: "auto", status: "pending", party,
+          address: h.address, askingPrice: h.sellerAsk || 0, why: `they named ${h.address} too` });
+      }
+    }
   }
   if (numberFirst) {
     const extra = numberFirst.replaceOfferId ? { replaceOfferId: numberFirst.replaceOfferId } : {};
@@ -4469,7 +4524,23 @@ async function runReply(job, ctx) {
   let chaseHasDate = false;
   let chaseStarted = false;
   if (party === "agent") {
-    const pend = addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });
+    // Every house they named, address or not, is a row on their timeline:
+    // "Pine St, Shelton, asking 410K, a 1920s rambler" is a lead even
+    // before the number comes (2026-10-13).
+    for (const h of namedHouses) {
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: "house_mentioned", at: new Date(now).toISOString(),
+        address: h.address, source: isCall ? "call" : "conversation", ref: record.id,
+        dedupeKey: `house_mentioned:${job.contactId}:${addressKey(h.address)}:${record.id}`,
+        data: { sellerAsk: h.sellerAsk || 0, note: h.note || "", needsAddress: h.needsAddress },
+      }).catch(() => {});
+    }
+    // A house with no number starts the chase too, even when propertyAddress
+    // holds the street; its hint names each one the way they did.
+    let pend = addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });
+    if (housesWithoutNumber.length && draft.intent !== "opt_out") {
+      pend = { ...(pend || { firstDueAt: null, phrase: "" }), hint: addressHint(housesWithoutNumber), houses: housesWithoutNumber.map((h) => h.address) };
+    }
     if (pend) {
       chaseHasDate = Boolean(pend.firstDueAt);
       chaseStarted = true;
@@ -4477,7 +4548,7 @@ async function runReply(job, ctx) {
         store, locationId, contactId: job.contactId, party: "agent", type: "address_pending", at: new Date(now).toISOString(),
         address: "", source: "conversation", ref: record.id,
         dedupeKey: `address_pending:${job.contactId}:${record.id}`,
-        data: { hint: pend.hint, firstDueAt: pend.firstDueAt, phrase: pend.phrase },
+        data: { hint: pend.hint, firstDueAt: pend.firstDueAt, phrase: pend.phrase, ...(pend.houses ? { houses: pend.houses } : {}) },
       }).catch(() => {});
     } else if (draft.intent === "opt_out") {
       await recordEvent({
@@ -4676,6 +4747,8 @@ async function runReply(job, ctx) {
     const extra = planActions({ party, intent: "new_property", confidence: "high", playbook, minConfidence: "high" });
     const fresh = [...extra.auto, ...extra.suggested].filter((a) => !already.has(`${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`))
       .filter((a) => !(notOurKind && a.type === "start_underwrite"))
+      // A street with no number isn't a house to underwrite yet; the reply asks for it.
+      .filter((a) => !(a.type === "start_underwrite" && housesWithoutNumber.length && !underwritableAddress(draft.propertyAddress)))
       .map((a) => ({ ...a, via: "subject moved" }));
     if (fresh.length) {
       for (const a of fresh) (a.mode === "auto" ? plan.auto : plan.suggested).push(a);
