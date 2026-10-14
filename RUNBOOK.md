@@ -4055,6 +4055,45 @@ Read from all 131 houses agents brought us (87 threads):
 Not built: moving the agent's card to Tier 1 on a brought house. `followTierStage` already moves it
 when the bot adds the tier-1 tag, so the leak was the retire rule.
 
+### Partner terms reach Matt (2026-10-14)
+
+Reading the threads, about 17 agents offered a working relationship on terms and the bot answered
+"keep me in mind" or "let me check with my partner". The terms are Matt's to answer.
+
+- **The detector.** `partnerTerms(text)` (`shared/partner-terms.js`, pure) returns
+  `{ kind, phrase, kinds, addToBuyers }` or null. It reads only their own words: reactions quoting
+  our text, links, phones and emails are stripped first. The kinds, strongest first:
+  - `list_back`: list-backs, the relist after the flip, "one agent or several for resale".
+  - `buyer_agent`: offers to represent us, or a buyer agency/brokerage agreement they need. "Are
+    you represented?" is not one; the bot answers that.
+  - `referral_fee`: finder's or referral fees, and a commission only when asked as a question.
+  - `co_wholesale`: their wholesale or dispo partners, a JV, or a deal community.
+  - `investor_buyer`: they pay assignment fees, buy N a month, or flip themselves.
+- **Not in the model's schema.** The reply format is part of the cached prompt, so this is a
+  regex backstop in `runReply` (step 1a). It runs on the agent's burst (`theirLatestWords`), texts
+  only.
+- **The hold.** The draft gets `partnerTerms` and `needsHuman`, and `evaluateReplyGates` flags
+  "they … — partner terms are yours to answer" whatever the intent. It is a content gate:
+  - no guard opens it;
+  - the nightly audit never releases it (`releaseForAudit`, `releasableHeld`);
+  - no redraft is spent on it.
+- **The prompt line.** `partnerTermsLine` goes in the reply's user context, not the cached
+  prompt. It tells the draft to name what they offered and say a call is coming, with no fee or
+  agreement and no "keep me in mind". Matt edits and sends it.
+- **The Desk row.** A `partner_terms` event (one per agent, kind and day) raises
+  `call_partner_terms`, labelled "Partner terms: yours to answer" (`shared/call-list.js`).
+  - It carries `partner: { kind, phrase, kinds, addToBuyers }` and the held draft's id.
+  - It lasts 14 days. A connected call or a hand reply after it clears it.
+  - It is on Today (`URGENT_KINDS`) and leads the person's row, with the held reply folded under it.
+- **They buy.** `investor_buyer` also records `investor_minded` (same dedupe key as the reply's
+  own read), and the row's goal says "add them to the buyer list". Nothing creates an investor
+  profile.
+
+Replay over the 5,503 texts agents sent us (saved threads, 2026-10-14): 56 hits across 46 agents
+(list_back 15, referral_fee 16, buyer_agent 13, co_wholesale 9, investor_buyer 3). Two were not
+partner terms: a wholesaler pointing us to their dispo person about one house, and "I'm a
+wholesaler myself so I understand".
+
 ### Every agent on a clock: the agent check-in (2026-09-29)
 
 Matt: "reach out to these agents proactively and frequently, every 3 weeks or

@@ -341,6 +341,34 @@ test("a seller 7% under our number is a call, not a dead thread — live or lost
   assert.equal(normalizeDesk({}).gapPct, 15);
 });
 
+// 2026-10-14: list-backs, buyer's-agent offers, referral fees and deal lists
+// were answered "keep me in mind". The terms are Matt's.
+test("an agent who offered partner terms gets a partner row carrying what they offered", () => {
+  const ev = (over = {}) => ({ type: "partner_terms", contactId: "c8", at: ago(0.2), data: { kind: "list_back", phrase: "Do you do list backs?", kinds: ["list_back"], addToBuyers: false }, ...over });
+  const drafts = [{ id: "d8", contactId: "c8", contactName: "Pat Agent", status: "draft", inbound: "Do you do list backs?", partnerTerms: { kind: "list_back" }, createdAt: ago(0.2) }];
+  const rows = callList({ events: [ev()], drafts, now: NOW });
+  const r = rows.find((x) => x.kind === "call_partner_terms");
+  assert.ok(r, "a partner row");
+  assert.equal(r.contactName, "Pat Agent");
+  assert.equal(r.draftId, "d8", "the held reply rides on the row");
+  assert.match(r.title, /^Pat Agent: asked about a list-back — "Do you do list backs\?"/);
+  assert.deepEqual(r.partner, { kind: "list_back", phrase: "Do you do list backs?", kinds: ["list_back"], addToBuyers: false });
+  assert.match(r.call.goal, /terms are yours/);
+  assert.doesNotMatch(r.call.goal, /buyer list/);
+  assert.ok(CALL_KINDS.some((k) => k.key === "call_partner_terms" && /Partner terms/.test(k.label)));
+  // Ahead of the investor-minded call for the same person.
+  const minded = { type: "investor_minded", contactId: "c8", at: ago(0.2), data: { cue: "i can pay a 10k assignment" } };
+  const buyer = ev({ data: { kind: "investor_buyer", phrase: "I can pay a 10k assignment if it pencils", kinds: ["investor_buyer"], addToBuyers: true } });
+  const both = callList({ events: [minded, buyer], drafts, now: NOW });
+  assert.deepEqual(both.filter((x) => x.contactId === "c8").map((x) => x.kind), ["call_partner_terms"]);
+  assert.match(both[0].call.goal, /add them to the buyer list/i);
+  assert.equal(both[0].partner.addToBuyers, true);
+  // Done once you've talked, or texted them yourself; gone after two weeks.
+  assert.equal(callList({ events: [ev(), { type: "hand_reply", contactId: "c8", at: ago(0.1) }], drafts, now: NOW }).filter((x) => x.kind === "call_partner_terms").length, 0);
+  assert.equal(callList({ events: [ev({ at: ago(15) })], drafts, now: NOW }).filter((x) => x.kind === "call_partner_terms").length, 0);
+  assert.equal(callList({ events: [ev()], drafts, unsubscribed: new Set(["c8"]), now: NOW }).filter((x) => x.kind === "call_partner_terms").length, 0);
+});
+
 test("an agent who talks like an investor gets one relationship call, and a brought house that's a wholesaler's assignment says so", () => {
   const ev = { type: "investor_minded", contactId: "c7", at: ago(1), data: { cue: "finder's fee" } };
   const rows = callList({ offers: [offer({ id: "x", contactId: "c7", contactName: "Sam T", status: "passed" })], events: [ev], now: NOW });

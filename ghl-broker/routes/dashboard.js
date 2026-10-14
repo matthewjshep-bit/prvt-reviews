@@ -86,6 +86,8 @@ const PIPELINE_EVENT_TYPES = [
   "promise_made", "promise_owed", "promise_kept",
   "underwrite_dropped",
   "drive_stopped", "drive_resumed", "hand_reply", "investor_minded",
+  // An agent's partner terms: the Desk's partner row (shared/call-list.js).
+  "partner_terms",
 ];
 
 const DAY_MS = 86400000;

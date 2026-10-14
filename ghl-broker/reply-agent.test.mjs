@@ -701,6 +701,77 @@ test("when an agent sounds confused or fed up with us, the reply waits for you",
   }
 });
 
+// 2026-10-14: about 17 agents offered to work with us on terms — a
+// list-back, being our buyer's agent, a referral fee, their wholesale list,
+// buying themselves — and the bot answered "keep me in mind" on its own.
+// The terms are Matt's to answer.
+const runPartner = async (message, draft = { ...DRAFT, reply: "Sounds good, keep me in mind!" }) => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => OFFERS;
+  const asked = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message, sendsEnabled: true,
+    deps: { draft: async (args) => { asked.push(args); return draft; }, now: () => NOW, random: () => 0 },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const events = await store.listContactEvents("LOC", "c1");
+  return { d, events, asked };
+};
+
+test("an agent asking if we do list-backs gets held for Matt with a partner row, not 'keep me in mind'", async () => {
+  const { d, events, asked } = await runPartner("Do you do list backs? I'm an agent, let's chat more tomorrow");
+  assert.equal(d.status, "draft", "held, never scheduled");
+  assert.equal(d.autoSend.decided, false);
+  assert.match(d.autoSend.reason, /^needs a person: they asked about a list-back/);
+  assert.equal(d.needsHuman, true);
+  assert.equal(d.gateClean, false, "the nightly audit never releases it");
+  assert.deepEqual({ kind: d.partnerTerms.kind, phrase: d.partnerTerms.phrase }, { kind: "list_back", phrase: "Do you do list backs?" });
+  // The draft was told to answer the offer, not brush it off.
+  assert.match(asked[0].context.text, /PARTNER TERMS: they asked whether we give the listing back/);
+  assert.match(asked[0].context.text, /Never "keep me in mind"/);
+  const row = events.find((e) => e.type === "partner_terms");
+  assert.deepEqual(row.data, { kind: "list_back", phrase: "Do you do list backs?", kinds: ["list_back"], addToBuyers: false });
+  assert.equal(events.some((e) => e.type === "investor_minded"), false, "an agent asking for a list-back isn't an investor");
+});
+
+test("an agent offering to be our buyer's agent raises a partner row", async () => {
+  const { d, events } = await runPartner("I can represent you as your buyer's agent and keep an eye out for you");
+  assert.equal(d.status, "draft");
+  assert.equal(d.partnerTerms.kind, "buyer_agent");
+  assert.equal(events.filter((e) => e.type === "partner_terms").length, 1);
+});
+
+test("an agent who says they'd pay an assignment fee is investor-minded and flagged for the buyer list", async () => {
+  const { d, events } = await runPartner("Nothing now. Anything you got offered that didn't work for you? I can pay a 10k assignment if the deal pencils out");
+  assert.equal(d.status, "draft");
+  assert.equal(d.partnerTerms.kind, "investor_buyer");
+  assert.equal(events.find((e) => e.type === "partner_terms").data.addToBuyers, true);
+  const minded = events.find((e) => e.type === "investor_minded");
+  assert.ok(minded, "the investor-minded path records them");
+  assert.equal(minded.dedupeKey, "investor_minded:c1", "once per agent, the same key the reply's own read uses");
+});
+
+test("a plain 'I'll keep you in mind' raises nothing", async () => {
+  const { d, events, asked } = await runPartner("Nothing right now but I'll keep you in mind!", { ...DRAFT, reply: "Appreciate it, talk soon." });
+  assert.equal(d.status, "scheduled", "an ordinary reply still sends itself");
+  assert.equal(d.partnerTerms, undefined);
+  assert.equal(events.some((e) => e.type === "partner_terms"), false);
+  assert.doesNotMatch(asked[0].context.text || "", /PARTNER TERMS/);
+});
+
+test("evaluateReplyGates holds any reply carrying partner terms, whatever its intent", () => {
+  const g = gate({ intent: "question", reply: "Happy to work together.", partnerTerms: { kind: "referral_fee", phrase: "What are your referral fees like?" } });
+  assert.equal(g.ok, false);
+  assert.equal(g.clean, false, "not a lock a guard may open");
+  assert.match(g.flags.join(" · "), /they asked about a referral fee or a commission — partner terms are yours to answer/);
+  assert.equal(gate({ intent: "question", reply: "Happy to work together." }).ok, true);
+  assert.equal(gate({ intent: "question", reply: "Thanks!", partnerTerms: { kind: "list_back" } }, { party: "investor" }).flags.some((f) => /partner terms/.test(f)), false, "an investor's buying talk is not an agent's terms");
+});
+
 test("with sends off on the broker nothing is scheduled, and the draft says why", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);

@@ -116,6 +116,9 @@ export const EVENT_TYPES = [
   "unsubscribed",
   // Matt's contact card went to them in its own text (shared/contact-card.js).
   "contact_card_sent",
+  // An agent offered to work together on terms — a list-back, being our
+  // buyer's agent, a fee, their deal list (shared/partner-terms.js).
+  "partner_terms",
 ];
 
 export const EVENT_LABEL = {
@@ -155,6 +158,7 @@ export const EVENT_LABEL = {
   drive_stopped: "you stopped the bot", drive_resumed: "the bot is back on", cadence_set: "you changed how often we check in",
   unsubscribed: "they unsubscribed",
   contact_card_sent: "we sent our contact card",
+  partner_terms: "they offered to work together",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -194,6 +198,7 @@ export const EVENT_ICON = {
   drive_stopped: "CirclePause", drive_resumed: "CirclePlay", cadence_set: "Gauge",
   unsubscribed: "UserX",
   contact_card_sent: "Contact",
+  partner_terms: "Handshake",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

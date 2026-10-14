@@ -169,6 +169,19 @@ test("Today keeps only what needs Matt: replies waiting, owed numbers, a counter
   assert.deepEqual(TODAY_SECTIONS.map((s) => [s.key, s.label]), [["decide", "Needs you"]]);
 });
 
+test("partner terms lead the person's row on Today, with the held reply folded under it", () => {
+  const drafts = [{ id: "reply", intent: "question", partnerTerms: { kind: "list_back" } }];
+  const partner = { id: "call_partner_terms:c9", kind: "call_partner_terms", section: "call", severity: "now", contactId: "c9", contactName: "Pat Agent", draftId: "reply", ops: [] };
+  const kept = urgentReasons([partner, draftRow("reply", { contactId: "c9" })], { drafts });
+  assert.deepEqual(kept.map((r) => r.kind).sort(), ["call_partner_terms", "draft_waiting"]);
+  const { rows } = foldDesk(kept, { drafts });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "call_partner_terms");
+  assert.deepEqual(rows[0].also.map((r) => r.kind), ["draft_waiting"]);
+  // Out of tries, it's back with the machine and off Today like any call.
+  assert.equal(urgentReasons([{ ...partner, section: "machine" }], { drafts }).length, 0);
+});
+
 test("a person whose strongest reason was a call still shows for the decision under it", () => {
   const kept = urgentReasons([{ id: "call_brought:c1", kind: "call_brought", severity: "now", contactId: "c1", ops: [] }, promise()]);
   const { rows } = foldDesk(kept);
