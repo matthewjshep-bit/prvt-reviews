@@ -70,8 +70,11 @@ export const CARD_STAGE_LABEL = Object.freeze({ tier2: "Tier 2", tier1: "Tier 1"
 /** Stages that go away (Matt deletes them in GHL once they're empty). */
 export const OLD_STAGES = Object.freeze(["newLead", "contacted", "tier3", "negotiations", "passed", "notGood", "contractSent", "lost"]);
 
-// A card move within this long of a move the app recorded (ghl_stage_moved,
-// or a workflow the bot enrolled them in) is the app's own, not a person's.
+// A card move within this long of a move the app recorded (ghl_stage_moved:
+// this planner, the migration, the Tier 1 list) is the app's own, not a
+// person's. A GHL workflow the bot enrolled them in is not counted: TIER 2 on
+// a no ("she's listing next week") was the conversation's own read, and the
+// planner must not drag that card back up on an unsent number.
 export const APP_MOVE_SLACK_MS = 10 * 60000;
 
 // A held underwrite counts as a house in hand this long (shared/tiers.js
@@ -112,11 +115,12 @@ const RANK = { contract: 5, offerOut: 4, tier1: 3, won: 2, tier2: 1 };
  * (offerStageAt). `to` is null when the agent has no offers at all.
  *
  * A house we priced and never sent (a held draft, or a `new` row) is Tier 1
- * only while it's live: something happened on it, or they wrote to us, in
- * the last `staleDays` (ghlStages.staleTier1Days, 10). After that it's Tier 2
- * — Matt, 2026-10-14: Eric B. sat in Tier 1 for 55 days on an August row
- * that never went out, and Cheryl P. on a duplicate of a house
- * we'd passed on. `lastIn` is their last word (ISO or ms), when known.
+ * only while it's live: something happened on the offer in the last
+ * `staleDays` (ghlStages.staleTier1Days, 10). After that it's Tier 2 —
+ * Matt, 2026-10-14: Eric B. sat in Tier 1 for 55 days on an August row that
+ * never went out, and Cheryl P. on a duplicate of a house we'd passed on.
+ * Their texts about something else don't keep a number alive: a re-run, a
+ * float or a send is what does. `lastIn` is accepted and unused here.
  */
 export function targetStage({ offers = [], now = Date.now(), lastIn = null, staleDays = GHL_STAGES_DEFAULTS.staleTier1Days } = {}) {
   const rows = annotateCurrent((offers || []).filter(Boolean)).filter((o) => !o.supersededBy);
@@ -125,8 +129,7 @@ export function targetStage({ offers = [], now = Date.now(), lastIn = null, stal
   const consider = (key, o, why) => {
     if (!best || RANK[key] > RANK[best.key]) best = { key, offerId: o.id || null, why };
   };
-  const spoke = ms(lastIn);
-  const live = (t) => now - Math.max(t ?? 0, spoke ?? 0) <= staleDays * DAY_MS;
+  const live = (t) => t != null && now - t <= staleDays * DAY_MS;
   for (const o of rows) {
     const t = offerStageAt(o);
     if (o.status === "draft") {
@@ -134,7 +137,7 @@ export function targetStage({ offers = [], now = Date.now(), lastIn = null, stal
       if (!o.contactId || age > HELD_DAYS * DAY_MS) continue;
       if (t != null) at = Math.max(at ?? t, t);
       if (live(t)) consider("tier1", o, "a house being priced");
-      else consider("tier2", o, `held, and nothing on it or from them in ${staleDays}+ days`);
+      else consider("tier2", o, `held, and nothing on it in ${staleDays}+ days`);
       continue;
     }
     if (t != null) at = Math.max(at ?? t, t);
@@ -145,7 +148,7 @@ export function targetStage({ offers = [], now = Date.now(), lastIn = null, stal
     } else if (s.stage === "sent" || s.sub === "countered" || s.sub === "hot") consider("offerOut", o, s.sub ? `responded: ${s.sub}` : s.why);
     else if (s.stage === "draft") {
       if (live(t)) consider("tier1", o, "priced, our number not out yet");
-      else consider("tier2", o, `priced but never sent, and nothing on it or from them in ${staleDays}+ days`);
+      else consider("tier2", o, `priced but never sent, and nothing on it in ${staleDays}+ days`);
     }
     else consider("tier2", o, `every house passed (${s.why})`);
   }
@@ -236,7 +239,7 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
  *   lastIn               Map contactId → ISO of their last word
  *   openPromiseContacts  Set of contactIds we owe a number or an answer
  *   nurtureLive          [{ id, name }] published nurture workflows a Tier 2 move would start
- *   appMoves             Map contactId → [ISO] of card moves the app made (APP_MOVE_SLACK_MS)
+ *   appMoves             Map contactId → [ISO] of card moves the app made (ghl_stage_moved; APP_MOVE_SLACK_MS)
  */
 export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), settings = {}, now = Date.now() } = {}) {
   const counts = { considered: 0, planned: 0, blocked: 0, created: 0, youMoved: 0, old: 0, byMove: {} };

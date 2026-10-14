@@ -382,3 +382,8 @@ test("an offer in escrow with a backup marks the house gone", () => {
   assert.equal(houseGone("Can you back up a sec, what's your number?", ""), false);
   assert.equal(houseGone("The seller wants out of escrow on his other house first", ""), false);
 });
+
+test("'it's currently under contract' marks the house gone", () => {
+  assert.equal(houseGone("It's currently under contract as a short sale.", "status_check"), true);
+  assert.equal(houseGone("It's still pending", ""), true);
+});

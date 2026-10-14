@@ -216,7 +216,9 @@ test("a priced offer never sent and quiet 10 days leaves Tier 1", () => {
   assert.equal(t.to, "tier2");
   assert.match(t.why, /never sent/);
   assert.equal(targetStage({ offers: [offer("e2", { status: "new", sends: [], createdAt: ago(4) })], now: NOW }).to, "tier1", "a fresh one stays");
-  assert.equal(targetStage({ offers: [offer("e3", { status: "new", sends: [], createdAt: ago(30) })], now: NOW, lastIn: ago(2) }).to, "tier1", "they wrote this week: still live");
+  assert.equal(targetStage({ offers: [offer("e3", { status: "new", sends: [], createdAt: ago(30) })], now: NOW, lastIn: ago(2) }).to, "tier2",
+    "their texts about something else don't keep an unsent number alive");
+  assert.equal(targetStage({ offers: [offer("e5", { status: "new", sends: [], createdAt: ago(30), statusAt: ago(2) })], now: NOW }).to, "tier1", "something on the offer this week does");
   assert.equal(targetStage({ offers: [offer("e4", { status: "draft", sends: [], createdAt: ago(15) })], now: NOW }).to, "tier2", "a held draft gone quiet too");
 });
 

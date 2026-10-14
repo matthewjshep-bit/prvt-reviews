@@ -229,3 +229,16 @@ test("when GHL follows the offers, a tag the bot added never moves the card; the
     tagEvents: [{ contactId: "lori", at: "2026-09-15T11:00:00Z", data: { tag: "tier-1" } }] });
   assert.deepEqual([fixes[0].moveTo, fixes[0].remove, fixes[0].add], [null, ["tier-1"], []]);
 });
+
+// 2026-10-14: the bot's TIER 2 enrollment on "she's listing next week" put
+// the card in Tier 2 — the conversation's own read. It's not the app's move
+// to undo on an unsent number; the planner's and the migration's are.
+import { appMovesByContact as _appMoves } from "./tier-check.js";
+test("only the app's own card moves count as the app's, not the bot's TIER workflows", () => {
+  const m = _appMoves([
+    { contactId: "a", type: "ghl_stage_moved", at: "2026-10-13T23:07:31Z" },
+    { contactId: "b", type: "workflow_enrolled", at: "2026-10-13T22:09:58Z" },
+  ]);
+  assert.deepEqual(m.get("a"), ["2026-10-13T23:07:31Z"]);
+  assert.equal(m.has("b"), false);
+});
