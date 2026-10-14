@@ -47,12 +47,6 @@ const pacificDay = (ms) => new Intl.DateTimeFormat("en-CA", { timeZone: "America
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The tags the tier nurture goes with; who the one-time clean-up reads.
 export const TIER_DRIP_TAGS = ["tier-2", "tier-3"];
-// The day agents who had written back joined the check-in by their reply
-// alone (2026-10-14: 104 were outside the pool). Their first check-ins are
-// spread over the `everyDays` after it (shared/agent-pulse.js
-// firstCheckInAt), not all due the morning of the deploy. The replier
-// backfill stamps its own run time on its marker instead.
-export const REPLIERS_JOINED_AT = "2026-10-15T15:00:00.000Z";
 // Timeline events that only an agent's thread has: the outreach opener.
 const AGENT_SIGNAL_TYPES = new Set(["outreach_enrolled", "outreach_sent", "outreach_left"]);
 
@@ -227,6 +221,12 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
     if (r.party === "agent" || hooked.has(id) || (eventsBy.get(id) || []).some((e) => AGENT_SIGNAL_TYPES.has(e?.type))) repliers.add(id);
   }
   for (const id of repliers) ids.add(id);
+  // The day each of them joined (agent_pulse_joined, written by the first
+  // real run that saw them), so their first check-in is spread from it.
+  const joinedBy = new Map();
+  for (const e of ledgerRead.events || []) {
+    if (e?.type === "agent_pulse_joined" && e.contactId && (!joinedBy.has(e.contactId) || String(e.at) < String(joinedBy.get(e.contactId)))) joinedBy.set(e.contactId, e.at);
+  }
 
   const agents = [];
   for (const id of ids) {
@@ -240,8 +240,10 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
       lastInboundAt: inboundRow.get(id)?.at || null, listings: listingsBy.get(id) || [],
       ghlTier: cards.get(id) || null,
       // When they joined the check-in, for spreading the first one: the
-      // replier backfill's run, or the day repliers joined by their reply.
-      joinedAt: inboundRow.get(id)?.data?.joinedAt || (repliers.has(id) ? REPLIERS_JOINED_AT : null),
+      // replier backfill's run, or the day the runner first saw their reply.
+      // Joined by a reply and not yet written down: the planner counts today.
+      joinedAt: inboundRow.get(id)?.data?.joinedAt || joinedBy.get(id) || null,
+      joinedByReply: repliers.has(id),
     });
   }
   return { agents, settings, config, oa, houses, ledgerRead, evRead };
@@ -265,7 +267,10 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   const drips = tierDrips({ pulse: settings, conversationAi: saved.conversationAi, workflows });
   const planSettings = { ...settings, replacesWorkflowIds: drips.map((d) => d.id) };
   const plan = pickPulseAgents({ agents: agents.filter((a) => !triedToday.has(a.contactId)), settings: planSettings, config, houses, outreachFollowUpDays: oa.followUpDays, seats, now });
-  return { ...plan, settings, drips, claimedToday, seats, tierCardsRead: tierCards instanceof Map, truncated: Boolean(evRead.truncated || ledgerRead.truncated) };
+  // Repliers in the pool by their reply alone with no join day on record:
+  // the run writes one for each (agent_pulse_joined), so their spread holds.
+  const unjoined = agents.filter((a) => a.joinedByReply && !a.joinedAt).map((a) => a.contactId);
+  return { ...plan, settings, drips, claimedToday, seats, unjoined, tierCardsRead: tierCards instanceof Map, truncated: Boolean(evRead.truncated || ledgerRead.truncated) };
 }
 
 // What keeps a Tier 2 agent warm, in a few words (shared/agent-pulse.js
@@ -357,6 +362,15 @@ export function startAgentPulse({
     const config = conversationConfig(saved);
     job.autoSend = Boolean(plan.settings.autoSend && sendsEnabled && config.enabled);
     const botOff = config.routing?.botOffTags || [];
+    // Every replier who joined by their reply, picked or not: the day they
+    // joined, once, so their first check-in stays on its spread day.
+    if (!dryRun) {
+      for (const contactId of plan.unjoined || []) {
+        await recordEvent({ store, locationId, contactId, party: "agent", type: "agent_pulse_joined", at: iso(now), source: "sweep",
+          dedupeKey: `agent_pulse_joined:${contactId}`, data: { by: "reply" } }).catch(() => {});
+      }
+      job.joined = (plan.unjoined || []).length;
+    }
     // A different way in for each text, continuing across the day's runs.
     let n = Number(plan.claimedToday) || 0;
     // The day's picks, then the spares: an agent skipped before being claimed

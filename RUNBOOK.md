@@ -4265,12 +4265,18 @@ Matt: all of them go into the check-in.
   apply as for everyone.
 - **Spread, not one burst.** Their last word is weeks old, so they would all
   be due the morning they join. Instead each agent's first check-in falls on
-  their own day within `everyDays` of joining (`firstCheckInAt`, picked from
-  their contact id). This applies only to the first check-in. Once they've
-  been checked in on, or anyone has talked since, the normal clock takes
-  over. A fresh listing of theirs is still raised at once. Repliers added
-  through the timeline count from `REPLIERS_JOINED_AT` (2026-10-15 8am PT).
-  The backfill below counts from the day it runs.
+  their own weekday (Pacific) within `everyDays` of joining
+  (`firstCheckInAt`, picked from their contact id). Weekends are skipped
+  because the run is weekdays only. This applies only to the first check-in.
+  Once they've been checked in on, or anyone has talked since, the normal
+  clock takes over. A fresh listing of theirs is still raised at once.
+- **The day they joined.** A replier who joins by their reply counts from
+  today in every plan and preview until a real run writes it down. The first
+  real run (`startAgentPulse`, not a dry run) records `agent_pulse_joined`
+  for every such replier, picked or not, with `at` = now and dedupe key
+  `agent_pulse_joined:<id>`. Later plans read their day from that event, so
+  the spread holds from whenever the change first runs. The backfill below
+  counts from the day it runs (`data.joinedAt` on its marker).
 - **The backfill, once.** Many of the 104 answered a GHL workflow text
   before the app read inbound texts, so the app has no reply on record for
   them. `ghl-broker/scripts/backfill-replier-profiles.mjs`

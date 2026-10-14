@@ -119,7 +119,7 @@ export const AGENT_PULSE_EVENT_TYPES = [
   // Houses passed or kicked off the Tier 1 list: never raised again.
   "tier1_passed", "tier1_kicked", "tier1_added",
 ];
-export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided"];
+export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided", "agent_pulse_joined"];
 // What counts as them having written back (store.lastContactActivity with
 // inboundOnly — a text summary only when it summarises THEIR text).
 export const INBOUND_EVENT_TYPES = [
@@ -395,7 +395,7 @@ export function tierCard(agent = {}) {
 /**
  * checkInSlot(contactId, days) → 0 … days-1
  *
- * A day of its own for an agent, the same every time it's asked: FNV-1a of
+ * A slot of its own for an agent, the same every time it's asked: FNV-1a of
  * the contact id. What spreads a crowd that joins the check-in at once.
  */
 export function checkInSlot(contactId = "", days = 21) {
@@ -405,23 +405,33 @@ export function checkInSlot(contactId = "", days = 21) {
   return h % n;
 }
 
+const pacificWeekday = (t) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short" }).format(new Date(t));
+const isWeekend = (t) => { const d = pacificWeekday(t); return d === "Sat" || d === "Sun"; };
+
 /**
  * firstCheckInAt({ contactId, joinedAt, everyDays }) → ISO | null
  *
- * When an agent who joined the check-in on `joinedAt` (agent.joinedAt, set
- * by the runner for the repliers it adds) gets their first one: their own
- * day within the next `everyDays`. Null without a join date.
+ * When an agent who joined the check-in on `joinedAt` gets their first one:
+ * their own weekday (Pacific) within the `everyDays` from it. The run is
+ * weekdays only, so a weekend slot would only pile onto Monday. Null without
+ * a join date.
  */
 export function firstCheckInAt({ contactId = "", joinedAt = null, everyDays = 21 } = {}) {
   const t = ms(joinedAt);
-  return t == null ? null : iso(t + checkInSlot(contactId, everyDays) * DAY_MS);
+  if (t == null) return null;
+  const n = Math.max(1, Math.round(Number(everyDays)) || 1);
+  const workdays = [];
+  for (let d = 0; d < n; d++) if (!isWeekend(t + d * DAY_MS)) workdays.push(d);
+  if (!workdays.length) return iso(t);
+  return iso(t + workdays[checkInSlot(contactId, workdays.length)] * DAY_MS);
 }
 
 /**
  * evaluateAgent(agent, ctx) → { status, reason, segment, pulseReason, listing, house, priority }
  *
  *   agent  { contactId, name, tags, offers (all), current (current rows),
- *            drafts, events, ledger, lastInboundAt, listings, facts, joinedAt }
+ *            drafts, events, ledger, lastInboundAt, listings, facts,
+ *            joinedAt, joinedByReply }
  *   ctx    { settings, config, houses, outreachFollowUpDays, now }
  *
  * status: "stopped" | "owned" | "not_due" | "cold_dropped" | "due".
@@ -504,8 +514,12 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   // the first one lands on their own day in the next `everyDays`, not all on
   // the morning they joined. Only the first: once checked in on, or once
   // anyone has talked since, the clock above decides.
-  const firstAt = firstCheckInAt({ contactId: agent.contactId, joinedAt: agent.joinedAt, everyDays });
-  if (firstAt && !lastPulseAt && !texted.length && !(since && String(since) > String(agent.joinedAt)) && now < ms(firstAt)) {
+  // `joinedAt`: the runner's agent_pulse_joined, or the replier backfill's
+  // run. One who joined by their reply and isn't written down yet joins
+  // today, so a preview spreads them from today, as the next run will.
+  const joinedAt = agent.joinedAt || (agent.joinedByReply ? iso(now) : null);
+  const firstAt = firstCheckInAt({ contactId: agent.contactId, joinedAt, everyDays });
+  if (firstAt && !lastPulseAt && !texted.length && !(since && String(since) > String(joinedAt)) && now < ms(firstAt)) {
     return out("not_due", `joined the check-in; first one spread over ${everyDays} days`, { segment, dueAt: firstAt });
   }
   const house = ourHouseFor({ offers: agent.current || [], drafts, events, config, now });

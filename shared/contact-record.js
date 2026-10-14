@@ -58,7 +58,9 @@ export const EVENT_TYPES = [
   // day's claim, written before the draft; `agent_pulse_texted` is the text
   // actually going; a claim that drafted nothing is voided so the seat and the
   // listing come back. `listing_pinged` keeps a listing to one text, ever.
-  "agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided",
+  // `agent_pulse_joined`: the day an agent who wrote back joined the pool by
+  // their reply alone; their first check-in is spread from it.
+  "agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided", "agent_pulse_joined",
   // A GHL workflow the app put them in or took them out of (conversation
   // actions), so the pulse knows who a drip already has.
   "workflow_enrolled", "workflow_left",
@@ -125,6 +127,7 @@ export const EVENT_LABEL = {
   underwrite_dropped: "an underwrite left the queue without running",
   listing_off_market: "the listing went off the market", listing_back_on_market: "the listing came back on the market",
   agent_pulse_sent: "a check-in was started", agent_pulse_texted: "we checked in", agent_pulse_voided: "a check-in drafted nothing",
+  agent_pulse_joined: "joined the agent check-in",
   listing_pinged: "we asked about their listing", listing_ping_voided: "a listing text drafted nothing",
   workflow_enrolled: "added to a GHL workflow", workflow_left: "taken out of a GHL workflow",
   offmarket_asked: "we asked about off-market houses",
@@ -187,7 +190,7 @@ export const EVENT_ICON = {
   underwrite_dropped: "Clock",
   listing_off_market: "XCircle",
   listing_back_on_market: "RefreshCw",
-  agent_pulse_sent: "BellRing", agent_pulse_texted: "MessageSquare", agent_pulse_voided: "Clock",
+  agent_pulse_sent: "BellRing", agent_pulse_texted: "MessageSquare", agent_pulse_voided: "Clock", agent_pulse_joined: "BellRing",
   listing_pinged: "Crosshair", listing_ping_voided: "Clock",
   workflow_enrolled: "Workflow", workflow_left: "LogOut",
   offmarket_asked: "Crosshair",
