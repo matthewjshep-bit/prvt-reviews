@@ -25,7 +25,7 @@ import { auditDedupeKey } from "./shared/conversation-audit.js";
 import { conversationConfig, startProactive as defaultStartProactive } from "./reply-agent.js";
 import { recordEvent } from "./contact-record.js";
 import { getContact, searchOpportunities, listPipelines, createContactNote, removeContactTags, smsUnsubscribed } from "./ghl.js";
-import { UW_TAGS } from "./auto-underwrite.js";
+import { UW_TAGS, knownAddressesFor } from "./auto-underwrite.js";
 import { waitingReason } from "./outbox-guard.js";
 import { leadSourceOf } from "./shared/lead-source.js";
 
@@ -78,7 +78,8 @@ export async function carryOutHeldVerdict({ client, locationId, saved = {}, stor
   if (!c.inserted) return { status: "claimed", reason: "", jobId: null };
   if (t.action === "rerun") {
     if (typeof deps.startUnderwrite !== "function") return { status: "skipped", reason: "the underwriter is not wired", jobId: null };
-    const r = await deps.startUnderwrite({ contactId, message: "", address: o.address, askingPrice: t.askingPrice || 0, replaceOfferId: o.id });
+    // `t.address`: the full address the triage found for a street the map missed.
+    const r = await deps.startUnderwrite({ contactId, message: "", address: t.address || o.address, askingPrice: t.askingPrice || 0, replaceOfferId: o.id });
     if (r?.skipped) return { status: "skipped", reason: r.skipped, jobId: null };
     return { status: r?.queued ? "queued" : "started", reason: "", jobId: r?.job?.id || null };
   }
@@ -133,12 +134,13 @@ export async function sweepHeldUnderwrites({
 
   for (const [contactId, mine] of byContact) {
     const siblings = offers.filter((o) => o?.contactId === contactId);
-    let events = [], drafts = [], contact = null, opportunities = [], hooks = [];
+    let events = [], drafts = [], contact = null, opportunities = [], hooks = [], knownAddresses = [];
     if (contactId) {
-      [events, drafts, hooks] = await Promise.all([
+      [events, drafts, hooks, knownAddresses] = await Promise.all([
         store.listContactEvents(locationId, contactId, { limit: 300 }).catch(() => []),
         store.listReplyDrafts(locationId, { contactId, limit: 40 }).catch(() => []),
         typeof store.listOutreachHooks === "function" ? store.listOutreachHooks(locationId, { contactId }).catch(() => []) : [],
+        knownAddressesFor({ store, locationId, contactId }).catch(() => []),
       ]);
       try {
         const c = await getContact(client, contactId);
@@ -152,7 +154,7 @@ export async function sweepHeldUnderwrites({
     let closed = 0;
     for (const o of mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))) {
       const brought = o.autoUnderwrite?.leadSource === "agent_brought" || leadSourceOf({ offer: o, hooks, events }).source === "agent_brought";
-      const t = triageHeldUnderwrite({ offer: o, siblings, events, drafts, contact, opportunities, botOffTags, now, knownCities, brought });
+      const t = triageHeldUnderwrite({ offer: o, siblings, events, drafts, contact, opportunities, botOffTags, now, knownCities, brought, knownAddresses });
       const kind = KIND_OF[t.action];
       // A wait with a date (asked, passes in a week) is reported, so the
       // Desk can say when; any other wait is nothing to say.

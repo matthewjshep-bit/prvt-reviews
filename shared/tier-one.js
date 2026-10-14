@@ -58,11 +58,23 @@ export function isTierOneAction(a = {}) {
 // (shared/ghl-stages.js, Matt's four stages, 2026-10-13), the offers say
 // where an agent is and Tier 3 is gone, so these stand down. Leaving the
 // lower tiers (the tier-1 rule's remove_tags / remove_from_workflow) still
-// runs; TIER 1 stays — it starts the underwrite.
+// runs. The Tier 1 moves stand down too (isTierOneCardAction).
 export function isLowerTierAction(a = {}) {
   const tags = (a.tags || []).map((t) => String(t).toLowerCase());
   if (a.type === "add_tags") return tags.some((t) => t === "tier-2" || t === "tier-3");
   if (a.type === "add_to_workflow") return /^\s*tier\s*[23]\s*$/i.test(String(a.workflowName || ""));
+  return false;
+}
+
+// The bot's Tier 1 move: the tier-1 tag and the TIER 1 workflow. Both moved
+// the GHL card into Tier 1 on the model's intent alone, including on replies
+// that passed on the house (2026-10-14). With GHL following the offers they
+// stand down; the rule's start_underwrite stays, and the offer it makes is
+// what moves the card.
+export function isTierOneCardAction(a = {}) {
+  const tags = (a.tags || []).map((t) => String(t).toLowerCase());
+  if (a.type === "add_tags") return tags.includes("tier-1");
+  if (a.type === "add_to_workflow") return /^\s*tier\s*1\s*$/i.test(String(a.workflowName || ""));
   return false;
 }
 

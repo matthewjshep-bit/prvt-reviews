@@ -347,3 +347,38 @@ test("a re-run on a house the sweep passed on isn't closed again by that old pas
   const mine = { type: "offer_we_passed", address: "2500 Alder St, Milton, WA 98354", at: ago(3), data: { by: "you" } };
   assert.equal(triage({ events: [mine] }).reason, "we passed on this house", "a pass a person made still closes it");
 });
+
+/* ---------- 2026-10-14: what we already know, and what we already said ---------- */
+import { houseGone } from "./held-underwrites.js";
+const MISS = "stopped early — couldn't locate 5413 Welfare Ave NE on the map";
+const welfare = (over = {}) => held({ address: "5413 Welfare Ave NE", ...over }, [MISS]);
+const said = (reply, over = {}) => ({ id: `r${Math.random()}`, contactId: "c1", status: "sent", party: "agent", intent: "investor_open", inbound: "Needs a refresh, new carpet and some updates",
+  reply, propertyAddress: "5413 Welfare Ave NE", createdAt: ago(1), ...over });
+
+test("a held underwrite on a house the bot passed on retires, not asks for the address", () => {
+  const t = triageHeldUnderwrite({ offer: welfare(), drafts: [said("Sounds mostly cosmetic, probably not enough meat for us on that one.")], now: NOW });
+  assert.equal(t.action, "retire");
+  assert.equal(t.status, "we_passed");
+  assert.match(t.reason, /we told them we're passing/);
+  const stamped = triageHeldUnderwrite({ offer: welfare(), drafts: [said("Thanks, sounds too nice for us.", { qualify: { stage: "pass", address: "5413 Welfare Ave NE" } })], now: NOW });
+  assert.equal(stamped.action, "retire");
+});
+
+test("a held underwrite we can place from the listing re-runs instead of asking", () => {
+  const t = triageHeldUnderwrite({ offer: welfare(), drafts: [said("What's it actually need?", { inbound: "Needs a roof" })],
+    knownAddresses: ["5413 Welfare Ave NE, Bainbridge Island, WA 98110", "99 Other St, Kent, WA 98031"], now: NOW });
+  assert.equal(t.action, "rerun");
+  assert.equal(t.address, "5413 Welfare Ave NE, Bainbridge Island, WA 98110");
+  const unknown = triageHeldUnderwrite({ offer: welfare(), drafts: [said("What's it actually need?", { inbound: "Needs a roof" })], knownAddresses: ["99 Other St, Kent, WA 98031"], now: NOW });
+  assert.equal(unknown.action, "ask", "a street we can't place is still asked about");
+  assert.deepEqual(unknown.needs, ["address"]);
+});
+
+test("an offer in escrow with a backup marks the house gone", () => {
+  assert.equal(houseGone("A full price offer is in escrow now, and the other one is considered the backup.", "status_check"), true);
+  assert.equal(houseGone("It's in escrow with another buyer", ""), true);
+  assert.equal(houseGone("We are taking backup offers", ""), true);
+  assert.equal(houseGone("Great news, we're in escrow!", ""), false, "our own deal in escrow is good news");
+  assert.equal(houseGone("Can you back up a sec, what's your number?", ""), false);
+  assert.equal(houseGone("The seller wants out of escrow on his other house first", ""), false);
+});

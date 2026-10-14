@@ -60,9 +60,9 @@ import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
-import { passedOnHouse, isTierOneAction, isLowerTierAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
+import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
-import { qualifyStep, QUALIFY_ASK_RX } from "./shared/flip-read.js";
+import { qualifyStep, QUALIFY_ASK_RX, ourReplyPasses } from "./shared/flip-read.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
@@ -1661,12 +1661,18 @@ export function theirWordsSince(transcript = "", sinceMs = 0, message = "") {
 /**
  * icebreakerHouse(events) → { address, at } | null
  *
- * The listing our first text opened with: the app's outreach_sent, or the
- * GHL workflow's outreach_enrolled for the cohort it texted.
+ * The newest listing of theirs we opened with: the app's outreach_sent, the
+ * GHL workflow's outreach_enrolled for the cohort it texted, or a check-in
+ * about a fresh listing of theirs (agent_pulse_texted with its listingKey).
+ * A check-in listing is the same icebreaker as the first text's (Matt,
+ * 2026-10-14: Dana F.'s "needs a refresh" on Welfare Ave ran Tier 1
+ * and an underwrite while the reply passed on it).
  */
 export function icebreakerHouse(events = []) {
   const e = (events || [])
-    .filter((x) => (x?.type === "outreach_sent" || (x?.type === "outreach_enrolled" && x.data?.kind !== "followup")) && x.address)
+    .filter((x) => x?.address && (x.type === "outreach_sent"
+      || (x.type === "outreach_enrolled" && x.data?.kind !== "followup")
+      || (x.type === "agent_pulse_texted" && (x.data?.listingKey || x.data?.reason === "fresh_listing"))))
     .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0];
   return e ? { address: e.address, at: Date.parse(e.at || "") || 0 } : null;
 }
@@ -1680,15 +1686,16 @@ export function icebreakerHouse(events = []) {
  * "pass" and "closed" carry the reply and hold the underwrite.
  */
 export async function qualifyIcebreaker({ store, locationId, contactId, draft, message, transcript, now = Date.now(), agentRehab = 0 }) {
-  const evs = (await store.listContactEvents?.(locationId, contactId, { types: ["outreach_sent", "outreach_enrolled"], limit: 50 }).catch(() => [])) || [];
+  const evs = (await store.listContactEvents?.(locationId, contactId, { types: ["outreach_sent", "outreach_enrolled", "agent_pulse_texted"], limit: 50 }).catch(() => [])) || [];
   const ice = icebreakerHouse(evs);
   if (!ice) return null;
-  const key = addressKey(ice.address);
-  if (!key || addressKey(draft.propertyAddress || ice.address) !== key) return null;
+  // Same number, same street: a check-in event from before 2026-10-14 holds
+  // the street alone, and the model's address may carry the city.
+  if (!addressKey(ice.address) || !sameStreet(draft.propertyAddress || ice.address, ice.address)) return null;
   const book = await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []);
   if (knownOfferFor(book, ice.address, now)) return null;
   const sent = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 30 }).catch(() => []);
-  const ours = (stage) => sent.some((d) => d.qualify?.stage === stage && addressKey(d.qualify.address || "") === key);
+  const ours = (stage) => sent.some((d) => d.qualify?.stage === stage && sameStreet(d.qualify.address || "", ice.address));
   const asked = ours("ask") || String(transcript || "").split("\n").some((l) => /^\[[^\]]*\]\s+US\b/.test(l) && QUALIFY_ASK_RX.test(l));
   const passed = ours("pass");
   const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: openerVariant(contactId, 3) });
@@ -3821,6 +3828,25 @@ async function runReply(job, ctx) {
     const r = await redraftOnGate({ draft, gate, gateFor, config, redraft: (fix) => deps.draft({ ...replyArgs, fix }) });
     draft = r.draft; gate = r.gate;
   }
+  // Our reply passes on the house (Matt, 2026-10-14). "Sounds mostly
+  // cosmetic, probably not enough meat for us" went out tagged
+  // deal_available, and the intent alone ran Tier 1 — tag, TIER 1 workflow,
+  // an underwrite — for a house we'd just turned down (Dana F.'s
+  // Welfare Ave, Korey P.'s turnkey Puyallup). What we said wins: it files
+  // as "nothing right now" (Tier 2), the house is stamped passed so a racing
+  // underwrite stops (threadPassed), and an unsent offer on it is closed.
+  const replyPassed = party === "agent" && !qualifyHeld && !numberFirst && !notOurKind
+    && ["deal_available", "new_property"].includes(draft.intent) && ourReplyPasses(draft.reply);
+  if (replyPassed) {
+    draft = {
+      ...draft,
+      intent: "investor_open",
+      reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
+      ...(draft.propertyAddress ? { qualify: { stage: "pass", address: draft.propertyAddress, why: "our reply passed on it" } } : {}),
+    };
+    job.intent = draft.intent;
+    gate = gateFor(draft);
+  }
   let base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   // The text after a call is its own allowlist slot on top of the intent's:
   // a question asked on the phone still needs "text after a call" ticked.
@@ -3904,6 +3930,17 @@ async function runReply(job, ctx) {
   if (qualifyHeld) {
     plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite" && !isTierOneAction(x));
     plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite" && !isTierOneAction(x));
+  }
+  // We passed on it in this reply: no credits, no Tier 1, and a number we
+  // priced and never sent on it is closed, so it can't hold their card in
+  // Tier 1 (Korey P.'s turnkey Puyallup, 2026-10-06).
+  if (replyPassed) {
+    plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite" && !isTierOneAction(x));
+    plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite" && !isTierOneAction(x));
+    if (draft.propertyAddress) {
+      plan.auto.push({ id: `a-unsent-${job.id}`, type: "retire_unsent_offer", mode: "auto", status: "pending", party,
+        why: "our reply passed on the house — a number we never sent on it closes" });
+    }
   }
   if (numberFirst) {
     const extra = numberFirst.replaceOfferId ? { replaceOfferId: numberFirst.replaceOfferId } : {};
@@ -4401,7 +4438,7 @@ async function runReply(job, ctx) {
     const filed = await applyProfileUpdates({
       client, locationId, contactId: job.contactId, party, profile: learnable, custom: a.custom,
       summary: draft.summary, subjectProperty: draft.propertyAddress, config, now, warnings,
-      store, draftId: record.id, intent: draft.intent, inbound: job.message, notOurKind, qualifying: qualifyHeld ? draft.qualify.stage : "",
+      store, draftId: record.id, intent: draft.intent, inbound: job.message, notOurKind, qualifying: qualifyHeld ? draft.qualify.stage : replyPassed ? "pass" : "",
     });
     if (filed.learned.length || filed.written.length) {
       record = { ...record, profileUpdates: { learned: filed.learned, written: filed.written }, warnings: warnings.slice(0, 6), updatedAt: new Date().toISOString() };
@@ -4617,7 +4654,7 @@ async function runReply(job, ctx) {
   // 2026-10-11, on 1425 33rd St SE: "even though we passed, if the numbers
   // work out we should proceed." It is an ordinary underwrite
   // from here: its number goes out only the way any number does.
-  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !qualifyHeld && reopensOnTheirNumbers(namedKnown)) {
+  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !qualifyHeld && !replyPassed && reopensOnTheirNumbers(namedKnown)) {
     const since = Date.parse(namedKnown.retired?.at || namedKnown.statusAt || "") || 0;
     const evs = (await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => [])) || [];
     const told = evs.some((e) => e?.type === "agent_estimate" && e.address
@@ -4644,7 +4681,7 @@ async function runReply(job, ctx) {
   // planned an underwrite on this message. Not when a re-quote on their
   // numbers is already planned, and not on a house we've been told isn't ours
   // or are still qualifying.
-  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !qualifyHeld
+  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !qualifyHeld && !replyPassed
       && ![...plan.auto, ...plan.suggested].some((x) => x.type === "requote_from_agent_numbers")) {
     const evs = (await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => [])) || [];
     if (rerunsRoughOffer({ known: namedKnown, book: bookRows, events: evs })) {
@@ -4673,7 +4710,7 @@ async function runReply(job, ctx) {
   }
   // Not when their own words say it isn't a flip: the reply is "that one's
   // more finished than what we buy", and Tier 1 is houses that need work.
-  if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent) && !notOurKind && !qualifyHeld) {
+  if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent) && !notOurKind && !qualifyHeld && !replyPassed) {
     const already = new Set([...plan.auto, ...plan.suggested].map((a) => `${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`));
     const extra = planActions({ party, intent: "new_property", confidence: "high", playbook, minConfidence: "high" });
     const fresh = [...extra.auto, ...extra.suggested].filter((a) => !already.has(`${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`))
@@ -4686,15 +4723,20 @@ async function runReply(job, ctx) {
     }
   }
 
-  /* --- 4e°. GHL follows the offers: no tier-2/3 tag, no TIER 2/3 workflow --- */
+  /* --- 4e°. GHL follows the offers: no tier tag, no TIER workflow --- */
   // Matt's four stages (2026-10-13): Tier 3 is folded into Tier 2 and the
   // offers move the card. A tier-3 tag on a "no" would start GHL's TIER 3
-  // workflow, which drags the card back into a stage that's gone.
-  if (party === "agent" && normalizeGhlStages(saved?.ghlStages).mode === "on" && [...plan.auto, ...plan.suggested].some(isLowerTierAction)) {
-    const why = "the pipeline follows the offers — Tier 2/3 come from the offers, not a tag";
-    plan.auto = plan.auto.filter((x) => !isLowerTierAction(x));
-    plan.suggested = plan.suggested.filter((x) => !isLowerTierAction(x));
-    record = { ...record, actions: (record.actions || []).map((x) => (isLowerTierAction(x) && x.status === "pending" ? { ...x, status: "skipped", detail: why } : x)), updatedAt: new Date().toISOString() };
+  // workflow, which drags the card back into a stage that's gone. The tier-1
+  // tag and TIER 1 workflow go too (2026-10-14): they moved the card into
+  // Tier 1 on the model's intent alone — Dana F., Loren K.,
+  // Lan N., on replies that passed — and the underwrite the rule carries
+  // (start_underwrite) is what makes an offer, and the offer moves the card.
+  const followsOffers = (x) => isLowerTierAction(x) || isTierOneCardAction(x);
+  if (party === "agent" && normalizeGhlStages(saved?.ghlStages).mode === "on" && [...plan.auto, ...plan.suggested].some(followsOffers)) {
+    const why = "the pipeline follows the offers — the stage comes from the offers, not a tag or a TIER workflow";
+    plan.auto = plan.auto.filter((x) => !followsOffers(x));
+    plan.suggested = plan.suggested.filter((x) => !followsOffers(x));
+    record = { ...record, actions: (record.actions || []).map((x) => (followsOffers(x) && x.status === "pending" ? { ...x, status: "skipped", detail: why } : x)), updatedAt: new Date().toISOString() };
     await store.updateReplyDraft(record.id, record).catch(() => {});
   }
 

@@ -29,7 +29,7 @@
 
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig } from "./reply-agent.js";
-import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
+import { listJobs as listUnderwriteJobs, knownAddressesFor } from "./auto-underwrite.js";
 import { getContact as ghlGetContact, searchOpportunities as ghlSearchOpportunities, smsUnsubscribed } from "./ghl.js";
 import { carryOutHeldVerdict } from "./held-underwrites.js";
 import { triageHeldUnderwrite } from "./shared/held-underwrites.js";
@@ -105,7 +105,8 @@ export async function driveOpenPromises({ client = null, locationId, saved = {},
         try { const c = await getContact(p.contactId); contact = { tags: c?.tags || [], dnd: typeof c?.dnd === "boolean" ? c.dnd : smsUnsubscribed(c) }; } catch { contact = null; }
         try { opportunities = (await searchOpps({ contactId: p.contactId })) || []; } catch { opportunities = []; }
         if (contact?.dnd) { row.status = "stopped"; row.reason = "they unsubscribed"; continue; }
-        for (const o of held) heldTriageByOffer[o.id] = triageHeldUnderwrite({ offer: o, siblings: offers, events: timeline, drafts, contact, opportunities, botOffTags, now });
+        const knownAddresses = await knownAddressesFor({ store, locationId, contactId: p.contactId }).catch(() => []);
+        for (const o of held) heldTriageByOffer[o.id] = triageHeldUnderwrite({ offer: o, siblings: offers, events: timeline, drafts, contact, opportunities, botOffTags, now, knownAddresses });
       }
 
       const jobs = (jobsFor(locationId, { contactId: p.contactId }) || []).map((j) => ({ ...j, contactId: j.contactId || p.contactId }));

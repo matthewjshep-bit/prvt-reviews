@@ -769,6 +769,23 @@ const pgStore = {
     );
     return rows;
   },
+  // Every listing address we pulled for this agent (any batch, newest first):
+  // the full line RentCast gave us, so a street they or we texted ("5413
+  // Welfare Ave NE") can be finished before an underwrite looks it up.
+  async listContactListingAddresses(locationId, contactId, { limit = 200 } = {}) {
+    if (!contactId) return [];
+    const { rows } = await query(
+      `select distinct on (l.doc->>'address') l.doc->>'address' as address, l.last_seen as "lastSeen"
+         from outreach_listings l
+         join outreach_agents a on a.location_id = l.location_id and a.batch_id = l.batch_id and a.agent_key = l.agent_key
+        where l.location_id = $1 and coalesce(a.contact_id, a.doc->'ghl'->>'contactId') = $2
+          and coalesce(l.doc->>'address', '') <> ''
+        order by l.doc->>'address', l.last_seen desc
+        limit $3`,
+      [locationId, contactId, limit]
+    );
+    return rows.sort((x, y) => String(y.lastSeen).localeCompare(String(x.lastSeen))).map((r) => r.address);
+  },
   // Listings of agents already in GHL, first seen since `since` and seen on a
   // pull since `seenSince` (still listed) — what the agent pulse raises by
   // name (agent-pulse.js). The contact comes off the agent row: the import's
@@ -1954,6 +1971,19 @@ const fileStore = (() => {
       return Object.values(data.outreachListings).filter(
         (l) => l.locationId === locationId && l.batchId === batchId && l.agentKey === agentKey
       );
+    },
+    async listContactListingAddresses(locationId, contactId, { limit = 200 } = {}) {
+      ensure();
+      if (!contactId) return [];
+      const rows = [];
+      for (const l of Object.values(data.outreachListings)) {
+        if (l.locationId !== locationId || !l.doc?.address) continue;
+        const a = data.outreachAgents[`${locationId}|${l.batchId}|${l.agentKey}`];
+        if ((a?.contactId || a?.doc?.ghl?.contactId || null) !== contactId) continue;
+        rows.push(l);
+      }
+      rows.sort((x, y) => String(y.lastSeen).localeCompare(String(x.lastSeen)));
+      return [...new Set(rows.map((l) => String(l.doc.address)))].slice(0, limit);
     },
     async listFreshAgentListings(locationId, { since, seenSince, limit = 20000 } = {}) {
       ensure();

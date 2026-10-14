@@ -460,7 +460,7 @@ export async function previewAgentPulse({ client, locationId, saved = {}, store 
       .catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
     if (!r?.skipped) drafted++;
     previews.push({
-      contactId: p.contactId, name: r?.contactName || p.name || "", segment: p.segment, reason: p.reason, street: p.subject?.address || "",
+      contactId: p.contactId, name: r?.contactName || p.name || "", segment: p.segment, reason: p.reason, street: String(p.subject?.address || "").split(",")[0].trim(),
       reply: r?.reply || "", held: Boolean(r?.held), flags: r?.flags || [], skipped: r?.skipped || "",
     });
   }

@@ -70,7 +70,13 @@ export const CARD_STAGE_LABEL = Object.freeze({ tier2: "Tier 2", tier1: "Tier 1"
 /** Stages that go away (Matt deletes them in GHL once they're empty). */
 export const OLD_STAGES = Object.freeze(["newLead", "contacted", "tier3", "negotiations", "passed", "notGood", "contractSent", "lost"]);
 
-// A held underwrite counts as a house in hand this long (shared/tiers.js HELD_DAYS).
+// A card move within this long of a move the app recorded (ghl_stage_moved,
+// or a workflow the bot enrolled them in) is the app's own, not a person's.
+export const APP_MOVE_SLACK_MS = 10 * 60000;
+
+// A held underwrite counts as a house in hand this long (shared/tiers.js
+// HELD_DAYS) — the outer bound. Inside it, the card follows the thread: see
+// targetStage's `staleDays`.
 export const HELD_DAYS = 21;
 
 /** stageKeys(acq) → { key: stageId } for the stages this knows, by name. `contract` is Contract Signed, else Contract Sent. */
@@ -99,26 +105,36 @@ export function stageKeyOf(keys, stageId) {
 const RANK = { contract: 5, offerOut: 4, tier1: 3, won: 2, tier2: 1 };
 
 /**
- * targetStage({ offers, now }) → { to: "contract"|"offerOut"|"tier1"|"tier2"|null, won, why, at, offerId }
+ * targetStage({ offers, now, lastIn, staleDays }) → { to: "contract"|"offerOut"|"tier1"|"tier2"|null, won, why, at, offerId }
  *
  * `offers` are the agent's rows (lean is fine), drafts included. Superseded
  * rows don't count. `at` is the newest offer event across their current rows
  * (offerStageAt). `to` is null when the agent has no offers at all.
+ *
+ * A house we priced and never sent (a held draft, or a `new` row) is Tier 1
+ * only while it's live: something happened on it, or they wrote to us, in
+ * the last `staleDays` (ghlStages.staleTier1Days, 10). After that it's Tier 2
+ * — Matt, 2026-10-14: Eric B. sat in Tier 1 for 55 days on an August row
+ * that never went out, and Cheryl P. on a duplicate of a house
+ * we'd passed on. `lastIn` is their last word (ISO or ms), when known.
  */
-export function targetStage({ offers = [], now = Date.now() } = {}) {
+export function targetStage({ offers = [], now = Date.now(), lastIn = null, staleDays = GHL_STAGES_DEFAULTS.staleTier1Days } = {}) {
   const rows = annotateCurrent((offers || []).filter(Boolean)).filter((o) => !o.supersededBy);
   let best = null;
   let at = null;
   const consider = (key, o, why) => {
     if (!best || RANK[key] > RANK[best.key]) best = { key, offerId: o.id || null, why };
   };
+  const spoke = ms(lastIn);
+  const live = (t) => now - Math.max(t ?? 0, spoke ?? 0) <= staleDays * DAY_MS;
   for (const o of rows) {
     const t = offerStageAt(o);
     if (o.status === "draft") {
       const age = now - (ms(o.createdAt) ?? now);
       if (!o.contactId || age > HELD_DAYS * DAY_MS) continue;
       if (t != null) at = Math.max(at ?? t, t);
-      consider("tier1", o, "a house being priced");
+      if (live(t)) consider("tier1", o, "a house being priced");
+      else consider("tier2", o, `held, and nothing on it or from them in ${staleDays}+ days`);
       continue;
     }
     if (t != null) at = Math.max(at ?? t, t);
@@ -127,7 +143,10 @@ export function targetStage({ offers = [], now = Date.now() } = {}) {
       if (o.deal && !LIVE_DEAL_STAGES.has(o.deal.stage)) consider("won", o, "the deal closed");
       else consider("contract", o, "under contract");
     } else if (s.stage === "sent" || s.sub === "countered" || s.sub === "hot") consider("offerOut", o, s.sub ? `responded: ${s.sub}` : s.why);
-    else if (s.stage === "draft") consider("tier1", o, "priced, our number not out yet");
+    else if (s.stage === "draft") {
+      if (live(t)) consider("tier1", o, "priced, our number not out yet");
+      else consider("tier2", o, `priced but never sent, and nothing on it or from them in ${staleDays}+ days`);
+    }
     else consider("tier2", o, `every house passed (${s.why})`);
   }
   if (!best) return { to: null, won: false, why: "no offers", at, offerId: null };
@@ -143,7 +162,7 @@ export function targetStage({ offers = [], now = Date.now() } = {}) {
  * (pipelineStageId, status, lastStageChangeAt when the read has it — the
  * per-contact search doesn't, and then the newest offer event wins).
  */
-export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], settings = {}, now = Date.now() } = {}) {
+export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], settings = {}, now = Date.now() } = {}) {
   const cfg = normalizeGhlStages(settings);
   const k = keys || stageKeys(acq);
   const label = (key) => CARD_STAGE_LABEL[key] || key;
@@ -152,7 +171,7 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
   const mine = (cards || []).filter((c) => c && (!c.pipelineId || c.pipelineId === acq.id));
   const open = mine.filter((c) => String(c.status || "open") === "open");
   if (open.length > 1) return { skip: "two open cards — a person's call" };
-  const t = targetStage({ offers, now });
+  const t = targetStage({ offers, now, lastIn, staleDays: cfg.staleTier1Days });
   const base = { contactId, why: t.why };
 
   // No open card: create one for something live; a lost or abandoned card is reopened instead.
@@ -188,8 +207,13 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
   if (!k[to]) return { skip: `no ${label(to)} stage in the Acquisitions pipeline` };
 
   // Newest wins: a person moved the card after the last thing the offers did.
+  // A move the app made — this planner, the one-time migration, the Tier 1
+  // list, or a GHL workflow the bot enrolled them in — is not a person's: on
+  // 2026-10-14 Eric B. and Korey P. read "you moved it" off the
+  // migration's own move into Tier 1, so nothing could ever take them out.
   const cardAt = ms(card.lastStageChangeAt);
-  if (!folded && t.to && cardAt != null && t.at != null && cardAt > t.at && (to !== at || t.won)) {
+  const appMade = cardAt != null && (appMoves || []).some((x) => { const m = ms(x); return m != null && Math.abs(m - cardAt) <= APP_MOVE_SLACK_MS; });
+  if (!folded && !appMade && t.to && cardAt != null && t.at != null && cardAt > t.at && (to !== at || t.won)) {
     return { youMoved: { ...base, opportunityId: card.id, from, wanted: label(to) } };
   }
   if (to === at) {
@@ -212,8 +236,9 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
  *   lastIn               Map contactId → ISO of their last word
  *   openPromiseContacts  Set of contactIds we owe a number or an answer
  *   nurtureLive          [{ id, name }] published nurture workflows a Tier 2 move would start
+ *   appMoves             Map contactId → [ISO] of card moves the app made (APP_MOVE_SLACK_MS)
  */
-export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], settings = {}, now = Date.now() } = {}) {
+export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), settings = {}, now = Date.now() } = {}) {
   const counts = { considered: 0, planned: 0, blocked: 0, created: 0, youMoved: 0, old: 0, byMove: {} };
   const out = { moves: [], creates: [], youMoved: [], counts };
   if (!acq?.id) return out;
@@ -233,7 +258,8 @@ export function planStageMoves({ acq = null, opportunities = [], offers = [], la
     const mineOffers = offersBy.get(contactId) || [];
     const name = mineOffers.find((o) => o.contactName)?.contactName || "";
     const r = planCard({ acq, keys, cards: cardsBy.get(contactId) || [], offers: mineOffers, contactId, name,
-      lastIn: lastIn?.get?.(contactId) || null, openPromise: openPromiseContacts?.has?.(contactId) || false, nurtureLive, settings, now });
+      lastIn: lastIn?.get?.(contactId) || null, openPromise: openPromiseContacts?.has?.(contactId) || false, nurtureLive,
+      appMoves: appMoves?.get?.(contactId) || [], settings, now });
     if (r.old) counts.old++;
     if (r.youMoved) { counts.youMoved++; out.youMoved.push(r.youMoved); continue; }
     if (r.create) { counts.created++; out.creates.push(r.create); continue; }

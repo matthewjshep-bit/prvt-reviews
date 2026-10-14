@@ -2317,16 +2317,29 @@ async function runUnderwrite(job, ctx) {
   }
 }
 
-// Every full address the contact record already ties to this agent: the
-// listing hook at import, the outreach text, subject-property writes, their
-// own property details. Any of these on the same street line as a shorthand
-// address IS that address.
-async function knownAddressesFor({ store, locationId, contactId }) {
-  if (!contactId || typeof store?.listContactEvents !== "function") return [];
-  try {
-    const events = await store.listContactEvents(locationId, contactId, { limit: 300 });
-    return [...new Set(events.map((e) => String(e?.address || "").trim()).filter((a) => a && /,/.test(a)))];
-  } catch { return []; }
+// Every full address we already tie to this agent: the listing hook at
+// import, the outreach text, subject-property writes, their own property
+// details, every listing of theirs we pulled from RentCast, and the houses
+// in our offer book with them. Any of these on the same street line as a
+// shorthand address IS that address. The listings and the offers were missing
+// until 2026-10-14: a check-in about "5413 Welfare Ave NE" (a RentCast listing
+// we held with its city and ZIP) held as "couldn't locate", and the agent was
+// asked to confirm the full address.
+export async function knownAddressesFor({ store, locationId, contactId }) {
+  if (!contactId) return [];
+  const full = (a) => { const t = String(a || "").trim(); return t && /,/.test(t) ? t : ""; };
+  const [events, listings, offers, hooks] = await Promise.all([
+    typeof store?.listContactEvents === "function" ? store.listContactEvents(locationId, contactId, { limit: 300 }).catch(() => []) : [],
+    typeof store?.listContactListingAddresses === "function" ? store.listContactListingAddresses(locationId, contactId).catch(() => []) : [],
+    typeof store?.listOffers === "function" ? store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []) : [],
+    typeof store?.listOutreachHooks === "function" ? store.listOutreachHooks(locationId, { contactId }).catch(() => []) : [],
+  ]);
+  return [...new Set([
+    ...(events || []).map((e) => full(e?.address)),
+    ...(listings || []).map(full),
+    ...(offers || []).map((o) => full(o?.address)),
+    ...(hooks || []).map((h) => full(h?.address)),
+  ].filter(Boolean))];
 }
 
 // "agent-outreach-autopilot-king-wa" / "agent-outreach-pierce-county-wa-aug-18" → "King" / "Pierce".

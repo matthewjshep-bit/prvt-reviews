@@ -98,7 +98,7 @@ import {
   DEFAULT_CONTRACT_CLAUSES, DEFAULT_ASSIGNMENT_CLAUSES, ASSIGNMENT_TOKENS, ASSIGNMENT_PREAMBLE,
 } from "../shared/contract-template.js";
 import { fetchListingPhotos, fetchZillowPhotos, fetchZillowFacts, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
-import { addressKey, addressQueryVariants, zillowUrl, zillowLookupForms } from "../shared/us-address.js";
+import { addressKey, addressQueryVariants, zillowUrl, zillowLookupForms, sameStreet } from "../shared/us-address.js";
 import { pullComps } from "../comps-pull.js";
 import { geocodeAddress } from "../geocode.js";
 import { pullZillowComps, pullZillowActives, mergeFacts, streetKey } from "../comps-zillow.js";
@@ -5546,6 +5546,30 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await syncAgentOfferTag(client, locationId, contactId);
       const stopped = status === "unavailable" ? await stopMachineTextsForOffer({ client, store, locationId, offer }).catch(() => []) : [];
       return { ok: true, address: offer.address, status, amount: counter, stopped: stopped.length };
+    },
+    // Our reply passed on the house (reply-agent.js, ourReplyPasses): a
+    // number we priced on it and never sent — a held draft, or a `new` row
+    // never floated or sent — closes as we_passed, so it can't hold the
+    // agent's card in Tier 1 (Korey P.'s turnkey Puyallup, 2026-10-06).
+    // An offer that went out is never touched: walking away from one stays
+    // the operator's call (setOfferStatus).
+    retireUnsentOffers: async ({ contactId, addressHint, note = "" }) => {
+      if (!contactId || !String(addressHint || "").trim()) return { ok: false, reason: "no house named" };
+      const rows = await store.listOffers(locationId, { contactId, limit: 50 }).catch(() => []);
+      const wentOut = (o) => Boolean(o.floatSentAt) || (o.sends || []).some((x) => Object.values(x?.results || {}).some((r) => r?.ok));
+      const unsent = rows.filter((o) => o?.id && !o.deal && o.address && sameStreet(o.address, addressHint)
+        && ["draft", "new"].includes(effectiveStatus(o)) && !wentOut(o));
+      if (!unsent.length) return { ok: false, reason: "no unsent offer on that house" };
+      const ts = new Date().toISOString();
+      const why = dealStr(note || "our reply passed on the house", 200);
+      for (const o of unsent) {
+        recordStatus(o, "we_passed", why, ts, { source: "conversation" });
+        o.retired = { at: ts, by: "conversation", reason: "our reply passed on the house" };
+        await store.updateOffer(o.id, o);
+        await recordEvent({ store, locationId, contactId, party: "agent", type: "offer_we_passed", at: ts, address: o.address, offerId: o.id,
+          source: "conversation", dedupeKey: `reply_passed:${o.id}`, data: { phrase: "we passed (our reply turned it down)", by: "conversation" } }).catch(() => {});
+      }
+      return { ok: true, retired: unsent.length, address: unsent[0].address };
     },
     // A buyer's answer about the walkthrough, filed on the deal
     // (shared/showing.js recordRsvp). Read fresh: the reply may land while

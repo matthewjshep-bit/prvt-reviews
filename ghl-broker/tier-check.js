@@ -175,6 +175,19 @@ const nurtureWorkflows = (list) => (Array.isArray(list) ? list : [])
   .filter((w) => w?.id && NURTURE_RX.test(String(w.name || "")) && !/dispo/i.test(String(w.name || "")) && String(w.status || "").toLowerCase() !== "draft")
   .map((w) => ({ id: String(w.id), name: String(w.name || "") }));
 
+// What the app does to a card: its own moves, and the GHL workflows the bot
+// puts someone in (TIER 1 moved the card by itself, seconds later).
+export const APP_MOVE_EVENT_TYPES = ["ghl_stage_moved", "workflow_enrolled"];
+export function appMovesByContact(events = []) {
+  const out = new Map();
+  for (const e of events || []) {
+    if (!e?.contactId || !e.at || !APP_MOVE_EVENT_TYPES.includes(e.type)) continue;
+    if (!out.has(e.contactId)) out.set(e.contactId, []);
+    out.get(e.contactId).push(e.at);
+  }
+  return out;
+}
+
 /**
  * runStagePlan({ client, locationId, store, saved, ghl, read, dryRun, now }) → { mode, planned, blocked, applied, moves, errors }
  *
@@ -190,10 +203,12 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
   const pipelines = read?.pipelines || await api.listPipelines(client, locationId);
   const acq = acquisitionsPipeline(pipelines);
   if (!acq) { out.errors.push("no pipeline with Tier 1/2/3 stages"); return out; }
-  const [opportunities, offers, promiseEvents, lastRows, workflows] = await Promise.all([
+  const [opportunities, offers, promiseEvents, moveEvents, lastRows, workflows] = await Promise.all([
     read?.opportunities || api.listAcquisitionOpportunities(client, locationId, acq.id),
     store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []),
     store.listContactEventsSince?.(locationId, iso(now - 7 * 86400000), { types: ["promise_made", "promise_owed", "promise_kept"], limit: 5000 }).catch(() => []) || [],
+    // Card moves the app made, so "newest wins" never reads one as yours.
+    store.listContactEventsSince?.(locationId, iso(now - 60 * 86400000), { types: APP_MOVE_EVENT_TYPES, limit: 20000 }).catch(() => []) || [],
     store.lastContactActivity?.(locationId, { types: INBOUND_EVENT_TYPES, inboundOnly: true }).catch(() => []) || [],
     (api.listWorkflows ? api.listWorkflows(client, locationId) : Promise.resolve(null)).catch(() => null),
   ]);
@@ -201,6 +216,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     acq, opportunities, offers, now, settings: cfg,
     lastIn: new Map((lastRows || []).map((r) => [r.contactId, r.at])),
     openPromiseContacts: new Set(openPromises(promiseEvents || [], { now }).map((p) => p.contactId)),
+    appMoves: appMovesByContact(moveEvents),
     // Can't read the workflow list: assume the nurture is live, so nothing moves into Tier 2 blind.
     nurtureLive: workflows == null ? [{ id: "?", name: "a nurture workflow (GHL's list couldn't be read)" }] : nurtureWorkflows(workflows),
   });

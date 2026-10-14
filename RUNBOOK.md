@@ -2273,7 +2273,7 @@ agent is, in four stages, and the stage of their offers drives it.
 | GHL stage | Means | Set when, across the agent's current offers |
 |---|---|---|
 | Tier 2 | replied, nothing live — the app's check-in is the nurture | every offer passed (they passed, we passed, gone, no reply, deal fell through) |
-| Tier 1 | a property identified | a draft: priced and not out, or a held underwrite ≤ 21 days |
+| Tier 1 | a property identified | a draft: priced and not out, or a held underwrite — while live (something on it, or a word from them, in the last `staleTier1Days`, 10) |
 | Offer Out | our number is out | Sent (written offer, or a number texted), Countered or Hot |
 | Contract | under contract | Accepted / a live deal. A closed deal marks the card **won** |
 
@@ -2285,7 +2285,16 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
 - **Newest wins.** A card moves only when the agent's newest offer event
   (`offerStageAt`: status, send, float, heat, deal stage) is later than the
   card's `lastStageChangeAt`. A card you drag in GHL after that stays put and
-  is reported as "moved by hand".
+  is reported as "moved by hand". A move the app made — this planner, the
+  migration, the Tier 1 list (`ghl_stage_moved`), or a GHL workflow the bot
+  enrolled them in (`workflow_enrolled`), within 10 minutes of the card's
+  move (`APP_MOVE_SLACK_MS`) — is never read as yours (2026-10-14: the
+  migration's own move into Tier 1 pinned Eric B. and Korey P. there).
+- **A number we never sent goes stale (2026-10-14).** A `new` row or a held
+  draft is Tier 1 only while live: an offer event on it, or a word from the
+  agent, in the last `staleTier1Days` (10). After that the agent is Tier 2
+  ("priced but never sent…"). Eric B. had sat in Tier 1 55 days on an
+  August row; Cheryl P. on a duplicate of a house we'd passed.
 - **Never:** two open cards (a person's call), a won card (a new house makes a
   new card), a card still in a stage that's going away (the migration), or a
   move into Tier 2 while a published "nurture" workflow would text them
@@ -2302,9 +2311,22 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
     `maxMovesPerRun`.
 - **Tags follow the card** when it's on: the 7am check sets tier-1 for Tier 1,
   Offer Out and Contract and tier-2 for Tier 2, and a tag the bot adds no
-  longer moves a card. The bot's tier-2/tier-3 tags and TIER 2/TIER 3
-  enrollments stand down (reply-agent 4e°, `isLowerTierAction`); it still adds
-  tier-1 and enrolls TIER 1, which starts the underwrite.
+  longer moves a card. The bot's tier tags and TIER 1/2/3 enrollments all
+  stand down (reply-agent 4e°, `isLowerTierAction`, `isTierOneCardAction`,
+  2026-10-14). TIER 1 had moved the card into Tier 1 on the model's intent
+  alone, including on replies that passed (Dana F., Loren K.,
+  Lan N.). The rule's `start_underwrite` still runs; the offer it makes
+  moves the card. The TIER 1/2/3 workflows in GHL can go to Draft.
+- **Our reply passes → not Tier 1 (2026-10-14).** The model tagged "probably
+  not enough meat for us" as `deal_available`. `ourReplyPasses`
+  (`shared/flip-read.js`) reads our own reply: a pass that isn't also chasing
+  a house ("pass on 184th, keep me posted on Mount Vernon" still runs) files
+  as `investor_open`, strips the underwrite and the tier-1 rule, stamps the
+  draft `qualify: {stage: "pass", why: "our reply passed on it"}` (so
+  `threadPassed` stops a racing underwrite, and the app's Tier 1 skips the
+  house), and `retire_unsent_offer` closes a number we priced on that house
+  and never sent (`we_passed`, `retired.by: "conversation"`). An offer that
+  went out — floated or sent — is never touched.
 - **Tier 2 is the agent nurture** (Matt): everyone with nothing live,
   former Tier 3s included, replied or not. The app's agent check-in is the
   nurture. A card that still lands in Tier 3 (a workflow, a drag) is moved on
@@ -2584,7 +2606,9 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
       (`knownCitiesFrom`; the city comes from `parseUsAddress`): passed,
       but only after anything their numbers could clear has been asked.
     - Each gets one `kind_pass` text, which says why: not single-family, rural or out of area.
-    - An address the map couldn't place: one ask to confirm the street.
+    - An address the map couldn't place: finished from what we hold first
+      (their RentCast listings, our outreach text, the book), and re-run on
+      that; only a street we can't place gets one ask to confirm it.
     - `heldOnTheMachine` shows the plain ones as Machine rows tonight.
   - A held reply the 7pm check will send (`releasableHeld`) is a Machine row
     with its time. Only a reply to their text: a text the machine started
@@ -3089,8 +3113,11 @@ agent check-in may name it as how a house ended ("it sold").
 Switch: `conversationAi.parties.agent.qualifyFirst.enabled` (default **off**).
 Rules: `shared/flip-read.js`. Gate: `qualifyIcebreaker` in `ghl-broker/reply-agent.js`.
 
-The house our first text opened with (the newest `outreach_sent`, or the
-workflow cohort's `outreach_enrolled`) is a way to start talking, not a lead.
+The house our first text opened with (the newest `outreach_sent`, the
+workflow cohort's `outreach_enrolled`, or — since 2026-10-14 — a check-in
+about a fresh listing of theirs, `agent_pulse_texted` with its `listingKey`)
+is a way to start talking, not a lead. Matched by number and street, so a
+check-in event that held the street alone still counts.
 With the switch on, a reply about that house, before we have any offer on it, goes:
 
 1. **Their words name real trouble → underwrite now**, as before. That covers
@@ -3142,6 +3169,10 @@ The verdicts, in order:
   house gets a check-in every ten days); the seller said no, not interested,
   won't sell, or has other offers → `passed`, still for sale, so the check-in
   may bring it back; turnkey per the agent → `we_passed`;
+  we told them we're passing on it — our sent reply on the house passes
+  (`ourReplyPasses`) or the thread's qualify stamp says pass → `we_passed`
+  (2026-10-14, Welfare Ave: a pass, then an underwrite held on the map, then
+  "can you confirm the full address?" at 7pm);
   held **14 days** with no word → `we_passed`; we asked for their read
   **7 days** ago and heard nothing → `we_passed`. The `uw-needs-review` tag
   comes off once nothing of theirs is held.
@@ -3174,6 +3205,14 @@ The verdicts, in order:
   know — the listing's, the seller's ask on the timeline, or the message's;
   the cap used to read only the listing, so a park home with no live
   listing never rescued). Their value with no list price at all → yours.
+  **Also a rerun (2026-10-14): a street the map couldn't place** ("couldn't
+  locate 5413 Welfare Ave NE") that matches, by number and street, a full
+  address we already hold for this agent (`knownAddressesFor` in
+  auto-underwrite.js: their RentCast listings — `store.listContactListingAddresses`
+  — our outreach hook, timeline events with a city, the book) re-runs on that
+  address, and nobody is asked. The underwriter reads the same list before it
+  ever holds. Agent check-ins now carry the listing's full address, so a reply
+  to one starts with its city.
 - **ask**: rescuable holds, the missing number(s) not on the timeline, the
   thread alive (they wrote within 21 days, or the hold is under 3 days) →
   one `take_ask` text asking for exactly the missing piece — "what's it worth
