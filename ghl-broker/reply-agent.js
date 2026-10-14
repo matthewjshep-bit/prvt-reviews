@@ -90,7 +90,7 @@ import {
 } from "./ghl.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { endsWithQuestionToThem } from "./shared/promise-resolver.js";
-import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn } from "./shared/follow-up.js";
+import { detectPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn, detectLeadTiming, leadIsTheNet } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts,
@@ -339,6 +339,10 @@ export const SHADOW_GRACE_MS = 20_000;
 // Plain check-ins with no number, no negotiation and no terms in them — the
 // texts where thinking harder buys nothing (2026-09-25). Everything else,
 // replies included, stays at medium.
+// A lead this far out is its own check-in, not the address chase's first ask
+// (promise-sweep.js reads a chase for 60 days and its ladder runs 28 past its first).
+const LEAD_CHASE_MAX_DAYS = 21;
+
 export const LOW_EFFORT_KINDS = new Set(["offer_nudge", "outreach_nudge", "checkin_due", "passed_checkin", "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "deal_followup", "showing_reminder", "showing_followup"]);
 export const draftEffort = (outbound) => (outbound && LOW_EFFORT_KINDS.has(outbound.kind) ? "low" : "medium");
 
@@ -2964,7 +2968,10 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     ...(kind === "price_drop" ? { from: Math.round(Number(subject?.from) || 0), to: Math.round(Number(subject?.to) || 0),
       fromK: Number(subject?.from) > 0 ? kText(Number(subject.from)) : "", toK: Number(subject?.to) > 0 ? kText(Number(subject.to)) : "",
       offerStatus: subject?.status || "", ourK: Number(offer?.cashAmount) > 0 ? kText(Number(offer.cashAmount)) : "" } : {}),
-    ...(kind === "checkin_due" ? { phrase: subject?.phrase || "", sourceKind: subject?.sourceKind || "date" } : {}),
+    ...(kind === "checkin_due" ? { phrase: subject?.phrase || "", sourceKind: subject?.sourceKind || "date",
+      // The lead they told us about, in their words (promise-sweep.js).
+      ...(subject?.lead ? { lead: { what: String(subject.lead.what || "").slice(0, 80), said: String(subject.lead.said || "").slice(0, 200),
+        toldAt: subject.lead.toldAt || null, via: subject.lead.via || "text" } } : {}) } : {}),
     ...(kind === "address_chase" ? { hint: String(subject?.hint || "").slice(0, 160), phrase: subject?.phrase || "",
       rung: Number(subject?.rung) || 1, rungs: Number(subject?.rungs) || 1 } : {}) };
 }
@@ -3006,6 +3013,9 @@ function outboundSummary({ kind, offer, outbound }) {
     case "checkin_due":
       if (outbound.sourceKind === "source") return "Weekly check-in with an agent who offered to send us deals: anything new that needs work?";
       if (outbound.sourceKind === "unanswered") return `Comes back to them${where ? ` on ${where}` : ""} — their last text never got an answer from us.`;
+      if (outbound.sourceKind === "lead") return outbound.lead?.what
+        ? `Asks about ${outbound.lead.what}, on the day they named${outbound.phrase ? ` ("${outbound.phrase}")` : ""}.`
+        : `The check-in they asked for${outbound.phrase ? ` ("${outbound.phrase}")` : ""}, on the day they named.`;
       return `The check-in they asked for${outbound.phrase ? ` ("${outbound.phrase}")` : ""}: anything land that needs work?`;
     case "address_chase": return `Asks again for the address of the property they said was coming (check-in ${outbound.rung} of ${outbound.rungs}).`;
     case "price_drop": return `The list price on ${where} came down${outbound.fromK ? ` from ${outbound.fromK}` : ""} to ${outbound.toK}; asks if the seller would look at cash closer to ours now.`;
@@ -4531,11 +4541,27 @@ async function runReply(job, ctx) {
   // agent with only a vacant lot got five chase texts).
   let chaseHasDate = false;
   let chaseStarted = false;
+  // A lead they gave us the timing of ("relisting in the spring", "should
+  // know by end of the month"), read from their words: on a call, their side
+  // of the transcript. A call is read for this and for nothing else in 4c′
+  // (shared/follow-up.js detectLeadTiming).
+  const callTheirs = isCall ? themLines(inboundText) : "";
+  const lead = party === "agent" && draft.intent !== "opt_out"
+    ? detectLeadTiming(isCall ? (callTheirs || inboundText) : job.message, now, { checkBack: !isCall || Boolean(callTheirs) })
+    : null;
   if (party === "agent") {
-    const pend = addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });
+    let pend = addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });
     if (pend && (refusesAddress(job.message) || notAHouse(job.message))) {
       job.warnings.push(refusesAddress(job.message) ? "no address chase: they won't share it yet" : "no address chase: it's land, not a house");
-    } else if (pend) {
+      pend = null;
+    }
+    // A house coming with no address, on a day only the lead reader heard
+    // ("one coming up closer to Nov 1"): the chase's first ask is that day.
+    // Further out than the chase's ladder can wait ("one in the spring"),
+    // there's no chase: the lead's own check-in asks on its day.
+    if (pend && lead && Date.parse(lead.when) - now > LEAD_CHASE_MAX_DAYS * 86400000) pend = null;
+    else if (pend && !pend.firstDueAt && lead) { pend.firstDueAt = lead.when; pend.phrase = lead.phrase; }
+    if (pend) {
       chaseHasDate = Boolean(pend.firstDueAt);
       chaseStarted = true;
       await recordEvent({
@@ -4570,8 +4596,25 @@ async function runReply(job, ctx) {
     await learnFacts({ store, locationId, contactId: job.contactId, party: "agent",
       facts: [{ key: "checkinEvery", value: String(cadence.days), source: "conversation", at: new Date(now).toISOString(), ref: record.id }] }).catch(() => {});
   }
+  // The lead, on its own track (promise-sweep.js runCheckInSweep): its day
+  // may be months off, and an offer's own clock keeps them until it lets go.
+  // Not when the address chase already asks on that day, nor for a bare
+  // "check back in a couple months" with no lead in it: that is their
+  // cadence, booked below as a dated check-in.
+  const leadBooked = Boolean(lead) && !chaseStarted && !(cadence?.checkBack && !lead.what);
+  if (leadBooked) {
+    await recordEvent({
+      store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
+      address: "", source: isCall ? "call" : "conversation", ref: record.id,
+      dedupeKey: `checkin_requested:lead:${job.contactId}:${lead.when.slice(0, 10)}`,
+      data: { kind: "lead", phrase: lead.phrase, dueAt: lead.when,
+        lead: { what: lead.what, when: lead.when, said: lead.said, confidence: lead.confidence, via: isCall ? "call" : "text" } },
+    }).catch(() => {});
+    // Only a lead days away is the net under a held reply; one in March isn't.
+    if (leadIsTheNet({ data: { kind: "lead", dueAt: lead.when } }, now)) checkInBooked = true;
+  }
   if (party === "agent" && !isCall && !["opt_out", "counter", "acceptance", "realm_yes"].includes(draft.intent)) {
-    const ask = chaseHasDate ? null : (checkInRequested(job.message, now) || takingItToSeller(job.message, now)
+    const ask = chaseHasDate || leadBooked ? null : (checkInRequested(job.message, now) || takingItToSeller(job.message, now)
       || (cadence?.checkBack ? { dueAt: cadenceDueAt(now, cadence.days), phrase: cadence.phrase } : null));
     if (ask) {
       checkInBooked = true;

@@ -38,7 +38,7 @@
 // Pure. The runner (ghl-broker/agent-pulse.js) reads; this decides.
 
 import { effectiveStatus, OPEN_STATUSES, DEAD_STATUSES, dealIsOver, priceAgreed } from "./offer-status.js";
-import { threadTimes, staleHeld } from "./follow-up.js";
+import { threadTimes, staleHeld, leadCheckInPending } from "./follow-up.js";
 import { nextFollowUp } from "./next-follow-up.js";
 import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT, HOUSE_OVER_REASONS, threadHealth } from "./thread-health.js";
 import { offerHasTheirAnswer } from "./tiers.js";
@@ -277,13 +277,13 @@ function lastWordAt({ offer = {}, drafts = [], events = [], lastInboundAt = null
 }
 
 /**
- * agentOwner({ offers, drafts, events, config, settings, outreachFollowUpDays, now }) → owner | null
+ * offerOwner({ offers, drafts, events, config, lastInboundAt, now }) → owner | null
  *
- * The clock that has this agent right now, in words, or null when nothing
- * does. `offers` are this agent's CURRENT rows (shared/current-offer.js).
+ * The offer clocks alone: a live deal, a held underwrite, an open offer, or
+ * whatever clock the Offers column says is coming on one. A lead check-in
+ * (promise-sweep.js) waits behind these and goes after.
  */
-export function agentOwner({ offers = [], drafts: allDrafts = [], events = [], config = {}, settings = {}, outreachFollowUpDays = 14, lastInboundAt = null, now = Date.now() } = {}) {
-  const s = normalizeAgentPulse(settings);
+export function offerOwner({ offers = [], drafts: allDrafts = [], events = [], config = {}, lastInboundAt = null, now = Date.now() } = {}) {
   // A held draft owns the agent for a week, not for good (forgetStaleHeld).
   const drafts = forgetStaleHeld(allDrafts, now);
   // Offers first: a live deal, an open offer, and whatever clock the Offers
@@ -307,6 +307,21 @@ export function agentOwner({ offers = [], drafts: allDrafts = [], events = [], c
       return String(next.label || next.kind).toLowerCase();
     }
   }
+  return null;
+}
+
+/**
+ * agentOwner({ offers, drafts, events, config, settings, outreachFollowUpDays, lastInboundAt, now }) → owner | null
+ *
+ * The clock that has this agent right now, in words, or null when nothing
+ * does. `offers` are this agent's CURRENT rows (shared/current-offer.js).
+ */
+export function agentOwner({ offers = [], drafts: allDrafts = [], events = [], config = {}, settings = {}, outreachFollowUpDays = 14, lastInboundAt = null, now = Date.now() } = {}) {
+  const s = normalizeAgentPulse(settings);
+  // A held draft owns the agent for a week, not for good (forgetStaleHeld).
+  const drafts = forgetStaleHeld(allDrafts, now);
+  const held = offerOwner({ offers, drafts, events, config, lastInboundAt, now });
+  if (held) return held;
   // Anything waiting in the outbox: one voice at a time.
   const open = (drafts || []).filter((d) => d && (d.status === "draft" || d.status === "scheduled"));
   if (open.length) return threadTimes(drafts).heldSince ? "their text is waiting on you" : "a text is waiting in the outbox";
@@ -316,9 +331,16 @@ export function agentOwner({ offers = [], drafts: allDrafts = [], events = [], c
   const kept = byTime.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
   if (byTime.some((e) => e.type === "promise_made" && after(e, kept) && now - (ms(e.at) ?? 0) < 72 * HOUR_MS)) return "a promise we made";
   // A check-in they asked for, not yet sent or answered.
-  const req = byTime.filter((e) => e.type === "checkin_requested").at(-1);
+  const req = byTime.filter((e) => e.type === "checkin_requested" && e.data?.kind !== "lead").at(-1);
   if (req && requestStands(req, now) && !byTime.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)
       && !byTime.some((e) => (e.type === "text_summary" || e.type === "call_summary") && after(e, req.at))) return "a check-in they asked for";
+  // A lead they told us the timing of ("relisting in the spring") has them
+  // only in the run-up to its day, so the two texts don't land together.
+  // Further out the regular check-in keeps its clock (Matt: every agent who
+  // replied hears from us every few weeks) and stays generic; the lead's own
+  // check-in still goes on its day (promise-sweep.js).
+  const lead = leadCheckInPending(byTime, now);
+  if (lead && (ms(lead.data?.dueAt) ?? 0) - now <= s.everyDays * DAY_MS) return "a lead they told us about";
   // A property they said was coming, still being chased.
   const pending = byTime.filter((e) => e.type === "address_pending").at(-1);
   if (pending && now - (ms(pending.at) ?? 0) < 32 * DAY_MS

@@ -3598,6 +3598,66 @@ test("an opt-out is never put on the check-in clock", async () => {
   assert.equal(events.length, 0, "silence is the whole point of an opt-out");
 });
 
+/* ---------- a lead they told us the timing of (2026-10-14) ---------- */
+
+test("an agent who says the listing goes live next week gets a check-in that week, naming it", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Nothing right now, but we're going on the market next week with one that needs a full remodel.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "other", confidence: "high", needsHuman: false, reply: "Sounds good, keep me posted.", propertyAddress: "" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const events = await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] });
+  const lead = events.find((e) => e.data?.kind === "lead");
+  assert.ok(lead, JSON.stringify(events));
+  assert.equal(lead.data.lead.what, "the listing");
+  const days = (Date.parse(lead.data.dueAt) - Date.now()) / 86400000;
+  assert.ok(days > 5 && days < 11, `about a week out, got ${days.toFixed(1)}`);
+  assert.ok(!events.some((e) => e.data?.kind === "date"), "one check-in for one message, not two");
+});
+
+test("a lead said on a call books a check-in, from their side of the call only", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const store = fakeStore();
+  store.listOffers = async () => OFFERS;
+  const transcript = "US: I'll circle back next week either way.\nTHEM: honestly we took it off the market, relisting in the spring once the tenant's out.";
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: transcript, channel: "sms", sendsEnabled: true,
+    inboundKind: "call", call: { messageId: "m-lead", direction: "outbound", at: new Date().toISOString(), durationSec: 120, dedupeKey: "call:m-lead", transcript },
+    deps: { draft: async () => ({ ...DRAFT, intent: "other", reply: "Good talking, I'll check back in the spring.", counterAmount: 0, propertyAddress: "" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const events = await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] });
+  const lead = events.find((e) => e.data?.kind === "lead");
+  assert.ok(lead, JSON.stringify(events));
+  assert.equal(lead.data.lead.via, "call");
+  assert.equal(lead.data.lead.what, "relisting it");
+  assert.equal(new Date(lead.data.dueAt).getUTCMonth(), 2, "March, not our 'next week'");
+});
+
+test("a lead months out leaves the 'nobody answered' net under a held reply in place", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "The seller wants to see proof of funds first. If not, she'll relist in the spring.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "proof_of_funds", confidence: "high", needsHuman: true,
+      humanReason: "they want proof of funds", reply: "Let me get that over to you today.", propertyAddress: "12 Elm St" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const kinds = (await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] })).map((e) => e.data?.kind).sort();
+  assert.deepEqual(kinds, ["lead", "unanswered"], JSON.stringify({ status: d.status, auto: d.autoSend, intent: d.intent }));
+});
+
 /* ---------- a burst never silences a thread (Colin Foote, 2026-09-15) ---------- */
 
 test("a held third text lets the scheduled reply to the first two go, and waits on top of it", async () => {

@@ -36,6 +36,7 @@ import {
   AGENT_PULSE_EVENT_TYPES, AGENT_PULSE_LEDGER_TYPES, INBOUND_EVENT_TYPES,
 } from "./shared/agent-pulse.js";
 import { leadSourcesFor } from "./shared/lead-source.js";
+import { LEAD_MAX_DAYS, LEAD_STALE_DAYS } from "./shared/follow-up.js";
 
 export const CURSOR_NAME = "agentPulse";
 export const WINDOW_HOURS = 5;
@@ -168,7 +169,7 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   // The stop events come with no time window (ghl-broker/bot-hold.js): the
   // pulse's own read keeps 130 days, and a stop pressed in May still holds.
   // Not caught — a plan that can't tell who is stopped texts no one.
-  const [profiles, investors, offers, evRead, ledgerRead, openDrafts, recentDrafts, threadDrafts, inbound, listings, stops] = await Promise.all([
+  const [profiles, investors, offers, evRead, ledgerRead, openDrafts, recentDrafts, threadDrafts, inbound, listings, stops, leadRead] = await Promise.all([
     store.listContactProfiles(locationId, { party: "agent", limit: 20000 }).catch(() => []),
     store.listContactProfiles(locationId, { party: "investor", limit: 20000 }).catch(() => []),
     store.listOffers(locationId, { limit: 5000, lean: true }).catch(() => []),
@@ -184,6 +185,10 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
       ? store.listFreshAgentListings(locationId, { since: iso(now - settings.freshDays * DAY_MS), seenSince: iso(now - settings.listingSeenDays * DAY_MS) }).catch(() => [])
       : [],
     botEventsByContact({ store, locationId }),
+    // A lead they told us the timing of is booked up to thirteen months out
+    // (shared/follow-up.js detectLeadTiming): further back than the window
+    // above, so the check-in on its day still has them.
+    allEventsSince(store, locationId, iso(now - (LEAD_MAX_DAYS + LEAD_STALE_DAYS) * DAY_MS), { types: ["checkin_requested", "checkin_sent"] }, { ceiling: 100000 }).catch(() => ({ events: [] })),
   ]);
   // Every agent's opening listing, to tell the houses they brought us from
   // the ones we texted them about (shared/lead-source.js).
@@ -195,6 +200,8 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   const offersBy = byContact(annotated);
   const eventsBy = byContact(evRead.events);
   for (const [id, list] of stops) eventsBy.set(id, mergeEvents(eventsBy.get(id) || [], list));
+  const olderLeads = (leadRead.events || []).filter((e) => e.data?.kind === "lead" && String(e.at) < iso(now - EVENTS_DAYS * DAY_MS));
+  for (const [id, list] of byContact(olderLeads)) eventsBy.set(id, mergeEvents(eventsBy.get(id) || [], list));
   const ledgerBy = byContact(ledgerRead.events);
   // Four days of drafts for everyone; an agent with an open offer gets their
   // newest THREAD_DRAFTS too. Until 2026-10-14 the pulse saw only four days

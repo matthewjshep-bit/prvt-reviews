@@ -1070,6 +1070,19 @@ function openingFor(outbound) {
             ? `This agent's last message never got a reply from us. Pick it back up where they left it, as if you'd been ` +
               `thinking it over: ask where things stand${o.phrase ? ` on ${o.phrase}` : ""} and whether it's still live. ` +
               `Do NOT apologise, do NOT mention the gap or the delay, and do NOT re-answer what they said. `
+          : o.sourceKind === "lead"
+            // A lead they told us the timing of, and it's that time. The text
+            // is about THAT lead — "Did the bank come back on the short
+            // sale?" — not the generic "anything distressed come across your
+            // desk?" (2026-10-14: every dated lead got the generic one).
+            ? `${o.lead?.toldAt ? `On ${String(o.lead.toldAt).slice(0, 10)}` : "Earlier"}${o.lead?.via === "call" ? ", on a call," : ""} this agent told us ` +
+              `about ${o.lead?.what ? `a lead (${o.lead.what})` : "when to check back"}${o.phrase ? ` and when ("${o.phrase}")` : ""}. ` +
+              (o.lead?.said ? `Their words: "${o.lead.said}". ` : "") +
+              `It's that time now. ` +
+              (o.lead?.what
+                ? `Ask about that lead specifically, in a line, the way a person who remembered would — e.g. "Did the bank come back on the short sale?" ` +
+                  `or "Did that one end up relisting?" Do NOT ask the generic "anything distressed or off-market come across your desk?" question. `
+                : `Mention it naturally ("you'd mentioned ${o.phrase || "circling back"}") and ask whether anything landed that needs work. `)
           : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally ` +
             `("you'd mentioned ${o.phrase || "circling back"}"). Ask whether anything landed that needs work. `) +
         // Never the same question twice: 1010 Bellevue's agent was asked for

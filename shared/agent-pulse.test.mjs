@@ -63,6 +63,28 @@ test("an agent another clock owns waits until that clock ends", () => {
   assert.equal(v.house.id, "o1");
 });
 
+const leadIn = (dueInDays, at = ago(60)) => ({ type: "checkin_requested", at,
+  data: { kind: "lead", dueAt: ago(-dueInDays), phrase: "for about a year", lead: { what: "the fixer", said: "May have a fixer but not for about a year" } } });
+
+test("an agent whose fixer is a year out still gets the regular check-in in the meantime", () => {
+  const a = agent({ lastInboundAt: ago(60), events: [leadIn(300), { type: "text_summary", at: ago(60) }] });
+  const v = evaluateAgent(a, ctx());
+  assert.equal(v.status, "due", v.reason);
+  // And it stays generic: nothing about the far-off fixer rides on it.
+  assert.equal(v.pulseReason, "general");
+  assert.doesNotMatch(JSON.stringify(agentPulseSubject({ agent: a, verdict: v, now: NOW })), /about a year|the fixer/);
+});
+
+test("the regular check-in steps aside the week the lead comes due", () => {
+  const v = evaluateAgent(agent({ lastInboundAt: ago(60), events: [leadIn(5), { type: "text_summary", at: ago(60) }] }), ctx());
+  assert.equal(v.status, "owned");
+  assert.equal(v.reason, "a lead they told us about");
+  // Asked about on its day: the regular check-in has them again.
+  const lead = leadIn(-2);
+  const asked = agent({ lastInboundAt: ago(60), events: [lead, { type: "checkin_sent", at: ago(2), data: { requestAt: lead.at, kind: "lead" } }] });
+  assert.notEqual(evaluateAgent(asked, ctx()).reason, "a lead they told us about");
+});
+
 test("a text waiting in the outbox, a promise, a check-in they asked for and the outreach workflow each own the agent", () => {
   const held = agent({ lastInboundAt: ago(60), drafts: [{ id: "d", status: "draft", inbound: "any update?", createdAt: ago(1) }] });
   assert.equal(evaluateAgent(held, ctx()).reason, "their text is waiting on you");

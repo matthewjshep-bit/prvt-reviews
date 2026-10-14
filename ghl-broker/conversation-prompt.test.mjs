@@ -134,6 +134,19 @@ test("the check-in on a thread we never answered apologises for nothing", () => 
   assert.match(weekly, /weekly check-in/i);
 });
 
+test("the check-in on a lead they gave us a date for names the lead, not the generic 'anything distressed?'", () => {
+  const t = outboundOpening({ kind: "checkin_due", address: "", sourceKind: "lead", phrase: "end of this month",
+    lead: { what: "the short sale", said: "The short sale is in bank underwriting, should know by end of this month.", toldAt: "2026-10-14T20:00:00.000Z", via: "text" } });
+  assert.match(t, /a lead \(the short sale\)/);
+  assert.match(t, /bank underwriting/);
+  assert.match(t, /Did the bank come back on the short sale\?/);
+  assert.match(t, /Do NOT ask the generic/);
+  assert.match(t, /Set intent to checkin_due/);
+  // Only "check back in a couple months": the light ask, on the day they named.
+  const back = outboundOpening({ kind: "checkin_due", address: "", sourceKind: "lead", phrase: "in a couple months", lead: { what: "", said: "Check back in a couple months" } });
+  assert.match(back, /you'd mentioned in a couple months/);
+});
+
 test("a counter nudge asks for room and names no number", () => {
   const t = outboundOpening({ kind: "counter_nudge", address: "3831 Bagley Ave N, Seattle, WA", days: 6, theirsK: "850k" });
   assert.match(t, /countered on 3831 Bagley Ave N.*6 days ago/);
