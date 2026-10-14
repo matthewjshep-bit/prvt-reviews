@@ -692,6 +692,17 @@ test("'check back in a couple months' is checked in on at day sixty, not lost at
   assert.equal(s2.calls.length, 0);
 });
 
+test("a lead they told us about later doesn't hide the 'check back in a couple months' they asked for first", async () => {
+  const req = request(60 * 24, { kind: "date", phrase: "a couple months", dueAt: at(2) });
+  const lead = leadReq(50, 100);
+  const store = fullStore({ events: [req, lead] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1, JSON.stringify(r.results));
+  assert.equal(s.calls[0].subject.phrase, "a couple months");
+  assert.notEqual(s.calls[0].subject.sourceKind, "lead", "the lead waits for its own day");
+});
+
 test("a deal source who told us how often to check in leaves the weekly chain", async () => {
   const store = fullStore({ events: [request(48, { kind: "source", phrase: "", dueAt: at(1), left: 5 })], facts: { checkinEvery: [{ value: "90", at: at(24) }] } });
   const s = starter();
