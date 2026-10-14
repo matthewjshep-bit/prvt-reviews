@@ -186,3 +186,27 @@ export function stillQualifying({ address = "", contactId = "", events = [], dra
   return !(drafts || []).some((d) => d && (!contactId || d.contactId === contactId)
     && d.qualify?.stage === "qualified" && sameStreet(d.qualify.address || "", address));
 }
+
+// A reply that is the bot's word to the agent: going out, gone, or waiting on
+// a person. A draft someone dismissed or a newer reply replaced is not.
+const QUALIFY_LIVE_STATUSES = new Set(["draft", "scheduled", "sent"]);
+
+/**
+ * threadPassed({ address, drafts }) → { stage } | null
+ *
+ * The bot's newest read of this house in the thread, when it says not to
+ * price it: still asking its one question ("ask"), passed ("pass"), or
+ * closed after a pass ("closed"). A later reply that found it a flip
+ * ("qualified") lets it run. The underwriter checks this before it buys the
+ * comps and again before it makes the offer: 31 N Colony Surf Dr
+ * (2026-10-13) was passed at 12:07 while an underwrite started at 12:06
+ * landed its offer at 12:08, and that offer floated and went out on paper
+ * the next morning.
+ */
+export function threadPassed({ address = "", drafts = [] } = {}) {
+  if (!String(address || "").trim()) return null;
+  const latest = (drafts || [])
+    .filter((d) => d?.qualify?.stage && QUALIFY_LIVE_STATUSES.has(d.status) && sameStreet(d.qualify.address || "", address))
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  return latest && ["ask", "pass", "closed"].includes(latest.qualify.stage) ? { stage: latest.qualify.stage } : null;
+}
