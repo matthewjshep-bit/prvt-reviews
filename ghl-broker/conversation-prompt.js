@@ -194,7 +194,10 @@ const AGENT_BROUGHT =
   "A HOUSE THEY BRING US (not the one our first text named): that is the lead. Get the address if they haven't given it, and " +
   "say plainly we won't approach, drive by or bother the seller without their say-so — sellers behind these houses often want " +
   "it quiet. Ask what they think it's worth fixed up and what it needs, and the seller's situation and timing. Keep it to one " +
-  "or two short texts; Matt calls them next.";
+  "or two short texts; Matt calls them next. SEVERAL HOUSES IN ONE TEXT: every one is a lead. Ask for the exact address of " +
+  "each one they gave without a house number, in the same text (\"what are the addresses on the Pine St one and the Alder St " +
+  "triplex?\"), and list every one in houses. Never answer them as if they were still talking about the house our first " +
+  "text named.";
 
 const CONTINUITY = {
   agent:
@@ -1102,7 +1105,10 @@ function openingFor(outbound) {
     // A property they told us was coming, and we still don't have the
     // address. It's their deal we're waiting on, so it reads as keen, not pushy.
     case "address_chase":
-      return `${START} This agent told us a property was coming, but we don't have the address yet. What they said: "${o.hint}". ` +
+      return `${START} ` + (o.houses?.length
+        ? `This agent named ${o.houses.length > 1 ? "houses" : "a house"} of theirs without the house number, and we still don't have it: ${o.hint}. ` +
+          `Ask for the exact address${o.houses.length > 1 ? " of each, naming each one the way they did, in this one text" : ""}. `
+        : `This agent told us a property was coming, but we don't have the address yet. What they said: "${o.hint}". `) +
         (o.rung <= 1
           ? `Check in on it: is it ready, and can they send the address so we can get started on comps? `
           : o.rung >= o.rungs
@@ -1203,7 +1209,7 @@ export function schemaFor(party = "agent", { profile = true, outbound = null, bo
     type: "object",
     additionalProperties: false,
     required: ["intent", "confidence", "reply", "needsHuman", "humanReason", "summary", "propertyAddress", "counterAmount",
-      ...(party === "investor" ? ["passReason", "walkthrough"] : []), ...(party === "agent" ? ["propertyDetails", "agentArv", "agentRehab", "agentTakeNote", "dealSignal"] : []), ...(profile ? ["profile"] : []),
+      ...(party === "investor" ? ["passReason", "walkthrough"] : []), ...(party === "agent" ? ["propertyDetails", "agentArv", "agentRehab", "agentTakeNote", "dealSignal", "houses"] : []), ...(profile ? ["profile"] : []),
       ...(booking ? ["offeredSlots", "chosenSlot"] : [])],
     properties: {
       ...(profile ? { profile: profileSchemaFor(party) } : {}),
@@ -1249,6 +1255,21 @@ export function schemaFor(party = "agent", { profile = true, outbound = null, bo
             sellerAsk: { type: "integer", description: "What the seller needs to get, whole dollars, if NEW; 0 otherwise" },
             timeline: { type: "string", description: "The seller's timeline as stated, if NEW; else empty" },
             occupancy: { type: "string", enum: ["", "vacant", "owner_occupied", "tenant", "unknown"], description: "If NEW; empty otherwise" },
+          },
+        },
+        houses: {
+          type: "array",
+          description:
+            "EVERY property THEY bring up in this message, one entry each, including the one in propertyAddress — " +
+            "even when they give only a street (\"one on Pine St in Shelton\", \"a triplex on Alder Street\") or only a town (\"one in Duvall\" → \"Duvall\"). " +
+            "Empty when they name no property.",
+          items: {
+            type: "object", additionalProperties: false, required: ["address", "sellerAsk", "note"],
+            properties: {
+              address: { type: "string", description: "As much of the address as they gave (house number, street, city); never invented" },
+              sellerAsk: { type: "integer", description: "The asking price THEY gave for this house, whole dollars; 0 if none" },
+              note: { type: "string", description: "Type, condition or terms in their words, under 15 words (\"triplex, seller would carry the note\"); empty if none" },
+            },
           },
         },
         agentArv: { type: "integer", description: "What THEY think it is worth fixed up, whole dollars; 0 if not stated" },

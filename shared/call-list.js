@@ -93,6 +93,8 @@ export const CALL_KINDS = [
   { key: "call_partner",     label: "Relationship check-in" },
   { key: "call_investor",    label: "Investor-minded agent" },
   { key: "call_partner_terms", label: "Partner terms: yours to answer" },
+  // A decision, not a call (2026-10-14): someone else they say has one.
+  { key: "referral",         label: "Referral: someone else has one" },
 ];
 // They called you: ring back first — they reached out.
 const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_investor: 45, call_partner: 30, call_partner_terms: 80 };
@@ -135,6 +137,8 @@ const LIVE_LANES = new Set(["floated", "sent", "countered", "hot"]);
 const NOT_OUR_HOUSE_RX = /outside the area|rural|acres|manufactured|mobile home|condo|townho|multi-family|duplex|not our kind|wholesaler/i;
 // A house an agent brought stays a call this long after it landed.
 const BROUGHT_FRESH_DAYS = 2;
+// A referral to someone else stays a decision this long.
+const REFERRAL_DAYS = 21;
 
 /**
  * callList({ offers, cards, actions, drafts, events, lastIn, lastAny, unsubscribed, settings, now })
@@ -522,6 +526,31 @@ export function callList({
       why: `talks like an investor ("${String(e.data?.cue || "").slice(0, 40)}") — worth a relationship call`,
       goal: "Put a voice to the name: how they work with investors, what they and their clients have coming, and that we'd love them to write it up and represent us. These agents bring the off-market houses.",
       opener: `Hi ${first(name)}, it's Matt — wanted to put a voice to the name. Sounds like you think about these the way we do.` });
+  }
+
+  /* 6c. Someone else they pointed us to for a house: a decision, not a call.
+   * "Contact <a colleague> at <a brokerage>, she has one coming up" (2026-10-14)
+   * was thanked and forgotten. The person they named is a stranger to us, so
+   * nothing texts them; the row says who, where, and to mention the agent.
+   * One per person named (the reply agent's dedupe key), for three weeks;
+   * Dismiss clears it. Not one of the per-person call reasons above. */
+  for (const e of (events || []).filter((x) => x?.type === "referral_mentioned" && x.contactId)) {
+    if (now - (ms(e.at) ?? 0) > REFERRAL_DAYS * DAY_MS) continue;
+    const c = e.contactId;
+    const d = e.data || {};
+    const who = String(d.name || "").trim() || (d.relation ? `their ${d.relation}` : "someone they know");
+    const agent = nameOf(c, offersBy, draftsBy);
+    const agentFirst = agent ? first(agent) : "the agent";
+    const brokerage = String(d.brokerage || "").trim();
+    out.push({
+      id: `referral:${c}:${String(d.name || d.relation || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
+      kind: "referral", section: "decide", group: "yours", severity: "now",
+      contactId: c, contactName: agent, offerId: null, address: "", draftId: null, score: 0, since: e.at,
+      title: `Referral: ${who}${brokerage ? ` (${brokerage})` : ""} — ${agentFirst} says they have one`,
+      detail: `${d.phrase ? `“${String(d.phrase).slice(0, 160)}” ` : ""}Reach out yourself if it's worth it${d.phone ? ` (${d.phone})` : ""}, and mention ${agentFirst}. The bot never contacts them.`,
+      referral: { name: String(d.name || ""), brokerage, relation: String(d.relation || ""), phone: String(d.phone || "") },
+      ops: [],
+    });
   }
 
   /* 7. Partners — agents we've done business with — gone quiet a while. */

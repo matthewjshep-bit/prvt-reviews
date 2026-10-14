@@ -47,7 +47,7 @@ export const KIND_STRENGTH = [
   "call_hot", "call_brought", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
   // An agent's partner terms lead their held reply: the row says what they offered.
   "call_partner_terms",
-  "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed",
+  "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral",
   "call_first_reply", "call_quiet", "ladder_exhausted",
   "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "texts_elsewhere", "stage_lag",
   "deal_no_buyers", "deal_no_dataroom", "showing_no_window", "underwrite_dropped",
@@ -145,6 +145,8 @@ const URGENT_KINDS = new Set([
   "promise_owed", "number_owed", "audit_owed", "closing_soon", "closing_task_due",
   // Nothing we text them arrives until their number changes (2026-10-14).
   "texts_elsewhere",
+  // Someone else an agent says has a house (shared/call-list.js): reach out or not is his.
+  "referral",
 ]);
 
 /**

@@ -546,3 +546,30 @@ test("a house the sweep passed on before we priced it is open to the agent's num
     retired: { ...swept.retired, reason: "not our kind of house — an apartment (single-family only right now)" } };
   assert.match(summarizeOffers([condo]).text, /WE WALKED AWAY/, "a condo stays walked away from");
 });
+
+// 2026-10-13: an agent named two houses by street only. The next reply has
+// to know they're still waiting on an address, or "it's 1412" lands nowhere.
+test("houses they named without a number are listed for the next reply until the number comes", () => {
+  const at = new Date(Date.now() - 3600000).toISOString();
+  const events = [
+    { type: "house_mentioned", at, address: "Pine St, Shelton", data: { sellerAsk: 410000, note: "1920s rambler" } },
+    { type: "house_mentioned", at, address: "Alder Street", data: { sellerAsk: 0, note: "triplex, seller would carry the note" } },
+  ];
+  const ctx = buildAgentContext({ offers: [], events });
+  assert.match(ctx.text, /HOUSES THEY NAMED THAT WE DON'T HAVE AN ADDRESS FOR YET/);
+  assert.match(ctx.text, /- Pine St, Shelton, asking \$410,000 — 1920s rambler/);
+  assert.match(ctx.text, /- Alder Street — triplex, seller would carry the note/);
+  assert.ok(ctx.amounts.includes(410000), "their ask may be said back");
+  const later = buildAgentContext({ offers: [{ id: "o1", address: "88 Alder St, Shelton, WA", status: "draft" }],
+    events: [...events, { type: "house_mentioned", at: new Date().toISOString(), address: "1412 Pine St, Shelton", data: {} }] });
+  assert.doesNotMatch(later.text, /DON'T HAVE AN ADDRESS/);
+});
+
+// 2026-10-14: "some Stanwood houses", no street at all. The next reply
+// still has to know we're waiting on where they are.
+test("houses they named only by town are listed for the next reply by what they called them", () => {
+  const at = new Date(Date.now() - 3600000).toISOString();
+  const events = [{ type: "house_mentioned", at, address: "", data: { label: "the Stanwood houses", area: "Stanwood", town: "Stanwood", note: "need a lot of work" } }];
+  const ctx = buildAgentContext({ offers: [], events });
+  assert.match(ctx.text, /- the Stanwood houses \(no street yet\) — need a lot of work/);
+});

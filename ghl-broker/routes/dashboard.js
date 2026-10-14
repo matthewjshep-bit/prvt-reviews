@@ -86,7 +86,7 @@ const PIPELINE_EVENT_TYPES = [
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
   "underwrite_dropped", "texts_elsewhere",
-  "drive_stopped", "drive_resumed", "hand_reply", "investor_minded",
+  "drive_stopped", "drive_resumed", "hand_reply", "investor_minded", "referral_mentioned",
   // An agent's partner terms: the Desk's partner row (shared/call-list.js).
   "partner_terms",
 ];

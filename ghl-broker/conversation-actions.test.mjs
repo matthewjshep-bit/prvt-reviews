@@ -333,6 +333,15 @@ test("a new property with no address waits for the address instead of underwriti
   assert.equal(calls.length, 2);
 });
 
+test("a second house named in the same text underwrites on its own address and ask", async () => {
+  const calls = [];
+  const deps = { startUnderwrite: async (args) => { calls.push(args); return { job: { dryRun: false } }; } };
+  await runActions({ client: {}, locationId: "LOC", contactId: "c1", deps,
+    draft: { intent: "new_property", propertyAddress: "1412 Pine St, Shelton, WA", counterAmount: 410000, inbound: "…" },
+    actions: [{ id: "u1", type: "start_underwrite" }, { id: "u2", type: "start_underwrite", address: "88 Alder St, Shelton, WA", askingPrice: 720000 }] });
+  assert.deepEqual(calls.map((c) => [c.address, c.askingPrice]), [["1412 Pine St, Shelton, WA", 410000], ["88 Alder St, Shelton, WA", 720000]]);
+});
+
 // GHL has no API that says which workflows a contact is in, so the app writes
 // down every enrollment it makes (2026-09-29): the agent check-in leaves an
 // agent to a drip that may be texting them.

@@ -25,6 +25,7 @@ import { addressKey as propertyKey } from "./shared/us-address.js";
 import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor, liveRange, rangeWords } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { emailContextText } from "./shared/gmail.js";
+import { housesAwaitingAddress } from "./shared/mentioned-houses.js";
 import { showingContextLines } from "./shared/showing.js";
 import { accessFor, accessLines } from "./shared/deal-access.js";
 import { assetOf, assetPhrase, isRuralLot, kindHold, normalizeAsset } from "./shared/asset-type.js";
@@ -377,6 +378,15 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     }
   }
 
+  // Houses they named with no number yet (2026-10-13: a street name and a
+  // triplex, no numbers). Each is a lead; the address is the next ask,
+  // and a bare "it's 1412" is about one of these.
+  const awaiting = housesAwaitingAddress({ events, offers, now });
+  const awaitingLines = awaiting.map((h) => {
+    if (h.sellerAsk) amounts.add(Math.round(h.sellerAsk));
+    return `- ${h.address || `${h.label} (no street yet)`}${h.sellerAsk ? `, asking ${fmtMoney(h.sellerAsk)}` : ""}${h.note ? ` — ${h.note}` : ""} (named ${String(h.at || "").slice(0, 10)})`;
+  });
+
   const text = [
     book.count
       ? `OUR OFFERS TO THIS AGENT (newest first — the only numbers you may quote):\n${book.text}\n` +
@@ -400,6 +410,9 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
         "yet is still being worked: never make up timing or a figure for it."
       : "OUR OFFERS TO THIS AGENT: none on record.",
     dossierText,
+    awaitingLines.length
+      ? `HOUSES THEY NAMED THAT WE DON'T HAVE AN ADDRESS FOR YET (their leads — get the exact address of each; a house number they send now is one of these):\n${awaitingLines.join("\n")}`
+      : "",
     takeLines.length ? `THE AGENT'S OWN TAKE (their numbers, not ours — don't ask again, don't adopt them):\n${takeLines.join("\n")}` : "",
     hook,
     history.length ? `PROPERTIES THEY'VE SENT OR DISCUSSED WITH US BEFORE (oldest first):\n${history.map((l) => `- ${l}`).join("\n")}` : "",
