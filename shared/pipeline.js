@@ -90,6 +90,7 @@ export const ACTION_KINDS = [
   { key: "gone_quiet",        label: "Gone quiet" },
   { key: "underwrite_failed", label: "Underwrites that failed" },
   { key: "underwrite_dropped", label: "Underwrites that never ran" },
+  { key: "texts_elsewhere",   label: "Their texts go to another number" },
 ];
 
 // Investor state on a deal card, and its precedence. A buyer who committed
@@ -570,6 +571,28 @@ export function buildPipeline({
       title: `Never underwrote ${String(e.address || "an address").split(",")[0]}`,
       detail: String(e.data?.reason || "it left the underwrite queue without running").slice(0, 160),
       ops: e.address ? [{ key: "rerun_held", label: "Run it now", intent: "primary" }] : [] });
+  }
+
+  /* --- their texts go to another number --- */
+  // Their phone answered with an auto-reply naming another number to text
+  // (2026-10-14: Redfin's "we use a different number for texting"). Nothing
+  // we send reaches them until the contact's number changes, which is yours.
+  // The row stays a month, or until they write back for real.
+  const elsewhere = new Map();
+  for (const e of events) {
+    if (e?.type !== "texts_elsewhere" || !e.contactId) continue;
+    if (String(e.at) > String(elsewhere.get(e.contactId)?.at || "")) elsewhere.set(e.contactId, e);
+  }
+  for (const [contactId, e] of elsewhere) {
+    const at = ms(e.at);
+    if (at == null || now - at > 30 * DAY_MS) continue;
+    if (events.some((x) => x?.contactId === contactId && x.type === "text_summary" && String(x.at) > String(e.at))) continue;
+    const other = String(e.data?.otherNumber || "").slice(0, 20);
+    push({ id: `texts_elsewhere:${contactId}:${e.at}`, kind: "texts_elsewhere", severity: "soon", group: "yours",
+      contactId, contactName: contactNames[contactId] || "", address: "", offerId: null, askingPrice: 0,
+      title: `${contactNames[contactId] || "An agent"}: their texts go to another number`,
+      detail: other ? `an auto-reply says to text ${other} — update their number in GHL, or call` : "an auto-reply answered — update their number in GHL, or call",
+      ops: [] });
   }
 
   /* --- drafts: waiting, scheduled, and the hand-offs riding on them --- */

@@ -43,6 +43,7 @@ import { offerHasTheirAnswer } from "./tiers.js";
 import { addressKey, sameStreet } from "./us-address.js";
 import { offMarketAskDue } from "./off-market.js";
 import { botHold, paceOf, paceScale } from "./bot-hold.js";
+import { cadenceDays, requestStands } from "./brush-offs.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -273,7 +274,7 @@ export function agentOwner({ offers = [], drafts = [], events = [], config = {},
   if (byTime.some((e) => e.type === "promise_made" && after(e, kept) && now - (ms(e.at) ?? 0) < 72 * HOUR_MS)) return "a promise we made";
   // A check-in they asked for, not yet sent or answered.
   const req = byTime.filter((e) => e.type === "checkin_requested").at(-1);
-  if (req && now - (ms(req.at) ?? 0) < 45 * DAY_MS && !byTime.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)
+  if (req && requestStands(req, now) && !byTime.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)
       && !byTime.some((e) => (e.type === "text_summary" || e.type === "call_summary") && after(e, req.at))) return "a check-in they asked for";
   // A property they said was coming, still being chased.
   const pending = byTime.filter((e) => e.type === "address_pending").at(-1);
@@ -431,9 +432,16 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   // Check in less / more with them (shared/bot-hold.js): the three weeks and
   // the cold pings stretch or shrink; the quiet days after any text only grow.
   const { rung, floor } = paceScale(paceOf({ events }).factor);
-  const everyDays = Math.round(s.everyDays * rung);
-  const coldEveryDays = Math.round(s.coldEveryDays * rung);
-  const quietDays = Math.round(s.quietDays * floor);
+  // How often they asked to hear from us (fact checkinEvery, read off their
+  // own words by shared/brush-offs.js): "every 2–3 months", "you're on my
+  // email list", "I have enough wholesalers". Every wait is at least that
+  // long, a fresh listing of theirs included (2026-10-14: an agent who asked
+  // for every two or three months heard from us a month later).
+  const asked = cadenceDays(agent.facts);
+  const everyDays = Math.max(Math.round(s.everyDays * rung), asked);
+  const coldEveryDays = Math.max(Math.round(s.coldEveryDays * rung), asked);
+  const quietDays = Math.max(Math.round(s.quietDays * floor), asked);
+  const waitWhy = (days, plain) => (asked && days === asked ? `they asked for a check-in every ${asked} days` : plain);
   const quietFor = (days) => !since || now - (ms(since) ?? 0) >= days * DAY_MS;
   // When a wait ends, for the plan's per-agent list.
   const after = (t, days) => (ms(t) == null ? null : new Date(ms(t) + days * DAY_MS).toISOString());
@@ -460,8 +468,8 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     }
     if (!listing) return out("not_due", "only a new listing of theirs is a reason to text", { segment: coldSeg });
     const lastPing = latest(texted.map((e) => e.at));
-    if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", `pinged within ${coldEveryDays} days`, { segment: coldSeg, dueAt: after(lastPing, coldEveryDays) });
-    if (!quietFor(quietDays)) return out("not_due", `touched within ${quietDays} days`, { segment: coldSeg, dueAt: after(since, quietDays) });
+    if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", waitWhy(coldEveryDays, `pinged within ${coldEveryDays} days`), { segment: coldSeg, dueAt: after(lastPing, coldEveryDays) });
+    if (!quietFor(quietDays)) return out("not_due", waitWhy(quietDays, `touched within ${quietDays} days`), { segment: coldSeg, dueAt: after(since, quietDays) });
     return out("due", "", { segment: coldSeg, pulseReason: "fresh_listing", listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
   }
 
@@ -473,7 +481,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   if (listing && quietFor(quietDays)) {
     return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
   }
-  if (!quietFor(everyDays)) return out("not_due", card && since === card.movedAt ? `moved to Tier ${card.tier.slice(1)} within ${everyDays} days` : `talked within ${everyDays} days`, { segment, dueAt: after(since, everyDays) });
+  if (!quietFor(everyDays)) return out("not_due", waitWhy(everyDays, card && since === card.movedAt ? `moved to Tier ${card.tier.slice(1)} within ${everyDays} days` : `talked within ${everyDays} days`), { segment, dueAt: after(since, everyDays) });
   const house = ourHouseFor({ offers: agent.current || [], drafts, events, config, now });
   const overdue = since ? now - (ms(since) ?? 0) : Infinity;
   return out("due", "", { segment, pulseReason: house ? "our_house" : "general", house, priority: [2 + tier, -overdue] });

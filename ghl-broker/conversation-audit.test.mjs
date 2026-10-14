@@ -453,6 +453,16 @@ test("goodbyes are closers, however they're spelled", () => {
   assert.equal(isCloser("7022 in Kenmore is the only thing close."), false);
 });
 
+// 2026-10-14: the eXp desk's menu and Redfin's "different number for texting"
+// sat as texts we never answered.
+test("a brokerage auto-reply isn't a text we never answered", async () => {
+  const d = deps({ latestInbound: async () => ({ body: "Hello, and thank you for contacting the eXpert Care Desk at eXp Realty. Press 1 for eXp Realty US or Canada.", type: "SMS", at: ago(5) }) });
+  const { acted } = await runConversationAudit({ client: {}, locationId: "L", saved: SAVED, store: fakeStore(), sendsEnabled: true, deps: d, now: NOW, pace: 0 });
+  assert.equal(acted[0].status, "skipped");
+  assert.match(acted[0].reason, /an auto-reply, not a person/);
+  assert.equal(d.calls.length, 0, "no reply drafted");
+});
+
 test("a lead followed by 'not really' is still answered: every unanswered text is read, not just the last", async () => {
   const store = fakeStore();
   const d = deps({

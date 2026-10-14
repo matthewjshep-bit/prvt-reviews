@@ -518,3 +518,72 @@ test("a promise we owe waits while their newer text is waiting on you", async ()
   assert.equal(r.owed, 0, "not filed as owed while a person has the thread");
   assert.match(r.results[0].reason, /their text is waiting on you/);
 });
+
+/* ---------- they said no to the chase, or how often to check in (2026-10-14) ---------- */
+
+const theySaid = (hoursAgo, inbound) => ({ contactId: "ag", type: "text_summary", at: at(hoursAgo), dedupeKey: `ts:${hoursAgo}`, data: { inbound, summary: "", intent: "" } });
+// The fake store with a contact's own read and a profile, as the real one has.
+const fullStore = ({ events = [], facts = null } = {}) => {
+  const store = fakeStore({ events });
+  store.listContactEvents = async (_loc, contactId, { since = null, types = null } = {}) =>
+    store.events.filter((e) => e.contactId === contactId && (!since || e.at >= since) && (!types || types.includes(e.type)));
+  store.getContactProfile = async () => (facts ? { facts } : null);
+  return store;
+};
+
+test("the address chase stops after 'please don't keep asking', and says why on the record", async () => {
+  const store = fakeStore({ events: [pending(10 * 24), theySaid(5 * 24, "Please don't keep asking me. I will definitely let you know when we are ready.")] });
+  const s = starter();
+  const r = await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0, "no more asks");
+  assert.equal(r.results[0].status, "closed");
+  const closed = store.events.find((e) => e.type === "address_pending_closed");
+  assert.equal(closed.data.reason, "they_refused");
+  assert.match(closed.data.why, /stop asking/);
+  assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW + 5 * DAY, deps: s })).sent, 0, "and stays stopped");
+});
+
+test("'no, you can see them when they're on the market' and a bare 'not yet' end the chase too", async () => {
+  for (const said of ["No, you can see them when they're on the market.", "Not yet", "No"]) {
+    const store = fakeStore({ events: [pending(10 * 24), theySaid(5 * 24, said)] });
+    const s = starter();
+    await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+    assert.equal(s.calls.length, 0, said);
+  }
+  // A not-yet with a lead in it keeps the chase going.
+  const store = fakeStore({ events: [pending(10 * 24), theySaid(5 * 24, "Not yet. I do have a duplex in Federal Way coming up that needs a ton of work.")] });
+  const s = starter();
+  await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 1);
+});
+
+test("an agent with only a vacant lot coming gets no address chase", async () => {
+  const store = fakeStore({ events: [pending(50, { hint: "Nothing in my hand right now. I still have a vacant lot if you have someone interested." })] });
+  const s = starter();
+  await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0);
+  assert.equal(store.events.find((e) => e.type === "address_pending_closed")?.data.reason, "not_a_house");
+});
+
+test("'check back in a couple months' is checked in on at day sixty, not lost at day forty-five", async () => {
+  const req = request(60 * 24, { kind: "date", phrase: "a couple months", dueAt: at(2) });
+  const store = fullStore({ events: [req] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1, JSON.stringify(r.results));
+  assert.equal(s.calls[0].kind, "checkin_due");
+  assert.equal(s.calls[0].subject.phrase, "a couple months");
+  // They wrote back at day 30: nothing to send.
+  const answered = fullStore({ events: [req, { contactId: "c9", type: "text_summary", at: at(30 * 24), data: {} }] });
+  const s2 = starter();
+  await runCheckInSweep({ locationId: "LOC", saved: SAVED, store: answered, now: NOW, deps: s2 });
+  assert.equal(s2.calls.length, 0);
+});
+
+test("a deal source who told us how often to check in leaves the weekly chain", async () => {
+  const store = fullStore({ events: [request(48, { kind: "source", phrase: "", dueAt: at(1), left: 5 })], facts: { checkinEvery: [{ value: "90", at: at(24) }] } });
+  const s = starter();
+  await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 1, "this week's goes");
+  assert.equal(store.events.filter((e) => e.type === "checkin_requested").length, 1, "no next week");
+});

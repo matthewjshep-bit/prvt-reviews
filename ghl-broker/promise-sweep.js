@@ -31,6 +31,7 @@ import { openPromises, resolvePromise, normalizePromiseDismissal, promiseWhat, P
 import { driveOpenPromises, promiseClaimed } from "./promise-driver.js";
 import { waitingReason } from "./outbox-guard.js";
 import { callEventConnected } from "./shared/talked-to.js";
+import { cadenceDays, requestStands, refusesAddress, notAHouse, CADENCE_MAX_DAYS } from "./shared/brush-offs.js";
 
 const HOUR_MS = 3600000;
 
@@ -234,6 +235,9 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
 
 // A request stands this long; "in a month" is the longest one we read.
 export const CHECKIN_WINDOW_DAYS = 45;
+// The furthest back a request can still stand: the longest cadence an agent
+// can ask for, plus the two weeks past due it stays good for.
+export const CHECKIN_LONGEST_DAYS = CADENCE_MAX_DAYS + 21;
 // A deal source hears from us weekly, this many times, until they reply.
 export const SOURCE_REPEAT_DAYS = 7;
 export const SOURCE_TOUCHES = 6;
@@ -262,6 +266,22 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     if (!e?.contactId) continue;
     if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
     byContact.get(e.contactId).push(e);
+  }
+  // A request older than the window that still stands — "check back in a
+  // couple months" is due at day 60 (shared/brush-offs.js requestStands) —
+  // brings that contact's own events since it was made.
+  const windowStart = iso(now - CHECKIN_WINDOW_DAYS * 86400000);
+  const longReqs = await store.listContactEventsSince(locationId, iso(now - CHECKIN_LONGEST_DAYS * 86400000), { types: ["checkin_requested"], limit: 5000 }).catch(() => []);
+  const newestReq = new Map();
+  for (const e of longReqs) if (e?.contactId && String(e.at) > String(newestReq.get(e.contactId)?.at || "")) newestReq.set(e.contactId, e);
+  for (const [contactId, req] of newestReq) {
+    if (String(req.at) >= windowStart || !requestStands(req, now)) continue;
+    const since = await store.listContactEvents?.(locationId, contactId, { since: req.at, types: ["checkin_sent", "text_summary", "call_summary", "hand_reply"], limit: 500 }).catch(() => []) || [];
+    const seen = new Set();
+    byContact.set(contactId, [req, ...since, ...(byContact.get(contactId) || [])].filter((e) => {
+      const k = e?.id || e?.dedupeKey || `${e?.type}:${e?.at}`;
+      return e && !seen.has(k) && seen.add(k);
+    }));
   }
 
   for (const [contactId, list] of byContact) {
@@ -342,8 +362,12 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });
     else { out.sent++; out.results.push({ contactId, status: "sent", jobId: r?.job?.id || null }); }
     // A deal source's next week.
+    // Not when they've since told us how often to check in: the weekly chain
+    // ends and the agent check-in keeps their cadence (checkinEvery).
     const left = Number(req.data?.left) || 0;
-    if (req.data?.kind === "source" && left > 0) {
+    const asked = req.data?.kind === "source" && left > 0
+      ? cadenceDays((await store.getContactProfile?.(locationId, contactId).catch(() => null))?.facts) : 0;
+    if (req.data?.kind === "source" && left > 0 && !asked) {
       await recordEvent({
         store, locationId, contactId, party: "agent", type: "checkin_requested", at: iso(now), address: req.address || "",
         source: "conversation", dedupeKey: `checkin_requested:source:${contactId}:${iso(now).slice(0, 10)}`,
@@ -429,6 +453,23 @@ export async function runAddressChase({ client, locationId, saved = {}, store, s
       }).catch(() => {});
       out.found++;
       out.results.push({ contactId, status: "closed", reason: `you ${yours.type === "hand_reply" ? "texted" : "called"} them yourself` });
+      continue;
+    }
+    // Their newest text since says no to giving it (2026-10-14: "Please don't
+    // keep asking me" got two more asks; "No, you can see them when they're on
+    // the market" got another), or what's coming is land, not a house. The
+    // chase ends, on the record; the agent check-in has them from here.
+    const lastText = list.filter((e) => after(e) && e.type === "text_summary" && String(e.data?.inbound || "").trim()).at(-1);
+    const refused = lastText ? refusesAddress(lastText.data.inbound) : null;
+    const land = !refused && notAHouse(pending.data?.hint || "");
+    if (refused || land) {
+      await recordEvent({
+        store, locationId, contactId, party: "agent", type: "address_pending_closed", at: iso(now), address: "",
+        source: "conversation", dedupeKey: `address_pending_closed:${contactId}:${pending.at}:${refused ? "refused" : "land"}`,
+        data: { reason: refused ? "they_refused" : "not_a_house", why: refused || "it's land, not a house", pendingAt: pending.at },
+      }).catch(() => {});
+      out.found++;
+      out.results.push({ contactId, status: "closed", reason: refused || "it's land, not a house" });
       continue;
     }
     const rungs = addressChaseRungs(pending);

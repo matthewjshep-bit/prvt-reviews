@@ -11,6 +11,7 @@
 
 import { store as defaultStore } from "./store.js";
 import { auditConversations, auditDedupeKey, isCloser, isPlainNo, AUDIT_EVENT_TYPES, HELD_SWEEP_KINDS, MAX_REDRAFT_TRIES, REDRAFT_RETRY_AFTER_MS } from "./shared/conversation-audit.js";
+import { isAutoReply } from "./shared/brush-offs.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { mergeEvents } from "./shared/bot-hold.js";
 import { effectiveStatus, OPEN_STATUSES, dealIsOver } from "./shared/offer-status.js";
@@ -261,9 +262,12 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
         // A plain no to our check-in ends it — unless our offer is out, when
         // the no may be their pass and the reply agent records it.
         const liveOffer = offers.some((o) => o?.contactId === f.contactId && ((o.deal && !dealIsOver(o.deal)) || (!o.deal && OPEN_STATUSES.has(effectiveStatus(o)))));
-        const ends = (t) => isReaction(t) || isCloser(t) || (!liveOffer && isPlainNo(t));
+        // An auto-reply (Redfin's "different number for texting", the eXp
+        // desk) is a machine, not them: nothing to answer (2026-10-14).
+        const ends = (t) => isReaction(t) || isAutoReply(t) || isCloser(t) || (!liveOffer && isPlainNo(t));
         if (texts.length && texts.every(ends)) {
-          const why = texts.every((t) => isReaction(t)) ? "a reaction, not a text"
+          const why = texts.every((t) => isAutoReply(t)) ? "an auto-reply, not a person"
+            : texts.every((t) => isReaction(t)) ? "a reaction, not a text"
             : texts.every((t) => isReaction(t) || isCloser(t)) ? "a closer, not a question" : "a no to our check-in — nothing to answer";
           drop(f, row, why);
           continue;

@@ -49,6 +49,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
+import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
 import { normalizeOpener, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
@@ -2097,6 +2098,24 @@ export async function startReply({
     await recordEvent({ store, locationId, contactId, party: party === "investor" ? "investor" : "agent", type: "reply_not_needed", at: new Date().toISOString(),
       source: "conversation", dedupeKey: `reply_not_needed:echo:${contactId}:${new Date().toISOString().slice(0, 13)}`, data: { intent: "echo" } }).catch(() => {});
     return { skipped: "their message is our own text echoed back — nothing to answer", job: null, echo: true };
+  }
+  // A machine answered, not them (2026-10-14: Redfin's "we use a different
+  // number for texting", the eXp desk's menu): nothing to answer, nothing
+  // waiting on you, no check-in clock, and they haven't written back — so no
+  // text summary, and the outreach drip keeps them. Settled on the record for
+  // the audit. When it names the number their texts go to, that is yours
+  // (texts_elsewhere → "Their texts go to another number" on Today).
+  if (inboundKind !== "call" && isAutoReply(message)) {
+    const at = new Date(typeof deps.now === "function" ? deps.now() : Date.now()).toISOString();
+    const who = party === "investor" ? "investor" : "agent";
+    await recordEvent({ store, locationId, contactId, party: who, type: "reply_not_needed", at,
+      source: "conversation", dedupeKey: `reply_not_needed:auto:${contactId}:${at.slice(0, 13)}`, data: { intent: "auto_reply" } }).catch(() => {});
+    const other = autoReplyNumber(message);
+    if (other) {
+      await recordEvent({ store, locationId, contactId, party: who, type: "texts_elsewhere", at,
+        source: "conversation", dedupeKey: `texts_elsewhere:${contactId}:${other.replace(/\D/g, "")}`, data: { otherNumber: other } }).catch(() => {});
+    }
+    return { skipped: "an auto-reply, not a person — nothing to answer", job: null, autoReply: true };
   }
 
   // They wrote back: out of the outreach drip, whatever happens to the reply
@@ -4505,11 +4524,17 @@ async function runReply(job, ctx) {
   // asking on a ladder until an address lands, they opt out, or it runs out.
   // A time they named ("in a few weeks") is its first rung, in place of a
   // separate check-in, so they don't get two texts.
+  //
+  // Not when the same text says no to giving it ("can't share the address
+  // until it lists") or what's coming is a piece of land (2026-10-14: an
+  // agent with only a vacant lot got five chase texts).
   let chaseHasDate = false;
   let chaseStarted = false;
   if (party === "agent") {
     const pend = addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });
-    if (pend) {
+    if (pend && (refusesAddress(job.message) || notAHouse(job.message))) {
+      job.warnings.push(refusesAddress(job.message) ? "no address chase: they won't share it yet" : "no address chase: it's land, not a house");
+    } else if (pend) {
       chaseHasDate = Boolean(pend.firstDueAt);
       chaseStarted = true;
       await recordEvent({
@@ -4530,9 +4555,23 @@ async function runReply(job, ctx) {
   /* --- 4c′. when they said to check back, and who sends us deals --- */
   // Remembered as `checkin_requested`; promise-sweep.js runCheckInSweep sends
   // the check-in when it's due and they haven't come back first.
+  //
+  // How often they want to hear from us, in their words (2026-10-14: "check
+  // in no more than every 2–3 months", "you are on my email list so you don't
+  // need to check in", "I have enough wholesalers"): the contact's
+  // `checkinEvery` fact, newest wins, which the agent check-in waits at least
+  // (shared/agent-pulse.js). "Check back in a couple months" is also a dated
+  // check-in that far out. A cadence never starts the weekly deal-source
+  // chain or the two-morning clock under a held reply.
   let checkInBooked = false;
+  const cadence = party === "agent" && !isCall && draft.intent !== "opt_out" ? cadenceRequest(job.message) : null;
+  if (cadence) {
+    await learnFacts({ store, locationId, contactId: job.contactId, party: "agent",
+      facts: [{ key: "checkinEvery", value: String(cadence.days), source: "conversation", at: new Date(now).toISOString(), ref: record.id }] }).catch(() => {});
+  }
   if (party === "agent" && !isCall && !["opt_out", "counter", "acceptance", "realm_yes"].includes(draft.intent)) {
-    const ask = chaseHasDate ? null : (checkInRequested(job.message, now) || takingItToSeller(job.message, now));
+    const ask = chaseHasDate ? null : (checkInRequested(job.message, now) || takingItToSeller(job.message, now)
+      || (cadence?.checkBack ? { dueAt: cadenceDueAt(now, cadence.days), phrase: cadence.phrase } : null));
     if (ask) {
       checkInBooked = true;
       await recordEvent({
@@ -4554,7 +4593,7 @@ async function runReply(job, ctx) {
       // the next; one they answered, or that aged out, is over).
       const running = lastSource && !prior.some((e) => e.type === "checkin_sent" && e.data?.requestAt === lastSource.at)
         && Date.parse(lastSource.data?.dueAt || "") > now - 8 * 86400000;
-      if (!running) {
+      if (!running && !cadence) {
         await recordEvent({
           store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
           address: "", source: "conversation", ref: record.id,
@@ -4578,7 +4617,7 @@ async function runReply(job, ctx) {
   // never on small talk, and never when this message already booked a
   // check-in or started an address chase — nobody gets two texts.
   const heldSilent = party === "agent" && !isCall && !auto.send && HELD_FOR_A_PERSON.has(auto.code)
-    && !checkInBooked && !chaseStarted && !job.fromCheckIn
+    && !checkInBooked && !chaseStarted && !job.fromCheckIn && !cadence
     && !["opt_out", "small_talk"].includes(draft.intent);
   if (heldSilent) {
     const due = unansweredCheckIn(now);

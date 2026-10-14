@@ -6736,3 +6736,77 @@ test("with ghlStages on the bot adds no tier-1 tag or TIER 1 workflow, and still
   const t1 = tierOneActions(d.actions);
   assert.ok(t1.length > 0 && t1.every((a) => a.status === "skipped" && /pipeline follows the offers/.test(a.detail || "")), JSON.stringify(t1.map((a) => [a.type, a.status])));
 });
+
+/* ---------- cadence and brush-offs (2026-10-14) ---------- */
+
+const eventsOf = async (store, types) => store.listContactEvents("LOC", "c1", { types });
+
+test("a Redfin auto-reply isn't a text waiting on Matt: no draft, no clock, and the other number is yours", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  let drafted = 0;
+  const r = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1",
+    message: "You've reached Redfin, but we actually use a different number for texting - (206) 555-0100. We'll send you a message from that number!",
+    deps: { draft: async () => { drafted++; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(r.job, null);
+  assert.equal(r.autoReply, true);
+  assert.equal(drafted, 0, "nothing for the model to answer");
+  assert.equal((await store.listReplyDrafts("LOC", { contactId: "c1" })).length, 0, "nothing waiting in the outbox");
+  assert.equal((await eventsOf(store, ["text_summary", "checkin_requested"])).length, 0, "not their reply, and no check-in clock");
+  assert.equal((await eventsOf(store, ["reply_not_needed"]))[0]?.data.intent, "auto_reply");
+  assert.equal((await eventsOf(store, ["texts_elsewhere"]))[0]?.data.otherNumber, "(206) 555-0100");
+});
+
+test("an agent who says check in every two or three months has it on the record, and no two-morning clock", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Nothing right now. You are on my list. Would you check in no more than every 2-3 months. I get too many of these.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", needsHuman: true, humanReason: "they asked us to back off", reply: "Will do.", propertyAddress: "" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const profile = await store.getContactProfile("LOC", "c1");
+  assert.equal(profile.facts.checkinEvery.at(-1).value, "75");
+  assert.equal((await eventsOf(store, ["checkin_requested"])).length, 0, "no 'their text is waiting' check-in two mornings on");
+});
+
+test("'feel free to check back in a couple months' books the check-in two months out, not a weekly chain", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "It's pretty dialed in already. Feel free to check back in a couple months, I'll keep you in mind for any fixers 👍",
+    deps: { draft: async () => ({ ...DRAFT, intent: "small_talk", reply: "Will do, talk then.", propertyAddress: "" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const reqs = await eventsOf(store, ["checkin_requested"]);
+  assert.equal(reqs.length, 1, JSON.stringify(reqs.map((e) => e.data)));
+  assert.equal(reqs[0].data.kind, "date");
+  assert.equal(reqs[0].data.phrase, "a couple months");
+  const days = (Date.parse(reqs[0].data.dueAt) - Date.now()) / 86400000;
+  assert.ok(days > 59 && days < 61.5, `due in ${days} days`);
+  assert.equal((await store.getContactProfile("LOC", "c1")).facts.checkinEvery.at(-1).value, "60");
+});
+
+test("'I can't give the address until it lists' starts no address chase", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "I have one coming up in Kent but I cannot give the address until it lists.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "new_property", propertyAddress: "", reply: "Fair enough, send it when it's live." }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal((await eventsOf(store, ["address_pending"])).length, 0);
+});
