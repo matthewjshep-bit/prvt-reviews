@@ -9,6 +9,7 @@
 import {
   applyDraftAction, createDataroom, deleteOffer, dismissPromise, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
   askAgentForWindow, updateDealChecklist, rerunHeldUnderwrite, resumeDrive, retryUnderwrite, runFollowUps, stopDrive, setOfferStatus, updateDeal, nudgeDealBuyers,
+  setContactEmail,
 } from "./api.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL } from "@shared/post-mortem.js";
 
@@ -74,6 +75,8 @@ export async function runOp(key, item, extra = null) {
     // Not single-family: the same run, told to price it anyway.
     case "underwrite_anyway":  return rerunHeldUnderwrite(item, { anyKind: true });
     case "retry_underwrite":   return retryUnderwrite(item.jobId);
+    // An email they texted, onto their GHL contact (shared/call-list.js email_check).
+    case "use_email":          return setContactEmail(item.contactId, item.email);
     // A stop is the whole thread with this agent, not one house: the point is
     // that you are picking it up yourself.
     case "stop_drive":         return stopDrive({ contactId: item.contactId, address: item.address });
@@ -98,6 +101,7 @@ export function describeResult(key, r) {
   }
   if (key === "ask_agent_window") return r.status === "scheduled" ? "Asked. It goes out at the next open minute." : `Drafted for you${r.reason ? ` (${r.reason})` : ""} — check the outbox.`;
   if (key === "tick_task") return "Ticked off.";
+  if (key === "use_email") return r.unchanged ? "GHL already has it." : `Saved to GHL: ${r.email}.`;
   if (key === "build_dataroom") return "Built. Open the deal to check it and copy the link.";
   if (key === "stop_drive") return "Stopped. It is yours until you press Resume.";
   if (key === "resume_drive") return "Back with the machine.";

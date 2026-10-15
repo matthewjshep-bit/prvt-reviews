@@ -403,3 +403,29 @@ test("an agent who points us to someone with a house raises a referral row on To
   assert.equal(callList({ events: [relative], now: NOW }).find((x) => x.kind === "referral").title, "Referral: their husband's client — the agent says they have one");
   assert.equal(callList({ events: [{ ...ev, at: ago(40) }], now: NOW }).filter((x) => x.kind === "referral").length, 0, "a month on, it's old news");
 });
+
+// 2026-10-15: an address texted to us that GHL couldn't simply take — a
+// different one on file, or another contact has it — is Matt's to check.
+test("an email they texted that GHL couldn't take is on Today until an email is saved for them", () => {
+  const offered = { type: "email_offered", contactId: "c9", at: ago(1), source: "conversation",
+    data: { email: "new@example.com", current: "old@example.com", why: "a different one is on file" } };
+  const rows = callList({ offers: [offer({ id: "z", contactId: "c9", contactName: "Sam Buyer", status: "sent" })], events: [offered], now: NOW });
+  const r = rows.find((x) => x.kind === "email_check");
+  assert.ok(r);
+  assert.equal(r.title, "Sam texted an email: new@example.com");
+  assert.match(r.detail, /GHL has old@example\.com/);
+  assert.equal(r.email, "new@example.com");
+  assert.deepEqual(r.ops.map((o) => o.key), ["use_email", "open_contact"]);
+  assert.deepEqual(urgentReasons([r]).map((x) => x.kind), ["email_check"], "it's on Today");
+  assert.ok(CALL_KINDS.some((k) => k.key === "email_check"));
+
+  const saved = { type: "email_saved", contactId: "c9", at: ago(0.5), data: { email: "new@example.com" } };
+  assert.equal(callList({ events: [offered, saved], now: NOW }).find((x) => x.kind === "email_check"), undefined, "gone once an email is saved");
+
+  const taken = { ...offered, data: { email: "dup@example.com", current: "", why: "another GHL contact has it" } };
+  const t = callList({ events: [taken], now: NOW }).find((x) => x.kind === "email_check");
+  assert.match(t.detail, /Another GHL contact already has that address/);
+  assert.deepEqual(t.ops.map((o) => o.key), ["open_contact"], "nothing to Use when GHL would refuse it");
+
+  assert.equal(callList({ events: [{ ...offered, at: ago(30) }], now: NOW }).find((x) => x.kind === "email_check"), undefined, "three weeks, then it's gone");
+});

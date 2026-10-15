@@ -130,6 +130,11 @@ export const EVENT_TYPES = [
   // An agent offered to work together on terms — a list-back, being our
   // buyer's agent, a fee, their deal list (shared/partner-terms.js).
   "partner_terms",
+  // An email address they texted us (shared/contact-email.js). Saved: GHL's
+  // email field now has it (data.email, data.previous). Offered: they gave
+  // one GHL can't take as is — a different one is on file, or another
+  // contact has it — so Today asks you (data.email, data.current, data.why).
+  "email_saved", "email_offered",
 ];
 
 export const EVENT_LABEL = {
@@ -172,6 +177,7 @@ export const EVENT_LABEL = {
   contact_card_sent: "we sent our contact card",
   texts_elsewhere: "an auto-reply says their texts go to another number",
   partner_terms: "they offered to work together",
+  email_saved: "their email saved to GHL", email_offered: "they gave an email to check",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -213,6 +219,7 @@ export const EVENT_ICON = {
   contact_card_sent: "Contact",
   texts_elsewhere: "CircleSlash",
   partner_terms: "Handshake",
+  email_saved: "AtSign", email_offered: "AtSign",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];
@@ -246,6 +253,11 @@ export const FACT_KEYS = {
   // "you're on my email list" 90 (shared/brush-offs.js cadenceRequest). The
   // agent check-in waits at least this long. App-only: no GHL field.
   checkinEvery:          { kind: "scalar", party: "agent",    cap: 20, days: true, ghl: false, label: "Check in every (days)" },
+  // How a buyer wants deals (shared/contact-email.js, 2026-10-15): "email"
+  // sends every deal by email as well as the text. App-only; the GHL tag
+  // dispo-deals-by-email mirrors it. Turned off by writing "text", never by
+  // removing it, so a tombstone can't stop them asking again.
+  deals_by:              { kind: "scalar", party: "investor", cap: 20, ghl: false, label: "Deals go by", values: ["email", "text"] },
 };
 export const factKeysFor = (party) =>
   Object.keys(FACT_KEYS).filter((k) => FACT_KEYS[k].party === "both" || FACT_KEYS[k].party === party);

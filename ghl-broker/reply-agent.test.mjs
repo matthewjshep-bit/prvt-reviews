@@ -7131,3 +7131,122 @@ test("'I can't give the address until it lists' starts no address chase", async 
   assert.equal(job.status, "done", job.error);
   assert.equal((await eventsOf(store, ["address_pending"])).length, 0);
 });
+
+/* ---------- an email they text reaches GHL, and buyers who want deals by email (2026-10-15) ---------- */
+
+// Until 2026-10-15 an address texted to us was used once, for the send it came
+// with, and GHL's email field never heard of it. And several buyers asked
+// for deals by email while every deal went to their phones.
+function emailStub({ tags = ["agent"], email = "", dupId = null } = {}) {
+  const puts = [];
+  const tagCalls = [];
+  const client = {
+    call: async (path, opts = {}) => {
+      if (/^\/contacts\/c1$/.test(path) && !opts.method) return { contact: { id: "c1", firstName: "Sam", lastName: "Buyer", tags, email, phone: "+12065550111" } };
+      if (/^\/contacts\/c1$/.test(path) && opts.method === "PUT") { puts.push(opts.body); return { contact: {} }; }
+      if (path.startsWith("/contacts/search/duplicate")) {
+        if (dupId) return { contact: { id: dupId } };
+        const e = new Error("no match"); e.status = 404; throw e;
+      }
+      if (path.endsWith("/customFields") && !opts.method) return { customFields: [] };
+      if (path.endsWith("/notes")) return {};
+      if (path.endsWith("/tags")) { tagCalls.push([opts.method || "POST", opts.body.tags]); return {}; }
+      if (path.startsWith("/conversations/search")) return { conversations: [] };
+      if (path === "/conversations/messages") return { messageId: "m9" };
+      if (path.includes("/workflow/")) return { succeeded: true };
+      throw new Error(`unexpected ${path}`);
+    },
+  };
+  return { client, puts, tags: tagCalls, emailPuts: () => puts.filter((b) => "email" in b) };
+}
+const emailEventsOf = (store, type) => (store.events.get("LOC|c1") || []).filter((e) => e.type === type);
+
+test("an email address an agent texts lands on their GHL contact when it has none", async () => {
+  _resetJobs();
+  const stub = emailStub();
+  const store = fakeStore();
+  const { job } = await startReply({ client: stub.client, locationId: "LOC", saved: SAVED, store, contactId: "c1",
+    message: "Sure, my email is Sam@Example.com", deps: { draft: async () => DRAFT } });
+  await settle();
+  assert.notEqual(job.status, "error", job.error);
+  assert.deepEqual(stub.emailPuts(), [{ email: "sam@example.com" }]);
+  assert.equal(emailEventsOf(store, "email_saved")[0].data.email, "sam@example.com");
+  assert.equal(store.profiles.get("LOC|c1").email, "sam@example.com");
+});
+
+test("an agent's transaction coordinator's address never becomes the agent's email", async () => {
+  _resetJobs();
+  const stub = emailStub();
+  const store = fakeStore();
+  await startReply({ client: stub.client, locationId: "LOC", saved: SAVED, store, contactId: "c1",
+    message: "Please send it to my TC at jane@example.com", deps: { draft: async () => DRAFT } });
+  await settle();
+  assert.deepEqual(stub.emailPuts(), []);
+  assert.deepEqual(emailEventsOf(store, "email_saved"), []);
+  assert.deepEqual(emailEventsOf(store, "email_offered"), [], "someone else's address isn't a question for Matt either");
+});
+
+test("a different address with no word on whose it is waits on Today instead of replacing the one on file", async () => {
+  _resetJobs();
+  const stub = emailStub({ email: "old@example.com" });
+  const store = fakeStore();
+  await startReply({ client: stub.client, locationId: "LOC", saved: SAVED, store, contactId: "c1",
+    message: "send it to new@example.com", deps: { draft: async () => DRAFT } });
+  await settle();
+  assert.deepEqual(stub.emailPuts(), []);
+  const [offered] = emailEventsOf(store, "email_offered");
+  assert.deepEqual({ email: offered.data.email, current: offered.data.current }, { email: "new@example.com", current: "old@example.com" });
+});
+
+test("an address another GHL contact already has is not saved over this one", async () => {
+  _resetJobs();
+  const stub = emailStub({ dupId: "someone-else" });
+  const store = fakeStore();
+  await startReply({ client: stub.client, locationId: "LOC", saved: SAVED, store, contactId: "c1",
+    message: "my email is sam@example.com", deps: { draft: async () => DRAFT } });
+  await settle();
+  assert.deepEqual(stub.emailPuts(), []);
+  assert.match(emailEventsOf(store, "email_offered")[0].data.why, /another GHL contact/);
+});
+
+test("a buyer who asks for deals by email is switched to email and gets the deal they're on as an email", async () => {
+  _resetJobs();
+  const stub = emailStub({ tags: ["investor", "dispo-1510-maple-lane"], email: "sam@example.com" });
+  const store = fakeStore();
+  store.listDeals = async () => [MAPLE];
+  const emailed = [];
+  const { job } = await startReply({
+    client: stub.client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "Can you email me the details instead?",
+    deps: {
+      linkDealInterest: async (x) => ({ ok: true, linked: true, status: x.status }),
+      emailDealTo: async (x) => { emailed.push(x); return { ok: true, status: "draft", draftId: "dx", address: MAPLE.address }; },
+      draft: async () => ({ ...INVESTOR_DRAFT, intent: "question", propertyAddress: "", reply: "Sure, I'll get it over to you by email." }),
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(store.profiles.get("LOC|c1").facts.deals_by.map((f) => f.value), ["email"]);
+  assert.ok(stub.tags.some(([m, t]) => m === "POST" && t.includes("dispo-deals-by-email")), "the GHL tag mirrors it");
+  assert.deepEqual(emailed, [{ contactId: "c1", offerId: "mh" }]);
+  assert.ok((await store.getReplyDraft(job.draftId)).warnings.some((w) => /is in the outbox to them by email/.test(w)));
+});
+
+test("a buyer who wants deals by email with no address on file is asked for one, and nothing is drafted to nowhere", async () => {
+  _resetJobs();
+  const stub = emailStub({ tags: ["investor", "dispo-1510-maple-lane"], email: "" });
+  const store = fakeStore();
+  store.listDeals = async () => [MAPLE];
+  const emailed = [];
+  const { job } = await startReply({
+    client: stub.client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "I prefer email for deals",
+    deps: {
+      linkDealInterest: async (x) => ({ ok: true, linked: true, status: x.status }),
+      emailDealTo: async (x) => { emailed.push(x); return { ok: true, status: "draft" }; },
+      draft: async () => ({ ...INVESTOR_DRAFT, intent: "question", propertyAddress: "", reply: "Sure, what's the best email?" }),
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(emailed, []);
+  assert.ok((await store.getReplyDraft(job.draftId)).warnings.some((w) => /no address for them/.test(w)));
+});

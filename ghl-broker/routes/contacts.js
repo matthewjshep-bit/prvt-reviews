@@ -6,6 +6,8 @@
 //   POST /api/contacts/:id/reply          a text typed on Today's work pane (no bot draft); dry-run unless CARD_SENDS_ENABLED
 //   POST /api/contacts/:id/facts          an operator adds or removes facts; GHL is re-projected
 //   POST /api/contacts/:id/events         an operator adds a note or a call summary
+//   POST /api/contacts/:id/email          an operator sets their email on GHL (Today's "Use it", the drawer)
+//   POST /api/contacts/:id/deals-by       a buyer gets deals by email or by text
 //   POST /api/contacts/:id/gmail          read the email with them from Gmail onto the record (read-only)
 //   POST /api/contacts/backfill           fill the record from existing offers, deals, drafts, invites and GHL fields
 //   GET  /api/contacts/backfill/status    the running or last job, plus the record's counts
@@ -23,6 +25,8 @@ import { syncContactGmail, contactEmails } from "../gmail-sync.js";
 import { sendHandReply } from "../hand-reply.js";
 import { contactTimeline } from "../contact-timeline.js";
 import { CALL_OUTCOMES } from "../shared/talked-to.js";
+import { writeContactEmail, setDealsBy } from "../contact-email.js";
+import { validEmail } from "../shared/contact-email.js";
 
 const DAY_MS = 86400000;
 
@@ -198,6 +202,37 @@ export default function createContactsRouter({ resolveLocation, onHandText = nul
         data: type === "note" ? { text } : { summary: text },
       });
       res.json({ ok: true, event: r.event });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Their email on GHL, set by a person: Today's "Use it" on an address they
+  // texted, or the drawer. Refused when another GHL contact has it.
+  router.post("/:id/email", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = str(req.params.id, 64);
+      const email = validEmail(req.body?.email);
+      if (!email) return res.status(400).json({ error: "not an email address" });
+      const party = ["agent", "investor"].includes(req.body?.party) ? req.body.party : null;
+      let previous = "";
+      try { previous = (await getContact(client, contactId))?.email || ""; } catch { previous = ""; }
+      if (validEmail(previous) === email) return res.json({ ok: true, email, unchanged: true });
+      const r = await writeContactEmail({ client, store, locationId, contactId, party, email, previous, source: "operator", ref: "drawer", how: previous ? "replace" : "set" });
+      if (!r.ok) return res.status(409).json({ error: r.reason || "not saved" });
+      res.json({ ok: true, email: r.email });
+    } catch (err) { fail(res, err); }
+  });
+
+  // How a buyer gets deals: "email" or "text" (the drawer's switch).
+  router.post("/:id/deals-by", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = str(req.params.id, 64);
+      const value = req.body?.value;
+      if (!["email", "text"].includes(value)) return res.status(400).json({ error: "value must be email or text" });
+      const r = await setDealsBy({ client, store, locationId, contactId, value, source: "operator", ref: "drawer" });
+      const record = await getContactRecord({ store, locationId, contactId, party: "investor" });
+      res.json({ ...r, ...record });
     } catch (err) { fail(res, err); }
   });
 

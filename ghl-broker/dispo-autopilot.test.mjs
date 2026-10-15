@@ -139,6 +139,46 @@ test("a buyer with no phone is emailed the deal as a draft that waits for you; a
   assert.equal(off.rows[0].status, "skipped");
 });
 
+// Several buyers (2026-10-15) asked for deals by email, and a
+// buyer with a phone could only ever be texted one.
+test("a buyer who asked for deals by email is texted first and emailed too; the email waits for you", async () => {
+  const store = fakeStore();
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } } };
+  const r = await queueBlastDrafts({ store, locationId: "L", offer, now: NOW, sendsEnabled: true, blastsEnabled: true, saved, investors: [
+    { contactId: "k1", name: "Sam B", phone: "+12065550111", email: "sam@example.com", record: { deals_by: "email" } },
+    { contactId: "k2", name: "Tag Only", phone: "+12065550112", email: "tag@example.com", tags: ["dispo-deals-by-email"] },
+    { contactId: "k3", name: "Back To Text", phone: "+12065550113", email: "t@example.com", tags: ["dispo-deals-by-email"], record: { deals_by: "text" } },
+    { contactId: "k4", name: "No Address", phone: "+12065550114", email: "", record: { deals_by: "email" } },
+    { contactId: "k5", name: "Never Asked", phone: "+12065550115", email: "n@example.com" },
+  ] });
+  const drafts = [...store.rows.values()];
+  const of = (cid) => drafts.filter((d) => d.contactId === cid).map((d) => d.channel).sort();
+  assert.deepEqual(of("k1"), ["email", "sms"], "the text still goes, and the email with it");
+  assert.deepEqual(of("k2"), ["email", "sms"], "the GHL tag counts when the record has no answer");
+  assert.deepEqual(of("k3"), ["sms"], "the record's 'text' beats the tag");
+  assert.deepEqual(of("k4"), ["sms"], "no address to email: the text alone");
+  assert.deepEqual(of("k5"), ["sms"], "text is the default");
+  const [text, mail] = ["sms", "email"].map((c) => drafts.find((d) => d.contactId === "k1" && d.channel === c));
+  assert.equal(text.status, "scheduled");
+  assert.equal(mail.status, "draft", "emailed deals still wait for you unless they may send themselves");
+  assert.ok(mail.outbound.subject, "an emailed deal has a subject line");
+  assert.ok(mail.flags.includes("they asked for deals by email too — the text goes as well"));
+  assert.equal(r.rows.filter((x) => x.contactId === "k1").length, 2);
+
+  // Queued again (a second click): each channel replaces its own, nothing doubles.
+  await queueBlastDrafts({ store, locationId: "L", offer, now: NOW, sendsEnabled: true, blastsEnabled: true, saved,
+    investors: [{ contactId: "k1", name: "Sam B", phone: "+12065550111", email: "sam@example.com", record: { deals_by: "email" } }] });
+  const live = [...store.rows.values()].filter((d) => d.contactId === "k1" && d.status !== "superseded").map((d) => d.channel).sort();
+  assert.deepEqual(live, ["email", "sms"]);
+
+  // One deal by email for a buyer who asked: the email alone, and a text of it
+  // still queued stays queued.
+  const one = await queueBlastDrafts({ store, locationId: "L", offer, now: NOW, sendsEnabled: true, blastsEnabled: true, saved,
+    investors: [{ contactId: "k5", name: "Never Asked", phone: "+12065550115", email: "n@example.com", channel: "email" }] });
+  assert.deepEqual(one.rows.map((x) => x.channel), ["email"]);
+  assert.deepEqual([...store.rows.values()].filter((d) => d.contactId === "k5" && d.status !== "superseded").map((d) => d.channel).sort(), ["email", "sms"]);
+});
+
 test("email settings default to drafting on, sending off", () => {
   assert.deepEqual(normalizeDispoAutopilot().email, { draft: true, autoSend: false });
   assert.deepEqual(normalizeDispoAutopilot({ email: { draft: false, autoSend: "yes" } }).email, { draft: false, autoSend: false });

@@ -33,7 +33,7 @@ import { buyboxCustom, investorProfileText, refreshInvestorRow } from "../invest
 import { CURSOR_NAME as BOOK_SYNC_CURSOR } from "../investor-sync.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel, resumePulledBack } from "../dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel, blastChannels, resumePulledBack } from "../dispo-autopilot.js";
 import { planBuyerPulse, startBuyerPulse, previewBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
 import { runShowingSweep } from "../showing-sweep.js";
 import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
@@ -44,6 +44,7 @@ import {
   smsUnsubscribed,
 } from "../ghl.js";
 import { anthropicErrorToHttp } from "../rehab-scan.js";
+import { dealsByOf } from "../shared/contact-email.js";
 import {
   BUYBOX_FIELDS, INVESTOR_FIELD_DEFS, RANK_LIMIT, dealToQuery, addressAreas,
   parseBuyboxQuery, rankInvestors,
@@ -745,7 +746,7 @@ export default function createDispoRouter({ resolveLocation }) {
       const next = nextWave(offer.deal, da);
       const { ranked, target } = await rankedForDeal(locationId, offer);
       const wouldGet = pickWave(ranked, { wave: 2, floor: da.secondWaveMinScore, exclude: "blasted", ...waveOptions(target, da) }).slice(0, da.secondWaveCount)
-        .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons, channel: blastChannel(i, da) }));
+        .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons, channel: blastChannel(i, da), channels: blastChannels(i, da) }));
       res.json({
         ok: true, offerId: offer.id, address: offer.address, stage: offer.deal.stage || null, asset: target.asset || null,
         autoBlastOnPromote: da.autoBlastOnPromote, maxWaves: da.maxWaves, waveHours: da.secondWaveHours,
@@ -1180,7 +1181,7 @@ export default function createDispoRouter({ resolveLocation }) {
         full.deal.blastTags = [...new Set([...(full.deal.blastTags || []), blastTag])];
         // Who this wave went to, so the next never picks them again, sent
         // or not (shared/buyer-score.js blastedTo).
-        const contactIds = (r.rows || []).filter((x) => x.draftId).map((x) => x.contactId);
+        const contactIds = [...new Set((r.rows || []).filter((x) => x.draftId).map((x) => x.contactId))];
         full.deal.blasts = [...(full.deal.blasts || []), { at: new Date(now).toISOString(), count: investors.length, queued: r.queued, drafted: r.drafted, via: "app", wave, tag: blastTag, contactIds }];
         await store.updateOffer(full.id, full);
       }
@@ -1209,6 +1210,36 @@ export default function createDispoRouter({ resolveLocation }) {
       if (last) { last.resumedAt = new Date(now).toISOString(); await store.updateOffer(full.id, full); }
     }
     return r;
+  }
+
+  /**
+   * emailDealToBuyer({ locationId, offer, contactId, now }) → { ok, status, draftId, address, reason? }
+   *
+   * One buyer asked for this deal by email (reply-agent.js, 2026-10-15): the
+   * same deal a wave writes, as an email to them alone. It waits in the
+   * outbox unless emailed deals send themselves (dispoAutopilot.email
+   * .autoSend). Not a wave: the deal's blasts list is left alone, so the wave
+   * clock and counts don't move. A text of it still queued for them stays
+   * queued: they get both.
+   */
+  async function emailDealToBuyer({ locationId, offer, contactId, now = Date.now() }) {
+    if (!offer?.deal) return { ok: false, reason: "not a deal" };
+    const paused = dealOutreachPaused(offer.deal);
+    if (paused && paused.contactId !== contactId) return { ok: false, reason: outreachPausedReason(paused, offer.address), address: offer.address };
+    const row = await store.getInvestor(locationId, contactId).catch(() => null);
+    const doc = row?.doc || {};
+    if (!doc.email) return { ok: false, reason: "no email on file for them", address: offer.address };
+    const settings = await getSettings(locationId);
+    const r = await queueBlastDrafts({
+      store, locationId, offer, saved: settings, now, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED,
+      label: (offer.deal.blastTags || []).at(-1) || "",
+      // They just wrote to us: no how-we-found-you line.
+      // The email only: the text of it already went, or goes on its own.
+      investors: [{ contactId, name: row?.name || doc.name || "", email: doc.email, phone: doc.phone || "", tags: doc.tags || [], channel: "email", lastRepliedAt: new Date(now).toISOString() }],
+    });
+    const one = r.rows?.[0];
+    if (!one?.draftId) return { ok: false, reason: one?.reason || r.reason || "nothing drafted", address: offer.address };
+    return { ok: true, status: one.status, draftId: one.draftId, address: offer.address };
   }
 
   /**
@@ -1278,7 +1309,7 @@ export default function createDispoRouter({ resolveLocation }) {
   // How to reach a buyer, carried onto a wave's shortlist so the queue can
   // pick the channel and the how-we-found-you line (dispo-autopilot.js).
   function reachOf(i = {}) {
-    return { phone: i.phone || "", email: i.email || "", tags: i.tags || [], lastRepliedAt: i.lastRepliedAt || "" };
+    return { phone: i.phone || "", email: i.email || "", tags: i.tags || [], lastRepliedAt: i.lastRepliedAt || "", dealsBy: dealsByOf(i) };
   }
 
   /** rankBuyerForDeal(locationId, offer, contactId) → { rank, tier } | null — for the dataroom guard. */
@@ -1353,6 +1384,7 @@ export default function createDispoRouter({ resolveLocation }) {
   router.rankBuyerForDeal = rankBuyerForDeal;
   router.blastFromApp = blastFromApp;
   router.resumeWave = resumeWave;
+  router.emailDealToBuyer = emailDealToBuyer;
 
   return router;
 }

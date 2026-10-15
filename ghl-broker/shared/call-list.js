@@ -98,6 +98,8 @@ export const CALL_KINDS = [
   { key: "call_partner_terms", label: "Partner terms: yours to answer" },
   // A decision, not a call (2026-10-14): someone else they say has one.
   { key: "referral",         label: "Referral: someone else has one" },
+  // A decision, not a call (2026-10-15): an email they texted, to check.
+  { key: "email_check",      label: "An email they texted, to check" },
 ];
 // They called you: ring back first — they reached out.
 const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_investor: 45, call_partner: 30, call_partner_terms: 80 };
@@ -142,6 +144,8 @@ const NOT_OUR_HOUSE_RX = /outside the area|rural|acres|manufactured|mobile home|
 const BROUGHT_FRESH_DAYS = 2;
 // A referral to someone else stays a decision this long.
 const REFERRAL_DAYS = 21;
+// So does an email address they texted that GHL couldn't simply take.
+const EMAIL_CHECK_DAYS = 21;
 
 /**
  * callList({ offers, cards, actions, drafts, events, lastIn, lastAny, unsubscribed, settings, now })
@@ -553,6 +557,40 @@ export function callList({
       detail: `${d.phrase ? `“${String(d.phrase).slice(0, 160)}” ` : ""}Reach out yourself if it's worth it${d.phone ? ` (${d.phone})` : ""}, and mention ${agentFirst}. The bot never contacts them.`,
       referral: { name: String(d.name || ""), brokerage, relation: String(d.relation || ""), phone: String(d.phone || "") },
       ops: [],
+    });
+  }
+
+  /* 6d. An email address they texted that GHL couldn't simply take
+   * (shared/contact-email.js, 2026-10-15): a different one is on file and
+   * they didn't say the new one is theirs, or another GHL contact already
+   * has it. One row per address until an email is saved for them (Use it,
+   * or the drawer); Dismiss clears it. Nothing is sent either way. */
+  const emailSavedAt = new Map();
+  for (const e of (events || []).filter((x) => x?.type === "email_saved" && x.contactId)) {
+    emailSavedAt.set(e.contactId, Math.max(emailSavedAt.get(e.contactId) || 0, ms(e.at) ?? 0));
+  }
+  for (const e of (events || []).filter((x) => x?.type === "email_offered" && x.contactId)) {
+    const at = ms(e.at) ?? 0;
+    if (now - at > EMAIL_CHECK_DAYS * DAY_MS || (emailSavedAt.get(e.contactId) || 0) >= at) continue;
+    const c = e.contactId;
+    const d = e.data || {};
+    const email = String(d.email || "").trim();
+    if (!email) continue;
+    const name = nameOf(c, offersBy, draftsBy);
+    const elsewhere = /another GHL contact/i.test(String(d.why || ""));
+    const current = String(d.current || "").trim();
+    out.push({
+      id: `email_check:${c}:${email.toLowerCase()}`,
+      kind: "email_check", section: "decide", group: "yours", severity: "soon",
+      contactId: c, contactName: name, offerId: null, address: "", draftId: null, score: 0, since: e.at,
+      title: `${name ? first(name) : "They"} texted an email: ${email}`,
+      detail: elsewhere
+        ? "Another GHL contact already has that address, so it wasn't saved. It may be a duplicate contact in GHL."
+        : d.why === "GHL didn't take it"
+        ? "GHL didn't take it when we tried. Use it to try again."
+        : `GHL has ${current || "a different address"}${d.why === "more than one address" ? ", and they texted more than one" : ""}. Use the new one if it's theirs.`,
+      email,
+      ops: elsewhere ? [{ key: "open_contact", label: "Open their record" }] : [{ key: "use_email", label: "Use it", intent: "primary" }, { key: "open_contact", label: "Open their record" }],
     });
   }
 

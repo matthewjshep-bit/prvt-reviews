@@ -10,6 +10,7 @@ import {
   Send, RefreshCw, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
   MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
   Calculator, ClipboardList, Circle, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX, Gauge, CircleSlash, Contact, Home,
+  AtSign,
 } from "lucide-react";
 import { EVENT_LABEL, EVENT_ICON, AI_SOURCES, FACT_KEYS, PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
 import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
@@ -22,6 +23,7 @@ const ICONS = {
   Send, RefreshCw, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
   MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
   Calculator, ClipboardList, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX, Gauge, CircleSlash, Contact, Home,
+  AtSign,
 };
 export const EventIcon = ({ type, size = 13 }) => { const I = ICONS[EVENT_ICON[type]] || Circle; return <I size={size} className="shrink-0" />; };
 
@@ -59,6 +61,8 @@ export function eventLine(ev) {
     case "call_booked": return d.label || "";
     case "cadence_set": return PACE_LABEL[d.pace] || "";
     case "drive_stopped": return [d.until ? `paused until ${pauseDay(d.until)}` : "until you resume", d.reason ? `— ${d.reason}` : ""].filter(Boolean).join(" ");
+    case "email_saved": return [d.email || "", d.previous ? `was ${d.previous}` : ""].filter(Boolean).join(" · ");
+    case "email_offered": return [d.email || "", d.why || ""].filter(Boolean).join(" · ");
     case "email_received":
     case "email_sent": return [d.subject ? `“${d.subject}”` : "(no subject)", d.attachments?.length ? `📎 ${d.attachments.slice(0, 3).join(", ")}` : ""].filter(Boolean).join(" · ");
     default: return d.note || "";
