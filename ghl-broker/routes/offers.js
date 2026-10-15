@@ -5322,6 +5322,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     },
     linkDealInterest: ({ contactId, addressHint, status, reason, revive, addOnly, withinDays, note }) =>
       linkInvestorInterest({ locationId, client, contactId, addressHint, status, reason, revive, addOnly, withinDays, note }),
+    // A buyer asked for a deal by email (reply-agent.js): that deal, as an
+    // email draft to them (routes/dispo.js emailDealToBuyer). Live deals only.
+    emailDealTo: async ({ contactId, offerId }) => {
+      if (!dispoDeps?.emailDealToBuyer) return { ok: false, reason: "dispositions isn't wired" };
+      const offer = offerId ? await store.getOffer(offerId).catch(() => null) : null;
+      if (!offer || offer.locationId !== locationId || !LIVE_DEAL_STAGES.has(offer.deal?.stage)) return { ok: false, reason: "not a live deal" };
+      return dispoDeps.emailDealToBuyer({ locationId, offer, contactId });
+    },
     // The agent's offer outcome, from what they just said: a counter or a
     // pass. Same write the History table's status menu makes — ledger line,
     // tag reconcile and all — on their newest open offer, or the one whose

@@ -40,6 +40,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { buildTranscript, enrichFieldDefs, mergeHistory, mergeFacts, SUBJECT_PROPERTY_FIELD } from "./enrich.js";
 import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
+import { saveTextedEmail, setDealsBy } from "./contact-email.js";
+import { wantsDealsByEmail } from "./shared/contact-email.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
 import { paperWent, paperWorthy, floatSentAt, isRoughNumber } from "./shared/paper-follows.js";
@@ -467,6 +469,23 @@ export function heldDealReplyFiling(message = "", linkedDeals = []) {
  */
 export function walkthroughDealFor(deals = null, address = "") {
   const rows = (deals?.linked || []).filter((d) => d?.stage === "under_contract" && d.offerId);
+  if (!rows.length) return null;
+  if (address) {
+    const named = rows.find((d) => sameStreet(d.address, address));
+    if (named) return named;
+  }
+  return rows.length === 1 ? rows[0] : null;
+}
+
+/**
+ * dealToEmailFor(deals, address) → the deal row a buyer who asked for email
+ * should get by email, or null.
+ *
+ * A live deal they're already on (sent it, or linked): the one the message
+ * names, else the only one there is. Two and no address: nothing is guessed.
+ */
+export function dealToEmailFor(deals = null, address = "") {
+  const rows = (deals?.linked || []).filter((d) => d?.offerId);
   if (!rows.length) return null;
   if (address) {
     const named = rows.find((d) => sameStreet(d.address, address));
@@ -3444,6 +3463,22 @@ async function runReply(job, ctx) {
   job.partySource = a.partySource;
   job.contactName = a.contactName;
 
+  // An email address they texted goes on their GHL contact (2026-10-15).
+  // Until then it was used once, for the send it came with, and forgotten.
+  // A buyer asking for deals by email is filed the same way. Neither sends
+  // anything, so both run whoever has the thread; a call's transcript is
+  // never read for an address (shared/contact-email.js).
+  if (party !== "unknown" && !isCall) {
+    const words = job.originalMessage || job.message;
+    const mail = await saveTextedEmail({ client, store, locationId, contactId: job.contactId, party, message: words,
+      current: a.contact ? a.contact.email || "" : undefined, ref: job.id, now }).catch(() => null);
+    if (mail && mail.action !== "none") job.emailSave = { action: mail.action, ok: mail.ok ?? null, reason: mail.reason || "" };
+    if (party === "investor" && wantsDealsByEmail(words)) {
+      const r = await setDealsBy({ client, store, locationId, contactId: job.contactId, value: "email", source: "conversation", ref: job.id }).catch(() => null);
+      if (r?.ok) job.dealsByEmail = { hasEmail: Boolean(mail?.ok || a.contact?.email) };
+    }
+  }
+
   // A hold before any draft leaves no row in the outbox, and until 2026-09-22
   // no trace anywhere: the nightly audit's redraft of Michael Lindekugel
   // (bot-off tag) came back as "drafting was tried … nothing came of it".
@@ -3908,6 +3943,22 @@ async function runReply(job, ctx) {
     const r = await deps.linkDealInterest({ contactId: job.contactId, addressHint: draft.propertyAddress || walkDeal?.address || "", ...filing })
       .catch((e) => { warnings.push(`not put on the deal: ${e.message}`); return null; });
     if (r?.ok) filedOnDeal = filing.status;
+  }
+
+  // They asked for it by email (2026-10-15): the deal they're on goes to them
+  // as an email, drafted like a wave's (routes/dispo.js emailDealToBuyer). It
+  // waits in the outbox unless emailed deals send themselves, so the reply
+  // must not say it went — CLAIMS_EMAIL_RX below holds one that does.
+  if (job.dealsByEmail && draft.intent !== "passing") {
+    const deal = dealToEmailFor(context?.deals, draft.propertyAddress || walkDeal?.address || "");
+    if (!job.dealsByEmail.hasEmail) warnings.push("they want deals by email and we have no address for them — ask for it");
+    else if (deal && deps.emailDealTo) {
+      const r = await deps.emailDealTo({ contactId: job.contactId, offerId: deal.offerId })
+        .catch((e) => ({ ok: false, reason: String(e?.message || e).slice(0, 120) }));
+      warnings.push(r?.ok
+        ? `${deal.address} ${r.status === "scheduled" ? "is scheduled to go" : "is in the outbox"} to them by email`
+        : `they asked for ${deal.address} by email and it wasn't drafted: ${r?.reason || "unknown"}`);
+    }
   }
 
   // A walkthrough, a call, a time: yours by design, and therefore a draft

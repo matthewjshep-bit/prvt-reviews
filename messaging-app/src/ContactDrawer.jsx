@@ -21,7 +21,8 @@ import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { INVESTOR_STATUS_LABEL } from "@shared/offer-status.js";
-import { getContactProfile, saveContactFacts, addContactEvent, checkContactGmail, ghlContactUrl } from "./api.js";
+import { getContactProfile, saveContactFacts, addContactEvent, checkContactGmail, ghlContactUrl, setContactEmail, setContactDealsBy } from "./api.js";
+import { dealsByOf } from "@shared/contact-email.js";
 import { BTN, BTN_PRIMARY, CurrentPill, Pill, StatusPill, StagePill } from "./ui.jsx";
 import { PartyPill, DraftRow } from "./ConversationOutbox.jsx";
 
@@ -103,6 +104,8 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
   const [note, setNote] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [gmailNote, setGmailNote] = useState("");
+  // The email being typed, or null when not editing it.
+  const [emailEdit, setEmailEdit] = useState(null);
 
   const load = async (pull = false) => {
     setError("");
@@ -128,12 +131,16 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
     const r = await checkContactGmail(contactId);
     setGmailNote(r.skipped ? r.skipped : r.recorded ? `${r.recorded} new email${r.recorded === 1 ? "" : "s"} added` : r.found ? "nothing new in Gmail" : "no email with them in Gmail");
   });
+  const saveEmail = () => run(async () => { await setContactEmail(contactId, emailEdit.trim(), party); setEmailEdit(null); });
   const addNote = () => { const text = note.trim(); if (!text) return; setNote(""); run(() => addContactEvent(contactId, { type: "note", text, party })); };
 
   if (!contactId) return null;
   const p = rec?.profile;
   const buyKeys = factKeysFor("investor").filter((k) => k.startsWith("buybox") || k === "rehab_appetite");
-  const aboutKeys = (party === "investor" ? factKeysFor("investor") : factKeysFor("agent")).filter((k) => !buyKeys.includes(k));
+  // deals_by has its own switch in the header (it also moves a GHL tag).
+  const aboutKeys = (party === "investor" ? factKeysFor("investor") : factKeysFor("agent")).filter((k) => !buyKeys.includes(k) && k !== "deals_by");
+  const dealsBy = dealsByOf({ record: { deals_by: rec?.facts?.deals_by }, tags: p?.tags || [] });
+  const toggleDealsBy = () => run(() => setContactDealsBy(contactId, dealsBy === "email" ? "text" : "email"));
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
@@ -147,7 +154,20 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-3 text-xs text-slate-500">
               {p?.phone && <span>{p.phone}</span>}
-              {p?.email && <span>{p.email}</span>}
+              {emailEdit === null
+                ? <button type="button" disabled={busy || !rec} onClick={() => setEmailEdit(p?.email || "")} className="hover:text-slate-800" title="Change the email on their GHL contact">{p?.email || "Add email"}</button>
+                : (
+                  <form className="inline-flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); saveEmail(); }}>
+                    <input type="email" autoFocus value={emailEdit} onChange={(e) => setEmailEdit(e.target.value)} aria-label="Email" className={`${INPUT} py-0.5 text-xs`} />
+                    <button type="submit" disabled={busy || !emailEdit.trim()} className="font-semibold text-blue-600 hover:text-blue-700">Save</button>
+                    <button type="button" onClick={() => setEmailEdit(null)} className="hover:text-slate-800">Cancel</button>
+                  </form>
+                )}
+              {party === "investor" && rec && (
+                <label className="inline-flex items-center gap-1" title={p?.email ? "Every deal goes to them by email instead of a text" : "Add an email first"}>
+                  <input type="checkbox" checked={dealsBy === "email"} disabled={busy || (!p?.email && dealsBy !== "email")} onChange={toggleDealsBy} /> Deals by email
+                </label>
+              )}
               <a href={ghlContactUrl(contactId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-semibold text-blue-600 hover:text-blue-700">Open in GoHighLevel <ExternalLink size={11} /></a>
               <button type="button" disabled={busy} onClick={() => load(true)} className="inline-flex items-center gap-1 hover:text-slate-800" title="Read the GHL contact again and fill any gaps"><RefreshCw size={11} /> Pull from GHL</button>
               <button type="button" disabled={busy || !p?.email} onClick={checkGmail} className="inline-flex items-center gap-1 hover:text-slate-800 disabled:opacity-50" title={p?.email ? "Read the email with them from Gmail onto their timeline" : "No email address on this contact"}><Mail size={11} /> Check Gmail</button>

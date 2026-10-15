@@ -5458,6 +5458,25 @@ Before this, wave 2 re-drafted every wave-1 buyer whose text was still sitting i
 
 `GET /api/dispo/waves/preview?offerId=` returns the deal's `asset` and each next buyer's `channel`.
 
+### Deals by email, and an email they text reaches GHL (2026-10-15)
+
+Several buyers asked for deals by email (2026-10-15). A buyer with a phone could only be texted one, and an address anyone texted us was used once (the offer `emailTo`) and never reached GHL's email field. Rules are in `shared/contact-email.js`, I/O in `ghl-broker/contact-email.js`.
+
+**Deals by email** (`deals_by` fact, investor, app-only; GHL tag `dispo-deals-by-email` mirrors it):
+- **Waves:** `blastChannel` emails a buyer whose `deals_by` is `email` (the record first, the tag when the record has no answer), phone or not, when we have an address. No address: a text, as before. Email only, no text as well (Matt, 2026-10-15). The draft is flagged "they asked for deals by email".
+- **It still waits for you.** Emailed deals schedule themselves only with `dispoAutopilot.email.autoSend`, which is off. Emails aren't counted against the weekly touch limit or combined, as before.
+- **Turning it on:** the contact drawer's **Deals by email** switch (`POST /api/contacts/:id/deals-by` `{ value: "email" | "text" }`). Off writes `text`, never removes the fact, so a tombstone can't stop them asking again.
+- **When a buyer asks** ("email me the details", "by email please", "I prefer email"; `wantsDealsByEmail`, a no to email doesn't count): the switch turns on whoever has the thread. When the bot reads the reply, the deal they're on (the house they named, else the only one they're on) is drafted to them as an email (`emailDealTo` → `routes/dispo.js emailDealToBuyer`; not a wave, so the deal's `blasts` don't move). The draft carries a warning saying so. With no address on file the warning says to ask for one. The bot's reply can't say it was emailed (`CLAIMS_EMAIL_RX` holds it).
+- Only deal texts (`blast_open`) move to email. Pulse check-ins, walkthrough texts and `deal_followup` are still texts.
+
+**An email they text** (agents and buyers, every text the reply agent reads, whoever has the thread; never a call):
+- **GHL has none:** saved to GHL's email field, the record's profile and their Dispositions row (`email_saved`).
+- **GHL has a different one:** replaced when they said it's theirs ("my email is", "email me at", a bare address). Otherwise an `email_offered` event puts a Decide row on Today: "Sam texted an email: …", with **Use it** (`POST /api/contacts/:id/email`).
+- **Someone else's** ("my TC at", "her email", anything after cc): never saved, never asked about.
+- **Another GHL contact has it** (`findDuplicateContact`): not saved. The Today row says so, with no Use button.
+- The row goes when any email is saved for them, after 21 days, or on Dismiss.
+- Logs carry the contact id only; an address in a GHL error is blanked.
+
 ### A reply about a deal goes on the deal (2026-10-01)
 
 Kenneth Patton asked about 1510 Maple Lane's land lease, its size and its photos, and he was on no deal. There were two reasons:

@@ -139,6 +139,28 @@ test("a buyer with no phone is emailed the deal as a draft that waits for you; a
   assert.equal(off.rows[0].status, "skipped");
 });
 
+// Several buyers (2026-10-15) asked for deals by email, and a
+// buyer with a phone could only ever be texted one.
+test("a buyer who asked for deals by email gets the deal by email even with a phone, and it waits for you", async () => {
+  const store = fakeStore();
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } } };
+  const r = await queueBlastDrafts({ store, locationId: "L", offer, now: NOW, sendsEnabled: true, blastsEnabled: true, saved, investors: [
+    { contactId: "k1", name: "Sam B", phone: "+12065550111", email: "sam@example.com", record: { deals_by: "email" } },
+    { contactId: "k2", name: "Tag Only", phone: "+12065550112", email: "tag@example.com", tags: ["dispo-deals-by-email"] },
+    { contactId: "k3", name: "Back To Text", phone: "+12065550113", email: "t@example.com", tags: ["dispo-deals-by-email"], record: { deals_by: "text" } },
+    { contactId: "k4", name: "No Address", phone: "+12065550114", email: "", record: { deals_by: "email" } },
+  ] });
+  const by = Object.fromEntries([...store.rows.values()].map((d) => [d.contactId, d]));
+  assert.equal(by.k1.channel, "email");
+  assert.equal(by.k1.status, "draft", "emailed deals still wait for you unless they may send themselves");
+  assert.ok(by.k1.outbound.subject, "an emailed deal has a subject line");
+  assert.ok(by.k1.flags.includes("they asked for deals by email"));
+  assert.equal(by.k2.channel, "email", "the GHL tag counts when the record has no answer");
+  assert.equal(by.k3.channel, "sms", "the record's 'text' beats the tag");
+  assert.equal(by.k4.channel, "sms", "no address to email: a text, as before");
+  assert.equal(r.rows.find((x) => x.contactId === "k1").channel, "email");
+});
+
 test("email settings default to drafting on, sending off", () => {
   assert.deepEqual(normalizeDispoAutopilot().email, { draft: true, autoSend: false });
   assert.deepEqual(normalizeDispoAutopilot({ email: { draft: false, autoSend: "yes" } }).email, { draft: false, autoSend: false });

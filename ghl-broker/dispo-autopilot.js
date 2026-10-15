@@ -33,6 +33,7 @@ import { nextSendTime, spreadAcrossDay, machineHours } from "./conversation-sche
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { botHold, holdLine } from "./shared/bot-hold.js";
+import { dealsByOf } from "./shared/contact-email.js";
 
 export const CURSOR_NAME = "dispo";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -122,12 +123,16 @@ export function blastIntro(inv = {}) {
 /**
  * blastChannel(inv, da) → "sms" | "email" | ""
  *
- * A phone is texted. No phone and an email is emailed, when email drafting
+ * A buyer who asked for deals by email (shared/contact-email.js dealsByOf:
+ * the record's deals_by, else the GHL tag) is emailed, phone or not, when
+ * we have an address (2026-10-15: several buyers asked). Otherwise
+ * a phone is texted. No phone and an email is emailed, when email drafting
  * is on. A caller that knows neither (an older shortlist of ids and names)
  * gets a text, as it always has; one that knows there is no way to reach
  * them gets "" and the buyer is skipped.
  */
 export function blastChannel(inv = {}, da = normalizeDispoAutopilot({})) {
+  if (inv.email && dealsByOf(inv) === "email") return "email";
   if (inv.phone) return "sms";
   if (inv.phone === undefined && inv.email === undefined) return "sms";
   if (inv.email && da.email.draft) return "email";
@@ -215,6 +220,9 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const name = inv.name || inv.doc?.name || "";
     const channel = blastChannel(inv, da);
     if (!channel) { rows.push({ contactId, name, status: "skipped", reason: "no phone, and email drafting is off", text: "" }); continue; }
+    // They asked for deals by email: said on the row, so the outbox and the
+    // wave preview show why a buyer with a phone wasn't texted.
+    const byRequest = channel === "email" && Boolean(inv.phone) ? "they asked for deals by email" : "";
     // An email waits for you unless emailed deals may send themselves.
     const hold = holdOf(contactId);
     const schedule = !hold.held && willSchedule && (channel === "sms" || da.email.autoSend);
@@ -258,7 +266,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
       matchedTags: { agent: [], investor: [] }, contextSummary: { deal: offer.id }, offersInContext: 0,
       autoSend: { decided: schedule, reason: schedule ? "" : hold.held ? `${holdLine(hold)} — it waits for you` : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
       supersededIds: open.map((o) => o.id), warnings: [], noteOnAutoSend: config.notes?.onAutoSend !== false, promptVersion: 3,
-      ...(waits ? { flags: [waits] } : {}),
+      ...(waits || byRequest ? { flags: [waits, byRequest].filter(Boolean) } : {}),
       ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
     });
     if (schedule) queued++; else drafted++;

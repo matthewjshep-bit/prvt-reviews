@@ -116,6 +116,13 @@ export const saveContactFacts = (id, { party, add = [], remove = [] }) =>
   post(`/api/contacts/${encodeURIComponent(id)}/facts`, { party, add, remove });
 export const addContactEvent = (id, body) =>
   post(`/api/contacts/${encodeURIComponent(id)}/events`, body);
+// Their email on the GHL contact (Today's "Use it", the drawer). 409 when
+// another GHL contact already has it.
+export const setContactEmail = (id, email, party = null) =>
+  post(`/api/contacts/${encodeURIComponent(id)}/email`, { email, party });
+// How a buyer gets deals: "email" or "text". Answers with their record.
+export const setContactDealsBy = (id, value) =>
+  post(`/api/contacts/${encodeURIComponent(id)}/deals-by`, { value });
 // A call that didn't connect (the Desk's chips): no_answer | voicemail |
 // call_back with callBackAt. No words — the outcome and the date only.
 export const logCallAttempt = (id, { outcome, callBackAt = null, party = null, offerId = null, address = "" } = {}) =>

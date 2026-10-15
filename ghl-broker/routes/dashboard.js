@@ -89,6 +89,8 @@ const PIPELINE_EVENT_TYPES = [
   "drive_stopped", "drive_resumed", "hand_reply", "investor_minded", "referral_mentioned",
   // An agent's partner terms: the Desk's partner row (shared/call-list.js).
   "partner_terms",
+  // An email they texted, to check, until one is saved (shared/call-list.js).
+  "email_offered", "email_saved",
 ];
 
 const DAY_MS = 86400000;

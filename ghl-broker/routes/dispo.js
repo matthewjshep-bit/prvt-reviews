@@ -44,6 +44,7 @@ import {
   smsUnsubscribed,
 } from "../ghl.js";
 import { anthropicErrorToHttp } from "../rehab-scan.js";
+import { dealsByOf } from "../shared/contact-email.js";
 import {
   BUYBOX_FIELDS, INVESTOR_FIELD_DEFS, RANK_LIMIT, dealToQuery, addressAreas,
   parseBuyboxQuery, rankInvestors,
@@ -1212,6 +1213,35 @@ export default function createDispoRouter({ resolveLocation }) {
   }
 
   /**
+   * emailDealToBuyer({ locationId, offer, contactId, now }) → { ok, status, draftId, address, reason? }
+   *
+   * One buyer asked for this deal by email (reply-agent.js, 2026-10-15): the
+   * same deal a wave writes, as an email to them alone. It waits in the
+   * outbox unless emailed deals send themselves (dispoAutopilot.email
+   * .autoSend). Not a wave: the deal's blasts list is left alone, so the wave
+   * clock and counts don't move. A text of it still queued for them is
+   * superseded by queueBlastDrafts.
+   */
+  async function emailDealToBuyer({ locationId, offer, contactId, now = Date.now() }) {
+    if (!offer?.deal) return { ok: false, reason: "not a deal" };
+    const paused = dealOutreachPaused(offer.deal);
+    if (paused && paused.contactId !== contactId) return { ok: false, reason: outreachPausedReason(paused, offer.address), address: offer.address };
+    const row = await store.getInvestor(locationId, contactId).catch(() => null);
+    const doc = row?.doc || {};
+    if (!doc.email) return { ok: false, reason: "no email on file for them", address: offer.address };
+    const settings = await getSettings(locationId);
+    const r = await queueBlastDrafts({
+      store, locationId, offer, saved: settings, now, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED,
+      label: (offer.deal.blastTags || []).at(-1) || "",
+      // They just wrote to us: no how-we-found-you line.
+      investors: [{ contactId, name: row?.name || doc.name || "", email: doc.email, phone: doc.phone || "", tags: doc.tags || [], dealsBy: "email", lastRepliedAt: new Date(now).toISOString() }],
+    });
+    const one = r.rows?.[0];
+    if (!one?.draftId) return { ok: false, reason: one?.reason || r.reason || "nothing drafted", address: offer.address };
+    return { ok: true, status: one.status, draftId: one.draftId, address: offer.address };
+  }
+
+  /**
    * rankedForDeal(locationId, offer) → { target, linked, ranked, considered }
    *
    * Every active buyer scored against this deal (buyer-score.js), highest
@@ -1278,7 +1308,7 @@ export default function createDispoRouter({ resolveLocation }) {
   // How to reach a buyer, carried onto a wave's shortlist so the queue can
   // pick the channel and the how-we-found-you line (dispo-autopilot.js).
   function reachOf(i = {}) {
-    return { phone: i.phone || "", email: i.email || "", tags: i.tags || [], lastRepliedAt: i.lastRepliedAt || "" };
+    return { phone: i.phone || "", email: i.email || "", tags: i.tags || [], lastRepliedAt: i.lastRepliedAt || "", dealsBy: dealsByOf(i) };
   }
 
   /** rankBuyerForDeal(locationId, offer, contactId) → { rank, tier } | null — for the dataroom guard. */
@@ -1353,6 +1383,7 @@ export default function createDispoRouter({ resolveLocation }) {
   router.rankBuyerForDeal = rankBuyerForDeal;
   router.blastFromApp = blastFromApp;
   router.resumeWave = resumeWave;
+  router.emailDealToBuyer = emailDealToBuyer;
 
   return router;
 }
