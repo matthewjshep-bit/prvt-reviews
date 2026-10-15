@@ -121,22 +121,30 @@ export function blastIntro(inv = {}) {
 }
 
 /**
- * blastChannel(inv, da) → "sms" | "email" | ""
+ * blastChannels(inv, da) → ["sms"] | ["sms", "email"] | ["email"] | []
  *
- * A buyer who asked for deals by email (shared/contact-email.js dealsByOf:
- * the record's deals_by, else the GHL tag) is emailed, phone or not, when
- * we have an address (2026-10-15: several buyers asked). Otherwise
- * a phone is texted. No phone and an email is emailed, when email drafting
- * is on. A caller that knows neither (an older shortlist of ids and names)
- * gets a text, as it always has; one that knows there is no way to reach
- * them gets "" and the buyer is skipped.
+ * A phone is texted. A buyer who asked for deals by email (shared/
+ * contact-email.js dealsByOf: the record's deals_by, else the GHL tag) is
+ * texted AND emailed when we have an address (Matt, 2026-10-15: text first,
+ * then email too once they ask). No phone and an email is emailed, when
+ * email drafting is on. A caller that knows neither (an older shortlist of
+ * ids and names) gets a text, as it always has; one that knows there is no
+ * way to reach them gets [] and the buyer is skipped. `inv.channel` asks for
+ * that one channel only (a buyer asking for one deal by email).
  */
+export function blastChannels(inv = {}, da = normalizeDispoAutopilot({})) {
+  if (inv.channel === "email") return inv.email ? ["email"] : [];
+  if (inv.channel === "sms") return inv.phone || inv.phone === undefined ? ["sms"] : [];
+  const askedForEmail = Boolean(inv.email) && dealsByOf(inv) === "email";
+  if (inv.phone) return askedForEmail ? ["sms", "email"] : ["sms"];
+  if (inv.phone === undefined && inv.email === undefined) return ["sms"];
+  if (inv.email && (da.email.draft || askedForEmail)) return ["email"];
+  return [];
+}
+
+/** blastChannel(inv, da) → the first channel blastChannels picks, or "". */
 export function blastChannel(inv = {}, da = normalizeDispoAutopilot({})) {
-  if (inv.email && dealsByOf(inv) === "email") return "email";
-  if (inv.phone) return "sms";
-  if (inv.phone === undefined && inv.email === undefined) return "sms";
-  if (inv.email && da.email.draft) return "email";
-  return "";
+  return blastChannels(inv, da)[0] || "";
 }
 
 /**
@@ -218,27 +226,22 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const contactId = inv.contactId;
     if (!contactId) continue;
     const name = inv.name || inv.doc?.name || "";
-    const channel = blastChannel(inv, da);
-    if (!channel) { rows.push({ contactId, name, status: "skipped", reason: "no phone, and email drafting is off", text: "" }); continue; }
-    // They asked for deals by email: said on the row, so the outbox and the
-    // wave preview show why a buyer with a phone wasn't texted.
-    const byRequest = channel === "email" && Boolean(inv.phone) ? "they asked for deals by email" : "";
-    // An email waits for you unless emailed deals may send themselves.
+    const channels = blastChannels(inv, da);
+    if (!channels.length) { rows.push({ contactId, name, status: "skipped", reason: "no phone, and email drafting is off", text: "" }); continue; }
     const hold = holdOf(contactId);
-    const schedule = !hold.held && willSchedule && (channel === "sms" || da.email.autoSend);
     const intro = blastIntro(inv);
     const variant = i;
     const text = blastMessage({ ...facts, firstName: name, variant, ask, intro });
-    const subject = channel === "email" ? blastSubject(facts) : "";
     if (i > 0) cursor += da.spreadSec * 1000 + Math.round(Math.random() * 15000);
     let sendAt = nextSendTime({ now: cursor, delayMs: 0, quietHours: machineHours(config.autoSend) });
     cursor = Date.parse(sendAt);
     i++;
     // Their week is spent (shared/buyer-touch.js): the deal keeps its seat
     // on the wave and goes when their week opens, with anything else new for
-    // them in the same text (reply-agent.js sendReplyDraft).
+    // them in the same text (reply-agent.js sendReplyDraft). The email that
+    // goes with it, when they asked for one, goes then too.
     let waits = "";
-    if (schedule && channel === "sms" && da.touchBudget.enabled) {
+    if (channels.includes("sms") && !hold.held && willSchedule && da.touchBudget.enabled) {
       const limit = await buyerTouchLimit({ store, locationId, contactId, budget: da.touchBudget, now });
       if (!limit.open) {
         const opens = spreadAcrossDay({ now: limit.at, quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all" });
@@ -249,28 +252,37 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
         }
       }
     }
-    if (dryRun) { rows.push({ contactId, name, channel, status: "would queue", sendAt: schedule ? sendAt : null, text, ...(waits ? { waits } : {}), ...(subject ? { subject } : {}) }); continue; }
-    // One open blast per buyer per deal: a second click supersedes the first.
-    const open = await store.listReplyDrafts(locationId, { contactId, status: ["draft", "scheduled"], limit: 5 }).catch(() => []);
-    for (const old of open.filter((d) => d.outbound?.kind === "blast_open" && d.outbound?.offerId === offer.id)) {
+    // One open blast per buyer per deal and channel: a second click
+    // supersedes the first.
+    const open = dryRun ? [] : await store.listReplyDrafts(locationId, { contactId, status: ["draft", "scheduled"], limit: 5 }).catch(() => []);
+    const replaced = open.filter((d) => d.outbound?.kind === "blast_open" && d.outbound?.offerId === offer.id && channels.includes(d.channel === "email" ? "email" : "sms"));
+    for (const old of replaced) {
       await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: iso(now) }).catch(() => {});
     }
-    const ts = iso(now);
-    const record = await store.createReplyDraft({
-      locationId, contactId, contactName: name, status: schedule ? "scheduled" : "draft", channel, jobId: null,
-      inbound: "", outbound: { kind: "blast_open", offerId: offer.id, address: offer.address, label: label || "", variant, ...(ownLine ? { note: ownLine } : {}),
-        ...(intro ? { intro } : {}), ...(subject ? { subject } : {}) },
-      reply: text, intent: "blast_open", confidence: "high", needsHuman: false, humanReason: "",
-      summary: `Puts ${offer.address} in front of ${name || "a buyer"} at ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}.`,
-      propertyAddress: offer.address || "", counterAmount: null, autoSendable: true, flags: [], party: "investor", partySource: "deal",
-      matchedTags: { agent: [], investor: [] }, contextSummary: { deal: offer.id }, offersInContext: 0,
-      autoSend: { decided: schedule, reason: schedule ? "" : hold.held ? `${holdLine(hold)} — it waits for you` : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
-      supersededIds: open.map((o) => o.id), warnings: [], noteOnAutoSend: config.notes?.onAutoSend !== false, promptVersion: 3,
-      ...(waits || byRequest ? { flags: [waits, byRequest].filter(Boolean) } : {}),
-      ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
-    });
-    if (schedule) queued++; else drafted++;
-    rows.push({ contactId, name, channel, status: schedule ? "scheduled" : "draft", draftId: record.id, sendAt: schedule ? sendAt : null, text, ...(waits ? { waits } : {}), ...(subject ? { subject } : {}) });
+    for (const channel of channels) {
+      // An email waits for you unless emailed deals may send themselves.
+      const schedule = !hold.held && willSchedule && (channel === "sms" || da.email.autoSend);
+      const subject = channel === "email" ? blastSubject(facts) : "";
+      // Said on the row, so the outbox and the wave preview show why this
+      // buyer gets an email as well as the text.
+      const flags = [channel === "sms" ? waits : "", channel === "email" && inv.phone && !inv.channel ? "they asked for deals by email too — the text goes as well" : ""].filter(Boolean);
+      if (dryRun) { rows.push({ contactId, name, channel, status: "would queue", sendAt: schedule ? sendAt : null, text, ...(channel === "sms" && waits ? { waits } : {}), ...(subject ? { subject } : {}) }); continue; }
+      const ts = iso(now);
+      const record = await store.createReplyDraft({
+        locationId, contactId, contactName: name, status: schedule ? "scheduled" : "draft", channel, jobId: null,
+        inbound: "", outbound: { kind: "blast_open", offerId: offer.id, address: offer.address, label: label || "", variant, ...(ownLine ? { note: ownLine } : {}),
+          ...(intro ? { intro } : {}), ...(subject ? { subject } : {}) },
+        reply: text, intent: "blast_open", confidence: "high", needsHuman: false, humanReason: "",
+        summary: `Puts ${offer.address} in front of ${name || "a buyer"} at ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}.`,
+        propertyAddress: offer.address || "", counterAmount: null, autoSendable: true, flags, party: "investor", partySource: "deal",
+        matchedTags: { agent: [], investor: [] }, contextSummary: { deal: offer.id }, offersInContext: 0,
+        autoSend: { decided: schedule, reason: schedule ? "" : hold.held ? `${holdLine(hold)} — it waits for you` : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
+        supersededIds: replaced.filter((o) => (o.channel === "email" ? "email" : "sms") === channel).map((o) => o.id), warnings: [], noteOnAutoSend: config.notes?.onAutoSend !== false, promptVersion: 3,
+        ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
+      });
+      if (schedule) queued++; else drafted++;
+      rows.push({ contactId, name, channel, status: schedule ? "scheduled" : "draft", draftId: record.id, sendAt: schedule ? sendAt : null, text, ...(channel === "sms" && waits ? { waits } : {}), ...(subject ? { subject } : {}) });
+    }
   }
   return { queued, drafted, waiting, dryRun: Boolean(dryRun), scheduled: willSchedule, reason, rows, price: facts.price };
 }

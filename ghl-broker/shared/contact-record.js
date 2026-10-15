@@ -257,7 +257,7 @@ export const FACT_KEYS = {
   // agent check-in waits at least this long. App-only: no GHL field.
   checkinEvery:          { kind: "scalar", party: "agent",    cap: 20, days: true, ghl: false, label: "Check in every (days)" },
   // How a buyer wants deals (shared/contact-email.js, 2026-10-15): "email"
-  // sends every deal by email instead of a text. App-only; the GHL tag
+  // sends every deal by email as well as the text. App-only; the GHL tag
   // dispo-deals-by-email mirrors it. Turned off by writing "text", never by
   // removing it, so a tombstone can't stop them asking again.
   deals_by:              { kind: "scalar", party: "investor", cap: 20, ghl: false, label: "Deals go by", values: ["email", "text"] },

@@ -33,7 +33,7 @@ import { buyboxCustom, investorProfileText, refreshInvestorRow } from "../invest
 import { CURSOR_NAME as BOOK_SYNC_CURSOR } from "../investor-sync.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel, resumePulledBack } from "../dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel, blastChannels, resumePulledBack } from "../dispo-autopilot.js";
 import { planBuyerPulse, startBuyerPulse, previewBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
 import { runShowingSweep } from "../showing-sweep.js";
 import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
@@ -746,7 +746,7 @@ export default function createDispoRouter({ resolveLocation }) {
       const next = nextWave(offer.deal, da);
       const { ranked, target } = await rankedForDeal(locationId, offer);
       const wouldGet = pickWave(ranked, { wave: 2, floor: da.secondWaveMinScore, exclude: "blasted", ...waveOptions(target, da) }).slice(0, da.secondWaveCount)
-        .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons, channel: blastChannel(i, da) }));
+        .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons, channel: blastChannel(i, da), channels: blastChannels(i, da) }));
       res.json({
         ok: true, offerId: offer.id, address: offer.address, stage: offer.deal.stage || null, asset: target.asset || null,
         autoBlastOnPromote: da.autoBlastOnPromote, maxWaves: da.maxWaves, waveHours: da.secondWaveHours,
@@ -1181,7 +1181,7 @@ export default function createDispoRouter({ resolveLocation }) {
         full.deal.blastTags = [...new Set([...(full.deal.blastTags || []), blastTag])];
         // Who this wave went to, so the next never picks them again, sent
         // or not (shared/buyer-score.js blastedTo).
-        const contactIds = (r.rows || []).filter((x) => x.draftId).map((x) => x.contactId);
+        const contactIds = [...new Set((r.rows || []).filter((x) => x.draftId).map((x) => x.contactId))];
         full.deal.blasts = [...(full.deal.blasts || []), { at: new Date(now).toISOString(), count: investors.length, queued: r.queued, drafted: r.drafted, via: "app", wave, tag: blastTag, contactIds }];
         await store.updateOffer(full.id, full);
       }
@@ -1219,8 +1219,8 @@ export default function createDispoRouter({ resolveLocation }) {
    * same deal a wave writes, as an email to them alone. It waits in the
    * outbox unless emailed deals send themselves (dispoAutopilot.email
    * .autoSend). Not a wave: the deal's blasts list is left alone, so the wave
-   * clock and counts don't move. A text of it still queued for them is
-   * superseded by queueBlastDrafts.
+   * clock and counts don't move. A text of it still queued for them stays
+   * queued: they get both.
    */
   async function emailDealToBuyer({ locationId, offer, contactId, now = Date.now() }) {
     if (!offer?.deal) return { ok: false, reason: "not a deal" };
@@ -1234,7 +1234,8 @@ export default function createDispoRouter({ resolveLocation }) {
       store, locationId, offer, saved: settings, now, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED,
       label: (offer.deal.blastTags || []).at(-1) || "",
       // They just wrote to us: no how-we-found-you line.
-      investors: [{ contactId, name: row?.name || doc.name || "", email: doc.email, phone: doc.phone || "", tags: doc.tags || [], dealsBy: "email", lastRepliedAt: new Date(now).toISOString() }],
+      // The email only: the text of it already went, or goes on its own.
+      investors: [{ contactId, name: row?.name || doc.name || "", email: doc.email, phone: doc.phone || "", tags: doc.tags || [], channel: "email", lastRepliedAt: new Date(now).toISOString() }],
     });
     const one = r.rows?.[0];
     if (!one?.draftId) return { ok: false, reason: one?.reason || r.reason || "nothing drafted", address: offer.address };

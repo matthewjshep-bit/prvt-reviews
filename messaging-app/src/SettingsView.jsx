@@ -1529,7 +1529,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={form.dispoAutopilot?.email?.draft !== false}
               onChange={(e) => setDispoAuto("email")({ ...(form.dispoAutopilot?.email || {}), draft: e.target.checked })} />
-            <span><span className="font-semibold">Email the deal to buyers with no phone</span><span className="block text-xs text-slate-500">A buyer who fits a wave but has only an email gets the deal by email: a subject line with what it is and the price, the same facts as the text, their package link. A buyer who asked for deals by email (Deals by email on their record) gets them this way too, phone or not. They wait in the outbox for you.</span></span>
+            <span><span className="font-semibold">Email the deal to buyers with no phone</span><span className="block text-xs text-slate-500">A buyer who fits a wave but has only an email gets the deal by email: a subject line with what it is and the price, the same facts as the text, their package link. A buyer who asked for deals by email (Deals by email on their record) gets each deal by email as well as the text. They wait in the outbox for you.</span></span>
           </label>
           <label className="flex items-start gap-2 text-sm pl-6">
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.email?.autoSend)}

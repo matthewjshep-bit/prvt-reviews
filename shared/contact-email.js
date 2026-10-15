@@ -4,8 +4,9 @@
 // Until 2026-10-15 an address texted to us was used once, for the send it came
 // with (reply-agent.js emailRequest → send_offer emailTo), and then forgotten:
 // GHL's email field never heard of it, so the next email went to the old
-// address or nowhere. And a buyer with a phone always got a deal by text, even
-// one who asked for email (several buyers, 2026-10-15).
+// address or nowhere. And a buyer with a phone only ever got a deal by text,
+// even one who asked for email (several buyers, 2026-10-15). Text stays first;
+// asking adds the email.
 //
 // Pure. The GHL write, the duplicate check and the record are in
 // ghl-broker/contact-email.js.

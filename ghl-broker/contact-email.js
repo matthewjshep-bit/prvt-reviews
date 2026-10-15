@@ -99,8 +99,8 @@ export async function saveTextedEmail({ client, store, locationId, contactId, pa
 /**
  * setDealsBy({ client, store, locationId, contactId, value, source, ref }) → { ok, value }
  *
- * "email": every deal goes to this buyer by email instead of a text
- * (dispo-autopilot.js blastChannel). "text": back to texts. On the record as
+ * "email": every deal goes to this buyer by email as well as the text
+ * (dispo-autopilot.js blastChannels). "text": back to texts. On the record as
  * the `deals_by` fact, mirrored as the GHL tag dispo-deals-by-email.
  */
 export async function setDealsBy({ client, store, locationId, contactId, value, source = "operator", ref = null } = {}) {

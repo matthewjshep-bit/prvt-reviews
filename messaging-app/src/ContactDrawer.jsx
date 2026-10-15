@@ -164,7 +164,7 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
                   </form>
                 )}
               {party === "investor" && rec && (
-                <label className="inline-flex items-center gap-1" title={p?.email ? "Every deal goes to them by email instead of a text" : "Add an email first"}>
+                <label className="inline-flex items-center gap-1" title={p?.email ? "Every deal is texted and emailed to them" : "Add an email first"}>
                   <input type="checkbox" checked={dealsBy === "email"} disabled={busy || (!p?.email && dealsBy !== "email")} onChange={toggleDealsBy} /> Deals by email
                 </label>
               )}
