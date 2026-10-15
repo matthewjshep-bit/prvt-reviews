@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   normalizeAgentPulse, evaluateAgent, pickPulseAgents, agentSegment, agentStops, agentOwner,
   freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor, dealToThank, openOfferIdle, tierCard,
+  firstCheckInAt, classifyReplierThread,
 } from "./agent-pulse.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
@@ -61,6 +62,28 @@ test("an agent another clock owns waits until that clock ends", () => {
   assert.equal(v.status, "due", v.reason);
   assert.equal(v.pulseReason, "our_house");
   assert.equal(v.house.id, "o1");
+});
+
+const leadIn = (dueInDays, at = ago(60)) => ({ type: "checkin_requested", at,
+  data: { kind: "lead", dueAt: ago(-dueInDays), phrase: "for about a year", lead: { what: "the fixer", said: "May have a fixer but not for about a year" } } });
+
+test("an agent whose fixer is a year out still gets the regular check-in in the meantime", () => {
+  const a = agent({ lastInboundAt: ago(60), events: [leadIn(300), { type: "text_summary", at: ago(60) }] });
+  const v = evaluateAgent(a, ctx());
+  assert.equal(v.status, "due", v.reason);
+  // And it stays generic: nothing about the far-off fixer rides on it.
+  assert.equal(v.pulseReason, "general");
+  assert.doesNotMatch(JSON.stringify(agentPulseSubject({ agent: a, verdict: v, now: NOW })), /about a year|the fixer/);
+});
+
+test("the regular check-in steps aside the week the lead comes due", () => {
+  const v = evaluateAgent(agent({ lastInboundAt: ago(60), events: [leadIn(5), { type: "text_summary", at: ago(60) }] }), ctx());
+  assert.equal(v.status, "owned");
+  assert.equal(v.reason, "a lead they told us about");
+  // Asked about on its day: the regular check-in has them again.
+  const lead = leadIn(-2);
+  const asked = agent({ lastInboundAt: ago(60), events: [lead, { type: "checkin_sent", at: ago(2), data: { requestAt: lead.at, kind: "lead" } }] });
+  assert.notEqual(evaluateAgent(asked, ctx()).reason, "a lead they told us about");
 });
 
 test("a text waiting in the outbox, a promise, a check-in they asked for and the outreach workflow each own the agent", () => {
@@ -475,4 +498,188 @@ test("a check-in house carries its city and ZIP, and the text still names it by 
   assert.equal(subj.address, "123 Main St, Kent, WA 98031");
   assert.equal(subj.listing.street, "123 Main St");
   assert.equal(subj.listing.city, "Kent");
+});
+
+// Offers stuck open (2026-10-14): the Line listed offers still "new" where the
+// machine stood down 8–13 days back, and others where the agent replied and
+// nothing answered it. "An open offer" held each agent from the check-in for
+// good. A stood-down offer with no text either way for a week lets them go.
+const stuck = (over = {}) => ({ id: "o-stuck", contactId: "a1", address: "41 Alder Ln, Shelton, WA 98584", cashAmount: 210000, status: "sent",
+  createdAt: ago(45), statusAt: ago(45), statusHistory: [], sends: [{ ts: ago(45) }], ...over });
+// They wrote back; nobody answered it, and the bot's held reply was set aside.
+const unanswered = (days) => ({ id: `in-${days}`, status: "superseded", inbound: "Let me run it by the seller", intent: "other", createdAt: ago(days), updatedAt: ago(days) });
+const OFF = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: false } } } });
+
+test("an agent whose offer the machine stood down on two weeks ago is on the regular check-in clock, not held by the offer", () => {
+  const drafts = [unanswered(14)];
+  const v = evaluateAgent(agent({ lastInboundAt: ago(14), offers: [stuck()], current: [stuck()], drafts }), ctx());
+  assert.notEqual(v.status, "owned", v.reason);
+  assert.equal(v.status, "not_due", "they wrote 14 days ago: the check-in comes at 21");
+  assert.match(openOfferIdle({ offer: stuck(), drafts, config: CONFIG, lastInboundAt: ago(14), now: NOW }) || "", /nothing has answered it/);
+  // Three weeks on, the check-in is due.
+  const later = evaluateAgent(agent({ lastInboundAt: ago(22), offers: [stuck()], current: [stuck()], drafts: [unanswered(22)] }), ctx());
+  assert.equal(later.status, "due", later.reason);
+});
+
+test("an agent whose offer the machine stood down on for any reason gets the regular check-in once nobody has texted for a week", () => {
+  // Follow-ups switched off: nothing will ever move the offer.
+  const off = evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()] }), ctx({ config: OFF }));
+  assert.equal(off.status, "due", off.reason);
+  // You stopped the bot on that house (not the whole thread).
+  const stopped = [{ type: "drive_stopped", offerId: "o-stuck", at: ago(20), data: { reason: "" } }];
+  const v = evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()], events: stopped }), ctx());
+  assert.equal(v.status, "due", v.reason);
+  // A pause has a date: the offer keeps them until it.
+  const paused = [{ type: "drive_stopped", offerId: "o-stuck", at: ago(20), data: { until: ago(-5) } }];
+  const p = evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()], events: paused }), ctx());
+  assert.equal(p.reason, "an open offer", "paused until next week");
+});
+
+test("an agent mid-negotiation this week is still owned by the offer", () => {
+  const talked = [{ type: "text_summary", at: ago(3), data: { inbound: "Seller might do 230" } }];
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(3), offers: [stuck()], current: [stuck()], events: talked }), ctx({ config: OFF })).reason, "an open offer");
+  // Our own text five days ago counts too.
+  const ours = [{ type: "follow_up_sent", at: ago(5) }];
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()], events: ours }), ctx({ config: OFF })).reason, "an open offer");
+  // A person picked it up two days ago: theirs, whatever the clock says.
+  const byHand = [{ type: "hand_reply", at: ago(2) }];
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()], events: byHand }), ctx({ config: OFF })).reason, "an open offer");
+  // An offer made this week is fresh business, even with nothing said on it.
+  const fresh = stuck({ createdAt: ago(4), statusAt: ago(4), sends: [{ ts: ago(4) }] });
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), offers: [fresh], current: [fresh] }), ctx({ config: OFF })).reason, "an open offer");
+  // A nudge still coming keeps them with the offer, however quiet.
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(60), offers: [stuck()], current: [stuck()] }), ctx()).reason, "an open offer");
+});
+
+test("a held draft from a month ago doesn't silence the agent", () => {
+  const old = { id: "d-old", status: "draft", inbound: "any update?", createdAt: ago(30), updatedAt: ago(30) };
+  const v = evaluateAgent(agent({ lastInboundAt: ago(30), drafts: [old] }), ctx());
+  assert.equal(v.status, "due", v.reason);
+  // On an open offer too: the held reply was the only thing keeping it "owed".
+  const onOffer = evaluateAgent(agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()], drafts: [old] }), ctx());
+  assert.equal(onOffer.status, "due", onOffer.reason);
+  // This week's held reply still owns them.
+  const fresh = { ...old, createdAt: ago(2), updatedAt: ago(2) };
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(2), drafts: [fresh] }), ctx()).reason, "their text is waiting on you");
+  // A text queued for next week is coming, however long ago it was written.
+  const queued = { id: "d-q", status: "scheduled", inbound: "", outbound: { kind: "checkin_due" }, createdAt: ago(20), sendAt: ago(-3) };
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), drafts: [queued] }), ctx()).reason, "a text is waiting in the outbox");
+});
+
+test("an agent let go from a stuck offer gets the general check-in, which never names that house", () => {
+  const a = agent({ lastInboundAt: ago(30), offers: [stuck()], current: [stuck()] });
+  const v = evaluateAgent(a, ctx({ config: OFF }));
+  assert.equal(v.status, "due", v.reason);
+  assert.equal(v.pulseReason, "general");
+  assert.equal(v.house || null, null, "an open offer is never the check-in's house");
+  const subject = agentPulseSubject({ agent: a, verdict: v, now: NOW });
+  assert.equal(subject.house, null);
+  assert.ok(subject.pastHouses.includes(stuck().address), "the gate holds a check-in that names it");
+});
+
+// 2026-10-14: 104 agents who wrote back sat outside the check-in pool, and
+// nothing would ever text them again. They join it all at once, weeks after
+// their last word — so every one of them would be due the same morning.
+test("fifty repliers added at once are spread over two weeks, not due the same day", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const joinedAt = ago(0);
+  const repliers = Array.from({ length: 50 }, (_, i) => agent({ contactId: `rp-${i}x${i * 7}`, lastInboundAt: ago(60 + i), joinedAt }));
+  const onDay = (d) => repliers.map((a) => evaluateAgent(a, ctx({ settings: S14, now: NOW + d * DAY + 3600000 }))).filter((v) => v.status === "due").length;
+  assert.ok(onDay(0) <= 10, `${onDay(0)} due on the day they joined`);
+  const firsts = new Set(repliers.map((a) => evaluateAgent(a, ctx({ settings: S14 })).dueAt || "now"));
+  assert.ok(firsts.size >= 8, `first check-ins land on ${firsts.size} different days`);
+  assert.equal(onDay(14), 50, "and every one is due within the two weeks");
+  // Waiting, each one says when — and says it the same way every day.
+  const waiting = evaluateAgent(repliers.find((a) => Date.parse(firstCheckInAt({ contactId: a.contactId, joinedAt, everyDays: 14 })) > NOW + 3 * DAY), ctx({ settings: S14 }));
+  assert.equal(waiting.status, "not_due");
+  assert.equal(waiting.segment, "engaged");
+  assert.equal(evaluateAgent(repliers[3], ctx({ settings: S14, now: NOW + 2 * 3600000 })).dueAt, evaluateAgent(repliers[3], ctx({ settings: S14 })).dueAt);
+});
+
+test("the spread only holds back a replier's first check-in, never one who has talked since or been checked in on", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const joinedAt = ago(1);
+  const id = Array.from({ length: 40 }, (_, i) => `slot-${i}`).find((x) => Date.parse(firstCheckInAt({ contactId: x, joinedAt, everyDays: 14 })) > NOW + 2 * DAY);
+  assert.ok(Date.parse(firstCheckInAt({ contactId: id, joinedAt, everyDays: 14 })) > NOW);
+  assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60), joinedAt }), ctx({ settings: S14 })).status, "not_due");
+  const checked = agent({ contactId: id, lastInboundAt: ago(60), joinedAt, ledger: [{ type: "agent_pulse_sent", at: ago(20), dedupeKey: "k" }] });
+  assert.equal(evaluateAgent(checked, ctx({ settings: S14 })).status, "due", "already on the clock: the clock decides");
+  assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60) }), ctx({ settings: S14 })).status, "due", "no join date: nothing to spread");
+  assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60), joinedAt, listings: [listing()] }), ctx({ settings: S14 })).pulseReason, "fresh_listing", "a fresh listing of theirs is news now");
+});
+
+test("a replier who said stop, or sounds annoyed, is not checked in on when they join", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const stopped = agent({ lastInboundAt: ago(60), joinedAt: ago(30), events: [{ type: "unsubscribed", at: ago(30) }] });
+  assert.equal(evaluateAgent(stopped, ctx({ settings: S14 })).status, "stopped");
+  const annoyed = agent({ lastInboundAt: ago(60), joinedAt: ago(30), events: [{ type: "text_summary", at: ago(60), data: { inbound: "how many times do I have to say no" } }] });
+  assert.equal(evaluateAgent(annoyed, ctx({ settings: S14 })).status, "stopped");
+});
+
+const msg = (direction, body, daysAgo, messageType = "TYPE_SMS") => ({ direction, body, messageType, dateAdded: ago(daysAgo) });
+test("the replier backfill reads a GHL thread: their text is a reply, a stop or DND is an opt-out, an auto-reply is not a person", () => {
+  const ours = msg("outbound", "Hi Pat, is 1 Elm St a project or pretty turnkey?", 50);
+  const none = classifyReplierThread({ messages: [ours, msg("inbound", "", 49, "TYPE_ACTIVITY_OPPORTUNITY")] });
+  assert.equal(none.kind, "none");
+  const replied = classifyReplierThread({ messages: [ours, msg("inbound", "Pretty turnkey, sorry. Will keep you in mind", 49)] });
+  assert.equal(replied.kind, "engaged");
+  assert.equal(replied.lastInboundAt, ago(49));
+  assert.equal(replied.channel, "sms");
+  assert.match(replied.lastText, /keep you in mind/);
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "", 40, "TYPE_CALL")] }).kind, "engaged", "a call from them counts");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "STOP", 49)] }).kind, "opted_out");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "Wrong number", 49)] }).kind, "opted_out");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "Not right now", 49), msg("inbound", "please take me off your list", 45)] }).kind, "opted_out");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "Stop by the open house Saturday!", 49)] }).kind, "engaged", "a word in a sentence is not a stop");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "That's not my listing pls stop", 49)] }).kind, "opted_out", "a stop at the end of a short text");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "No need to message me looking for houses. Bye", 49)] }).kind, "opted_out");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "You've reached Big Brokerage, but we use a different number for texting.", 49)] }).kind, "auto_reply");
+  const dnd = classifyReplierThread({ messages: [ours, msg("inbound", "sure", 49)], contact: { dndSettings: { SMS: { status: "active" } } } });
+  assert.deepEqual([dnd.kind, dnd.why], ["opted_out", "dnd"]);
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "sure", 49)], contact: { tags: ["DNC"] } }).kind, "opted_out");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "I'm driving with Do Not Disturb While Driving turned on. I'll see your message when I get where I'm going.", 49)] }).kind, "auto_reply");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "This number does not accept text messages.", 49)] }).kind, "auto_reply");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "I'm driving with Do Not Disturb While Driving turned on.", 49), msg("inbound", "ok what's your number", 48)] }).kind, "engaged", "a real text after the auto-reply");
+  assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", "how many times do I have to tell you no", 49)] }).kind, "annoyed");
+  assert.equal(JSON.stringify(classifyReplierThread({ messages: [ours, msg("inbound", "STOP", 49)] })).includes("STOP"), false, "an opt-out carries no words of theirs");
+});
+
+// The replier backfill and the reply agent read auto-replies the same way
+// (shared/brush-offs.js isAutoReply): a brokerage desk that answered for
+// them is not an agent who wrote back.
+test("the replier backfill knows a brokerage desk's auto-reply the reply agent already drops", () => {
+  const ours = msg("outbound", "Hi Pat, is 1 Elm St a project or pretty turnkey?", 50);
+  for (const t of [
+    "Thank you for your message, we will get back to you shortly. Thank you.",
+    "Thank you for messaging Big Brokerage. We're excited to connect with you and will be with you in just a moment.",
+  ]) assert.equal(classifyReplierThread({ messages: [ours, msg("inbound", t, 49)] }).kind, "auto_reply", t);
+});
+
+// The run is weekdays only: a Saturday or Sunday slot would just pile onto
+// Monday's run.
+test("no first check-in lands on a weekend", () => {
+  // Joined on a Friday, a Saturday and a Monday (noon Pacific).
+  for (const joinedAt of ["2026-10-16T19:00:00Z", "2026-10-17T19:00:00Z", "2026-10-19T19:00:00Z"]) {
+    const days = new Map();
+    for (let i = 0; i < 300; i++) {
+      const at = firstCheckInAt({ contactId: `wk-${i}-${i * 13}`, joinedAt, everyDays: 14 });
+      const wd = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short" }).format(new Date(at));
+      assert.ok(wd !== "Sat" && wd !== "Sun", `${joinedAt}: a first check-in on ${wd}`);
+      assert.ok(Date.parse(at) - Date.parse(joinedAt) < 14 * DAY, "within the two weeks");
+      days.set(at.slice(0, 10), (days.get(at.slice(0, 10)) || 0) + 1);
+    }
+    assert.equal(days.size, 10, "all ten weekdays of the two weeks are used");
+    assert.ok(Math.max(...days.values()) < 60, "and none takes a pile");
+  }
+});
+
+test("a replier who joined by their reply and isn't written down yet is spread from today, every day the same way once the run writes it", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const ids = Array.from({ length: 40 }, (_, i) => `jr-${i}`);
+  const fresh = ids.map((id) => evaluateAgent(agent({ contactId: id, lastInboundAt: ago(90), joinedByReply: true }), ctx({ settings: S14 })));
+  assert.ok(fresh.filter((v) => v.status === "due").length <= 10, "not all due today");
+  for (const v of fresh.filter((v) => v.status === "not_due")) assert.ok(Date.parse(v.dueAt) < NOW + 14 * DAY, "each within two weeks of today");
+  // Written down today: a week later the same agents keep their days.
+  const later = ids.map((id) => evaluateAgent(agent({ contactId: id, lastInboundAt: ago(90), joinedByReply: true, joinedAt: ago(0) }), ctx({ settings: S14, now: NOW + 7 * DAY })));
+  assert.deepEqual(later.map((v) => v.dueAt || null).filter(Boolean), fresh.map((v) => v.dueAt || null).filter((d) => d && Date.parse(d) > NOW + 7 * DAY));
 });

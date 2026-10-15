@@ -134,6 +134,19 @@ test("the check-in on a thread we never answered apologises for nothing", () => 
   assert.match(weekly, /weekly check-in/i);
 });
 
+test("the check-in on a lead they gave us a date for names the lead, not the generic 'anything distressed?'", () => {
+  const t = outboundOpening({ kind: "checkin_due", address: "", sourceKind: "lead", phrase: "end of this month",
+    lead: { what: "the short sale", said: "The short sale is in bank underwriting, should know by end of this month.", toldAt: "2026-10-14T20:00:00.000Z", via: "text" } });
+  assert.match(t, /a lead \(the short sale\)/);
+  assert.match(t, /bank underwriting/);
+  assert.match(t, /Did the bank come back on the short sale\?/);
+  assert.match(t, /Do NOT ask the generic/);
+  assert.match(t, /Set intent to checkin_due/);
+  // Only "check back in a couple months": the light ask, on the day they named.
+  const back = outboundOpening({ kind: "checkin_due", address: "", sourceKind: "lead", phrase: "in a couple months", lead: { what: "", said: "Check back in a couple months" } });
+  assert.match(back, /you'd mentioned in a couple months/);
+});
+
 test("a counter nudge asks for room and names no number", () => {
   const t = outboundOpening({ kind: "counter_nudge", address: "3831 Bagley Ave N, Seattle, WA", days: 6, theirsK: "850k" });
   assert.match(t, /countered on 3831 Bagley Ave N.*6 days ago/);
@@ -487,6 +500,19 @@ test("the pass on a rural house says we can't do rural and names the acreage", (
   assert.match(t, /it's a rural property — it sits on 5\.2 acres, and we can't do rural/);
   assert.match(t, /fixers in town on a normal-size lot/);
   assert.doesNotMatch(t, /single-family/);
+});
+
+// 2026-10-14: a house we owed the agent a number on, closed out by the sweep.
+test("the pass on a house we promised a number on owns that we owe them, gives the reason, and asks for the next one", async () => {
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  const o = outboundDescriptor({ kind: "kind_pass", offer: null, saved: {}, subject: { address: "12 Elm St, Renton, WA", why: "promised", owed: "number", reason: "there weren't enough good sales nearby to price it with confidence", heldReason: "held 15 days and nothing since" } });
+  assert.equal(o.why, "promised");
+  const t = outboundOpening(o);
+  assert.match(t, /we'd come back to them with a number on 12 Elm St/);
+  assert.match(t, /We're passing on it: there weren't enough good sales nearby/);
+  assert.match(t, /send the next fixer/);
+  assert.match(t, /Do NOT name any number/);
+  assert.doesNotMatch(t, /held 15 days/, "the sweep's own reason is ours, not theirs");
 });
 
 test("when an agent brings us a house, the bot gets the address with a promise not to bother the seller, and their read on value and work", () => {

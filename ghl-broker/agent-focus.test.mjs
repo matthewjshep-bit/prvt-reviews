@@ -95,3 +95,17 @@ test("the sweep's line about a passed house and its repeating ladder reach the n
   assert.equal(plain.aside, undefined);
   assert.equal(plain.repeats, undefined);
 });
+
+// 2026-10-14: an open offer the machine stood down on held the agent check-in
+// out at this door too, unless the stand-down was a no.
+test("the agent check-in goes out when the live offer has nothing coming and nobody has texted for two weeks", async () => {
+  const STUCK = { id: "stuck", locationId: "LOC", contactId: "c1", address: "41 Alder Ln, Shelton, WA 98584", cashAmount: 210000,
+    status: "sent", statusAt: ago(30), createdAt: ago(30), sends: [{ ts: ago(30) }] };
+  const theirs = (day) => ({ id: `in${day}`, locationId: "LOC", contactId: "c1", status: "superseded", inbound: "Let me run it by the seller", intent: "other",
+    createdAt: ago(day), updatedAt: ago(day) });
+  const quiet = storeWith({ offers: [STUCK], drafts: [theirs(14)] });
+  assert.equal(await agentTurnReason({ store: quiet, locationId: "LOC", contactId: "c1", kind: "agent_pulse", config, now: NOW }), null);
+  const talking = storeWith({ offers: [STUCK], drafts: [theirs(3)] });
+  assert.match(await agentTurnReason({ store: talking, locationId: "LOC", contactId: "c1", kind: "agent_pulse", config, now: NOW }), /one house at a time/,
+    "they wrote three days ago: the offer is still the conversation");
+});

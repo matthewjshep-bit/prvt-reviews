@@ -27,10 +27,17 @@ import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { addressKey } from "./shared/us-address.js";
 import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
 import { triageHeldUnderwrite } from "./shared/held-underwrites.js";
-import { openPromises, resolvePromise, normalizePromiseDismissal, promiseWhat, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
+import { openPromises, resolvePromise, normalizePromiseDismissal, promiseWhat, endsWithQuestionToThem, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
+import { keepsOurWord, OWED_WINDOW_DAYS } from "./shared/promise-owed.js";
+import { detectPromise, isConditionalPromise, PROMISE_DUE_HOURS } from "./shared/follow-up.js";
 import { driveOpenPromises, promiseClaimed } from "./promise-driver.js";
 import { waitingReason } from "./outbox-guard.js";
 import { callEventConnected } from "./shared/talked-to.js";
+import { cadenceDays, requestStands, refusesAddress, notAHouse, CADENCE_MAX_DAYS } from "./shared/brush-offs.js";
+import { leadCheckInPending, LEAD_MAX_DAYS, LEAD_STALE_DAYS } from "./shared/follow-up.js";
+import { offerOwner } from "./shared/agent-pulse.js";
+import { annotateCurrent } from "./shared/current-offer.js";
+import { allEventsSince } from "./contact-events.js";
 
 const HOUR_MS = 3600000;
 
@@ -48,7 +55,10 @@ const HOUR_MS = 3600000;
  */
 export async function settlePromise({ store, locationId, contactId, address = "", by = "operator", reason = null, offerId = null, now = Date.now() }) {
   if (!contactId) return { settled: false };
-  const events = await store.listContactEventsSince(locationId, new Date(now - PROMISE_WINDOW_HOURS * HOUR_MS).toISOString(), {
+  // As far back as Today's owed row reaches (promise-owed.js), so its
+  // Dismiss, and an outcome on the house, close a promise a week old too.
+  const back = Math.max(PROMISE_WINDOW_HOURS, OWED_WINDOW_DAYS * 24);
+  const events = await store.listContactEventsSince(locationId, new Date(now - back * HOUR_MS).toISOString(), {
     types: ["promise_made", "promise_owed", "promise_kept"], limit: 5000,
   }).catch(() => []);
   const list = events.filter((e) => e?.contactId === contactId).sort((a, b) => String(a.at).localeCompare(String(b.at)));
@@ -68,6 +78,38 @@ export async function settlePromise({ store, locationId, contactId, address = ""
   });
   return { settled: Boolean(r?.inserted) };
 }
+/**
+ * notePromiseInHandText({ store, locationId, contactId, text, at, channel }) → { made, kept }
+ *
+ * A text you typed yourself (the composer, or GHL) is our word too
+ * (2026-10-14: several of the numbers nobody delivered were promised by
+ * hand). "I'll get back to you today with a number" opens a promise, a price
+ * or a pass keeps one — the same events the bot's sends write. Only what
+ * it was (number / the written offer) is kept, never the words. Texts only:
+ * an email carries the thread quoted under it.
+ */
+export async function notePromiseInHandText({ store, locationId, contactId, text, at = new Date().toISOString(), channel = "sms" }) {
+  const body = String(text || "");
+  if (!contactId || channel !== "sms" || !body.trim()) return { made: false, kept: false };
+  const keeps = keepsOurWord(body);
+  let kept = false;
+  if (keeps) {
+    const r = await recordEvent({
+      store, locationId, contactId, party: "agent", type: "promise_kept", at: new Date(Date.parse(at) - 1).toISOString(), address: "",
+      source: "operator", dedupeKey: `promise_kept:${contactId}:you:${at}`, data: { by: `you_${keeps}` },
+    }).catch(() => ({ inserted: 0 }));
+    kept = Boolean(r?.inserted);
+  }
+  const what = detectPromise(body);
+  if (what !== "number" && what !== "paper") return { made: false, kept };
+  const r = await recordEvent({
+    store, locationId, contactId, party: "agent", type: "promise_made", at, address: "",
+    source: "operator", dedupeKey: `promise_made:${contactId}:you:${at}`,
+    data: { what, by: "you", dueAt: new Date(Date.parse(at) + PROMISE_DUE_HOURS * HOUR_MS).toISOString(), asksThem: endsWithQuestionToThem(body), ...(isConditionalPromise(body) ? { conditional: true } : {}) },
+  }).catch(() => ({ inserted: 0 }));
+  return { made: Boolean(r?.inserted), kept };
+}
+
 /**
  * heldTriageForPromises({ store, locationId, offers, events, config, now }) → { offerId: verdict }
  *
@@ -135,7 +177,9 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
   for (const [contactId, list] of byContact) {
     list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
     const lastKept = list.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
-    const open = list.filter((e) => e.type === "promise_made" && String(e.at) > lastKept);
+    // A promise you typed yourself is yours to keep: no "still working on
+    // it" text in your name. Today's owed row carries it (promise-owed.js).
+    const open = list.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && String(e.at) > lastKept);
     const owed = list.filter((e) => e.type === "promise_owed" && String(e.at) >= lastKept).at(-1) || null;
     if (!open.length && !owed) continue;
     out.considered++;
@@ -234,6 +278,9 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
 
 // A request stands this long; "in a month" is the longest one we read.
 export const CHECKIN_WINDOW_DAYS = 45;
+// The furthest back a request can still stand: the longest cadence an agent
+// can ask for, plus the two weeks past due it stays good for.
+export const CHECKIN_LONGEST_DAYS = CADENCE_MAX_DAYS + 21;
 // A deal source hears from us weekly, this many times, until they reply.
 export const SOURCE_REPEAT_DAYS = 7;
 export const SOURCE_TOUCHES = 6;
@@ -263,10 +310,29 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
     byContact.get(e.contactId).push(e);
   }
+  // A request older than the window that still stands — "check back in a
+  // couple months" is due at day 60 (shared/brush-offs.js requestStands) —
+  // brings that contact's own events since it was made.
+  const windowStart = iso(now - CHECKIN_WINDOW_DAYS * 86400000);
+  const longReqs = await store.listContactEventsSince(locationId, iso(now - CHECKIN_LONGEST_DAYS * 86400000), { types: ["checkin_requested"], limit: 5000 }).catch(() => []);
+  const newestReq = new Map();
+  // (A lead with a date reads its own thirteen months, below.)
+  for (const e of longReqs) if (e?.contactId && e.data?.kind !== "lead" && String(e.at) > String(newestReq.get(e.contactId)?.at || "")) newestReq.set(e.contactId, e);
+  for (const [contactId, req] of newestReq) {
+    if (String(req.at) >= windowStart || !requestStands(req, now)) continue;
+    const since = await store.listContactEvents?.(locationId, contactId, { since: req.at, types: ["checkin_sent", "text_summary", "call_summary", "hand_reply"], limit: 500 }).catch(() => []) || [];
+    const seen = new Set();
+    byContact.set(contactId, [req, ...since, ...(byContact.get(contactId) || [])].filter((e) => {
+      const k = e?.id || e?.dedupeKey || `${e?.type}:${e?.at}`;
+      return e && !seen.has(k) && seen.add(k);
+    }));
+  }
 
   for (const [contactId, list] of byContact) {
     list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
-    const req = list.filter((e) => e.type === "checkin_requested").at(-1);
+    // A lead with a date has its own track, below: it neither replaces this
+    // one nor is replaced by it.
+    const req = list.filter((e) => e.type === "checkin_requested" && e.data?.kind !== "lead").at(-1);
     if (!req) continue;
     if (list.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)) continue;
     if (Date.parse(req.data?.dueAt || "") > now) continue;
@@ -342,14 +408,69 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });
     else { out.sent++; out.results.push({ contactId, status: "sent", jobId: r?.job?.id || null }); }
     // A deal source's next week.
+    // Not when they've since told us how often to check in: the weekly chain
+    // ends and the agent check-in keeps their cadence (checkinEvery).
     const left = Number(req.data?.left) || 0;
-    if (req.data?.kind === "source" && left > 0) {
+    const asked = req.data?.kind === "source" && left > 0
+      ? cadenceDays((await store.getContactProfile?.(locationId, contactId).catch(() => null))?.facts) : 0;
+    if (req.data?.kind === "source" && left > 0 && !asked) {
       await recordEvent({
         store, locationId, contactId, party: "agent", type: "checkin_requested", at: iso(now), address: req.address || "",
         source: "conversation", dedupeKey: `checkin_requested:source:${contactId}:${iso(now).slice(0, 10)}`,
         data: { kind: "source", phrase: "", dueAt: iso(now + SOURCE_REPEAT_DAYS * 86400000), left: left - 1 },
       });
     }
+  }
+
+  /* --- a lead they told us the timing of --- */
+  // "Relisting in the spring", "should know by end of the month" (reply-agent.js,
+  // shared/follow-up.js detectLeadTiming). Booked up to thirteen months out, so
+  // read that far back; their texts and calls come from the window above.
+  const leadRead = await allEventsSince(store, locationId, iso(now - (LEAD_MAX_DAYS + LEAD_STALE_DAYS) * 86400000),
+    { types: ["checkin_requested", "checkin_sent"] }, { ceiling: 100000 }).catch(() => ({ events: [] }));
+  const leadsBy = new Map();
+  for (const e of leadRead.events || []) {
+    if (!e?.contactId) continue;
+    if (!leadsBy.has(e.contactId)) leadsBy.set(e.contactId, []);
+    leadsBy.get(e.contactId).push(e);
+  }
+  for (const [contactId, mine] of leadsBy) {
+    if (!mine.some((e) => e.type === "checkin_requested" && e.data?.kind === "lead")) continue;
+    const talk = (byContact.get(contactId) || []).filter((e) => ["text_summary", "call_summary", "hand_reply"].includes(e.type));
+    const all = [...mine, ...talk];
+    const req = leadCheckInPending(all, now);
+    if (!req || Date.parse(req.data?.dueAt || "") > now) continue;
+    out.considered++;
+    // One check-in at a time: another went to them in the last three days.
+    const recent = all.some((e) => e.type === "checkin_sent" && Date.parse(e.at) > now - 3 * 86400000);
+    if (recent || out.results.some((x) => x.contactId === contactId && (x.status === "sent" || x.status === "re-answered"))) {
+      out.results.push({ contactId, status: "waiting", reason: "another check-in just went to them" });
+      continue;
+    }
+    // An offer's own clock (a live deal, an open offer being asked about, a
+    // held underwrite) keeps them; the lead goes after it lets go.
+    const rows = await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []);
+    const current = annotateCurrent(rows || []).filter((o) => o && o.isCurrent !== false && o.contactId === contactId);
+    const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 20 }).catch(() => []);
+    // (The lead itself is not an offer's clock: without this it would wait on itself.)
+    const offerEvents = [...(byContact.get(contactId) || [])].filter((e) => !(e.type === "checkin_requested" && e.data?.kind === "lead"));
+    const holder = offerOwner({ offers: current, drafts, events: offerEvents, config, now });
+    if (holder) { out.results.push({ contactId, status: "waiting", reason: holder }); continue; }
+    const waitingOn = await waitingReason({ store, locationId, contactId, continues: null });
+    if (waitingOn) { out.results.push({ contactId, status: "waiting", reason: waitingOn }); continue; }
+    const claim = await recordEvent({
+      store, locationId, contactId, party: "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
+      source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,
+      data: { requestAt: req.at, kind: "lead", phrase: req.data?.phrase || "" },
+    });
+    if (!claim.inserted) continue;
+    const r = await start({
+      client, locationId, saved, store, contactId, kind: "checkin_due", offer: null, continues: null,
+      subject: { address: req.address || "", phrase: req.data?.phrase || "", sourceKind: "lead", lead: { ...(req.data?.lead || {}), toldAt: req.at } },
+      sendsEnabled, deps,
+    }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
+    if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });
+    else { out.sent++; out.results.push({ contactId, status: "sent", kind: "lead", jobId: r?.job?.id || null }); }
   }
   return out;
 }
@@ -431,6 +552,23 @@ export async function runAddressChase({ client, locationId, saved = {}, store, s
       out.results.push({ contactId, status: "closed", reason: `you ${yours.type === "hand_reply" ? "texted" : "called"} them yourself` });
       continue;
     }
+    // Their newest text since says no to giving it (2026-10-14: "Please don't
+    // keep asking me" got two more asks; "No, you can see them when they're on
+    // the market" got another), or what's coming is land, not a house. The
+    // chase ends, on the record; the agent check-in has them from here.
+    const lastText = list.filter((e) => after(e) && e.type === "text_summary" && String(e.data?.inbound || "").trim()).at(-1);
+    const refused = lastText ? refusesAddress(lastText.data.inbound) : null;
+    const land = !refused && notAHouse(pending.data?.hint || "");
+    if (refused || land) {
+      await recordEvent({
+        store, locationId, contactId, party: "agent", type: "address_pending_closed", at: iso(now), address: "",
+        source: "conversation", dedupeKey: `address_pending_closed:${contactId}:${pending.at}:${refused ? "refused" : "land"}`,
+        data: { reason: refused ? "they_refused" : "not_a_house", why: refused || "it's land, not a house", pendingAt: pending.at },
+      }).catch(() => {});
+      out.found++;
+      out.results.push({ contactId, status: "closed", reason: refused || "it's land, not a house" });
+      continue;
+    }
     const rungs = addressChaseRungs(pending);
     let due = -1;
     rungs.forEach((t, i) => { if (t <= now) due = i; });
@@ -453,7 +591,8 @@ export async function runAddressChase({ client, locationId, saved = {}, store, s
     if (!claim.inserted) continue;
     const r = await start({
       client, locationId, saved, store, contactId, kind: "address_chase", offer: null,
-      subject: { address: "", hint: pending.data?.hint || "", phrase: pending.data?.phrase || "", rung: due + 1, rungs: rungs.length },
+      subject: { address: "", hint: pending.data?.hint || "", phrase: pending.data?.phrase || "", rung: due + 1, rungs: rungs.length,
+        houses: Array.isArray(pending.data?.houses) ? pending.data.houses : [] },
       sendsEnabled, deps,
     }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
     if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });

@@ -9,7 +9,7 @@ import React from "react";
 import {
   Send, RefreshCw, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
   MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
-  Calculator, ClipboardList, Circle, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX, Gauge, CircleSlash, Contact,
+  Calculator, ClipboardList, Circle, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX, Gauge, CircleSlash, Contact, Home,
 } from "lucide-react";
 import { EVENT_LABEL, EVENT_ICON, AI_SOURCES, FACT_KEYS, PROPERTY_DETAIL_FIELDS } from "@shared/contact-record.js";
 import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
@@ -21,7 +21,7 @@ import { offerEditorUrl } from "./api.js";
 const ICONS = {
   Send, RefreshCw, ArrowLeftRight, XCircle, Clock, CheckCircle2, ThumbsUp, ThumbsDown, FileSignature, Milestone, Eye, Handshake,
   MessageSquareQuote, Megaphone, FolderOpen, Phone, MessageSquare, StickyNote, Sparkles, Tag, Crosshair, Lightbulb, Eraser, Download,
-  Calculator, ClipboardList, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX, Gauge, CircleSlash, Contact,
+  Calculator, ClipboardList, BellRing, CalendarCheck, Undo2, Mail, CirclePause, CirclePlay, UserX, Gauge, CircleSlash, Contact, Home,
 };
 export const EventIcon = ({ type, size = 13 }) => { const I = ICONS[EVENT_ICON[type]] || Circle; return <I size={size} className="shrink-0" />; };
 
@@ -48,6 +48,9 @@ export function eventLine(ev) {
     case "offer_countered": return d.amount ? `at ${money(d.amount)}` : d.note || "";
     case "dataroom_viewed": return d.viewCount > 1 ? `view ${d.viewCount}` : "first view";
     case "property_details": return PROPERTY_DETAIL_FIELDS.filter((f) => d[f.key] != null).map((f) => `${f.label.toLowerCase()}: ${f.number ? money(d[f.key]) : f.values ? String(d[f.key]).replace(/_/g, " ") : d[f.key]}`).join(" · ");
+    case "house_mentioned": return [ev.address ? "" : d.label || "", d.sellerAsk ? `asking ${money(d.sellerAsk)}` : "", d.note || "",
+      d.needsAddress ? (ev.address ? "no house number yet" : "no street yet") : "", d.heard === "unlabelled" ? "on a call (either side)" : d.heard === "them" ? "on a call" : ""].filter(Boolean).join(" · ");
+    case "referral_mentioned": return [d.name || (d.relation ? `their ${d.relation}` : ""), d.brokerage || "", d.phone || ""].filter(Boolean).join(" · ");
     case "agent_estimate": return [d.arv ? `worth ${money(d.arv)} done` : "", d.rehab ? `about ${money(d.rehab)} of work` : ""].filter(Boolean).join(" · ") + (d.note ? ` — “${d.note}”` : "");
     case "enrich_run": return d.summary || "";
     case "import": return d.batchName ? `from batch ${d.batchName}` : "";

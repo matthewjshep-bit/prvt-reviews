@@ -441,3 +441,9 @@ test("a reply the bot couldn't place goes out in the daytime release when every 
 test("an investor reply the bot couldn't place still waits for Matt", () => {
   assert.deepEqual(releasedBy(dayAudit(heldOther({ party: "investor" }))), []);
 });
+
+test("a number we still owe someone who unsubscribed is not a row: nothing may text them", () => {
+  const row = { id: "number_owed:c9:x", kind: "number_owed", contactId: "c9" };
+  assert.deepEqual(stillOwed([row], { unsubscribed: new Set(["c9"]) }), []);
+  assert.deepEqual(stillOwed([row], { unsubscribed: new Set() }), [row]);
+});

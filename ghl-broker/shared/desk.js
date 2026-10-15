@@ -45,9 +45,11 @@ export const CALL_INTENTS = new Set(["wants_call", "scheduling", "wants_walkthro
 // after these, by severity.
 export const KIND_STRENGTH = [
   "call_hot", "call_brought", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
-  "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "audit_owed",
+  // An agent's partner terms lead their held reply: the row says what they offered.
+  "call_partner_terms",
+  "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral",
   "call_first_reply", "call_quiet", "ladder_exhausted",
-  "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "stage_lag",
+  "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "texts_elsewhere", "stage_lag",
   "deal_no_buyers", "deal_no_dataroom", "showing_no_window", "underwrite_dropped",
   "call_phone_only", "call_investor", "call_partner",
   "gone_quiet", "showing_soon", "blast_no_opens", "underwrite_failed", "draft_scheduled",
@@ -136,9 +138,15 @@ export const TODAY_SECTIONS = [
   { key: "decide", label: "Needs you", hint: "Urgent, and only you can do it." },
 ];
 const NOT_URGENT_OUTBOUND = new Set(["agent_pulse", "outreach_open", "buyer_pulse", "realm_check", "take_check"]);
+// An agent's partner terms (shared/partner-terms.js) are someone waiting on an
+// answer only Matt gives.
 const URGENT_KINDS = new Set([
-  "call_counter", "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting",
-  "promise_owed", "audit_owed", "closing_soon", "closing_task_due",
+  "call_counter", "call_partner_terms", "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting",
+  "promise_owed", "number_owed", "audit_owed", "closing_soon", "closing_task_due",
+  // Nothing we text them arrives until their number changes (2026-10-14).
+  "texts_elsewhere",
+  // Someone else an agent says has a house (shared/call-list.js): reach out or not is his.
+  "referral",
 ]);
 
 /**
@@ -177,7 +185,7 @@ export function foldKey(a) {
 // Weaker reasons that only repeat a stronger one in the same row.
 function redundant(r, siblings) {
   const has = (pred) => siblings.some((s) => s !== r && pred(s));
-  if (r.kind === "audit_owed" && r.findingKind === "promise_open_overdue") return has((s) => s.kind === "promise_owed");
+  if (r.kind === "audit_owed" && r.findingKind === "promise_open_overdue") return has((s) => s.kind === "promise_owed" || s.kind === "number_owed");
   // Only a live call row stands in for these: one the tries ran out on has
   // gone back to the machine, and the row it replaced is the decision again.
   const calling = (s, kind) => s.kind === kind && s.section === "call";
@@ -271,7 +279,9 @@ export function nameRows(reasons = [], names = {}) {
     const name = a?.contactId && !a.contactName ? String(names[a.contactId] || "").trim() : "";
     if (!name) return a;
     const title = String(a.title || "");
-    const renamed = /^An agent\b/.test(title) ? title.replace(/^An agent/, name) : title;
+    const renamed = /^An agent\b/.test(title) ? title.replace(/^An agent/, name)
+      // "Owed: a number to an agent on 12 Elm St" (pipeline.js number_owed): the first name.
+      : /^Owed: .+? to an agent\b/.test(title) ? title.replace(/ to an agent\b/, ` to ${name.split(/\s+/)[0]}`) : title;
     return { ...a, contactName: name, title: renamed, ...(renamed !== title && !a.dismissedAs ? { dismissedAs: title } : {}) };
   });
 }

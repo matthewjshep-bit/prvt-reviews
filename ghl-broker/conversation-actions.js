@@ -231,14 +231,17 @@ const EXECUTORS = {
     // Alexandria Goforth (2026-09-15) that was the turnkey listing she had just
     // declined, and a 375k float on it replaced the reply asking for the
     // Spanaway address. Wait for the address; the address chase asks for it.
-    if (draft?.intent === "new_property" && !String(draft?.propertyAddress || "").trim() && !action?.replaceOfferId) {
+    // A second house named in the same text carries its own address and ask
+    // on the action (reply-agent.js, 2026-10-13); the draft's are the first.
+    const address = String(action?.address || draft?.propertyAddress || "").trim();
+    if (draft?.intent === "new_property" && !address && !action?.replaceOfferId) {
       return "waiting for the address: a new property with no address isn't underwritten";
     }
     // A number the agent named ("not less than 450k") rides along as the
     // asking price, so the offer is priced against the seller's floor.
     const r = await deps.startUnderwrite({
-      contactId, message: draft?.inbound || "", address: draft?.propertyAddress || "",
-      askingPrice: Math.max(0, Number(draft?.counterAmount) || 0),
+      contactId, message: draft?.inbound || "", address,
+      askingPrice: Math.max(0, Number(action?.address ? action.askingPrice : draft?.counterAmount) || 0),
       // Set when a held underwrite is being re-run on new information: the new
       // run replaces that draft instead of standing down behind it.
       ...(action?.replaceOfferId ? { replaceOfferId: action.replaceOfferId } : {}),

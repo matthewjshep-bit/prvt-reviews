@@ -16,7 +16,7 @@
 
 import { OPEN_STATUSES, DEAD_STATUSES, effectiveStatus, dealIsOver } from "./offer-status.js";
 import { currentOffers, currentOfferFor } from "./current-offer.js";
-import { unansweredCheckIn, nextMorning } from "./follow-up.js";
+import { unansweredCheckIn, nextMorning, leadIsTheNet } from "./follow-up.js";
 import { NEVER_AUTO } from "./conversation-ai.js";
 import { botHold, holdLine } from "./bot-hold.js";
 import { callEventConnected } from "./talked-to.js";
@@ -231,9 +231,10 @@ export function auditConversations({
     return (draftsBy.get(c) || []).some((d) => d.status === "dismissed" && (d.flags || []).some((f) => HUMAN_TOOK_IT.test(f)));
   };
   // A check-in already waiting to fire — the audit never overwrites one
-  // (runCheckInSweep reads only the newest request per contact).
+  // (runCheckInSweep reads only the newest request per contact). A lead's
+  // check-in rides its own track, and only one that's days away is a net.
   const checkInPending = (c) => {
-    const req = last(ev(c, "checkin_requested"));
+    const req = last(ev(c, "checkin_requested").filter((e) => leadIsTheNet(e, now)));
     if (!req) return false;
     if (ev(c, "checkin_sent").some((s) => s.data?.requestAt === req.at)) return false;
     return (ms(req.data?.dueAt) ?? 0) > now;
@@ -309,7 +310,7 @@ export function auditConversations({
     // it is, and neither a release nor a clock is the audit's to set.
     if (newest.status === "draft" && !QUIET_INTENTS.has(newest.intent) && holdOf(c).held) continue;
     if (newest.status === "draft" && !QUIET_INTENTS.has(newest.intent)) {
-      const clock = last(ev(c, "checkin_requested").filter((e) => (ms(e.at) ?? 0) >= (ms(newest.createdAt) ?? 0)));
+      const clock = last(ev(c, "checkin_requested").filter((e) => (ms(e.at) ?? 0) >= (ms(newest.createdAt) ?? 0) && leadIsTheNet(e, now)));
       const age = hoursAgo(newest.createdAt);
       const reason = newest.autoSend?.reason || (newest.flags || [])[0] || "held";
       // Loose: a holding reply the money guard passed, that the model didn't
@@ -553,7 +554,7 @@ export function releasableHeld(d, { loose = true, mode = "night", releaseMinAgeM
 const ANSWERED_BY_A_REPLY = new Set(["unanswered_inbound", "held_aging"]);
 // Rows that ask for a text to someone. Nothing reaches a person who
 // unsubscribed, so none of these is a call to make.
-const TEXTING_KINDS = new Set(["audit_owed", "draft_waiting", "draft_scheduled", "promise_owed", "offer_ready"]);
+const TEXTING_KINDS = new Set(["audit_owed", "draft_waiting", "draft_scheduled", "promise_owed", "number_owed", "offer_ready"]);
 
 /**
  * stillOwed(rows, { drafts, unsubscribed }) → rows

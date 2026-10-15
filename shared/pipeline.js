@@ -24,6 +24,7 @@ import { stepLabel, exhausted, normalizeSteps, questionIn } from "./follow-up.js
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
 import { addressKey } from "./contact-record.js";
 import { openPromises, resolvePromise } from "./promise-resolver.js";
+import { owedPromises } from "./promise-owed.js";
 import { UNANSWERED_LIMIT } from "./thread-health.js";
 import { botHold, holdLine } from "./bot-hold.js";
 import { groupHouses, resolveHouse } from "./current-offer.js";
@@ -70,6 +71,7 @@ export const INTEREST_STALL_DAYS = 4;
 // The order the queue shows its groups in, and what each is called.
 export const ACTION_KINDS = [
   { key: "promise_owed",      label: "Owed a number" },
+  { key: "number_owed",       label: "Still owed, past the day" },
   { key: "draft_waiting",     label: "Drafts waiting on you" },
   { key: "handoff",           label: "One click from you" },
   { key: "investor_price_agreed", label: "Prices the machine agreed" },
@@ -90,6 +92,7 @@ export const ACTION_KINDS = [
   { key: "gone_quiet",        label: "Gone quiet" },
   { key: "underwrite_failed", label: "Underwrites that failed" },
   { key: "underwrite_dropped", label: "Underwrites that never ran" },
+  { key: "texts_elsewhere",   label: "Their texts go to another number" },
 ];
 
 // Investor state on a deal card, and its precedence. A buyer who committed
@@ -572,6 +575,28 @@ export function buildPipeline({
       ops: e.address ? [{ key: "rerun_held", label: "Run it now", intent: "primary" }] : [] });
   }
 
+  /* --- their texts go to another number --- */
+  // Their phone answered with an auto-reply naming another number to text
+  // (2026-10-14: Redfin's "we use a different number for texting"). Nothing
+  // we send reaches them until the contact's number changes, which is yours.
+  // The row stays a month, or until they write back for real.
+  const elsewhere = new Map();
+  for (const e of events) {
+    if (e?.type !== "texts_elsewhere" || !e.contactId) continue;
+    if (String(e.at) > String(elsewhere.get(e.contactId)?.at || "")) elsewhere.set(e.contactId, e);
+  }
+  for (const [contactId, e] of elsewhere) {
+    const at = ms(e.at);
+    if (at == null || now - at > 30 * DAY_MS) continue;
+    if (events.some((x) => x?.contactId === contactId && x.type === "text_summary" && String(x.at) > String(e.at))) continue;
+    const other = String(e.data?.otherNumber || "").slice(0, 20);
+    push({ id: `texts_elsewhere:${contactId}:${e.at}`, kind: "texts_elsewhere", severity: "soon", group: "yours",
+      contactId, contactName: contactNames[contactId] || "", address: "", offerId: null, askingPrice: 0,
+      title: `${contactNames[contactId] || "An agent"}: their texts go to another number`,
+      detail: other ? `an auto-reply says to text ${other} — update their number in GHL, or call` : "an auto-reply answered — update their number in GHL, or call",
+      ops: [] });
+  }
+
   /* --- drafts: waiting, scheduled, and the hand-offs riding on them --- */
   const cardById = new Map(cards.map((c) => [c.id, c]));
   for (const d of openDrafts) {
@@ -695,6 +720,36 @@ export function buildPipeline({
       // the row can always be closed by hand, with why. Marking the offer
       // sent / passed closes it too.
       ops: [...ops.filter((o) => v.offerId || !NEEDS_OFFER.has(o.key)), { key: "dismiss_promise", label: "Dismiss" }] });
+  }
+
+  /* --- a number or the offer we promised, still owed a day on (2026-10-14) --- */
+  // The row above lasts three days. This one lasts until the number goes
+  // out, we pass, or you dismiss it (promise-owed.js owedPromises): the
+  // agents we promised were the ones answering us. While the row above is
+  // up for someone, it speaks for them.
+  const promiseRowFor = new Set(actions.filter((a) => a.kind === "promise_owed").map((a) => a.contactId));
+  for (const p of owedPromises({ events, sentDrafts, offers, now })) {
+    if (promiseRowFor.has(p.contactId)) continue;
+    const mine = byContact.get(p.contactId) || [];
+    const theirs = [...sentDrafts, ...drafts].filter((d) => d?.contactId === p.contactId);
+    const v = resolvePromise({ promise: { ...p, asksThem: false, owedAt: null }, offers: mine, jobs, drafts: theirs,
+      heldTriageByOffer, events, qualifyFirst: Boolean(config?.parties?.agent?.qualifyFirst?.enabled), now });
+    if (v.move === "not_owed") continue;
+    const named = contactNames[p.contactId] || mine.find((o) => o?.contactName)?.contactName || theirs.find((d) => d.contactName)?.contactName || "";
+    const first = String(named).trim().split(/\s+/)[0] || "";
+    const street = p.address ? String(p.address).split(",")[0] : "";
+    const heldOffer = v.offerId ? mine.find((o) => o.id === v.offerId && aiHoldReasons(o).length) : null;
+    const days = Math.floor((now - (ms(p.since) ?? now)) / DAY_MS);
+    push({ id: `number_owed:${p.contactId}:${p.since}`, kind: "number_owed", severity: "now", contactId: p.contactId, contactName: named,
+      address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0,
+      draftId: null, fromDraftId: p.draftId || null, promisedAt: p.lastAt,
+      // An underwrite still running is the machine's; everything else waits on you.
+      group: v.move === "wait" ? "machine" : "yours", ...(v.move === "wait" ? { next: { what: v.reason || "waiting", at: null } } : {}),
+      title: `Owed: ${p.what === "paper" ? "the written offer" : "a number"} to ${first || "an agent"}${street ? ` on ${street}` : ""}`,
+      detail: [`promised ${p.dates.join(", again ")}`, days >= 2 ? `${days} days ago` : "", PROMISE_MOVE_LABEL[v.move] || "",
+        heldOffer ? `underwrite held: ${String(aiHoldReasons(heldOffer)[0]).split(" — ")[0].slice(0, 120)}` : "",
+        p.text ? `we said "${String(p.text).slice(0, 90)}"` : p.by === "you" ? "you said it yourself" : ""].filter(Boolean).join(" · "),
+      ops: [...(PROMISE_OPS[v.move] || []).filter((o) => v.offerId || !NEEDS_OFFER.has(o.key)), { key: "dismiss_promise", label: "Dismiss" }] });
   }
 
   // Timers: rows the machine clears by itself after a wait (driver.timers).

@@ -30,19 +30,23 @@
 // The one-owner rule: an agent another clock owns is left to it — an open
 // offer and its nudges, the push to paper, check-ins on a passed offer, a
 // promise, a check-in they asked for, an address chase, the outreach
-// workflows, anything waiting in the outbox, a live deal, a thread you picked
-// up. The pulse picks them up the day it ends: one voice per agent.
+// workflows, anything waiting in the outbox (a held draft for a week), a live
+// deal, a thread you picked up. The pulse picks them up the day it ends: one
+// voice per agent. An open offer with nothing coming and a quiet week ends too
+// (openOfferIdle).
 //
 // Pure. The runner (ghl-broker/agent-pulse.js) reads; this decides.
 
 import { effectiveStatus, OPEN_STATUSES, DEAD_STATUSES, dealIsOver, priceAgreed } from "./offer-status.js";
-import { threadTimes } from "./follow-up.js";
+import { threadTimes, staleHeld, leadCheckInPending } from "./follow-up.js";
 import { nextFollowUp } from "./next-follow-up.js";
 import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT, HOUSE_OVER_REASONS, threadHealth } from "./thread-health.js";
 import { offerHasTheirAnswer } from "./tiers.js";
 import { addressKey, sameStreet } from "./us-address.js";
 import { offMarketAskDue } from "./off-market.js";
 import { botHold, paceOf, paceScale } from "./bot-hold.js";
+import { cadenceDays, requestStands, isAutoReply } from "./brush-offs.js";
+import { optOutInTranscript, CONVERSATION_AI_DEFAULTS } from "./conversation-ai.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -118,7 +122,7 @@ export const AGENT_PULSE_EVENT_TYPES = [
   // Houses passed or kicked off the Tier 1 list: never raised again.
   "tier1_passed", "tier1_kicked", "tier1_added",
 ];
-export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided"];
+export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided", "agent_pulse_joined"];
 // What counts as them having written back (store.lastContactActivity with
 // inboundOnly — a text summary only when it summarises THEIR text).
 export const INBOUND_EVENT_TYPES = [
@@ -217,31 +221,72 @@ export const UNSENT_STALE_DAYS = 7;
  *     would take and keeps the offer open; when that goes unanswered nothing
  *     moves it again (four on 2026-10-09, the oldest from 9/24);
  *   - a priced number a person never sent, a week on (seven, back to July).
- * Either way the agent check-in asks for their next one. Anything else
- * coming on the offer — a nudge, the push to paper, a float, a promise, a
- * reply owed, a person's thread — keeps the agent with the offer.
+ * Either way the agent check-in asks for their next one.
+ *
+ * 2026-10-14: the Line still listed open offers the machine had stood down on
+ * 8–13 days back, and others where the agent wrote and nothing answered it.
+ * Any offer with nothing coming — the push to paper ran out, a reply nobody
+ * answered, follow-ups switched off, you stopped the bot on that house — lets
+ * the agent go once there has been no text either way for STOOD_DOWN_QUIET_DAYS.
+ * A text this week, an offer made this week, a person on the thread, a pause
+ * with a date, or anything still coming on the offer — a nudge, the push to
+ * paper, a float, a promise, a reply held this week — keeps the agent with it.
+ * `drafts` are read with stale held rows forgotten (forgetStaleHeld).
  */
-export function openOfferIdle({ offer, drafts = [], events = [], config = {}, now = Date.now() } = {}) {
+export const STOOD_DOWN_QUIET_DAYS = 7;
+export function openOfferIdle({ offer, drafts = [], events = [], config = {}, lastInboundAt = null, now = Date.now() } = {}) {
   if (!offer) return null;
-  const next = nextFollowUp({ offer, drafts, events, config, now });
-  if (next.kind === "none") {
-    const h = threadHealth({ offer, drafts, events, now });
-    if (!h.drive && HOUSE_OVER_REASONS.has(h.reason)) return `the machine stands down: ${h.detail}`;
+  const list = forgetStaleHeld(drafts, now);
+  const next = nextFollowUp({ offer, drafts: list, events, config, now });
+  const stoodDown = next.kind === "none" || (next.kind === "stopped" && !next.until);
+  if (!stoodDown) {
+    if (next.kind === "float" && next.who === "you" && next.at && now - (ms(next.at) ?? now) > UNSENT_STALE_DAYS * DAY_MS) {
+      return "our number never went out";
+    }
+    return null;
   }
-  if (next.kind === "float" && next.who === "you" && next.at && now - (ms(next.at) ?? now) > UNSENT_STALE_DAYS * DAY_MS) {
-    return "our number never went out";
-  }
-  return null;
+  const h = threadHealth({ offer, drafts: list, events, now });
+  if (next.kind === "none" && !h.drive && HOUSE_OVER_REASONS.has(h.reason)) return `the machine stands down: ${h.detail}`;
+  if (h.reason === "person_has_it") return null;
+  const last = lastWordAt({ offer, drafts: list, events, lastInboundAt });
+  if (last != null && now - last < STOOD_DOWN_QUIET_DAYS * DAY_MS) return null;
+  return `nothing coming on it and no text for ${STOOD_DOWN_QUIET_DAYS} days: ${next.reason || next.label}`;
 }
 
 /**
- * agentOwner({ offers, drafts, events, config, settings, outreachFollowUpDays, now }) → owner | null
+ * forgetStaleHeld(drafts, now) → drafts
  *
- * The clock that has this agent right now, in words, or null when nothing
- * does. `offers` are this agent's CURRENT rows (shared/current-offer.js).
+ * A held reply or a person's draft a week old (shared/follow-up.js staleHeld)
+ * is not something the agent is waiting on: it stays on the Desk, and the
+ * pulse reads it as set aside. Their text in it still counts as their text.
  */
-export function agentOwner({ offers = [], drafts = [], events = [], config = {}, settings = {}, outreachFollowUpDays = 14, now = Date.now() } = {}) {
-  const s = normalizeAgentPulse(settings);
+export function forgetStaleHeld(drafts = [], now = Date.now()) {
+  return (drafts || []).map((d) => (staleHeld(d, now) ? { ...d, status: "set_aside" } : d));
+}
+
+// Any text either way with this agent, or anything done on the offer itself.
+const WORD_EVENT_TYPES = new Set([...OUR_TEXT_TYPES, "text_summary", "call_summary", "email_received", "offer_sent"]);
+function lastWordAt({ offer = {}, drafts = [], events = [], lastInboundAt = null } = {}) {
+  const times = [
+    lastInboundAt, offer.createdAt, offer.statusAt, offer.proactive?.realmCheckAt, offer.proactive?.takeCheckAt,
+    ...(offer.sends || []).map((s) => s?.ts || s?.at),
+    ...(offer.followUps || []).map((f) => f?.at),
+    ...(drafts || []).filter((d) => d && (d.status === "sent" || String(d.inbound || "").trim())).map((d) => (d.status === "sent" ? d.sentAt || d.updatedAt || d.createdAt : d.createdAt)),
+    ...(events || []).filter((e) => e && WORD_EVENT_TYPES.has(e.type)).map((e) => e.at),
+  ].map(ms).filter((t) => t != null);
+  return times.length ? Math.max(...times) : null;
+}
+
+/**
+ * offerOwner({ offers, drafts, events, config, lastInboundAt, now }) → owner | null
+ *
+ * The offer clocks alone: a live deal, a held underwrite, an open offer, or
+ * whatever clock the Offers column says is coming on one. A lead check-in
+ * (promise-sweep.js) waits behind these and goes after.
+ */
+export function offerOwner({ offers = [], drafts: allDrafts = [], events = [], config = {}, lastInboundAt = null, now = Date.now() } = {}) {
+  // A held draft owns the agent for a week, not for good (forgetStaleHeld).
+  const drafts = forgetStaleHeld(allDrafts, now);
   // Offers first: a live deal, an open offer, and whatever clock the Offers
   // column says is coming on each (the same answer, from the same code).
   for (const o of offers || []) {
@@ -255,7 +300,7 @@ export function agentOwner({ offers = [], drafts = [], events = [], config = {},
       continue;
     }
     if (OPEN_STATUSES.has(status) && !o.deal) {
-      if (openOfferIdle({ offer: o, drafts, events, config, now })) continue;
+      if (openOfferIdle({ offer: o, drafts, events, config, lastInboundAt, now })) continue;
       return "an open offer";
     }
     const next = nextFollowUp({ offer: o, drafts, events, config, now });
@@ -263,6 +308,21 @@ export function agentOwner({ offers = [], drafts = [], events = [], config = {},
       return String(next.label || next.kind).toLowerCase();
     }
   }
+  return null;
+}
+
+/**
+ * agentOwner({ offers, drafts, events, config, settings, outreachFollowUpDays, lastInboundAt, now }) → owner | null
+ *
+ * The clock that has this agent right now, in words, or null when nothing
+ * does. `offers` are this agent's CURRENT rows (shared/current-offer.js).
+ */
+export function agentOwner({ offers = [], drafts: allDrafts = [], events = [], config = {}, settings = {}, outreachFollowUpDays = 14, lastInboundAt = null, now = Date.now() } = {}) {
+  const s = normalizeAgentPulse(settings);
+  // A held draft owns the agent for a week, not for good (forgetStaleHeld).
+  const drafts = forgetStaleHeld(allDrafts, now);
+  const held = offerOwner({ offers, drafts, events, config, lastInboundAt, now });
+  if (held) return held;
   // Anything waiting in the outbox: one voice at a time.
   const open = (drafts || []).filter((d) => d && (d.status === "draft" || d.status === "scheduled"));
   if (open.length) return threadTimes(drafts).heldSince ? "their text is waiting on you" : "a text is waiting in the outbox";
@@ -272,9 +332,16 @@ export function agentOwner({ offers = [], drafts = [], events = [], config = {},
   const kept = byTime.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
   if (byTime.some((e) => e.type === "promise_made" && after(e, kept) && now - (ms(e.at) ?? 0) < 72 * HOUR_MS)) return "a promise we made";
   // A check-in they asked for, not yet sent or answered.
-  const req = byTime.filter((e) => e.type === "checkin_requested").at(-1);
-  if (req && now - (ms(req.at) ?? 0) < 45 * DAY_MS && !byTime.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)
+  const req = byTime.filter((e) => e.type === "checkin_requested" && e.data?.kind !== "lead").at(-1);
+  if (req && requestStands(req, now) && !byTime.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)
       && !byTime.some((e) => (e.type === "text_summary" || e.type === "call_summary") && after(e, req.at))) return "a check-in they asked for";
+  // A lead they told us the timing of ("relisting in the spring") has them
+  // only in the run-up to its day, so the two texts don't land together.
+  // Further out the regular check-in keeps its clock (Matt: every agent who
+  // replied hears from us every few weeks) and stays generic; the lead's own
+  // check-in still goes on its day (promise-sweep.js).
+  const lead = leadCheckInPending(byTime, now);
+  if (lead && (ms(lead.data?.dueAt) ?? 0) - now <= s.everyDays * DAY_MS) return "a lead they told us about";
   // A property they said was coming, still being chased.
   const pending = byTime.filter((e) => e.type === "address_pending").at(-1);
   if (pending && now - (ms(pending.at) ?? 0) < 32 * DAY_MS
@@ -392,10 +459,45 @@ export function tierCard(agent = {}) {
 }
 
 /**
+ * checkInSlot(contactId, days) → 0 … days-1
+ *
+ * A slot of its own for an agent, the same every time it's asked: FNV-1a of
+ * the contact id. What spreads a crowd that joins the check-in at once.
+ */
+export function checkInSlot(contactId = "", days = 21) {
+  const n = Math.max(1, Math.round(Number(days)) || 1);
+  let h = 0x811c9dc5;
+  for (const ch of String(contactId || "")) { h ^= ch.charCodeAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h % n;
+}
+
+const pacificWeekday = (t) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short" }).format(new Date(t));
+const isWeekend = (t) => { const d = pacificWeekday(t); return d === "Sat" || d === "Sun"; };
+
+/**
+ * firstCheckInAt({ contactId, joinedAt, everyDays }) → ISO | null
+ *
+ * When an agent who joined the check-in on `joinedAt` gets their first one:
+ * their own weekday (Pacific) within the `everyDays` from it. The run is
+ * weekdays only, so a weekend slot would only pile onto Monday. Null without
+ * a join date.
+ */
+export function firstCheckInAt({ contactId = "", joinedAt = null, everyDays = 21 } = {}) {
+  const t = ms(joinedAt);
+  if (t == null) return null;
+  const n = Math.max(1, Math.round(Number(everyDays)) || 1);
+  const workdays = [];
+  for (let d = 0; d < n; d++) if (!isWeekend(t + d * DAY_MS)) workdays.push(d);
+  if (!workdays.length) return iso(t);
+  return iso(t + workdays[checkInSlot(contactId, workdays.length)] * DAY_MS);
+}
+
+/**
  * evaluateAgent(agent, ctx) → { status, reason, segment, pulseReason, listing, house, priority }
  *
  *   agent  { contactId, name, tags, offers (all), current (current rows),
- *            drafts, events, ledger, lastInboundAt, listings, facts }
+ *            drafts, events, ledger, lastInboundAt, listings, facts,
+ *            joinedAt, joinedByReply }
  *   ctx    { settings, config, houses, outreachFollowUpDays, now }
  *
  * status: "stopped" | "owned" | "not_due" | "cold_dropped" | "due".
@@ -409,7 +511,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
 
   const stop = agentStops({ drafts, events, tags: agent.tags || [], botOffTags: config?.routing?.botOffTags || [], now });
   if (stop) return out("stopped", stop);
-  const owner = agentOwner({ offers: agent.current || [], drafts, events, config, settings: s, outreachFollowUpDays, now });
+  const owner = agentOwner({ offers: agent.current || [], drafts, events, config, settings: s, outreachFollowUpDays, lastInboundAt: agent.lastInboundAt, now });
   if (owner) return out("owned", owner);
 
   // Where they stand with us, and how many of our check-ins met silence.
@@ -431,9 +533,16 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   // Check in less / more with them (shared/bot-hold.js): the three weeks and
   // the cold pings stretch or shrink; the quiet days after any text only grow.
   const { rung, floor } = paceScale(paceOf({ events }).factor);
-  const everyDays = Math.round(s.everyDays * rung);
-  const coldEveryDays = Math.round(s.coldEveryDays * rung);
-  const quietDays = Math.round(s.quietDays * floor);
+  // How often they asked to hear from us (fact checkinEvery, read off their
+  // own words by shared/brush-offs.js): "every 2–3 months", "you're on my
+  // email list", "I have enough wholesalers". Every wait is at least that
+  // long, a fresh listing of theirs included (2026-10-14: an agent who asked
+  // for every two or three months heard from us a month later).
+  const asked = cadenceDays(agent.facts);
+  const everyDays = Math.max(Math.round(s.everyDays * rung), asked);
+  const coldEveryDays = Math.max(Math.round(s.coldEveryDays * rung), asked);
+  const quietDays = Math.max(Math.round(s.quietDays * floor), asked);
+  const waitWhy = (days, plain) => (asked && days === asked ? `they asked for a check-in every ${asked} days` : plain);
   const quietFor = (days) => !since || now - (ms(since) ?? 0) >= days * DAY_MS;
   // When a wait ends, for the plan's per-agent list.
   const after = (t, days) => (ms(t) == null ? null : new Date(ms(t) + days * DAY_MS).toISOString());
@@ -460,8 +569,8 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     }
     if (!listing) return out("not_due", "only a new listing of theirs is a reason to text", { segment: coldSeg });
     const lastPing = latest(texted.map((e) => e.at));
-    if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", `pinged within ${coldEveryDays} days`, { segment: coldSeg, dueAt: after(lastPing, coldEveryDays) });
-    if (!quietFor(quietDays)) return out("not_due", `touched within ${quietDays} days`, { segment: coldSeg, dueAt: after(since, quietDays) });
+    if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", waitWhy(coldEveryDays, `pinged within ${coldEveryDays} days`), { segment: coldSeg, dueAt: after(lastPing, coldEveryDays) });
+    if (!quietFor(quietDays)) return out("not_due", waitWhy(quietDays, `touched within ${quietDays} days`), { segment: coldSeg, dueAt: after(since, quietDays) });
     return out("due", "", { segment: coldSeg, pulseReason: "fresh_listing", listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
   }
 
@@ -473,7 +582,19 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   if (listing && quietFor(quietDays)) {
     return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
   }
-  if (!quietFor(everyDays)) return out("not_due", card && since === card.movedAt ? `moved to Tier ${card.tier.slice(1)} within ${everyDays} days` : `talked within ${everyDays} days`, { segment, dueAt: after(since, everyDays) });
+  if (!quietFor(everyDays)) return out("not_due", waitWhy(everyDays, card && since === card.movedAt ? `moved to Tier ${card.tier.slice(1)} within ${everyDays} days` : `talked within ${everyDays} days`), { segment, dueAt: after(since, everyDays) });
+  // Joined the check-in long after their last word (the repliers, 2026-10-14):
+  // the first one lands on their own day in the next `everyDays`, not all on
+  // the morning they joined. Only the first: once checked in on, or once
+  // anyone has talked since, the clock above decides.
+  // `joinedAt`: the runner's agent_pulse_joined, or the replier backfill's
+  // run. One who joined by their reply and isn't written down yet joins
+  // today, so a preview spreads them from today, as the next run will.
+  const joinedAt = agent.joinedAt || (agent.joinedByReply ? iso(now) : null);
+  const firstAt = firstCheckInAt({ contactId: agent.contactId, joinedAt, everyDays });
+  if (firstAt && !lastPulseAt && !texted.length && !(since && String(since) > String(joinedAt)) && now < ms(firstAt)) {
+    return out("not_due", `joined the check-in; first one spread over ${everyDays} days`, { segment, dueAt: firstAt });
+  }
   const house = ourHouseFor({ offers: agent.current || [], drafts, events, config, now });
   const overdue = since ? now - (ms(since) ?? 0) : Infinity;
   return out("due", "", { segment, pulseReason: house ? "our_house" : "general", house, priority: [2 + tier, -overdue] });
@@ -654,4 +775,58 @@ export function tierDrips({ pulse = {}, conversationAi = null, workflows = null 
     .filter((w) => w?.id && String(w.status || "").toLowerCase() !== "draft" && NURTURE_RX.test(String(w.name || "")) && TIER_RX.test(String(w.name || "")) && !DISPO_RX.test(String(w.name || "")))
     .map((w) => ({ id: String(w.id), name: String(w.name || "") }))
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/* ---------- the repliers outside the pool (ghl-broker/replier-backfill.js) ---------- */
+
+// Phone-side auto-replies: a text that came from their phone, not from them.
+// Only a thread with nothing else from them is "auto_reply".
+export const AUTO_REPLY_RX = /\b(?:do not disturb while driving|i(?:'|’)?m driving with do not disturb|auto[- ]?(?:reply|response|responder)|this is an automated|automated (?:message|response|reply)|(?:does not|doesn'?t|cannot|can'?t|unable to|not able to) (?:receive|accept|read|respond to) (?:text|sms)|(?:text|sms)(?: messages?)? (?:are|is) not (?:monitored|received|accepted)|out of (?:the )?office|(?:on vacation|out of town) (?:until|through|thru)|(?:use|have) a different number for text(?:ing|s)?|thank you for contacting the [\w\s]{0,30}(?:desk|line|team)\b[^]*\bpress \d)\b/i;
+// A stop at the END of a short text ("not my listing, pls stop"), and a
+// polite "don't text me": optOutInTranscript only reads a stop that leads.
+const STOP_TAIL_RX = /\bstop\W*$/i;
+const NO_NEED_RX = /\bno need to (?:message|text|contact) me\b/i;
+const smsDnd = (c) => c?.dnd === true || ["active", "permanent"].includes(String(c?.dndSettings?.SMS?.status || "").toLowerCase());
+const replyChannel = (m) => {
+  const t = String(m?.messageType || m?.type || "").toUpperCase();
+  if (t.includes("ACTIVITY") || t.includes("OPPORTUNITY")) return null;
+  if (t.includes("CALL")) return "call";
+  if (t.includes("SMS")) return "sms";
+  return null;
+};
+
+/**
+ * classifyReplierThread({ messages, contact, optOut }) → { kind, why, lastInboundAt, channel, inbound, lastText? }
+ *
+ * One agent's GHL thread (raw conversation messages, any order), read for
+ * the one-time replier backfill. `kind`:
+ *   none       nothing from them by text or call
+ *   opted_out  SMS DND in GHL, a do-not-text tag, or a stop in their own
+ *              words anywhere in the thread (optOutInTranscript: "STOP",
+ *              "wrong number", "take me off your list")
+ *   auto_reply every text from them is their phone answering for them
+ *   annoyed    one of their last three texts sounds annoyed
+ *   engaged    a person wrote back (or called): they join the check-in
+ * Only `engaged` carries a word of theirs (`lastText`, ≤300 chars) — for the
+ * timeline event, never a log line.
+ */
+export function classifyReplierThread({ messages = [], contact = null, optOut = CONVERSATION_AI_DEFAULTS.optOut } = {}) {
+  const inbound = (messages || [])
+    .map((m) => ({ m, channel: replyChannel(m), at: ms(m?.dateAdded) }))
+    .filter((x) => x.channel && x.at != null && String(x.m?.direction || "").toLowerCase() === "inbound")
+    .filter((x) => x.channel === "call" || String(x.m?.body || "").trim())
+    .sort((a, b) => a.at - b.at);
+  const last = inbound.at(-1);
+  const base = { lastInboundAt: last ? iso(last.at) : null, channel: last?.channel || null, inbound: inbound.length };
+  if (!last) return { kind: "none", why: "no reply", ...base };
+  if (smsDnd(contact)) return { kind: "opted_out", why: "dnd", ...base };
+  if (blockedByTags(contact?.tags || [])) return { kind: "opted_out", why: "tag", ...base };
+  const texts = inbound.filter((x) => x.channel === "sms").map((x) => ({ at: x.at, text: String(x.m.body || "").replace(/\s+/g, " ").trim() }));
+  const transcript = texts.map((x) => `[${iso(x.at).slice(0, 16).replace("T", " ")}] THEM sms: ${x.text}`).join("\n");
+  const stopLine = (t) => (STOP_TAIL_RX.test(t) && t.split(/\s+/).length <= 6) || NO_NEED_RX.test(t);
+  if (optOutInTranscript(transcript, optOut || CONVERSATION_AI_DEFAULTS.optOut) || texts.some((x) => stopLine(x.text))) return { kind: "opted_out", why: "said stop", ...base };
+  const calls = inbound.length - texts.length;
+  if (!calls && texts.every((x) => AUTO_REPLY_RX.test(x.text) || isAutoReply(x.text))) return { kind: "auto_reply", why: "auto-reply only", ...base };
+  if (texts.slice(-3).some((x) => IRRITATED_RX.test(x.text))) return { kind: "annoyed", why: "sounds annoyed", ...base };
+  return { kind: "engaged", why: "replied", ...base, lastText: (texts.at(-1)?.text || "").slice(0, 300) };
 }

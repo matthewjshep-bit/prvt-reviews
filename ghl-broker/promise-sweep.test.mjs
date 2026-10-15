@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runPromiseSweep, maybeRunPromiseSweep, settlePromise, localHour } from "./promise-sweep.js";
+import { runPromiseSweep, maybeRunPromiseSweep, settlePromise, localHour, notePromiseInHandText } from "./promise-sweep.js";
 import { detectPromise, PROMISE_DUE_HOURS } from "./shared/follow-up.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { buildPipeline } from "./shared/pipeline.js";
@@ -76,6 +76,53 @@ test("saying we'll have it over today is a promise of the written offer", () => 
   assert.equal(detectPromise("Let me send over the formal offer now."), "paper");
   assert.equal(detectPromise("Feel free to send it over when you get a chance."), null, "asks them");
   assert.equal(detectPromise("Let me run it by underwriting and I'll send it over."), "number", "a number first");
+});
+
+// 2026-10-14: promises in real threads that read as a mere "answer", so
+// nothing held them as a number we owed.
+test("the ways we promise a number in real threads all read as a number", () => {
+  assert.equal(detectPromise("Thanks, I'll come back to you today with a number."), "number");
+  assert.equal(detectPromise("Will have a number for you this afternoon."), "number");
+  assert.equal(detectPromise("Got the photos. Let me run it and get back to you."), "number");
+  assert.equal(detectPromise("Numbers are with my team right now. I'll come back to you today with where we'd land on it."), "number");
+  assert.equal(detectPromise("Appreciate that. Before we set up a time, let me run the numbers on 12 Elm St with my team so nobody's time gets wasted. I'll come back to you today with where we'd be."), "number");
+  assert.equal(detectPromise("Thanks Pat, I'll run both of these by my underwriting team today and get back to you."), "number");
+  assert.equal(detectPromise("Let me re-run it with the higher rehab number before I throw one out. I'll come back to you today with where we land."), "number");
+  assert.equal(detectPromise("Great, I'll send the LOI over this afternoon."), "paper");
+  assert.equal(detectPromise("Let's get it in front of them then. I'll send our letter of intent over today."), "paper");
+  // A partner question stays an answer (the answer box keeps it).
+  assert.equal(detectPromise("Still interested. 608 is where our numbers landed. Let me run it by my partner and get back to you today on whether there's any room."), "answer");
+  assert.equal(detectPromise("Let me confirm a closing date and come back to you this afternoon."), "answer");
+});
+
+test("a number you promised by hand is owed on Today, and a price you text keeps it — no machine text in your name", async () => {
+  const store = fakeStore();
+  const r = await notePromiseInHandText({ store, locationId: "L", contactId: "c1", text: "Thanks Pat, I'll get back to you today with a number on it.", at: at(50) });
+  assert.equal(r.made, true);
+  const made = store.events.find((e) => e.type === "promise_made");
+  assert.equal(made.data.by, "you");
+  assert.equal(made.data.text, undefined, "the words stay in GHL");
+  // The sweep never texts "still working on it" for you.
+  const st = starter();
+  const swept = await runPromiseSweep({ client: {}, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: st, now: NOW });
+  assert.equal(st.calls.length, 0);
+  assert.equal(swept.owed, 0);
+  // Today does carry it.
+  const board = buildPipeline({ events: store.events, now: NOW, contactNames: { c1: "Pat Agent" } });
+  const row = board.actions.find((a) => a.kind === "number_owed");
+  assert.ok(row);
+  assert.match(row.detail, /you said it yourself/);
+  // A price you text later keeps it.
+  const k = await notePromiseInHandText({ store, locationId: "L", contactId: "c1", text: "Ran it, we'd be at 410k as-is.", at: at(1) });
+  assert.equal(k.kept, true);
+  assert.equal(buildPipeline({ events: store.events, now: NOW }).actions.some((a) => a.kind === "number_owed"), false);
+  // An email carries the thread under it: not read.
+  assert.deepEqual(await notePromiseInHandText({ store, locationId: "L", contactId: "c2", text: "I'll get back to you today with a number.", at: at(1), channel: "email" }), { made: false, kept: false });
+});
+
+test("asking them for the address, or to send something over, is not a promise of paper", () => {
+  assert.notEqual(detectPromise("Good to hear. What's the address so I can get it in front of underwriting today?"), "paper");
+  assert.equal(detectPromise("Right, I still need the actual address to run comps and confirm it. Can you send it over?"), null);
 });
 
 const paperPromise = (hoursAgo) => promise(hoursAgo, { data: { what: "paper", draftId: `d${hoursAgo}`,
@@ -268,6 +315,71 @@ test("a text of ours from before they were left waiting covers nothing", async (
   const s = starter();
   const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
   assert.equal(r.sent, 1);
+});
+
+/* ---------- a lead they told us the timing of ---------- */
+
+const DAY_MS = 24 * HOUR;
+const leadReq = (daysAgo, dueInDays, more = {}) => ({
+  contactId: "c9", type: "checkin_requested", at: new Date(NOW - daysAgo * DAY_MS).toISOString(), address: "",
+  dedupeKey: `checkin_requested:lead:c9:${daysAgo}`,
+  data: { kind: "lead", phrase: "in the spring", dueAt: new Date(NOW + dueInDays * DAY_MS).toISOString(),
+    lead: { what: "relisting it", said: "Taken off market, relisting in the spring.", via: "text" }, ...more },
+});
+
+test("springtime means a check-in in March, not every two weeks: a lead booked five months ago goes on its day, naming it", async () => {
+  const store = fakeStore({ events: [leadReq(150, -0.1)] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1, JSON.stringify(r.results));
+  assert.equal(s.calls[0].kind, "checkin_due");
+  assert.equal(s.calls[0].subject.sourceKind, "lead");
+  assert.equal(s.calls[0].subject.lead.what, "relisting it");
+  const again = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW + HOUR, deps: s });
+  assert.equal(again.sent, 0, "claimed: asked once");
+});
+
+test("a lead isn't asked about before its day", async () => {
+  const store = fakeStore({ events: [leadReq(10, 60)] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 0);
+  assert.equal(s.calls.length, 0);
+});
+
+test("a newer 'nobody answered them' clock doesn't wipe out the lead", async () => {
+  const store = fakeStore({ events: [
+    leadReq(40, -0.1),
+    { contactId: "c9", type: "text_summary", at: at(24 * 30), data: {} },
+    // Booked after the lead, and not due yet.
+    request(24 * 30 - 0.01, { kind: "unanswered", phrase: "", dueAt: at(-24) }),
+  ] });
+  const s = starter();
+  await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.filter((c) => c.subject.sourceKind === "lead").length, 1, "the lead still goes");
+});
+
+test("an open offer still being asked about keeps them; the lead check-in waits and goes after", async () => {
+  const offer = { id: "o1", contactId: "c9", address: "12 Elm St, Kent, WA 98031", status: "sent", cashAmount: 300000,
+    createdAt: at(48), statusAt: at(48), sends: [{ ts: at(48) }] };
+  const saved = { ...SAVED, conversationAi: normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true,
+    ladders: { offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 7 } } } } } }) };
+  const store = fakeStore({ events: [leadReq(20, -0.1)], offers: [offer] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0, JSON.stringify(r.results));
+  assert.equal(r.results[0].status, "waiting");
+  // They passed on it: the offer lets go, and the lead goes.
+  offer.status = "passed"; offer.statusAt = at(1); offer.statusHistory = [{ status: "passed", ts: at(1) }];
+  const r2 = await runCheckInSweep({ locationId: "LOC", saved, store, now: NOW, deps: s });
+  assert.equal(r2.sent, 1, JSON.stringify(r2.results));
+});
+
+test("they brought the lead up themselves in the run-up to its day: no check-in on top", async () => {
+  const store = fakeStore({ events: [leadReq(30, -0.1), { contactId: "c9", type: "text_summary", at: at(24 * 5), data: {} }] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0, JSON.stringify(r.results));
 });
 
 /* ---------- the address they haven't sent yet ---------- */
@@ -517,4 +629,84 @@ test("a promise we owe waits while their newer text is waiting on you", async ()
   assert.equal(s.calls.length, 0);
   assert.equal(r.owed, 0, "not filed as owed while a person has the thread");
   assert.match(r.results[0].reason, /their text is waiting on you/);
+});
+
+/* ---------- they said no to the chase, or how often to check in (2026-10-14) ---------- */
+
+const theySaid = (hoursAgo, inbound) => ({ contactId: "ag", type: "text_summary", at: at(hoursAgo), dedupeKey: `ts:${hoursAgo}`, data: { inbound, summary: "", intent: "" } });
+// The fake store with a contact's own read and a profile, as the real one has.
+const fullStore = ({ events = [], facts = null } = {}) => {
+  const store = fakeStore({ events });
+  store.listContactEvents = async (_loc, contactId, { since = null, types = null } = {}) =>
+    store.events.filter((e) => e.contactId === contactId && (!since || e.at >= since) && (!types || types.includes(e.type)));
+  store.getContactProfile = async () => (facts ? { facts } : null);
+  return store;
+};
+
+test("the address chase stops after 'please don't keep asking', and says why on the record", async () => {
+  const store = fakeStore({ events: [pending(10 * 24), theySaid(5 * 24, "Please don't keep asking me. I will definitely let you know when we are ready.")] });
+  const s = starter();
+  const r = await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0, "no more asks");
+  assert.equal(r.results[0].status, "closed");
+  const closed = store.events.find((e) => e.type === "address_pending_closed");
+  assert.equal(closed.data.reason, "they_refused");
+  assert.match(closed.data.why, /stop asking/);
+  assert.equal((await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW + 5 * DAY, deps: s })).sent, 0, "and stays stopped");
+});
+
+test("'no, you can see them when they're on the market' and a bare 'not yet' end the chase too", async () => {
+  for (const said of ["No, you can see them when they're on the market.", "Not yet", "No"]) {
+    const store = fakeStore({ events: [pending(10 * 24), theySaid(5 * 24, said)] });
+    const s = starter();
+    await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+    assert.equal(s.calls.length, 0, said);
+  }
+  // A not-yet with a lead in it keeps the chase going.
+  const store = fakeStore({ events: [pending(10 * 24), theySaid(5 * 24, "Not yet. I do have a duplex in Federal Way coming up that needs a ton of work.")] });
+  const s = starter();
+  await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 1);
+});
+
+test("an agent with only a vacant lot coming gets no address chase", async () => {
+  const store = fakeStore({ events: [pending(50, { hint: "Nothing in my hand right now. I still have a vacant lot if you have someone interested." })] });
+  const s = starter();
+  await runAddressChase({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 0);
+  assert.equal(store.events.find((e) => e.type === "address_pending_closed")?.data.reason, "not_a_house");
+});
+
+test("'check back in a couple months' is checked in on at day sixty, not lost at day forty-five", async () => {
+  const req = request(60 * 24, { kind: "date", phrase: "a couple months", dueAt: at(2) });
+  const store = fullStore({ events: [req] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1, JSON.stringify(r.results));
+  assert.equal(s.calls[0].kind, "checkin_due");
+  assert.equal(s.calls[0].subject.phrase, "a couple months");
+  // They wrote back at day 30: nothing to send.
+  const answered = fullStore({ events: [req, { contactId: "c9", type: "text_summary", at: at(30 * 24), data: {} }] });
+  const s2 = starter();
+  await runCheckInSweep({ locationId: "LOC", saved: SAVED, store: answered, now: NOW, deps: s2 });
+  assert.equal(s2.calls.length, 0);
+});
+
+test("a lead they told us about later doesn't hide the 'check back in a couple months' they asked for first", async () => {
+  const req = request(60 * 24, { kind: "date", phrase: "a couple months", dueAt: at(2) });
+  const lead = leadReq(50, 100);
+  const store = fullStore({ events: [req, lead] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1, JSON.stringify(r.results));
+  assert.equal(s.calls[0].subject.phrase, "a couple months");
+  assert.notEqual(s.calls[0].subject.sourceKind, "lead", "the lead waits for its own day");
+});
+
+test("a deal source who told us how often to check in leaves the weekly chain", async () => {
+  const store = fullStore({ events: [request(48, { kind: "source", phrase: "", dueAt: at(1), left: 5 })], facts: { checkinEvery: [{ value: "90", at: at(24) }] } });
+  const s = starter();
+  await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length, 1, "this week's goes");
+  assert.equal(store.events.filter((e) => e.type === "checkin_requested").length, 1, "no next week");
 });

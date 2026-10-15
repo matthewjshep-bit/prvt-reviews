@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   dueStep, exhausted, followUpDedupeKey, normalizeSteps, stepLabel,
-  kindsFor, DEFAULT_LADDERS, FOLLOW_UP_KINDS, nextRungAt, blockingDraft,
+  kindsFor, DEFAULT_LADDERS, FOLLOW_UP_KINDS, nextRungAt, blockingDraft, supersededBy,
 } from "./follow-up.js";
 
 const DAY = 86400000;
@@ -272,4 +272,19 @@ test("a queued deal text doesn't hold up a walkthrough reminder", () => {
   assert.equal(blockingDraft(queued, { kind: "deal_followup" })?.id, "b1");
   // A deal text waiting for you (a draft) still holds everything.
   assert.equal(blockingDraft([{ ...queued[0], status: "draft" }], { kind: "showing_reminder" })?.id, "b1");
+});
+
+// 2026-10-14: a reply held a month ago kept the agent check-in out for good.
+test("a reply held for a month doesn't keep the agent check-in out, and the check-in leaves it on the Desk", () => {
+  const now = at(40);
+  const old = { id: "h1", status: "draft", inbound: "any update?", createdAt: SENT };
+  assert.equal(blockingDraft([old], { kind: "agent_pulse", now }), null);
+  assert.equal(blockingDraft([old], { kind: "offer_nudge", now })?.id, "h1", "every other machine text still waits on it");
+  assert.equal(blockingDraft([{ ...old, createdAt: new Date(at(37)).toISOString() }], { kind: "agent_pulse", now })?.id, "h1", "held three days: it still holds");
+  const queuedAhead = { id: "q1", status: "scheduled", outbound: { kind: "check_in" }, createdAt: SENT, sendAt: new Date(at(42)).toISOString() };
+  assert.equal(blockingDraft([queuedAhead], { kind: "agent_pulse", now })?.id, "q1", "a text still going out holds");
+  // The check-in replaces old machine rows, never your held reply.
+  const oldNudge = { id: "n1", status: "draft", outbound: { kind: "offer_nudge" }, createdAt: SENT };
+  assert.deepEqual(supersededBy([old, oldNudge], { kind: "agent_pulse", now }).map((d) => d.id), ["n1"]);
+  assert.deepEqual(supersededBy([old, oldNudge], { kind: "offer_nudge", now }).map((d) => d.id), ["h1", "n1"]);
 });

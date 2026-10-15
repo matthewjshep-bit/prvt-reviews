@@ -521,6 +521,24 @@ test("sending the first cold text writes outreach_sent — the ladder's trigger 
   assert.equal((await store2.listContactEvents("LOC", "c1", { types: ["outreach_sent"] })).length, 0);
 });
 
+// 2026-10-14: a number we promised stays owed until one goes out — so the
+// text that carries it has to say so.
+test("a reply that sends our number keeps the number we promised; one that promises again keeps nothing", async () => {
+  const priced = { ...openDraft(), party: "agent", inbound: "Any word on it?", reply: "Ran it. We'd be at 410k as-is, 14-day close.", propertyAddress: "12 Elm St, Renton, WA" };
+  const again = { ...openDraft(), id: "d2", contactId: "c2", party: "agent", inbound: "Seller wants 480k", reply: "Got it, 480k. Let me run that by underwriting and get back to you with a number tomorrow." };
+  const store = fakeStore([priced, again]);
+  const client = { call: async () => ({ messageId: "m1" }) };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+  const kept = await store.listContactEvents("LOC", "c1", { types: ["promise_kept"] });
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].data.by, "our_number");
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true });
+  assert.equal((await store.listContactEvents("LOC", "c2", { types: ["promise_kept"] })).length, 0);
+  const made = await store.listContactEvents("LOC", "c2", { types: ["promise_made"] });
+  assert.equal(made.length, 1);
+  assert.equal(made[0].data.what, "number");
+});
+
 test("an email draft goes out as an email with the address as its subject", async () => {
   const store = fakeStore([{ ...openDraft(), channel: "email", reply: "First line.\n\nSecond <para>." }]);
   const calls = [];
@@ -699,6 +717,77 @@ test("when an agent sounds confused or fed up with us, the reply waits for you",
     assert.equal(d.autoSend.decided, false);
     assert.match(d.autoSend.reason, /confused|already told us/);
   }
+});
+
+// 2026-10-14: about 17 agents offered to work with us on terms — a
+// list-back, being our buyer's agent, a referral fee, their wholesale list,
+// buying themselves — and the bot answered "keep me in mind" on its own.
+// The terms are Matt's to answer.
+const runPartner = async (message, draft = { ...DRAFT, reply: "Sounds good, keep me in mind!" }) => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.listOffers = async () => OFFERS;
+  const asked = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: AUTO_SAVED, store, contactId: "c1", message, sendsEnabled: true,
+    deps: { draft: async (args) => { asked.push(args); return draft; }, now: () => NOW, random: () => 0 },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const events = await store.listContactEvents("LOC", "c1");
+  return { d, events, asked };
+};
+
+test("an agent asking if we do list-backs gets held for Matt with a partner row, not 'keep me in mind'", async () => {
+  const { d, events, asked } = await runPartner("Do you do list backs? I'm an agent, let's chat more tomorrow");
+  assert.equal(d.status, "draft", "held, never scheduled");
+  assert.equal(d.autoSend.decided, false);
+  assert.match(d.autoSend.reason, /^needs a person: they asked about a list-back/);
+  assert.equal(d.needsHuman, true);
+  assert.equal(d.gateClean, false, "the nightly audit never releases it");
+  assert.deepEqual({ kind: d.partnerTerms.kind, phrase: d.partnerTerms.phrase }, { kind: "list_back", phrase: "Do you do list backs?" });
+  // The draft was told to answer the offer, not brush it off.
+  assert.match(asked[0].context.text, /PARTNER TERMS: they asked whether we give the listing back/);
+  assert.match(asked[0].context.text, /Never "keep me in mind"/);
+  const row = events.find((e) => e.type === "partner_terms");
+  assert.deepEqual(row.data, { kind: "list_back", phrase: "Do you do list backs?", kinds: ["list_back"], addToBuyers: false });
+  assert.equal(events.some((e) => e.type === "investor_minded"), false, "an agent asking for a list-back isn't an investor");
+});
+
+test("an agent offering to be our buyer's agent raises a partner row", async () => {
+  const { d, events } = await runPartner("I can represent you as your buyer's agent and keep an eye out for you");
+  assert.equal(d.status, "draft");
+  assert.equal(d.partnerTerms.kind, "buyer_agent");
+  assert.equal(events.filter((e) => e.type === "partner_terms").length, 1);
+});
+
+test("an agent who says they'd pay an assignment fee is investor-minded and flagged for the buyer list", async () => {
+  const { d, events } = await runPartner("Nothing now. Anything you got offered that didn't work for you? I can pay a 10k assignment if the deal pencils out");
+  assert.equal(d.status, "draft");
+  assert.equal(d.partnerTerms.kind, "investor_buyer");
+  assert.equal(events.find((e) => e.type === "partner_terms").data.addToBuyers, true);
+  const minded = events.find((e) => e.type === "investor_minded");
+  assert.ok(minded, "the investor-minded path records them");
+  assert.equal(minded.dedupeKey, "investor_minded:c1", "once per agent, the same key the reply's own read uses");
+});
+
+test("a plain 'I'll keep you in mind' raises nothing", async () => {
+  const { d, events, asked } = await runPartner("Nothing right now but I'll keep you in mind!", { ...DRAFT, reply: "Appreciate it, talk soon." });
+  assert.equal(d.status, "scheduled", "an ordinary reply still sends itself");
+  assert.equal(d.partnerTerms, undefined);
+  assert.equal(events.some((e) => e.type === "partner_terms"), false);
+  assert.doesNotMatch(asked[0].context.text || "", /PARTNER TERMS/);
+});
+
+test("evaluateReplyGates holds any reply carrying partner terms, whatever its intent", () => {
+  const g = gate({ intent: "question", reply: "Happy to work together.", partnerTerms: { kind: "referral_fee", phrase: "What are your referral fees like?" } });
+  assert.equal(g.ok, false);
+  assert.equal(g.clean, false, "not a lock a guard may open");
+  assert.match(g.flags.join(" · "), /they asked about a referral fee or a commission — partner terms are yours to answer/);
+  assert.equal(gate({ intent: "question", reply: "Happy to work together." }).ok, true);
+  assert.equal(gate({ intent: "question", reply: "Thanks!", partnerTerms: { kind: "list_back" } }, { party: "investor" }).flags.some((f) => /partner terms/.test(f)), false, "an investor's buying talk is not an agent's terms");
 });
 
 test("with sends off on the broker nothing is scheduled, and the draft says why", async () => {
@@ -3598,6 +3687,66 @@ test("an opt-out is never put on the check-in clock", async () => {
   assert.equal(events.length, 0, "silence is the whole point of an opt-out");
 });
 
+/* ---------- a lead they told us the timing of (2026-10-14) ---------- */
+
+test("an agent who says the listing goes live next week gets a check-in that week, naming it", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Nothing right now, but we're going on the market next week with one that needs a full remodel.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "other", confidence: "high", needsHuman: false, reply: "Sounds good, keep me posted.", propertyAddress: "" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const events = await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] });
+  const lead = events.find((e) => e.data?.kind === "lead");
+  assert.ok(lead, JSON.stringify(events));
+  assert.equal(lead.data.lead.what, "the listing");
+  const days = (Date.parse(lead.data.dueAt) - Date.now()) / 86400000;
+  assert.ok(days > 5 && days < 11, `about a week out, got ${days.toFixed(1)}`);
+  assert.ok(!events.some((e) => e.data?.kind === "date"), "one check-in for one message, not two");
+});
+
+test("a lead said on a call books a check-in, from their side of the call only", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const store = fakeStore();
+  store.listOffers = async () => OFFERS;
+  const transcript = "US: I'll circle back next week either way.\nTHEM: honestly we took it off the market, relisting in the spring once the tenant's out.";
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: transcript, channel: "sms", sendsEnabled: true,
+    inboundKind: "call", call: { messageId: "m-lead", direction: "outbound", at: new Date().toISOString(), durationSec: 120, dedupeKey: "call:m-lead", transcript },
+    deps: { draft: async () => ({ ...DRAFT, intent: "other", reply: "Good talking, I'll check back in the spring.", counterAmount: 0, propertyAddress: "" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const events = await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] });
+  const lead = events.find((e) => e.data?.kind === "lead");
+  assert.ok(lead, JSON.stringify(events));
+  assert.equal(lead.data.lead.via, "call");
+  assert.equal(lead.data.lead.what, "relisting it");
+  assert.equal(new Date(lead.data.dueAt).getUTCMonth(), 2, "March, not our 'next week'");
+});
+
+test("a lead months out leaves the 'nobody answered' net under a held reply in place", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(NEGOTIATION_OFFER);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "The seller wants to see proof of funds first. If not, she'll relist in the spring.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "proof_of_funds", confidence: "high", needsHuman: true,
+      humanReason: "they want proof of funds", reply: "Let me get that over to you today.", propertyAddress: "12 Elm St" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  const kinds = (await store.listContactEvents("LOC", "c1", { types: ["checkin_requested"] })).map((e) => e.data?.kind).sort();
+  assert.deepEqual(kinds, ["lead", "unanswered"], JSON.stringify({ status: d.status, auto: d.autoSend, intent: d.intent }));
+});
+
 /* ---------- a burst never silences a thread (Colin Foote, 2026-09-15) ---------- */
 
 test("a held third text lets the scheduled reply to the first two go, and waits on top of it", async () => {
@@ -6412,15 +6561,16 @@ function threadClient(lines) {
   } };
 }
 const OPENER = "Hi Sam, came across your listing at 48 Cedar Hollow Rd. Is this one a bit of a project, or pretty turnkey?";
-async function replyTo(message, { saved = QUALIFY_SAVED, intent = "deal_available", address = ICE, lines = [["outbound", OPENER]], sent = [] } = {}) {
+async function replyTo(message, { saved = QUALIFY_SAVED, intent = "deal_available", address = ICE, lines = [["outbound", OPENER]], sent = [],
+  reply = "Good to know. I'll run the numbers with underwriting today and get back to you.", houses } = {}) {
   _resetJobs();
   const store = await iceStore(sent);
   const uw = [];
   const { job } = await startReply({
     client: threadClient(lines), locationId: "LOC", saved, store, contactId: "c1", sendsEnabled: true, message,
     deps: {
-      draft: async () => ({ ...DRAFT, intent, confidence: "high", needsHuman: false, propertyAddress: address,
-        reply: "Good to know. I'll run the numbers with underwriting today and get back to you." }),
+      draft: async () => ({ ...DRAFT, intent, confidence: "high", needsHuman: false, propertyAddress: address, reply,
+        ...(houses ? { houses } : {}) }),
       startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-q" } }; },
     },
   });
@@ -6482,6 +6632,177 @@ test("with qualify-first off, the first-text house underwrites as before", async
   const { d, uw } = await replyTo("Cosmetic fixer", { saved: STARTER_SAVED });
   assert.equal(uw.length, 1);
   assert.equal(d.qualify, undefined);
+});
+
+/* ---------- an agent names other houses, without the house number (2026-10-13) ---------- */
+
+// A listing agent we'd passed on (the first-text house) wrote back with two
+// more of theirs: one on a street in town and a triplex on another,
+// each with an asking price. No house numbers. The reply read it as more talk about the first-text house and
+// sent the canned "keep me in mind" line; neither house was kept, and
+// nobody asked where they are.
+const PASSED_ICE = [{ id: "p1", locationId: "LOC", contactId: "c1", status: "sent", createdAt: iso(3600000), reply: "…", qualify: { stage: "pass", address: ICE } }];
+const TWO_MORE = "Got one on Pine St in Shelton too, a 1920s rambler, they want about 410K. " +
+  "Also a house split into a triplex over on Alder Street, around 720K";
+const TWO_HOUSES = [
+  { address: "Pine St, Shelton", sellerAsk: 410000, note: "1920s rambler" },
+  { address: "Alder Street", sellerAsk: 720000, note: "triplex, seller would carry the note" },
+];
+const kept = async (store) => (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "house_mentioned");
+
+test("an agent who names two more houses by street only is asked for both addresses, and both houses are kept", async () => {
+  const { d, uw, store } = await replyTo(TWO_MORE, {
+    intent: "new_property", address: "", houses: TWO_HOUSES, sent: PASSED_ICE,
+    reply: "Both sound worth a look. What are the addresses on the Pine St one and the Alder St triplex?",
+  });
+  assert.notEqual(d.qualify?.stage, "closed", "not read as more talk about the first-text house");
+  assert.doesNotMatch(d.reply, /keep me in mind/i);
+  assert.match(d.reply, /Pine St/);
+  assert.match(d.reply, /Alder/);
+  assert.equal(uw.length, 0, "no underwrite without a house number");
+  const houses = await kept(store);
+  assert.deepEqual(houses.map((e) => e.address).sort(), ["Alder Street", "Pine St, Shelton"]);
+  const pine = houses.find((e) => /Pine/.test(e.address));
+  assert.equal(pine.data.sellerAsk, 410000);
+  assert.equal(pine.data.needsAddress, true);
+  const pend = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "address_pending");
+  assert.ok(pend, "the address chase starts");
+  assert.match(pend.data.hint, /Pine St/);
+  assert.match(pend.data.hint, /Alder/);
+});
+
+test("the two houses are still kept when the model lists none of them", async () => {
+  const { d, store } = await replyTo(TWO_MORE, {
+    intent: "deal_available", address: "", sent: PASSED_ICE,
+    reply: "Nice, what are the addresses on those two?",
+  });
+  assert.notEqual(d.qualify?.stage, "closed");
+  assert.equal(d.reply, "Nice, what are the addresses on those two?");
+  assert.deepEqual((await kept(store)).map((e) => e.address).sort(), ["Alder Street", "Pine St, Shelton"]);
+});
+
+test("a reply that forgets to ask where the houses are gets the ask added", async () => {
+  const { d } = await replyTo(TWO_MORE, {
+    intent: "new_property", address: "", houses: TWO_HOUSES, sent: PASSED_ICE,
+    reply: "Appreciate you thinking of me.",
+  });
+  assert.match(d.reply, /^Appreciate you thinking of me\./);
+  assert.match(d.reply, /address/i);
+  assert.match(d.reply, /Pine St/);
+  assert.match(d.reply, /Alder St/);
+});
+
+test("a street with no house number is not underwritten, even when the model calls it the property", async () => {
+  const { uw, store } = await replyTo(TWO_MORE, {
+    intent: "new_property", address: "Pine St, Shelton", houses: TWO_HOUSES, sent: PASSED_ICE,
+    reply: "What are the addresses on the Pine St one and the Alder St triplex?",
+  });
+  assert.equal(uw.length, 0);
+  assert.ok((await store.listContactEvents("LOC", "c1")).some((e) => e.type === "address_pending"));
+});
+
+test("when the addresses come back, every house they named is underwritten, not just one", async () => {
+  const { uw, store } = await replyTo("Pine is 1412 Pine St Shelton and the triplex is 88 Alder St Shelton", {
+    intent: "new_property", address: "1412 Pine St, Shelton, WA", sent: PASSED_ICE,
+    houses: [{ address: "1412 Pine St, Shelton, WA", sellerAsk: 0, note: "" }, { address: "88 Alder St, Shelton, WA", sellerAsk: 0, note: "triplex" }],
+    reply: "Thanks, running numbers on both today.",
+  });
+  assert.deepEqual(uw.map((u) => u.address).sort(), ["1412 Pine St, Shelton, WA", "88 Alder St, Shelton, WA"]);
+  assert.deepEqual((await kept(store)).map((e) => e.data.needsAddress), [false, false]);
+});
+
+test("a house they say is gone is not asked about or kept as a lead", async () => {
+  const { d, store } = await replyTo("Sorry, the one on Pine St in Shelton already sold", {
+    intent: "rejection", address: "", sent: PASSED_ICE, houses: [{ address: "Pine St, Shelton", sellerAsk: 0, note: "sold" }],
+    reply: "No worries, thanks for letting me know.",
+  });
+  assert.equal(d.reply, "No worries, thanks for letting me know.");
+  assert.deepEqual(await kept(store), []);
+  assert.ok(!(await store.listContactEvents("LOC", "c1")).some((e) => e.type === "address_pending"));
+});
+
+test("talk about the first-text house alone still gets our one question", async () => {
+  const { d } = await replyTo("It's on a quiet street, cosmetic fixer", { houses: [] });
+  assert.equal(d.qualify.stage, "ask");
+});
+
+/* ---------- houses and referrals mentioned in passing (2026-10-14) ---------- */
+
+// 2,014 real threads read: houses named on a call ("I'll have one up in
+// Mount Vernon in a few weeks") were never kept, a house named by town with
+// no street ("some Stanwood houses") was never asked about, and an agent who
+// pointed us at a colleague who "has one coming up" was answered and
+// forgotten.
+async function callTo(transcript, { houses = [], reply = "Good talking just now.", intent = "question", address = "", sent = PASSED_ICE } = {}) {
+  _resetJobs();
+  const store = await iceStore(sent);
+  const uw = [];
+  const { job } = await startReply({
+    client: threadClient([["outbound", OPENER]]), locationId: "LOC", saved: QUALIFY_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: transcript, channel: "sms", inboundKind: "call",
+    call: { messageId: "m-c", direction: "inbound", at: iso(600000), durationSec: 240, dedupeKey: "call:m-c", transcript },
+    deps: {
+      draft: async () => ({ ...DRAFT, intent, confidence: "high", needsHuman: false, propertyAddress: address, reply, houses }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-c" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return { d: await store.getReplyDraft(job.draftId), uw, store };
+}
+
+test("a house the agent names on a call gets an address ask in the next text", async () => {
+  const { d, uw, store } = await callTo("US: anything else on your radar up north?\nTHEM: I've got one in Duvall coming up, needs everything\nUS: love that");
+  const houses = await kept(store);
+  assert.deepEqual(houses.map((e) => [e.address, e.data.label, e.source, e.data.heard]), [["", "the Duvall one", "call", "them"]]);
+  assert.match(d.reply, /address/i);
+  assert.match(d.reply, /Duvall/);
+  const pend = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "address_pending");
+  assert.ok(pend, "the address chase starts");
+  assert.match(pend.data.hint, /Duvall/);
+  assert.equal(uw.length, 0);
+});
+
+test("a street only we said on a call is not kept as their house", async () => {
+  const { d, store } = await callTo("US: is the one on Maple St still around?\nTHEM: not sure, I'll check with the seller", {
+    reply: "Thanks, talk soon.", houses: [{ address: "Maple St", sellerAsk: 0, note: "" }],
+  });
+  assert.deepEqual(await kept(store), []);
+  assert.equal(d.reply, "Thanks, talk soon.");
+});
+
+test("a call with no speaker labels keeps the house but never starts an underwrite on it", async () => {
+  const { uw, store } = await callTo("Speaker 1: so the other one is 77 Birch St in Shelton, it's ready now. Speaker 2: great, send it over", {
+    intent: "new_property", address: "48 Cedar Hollow Rd, Shelton, WA 98584",
+    houses: [{ address: "77 Birch St, Shelton, WA", sellerAsk: 300000, note: "ready now" }],
+  });
+  assert.ok(!uw.some((u) => /Birch/.test(u.address || "")), JSON.stringify(uw));
+  const houses = await kept(store);
+  assert.deepEqual(houses.map((e) => [e.address, e.source, e.data.heard]), [["77 Birch St, Shelton, WA", "call", "unlabelled"]]);
+});
+
+test("'some Stanwood houses' gets asked about by town", async () => {
+  const { d, uw, store } = await replyTo("I've got some Stanwood houses that need a lot of work", {
+    intent: "deal_available", address: "", sent: PASSED_ICE, reply: "Appreciate you thinking of me.",
+  });
+  assert.match(d.reply, /^Appreciate you thinking of me\./);
+  assert.match(d.reply, /addresses on the Stanwood houses/);
+  assert.equal(uw.length, 0, "no underwrite without a house number");
+  const houses = await kept(store);
+  assert.deepEqual(houses.map((e) => [e.address, e.data.label, e.data.town, e.data.needsAddress]), [["", "the Stanwood houses", "Stanwood", true]]);
+});
+
+test("an agent who says 'contact Dana at Acme Realty, she has one' raises a referral row and texts nobody", async () => {
+  const { d, store } = await replyTo("Nothing right now. Contact Sara Example at John L Scott, she has one coming up: (555) 555-0100", {
+    intent: "investor_open", address: "", sent: PASSED_ICE, reply: "Thanks, appreciate the heads up.",
+  });
+  const refs = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "referral_mentioned");
+  assert.equal(refs.length, 1);
+  assert.deepEqual([refs[0].data.name, refs[0].data.brokerage, refs[0].data.phone], ["Sara Example", "John L Scott", "(555) 555-0100"]);
+  assert.equal(d.contactId, "c1");
+  const drafts = await store.listReplyDrafts("LOC", { limit: 50 });
+  assert.ok(drafts.every((x) => x.contactId === "c1"), "no draft to the person they named");
+  assert.doesNotMatch(d.reply, /Sara/);
 });
 
 /* ---------- a gate hold earns one redraft (2026-10-08) ---------- */
@@ -6735,4 +7056,78 @@ test("with ghlStages on the bot adds no tier-1 tag or TIER 1 workflow, and still
   assert.equal(uw.length, 1, "the underwrite still runs");
   const t1 = tierOneActions(d.actions);
   assert.ok(t1.length > 0 && t1.every((a) => a.status === "skipped" && /pipeline follows the offers/.test(a.detail || "")), JSON.stringify(t1.map((a) => [a.type, a.status])));
+});
+
+/* ---------- cadence and brush-offs (2026-10-14) ---------- */
+
+const eventsOf = async (store, types) => store.listContactEvents("LOC", "c1", { types });
+
+test("a Redfin auto-reply isn't a text waiting on Matt: no draft, no clock, and the other number is yours", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  let drafted = 0;
+  const r = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1",
+    message: "You've reached Redfin, but we actually use a different number for texting - (206) 555-0100. We'll send you a message from that number!",
+    deps: { draft: async () => { drafted++; return DRAFT; } },
+  });
+  await settle();
+  assert.equal(r.job, null);
+  assert.equal(r.autoReply, true);
+  assert.equal(drafted, 0, "nothing for the model to answer");
+  assert.equal((await store.listReplyDrafts("LOC", { contactId: "c1" })).length, 0, "nothing waiting in the outbox");
+  assert.equal((await eventsOf(store, ["text_summary", "checkin_requested"])).length, 0, "not their reply, and no check-in clock");
+  assert.equal((await eventsOf(store, ["reply_not_needed"]))[0]?.data.intent, "auto_reply");
+  assert.equal((await eventsOf(store, ["texts_elsewhere"]))[0]?.data.otherNumber, "(206) 555-0100");
+});
+
+test("an agent who says check in every two or three months has it on the record, and no two-morning clock", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Nothing right now. You are on my list. Would you check in no more than every 2-3 months. I get too many of these.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", needsHuman: true, humanReason: "they asked us to back off", reply: "Will do.", propertyAddress: "" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const profile = await store.getContactProfile("LOC", "c1");
+  assert.equal(profile.facts.checkinEvery.at(-1).value, "75");
+  assert.equal((await eventsOf(store, ["checkin_requested"])).length, 0, "no 'their text is waiting' check-in two mornings on");
+});
+
+test("'feel free to check back in a couple months' books the check-in two months out, not a weekly chain", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "It's pretty dialed in already. Feel free to check back in a couple months, I'll keep you in mind for any fixers 👍",
+    deps: { draft: async () => ({ ...DRAFT, intent: "small_talk", reply: "Will do, talk then.", propertyAddress: "" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const reqs = await eventsOf(store, ["checkin_requested"]);
+  assert.equal(reqs.length, 1, JSON.stringify(reqs.map((e) => e.data)));
+  assert.equal(reqs[0].data.kind, "date");
+  assert.equal(reqs[0].data.phrase, "a couple months");
+  const days = (Date.parse(reqs[0].data.dueAt) - Date.now()) / 86400000;
+  assert.ok(days > 59 && days < 61.5, `due in ${days} days`);
+  assert.equal((await store.getContactProfile("LOC", "c1")).facts.checkinEvery.at(-1).value, "60");
+});
+
+test("'I can't give the address until it lists' starts no address chase", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1",
+    message: "I have one coming up in Kent but I cannot give the address until it lists.",
+    deps: { draft: async () => ({ ...DRAFT, intent: "new_property", propertyAddress: "", reply: "Fair enough, send it when it's live." }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal((await eventsOf(store, ["address_pending"])).length, 0);
 });

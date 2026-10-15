@@ -58,7 +58,9 @@ export const EVENT_TYPES = [
   // day's claim, written before the draft; `agent_pulse_texted` is the text
   // actually going; a claim that drafted nothing is voided so the seat and the
   // listing come back. `listing_pinged` keeps a listing to one text, ever.
-  "agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided",
+  // `agent_pulse_joined`: the day an agent who wrote back joined the pool by
+  // their reply alone; their first check-in is spread from it.
+  "agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided", "agent_pulse_joined",
   // A GHL workflow the app put them in or took them out of (conversation
   // actions), so the pulse knows who a drip already has.
   "workflow_enrolled", "workflow_left",
@@ -107,6 +109,12 @@ export const EVENT_TYPES = [
   // or an agent added to it; and a GHL card the app moved (data.from/to).
   "tier1_passed", "tier1_kicked", "tier1_added", "ghl_stage_moved",
   "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate", "property_details",
+  // A house they named in a text, address or not (shared/mentioned-houses.js):
+  // data.sellerAsk, data.note, data.needsAddress.
+  "house_mentioned",
+  // Someone else they pointed us to for a house (shared/mentioned-houses.js
+  // referralMention): data.name, data.brokerage, data.relation, data.phone.
+  "referral_mentioned",
   // Stop / Pause and Resume on the work pane (shared/bot-hold.js): while a
   // stop holds, nothing goes to them by itself. data.until ends a pause.
   "drive_stopped", "drive_resumed",
@@ -116,6 +124,12 @@ export const EVENT_TYPES = [
   "unsubscribed",
   // Matt's contact card went to them in its own text (shared/contact-card.js).
   "contact_card_sent",
+  // Their phone answered with an auto-reply naming another number to text
+  // (shared/brush-offs.js autoReplyNumber): our texts aren't reaching them.
+  "texts_elsewhere",
+  // An agent offered to work together on terms — a list-back, being our
+  // buyer's agent, a fee, their deal list (shared/partner-terms.js).
+  "partner_terms",
 ];
 
 export const EVENT_LABEL = {
@@ -125,6 +139,7 @@ export const EVENT_LABEL = {
   underwrite_dropped: "an underwrite left the queue without running",
   listing_off_market: "the listing went off the market", listing_back_on_market: "the listing came back on the market",
   agent_pulse_sent: "a check-in was started", agent_pulse_texted: "we checked in", agent_pulse_voided: "a check-in drafted nothing",
+  agent_pulse_joined: "joined the agent check-in",
   listing_pinged: "we asked about their listing", listing_ping_voided: "a listing text drafted nothing",
   workflow_enrolled: "added to a GHL workflow", workflow_left: "taken out of a GHL workflow",
   offmarket_asked: "we asked about off-market houses",
@@ -136,7 +151,7 @@ export const EVENT_LABEL = {
   enrich_run: "AI enrichment ran", tag_added: "tag added", tag_removed: "tag removed",
   tier1_passed: "passed on it from Tier 1", tier1_kicked: "taken off Tier 1", tier1_added: "put on Tier 1", ghl_stage_moved: "GHL card moved",
   subject_property_set: "subject property set", fact_learned: "learned about them", fact_removed: "fact removed",
-  import: "imported", agent_estimate: "agent's own take", property_details: "property details",
+  import: "imported", agent_estimate: "agent's own take", property_details: "property details", house_mentioned: "they named a house", referral_mentioned: "they named someone with a house",
   follow_up_sent: "we followed up",
   outreach_sent: "we reached out about their listing",
   outreach_enrolled: "added to an outreach workflow",
@@ -155,6 +170,8 @@ export const EVENT_LABEL = {
   drive_stopped: "you stopped the bot", drive_resumed: "the bot is back on", cadence_set: "you changed how often we check in",
   unsubscribed: "they unsubscribed",
   contact_card_sent: "we sent our contact card",
+  texts_elsewhere: "an auto-reply says their texts go to another number",
+  partner_terms: "they offered to work together",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -168,7 +185,7 @@ export const EVENT_ICON = {
   call_summary: "Phone", text_summary: "MessageSquare", note: "StickyNote",
   enrich_run: "Sparkles", tag_added: "Tag", tag_removed: "Tag",
   tier1_passed: "XCircle", tier1_kicked: "CircleSlash", tier1_added: "CheckCircle2", ghl_stage_moved: "ArrowLeftRight",
-  subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator", property_details: "ClipboardList",
+  subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator", property_details: "ClipboardList", house_mentioned: "Home", referral_mentioned: "Handshake",
   follow_up_sent: "BellRing",
   property_financed: "Landmark",
   outreach_sent: "Send",
@@ -187,13 +204,15 @@ export const EVENT_ICON = {
   underwrite_dropped: "Clock",
   listing_off_market: "XCircle",
   listing_back_on_market: "RefreshCw",
-  agent_pulse_sent: "BellRing", agent_pulse_texted: "MessageSquare", agent_pulse_voided: "Clock",
+  agent_pulse_sent: "BellRing", agent_pulse_texted: "MessageSquare", agent_pulse_voided: "Clock", agent_pulse_joined: "BellRing",
   listing_pinged: "Crosshair", listing_ping_voided: "Clock",
   workflow_enrolled: "Workflow", workflow_left: "LogOut",
   offmarket_asked: "Crosshair",
   drive_stopped: "CirclePause", drive_resumed: "CirclePlay", cadence_set: "Gauge",
   unsubscribed: "UserX",
   contact_card_sent: "Contact",
+  texts_elsewhere: "CircleSlash",
+  partner_terms: "Handshake",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];
@@ -223,6 +242,10 @@ export const FACT_KEYS = {
   brokerage:             { kind: "scalar", party: "agent",    cap: 5,  label: "Brokerage" },
   suggested_next_action: { kind: "scalar", party: "both",     cap: 20, label: "Next action" },
   last_convo_summary:    { kind: "scalar", party: "both",     cap: 20, ghlMax: 500, label: "Last conversation" },
+  // How often they asked us to check in, in days: "every 2–3 months" is 75,
+  // "you're on my email list" 90 (shared/brush-offs.js cadenceRequest). The
+  // agent check-in waits at least this long. App-only: no GHL field.
+  checkinEvery:          { kind: "scalar", party: "agent",    cap: 20, days: true, ghl: false, label: "Check in every (days)" },
 };
 export const factKeysFor = (party) =>
   Object.keys(FACT_KEYS).filter((k) => FACT_KEYS[k].party === "both" || FACT_KEYS[k].party === party);
@@ -428,6 +451,10 @@ function coerceValue(key, value) {
     const n = Number(v.replace(/[$,\s]/g, ""));
     return Number.isFinite(n) && n > 0 ? String(Math.round(n)) : "";
   }
+  if (def.days) {
+    const n = Math.round(Number(v.replace(/[^\d.]/g, "")));
+    return Number.isFinite(n) && n >= 7 && n <= 365 ? String(n) : "";
+  }
   if (def.values) {
     v = v.toLowerCase().replace(/[\s-]+/g, "_");
     return def.values.includes(v) ? v : "";
@@ -516,6 +543,7 @@ export function factsAsCustom(facts) {
 export function factsFromCustom(custom = {}, party = "agent", { source = "import", at = new Date().toISOString(), ref = null } = {}) {
   const out = [];
   for (const key of factKeysFor(party)) {
+    if (FACT_KEYS[key].ghl === false) continue;
     const raw = custom?.[key];
     if (raw == null || norm(raw) === "") continue;
     const def = FACT_KEYS[key];

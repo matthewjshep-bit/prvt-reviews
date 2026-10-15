@@ -34,6 +34,7 @@ import {
 } from "../ghl.js";
 import { offerFunnel, counterSpread, passReasons, followUpPerformance, passThemes } from "../shared/funnel.js";
 import { buildPipeline } from "../shared/pipeline.js";
+import { owedPromises } from "../shared/promise-owed.js";
 import { selfNames, selfContactIds, withoutSelf } from "../shared/self-contact.js";
 import { autopilotSummary, graduationReport, GRADUATION } from "../shared/graduation.js";
 import { buildFlow, FLOW_STAGES } from "../shared/flow.js";
@@ -84,8 +85,10 @@ const PIPELINE_EVENT_TYPES = [
   "follow_up_sent", "text_summary", "call_summary", "call_attempt",
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
-  "underwrite_dropped",
-  "drive_stopped", "drive_resumed", "hand_reply", "investor_minded",
+  "underwrite_dropped", "texts_elsewhere",
+  "drive_stopped", "drive_resumed", "hand_reply", "investor_minded", "referral_mentioned",
+  // An agent's partner terms: the Desk's partner row (shared/call-list.js).
+  "partner_terms",
 ];
 
 const DAY_MS = 86400000;
@@ -509,7 +512,15 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
       // What the machine would do about each owed promise: the answers we
       // have since given, and the triage of any held underwrite in the way.
-      const sentDrafts = recentDrafts.filter((d) => d?.status === "sent");
+      const recentSent = recentDrafts.filter((d) => d?.status === "sent");
+      // A number we still owe (shared/promise-owed.js) reaches back further
+      // than these two weeks of sends: each person it would name has their
+      // own sent texts read, so a number that went out three weeks ago is
+      // never read as owed. A handful of people, one small read each.
+      const owedIds = owedPromises({ events, sentDrafts: recentSent, offers, now }).map((p) => p.contactId).slice(0, 40);
+      const olderSent = (await Promise.all(owedIds.map((c) => store.listReplyDrafts(locationId, { contactId: c, status: "sent", limit: 40 }).catch(() => [])))).flat();
+      const seenSent = new Set(recentSent.map((d) => d.id));
+      const sentDrafts = [...recentSent, ...olderSent.filter((d) => d?.id && !seenSent.has(d.id) && seenSent.add(d.id))];
       const heldTriageByOffer = await heldTriageForPromises({ store, locationId, offers, events, config, now }).catch(() => ({}));
       // Which live deals have a buyer package, for the "no buyer package" row.
       const dealRooms = await dealRoomIds({ store, locationId, offers });

@@ -32,6 +32,7 @@ import { offMarketCue } from "./off-market.js";
 import { sameStreet } from "./us-address.js";
 import { buyerCeiling } from "./post-mortem.js";
 import { ASSIGNMENT_RX } from "./lead-source.js";
+import { PARTNER_TERMS_LABEL } from "./partner-terms.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -94,9 +95,12 @@ export const CALL_KINDS = [
   { key: "call_phone_only",  label: "Phone only" },
   { key: "call_partner",     label: "Relationship check-in" },
   { key: "call_investor",    label: "Investor-minded agent" },
+  { key: "call_partner_terms", label: "Partner terms: yours to answer" },
+  // A decision, not a call (2026-10-14): someone else they say has one.
+  { key: "referral",         label: "Referral: someone else has one" },
 ];
 // They called you: ring back first — they reached out.
-const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_investor: 45, call_partner: 30 };
+const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_investor: 45, call_partner: 30, call_partner_terms: 80 };
 // Points off for each call that didn't connect since the row's reason, and
 // for each day their last word has aged (hot, counters, quiet threads).
 const PER_TRY = 15;
@@ -136,6 +140,8 @@ const LIVE_LANES = new Set(["floated", "sent", "countered", "hot"]);
 const NOT_OUR_HOUSE_RX = /outside the area|rural|acres|manufactured|mobile home|condo|townho|multi-family|duplex|not our kind|wholesaler/i;
 // A house an agent brought stays a call this long after it landed.
 const BROUGHT_FRESH_DAYS = 2;
+// A referral to someone else stays a decision this long.
+const REFERRAL_DAYS = 21;
 
 /**
  * callList({ offers, cards, actions, drafts, events, lastIn, lastAny, unsubscribed, settings, now })
@@ -483,6 +489,33 @@ export function callList({
       opener: `Hi ${first(card.contactName)}, Matt here — calling rather than texting about ${street(card.address)}.` });
   }
 
+  /* 6a. An agent who offered to work together, on terms (2026-10-14).
+   * A list-back, being our buyer's agent, a referral or buyer broker fee,
+   * their deal list, or they buy themselves (shared/partner-terms.js). The
+   * bot held its reply; the terms are Matt's. Two weeks, then it's history;
+   * a call or a text from you after it clears it. Ahead of 6b: the same
+   * person is one row, and what they offered is the more specific. */
+  const PARTNER_DAYS = 14;
+  for (const e of [...(events || [])].filter((x) => x?.type === "partner_terms" && x.contactId && PARTNER_TERMS_LABEL[x.data?.kind])
+    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))) {
+    const c = e.contactId;
+    if (taken.has(c) || unsubscribed.has(c) || irritated(c)) continue;
+    if (now - (ms(e.at) ?? 0) > PARTNER_DAYS * DAY_MS) continue;
+    const name = nameOf(c, offersBy, draftsBy);
+    const d = e.data;
+    const phrase = String(d.phrase || "").slice(0, 120);
+    // The reply the bot held for them, newest first.
+    const held = (draftsBy.get(c) || []).filter((x) => x.partnerTerms && ["draft", "scheduled"].includes(x.status || "draft"))
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] || null;
+    add("call_partner_terms", { contactId: c, contactName: name, since: e.at, draftId: held?.id || null,
+      why: `${PARTNER_TERMS_LABEL[d.kind]}${phrase ? ` — "${phrase}"` : ""}`,
+      goal: "They offered to work together; the terms are yours to answer. Hear how they like to work, say how you'd set it up, " +
+        "and send (or rewrite) the reply the bot held" + (d.addToBuyers ? ". They buy too: add them to the buyer list." : "."),
+      opener: `Hi ${first(name)}, it's Matt — saw your note about working together. Easier to talk it through than text.`,
+      extra: { partner: { kind: d.kind, phrase, kinds: Array.isArray(d.kinds) ? d.kinds : [d.kind], addToBuyers: Boolean(d.addToBuyers) } },
+      agePenaltyFrom: ms(e.at) });
+  }
+
   /* 6b. An agent who thinks like an investor: one relationship call.
    * They asked about a finder's fee or assigning, own rentals, or offered to
    * represent us — how the agents behind the deals with committed buyers
@@ -496,6 +529,31 @@ export function callList({
       why: `talks like an investor ("${String(e.data?.cue || "").slice(0, 40)}") — worth a relationship call`,
       goal: "Put a voice to the name: how they work with investors, what they and their clients have coming, and that we'd love them to write it up and represent us. These agents bring the off-market houses.",
       opener: `Hi ${first(name)}, it's Matt — wanted to put a voice to the name. Sounds like you think about these the way we do.` });
+  }
+
+  /* 6c. Someone else they pointed us to for a house: a decision, not a call.
+   * "Contact <a colleague> at <a brokerage>, she has one coming up" (2026-10-14)
+   * was thanked and forgotten. The person they named is a stranger to us, so
+   * nothing texts them; the row says who, where, and to mention the agent.
+   * One per person named (the reply agent's dedupe key), for three weeks;
+   * Dismiss clears it. Not one of the per-person call reasons above. */
+  for (const e of (events || []).filter((x) => x?.type === "referral_mentioned" && x.contactId)) {
+    if (now - (ms(e.at) ?? 0) > REFERRAL_DAYS * DAY_MS) continue;
+    const c = e.contactId;
+    const d = e.data || {};
+    const who = String(d.name || "").trim() || (d.relation ? `their ${d.relation}` : "someone they know");
+    const agent = nameOf(c, offersBy, draftsBy);
+    const agentFirst = agent ? first(agent) : "the agent";
+    const brokerage = String(d.brokerage || "").trim();
+    out.push({
+      id: `referral:${c}:${String(d.name || d.relation || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
+      kind: "referral", section: "decide", group: "yours", severity: "now",
+      contactId: c, contactName: agent, offerId: null, address: "", draftId: null, score: 0, since: e.at,
+      title: `Referral: ${who}${brokerage ? ` (${brokerage})` : ""} — ${agentFirst} says they have one`,
+      detail: `${d.phrase ? `“${String(d.phrase).slice(0, 160)}” ` : ""}Reach out yourself if it's worth it${d.phone ? ` (${d.phone})` : ""}, and mention ${agentFirst}. The bot never contacts them.`,
+      referral: { name: String(d.name || ""), brokerage, relation: String(d.relation || ""), phone: String(d.phone || "") },
+      ops: [],
+    });
   }
 
   /* 7. Partners — agents we've done business with — gone quiet a while. */

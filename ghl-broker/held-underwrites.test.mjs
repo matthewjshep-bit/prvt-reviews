@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { sweepHeldUnderwrites } from "./held-underwrites.js";
 import { runConversationAudit } from "./conversation-audit.js";
+import { releasableHeld } from "./shared/conversation-audit.js";
 
 const NOW = Date.parse("2026-09-17T02:00:00Z");
 const ago = (d) => new Date(NOW - d * 86400000).toISOString();
@@ -167,4 +168,41 @@ test("an ask already made isn't claimed again every night: an answer without a n
   const byOffer = Object.fromEntries(r.findings.map((f) => [f.offerId, f]));
   assert.equal(byOffer.h1.kind, "held_call"); assert.match(byOffer.h1.why, /without a number/);
   assert.equal(byOffer.h2.kind, "held_waiting"); assert.equal(byOffer.h2.passAt, new Date(Date.parse(ago(3)) + 7 * 86400000).toISOString());
+});
+
+// 2026-10-14: houses we'd told an agent we'd price were closed out by this
+// sweep, quietly, and the agent who was waiting on us never heard a thing.
+test("a house we retire after promising a number gets a pass text drafted for the agent", async () => {
+  const stale = held({ createdAt: ago(16), updatedAt: ago(16), autoUnderwrite: { jobId: "j1", held: [THIN], finishedAt: ago(16) } });
+  const promised = { type: "promise_made", contactId: "c1", address: "2500 Alder St, Milton, WA 98354", at: ago(15), data: { what: "number", text: "I'll run it by underwriting today and get back to you with a number." } };
+  const proactive = [];
+  const d = deps({ releaseHeld: true, startProactive: async (a) => { proactive.push(a); return { job: { id: "p1" } }; } });
+  const store = fakeStore({ offers: [stale], events: [promised] });
+  const r = await run(store, fakeClient(), d);
+  assert.equal(store.book.get("h1").status, "we_passed");
+  assert.equal(proactive.length, 1);
+  assert.equal(proactive[0].kind, "kind_pass");
+  assert.equal(proactive[0].subject.why, "promised");
+  assert.equal(proactive[0].subject.owed, "number");
+  assert.equal(proactive[0].deps.releaseHeld, false, "switch off: the draft waits for you");
+  assert.ok(proactive[0].deps.holdForAPerson, "…and says so, so the 7pm audit never releases it");
+  assert.equal(releasableHeld({ status: "draft", intent: "kind_pass", party: "agent", gateClean: true, createdAt: ago(0), autoSend: { decided: false, reason: `needs a person: ${proactive[0].deps.holdForAPerson}` } }, { now: NOW }), false);
+  assert.match(r.acted[0].reason, /drafted for you/);
+
+  // Switched on, it goes the way the other pass notes go.
+  const on = { ...SAVED, conversationAi: { ...SAVED.conversationAi, heldTriage: { passOnRetire: true } } };
+  const proactive2 = [];
+  const d2 = deps({ releaseHeld: true, startProactive: async (a) => { proactive2.push(a); return { job: { id: "p2" } }; } });
+  await run(fakeStore({ offers: [{ ...stale }], events: [promised] }), fakeClient(), d2, { saved: on });
+  assert.equal(proactive2[0].deps.releaseHeld, true);
+  assert.equal(proactive2[0].deps.holdForAPerson, undefined);
+});
+
+test("a house retired quietly with nothing promised still sends nothing", async () => {
+  const stale = held({ createdAt: ago(16), updatedAt: ago(16), autoUnderwrite: { jobId: "j1", held: [THIN], finishedAt: ago(16) } });
+  const d = deps();
+  const store = fakeStore({ offers: [stale] });
+  await run(store, fakeClient(), d);
+  assert.equal(store.book.get("h1").status, "we_passed");
+  assert.equal(d.calls.filter((c) => c[0] === "proactive").length, 0);
 });

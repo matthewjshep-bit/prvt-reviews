@@ -59,7 +59,7 @@
 
 import { driveOpenPromises } from "../promise-driver.js";
 import { agreeInvestorPrice } from "../investor-price.js";
-import { settlePromise } from "../promise-sweep.js";
+import { settlePromise, notePromiseInHandText } from "../promise-sweep.js";
 // An outcome that means we no longer owe them a number on that house.
 const PROMISE_SETTLING_STATUSES = new Set(["sent", "countered", "no_response", "passed", "we_passed", "unavailable"]);
 import express from "express";
@@ -3538,6 +3538,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return { offerId: full.id, address: full.address, phrase };
   }
   router.passOnOurNo = passOnOurNo;
+  // Everything a text you typed yourself can move: a promise of a number
+  // opened or kept (promise-sweep.js notePromiseInHandText), then our no.
+  async function onHandText({ locationId, contactId, text, at, channel = "sms", ...rest }) {
+    await notePromiseInHandText({ store, locationId, contactId, text, at, channel }).catch(() => null);
+    return passOnOurNo({ locationId, contactId, text, at, channel, ...rest });
+  }
+  router.onHandText = onHandText;
   // The Tier 1 list's Pass / Kick out (routes/dashboard.js → tier-one.js)
   // records the outcome the same way the status menu does.
   router.applyOperatorStatus = applyOperatorStatus;
@@ -3591,7 +3598,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   });
   // The hand-reply sweep's hook (hand-reply-sweep.js onHandText).
   router.handTextDepsFor = ({ locationId, client }) => ({
-    onHandText: (t) => passOnOurNo({ locationId, client, contactId: t.contactId, text: t.body, at: t.at, via: "typed in GHL", channel: t.channel }),
+    onHandText: (t) => onHandText({ locationId, client, contactId: t.contactId, text: t.body, at: t.at, via: "typed in GHL", channel: t.channel }),
   });
 
   // Heat: flag an offer as close to a contract, or cool one the signals made

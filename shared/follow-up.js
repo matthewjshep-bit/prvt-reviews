@@ -94,10 +94,13 @@ export const PROMISE_DUE_HOURS = 4;
 // our offer in", "I'll have our offer to you" (2026-10-08: the bot said it
 // and nothing tracked it). We say it, about the paper; "feel free to send it
 // over" asks THEM, and "send it over to my partner" isn't to them.
-const WE_WILL = String.raw`(?:i'?ll|i\s+will|i\s+can|we'?ll|we\s+will|we\s+can|i'?m\s+going\s+to|we'?re\s+going\s+to|let\s+me|happy\s+to|can)\s+(?:\w+\s+){0,2}?`;
+// "Can you send it over?" asks them, and "so I can get it in front of
+// underwriting" is about our numbers, not the paper (2026-10-14 replay: both
+// read as a promise of the written offer).
+const WE_WILL = String.raw`(?:i'?ll|i\s+will|i\s+can|we'?ll|we\s+will|we\s+can|i'?m\s+going\s+to|we'?re\s+going\s+to|let\s+me|happy\s+to|can)\s+(?:(?!you\b)\w+\s+){0,2}?`;
 const THE_PAPER = String.raw`(?:our|the)\s+(?:written\s+|formal\s+|official\s+)?(?:offer|loi|letter(?:\s+of\s+intent)?)`;
 const PAPER_PROMISE = [
-  new RegExp(String.raw`\b${WE_WILL}(?:send|get|have|shoot)\s+(?:it|that|${THE_PAPER})\s+(?:over|in|to\s+you|your\s+way)\b(?!\s+to\s+(?:my|our|the|him|her|them)\b)`, "i"),
+  new RegExp(String.raw`\b${WE_WILL}(?:send|get|have|shoot)\s+(?:it|that|${THE_PAPER})\s+(?:over|in(?!\s+front)|to\s+you|your\s+way)\b(?!\s+to\s+(?:my|our|the|him|her|them)\b)`, "i"),
   new RegExp(String.raw`\b${WE_WILL}(?:send|get|shoot)\s+over\s+${THE_PAPER}`, "i"),
 ];
 
@@ -115,13 +118,37 @@ export function detectPromise(text = "") {
   const number = [
     /\b(?:number|numbers|figure|offer)\b[^.?!]{0,40}\bback\s+to\s+you\b/i,
     /\b(?:get|come|circle)\s+back\s+(?:to\s+you\s+)?with\s+(?:a|an|the|our)\s+(?:\w+\s+)?(?:number|figure|offer|price)\b/i,
-    /\b(?:run|re-?run|running)\s+(?:it|this|that|the\s+(?:numbers|address)|[\w-]+)\s+(?:by|past|through)\s+(?:my\s+|our\s+|the\s+)?underwriting\b/i,
+    /\b(?:run|re-?run|running)\s+(?:it|this|that|the\s+(?:numbers|address)|(?:[\w-]+\s+){0,3}[\w-]+)\s+(?:by|past|through)\s+(?:my\s+|our\s+|the\s+)?underwriting\b/i,
     /\bnumbers?\s+re-?run\b/i,
+    // "I'll come back to you today with a number", "will have a number for
+    // you this afternoon" (2026-10-14: read as a bare "answer").
+    /\b(?:get|come|circle)\s+back\s+to\s+you\b[^.?!]{0,30}?\bwith\s+(?:a|an|the|our)\s+(?:\w+\s+)?(?:number|figure|offer|price)\b/i,
+    /\b(?:have|get)\s+(?:a|our|the)\s+(?:\w+\s+)?(?:number|numbers|figure)\s+(?:back\s+)?(?:to|for)\s+you\b/i,
   ];
   if (number.some((re) => re.test(t))) return "number";
+  // "…and get back to you with where we'd land", "let me run it and get back
+  // to you": our numbers — unless it's a partner's call, which is an answer
+  // the owner gives (isDeflection, the answer box).
+  const ours = [
+    /\b(?:get|come|circle)\s+back\s+(?:to\s+you\s+)?[^.?!]{0,30}?\bwith\s+where\s+we(?:'d|\s+would|'ll|\s+will)?\s+(?:land|be|stand|come\s+out)\b/i,
+    /\b(?:run|re-?run|running)\s+(?:it|this|that|them|those|the\s+numbers|those\s+numbers|numbers)\s+(?:today\s+|now\s+)?(?:and|&)\s+(?:i'?ll\s+|we'?ll\s+)?(?:get|come|circle)\s+back\b/i,
+  ];
+  if (!/\bpartner\b/i.test(t) && ours.some((re) => re.test(t))) return "number";
   if (PAPER_PROMISE.some((re) => re.test(t))) return "paper";
   if (/\b(?:get|come|circle)\s+back\s+to\s+you\b|\bback\s+to\s+you\s+(?:today|this\s+afternoon|tonight|tomorrow|later)\b/i.test(t)) return "answer";
   return null;
+}
+
+/**
+ * isConditionalPromise(text) → boolean
+ *
+ * "I'll run it by underwriting and circle back if it pencils out", "…and
+ * see if we can get back to you with an offer": a look we promised, not a
+ * number. Still a promise for the sweep's same-day clock, but nothing we
+ * owe a week later (shared/promise-owed.js).
+ */
+export function isConditionalPromise(text = "") {
+  return /\b(?:circle\s+back|get\s+back(?:\s+to\s+you)?|reach\s+(?:back\s+)?out|follow\s+up|give\s+you\s+a\s+(?:quick\s+)?call|come\s+back(?:\s+to\s+you)?)\s+if\b|\bif\s+it\s+(?:pencils|makes\s+sense|looks\s+like\s+a\s+fit|(?:'s|is)\s+a\s+fit|works\s+for\s+us)\b|\bsee\s+if\s+(?:we\s+can|it\s+(?:pencils|works|makes\s+sense))\b|\bif\s+(?:they|the\s+sellers?|she|he|you)\s+(?:\w+\s+){0,3}?(?:come|get)\s+back\b/i.test(String(text || ""));
 }
 
 /**
@@ -192,6 +219,335 @@ export function timeNamed(text = "", now = Date.now()) {
   if (weeks) return { dueAt: morningOf(now + 15 * DAY_MS), phrase: weeks[0].trim() };
   if (/\b(?:a|next)\s+month\b/i.test(t)) return { dueAt: morningOf(now + 31 * DAY_MS), phrase: "a month" };
   return null;
+}
+
+/* ---------- a lead, and when it'll be ready ---------- */
+
+// 2026-10-14: 17 agents told us WHEN a lead would be ready ("relisting in
+// springtime", "should know by end of the month", "coming closer to Nov 1")
+// and 31 named one, and every one got the generic 14-day "anything distressed
+// or off-market?" text instead of one on the right day naming the lead.
+// checkInRequested only heard "check back" plus a day or a week.
+//
+// detectLeadTiming hears the lead (a short sale, a relist, one coming up, an
+// expiring listing) and the time (next week, end of the month, spring, about
+// a year), and only books when both are in the same stretch of words.
+// Precision over recall: a miss is the generic check-in, as before; a false
+// hit is a text about a house that doesn't exist.
+
+// The furthest out a lead is booked: thirteen months. Past that, nothing.
+export const LEAD_MAX_DAYS = 395;
+// A lead check-in held back (an open offer had them) is dropped this long
+// after its day: by then it's the conversation's, not a clock's.
+export const LEAD_STALE_DAYS = 30;
+// They spoke in the run-up to its day: the lead is in the conversation, and a
+// check-in on top of it is the machine talking over itself.
+export const LEAD_QUIET_DAYS = 14;
+
+const MONTH_KEYS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const MONTH_RX = String.raw`(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?`;
+const NUM_RX = String.raw`((?:a\s+)?(?:few|couple(?:\s+of)?)|\d{1,2}|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)`;
+const NUM_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, few: 3, couple: 2 };
+const numOf = (s) => { const k = String(s || "").toLowerCase().replace(/^a\s+/, "").replace(/\s+of$/, ""); return /^\d+$/.test(k) ? Number(k) : NUM_WORDS[k] || 0; };
+const WEEKDAY_FULL = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+// The calendar day it is in Seattle, as a UTC midnight.
+function todayOf(now) {
+  const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(now)).split("-").map(Number);
+  return Date.UTC(y, m - 1, d);
+}
+const ymd = (day) => { const d = new Date(day); return [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()]; };
+const lastDayOf = (y, m) => new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+function addMonths(day, n) {
+  const [y, m, d] = ymd(day);
+  return Date.UTC(y, m + n, Math.min(d, lastDayOf(y, m + n)));
+}
+// The next time this month and day come round (today counts).
+function nextDate(today, month, date) {
+  const [y] = ymd(today);
+  const d = Date.UTC(y, month, Math.min(date, lastDayOf(y, month)));
+  return d >= today ? d : Date.UTC(y + 1, month, Math.min(date, lastDayOf(y + 1, month)));
+}
+const SEASONS = { spring: [2, 15], summer: [5, 15], fall: [8, 15], autumn: [8, 15], winter: [11, 15] };
+
+// Each says when, from a match: { day, how } — `how` "by" (a deadline: we ask
+// a couple of days after), "after" (the day after), or "" (that day).
+// `low` marks the vague ones. A `when` of null drops the match.
+const TIME_RULES = [
+  { rx: /\btomorrow\b/gi, when: (m, t) => ({ day: t + DAY_MS }) },
+  { rx: /\b(?:later\s+)?this\s+week\b/gi, when: (m, t) => ({ day: t + Math.max(1, (5 - new Date(t).getUTCDay() + 7) % 7) * DAY_MS }) },
+  { rx: /\b(?:early\s+|later\s+)?next\s+week\b/gi, when: (m, t) => ({ day: t + 7 * DAY_MS }) },
+  { rx: /\b(this|next)\s+weekend\b/gi, when: (m, t) => ({ day: t + (((6 - new Date(t).getUTCDay() + 7) % 7 || 7) + (/next/i.test(m[1]) ? 7 : 0)) * DAY_MS }) },
+  { rx: /\bnext\s+month\b/gi, when: (m, t) => { const [y, mo] = ymd(t); return { day: Date.UTC(y, mo + 1, 10) }; } },
+  // "in a few weeks", "in the next 30 days", "within a couple of months",
+  // "not for about a year", "for 6 months then relisting".
+  { rx: new RegExp(String.raw`\b(in|within|for|over|another|after)\s+(?:the\s+)?(?:next\s+|coming\s+)?(?:about\s+|around\s+|roughly\s+|maybe\s+|another\s+)?${NUM_RX}\s+(days?|weeks?|months?|years?)\b`, "gi"),
+    when: (m, t, text) => {
+      const pre = text.slice(Math.max(0, m.index - 6), m.index);
+      const post = text.slice(m.index + m[0].length, m.index + m[0].length + 14);
+      // "for six months" is how long, not when — unless it's "not for" or "…then".
+      if (/^for$/i.test(m[1]) && !/\bnot\s+$/i.test(pre) && !/^\s*,?\s*(?:and\s+)?then\b/i.test(post)) return null;
+      return spanFrom(t, numOf(m[2]), m[3]);
+    } },
+  { rx: new RegExp(String.raw`\bnext\s+${NUM_RX}\s+(days?|weeks?|months?)\b`, "gi"), when: (m, t) => spanFrom(t, numOf(m[1]), m[2]) },
+  { rx: /\b(?:within|in|over)\s+(?:the\s+)?(?:next|coming)\s+(week|month)(\s+or\s+two)?\b/gi, when: (m, t) => spanFrom(t, m[2] ? 2 : 1, m[1]) },
+  // "the bank said it takes 30-45 days": the short end.
+  { rx: /\btakes?\s+(?:about\s+|around\s+)?(\d{1,2})(?:\s*(?:-|to)\s*\d{1,2})?\s+(days|weeks|months)\b/gi, when: (m, t) => spanFrom(t, Number(m[1]), m[2]) },
+  { rx: new RegExp(String.raw`\b${NUM_RX}\s+(weeks?|months?)\s+(?:out|from\s+now)\b`, "gi"), when: (m, t) => spanFrom(t, numOf(m[1]), m[2]) },
+  { rx: /\b(?:about|around|roughly|maybe)\s+a\s+year\b/gi, when: (m, t) => ({ day: addMonths(t, 12) }) },
+  { rx: /\b(?:by\s+)?(?:the\s+)?end\s+of\s+(?:the\s+|this\s+)?(week|month|year)\b/gi,
+    when: (m, t) => {
+      const [y, mo] = ymd(t);
+      const unit = m[1].toLowerCase();
+      if (unit === "week") return { day: t + ((5 - new Date(t).getUTCDay() + 7) % 7) * DAY_MS, how: "by" };
+      if (unit === "month") return { day: Date.UTC(y, mo, lastDayOf(y, mo)), how: "by" };
+      return { day: Date.UTC(y, 11, 31), how: "by" };
+    } },
+  { rx: /\b(?:by\s+)?(?:the\s+)?end\s+of\s+next\s+month\b/gi, when: (m, t) => { const [y, mo] = ymd(t); return { day: Date.UTC(y, mo + 1, lastDayOf(y, mo + 1)), how: "by" }; } },
+  { rx: /\b(?:first|beginning|start)\s+of\s+(?:the\s+|next\s+)month\b/gi, when: (m, t) => { const [y, mo] = ymd(t); return { day: Date.UTC(y, mo + 1, 1) }; } },
+  { rx: /\bafter\s+the\s+holidays\b|\b(?:first|beginning|start)\s+of\s+(?:the|next)\s+year\b|\b(?:after|in)\s+(?:the\s+)?new\s+year\b|\bnext\s+year\b/gi,
+    when: (m, t) => ({ day: nextDate(t, 0, /next\s+year/i.test(m[0]) ? 15 : 5) }) },
+  { rx: /\bafter\s+thanksgiving\b/gi, when: (m, t) => { const [y] = ymd(t); const nov1 = new Date(Date.UTC(y, 10, 1)).getUTCDay(); const tg = Date.UTC(y, 10, 1 + ((4 - nov1 + 7) % 7) + 21); return { day: (tg >= t ? tg : tg + 364 * DAY_MS) + 4 * DAY_MS }; } },
+  { rx: /\bafter\s+christmas\b/gi, when: (m, t) => ({ day: nextDate(t, 11, 28) }) },
+  // "relisting in springtime", "until spring", "next summer", "early fall".
+  { rx: /\b(in\s+the|in|by|until|till|this|next|the|around|after|before|early|late|mid)[-\s]+(?:(early|late|mid)[-\s]+)?(spring|summer|fall|autumn|winter)(?:time)?\b|\b(spring|summer|winter)time\b/gi,
+    when: (m, t) => {
+      const season = (m[3] || m[4]).toLowerCase();
+      const pre = String(m[1] || "").toLowerCase();
+      const [mo, d] = SEASONS[season];
+      let day = nextDate(t, mo, d);
+      // In the season already ("this summer" in July): soon, not next year.
+      if (day - t > 290 * DAY_MS && pre !== "next") day = t + 14 * DAY_MS;
+      const shade = String(m[2] || (/^(early|late|mid)$/.test(pre) ? pre : "")).toLowerCase();
+      if (shade === "early") day -= 14 * DAY_MS;
+      if (shade === "late") day += 45 * DAY_MS;
+      return { day, how: pre === "by" ? "by" : ["until", "till", "after"].includes(pre) ? "after" : "" };
+    } },
+  // "by end of October", "in March", "early November", "Nov 1", "after October 21st".
+  { rx: new RegExp(String.raw`\b(?:(by|in|after|until|till|around|before|early|mid|late|(?:the\s+)?end\s+of|(?:the\s+)?(?:beginning|start|first|middle|first\s+week)\s+of)[-\s]+(?:the\s+)?)?${MONTH_RX}(?:\s+(\d{1,2})(?:st|nd|rd|th)?\b)?`, "gi"),
+    when: (m, t) => {
+      const pre = String(m[1] || "").toLowerCase().replace(/^the\s+/, "").replace(/\s+/g, " ");
+      const mo = MONTH_KEYS.indexOf(m[2].toLowerCase().slice(0, 3));
+      const date = m[3] ? Number(m[3]) : 0;
+      if (mo < 0 || date > 31) return null;
+      // "may", "march": a word first. Only a month with a date or a lead-in.
+      if (!pre && !date) return null;
+      const how = pre === "by" || pre === "end of" ? "by" : ["after", "until", "till"].includes(pre) ? "after" : "";
+      const [y, cur] = ymd(t);
+      let day;
+      if (date) day = nextDate(t, mo, date);
+      else {
+        const anchor = pre === "end of" || pre === "by" ? lastDayOf(y, mo)
+          : pre === "early" || /^(beginning|start|first)/.test(pre) ? 5
+          : pre === "mid" || pre === "middle of" ? 15
+          : pre === "late" ? 25
+          : pre === "after" ? lastDayOf(y, mo)
+          : 1;
+        day = mo === cur ? Math.max(Date.UTC(y, mo, anchor), t + 3 * DAY_MS) : nextDate(t, mo, anchor);
+      }
+      // Most of a year away is a month that's gone: "listed in September".
+      if (day - t > 300 * DAY_MS) return null;
+      return { day, how };
+    } },
+  { rx: /\b(by|on|after|until|till|around|before)\s+(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/gi,
+    when: (m, t) => {
+      const mo = Number(m[2]) - 1, date = Number(m[3]);
+      if (mo < 0 || mo > 11 || date < 1 || date > 31) return null;
+      const day = nextDate(t, mo, date);
+      if (day - t > 300 * DAY_MS) return null;
+      const pre = m[1].toLowerCase();
+      return { day, how: pre === "by" ? "by" : ["after", "until", "till"].includes(pre) ? "after" : "" };
+    } },
+  { rx: /\b(by|on|after|until|till|around)\s+the\s+(\d{1,2})(?:st|nd|rd|th)\b/gi,
+    when: (m, t) => {
+      const date = Number(m[2]);
+      if (date < 1 || date > 31) return null;
+      const [y, mo, d] = ymd(t);
+      const day = date >= d ? Date.UTC(y, mo, Math.min(date, lastDayOf(y, mo))) : Date.UTC(y, mo + 1, Math.min(date, lastDayOf(y, mo + 1)));
+      const pre = m[1].toLowerCase();
+      return { day, how: pre === "by" ? "by" : ["after", "until", "till"].includes(pre) ? "after" : "" };
+    } },
+  // "by Tuesday", "after Monday", "goes live Thursday". The short forms only
+  // with a lead-in ("sat on the market" isn't Saturday).
+  { rx: /\b(?:(by|on|after|until|till|this|next|coming)\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tues?|wed|thurs?|fri|sat)\b/gi,
+    when: (m, t) => {
+      const name = m[2].toLowerCase();
+      const pre = String(m[1] || "").toLowerCase();
+      if (!WEEKDAY_FULL.includes(name) && !pre) return null;
+      const want = WEEKDAY_FULL.findIndex((w) => w.startsWith(name.slice(0, 3)));
+      let add = (want - new Date(t).getUTCDay() + 7) % 7;
+      if (add === 0) add = 7;
+      return { day: t + add * DAY_MS, how: pre === "by" ? "by" : ["after", "until", "till"].includes(pre) ? "after" : "" };
+    } },
+  // The vague ones: a couple of weeks out, at low confidence.
+  { rx: /\b(soon|shortly|in\s+the\s+near\s+future|any\s+day\s+now)\b/gi,
+    when: (m, t, text) => {
+      const pre = text.slice(Math.max(0, m.index - 12), m.index);
+      if (/\b(?:as|talk|chat|speak|see|hear\s+from\s+you)\s+$/i.test(pre)) return null;
+      return { day: t + 14 * DAY_MS, low: true };
+    } },
+];
+
+function spanFrom(today, n, unit) {
+  if (!(n > 0)) return null;
+  const u = String(unit).toLowerCase();
+  if (u.startsWith("day")) return { day: today + n * DAY_MS };
+  if (u.startsWith("week")) return { day: today + n * 7 * DAY_MS };
+  if (u.startsWith("month")) return { day: addMonths(today, n) };
+  return { day: addMonths(today, 12 * n) };
+}
+
+// What the lead is, in words the check-in can use. Earlier rows win when two
+// sit beside the same time ("taken off market, relisting in spring" is the
+// relist). `by` marks a lead whose time is a deadline — the expiry, the
+// answer they're waiting on — so we ask a couple of days after it.
+const HOUSE_WORD = /\b(?:house|home|property|seller|owner|bank|lender|condition|inspection|listing|probate|court|repairs|tenants?|fixer)\b/i;
+const LEAD_CUES = [
+  { rx: /\bshort[\s-]sale\b/i, what: "the short sale" },
+  { rx: /\bprobate\b/i, what: "the probate" },
+  { rx: /\b(?:an?|the|this|that)\s+estate\b(?!\s+(?:agent|market|industry|business|license))|\bestate\s+(?:sale|house|property|home|listing)\b/i, what: "the estate" },
+  { rx: /\bhoarder\b/i, what: "the hoarder house" },
+  { rx: /\b(?:pre-?)?foreclos\w*/i, what: "the foreclosure" },
+  { rx: /\b(?:listing|it|we|we're|agreement|contract)\s+(?:\w+\s+){0,2}?expir(?:es|ing|e)\b|\bexpir(?:es|ing|e)\s+(?:next|this|on|in|by|end|at\s+the\s+end)\b|\bexpir\w*\s+listing\b/i, what: "the listing expiring", by: true },
+  // Ahead of us, not behind: "relisting", "will go back on", never "relisted" or "went back on".
+  { rx: /\bre-?\s?list(?:ing|s)?\b(?!\s+(?:w\/?|with)\.?\s+(?:someone|somebody|another|a\s+different))|\b(?:go|going|goes|put|putting|come|coming|be|bring|bringing)\s+(?:it\s+)?back\s+on\b/i, what: "relisting it" },
+  { rx: /\b(?:pull|pulling|take|taking|taken)\s+(?:it\s+)?off\s+(?:of\s+)?(?:the\s+)?market\b|\bpull(?:ing)?\s+it\b|\bwithdraw(?:ing)?\b/i, what: "the listing they may pull" },
+  { rx: /\b(?:one|something|another|a\s+(?:house|home|property|listing|fixer|flip|few))\s+(?:\w+\s+){0,2}?coming\s+(?:up|soon|down|on|out|available)\b|\bhave\s+(?:one|something)\s+(?:for\s+you\s+)?(?:soon|shortly|coming)\b|\bhave\s+(?:one|something|another)\s+(?:\w+\s+){0,2}?(?:listed|to\s+list|hitting)\b/i, what: "the one coming up" },
+  { rx: /\bsomething\s+(?:\w+\s+)?(?:on|hitting|to)\s+the\s+market\b/i, what: "the one coming on the market" },
+  { rx: /\b(?:list|listing)\s+(?:it|this|that|her|his|their|the\s+(?:house|home|property|place))\b|\b(?:going|plan(?:ning)?|getting\s+ready|about|preparing|ready)\s+to\s+list\b|\b(?:will|'ll|gonna|should|going\s+to)\s+(?:be\s+)?list(?:ing|ed)?\b|\b(?:is|are|'s|'re|am|'m)\s+listing\b(?!\s+(?:agent|price|photos|is|was))|\b(?:hit|hits|hitting)\s+(?:the\s+)?(?:market|mls)\b|\b(?:come|comes|coming|go|goes|going)\s+(?:on|to|onto)\s+(?:the\s+)?(?:market|mls)\b|\bgo(?:es|ing)?\s+live\b|\blisting\s+(?:goes|will|should|is\s+going)\b/i, what: "the listing" },
+  { rx: /\boff[\s-]?market\b|\bpocket\s+listing\b|\bunlisted\b|\bnot\s+(?:yet\s+)?(?:listed|on\s+the\s+market)\b|\bpre[\s-]?market\b/i, what: (m) => (/unlisted/i.test(m[0]) ? "the unlisted house" : "the off-market one") },
+  { rx: /\b(?:a|an|another|one|some|couple|few)\s+(?:\w+\s+)?(?:fixers?|fixer[\s-]uppers?|flips?|investor\s+specials?|handyman\s+specials?|tear[\s-]?downs?|project\s+(?:house|home|property))\b/i, what: "the fixer" },
+  { rx: /\btenants?\b[^.!?]{0,30}\b(?:mov(?:e|es|ing)|vacat(?:e|es|ing)|leav(?:e|es|ing)|lease\s+(?:is\s+)?(?:up|ends?|ending))\b|\blease\s+(?:is\s+)?(?:up|ends?|ending)\b|\bvacant\s+(?:by|after|in)\b/i, what: "the tenant moving out" },
+  { rx: /\bclean(?:ed|ing)?[\s-]?out\b|\bclear(?:ed|ing)?\s+(?:it\s+)?out\b/i, what: "the clean-out" },
+  { rx: /\b(?:sellers?|owners?|clients?|family|heirs?)\b[^.!?]{0,25}?\b(?:decid\w*|thinking|consider\w*|on\s+the\s+fence|wants?\s+(?:it\s+)?(?:to\s+)?sell|wants?\s+(?:to\s+)?(?:get\s+)?it\s+sold|need\w*\s+to\s+sell|ready\s+to\s+sell|undecided|might\s+sell|may\s+sell|plan\w*\s+to\s+sell|letting\s+it\s+go)\b/i, what: "the seller's plans" },
+  { rx: /\b(?:should|will|'ll|hope\s+to|hoping\s+to|going\s+to|gonna)\s+(?:\w+\s+)?(?:know|hear(?:\s+back)?|find\s+out|have\s+(?:an?\s+)?(?:answer|update|decision))\b/i, what: "what they find out", by: true, needsHouse: true },
+  { rx: /(?<!\bwanted\s+to\s)(?<!\bjust\s)\bcheck(?:ing)?\s+back\b|\bcheck\s+in\s+(?:with\s+me\s+)?(?:again|in|after|around|next)\b|\breach\s+(?:back\s+)?out\b|\bcircle\s+back\b|\btouch\s+base\b|\bfollow\s+up\s+(?:with\s+me\s+)?(?:in|after|next)\b|\bhit\s+me\s+(?:back\s+)?up\b|\b(?:free|available)\s+to\s+(?:talk|chat|connect)\b|\btalk\s+(?:more\s+)?(?:after|then|next)\b|\b(?:ask|try)\s+me\s+again\b/i, what: "", checkBack: true },
+];
+// How far apart (characters) the lead and its time may sit.
+const LEAD_NEAR = 70;
+
+/**
+ * detectLeadTiming(text, now, { checkBack }) → { when, what, phrase, said, confidence } | null
+ *
+ * An agent telling us when a lead will be ready. `when` is the check-in's
+ * ISO time (10am Pacific): the day they named, a couple of days after a
+ * deadline ("should know by", "expires"), the day after an "after", and never
+ * sooner than two days out. The earliest one wins ("if it doesn't sell by end
+ * of October she'll pull it until spring" is asked about in November).
+ * `what` names the lead ("the short sale"), or "" when they only said to
+ * check back. `checkBack: false` hears only the lead words — for a call
+ * transcript with our side in it too.
+ */
+export function detectLeadTiming(text = "", now = Date.now(), { checkBack = true } = {}) {
+  const t = String(text || "").replace(/[’‘]/g, "'");
+  if (!t.trim()) return null;
+  // A tapback quotes OUR text back ("Liked “I'll check back next week”"): not theirs.
+  if (/^\s*(?:liked|loved|disliked|emphasi[sz]ed|laughed\s+at|questioned|removed\s+.{1,8}\s+from|\S{1,4}\s+to)\s+[“"]/i.test(t)) return null;
+  const today = todayOf(now);
+  const cues = [];
+  for (const c of LEAD_CUES) {
+    if (c.checkBack && !checkBack) continue;
+    if (c.needsHouse && !HOUSE_WORD.test(t)) continue;
+    const rx = new RegExp(c.rx.source, "gi");
+    for (const m of t.matchAll(rx)) {
+      // A cue about our offer ("your offer expires") is not their lead, and
+      // nor is what they think WE could do ("if you fixed it up and relisted").
+      if (/\b(?:your|our)\s+offer\b/i.test(t.slice(Math.max(0, m.index - 14), m.index + m[0].length))) continue;
+      if (/\b(?:if\s+you|you\s+(?:could|would|can|'d|might|fix\w*|flip\w*|bought|buy))\b[^.!?]{0,40}$/i.test(t.slice(Math.max(0, m.index - 60), m.index))) continue;
+      cues.push({ start: m.index, end: m.index + m[0].length, rank: LEAD_CUES.indexOf(c), cue: c, m });
+    }
+  }
+  if (!cues.length) return null;
+
+  let best = null;
+  for (const rule of TIME_RULES) {
+    const rx = new RegExp(rule.rx.source, "gi");
+    for (const m of t.matchAll(rx)) {
+      const start = m.index, end = m.index + m[0].length;
+      // Something that already happened: "last spring", "since March", "a few weeks ago".
+      if (/\b(?:last|since|past|this\s+past|back\s+in)\s+$/i.test(t.slice(Math.max(0, start - 16), start))) continue;
+      if (/^\s*(?:ago|back|(?:of\s+)?last\s+year|of\s+\d{4}|,?\s*\d{4})\b/i.test(t.slice(end, end + 16))) continue;
+      // A house closing is a deal on paper, not a lead ("closing soon", "close tomorrow").
+      if (/\bclos(?:e|es|ed|ing)\s+(?:\w+\s+)?$/i.test(t.slice(Math.max(0, start - 20), start))) continue;
+      const w = rule.when(m, today, t);
+      if (!w) continue;
+      // A lead in the same sentence: "...decided to go on market! I'll send
+      // what I find this week" is two things. The sentence before may still
+      // name it better ("exploring a short sale. We should know next week").
+      const between = (c) => (c.end <= start ? t.slice(c.end, start) : c.start >= end ? t.slice(end, c.start) : "");
+      const close = cues.filter((c) => between(c).length <= LEAD_NEAR);
+      if (!close.some((c) => !/[!?]|\.\s/.test(between(c)))) continue;
+      const nearby = close.filter((c) => !/[!?]/.test(between(c))).sort((a, b) => a.rank - b.rank);
+      const near = nearby[0];
+      // "I'll circle back shortly" is no date at all.
+      if (w.low && near.cue.checkBack) continue;
+      let day = w.day;
+      if (w.how === "by" || nearby.some((c) => c.cue.by)) day += 2 * DAY_MS;
+      else if (w.how === "after") day += DAY_MS;
+      if (day - today < 2 * DAY_MS) day = Math.max(day, today) + DAY_MS;
+      // Never on a weekend: Monday.
+      const dow = new Date(day).getUTCDay();
+      if (dow === 6) day += 2 * DAY_MS; else if (dow === 0) day += DAY_MS;
+      if (day - today > LEAD_MAX_DAYS * DAY_MS) continue;
+      if (best && best.day <= day) continue;
+      const what = typeof near.cue.what === "function" ? near.cue.what(near.m) : near.cue.what;
+      const from = Math.max(0, Math.min(start, near.start)), to = Math.max(end, near.end);
+      const said = sentenceAround(t, from, to);
+      best = { day, what, phrase: m[0].trim(), said, confidence: w.low ? "low" : "high" };
+    }
+  }
+  if (!best) return null;
+  return { when: morningOf(best.day), what: best.what, phrase: best.phrase, said: best.said, confidence: best.confidence };
+}
+
+// The sentence (or two) a match sits in, clipped.
+function sentenceAround(t, from, to) {
+  const before = t.slice(0, from).search(/[^.!?\n]*$/);
+  const tail = t.slice(to).search(/[.!?\n]/);
+  return t.slice(before < 0 ? 0 : before, tail < 0 ? t.length : to + tail + 1).replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+// A lead check-in this close stands in for the "nobody answered them" net
+// under a held reply (reply-agent.js, the nightly audit); one further out
+// leaves that net in place — "relisting in spring" is no reason to leave a
+// held reply unanswered till March.
+export const LEAD_NET_DAYS = 7;
+
+/** leadIsTheNet(event, now) → true for any check-in request but a lead more than LEAD_NET_DAYS out. */
+export function leadIsTheNet(e, now = Date.now()) {
+  if (e?.data?.kind !== "lead") return true;
+  return (ms(e.data?.dueAt) ?? 0) - now <= LEAD_NET_DAYS * DAY_MS;
+}
+
+/**
+ * leadCheckInAnswered(req, events) → boolean
+ *
+ * They spoke in the run-up to the lead's day (or since it was booked, when
+ * that's sooner): the conversation has the lead. A text about something else
+ * in November doesn't settle a lead that's due in March.
+ */
+export function leadCheckInAnswered(req, events = []) {
+  const due = ms(req?.data?.dueAt) ?? ms(req?.at) ?? 0;
+  const from = Math.max(ms(req?.at) ?? 0, due - LEAD_QUIET_DAYS * DAY_MS);
+  return (events || []).some((e) => (e?.type === "text_summary" || e?.type === "call_summary") && (ms(e.at) ?? 0) > from);
+}
+
+/**
+ * leadCheckInPending(events, now) → the lead's checkin_requested event | null
+ *
+ * The newest lead an agent told us about, not yet asked about, not settled by
+ * the conversation, and not long past its day. It has its own track: a newer
+ * "unanswered" or "this Wednesday" check-in doesn't replace it.
+ */
+export function leadCheckInPending(events = [], now = Date.now()) {
+  const byTime = [...(events || [])].filter(Boolean).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const req = byTime.filter((e) => e.type === "checkin_requested" && e.data?.kind === "lead").at(-1);
+  if (!req) return null;
+  if (byTime.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)) return null;
+  const due = ms(req.data?.dueAt);
+  if (due == null || now - due > LEAD_STALE_DAYS * DAY_MS) return null;
+  if (leadCheckInAnswered(req, byTime)) return null;
+  return req;
 }
 
 /**
@@ -520,10 +876,36 @@ const OWN_DRAFT_WORD = { check_in: "check-in", partner_answer: "answer", showing
 // doesn't hold these up, and they never replace it.
 export const SERVICE_KINDS = new Set(["showing_reminder", "showing_followup"]);
 
-export function blockingDraft(open = [], { continues = null, kind = null } = {}) {
+export function blockingDraft(open = [], { continues = null, kind = null, now = Date.now() } = {}) {
   return (open || []).find((d) => d && (d.status === "draft" || d.status === "scheduled")
     && d.id !== continues && !MACHINE_STARTED_KINDS.has(d.outbound?.kind)
-    && !(SERVICE_KINDS.has(kind) && d.status === "scheduled" && d.outbound?.kind === "blast_open")) || null;
+    && !(SERVICE_KINDS.has(kind) && d.status === "scheduled" && d.outbound?.kind === "blast_open")
+    && !(kind === "agent_pulse" && staleHeld(d, now))) || null;
+}
+
+// A draft held a week, or a text queued long ago whose send time has passed,
+// is forgotten business: it stays on the Desk for you, but it no longer
+// speaks for the agent. Until 2026-10-14 a held reply of any age kept the
+// agent check-in away for good (shared/agent-pulse.js agentOwner).
+export const STALE_HELD_DAYS = 7;
+/** staleHeld(draft, now) → true for an open draft written STALE_HELD_DAYS ago that isn't still going out. */
+export function staleHeld(d, now = Date.now()) {
+  if (!d || (d.status !== "draft" && d.status !== "scheduled")) return false;
+  if (d.status === "scheduled" && (ms(d.sendAt) ?? 0) > now) return false;
+  const t = ms(d.createdAt);
+  return t != null && now - t >= STALE_HELD_DAYS * DAY_MS;
+}
+
+/**
+ * supersededBy(open, { kind, now }) → the open drafts a new machine text replaces
+ *
+ * All of them, except a deal text queued for a buyer (it waits for their
+ * week) and, for the agent check-in, a stale held row — the check-in goes
+ * out past it, and it stays on the Desk for you.
+ */
+export function supersededBy(open = [], { kind = null, now = Date.now() } = {}) {
+  return (open || []).filter((d) => d && d.outbound?.kind !== "blast_open"
+    && !(kind === "agent_pulse" && staleHeld(d, now) && !MACHINE_STARTED_KINDS.has(d.outbound?.kind)));
 }
 
 /** Why the machine stood down, in the words a skipped row shows. */

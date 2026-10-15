@@ -2110,6 +2110,67 @@ held triage from the contact's timeline and drafts only. GHL is not asked, so
 the tag and stage checks are skipped on the row; the nightly sweep makes them
 before anything is actually done.
 
+### A promised number stays owed until it's delivered (2026-10-14)
+
+**Why.** Reading 2,014 threads turned up at least 15 where we told an agent
+"I'll get back to you today with a number" (or the LOI) and nothing
+followed. The promise row above drops off Today after 72 hours. Several of
+the houses were then closed out by the nightly held-underwrite sweep, stale
+or no answer, with nothing sent. The agent was never told. These were the
+agents who answer us.
+
+**The row.** `shared/promise-owed.js` `owedPromises`, pure. A `promise_made`
+of a **number** or **the written offer** that is 24h old (`OWED_AFTER_HOURS`)
+becomes a "Needs you" row, kind `number_owed`: "Owed: a number to Pat on
+12 Elm St". The detail says when we promised ("promised Oct 7, again Oct 9")
+and what we said. It doesn't expire at 72h; it reads back 60 days
+(`OWED_WINDOW_DAYS`). While the 72-hour `promise_owed` row is up for that
+person, that row speaks for them. The buttons are the resolver's (float,
+open and send, re-run) plus Dismiss-with-why.
+
+It clears when:
+- a text of ours on that house names a price (≥ $50k; "449kish" counts) or
+  passes (`keepsOurWord`);
+- a float or `kind_pass` goes out, or the written offer goes out;
+- they passed, the house is gone, it's a deal, or a person marked it we passed;
+- there's a `promise_kept` after it: the sweep, a status you set, or Dismiss.
+
+A house the held sweep closed out by itself does **not** clear it. The agent
+hasn't heard yet. Not owed at all: an "answer" promise (the 72h row's
+business), a number promise that ended on a question to them, and a
+conditional one ("…circle back if it pencils out", "see if we can",
+`isConditionalPromise`).
+
+**The send writes the keep.** `sendReplyDraft` records `promise_kept`
+(`by: our_number | our_pass | realm_check | take_check | kind_pass`) for any
+agent text that delivers. A text that promises again keeps nothing ("Got it,
+480k, let me run that…" is their number said back).
+
+**Your own texts count.** The composer and texts typed in GHL go through
+`notePromiseInHandText` (promise-sweep.js, via the offers router's
+`onHandText`). A promise opens a `promise_made` with `by: "you"`, and a price
+or pass keeps one. Only what kind of promise it was is stored, never the
+words. The sweep, the driver and the 72h row ignore `by: "you"`, so no "still
+working on it" text ever goes out in your name. Only the owed row carries it.
+
+**Detection widened.** `detectPromise` now reads "I'll come back to you today
+with a number", "will have a number for you this afternoon", "let me run it
+and get back to you", "…with where we'd land", and "run both of these by
+underwriting" as a number. When a partner is named, it stays an answer, for
+the answer box. "Can you send it over?" and "so I can get it in front of
+underwriting" are no longer read as promising the paper.
+
+**Retiring a house we owed tells them.** See the held-underwrite triage,
+"promised" below.
+
+**Replay (2026-10-14, 968 saved threads).** 115 threads have a firm promise
+of a number or the offer from us. In 55 of them, at least one promise saw no
+price, offer or pass from us within 48h. Of those, 44 were in the last 60
+days and 28 never got one at all. On deploy, expect up to about that many
+`number_owed` rows. Only promises recorded since `promise_made` existed
+(bot sends from 2026-09-14) show, and your own typed promises only from now
+on.
+
 ### Answers the bot didn't have (2026-09-17)
 
 **Why.** Three of Today's "we owe them an answer" rows were the bot saying "let
@@ -3143,6 +3204,109 @@ Their words are every line they've sent since the first text. A showing offer
 first". A house the agent brings up themselves underwrites right away, and so
 does any house we already priced. The draft row carries `qualify: {stage, address, why}`.
 
+### Every house an agent names is kept, and a missing address is asked for (2026-10-13)
+
+Rules: `shared/mentioned-houses.js`. Wiring: `runReply` in `ghl-broker/reply-agent.js`.
+No switch. It sends only through the reply's existing auto-send rules.
+
+An agent we'd passed on (the first-text house) wrote back with two more of
+theirs: one on a street in town and a triplex, each with
+an asking price. Neither had a house number. The
+empty `propertyAddress` was read as the first-text house, the qualify step
+had already passed on it, and the canned "keep me in mind" line went out.
+Neither house was kept, and nothing asked where they were.
+
+Now, on an agent text that reads as a lead (`HOUSE_LEAD_INTENTS`: deal_available,
+new_property, investor_open, media, wants_call, scheduling):
+
+- The draft lists every house they named in `houses` (`{address, sellerAsk, note}`).
+  Streets the model missed are caught from their words (`streetMentions`).
+  The first-text house and office addresses in a signature are left out.
+- Each house becomes a `house_mentioned` event (`data.sellerAsk`, `data.note`,
+  `data.needsAddress`), shown on the timeline as "they named a house".
+- If they named any house that isn't the first-text one, the qualify step
+  leaves the message alone.
+- A house with no number:
+  - **No underwrite.** That holds even when the model put the bare street in
+    `propertyAddress`.
+  - **The reply asks for the exact address of each one.** If the model's
+    reply forgot to, the ask is added to the end.
+  - **The address chase starts**, with a hint that names each house and its
+    ask (`address_pending.data.houses`). The chase text asks for each house by name.
+- The agent context lists "HOUSES THEY NAMED THAT WE DON'T HAVE AN ADDRESS
+  FOR YET" (last 60 days) until the number or an offer on that street shows up.
+- When several numbered houses come in one text, each house the model listed
+  that has its street line in their own words gets its own `start_underwrite`
+  (an `address` and `askingPrice` on the action). This happens only when the
+  rule already starts one, and never for a house already in the offer book.
+
+Still one chase per contact: an address landing for one house closes the
+chase for the rest. The context block keeps the others in front of the bot.
+
+#### Calls, houses with no street, and referrals (2026-10-14)
+
+Reading 2,014 threads turned up three more leaks: a house named on a call was
+never kept; a house named by town only ("some Stanwood houses", "I got one in
+Medina, 2 in Stanwood") or by what it is ("two more parcels next to" a
+listing, "he wants to sell his flips") was never asked about; and an agent who
+pointed us at someone else ("contact <name> at John L Scott, she has one coming
+up") got a thank-you and nothing more. Still no switch.
+
+- **Calls.** The same capture runs on a call transcript. When GHL labels the
+  sides (`THEM:` / `US:`), only their lines are read (`callWords`). A house in
+  the model's `houses` counts only if their lines name its street or town
+  (`saidIn`). A call's
+  intent doesn't gate it, and houses already in their offer book are left out.
+  The text after the call gets the address ask, and the address chase starts.
+  `house_mentioned.data.heard` is `them`, `unlabelled` or `text`. With no
+  speaker labels, our own words are mixed in. Those houses are kept and asked
+  about, but **never underwritten**. On a labelled call, a numbered house
+  in their lines can still get its own `start_underwrite`, as in a text.
+- **No street at all** (`areaMentions`). The house is kept as a
+  `house_mentioned` with `address: ""` and these fields:
+  - `data.label`: how the ask names it ("the Stanwood houses").
+  - `data.area`: the town, or "next to 5206 W Werner Rd".
+  - `data.town`: the town when one was said.
+
+  Two kinds count:
+  - A town we know (the buyer-map list plus a few) after a "have / got /
+    there's / listed" with "one", "another", a number or a house noun.
+  - "a/some <Town> <house noun>" with a lead word nearby.
+
+  The first-text house's town counts only with "another" or "more". A
+  copula ("it's a Lacey rambler") never counts. Neither does a tapback
+  quoting our text. Such a house stays on the context list until a numbered
+  house in that town comes in from them. With no town ("his flips"), any
+  numbered house closes it. "Federal Way" with no number is the town, not a
+  street.
+- **Referrals** (`referralMention`). These count:
+  - "contact / call / text / reach out to / go through <Name> (at <Brokerage>)"
+  - "<Name> at <Brokerage> has one"
+  - "my partner/colleague <Name>" with a lead cue
+  - "my husband's client wants to sell"
+  - "my wholesale partner is looking for you"
+
+  Each writes one `referral_mentioned` event per person named (`data.name`,
+  `brokerage`, `relation`, `phone`, `phrase`). Only the agent's own words
+  count: a text, or their side of a labelled call. That event raises a
+  **`referral` row on Today** (`shared/call-list.js`): "Referral: <Name>
+  (<brokerage>) — <agent> says they have one". The row shows their words, the
+  phone if they gave one, and "mention <agent>". It lasts 21 days, or until
+  you Dismiss it. **Nothing ever texts the person they named.** Reaching
+  out is Matt's call.
+
+Replay on the saved threads (5,210 agent texts, 362 call transcripts):
+
+| Detector | Agent texts | Calls | False positives |
+| --- | --- | --- | --- |
+| `referralMention` | 7 | 0 | none clear; 2 are a partner holding details on a house already in play |
+| `areaMentions` | 43 | 6 | 1, on a call: an agent's own project |
+
+About four of the 43 texts gave the number in the next sentence. The model's
+`houses` usually carries it, and a numbered house in the same town drops the
+town-only one. Still missed on calls: "I'll have one up there", with the
+town said by the other speaker, and a bare "he'll email other properties".
+
 ### Held underwrites — the nightly triage (2026-09-16)
 
 "Underwrites that need a look" held 49 rows and Matt wasn't going to get to
@@ -3179,6 +3343,20 @@ The verdicts, in order:
   held **14 days** with no word → `we_passed`; we asked for their read
   **7 days** ago and heard nothing → `we_passed`. The `uw-needs-review` tag
   comes off once nothing of theirs is held.
+  **Promised (2026-10-14).** Sometimes the sweep closes a house out by itself
+  (stale, no answer, turnkey; `QUIET_PASS`) while we still owe that agent a
+  number or the offer on it (`owedOnHouse`, shared/promise-owed.js), or while
+  their last text about it was never answered. Then the verdict carries
+  `passNote: "promised"`, and a `kind_pass` is drafted with `why: "promised"`.
+  It owns that we owe them, says we're out with one honest reason
+  (`passReasonInWords`, never the sweep's own "held 15 days"), and asks for
+  the next fixer. It names no number. **Switch:
+  `conversationAi.heldTriage.passOnRetire`, off by default.** When it's off,
+  the draft is held for you. It shows on Today as a draft beside the
+  `number_owed` row, and the audit never releases it. When it's on, it goes
+  the way the other pass notes go (released by the audit). Retires that
+  already tell them, or that we may not text (unsubscribed, bot-off, a GHL
+  stage, "we told them we're passing"), get no second note.
   **Not a flip, in their words (2026-10-05).** Ryan Bowen texted "move in
   ready… certainly not a fix n flip", then "You should come take a look!",
   and "number first" underwrote 13814 214th St E anyway. `isTurnkeyReply` now
@@ -4055,6 +4233,94 @@ Read from all 131 houses agents brought us (87 threads):
 Not built: moving the agent's card to Tier 1 on a brought house. `followTierStage` already moves it
 when the bot adds the tier-1 tag, so the leak was the retire rule.
 
+### A lead with a date gets a check-in on that date, naming it (2026-10-14)
+
+Reading 2,014 threads on 2026-10-14: 17 agents told us when a lead would be ready ("relisting in
+springtime", "should know by end of the month", "coming closer to Nov 1", "not for about a year")
+and 31 named one, and every one got the generic 14-day "anything distressed or off-market?" text.
+`checkInRequested` only heard "check back" plus a weekday or a week, and calls were never read.
+
+- **The reader.** `detectLeadTiming(text, now)` (shared/follow-up.js) needs a lead and a time in the
+  same sentence:
+  - leads: short sale, probate, estate, hoarder, foreclosure, an expiring listing, relisting, pulling
+    it, one coming up, listing it / going on the market / going live, off-market or unlisted, a
+    fixer, a tenant moving out, the seller deciding, "should know", or "check back / circle back /
+    hit me up / free to talk after";
+  - times: tomorrow, this/next week, next month, in N days/weeks/months, end of the month, a month
+    name (next time it comes round), early/mid/late, seasons (Mar 15, Jun 15, Sep 15, Dec 15),
+    after the holidays / new year (Jan 5), about a year, a weekday, a date, "soon" (two weeks, low).
+- **The date.** The earliest one wins. A deadline ("by", "end of", "expires", "should know") is
+  asked about two days after it, an "after" the day after. Never sooner than two days out, never on a
+  weekend (Monday), never more than 13 months out.
+- **It won't fire on:** a tapback quoting our own text ("Liked “I'll check back…”"), what they think
+  WE could do ("if you fixed it up and relisted it"), a deal closing ("closing soon"), the past
+  ("last spring", "since March", "listed in September", "of last year"), our offer expiring, or a
+  bare "May"/"March" with no lead-in.
+- **Booking.** The reply agent files `checkin_requested` with `kind: "lead"` and
+  `lead: { what, when, said, via }` instead of the plain check-in for that message. A bare "check
+  back in a couple months" with no lead in it is their cadence (`checkinEvery`), booked as a plain
+  `kind: "date"` check-in, not a lead. On a call it
+  reads the THEM lines of the transcript (an unlabelled one: lead words only, no "check back", since
+  our side is in it). The isCall exclusion still holds for everything else. A house coming with no
+  address and a lead under 21 days out makes that day the address chase's first ask; further out
+  there's no chase, the lead's own check-in asks.
+- **Its own track.** `runCheckInSweep` (promise-sweep.js) reads leads 13 months back, apart from the
+  newest-request rule: a later "nobody answered them" clock doesn't replace a lead. It goes on its
+  day as `checkin_due` with `sourceKind: "lead"`, and the text asks about that lead ("Did the bank
+  come back on the short sale?"), not the generic question.
+- **Who goes first.** An offer's clock (`offerOwner`, shared/agent-pulse.js: a live deal, an open
+  offer still being asked about, a held underwrite) keeps them; the lead waits, unclaimed, and goes
+  after. It's dropped 30 days past its day, after another check-in in the last three days waits, and
+  if they spoke in the 14 days before its day the conversation has it. A far-off lead never means
+  months of silence: the regular agent check-in keeps its clock, generic as always, and only stands
+  down ("a lead they told us about") once the lead's day is within `everyDays`, so the two don't
+  land together. A lead more than 7 days out doesn't replace the "nobody answered them" net under a
+  held reply.
+- **Sends.** No new switch. It rides `checkin_due`'s existing auto-send rule.
+- **Replay (2026-10-14, read-only):** 36 hits in 5,538 texts and 252 calls across 31 agents: 9 within
+  a week, 19 in 8–30 days, 4 in 31–90, 4 further. Two read as live-deal chatter ("undergoing
+  foreclosure, close within a couple of days", "seller decides Monday"); both would wait behind
+  the open offer.
+
+### Partner terms reach Matt (2026-10-14)
+
+Reading the threads, about 17 agents offered a working relationship on terms and the bot answered
+"keep me in mind" or "let me check with my partner". The terms are Matt's to answer.
+
+- **The detector.** `partnerTerms(text)` (`shared/partner-terms.js`, pure) returns
+  `{ kind, phrase, kinds, addToBuyers }` or null. It reads only their own words: reactions quoting
+  our text, links, phones and emails are stripped first. The kinds, strongest first:
+  - `list_back`: list-backs, the relist after the flip, "one agent or several for resale".
+  - `buyer_agent`: offers to represent us, or a buyer agency/brokerage agreement they need. "Are
+    you represented?" is not one; the bot answers that.
+  - `referral_fee`: finder's or referral fees, and a commission only when asked as a question.
+  - `co_wholesale`: their wholesale or dispo partners, a JV, or a deal community.
+  - `investor_buyer`: they pay assignment fees, buy N a month, or flip themselves.
+- **Not in the model's schema.** The reply format is part of the cached prompt, so this is a
+  regex backstop in `runReply` (step 1a). It runs on the agent's burst (`theirLatestWords`), texts
+  only.
+- **The hold.** The draft gets `partnerTerms` and `needsHuman`, and `evaluateReplyGates` flags
+  "they … — partner terms are yours to answer" whatever the intent. It is a content gate:
+  - no guard opens it;
+  - the nightly audit never releases it (`releaseForAudit`, `releasableHeld`);
+  - no redraft is spent on it.
+- **The prompt line.** `partnerTermsLine` goes in the reply's user context, not the cached
+  prompt. It tells the draft to name what they offered and say a call is coming, with no fee or
+  agreement and no "keep me in mind". Matt edits and sends it.
+- **The Desk row.** A `partner_terms` event (one per agent, kind and day) raises
+  `call_partner_terms`, labelled "Partner terms: yours to answer" (`shared/call-list.js`).
+  - It carries `partner: { kind, phrase, kinds, addToBuyers }` and the held draft's id.
+  - It lasts 14 days. A connected call or a hand reply after it clears it.
+  - It is on Today (`URGENT_KINDS`) and leads the person's row, with the held reply folded under it.
+- **They buy.** `investor_buyer` also records `investor_minded` (same dedupe key as the reply's
+  own read), and the row's goal says "add them to the buyer list". Nothing creates an investor
+  profile.
+
+Replay over the 5,503 texts agents sent us (saved threads, 2026-10-14): 56 hits across 46 agents
+(list_back 15, referral_fee 16, buyer_agent 13, co_wholesale 9, investor_buyer 3). Two were not
+partner terms: a wholesaler pointing us to their dispo person about one house, and "I'm a
+wholesaler myself so I understand".
+
 ### Every agent on a clock: the agent check-in (2026-09-29)
 
 Matt: "reach out to these agents proactively and frequently, every 3 weeks or
@@ -4094,8 +4360,9 @@ runs it) owns an agent when nothing else does:
 - **One voice.** An agent another clock owns is left to it. That covers:
   - a live deal, an open offer, or a held underwrite under 14 days old;
   - any follow-up the Offers column shows as coming;
-  - anything waiting in the outbox, a promise, a check-in they asked for, or
-    an address chase;
+  - anything waiting in the outbox (a held draft for a week at most), a
+    promise, a check-in they asked for, a lead they gave us a date for (only
+    once its day is within `everyDays`), or an address chase;
   - the outreach first-text workflow (until its follow-up is due) or its
     follow-up (`ghlWorkflowDays`, 21);
   - any GHL workflow the app enrolled them in (now recorded as
@@ -4249,6 +4516,158 @@ agents:
 - the tier and when the card moved.
 
 If the board can't be read, the run plans without the cards.
+
+**Offers stuck open let the agent go (2026-10-14).** The Line listed open
+offers the machine had stood down on 8–13 days back ("they passed"), and
+others where the agent wrote and nothing answered it. The check-in left every
+one of them to "an open offer", for good. Three fixes:
+- **The plan reads the offer's thread.** It used to read four days of drafts,
+  so a no from last week was missed, a nudge looked to be coming, and the agent
+  stayed owned. An agent with an open offer now gets their newest 20 drafts
+  from the last 130 days, the way the Offers column reads them.
+- **Nothing coming plus a quiet week releases the agent.** `openOfferIdle`
+  now covers any open offer with nothing coming (Next follow-up "None
+  scheduled" for any reason: the push to paper ran out, a reply nobody
+  answered, follow-ups switched off), and a house you pressed Stop on. These
+  release once there has been no text either way for `STOOD_DOWN_QUIET_DAYS`
+  (7). That counts their texts, ours, calls, sends and nudges on the offer,
+  and the offer's own date. The agent stays with the offer when any of these
+  hold:
+  - a text in the last week;
+  - an offer made this week;
+  - a person on the thread (`person_has_it`);
+  - a pause with a date;
+  - anything still coming on the offer.
+
+  A no or pending/sold still releases at once. The send-time door
+  (`ghl-broker/agent-focus.js`) asks the same function.
+- **A held draft owns the agent for a week, not forever.** A held reply or a
+  person's draft created `STALE_HELD_DAYS` (7) ago, or a queued text whose send
+  time has passed, no longer owns the agent (`staleHeld` in
+  `shared/follow-up.js`). It stays on the Desk. The agent check-in no longer
+  waits behind it (`blockingDraft` with kind `agent_pulse`) and does not
+  replace it (`supersededBy`). Every other machine text still waits on it.
+
+A released agent gets the general check-in. An open offer is never the
+check-in's house, and the past-house gate holds a draft that names it. "You
+have the thread" was already bounded: 3 days after your last hand reply
+(`PERSON_HAS_IT_DAYS`).
+
+### How often they asked, and when to stop asking (2026-10-14)
+
+Reading 2,014 threads turned up agents who told us how often to check in,
+and we kept the 21-day clock anyway: "check in no more than every 2–3
+months" (texted a month later), "check back in a couple months" (texted
+three weeks later, then two weeks after that), "you are on my email list so
+you don't need to check in", "I have enough wholesalers". The address chase
+kept asking after "please don't keep asking me". Brokerage auto-replies
+(Redfin, the eXp desk) read as the agent writing back. The pure detectors
+are in `shared/brush-offs.js`.
+
+- **Cadence.** `cadenceRequest(text)` reads an agent's own text into days:
+  - "every 2–3 months" is 75; "check back in a couple months" is 60; "a few
+    months" is 90; "once a month" is 30;
+  - "you're on my email list" or "don't need to check in" is 90;
+  - "enough wholesalers", "too far apart to remain in contact", "don't work
+    with wholesalers" or "pocket listings are illegal" is 120.
+
+  The reply agent stores it as the fact `checkinEvery` (agent only, newest
+  wins, app-only, no GHL field; you can edit or remove it in the drawer).
+  The agent check-in waits at least that long for every kind of check-in,
+  a fresh listing of theirs included, and the plan's reason reads "they
+  asked for a check-in every N days". The same text never starts the weekly
+  "I'll send you deals" chain, and the check-in sweep ends a running chain
+  once the fact is there. It also never books the two-morning clock under a
+  held reply.
+- **"Check back in N months"** also books a dated check-in that far out
+  (`checkin_requested`, kind `date`). A request now stands until 45 days
+  after it was made, or two weeks past its due date, whichever is later
+  (`requestStands`). The sweep reads requests up to `CHECKIN_LONGEST_DAYS`
+  back.
+- **The address chase stops on a no.** `refusesAddress(text)` covers "please
+  don't keep asking", "you can see them when they're on the market", "I can't
+  give the address until it lists", "can't share that", a bare "no" or "not
+  yet", and "no, I'll tell you when". When their newest text since the chase
+  started is one of these, the chase is closed (`address_pending_closed`,
+  `reason: they_refused`, with `why`). A no that goes on with a lead is not a
+  refusal. The chase also never starts on a text that refuses, or on land
+  ("I still have a vacant lot", `notAHouse`): that closes with
+  `reason: not_a_house`.
+- **Auto-replies aren't replies.** `isAutoReply(text)` covers:
+  - Redfin's "different number for texting" and the eXp desk menu;
+  - "Thank you for your message, we will get back to you shortly";
+  - out of office, Driving Focus, and a brokerage's SMS opt-in or CRM text.
+
+  `startReply` drops these before anything runs. Nothing is drafted and no
+  text summary is written, so the unanswered count doesn't reset, nothing
+  waits on you, and no check-in is booked. `reply_not_needed` with
+  `intent: auto_reply` settles it for the nightly audit, which also drops
+  one on its own ("an auto-reply, not a person"). When the auto-reply names
+  another number (`autoReplyNumber`), a `texts_elsewhere` event puts "Their
+  texts go to another number" on Today, with the number. Update the contact
+  in GHL or call, then dismiss it. The row clears after 30 days or when they
+  text for real. The number goes only in the event and on the row, never in
+  a log line.
+
+No switch: these only make the machine text less.
+
+**Agents who wrote back join it (2026-10-14).** Of the 1,049 agents we had
+texted who sat outside the pool, 104 had replied at least once. They had no
+profile, offer, card or fresh listing, so nothing would ever text them again.
+Matt: all of them go into the check-in.
+- **Who.** `loadPulseAgents` adds anyone with a reply on the timeline
+  (`store.lastContactActivity`, inbound only), if we know they're an agent:
+  - the reply was filed as an agent's;
+  - or we imported them from the outreach pull;
+  - or their timeline has our opener.
+
+  A buyer or an unknown caller never joins. They come in as engaged, and
+  opt-outs, stops, annoyed replies and the runner's GHL check (DND, tags)
+  apply as for everyone.
+- **Spread, not one burst.** Their last word is weeks old, so they would all
+  be due the morning they join. Instead each agent's first check-in falls on
+  their own weekday (Pacific) within `everyDays` of joining
+  (`firstCheckInAt`, picked from their contact id). Weekends are skipped
+  because the run is weekdays only. This applies only to the first check-in.
+  Once they've been checked in on, or anyone has talked since, the normal
+  clock takes over. A fresh listing of theirs is still raised at once.
+- **The day they joined.** A replier who joins by their reply counts from
+  today in every plan and preview until a real run writes it down. The first
+  real run (`startAgentPulse`, not a dry run) records `agent_pulse_joined`
+  for every such replier, picked or not, with `at` = now and dedupe key
+  `agent_pulse_joined:<id>`. Later plans read their day from that event, so
+  the spread holds from whenever the change first runs. The backfill below
+  counts from the day it runs (`data.joinedAt` on its marker).
+- **The backfill, once.** Many of the 104 answered a GHL workflow text
+  before the app read inbound texts, so the app has no reply on record for
+  them. `ghl-broker/scripts/backfill-replier-profiles.mjs`
+  (`ghl-broker/replier-backfill.js`) reads the GHL thread of every outreach
+  agent who isn't in the pool and isn't a buyer, three at a time. It sorts
+  each one (`classifyReplierThread`):
+  - **replied:** gets an agent profile and their last word on the timeline
+    (a `text_summary`, or a `call_summary` for a call, with source `backfill`
+    and dedupe key `replier_backfill:<id>`);
+  - **opted out:** STOP, wrong number, "take me off", a stop at the end of a
+    short text, SMS DND or a do-not-text tag. These are marked through
+    `markUnsubscribed`, which adds the `unsubscribed` tag and event;
+  - **left alone:** auto-replies only (a "Do Not Disturb While Driving"
+    reply, or a brokerage desk line) and annoyed replies.
+
+  A replay over the saved 2026-10-14 threads found 72 replied, 31 opted out
+  and 2 auto-replies.
+
+  Run it from `ghl-broker/` with `DATABASE_URL`, `GHL_TOKEN` and
+  `GHL_LOCATION_ID` set; the broker's Render Shell has all three. Run it
+  after the deploy that carries it:
+  1. `node scripts/backfill-replier-profiles.mjs` is the dry run, and the
+     default. It reads only and prints counts only: no names, phones or
+     words. Check that the opted-out count holds the stops.
+  2. `node scripts/backfill-replier-profiles.mjs --write` writes.
+     `--limit N` runs a slice first.
+
+  It's safe to run again: written contacts are in the pool and get skipped.
+  Afterwards, `GET /api/outreach/pulse?agents=1` should show the engaged pool
+  up by about 70, with their `dueAt` spread over the next `everyDays`.
 
 ### The daily sweep (outreach autopilot)
 

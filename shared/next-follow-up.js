@@ -152,7 +152,7 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
   const pr = (events || []).filter((e) => ["promise_made", "promise_owed", "promise_kept"].includes(e?.type) && (ms(e.at) ?? 0) >= now - PROMISE_WINDOW_HOURS * HOUR_MS)
     .sort((a, b) => String(a.at).localeCompare(String(b.at)));
   const keptAt = pr.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
-  const made = pr.filter((e) => e.type === "promise_made" && String(e.at) > keptAt && (e.data?.asksThem !== true || e.data?.what === "paper"));
+  const made = pr.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && String(e.at) > keptAt && (e.data?.asksThem !== true || e.data?.what === "paper"));
   if (made.length) {
     const due = ms(made[0].data?.dueAt) ?? (ms(made[0].at) + PROMISE_DUE_HOURS * HOUR_MS);
     const what = made.some((p) => p.data?.what === "number") ? "a number" : made.some((p) => p.data?.what === "paper") ? "the written offer" : "an answer";
