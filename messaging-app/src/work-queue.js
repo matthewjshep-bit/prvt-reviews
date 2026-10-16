@@ -8,7 +8,7 @@
 
 import { ACTION_GROUPS, ACTION_KINDS } from "@shared/pipeline.js";
 import { AUDIT_ACTION_KINDS } from "@shared/conversation-audit.js";
-import { DESK_SECTIONS, TODAY_SECTIONS } from "@shared/desk.js";
+import { DESK_SECTIONS, TODAY_SECTIONS, GHL_CALLS_EMPTY } from "@shared/desk.js";
 import { CALL_KINDS } from "@shared/call-list.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
 import { OPEN_STATUSES, effectiveStatus } from "@shared/offer-status.js";
@@ -29,6 +29,9 @@ export const TODAY_GROUPS = GROUP_ORDER.map((key) => ({ key, field: "group", lab
 // Today: "Needs you" (Matt, 2026-10-13: only urgent work only he can do), then
 // "Today's calls" (2026-10-15: the day's best calls, at most ten).
 export const DESK_GROUPS = TODAY_SECTIONS.map((s) => ({ ...s, field: "section", empty: s.empty || "Nothing needs you right now." }));
+// With calls going to GHL's Manual Actions (desk.ghlCalls, 2026-10-15),
+// Today's calls says where they went when it's empty.
+export const deskGroupsFor = (desk) => (desk?.ghlCalls?.on ? DESK_GROUPS.map((g) => (g.key === "call" ? { ...g, empty: GHL_CALLS_EMPTY } : g)) : DESK_GROUPS);
 export const SECTION_LABEL = { ...GROUP_LABEL, ...Object.fromEntries(DESK_SECTIONS.map((s) => [s.key, s.label])) };
 
 // Which group a row is in. An action with no group (an older broker) is
