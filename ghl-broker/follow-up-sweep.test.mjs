@@ -489,6 +489,22 @@ test("the daily sweep needs the bot on, a key, and at least one live ladder", as
 });
 
 
+/* ---------- a number texted in a reply (2026-10-16) ---------- */
+
+// Matt, 2026-10-16: an agent we texted 377K in a plain reply, who said "that
+// won't work" and went quiet, heard nothing for two weeks. The offer stayed
+// "new" with floatSentAt stamped, the Offers column promised a nudge, and the
+// sweep skipped it because it only read a realm check's own stamp.
+test("an agent we texted our number in a reply gets the nudge, though the offer still says new", async () => {
+  const quiet = anOffer({ status: "new", statusAt: null, sends: [], floatSentAt: at(0) });
+  const c = await agentCandidates({ store: fakeStore({ offers: [quiet] }), locationId: "LOC", config: configWith(), now: T0 + 15 * DAY });
+  assert.deepEqual(c.map((x) => x.offerId), ["o1"]);
+  assert.equal(c[0].startedAt, at(0), "counted from when our number reached them");
+  // A priced offer whose number never went out is still the float timer's, not a nudge.
+  const unsent = anOffer({ status: "new", statusAt: null, sends: [] });
+  assert.deepEqual(await agentCandidates({ store: fakeStore({ offers: [unsent] }), locationId: "LOC", config: configWith(), now: T0 + 15 * DAY }), []);
+});
+
 /* ---------- one nudge per property ---------- */
 
 const sentOffer = (id, over = {}) => ({

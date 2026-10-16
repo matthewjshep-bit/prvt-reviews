@@ -567,8 +567,10 @@ function nudgeAside(o) {
 // went through. And the texts a buyer gets about a deal — its follow-ups and
 // the walkthrough reminders (2026-10-15: a tenth of October's buyer texts
 // were blocked, all of them deal texts and walkthrough invites).
+// The second look at a past offer (2026-10-16) comes after weeks of silence,
+// so it reads to a carrier like a cold text too.
 export const CARRIER_CHECKED_KINDS = new Set(["outreach_open", "outreach_nudge", "agent_pulse", "buyer_pulse",
-  "blast_nudge", "dataroom_nudge", "deal_followup", "showing_reminder", "showing_followup"]);
+  "blast_nudge", "dataroom_nudge", "deal_followup", "showing_reminder", "showing_followup", "second_look"]);
 
 export function outboundOpening(outbound) {
   const base = openingFor(outbound);
@@ -1161,6 +1163,19 @@ function openingFor(outbound) {
         `closer to ours now. You may say their new list price and restate our number exactly as it is in the offer book; ` +
         `do NOT raise ours, hint that we'd go higher, or name any other number. Write it like a text: no dollar signs. ` +
         `${CONTINUE} Set intent to price_drop.`;
+
+    // A strong past offer, asked about once more (shared/second-look.js,
+    // 2026-10-16): the seller's number was close to ours and it went quiet.
+    // Our same number, never more, and a call — never "did it sell?".
+    case "second_look":
+      return `${START} A while back ${o.offerStatus === "no_response" ? "we put a number to this agent on" : o.offerStatus === "countered" ? "this agent countered our number on" : "this agent and their seller passed on our number on"} ` +
+        `${o.street || o.address}, and it went quiet. The seller's number wasn't far from ours. ` +
+        `In one or two short lines, under ${o.maxChars || 240} characters: name ${o.street || "the street"}, say that if the seller is still open to it ` +
+        `we can still do ${o.oursK} — our same number, said exactly that way — and ask whether it's worth a quick call. ` +
+        `Do NOT name any other number: not theirs, not a range, not a new one, and never hint that we'd go higher. ` +
+        `Do NOT ask whether it sold, closed, is still available or is still on the market. No dollar signs. ` +
+        `${o.step > 1 ? "We asked once before: don't repeat the wording of that text. " : ""}` +
+        `Easy to say no to, never pushy. ${CONTINUE} Set intent to second_look.`;
 
     // The check-in they asked for. It is theirs — they said when — so it reads
     // as keeping an appointment, not chasing.

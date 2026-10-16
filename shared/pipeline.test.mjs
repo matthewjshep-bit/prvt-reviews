@@ -954,3 +954,15 @@ test("an agreed number you haven't approved is a row for you: approve it before 
   assert.equal(kinds(build({ offers: [{ ...o, autoUnderwrite: null }] })).includes("approve_number"), false, "a hand-made number is yours already");
   assert.equal(kinds(build({ offers: [{ ...o, realm: null }] })).includes("approve_number"), false, "nothing agreed");
 });
+
+// 2026-10-16: a number texted in an ordinary reply carries only floatSentAt.
+// It is not "priced, nothing has gone out", and no timer floats it again.
+test("a number we texted in a reply is not a priced-not-floated row, and the timer never floats it twice", async () => {
+  const { timerMoves } = await import("./pipeline.js");
+  const TIMED = normalizeConversationAi({ enabled: true, driver: { timers: { enabled: true } } });
+  const ai = offer({ status: "new", sends: [], floatSentAt: D(2), autoUnderwrite: { jobId: "j1", passed: true } });
+  const r = build({ config: TIMED, offers: [ai] });
+  assert.equal(kinds(r).includes("offer_ready"), false);
+  assert.equal(timerMoves(r.actions, { config: TIMED, now: NOW }).length, 0);
+  assert.equal(kinds(build({ offers: [offer({ status: "new", sends: [], floatSentAt: D(2) })] })).includes("offer_ready"), false, "made by hand too");
+});

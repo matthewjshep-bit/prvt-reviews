@@ -1169,6 +1169,67 @@ to a number nobody decided on. Matt: "we need to stick with our prev numbers".
   contract's. The Offer pane's pencil does this before a re-quote on an
   agreed offer and says so first. Sends nothing.
 
+### A second look at a strong past offer (2026-10-16, off by default)
+
+The 2026-10-16 audit found 36 offers that died close, with nothing planned:
+they passed, went quiet or countered and stopped; the seller's number was
+within 15% of ours; and the agent had really talked to us. Matt: "checking
+really good past offers to see if they would reconsider if the margin's good
+enough and the conversation warranted a follow-up".
+
+- **Who** (`secondLookDue`, `shared/second-look.js`, pure). The agent's
+  current row on the house, no deal, and all of these:
+  - status passed, no_response or countered, or our own pass over their
+    counter (`numbersPass`: a counter on record or the counter hold, never a
+    pass for the kind of house, the area, or one a sweep closed out);
+  - our number went out: paper, `floatSentAt` (a number texted in a plain
+    reply) or a realm check; the status is 21–120 days old;
+  - their number within `withinPct` of ours: the lowest of their counter,
+    the seller's number the agent gave (`sellerAsk`), and the list price (the
+    price watch's last look, else the list when we priced it);
+  - they wrote us `minTheirTexts` times (auto-replies don't count) or we had
+    a real call (`realCall`);
+  - quiet: nothing from them, and no text of ours about this house, for
+    `afterDays`;
+  - not off the market (the price watch) and not "it's pending/sold" in their
+    newest texts; unknown is allowed;
+  - at most `maxPerHouse` sent per house, `everyDays` between looks (per
+    house and per agent: one house at a time), and none after a no to the
+    last one;
+  - never to an agent who is stopped, opted out, tagged off or annoyed
+    (`agentStops`), on a live thread (`machineMayStart`), the day a call to
+    them is queued in GHL, or while another house of theirs is live.
+- **The text** (`second_look`, `conversation-prompt.js`, carrier-checked):
+  one or two lines under 240 characters naming the street — if the seller is
+  still open to it, we can still do our same number — and is it worth a
+  quick call. Never "did it sell?". The number is worked out from the thread
+  in `startProactive` (`secondLookNumber`: the lowest we put to them on the
+  house, via `holdNumber`), and it is the only number the money guard allows
+  (`onlyFloats`, ours or ours in thousands rounded down). Anything above it,
+  even "378K" on 377,552, or over 240 characters, is written once more and
+  then dropped, never left on the Desk.
+- **Running it.** The morning follow-up sweep (`secondLookCandidates`), after
+  every other clock, one house per agent (the closest to ours), with the
+  sweep's own gates: Stop/Pause, one text a morning, 72 hours apart and two a
+  week (`second_look` is an unprompted kind), the outbox, the claim
+  (`follow_up_sent`, `data.kind: second_look`). A clean draft sends itself:
+  the sweep releases it (`releaseHeld`) the way the agent check-in's runner
+  does, so it is not on the auto-send grid and the dial never touches it.
+  When it actually sends, `second_look_sent` goes on the timeline; that is
+  what `maxPerHouse` counts. A second look on our own numbers pass is the one
+  machine text allowed on a we_passed house, and only if the offer's status
+  hasn't changed since it was drafted.
+- **Switch:** `conversationAi.parties.agent.followUp.secondLook { enabled:
+  false, withinPct: 15, afterDays: 21, everyDays: 45, maxPerHouse: 2,
+  minTheirTexts: 2 }`. Party auto-send and `CARD_SENDS_ENABLED` still gate
+  every send.
+- **Check:** `GET /api/offers/automations/conversation/follow-ups?preview=1`
+  lists `secondLooks.rows` — who the next sweep would ask and why ("their
+  counter 410K is 7.9% over our 380K; passed 30 days ago"), even with the
+  switch off, no names. `POST …/follow-ups/run {dryRun: true}` shows each as
+  `would send`. A real one's claim carries the same `data.why`, and the
+  timeline reads "we asked once more at our same number".
+
 ### How we got our number — the math behind every offer (2026-10-07)
 
 Matt benchmarked a No Fluff wholesaling video (Ed Zamora, 3–5 deals a month
@@ -1647,6 +1708,26 @@ while their text (or your own draft) is waiting in the outbox is kept
 (`priceWatch.dropOwed`) and texted on a later run, measured from the price
 before the drop. With `followUp.watchFloated` on, a number floated by text
 and never sent is watched too. Both switches ship off.
+
+**A number texted in a plain reply counts as out (2026-10-16).** Our number
+said in an ordinary reply leaves the offer "new" with only `floatSentAt`, no
+realm check's own stamp. The follow-up sweep learned to nudge it the same
+morning (b8c360e); three readers still took it for a number that never went
+out:
+- **The price watch** skipped it, so a cut on that house went unseen. It now
+  reads `floatSentAt` like a realm check's stamp, still behind
+  `followUp.watchFloated` (off in code; the coordinator turns it on).
+- **The Offers column** (`nextFollowUp`) said "Our number never went out" and
+  the agent check-in read the offer as unsent and took the agent; it now
+  shows the offer nudge, counted from `floatSentAt`, the way the sweep acts.
+- **Today's "Priced, not floated"** row (and the float timer it drives) no
+  longer lists it, so the number is never floated a second time.
+No switch beyond `watchFloated`. Check: an offer with `floatSentAt` and status
+new shows "Nudge · …" in Next follow-up, and once `watchFloated` is on the
+next morning's watch (`job_cursors` row `priceWatch`, `last.watched`) counts
+it. Not changed: the board's
+lane (`laneFor`) still places such a row in "ready", which the GHL mirror
+reads.
 
 ### The tick: every job on its own, every day comes back (2026-09-29)
 
@@ -3807,6 +3888,39 @@ nothing. **A held draft a person published is not "needs a look"** any more
 — the queue row is only for an unpublished draft (Erin Twedt's 20531 S
 Danvers sat there a day after its number had been floated).
 
+**Numbers we never sent, closed out (2026-10-16, ON at 10 days).** The audit
+found six priced offers whose number never went out, some since August: the
+Offers column said "Our number never went out — float or send it" ("the
+float timer didn't send it") and they sat on Today for Matt for good. The
+same nightly pass now closes them (`retireStaleUnsent`,
+`ghl-broker/held-underwrites.js`; the verdict is `staleUnsent`,
+`shared/stale-unsent.js`):
+- **Which.** The house's current row, status new, a number on it, and nothing
+  of ours ever in front of them: no letter that went, no `floatSentAt` (a
+  number texted in a plain reply), no realm or take check, no nudge. It is
+  `retireUnsentDays` past the day it was due out (the float timer's hours
+  after it was priced, or a day for one made by hand; a re-quote restarts
+  it). Not a deal, a held draft (the triage above has those), or a yes.
+- **Never** while a person has the thread (a hand reply or a call), while a
+  float you pressed is still waiting in the outbox, or within 14 days of a
+  person's own work on the row: made by hand, revised, pinned, approved or
+  published.
+- **What it does.** `we_passed`, `statusNote` "never sent: closed after N
+  days", `retired: {by: "stale-unsent", at, reason}` (the held sweep's own
+  shape), an `offer_we_passed` timeline line, and any machine text still
+  queued about it dismissed, as the status menu's "we passed" does. Nothing is
+  texted and no GHL note is written. The agent is then nobody's offer and goes
+  to the agent check-in (`offerOwner` reads a pass of ours as nothing coming).
+  A second look never revives one (`numbersPass` skips sweep-retired rows).
+- **Switch:** `conversationAi.parties.agent.followUp.retireUnsentDays`,
+  default **10** — this one ships on, because it only closes our own stale
+  rows and sends nothing. 0 turns it off; so does `nightlyAudit.heldSweep:
+  false`.
+- **Check:** the audit's Run now as a dry run lists them as "Numbers we never
+  sent, closed out" (kind `stale_unsent`, `counts.byKind.stale_unsent`) with
+  the days; a real run shows each under "Done on its own" as `close unsent
+  (closed: never sent: closed after N days)`.
+
 ### Sounding like a person (the send layer)
 
 Conversation AI page → "When it sends on its own". Three things beyond the
@@ -4948,7 +5062,9 @@ runs it) owns an agent when nothing else does:
     promise, a check-in they asked for, a lead they gave us a date for (only
     once its day is within `everyDays`), or an address chase;
   - the outreach first-text workflow (until its follow-up is due) or its
-    follow-up (`ghlWorkflowDays`, 21);
+    follow-up (`ghlWorkflowDays`, 21). The follow-up holds them only while
+    `outreachAutopilot.followUpEnabled` is on (2026-10-16): switched off, its
+    old enrollments hold nobody, and the app's nudge has that cohort;
   - any GHL workflow the app enrolled them in (now recorded as
     `workflow_enrolled`) unless its id is in `quietWorkflowIds`;
   - a thread you picked up in the last 3 days.
@@ -5137,6 +5253,20 @@ The plan also reads every offer contact, not only contact profiles and
 listing agents (`loadPulseAgents`). The runner's GHL preflight checks the tags
 of a contact with no profile.
 
+**Offer contacts without an agent profile (2026-10-16).** The audit counted
+seven contacts with an offer and no agent profile (offers made by hand from
+the Offers form, where no text ever came through the app). They were already
+in the pool through their offers; what they lost was their own record. The
+plan now reads every profile in one read: an offer contact whose only profile
+has no party (an event wrote it with none) has its tags and facts read, so a
+do-not-contact tag or "check in every few months" holds for them too. Our own
+contact (`shared/self-contact.js`, the signer's or persona's full name) is
+never in the pool. A buyer with an offer stays the buyer pulse's. The first
+check-in's claim (`agent_pulse_sent`, party agent) gives them an agent profile.
+No switch: it rides the check-in's own. Check: `GET /api/outreach/pulse`
+`counts.offerContacts` — `{ total, inPool, buyers, self }`; total minus inPool
+is buyers plus us, so nobody with an offer is missing for any other reason.
+
 **Tier 2 and Tier 3 from the app (2026-10-09).** Matt confirmed GHL's "Tier
 2+3 nurture" sends nothing now: "we need to be doing everything from the
 app". The plan reads GHL's Acquisitions board (`pulseTierCards`, ten
@@ -5309,6 +5439,36 @@ Matt: all of them go into the check-in.
   Afterwards, `GET /api/outreach/pulse?agents=1` should show the engaged pool
   up by about 70, with their `dueAt` spread over the next `everyDays`.
 
+**Repliers the pool already has (2026-10-16).** The 10/16 audit found 59+
+agents IN the pool, sorted "cold" because the app had no reply from them,
+who had written back in GHL (mostly to the old workflow texts in August and
+September). Cold agents hear from us only about a fresh listing, so they
+went months without a touch.
+- **What.** `includePool` on the backfill also reads every pool agent with
+  no reply on their timeline or drafts, no offer only their answer could
+  have moved, and no stop (`poolNeverReplied`). A reply in GHL gets the same
+  last-word marker, so they become engaged and join the regular check-in;
+  an opt-out goes through `markUnsubscribed`. Auto-replies and annoyed
+  replies are left alone. A reply found in their drafts is counted
+  (`pool.hadReply`) and not read from GHL.
+- **Spread.** Their first check-in is spread over `everyDays` from the run,
+  like every joiner. A listing ping we sent them while they were cold (a
+  ledger event with `data.segment: "cold"`, before the join) doesn't count as
+  being on the clock, so it doesn't make them due all at once.
+- **Running it, without the Render Shell.** `POST
+  /api/outreach/repliers/backfill {dryRun = true, includePool = true,
+  limit}` starts it as an in-memory job (one at a time, 409 otherwise),
+  three GHL threads at a time and paced, as the script reads them. `GET
+  /api/outreach/repliers/backfill` has `progress` while it reads and
+  `result` when done: counts by class (`kinds`, `why`, `pool.kinds`,
+  `written`), never a name, phone or word. Run the dry run first and check
+  that `pool.kinds.opted_out` holds the stops; then `{dryRun: false}`. A
+  `limit` reads a slice (the agents outside the pool first). The script
+  takes `--include-pool` too. Reruns are safe. No switch: it runs only when
+  asked.
+- **Check.** `GET /api/outreach/pulse?agents=1`: the engaged count up by
+  about `written.markers`, their `dueAt` spread over the next `everyDays`.
+
 ### The daily sweep (outreach autopilot)
 
 Settings → Agent Outreach → "Run outreach every day on its own". Once a
@@ -5434,6 +5594,43 @@ counts from. Any reply, an offer, a realm-yes, or a deal ends the ladder;
 when it runs out the agent is counted on Reports → Flow ("N cold agents never
 answered", `counts.coldNoReply`). It is not a row on Today (2026-09-17): there
 is nothing for a person to do about an agent who never answered.
+
+**The GHL workflow's cohort gets the app's follow-up (2026-10-16, off by
+default).** Agents whose first text came from the GHL workflow (before
+2026-10-04) carry an `outreach_enrolled` (kind `first`), not an
+`outreach_sent`, so the ladder above never counted them. Their follow-up was
+the GHL follow-up workflow's, and on 10/16 195 of them who never answered had
+heard nothing in 15 to 45 days (about 73 workflow texts had gone out since
+10/1 in all). `outreachAutopilot.nudgeGhlCohort` (default false) puts them on
+the same "Reached out, no reply" ladder (`ghlCohortCandidates` in
+follow-up-sweep.js):
+- **Who.** A GHL first text in the last 60 days, no app first text, no offer,
+  realm-yes or deal since, and no text of ours since (a check-in, a hand
+  reply, an address chase, another follow-up). Counted from the GHL first
+  text; any reply ends it, as for everyone.
+- **GHL decides last.** Before a rung is claimed (a dry run too), their GHL
+  thread is read (`afterFirstText`). Skipped, unclaimed: they wrote back
+  there (a text or a call); GHL sent anything more than 6 hours after the
+  first text that wasn't marked failed (the follow-up workflow did deliver,
+  or a person texted); no first text in the thread; a thread that can't be
+  read.
+- **One system.** After the claim and before the draft starts, the contact
+  is taken out of `followUpWorkflowId` (best-effort, written down as
+  `workflow_left`). The GHL follow-up (`outreach-followup.js`) also skips
+  anyone the app already followed up.
+- **County.** The nudge names the county of their outreach row's listing
+  (`doc.hook.county`), else the batch they were imported into ("Autopilot ·
+  Pierce, WA"), and the listing from the enrollment.
+- **Turning it on.** `nudgeGhlCohort: true` and `followUpEnabled: false`
+  (keep `followUpWorkflowId` set: the removal needs it). The agent check-in
+  then stops treating "the outreach follow-up workflow" as their owner.
+- **Check.** `POST /api/offers/automations/conversation/follow-ups/run
+  {dryRun: true}` (or the morning run), then `GET
+  /api/offers/automations/conversation/follow-ups` for the job's `results`:
+  rows with `ghl: true` say "would send" with the county, or why they were
+  skipped. After a live run, a started row carries `ghlFollowUp: "removed"`,
+  and the contact's timeline has the `follow_up_sent` (`outreach_nudge`) and
+  a `workflow_left`.
 
 **The app's first text (2026-10-04).** Matt moved the first text from the
 agent-smsblast workflow to the app, so each one is written fresh in his voice:

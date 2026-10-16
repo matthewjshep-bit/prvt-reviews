@@ -130,7 +130,7 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
     result.counts.held = h.counts;
     result.counts.queued += h.findings.filter((f) => f.action && ["ask_take", "rerun_held"].includes(f.action.type)).length;
     result.counts.owed += h.counts.yours;
-    for (const k of ["held_rerun", "held_ask", "held_yours", "held_over", "held_junk"]) result.counts.byKind[k] = h.findings.filter((f) => f.kind === k).length;
+    for (const k of ["held_rerun", "held_ask", "held_yours", "held_over", "held_junk", "stale_unsent"]) result.counts.byKind[k] = h.findings.filter((f) => f.kind === k).length;
     acted.push(...h.acted);
   } catch (e) {
     result.counts.held = { error: String(e?.message || e).slice(0, 160) };

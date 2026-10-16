@@ -57,6 +57,8 @@ export const AUDIT_KINDS = [
   { key: "held_waiting",         label: "Held underwrites — asked, passes in a week without a number", severity: "fyi" },
   { key: "held_over",            label: "Held drafts the conversation closed",          severity: "fyi" },
   { key: "held_junk",            label: "Held drafts with nothing to review",           severity: "fyi" },
+  // A priced number that never went out, closed ten days on (shared/stale-unsent.js).
+  { key: "stale_unsent",         label: "Numbers we never sent, closed out",            severity: "fyi" },
 ];
 // A finding's action that ends in a text, a run, or a queued send.
 export const QUEUED_ACTIONS = new Set(["redraft", "run_follow_up_sweep", "queue_offer_send", "requote", "release", "nudge_counter", "nudge_offer", "ask_take", "rerun_held"]);

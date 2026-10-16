@@ -46,7 +46,7 @@ test("a check-in that still pitches is held by the gate", () => {
   assert.equal(g.ok, false);
   assert.ok(g.flags.some((f) => /carriers block/.test(f)), g.flags.join(" · "));
   assert.equal(evaluateReplyGates({ draft, party: "agent" }).flags.some((f) => /carriers block/.test(f)), false, "only where asked: a float to an agent we're talking to is fine");
-  assert.deepEqual([...CARRIER_CHECKED_KINDS].sort(), ["agent_pulse", "blast_nudge", "buyer_pulse", "dataroom_nudge", "deal_followup", "outreach_nudge", "outreach_open", "showing_followup", "showing_reminder"]);
+  assert.deepEqual([...CARRIER_CHECKED_KINDS].sort(), ["agent_pulse", "blast_nudge", "buyer_pulse", "dataroom_nudge", "deal_followup", "outreach_nudge", "outreach_open", "second_look", "showing_followup", "showing_reminder"]);
 });
 
 test("a machine text with blocked words is written again without them, once", async () => {

@@ -21,7 +21,7 @@ export const DIGEST_SECTIONS = [
 export const CLOSE_COUNTER_PCT = 0.15;
 // Answering these is not the point of the digest.
 const QUIET_INTENTS = new Set(["opt_out", "small_talk", "media"]);
-const NUMBER_KINDS = new Set(["realm_check", "take_check", "price_drop"]);
+const NUMBER_KINDS = new Set(["realm_check", "take_check", "price_drop", "second_look"]);
 
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const k = (n) => `${Math.round(Number(n) / 1000)}k`;

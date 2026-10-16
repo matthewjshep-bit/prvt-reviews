@@ -51,6 +51,7 @@ import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound, supersededBy } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
+import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_STATUSES } from "./shared/second-look.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
 import { normalizeOpener, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
@@ -146,8 +147,13 @@ export const RA_MAX_SMS_CHARS = 480;      // three segments; longer than that is
 export const RA_MAX_CONCURRENT = 2;
 // Sweep-started texts that may wait on a batch (BATCHABLE_KINDS) run on their
 // own lane this wide: enough for a sweep to fill one batch, few enough that
-// the GHL reads around each draft stay under its rate limit.
-export const RA_MACHINE_CONCURRENT = 8;
+// the GHL reads around each draft stay under its rate limit. 8 until
+// 2026-10-16: with the outreach cap gone a day held ~530 machine drafts, each
+// two or three batch round trips (draft, then the carrier/length rewrites),
+// and 8 at a time wrote ~0.6 a minute — most of the day's first texts would
+// have waited for Monday. 24 is three times that and ~70 GHL reads in a burst,
+// still under GHL's 100 per 10 seconds.
+export const RA_MACHINE_CONCURRENT = 24;
 
 export const RA_TAGS = {
   draft: process.env.REPLY_DRAFT_TAG || "reply-draft",
@@ -366,7 +372,7 @@ export const KEEP_FOR_A_PERSON = new Set(["realm_check", "take_check", "promise_
 export const BATCHABLE_KINDS = new Set([
   "outreach_open", "outreach_nudge", "counter_nudge", "take_ask", "offer_nudge", "hot_push", "passed_checkin",
   "buyer_pulse", "agent_pulse", "blast_nudge", "dataroom_nudge", "deal_followup", "promise_due", "price_drop", "checkin_due",
-  "showing_reminder", "showing_followup",
+  "showing_reminder", "showing_followup", "second_look",
 ]);
 
 export function draftParams({ model, system, user, schema, effort = "medium" }) {
@@ -2616,6 +2622,31 @@ export const OUTBOUND_KINDS = {
     floats: ({ subject }) => [subject?.to, subject?.from].map((n) => Math.round(Number(n) || 0)).filter(Boolean),
     forbids: () => [],
   },
+  // A strong past offer, asked about once more (shared/second-look.js,
+  // 2026-10-16): our same number, never more. `subject.ours` is that number,
+  // worked out from the thread in startProactive (secondLookNumber) — the
+  // lowest we put to them on the house — and it is the ONLY number the text
+  // may say (`onlyFloats`): not the book, not theirs. Its switch is
+  // followUp.secondLook; not on the playbook grid, so the sweep releases a
+  // clean draft itself (follow-up-sweep.js), the way the check-in's runner does.
+  second_look: {
+    party: "agent",
+    enabled: (pb) => pb?.followUp?.enabled && pb?.followUp?.secondLook?.enabled,
+    ready: ({ offer, subject }) => {
+      if (!offer?.address) return "no offer on the house";
+      if (offer.deal) return "it became a deal";
+      if (!SECOND_LOOK_STATUSES.has(offerStatus(offer))) return `the offer is ${offerStatus(offer).replace(/_/g, " ")} now`;
+      return Number(subject?.ours) > 0 ? true : "no number of ours to restate";
+    },
+    floats: ({ subject }) => {
+      const n = Math.round(Number(subject?.ours) || 0);
+      // Exactly ours, or ours said in thousands rounded DOWN ("377K" on
+      // 377,552): never a figure above what we sent.
+      return n > 0 ? [n, Math.floor(n / 1000) * 1000] : [];
+    },
+    forbids: () => [],
+    onlyFloats: true,
+  },
   // They told us when to check back ("this Wednesday"), or offered to send us
   // deals — the check-in they asked for (promise-sweep.js runCheckInSweep).
   checkin_due: {
@@ -2843,6 +2874,15 @@ export async function startProactive({
   // A high-stakes house floats a range until we have their read and eyes on
   // it (shared/number-stance.js).
   const stance = kind === "realm_check" ? await floatStanceFor({ store, offer, config, dossier }) : null;
+  // The second look restates our number on the house, and only ours: the
+  // lowest we put to them there (shared/second-look.js secondLookNumber),
+  // read off the thread, never above what we sent. No thread, no text.
+  if (kind === "second_look" && offer?.address) {
+    let thread = "";
+    try { thread = (await buildTranscript(client, locationId, contactId, { maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 60, maxChars: 16000, maxCallTranscripts: 0 })).text || ""; }
+    catch (e) { return { skipped: `couldn't read the thread to check our number (${String(e?.message || e).slice(0, 80)})`, job: null }; }
+    subject = { ...(subject || {}), ours: secondLookNumber({ offer, transcript: thread }) || 0 };
+  }
   const ready = spec.ready({ offer, subject, config, dossier, stance });
   if (ready !== true) return { skipped: ready, job: null };
 
@@ -3199,6 +3239,12 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       coldOpen: (p.segment === "cold" || /gone quiet/.test(String(p.segment || ""))) && (p.reason === "fresh_listing" || p.reason === "off_market_listing") && Boolean(p.listing),
       variant: Number(p.variant) || 0 };
   }
+  if (kind === "second_look") {
+    // Our same number, said in thousands rounded down, and nothing else.
+    const ours = Math.round(Number(subject?.ours) || 0);
+    return { ...base, street: streetOf(address), ours, oursK: ours ? `${Math.floor(ours / 1000)}K` : "",
+      offerStatus: offerStatus(offer), went: whatWentOut(offer), step: Number(subject?.step) || 1, maxChars: SECOND_LOOK_MAX_CHARS };
+  }
   if (kind === "showing_reminder" || kind === "showing_followup") {
     // The walkthrough: the street and the window as a buyer reads it
     // (shared/showing.js windowLabel). How they get in is the deal's access
@@ -3311,6 +3357,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "address_chase": return outbound.houses?.length
       ? `Asks again for the addresses of the houses they named: ${outbound.houses.join(", ")} (check-in ${outbound.rung} of ${outbound.rungs}).`
       : `Asks again for the address of the property they said was coming (check-in ${outbound.rung} of ${outbound.rungs}).`;
+    case "second_look": return `Second look at ${where}: if the seller is still open to it, we can still do ${outbound.oursK} (our same number); asks if it's worth a quick call.`;
     case "price_drop": return `The list price on ${where} came down${outbound.fromK ? ` from ${outbound.fromK}` : ""} to ${outbound.toK}; asks if the seller would look at cash closer to ours now.`;
     case "promise_due": return `Keeps our word on ${where}: we said we'd come back with ${outbound.what === "number" ? "a number" : "an answer"} and nothing went out${outbound.heldReason ? " (the underwrite held)" : ""}.`;
     default: return `Starts a message about ${where}${rung}.`;
@@ -3360,6 +3407,21 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
     houseWords: houseWordsFor(context?.deals, a.transcript) });
+  // The second look is one or two short lines (shared/second-look.js), and
+  // says our same number and nothing above it — not even the book's own
+  // rounding up ("378K" on 377,552).
+  if (kind === "second_look") {
+    const ours = Math.round(Number(subject?.ours) || 0);
+    return (d) => {
+      const g = gate(d);
+      const extra = [];
+      const n = String(d?.reply || "").length;
+      if (n > SECOND_LOOK_MAX_CHARS) extra.push(`${n} characters — the second look is one or two short lines, under ${SECOND_LOOK_MAX_CHARS}`);
+      const above = ours > 0 ? pricesWeName(d?.reply || "", ours).filter((x) => x > ours) : [];
+      if (above.length) extra.push(`the draft says ${above.map((x) => fmtMoney(x)).join(", ")} — the second look is our same number, ${fmtMoney(ours)}, never more`);
+      return extra.length ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), ...extra] } : g;
+    };
+  }
   if (pastHouses.length) {
     return (d) => {
       const g = gate(d);
@@ -3643,6 +3705,9 @@ async function runProactive(job, ctx) {
       ...((kind === "outreach_open" || kind === "outreach_nudge") && outbound.county ? { county: outbound.county } : {}),
       // Why we passed: the send-time live-thread check lets a no-fit ("too_far") through.
       ...(kind === "kind_pass" && outbound.why ? { why: outbound.why } : {}),
+      // The number it restates, and where the offer stood when it was
+      // drafted: a status marked after this stops it at send.
+      ...(kind === "second_look" ? { amount: outbound.ours, offerStatus: outbound.offerStatus, statusAt: offer?.statusAt || null, step: outbound.step } : {}),
       // Which first text this was (conversation-prompt.js openerPlan), so
       // replies can be read back by opening, voice and detail.
       ...(kind === "outreach_open" ? openerChoices(outbound) : {}),
@@ -5976,7 +6041,12 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // person pressing Send is a person deciding.
   if (auto && d.party !== "investor" && d.outbound?.kind && !String(d.inbound || "").trim()) {
     const offer = d.outbound?.offerId && store.getOffer ? await store.getOffer(d.outbound.offerId).catch(() => null) : null;
-    if (offer && ["we_passed", "unavailable"].includes(offerStatus(offer))) {
+    // The second look at a pass of ours over the numbers (shared/second-look.js
+    // numbersPass) is the one text about a house we passed on: its picker read
+    // that pass. A status marked since it was drafted still stops it.
+    const lookAtOurPass = d.outbound.kind === "second_look" && offer && offerStatus(offer) === "we_passed"
+      && d.outbound.offerStatus === "we_passed" && Boolean(d.outbound.statusAt) && d.outbound.statusAt === offer.statusAt;
+    if (offer && ["we_passed", "unavailable"].includes(offerStatus(offer)) && !lookAtOurPass) {
       const ts = new Date(now).toISOString();
       const why = offerStatus(offer) === "unavailable" ? `${offer.address || "that house"} is no longer available` : `we passed on ${offer.address || "that house"}`;
       await store.updateReplyDraft(d.id, {
@@ -6260,6 +6330,15 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null,
         // What it named (shared/agent-pulse.js checkInHook), to read replies by.
         ...(d.outbound.hook ? { hook: d.outbound.hook } : {}) },
+    }).catch(() => {});
+  }
+  // The second look at a past offer actually went (shared/second-look.js):
+  // how many a house has had, and when the last one was, read this.
+  if (d.outbound?.kind === "second_look") {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "agent", type: SECOND_LOOK_SENT, at: ts,
+      address: d.outbound.address || d.propertyAddress || "", offerId: d.outbound.offerId || null, source: "conversation", ref: d.id,
+      dedupeKey: `${SECOND_LOOK_SENT}:${d.id}`, data: { draftId: d.id, auto: Boolean(auto), amount: Number(d.outbound.amount) || null, step: d.outbound.step ?? null },
     }).catch(() => {});
   }
   // Our number actually went by text: the offer is Sent from here

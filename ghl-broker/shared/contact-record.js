@@ -148,6 +148,9 @@ export const EVENT_TYPES = [
   // the day's claim, written first; a GHL write that failed; a call taken back
   // out of the workflow because its reason was gone. data.claimKey ties them.
   "ghl_call_queued", "ghl_call_failed", "ghl_call_withdrawn",
+  // A second look at a strong past offer actually went (shared/second-look.js):
+  // our same number, once more. How many a house has had reads these.
+  "second_look_sent",
 ];
 
 export const EVENT_LABEL = {
@@ -194,6 +197,7 @@ export const EVENT_LABEL = {
   showing_offered: "they offered a showing",
   email_saved: "their email saved to GHL", email_offered: "they gave an email to check",
   ghl_call_queued: "a call went to GHL's Manual Actions", ghl_call_failed: "a call couldn't go to GHL", ghl_call_withdrawn: "a call was taken back out of GHL",
+  second_look_sent: "we asked once more at our same number",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -239,6 +243,7 @@ export const EVENT_ICON = {
   showing_offered: "Home",
   email_saved: "AtSign", email_offered: "AtSign",
   ghl_call_queued: "Phone", ghl_call_failed: "CircleSlash", ghl_call_withdrawn: "Undo2",
+  second_look_sent: "RefreshCw",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

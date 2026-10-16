@@ -112,6 +112,7 @@ export const INTENT_LABEL = {
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text",
     call_followup: "text after a call", showing_ask: "asked for a buyer walkthrough window", promise_due: "kept our word on a number we owed", price_drop: "saw the list price come down", checkin_due: "the check-in they asked for", address_chase: "asked again for the address of a property they said was coming",
     agent_pulse: "checked in on the relationship",
+    second_look: "asked once more about a strong past offer, at our same number",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
     wants_call: "wants a call", scheduling: "scheduling", proof_of_funds: "proof of funds",
     status_check: "checking in", small_talk: "small talk", media: "sent a photo", opt_out: "opted out", other: "other",
@@ -1127,6 +1128,43 @@ function normalizeFollowUp(src = {}, party = "agent") {
     // Outside the dial's fingerprint, which reads the ladders only.
     relist: bool(f.relist, false),
     watchFloated: bool(f.watchFloated, false),
+    // A second look at a strong past offer (shared/second-look.js), agent
+    // only and off. Outside the dial's fingerprint, like the two above.
+    // And a number we priced and never sent, closed out quietly after this
+    // many days overdue (shared/stale-unsent.js) — ON at 10, since it only
+    // closes our own stale rows and sends nothing; 0 turns it off.
+    ...(party === "agent" ? {
+      secondLook: normalizeSecondLook(f.secondLook),
+      retireUnsentDays: int(f.retireUnsentDays, RETIRE_UNSENT_DEFAULT_DAYS, 0, 120),
+    } : {}),
+  };
+}
+export const RETIRE_UNSENT_DEFAULT_DAYS = 10;
+
+// The second look (2026-10-16, shared/second-look.js): a strong past offer —
+// they passed, went quiet or countered, with the seller's number (or the list
+// price) within `withinPct` of ours and an agent who really talked to us — is
+// asked about once more: if the seller is still open to it, we can still do
+// our same number. `enabled` drafts it on the morning sweep and lets a clean
+// one send itself; off by default, and the dial never touches it.
+export const SECOND_LOOK_DEFAULTS = Object.freeze({
+  enabled: false,
+  withinPct: 15,     // their number (or the list) at most this far over ours
+  afterDays: 21,     // nothing from them, and the offer settled, this long
+  everyDays: 45,     // between second looks, per house and per agent
+  maxPerHouse: 2,    // second looks that actually went, per house, ever
+  minTheirTexts: 2,  // they wrote us at least this often (or a real call)
+});
+export function normalizeSecondLook(v = {}) {
+  const s = v && typeof v === "object" ? v : {};
+  const d = SECOND_LOOK_DEFAULTS;
+  return {
+    enabled: bool(s.enabled, d.enabled),
+    withinPct: int(s.withinPct, d.withinPct, 1, 50),
+    afterDays: int(s.afterDays, d.afterDays, 3, 120),
+    everyDays: int(s.everyDays, d.everyDays, 7, 365),
+    maxPerHouse: int(s.maxPerHouse, d.maxPerHouse, 1, 5),
+    minTheirTexts: int(s.minTheirTexts, d.minTheirTexts, 0, 20),
   };
 }
 

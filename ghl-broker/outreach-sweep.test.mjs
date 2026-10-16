@@ -13,7 +13,7 @@ const row = (k, doc = {}, extra = {}) => ({ agentKey: k, status: "new", contactI
 test("settings coerce to safe defaults", () => {
   assert.deepEqual(normalizeOutreachAutopilot(undefined), {
     enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", opener: { examples: DEFAULT_OPENER_EXAMPLES }, requireDistress: true, turnkeyShare: 0,
-    workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14,
+    workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14, nudgeGhlCohort: false,
     minDaysOnMarket: 45, propertyTypes: ["Single Family"], maxYearBuilt: 0, reserveRequests: 2,
     monthlyRequests: 0, cycleDay: 1, maxListPrice: 1500000, coverage: "counties",
     zillowLookup: { enabled: false, perRun: 25 }, neverTexted: { enabled: false }, expired: { enabled: false, share: 25 },

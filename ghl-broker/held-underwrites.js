@@ -22,12 +22,14 @@ import { store as defaultStore } from "./store.js";
 import { triageHeldUnderwrite, retireNote, knownCitiesFrom, passReasonInWords } from "./shared/held-underwrites.js";
 import { aiHoldReasons, isAiGenerated, effectiveStatus } from "./shared/offer-status.js";
 import { auditDedupeKey } from "./shared/conversation-audit.js";
-import { conversationConfig, startProactive as defaultStartProactive } from "./reply-agent.js";
+import { conversationConfig, startProactive as defaultStartProactive, stopMachineTextsForOffer } from "./reply-agent.js";
 import { recordEvent } from "./contact-record.js";
 import { getContact, searchOpportunities, listPipelines, createContactNote, removeContactTags, smsUnsubscribed } from "./ghl.js";
 import { UW_TAGS, knownAddressesFor } from "./auto-underwrite.js";
 import { waitingReason } from "./outbox-guard.js";
 import { leadSourceOf } from "./shared/lead-source.js";
+import { staleUnsent, staleUnsentPatch, STALE_UNSENT_BY } from "./shared/stale-unsent.js";
+import { supersededIds } from "./shared/current-offer.js";
 
 const iso = (t) => new Date(t).toISOString();
 const wait = (msec) => new Promise((r) => setTimeout(r, msec));
@@ -94,6 +96,62 @@ export async function carryOutHeldVerdict({ client, locationId, saved = {}, stor
 }
 
 /**
+ * retireStaleUnsent({ client, locationId, saved, store, offers, now, dryRun })
+ *   → { retired, findings, acted }
+ *
+ * A priced offer whose number never went out, `retireUnsentDays` overdue
+ * (shared/stale-unsent.js, 2026-10-16): retired as we_passed, "never sent:
+ * closed after N days", the held sweep's own `retired` shape with by
+ * "stale-unsent". Nothing is texted and nothing goes to GHL; a machine text
+ * still queued about it is dismissed, as the status menu's "we passed" does.
+ * The agent is the agent check-in's from here.
+ */
+export async function retireStaleUnsent({ client = null, locationId, saved = {}, store = defaultStore, offers = null, now = Date.now(), dryRun = false }) {
+  const config = conversationConfig(saved);
+  const days = config.parties?.agent?.followUp?.retireUnsentDays ?? 0;
+  const out = { retired: 0, findings: [], acted: [] };
+  if (!(days > 0)) return out;
+  const book = offers || await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []);
+  // Only a house's current row (shared/current-offer.js): an older one the
+  // house moved past is no row anybody reads.
+  const replaced = supersededIds(book);
+  const floatAfterHours = config.driver?.timers?.floatAfterHours || 4;
+  const rows = book.filter((o) => o?.id && o.status !== "draft" && effectiveStatus(o) === "new" && !o.deal && !replaced.has(o.id));
+  for (const lean of rows) {
+    const full = (await store.getOffer?.(lean.id).catch(() => null)) || lean;
+    // Cheap first: the row alone says "not yet" for most.
+    const first = staleUnsent({ offer: full, days, floatAfterHours, now });
+    if (!first.retire) continue;
+    const contactId = full.contactId || "";
+    const [drafts, events] = contactId ? await Promise.all([
+      store.listReplyDrafts(locationId, { contactId, limit: 40 }).catch(() => []),
+      store.listContactEvents(locationId, contactId, { limit: 300 }).catch(() => []),
+    ]) : [[], []];
+    const v = staleUnsent({ offer: full, drafts, events, days, floatAfterHours, now });
+    if (!v.retire) continue;
+    const f = { kind: "stale_unsent", severity: "fyi", contactId, contactName: full.contactName || "", party: "agent", address: full.address || "", offerId: full.id,
+      why: v.why, anchorAt: full.createdAt || null, dueAt: new Date(now).toISOString(), evidence: { overdueDays: v.overdueDays }, action: null };
+    f.id = auditDedupeKey(f);
+    out.findings.push(f);
+    if (dryRun) continue;
+    const row = { contactId, contactName: f.contactName, address: f.address, kind: "stale_unsent", action: "close_unsent", status: "closed", reason: v.why, offerId: full.id };
+    try {
+      await store.updateOffer(full.id, staleUnsentPatch(full, { why: v.why, now }));
+      await recordEvent({
+        store, locationId, contactId, party: "agent", type: "offer_we_passed", at: new Date(now).toISOString(), address: full.address || "", offerId: full.id,
+        source: "sweep", dedupeKey: `stale_unsent:${full.id}`, data: { phrase: v.why, by: STALE_UNSENT_BY },
+      }).catch(() => {});
+      await stopMachineTextsForOffer({ client, store, locationId, offer: full, why: `${String(full.address || "that house").split(",")[0]}: our number never went out — closed`, now }).catch(() => []);
+      out.retired++;
+    } catch (e) {
+      row.status = "error"; row.reason = String(e?.message || e).slice(0, 160);
+    }
+    out.acted.push(row);
+  }
+  return out;
+}
+
+/**
  * sweepHeldUnderwrites({ client, locationId, saved, store, sendsEnabled, deps, now, dryRun, pace })
  *   → { findings, acted, counts, reason }
  *
@@ -110,6 +168,13 @@ export async function sweepHeldUnderwrites({
   if (config.nightlyAudit?.heldSweep === false) return { findings, acted, counts, reason: "the held-underwrite sweep is switched off" };
 
   const offers = await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []);
+  const may = !dryRun && config.enabled;
+  // A number we priced and never sent, ten days on: closed out quietly in the
+  // same pass (retireStaleUnsent). Reported on a dry run, done on a real one.
+  // Its findings (kind stale_unsent) are the count: the audit's byKind reads them.
+  const stale = await retireStaleUnsent({ client, locationId, saved, store, offers, now, dryRun: !may }).catch(() => ({ retired: 0, findings: [], acted: [] }));
+  findings.push(...stale.findings);
+  acted.push(...stale.acted);
   const held = offers.filter((o) => o && effectiveStatus(o) === "draft" && isAiGenerated(o) && aiHoldReasons(o).length > 0);
   counts.held = held.length;
   if (!held.length) return { findings, acted, counts, reason: "" };
@@ -126,7 +191,6 @@ export async function sweepHeldUnderwrites({
     if (!byContact.has(c)) byContact.set(c, []);
     byContact.get(c).push(o);
   }
-  const may = !dryRun && config.enabled;
   const startProactive = typeof deps.startProactive === "function" ? deps.startProactive : defaultStartProactive;
   const botOffTags = (config.routing?.botOffTags || []).map((t) => String(t).toLowerCase());
   // The towns we buy in: our map, and anywhere we've put a number on a house.
