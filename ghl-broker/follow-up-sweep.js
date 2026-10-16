@@ -42,6 +42,7 @@ import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { runCounterHolds } from "./counter-hold.js";
+import { secondLookDue, numberPresented, normalizeSecondLook, SECOND_LOOK_STATUSES, SECOND_LOOK_WINDOW_DAYS, SECOND_LOOK_KIND } from "./shared/second-look.js";
 
 const DAY_MS = 86400000;
 // GHL's burst cap is 100 req / 10s per location; the same pace the enrichment
@@ -314,11 +315,67 @@ export async function hotCandidates({ store, locationId, config, now = Date.now(
   return out;
 }
 
+/**
+ * secondLookCandidates({ store, locationId, config, now, book }) → [candidate]
+ *
+ * Strong past offers worth one more ask (shared/second-look.js, 2026-10-16):
+ * they passed, went quiet, countered and stopped, or we passed over the
+ * numbers — in the last 120 days, our number in front of them, theirs close.
+ * The picker decides; this reads each agent's thread once and keeps one
+ * house per agent, the one closest to ours. Off unless followUp.secondLook;
+ * the preview may ask what it WOULD pick with the switch off (ignoreSwitch).
+ */
+export async function secondLookCandidates({ store, locationId, config, now = Date.now(), book = null, ignoreSwitch = false }) {
+  const pb = config?.parties?.agent;
+  const cfg = normalizeSecondLook(pb?.followUp?.secondLook);
+  if (!ignoreSwitch && (!pb?.followUp?.enabled || !cfg.enabled)) return [];
+  const rows = await followUpRows(store, locationId, { statuses: [...SECOND_LOOK_STATUSES],
+    since: iso(now - SECOND_LOOK_WINDOW_DAYS * DAY_MS), before: iso(now - cfg.afterDays * DAY_MS) });
+  const all = book || (typeof store.listOffers === "function" ? await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => null) : null);
+  // Only the agent's current row on a house: an older row's number is one
+  // the house moved past (shared/current-offer.js).
+  const replaced = all ? supersededIds(all) : new Set();
+  const byContact = new Map();
+  for (const o of rows) {
+    if (!o?.contactId || !o.address || o.deal || replaced.has(o.id)) continue;
+    if (!SECOND_LOOK_STATUSES.has(effectiveStatus(o)) || !numberPresented(o)) continue;
+    if (!byContact.has(o.contactId)) byContact.set(o.contactId, []);
+    byContact.get(o.contactId).push(o);
+  }
+  const botOffTags = config.routing?.botOffTags || [];
+  const out = [];
+  for (const [contactId, mine] of byContact) {
+    const [events, drafts, profile] = await Promise.all([
+      typeof store.listContactEvents === "function" ? store.listContactEvents(locationId, contactId, { limit: 300 }).catch(() => []) : [],
+      store.listReplyDrafts(locationId, { contactId, limit: 40 }).catch(() => []),
+      typeof store.getContactProfile === "function" ? store.getContactProfile(locationId, contactId).catch(() => null) : null,
+    ]);
+    const theirOffers = (all || rows).filter((o) => o?.contactId === contactId);
+    let best = null;
+    for (const lean of mine) {
+      // The full row: the price watch's last look and the counter live on it.
+      const offer = (await store.getOffer(lean.id).catch(() => null)) || lean;
+      const v = secondLookDue({ offer, offers: theirOffers, events, drafts, tags: profile?.tags || [], botOffTags, cfg, now });
+      if (v.due && (!best || v.gapPct < best.v.gapPct)) best = { offer, v };
+    }
+    if (!best) continue;
+    out.push({
+      kind: SECOND_LOOK_KIND, party: "agent", contactId, offerId: best.offer.id, address: best.offer.address,
+      // A day in the subject id: a look that drafted nothing can be tried again
+      // (after everyDays — the picker reads the claim), never twice a day.
+      subjectId: `${best.offer.id}@${iso(now).slice(0, 10)}`, startedAt: best.offer.statusAt || null,
+      step: best.v.step, theirs: best.v.theirs, source: best.v.source, gapPct: best.v.gapPct, why: best.v.why,
+      sentSteps: [], ladder: { steps: [], repeatEvery: 0 },
+    });
+  }
+  return out;
+}
+
 // Kinds that are about one of our offers: the offer rides into the draft
 // and the offer remembers its own rungs.
-const OFFER_KINDS = new Set(["offer_nudge", "passed_checkin", "hot_push"]);
+const OFFER_KINDS = new Set(["offer_nudge", "passed_checkin", "hot_push", SECOND_LOOK_KIND]);
 // "one text a morning — the push to paper went to them first"
-const KIND_WORD = { hot_push: "the push to paper", offer_nudge: "the nudge on their live offer", passed_checkin: "a check-in", outreach_nudge: "a follow-up" };
+const KIND_WORD = { hot_push: "the push to paper", offer_nudge: "the nudge on their live offer", passed_checkin: "a check-in", outreach_nudge: "a follow-up", second_look: "a second look at a past offer" };
 // A passed offer's check-in isn't ended by them texting us about something
 // else — only paused while a conversation is actually live.
 const CHECKIN_QUIET_HOURS = 72;
@@ -520,6 +577,9 @@ async function runSweep(job, ctx) {
     ...(await agentCandidates({ store, locationId, config, now }))
       .sort((a, b) => Number(focusFor(b.contactId)?.id === b.offerId) - Number(focusFor(a.contactId)?.id === a.offerId)),
     ...onTheirOwn,
+    // A strong past offer, asked about once more — after every clock that
+    // was already running, so it never takes their morning's one text.
+    ...(await secondLookCandidates({ store, locationId, config, now, book })),
     ...(await outreachCandidates({ store, locationId, config, now })),
     ...(await investorCandidates({ store, locationId, config, now })),
   ];
@@ -695,7 +755,9 @@ async function runSweep(job, ctx) {
       const covered = rungsCovered({ steps: c.ladder.steps, repeatEvery: c.ladder.repeatEvery, startedAt: c.startedAt, texts: nudgeTimes(agentDrafts, c.offerId), pace });
       if (covered.length) c.sentSteps = [...new Set([...c.sentSteps, ...covered])];
     }
-    const d = dueStep({
+    // The second look has no ladder: its picker said it is due today
+    // (shared/second-look.js), and the spacing below still holds it.
+    const d = c.kind === SECOND_LOOK_KIND ? { due: true, step: c.step, dayOffset: 0 } : dueStep({
       steps: c.ladder.steps, startedAt: c.startedAt, sentSteps: c.sentSteps,
       lastInboundAt, lastTouchAt, now, pace,
       // The hot push re-anchors on their reply instead of stopping on it,
@@ -797,7 +859,7 @@ async function runSweep(job, ctx) {
       at: iso(now), address: c.address, offerId: c.offerId, source: "conversation",
       ref: `${c.kind}:${c.subjectId}:${d.step}`,
       dedupeKey: followUpDedupeKey({ kind: c.kind, subjectId: c.subjectId, step: d.step }),
-      data: { kind: c.kind, step: d.step, dayOffset: d.dayOffset, ladder: c.ladder.steps },
+      data: { kind: c.kind, step: d.step, dayOffset: d.dayOffset, ladder: c.ladder.steps, ...(c.kind === SECOND_LOOK_KIND ? { why: c.why } : {}) },
     });
     if (!claim.inserted) {
       job.skipped++;
@@ -814,8 +876,13 @@ async function runSweep(job, ctx) {
                    viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, spokeAt: c.spokeAt || null, lastTouchAt, relisted: Boolean(c.relisted),
                    ...(c.county ? { county: c.county } : {}),
                    ...(c.wavering ? { wavering: true } : {}),
+                   ...(c.kind === SECOND_LOOK_KIND ? { theirs: c.theirs, source: c.source } : {}),
                    ...(aside ? { aside: { address: aside.address, quiet: Boolean(aside.quiet) } } : {}) },
-        sendsEnabled, deps,
+        sendsEnabled,
+        // Its own switch (followUp.secondLook) is the say-so: a clean draft —
+        // the money guard passed on our same number — sends itself, the way
+        // the agent check-in's runner releases its own. Not on the grid.
+        deps: c.kind === SECOND_LOOK_KIND ? { ...deps, releaseHeld: true, releaseReason: "the second look may send itself (followUp.secondLook)" } : deps,
       });
       if (r?.skipped) {
         job.skipped++;
@@ -898,7 +965,7 @@ export async function maybeStartFollowUpSweep({ client, locationId, saved, store
   if (!config.enabled) return false;
   const anyLadder = ["agent", "investor"].some((p) => {
     const fu = config.parties[p]?.followUp;
-    return fu?.enabled && Object.values(fu.ladders || {}).some((l) => l.enabled && l.steps?.length);
+    return fu?.enabled && (Object.values(fu.ladders || {}).some((l) => l.enabled && l.steps?.length) || fu.secondLook?.enabled);
   });
   if (!anyLadder) return false;
   // Once a day, and back again the same morning if a deploy killed it

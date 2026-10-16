@@ -149,7 +149,7 @@ export function threadHealth({ offer = null, drafts = [], events = [], now = Dat
 export const LIVE_THREAD_HOURS = 48;
 export const LIVE_THREAD_KINDS = new Set([
   "kind_pass", "passed_checkin", "agent_pulse", "checkin_due", "offer_nudge", "counter_nudge", "outreach_nudge",
-  "address_chase", "price_drop", "promise_due", "take_ask", "hot_push",
+  "address_chase", "price_drop", "promise_due", "take_ask", "hot_push", "second_look",
 ]);
 // The yes rule: a text that walks away from the house never goes out after
 // they said yes to our number (shared/offer-status.js saidYes).

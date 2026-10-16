@@ -1169,6 +1169,67 @@ to a number nobody decided on. Matt: "we need to stick with our prev numbers".
   contract's. The Offer pane's pencil does this before a re-quote on an
   agreed offer and says so first. Sends nothing.
 
+### A second look at a strong past offer (2026-10-16, off by default)
+
+The 2026-10-16 audit found 36 offers that died close, with nothing planned:
+they passed, went quiet or countered and stopped; the seller's number was
+within 15% of ours; and the agent had really talked to us. Matt: "checking
+really good past offers to see if they would reconsider if the margin's good
+enough and the conversation warranted a follow-up".
+
+- **Who** (`secondLookDue`, `shared/second-look.js`, pure). The agent's
+  current row on the house, no deal, and all of these:
+  - status passed, no_response or countered, or our own pass over their
+    counter (`numbersPass`: a counter on record or the counter hold, never a
+    pass for the kind of house, the area, or one a sweep closed out);
+  - our number went out: paper, `floatSentAt` (a number texted in a plain
+    reply) or a realm check; the status is 21–120 days old;
+  - their number within `withinPct` of ours: the lowest of their counter,
+    the seller's number the agent gave (`sellerAsk`), and the list price (the
+    price watch's last look, else the list when we priced it);
+  - they wrote us `minTheirTexts` times (auto-replies don't count) or we had
+    a real call (`realCall`);
+  - quiet: nothing from them, and no text of ours about this house, for
+    `afterDays`;
+  - not off the market (the price watch) and not "it's pending/sold" in their
+    newest texts; unknown is allowed;
+  - at most `maxPerHouse` sent per house, `everyDays` between looks (per
+    house and per agent: one house at a time), and none after a no to the
+    last one;
+  - never to an agent who is stopped, opted out, tagged off or annoyed
+    (`agentStops`), on a live thread (`machineMayStart`), the day a call to
+    them is queued in GHL, or while another house of theirs is live.
+- **The text** (`second_look`, `conversation-prompt.js`, carrier-checked):
+  one or two lines under 240 characters naming the street — if the seller is
+  still open to it, we can still do our same number — and is it worth a
+  quick call. Never "did it sell?". The number is worked out from the thread
+  in `startProactive` (`secondLookNumber`: the lowest we put to them on the
+  house, via `holdNumber`), and it is the only number the money guard allows
+  (`onlyFloats`, ours or ours in thousands rounded down). Anything above it,
+  even "378K" on 377,552, or over 240 characters, is written once more and
+  then dropped, never left on the Desk.
+- **Running it.** The morning follow-up sweep (`secondLookCandidates`), after
+  every other clock, one house per agent (the closest to ours), with the
+  sweep's own gates: Stop/Pause, one text a morning, 72 hours apart and two a
+  week (`second_look` is an unprompted kind), the outbox, the claim
+  (`follow_up_sent`, `data.kind: second_look`). A clean draft sends itself:
+  the sweep releases it (`releaseHeld`) the way the agent check-in's runner
+  does, so it is not on the auto-send grid and the dial never touches it.
+  When it actually sends, `second_look_sent` goes on the timeline; that is
+  what `maxPerHouse` counts. A second look on our own numbers pass is the one
+  machine text allowed on a we_passed house, and only if the offer's status
+  hasn't changed since it was drafted.
+- **Switch:** `conversationAi.parties.agent.followUp.secondLook { enabled:
+  false, withinPct: 15, afterDays: 21, everyDays: 45, maxPerHouse: 2,
+  minTheirTexts: 2 }`. Party auto-send and `CARD_SENDS_ENABLED` still gate
+  every send.
+- **Check:** `GET /api/offers/automations/conversation/follow-ups?preview=1`
+  lists `secondLooks.rows` — who the next sweep would ask and why ("their
+  counter 410K is 7.9% over our 380K; passed 30 days ago"), even with the
+  switch off, no names. `POST …/follow-ups/run {dryRun: true}` shows each as
+  `would send`. A real one's claim carries the same `data.why`, and the
+  timeline reads "we asked once more at our same number".
+
 ### How we got our number — the math behind every offer (2026-10-07)
 
 Matt benchmarked a No Fluff wholesaling video (Ed Zamora, 3–5 deals a month
