@@ -18,7 +18,8 @@ import {
 import { EmptyState, ErrorBar, FilterChips, SearchInput, Spinner, TableCard } from "./ui.jsx";
 
 // RentCast propertyType values.
-const PROPERTY_TYPES = ["Single Family", "Condo", "Townhouse", "Multi-Family", "Manufactured", "Land"];
+// No manufactured: we don't buy mobile homes (Matt, 2026-10-13).
+const PROPERTY_TYPES = ["Single Family", "Condo", "Townhouse", "Multi-Family", "Land"];
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";

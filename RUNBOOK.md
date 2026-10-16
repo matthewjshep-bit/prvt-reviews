@@ -5513,11 +5513,21 @@ Matt: "filter out rural properties when we reach out to agents, these are harder
 - **Pass.** `triageHeldUnderwrite` retires a rural hold to `we_passed` at the next check, with no 24h wait. The held sweep then sends `kind_pass` with `why: "rural"`: "we can't do rural — our buyers want houses on under 2 acres", and an ask for fixers in town. On the Desk the card reads "Rural: address" (Underwrite anyway / Pass on it). Tier 1 flags it `rural` (sure), and the morning auto-kick takes it off.
 - **Bot.** `agentFocusRule` tells the agent bot that we don't buy rural houses, acreage, farms or ranches. When an agent says 2+ acres, the bot says no kindly and doesn't promise numbers. A rural house we priced on purpose is named by `pricedOutsideFocus`, and lean rows carry `subjectLotSqft` for that in both store backends.
 
+### No mobile or manufactured homes (2026-10-13)
+
+Matt: "can we not do manufactured homes as a rule now, lets decline if someone asks if we do them."
+
+- **The rule.** `NEVER_BUY_KINDS = ["manufactured"]` in `shared/asset-type.js`. `normalizeFocusKinds` strips it, so it can't be ticked back on in Settings (the checkbox is gone). `kindHold` holds a mobile home as `not our kind of house — a mobile home (we don't buy mobile or manufactured homes)` whatever `focusKinds` says. `MOBILE_HOLD` matches it, and the older "(single-family only right now)" wording too.
+- **Pass.** Like rural, `triageHeldUnderwrite` retires a mobile-home hold to `we_passed` at the next check, with no 24h wait. The held sweep sends `kind_pass` with `why: "manufactured"`: "it's a mobile or manufactured home, and we don't buy those", plus an ask for single-family fixers. Underwrite anyway before then still prices it.
+- **Bot.** `agentFocusRule` has a MOBILE HOMES paragraph. If an agent asks whether we buy them, or brings one, the bot says no plainly and kindly, never "maybe" or "send it over", and asks for single-family fixers. A mobile home we priced on purpose is still named by `pricedOutsideFocus`.
+- **Outreach.** `ingestCohort` drops `Manufactured` listings whatever type was asked for, with a "no mobile homes: dropped N of M" warning. `pickAgentsToImport` refuses a `Manufactured` hook. `normalizeOutreachAutopilot` drops the type, and the Settings and Agent Outreach pickers no longer offer it.
+- **Unchanged.** Selling a mobile home we already hold: the buyer side, `pickWave({ manufactured })`, the mobile-home buyer tags and the Deals modal kind picker.
+
 ### Single-family focus (2026-10-01)
 
 Matt: focus the app on single-family residences. Multi-family stays a kind an offer can carry (it will be expanded into later), but it isn't priced on its own yet. Neither are townhouses, condos, mobile homes or land.
 
-- **`settings.focusKinds`** (default `["sfr"]`, `normalizeFocusKinds` in `shared/asset-type.js`) lists the kinds the auto-underwrite prices on its own. Set it in Settings → Auto-underwrite → "Houses the auto-underwrite prices on its own". Multi-family and mobile/manufactured can be ticked there later.
+- **`settings.focusKinds`** (default `["sfr"]`, `normalizeFocusKinds` in `shared/asset-type.js`) lists the kinds the auto-underwrite prices on its own. Set it in Settings → Auto-underwrite → "Houses the auto-underwrite prices on its own". Multi-family can be ticked there later (mobile/manufactured can't: see No mobile or manufactured homes).
 - **The hold** (`kindHold`, `auto-underwrite.js` step 2):
   - It runs right after the subject's Zillow lookup, before the comps and the photo scan are bought.
   - Any `homeType` outside the focus is held as `not our kind of house — a townhouse (single-family only right now)`.

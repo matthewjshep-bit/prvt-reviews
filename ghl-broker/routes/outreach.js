@@ -439,6 +439,12 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       pool = pool.filter((l) => !l.propertyType || want.has(String(l.propertyType).toLowerCase()));
       if (pool.length < before) warnings.push(`property type filter (${String(propertyType).replace(/\|/g, ", ")}) kept ${pool.length} of ${before}`);
     }
+    // Never a mobile home, whatever was asked for (Matt, 2026-10-13).
+    {
+      const before = pool.length;
+      pool = pool.filter((l) => String(l.propertyType || "").toLowerCase() !== "manufactured");
+      if (pool.length < before) warnings.push(`no mobile homes: dropped ${before - pool.length} of ${before}`);
+    }
     // Rural: two acres or more (Matt, 2026-10-08) — harder to comp, and our
     // buyers don't want it, so it is never a reason to text an agent. RentCast
     // gives the lot in square feet; a listing with no lot on record is kept.

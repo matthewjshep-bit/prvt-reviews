@@ -83,7 +83,7 @@ test("a buy box that says manufactured wants one", () => {
 test("only single-family houses are underwritten on their own; everything else is held, and an untyped house goes ahead", async () => {
   const { kindHold, normalizeFocusKinds, KIND_HOLD } = await import("./asset-type.js");
   assert.equal(kindHold("SINGLE_FAMILY"), "");
-  assert.equal(kindHold("MANUFACTURED"), "not our kind of house — a mobile home (single-family only right now)");
+  assert.equal(kindHold("MANUFACTURED"), "not our kind of house — a mobile home (we don't buy mobile or manufactured homes)");
   assert.equal(kindHold("TOWNHOUSE"), "not our kind of house — a townhouse (single-family only right now)");
   assert.equal(kindHold("MULTI_FAMILY"), "not our kind of house — a multi-family (single-family only right now)");
   assert.equal(kindHold("CONDO"), "not our kind of house — a condo (single-family only right now)");
@@ -131,4 +131,28 @@ test("the agent bot is told we can't do rural houses on two acres or more", asyn
   const rule = agentFocusRule(["sfr"]);
   assert.match(rule, /we don't buy rural houses — anything on 2 acres or more/);
   assert.match(rule, /say kindly that we can't do rural properties/);
+});
+
+// Matt, 2026-10-13: "can we not do manufactured homes as a rule now, lets
+// decline if someone asks if we do them." Not a focus that Settings can tick
+// back on: a mobile home is held whatever focusKinds says, and the bot says
+// no when an agent asks whether we buy them.
+test("a mobile home is held even when Settings has mobile homes ticked", async () => {
+  const { kindHold, normalizeFocusKinds, MOBILE_HOLD } = await import("./asset-type.js");
+  assert.deepEqual(normalizeFocusKinds(["sfr", "manufactured"]), ["sfr"]);
+  assert.deepEqual(normalizeFocusKinds(["manufactured"]), ["sfr"], "never empty");
+  const why = kindHold("MANUFACTURED", ["sfr", "manufactured"]);
+  assert.match(why, /^not our kind of house — a mobile home/);
+  assert.ok(MOBILE_HOLD.test(why));
+  assert.equal(MOBILE_HOLD.test(kindHold("TOWNHOUSE")), false);
+});
+
+test("an agent who asks whether we buy mobile homes is told no, whatever Settings says", async () => {
+  const { agentFocusRule } = await import("./asset-type.js");
+  for (const rule of [agentFocusRule(["sfr"]), agentFocusRule(["sfr", "manufactured"])]) {
+    assert.match(rule, /single-family houses only/);
+    assert.doesNotMatch(rule, /single-family houses and mobile homes/);
+    assert.match(rule, /we don't buy mobile or manufactured homes/);
+    assert.match(rule, /asks whether we buy them/);
+  }
 });

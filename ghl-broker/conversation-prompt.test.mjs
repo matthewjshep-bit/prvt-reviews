@@ -515,6 +515,15 @@ test("the pass on a house we promised a number on owns that we owe them, gives t
   assert.doesNotMatch(t, /held 15 days/, "the sweep's own reason is ours, not theirs");
 });
 
+// Matt, 2026-10-13: no manufactured homes as a rule.
+test("the pass on a mobile home says we don't buy mobile homes, not that we're single-family only right now", () => {
+  const t = outboundOpening({ kind: "kind_pass", address: "1510 Maple Lane, Kent, WA 98030", why: "manufactured",
+    heldReason: "not our kind of house — a mobile home (we don't buy mobile or manufactured homes)" });
+  assert.match(t, /it's a mobile or manufactured home, and we don't buy those/);
+  assert.match(t, /single-family fixers/);
+  assert.doesNotMatch(t, /right now we only buy single-family/);
+});
+
 test("when an agent brings us a house, the bot gets the address with a promise not to bother the seller, and their read on value and work", () => {
   const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
   assert.match(sys, /A HOUSE THEY BRING US[^]*won't approach, drive by or bother the seller/);

@@ -37,7 +37,7 @@
 import { addressKey, sameStreet, parseUsAddress, completeAddress } from "./us-address.js";
 import { propertyDossier } from "./contact-record.js";
 import { aiHoldReasons, effectiveStatus, DEAD_STATUSES } from "./offer-status.js";
-import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
+import { KIND_HOLD, MOBILE_HOLD, RURAL_HOLD } from "./asset-type.js";
 import { WA_CITY_COORDS } from "./wa-city-coords.js";
 import { ourReplyPasses, threadPassed } from "./flip-read.js";
 import { owedOnHouse } from "./promise-owed.js";
@@ -367,6 +367,12 @@ function triageCore({
   const rural = held.find((h) => RURAL_HOLD.test(String(h || "")));
   if (rural) return { ...base, action: "retire", status: "we_passed", passNote: "rural", reason: String(rural) };
 
+  /* --- 3, also: a mobile home (Matt, 2026-10-13: not as a rule) --- */
+  // Same as rural: passed at the next check, and the agent hears we don't
+  // buy mobile or manufactured homes. "Underwrite anyway" before then still prices it.
+  const mobile = held.find((h) => MOBILE_HOLD.test(String(h || "")));
+  if (mobile) return { ...base, action: "retire", status: "we_passed", passNote: "manufactured", reason: String(mobile) };
+
   /* --- 3a. not our kind of house (2026-10-01: single-family only) --- */
   // Whether to price a mobile home or a duplex anyway is a person's call —
   // for a day (Matt, 2026-10-04: the app should do everything else). Then
@@ -544,6 +550,7 @@ export function heldOnTheMachine(offer, { knownCities = null, now = Date.now() }
   if (!address || cls.junk || TEST_ADDRESS.test(address) || !/\d/.test(address)) return { what: "dropped at the 7pm check — nothing to place" };
   const rural = held.find((h) => RURAL_HOLD.test(String(h || "")));
   if (rural) return { what: `passed at the 7pm check — ${String(rural).split(" (")[0].replace(/^rural — /, "rural: ")}; we buy under 2 acres` };
+  if (held.some((h) => MOBILE_HOLD.test(String(h || "")))) return { what: "passed at the 7pm check — a mobile home; we don't buy mobile or manufactured homes" };
   if (held.some((h) => KIND_HOLD.test(String(h || "")))) {
     const heldAt = ms(offer?.autoUnderwrite?.finishedAt) ?? ms(offer?.updatedAt) ?? ms(offer?.createdAt) ?? now;
     return { what: "passed unless you underwrite it anyway — we buy single-family only", at: new Date(heldAt + KIND_PASS_HOURS * 3600000).toISOString() };
