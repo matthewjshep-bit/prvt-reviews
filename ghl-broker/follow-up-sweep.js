@@ -132,9 +132,12 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     // Nothing went out on it yet — no letter, no number floated — so there is
     // nothing to follow up: "we sent you an offer" would be false, and a
     // priced offer waiting to be floated is the float timer's. A number
-    // floated by text is followed up from when it was floated.
+    // floated by text is followed up from when it was floated — a realm
+    // check's own stamp, or floatSentAt, which a number texted in a plain
+    // reply also carries (2026-10-16: an agent texted 377K that way went two
+    // weeks with no nudge while the Offers column promised one).
     const onPaper = paperWent(o);
-    const floatedAt = o.proactive?.realmCheckAt || o.proactive?.takeCheckAt || null;
+    const floatedAt = o.floatSentAt || o.proactive?.realmCheckAt || o.proactive?.takeCheckAt || null;
     if (!onPaper && !floatedAt && effectiveStatus(o) === "new") continue;
     // Count from the last time we actually put it in front of them.
     const startedAt = onPaper ? offerNudgeStart(o) : (floatedAt || offerNudgeStart(o));
