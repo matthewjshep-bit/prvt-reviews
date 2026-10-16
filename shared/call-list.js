@@ -23,8 +23,8 @@ import { callEventConnected } from "./talked-to.js";
 import { agentSegment } from "./agent-pulse.js";
 import { IRRITATED_RX } from "./thread-health.js";
 import { handsWriteUpBack } from "./conversation-ai.js";
-import { holdState } from "./counter-hold.js";
-import { flipRead } from "./flip-read.js";
+import { holdState, callsInstead, closeCounter } from "./counter-hold.js";
+import { flipRead, saysTurnkey } from "./flip-read.js";
 import { offMarketCue } from "./off-market.js";
 import { sameStreet } from "./us-address.js";
 import { buyerCeiling } from "./post-mortem.js";
@@ -57,6 +57,10 @@ export const DESK_DEFAULTS = Object.freeze({
   // with nobody picking up the phone.
   gapPct: 15,
   revisitDays: 60,         // a house lost within the gap stays worth one call this long
+  // Today's calls (2026-10-15): the top this many Call rows go on Today
+  // under "Today's calls". The funnel review: every contract from outreach
+  // agents came from a phone call, and only 15% of repliers ever talked.
+  dailyCalls: 10,
 });
 
 /** normalizeDesk(v) → every setting, a whole number in its range. */
@@ -72,6 +76,7 @@ export function normalizeDesk(v = {}) {
     triesBeforeMachine: n(o.triesBeforeMachine, d.triesBeforeMachine, 1, 5),
     gapPct: n(o.gapPct, d.gapPct, 0, 30),
     revisitDays: n(o.revisitDays, d.revisitDays, 0, 180),
+    dailyCalls: n(o.dailyCalls, d.dailyCalls, 0, 30),
   };
 }
 
@@ -85,9 +90,12 @@ export const CALL_KINDS = [
   { key: "hot_machine",      label: "Hot: the machine is pushing to paper" },
   { key: "counter_held",     label: "Counter: held at our number" },
   { key: "call_missed",      label: "They called you" },
+  // Built by the pipeline from a promise (shared/promise-owed.js, 2026-10-15).
+  { key: "call_owed",        label: "We said we'd call" },
   { key: "call_counter",     label: "Counter above our number" },
   { key: "call_gap",         label: "Their number is close to ours" },
   { key: "call_first_reply", label: "New agent, first reply" },
+  { key: "call_turnkey_week", label: "Turnkey reply: what else are they working on?" },
   { key: "call_quiet",       label: "Gone quiet: a call beats another text" },
   { key: "call_phone_only",  label: "Phone only" },
   { key: "call_partner",     label: "Relationship check-in" },
@@ -99,11 +107,26 @@ export const CALL_KINDS = [
   { key: "email_check",      label: "An email they texted, to check" },
 ];
 // They called you: ring back first — they reached out.
-const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_investor: 45, call_partner: 30, call_partner_terms: 80 };
+const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_turnkey_week: 50, call_investor: 45, call_partner: 30, call_partner_terms: 80 };
+// A turnkey first reply stays a (small) call this long.
+const TURNKEY_WEEK_DAYS = 7;
 // Points off for each call that didn't connect since the row's reason, and
 // for each day their last word has aged (hot, counters, quiet threads).
 const PER_TRY = 15;
 const PER_DAY = 1, MAX_AGE_PENALTY = 30;
+// Points on for what the funnel review (2026-10-15) found behind the deals:
+// an agent we've done business with or who brought us a house, one who
+// talks like an investor, a seller going through a life event, a counter
+// close to ours. Shown on the row (call.boosts) so the order reads.
+export const CALL_BOOSTS = {
+  partner: { points: 15, label: "you've done business" },
+  source: { points: 15, label: "they've brought us a house" },
+  investor_minded: { points: 10, label: "talks like an investor" },
+  life_event: { points: 10, label: "a seller going through a life event" },
+  close_counter: { points: 10, label: "their counter is close to ours" },
+};
+const INVESTOR_MINDED_DAYS = 90;
+const LIFE_EVENT_DAYS = 60;
 
 const FIRST_REPLY_INTENTS = new Set(["deal_available", "new_property", "investor_open"]);
 // A price in their words: "$425,000", "425k", "1.2M", "425,000". A street
@@ -213,16 +236,35 @@ export function callList({
     const lastTry = tries.map((e) => e.at).sort().at(-1) || null;
     const aged = agePenaltyFrom != null ? Math.min(MAX_AGE_PENALTY, Math.max(0, Math.floor((now - agePenaltyFrom) / DAY_MS)) * PER_DAY) : 0;
     const spent = tries.length >= cfg.triesBeforeMachine;
+    const theHouses = houses || housesOf(contactId);
+    const boosts = boostsFor(contactId, { houses: theHouses, counter: extra.counter || null });
     taken.add(contactId);
     out.push({
       id: `${kind}:${offerId || contactId}`, kind, section: spent ? "machine" : "call", group: spent ? "machine" : "yours",
       severity: spent ? "fyi" : "now", contactId, contactName, offerId, address, draftId,
-      score: BASE[kind] - aged - PER_TRY * tries.length,
+      score: BASE[kind] - aged - PER_TRY * tries.length + boosts.reduce((sum, b) => sum + b.points, 0),
       title: `${contactName || "Someone"}: ${why}`, detail: goal,
       ...(spent ? { next: { what: `called ${tries.length}× with no answer — back to texting`, at: null } } : {}),
-      call: { reason: kind, why, goal, opener, houses: houses || housesOf(contactId), since: since || null, tries: tries.length, lastTryAt: lastTry, lastWordAt: (() => { const t = lastWord(contactId); return t ? new Date(t).toISOString() : null; })() },
+      call: { reason: kind, why, goal, opener, houses: theHouses, since: since || null, tries: tries.length, lastTryAt: lastTry, lastWordAt: (() => { const t = lastWord(contactId); return t ? new Date(t).toISOString() : null; })(),
+        ...(boosts.length ? { boosts } : {}) },
       ops: [], ...extra,
     });
+  };
+
+  // What moves a call up the list (CALL_BOOSTS): who they are to us, what
+  // they've said, how close their number is.
+  const boostsFor = (c, { houses = [], counter = null } = {}) => {
+    const out = [];
+    const boost = (key) => out.push({ key, ...CALL_BOOSTS[key] });
+    const seg = agentSegment({ offers: offersBy.get(c) || [], lastInboundAt: lastWordIso(lastWord(c)) });
+    if (seg === "partner" || seg === "source") boost(seg);
+    if ((eventsBy.get(c) || []).some((e) => e.type === "investor_minded" && now - (ms(e.at) ?? 0) <= INVESTOR_MINDED_DAYS * DAY_MS)) boost("investor_minded");
+    const words = theirWords(c).filter((d) => now - (ms(d.createdAt) ?? 0) <= LIFE_EVENT_DAYS * DAY_MS).map((d) => d.inbound).join("\n");
+    if (words && flipRead(words).strong.some((x) => x === "life event" || x === "estate or probate")) boost("life_event");
+    const close = counter?.closePct != null
+      || (houses || []).some((h) => closeCounter({ ours: h.ours, theirs: h.theirs, pct: machine.counterHold?.callWithinPct ?? 10 }));
+    if (close) boost("close_counter");
+    return out;
   };
 
   // A row the machine is already driving: in "The machine is on it", with
@@ -373,7 +415,9 @@ export function callList({
     const theirs = Number(o.counter?.amount) || 0;
     // Held at our number (counter-hold.js): the machine checks in and passes
     // — "come closer to where they are" too, which carries no number.
-    if (machine.counterHold?.enabled && o.counterHold?.at) {
+    // Unless their newest counter came in close to ours since (2026-10-15):
+    // that one is a call again.
+    if (machine.counterHold?.enabled && o.counterHold?.at && !callsInstead(o, machine.counterHold.callWithinPct ?? 10)) {
       const ourLast = (draftsBy.get(c) || []).filter((d) => d.status === "sent").map((d) => d.sentAt || d.updatedAt || d.createdAt).filter(Boolean).sort().at(-1) || null;
       const st = holdState(o, { lastInboundAt: lastWordIso(lastWord(c)), lastOutboundAt: ourLast, checkIns: machine.counterHold.checkIns, gapHours: machine.counterHold.gapHours, now });
       machineRow("counter_held", { contactId: c, contactName: card.contactName, offerId: card.offerId, address: card.address,
@@ -385,10 +429,14 @@ export function callList({
     if (!(theirs > ours)) continue;
     const band = newestBand(draftsBy.get(c) || [], card.offerId);
     const ceiling = Number(band?.exception?.ceiling) || 0;
-    const counter = { ours, theirs, gap: theirs - ours, ceiling: ceiling || null, overCeiling: ceiling ? Math.max(0, theirs - ceiling) : null, basis: band?.exception?.basis || "", draftId: band?.status === "draft" ? band.id : null };
+    // Within callWithinPct of ours (2026-10-15): the reply agent held no
+    // number by text — this call is how it lands.
+    const close = closeCounter({ ours, theirs, pct: machine.counterHold?.callWithinPct ?? 10 });
+    const counter = { ours, theirs, gap: theirs - ours, ceiling: ceiling || null, overCeiling: ceiling ? Math.max(0, theirs - ceiling) : null, basis: band?.exception?.basis || "", draftId: band?.status === "draft" ? band.id : null,
+      ...(close ? { closePct: close.pct } : {}) };
     add("call_counter", { contactId: c, contactName: card.contactName, offerId: card.offerId, address: card.address, since: o.counter?.at || o.statusAt,
       draftId: counter.draftId,
-      why: `countered ${kText(theirs)} on ${street(card.address)} against our ${kText(ours)}`,
+      why: `countered ${kText(theirs)} on ${street(card.address)} against our ${kText(ours)}${close ? ` — ${close.pct}% apart, a call lands it` : ""}`,
       goal: `Land a number. Ours ${kText(ours)}, theirs ${kText(theirs)} (${kText(theirs - ours)} apart)${ceiling ? `; the buyer ceiling is ${kText(ceiling)}` : ""}. Never above what we sent without deciding it yourself.`,
       opener: `Hi ${first(card.contactName)}, it's Matt — got your ${kText(theirs)} on ${street(card.address)}. Easier to talk it through than text.`,
       extra: { counter }, agePenaltyFrom: lastWord(c) });
@@ -439,7 +487,7 @@ export function callList({
     if (!outreached.has(c) || unsubscribed.has(c) || irritated(c)) continue;
     const ins = list.filter((d) => String(d.inbound || "").trim() && d.party !== "investor").sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     const firstIn = ins[0];
-    if (!firstIn || now - (ms(firstIn.createdAt) ?? 0) > cfg.firstReplyDays * DAY_MS) continue;
+    if (!firstIn || now - (ms(firstIn.createdAt) ?? 0) > Math.max(cfg.firstReplyDays, TURNKEY_WEEK_DAYS) * DAY_MS) continue;
     // Their first word ever: nothing earlier on the timeline either.
     const earlier = (eventsBy.get(c) || []).some((e) => (e.type === "text_summary" || callEventConnected(e)) && (ms(e.at) ?? 0) < (ms(firstIn.createdAt) ?? 0) - 60000);
     if (earlier) continue;
@@ -450,11 +498,24 @@ export function callList({
       .filter((e) => (e.type === "outreach_sent" || (e.type === "outreach_enrolled" && e.data?.kind !== "followup")) && e.address)
       .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0]?.address || "";
     const lead = firstReplyLead({ ins, iceAddress });
-    if (!lead) continue;
     const priorOffer = (offersBy.get(c) || []).some((o) => (ms(o.createdAt) ?? 0) < (ms(firstIn.createdAt) ?? 0));
     if (priorOffer) continue;
     const name = named.contactName || nameOf(c, offersBy, draftsBy);
     const house = String(named.propertyAddress || "").trim();
+    if (!lead) {
+      // "It's turnkey" (2026-10-15): not a lead (4e50f9a), but the agents
+      // behind deals with committed buyers said exactly that and brought
+      // their next house once we talked. A small call for a week: what
+      // else are they working on?
+      if (!saysTurnkey(ins.map((d) => d.inbound).join("\n"))) continue;
+      add("call_turnkey_week", { contactId: c, contactName: name, address: house, since: firstIn.createdAt,
+        why: `said ${house ? street(house) : "our listing"} is turnkey — ask what else they're working on`,
+        goal: "Not a deal on that one. Put a voice to the name and ask what else they're working on: anything rough, on or off-market, and how they like to work with investors.",
+        opener: `Hi ${first(name)}, it's Matt — thanks for the heads-up on ${house ? street(house) : "the listing"}. What else are you working on?`,
+        agePenaltyFrom: ms(firstIn.createdAt) });
+      continue;
+    }
+    if (now - (ms(firstIn.createdAt) ?? 0) > cfg.firstReplyDays * DAY_MS) continue;
     add("call_first_reply", { contactId: c, contactName: name, address: house, since: firstIn.createdAt,
       why: house ? `first reply, about ${street(house)} — ${lead}` : `first reply — ${lead}`,
       goal: "Relationship intro: who they are, what they list, and how they like to work with investors.",

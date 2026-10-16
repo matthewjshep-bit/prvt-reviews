@@ -26,8 +26,9 @@ const GROUP_HINT = { yours: "Decisions only you make.", stuck: "The machine trie
 // the Desk's read `section`.
 export const TODAY_GROUPS = GROUP_ORDER.map((key) => ({ key, field: "group", label: GROUP_LABEL[key], hint: GROUP_HINT[key], folds: key === "machine",
   ...(key === "yours" ? { empty: "Nothing is waiting on you." } : {}) }));
-// Today is one list, "Needs you" (Matt, 2026-10-13: only urgent work only he can do).
-export const DESK_GROUPS = TODAY_SECTIONS.map((s) => ({ ...s, field: "section", empty: "Nothing needs you right now." }));
+// Today: "Needs you" (Matt, 2026-10-13: only urgent work only he can do), then
+// "Today's calls" (2026-10-15: the day's best calls, at most ten).
+export const DESK_GROUPS = TODAY_SECTIONS.map((s) => ({ ...s, field: "section", empty: s.empty || "Nothing needs you right now." }));
 export const SECTION_LABEL = { ...GROUP_LABEL, ...Object.fromEntries(DESK_SECTIONS.map((s) => [s.key, s.label])) };
 
 // Which group a row is in. An action with no group (an older broker) is

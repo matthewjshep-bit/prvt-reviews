@@ -13,10 +13,11 @@
 // cap, six rungs for a cold agent by design). This is for what is NEW: moves
 // the machine starts by itself between rungs.
 
-import { DEAD_STATUSES, LIVE_DEAL_STAGES, effectiveStatus } from "./offer-status.js";
+import { DEAD_STATUSES, LIVE_DEAL_STAGES, OPEN_STATUSES, effectiveStatus, isHot, priceAgreed, saidYes } from "./offer-status.js";
 import { OVER_PLAIN } from "./held-underwrites.js";
 import { botHold, holdLine } from "./bot-hold.js";
 import { callEventConnected } from "./talked-to.js";
+import { isAutoReply } from "./brush-offs.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -132,4 +133,79 @@ export function threadHealth({ offer = null, drafts = [], events = [], now = Dat
   if (n >= UNANSWERED_LIMIT) return stop("two_unanswered", `${n} texts from us since they last wrote, nothing back`);
 
   return { drive: true, reason: "", detail: "", since: null };
+}
+
+/* ---------- the machine stays out of a live thread (2026-10-15) ---------- */
+
+// The funnel review: machine texts landed in the middle of 92 of 485
+// threads, and the worst of them walked away from a yes. Two rules, asked by
+// every door a text the machine starts goes through (startProactive, and the
+// send itself in sendReplyDraft).
+//
+// 48 hours: they wrote to us (not an auto-reply) and a house is live — a
+// check-in, a nudge, a "still working on it" lands on top of a conversation
+// somebody is having. The floats (realm_check, take_check) are the answer to
+// that conversation, so they are not held by it.
+export const LIVE_THREAD_HOURS = 48;
+export const LIVE_THREAD_KINDS = new Set([
+  "kind_pass", "passed_checkin", "agent_pulse", "checkin_due", "offer_nudge", "counter_nudge", "outreach_nudge",
+  "address_chase", "price_drop", "promise_due", "take_ask", "hot_push",
+]);
+// The yes rule: a text that walks away from the house never goes out after
+// they said yes to our number (shared/offer-status.js saidYes).
+export const PASS_SHAPED_KINDS = new Set(["kind_pass", "passed_checkin"]);
+// A house they named this recently is live even with no offer on it yet.
+const NAMED_HOUSE_DAYS = 14;
+const HOUSE_TALK = new Set(["deal_available", "new_property", "counter", "acceptance", "realm_yes"]);
+
+/** liveHouse({ offers, events, drafts, now }) → the house that is live for this contact, or null */
+export function liveHouse({ offers = [], events = [], drafts = [], now = Date.now() } = {}) {
+  for (const o of offers || []) {
+    if (!o || (o.deal && !LIVE_DEAL_STAGES.has(o.deal.stage))) continue;
+    const status = effectiveStatus(o);
+    if (DEAD_STATUSES.has(status)) continue;
+    if (OPEN_STATUSES.has(status) || isHot(o) || priceAgreed(o)) return { address: o.address || "", offerId: o.id || null, why: `the offer on ${String(o.address || "a house").split(",")[0]} is ${status.replace(/_/g, " ")}` };
+  }
+  const named = (events || []).find((e) => e?.type === "house_mentioned" && e.address && now - (ms(e.at) ?? 0) <= NAMED_HOUSE_DAYS * DAY_MS);
+  if (named) return { address: named.address, offerId: null, why: `they named ${String(named.address).split(",")[0]}` };
+  const talk = (drafts || []).find((d) => d && String(d.inbound || "").trim() && d.propertyAddress && HOUSE_TALK.has(d.intent)
+    && now - (ms(d.createdAt) ?? 0) <= NAMED_HOUSE_DAYS * DAY_MS);
+  if (talk) return { address: talk.propertyAddress, offerId: null, why: `they're talking about ${String(talk.propertyAddress).split(",")[0]}` };
+  return null;
+}
+
+/**
+ * machineMayStart({ kind, drafts, events, offers, address, passes, now }) → { ok, rule?, reason?, since? }
+ *
+ *   kind     the outbound kind the machine would start (or is about to send)
+ *   drafts   this contact's reply drafts, any status
+ *   events   this contact's timeline
+ *   offers   this contact's offers (lean rows are enough)
+ *   address  the house the text is about, when it names one
+ *   passes   the text itself walks away (ourReplyPasses on a reply's body)
+ *
+ * Pure. `ok: false` says which rule held it and why, in words for the row.
+ */
+export function machineMayStart({ kind = "", drafts = [], events = [], offers = [], address = "", passes = false, now = Date.now() } = {}) {
+  if (PASS_SHAPED_KINDS.has(kind) || passes) {
+    const yes = saidYes({ offers, drafts, events, address, now });
+    if (yes) {
+      const where = yes.address ? ` on ${String(yes.address).split(",")[0]}` : "";
+      return { ok: false, rule: "said_yes", since: yes.at, yes,
+        reason: `they said yes to our number${where} — nothing that walks away from it goes out by itself` };
+    }
+  }
+  if (LIVE_THREAD_KINDS.has(kind)) {
+    const last = inboundsNewestFirst(drafts).find((d) => !isAutoReply(d.inbound));
+    const at = ms(last?.createdAt);
+    if (at != null && now - at < LIVE_THREAD_HOURS * 3600000 && at <= now + 60000) {
+      const house = liveHouse({ offers, events, drafts, now });
+      if (house) {
+        const hours = Math.max(1, Math.round((now - at) / 3600000));
+        return { ok: false, rule: "live_thread", since: last.createdAt, house,
+          reason: `they texted ${hours}h ago and ${house.why} — the machine stays out of a live thread for ${LIVE_THREAD_HOURS}h` };
+      }
+    }
+  }
+  return { ok: true };
 }

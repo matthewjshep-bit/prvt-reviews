@@ -108,13 +108,15 @@ const PAPER_PROMISE = [
 ];
 
 /**
- * detectPromise(text) → "number" | "paper" | "answer" | null
+ * detectPromise(text) → "number" | "paper" | "call" | "tour" | "emd" | "answer" | null
  *
  * Whether a reply WE sent commits us to coming back. "number" when it's our
  * numbers ("get back to you with a number", "run it by underwriting", "have a
  * number back to you today"); "paper" when it's the written offer ("can have
- * it over today", "I'll send our offer over"); "answer" when it's anything
- * else ("let me run that by my partner and get back to you this afternoon").
+ * it over today", "I'll send our offer over"); "call", "tour" and "emd" when
+ * it's a call, a time to walk the house, or the earnest money — things only a
+ * person keeps (PERSON_PROMISES); "answer" when it's anything else ("let me
+ * run that by my partner and get back to you this afternoon").
  */
 export function detectPromise(text = "") {
   const t = String(text || "");
@@ -127,6 +129,9 @@ export function detectPromise(text = "") {
     // you this afternoon" (2026-10-14: read as a bare "answer").
     /\b(?:get|come|circle)\s+back\s+to\s+you\b[^.?!]{0,30}?\bwith\s+(?:a|an|the|our)\s+(?:\w+\s+)?(?:number|figure|offer|price)\b/i,
     /\b(?:have|get)\s+(?:a|our|the)\s+(?:\w+\s+)?(?:number|numbers|figure)\s+(?:back\s+)?(?:to|for)\s+you\b/i,
+    // The words the prompts use since 2026-10-15: "I'll text you the number
+    // by 3", "…and text you where we'd land".
+    /\btext\s+you\s+(?:back\s+)?(?:where\s+we(?:'d|\s+would|'ll)?\s+(?:land|be|come\s+out)|(?:the|our|a)\s+(?:\w+\s+)?(?:number|figure|price))\b/i,
   ];
   if (number.some((re) => re.test(t))) return "number";
   // "…and get back to you with where we'd land", "let me run it and get back
@@ -138,9 +143,37 @@ export function detectPromise(text = "") {
   ];
   if (!/\bpartner\b/i.test(t) && ours.some((re) => re.test(t))) return "number";
   if (PAPER_PROMISE.some((re) => re.test(t))) return "paper";
+  // A call, a time to walk it, the earnest money (2026-10-15: 37 of the 58
+  // negotiations we dropped were a promise not kept, and these were the ones
+  // nothing tracked). "…give you a call if it makes sense" promises nothing.
+  if (!isConditionalPromise(t)) {
+    if (CALL_PROMISE.some((re) => re.test(t))) return "call";
+    if (TOUR_PROMISE.some((re) => re.test(t))) return "tour";
+    if (EMD_PROMISE.some((re) => re.test(t))) return "emd";
+  }
   if (/\b(?:get|come|circle)\s+back\s+to\s+you\b|\bback\s+to\s+you\s+(?:today|this\s+afternoon|tonight|tomorrow|later)\b/i.test(t)) return "answer";
   return null;
 }
+
+// What only a person keeps (2026-10-15): a call, a time to walk the house,
+// the earnest money. They're tracked on Today (shared/promise-owed.js
+// owedPersonPromises, a call as a call_owed row), never by the machine's
+// "still working on it" text or the promise driver.
+export const PERSON_PROMISES = new Set(["call", "tour", "emd"]);
+const WE_SAY = String.raw`(?:i'?ll|i\s+will|we'?ll|we\s+will|let\s+me|i'?m\s+going\s+to|we'?re\s+going\s+to|i\s+can|matt\s+will|he'?ll)`;
+const CALL_PROMISE = [
+  new RegExp(String.raw`\b${WE_SAY}\s+(?:\w+\s+){0,2}?(?:give\s+you\s+a\s+(?:quick\s+)?(?:call|ring|buzz)|call\s+you(?:\s+back)?|ring\s+you)\b`, "i"),
+  /\b(?:call|ring)\s+you\s+(?:back\s+)?(?:tomorrow|today|tonight|this\s+(?:afternoon|evening|morning|week)|in\s+(?:a\s+bit|an\s+hour|a\s+few))\b/i,
+  // What the prompts say to do with terms: "let's go over the terms on a quick call".
+  /\b(?:i'?ll|we'?ll|let'?s|let\s+me|happy\s+to|i\s+can|we\s+can)\s+(?:go\s+over|walk\s+(?:you\s+)?through|talk\s+(?:it\s+|that\s+|this\s+)?(?:over|through))\b[^.?!]{0,40}\bon\s+a\s+(?:quick\s+)?(?:phone\s+)?call\b/i,
+];
+const TOUR_PROMISE = [
+  new RegExp(String.raw`\b${WE_SAY}\s+(?:\w+\s+){0,2}?(?:get\s+(?:back\s+to\s+)?you\s+(?:a\s+)?(?:time|times|day)\s+to\s+(?:walk|see|tour|look\s+at)|(?:come|get)\s+back\s+(?:to\s+you\s+)?(?:with|on)\s+(?:a\s+)?(?:time|times|day)\b|(?:set\s+up|schedule|book|line\s+up)\s+(?:a\s+)?(?:time\s+to\s+(?:walk|see|tour)|walk-?through|showing|tour))`, "i"),
+];
+const EMD_PROMISE = [
+  new RegExp(String.raw`\b${WE_SAY}\s+(?:\w+\s+){0,3}?(?:send|get|wire|deliver|drop\s+off|have)\s+(?:\w+\s+){0,2}?(?:earnest(?:\s+money)?|emd|deposit)\b`, "i"),
+  /\b(?:earnest(?:\s+money)?|emd|deposit)\b[^.?!]{0,30}\b(?:i'?ll|we'?ll|i\s+will|we\s+will)\s+(?:send|wire|get|deliver)\b/i,
+];
 
 /**
  * isConditionalPromise(text) → boolean

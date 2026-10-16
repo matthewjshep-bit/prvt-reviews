@@ -657,3 +657,33 @@ test("the pass on a house we promised a number on is off until switched on, and 
   assert.equal(normalizeConversationAi({ heldTriage: { passOnRetire: "yes" } }).heldTriage.passOnRetire, false);
   assert.equal(normalizeConversationAi(normalizeConversationAi({ heldTriage: { passOnRetire: true } })).heldTriage.passOnRetire, true);
 });
+
+// 2026-10-15: a counter within this percent of our number is a call, not the hold text.
+test("a close counter's percent defaults to 10, stays in 0–30, and survives a save", () => {
+  assert.equal(normalizeConversationAi({}).parties.agent.counterHold.callWithinPct, 10);
+  assert.equal(normalizeConversationAi({ parties: { agent: { counterHold: { callWithinPct: 0 } } } }).parties.agent.counterHold.callWithinPct, 0);
+  assert.equal(normalizeConversationAi({ parties: { agent: { counterHold: { callWithinPct: 80 } } } }).parties.agent.counterHold.callWithinPct, 30);
+  const saved = normalizeConversationAi({ parties: { agent: { counterHold: { enabled: true, callWithinPct: 7 } } } });
+  assert.equal(normalizeConversationAi(saved).parties.agent.counterHold.callWithinPct, 7);
+});
+
+// 2026-10-15: the call ask on an agent's first answer ships off, agent only.
+test("the call ask is off until switched on, agent only, and survives a save", () => {
+  assert.equal(normalizeConversationAi({}).parties.agent.callAsk.enabled, false);
+  const on = normalizeConversationAi({ parties: { agent: { callAsk: { enabled: true } }, investor: { callAsk: { enabled: true } } } });
+  assert.equal(on.parties.agent.callAsk.enabled, true);
+  assert.equal(on.parties.investor.callAsk.enabled, false);
+  assert.equal(normalizeConversationAi(on).parties.agent.callAsk.enabled, true);
+});
+
+// 2026-10-15: in 37 of 58 dropped negotiations we'd promised something
+// nobody delivered, often from an "underwriting team" or a "partner".
+import { AGENT_PAPER_RULE, AGENT_GOAL_RULE, PROMISE_RULE } from "./conversation-ai.js";
+test("the agent defaults never invent an underwriting team or a partner to check with, and promise only with a time", () => {
+  const agent = starterConfig({ signer: "Matt Shepherd" }).parties.agent;
+  const words = JSON.stringify({ i: agent.instructions, m: agent.mayCommit, rules: starterConfig({ signer: "Matt Shepherd" }).rules,
+    ex: starterConfig({ signer: "Matt Shepherd" }).examples.filter((e) => e.party === "agent") }) + AGENT_PAPER_RULE + AGENT_GOAL_RULE;
+  assert.doesNotMatch(words, /underwriting team|my partner|your partner|back to you (?:today|this afternoon)|by underwriting/i);
+  assert.match(PROMISE_RULE, /I'll text you the number by 3/);
+  assert.match(PROMISE_RULE, /quick call/);
+});

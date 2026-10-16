@@ -55,10 +55,11 @@ test("a connected call since the reason clears the row; one before it doesn't", 
 test("two no-answers hand the person back to the machine", () => {
   const offers = [offer({ realm: { answer: "yes", ts: ago(1) } })];
   const miss = (d) => ({ type: "call_attempt", contactId: "c1", at: ago(d), data: { outcome: "no_answer", direction: "outbound" } });
+  const fresh = callList({ offers, cards: [card()], now: NOW })[0];
   const once = callList({ offers, cards: [card()], events: [miss(0.2)], now: NOW })[0];
   assert.equal(once.section, "call");
   assert.equal(once.call.tries, 1);
-  assert.ok(once.score < 100, "lower for the day");
+  assert.ok(once.score < fresh.score, "lower for the day");
   const twice = callList({ offers, cards: [card()], events: [miss(0.3), miss(0.1)], now: NOW })[0];
   assert.equal(twice.section, "machine");
   assert.match(twice.next.what, /back to texting/);
@@ -97,7 +98,8 @@ test("an agent who said 'stop calling' is never on the list", () => {
 
 test("they called and nobody picked up: call them back first", () => {
   const missed = { type: "call_attempt", contactId: "c9", at: ago(0.1), data: { outcome: "no_answer", direction: "inbound" } };
-  const rows = callList({ offers: [offer({ realm: { answer: "yes", ts: ago(1) } })], cards: [card()], events: [missed], drafts: [{ id: "d", contactId: "c9", contactName: "Rob G", inbound: "hi", createdAt: ago(5) }], now: NOW });
+  // A hot offer nobody has agreed yet: no boosts, so the ring back leads.
+  const rows = callList({ offers: [offer({ hot: { at: ago(1), by: "operator" } })], cards: [card()], events: [missed], drafts: [{ id: "d", contactId: "c9", contactName: "Rob G", inbound: "hi", createdAt: ago(5) }], now: NOW });
   assert.equal(rows[0].kind, "call_missed");
   assert.match(rows[0].call.opener, /sorry I missed your call/);
 });
@@ -119,11 +121,27 @@ test("a new agent's first reply about a house is a relationship call; a reply af
 const iceEvents = [{ type: "outreach_sent", contactId: "n1", at: ago(3), address: "210 4th Ave, Kent, WA 98032" }];
 const firstReply = (over = {}) => ({ id: "f", contactId: "n1", contactName: "Nadia P", party: "agent", intent: "deal_available", propertyAddress: "210 4th Ave, Kent, WA", createdAt: ago(0.5), ...over });
 
-test("an agent who says the house is turnkey isn't put on the call list", () => {
+test("an agent who says the house is turnkey isn't a first-reply lead", () => {
   for (const inbound of ["It's turnkey, not a fix", "Move-in ready! New roof and updated kitchen", "Not a fixer, it's in great shape"]) {
     const r = callList({ events: iceEvents, drafts: [firstReply({ inbound })], now: NOW });
     assert.equal(r.filter((x) => x.kind === "call_first_reply").length, 0, inbound);
   }
+});
+
+// 2026-10-15: the agents behind deals with committed buyers said "it's
+// turnkey" first and brought their next house once we talked. A small call
+// for a week: what else are they working on?
+test("a turnkey first reply is a small call for a week: what else are they working on", () => {
+  const r = callList({ events: iceEvents, drafts: [firstReply({ inbound: "It's turnkey, not a fix" })], now: NOW });
+  assert.equal(r[0]?.kind, "call_turnkey_week");
+  assert.equal(r[0].section, "call");
+  assert.match(r[0].call.opener, /What else are you working on\?/);
+  assert.ok(r[0].score < 70, "below a lead's first reply");
+  // Six days on it's still there; past the week it's gone.
+  assert.equal(callList({ events: iceEvents, drafts: [firstReply({ inbound: "It's turnkey, not a fix", createdAt: ago(6) })], now: NOW })[0]?.kind, "call_turnkey_week");
+  assert.equal(callList({ events: iceEvents, drafts: [firstReply({ inbound: "It's turnkey, not a fix", createdAt: ago(8) })], now: NOW }).length, 0);
+  // A lead's first reply still only lasts firstReplyDays.
+  assert.equal(callList({ events: iceEvents, drafts: [firstReply({ inbound: "Yes it's a project, foundation issues", createdAt: ago(5) })], now: NOW }).length, 0);
 });
 
 test("an agent who says it's a project is", () => {
@@ -428,4 +446,59 @@ test("an email they texted that GHL couldn't take is on Today until an email is 
   assert.deepEqual(t.ops.map((o) => o.key), ["open_contact"], "nothing to Use when GHL would refuse it");
 
   assert.equal(callList({ events: [{ ...offered, at: ago(30) }], now: NOW }).find((x) => x.kind === "email_check"), undefined, "three weeks, then it's gone");
+});
+
+/* ---------- a counter close to ours is a call (2026-10-15) ---------- */
+
+test("a counter that comes in close to our number after the hold is a call again, not the machine's", () => {
+  const MACHINE = { hotPush: true, offerNudge: true, counterHold: { enabled: true, checkIns: 2, gapHours: 72, callWithinPct: 10 }, nudges: true };
+  const held = (counter) => offer({ id: "5", contactId: "held", contactName: "Agent held", address: "5 Main St, Seattle, WA 98101", status: "countered", cashAmount: 300000,
+    counter, counterHold: { at: ago(4), ours: 300000, theirs: 340000, nudges: [ago(1)], replies: [] } });
+  const heldCard = card({ lane: "countered", offerId: "5", contactId: "held", contactName: "Agent held", address: "5 Main St, Seattle, WA 98101", cashAmount: 300000, status: "countered" });
+  // Their 340K before the hold: the machine holds it.
+  const before = callList({ offers: [held({ amount: 340000, at: ago(5) })], cards: [heldCard], now: NOW, machine: MACHINE });
+  assert.equal(before[0].kind, "counter_held");
+  // They came down to 315K since: 5% apart, a call.
+  const after = callList({ offers: [held({ amount: 315000, at: ago(0.5) })], cards: [heldCard], now: NOW, machine: MACHINE });
+  assert.equal(after[0].kind, "call_counter");
+  assert.equal(after[0].section, "call");
+  assert.equal(after[0].counter.closePct, 5);
+  assert.match(after[0].title, /5% apart, a call lands it/);
+});
+
+/* ---------- what moves a call up (2026-10-15) ---------- */
+
+test("calls are ranked by what's behind the deals: a partner or source, an investor-minded agent, a life event, a close counter", () => {
+  const hotOffer = (id, c, over = {}) => offer({ id, contactId: c, contactName: `Agent ${c}`, address: `${id} Main St, Seattle, WA 98101`, hot: { at: ago(1), by: "operator" }, ...over });
+  const hotCard = (id, c) => card({ offerId: id, contactId: c, contactName: `Agent ${c}`, address: `${id} Main St, Seattle, WA 98101` });
+  const offers = [hotOffer("1", "plain"), hotOffer("2", "warm"), offer({ id: "3", contactId: "warm", address: "3 Oak Ave, Kent, WA", status: "passed", realm: { answer: "yes", ts: ago(40) } })];
+  const events = [{ type: "investor_minded", contactId: "warm", at: ago(20), data: { cue: "I own a few rentals" } }];
+  const drafts = [{ id: "w", contactId: "warm", inbound: "The owner passed away and the executor wants it gone", createdAt: ago(2) }];
+  const rows = callList({ offers, cards: [hotCard("1", "plain"), hotCard("2", "warm")], events, drafts, now: NOW });
+  const by = Object.fromEntries(rows.map((r) => [r.contactId, r]));
+  assert.equal(by.plain.call.boosts, undefined);
+  assert.deepEqual(by.warm.call.boosts.map((b) => [b.key, b.points]), [["partner", 15], ["investor_minded", 10], ["life_event", 10]]);
+  assert.equal(by.warm.call.boosts.reduce((s, b) => s + b.points, 0), 35);
+  assert.ok(by.warm.score > by.plain.score);
+  assert.equal(rows[0].contactId, "warm");
+  // A counter 5% over ours.
+  const ctr = callList({ offers: [offer({ id: "o4", contactId: "c4", status: "countered", cashAmount: 300000, counter: { amount: 315000, at: ago(1) } })],
+    cards: [card({ lane: "countered", contactId: "c4", offerId: "o4", cashAmount: 300000, status: "countered" })], now: NOW });
+  assert.ok(ctr[0].call.boosts.some((b) => b.key === "close_counter"));
+});
+
+test("the day's number of calls is a setting, 10 by default, 0 to 30", () => {
+  assert.equal(normalizeDesk({}).dailyCalls, 10);
+  assert.equal(DESK_DEFAULTS.dailyCalls, 10);
+  assert.equal(normalizeDesk({ dailyCalls: 0 }).dailyCalls, 0);
+  assert.equal(normalizeDesk({ dailyCalls: 99 }).dailyCalls, 30);
+});
+
+// 2026-10-15: their voicemail's own summary doesn't clear "they called you".
+test("a missed call with a voicemail on a live house stays a call", () => {
+  const rang = { type: "call_attempt", contactId: "c1", at: ago(0.1), data: { outcome: "voicemail", direction: "inbound", leftMessage: true } };
+  const vm = { type: "call_summary", contactId: "c1", at: ago(0.1), data: { transcribed: true, missed: true, summary: "seller has news" } };
+  const rows = callList({ offers: [offer({ status: "sent" })], cards: [card({ lane: "sent" })], events: [rang, vm], now: NOW });
+  assert.equal(rows[0]?.kind, "call_missed");
+  assert.equal(rows[0].offerId, "o1", "about a live house, so it's one of Today's calls");
 });

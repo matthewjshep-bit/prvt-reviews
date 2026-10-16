@@ -29,7 +29,7 @@ import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
 import { triageHeldUnderwrite } from "./shared/held-underwrites.js";
 import { openPromises, resolvePromise, normalizePromiseDismissal, promiseWhat, endsWithQuestionToThem, PROMISE_WINDOW_HOURS } from "./shared/promise-resolver.js";
 import { keepsOurWord, OWED_WINDOW_DAYS } from "./shared/promise-owed.js";
-import { detectPromise, isConditionalPromise, PROMISE_DUE_HOURS } from "./shared/follow-up.js";
+import { detectPromise, isConditionalPromise, PROMISE_DUE_HOURS, PERSON_PROMISES } from "./shared/follow-up.js";
 import { driveOpenPromises, promiseClaimed } from "./promise-driver.js";
 import { waitingReason } from "./outbox-guard.js";
 import { callEventConnected } from "./shared/talked-to.js";
@@ -63,7 +63,11 @@ export async function settlePromise({ store, locationId, contactId, address = ""
   }).catch(() => []);
   const list = events.filter((e) => e?.contactId === contactId).sort((a, b) => String(a.at).localeCompare(String(b.at)));
   const lastKept = list.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
-  const open = list.filter((e) => e.type !== "promise_kept" && String(e.at) >= lastKept);
+  // A call, a time to walk it or the earnest money stays open through the
+  // machine's own keeps (a price isn't a call): only a dismissal closes it.
+  const personOpen = (e) => e.type === "promise_made" && PERSON_PROMISES.has(e.data?.what)
+    && !list.some((k) => k.type === "promise_kept" && k.data?.by === "dismissed" && String(k.at) >= String(e.at));
+  const open = list.filter((e) => e.type !== "promise_kept" && (String(e.at) >= lastKept || personOpen(e)));
   if (!open.length) return { settled: false };
   const key = address ? addressKey(address) : "";
   const street = (a) => addressKey(String(a || "").split(",")[0]);
@@ -85,7 +89,8 @@ export async function settlePromise({ store, locationId, contactId, address = ""
  * (2026-10-14: several of the numbers nobody delivered were promised by
  * hand). "I'll get back to you today with a number" opens a promise, a price
  * or a pass keeps one — the same events the bot's sends write. Only what
- * it was (number / the written offer) is kept, never the words. Texts only:
+ * it was (number / the written offer / a call, a time to walk it, the
+ * earnest money) is kept, never the words. Texts only:
  * an email carries the thread quoted under it.
  */
 export async function notePromiseInHandText({ store, locationId, contactId, text, at = new Date().toISOString(), channel = "sms" }) {
@@ -101,7 +106,7 @@ export async function notePromiseInHandText({ store, locationId, contactId, text
     kept = Boolean(r?.inserted);
   }
   const what = detectPromise(body);
-  if (what !== "number" && what !== "paper") return { made: false, kept };
+  if (what !== "number" && what !== "paper" && !PERSON_PROMISES.has(what)) return { made: false, kept };
   const r = await recordEvent({
     store, locationId, contactId, party: "agent", type: "promise_made", at, address: "",
     source: "operator", dedupeKey: `promise_made:${contactId}:you:${at}`,
@@ -179,7 +184,9 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
     const lastKept = list.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
     // A promise you typed yourself is yours to keep: no "still working on
     // it" text in your name. Today's owed row carries it (promise-owed.js).
-    const open = list.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && String(e.at) > lastKept);
+    // A call, a time to walk it, the earnest money: a person keeps those, and
+    // Today carries them (shared/promise-owed.js owedPersonPromises).
+    const open = list.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && !PERSON_PROMISES.has(e.data?.what) && String(e.at) > lastKept);
     const owed = list.filter((e) => e.type === "promise_owed" && String(e.at) >= lastKept).at(-1) || null;
     if (!open.length && !owed) continue;
     out.considered++;

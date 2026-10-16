@@ -2171,6 +2171,52 @@ days and 28 never got one at all. On deploy, expect up to about that many
 (bot sends from 2026-09-14) show, and your own typed promises only from now
 on.
 
+### A call, a time to walk it, the earnest money: promises we keep (2026-10-15)
+
+**Why.** The funnel review: in 37 of the 58 negotiations we dropped, we'd
+promised something nobody delivered, and the bot's defaults kept inventing
+people to check with ("my underwriting team", "my partner … back to you this
+afternoon").
+
+**Three more kinds of promise** (`detectPromise`, shared/follow-up.js):
+`call` ("I'll give you a call tomorrow", "let me call you back"), `tour`
+("I'll get you a time to walk it", "let me set up a walkthrough") and `emd`
+("we'll get the earnest money over to title"). A conditional one ("…give you a
+call if it makes sense") is not a promise. They're `PERSON_PROMISES`: only a
+person keeps them, so the promise sweep never sends its "still working on it"
+text for one and the driver never acts on one. `sendReplyDraft` and your own
+typed texts (`notePromiseInHandText`) record them as `promise_made` with
+`what: call | tour | emd`.
+
+**Owed rows** (`owedPersonPromises`, shared/promise-owed.js), a day after the
+promise, for 60 days:
+- `call`: a **call_owed** Call row ("Owed: a call to Pat on 12 Elm St"),
+  score 110, so it leads Today's calls, and it's on Today even when
+  `desk.dailyCalls` is 0. Kept by a connected call or one of ours that was
+  tried (`call_attempt`, not their missed call to us).
+- `tour`: an owed row "Owed: a time to walk it to …". Kept by a booking
+  (`call_booked`) or a text of ours that names a time.
+- `emd`: an owed row "Owed: the earnest money to …". Kept when the deal's
+  "Earnest money to title" checklist item is ticked.
+Dismiss closes any of them (`promise_kept` by `dismissed`). The machine's own
+keeps (a price went out) don't: a price isn't a call.
+
+**The default words** (no setting; the live config's saved instructions are
+separate and get the same rewrite by hand). A new fixed `PROMISE_RULE` rides
+on every agent draft: promise only what will actually happen, and say when
+("I'll text you the number by 3"); never invent a team or a partner; anything
+only Matt settles goes on a quick call, with needsHuman. FACTS, COMMITMENTS
+and MATH (conversation-prompt.js), the starter rules, examples, PRICING,
+REALM CHECK and mayCommit (shared/conversation-ai.js), AGENT_PAPER_RULE and
+AGENT_GOAL_RULE, the come-down line in the offer book, and the number-first
+reply ("…I'll text you where we'd be once they're done") all lost their
+"underwriting team / my partner / back to you today". "I'll text you the
+number" and "text you where we'd land" still read as a promised number.
+
+**Check:** a sent "I'll give you a call tomorrow" puts `promise_made {what:
+"call"}` on the timeline; a day on, Today's calls shows "Owed: a call to …"
+until a call is logged or tried.
+
 ### Answers the bot didn't have (2026-09-17)
 
 **Why.** Three of Today's "we owe them an answer" rows were the bot saying "let
@@ -2228,6 +2274,25 @@ Draft), texts the machine started (check-ins, first texts, buyer pulses,
 floats — the Conversation outbox), deal housekeeping not yet due. The call
 list only ever fed this screen, so nothing about who gets texted changed. The
 Settings section for the call list is gone. Live snapshot: 85 rows → 18.
+
+**Today's calls (2026-10-15).** The funnel review: all 8 contracts from
+outreach agents came after a phone call; agents who talked brought houses
+54% of the time against 8%; and only 15% of the agents who answered us
+ever talked. So the call list is back on Today as a second section, **Today's
+calls**, under Needs you: the best `desk.dailyCalls` (default **10**, 0–30, 0 =
+none) call list rows still in Call, best score first (`urgentReasons`). A
+counter above ours and partner terms stay under Needs you as before. A missed
+call only makes it with a live house on it. A person with a decision and a
+call shows once, led by the call, with the decision under "Also on".
+Scores now carry boosts (`CALL_BOOSTS`, shared/call-list.js), shown on the
+call card as "Up the list: …": +15 an agent we've done business with or
+who brought us a house (`agentSegment` partner/source), +10 one who talks
+like an investor (`investor_minded` in the last 90 days), +10 a seller going
+through a life event or an estate in their words (last 60 days), +10 a
+counter within `counterHold.callWithinPct` of ours. Setting: `saved.desk.dailyCalls`
+(PUT the settings doc; there's no Settings field). Check: `GET
+/api/dashboard/pipeline` → `desk.sections` has `call`, and at most
+`dailyCalls` rows have `section: "call"`.
 
 **GHL stage beside the name.** The work pane's name line (Today and the
 Offers split, `GhlStagePill` in PaneParts.jsx) shows the agent's Acquisitions
@@ -2626,6 +2691,20 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
     of NEVER_AUTO.
   - Preview: `GET …/follow-ups?preview=1` → `counterHolds.rows`, even with
     the switch off.
+  - **A counter close to ours is a call, not the hold (2026-10-15).** The
+    funnel review: counters within 5% of our number agreed 13 times in 25;
+    past 25%, none of 95. A counter within
+    `parties.agent.counterHold.callWithinPct` (default **10**, 0–30, 0 = off)
+    of our number gets no hold text and is never passed by text (the soft
+    round, the pass line and the firm-floor pass all stand aside). It stays a
+    person's `counter` draft carrying `callCounter { offerId, ours, theirs,
+    pct }`, the offer is marked countered as before, and the Desk's
+    `call_counter` row says "N% apart, a call lands it". A close counter that
+    comes in after an earlier hold takes the house off the hold's clock (no
+    check-in, no pass) and back onto the call list (`callsInstead`,
+    shared/counter-hold.js). The counter band and `never_above_sent` are
+    unchanged. Check: the counter's draft in the outbox shows "N% over our
+    $X — call them"; the Desk shows the `call_counter` row.
 - **Your texts in GHL count** (`ghl-broker/hand-reply-sweep.js`, every tick).
   - It reads the moved conversations and picks out the outbound texts with a
     GHL `userId` (a person). The app's own sends come as source `app` with no
@@ -3204,6 +3283,37 @@ Their words are every line they've sent since the first text. A showing offer
 first". A house the agent brings up themselves underwrites right away, and so
 does any house we already priced. The draft row carries `qualify: {stage, address, why}`.
 
+### Their first answer asks for a call (2026-10-15)
+
+**Why.** The funnel review (485 threads): all 8 contracts from outreach
+agents came after a phone call; agents who talked brought us houses 54% of
+the time against 8%; only 15% of repliers ever talked.
+
+**What it does** (`parties.agent.callAsk { enabled }`, **off** by default). An
+agent's first answer to our first text (no text or call of ours since the
+`outreach_sent`/`outreach_enrolled`), turnkey answers included, closes with
+ONE question that asks for both other fixers and a quick call: "If you've got
+other fixers on your radar, I'd love a quick 5-minute call this week, what
+time works?" (`FIXERS_CALL_ASKS`, shared/flip-read.js). No day or time is
+offered: no calendar is connected, so they pick. The model is told to (a
+FIRST ANSWER line in the context); `withCallAsk` is the backstop when it
+didn't, taking over a closing "anything else that needs work?" so the text
+still asks one thing. The canned qualify question and pass have call
+variants (`QUALIFY_ASKS_CALL`, `QUALIFY_PASSES_CALL`). Never on a call, never
+when they brought a house of their own (that house is the lead), never on a
+counter, yes, no, opt-out, or a reply asking for a call or a time, never to
+someone who sounds annoyed, and only once: the send records `call_asked`
+(and `fixers_asked` when the text asks for other houses).
+
+**A turnkey reply is a small call (`call_turnkey_week`).** The call list
+dropped turnkey first replies on 2026-10-08. They're back for 7 days at score
+50 (below a lead's 70): "what else are you working on?". Today's calls shows
+them only when the day has room.
+
+**Check:** with the switch on, a first answer's draft ends with the call ask;
+the contact's timeline has `call_asked` once it's sent; when they answer with
+a time it's a `scheduling` heads-up for you.
+
 ### Every house an agent names is kept, and a missing address is asked for (2026-10-13)
 
 Rules: `shared/mentioned-houses.js`. Wiring: `runReply` in `ghl-broker/reply-agent.js`.
@@ -3487,6 +3597,21 @@ and, as before, a bare `call_summary` so the ladders and the check-in still
 see them reaching out — never read as a conversation. With no transcript the
 call is read once more before deciding, in case its length landed late.
 
+**A voicemail they leave is a missed call (2026-10-15).** Their inbound call
+that nobody picked up, with a voicemail long enough to read (40+ characters),
+used to go to the reply agent as if we'd talked: its `call_summary` read as a
+conversation, so "they called you" never showed. Now call-intake writes the
+inbound `call_attempt` first (`outcome: "voicemail"`, `leftMessage: true`, key
+`call_attempt:<messageId>`), then hands the words to the reply agent with
+`call.missed`. The reply agent's `call_summary` carries `missed: true`, which
+`callEventConnected` never counts as talking (so it doesn't clear the call
+row, and the 48-hour brake below doesn't fire). For an agent with a live
+house, the text after it waits for you ("they called about … and left a
+voicemail — call them back") and the Desk's `call_missed` row is one of
+Today's calls. No switch: it only holds a text back. Check: the contact's
+timeline shows the attempt with `leftMessage`, and the outbox row's reason
+says to call them back.
+
 **After a real call the machine stays off the thread for 48 hours**
 (`CALL_HAS_IT_HOURS`, `shared/thread-health.js`): a connected `call_summary`
 (transcribed, or logged by hand) makes the brake read `person_has_it` —
@@ -3739,6 +3864,49 @@ reply-agent.js (`WALK_AWAY_GAP`, `listPriceFloor`):
 - **What follows** is the rejection rule as configured (prod: tier-3 + TIER 3
   workflow + `mark_offer_passed`) and the passed-offer check-in ladder
   (every 10 days) — that is the "stay in touch".
+
+### The machine stays out of a live thread, and never walks away from a yes (2026-10-15)
+
+**Why.** The funnel review (485 threads, Jul–Oct) found machine texts landing
+in the middle of 92 live negotiations. The worst: a seller took our 261k on an
+offer we had marked we_passed four hours earlier, and 11 minutes later the
+bot answered "We've actually moved on from this one for now". The agent asked
+us to stop texting.
+
+**Two rules** (`machineMayStart`, shared/thread-health.js), asked in
+`startProactive` before anything is drafted and again in `sendReplyDraft`
+before an auto-send:
+
+- **48 hours.** They texted us (not an auto-reply) in the last 48h and a house
+  is live for them (an offer new/sent/countered, hot or agreed, a house they
+  named in the last 14 days): no `kind_pass`, `passed_checkin`, `agent_pulse`,
+  `checkin_due`, nudge, `address_chase`, `price_drop`, `promise_due`,
+  `take_ask` or `hot_push` is started, and one already counting down is
+  binned. The floats (`realm_check`, `take_check`) are exempt: they answer
+  the conversation.
+- **A yes.** Any yes to our number in the last 30 days on that house
+  (`saidYes`, shared/offer-status.js: an agreed price, the acceptance mark, a
+  `realm_yes`/`offer_accepted` event, an inbound read as an acceptance or a
+  realm yes, or their own words — `saysYes`): nothing pass-shaped goes out by
+  itself. That's `kind_pass`, `passed_checkin`, and any text whose words pass
+  (`ourReplyPasses`, which now also reads "we've actually/just moved on"). A
+  machine text is binned; a reply goes back to wait for you. The same yes
+  stops the held-underwrite sweep closing the house (it's "yours"), the
+  counter-hold clock passing it, the Tier 1 morning clear-out kicking the
+  card, and a reply that passes from retiring the unsent offer.
+
+**A yes after we passed.** A yes (by intent or in their words) on a house we
+marked we passed holds the reply for you whatever the model filed it as, and
+the draft carries `yesAfterPass`. Today shows it as **"They said yes after we
+passed: Name on Street"** (a `draft_waiting` row, now). Their next texts stay
+held until somebody sends something. The prompt's WE PASSED rule now says a
+yes to our number is not a new price: thank them, say you'll confirm today,
+needsHuman, never "we've moved on".
+
+**No switch.** Both rules only hold things back. **Check:** the outbox row's
+flag says "the machine stays out of a live thread for 48h" or "they said yes
+to our number"; the follow-up sweep's report lists the same reason as
+`skipped`.
 
 ### Terms the bot holds (2026-09-16)
 

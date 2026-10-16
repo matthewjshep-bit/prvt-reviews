@@ -73,7 +73,8 @@ const FACTS =
   "FACTS: every number, date, address and term you use must come from the CONTEXT you are given — the " +
   "thread, the records listed, or the operator's standing instructions. Never invent a price, a closing " +
   "timeline, an earnest money amount, a contingency, a proof-of-funds claim, or a company detail. If they ask " +
-  "something the context does not answer, say you will check and get back to them today; do not guess. " +
+  "something the context does not answer, do not guess, and do not invent anyone to check with (no team, no " +
+  "underwriter, no partner): say you'll go over it on a quick call, and set needsHuman. " +
   "The ONE exception is your own contact details: when they are listed below under HOW THEY REACH YOU, and only " +
   "when someone ASKS for them (\"what's your email?\", \"send it over\", \"how do I reach you?\"), give exactly " +
   "what is listed, verbatim, in the same message — no \"I'll send it over\", no checking with anyone. Never " +
@@ -96,12 +97,12 @@ const COMMITMENTS = {
     "COMMITMENTS: you may NOT accept a counter, raise or lower an offer, propose or confirm a showing or " +
     "inspection time, promise proof of funds, or agree to terms other than the WRITE-UP TERMS below, which are " +
     "standing and yours to give. When the agent asks for anything else on this list, write a " +
-    "holding reply that answers it without reading their number back and promises a same-day answer (\"Let me run " +
-    "that by my partner and get back to you this afternoon\"), and set needsHuman to true with the reason. " +
+    "holding reply that answers it without reading their number back and says you'll go over it on a quick call " +
+    "(\"Let me give you a quick call on that\"), never a partner or a team to check with, and set needsHuman to true with the reason. " +
     // Matt, 2026-09-14: a number before a showing, always.
     "A SHOWING, TOUR OR WALKTHROUGH OFFER on a house we have no offer on yet: do not take or offer a time. Say " +
-    "you'd like to run the numbers first so nobody's time gets wasted, and that you'll come back today with where " +
-    "we'd be. " +
+    "you'd like to run the numbers first so nobody's time gets wasted, and that you'll text them where we'd be " +
+    "once they're done. " +
     // A plain counter is held by the broker whatever the model says, and a
     // needsHuman on every counter kept the counter band from ever opening.
     "A COUNTER BY ITSELF is the exception to needsHuman: when the only thing they did is name the seller's " +
@@ -317,7 +318,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
         "after a no, one sentence of the method is plenty before you ask for their number. Then turn it into the useful question: if they see " +
         "a higher value or lighter work, ask for their numbers and say we'll re-run it on them. If the line says the figures don't tie, " +
         "describe the method without doing the arithmetic out loud."
-      : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and that your partner reviews the numbers.");
+      : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and offer to walk them through it on a quick call.");
   }
   if (party === "agent") {
     // Matt's standing preference, 2026-09-12. The agent must never learn it:
@@ -400,7 +401,10 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "once, warmly and plainly, that we've moved on from that one for now, and ask whether they have anything else " +
       "that needs work. If they come back with a new number or new terms on it, don't engage the price at all: thank " +
       "them, say you'll pass it along, and set needsHuman with the reason — reopening a house we walked from is a " +
-      "person's call."
+      "person's call. A YES TO OUR NUMBER is not a new price (2026-10-15: a seller who took our number on a house " +
+      "we'd passed on got \"we've moved on\", and the agent was gone): when they accept the number we gave, " +
+      "thank them, say you'll confirm it with them today, and set needsHuman. Never tell someone who just said yes " +
+      "that we've moved on, and never ask them for other houses in the same text."
     );
   }
   if (playbook.mayCommit) parts.push(`YOU MAY, on your own: ${playbook.mayCommit}`);

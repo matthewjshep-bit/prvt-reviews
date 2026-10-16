@@ -47,7 +47,7 @@ import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, 
 import { paperWent, paperWorthy, floatSentAt, isRoughNumber } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, soundsLikeSecondThoughts, soundsCrossedUp } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, PROMISE_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, soundsLikeSecondThoughts, soundsCrossedUp } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound, supersededBy } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
@@ -58,6 +58,8 @@ import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { holdFor } from "./bot-hold.js";
+import { machineMayStart, liveHouse, LIVE_THREAD_KINDS, PASS_SHAPED_KINDS, IRRITATED_RX } from "./shared/thread-health.js";
+import { closeCounter } from "./shared/counter-hold.js";
 import { agentTurnReason } from "./agent-focus.js";
 import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
@@ -65,14 +67,14 @@ import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcce
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
-import { qualifyStep, QUALIFY_ASK_RX, ourReplyPasses } from "./shared/flip-read.js";
+import { qualifyStep, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper, saysYes, saidYes, YES_WINDOW_DAYS } from "./shared/offer-status.js";
 import { signedContractIn, themLines } from "./shared/contract-signed.js";
 import { sameStreet, sameHouse } from "./shared/us-address.js";
 import { releasableHeld } from "./shared/conversation-audit.js";
@@ -1485,6 +1487,47 @@ function pickOfferByAddress(offers, hint) {
   }) || null;
 }
 
+/**
+ * yesAfterOurPass({ offers, drafts, events, draft, message, now }) → { offerId, address, amount, passedAt, at } | null
+ *
+ * Their yes to our number landed on a house we had marked we passed (the
+ * funnel review, 2026-10-15: the seller took our 261k four hours after we
+ * passed, and the bot answered "We've actually moved on"). The house they named,
+ * or with no house named and nothing open, the newest one we walked from in
+ * the last month. Only a house we put a number to: one we passed on before
+ * pricing it reopens on their numbers (held-underwrites.js) and the book
+ * already says so.
+ *
+ * This text's yes, or an earlier one since the pass that nobody has answered
+ * yet: their "did you get my text?" after it is still waiting on that yes,
+ * and the bot, told we walked away, would answer it with a goodbye.
+ */
+export function yesAfterOurPass({ offers = [], drafts = [], events = [], draft = {}, message = "", now = Date.now() } = {}) {
+  const walked = currentOffers(offers || []).filter((o) => offerStatus(o) === "we_passed" && Number(o.cashAmount) > 0 && !o.deal);
+  if (!walked.length) return null;
+  let picked = draft.propertyAddress ? pickOfferByAddress(walked, draft.propertyAddress) : null;
+  if (!picked) {
+    const open = currentOffers(offers || []).filter(isNegotiable);
+    if (draft.propertyAddress && pickOfferByAddress(open, draft.propertyAddress)) return null;
+    if (open.length) return null;
+    const passedAt = (o) => Date.parse(o.statusAt || "") || 0;
+    picked = [...walked].sort((x, y) => passedAt(y) - passedAt(x))[0];
+    if (now - passedAt(picked) > YES_WINDOW_DAYS * 86400000) return null;
+  }
+  const ours = Math.round(Number(picked.cashAmount) || 0);
+  const found = { offerId: picked.id, address: picked.address || "", amount: ours, passedAt: picked.statusAt || null };
+  const yesNow = (["acceptance", "realm_yes"].includes(draft.intent) && !draft.inRange && !(Number(draft.counterAmount) > 0)) || saysYes(message, ours);
+  if (yesNow) return { ...found, at: new Date(now).toISOString() };
+  const before = saidYes({ offers: [picked], drafts, events, address: picked.address, since: picked.statusAt, now });
+  if (!before) return null;
+  // Answered since: a person sent something after it (the bot's own replies
+  // to it are held, so a sent one is somebody's Send) or typed one on Today.
+  const after = (t) => (Date.parse(t || "") || 0) > Date.parse(before.at);
+  const answered = (drafts || []).some((d) => d?.status === "sent" && after(d.sentAt || d.updatedAt || d.createdAt))
+    || (events || []).some((e) => e?.type === "hand_reply" && after(e.at));
+  return answered ? null : { ...found, at: before.at };
+}
+
 /* ---------- GHL writeback ---------- */
 
 const contactName = (c) =>
@@ -1717,6 +1760,41 @@ export async function firstTextHouse(store, locationId, contactId) {
   return icebreakerHouse(evs);
 }
 
+// What the model is told on their first answer (shared/flip-read.js FIXERS_CALL_ASKS).
+const CALL_ASK_LINE =
+  "FIRST ANSWER: this is their first answer to our first text. Close with ONE question that asks for both other fixers and a " +
+  "quick call, in your words or these: \"If you've got other fixers on your radar, I'd love a quick 5-minute call this week, what " +
+  "time works?\" Never name a day or a time (there's no calendar: they pick), and ask nothing else in the same text. Leave it out " +
+  "if they brought up a house of their own (that house is the lead) or don't want to hear from us.";
+// Replies the call ask never rides on: the conversation turned, or a person has it.
+const CALL_ASK_SKIP_INTENTS = new Set(["counter", "acceptance", "realm_yes", "rejection", "proof_of_funds", "opt_out", "wants_call", "scheduling", "wants_walkthrough", "media"]);
+
+/**
+ * callAskFor({ events, transcript, message, ice }) → { first } | null
+ *
+ * Whether this reply may carry the call ask (shared/flip-read.js
+ * FIXERS_CALL_ASKS, 2026-10-15): we texted them first (the app's first text
+ * or the GHL workflow's), we've never asked them for a call (call_asked),
+ * and they don't sound annoyed. `first`: this is their first answer — no
+ * text or call of ours since the first text. Pure; the caller reads the
+ * timeline.
+ */
+export function callAskFor({ events = [], transcript = "", message = "", ice = null } = {}) {
+  if ((events || []).some((e) => e?.type === "call_asked")) return null;
+  const opener = (events || []).filter((e) => e?.type === "outreach_sent" || (e?.type === "outreach_enrolled" && e.data?.kind !== "followup"))
+    .map((e) => Date.parse(e.at || "") || 0).sort((a, b) => b - a)[0];
+  if (!opener) return null;
+  const words = theirLatestWords(transcript, message);
+  if (IRRITATED_RX.test(words) || soundsCrossedUp(words)) return null;
+  // Our first text, or a check-in about a fresh listing of theirs since, is the icebreaker either way.
+  const since = Math.max(opener, ice?.at || 0);
+  const ours = String(transcript || "").split("\n").some((line) => {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\]\s+US\b/.exec(line);
+    return m && Date.parse(`${m[1]}T${m[2]}:00Z`) > since + 60000;
+  });
+  return { first: !ours };
+}
+
 /**
  * qualifyIcebreaker({ ... }) → null | { stage, address, why, reply }
  *
@@ -1725,7 +1803,7 @@ export async function firstTextHouse(store, locationId, contactId) {
  * switch is off. Stage "qualified" lets everything run as before; "ask",
  * "pass" and "closed" carry the reply and hold the underwrite.
  */
-export async function qualifyIcebreaker({ store, locationId, contactId, draft, message, transcript, now = Date.now(), agentRehab = 0, ice: given }) {
+export async function qualifyIcebreaker({ store, locationId, contactId, draft, message, transcript, now = Date.now(), agentRehab = 0, ice: given, callAsk = false }) {
   const ice = given !== undefined ? given : await firstTextHouse(store, locationId, contactId);
   if (!ice) return null;
   // They named another house of theirs (2026-10-13: a street name and a
@@ -1741,7 +1819,7 @@ export async function qualifyIcebreaker({ store, locationId, contactId, draft, m
   const ours = (stage) => sent.some((d) => d.qualify?.stage === stage && sameStreet(d.qualify.address || "", ice.address));
   const asked = ours("ask") || String(transcript || "").split("\n").some((l) => /^\[[^\]]*\]\s+US\b/.test(l) && QUALIFY_ASK_RX.test(l));
   const passed = ours("pass");
-  const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: openerVariant(contactId, 3) });
+  const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: openerVariant(contactId, 3), callAsk });
   return { stage: step.move === "underwrite" ? "qualified" : step.move, address: ice.address, why: step.read.why, reply: step.reply };
 }
 
@@ -2098,7 +2176,7 @@ export async function assembleConversation({
   // What we buy right now (shared/asset-type.js): single-family only since
   // 2026-10-01, so a condo or a mobile home gets a plain no, not a promise —
   // except a house we chose to price anyway, which is named.
-  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE, CLARIFY_RULE, AGENT_HONESTY_RULE, agentFocusRule(saved?.focusKinds, { pricedAnyway: context.pricedOutsideFocus || [] })].filter(Boolean).join("\n")
+  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE, CLARIFY_RULE, AGENT_HONESTY_RULE, PROMISE_RULE, agentFocusRule(saved?.focusKinds, { pricedAnyway: context.pricedOutsideFocus || [] })].filter(Boolean).join("\n")
     : party === "investor" ? [base, CLARIFY_RULE].filter(Boolean).join("\n") : base;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
   // Ours to hand out when asked — an agent who asks "what's your email?" got
@@ -2579,6 +2657,19 @@ async function fellThroughFor({ store, locationId, addresses = [] }) {
 }
 const fellThroughLine = (o) => `the deal on ${String(o?.address || "the house").split(",")[0].trim()} fell through`;
 
+// machineMayStart (shared/thread-health.js) on this contact's book, drafts
+// and timeline. A read that fails holds nothing back: the other doors still
+// ask their own questions.
+async function machineMayStartFor({ store, locationId, contactId, kind, address = "", passes = false, now = Date.now() }) {
+  if (!LIVE_THREAD_KINDS.has(kind) && !PASS_SHAPED_KINDS.has(kind) && !passes) return { ok: true };
+  const [drafts, events, offers] = await Promise.all([
+    typeof store?.listReplyDrafts === "function" ? store.listReplyDrafts(locationId, { contactId, limit: 50 }).catch(() => []) : [],
+    typeof store?.listContactEvents === "function" ? store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []) : [],
+    typeof store?.listOffers === "function" ? store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []) : [],
+  ]);
+  return machineMayStart({ kind, drafts: drafts || [], events: events || [], offers: offers || [], address, passes, now });
+}
+
 export async function startProactive({
   client, locationId, saved, store, contactId, kind = "realm_check",
   offer = null, subject = null, sendsEnabled = false, deps = {}, personAsked = false, continues = null,
@@ -2609,6 +2700,10 @@ export async function startProactive({
     // listing agent, their TC, a buyer (5232 S Yakima, 2026-10-03).
     const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
     if (gone) return { skipped: fellThroughLine(gone), job: null };
+    // A live thread, or a yes we'd be walking away from (shared/thread-health.js).
+    const live = await machineMayStartFor({ store, locationId, contactId, kind, address: offer?.address || subject?.address || "",
+      now: typeof deps.now === "function" ? deps.now() : Date.now() });
+    if (!live.ok) return { skipped: live.reason, liveThread: live.rule, job: null };
     const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues, kind });
     // The holding reply this number answers: the float carries on from it
     // (floatAnswersHeldReply). Anything else waiting holds the float.
@@ -3559,7 +3654,17 @@ async function runReply(job, ctx) {
   const booking = await prepareBooking({ client, store, locationId, contactId: job.contactId, party, message: job.message, config, now, deps }).catch(() => null);
   if (booking?.error) warnings.push(`calendar: ${booking.error}`);
   const bookingText = booking ? bookingContextText(booking) : "";
-  const extraText = [bookingText, partnerTermsLine(terms)].filter(Boolean).join("\n\n");
+  // The house our first text opened with (read before the draft since
+  // 2026-10-15: the call ask below needs it too).
+  const iceHouse = party === "agent" ? await firstTextHouse(store, locationId, job.contactId) : null;
+  // The call ask (2026-10-15): their first answer to our first text closes
+  // with one question — other fixers, and a quick call this week. Texts
+  // only, once, never to someone annoyed; parties.agent.callAsk, off.
+  const callAsk = party === "agent" && !isCall && config.parties?.agent?.callAsk?.enabled
+    ? callAskFor({ events: (await store.listContactEvents?.(locationId, job.contactId, { types: ["outreach_sent", "outreach_enrolled", "call_asked"], limit: 50 }).catch(() => [])) || [],
+      transcript: a.transcript, message: job.originalMessage || job.message, ice: iceHouse })
+    : null;
+  const extraText = [bookingText, partnerTermsLine(terms), callAsk?.first ? CALL_ASK_LINE : ""].filter(Boolean).join("\n\n");
   const draftContext = extraText ? { ...context, text: [context.text, extraText].filter(Boolean).join("\n\n") } : context;
 
   /* --- 2. the draft --- */
@@ -3687,7 +3792,11 @@ async function runReply(job, ctx) {
         // not a gap to work however softly it's put; the list price as their
         // floor is the same thing said plainly.
         const beyondReach = reference > 0 && (theirs > reference * (1 + WALK_AWAY_GAP) || draft.counterFloor === "list_price");
-        if (reference > 0 && theirs > passLine && firmness === "soft" && !beyondReach && !(full.requotes || []).length) {
+        // Close to our number (2026-10-15): a call, never a pass or a soft
+        // round by text — the hold below hands it to a person.
+        const close = closeCounter({ ours: full.cashAmount, theirs, pct: config.parties?.agent?.counterHold?.callWithinPct ?? 10 });
+        if (close) { /* a person's call: see the hold below */ }
+        else if (reference > 0 && theirs > passLine && firmness === "soft" && !beyondReach && !(full.requotes || []).length) {
           // A soft floor is an opening. Keep it a live negotiation: file their
           // number on the offer, and ask for the value and the work so the
           // re-quote has something to run on. No number of ours, no goodbye.
@@ -3734,7 +3843,16 @@ async function runReply(job, ctx) {
     const hold = full ? holdNumber({ offer: full, transcript: a.transcript || "" }) : null;
     const theirs = Math.round(Number(draft.counterAmount) || 0);
     const comeUp = asksUsToComeUp(job.originalMessage || job.message);
-    if (hold && (theirs > hold.amount || (!theirs && comeUp))) {
+    // Close to our number: a phone call lands these and the hold text loses
+    // them (2026-10-15: within 5%, 13 of 25 agreed; past 25%, none). No hold,
+    // no pass: it stays a person's counter, and the Desk's call list leads
+    // with it (call_counter).
+    const close = hold ? closeCounter({ ours: hold.amount, theirs, pct: config.parties?.agent?.counterHold?.callWithinPct ?? 10 }) : null;
+    if (close) {
+      const where = String(full.address || "").split(",")[0].trim() || "the house";
+      draft = { ...draft, needsHuman: true, callCounter: { offerId: full.id, ours: hold.amount, theirs, pct: close.pct },
+        humanReason: `their ${fmtMoney(theirs)} on ${where} is ${close.pct}% over our ${fmtMoney(hold.amount)} — call them; a held number by text loses these` };
+    } else if (hold && (theirs > hold.amount || (!theirs && comeUp))) {
       const where = String(full.address || "").split(",")[0].trim() || "the house";
       // Said once; a second ask that didn't move gets the short version.
       const again = Boolean(full.counterHold?.at) && !(theirs > 0 && theirs < (Number(full.counterHold.theirs) || Infinity));
@@ -3782,7 +3900,6 @@ async function runReply(job, ctx) {
   // below leaves the message alone.
   // Only on a text that reads as a lead: "the one on Pine St sold" is not
   // a house to ask about.
-  const iceHouse = party === "agent" ? await firstTextHouse(store, locationId, job.contactId) : null;
   // On a call (2026-10-14: "I'll have one up in Mount Vernon in a few
   // weeks" was said on the phone and never kept) only their side counts
   // when the transcript says whose words are whose; a call covers many
@@ -3806,7 +3923,7 @@ async function runReply(job, ctx) {
       && (["deal_available", "new_property", "wants_walkthrough"].includes(draft.intent) || isShowingOffer(job.message))
       && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)) {
     const take = draft.agentTake ?? normalizeAgentTake(draft) ?? agentTakeFromText(job.message);
-    qualify = await qualifyIcebreaker({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: take?.rehab || 0, ice: iceHouse })
+    qualify = await qualifyIcebreaker({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: take?.rehab || 0, ice: iceHouse, callAsk: Boolean(callAsk) })
       .catch((e) => { warnings.push(`qualify: ${e.message}`); return null; });
     if (qualify && qualify.stage !== "qualified") {
       draft = {
@@ -3875,7 +3992,7 @@ async function runReply(job, ctx) {
           reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
           needsHuman: false,
           numberFirst: true,
-          reply: `Appreciate that. Before we set up a time, let me run the numbers on ${street || "it"} with my team so nobody's time gets wasted. I'll come back to you today with where we'd be.`,
+          reply: `Appreciate that. Before we set up a time, let me run the numbers on ${street || "it"} so nobody's time gets wasted. I'll text you where we'd be once they're done.`,
         };
       }
       job.intent = draft.intent;
@@ -3909,6 +4026,16 @@ async function runReply(job, ctx) {
     await createContactNote(client, job.contactId, {
       body: `Needs you — the bot acknowledged it, the substance is yours: ${String(draft.summary || job.message || "").slice(0, 400)}`,
     }).catch(() => {});
+  }
+
+  // The call ask's backstop (2026-10-15): their first answer, and the model
+  // didn't close with it. Not when they brought us a house of their own (that
+  // house is the lead), not on a canned qualify or number-first text, not on
+  // a reply that turned the conversation (a counter, a yes, a no-contact).
+  const theirHouse = Boolean(namedHouses.length) || (Boolean(draft.propertyAddress) && Boolean(iceHouse?.address) && !sameStreet(draft.propertyAddress, iceHouse.address));
+  if (callAsk?.first && !qualifyHeld && !numberFirst && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
+      && String(draft.reply || "").trim() && !CALL_ASK_RX.test(draft.reply)) {
+    draft = { ...draft, reply: withCallAsk(draft.reply, openerVariant(job.contactId, 3)), callAskAdded: true };
   }
 
   // The model read an opt-out the keywords didn't catch ("lose my number",
@@ -3975,6 +4102,36 @@ async function runReply(job, ctx) {
     return;
   }
 
+  // A voicemail an agent left about a live house (call-intake.js call.missed).
+  let missedCallHouse = "";
+  if (isCall && job.call?.missed && party === "agent") {
+    const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const live = liveHouse({ offers: book || [], now });
+    if (live) {
+      missedCallHouse = String(live.address || "their house").split(",")[0].trim();
+      draft = { ...draft, needsHuman: true, humanReason: `they called about ${missedCallHouse} and left a voicemail — call them back before any text` };
+    }
+  }
+
+  // A yes after we passed (2026-10-15). The seller took our number on a
+  // house we had walked from; the model, told we walked away, answered
+  // "We've actually moved on". Whatever the model filed it as, the reply
+  // waits for Matt — reopening it is his call — and Today says why.
+  let yesAfterPass = null;
+  if (party === "agent" && !isCall) {
+    const [book, earlier, timeline] = await Promise.all([
+      store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []),
+      store.listReplyDrafts(locationId, { contactId: job.contactId, limit: 50 }).catch(() => []),
+      typeof store.listContactEvents === "function" ? store.listContactEvents(locationId, job.contactId, { limit: 200 }).catch(() => []) : [],
+    ]);
+    yesAfterPass = yesAfterOurPass({ offers: book || [], drafts: earlier || [], events: timeline || [], draft, message: job.originalMessage || job.message, now });
+    if (yesAfterPass) {
+      const where = String(yesAfterPass.address || "the house").split(",")[0].trim();
+      draft = { ...draft, needsHuman: true, yesAfterPass,
+        humanReason: `they said yes to our ${fmtMoney(yesAfterPass.amount)} on ${where} after we passed on it — reopening it is your call; never answer a yes with a goodbye` };
+    }
+  }
+
   // Partner terms are Matt's: the reply waits for him whatever else rewrote
   // it above, and a person's flag keeps a redraft from being spent on it.
   if (terms) {
@@ -4004,8 +4161,11 @@ async function runReply(job, ctx) {
   // Welfare Ave, Korey P.'s turnkey Puyallup). What we said wins: it files
   // as "nothing right now" (Tier 2), the house is stamped passed so a racing
   // underwrite stops (threadPassed), and an unsent offer on it is closed.
-  const replyPassed = party === "agent" && !qualifyHeld && !numberFirst && !notOurKind
-    && ["deal_available", "new_property"].includes(draft.intent) && ourReplyPasses(draft.reply);
+  // Never on a yes (2026-10-15): a reply that turns down a house they just
+  // said yes on is the bot's mistake, not our decision.
+  const replyPassed = party === "agent" && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass
+    && ["deal_available", "new_property"].includes(draft.intent) && ourReplyPasses(draft.reply)
+    && !saysYes(job.originalMessage || job.message);
   if (replyPassed) {
     draft = {
       ...draft,
@@ -4050,6 +4210,16 @@ async function runReply(job, ctx) {
   // machine already lost the thread once, so it doesn't answer for you.
   if (auto.send && party === "agent" && soundsCrossedUp(theirLatestWords(a.transcript, job.message))) {
     auto = { ...auto, send: false, code: "needs_you", reason: "they sound confused, or say they already told us — you take this one" };
+  }
+  // Their yes on a house we walked from never gets a reply by itself.
+  if (yesAfterPass) {
+    auto = { ...auto, send: false, code: "needs_you", reason: "they said yes after we passed — you take this one" };
+  }
+  // An agent with a live house called and left a voicemail (2026-10-15): a
+  // call back from Matt first (the Desk's "they called you" row), so the text
+  // after it waits for him.
+  if (missedCallHouse) {
+    auto = { ...auto, send: false, code: "needs_you", reason: `they called about ${missedCallHouse} and left a voicemail — call them back` };
   }
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
@@ -4598,6 +4768,10 @@ async function runReply(job, ctx) {
     warnings: warnings.slice(0, 6),
     noteOnAutoSend: config.notes?.onAutoSend !== false,
     ...(draft.counterHold ? { counterHold: draft.counterHold } : {}),
+    // Their yes landed on a house we passed on: Today's row says so.
+    ...(draft.yesAfterPass ? { yesAfterPass: draft.yesAfterPass } : {}),
+    // A counter close to ours: a call, not the hold text (call_counter).
+    ...(draft.callCounter ? { callCounter: draft.callCounter } : {}),
     promptVersion: 3,
     updatedAt: ts,
   });
@@ -4615,7 +4789,9 @@ async function runReply(job, ctx) {
     await recordEvent({
       store, locationId, contactId: job.contactId, party, type: "call_summary", at: job.call.at || new Date(now).toISOString(),
       address: draft.propertyAddress || "", source: "call", ref: job.call.messageId || record.id, dedupeKey: job.call.dedupeKey || `call:${job.call.messageId}`,
-      data: { summary: String(draft.summary || "").slice(0, 500), intent: draft.intent, direction: job.call.direction, durationSec: job.call.durationSec, transcribed: true, draftId: record.id },
+      data: { summary: String(draft.summary || "").slice(0, 500), intent: draft.intent, direction: job.call.direction, durationSec: job.call.durationSec, transcribed: true, draftId: record.id,
+        // A voicemail they left (call-intake.js): their words, not a conversation (talked-to.js).
+        ...(job.call.missed ? { missed: true } : {}) },
     });
   }
 
@@ -5573,6 +5749,33 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     }
   }
 
+  // A live thread, or a yes (2026-10-15, shared/thread-health.js): a text the
+  // machine started that now lands on a conversation they're having, or any
+  // text — a reply too — that walks away from a house they said yes on. The
+  // machine's own text is binned; a reply waits for you. Only the auto path.
+  if (auto && d.party !== "investor") {
+    const machineText = Boolean(d.outbound?.kind) && !String(d.inbound || "").trim();
+    const live = await machineMayStartFor({ store, locationId, contactId: d.contactId, kind: machineText ? d.outbound.kind : "",
+      address: d.outbound?.address || d.propertyAddress || "", passes: ourReplyPasses(body), now });
+    if (!live.ok) {
+      const ts = new Date(now).toISOString();
+      if (machineText) {
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), `${live.reason} — not sent`],
+        });
+        await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      } else {
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), `held: ${live.reason}`],
+          autoSend: { ...(d.autoSend || {}), decided: false, reason: `needs a person: ${live.reason}` },
+        });
+      }
+      return { ok: true, skipped: live.reason, held: !machineText };
+    }
+  }
+
   // They unsubscribed since (or a blast never looked): GHL would answer 400
   // "has unsubscribed" and the row would come back as "Needs you" for a text
   // nobody can send. Dismissed instead, and the contact is flagged.
@@ -5772,6 +5975,17 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       store, locationId, contactId: d.contactId, party: "agent", type: "offmarket_asked", at: ts, source: "conversation", ref: d.id,
       dedupeKey: `offmarket_asked:${d.contactId}:${ts.slice(0, 10)}`, data: { draftId: d.id, auto: Boolean(auto) },
     }).catch(() => {});
+  }
+  // Our ask for a call, and for their other fixers, actually went (the call
+  // ask, 2026-10-15): asked once, and the Desk can see who was asked.
+  if ((d.party || "agent") === "agent") {
+    for (const [type, rx] of [["call_asked", CALL_ASK_RX], ["fixers_asked", FIXERS_ASK_RX]]) {
+      if (!rx.test(body)) continue;
+      await recordEvent({
+        store, locationId, contactId: d.contactId, party: "agent", type, at: ts, source: "conversation", ref: d.id,
+        dedupeKey: `${type}:${d.contactId}:${ts.slice(0, 10)}`, data: { draftId: d.id, auto: Boolean(auto) },
+      }).catch(() => {});
+    }
   }
   // The agent's check-in actually went: the cadence and the "unanswered"
   // counts (shared/agent-pulse.js) read this, never the claim.

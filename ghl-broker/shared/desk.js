@@ -28,6 +28,7 @@
 
 import { SEVERITY_RANK } from "./pipeline.js";
 import { callEventConnected } from "./talked-to.js";
+import { DESK_DEFAULTS } from "./call-list.js";
 
 export const DESK_SECTIONS = [
   { key: "call", label: "Call", hint: "Worth a phone call today: the conversations only you can have." },
@@ -44,11 +45,11 @@ export const CALL_INTENTS = new Set(["wants_call", "scheduling", "wants_walkthro
 // drafts, then the house-level and deal-level work. Anything unlisted sorts
 // after these, by severity.
 export const KIND_STRENGTH = [
-  "call_hot", "call_brought", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
+  "call_owed", "call_hot", "call_brought", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
   // An agent's partner terms lead their held reply: the row says what they offered.
   "call_partner_terms",
   "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral", "email_check",
-  "call_first_reply", "call_quiet", "ladder_exhausted",
+  "call_first_reply", "call_quiet", "call_turnkey_week", "ladder_exhausted",
   "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "texts_elsewhere", "stage_lag",
   "deal_no_buyers", "deal_no_dataroom", "showing_no_window", "underwrite_dropped",
   "call_phone_only", "call_investor", "call_partner",
@@ -134,9 +135,18 @@ export function sectionFor(a, { draftsById = new Map(), heldByOffer = new Map() 
 // text, a buyer pulse, a float — the Conversation outbox has them), and deal
 // housekeeping that isn't due. A deal blast Settings holds for him stays:
 // selling a house under contract is his.
+// Today's calls (2026-10-15): the funnel review found every contract from an
+// outreach agent came from a phone call, and only 15% of the agents who
+// answered us ever talked to Matt. The call list's best `desk.dailyCalls`
+// (10) are back on Today, under the decisions; the rest stay off it.
 export const TODAY_SECTIONS = [
   { key: "decide", label: "Needs you", hint: "Urgent, and only you can do it." },
+  { key: "call", label: "Today's calls", hint: "The calls most likely to become a deal, best first.", empty: "No calls today." },
 ];
+// The kinds a call list row can be, apart from the two that are decisions
+// (a counter above ours, partner terms) and stay under Needs you.
+const DAILY_CALL_EXCLUDED = new Set(["call_counter", "call_partner_terms", "call_owed"]);
+const DAILY_CALLS_DEFAULT = DESK_DEFAULTS.dailyCalls;
 const NOT_URGENT_OUTBOUND = new Set(["agent_pulse", "outreach_open", "buyer_pulse", "realm_check", "take_check"]);
 // An agent's partner terms (shared/partner-terms.js) are someone waiting on an
 // answer only Matt gives.
@@ -149,18 +159,33 @@ const URGENT_KINDS = new Set([
   "referral",
   // An email they texted that GHL couldn't simply take (shared/contact-email.js).
   "email_check",
+  // A call we said we'd make (2026-10-15): always on Today, under Today's calls.
+  "call_owed",
 ]);
+// Urgent rows that sit under Today's calls rather than Needs you.
+const URGENT_CALLS = new Set(["call_owed"]);
 
 /**
- * urgentReasons(reasons, { drafts, heldByOffer }) → the reasons that belong on Today, each placed in "decide"
+ * urgentReasons(reasons, { drafts, heldByOffer, dailyCalls }) → the reasons that belong on Today:
+ * the decisions placed in "decide", and the day's best `dailyCalls` call
+ * list rows in "call"
  *
  * Runs before foldDesk, so a person whose strongest reason was a call still
  * shows for the decision folded under it.
  */
-export function urgentReasons(reasons = [], { drafts = [], heldByOffer = new Map() } = {}) {
+export function urgentReasons(reasons = [], { drafts = [], heldByOffer = new Map(), dailyCalls = DAILY_CALLS_DEFAULT } = {}) {
   const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
   const held = heldByOffer instanceof Map ? heldByOffer : new Map(Object.entries(heldByOffer || {}));
   const out = [];
+  // Today's calls: the call list's own rows still in "call" (not handed back
+  // to the machine), best score first, `dailyCalls` of them. A missed call
+  // only when it's about a live house — a ring from someone with nothing
+  // open is not one of the day's best.
+  const calls = (reasons || []).filter((a) => a && String(a.kind || "").startsWith("call_") && !DAILY_CALL_EXCLUDED.has(a.kind)
+    && sectionFor(a, { draftsById, heldByOffer: held }) === "call" && !(a.kind === "call_missed" && !a.offerId))
+    .sort((x, y) => callScore(y) - callScore(x))
+    .slice(0, Math.max(0, Math.round(Number(dailyCalls) || 0)));
+  for (const a of calls) out.push({ ...a, section: "call" });
   for (const a of reasons || []) {
     if (!a || !URGENT_KINDS.has(a.kind)) continue;
     if (a.kind !== "call_counter" && sectionFor(a, { draftsById, heldByOffer: held }) === "machine") continue;
@@ -170,7 +195,7 @@ export function urgentReasons(reasons = [], { drafts = [], heldByOffer = new Map
       // A text the machine started (a check-in, a first text, a float): nobody is waiting on it.
       if (NOT_URGENT_OUTBOUND.has(d?.outbound?.kind) && !isCounterDraft(d)) continue;
     }
-    out.push({ ...a, section: "decide" });
+    out.push({ ...a, section: URGENT_CALLS.has(a.kind) ? "call" : "decide" });
   }
   return out;
 }
@@ -307,7 +332,7 @@ export function machineDrives(config) {
     offerNudge: on && Boolean(fu?.ladders?.offer_nudge?.enabled),
     // The hold's check-ins ride the follow-up clock (counter-hold.js).
     counterHold: on && pb?.counterHold?.enabled
-      ? { enabled: true, checkIns: Number(pb.counterHold.checkIns) || 2, gapHours: Number(fu?.minHoursBetween) || 72 } : null,
+      ? { enabled: true, checkIns: Number(pb.counterHold.checkIns) || 2, gapHours: Number(fu?.minHoursBetween) || 72, callWithinPct: pb.counterHold.callWithinPct ?? 10 } : null,
     nudges: on && Boolean(fu?.ladders?.offer_nudge?.enabled) && Number(fu?.ladders?.offer_nudge?.repeatEvery) > 0,
   };
 }

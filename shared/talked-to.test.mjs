@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { tallyMessages, relationshipOf, isTalkEvent, matchesText, voicemailGreeting } from "./talked-to.js";
+import { tallyMessages, relationshipOf, isTalkEvent, matchesText, voicemailGreeting, callEventConnected } from "./talked-to.js";
 
 const sms = (direction) => ({ messageType: "TYPE_SMS", direction });
 
@@ -83,4 +83,10 @@ test("a real conversation is never read as a greeting, however it opens", () => 
   assert.equal(voicemailGreeting(""), null);
   // A short real call that opens with "unavailable" is still a call.
   assert.equal(voicemailGreeting("THEM: Hey, sorry I was unavailable earlier.\nTHEM: It's Matt, calling about Maple. THEM: Yeah the seller is around."), null);
+});
+
+// 2026-10-15: a voicemail they left is transcribed, but nobody talked.
+test("a voicemail they left is not a conversation", () => {
+  assert.equal(callEventConnected({ type: "call_summary", data: { transcribed: true, missed: true, durationSec: 0 } }), false);
+  assert.equal(callEventConnected({ type: "call_summary", data: { transcribed: true, durationSec: 240 } }), true);
 });

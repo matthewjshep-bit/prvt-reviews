@@ -27,7 +27,7 @@ import { stepLabel, exhausted, normalizeSteps, questionIn } from "./follow-up.js
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
 import { addressKey } from "./contact-record.js";
 import { openPromises, resolvePromise } from "./promise-resolver.js";
-import { owedPromises } from "./promise-owed.js";
+import { owedPromises, owedPersonPromises, PERSON_PROMISE_WORDS } from "./promise-owed.js";
 import { UNANSWERED_LIMIT } from "./thread-health.js";
 import { botHold, holdLine } from "./bot-hold.js";
 import { groupHouses, resolveHouse } from "./current-offer.js";
@@ -75,6 +75,7 @@ export const INTEREST_STALL_DAYS = 4;
 export const ACTION_KINDS = [
   { key: "promise_owed",      label: "Owed a number" },
   { key: "number_owed",       label: "Still owed, past the day" },
+  { key: "call_owed",         label: "A call we promised" },
   { key: "draft_waiting",     label: "Drafts waiting on you" },
   { key: "handoff",           label: "One click from you" },
   { key: "investor_price_agreed", label: "Prices the machine agreed" },
@@ -151,6 +152,9 @@ const PROMISE_OPS = {
   yours: [{ key: "open_editor", label: "Open and fix", intent: "primary" }],
 };
 const NEEDS_OFFER = new Set(["float_take", "float_realm", "rerun_held", "open_editor"]);
+// A call we promised leads the day's calls (shared/call-list.js scores the
+// rest: a missed call is 105, a hot offer 100).
+const CALL_OWED_SCORE = 110;
 const PROMISE_MOVE_LABEL = {
   send_number: "the number is ready and hasn't gone out",
   send_paper: "we said we'd send the written offer and it hasn't gone",
@@ -610,12 +614,20 @@ export function buildPipeline({
     const never = (NEVER_AUTO[d.party] || []).includes(d.intent);
     const x = d.exception;
     if (d.status === "draft") {
-      const hot = never || (x && !x.passed);
-      const title = x && !x.passed && x.theirAmount && x.ceiling
+      // Their yes landed on a house we passed on (2026-10-15): the most
+      // important row of the day, said plainly.
+      const yesAfter = d.yesAfterPass?.offerId ? d.yesAfterPass : null;
+      const hot = never || (x && !x.passed) || Boolean(yesAfter);
+      const title = yesAfter
+        ? `They said yes after we passed: ${d.contactName || "an agent"} on ${String(yesAfter.address || base.address || "the house").split(",")[0]}`
+        : x && !x.passed && x.theirAmount && x.ceiling
         ? `Counter ${money(x.theirAmount)} is ${money(x.theirAmount - x.ceiling)} over the ${money(x.ceiling)} ceiling`
         : `${d.contactName || "Someone"}: ${String(d.intent || "reply").replace(/_/g, " ")}`;
       const id = push({ ...base, kind: "draft_waiting", severity: hot ? "now" : "soon", title,
-        detail: x && !x.passed ? (x.basis || x.reason || "") : (d.autoSend?.reason || ""), ops: [] });
+        ...(yesAfter ? { yesAfterPass: true } : {}),
+        detail: yesAfter
+          ? `they took our ${money(yesAfter.amount)} after we marked it we passed — reopen it, or tell them yourself; the bot's reply waits for you`
+          : x && !x.passed ? (x.basis || x.reason || "") : (d.autoSend?.reason || ""), ops: [] });
       if (card) card.actionIds.push(id);
     } else if (d.status === "scheduled" && d.outbound?.kind === "blast_open") {
       // A blast is one decision, not two hundred rows: one line per deal.
@@ -753,6 +765,36 @@ export function buildPipeline({
         heldOffer ? `underwrite held: ${String(aiHoldReasons(heldOffer)[0]).split(" — ")[0].slice(0, 120)}` : "",
         p.text ? `we said "${String(p.text).slice(0, 90)}"` : p.by === "you" ? "you said it yourself" : ""].filter(Boolean).join(" · "),
       ops: [...(PROMISE_OPS[v.move] || []).filter((o) => v.offerId || !NEEDS_OFFER.has(o.key)), { key: "dismiss_promise", label: "Dismiss" }] });
+  }
+
+  /* --- a call, a time to walk it, the earnest money we promised (2026-10-15) --- */
+  // Only a person keeps these (promise-owed.js owedPersonPromises). A call is
+  // a Call row at the top of the day's calls; the other two are owed rows
+  // like the number above, until they're kept or you dismiss them.
+  for (const p of owedPersonPromises({ events, sentDrafts, offers, now })) {
+    const mine = byContact.get(p.contactId) || [];
+    const theirs = [...sentDrafts, ...drafts].filter((d) => d?.contactId === p.contactId);
+    const named = contactNames[p.contactId] || mine.find((o) => o?.contactName)?.contactName || theirs.find((d) => d.contactName)?.contactName || "";
+    const first = String(named).trim().split(/\s+/)[0] || "";
+    const street = p.address ? String(p.address).split(",")[0] : "";
+    const v = resolvePromise({ promise: { ...p, asksThem: false, owedAt: null }, offers: mine, drafts: theirs, now });
+    const offer = p.address ? mine.find((o) => o?.address && streetKey(o.address) === streetKey(p.address)) : null;
+    const days = Math.floor((now - (ms(p.since) ?? now)) / DAY_MS);
+    const detail = [`promised ${p.dates.join(", again ")}`, days >= 2 ? `${days} days ago` : "",
+      p.text ? `we said "${String(p.text).slice(0, 90)}"` : p.by === "you" ? "you said it yourself" : ""].filter(Boolean).join(" · ");
+    const base = { contactId: p.contactId, contactName: named, address: p.address || "", offerId: offer?.id || null, move: v.move, why: v.reason || "",
+      draftId: null, fromDraftId: p.draftId || null, promisedAt: p.lastAt, severity: "now", group: "yours",
+      title: `Owed: ${PERSON_PROMISE_WORDS[p.what]} to ${first || "an agent"}${street ? ` on ${street}` : ""}`, detail };
+    if (v.move === "call_owed") {
+      push({ ...base, id: `call_owed:${p.contactId}:${p.since}`, kind: "call_owed", section: "call", score: CALL_OWED_SCORE,
+        call: { reason: "call_owed", why: "we said we'd call them", since: p.since, tries: 0, houses: [],
+          goal: `We told them we'd call${street ? ` about ${street}` : ""} (${detail}). Make the call, or text them a time that works and keep it.`,
+          opener: `Hi ${first || "there"}, it's Matt — calling like I said I would${street ? ` about ${street}` : ""}.` },
+        ops: [{ key: "dismiss_promise", label: "Dismiss" }] });
+    } else {
+      push({ ...base, id: `number_owed:${p.contactId}:${p.what}:${p.since}`, kind: "number_owed", what: p.what,
+        ops: [...(offer ? [{ key: "open_editor", label: "Open the offer", intent: "secondary" }] : []), { key: "dismiss_promise", label: "Dismiss" }] });
+    }
   }
 
   // Timers: rows the machine clears by itself after a wait (driver.timers).

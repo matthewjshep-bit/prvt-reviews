@@ -422,3 +422,15 @@ test("'it's currently under contract' marks the house gone", () => {
   assert.equal(houseGone("It's currently under contract as a short sale.", "status_check"), true);
   assert.equal(houseGone("It's still pending", ""), true);
 });
+
+// 2026-10-15: a yes to our number is never closed out by the sweep.
+test("a house they said yes on is yours, never retired by the sweep", () => {
+  const yes = inbound("They're willing to accept it, all cash, close in two weeks", { createdAt: ago(STALE_DAYS + 3) });
+  const old = held({ createdAt: ago(STALE_DAYS + 5), updatedAt: ago(STALE_DAYS + 5), autoUnderwrite: { held: [THIN], finishedAt: ago(STALE_DAYS + 5) } });
+  const t = triage({ offer: old, drafts: [yes], now: NOW });
+  assert.equal(t.action, "yours", t.reason);
+  assert.match(t.reason, /said yes to our number/);
+  // Without the yes the same silence retires it.
+  const quiet = triage({ offer: old, drafts: [inbound("ok thanks", { createdAt: ago(STALE_DAYS + 3) })], now: NOW });
+  assert.equal(quiet.action, "retire");
+});

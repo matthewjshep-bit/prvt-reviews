@@ -36,3 +36,31 @@ export function holdState(offer, { lastInboundAt = null, lastOutboundAt = null, 
     ? { next: "pass", why: `held at ${kText(h.ours)}; ${unmoved} check-in${unmoved === 1 ? "" : "s"} and they didn't move` }
     : { next: "nudge", why: `check-in ${unmoved + 1} of ${checkIns} after the hold` };
 }
+
+/**
+ * closeCounter({ ours, theirs, pct }) → { pct } | null
+ *
+ * Their counter is within `pct` percent above our number (2026-10-15, the
+ * funnel review: counters within 5% agreed 13 times in 25, past 25% never).
+ * Close enough that a phone call lands it and a held number by text loses
+ * it. `pct` 0 is off.
+ */
+export function closeCounter({ ours = 0, theirs = 0, pct = 10 } = {}) {
+  const o = Math.round(Number(ours) || 0), t = Math.round(Number(theirs) || 0), limit = Number(pct) || 0;
+  if (!(limit > 0) || !(o > 0) || !(t > o)) return null;
+  const gap = ((t - o) / o) * 100;
+  return gap <= limit ? { pct: Math.round(gap * 10) / 10 } : null;
+}
+
+/**
+ * callsInstead(offer, pct) → true when their newest counter came in after our
+ * hold and is close to our number (closeCounter): the hold's clock stands
+ * down — no check-in, no pass — and the counter is a call again.
+ */
+export function callsInstead(offer, pct = 10) {
+  const h = offer?.counterHold;
+  const c = offer?.counter;
+  if (!h?.at || !(Number(c?.amount) > 0)) return false;
+  if ((ms(c.at) ?? 0) <= (ms(h.at) ?? 0)) return false;
+  return Boolean(closeCounter({ ours: Number(h.ours) || Number(offer.cashAmount) || 0, theirs: c.amount, pct }));
+}

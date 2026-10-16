@@ -299,6 +299,15 @@ test("a counter draft with a failed band exception is a now action carrying the 
   assert.deepEqual(r.cards[0].draftIds, ["d1"]);
 });
 
+test("their yes after we passed is a now row that says so", () => {
+  const r = build({ offers: [offer({ status: "we_passed", cashAmount: 261000 })],
+    drafts: [draft({ intent: "question", contactName: "Dana Agent", yesAfterPass: { offerId: "o1", address: "12 Elm St, Renton, WA", amount: 261000 } })] });
+  const a = r.actions.find((x) => x.kind === "draft_waiting");
+  assert.equal(a.severity, "now");
+  assert.equal(a.title, "They said yes after we passed: Dana Agent on 12 Elm St");
+  assert.match(a.detail, /took our \$261,000/);
+});
+
 test("a counter draft inside the band still waits on a person but is not urgent", () => {
   const r = build({ offers: [offer({ status: "countered" })],
     drafts: [draft({ intent: "question", exception: { passed: true, theirAmount: 280000, ceiling: 292000 } })] });
@@ -865,4 +874,21 @@ test("an owed row inside the first three days stands aside for the promise row a
   const r = build({ events: [made(30), owed({ at: H(26) })] });
   assert.ok(promiseRow(r));
   assert.equal(owedRow(r), undefined);
+});
+
+/* ---------- a call we promised (2026-10-15) ---------- */
+
+test("a call we promised is a Call row at the top of the day; a walk-through time is an owed row", () => {
+  const callMade = { type: "promise_made", contactId: "a1", at: D(2), address: "12 Elm St, Renton, WA", data: { what: "call", text: "I'll give you a call tomorrow.", draftId: "s1" } };
+  const r = build({ offers: [offer()], events: [callMade] });
+  const row = r.actions.find((a) => a.kind === "call_owed");
+  assert.ok(row, "the call row");
+  assert.equal(row.section, "call");
+  assert.equal(row.title, "Owed: a call to Sarah on 12 Elm St");
+  assert.ok(row.score > 105, "ahead of a missed call");
+  assert.match(row.call.opener, /calling like I said I would/);
+  assert.ok(!r.actions.some((a) => a.kind === "promise_owed" || (a.kind === "number_owed" && a.what !== "tour")), "not a 'we owe them an answer' row");
+  const tourMade = { ...callMade, data: { what: "tour", text: "I'll get you a time to walk it.", draftId: "s2" } };
+  const t = build({ offers: [offer()], events: [tourMade] }).actions.find((a) => a.kind === "number_owed");
+  assert.equal(t.title, "Owed: a time to walk it to Sarah on 12 Elm St");
 });

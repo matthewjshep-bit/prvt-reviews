@@ -149,6 +149,8 @@ export default function CallCard({ item, targets = {}, onDone, phone: givenPhone
   return (
     <div className="mt-2 space-y-1.5 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2" aria-label="The call">
       {call.goal && <p className="text-sm font-semibold text-emerald-900">{call.goal}</p>}
+      {/* What put this call near the top of the day (shared/call-list.js CALL_BOOSTS). */}
+      {call.boosts?.length ? <p className="text-xs text-emerald-800">Up the list: {call.boosts.map((b) => b.label).join(" · ")}</p> : null}
       <CallHouses houses={call.houses || []} counter={item.counter || null} />
       {call.opener && (
         <p className="text-sm text-emerald-950">

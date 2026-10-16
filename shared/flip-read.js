@@ -147,7 +147,56 @@ export const QUALIFY_PASSES = [
   `Good to know. We buy ${OUR_BOX_WORDS}. If a seller who has to move by a date crosses your desk, on or off-market, I'd love a look.`,
 ];
 
+// The call ask (2026-10-15). The funnel review: all 8 contracts from outreach
+// agents came after a phone call, agents who talked brought us houses 54% of
+// the time against 8%, and only 15% of the agents who answered ever talked.
+// So their first answer gets one closing question that asks for both: other
+// fixers, and a quick call. No times — no calendar is connected, so we ask
+// what works for them. parties.agent.callAsk, off by default.
+export const FIXERS_CALL_ASKS = [
+  "If you've got other fixers on your radar, I'd love a quick 5-minute call this week, what time works?",
+  "If anything else rough is on your radar, I'd love a quick 5-minute call this week, what time works for you?",
+  "If you've got other fixers coming up, a quick 5-minute call this week would be great, what time works?",
+];
+// The question and the pass, with the call ask in them: still one question
+// about the house (QUALIFY_ASK_RX reads it), and the pass still asks for
+// others, on or off-market.
+export const QUALIFY_ASKS_CALL = [
+  "Good to know. Big-ticket stuff like roof or foundation, or more of a refresh? I'd love the seller's story, and any other fixers you've got, on a quick 5-minute call this week, what time works?",
+  "Appreciate it. Real repairs like roof, foundation or systems, or more of a refresh? Easier to hear the seller's situation and anything else you've got on a quick 5-minute call this week, what time works?",
+  "Helpful, thanks. Is it the big stuff like roof or foundation, or mostly cosmetic? I'd love the seller's story, and any other fixers, on a quick 5-minute call this week, what time works?",
+];
+export const QUALIFY_PASSES_CALL = [
+  `Thanks, sounds too nice for us. We buy ${OUR_BOX_WORDS}. If you've got other fixers on your radar, on or off-market, I'd love a quick 5-minute call this week, what time works?`,
+  `Appreciate it. Lighter than we go for: ${OUR_BOX_WORDS}. If anything like that is on your radar, listed or off-market, I'd love a quick 5-minute call this week, what time works?`,
+  `Good to know. We buy ${OUR_BOX_WORDS}. If you've got other fixers coming up, on or off-market, a quick 5-minute call this week would be great, what time works?`,
+];
+// Our text asked for a call, in any words. What the send records
+// (call_asked), and what tells the backstop the model already asked.
+export const CALL_ASK_RX = /\b(?:quick|short|(?:5|five|10|ten|15|fifteen)[\s-]?min(?:ute)?s?)\s+(?:phone\s+)?(?:call|chat)\b|\b(?:hop|jump)\s+on\s+(?:a|the)\s+(?:quick\s+)?(?:phone|call)\b|\bgive\s+you\s+a\s+(?:quick\s+)?(?:call|ring)\s+(?:this|next)\s+week\b/i;
+// …and asked for other houses (fixers_asked).
+export const FIXERS_ASK_RX = /\b(?:other|more)\s+(?:fixers?|fixer[\s-]uppers?|projects|flips)\b|\banything\s+else\s+(?:rough|distressed|sitting|that\s+needs\s+work|like\s+that)\b|\bon\s+your\s+radar\b/i;
+
 const pick = (list, variant) => list[Math.abs(Math.round(Number(variant) || 0)) % list.length];
+
+/**
+ * withCallAsk(reply, variant) → the reply, ending on our one call ask
+ *
+ * The backstop for a first answer the model didn't close with the call ask.
+ * A reply that already asks for a call is left alone; one that ends on a
+ * question about other houses or staying in touch has that question taken
+ * over by the call ask, so the text still asks one thing.
+ */
+export function withCallAsk(reply = "", variant = 0) {
+  const said = String(reply || "").trim();
+  if (CALL_ASK_RX.test(said)) return said;
+  const ask = pick(FIXERS_CALL_ASKS, variant);
+  if (!said) return ask;
+  const parts = said.split(/(?<=[.!?])\s+/);
+  const last = parts.at(-1) || "";
+  const replaceable = /\?\s*$/.test(last) && (FIXERS_ASK_RX.test(last) || /\bstay\s+in\s+touch\b|\bkeep\s+(?:me|us)\s+in\s+mind\b|\bneeds?\s+(?:real\s+)?work\b|\boff[\s-]?market\b/i.test(last));
+  return [...(replaceable ? parts.slice(0, -1) : parts), ask].join(" ").trim();
+}
 
 /**
  * qualifyStep({ words, asked, passed, agentRehab, variant }) → { move, read, reply }
@@ -158,14 +207,16 @@ const pick = (list, variant) => list[Math.abs(Math.round(Number(variant) || 0)) 
  *   move "closed"      we already passed and it still doesn't qualify
  *
  * `words` is everything they've said about it since the first text; `asked`
- * and `passed` are whether our question / our pass already went.
+ * and `passed` are whether our question / our pass already went; `callAsk`
+ * puts the call ask in the question or the pass.
  */
-export function qualifyStep({ words = "", asked = false, passed = false, agentRehab = 0, variant = 0 } = {}) {
+export function qualifyStep({ words = "", asked = false, passed = false, agentRehab = 0, variant = 0, callAsk = false } = {}) {
   const read = flipRead(words, { agentRehab });
   if (read.qualifies) return { move: "underwrite", read, reply: "" };
   if (passed) return { move: "closed", read, reply: "Appreciate it. Keep me in mind if anything rougher comes up." };
-  if (asked || saysTurnkey(words)) return { move: "pass", read, reply: pick(QUALIFY_PASSES, variant) };
-  return { move: "ask", read, reply: pick(QUALIFY_ASKS, variant) };
+  // `callAsk`: the ask and the pass carry the call ask (FIXERS_CALL_ASKS).
+  if (asked || saysTurnkey(words)) return { move: "pass", read, reply: pick(callAsk ? QUALIFY_PASSES_CALL : QUALIFY_PASSES, variant) };
+  return { move: "ask", read, reply: pick(callAsk ? QUALIFY_ASKS_CALL : QUALIFY_ASKS, variant) };
 }
 
 /**
@@ -206,7 +257,8 @@ const OUR_PASS_RX = [
   /\b(?:too|more)\s+(?:turnkey|finished|nice)\s+(?:for\s+us|than\s+what\s+we)\b/i,
   /\b(?:mostly|usually|really)\s+after\s+(?:places|houses|homes|stuff|properties)\s+(?:that\s+)?need(?:ing|s)?\s+(?:real\s+|more\s+)?work\b/i,
   /\boutside\s+the\s+box\s+for\s+us\b/i,
-  /\b(?:we(?:'d|'ve|\s+have|\s+had)?|i(?:'ve)?)\s+(?:already\s+)?moved\s+on\s+from\s+(?:that|this)\s+one\b/i,
+  // "We've actually moved on from this one" (2026-10-15) said it too.
+  /\b(?:we(?:'d|'ve|\s+have|\s+had)?|i(?:'ve)?)\s+(?:(?:already|actually|just|kind\s+of|since)\s+)?moved\s+on\s+from\s+(?:that|this)\s+one\b/i,
   /\b(?:we'?ll|we\s+will|going\s+to|gonna)\s+pass\s+on\s+(?:that|this|it)\b/i,
 ];
 // The same reply still chasing a house — ours or another one ("pass on 184th,

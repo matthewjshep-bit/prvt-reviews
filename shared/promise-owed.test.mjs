@@ -41,3 +41,38 @@ test("a house with nothing promised and nothing of theirs waiting owes nothing",
   assert.equal(owedOnHouse({ address: "12 Elm St, Renton, WA", events: [], drafts: [] }), null);
   assert.equal(owedOnHouse({ address: "", events: [{ type: "promise_made", contactId: "c1", at: "2026-10-01T18:00:00Z", data: { what: "number" } }] }), null);
 });
+
+/* ---------- a call, a time to walk it, the earnest money (2026-10-15) ---------- */
+
+import { owedPersonPromises } from "./promise-owed.js";
+const NOW2 = Date.parse("2026-10-15T20:00:00Z");
+const hrs = (h) => new Date(NOW2 - h * 3600000).toISOString();
+const made = (what, h, text, over = {}) => ({ type: "promise_made", contactId: "c1", at: hrs(h), address: "12 Elm St, Renton, WA", data: { what, text, draftId: `d${h}` }, ...over });
+
+test("a call we promised is owed until a call is made or tried; a dismissal clears it, a price doesn't", () => {
+  const call = made("call", 30, "I'll give you a call tomorrow.");
+  const owed = owedPersonPromises({ events: [call], now: NOW2 });
+  assert.equal(owed.length, 1);
+  assert.equal(owed[0].what, "call");
+  assert.equal(owedPersonPromises({ events: [made("call", 5, "I'll call you later")], now: NOW2 }).length, 0, "not a day old yet");
+  const talked = { type: "call_summary", contactId: "c1", at: hrs(20), data: { transcribed: true, durationSec: 240 } };
+  assert.equal(owedPersonPromises({ events: [call, talked], now: NOW2 }).length, 0, "a connected call keeps it");
+  const tried = { type: "call_attempt", contactId: "c1", at: hrs(20), data: { outcome: "no_answer", direction: "outbound" } };
+  assert.equal(owedPersonPromises({ events: [call, tried], now: NOW2 }).length, 0, "a call we tried keeps it");
+  const theyRang = { type: "call_attempt", contactId: "c1", at: hrs(20), data: { outcome: "no_answer", direction: "inbound" } };
+  assert.equal(owedPersonPromises({ events: [call, theyRang], now: NOW2 }).length, 1, "their missed call doesn't");
+  assert.equal(owedPersonPromises({ events: [call, { type: "promise_kept", contactId: "c1", at: hrs(10), data: { by: "our_number" } }], now: NOW2 }).length, 1);
+  assert.equal(owedPersonPromises({ events: [call, { type: "promise_kept", contactId: "c1", at: hrs(10), data: { by: "dismissed" } }], now: NOW2 }).length, 0);
+});
+
+test("a walk-through time is kept by a booking or a text of ours with a time; the earnest money by the checklist", () => {
+  const tour = made("tour", 30, "I'll get you a time to walk it this week.");
+  assert.equal(owedPersonPromises({ events: [tour], now: NOW2 })[0].what, "tour");
+  const sent = [{ contactId: "c1", status: "sent", sentAt: hrs(20), reply: "Could we walk it Thursday at 2?" }];
+  assert.equal(owedPersonPromises({ events: [tour], sentDrafts: sent, now: NOW2 }).length, 0);
+  assert.equal(owedPersonPromises({ events: [tour, { type: "call_booked", contactId: "c1", at: hrs(2) }], now: NOW2 }).length, 0);
+  const emd = made("emd", 50, "We'll get the earnest money over to title Monday.");
+  assert.equal(owedPersonPromises({ events: [emd], now: NOW2 })[0].what, "emd");
+  const deal = { contactId: "c1", address: "12 Elm St, Renton, WA", deal: { stage: "under_contract", checklist: { items: [{ id: "earnest_money", done: true }] } } };
+  assert.equal(owedPersonPromises({ events: [emd], offers: [deal], now: NOW2 }).length, 0);
+});
