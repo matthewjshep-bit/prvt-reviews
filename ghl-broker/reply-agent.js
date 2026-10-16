@@ -101,6 +101,7 @@ import {
   investorFacingPrice, INVESTOR_DEAL_STAGES } from "./conversation-context.js";
 import {
   buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext, CARRIER_CHECKED_KINDS, OPENING_MOVES,
+  openerPlan,
 } from "./conversation-prompt.js";
 import { carrierFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
@@ -3146,6 +3147,13 @@ export async function writeAgainWithoutCarrierWords({ draft, kind, redraft }) {
   return again?.reply && carrierFlags(again.reply).length < before.length ? again : draft;
 }
 
+// The opener's choices, kept on the draft's outbound (openerPlan): small
+// numbers and the one detail, never the examples themselves.
+function openerChoices(outbound = {}) {
+  const p = openerPlan(outbound);
+  return { variant: p.variant, move: p.moveIndex, who: p.whoIndex, notice: p.notice || "", turnkey: p.turnkey, examplesHash: p.examplesHash };
+}
+
 // The cold open and its nudge never sign off: GHL puts "Thanks, Matt" and
 // "No worries if not can stop" on the first text a contact gets, so a sign-off
 // the model wrote anyway would reach the agent twice (Matt, 2026-10-05).
@@ -3365,6 +3373,9 @@ async function runProactive(job, ctx) {
       ...(outbound.step != null ? { step: outbound.step, steps: subject?.steps || [], stepLabel: outbound.stepLabel } : {}),
       ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: subject?.listingKey || null } : {}),
       ...((kind === "outreach_open" || kind === "outreach_nudge") && outbound.county ? { county: outbound.county } : {}),
+      // Which first text this was (conversation-prompt.js openerPlan), so
+      // replies can be read back by opening, voice and detail.
+      ...(kind === "outreach_open" ? openerChoices(outbound) : {}),
     },
     reply: draft.reply, intent: kind, confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
     usage: draft.usage || null, shadow: shadowRow(draft.shadow, gateFor),
@@ -5814,7 +5825,12 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       store, locationId, contactId: d.contactId, party: "agent", type: "outreach_sent", at: ts,
       address: d.outbound.address || d.propertyAddress || "", source: "conversation", ref: d.id,
       dedupeKey: `outreach:${d.contactId}:${d.id}`,
-      data: { draftId: d.id, auto: Boolean(auto), contactName: d.contactName || "", ...(d.outbound.county ? { county: d.outbound.county } : {}) },
+      data: { draftId: d.id, auto: Boolean(auto), contactName: d.contactName || "", ...(d.outbound.county ? { county: d.outbound.county } : {}),
+        // What went, for reading replies by opening (2026-10-15): the
+        // variant and opening move it was written from, whether it was a
+        // turnkey seat, how long it was, and whether a person changed it.
+        ...(d.outbound.variant != null ? { variant: d.outbound.variant, openingMove: d.outbound.move } : {}),
+        turnkey: d.outbound.turnkey === true, chars: body.length, edited: Boolean(updated.edited) },
     }).catch(() => {});
   }
   // A reply that promised to come back starts a clock (promise-sweep.js). The

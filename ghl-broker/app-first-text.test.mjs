@@ -16,8 +16,8 @@ import assert from "node:assert/strict";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "app-first-text-test-"));
 process.env.OUTREACH_IMPORTS_ENABLED = "true";
 
-const { outboundOpening, OPENING_MOVES, WHO_WE_ARE } = await import("./conversation-prompt.js");
-const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText, writeWithoutOverused } = await import("./reply-agent.js");
+const { outboundOpening, OPENING_MOVES, WHO_WE_ARE, openerPlan } = await import("./conversation-prompt.js");
+const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText, writeWithoutOverused, startProactive, sendReplyDraft } = await import("./reply-agent.js");
 const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
 const { normalizeOutreachAutopilot, startOutreachSweep, _resetJobs } = await import("./outreach-sweep.js");
 const { store } = await import("./store.js");
@@ -250,6 +250,38 @@ test("a turnkey seat whose first text a deploy lost is sent the turnkey text too
   assert.equal(asked[0].contactId, r.results[0].contactId);
   assert.equal(asked[0].hook.turnkey, true, "the lost retry keeps the flag");
   assert.equal(asked[0].hook.city, "Auburn");
+});
+
+test("a first text that went says which one it was: its variant, opening move, turnkey seat, length, and whether a person changed it", async () => {
+  const L = "loc-first-text-plan";
+  const saved = { aiApiKey: "test-key", conversationAi: { enabled: true, parties: { agent: { outreach: { enabled: true } } } } };
+  const client = { call: async (p) => (p === "/conversations/messages" ? { messageId: "m-plan" } : {}) };
+  const reply = "Hi Dana, saw 3 Shine Ct in Kent and it looks pretty finished. Do you ever get ones that need a little work?";
+  const subject = { address: "3 Shine Ct, Kent, WA", county: "King", city: "Kent", variant: 7, house: { yearBuilt: 1958, turnkey: true } };
+  const { job, skipped } = await startProactive({ client, locationId: L, saved, store, contactId: "c-plan", kind: "outreach_open", subject,
+    deps: { draft: async () => ({ reply, summary: "s", confidence: "high", needsHuman: false }) } });
+  assert.ok(job, skipped);
+  for (let i = 0; i < 100 && !["done", "held", "error"].includes(job.status); i++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(job.status, "done", job.error || job.heldReason);
+  const d = await store.getReplyDraft(job.draftId);
+  const plan = openerPlan(outboundDescriptor({ kind: "outreach_open", offer: null, saved, subject }));
+  assert.equal(d.outbound.variant, 7);
+  assert.equal(d.outbound.move, 7 % OPENING_MOVES.length);
+  assert.equal(d.outbound.who, 7 % WHO_WE_ARE.length);
+  assert.equal(d.outbound.notice, "built in the 1950s");
+  assert.equal(d.outbound.turnkey, true);
+  assert.equal(d.outbound.examplesHash, plan.examplesHash);
+  assert.ok(d.outbound.examplesHash, "which examples it was written from");
+
+  const edited = `${reply} Happy to chat.`;
+  await sendReplyDraft({ client, store, locationId: L, draftId: d.id, text: edited, live: true });
+  const [sent] = await store.listContactEvents(L, "c-plan", { types: ["outreach_sent"] });
+  assert.equal(sent.data.variant, 7);
+  assert.equal(sent.data.openingMove, 7 % OPENING_MOVES.length);
+  assert.equal(sent.data.turnkey, true);
+  assert.equal(sent.data.chars, edited.length);
+  assert.equal(sent.data.edited, true);
+  assert.equal(openerPlan({ examples: ["a", "b"], variant: 3 }).lead, "b", "the lead example is the one the prompt leads with");
 });
 
 test("the first six with house details came out alike, so each agent gets its own opening move and its own detail", () => {

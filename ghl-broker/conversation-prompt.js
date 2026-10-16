@@ -598,6 +598,39 @@ export const OPENING_MOVES = [
   "start with your question about the house, then who you are",
 ];
 
+// A short, stable fingerprint of the examples list, so a sent first text says
+// which set of Matt's examples it was written from.
+function examplesHash(ex = []) {
+  let h = 0;
+  for (const ch of ex.join("\n")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return ex.length ? h.toString(36) : "";
+}
+
+/**
+ * openerPlan(o) → { variant, lead, voice, move, moveIndex, who, whoIndex,
+ *   notice, town, turnkey, examplesHash }
+ *
+ * The choices behind one agent's first text (outreach_open), all from
+ * `variant` (the contact id's hash): which of Matt's examples leads, the
+ * opening move, the way we say who we are, and the one detail to notice.
+ * The prompt is built from it, and the draft keeps it, so which first texts
+ * get answers can be read back by variant (2026-10-15).
+ */
+export function openerPlan(o = {}) {
+  const ex = Array.isArray(o.examples) ? o.examples : [];
+  const lead = ex.length ? ex[(Number(o.variant) || 0) % ex.length] : "";
+  const voice = lead ? [lead, ...ex.filter((x) => x !== lead)] : [];
+  const details = Array.isArray(o.details) ? o.details.filter(Boolean) : [];
+  const v = Math.max(0, Math.round(Number(o.variant) || 0));
+  const moveIndex = v % OPENING_MOVES.length;
+  const town = (details.find((d) => d.startsWith("it's in ")) || "").replace("it's in ", "");
+  const others = details.filter((d) => !d.startsWith("it's in "));
+  const notice = others.length ? others[Math.floor(v / OPENING_MOVES.length) % others.length] : "";
+  const whoIndex = v % WHO_WE_ARE.length;
+  return { variant: v, lead, voice, move: OPENING_MOVES[moveIndex], moveIndex, who: WHO_WE_ARE[whoIndex], whoIndex,
+    notice, town, turnkey: o.turnkey === true, examplesHash: examplesHash(ex) };
+}
+
 function openingFor(outbound) {
   if (!outbound?.kind) return "";
   const o = outbound;
@@ -678,25 +711,16 @@ function openingFor(outbound) {
       // county the listing is in. GHL puts the stop line on the end itself.
       const street = o.address.split(",")[0];
       const where = o.county ? `${o.county} County` : "the area";
-      const ex = Array.isArray(o.examples) ? o.examples : [];
-      const lead = ex.length ? ex[(Number(o.variant) || 0) % ex.length] : "";
-      const voice = lead ? [lead, ...ex.filter((x) => x !== lead)] : [];
       // 2026-10-05: more of Matt in it — one real detail from the listing,
       // so the agent can tell somebody looked, and room for a light touch of
       // humour. Still short, still no pitch.
-      const details = Array.isArray(o.details) ? o.details.filter(Boolean) : [];
       // The first live batch with details (2026-10-05) came out five of six
       // alike: the bot always picked the decade and blended the examples into
       // one formula. So each agent gets its own opening move and its own
-      // detail to notice, both from `variant` (the contact id's hash).
-      const v = Math.max(0, Math.round(Number(o.variant) || 0));
-      const move = OPENING_MOVES[v % OPENING_MOVES.length];
-      const town = (details.find((d) => d.startsWith("it's in ")) || "").replace("it's in ", "");
-      const others = details.filter((d) => !d.startsWith("it's in "));
-      const notice = others.length ? others[Math.floor(v / OPENING_MOVES.length) % others.length] : "";
-      // …and its own way of saying who we are: 30 of the 45 drafts on
-      // 2026-10-05 said "hunting for my next flip", 10 "Seattle flipper".
-      const who = WHO_WE_ARE[v % WHO_WE_ARE.length];
+      // detail to notice, both from `variant` (the contact id's hash) — and
+      // its own way of saying who we are: 30 of the 45 drafts on 2026-10-05
+      // said "hunting for my next flip", 10 "Seattle flipper" (openerPlan).
+      const { voice, move, town, notice, who } = openerPlan(o);
       return `${START} This is the FIRST text this listing agent has ever had from us, about their listing at ` +
         `${o.address}. Write it the way Matt texts: a friendly local flipper who is easy to talk to, warm and a little ` +
         `funny, never a pitch. Two or three short sentences that: mention their listing on ${street}, say who you are, say ` +

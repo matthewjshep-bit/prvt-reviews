@@ -4839,6 +4839,16 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   memory without recording a skip. The retry also picks up any contact the
   app created to text (`import` event with `openWith: "app"`) more than 2
   hours ago that has no draft of any kind.
+- **Which first text went (2026-10-15).** `openerPlan(o)` in
+  `conversation-prompt.js` makes every per-agent choice from `variant`: the
+  lead example, the opening move, the way we say who we are and the one detail
+  to notice. The prompt is built from it. The draft's `outbound` keeps
+  `variant`, `move` (index into `OPENING_MOVES`), `who` (index into
+  `WHO_WE_ARE`), `notice`, `turnkey` and `examplesHash` (which saved examples
+  it was written from). The `outreach_sent` event adds `variant`,
+  `openingMove`, `turnkey`, `chars` (the length that went) and `edited` (a
+  person changed it). No switch. Check: an `outreach_sent` event's `data` on
+  any agent texted after the deploy.
 - **Samples.** "Write 3 sample first texts" under the examples box
   (`POST /api/outreach/opener/preview`) drafts texts for agents waiting in the
   autopilot batches. Nothing is imported, saved or sent.
