@@ -67,7 +67,7 @@ import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcce
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
-import { qualifyStep, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
+import { qualifyStep, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
@@ -1806,6 +1806,13 @@ const CALL_ASK_LINE =
   "quick call, in your words or these: \"If you've got other fixers on your radar, I'd love a quick 5-minute call this week, what " +
   "time works?\" Never name a day or a time (there's no calendar: they pick), and ask nothing else in the same text. Leave it out " +
   "if they brought up a house of their own (that house is the lead) or don't want to hear from us.";
+// The same, without the call (parties.agent.callAsk off): the first text
+// carries no other-fixers line, so their first answer always asks for one.
+const FIXERS_ASK_LINE =
+  "FIRST ANSWER: this is their first answer to our first text. Close with ONE question asking whether they have other " +
+  "fixers on their radar, on or off-market, in your words or these: \"If you've got other fixers on your radar, on or " +
+  "off-market, I'm all ears.\" Ask nothing else in the same text. Leave it out if they brought up a house of their own " +
+  "(that house is the lead) or don't want to hear from us.";
 // Replies the call ask never rides on: the conversation turned, or a person has it.
 const CALL_ASK_SKIP_INTENTS = new Set(["counter", "acceptance", "realm_yes", "rejection", "proof_of_funds", "opt_out", "wants_call", "scheduling", "wants_walkthrough", "media"]);
 
@@ -3839,11 +3846,14 @@ async function runReply(job, ctx) {
   // The call ask (2026-10-15): their first answer to our first text closes
   // with one question — other fixers, and a quick call this week. Texts
   // only, once, never to someone annoyed; parties.agent.callAsk, off.
-  const callAsk = party === "agent" && !isCall && config.parties?.agent?.callAsk?.enabled
+  // Off, their first answer still closes on the other-fixers ask alone.
+  const callOn = Boolean(config.parties?.agent?.callAsk?.enabled);
+  const firstAnswer = party === "agent" && !isCall
     ? callAskFor({ events: (await store.listContactEvents?.(locationId, job.contactId, { types: ["outreach_sent", "outreach_enrolled", "call_asked"], limit: 50 }).catch(() => [])) || [],
       transcript: a.transcript, message: job.originalMessage || job.message, ice: iceHouse })
     : null;
-  const extraText = [bookingText, partnerTermsLine(terms), callAsk?.first ? CALL_ASK_LINE : ""].filter(Boolean).join("\n\n");
+  const callAsk = callOn ? firstAnswer : null;
+  const extraText = [bookingText, partnerTermsLine(terms), firstAnswer?.first ? (callOn ? CALL_ASK_LINE : FIXERS_ASK_LINE) : ""].filter(Boolean).join("\n\n");
   const draftContext = extraText ? { ...context, text: [context.text, extraText].filter(Boolean).join("\n\n") } : context;
 
   /* --- 2. the draft --- */
@@ -4206,7 +4216,7 @@ async function runReply(job, ctx) {
     draft = { ...draft, intent: "status_check", reclassifiedFrom: "other" };
     job.intent = draft.intent;
   }
-  // An answer to our first text that fits no intent — Steven Jansen's "Its
+  // An answer to our first text that fits no intent — an agent's "Its
   // for sale", Michael Lindekugel's "Not my place to judge the condition"
   // (2026-09-15) — sat as "a person's call" and the thread stalled. It is
   // them answering us: the reply that keeps it going sends, provided it names
@@ -4232,6 +4242,9 @@ async function runReply(job, ctx) {
   if (callAsk?.first && !qualifyHeld && !numberFirst && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
       && String(draft.reply || "").trim() && !CALL_ASK_RX.test(draft.reply)) {
     draft = { ...draft, reply: withCallAsk(draft.reply, openerVariant(job.contactId, 3)), callAskAdded: true };
+  } else if (!callOn && firstAnswer?.first && !qualifyHeld && !numberFirst && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
+      && String(draft.reply || "").trim() && !FIXERS_ASK_RX.test(draft.reply)) {
+    draft = { ...draft, reply: withFixersAsk(draft.reply, openerVariant(job.contactId, 3)), fixersAskAdded: true };
   }
 
   // The model read an opt-out the keywords didn't catch ("lose my number",

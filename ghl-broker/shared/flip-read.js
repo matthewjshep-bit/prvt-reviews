@@ -161,6 +161,14 @@ export const FIXERS_CALL_ASKS = [
   "If anything else rough is on your radar, I'd love a quick 5-minute call this week, what time works for you?",
   "If you've got other fixers coming up, a quick 5-minute call this week would be great, what time works?",
 ];
+// The same first-answer ask without the call, for when the call ask is off:
+// the first text no longer carries the other-fixers line (2026-10-15), so
+// their first answer is where we ask for the next house either way.
+export const FIXERS_ASKS = [
+  "If you've got other fixers on your radar, on or off-market, I'm all ears.",
+  "Anything else rough on your radar, listed or not? I'd love a first look.",
+  "If you've got other fixers coming up, on or off-market, send them my way.",
+];
 // The question and the pass, with the call ask in them: still one question
 // about the house (QUALIFY_ASK_RX reads it), and the pass still asks for
 // others, on or off-market.
@@ -198,6 +206,24 @@ export function withCallAsk(reply = "", variant = 0) {
   const parts = said.split(/(?<=[.!?])\s+/);
   const last = parts.at(-1) || "";
   const replaceable = /\?\s*$/.test(last) && (FIXERS_ASK_RX.test(last) || /\bstay\s+in\s+touch\b|\bkeep\s+(?:me|us)\s+in\s+mind\b|\bneeds?\s+(?:real\s+)?work\b|\boff[\s-]?market\b/i.test(last));
+  return [...(replaceable ? parts.slice(0, -1) : parts), ask].join(" ").trim();
+}
+
+/**
+ * withFixersAsk(reply, variant) → the reply, ending on our ask for their other fixers
+ *
+ * withCallAsk's twin for when the call ask is off. A reply that already asks
+ * for other houses is left alone; one ending on a stay-in-touch question has
+ * it taken over, so the text still asks one thing.
+ */
+export function withFixersAsk(reply = "", variant = 0) {
+  const said = String(reply || "").trim();
+  if (FIXERS_ASK_RX.test(said)) return said;
+  const ask = pick(FIXERS_ASKS, variant);
+  if (!said) return ask;
+  const parts = said.split(/(?<=[.!?])\s+/);
+  const last = parts.at(-1) || "";
+  const replaceable = /\?\s*$/.test(last) && /\bstay\s+in\s+touch\b|\bkeep\s+(?:me|us)\s+in\s+mind\b|\bneeds?\s+(?:real\s+)?work\b|\boff[\s-]?market\b/i.test(last);
   return [...(replaceable ? parts.slice(0, -1) : parts), ask].join(" ").trim();
 }
 

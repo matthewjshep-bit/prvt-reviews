@@ -147,3 +147,15 @@ test("the backstop ends the reply on the call ask, taking over a closing ask for
   const already = "Appreciate it. Got 5 minutes for a quick call this week?";
   assert.equal(withCallAsk(already), already, "a reply that already asks for a call is left alone");
 });
+
+test("withFixersAsk ends a reply on one ask for other fixers, and leaves a reply that already asks alone", async () => {
+  const { withFixersAsk, FIXERS_ASK_RX, CALL_ASK_RX } = await import("./flip-read.js");
+  const t = withFixersAsk("Makes sense, that one's not for us then.", 0);
+  assert.match(t, FIXERS_ASK_RX);
+  assert.doesNotMatch(t, CALL_ASK_RX);
+  const already = "Got it. Anything else sitting that needs work?";
+  assert.equal(withFixersAsk(already, 1), already);
+  const swapped = withFixersAsk("Thanks! Keep me in mind?", 2);
+  assert.doesNotMatch(swapped, /keep me in mind/i, "the stay-in-touch question is taken over");
+  assert.equal((swapped.match(/\?/g) || []).length <= 1, true);
+});

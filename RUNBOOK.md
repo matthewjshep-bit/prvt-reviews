@@ -3482,6 +3482,11 @@ counter, yes, no, opt-out, or a reply asking for a call or a time, never to
 someone who sounds annoyed, and only once: the send records `call_asked`
 (and `fixers_asked` when the text asks for other houses).
 
+**With the switch off,** the first answer still closes on the other-fixers
+ask alone (`FIXERS_ASKS`, `withFixersAsk`), because the first text no longer
+carries that line. Same rules: first answer only, not when they brought a
+house of their own, not on a counter, yes, no or opt-out.
+
 **A turnkey reply is a small call (`call_turnkey_week`).** The call list
 dropped turnkey first replies on 2026-10-08. They're back for 7 days at score
 50 (below a lead's 70): "what else are you working on?". Today's calls shows

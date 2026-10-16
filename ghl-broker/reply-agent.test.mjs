@@ -7587,6 +7587,20 @@ test("a turnkey first answer to our first text closes with one ask: other fixers
   assert.doesNotMatch(off.d.reply, CALL_ASK_RX);
 });
 
+// The first text no longer asks for other fixers (2026-10-15), so with the
+// call ask off their first answer still asks for the next house, and only that.
+test("with the call ask off, a first answer that forgot to ask for other fixers gets that ask and no call", async () => {
+  const { d } = await replyTo("This one's turnkey, the sellers redid it before listing.", { intent: "deal_available", lines: [],
+    reply: "Makes sense, that one's not for us then." });
+  assert.match(d.reply, FIXERS_ASK_RX);
+  assert.doesNotMatch(d.reply, CALL_ASK_RX);
+  assert.ok(questions(d.reply) <= 1, d.reply);
+  // Our second answer to them doesn't repeat it.
+  const second = await replyTo("Thanks, will keep you posted", { intent: "small_talk",
+    lines: [["inbound", "it's a nice one"], ["outbound", "Got it, thanks."]], reply: "Sounds good, thanks." });
+  assert.doesNotMatch(second.d.reply, FIXERS_ASK_RX);
+});
+
 test("the qualify question on a first answer carries the call ask, and still reads as our question", async () => {
   const { d, uw } = await replyTo("Cosmetic fixer", { saved: callOn(QUALIFY_SAVED), lines: [] });
   assert.equal(uw.length, 0);
