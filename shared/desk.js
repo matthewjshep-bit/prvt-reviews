@@ -206,6 +206,78 @@ export function urgentReasons(reasons = [], { drafts = [], heldByOffer = new Map
   return out;
 }
 
+/* ---------- Today's calls in GHL's Manual Actions (2026-10-15) ---------- */
+
+// Matt dials from GHL's Manual Actions queue (shared/ghl-calls.js). The day's
+// list goes in at 8:30; these go in as they turn up until 5pm: a call we
+// promised, a counter above ours, partner terms, a missed call on a live
+// house — and a held reply asking to talk (CALL_INTENTS).
+export const GHL_URGENT_CALLS = new Set(["call_owed", "call_counter", "call_partner_terms", "call_missed"]);
+
+/**
+ * ghlCallKind(reason, { draftsById }) → "urgent" | "daily" | null
+ *
+ * Whether a reason is a call for GHL: one of the urgent kinds, a held reply
+ * whose intent is a call, or one of the call list's own rows still in Call.
+ * A missed call only with a live house on it, as on Today.
+ */
+export function ghlCallKind(a, { draftsById = new Map() } = {}) {
+  if (!a?.contactId) return null;
+  const kind = String(a.kind || "");
+  if (kind === "draft_waiting") return CALL_INTENTS.has(draftsById.get(a.draftId)?.intent) ? "urgent" : null;
+  if (kind === "call_missed" && !a.offerId) return null;
+  if (GHL_URGENT_CALLS.has(kind)) return "urgent";
+  return kind.startsWith("call_") && a.section === "call" ? "daily" : null;
+}
+
+/**
+ * ghlCallRows(rows, { mode, drafts }) → [{ contactId, urgent, reason }]
+ *
+ * The Desk's rows (foldDesk, before anything is hidden for GHL) that go to
+ * GHL now, one per person:
+ *   morning  Today's calls not waiting behind "N more to call", and every
+ *            row with an urgent reason (its own or one folded under it)
+ *   urgent   only the rows with an urgent reason
+ * `reason` is what the call is about: the row itself for one of Today's
+ * calls, else its first urgent reason.
+ */
+export function ghlCallRows(rows = [], { mode = "morning", drafts = [] } = {}) {
+  const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
+  const out = [];
+  const seen = new Set();
+  for (const row of rows || []) {
+    const c = row?.contactId;
+    if (!c || seen.has(c)) continue;
+    const urgent = [row, ...(row.also || [])].find((r) => ghlCallKind({ ...r, contactId: c }, { draftsById }) === "urgent") || null;
+    const daily = mode === "morning" && row.section === "call" && !row.later && ghlCallKind(row, { draftsById }) ? row : null;
+    const reason = daily || urgent;
+    if (!reason) continue;
+    seen.add(c);
+    out.push({ contactId: c, urgent: Boolean(urgent), reason: { ...reason, contactId: c, contactName: reason.contactName || row.contactName || "" } });
+  }
+  return out;
+}
+
+/**
+ * ghlCallsDue(reasons, { drafts, heldByOffer }) → Set of contactIds
+ *
+ * Everyone with a call still standing — any rank, not only the day's ten — so
+ * a call in GHL is taken back out only when its reason is really gone, never
+ * because a better call pushed it down the list. A row the call list handed
+ * back to the machine (the tries ran out) isn't one.
+ */
+export function ghlCallsDue(reasons = [], { drafts = [], heldByOffer = new Map() } = {}) {
+  const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
+  const held = heldByOffer instanceof Map ? heldByOffer : new Map(Object.entries(heldByOffer || {}));
+  const due = new Set();
+  for (const a of reasons || []) {
+    if (!ghlCallKind(a, { draftsById })) continue;
+    if (sectionFor(a, { draftsById, heldByOffer: held }) === "machine") continue;
+    due.add(a.contactId);
+  }
+  return due;
+}
+
 /** foldKey(reason) → the row it belongs to: a person, a deal, an offer, or itself. */
 export function foldKey(a) {
   if (DEAL_KINDS.has(a?.kind) && a.offerId) return `deal:${a.offerId}`;

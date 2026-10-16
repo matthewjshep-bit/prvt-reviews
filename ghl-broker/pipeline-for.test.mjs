@@ -28,7 +28,7 @@ app.use("/api/dashboard", router);
 const server = app.listen(0);
 const B = `http://127.0.0.1:${server.address().port}`;
 await store.init();
-test.after(() => { server.close(); fs.rmSync(DIR, { recursive: true, force: true }); });
+test.after(async () => { server.close(); await new Promise((r) => setTimeout(r, 120)); fs.rmSync(DIR, { recursive: true, force: true }); });
 
 const ago = (h) => new Date(Date.now() - h * 3600000).toISOString();
 
