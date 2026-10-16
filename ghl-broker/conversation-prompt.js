@@ -724,7 +724,7 @@ function openingFor(outbound) {
       return `${START} This is the FIRST text this listing agent has ever had from us, about their listing at ` +
         `${o.address}. Write it the way Matt texts: a friendly local flipper who is easy to talk to, warm and a little ` +
         `funny, never a pitch. Two short sentences that: mention their listing on ${street}, say who you are, and ask ONE ` +
-        `question about whether it needs work. Saying you're looking anywhere in ${where} is optional, if it fits. ` +
+        `question about ${o.offMarket ? "whether the seller still hopes to sell" : "whether it needs work"}. Saying you're looking anywhere in ${where} is optional, if it fits. ` +
         // 2026-10-15 (the funnel review): first texts under about 230
         // characters got 54% replies, longer ones a third, and the required
         // "other fixers" line cost about 12 points. That ask now follows
@@ -734,6 +734,13 @@ function openingFor(outbound) {
         (o.turnkey
           ? `THIS LISTING LOOKS FINISHED: don't call it a fixer or ask about it as if it were one. Say it looks finished and ask ` +
             `lightly whether they ever see ones that need work. That is your one question. `
+          : "") +
+        // 2026-10-15: the off-market seats — a listing that came off the
+        // market lately without selling. The seller may still want out.
+        (o.offMarket
+          ? `THIS LISTING CAME OFF THE MARKET RECENTLY: say you saw it came off the market and ask whether the seller is still ` +
+            `hoping to sell. That is your one question. Never the word "expired", never "didn't sell" or anything that sounds like ` +
+            `the agent fell short, and never ask whether it sold. `
           : "") +
         (notice || town
           ? `WHAT TO NOTICE: ${notice || `it's in ${town}`}${notice && town ? ` (it's in ${town}; naming the town is fine too)` : ""}. ` +
@@ -996,7 +1003,9 @@ function openingFor(outbound) {
       const askFor = (extra) => `ask whether anything distressed — a house that needs work, listed or not — or anything off-market has come across their desk lately. ` +
         `${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.${extra}`;
       const offAsk = askFor(` If it fits naturally, ${situationLine}${what}`);
-      const listingText = o.reason === "fresh_listing" && l;
+      const listingText = (o.reason === "fresh_listing" || o.reason === "off_market_listing") && l;
+      // Came off the market lately without selling (2026-10-15): the seller may still want out.
+      const offList = listingText && o.reason === "off_market_listing";
       // 2026-10-15 (the funnel review): Matt's own specific texts got 70%
       // replies, the generic check-ins 35%. So each names ONE real thing
       // (shared/agent-pulse.js checkInHook): their fresh listing, a house
@@ -1005,7 +1014,11 @@ function openingFor(outbound) {
       const hook = !listingText && o.reason !== "deal_thanks" ? o.hook || null : null;
       const mentioned = hook?.kind === "mentioned" && (hook.street || hook.label) ? hook : null;
       const closedNear = !mentioned && hook?.kind === "closed_nearby" && hook.town ? hook : null;
-      const why = listingText
+      const why = offList
+        ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""} came off the market recently. Say you saw it came off the market and ask, ` +
+          `plainly, whether the seller is still hoping to sell — we'd be glad to take a look. Name the street; never its price or any number, never the word ` +
+          `"expired", nothing that sounds like the agent fell short, and never ask whether it sold.`
+        : listingText
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
           `Ask, plainly, whether it's a bit of a project — if it needs work it may be one we'd want to take a look at. Name the street; never its price or any number.`
         : o.reason === "deal_thanks"
@@ -1037,7 +1050,7 @@ function openingFor(outbound) {
         // text: the short first-text voice, which gets answered.
         (cold && listingText
           ? `WHAT TO WRITE: the short first-text voice — two short sentences, under ${OPENER_MAX_CHARS} characters. Open with their first name, once; ` +
-            `name the street; ONE question, whether it's a bit of a project. Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
+            `name the street; ONE question, ${offList ? "whether the seller is still hoping to sell" : "whether it's a bit of a project"}. Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
             (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the street and the question. ` : "")
           : `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
             // No calendar is connected (2026-10-15): a call is offered, never a time.

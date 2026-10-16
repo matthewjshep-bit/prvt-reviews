@@ -2985,7 +2985,7 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       hook: pulseHook(p.hook),
       // A cold agent's fresh listing goes in the short first-text voice,
       // held under OPENER_MAX_CHARS like the first text (2026-10-15).
-      coldOpen: (p.segment === "cold" || /gone quiet/.test(String(p.segment || ""))) && p.reason === "fresh_listing" && Boolean(p.listing),
+      coldOpen: (p.segment === "cold" || /gone quiet/.test(String(p.segment || ""))) && (p.reason === "fresh_listing" || p.reason === "off_market_listing") && Boolean(p.listing),
       variant: Number(p.variant) || 0 };
   }
   if (kind === "showing_reminder" || kind === "showing_followup") {
@@ -3025,7 +3025,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       // One real thing about the house for the text to notice.
       details: houseDetails({ ...(subject?.house || {}), city: subject?.city || subject?.house?.city || "", dom: Number(subject?.hookDom) || subject?.house?.dom || 0 }),
       // A finished listing, texted for the agent rather than the house (the turnkey seats).
-      turnkey: subject?.house?.turnkey === true };
+      turnkey: subject?.house?.turnkey === true,
+      // A listing that came off the market lately without selling (the off-market seats).
+      offMarket: subject?.house?.offMarket === true };
   }
   // The nudges. They carry what the message is ABOUT and no numbers at all.
   return { ...base,
@@ -3078,6 +3080,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;
     case "agent_pulse":
       if (outbound.reason === "fresh_listing") return `Checks in about their listing at ${outbound.listing?.street || where}: would the seller look at an as-is cash offer?`;
+      if (outbound.reason === "off_market_listing") return `Checks in about their listing at ${outbound.listing?.street || where}, off the market lately: is the seller still hoping to sell?`;
       if (outbound.reason === "deal_thanks") return "Thanks them for the deal that just closed and asks whether anything distressed or off-market has come across their desk.";
       return "Checks in: anything distressed or off-market come across their desk lately?";
     case "showing_reminder": return `Reminds them about the walkthrough at ${outbound.street || where} tomorrow, ${outbound.windowLabel}.`;
@@ -3190,7 +3193,8 @@ function pulseHook(h) {
 // numbers and the one detail, never the examples themselves.
 function openerChoices(outbound = {}) {
   const p = openerPlan(outbound);
-  return { variant: p.variant, move: p.moveIndex, who: p.whoIndex, notice: p.notice || "", turnkey: p.turnkey, examplesHash: p.examplesHash };
+  return { variant: p.variant, move: p.moveIndex, who: p.whoIndex, notice: p.notice || "", turnkey: p.turnkey, examplesHash: p.examplesHash,
+    ...(outbound.offMarket === true ? { offMarket: true } : {}) };
 }
 
 // The cold open and its nudge never sign off: GHL puts "Thanks, Matt" and
@@ -5876,7 +5880,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         // variant and opening move it was written from, whether it was a
         // turnkey seat, how long it was, and whether a person changed it.
         ...(d.outbound.variant != null ? { variant: d.outbound.variant, openingMove: d.outbound.move } : {}),
-        turnkey: d.outbound.turnkey === true, chars: body.length, edited: Boolean(updated.edited) },
+        turnkey: d.outbound.turnkey === true, chars: body.length, edited: Boolean(updated.edited), ...(d.outbound.offMarket ? { offMarket: true } : {}) },
     }).catch(() => {});
   }
   // A reply that promised to come back starts a clock (promise-sweep.js). The

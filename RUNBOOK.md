@@ -4940,6 +4940,30 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   another; one a deploy drops is retried by the lost path. The sweep's cursor
   `last` carries `retried`, `neverTexted` and `opened`. Check: `GET
   /api/outreach/autopilot` → `last.neverTexted` after the 10am run.
+- **Listings that came off the market (2026-10-15, off by default).**
+  `outreachAutopilot.expired {enabled: false, share: 25}`. Before the regular
+  pull, each run reads ONE county (in turn, `outreachPages` cursor
+  `expiredTurn`) for RentCast `status=Inactive` listings, which include the
+  sold ones (`body.status: "Inactive"` on the pull; `rentcastPage` lets it
+  override Active). The listings go into their own batch, "Autopilot ·
+  Off-market · King, WA"; the county's own batch would collide on the listing
+  key. `keepOffMarket` (routes/outreach.js) keeps only listings with a
+  `removedDate` in the last 30 days that didn't sell
+  (`offMarketListings`, outreach-score.js):
+  - with an Apify token, Zillow's status decides for the freshest 40 (sold,
+    pending or back for sale are dropped);
+  - otherwise RentCast's history decides, which rarely shows a sale, so
+    without a token a sold house can slip through.
+  Coming off the market is the distress, so no distress rule applies after
+  it. Each listing and hook carries `offMarket` and `removedDate`.
+  `share` % of the run's RentCast requests and of the day's new agents go to
+  it first (the import's `createLimit` for that batch); the regular pull gets
+  the rest, inside the same monthly budget. A new agent's first text says we
+  saw it came off the market and asks whether the seller still hopes to sell,
+  never "expired". An agent already in GHL gets it from the check-in as
+  `off_market_listing` (`listingDistressed` reads `offMarket` as news), in
+  the same words. The cursor's `last.offMarket` says what the pull found.
+  Check: `GET /api/outreach/autopilot` → `last.offMarket`.
 - **Samples.** "Write 3 sample first texts" under the examples box
   (`POST /api/outreach/opener/preview`) drafts texts for agents waiting in the
   autopilot batches. Nothing is imported, saved or sent.

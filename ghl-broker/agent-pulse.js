@@ -32,7 +32,7 @@ import { agentTier } from "./shared/tiers.js";
 import { effectiveStatus, OPEN_STATUSES, dealIsOver } from "./shared/offer-status.js";
 import { addressKey } from "./shared/us-address.js";
 import {
-  normalizeAgentPulse, pickPulseAgents, blockedByTags, tierDrips, evaluateAgent, recentCloses, pickMattsFifteen,
+  normalizeAgentPulse, pickPulseAgents, blockedByTags, tierDrips, evaluateAgent, recentCloses, pickMattsFifteen, LISTING_REASONS,
   AGENT_PULSE_EVENT_TYPES, AGENT_PULSE_LEDGER_TYPES, INBOUND_EVENT_TYPES,
 } from "./shared/agent-pulse.js";
 import { leadSourcesFor } from "./shared/lead-source.js";
@@ -426,7 +426,7 @@ export function startAgentPulse({
       });
       if (!claim.inserted) { skip("already claimed today"); continue; }
       claimed++;
-      const pingKey = p.reason === "fresh_listing" && p.listingKey ? `listing_pinged:${p.contactId}:${p.listingKey}` : null;
+      const pingKey = LISTING_REASONS.has(p.reason) && p.listingKey ? `listing_pinged:${p.contactId}:${p.listingKey}` : null;
       if (pingKey) {
         await recordEvent({
           store, locationId, contactId: p.contactId, party: "agent", type: "listing_pinged", at: iso(now), source: "sweep",
@@ -555,7 +555,7 @@ export function startMattsFifteen({ client, locationId, saved = {}, store = defa
       const claim = await recordEvent({ store, locationId, contactId: p.contactId, party: "agent", type: "agent_pulse_sent", at: iso(now), source: "sweep",
         address: p.subject?.address || "", dedupeKey: claimKey, data: { segment: p.segment, reason: MATTS_FIFTEEN_REASON, pulse: p.reason, listingKey: p.listingKey || null, trigger } });
       if (!claim.inserted) { skip("already checked in on today"); continue; }
-      const pingKey = p.reason === "fresh_listing" && p.listingKey ? `listing_pinged:${p.contactId}:${p.listingKey}` : null;
+      const pingKey = LISTING_REASONS.has(p.reason) && p.listingKey ? `listing_pinged:${p.contactId}:${p.listingKey}` : null;
       if (pingKey) {
         await recordEvent({ store, locationId, contactId: p.contactId, party: "agent", type: "listing_pinged", at: iso(now), source: "sweep",
           address: p.subject?.address || "", dedupeKey: pingKey, data: { listingKey: p.listingKey } }).catch(() => {});

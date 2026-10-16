@@ -172,6 +172,8 @@ export function blockedByTags(tags = [], botOffTags = []) {
  */
 export function listingDistressed(doc = {}, rule = null) {
   if (!doc?.qualifies) return false;
+  // Came off the market lately without selling (the off-market pull): that is the distress.
+  if (doc.offMarket === true) return true;
   const d = doc.distress || {};
   if (rule === "cut-or-old") {
     const y = Number(doc.yearBuilt) || 0;
@@ -516,6 +518,12 @@ export function firstCheckInAt({ contactId = "", joinedAt = null, everyDays = 21
   return iso(t + workdays[checkInSlot(contactId, workdays.length)] * DAY_MS);
 }
 
+// A check-in about a listing of theirs: a fresh one, or one that came off the
+// market lately without selling (2026-10-15, "off_market_listing": the text
+// asks whether the seller still hopes to sell).
+export const LISTING_REASONS = new Set(["fresh_listing", "off_market_listing"]);
+const listingReason = (listing) => (listing?.doc?.offMarket === true ? "off_market_listing" : "fresh_listing");
+
 /**
  * evaluateAgent(agent, ctx) → { status, reason, segment, pulseReason, listing, house, priority }
  *
@@ -595,7 +603,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     const lastPing = latest(texted.map((e) => e.at));
     if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", waitWhy(coldEveryDays, `pinged within ${coldEveryDays} days`), { segment: coldSeg, dueAt: after(lastPing, coldEveryDays) });
     if (!quietFor(quietDays)) return out("not_due", waitWhy(quietDays, `touched within ${quietDays} days`), { segment: coldSeg, dueAt: after(since, quietDays) });
-    return out("due", "", { segment: coldSeg, pulseReason: "fresh_listing", listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
+    return out("due", "", { segment: coldSeg, pulseReason: listingReason(listing), listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
   }
 
   const tier = TOP_SEGMENTS.has(segment) ? 0 : 1;
@@ -604,7 +612,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const thanks = dealToThank({ offers: agent.offers || agent.current || [], events, ledger, now });
   if (thanks) return out("due", "", { segment, pulseReason: "deal_thanks", house: thanks, priority: [-1, -(ms(thanks.closedAt) ?? 0)] });
   if (listing && quietFor(quietDays)) {
-    return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
+    return out("due", "", { segment, pulseReason: listingReason(listing), listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
   }
   if (!quietFor(everyDays)) return out("not_due", waitWhy(everyDays, card && since === card.movedAt ? `moved to Tier ${card.tier.slice(1)} within ${everyDays} days` : `talked within ${everyDays} days`), { segment, dueAt: after(since, everyDays) });
   // Joined the check-in long after their last word (the repliers, 2026-10-14):
@@ -636,7 +644,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   const s = normalizeAgentPulse(settings);
   const counts = {
     pool: agents.length, bySegment: { partner: 0, source: 0, engaged: 0, cold: 0 }, stopped: {}, owned: {}, notDue: 0, coldDropped: 0,
-    due: { deal_thanks: 0, fresh_listing: 0, our_house: 0, general: 0 }, dueNoSeat: 0,
+    due: { deal_thanks: 0, fresh_listing: 0, off_market_listing: 0, our_house: 0, general: 0 }, dueNoSeat: 0,
     fresh: { withListing: 0 }, coverage: { touched: 0, pool: 0 },
     ghlTier: { t2: 0, t3: 0, due: 0 },
   };
@@ -665,7 +673,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
     if (v.status === "cold_dropped") { counts.coldDropped++; continue; }
     if (v.status === "not_due") { counts.notDue++; continue; }
     counts.due[v.pulseReason]++;
-    if (v.pulseReason === "fresh_listing") counts.fresh.withListing++;
+    if (LISTING_REASONS.has(v.pulseReason)) counts.fresh.withListing++;
     due.push({ agent: a, verdict: v });
   }
   const cmp = (x, y) => {
@@ -845,7 +853,7 @@ function agentTowns(agent = {}) {
  */
 export function checkInHook({ agent = {}, verdict = {}, houses = {}, now = Date.now() } = {}) {
   if (verdict.pulseReason === "deal_thanks") return null;
-  if (verdict.pulseReason === "fresh_listing" && verdict.listing) return { kind: "listing" };
+  if (LISTING_REASONS.has(verdict.pulseReason) && verdict.listing) return { kind: "listing" };
   const m = mentionedHouseFor({ events: agent.events || [], offers: agent.offers || [], now });
   if (m) {
     const days = Math.max(0, Math.floor((now - (ms(m.at) ?? now)) / DAY_MS));
@@ -890,7 +898,8 @@ export function agentPulseSubject({ agent = {}, verdict = {}, houses = {}, now =
     // was asked for the city we'd had from RentCast (2026-10-13). The text
     // itself names the listing by street (listing.street, listing.city).
     address: l ? String(l.address || "").trim() : h ? String(h.address || "").trim() : "",
-    listing: l ? { street: street(l.address), city: l.city || cityOf(l.address), dom: Number(l.daysOnMarket) || 0, cut: Boolean(l.distress?.cut), type: String(l.propertyType || "") } : null,
+    listing: l ? { street: street(l.address), city: l.city || cityOf(l.address), dom: Number(l.daysOnMarket) || 0, cut: Boolean(l.distress?.cut), type: String(l.propertyType || ""),
+      ...(l.offMarket === true ? { offMarket: true } : {}) } : null,
     house: h ? { street: street(h.address), how } : null,
     dealsWithUs: (agent.offers || []).filter((o) => o?.deal).length,
     offersWithUs: (agent.offers || []).length,

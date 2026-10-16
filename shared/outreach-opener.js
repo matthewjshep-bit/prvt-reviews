@@ -192,6 +192,9 @@ export function firstTextHook(doc = {}, { county = "", base = {} } = {}) {
   const own = Boolean(h.address);
   const cut = Boolean(h.priceCut || (Array.isArray(h.components) && h.components.some((c) => c?.key === "cuts" && Number(c.points) > 0)));
   const turnkey = h.turnkey === true || d.turnkey === true || b.turnkey === true;
+  // A listing that came off the market lately (the off-market seats, 2026-10-15).
+  const offMarket = h.offMarket === true || b.offMarket === true;
+  const removedDate = h.removedDate || b.removedDate || null;
   return {
     ...b,
     address: (own ? h.address : b.address) || "",
@@ -205,6 +208,7 @@ export function firstTextHook(doc = {}, { county = "", base = {} } = {}) {
     priceCut: cut || Boolean(b.priceCut),
     listingCount: Number(d.listingCount) || Number(b.listingCount) || 0,
     ...(turnkey ? { turnkey: true } : {}),
+    ...(offMarket ? { offMarket: true, ...(removedDate ? { removedDate } : {}) } : {}),
   };
 }
 
