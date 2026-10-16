@@ -62,7 +62,8 @@ import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
-import { ghlCallsOn, liveGhlQueues, GHL_CALL_EVENT_TYPES } from "../shared/ghl-calls.js";
+import { ghlCallsOn, liveGhlQueues, GHL_CALL_EVENT_TYPES, ghlCallWindow } from "../shared/ghl-calls.js";
+import { runGhlCalls, startGhlCalls, getGhlCallsJob, summarizeRun, patchCursor as patchGhlCallsCursor, pacificDay, CURSOR_NAME as GHL_CALLS_CURSOR } from "../ghl-calls.js";
 import { knownCitiesFrom, heldOnTheMachine } from "../shared/held-underwrites.js";
 import { callList, briefFor, normalizeDesk } from "../shared/call-list.js";
 import { attachNextFollowUpsFor } from "../next-follow-up.js";
@@ -741,6 +742,64 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const { locationId, client } = resolveLocation(req);
       const { body } = await pipelineFor({ locationId, client });
       res.json(body);
+    } catch (err) { fail(res, err); }
+  });
+
+  // Today's calls in GHL's Manual Actions (ghl-calls.js), read-only: the
+  // setting, who went in today, who came back out or failed, and the job's
+  // last runs. Ids, kinds and the words that went in the two fields.
+  router.get("/ghl-calls", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const now = Date.now();
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const settings = normalizeDesk(saved.desk).ghlCalls;
+      const day = pacificDay(now);
+      const dayStart = pacificStart(now);
+      const ledger = await store.listContactEventsSince(locationId, new Date(now - 7 * DAY_MS).toISOString(), { types: GHL_CALL_EVENT_TYPES, limit: 2000 }).catch(() => []);
+      const live = liveGhlQueues(ledger);
+      const todays = ledger.filter((e) => Date.parse(e.at) >= dayStart).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+      const ended = new Map(todays.filter((e) => e.type !== "ghl_call_queued").map((e) => [e.data?.claimKey, e]));
+      const row = (e) => ({ contactId: e.contactId, kind: e.data?.kind || "", at: e.at, address: e.address || e.data?.address || "" });
+      const cursor = await store.getJobCursor?.(locationId, GHL_CALLS_CURSOR).catch(() => null);
+      const { fields, ...doc } = cursor?.doc || {};
+      const job = getGhlCallsJob(locationId);
+      res.json({
+        ok: true, now: new Date(now).toISOString(), day,
+        settings, on: ghlCallsOn(settings), window: ghlCallWindow(settings),
+        today: {
+          queued: todays.filter((e) => e.type === "ghl_call_queued").map((e) => ({ ...row(e), mode: e.data?.mode || "", trigger: e.data?.trigger || "",
+            why: e.data?.why || "", say: e.data?.opener || "", inGhl: live.get(e.contactId)?.claimKey === e.dedupeKey, ended: ended.get(e.dedupeKey)?.type || null })),
+          withdrawn: todays.filter((e) => e.type === "ghl_call_withdrawn").map((e) => ({ ...row(e), why: e.data?.why || "" })),
+          failed: todays.filter((e) => e.type === "ghl_call_failed").map((e) => ({ ...row(e), error: e.data?.error || "" })),
+        },
+        inGhl: live.size,
+        cursor: cursor ? { at: cursor.at, ...doc, fieldsSet: Boolean(fields?.why && fields?.say) } : null,
+        running: job?.status === "running" ? summarizeRun(job) : null,
+      });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Run it by hand: { mode: "morning" | "urgent", dryRun }. A dry run (the
+  // default) reads Today and GHL's contacts and lists who would go in and who
+  // would be taken back; it writes nothing. A real run needs the switch on
+  // and a workflow, goes in the background, and GET /ghl-calls shows it.
+  router.post("/ghl-calls/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const mode = req.body?.mode === "urgent" ? "urgent" : "morning";
+      const dryRun = req.body?.dryRun !== false;
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      if (dryRun) {
+        const r = await runGhlCalls({ store, locationId, client, saved, deps: { pipelineFor }, mode, dryRun: true, trigger: "manual" });
+        return res.json({ ok: true, ...r });
+      }
+      if (!ghlCallsOn(normalizeDesk(saved.desk).ghlCalls)) {
+        return res.status(400).json({ error: "Calls to GHL are off: switch on \"Calls go to GHL Manual Actions\" and paste the workflow link in Settings first." });
+      }
+      const job = startGhlCalls({ store, locationId, client, saved, deps: { pipelineFor }, mode, trigger: "manual",
+        onDone: (j) => patchGhlCallsCursor(store, locationId, { hand: { at: j.finishedAt, last: summarizeRun(j) } }) });
+      res.status(202).json({ ok: true, started: true, job: summarizeRun(job) });
     } catch (err) { fail(res, err); }
   });
 
