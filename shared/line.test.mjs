@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeLineTargets, lineStations, methodMath, cycleTimes, offerLeaks, agentLeaks, buyerLeaks, dealLeaks,
-  leakTotal, backlogTotal, lineJobs, errorsByArea, realizedPricing, buildLine, LINE_JOBS,
+  leakTotal, backlogTotal, lineJobs, errorsByArea, realizedPricing, buildLine, LINE_JOBS, supplyCheck,
 } from "./line.js";
 
 const NOW = Date.parse("2026-09-29T18:00:00Z");
@@ -83,10 +83,51 @@ test("stations carry their targets and the month's pace; the method says what th
   assert.deepEqual(methodMath({ month, targets: {} }), { offers30: 150, contracts30: 1, expectedContracts: 1.3, offersForTarget: 240, feeAtTarget: 30000 });
 });
 
+// 2026-10-15: a phone call best predicts a contract; the Line shows it.
+test("the Line has a Talked station right after Replied, straight from the Flow", async () => {
+  const { buildFlow } = await import("./flow.js");
+  const now = Date.parse("2026-10-15T18:00:00Z");
+  const events = [{ id: "c1", contactId: "a1", type: "call_summary", at: "2026-10-14T18:00:00Z", source: "call", ref: "m1", data: { transcribed: true, durationSec: 120, summary: "talked" } }];
+  const month = buildFlow({ events, now, windowStartMs: now - 30 * 86400000, windowEndMs: now }).stages;
+  const st = lineStations({ week: month, month, targets: {} });
+  assert.deepEqual(st.slice(2, 4).map((x) => x.key), ["replied", "talked"]);
+  assert.equal(st.find((x) => x.key === "talked").month, 1);
+});
+
 test("targets default to the Agent Method and clamp", () => {
-  assert.deepEqual(normalizeLineTargets(), { newAgentsPerDay: 10, offersPerDay: 10, offersPerContract: 120, dealsPerMonth: 2, feePerDeal: 15000, agentTouchDays: 21, buyerTouchDays: 30 });
+  assert.deepEqual(normalizeLineTargets(), { newAgentsPerDay: 10, offersPerDay: 10, offersPerContract: 120, dealsPerMonth: 2, feePerDeal: 15000, agentTouchDays: 21, buyerTouchDays: 30, minNewAgentsPerDay: 5 });
+  assert.equal(normalizeLineTargets({ minNewAgentsPerDay: "0" }).minNewAgentsPerDay, 0, "0 turns the supply warning off");
   assert.equal(normalizeLineTargets({ offersPerDay: "25" }).offersPerDay, 25);
   assert.equal(normalizeLineTargets({ offersPerContract: 0 }).offersPerContract, 1);
+});
+
+// 2026-10-15: new-agent supply fell from 125 a day to 2 and nothing said so.
+test("the supply line warns when new agents fall under the day's minimum, and says what the sweep ran into", () => {
+  const week = (firstText, found = firstText) => [{ key: "found", count: found }, { key: "first_text", count: firstText }];
+  const cur = (last) => [{ name: "outreach", at: D(1), doc: { last } }];
+  const fine = supplyCheck({ week: week(70), cursors: cur({ candidates: 400, picked: 30, imported: 12 }) });
+  assert.equal(fine.perDay, 10);
+  assert.equal(fine.low, false);
+  assert.deepEqual(fine.why, []);
+
+  const dry = supplyCheck({ week: week(14), cursors: cur({ candidates: 6, picked: 4, imported: 1, skippedExisting: 3, warning: "King, WA: nobody new to text (6 on file…) — moving on" }) });
+  assert.equal(dry.perDay, 2);
+  assert.equal(dry.low, true);
+  assert.deepEqual(dry.why.map((w) => w.key), ["pool"]);
+  assert.match(dry.why[0].text, /the pool is dry: 6 on file, 4 picked, 3 already in GHL/);
+
+  const broke = supplyCheck({ week: week(0), cursors: cur({ picked: 0, warning: "RentCast budget: 990 of 1000 requests used this month — the sweep is standing down" }) });
+  assert.deepEqual(broke.why.map((w) => w.key), ["budget", "pool"]);
+  const capped = supplyCheck({ week: week(7), cursors: cur({ candidates: 300, picked: 40, warning: "the Conversation AI's daily cap leaves room for 1 first text today" }) });
+  assert.deepEqual(capped.why.map((w) => w.key), ["cap"]);
+  const off = supplyCheck({ week: week(0), cursors: [], settings: { outreachAutopilot: { enabled: false } } });
+  assert.deepEqual(off.why.map((w) => w.key), ["off", "never"]);
+  assert.equal(supplyCheck({ week: week(0), targets: { minNewAgentsPerDay: 0 } }).low, false, "0 = no warning");
+
+  const line = buildLine({ now: NOW, week: week(14), cursors: cur({ candidates: 6, picked: 0, neverTexted: 2, offMarket: { county: "King, WA", picked: 1 } }) });
+  assert.equal(line.supply.low, true);
+  assert.equal(line.supply.last.neverTexted, 2);
+  assert.equal(line.supply.last.offMarket.county, "King, WA");
 });
 
 test("agents and buyers due with their check-in off are leaks; on, only the ones without a seat", () => {

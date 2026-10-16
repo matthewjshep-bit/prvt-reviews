@@ -14,7 +14,7 @@
 import { fmtMoney } from "./shared/offer-calc.js";
 import { offerMath, compactMath, mathAllowedAmounts } from "./shared/offer-breakdown.js";
 import { isOffMarket, offMarketAskDaysAgo, OFF_MARKET_ASK_EVERY_DAYS } from "./shared/off-market.js";
-import { effectiveStatus, offerHeat, agreedAboveOurNumber, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused, priceAgreed } from "./shared/offer-status.js";
+import { effectiveStatus, offerHeat, agreedAboveOurNumber, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused, priceAgreed, numberApproved } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
 import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
@@ -32,6 +32,7 @@ import { assetOf, assetPhrase, isRuralLot, kindHold, normalizeAsset } from "./sh
 import { buyerFacts } from "./shared/underwrite-checks.js";
 import { blastNote, pickedRehabLevel } from "./shared/blast-text.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
+import { numberStance, stanceWaitingFor } from "./shared/number-stance.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -116,7 +117,9 @@ export { ourComeDown };
 
 const theirs = (note) => note.replace(/^countered at\b/i, "they countered at");
 
-export function summarizeOffers(offers = [], { now = Date.now(), showMath = false, transcript = "" } = {}) {
+// `stanceOf(offer)`: the house's number stance (shared/number-stance.js), when
+// the playbook has the high-stakes switch on.
+export function summarizeOffers(offers = [], { now = Date.now(), showMath = false, transcript = "", stanceOf = null } = {}) {
   const stale = new Set();
   // One line per house: its current offer (shared/current-offer.js), or its
   // newest draft when nothing on it is priced yet. The rows it superseded are
@@ -151,7 +154,9 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       for (const n of roughAmounts(down.amount)) amounts.add(n);
       stale.add(Math.round(amount));
     } else if (amount) for (const n of roughAmounts(amount)) amounts.add(n);
-    if (amount) numbers.push({ address: o.address, amount: Math.round(down ? down.amount : amount) });
+    // `approved`: Matt stands behind the number (2026-10-15) — the gate holds
+    // a write-up ask at one he hasn't.
+    if (amount) numbers.push({ address: o.address, amount: Math.round(down ? down.amount : amount), approved: !down && numberApproved(o) });
     // A higher number we texted that the offer never moved to (Jesse,
     // 2026-09-25: "workable for us at 650" on a 550K offer). Not allowed, and
     // the model is told plainly so it neither repeats nor confirms it.
@@ -166,6 +171,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     const terms = [
       t.closingDays ? `${t.closingDays}-day close` : "",
       t.earnestMoney ? `${fmtMoney(t.earnestMoney)} earnest money` : "",
+      t.inspectionDays ? `${t.inspectionDaysMin ? `${t.inspectionDaysMin} to ` : ""}${t.inspectionDays}-day inspection` : "",
       t.condition ? "as-is" : "",
     ].filter(Boolean).join(", ");
     if (t.earnestMoney) amounts.add(Math.round(t.earnestMoney));
@@ -216,6 +222,13 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         : status === "draft" ? (o.autoUnderwrite?.held?.length ? "numbers held for our team's review (no number yet)" : "still being underwritten (no number yet)")
         : "no amount recorded",
       range ? `— we floated "${rangeWords(range)}" by text ${dateWord(range.at)}: our number is ${fmtMoney(amount)}, the top of it; the bottom was never an offer on its own (never say ${Math.round(range.low / 1000)} by itself), and if they name a number inside it, a person decides` : "",
+      // A high-stakes house (2026-10-15): the number isn't firm yet.
+      (() => {
+        const st = amount && !down && typeof stanceOf === "function" ? stanceOf(o) : null;
+        return st?.mode === "range"
+          ? `— RANGE ONLY until we have ${stanceWaitingFor(st)} (${st.why}): talk about it as a rough range topped by ${fmtMoney(amount)}, never as a firm number, "our offer" or a written offer, and don't ask them to write it up yet`
+          : "";
+      })(),
       asking ? `(asking ${fmtMoney(asking)})` : "",
       terms ? `terms: ${terms}` : "",
       showMath && ties
@@ -229,14 +242,15 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
           : "",
       up
         ? `— WE TEXTED ${fmtMoney(up.amount)} ${dateWord(up.ts)} ("${up.text}"), but the offer was never revised to it. ` +
-          `It is NOT our number: never repeat it, confirm it, or treat a yes as agreement to it. A person is settling the price — say you're confirming with your partner`
+          `It is NOT our number: never repeat it, confirm it, or treat a yes as agreement to it. A person is settling the price — say you'll go over it on a quick call`
         : "",
       `— status: ${statusWord(status)}`,
       status === "we_passed" && reopensOnTheirNumbers(o)
         ? "— we passed on it before we ever priced it, and it is OPEN TO THEIR NUMBERS: don't chase it, but if they give their value, " +
           "the work, or a price on it, thank them and say you'll run it on their numbers and come back with ours — never say we've moved on " +
           "from it, and name no number yet"
-        : status === "we_passed" ? "WE WALKED AWAY from this house: closed on our side, do not chase it or name its number" : "",
+        : status === "we_passed" ? "WE WALKED AWAY from this house: closed on our side, do not chase it or name its number; " +
+          "if they say yes to our number on it, never say we've moved on: thank them and say you'll confirm it with them today (a person reopens it)" : "",
       status === "unavailable" ? "THE HOUSE IS GONE (sold or off the market, per the agent): do not chase it or name its number; if it comes back, a person re-offers" : "",
       lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" ? "" : "not sent yet",
       // No expiry date: the offer stands until they answer, and a date here
@@ -250,7 +264,11 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       // the agent was asking us to come up, and it asked him for a number
       // he'd already given.
       heat && !up ? (priceAgreed(o)
-        ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign`
+        ? (numberApproved(o)
+          ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign`
+          // Agreed, but not a number Matt has approved (2026-10-15).
+          : `AGREED (${heat.reason}) at ${fmtMoney(amount)}, but the number is NOT APPROVED on our side yet — don't ask them to write it up, ` +
+            `use NWMLS forms or represent us on it yet; say you'll confirm the number on our side today and come right back`)
         : `warm (${heat.reason}) — they're weighing our number, nothing is agreed; answer what they last said before asking anything new`) : "",
       o.statusNote ? `note: ${theirs(String(o.statusNote).slice(0, 120))}` : "",
       superseded.length ? `(${superseded.length} older offer${superseded.length === 1 ? "" : "s"} on this house superseded — this is the only number on it; never quote an older one)` : "",
@@ -300,9 +318,10 @@ function offMarketLines({ offers = [], events = [], now = Date.now() }) {
   return [ask, theirs ? `They have brought us an off-market house before (${String(theirs.address || "").split(",")[0]}) — a proven source; thank them like one.` : ""].filter(Boolean).join("\n");
 }
 
-export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "" }) {
+export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "", highStakes = null }) {
   const custom = recordOverCustom(rawCustom, facts);
-  const book = summarizeOffers(offers, { now, showMath, transcript });
+  const stanceOf = highStakes?.enabled ? (o) => numberStance({ offer: o, dossier: propertyDossier(events, o.address), highStakes }) : null;
+  const book = summarizeOffers(offers, { now, showMath, transcript, stanceOf });
   const amounts = new Set(book.amounts);
   const fields = fieldLines(custom, AGENT_FIELD_KEYS);
 
@@ -447,10 +466,10 @@ export function lessonsContextText(digest = "") {
     d.split(/(?<=[.!?])\s+/).filter(Boolean).map((l) => `- ${l.trim()}`).join("\n");
 }
 
-export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined }) {
+export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined, highStakes = null }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const { facts, events } = await loadRecord(store, locationId, contactId);
-  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds) };
+  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript, highStakes }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds) };
 }
 
 // Zillow's word for the house: the kind a person set on the offer first, then

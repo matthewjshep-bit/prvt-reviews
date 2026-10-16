@@ -325,13 +325,15 @@ test("the walkthrough reminder names the street and window, says only what the a
 // Matt, 2026-09-30: "make it reference pieces of the conversation we've had if
 // any, make it personalized, concise, friendly, professional, like we're
 // building a relationship".
-test("the check-in is generic: no house from before, personable from the tone and their area, and it asks about distressed or off-market houses", () => {
+test("the check-in names one thing and no house from before, personable from the tone and their area, and it asks about distressed or off-market houses", () => {
   const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged",
     lastHouse: { street: "9 Oak St", how: "passed", daysAgo: 35 },
     aboutThem: [{ what: "daughter just started at UW", daysAgo: 40 }],
     areas: ["South King"], lastSummary: "said a Burien fixer might list after the holidays",
     voice: "Keep it short. Sign off -Matt." });
-  assert.match(t, /KEEP IT GENERIC: never mention, name or hint at any house, listing, offer or deal from before/);
+  assert.match(t, /ONE THING ONLY \(no house at all\): never mention, name or hint at any other house, listing, offer or deal from before/);
+  assert.match(t, /never a house we priced or passed on, and never ask whether a house sold/);
+  assert.match(t, /THE ONE THING it names: name one kind of seller we're good for/);
   assert.doesNotMatch(t, /9 Oak St/, "the last house is never handed to the drafter");
   assert.doesNotMatch(t, /daughter/, "no personal detail");
   assert.doesNotMatch(t, /Burien fixer/, "no thread recital");
@@ -346,6 +348,58 @@ test("the check-in is generic: no house from before, personable from the tone an
   const thanks = outboundOpening({ kind: "agent_pulse", reason: "deal_thanks", segment: "partner", house: { street: "4747 46th Ave S", how: "closed" } });
   assert.doesNotMatch(thanks, /4747/);
   assert.match(thanks, /never name the house or its street/);
+});
+
+// 2026-10-15, the funnel review: Matt's own specific texts got 70% replies,
+// the bot's generic check-ins 35%. So a check-in names one real thing.
+test("a check-in names a house they mentioned that we never priced, as the one thing, and no other", () => {
+  const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", variant: 0,
+    hook: { kind: "mentioned", street: "Pine St", town: "Shelton", daysAgo: 20 }, lastHouse: { street: "9 Oak St", how: "passed" } });
+  assert.match(t, /They mentioned a house on Pine St in Shelton a few weeks back/);
+  assert.match(t, /how it's coming along, or whether the seller is still thinking about selling/);
+  assert.match(t, /the house they mentioned above is the only house in this text/);
+  assert.doesNotMatch(t, /9 Oak St/);
+  assert.doesNotMatch(t, /an estate that hasn't been listed/, "one thing: no seller situation on top");
+  assert.doesNotMatch(t, /\b20 days\b/, "no count of days");
+  const recent = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", hook: { kind: "mentioned", label: "some Stanwood houses", daysAgo: 3 } });
+  assert.match(recent, /They mentioned a house \(some Stanwood houses\) recently/);
+});
+
+test("a check-in may say we just closed one in their town, by the town only, never the house", () => {
+  const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", hook: { kind: "closed_nearby", town: "Kent" } });
+  assert.match(t, /We just closed on a house in Kent, a town they work\. Say so in a clause, by the town only — never a street or which house/);
+  assert.match(t, /Kent is the only place named, and no house at all/);
+  assert.match(t, /anything off-market has come across their desk/);
+});
+
+test("a check-in offers a quick call if that's easier, with no day or time — no calendar is connected", () => {
+  for (const o of [{ reason: "general" }, { reason: "fresh_listing", listing: { street: "1 A St", city: "Kent", dom: 10 } }]) {
+    const t = outboundOpening({ kind: "agent_pulse", segment: "engaged", ...o });
+    assert.match(t, /offer a quick call in a few words/);
+    assert.match(t, /never a day or a time, and still only one question/);
+  }
+});
+
+// 2026-10-15: short first texts got answered (54% under ~230 characters). A
+// cold agent's fresh listing is in effect a second first text.
+test("a cold agent's fresh listing gets the short first-text voice: their name, the street, one question, under 200 characters", () => {
+  const listing = { street: "123 Main St", city: "Kent", dom: 64, cut: true };
+  const t = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing });
+  assert.match(t, /the short first-text voice — two short sentences, under 200 characters/);
+  assert.match(t, /ONE question, whether it's a bit of a project\. Nothing else: no other ask, no call offer/);
+  assert.doesNotMatch(t, /offer a quick call in a few words/);
+  assert.match(t, /the listing above is the only house in this text/, "no past house");
+  assert.match(outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing, tooLong: 260 }), /YOUR LAST DRAFT WAS 260 CHARACTERS: write it again under 200/);
+  const warm = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing });
+  assert.doesNotMatch(warm, /short first-text voice/, "an agent we know gets the usual check-in");
+});
+
+test("the listing check-in and the thank-you keep their own one thing, whatever the hook says", () => {
+  const l = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing: { street: "77 Heron Way", city: "Tacoma", dom: 70 },
+    hook: { kind: "mentioned", street: "Pine St", daysAgo: 3 } });
+  assert.doesNotMatch(l, /Pine St/);
+  const thanks = outboundOpening({ kind: "agent_pulse", reason: "deal_thanks", segment: "partner", hook: { kind: "closed_nearby", town: "Kent" } });
+  assert.doesNotMatch(thanks, /Kent/);
 });
 
 // The first samples: "…had a price cut and is still sitting, aside from the
@@ -443,7 +497,7 @@ test("a follow-up to a buyer never says last check", () => {
   assert.match(t, /do NOT call it a last check, do NOT say you'll leave it alone/);
   assert.match(t, /pick up exactly where they left off/);
   assert.match(t, /Do NOT name a price or any number/);
-  assert.match(t, /Set intent to deal_followup\.$/);
+  assert.match(t, /Set intent to deal_followup\. Phone carriers block/, "then the carrier rule (2026-10-15)");
 });
 
 test("the bot is told to describe a house only in the deal's words", () => {
@@ -513,6 +567,42 @@ test("the pass on a house we promised a number on owns that we owe them, gives t
   assert.match(t, /send the next fixer/);
   assert.match(t, /Do NOT name any number/);
   assert.doesNotMatch(t, /held 15 days/, "the sweep's own reason is ours, not theirs");
+});
+
+// Matt, 2026-10-13: no manufactured homes as a rule.
+test("the pass on a mobile home says we don't buy mobile homes, not that we're single-family only right now", () => {
+  const t = outboundOpening({ kind: "kind_pass", address: "1510 Maple Lane, Kent, WA 98030", why: "manufactured",
+    heldReason: "not our kind of house — a mobile home (we don't buy mobile or manufactured homes)" });
+  assert.match(t, /it's a mobile or manufactured home, and we don't buy those/);
+  assert.match(t, /single-family fixers/);
+  assert.doesNotMatch(t, /right now we only buy single-family/);
+});
+
+// Price once (2026-10-15): a listed house far under the seller's number gets
+// a polite no-fit with no number, and the first text on a listed house asks
+// the seller's number instead of their read.
+test("the no-fit on a listed house says we're too far from the seller, names no number, and asks for other fixers on or off market", async () => {
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  const o = outboundDescriptor({ kind: "kind_pass", offer: null, saved: {}, subject: { address: "18 Fern Way, Kent, WA 98030", why: "too_far" } });
+  assert.equal(o.why, "too_far");
+  const t = outboundOpening(o);
+  assert.match(t, /too far under where the seller is to be worth sending a number/);
+  assert.match(t, /other fixers, on or off market/);
+  assert.match(t, /Do NOT name any number/);
+  assert.doesNotMatch(t, /single-family/);
+});
+
+test("the first text on a listed house floats our read and asks only what the seller is hoping to get", async () => {
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  const offer = { id: "o1", address: "18 Fern Way, Kent, WA 98030", cashAmount: 410000, arv: 620000, repairs: 90000 };
+  const o = outboundDescriptor({ kind: "take_check", offer, saved: {}, subject: { address: offer.address, askSeller: true } });
+  assert.equal(o.askSeller, true);
+  const t = outboundOpening(o);
+  assert.match(t, /"what's the seller hoping to get\?"/);
+  assert.match(t, /do NOT ask what they think it's worth/);
+  assert.match(t, /Do NOT mention an offer, a purchase price/);
+  const plain = outboundOpening(outboundDescriptor({ kind: "take_check", offer, saved: {}, subject: { address: offer.address } }));
+  assert.doesNotMatch(plain, /seller hoping/, "without the ask, the take check is as before");
 });
 
 test("when an agent brings us a house, the bot gets the address with a promise not to bother the seller, and their read on value and work", () => {

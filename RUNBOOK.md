@@ -612,6 +612,40 @@ All the logic lives in `shared/underwrite-checks.js` (`buyerView`), which calls 
 
 **Re-reading the threads.** `node scripts/buyer-objections-report.mjs` repeats the tally. It is read-only, prints ids only, and writes quotes only to a local file with `--quotes`.
 
+### Calibration from your own revisions (2026-10-15)
+
+From the funnel review: our number fell after the agent saw it on 35 of 305
+houses, and hand and machine first numbers were cut about equally (12.6% and
+11%), so the inputs are the problem: rehab read low off the photos, ARV read
+high. When Matt revises an auto-underwrite by hand, the machine now learns how
+far off it was.
+
+- **Recorded.** Every revision (`offer.revisions[]`) now carries `by` (`you`,
+  `requote`, `counter_band`), and `arv` and `repairs` as `[from, to]`, plus the
+  house's `sqft` and `yearBuilt` off the snapshot (`routes/offers.js`
+  `revisionInputs`). Only revisions made from 2026-10-15 have them.
+- **Read.** `calibrationReport` (`shared/calibration.js`) looks at a person's
+  revisions of auto-underwrites (one correction per offer: the machine's
+  figures before the first, his after the last) and adds two recommendations
+  to **Lessons** (`GET /api/dashboard/lessons`), the same shape as the rest:
+  - `rehab_psf_floor`, by era (built before 1950, 1950–79, 1980 on): at least
+    5 corrections in the era, at least 60% of them raising the rehab; the floor
+    is the $/sqft a quarter of his revisions run under;
+  - `arv_haircut`: at least 5 corrections, at least 60% lowering the ARV; the
+    cut is his middle cut, at most 15%.
+  With fewer, Lessons says "Not enough of your revisions yet to calibrate:
+  N of 5" (`calibration.note`). Apply works as for every other row; it saves
+  the whole `underwriteCalibration` block.
+- **Applied.** `settings.underwriteCalibration = { rehabFloorPsf: [{beforeYear,
+  psf}], arvHaircutPct }`, absent by default (`effectiveSettings` leaves it
+  absent; absent changes nothing). When set, the underwriter takes the haircut
+  off the ARV (the basis says "calibrated: less N%") and, when the scan priced
+  a rehab and the house has a size and a year built, adds an allowance line up
+  to the era's $/sqft — never past the heavy band's top, so it can't hold a
+  run. `job.calibration` says what it did.
+- **Check it.** Lessons shows the rows or the note. After Apply, a new
+  underwrite's ARV basis and warnings name the calibration.
+
 ### Subject Property
 
 One contact field, `subject_property` ("Subject Property"), answers: *if I
@@ -1213,6 +1247,63 @@ that the agent sees what the gap between the ARV and our price is made of.
   its length and the gate's flags. Nothing is filed or sent; it costs one
   model call. Turn the switches on with one PUT of the whole conversation
   config (GET it first).
+
+### Price once: a range on a big house, the seller's number first (2026-10-15)
+
+The funnel review (July to October) found our number fell after the agent had
+seen it on 35 of 305 houses, 11 of them after a counter or a yes. Hand and
+machine first numbers were cut about equally (12.6% and 11%), so the inputs
+are the problem (rehab read low, ARV read high). The gap between their number
+and ours decided the outcome: within 5%, 13 of 25 agreed; past 25%, none of 95.
+Both halves live in `shared/number-stance.js` (pure).
+
+- **A range until we know more** (`parties.agent.realmCheck.highStakes`:
+  `enabled` off by default, `overAmount` 500000). A house is high-stakes when
+  it is off-market, the agent brought it (`autoUnderwrite.leadSource:
+  agent_brought`), or our number is over `overAmount`. Until we have the
+  agent's read of the value and the work AND eyes on it (8+ photos scanned, a
+  walkthrough video on the offer, or `offer.seen`), the house is in range mode
+  (`numberStance` → `mode: "range"`):
+  - the float never leads with the number (`leadsWithNumber` is false), uses
+    the rough wording with a range topped by ours, and asks for their read,
+    then (once their read is in) "any chance of a few more photos or a quick
+    walkthrough video?";
+  - nothing goes on paper by machine: `paperWorthy`/`sendsItselfOnClear` say
+    no, the silence and answer timers skip it, the pushback paper skips it,
+    and the conversation's `sendOfferDocs` holds any send nobody pressed
+    (`unattended`, `forRecord`, or an auto rule's `send_offer`) with a
+    "Paper held" banner. A person pressing Send has decided;
+  - the offer book tells the bot "RANGE ONLY until …": no firm number, no
+    "our offer", no write-up ask.
+  A person-made or published offer is firm. Matt's approval (below) clears it.
+- **A listed house: the seller's number first** (`parties.agent.listedFirst`:
+  `enabled` off by default, `minPctOfTheirs` 75). Agents only, the machine's
+  first word on a house only (a person pressing Float, and a re-quote, skip
+  it). `listedFit` in `startProactive`:
+  - **ask_number** — a listed house (a list price, or our hook listing, and
+    not off-market), nothing of ours on it yet, and no seller number known:
+    the float becomes a take check that floats our ARV/rehab read and asks
+    "what's the seller hoping to get?" (`subject.askSeller`). Their answer
+    (filed as `property_details.sellerAsk`) fires the realm check the way
+    their read does.
+  - **no_fit** — ours is under `minPctOfTheirs`% of the seller's number (their
+    words, a `house_mentioned` with one, or a counter), or of the list price
+    once we've asked, and no number of ours has gone on the house (no price in
+    the thread, no paper, no floated number): nothing with a number goes. A
+    `kind_pass` with `why: "too_far"` says it's too far from where the seller
+    is to send a number and asks for other fixers on or off market (no
+    number). `offer.noFit {at, theirs, source, ratio, ours}` puts a **no_fit**
+    row on Today ("ours is 68% of the seller's 600K") with Price it by hand ·
+    Float ours anyway · We passed. It is never we_passed. The row goes when the
+    number moves, a number is floated, paper goes, or the offer closes. The
+    pushback paper never goes on a no-fit house.
+  - 75% of theirs is not the counter walk-away (`WALK_AWAY_GAP`, 25% over the
+    most we'd pay, so ours under about 80% of theirs): that rule answers a
+    counter after ours went out and is unchanged.
+- **Check it.** `POST /api/offers/:id/float {preview: true, realmCheck:
+  {highStakes: {enabled: true}}}` on a big house shows the range and the
+  question. Offers with `noFit` show on Today; `GET /api/offers/:id` shows
+  `noFit` and `paperHeld`.
 
 ### The current offer — one live row per house (2026-09-25)
 
@@ -1955,6 +2046,42 @@ The auto-send list's length bound went from 20 to 40: with this ladder the
 agent side has 21 eligible intents, and the last one was being dropped on
 save. Every entry is still filtered against `autoEligible`.
 
+### Approved numbers only go to a write-up (2026-10-15)
+
+From the funnel review: "since we're aligned at 752,500, can you write it up on
+NWMLS forms?", then "can't get there" the next day. The machine now asks an
+agent to write it up, use NWMLS forms or represent us only at a number Matt
+stands behind (`numberApproved` in `shared/offer-status.js`). No switch: this
+only tightens.
+
+- **Approved** means one of: an offer built by hand that no machine has moved;
+  `offer.approved = {amount, at, by}` at today's number, written by Send
+  (`by: "send"`), publishing a held run (`publish`), a hand revision in the
+  editor or the held-paper banner's re-quote (`revise`; revisions now carry
+  `by`), pinning a row (`pin`), or **Approve** on Today (`today`,
+  `POST /api/offers/:id/approve {amount?}`); or a run published or pinned after
+  the machine last moved the number. A re-quote on their figures
+  (`by: "requote"`) and the counter band running by itself
+  (`by: "counter_band"`) are not approval, and a new number voids an old one.
+- **What it holds.** The hot push (`asksForWriteUp` = `pushesToPaper` and
+  approved) — its `ready` and `hotCandidates`; the offer ladder still leaves an
+  agreed price alone, so nothing texts until Matt approves. The offer book says
+  "AGREED … but the number is NOT APPROVED on our side yet — don't ask them to
+  write it up … say you'll confirm the number on our side today". A gate
+  (`writeUpOk` in `evaluateReplyGates`) holds any agent draft that asks for a
+  write-up ("NWMLS", "write it up", or "represent us" beside an offer or a
+  price) on a house whose number isn't approved — except the "we're not
+  agents" answer when they handed the write-up back to us. The machine's own
+  letter text and email drop the NWMLS ask; so does the "taking it to the
+  seller" reply; the confident float doesn't promise the write-up.
+  `pushesToPaper` itself is unchanged: the focus house, the call list and the
+  offer ladder still read it as "a price is agreed".
+- **Today.** An agreed price (`priceAgreed`) at an unapproved number is an
+  **approve_number** row, "they agreed at $410,000 — approve it before we ask
+  for the write-up", with **Approve 410K** and Open.
+- **Check it.** `GET /api/offers/:id` shows `approved`; Today shows the row;
+  the hot push's skip reason is "the agreed number isn't approved yet".
+
 ### Timers on Today's rows (2026-09-17)
 
 `driver.timers` (off by default; Normal on the dial): `{ enabled,
@@ -2171,6 +2298,52 @@ days and 28 never got one at all. On deploy, expect up to about that many
 (bot sends from 2026-09-14) show, and your own typed promises only from now
 on.
 
+### A call, a time to walk it, the earnest money: promises we keep (2026-10-15)
+
+**Why.** The funnel review: in 37 of the 58 negotiations we dropped, we'd
+promised something nobody delivered, and the bot's defaults kept inventing
+people to check with ("my underwriting team", "my partner … back to you this
+afternoon").
+
+**Three more kinds of promise** (`detectPromise`, shared/follow-up.js):
+`call` ("I'll give you a call tomorrow", "let me call you back"), `tour`
+("I'll get you a time to walk it", "let me set up a walkthrough") and `emd`
+("we'll get the earnest money over to title"). A conditional one ("…give you a
+call if it makes sense") is not a promise. They're `PERSON_PROMISES`: only a
+person keeps them, so the promise sweep never sends its "still working on it"
+text for one and the driver never acts on one. `sendReplyDraft` and your own
+typed texts (`notePromiseInHandText`) record them as `promise_made` with
+`what: call | tour | emd`.
+
+**Owed rows** (`owedPersonPromises`, shared/promise-owed.js), a day after the
+promise, for 60 days:
+- `call`: a **call_owed** Call row ("Owed: a call to Pat on 12 Elm St"),
+  score 110, so it leads Today's calls, and it's on Today even when
+  `desk.dailyCalls` is 0. Kept by a connected call or one of ours that was
+  tried (`call_attempt`, not their missed call to us).
+- `tour`: an owed row "Owed: a time to walk it to …". Kept by a booking
+  (`call_booked`) or a text of ours that names a time.
+- `emd`: an owed row "Owed: the earnest money to …". Kept when the deal's
+  "Earnest money to title" checklist item is ticked.
+Dismiss closes any of them (`promise_kept` by `dismissed`). The machine's own
+keeps (a price went out) don't: a price isn't a call.
+
+**The default words** (no setting; the live config's saved instructions are
+separate and get the same rewrite by hand). A new fixed `PROMISE_RULE` rides
+on every agent draft: promise only what will actually happen, and say when
+("I'll text you the number by 3"); never invent a team or a partner; anything
+only Matt settles goes on a quick call, with needsHuman. FACTS, COMMITMENTS
+and MATH (conversation-prompt.js), the starter rules, examples, PRICING,
+REALM CHECK and mayCommit (shared/conversation-ai.js), AGENT_PAPER_RULE and
+AGENT_GOAL_RULE, the come-down line in the offer book, and the number-first
+reply ("…I'll text you where we'd be once they're done") all lost their
+"underwriting team / my partner / back to you today". "I'll text you the
+number" and "text you where we'd land" still read as a promised number.
+
+**Check:** a sent "I'll give you a call tomorrow" puts `promise_made {what:
+"call"}` on the timeline; a day on, Today's calls shows "Owed: a call to …"
+until a call is logged or tried.
+
 ### Answers the bot didn't have (2026-09-17)
 
 **Why.** Three of Today's "we owe them an answer" rows were the bot saying "let
@@ -2228,6 +2401,25 @@ Draft), texts the machine started (check-ins, first texts, buyer pulses,
 floats — the Conversation outbox), deal housekeeping not yet due. The call
 list only ever fed this screen, so nothing about who gets texted changed. The
 Settings section for the call list is gone. Live snapshot: 85 rows → 18.
+
+**Today's calls (2026-10-15).** The funnel review: all 8 contracts from
+outreach agents came after a phone call; agents who talked brought houses
+54% of the time against 8%; and only 15% of the agents who answered us
+ever talked. So the call list is back on Today as a second section, **Today's
+calls**, under Needs you: the best `desk.dailyCalls` (default **10**, 0–30, 0 =
+none) call list rows still in Call, best score first (`urgentReasons`). A
+counter above ours and partner terms stay under Needs you as before. A missed
+call only makes it with a live house on it. A person with a decision and a
+call shows once, led by the call, with the decision under "Also on".
+Scores now carry boosts (`CALL_BOOSTS`, shared/call-list.js), shown on the
+call card as "Up the list: …": +15 an agent we've done business with or
+who brought us a house (`agentSegment` partner/source), +10 one who talks
+like an investor (`investor_minded` in the last 90 days), +10 a seller going
+through a life event or an estate in their words (last 60 days), +10 a
+counter within `counterHold.callWithinPct` of ours. Setting: `saved.desk.dailyCalls`
+(PUT the settings doc; there's no Settings field). Check: `GET
+/api/dashboard/pipeline` → `desk.sections` has `call`, and at most
+`dailyCalls` rows have `section: "call"`.
 
 **GHL stage beside the name.** The work pane's name line (Today and the
 Offers split, `GhlStagePill` in PaneParts.jsx) shows the agent's Acquisitions
@@ -2551,6 +2743,56 @@ closing date in the same message ("closing 10/24") rides on the action. The
 deal's price is what `promoteToDeal` always read — the PSA's, else the
 offer's — never an "agreed" on record, which can sit above the book.
 
+### Before you sign: the pre-contract check (2026-10-15)
+
+The funnel review: 7 of 8 listed-house contracts fell through, against 1 of 5
+off-market. The dead ones had rehab low or ARV high, two were mobile homes
+signed and backed out of, one was signed with no buyer. `preContractChecks`
+(`shared/pre-contract.js`) reads eight things off the offer, each `ok`,
+`warn` (the record says something's wrong) or `unknown` (nobody looked):
+
+- **Listing remarks read**: `snapshot.rehab.listing.remarks` through
+  `remarkSignals` (a defect, low ceilings, rooms, contents left behind).
+- **Kind of house and title**: a mobile home (`assetOf`), or a land lease,
+  55+, HOA, easement, right-of-way or unpermitted work in the remarks or the
+  buyer-view flags.
+- **Eyes on the house**: 8+ listing photos scanned, or a video on the offer.
+- **Rehab at or above the light floor**: repairs vs `rehabBand(sqft).light[0]`.
+- **ARV under today's listings**: the buyer-view listings cap
+  (`snapshot.checks.cap` / `arv.capped`).
+- **At or under our number and the buyer ceiling**: the agreed (or contract)
+  price vs `cashAmount` and `buyerCeiling().withFee`.
+- **An extension, not their deadline**: ticked by hand only.
+- **Pre-sold to 3 buyers** (listed houses; none for off-market).
+
+Where it shows, all advisory (nothing blocks, no switch):
+
+- **Today**: a `pre_contract` row (Needs you) on an offer about to be signed
+  (`needsPreContract`: `pushesToPaper`, or the agent is writing it up; no
+  deal yet) while anything is open. "now" when they're writing it up. The pane
+  lists the items with a **Checked** button each (`POST
+  /api/offers/:id/precontract { key, done, note }`, kept at
+  `offer.preContract.ticks`; `GET` reads them). Buttons: **Pre-sell to 3
+  buyers** (listed houses), **Open the offer**, **It's signed — promote**.
+- **Promote**: open items are added to the promote's warnings ("before
+  signing, not checked: …") and the whole list is kept at
+  `deal.preContractAtPromote { at, open, checks }` for the post-mortem.
+- **Pre-sell** (`POST /api/dispo/presell { offerId, count = 3, dryRun }`):
+  the top `count` from `matchForDeal` (wave 1, topped up from wave 2), never
+  one it already went to, as **drafts only** — never scheduled, `needsHuman`,
+  reason `needs a person: a pre-sell waits for your Send…`, so no audit or
+  sweep releases them. `presellMessage` (shared/blast-text.js) never says
+  "under contract" and carries no link; the price is our number plus the
+  default fee. Saves `offer.presell { at, contactIds }`. At promote, buyers
+  whose pre-sell text was sent join the deal as `evaluating`
+  (`source: "presell"`); an unsent pre-sell draft is superseded so wave 1 can
+  send them the deal itself. A buyer who answers a pre-sell text before the
+  promote is answered by the investor bot, which has no deal to read yet —
+  work those by hand.
+
+Check: `GET /api/dashboard/pipeline` → `actions[]` with `kind: "pre_contract"`
+and its `checks`; a promoted deal's `deal.preContractAtPromote`.
+
 ### Tier 1 / Tier 2 — kept by the app, not GHL (2026-10-02)
 
 > 2026-10-07: GHL's Tier 1 stage is the list again (Matt: "that's my source
@@ -2626,6 +2868,20 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
     of NEVER_AUTO.
   - Preview: `GET …/follow-ups?preview=1` → `counterHolds.rows`, even with
     the switch off.
+  - **A counter close to ours is a call, not the hold (2026-10-15).** The
+    funnel review: counters within 5% of our number agreed 13 times in 25;
+    past 25%, none of 95. A counter within
+    `parties.agent.counterHold.callWithinPct` (default **10**, 0–30, 0 = off)
+    of our number gets no hold text and is never passed by text (the soft
+    round, the pass line and the firm-floor pass all stand aside). It stays a
+    person's `counter` draft carrying `callCounter { offerId, ours, theirs,
+    pct }`, the offer is marked countered as before, and the Desk's
+    `call_counter` row says "N% apart, a call lands it". A close counter that
+    comes in after an earlier hold takes the house off the hold's clock (no
+    check-in, no pass) and back onto the call list (`callsInstead`,
+    shared/counter-hold.js). The counter band and `never_above_sent` are
+    unchanged. Check: the counter's draft in the outbox shows "N% over our
+    $X — call them"; the Desk shows the `call_counter` row.
 - **Your texts in GHL count** (`ghl-broker/hand-reply-sweep.js`, every tick).
   - It reads the moved conversations and picks out the outbound texts with a
     GHL `userId` (a person). The app's own sends come as source `app` with no
@@ -3204,6 +3460,42 @@ Their words are every line they've sent since the first text. A showing offer
 first". A house the agent brings up themselves underwrites right away, and so
 does any house we already priced. The draft row carries `qualify: {stage, address, why}`.
 
+### Their first answer asks for a call (2026-10-15)
+
+**Why.** The funnel review (485 threads): all 8 contracts from outreach
+agents came after a phone call; agents who talked brought us houses 54% of
+the time against 8%; only 15% of repliers ever talked.
+
+**What it does** (`parties.agent.callAsk { enabled }`, **off** by default). An
+agent's first answer to our first text (no text or call of ours since the
+`outreach_sent`/`outreach_enrolled`), turnkey answers included, closes with
+ONE question that asks for both other fixers and a quick call: "If you've got
+other fixers on your radar, I'd love a quick 5-minute call this week, what
+time works?" (`FIXERS_CALL_ASKS`, shared/flip-read.js). No day or time is
+offered: no calendar is connected, so they pick. The model is told to (a
+FIRST ANSWER line in the context); `withCallAsk` is the backstop when it
+didn't, taking over a closing "anything else that needs work?" so the text
+still asks one thing. The canned qualify question and pass have call
+variants (`QUALIFY_ASKS_CALL`, `QUALIFY_PASSES_CALL`). Never on a call, never
+when they brought a house of their own (that house is the lead), never on a
+counter, yes, no, opt-out, or a reply asking for a call or a time, never to
+someone who sounds annoyed, and only once: the send records `call_asked`
+(and `fixers_asked` when the text asks for other houses).
+
+**With the switch off,** the first answer still closes on the other-fixers
+ask alone (`FIXERS_ASKS`, `withFixersAsk`), because the first text no longer
+carries that line. Same rules: first answer only, not when they brought a
+house of their own, not on a counter, yes, no or opt-out.
+
+**A turnkey reply is a small call (`call_turnkey_week`).** The call list
+dropped turnkey first replies on 2026-10-08. They're back for 7 days at score
+50 (below a lead's 70): "what else are you working on?". Today's calls shows
+them only when the day has room.
+
+**Check:** with the switch on, a first answer's draft ends with the call ask;
+the contact's timeline has `call_asked` once it's sent; when they answer with
+a time it's a `scheduling` heads-up for you.
+
 ### Every house an agent names is kept, and a missing address is asked for (2026-10-13)
 
 Rules: `shared/mentioned-houses.js`. Wiring: `runReply` in `ghl-broker/reply-agent.js`.
@@ -3487,6 +3779,21 @@ and, as before, a bare `call_summary` so the ladders and the check-in still
 see them reaching out — never read as a conversation. With no transcript the
 call is read once more before deciding, in case its length landed late.
 
+**A voicemail they leave is a missed call (2026-10-15).** Their inbound call
+that nobody picked up, with a voicemail long enough to read (40+ characters),
+used to go to the reply agent as if we'd talked: its `call_summary` read as a
+conversation, so "they called you" never showed. Now call-intake writes the
+inbound `call_attempt` first (`outcome: "voicemail"`, `leftMessage: true`, key
+`call_attempt:<messageId>`), then hands the words to the reply agent with
+`call.missed`. The reply agent's `call_summary` carries `missed: true`, which
+`callEventConnected` never counts as talking (so it doesn't clear the call
+row, and the 48-hour brake below doesn't fire). For an agent with a live
+house, the text after it waits for you ("they called about … and left a
+voicemail — call them back") and the Desk's `call_missed` row is one of
+Today's calls. No switch: it only holds a text back. Check: the contact's
+timeline shows the attempt with `leftMessage`, and the outbox row's reason
+says to call them back.
+
 **After a real call the machine stays off the thread for 48 hours**
 (`CALL_HAS_IT_HOURS`, `shared/thread-health.js`): a connected `call_summary`
 (transcribed, or logged by hand) makes the brake read `person_has_it` —
@@ -3598,6 +3905,30 @@ It is wording and links, not the number's registration. What changed:
   `"always"`.
 - `OUR_OFFER_TEXT_RX` also knows the for-the-record letter ("sending our
   written offer on …"), so the thread reader never takes it for a person.
+
+**Buyer texts (2026-10-15).** October's buyer texts: 74 of 678 blocked
+(10.9%), all of them cold deal texts ("it's Matt, a local investor… under
+contract…") and walkthrough invites with a price; buyer check-ins went
+through. What changed, no switch (these only hold more):
+
+- `CARRIER_CHECKED_KINDS` also covers the buyer follow-ups and walkthrough
+  texts: `blast_nudge`, `dataroom_nudge`, `deal_followup`, `showing_reminder`,
+  `showing_followup`. Same rule, one rewrite, then the gate holds it.
+- The county-records intro (dispo-autopilot.js `countyIntro`) says "I'm
+  Matt, I fix up houses locally", not "a local investor".
+- The operator's line in a deal text (`blastNote`, from the package headline
+  or the wave's own line) is left out whole when it says a carrier word
+  ("cash only, sold as-is").
+- **Send-time backstop** (`sendReplyDraft`, `BUYER_CARRIER_KINDS`): a deal,
+  walkthrough or buyer follow-up text going by itself that still says a
+  carrier word after the send-time rewrite goes back to Draft with
+  `held: carriers block texts like this — it says "…" — not sent`. A link
+  only counts to a buyer who has never written back (`investors.doc.lastRepliedAt`),
+  so with `blastLink: "always"` a cold buyer's deal text waits for your Send
+  (the minted invite is revoked; your Send mints a fresh one). Live is
+  `"on_reply"`, so a deal text carries no link and goes. Your Send is never held.
+- Check: the Outbox's Draft rows with that flag; or `carrierFlags(text)` on a
+  blast preview's rows (`POST /api/dispo/blast` with `dryRun`, the default).
 
 To re-run the measurement: page `searchConversations` for the window, read
 each conversation's messages, and group outbound `TYPE_SMS` by the `Error
@@ -3740,6 +4071,49 @@ reply-agent.js (`WALK_AWAY_GAP`, `listPriceFloor`):
   workflow + `mark_offer_passed`) and the passed-offer check-in ladder
   (every 10 days) — that is the "stay in touch".
 
+### The machine stays out of a live thread, and never walks away from a yes (2026-10-15)
+
+**Why.** The funnel review (485 threads, Jul–Oct) found machine texts landing
+in the middle of 92 live negotiations. The worst: a seller took our 261k on an
+offer we had marked we_passed four hours earlier, and 11 minutes later the
+bot answered "We've actually moved on from this one for now". The agent asked
+us to stop texting.
+
+**Two rules** (`machineMayStart`, shared/thread-health.js), asked in
+`startProactive` before anything is drafted and again in `sendReplyDraft`
+before an auto-send:
+
+- **48 hours.** They texted us (not an auto-reply) in the last 48h and a house
+  is live for them (an offer new/sent/countered, hot or agreed, a house they
+  named in the last 14 days): no `kind_pass`, `passed_checkin`, `agent_pulse`,
+  `checkin_due`, nudge, `address_chase`, `price_drop`, `promise_due`,
+  `take_ask` or `hot_push` is started, and one already counting down is
+  binned. The floats (`realm_check`, `take_check`) are exempt: they answer
+  the conversation.
+- **A yes.** Any yes to our number in the last 30 days on that house
+  (`saidYes`, shared/offer-status.js: an agreed price, the acceptance mark, a
+  `realm_yes`/`offer_accepted` event, an inbound read as an acceptance or a
+  realm yes, or their own words — `saysYes`): nothing pass-shaped goes out by
+  itself. That's `kind_pass`, `passed_checkin`, and any text whose words pass
+  (`ourReplyPasses`, which now also reads "we've actually/just moved on"). A
+  machine text is binned; a reply goes back to wait for you. The same yes
+  stops the held-underwrite sweep closing the house (it's "yours"), the
+  counter-hold clock passing it, the Tier 1 morning clear-out kicking the
+  card, and a reply that passes from retiring the unsent offer.
+
+**A yes after we passed.** A yes (by intent or in their words) on a house we
+marked we passed holds the reply for you whatever the model filed it as, and
+the draft carries `yesAfterPass`. Today shows it as **"They said yes after we
+passed: Name on Street"** (a `draft_waiting` row, now). Their next texts stay
+held until somebody sends something. The prompt's WE PASSED rule now says a
+yes to our number is not a new price: thank them, say you'll confirm today,
+needsHuman, never "we've moved on".
+
+**No switch.** Both rules only hold things back. **Check:** the outbox row's
+flag says "the machine stays out of a live thread for 48h" or "they said yes
+to our number"; the follow-up sweep's report lists the same reason as
+`skipped`.
+
 ### Terms the bot holds (2026-09-16)
 
 **The inspection period.** Our diligence is the feasibility window after mutual
@@ -3763,6 +4137,34 @@ any of it). From Saundra Mock on 13041, 2026-09-16: "your 12 day inspection
 contingency is a killer… she wants you to preinspect, so obviously the fewer
 days the better." The bot had a policy for neither half, so it promised twice
 to run it by a partner and the thread sat two days.
+
+### One set of terms (2026-10-15)
+
+Agents asked for written offers, earnest money terms and the inspection window,
+and got two answers: the bot's write-up terms ($1,000 earnest after
+inspection, a 10 to 14 day inspection, a hard money loan, roughly 10 to 21
+days to close; `writeUp` in the Conversation AI config, Matt 2026-09-18) and
+the letter's ($2,500 on acceptance, 14 days). Now there is one set. No switch:
+it follows `writeUp`.
+
+- **The letter** (`offer-doc.js`): with the Conversation AI saved, the earnest
+  money row is `writeUp.earnestMoney` "deposited with escrow after the
+  inspection period", a new **Inspection** row says "10 to 14 days from mutual
+  acceptance", and the closing row says "Roughly 10 to 21 days from acceptance,
+  inspection included — or a date of your choosing" (a closing date set by
+  hand in Settings still wins). `writtenTerms` in `shared/offer-calc.js`. A
+  visible change: new letters show $1,000, not $2,500. Letters already made
+  keep what they said. Per-offer letter terms from the editor are untouched.
+- **The email** the machine writes (no operator message) adds "Our terms:"
+  with `writeUpTermsText(writeUp)`. An operator's own message gets nothing
+  added. The text message is unchanged (carrier-safe: no "cash", no "as-is",
+  no link). No proof of funds goes (Matt skipped it).
+- **The offer book** reads the terms stamped on the offer when its letter was
+  made (`offer.terms`, `termsOnLetter`, now on lean rows), so the bot says
+  $1,000 and the inspection window for new letters and the old terms for old
+  ones.
+- **Check it.** Preview a send (`POST /api/offers/:id/send` with no message):
+  the email has "Our terms:"; a new offer's letter shows the Inspection row.
 
 ### A counter typed short, and a thread nobody answered (2026-09-16)
 
@@ -3885,8 +4287,8 @@ Old links redirect: `/dashboard?view=flow|dashboard|conversation` →
 
 ## Flow (the Reports landing tab)
 
-`/reports?view=flow` — the river. Twelve stages in two rows (acquisition:
-found → first text → replied → underwritten → floated → offered → countered
+`/reports?view=flow` — the river. Thirteen stages in two rows (acquisition:
+found → first text → replied → talked → underwritten → floated → offered → countered
 → under contract; disposition: blasted → opened → buyer → assigned/closed),
 each with its count in the window, a bar split violet (the machine on its
 own) / grey (a person), and arrows carrying the share of the previous stage
@@ -3905,6 +4307,25 @@ route `GET /api/dashboard/flow?days=&end=&tz_offset=`, uncached local tier.
 The timeline renderer is `messaging-app/src/EventFeed.jsx`, shared with the
 contact drawer.
 
+**Talked, and useful replies (2026-10-15).** Of every step on the line, a
+phone call best predicts a contract, and the river had no station for it.
+Thirteen stages now: **Talked** sits after Replied and counts each agent once
+with a real call in the window (`realCall`, `shared/talked-to.js`): a
+connected `call_summary` of 45 seconds or more; with no length from GHL, a
+transcribed call whose summary runs 200+ characters; or a call Matt logged by
+hand (no GHL message behind it). Its arrow is talked ÷ replied. Underwritten's
+arrow stays underwritten ÷ replied. Replied's sub-line adds **"N useful"**:
+agents whose reply said something (a text whose intent isn't opt_out, other or
+small_talk, that isn't a phone auto-reply or "stop texting me"), a real call,
+or a house, referral, property detail or estimate they gave
+(`house_mentioned`, `referral_mentioned`, `property_details`,
+`agent_estimate` — read by the Flow route, kept out of the feed). The Line gets
+the Talked station from the Flow, with no target. No switch: it only counts.
+Lean offer rows also carry `leadSource` (`{ source }` off
+`autoUnderwrite.leadSource`), so a row says "agent brought" without the
+timeline. Check: `GET /api/dashboard/flow` → `stages[3].key === "talked"`;
+`GET /api/dashboard/line` → a `talked` station.
+
 ## Line (Reports → Line, 2026-09-29)
 
 The whole business as one line, measured the way a factory floor is: is each station keeping pace, where does work wait, and what fell off with nothing scheduled. It only reads. Nothing on the page changes a setting.
@@ -3914,6 +4335,21 @@ The whole business as one line, measured the way a factory floor is: is each sta
 **Stations.** Flow's own counts (`buildFlow`) for the last 7 and 30 days, each station's rate a day, and its pace against a target.
 - Targets are in Settings → Line targets (`settings.lineTargets`, `normalizeLineTargets`). Defaults are the Agent Method's: 10 new agents a day, 10 offers a day, 120 offers to a contract, 2 deals a month, $15K a deal, every replied agent touched in 21 days, every buyer in 30.
 - The method line says what the month's offers should have made ("150 offers → 1.3 contracts expected") beside what they did.
+
+**Supply (2026-10-15).** New-agent supply fell from 125 a day to 2 and
+nothing said so. `supplyCheck` (`shared/line.js`, on `buildLine` as
+`supply`) counts first texts over the last 7 days. Below
+`lineTargets.minNewAgentsPerDay` (default 5; 0 turns it off; Settings → Line
+targets "Warn below") it is `low`. `why` reads the outreach sweep's last run
+(`job_cursors` "outreach", `doc.last`):
+- the autopilot is off, or the sweep has no run on record;
+- the last run failed;
+- the RentCast budget is spent;
+- the Conversation AI's daily cap left no room;
+- the pool is dry (no picks, "nobody new", or half the picks already in GHL).
+The Line shows a "New agents are drying up" card above Stations, with the
+last sweep's counts (on file, picked, imported, already in GHL,
+never-texted, off-market). Check: `GET /api/dashboard/line` → `supply`.
 
 **Waiting between stations** (`cycleTimes`). Median and slowest-tenth days for each hop that *finished* in the last 30 days:
 - priced → in front of the agent (letter or float);
@@ -4149,6 +4585,9 @@ house came.
 - **Opener.** Every default example ends asking for their other fixers, and
   the `outreach_open` rule makes that line required. The rule describes the
   line and never quotes it, so the texts don't all read the same.
+  (Superseded 2026-10-15: the first text is one question, and the fixers
+  ask follows their first answer. See "Short, one question" under The daily
+  sweep.)
 - **"It's turnkey".** A clear turnkey first answer skips the qualify question
   and gets the open-door pass at once (`saysTurnkey` in `shared/flip-read.js`;
   any "needs", "fixer" or "repairs" cancels it).
@@ -4186,6 +4625,14 @@ house came.
     never more than the share.
   - Their opener is told the listing looks finished and leans on the
     other-fixers line.
+  - **The flag reaches the text (fix, 2026-10-15).** The funnel review found
+    79 of 80 turnkey-seat agents asked "is this one a project?": the import
+    and the lost-text retry wrote the hook out field by field and dropped
+    `turnkey`. One builder, `firstTextHook(doc, { county, base })` in
+    `shared/outreach-opener.js`, now makes the hook for the import, the
+    skipped retry (which re-reads the agent's row, so an old skip gets the
+    flag back) and the lost retry. Check: `POST /api/outreach/opener/preview`
+    on a turnkey row, or an `outreach_open_skipped` event's `data.hook.turnkey`.
 
 ### Converting the houses agents bring (2026-10-09)
 
@@ -4321,6 +4768,40 @@ Replay over the 5,503 texts agents sent us (saved threads, 2026-10-14): 56 hits 
 partner terms: a wholesaler pointing us to their dispo person about one house, and "I'm a
 wholesaler myself so I understand".
 
+### Agents work for us (2026-10-15)
+
+From the funnel review: agents asked for written offers, NWMLS forms and to
+represent us, and the agents we let represent us became off-market sources.
+No switch: one rule, a wider detector, and a hold (these only tighten).
+
+- **The rule.** `AGENT_REPRESENT_RULE` (in `AGENT_GOAL_RULE`,
+  `shared/conversation-ai.js`) tells the bot that when it fits — its reply to
+  their first answer, a check-in, a house they bring us — it may say
+  `REPRESENT_US_LINE`: "we'd love to have you represent us on the purchase, so
+  you'd earn the buyer side too". Once in a thread at most, never as a
+  condition, never beside a number of ours (the write-up gate reads "represent
+  us" beside a price as a write-up ask).
+- **Their offer to be our agent is partner terms.** `buyer_agent` in
+  `shared/partner-terms.js` now also reads "I'd love to be your agent", "happy
+  to be your agent", "work as your buyer's agent", "a buyer's agreement", "a
+  buyer rep agreement" (never "who's your agent?" or "I can't be your agent").
+  As before: the reply is held for Matt and a `call_partner_terms` row goes on
+  Today.
+- **A showing on a live house is Matt's.** When an agent offers a showing or a
+  tour (`isShowingOffer`, or the model's walkthrough read) on a house we're
+  working — an open offer on it, or one we haven't priced that their words say
+  is finished — the reply is held: `draft.showingOffered`, and
+  `evaluateReplyGates` flags "they offered a showing on … — yours to book,
+  call or pass" (a content gate: the nightly audit never releases it). A
+  `showing_offered` event goes on their timeline (one a day per house). On an
+  unpriced finished house the drafted reply is still the "more finished than
+  what we buy" pass, so Send is one press; it just never goes by itself. A
+  house they told us was turnkey before this message (`agentRuledOut`) gets
+  the pass sent as it always did. An unpriced house with work still gets
+  "numbers first" and the underwrite.
+- **Check it.** Today shows the held draft under Drafts waiting on you with
+  the showing reason; the contact's timeline shows "they offered a showing".
+
 ### Every agent on a clock: the agent check-in (2026-09-29)
 
 Matt: "reach out to these agents proactively and frequently, every 3 weeks or
@@ -4441,6 +4922,62 @@ it is news, not history. The subject carries `pastHouses`, which the drafter
 never sees. A draft naming one of those houses (`namesHouse`) is written
 again once and dropped if it still names one. `pulse.voice` (Settings, 600
 characters) is Matt's own note on the voice, passed to the drafter.
+
+**One real thing, and a call (2026-10-15).** The funnel review: Matt's own
+specific texts got 70% replies, the generic check-ins 35%. Each check-in now
+names ONE real thing, picked by `checkInHook` in `shared/agent-pulse.js`
+(`subject.hook`), in this order:
+- `listing`: their fresh listing (as before);
+- `mentioned`: a house they named (`house_mentioned`, now read by the pulse)
+  in the last 60 days that we never priced (no offer on it, sent or drafted),
+  never passed or kicked off Tier 1, and that isn't our first text's listing;
+- `closed_nearby`: one of our deals at stage `closed` in the last 60 days, in
+  a town they work (their listings, their houses, their market areas). The
+  text names the town only, never the house;
+- `situation`: otherwise, one kind of seller we're good for.
+Never a house we priced or passed on, and never "did it sell?". The thank-you
+after a close has no hook. The hook's own house is taken out of `pastHouses`;
+the gate still holds every other one. A mentioned house sets no `address` or
+`listingKey`, so the reply isn't treated as a first-text house. The text may
+offer a quick call "if that's easier", never with a day or time (no calendar
+is connected). The draft's `outbound.hook` and the `agent_pulse_texted`
+event's `data.hook` record which kind went. No switch: it rides the check-in's
+own. Check: `POST /api/outreach/pulse/preview {limit: 3}` and read the hook in
+each sample.
+
+**A cold agent's fresh listing reads like a first text (2026-10-15).** A
+cold agent's `fresh_listing` check-in is in effect a second first text, so it
+gets the short first-text voice: their first name, the street, one question
+("a bit of a project?"), under `OPENER_MAX_CHARS` (200). No past house, no
+other ask, no call offer. A draft over 200 is written again once
+(`writeShorterFirstText`, `outbound.coldOpen`). `coldEveryDays` still
+defaults to 60 (Matt sets 30 live). No new switch: it rides the check-in's
+own. Check: `POST /api/outreach/pulse/preview {reason: "fresh_listing"}`.
+
+**Matt's 15 (2026-10-15, off by default).** Matt's own specific texts got
+70% replies. Once a week (`outreachAutopilot.pulse.mattsFifteen {enabled:
+false, size: 15, weekday: 1, hour: 8}`: Monday, from 8am Pacific) the tick
+drafts check-ins for his best agents, for him to make his own and send:
+- **Who** (`pickMattsFifteen`, `shared/agent-pulse.js`): partners, then
+  sources, then engaged agents. Within each, the newest word to us first, then
+  the most houses with us. Never an agent who is stopped or owned by another
+  clock, a cold one, or one either side texted in the last 7 days.
+- **How** (`startMattsFifteen`, `ghl-broker/agent-pulse.js`): each is
+  checked in GHL and claimed with the day's `agent_pulse_sent` (`reason:
+  "matt15"`, the same daily key as the check-in, so nobody gets two). It is
+  drafted as an `agent_pulse` with `subject.forMatt` and
+  `holdForAPerson("Matt's 15 …")`. Nothing sends itself; a draft that trips a
+  gate waits for him instead of being dropped.
+- **Where it shows.** The draft's `outbound.forMatt` keeps it on Today
+  (`urgentReasons`) as "Matt's 15: {name}, a check-in to make your own", with
+  the editable draft in the work pane. Send records `agent_pulse_texted` as
+  usual. His claims don't count against the daily check-in's seats.
+- **Gating.** `job_cursors` row `mattsFifteen` via the daily gate (cursor
+  written before the run, a stale run retried, tries capped), on the set
+  weekday only.
+- **Check.** `GET /api/outreach/pulse/matts-fifteen` lists who this week's
+  would be, plus the last run. `POST /api/outreach/pulse/matts-fifteen/run
+  {dryRun}` runs it by hand (a dry run by default).
 **Write 3 sample check-ins** (`POST /api/outreach/pulse/preview {limit, reason}`, `reason` e.g. "general")
 drafts the next ones from their real threads with the saved settings —
 `reply-agent.js previewProactive`, which writes nothing and sends nothing.
@@ -4811,9 +5348,25 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   `stripSignOff` cuts any sign-off or opt-out line from the end of an
   `outreach_open`/`outreach_nudge` draft anyway. An example containing "can
   stop" is dropped, and a sign-off at the end of an example is cut. The first
-  text stays under 250 characters so it fits in two SMS segments with GHL's
-  two lines added. A reply that arrives within minutes still
+  text stays under 200 characters (`OPENER_MAX_CHARS`; it was 250 until
+  2026-10-15). A reply that arrives within minutes still
   matches our draft, so it isn't held as a person's thread.
+- **Short, one question (2026-10-15).** The funnel review: first texts under
+  about 230 characters got 54% replies, longer ones 33–36%, and the required
+  other-fixers line cost about 12 points. The defaults are now four examples
+  of about 150 characters with one question each and no fixers line, and the
+  `outreach_open` rule asks for two short sentences and one question, with the
+  county line optional. A turnkey seat is told to say it looks finished and
+  ask lightly whether they ever see ones that need work. The fixers ask moves
+  to the reply to their first answer. `normalizeOpener` reads a saved list of
+  the old defaults (`LEGACY_DEFAULT_OPENER_EXAMPLES`) as unchanged and serves
+  the new ones; an old default mixed in with Matt's own is dropped, and so is
+  any saved example over 220 characters. An answer to our first text is
+  recognised by its sent `outreach_open` draft (`lastLineIsOurFirstText`), not
+  the words "came across your listing", which the new texts mostly don't say;
+  the phrase still counts for the GHL workflow's template. Check: `POST
+  /api/outreach/opener/preview` gives three samples, each at most 200
+  characters, none asking for other fixers.
 - **Nobody is created and left untexted.** Before importing, the sweep asks how
   many machine drafts the Conversation AI's daily cap still allows after the
   reply reserve (`machineRoomToday`), and lowers the day's number to fit. A
@@ -4831,6 +5384,56 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   memory without recording a skip. The retry also picks up any contact the
   app created to text (`import` event with `openWith: "app"`) more than 2
   hours ago that has no draft of any kind.
+- **Which first text went (2026-10-15).** `openerPlan(o)` in
+  `conversation-prompt.js` makes every per-agent choice from `variant`: the
+  lead example, the opening move, the way we say who we are and the one detail
+  to notice. The prompt is built from it. The draft's `outbound` keeps
+  `variant`, `move` (index into `OPENING_MOVES`), `who` (index into
+  `WHO_WE_ARE`), `notice`, `turnkey` and `examplesHash` (which saved examples
+  it was written from). The `outreach_sent` event adds `variant`,
+  `openingMove`, `turnkey`, `chars` (the length that went) and `edited` (a
+  person changed it). No switch. Check: an `outreach_sent` event's `data` on
+  any agent texted after the deploy.
+- **Agents nobody ever texted (2026-10-15, off by default).** New-agent
+  supply fell from 125 a day to 2. `outreachAutopilot.neverTexted {enabled:
+  false}`: inside the same daily room, after the retries, `retryFirstTexts`
+  gives the first text to imported agents a pull saw in the last 3 days
+  (`store.listNeverTextedOutreach`, both backends: status `imported`, a
+  contact id, no `doc.ghl.lastMessageAt`). It skips anyone with
+  `outreach_sent`, `outreach_enrolled`, an `outreach_open_skipped`,
+  `agent_pulse_texted`, `hand_reply`, a text or call summary, a follow-up,
+  check-in or address-chase text, an unsubscribe, the GHL trigger tag
+  (`tag_added agent-outreach`), or any reply draft. It also skips anyone the
+  app created to text, which the lost path covers. The hook is their current
+  listing from the latest pull (`firstTextHook`). Each is claimed first with
+  `outreach_open_queued` (one per contact, ever), so no second run starts
+  another; one a deploy drops is retried by the lost path. The sweep's cursor
+  `last` carries `retried`, `neverTexted` and `opened`. Check: `GET
+  /api/outreach/autopilot` → `last.neverTexted` after the 10am run.
+- **Listings that came off the market (2026-10-15, off by default).**
+  `outreachAutopilot.expired {enabled: false, share: 25}`. Before the regular
+  pull, each run reads ONE county (in turn, `outreachPages` cursor
+  `expiredTurn`) for RentCast `status=Inactive` listings, which include the
+  sold ones (`body.status: "Inactive"` on the pull; `rentcastPage` lets it
+  override Active). The listings go into their own batch, "Autopilot ·
+  Off-market · King, WA"; the county's own batch would collide on the listing
+  key. `keepOffMarket` (routes/outreach.js) keeps only listings with a
+  `removedDate` in the last 30 days that didn't sell
+  (`offMarketListings`, outreach-score.js):
+  - with an Apify token, Zillow's status decides for the freshest 40 (sold,
+    pending or back for sale are dropped);
+  - otherwise RentCast's history decides, which rarely shows a sale, so
+    without a token a sold house can slip through.
+  Coming off the market is the distress, so no distress rule applies after
+  it. Each listing and hook carries `offMarket` and `removedDate`.
+  `share` % of the run's RentCast requests and of the day's new agents go to
+  it first (the import's `createLimit` for that batch); the regular pull gets
+  the rest, inside the same monthly budget. A new agent's first text says we
+  saw it came off the market and asks whether the seller still hopes to sell,
+  never "expired". An agent already in GHL gets it from the check-in as
+  `off_market_listing` (`listingDistressed` reads `offMarket` as news), in
+  the same words. The cursor's `last.offMarket` says what the pull found.
+  Check: `GET /api/outreach/autopilot` → `last.offMarket`.
 - **Samples.** "Write 3 sample first texts" under the examples box
   (`POST /api/outreach/opener/preview`) drafts texts for agents waiting in the
   autopilot batches. Nothing is imported, saved or sent.
@@ -5513,11 +6116,21 @@ Matt: "filter out rural properties when we reach out to agents, these are harder
 - **Pass.** `triageHeldUnderwrite` retires a rural hold to `we_passed` at the next check, with no 24h wait. The held sweep then sends `kind_pass` with `why: "rural"`: "we can't do rural — our buyers want houses on under 2 acres", and an ask for fixers in town. On the Desk the card reads "Rural: address" (Underwrite anyway / Pass on it). Tier 1 flags it `rural` (sure), and the morning auto-kick takes it off.
 - **Bot.** `agentFocusRule` tells the agent bot that we don't buy rural houses, acreage, farms or ranches. When an agent says 2+ acres, the bot says no kindly and doesn't promise numbers. A rural house we priced on purpose is named by `pricedOutsideFocus`, and lean rows carry `subjectLotSqft` for that in both store backends.
 
+### No mobile or manufactured homes (2026-10-13)
+
+Matt: "can we not do manufactured homes as a rule now, lets decline if someone asks if we do them."
+
+- **The rule.** `NEVER_BUY_KINDS = ["manufactured"]` in `shared/asset-type.js`. `normalizeFocusKinds` strips it, so it can't be ticked back on in Settings (the checkbox is gone). `kindHold` holds a mobile home as `not our kind of house — a mobile home (we don't buy mobile or manufactured homes)` whatever `focusKinds` says. `MOBILE_HOLD` matches it, and the older "(single-family only right now)" wording too.
+- **Pass.** Like rural, `triageHeldUnderwrite` retires a mobile-home hold to `we_passed` at the next check, with no 24h wait. The held sweep sends `kind_pass` with `why: "manufactured"`: "it's a mobile or manufactured home, and we don't buy those", plus an ask for single-family fixers. Underwrite anyway before then still prices it.
+- **Bot.** `agentFocusRule` has a MOBILE HOMES paragraph. If an agent asks whether we buy them, or brings one, the bot says no plainly and kindly, never "maybe" or "send it over", and asks for single-family fixers. A mobile home we priced on purpose is still named by `pricedOutsideFocus`.
+- **Outreach.** `ingestCohort` drops `Manufactured` listings whatever type was asked for, with a "no mobile homes: dropped N of M" warning. `pickAgentsToImport` refuses a `Manufactured` hook. `normalizeOutreachAutopilot` drops the type, and the Settings and Agent Outreach pickers no longer offer it.
+- **Unchanged.** Selling a mobile home we already hold: the buyer side, `pickWave({ manufactured })`, the mobile-home buyer tags and the Deals modal kind picker.
+
 ### Single-family focus (2026-10-01)
 
 Matt: focus the app on single-family residences. Multi-family stays a kind an offer can carry (it will be expanded into later), but it isn't priced on its own yet. Neither are townhouses, condos, mobile homes or land.
 
-- **`settings.focusKinds`** (default `["sfr"]`, `normalizeFocusKinds` in `shared/asset-type.js`) lists the kinds the auto-underwrite prices on its own. Set it in Settings → Auto-underwrite → "Houses the auto-underwrite prices on its own". Multi-family and mobile/manufactured can be ticked there later.
+- **`settings.focusKinds`** (default `["sfr"]`, `normalizeFocusKinds` in `shared/asset-type.js`) lists the kinds the auto-underwrite prices on its own. Set it in Settings → Auto-underwrite → "Houses the auto-underwrite prices on its own". Multi-family can be ticked there later (mobile/manufactured can't: see No mobile or manufactured homes).
 - **The hold** (`kindHold`, `auto-underwrite.js` step 2):
   - It runs right after the subject's Zillow lookup, before the comps and the photo scan are bought.
   - Any `homeType` outside the focus is held as `not our kind of house — a townhouse (single-family only right now)`.

@@ -17,22 +17,24 @@
 
 import {
   effectiveStatus, isExpired, offerExpiresAt, investorStatus, needsAiReview, aiHoldReasons, isAiGenerated, isHot,
-  DEAD_STATUSES, LIVE_DEAL_STAGES,
-  offerHeat,
+  DEAD_STATUSES, LIVE_DEAL_STAGES, OPEN_STATUSES,
+  offerHeat, priceAgreed, agreedAboveOurNumber, numberApproved,
 } from "./offer-status.js";
 import { stepLabel, exhausted, normalizeSteps, questionIn } from "./follow-up.js";
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
 import { addressKey } from "./contact-record.js";
 import { openPromises, resolvePromise } from "./promise-resolver.js";
-import { owedPromises } from "./promise-owed.js";
+import { owedPromises, owedPersonPromises, PERSON_PROMISE_WORDS } from "./promise-owed.js";
 import { UNANSWERED_LIMIT } from "./thread-health.js";
 import { botHold, holdLine } from "./bot-hold.js";
-import { groupHouses, resolveHouse } from "./current-offer.js";
+import { groupHouses, resolveHouse, pricedAt } from "./current-offer.js";
 import { showingSummary } from "./showing.js";
 import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
 import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
 import { accessFor } from "./deal-access.js";
 import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
+import { needsPreContract, preContractChecks, openChecks, PRESELL_MIN_BUYERS } from "./pre-contract.js";
+import { isOffMarket } from "./off-market.js";
 
 const DAY_MS = 86400000;
 // How long a hand-made offer nobody sent stays a decision on the Desk.
@@ -72,14 +74,18 @@ export const INTEREST_STALL_DAYS = 4;
 export const ACTION_KINDS = [
   { key: "promise_owed",      label: "Owed a number" },
   { key: "number_owed",       label: "Still owed, past the day" },
+  { key: "call_owed",         label: "A call we promised" },
   { key: "draft_waiting",     label: "Drafts waiting on you" },
   { key: "handoff",           label: "One click from you" },
   { key: "investor_price_agreed", label: "Prices the machine agreed" },
   { key: "closing_soon",      label: "Closing" },
   { key: "closing_task_due",  label: "Closing checklist" },
   { key: "hot_stalled",       label: "Price agreed, gone quiet" },
+  { key: "pre_contract",      label: "Before you sign" },
   { key: "underwrite_held",   label: "Underwrites that need a look" },
   { key: "offer_ready",       label: "Priced, not floated" },
+  { key: "no_fit",            label: "Too far under the seller to text" },
+  { key: "approve_number",    label: "Agreed — approve the number" },
   { key: "ladder_exhausted",  label: "Followed up, no reply" },
   { key: "showing_soon",      label: "Walkthroughs coming up" },
   { key: "showing_no_window", label: "No walkthrough window yet" },
@@ -148,6 +154,9 @@ const PROMISE_OPS = {
   yours: [{ key: "open_editor", label: "Open and fix", intent: "primary" }],
 };
 const NEEDS_OFFER = new Set(["float_take", "float_realm", "rerun_held", "open_editor"]);
+// A call we promised leads the day's calls (shared/call-list.js scores the
+// rest: a missed call is 105, a hot offer 100).
+const CALL_OWED_SCORE = 110;
 const PROMISE_MOVE_LABEL = {
   send_number: "the number is ready and hasn't gone out",
   send_paper: "we said we'd send the written offer and it hasn't gone",
@@ -178,10 +187,13 @@ const PROMISE_MOVE_LABEL = {
  *   dealRooms     offer ids with a live buyer package (dataroom). Only when
  *                 given does a deal without one get a row: a caller that
  *                 didn't look never guesses.
+ *   preContractByOffer  { offerId: preContractChecks() } read off the full
+ *                 record for the offers about to be signed; without it the
+ *                 row reads the lean one (shared/pre-contract.js)
  */
 export function buildPipeline({
   offers = [], drafts = [], events = [], jobs = [], config = null, contactNames = {},
-  sentDrafts = [], heldTriageByOffer = {},
+  sentDrafts = [], heldTriageByOffer = {}, preContractByOffer = {},
   now = Date.now(), eventsLimit = 0, dealRooms = null,
 } = {}) {
   const rooms = dealRooms ? new Set(dealRooms) : null;
@@ -368,7 +380,34 @@ export function buildPipeline({
           ? [{ key: "underwrite_anyway", label: "Underwrite anyway", intent: "secondary" }, { key: "drop", label: "Pass on it", intent: "primary" }]
           : [{ key: "open_editor", label: "Open and fix", intent: "primary" }, { key: "drop", label: "Drop it", intent: "danger" }] }));
     }
-    if (lane === "ready" && card.ai.made && !(o.sends || []).length) {
+    // A listed house where ours is far under the seller's number (or the
+    // list price), so the machine sent a polite no-fit instead of a number
+    // (shared/number-stance.js listedFit, 2026-10-15). Not a pass: Matt
+    // prices it by hand, floats ours anyway, or walks. Gone once the number
+    // moves, a number goes out, or the offer closes.
+    const nf = o.noFit;
+    const noFitLive = Boolean(nf?.at && OPEN_STATUSES.has(status) && !o.deal && !(o.sends || []).length
+      && (ms(o.proactive?.realmCheckAt) ?? 0) <= ms(nf.at) && pricedAt(o) <= ms(nf.at));
+    if (noFitLive) {
+      const theirsK = nf.theirs ? `${Math.round(nf.theirs / 1000)}K` : "";
+      card.actionIds.push(push({ ...base, kind: "no_fit", severity: "soon",
+        title: `${card.address}: ours is ${nf.ratio ? `${Math.round(nf.ratio * 100)}% of ` : "far under "}${nf.source === "seller" ? "the seller's" : "the list price,"} ${theirsK}`,
+        detail: [`cash ${money(o.cashAmount)}`, "the machine told them it doesn't fit and sent no number"].join(" · "),
+        why: "too far apart to text a number",
+        ops: [{ key: "open_editor", label: "Price it by hand", intent: "primary" }, { key: "float_realm", label: "Float ours anyway", intent: "secondary" },
+          { key: "mark_we_passed", label: "We passed", intent: "secondary" }] }));
+    }
+    // They said yes to a number Matt hasn't approved (2026-10-15): the machine
+    // won't ask them to write it up, or to represent us at it, until he does.
+    const agreed = !o.deal && OPEN_STATUSES.has(status) ? priceAgreed(o) : null;
+    if (agreed && !agreedAboveOurNumber(o) && !numberApproved(o)) {
+      const k = `${Math.round((Number(o.cashAmount) || 0) / 1000)}K`;
+      card.actionIds.push(push({ ...base, kind: "approve_number", severity: "now", amount: Math.round(Number(o.cashAmount) || 0),
+        title: `${card.address}: they agreed at ${money(o.cashAmount)} — approve it before we ask for the write-up`,
+        detail: [`agreed by ${String(agreed.via || "their yes").replace(/_/g, " ")}`, "no write-up ask, no NWMLS, until you approve"].join(" · "),
+        ops: [{ key: "approve_number", label: `Approve ${k}`, intent: "primary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
+    }
+    if (lane === "ready" && card.ai.made && !(o.sends || []).length && !noFitLive) {
       card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon",
         readyAt: o.autoUnderwrite?.finishedAt || o.createdAt || null,
         title: `${card.address} is priced and nothing has gone out`, why: o.proactive?.skipped?.reason ? String(o.proactive.skipped.reason).slice(0, 140) : "",
@@ -407,6 +446,26 @@ export function buildPipeline({
           why: every ? `checking in every ${every} days` : "the machine has stopped texting; the next move is a call",
           ...(every ? { group: "machine", next: { what: "a status check", at: new Date((ms(lastPush) ?? now) + every * DAY_MS).toISOString() } } : {}),
           ops: [{ key: "open_contact", label: "Open their record", intent: "primary" }, { key: "mark_no_response", label: "Mark no response", intent: "secondary" }] }));
+      }
+    }
+    // About to be signed (2026-10-15): what nobody has looked at yet — the
+    // listing remarks, the title, a look inside, the rehab floor, the ARV
+    // against today's listings, our number, the deadline, a pre-sell. Seven
+    // of eight listed-house contracts fell through on things on this list.
+    if (needsPreContract(o)) {
+      const checks = preContractByOffer?.[o.id] || preContractChecks({ offer: o });
+      const open = openChecks(checks);
+      if (open.length) {
+        const presold = new Set(o.presell?.contactIds || []).size;
+        card.actionIds.push(push({ ...base, kind: "pre_contract", severity: o.hot?.signal === "writing_up" ? "now" : "soon",
+          title: `${card.address}: before you sign, ${open.length} of ${checks.length} not checked`,
+          detail: open.map((c) => c.label.toLowerCase()).join(" · "),
+          checks,
+          ops: [
+            ...(!isOffMarket(o) && presold < PRESELL_MIN_BUYERS ? [{ key: "presell", label: `Pre-sell to ${PRESELL_MIN_BUYERS} buyers`, intent: "primary" }] : []),
+            { key: "open_editor", label: "Open the offer", intent: isOffMarket(o) || presold >= PRESELL_MIN_BUYERS ? "primary" : "secondary" },
+            { key: "promote_deal", label: "It's signed — promote", intent: "secondary" },
+          ] }));
       }
     }
     if (ladderDone && !replied) {
@@ -607,12 +666,21 @@ export function buildPipeline({
     const never = (NEVER_AUTO[d.party] || []).includes(d.intent);
     const x = d.exception;
     if (d.status === "draft") {
-      const hot = never || (x && !x.passed);
-      const title = x && !x.passed && x.theirAmount && x.ceiling
+      // Their yes landed on a house we passed on (2026-10-15): the most
+      // important row of the day, said plainly.
+      const yesAfter = d.yesAfterPass?.offerId ? d.yesAfterPass : null;
+      const hot = never || (x && !x.passed) || Boolean(yesAfter);
+      const title = yesAfter
+        ? `They said yes after we passed: ${d.contactName || "an agent"} on ${String(yesAfter.address || base.address || "the house").split(",")[0]}`
+        : x && !x.passed && x.theirAmount && x.ceiling
         ? `Counter ${money(x.theirAmount)} is ${money(x.theirAmount - x.ceiling)} over the ${money(x.ceiling)} ceiling`
+        : d.outbound?.forMatt ? `Matt's 15: ${d.contactName || "an agent"}, a check-in to make your own`
         : `${d.contactName || "Someone"}: ${String(d.intent || "reply").replace(/_/g, " ")}`;
       const id = push({ ...base, kind: "draft_waiting", severity: hot ? "now" : "soon", title,
-        detail: x && !x.passed ? (x.basis || x.reason || "") : (d.autoSend?.reason || ""), ops: [] });
+        ...(yesAfter ? { yesAfterPass: true } : {}),
+        detail: yesAfter
+          ? `they took our ${money(yesAfter.amount)} after we marked it we passed — reopen it, or tell them yourself; the bot's reply waits for you`
+          : x && !x.passed ? (x.basis || x.reason || "") : (d.autoSend?.reason || ""), ops: [] });
       if (card) card.actionIds.push(id);
     } else if (d.status === "scheduled" && d.outbound?.kind === "blast_open") {
       // A blast is one decision, not two hundred rows: one line per deal.
@@ -750,6 +818,36 @@ export function buildPipeline({
         heldOffer ? `underwrite held: ${String(aiHoldReasons(heldOffer)[0]).split(" — ")[0].slice(0, 120)}` : "",
         p.text ? `we said "${String(p.text).slice(0, 90)}"` : p.by === "you" ? "you said it yourself" : ""].filter(Boolean).join(" · "),
       ops: [...(PROMISE_OPS[v.move] || []).filter((o) => v.offerId || !NEEDS_OFFER.has(o.key)), { key: "dismiss_promise", label: "Dismiss" }] });
+  }
+
+  /* --- a call, a time to walk it, the earnest money we promised (2026-10-15) --- */
+  // Only a person keeps these (promise-owed.js owedPersonPromises). A call is
+  // a Call row at the top of the day's calls; the other two are owed rows
+  // like the number above, until they're kept or you dismiss them.
+  for (const p of owedPersonPromises({ events, sentDrafts, offers, now })) {
+    const mine = byContact.get(p.contactId) || [];
+    const theirs = [...sentDrafts, ...drafts].filter((d) => d?.contactId === p.contactId);
+    const named = contactNames[p.contactId] || mine.find((o) => o?.contactName)?.contactName || theirs.find((d) => d.contactName)?.contactName || "";
+    const first = String(named).trim().split(/\s+/)[0] || "";
+    const street = p.address ? String(p.address).split(",")[0] : "";
+    const v = resolvePromise({ promise: { ...p, asksThem: false, owedAt: null }, offers: mine, drafts: theirs, now });
+    const offer = p.address ? mine.find((o) => o?.address && streetKey(o.address) === streetKey(p.address)) : null;
+    const days = Math.floor((now - (ms(p.since) ?? now)) / DAY_MS);
+    const detail = [`promised ${p.dates.join(", again ")}`, days >= 2 ? `${days} days ago` : "",
+      p.text ? `we said "${String(p.text).slice(0, 90)}"` : p.by === "you" ? "you said it yourself" : ""].filter(Boolean).join(" · ");
+    const base = { contactId: p.contactId, contactName: named, address: p.address || "", offerId: offer?.id || null, move: v.move, why: v.reason || "",
+      draftId: null, fromDraftId: p.draftId || null, promisedAt: p.lastAt, severity: "now", group: "yours",
+      title: `Owed: ${PERSON_PROMISE_WORDS[p.what]} to ${first || "an agent"}${street ? ` on ${street}` : ""}`, detail };
+    if (v.move === "call_owed") {
+      push({ ...base, id: `call_owed:${p.contactId}:${p.since}`, kind: "call_owed", section: "call", score: CALL_OWED_SCORE,
+        call: { reason: "call_owed", why: "we said we'd call them", since: p.since, tries: 0, houses: [],
+          goal: `We told them we'd call${street ? ` about ${street}` : ""} (${detail}). Make the call, or text them a time that works and keep it.`,
+          opener: `Hi ${first || "there"}, it's Matt — calling like I said I would${street ? ` about ${street}` : ""}.` },
+        ops: [{ key: "dismiss_promise", label: "Dismiss" }] });
+    } else {
+      push({ ...base, id: `number_owed:${p.contactId}:${p.what}:${p.since}`, kind: "number_owed", what: p.what,
+        ops: [...(offer ? [{ key: "open_editor", label: "Open the offer", intent: "secondary" }] : []), { key: "dismiss_promise", label: "Dismiss" }] });
+    }
   }
 
   // Timers: rows the machine clears by itself after a wait (driver.timers).

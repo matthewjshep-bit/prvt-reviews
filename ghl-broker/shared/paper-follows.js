@@ -95,15 +95,18 @@ export function saidYesOn(offer, { drafts = [], events = [] } = {}) {
 }
 
 /**
- * paperWorthy(offer, { saidYes }) → boolean
+ * paperWorthy(offer, { saidYes, stance }) → boolean
  *
  * A number we'd put in writing unasked: a person's own offer, a clean
  * underwrite, or a held one a person published. A rough number — built on
  * the agent's own figures (`basis: "agent_numbers"`) or marked `rough` — only
  * once they said yes to it (`saidYes`, see saidYesOn): silence, a no or a
- * neutral answer never puts it on paper. Never a held draft.
+ * neutral answer never puts it on paper. Never a held draft. Never a
+ * high-stakes house still in range mode (`stance`, shared/number-stance.js),
+ * yes or no: that waits for their read and eyes on it, or Matt's approval.
  */
-export function paperWorthy(offer, { saidYes = false } = {}) {
+export function paperWorthy(offer, { saidYes = false, stance = null } = {}) {
+  if (stance?.mode === "range") return false;
   const au = offer?.autoUnderwrite;
   if (!au) return true;
   if (ROUGH_BASES.has(au.basis)) return saidYes === true;
@@ -125,13 +128,15 @@ export function isRoughNumber(offer) {
 }
 
 /**
- * sendsItselfOnClear(offer) → boolean
+ * sendsItselfOnClear(offer, { stance }) → boolean
  *
  * May the written offer go out by itself the moment the underwrite lands
- * (sendOffer.onClearUnderwrite)? Not on the agent's own figures and not on a
- * rough first pass: both are numbers to float, not paper.
+ * (sendOffer.onClearUnderwrite)? Not on the agent's own figures, not on a
+ * rough first pass, and not on a high-stakes house in range mode: all three
+ * are numbers to float, not paper.
  */
-export function sendsItselfOnClear(offer) {
+export function sendsItselfOnClear(offer, { stance = null } = {}) {
+  if (stance?.mode === "range") return false;
   const au = offer?.autoUnderwrite;
   return !au || (au.basis !== "agent_numbers" && au.basis !== "rough");
 }
@@ -191,7 +196,7 @@ export function answeredSince(at, { drafts = [], events = [] } = {}) {
  * Whether the written offer should follow a float nobody answered. Every
  * refusal says why, for the runner's log and the tests.
  */
-export function paperAfterSilenceDue({ offer, drafts = [], events = [], silenceHours = 24, withFloat = false, now = Date.now() } = {}) {
+export function paperAfterSilenceDue({ offer, drafts = [], events = [], silenceHours = 24, withFloat = false, stance = null, now = Date.now() } = {}) {
   const no = (reason, extra = {}) => ({ due: false, reason, floatAt: null, hours: 0, ...extra });
   if (!offer || offer.deal) return no("a deal, not an offer");
   const status = effectiveStatus(offer);
@@ -199,6 +204,7 @@ export function paperAfterSilenceDue({ offer, drafts = [], events = [], silenceH
   if (!(Number(offer.cashAmount) > 0)) return no("no number on the offer");
   if (paperWent(offer)) return no("the written offer already went");
   if (offer.paperAfterFloat) return no("already tried once");
+  if (stance?.mode === "range") return no("a high-stakes house: a range only until we have their read and eyes on it");
   if (!paperWorthy(offer)) return no("not a number we put in writing unasked");
   const floatAt = floatSentAt(drafts, offer.id);
   if (!floatAt) return no("our number never went out by text");
@@ -235,7 +241,7 @@ const YES_INTENTS = new Set(["realm_yes", "acceptance"]);
  * conversation's. A yes counts too (`kind: "yes"`), and only a yes lets a
  * rough number (paperWorthy) go to paper.
  */
-export function paperAfterAnswerDue({ offer, drafts = [], events = [], now = Date.now() } = {}) {
+export function paperAfterAnswerDue({ offer, drafts = [], events = [], stance = null, now = Date.now() } = {}) {
   const no = (reason, extra = {}) => ({ due: false, reason, floatAt: null, kind: null, ...extra });
   if (!offer || offer.deal) return no("a deal, not an offer");
   const status = effectiveStatus(offer);
@@ -263,6 +269,7 @@ export function paperAfterAnswerDue({ offer, drafts = [], events = [], now = Dat
     if (OPEN_DRAFT.has(d.status)) return no("our reply to their answer is still waiting", { floatAt });
   }
   const saidYes = saidYesOn(offer, { drafts, events });
+  if (stance?.mode === "range") return no("a high-stakes house: a range only until we have their read and eyes on it", { floatAt });
   if (!paperWorthy(offer, { saidYes })) return no("not a number we put in writing unasked", { floatAt });
   return { due: true, reason: "", floatAt, kind: saidYes || answers.some((d) => YES_INTENTS.has(d.intent)) ? "yes" : "neutral" };
 }

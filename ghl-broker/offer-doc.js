@@ -4,7 +4,7 @@
 // no binding context is needed at render time. Layout follows the cardgen
 // template schema (percent coordinates, letter canvas 1224×1584).
 
-import { fmtMoney } from "./shared/offer-calc.js";
+import { fmtMoney, writtenTerms } from "./shared/offer-calc.js";
 import { offerMath } from "./shared/offer-breakdown.js";
 
 const LETTER = { width: 1224, height: 1584 };
@@ -514,12 +514,23 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
         .filter(([k, v]) => k && v)
         .slice(0, 7)
     : null;
+  // One set of terms (2026-10-15, shared/offer-calc.js writtenTerms): with the
+  // write-up terms saved, the earnest money, an inspection row and the close
+  // say what the bot tells agents. A closing date set by hand still wins.
+  const wt = writtenTerms(settings);
+  const days = (lo, hi) => (lo > 0 && lo < hi ? `${lo} to ${hi} days` : `${hi} days`);
   const terms = [
     ["Purchase Price", fmtMoney(cash.amount)],
     ...(customTerms ?? [
       ["Financing", String(settings.termFinancing || "").trim() || "Funded with cash or private loan"],
-      ["Earnest Money", `${fmtMoney(settings.earnestMoney)}, deposited with escrow upon mutual acceptance`],
-      ["Closing Date", String(settings.termClosing || "").trim() || "On or before 14 days from acceptance — or a date of your choosing"],
+      ["Earnest Money", wt.fromWriteUp
+        ? `${fmtMoney(wt.earnestMoney)}, deposited with escrow ${/^after inspection$/i.test(wt.earnestDue) ? "after the inspection period" : wt.earnestDue || "upon mutual acceptance"}`
+        : `${fmtMoney(settings.earnestMoney)}, deposited with escrow upon mutual acceptance`],
+      ...(wt.fromWriteUp && wt.inspectionDays > 0 ? [["Inspection", `${days(wt.inspectionDaysMin, wt.inspectionDays)} from mutual acceptance`]] : []),
+      ["Closing Date", String(settings.termClosing || "").trim()
+        || (wt.fromWriteUp && wt.closeDays > 0
+          ? `Roughly ${days(wt.closeDaysMin, wt.closeDays)} from acceptance, inspection included — or a date of your choosing`
+          : "On or before 14 days from acceptance — or a date of your choosing")],
       ["Condition", String(settings.termCondition || "").trim() || "Purchased strictly as-is; no repairs or clean-out required"],
       ["Possession", String(settings.termPossession || "").trim() || "At closing, or flexible if you need additional time"],
     ]),

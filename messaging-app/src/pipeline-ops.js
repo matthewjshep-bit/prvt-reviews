@@ -7,9 +7,9 @@
 // after any of them.
 
 import {
-  applyDraftAction, createDataroom, deleteOffer, dismissPromise, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
+  applyDraftAction, approveNumber, createDataroom, deleteOffer, dismissPromise, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
   askAgentForWindow, updateDealChecklist, rerunHeldUnderwrite, resumeDrive, retryUnderwrite, runFollowUps, stopDrive, setOfferStatus, updateDeal, nudgeDealBuyers,
-  setContactEmail,
+  setContactEmail, preSell, promoteDeal, tickPreContract,
 } from "./api.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL } from "@shared/post-mortem.js";
 
@@ -42,6 +42,7 @@ export const CONFIRM = {
   drop: (i) => `Drop the held underwrite on ${i.address || "this property"}? The draft is deleted.`,
   mark_passed: (i) => `Mark the offer on ${i.address || "this property"} as passed by them?`,
   mark_we_passed: (i) => `Mark the offer on ${i.address || "this property"} as passed by us — we're walking away?`,
+  promote_deal: (i) => `Is ${i.address || "this property"} signed? Promote it to a deal${(i.checks || []).some((c) => c.state !== "ok") ? " with items still unchecked" : ""}?`,
 };
 
 export async function runOp(key, item, extra = null) {
@@ -50,6 +51,8 @@ export async function runOp(key, item, extra = null) {
     case "drop":               return deleteOffer(item.offerId);
     case "float_take":         return floatOffer(item.offerId, "take_check");
     case "float_realm":        return floatOffer(item.offerId, "realm_check");
+    // An agreed number you stand behind: the write-up ask may go (shared/pipeline.js approve_number).
+    case "approve_number":     return approveNumber(item.offerId, item.amount || 0);
     // A hand-made offer whose number you texted yourself: the record catches up.
     case "mark_sent":          return setOfferStatus(item.offerId, "sent", "sent by hand");
     case "mark_no_response":   return setOfferStatus(item.offerId, "no_response", "from the pipeline board");
@@ -77,6 +80,11 @@ export async function runOp(key, item, extra = null) {
     case "retry_underwrite":   return retryUnderwrite(item.jobId);
     // An email they texted, onto their GHL contact (shared/call-list.js email_check).
     case "use_email":          return setContactEmail(item.contactId, item.email);
+    // Before we sign (shared/pre-contract.js): drafts to the top three buyers,
+    // a hand tick on one item, and the promote once it's signed.
+    case "presell":            return preSell(item.offerId, 3);
+    case "precontract_tick":   return tickPreContract(item.offerId, extra?.key, { note: extra?.note || "" });
+    case "promote_deal":       return promoteDeal(item.offerId);
     // A stop is the whole thread with this agent, not one house: the point is
     // that you are picking it up yourself.
     case "stop_drive":         return stopDrive({ contactId: item.contactId, address: item.address });
@@ -102,6 +110,9 @@ export function describeResult(key, r) {
   if (key === "ask_agent_window") return r.status === "scheduled" ? "Asked. It goes out at the next open minute." : `Drafted for you${r.reason ? ` (${r.reason})` : ""} — check the outbox.`;
   if (key === "tick_task") return "Ticked off.";
   if (key === "use_email") return r.unchanged ? "GHL already has it." : `Saved to GHL: ${r.email}.`;
+  if (key === "presell") return r.drafted ? `Drafted for ${r.drafted} buyer${r.drafted === 1 ? "" : "s"} — they wait in the outbox for your Send.` : (r.reason || "No buyers fit this one yet.");
+  if (key === "precontract_tick") return "Checked.";
+  if (key === "promote_deal") return (r.warnings || []).length ? `It's a deal. ${r.warnings.length} warning${r.warnings.length === 1 ? "" : "s"} — open the deal.` : "It's a deal.";
   if (key === "build_dataroom") return "Built. Open the deal to check it and copy the link.";
   if (key === "stop_drive") return "Stopped. It is yours until you press Resume.";
   if (key === "resume_drive") return "Back with the machine.";
@@ -109,6 +120,7 @@ export function describeResult(key, r) {
   if (key === "rerun_held") return "Running it again — the number lands in the outbox when it clears.";
   if (key === "underwrite_anyway") return "Underwriting it — the number lands in the outbox when it clears.";
   if (key === "dismiss_promise") return r.settled ? "Cleared." : "Already cleared.";
+  if (key === "approve_number") return "Approved. The machine may ask them to write it up at this number.";
   if (key === "apply") return r.action?.detail || "Done.";
   return "Done.";
 }

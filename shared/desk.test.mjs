@@ -174,7 +174,8 @@ test("Today keeps only what needs Matt: replies waiting, owed numbers, a counter
     { id: "closing_soon:o7", kind: "closing_soon", severity: "soon", offerId: "o7", ops: [] },
     { id: "hot_machine:o8", kind: "hot_machine", severity: "fyi", contactId: "c8", offerId: "o8", ops: [] },
   ];
-  const kept = urgentReasons(reasons, { drafts });
+  // No calls on Today (dailyCalls 0): only the decisions.
+  const kept = urgentReasons(reasons, { drafts, dailyCalls: 0 });
   assert.deepEqual(kept.map((r) => r.id).sort(), [
     "audit:unanswered_inbound:c4", "call_counter:ctr", "closing_soon:o6", "draft_waiting:blast", "draft_waiting:reply", "promise_owed:c1:2026-10-02T18:00:00Z",
   ]);
@@ -182,7 +183,33 @@ test("Today keeps only what needs Matt: replies waiting, owed numbers, a counter
   const { rows, counts } = foldDesk(kept, { drafts });
   assert.deepEqual(Object.keys(counts).filter((k) => counts[k]), ["decide"]);
   assert.equal(rows.length, 6);
-  assert.deepEqual(TODAY_SECTIONS.map((s) => [s.key, s.label]), [["decide", "Needs you"]]);
+  // 2026-10-15: the day's best calls are back under them. A missed call from
+  // someone with no live house isn't one of them.
+  const withCalls = urgentReasons(reasons, { drafts });
+  assert.deepEqual(withCalls.filter((r) => r.section === "call").map((r) => r.id).sort(), ["call_brought:br", "call_first_reply:fr", "call_gap:gap"]);
+  assert.deepEqual(TODAY_SECTIONS.map((s) => [s.key, s.label]), [["decide", "Needs you"], ["call", "Today's calls"]]);
+});
+
+test("Today's calls are the call list's best few, by score, and never one handed back to the machine", () => {
+  const call = (kind, cid, score, over = {}) => ({ id: `${kind}:${cid}`, kind, section: "call", severity: "now", contactId: cid, score, offerId: `o-${cid}`, ops: [], ...over });
+  const reasons = [call("call_quiet", "a", 60), call("call_hot", "b", 115), call("call_first_reply", "c", 70), call("call_gap", "d", 85),
+    call("call_hot", "spent", 120, { section: "machine" }), call("call_missed", "ring", 105)];
+  const kept = urgentReasons(reasons, { dailyCalls: 3 });
+  assert.deepEqual(kept.map((r) => r.contactId), ["b", "ring", "d"]);
+  assert.ok(kept.every((r) => r.section === "call"));
+  const { rows } = foldDesk(kept);
+  assert.deepEqual(rows.map((r) => r.contactId), ["b", "ring", "d"], "worked best first");
+});
+
+// Matt's 15 (2026-10-15): the week's check-ins drafted for him are his work.
+test("Matt's 15 check-ins are on Today for him to send; the machine's own check-ins stay off it", () => {
+  const drafts = [
+    { id: "mine", intent: "agent_pulse", outbound: { kind: "agent_pulse", forMatt: true } },
+    { id: "machine", intent: "agent_pulse", outbound: { kind: "agent_pulse" } },
+  ];
+  const kept = urgentReasons([draftRow("mine", { contactId: "m1", severity: "soon" }), draftRow("machine", { contactId: "m2", severity: "soon" })], { drafts });
+  assert.deepEqual(kept.map((r) => r.draftId), ["mine"]);
+  assert.equal(kept[0].section, "decide");
 });
 
 test("partner terms lead the person's row on Today, with the held reply folded under it", () => {
@@ -199,10 +226,23 @@ test("partner terms lead the person's row on Today, with the held reply folded u
 });
 
 test("a person whose strongest reason was a call still shows for the decision under it", () => {
-  const kept = urgentReasons([{ id: "call_brought:c1", kind: "call_brought", severity: "now", contactId: "c1", ops: [] }, promise()]);
-  const { rows } = foldDesk(kept);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].kind, "promise_owed");
-  assert.deepEqual(rows[0].also, []);
+  const brought = { id: "call_brought:c1", kind: "call_brought", severity: "now", contactId: "c1", ops: [] };
+  const off = foldDesk(urgentReasons([brought, promise()], { dailyCalls: 0 })).rows;
+  assert.equal(off.length, 1);
+  assert.equal(off[0].kind, "promise_owed");
+  assert.deepEqual(off[0].also, []);
+  // One of Today's calls: the call leads their row, the owed number rides under it.
+  const on = foldDesk(urgentReasons([brought, promise()])).rows;
+  assert.equal(on.length, 1);
+  assert.equal(on[0].kind, "call_brought");
+  assert.deepEqual(on[0].also.map((r) => r.kind), ["promise_owed"]);
 });
 
+
+// 2026-10-15: a call we promised is always on Today, under Today's calls.
+test("a call we promised is on Today under Today's calls even with no daily calls", () => {
+  const owed = { id: "call_owed:c1:x", kind: "call_owed", section: "call", severity: "now", contactId: "c1", score: 110, ops: [] };
+  const kept = urgentReasons([owed], { dailyCalls: 0 });
+  assert.deepEqual(kept.map((r) => [r.kind, r.section]), [["call_owed", "call"]]);
+  assert.equal(urgentReasons([owed]).length, 1, "and never twice");
+});

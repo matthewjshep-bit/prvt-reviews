@@ -189,9 +189,16 @@ export const FOCUS_KINDS_DEFAULT = ["sfr"];
 // first check-in.
 export const OUR_BOX_WORDS = "single-family houses that need work, under about a million";
 
-/** normalizeFocusKinds(v) → the kinds the machine underwrites; never empty. */
+// Matt, 2026-10-13: "can we not do manufactured homes as a rule now, lets
+// decline if someone asks if we do them." Not a focus Settings can tick back
+// on: a mobile home is held whatever focusKinds says, passed at the next
+// check like rural, kept out of outreach, and the bot says no when asked.
+// Selling one we already hold (the dispo side) is untouched.
+export const NEVER_BUY_KINDS = ["manufactured"];
+
+/** normalizeFocusKinds(v) → the kinds the machine underwrites; never empty, never a mobile home. */
 export function normalizeFocusKinds(v) {
-  const out = (Array.isArray(v) ? v : []).map(asType).filter(Boolean);
+  const out = (Array.isArray(v) ? v : []).map(asType).filter((k) => k && !NEVER_BUY_KINDS.includes(k));
   return out.length ? [...new Set(out)] : [...FOCUS_KINDS_DEFAULT];
 }
 
@@ -202,6 +209,9 @@ const KIND_WORDS = { sfr: "a single-family house", multi_family: "a multi-family
 // What every not-our-kind hold reason starts with (held-underwrites.js keys on it).
 export const KIND_HOLD_PREFIX = "not our kind of house";
 export const KIND_HOLD = /^not our kind of house\b/i;
+// The mobile-home hold, which passes at the next check instead of after a day.
+// Holds written before 2026-10-13 say "(single-family only right now)"; same house.
+export const MOBILE_HOLD = /^not our kind of house — a mobile home\b/i;
 
 /**
  * kindHold(homeType, focusKinds) → the hold reason, or "" to go ahead.
@@ -216,6 +226,7 @@ export function kindHold(homeType, focusKinds = FOCUS_KINDS_DEFAULT) {
   const kind = assetFromHomeType(raw);
   const focus = normalizeFocusKinds(focusKinds);
   if (kind && focus.includes(kind)) return "";
+  if (kind === "manufactured") return `${KIND_HOLD_PREFIX} — ${KIND_WORDS.manufactured} (we don't buy mobile or manufactured homes)`;
   const word = kind ? KIND_WORDS[kind] : OTHER_HOME_WORDS[raw] || `a ${raw.toLowerCase().replace(/_/g, " ")}`;
   const want = focus.length === 1 && focus[0] === "sfr" ? "single-family only right now" : `buying ${focus.map((k) => ASSET_TYPE_LABELS[k].toLowerCase()).join(", ")} right now`;
   return `${KIND_HOLD_PREFIX} — ${word} (${want})`;
@@ -268,12 +279,15 @@ export function ruralHold(lotSqft) {
  */
 export function agentFocusRule(focusKinds = FOCUS_KINDS_DEFAULT, { pricedAnyway = [] } = {}) {
   const focus = normalizeFocusKinds(focusKinds);
-  const buy = focus.map((k) => ({ sfr: "single-family houses", multi_family: "multi-family (2-4 units)", manufactured: "mobile homes" }[k])).join(" and ");
-  const skip = ["condos", "townhouses", ...(focus.includes("manufactured") ? [] : ["mobile or manufactured homes"]),
+  const buy = focus.map((k) => ({ sfr: "single-family houses", multi_family: "multi-family (2-4 units)" }[k])).join(" and ");
+  const skip = ["condos", "townhouses", "mobile or manufactured homes",
     ...(focus.includes("multi_family") ? [] : ["multi-family"]), "land"].join(", ");
   return `WHAT WE BUY RIGHT NOW: ${buy} only. If the agent's house is plainly one of these — ${skip} — don't promise numbers on it: ` +
     `say kindly that we're only buying ${buy} right now and ask if they have any ${focus.includes("sfr") ? "single-family fixers" : buy} coming up. ` +
     "If you can't tell what kind of house it is, treat it as a house. " +
+    "MOBILE HOMES: we don't buy mobile or manufactured homes — not in a park, not on their own land, not a single- or double-wide. " +
+    "If the agent asks whether we buy them, or brings one, say no plainly and kindly (\"we don't do mobile or manufactured homes\"), " +
+    "never \"maybe\" or \"send it over and we'll look\", and ask if they have any single-family fixers instead. " +
     `RURAL: we don't buy rural houses — anything on ${RURAL_LOT_ACRES} acres or more, acreage, a farm or a ranch. Our buyers want houses ` +
     `on under ${RURAL_LOT_ACRES} acres where there are sales nearby to compare them to. If the agent says the house sits on ${RURAL_LOT_ACRES}+ acres ` +
     "or is plainly rural, don't promise numbers on it: say kindly that we can't do rural properties and ask if they have any fixers in town. " +

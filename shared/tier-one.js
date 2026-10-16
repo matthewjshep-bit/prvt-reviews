@@ -262,7 +262,8 @@ export const ADDED_GRACE_DAYS = 7;
  *
  * Pure. `rows` are the Tier 1 list's rows (ghl-broker/tier-one.js loadTierOne),
  * each with `addedAt` (last put on Tier 1 by hand) and `chasing` (an address
- * we're still waiting on). Never a card added by hand in the last week.
+ * we're still waiting on). Never a card added by hand in the last week, and
+ * never one whose agent said yes to our number (`saidYes`).
  */
 export function autoKickPlan({ rows = [], now = Date.now() } = {}) {
   const days = (t) => { const ms = Date.parse(t || ""); return Number.isFinite(ms) ? (now - ms) / DAY_MS : Infinity; };
@@ -270,6 +271,8 @@ export function autoKickPlan({ rows = [], now = Date.now() } = {}) {
   for (const r of rows || []) {
     if (!r?.contactId || r.ok) continue;
     if (days(r.addedAt) < ADDED_GRACE_DAYS) continue;
+    // A yes to our number (2026-10-15) is never cleared off by the machine.
+    if (r.saidYes) continue;
     const sure = (r.flags || []).filter((f) => f.sure);
     let reason = sure.find((f) => AUTO_KICK_KEYS.includes(f.key))?.key || "";
     if (!reason && sure.some((f) => f.key === "no_house") && !r.chasing && days(r.inStageSince) >= NO_HOUSE_WAIT_DAYS) reason = "no_house";

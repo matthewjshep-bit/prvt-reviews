@@ -63,8 +63,8 @@ test("one person's owed number and last night's 'still owed' are one row on Toda
   const r = await (await fetch(`${B}/api/dashboard/pipeline`)).json();
   assert.equal(r.ok, true, r.error);
   assert.ok(r.desk, "the Desk rides on the same response");
-  // Today is one list, Needs you (Matt, 2026-10-13).
-  assert.deepEqual(r.desk.sections.map((s) => [s.key, s.label]), [["decide", "Needs you"]]);
+  // Today is Needs you (Matt, 2026-10-13), then Today's calls (2026-10-15).
+  assert.deepEqual(r.desk.sections.map((s) => [s.key, s.label]), [["decide", "Needs you"], ["call", "Today's calls"]]);
   assert.ok(r.desk.rows.every((x) => x.section === "decide"));
   const hanna = r.desk.rows.filter((x) => x.contactId === "hanna");
   assert.equal(hanna.length, 1, "Hanna is one row");
@@ -81,12 +81,20 @@ test("one person's owed number and last night's 'still owed' are one row on Toda
   assert.ok(r.actions.length >= r.desk.rows.length);
 });
 
-// Matt, 2026-10-13: "get rid of the call section". A hot offer is the
-// machine's hot push now, not a call on Today.
-test("a hot offer isn't a call on Today", async () => {
+// Matt, 2026-10-13: "get rid of the call section". 2026-10-15: the call
+// list's best ten are back as "Today's calls" — a hot offer the machine
+// isn't pushing to paper (the hot push is off here) is one of them.
+test("a hot offer the machine isn't pushing is one of Today's calls", async () => {
   await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "mary", contactName: "Maryanne A", address: "9311 12th Pl SE, Lake Stevens, WA 98258",
     status: "sent", cashAmount: 197500, statusHistory: [], createdAt: ago(200), sends: [{ ts: ago(150) }], realm: { answer: "yes", ts: ago(20) } });
   const rows = (await (await fetch(`${B}/api/dashboard/pipeline`)).json()).desk.rows;
-  assert.equal(rows.some((x) => x.contactId === "mary"), false);
-  assert.equal(rows.some((x) => String(x.kind).startsWith("call_") && x.kind !== "call_counter"), false, "no call rows at all");
+  const mine = rows.filter((x) => x.contactId === "mary");
+  assert.equal(mine.length, 1, "one row for Mary");
+  const mary = mine[0];
+  assert.equal(mary.kind, "call_hot");
+  assert.equal(mary.section, "call");
+  assert.ok(mary.call.boosts.some((b) => b.key === "partner"), "their yes makes them someone we've done business with");
+  // What to check before signing it rides on the same row (shared/pre-contract.js, 2026-10-15).
+  const kinds = [...(mary.also || []), ...(mary.quiet || [])].map((x) => x.kind);
+  assert.ok(kinds.includes("pre_contract"), `the house they said yes to needs its checks before signing (${kinds.join(", ")})`);
 });

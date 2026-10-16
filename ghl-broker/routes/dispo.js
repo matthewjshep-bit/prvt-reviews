@@ -11,6 +11,7 @@
 //   POST   /api/dispo/search                        plain-English buy-box search
 //   POST   /api/dispo/match                         rank investors against one deal
 //   POST   /api/dispo/blast                         bulk-tag a shortlist (dry-run by default)
+//   POST   /api/dispo/presell                       a house not yet signed, drafted to the top 3 buyers
 //
 // GHL stays the source of truth for contacts; the `investors` table is a
 // rebuildable search cache. Sync is read-only against GHL and therefore has no
@@ -45,6 +46,8 @@ import {
 } from "../ghl.js";
 import { anthropicErrorToHttp } from "../rehab-scan.js";
 import { dealsByOf } from "../shared/contact-email.js";
+import { effectiveSettings } from "../shared/offer-calc.js";
+import { PRESELL_MIN_BUYERS } from "../shared/pre-contract.js";
 import {
   BUYBOX_FIELDS, INVESTOR_FIELD_DEFS, RANK_LIMIT, dealToQuery, addressAreas,
   parseBuyboxQuery, rankInvestors,
@@ -1149,6 +1152,53 @@ export default function createDispoRouter({ resolveLocation }) {
   });
 
   const slugStreet = (address) => sanitizeTag(String(address || "").split(",")[0]);
+
+  /* ---------- pre-sell (shared/pre-contract.js, 2026-10-15) ---------- */
+
+  // A listed house we're about to sign, put to the best few buyers first:
+  // of eight listed-house contracts seven fell through, one signed with no
+  // buyer at all. Body: { offerId, count = 3, dryRun }. Drafts only — each
+  // waits in the outbox for your Send and nothing is scheduled. The text never
+  // says "under contract" and carries no link (blast-text.js presellMessage).
+  // Who it went to is saved on the offer (offer.presell); the ones you sent
+  // join the deal when it's promoted.
+  router.post("/presell", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const offerId = String(req.body?.offerId || "").slice(0, 64);
+      if (!offerId) return res.status(400).json({ error: "offerId required" });
+      const offer = await store.getOffer(offerId);
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
+      if (offer.deal) return res.status(409).json({ error: "already a deal — send it from the deal" });
+      const count = Math.max(1, Math.min(10, Math.round(Number(req.body?.count) || PRESELL_MIN_BUYERS)));
+      const dryRun = req.body?.dryRun === true;
+      // The wave-1 picks (VIP and Active, in its area), topped up from the
+      // wider second wave when that's fewer than asked. Never one it already went to.
+      const had = new Set(offer.presell?.contactIds || []);
+      const picks = [];
+      for (const wave of [1, 2]) {
+        if (picks.length >= count) break;
+        for (const r of (await matchForDeal(locationId, offer, { wave, exclude: "blasted" })).results) {
+          if (picks.length >= count) break;
+          if (!had.has(r.contactId) && !picks.some((p) => p.contactId === r.contactId)) picks.push(r);
+        }
+      }
+      if (!picks.length) return res.json({ ok: true, dryRun, drafted: 0, rows: [], reason: "no buyers fit this house yet" });
+      // Not a deal yet, so the buyer price is our number plus the default fee.
+      const saved = await getSettings(locationId);
+      const r = await queueBlastDrafts({ store, locationId, offer, investors: picks, saved: { ...saved, wholesaleFee: effectiveSettings(saved).wholesaleFee },
+        now: Date.now(), dryRun, presell: true, label: "presell" });
+      let presell = offer.presell || null;
+      const ids = (r.rows || []).filter((x) => x.draftId).map((x) => x.contactId);
+      if (!dryRun && ids.length) {
+        const full = await store.getOffer(offer.id);
+        presell = { at: new Date().toISOString(), contactIds: [...new Set([...(full.presell?.contactIds || []), ...ids])] };
+        full.presell = presell;
+        await store.updateOffer(full.id, full);
+      }
+      res.json({ ok: true, dryRun, drafted: r.drafted, rows: r.rows, price: r.price, presell });
+    } catch (err) { fail(res, err); }
+  });
 
   /**
    * blastFromApp({ locationId, client, offer, investors, saved, dryRun, label, wave })

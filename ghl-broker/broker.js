@@ -39,7 +39,7 @@ import { maybeSweepCalls } from "./call-intake.js";
 import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
 import { runLocationTick } from "./tick.js";
-import { maybeRunAgentPulse } from "./agent-pulse.js";
+import { maybeRunAgentPulse, maybeRunMattsFifteen } from "./agent-pulse.js";
 import { maybeRunShowingSweep } from "./showing-sweep.js";
 import { maybeSweepHandReplies } from "./hand-reply-sweep.js";
 import { startAiSpendMeter } from "./ai-spend.js";
@@ -351,6 +351,13 @@ const TICK_JOBS = [
   { area: "agent-pulse", run: async ({ client, locationId, saved }) => {
     if (await maybeRunAgentPulse({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
       deps: offersRouter.conversationDepsFor({ locationId, client, saved }) })) console.log(`agent check-in started for ${locationId}`);
+  } },
+  // Matt's 15 (agent-pulse.js): Monday morning, his best agents' check-ins
+  // drafted for him to make his own and send, on Today. Off until
+  // outreachAutopilot.pulse.mattsFifteen.enabled; nothing sends itself.
+  { area: "matts-fifteen", run: async ({ client, locationId, saved }) => {
+    if (await maybeRunMattsFifteen({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) })) console.log(`Matt's 15 started for ${locationId}`);
   } },
   // The walkthrough texts (showing-sweep.js): the reminder the afternoon
   // before and the follow-up after. Every tick; each text is its own claim.

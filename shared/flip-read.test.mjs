@@ -104,6 +104,8 @@ test("our reply passing on the house reads as a pass; a reply still chasing one 
     "Ah, cosmetic usually means it's not quite distressed enough for us. Anything else on your desk?",
     "Appreciate the numbers. Turns out Fox Rd's outside the box for us size-wise, so we've moved on from that one for now.",
     "We'd already moved on from that one for now, Brent. Got anything else sitting that needs work?",
+    // 2026-10-15: the one that answered a yes to our 261k.
+    "We've actually moved on from this one for now. Anything else that needs work?",
     // The qualify step stamps its own pass; these two read as one anyway.
     ...QUALIFY_PASSES.slice(0, 2),
   ]) assert.equal(ourReplyPasses(said), true, said);
@@ -116,4 +118,44 @@ test("our reply passing on the house reads as a pass; a reply still chasing one 
     ...QUALIFY_ASKS,
     "",
   ]) assert.equal(ourReplyPasses(said), false, said);
+});
+
+/* ---------- the call ask (2026-10-15) ---------- */
+
+import { FIXERS_CALL_ASKS, QUALIFY_ASKS_CALL, QUALIFY_PASSES_CALL, CALL_ASK_RX, FIXERS_ASK_RX, withCallAsk } from "./flip-read.js";
+test("the call ask is one closing question for other fixers and a quick call, with no day or time in it", () => {
+  for (const t of [...FIXERS_CALL_ASKS, ...QUALIFY_ASKS_CALL, ...QUALIFY_PASSES_CALL]) {
+    assert.match(t, CALL_ASK_RX, t);
+    assert.ok(t.length <= 220, t);
+    assert.doesNotMatch(t, /[—$]|\b(?:monday|tuesday|wednesday|thursday|friday|tomorrow|\d{1,2}\s*(?:am|pm))\b/i, t);
+  }
+  for (const t of FIXERS_CALL_ASKS) { assert.match(t, FIXERS_ASK_RX); assert.equal((t.match(/\?/g) || []).length, 1, t); }
+  for (const q of QUALIFY_ASKS_CALL) assert.match(q, QUALIFY_ASK_RX, "still read as our one question");
+  for (const p of QUALIFY_PASSES_CALL) { assert.doesNotMatch(p, QUALIFY_ASK_RX); assert.match(p, /off-market/); }
+  assert.match(qualifyStep({ words: "Cosmetic fixer", callAsk: true }).reply, CALL_ASK_RX);
+  assert.match(qualifyStep({ words: "This is turnkey, move in ready.", callAsk: true }).reply, CALL_ASK_RX);
+  assert.doesNotMatch(qualifyStep({ words: "Cosmetic fixer" }).reply, CALL_ASK_RX, "off, the question is as it was");
+});
+
+test("the backstop ends the reply on the call ask, taking over a closing ask for other houses", () => {
+  const out = withCallAsk("Makes sense, that one's not for us then. Anything else sitting that needs work?");
+  assert.equal((out.match(/\?/g) || []).length, 1, out);
+  assert.match(out, /^Makes sense, that one's not for us then\. /);
+  assert.match(out, CALL_ASK_RX);
+  const kept = withCallAsk("Got it, thanks for the update.");
+  assert.match(kept, /^Got it, thanks for the update\. If /);
+  const already = "Appreciate it. Got 5 minutes for a quick call this week?";
+  assert.equal(withCallAsk(already), already, "a reply that already asks for a call is left alone");
+});
+
+test("withFixersAsk ends a reply on one ask for other fixers, and leaves a reply that already asks alone", async () => {
+  const { withFixersAsk, FIXERS_ASK_RX, CALL_ASK_RX } = await import("./flip-read.js");
+  const t = withFixersAsk("Makes sense, that one's not for us then.", 0);
+  assert.match(t, FIXERS_ASK_RX);
+  assert.doesNotMatch(t, CALL_ASK_RX);
+  const already = "Got it. Anything else sitting that needs work?";
+  assert.equal(withFixersAsk(already, 1), already);
+  const swapped = withFixersAsk("Thanks! Keep me in mind?", 2);
+  assert.doesNotMatch(swapped, /keep me in mind/i, "the stay-in-touch question is taken over");
+  assert.equal((swapped.match(/\?/g) || []).length <= 1, true);
 });

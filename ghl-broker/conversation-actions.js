@@ -273,7 +273,9 @@ const EXECUTORS = {
     if (typeof deps?.reviseOfferToCounter !== "function") throw new Error("re-issuing an offer is not wired on this broker");
     const amount = Math.round(Number(action?.amount ?? draft?.counterAmount) || 0);
     if (!amount) return "no number to re-issue at";
-    const r = await deps.reviseOfferToCounter({ contactId, addressHint: draft?.propertyAddress || "", amount, draftId: draft?.id || null });
+    const r = await deps.reviseOfferToCounter({ contactId, addressHint: draft?.propertyAddress || "", amount, draftId: draft?.id || null,
+      // The band ran it by itself, or a person applied it from the row.
+      by: action?.mode === "auto" && !deps?.byPerson ? "counter_band" : "you" });
     if (!r?.ok) return r?.reason || "no offer to re-issue";
     return `re-issued ${r.address} at ${fmtMoney(amount)}`;
   },
@@ -316,6 +318,9 @@ const EXECUTORS = {
       // The written offer with the reply to a no (reply-agent.js): pinned to
       // the offer it was decided on, in its "for your records" words.
       ...(action?.forRecord === true ? { forRecord: true, by: "for_record", ...(action.offerId ? { offerId: action.offerId } : {}) } : {}),
+      // Nobody pressed it: an auto rule ran it (a person applying it from the
+      // row comes through applyDraftAction with deps.byPerson).
+      ...(action?.mode === "auto" && !deps?.byPerson ? { machine: true } : {}),
     });
     if (!r?.ok) return r?.reason || "no open offer to send";
     if (r.unchanged) return `offer on ${r.address} already went out ${r.sentAt ? `on ${String(r.sentAt).slice(0, 10)}` : ""}`.trim();

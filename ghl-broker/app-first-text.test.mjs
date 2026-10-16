@@ -16,9 +16,9 @@ import assert from "node:assert/strict";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "app-first-text-test-"));
 process.env.OUTREACH_IMPORTS_ENABLED = "true";
 
-const { outboundOpening, OPENING_MOVES, WHO_WE_ARE } = await import("./conversation-prompt.js");
-const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText, writeWithoutOverused } = await import("./reply-agent.js");
-const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
+const { outboundOpening, OPENING_MOVES, WHO_WE_ARE, openerPlan } = await import("./conversation-prompt.js");
+const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText, writeWithoutOverused, startProactive, sendReplyDraft, lastLineIsOurFirstText } = await import("./reply-agent.js");
+const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, DEFAULT_OPENER_EXAMPLES, LEGACY_DEFAULT_OPENER_EXAMPLES, OPENER_MAX_CHARS } = await import("./shared/outreach-opener.js");
 const { normalizeOutreachAutopilot, startOutreachSweep, _resetJobs } = await import("./outreach-sweep.js");
 const { store } = await import("./store.js");
 const { default: createOutreachRouter } = await import("./routes/outreach.js");
@@ -41,7 +41,7 @@ test("the first text never writes its own sign-off, because GHL adds 'Thanks, Ma
   assert.match(t, /NO sign-off/);
   assert.match(t, /no opt-out line/);
   assert.match(t, /adds "Thanks, Matt" and "No worries if not can stop" on the end by itself/);
-  assert.match(t, /under 250 characters/, "with GHL's two lines it stays inside two SMS segments");
+  assert.match(t, /under 200 characters/, "short first texts get answered, and GHL's two lines still fit");
 });
 
 test("a first text the bot signed anyway reaches the agent with one 'Thanks, Matt', not two", () => {
@@ -125,8 +125,19 @@ test("an opener example carrying the stop line is dropped, so the agent never ge
   assert.deepEqual(normalizeOpener({ examples: ["Hey {first}, {street} a project? Thanks, Matt"] }).examples, ["Hey {first}, {street} a project?"],
     "an example signed 'Thanks, Matt' would teach the bot to sign off");
   assert.deepEqual(normalizeOpener({ examples: "one\n\ntwo" }).examples, ["one", "two"], "the Settings box splits on blank lines");
-  assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => !/can stop/i.test(x) && /\{county\} County/.test(x)));
+  assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => !/can stop/i.test(x)));
   assert.deepEqual(normalizeOutreachAutopilot({}).opener.examples, DEFAULT_OPENER_EXAMPLES, "kept on the outreach settings");
+});
+
+test("the old long defaults Settings saved word for word become the new short ones, and a long example of Matt's own isn't used", () => {
+  assert.deepEqual(normalizeOpener({ examples: LEGACY_DEFAULT_OPENER_EXAMPLES }).examples, DEFAULT_OPENER_EXAMPLES, "the live list is the old defaults, saved verbatim");
+  assert.deepEqual(normalizeOpener({ examples: LEGACY_DEFAULT_OPENER_EXAMPLES.join("\n\n") }).examples, DEFAULT_OPENER_EXAMPLES, "or as the Settings box sends it");
+  const mine = "Hey {first}, {street} looks like my kind of house. A bit of a project?";
+  assert.deepEqual(normalizeOpener({ examples: [...LEGACY_DEFAULT_OPENER_EXAMPLES, mine] }).examples, [mine], "Matt's own stays, the old ones go");
+  const long = `Hi {first}, ${"I really like old houses with character and good bones. ".repeat(4)}Is {street} one of them?`;
+  assert.ok(long.length > 220);
+  assert.deepEqual(normalizeOpener({ examples: [long, mine] }).examples, [mine]);
+  assert.deepEqual(normalizeOpener({ examples: [long] }).examples, DEFAULT_OPENER_EXAMPLES, "nothing left is the defaults");
 });
 
 test("the county reads the same from RentCast or from the sweep's county key", () => {
@@ -202,6 +213,88 @@ test("the first text is told what the agent can see on the listing — a 1950s h
   assert.ok(o.details.every((d) => !/\$|\bk\b|days?\b/i.test(d)), "no price, no days-on-market count");
 });
 
+test("an agent picked for a turnkey seat gets the turnkey first text, not 'is this one a project?' — 79 of 80 did", async () => {
+  const L = "loc-first-text-turnkey";
+  const seen = [];
+  let refuse = true;
+  const router = createOutreachRouter({ resolveLocation: () => ({ locationId: L, client: ghlClient() }),
+    firstTouch: async (a) => { seen.push(a); return refuse && a.hook.address?.startsWith("7 ") ? { skipped: "no room" } : { job: { id: `j-tk-${seen.length}` } }; } });
+  const finished = (address) => ({ address, price: 650000, dom: 30, county: "King", city: "Kent", yearBuilt: 2004, turnkey: true });
+  const batch = await batchWith("Autopilot · King, WA", [
+    { key: "seat", hook: finished("3 Shine Ct, Kent, WA") },
+    { key: "refused", hook: finished("7 Shine Ct, Kent, WA") },
+  ], L);
+  const r = await router.importAgents({ locationId: L, client: ghlClient(), agentKeys: ["seat", "refused"], batchId: batch.id, dryRun: false, applyTag: false, openWith: "app" });
+  assert.equal(seen[0].hook.turnkey, true, "the import hands the flag to the first text");
+  const o = outboundDescriptor({ kind: "outreach_open", offer: null, saved: {},
+    subject: { address: seen[0].hook.address, county: seen[0].hook.county, city: seen[0].hook.city, house: seen[0].hook } });
+  assert.equal(o.turnkey, true);
+  assert.match(outboundOpening(o), /LOOKS FINISHED/);
+
+  // A skip written before this fix carried no flag: the retry reads the agent's row.
+  const refusedId = r.results.find((x) => x.agentKey === "refused").contactId;
+  await store.appendContactEvents(L, refusedId, [{ type: "outreach_open_skipped", party: "agent", at: new Date().toISOString(),
+    data: { reason: "old build", hook: { address: "7 Shine Ct, Kent, WA", county: "King" }, tries: 2 }, dedupeKey: `outreach_open_skipped:${refusedId}:old` }]);
+  refuse = false;
+  seen.length = 0;
+  await router.retryFirstTexts({ locationId: L, client: ghlClient() });
+  const again = seen.find((a) => a.contactId === refusedId);
+  assert.ok(again, "the refused one is tried again");
+  assert.equal(again.hook.turnkey, true, "the skipped retry keeps the flag");
+  assert.equal(again.hook.address, "7 Shine Ct, Kent, WA");
+});
+
+test("a turnkey seat whose first text a deploy lost is sent the turnkey text too", async () => {
+  const L = "loc-first-text-turnkey-lost";
+  const asked = [];
+  const router = createOutreachRouter({ resolveLocation: () => ({ locationId: L, client: ghlClient() }),
+    firstTouch: async (a) => { asked.push(a); return { job: { id: `j-${asked.length}` } }; } });
+  const batch = await batchWith("Autopilot · King, WA", [
+    { key: "dropped", hook: { address: "11 Done Ln, Auburn, WA", county: "King", city: "Auburn", turnkey: true } },
+  ], L);
+  const r = await router.importAgents({ locationId: L, client: ghlClient(), agentKeys: ["dropped"], batchId: batch.id, dryRun: false, applyTag: false, openWith: "app" });
+  await store.createReplyDraft({ locationId: L, contactId: "nobody", status: "draft", channel: "sms", reply: "Hi", outbound: { kind: "outreach_open" }, updatedAt: new Date().toISOString() });
+  asked.length = 0;
+  // The first try was dropped in memory: nothing written, no draft.
+  const later = await router.retryFirstTexts({ locationId: L, client: ghlClient(), now: Date.now() + 3 * 3600000 });
+  assert.equal(later.retried, 1);
+  assert.equal(asked[0].contactId, r.results[0].contactId);
+  assert.equal(asked[0].hook.turnkey, true, "the lost retry keeps the flag");
+  assert.equal(asked[0].hook.city, "Auburn");
+});
+
+test("a first text that went says which one it was: its variant, opening move, turnkey seat, length, and whether a person changed it", async () => {
+  const L = "loc-first-text-plan";
+  const saved = { aiApiKey: "test-key", conversationAi: { enabled: true, parties: { agent: { outreach: { enabled: true } } } } };
+  const client = { call: async (p) => (p === "/conversations/messages" ? { messageId: "m-plan" } : {}) };
+  const reply = "Hi Dana, saw 3 Shine Ct in Kent and it looks pretty finished. Do you ever get ones that need a little work?";
+  const subject = { address: "3 Shine Ct, Kent, WA", county: "King", city: "Kent", variant: 7, house: { yearBuilt: 1958, turnkey: true } };
+  const { job, skipped } = await startProactive({ client, locationId: L, saved, store, contactId: "c-plan", kind: "outreach_open", subject,
+    deps: { draft: async () => ({ reply, summary: "s", confidence: "high", needsHuman: false }) } });
+  assert.ok(job, skipped);
+  for (let i = 0; i < 100 && !["done", "held", "error"].includes(job.status); i++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(job.status, "done", job.error || job.heldReason);
+  const d = await store.getReplyDraft(job.draftId);
+  const plan = openerPlan(outboundDescriptor({ kind: "outreach_open", offer: null, saved, subject }));
+  assert.equal(d.outbound.variant, 7);
+  assert.equal(d.outbound.move, 7 % OPENING_MOVES.length);
+  assert.equal(d.outbound.who, 7 % WHO_WE_ARE.length);
+  assert.equal(d.outbound.notice, "built in the 1950s");
+  assert.equal(d.outbound.turnkey, true);
+  assert.equal(d.outbound.examplesHash, plan.examplesHash);
+  assert.ok(d.outbound.examplesHash, "which examples it was written from");
+
+  const edited = `${reply} Happy to chat.`;
+  await sendReplyDraft({ client, store, locationId: L, draftId: d.id, text: edited, live: true });
+  const [sent] = await store.listContactEvents(L, "c-plan", { types: ["outreach_sent"] });
+  assert.equal(sent.data.variant, 7);
+  assert.equal(sent.data.openingMove, 7 % OPENING_MOVES.length);
+  assert.equal(sent.data.turnkey, true);
+  assert.equal(sent.data.chars, edited.length);
+  assert.equal(sent.data.edited, true);
+  assert.equal(openerPlan({ examples: ["a", "b"], variant: 3 }).lead, "b", "the lead example is the one the prompt leads with");
+});
+
 test("the first six with house details came out alike, so each agent gets its own opening move and its own detail", () => {
   const details = ["it's in Packwood", "built in the 1960s", "3 bedrooms", "it sits on a big lot", "it has been on the market a while"];
   const moves = new Set(), notices = new Set();
@@ -241,16 +334,22 @@ test("a first text still saying 'hunting' or 'Seattle flipper' after being told 
   assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => !/seattle flipper|hunting/i.test(x)), "the examples don't teach them either");
 });
 
-test("a first text over 250 characters is written again shorter once — two of the first six were 266 and 288", async () => {
+test("a first text over 200 characters is written again shorter once — the short ones get answered", async () => {
+  assert.equal(OPENER_MAX_CHARS, 200);
   const long = { reply: "x".repeat(288), summary: "s" };
   const asked = [];
-  const short = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async (n) => { asked.push(n); return { reply: "y".repeat(230) }; } });
+  const short = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async (n) => { asked.push(n); return { reply: "y".repeat(190) }; } });
   assert.deepEqual(asked, [288]);
-  assert.equal(short.reply.length, 230);
-  assert.match(ask({ county: "King", tooLong: 288 }), /YOUR LAST DRAFT WAS 288 CHARACTERS/);
-  const fine = { reply: "z".repeat(240) };
+  assert.equal(short.reply.length, 190);
+  assert.match(ask({ county: "King", tooLong: 288 }), /YOUR LAST DRAFT WAS 288 CHARACTERS: write it again under 200/);
+  const fine = { reply: "z".repeat(195) };
   assert.equal(await writeShorterFirstText({ draft: fine, kind: "outreach_open", redraft: async () => { throw new Error("not asked"); } }), fine);
   assert.equal(await writeShorterFirstText({ draft: long, kind: "agent_pulse", redraft: async () => { throw new Error("not asked"); } }), long, "only the first text");
+  const cold = await writeShorterFirstText({ draft: long, kind: "agent_pulse", outbound: { coldOpen: true }, redraft: async () => ({ reply: "y".repeat(180) }) });
+  assert.equal(cold.reply.length, 180, "and a cold agent's fresh-listing check-in, which is a first text in all but name");
+  const o = outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { reason: "fresh_listing", segment: "cold", listing: { street: "1 A St" } } });
+  assert.equal(o.coldOpen, true);
+  assert.equal(outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { reason: "fresh_listing", segment: "engaged", listing: { street: "1 A St" } } }).coldOpen, false);
   const pitched = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async () => ({ reply: "We pay cash, as-is." }) });
   assert.equal(pitched, long, "a shorter one that pitches cash isn't taken");
 });
@@ -385,6 +484,56 @@ test("the 45 first texts a deploy dropped on 2026-10-05, imported before imports
   assert.equal(asked[0].hook.listingCount, 3);
 });
 
+/* ---------- agents nobody ever texted (2026-10-15) ---------- */
+
+// The funnel review: new-agent supply fell from 125 a day to 2. Agents we
+// imported (an older flow, or already in GHL) whom nobody ever texted are
+// still out there, and a pull that sees them again finds their listing.
+test("an imported agent nobody ever texted, seen again by a pull, gets the first text — only with the switch on, and never one with a thread", async () => {
+  const L = "loc-never-texted";
+  const asked = [];
+  const router = createOutreachRouter({ resolveLocation: () => ({ locationId: L, client: ghlClient() }),
+    firstTouch: async (a) => { asked.push(a); return { job: { id: `j-nt-${asked.length}` } }; } });
+  const keys = ["quiet", "talked", "tagged", "threaded", "drafted", "pulsed", "other"];
+  const batch = await batchWith("Autopilot · Pierce, WA", keys.map((key, i) => ({ key,
+    hook: { address: `${10 + i} Cedar St, Tacoma, WA`, county: "Pierce", city: "Tacoma", ...(key === "quiet" ? { turnkey: true } : {}) } })), L);
+  for (const key of keys) await store.setOutreachAgentStatus(L, batch.id, key, { status: "imported", contactId: `c-nt-${key}`, importedAt: new Date().toISOString() });
+  const row = await store.getOutreachAgent(L, batch.id, "threaded");
+  await store.upsertOutreachAgents(L, batch.id, [{ agentKey: "threaded", doc: { ...row.doc, ghl: { lastMessageAt: new Date().toISOString() } } }]);
+  const at = new Date().toISOString();
+  await store.appendContactEvents(L, "c-nt-talked", [{ type: "text_summary", party: "agent", at, data: { inbound: "not now" }, dedupeKey: "nt-talked" }]);
+  await store.appendContactEvents(L, "c-nt-tagged", [{ type: "tag_added", party: "agent", at, data: { tag: "agent-outreach" }, dedupeKey: "nt-tagged" }]);
+  await store.appendContactEvents(L, "c-nt-pulsed", [{ type: "agent_pulse_texted", party: "agent", at, data: {}, dedupeKey: "nt-pulsed" }]);
+  await store.appendContactEvents(L, "c-nt-other", [{ type: "tag_added", party: "agent", at, data: { tag: "agent-outreach-cedar-fixers" }, dedupeKey: "nt-other" }]);
+  await store.createReplyDraft({ locationId: L, contactId: "c-nt-drafted", status: "dismissed", channel: "sms", reply: "Hi", outbound: { kind: "agent_pulse" }, updatedAt: at });
+
+  assert.equal((await router.retryFirstTexts({ locationId: L, client: ghlClient() })).retried, 0, "off by default");
+  const dry = await router.retryFirstTexts({ locationId: L, client: ghlClient(), neverTexted: true, dryRun: true });
+  assert.deepEqual(dry.results.map((r) => r.contactId).sort(), ["c-nt-other", "c-nt-quiet"], "a batch tag isn't the workflow's trigger tag");
+  assert.equal(asked.length, 0, "a dry run texts nobody");
+
+  const stale = await router.retryFirstTexts({ locationId: L, client: ghlClient(), neverTexted: true, now: Date.now() + 4 * 86400000 });
+  assert.equal(stale.retried, 0, "not seen by a pull in the last three days");
+  const one = await router.retryFirstTexts({ locationId: L, client: ghlClient(), neverTexted: true, limit: 1 });
+  assert.equal(one.retried, 1, "inside the day's room");
+  assert.equal(one.neverTexted, 1);
+  await router.retryFirstTexts({ locationId: L, client: ghlClient(), neverTexted: true });
+  await router.retryFirstTexts({ locationId: L, client: ghlClient(), neverTexted: true });
+  assert.deepEqual(asked.map((a) => a.contactId).sort(), ["c-nt-other", "c-nt-quiet"], "each once: the claim stops a second run starting another");
+  const claim = await store.listContactEvents(L, "c-nt-quiet", { types: ["outreach_open_queued"] });
+  assert.equal(claim.length, 1);
+  // Dropped by a deploy before any draft: the lost path sends it later.
+  asked.length = 0;
+  await router.retryFirstTexts({ locationId: L, client: ghlClient(), now: Date.now() + 3 * 3600000 });
+  assert.deepEqual(asked.map((a) => a.contactId).sort(), ["c-nt-other", "c-nt-quiet"]);
+  const q = asked.find((a) => a.contactId === "c-nt-quiet");
+  assert.equal(q.hook.address, "10 Cedar St, Tacoma, WA", "their listing from the latest pull");
+  assert.equal(q.hook.county, "Pierce");
+  assert.equal(q.hook.turnkey, true);
+  assert.equal(normalizeOutreachAutopilot({}).neverTexted.enabled, false);
+  assert.equal(normalizeOutreachAutopilot({ neverTexted: { enabled: true } }).neverTexted.enabled, true);
+});
+
 /* ---------- the sweep ---------- */
 
 function sweepFake(rows) {
@@ -423,6 +572,28 @@ test("with room for 5 more machine texts today, the sweep creates 5 agents, not 
   assert.ok(job.warnings.some((w) => /room for 5 first texts today/.test(w)), job.warnings.join(" · "));
 });
 
+test("the sweep hands its never-texted switch to the retry, and counts them inside the day's room", async () => {
+  _resetJobs();
+  let asked = null;
+  let seen = null;
+  const deps = {
+    runPull: async () => ({ batchId: "b1", warnings: [] }),
+    importAgents: async (a) => { seen = a; return { results: [], imported: 0 }; },
+    firstTextRoom: async () => 7,
+    retryFirstTexts: async (a) => { asked = a; return { retried: 3, opened: 3, neverTexted: 2 }; },
+  };
+  const store = sweepFake(ranked);
+  const job = startOutreachSweep({ locationId: "loc-nt-sweep", client: {}, store, deps,
+    saved: { outreachAutopilot: { enabled: true, dailyCap: 100, firstTouch: "app", neverTexted: { enabled: true } } } });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(job.status, "done", job.error);
+  assert.equal(asked.neverTexted, true);
+  assert.equal(job.neverTexted, 2);
+  assert.equal(seen.createLimit, 4, "the room left after them");
+  const last = store.cursors.get("loc-nt-sweep|outreach")?.doc?.last;
+  assert.equal(last?.neverTexted, 2, "on the cursor, for the supply line");
+});
+
 test("with no room left today, the sweep doesn't pull or create anyone", async () => {
   _resetJobs();
   let pulled = false;
@@ -456,8 +627,37 @@ test("a dry run reads the room but texts nobody", async () => {
   assert.equal(seen.createLimit, 3);
 });
 
-test("every first text asks for their other fixers — the deals with committed buyers were the agent's next house, not the listing", () => {
+test("the first text asks one question and leaves their other fixers for their answer — the fixers line cost 12 points of replies", () => {
   const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES });
-  assert.match(t.split("HOW MATT WRITES")[0], /END with one short line[^.]*other fixers on their radar in King\. That line is required/);
-  assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => /other fixers|anything else that needs work/i.test(x)), "each example asks for the next house");
+  const rules = t.split("HOW MATT WRITES")[0];
+  assert.doesNotMatch(rules, /That line is required|END with one short line|other fixers on their radar/);
+  assert.match(rules, /Two short sentences/);
+  assert.match(rules, /don't ask about their other fixers or other houses in this text/);
+  assert.match(rules, /anywhere in King County is optional/, "the county line is optional");
+  const fill = (x) => x.replace("{first}", "Dana").replace("{street}", "14820 SE 172nd St").replace("{town}", "Renton").replace("{county}", "King");
+  for (const x of DEFAULT_OPENER_EXAMPLES) {
+    assert.doesNotMatch(x, /other fixers|anything else that needs work|all ears/i, x);
+    assert.equal((x.match(/\?/g) || []).length, 1, `one question: ${x}`);
+    assert.ok(fill(x).length >= 130 && fill(x).length <= 190, `about 150 characters filled in: ${fill(x).length}`);
+  }
+});
+
+test("a turnkey seat's first text says it looks finished and asks, once, whether they see ones that need work", () => {
+  const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES, turnkey: true });
+  assert.match(t, /THIS LISTING LOOKS FINISHED: don't call it a fixer/);
+  assert.match(t, /ask lightly whether they ever see ones that need work\. That is your one question/);
+  assert.doesNotMatch(t, /other fixers carry/);
+});
+
+test("an agent answering one of the new short first texts is answering us, though it never says 'came across your listing'", async () => {
+  const stamp = new Date(Date.now() - 60 * 60000).toISOString().slice(0, 16).replace("T", " ");
+  const ours = "Hey Dana, saw 12 Elm St come up. I flip a few houses a year. Is this one a project?";
+  const store = { listReplyDrafts: async () => [{ id: "d1", contactId: "c1", status: "sent", sentText: ours, outbound: { kind: "outreach_open" } }] };
+  const thread = (us) => `[${stamp}] US sms: ${us}\n[${stamp}] THEM sms: It's for sale`;
+  assert.equal(await lastLineIsOurFirstText({ store, locationId: "L", contactId: "c1", transcript: thread(`${ours} No worries if not can stop`) }), true, "GHL's stop line on the end");
+  assert.equal(await lastLineIsOurFirstText({ store, locationId: "L", contactId: "c1", transcript: thread("Following up on the offer we sent.") }), false, "another text of ours isn't the first one");
+  assert.equal(await lastLineIsOurFirstText({ store: { listReplyDrafts: async () => [] }, locationId: "L", contactId: "c1",
+    transcript: thread("Hi, came across your listing at 12 Elm St. Is it a bit of a project?") }), true, "the GHL workflow's template still counts");
+  const notOpen = { listReplyDrafts: async () => [{ id: "d2", contactId: "c1", status: "sent", sentText: ours, outbound: { kind: "agent_pulse" } }] };
+  assert.equal(await lastLineIsOurFirstText({ store: notOpen, locationId: "L", contactId: "c1", transcript: thread(ours) }), false, "only the first text");
 });

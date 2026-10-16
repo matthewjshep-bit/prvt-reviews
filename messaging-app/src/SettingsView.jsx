@@ -31,8 +31,9 @@ const fmtTyped = (v) => {
   return d ? Number(d).toLocaleString("en-US") : "";
 };
 
-// RentCast's property types (mirrors PROPERTY_TYPES in ghl-broker/outreach-sweep.js).
-const OUTREACH_PROPERTY_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse", "Condo", "Apartment", "Land"];
+// RentCast's property types (mirrors PROPERTY_TYPES in ghl-broker/outreach-sweep.js),
+// less Manufactured: we don't buy mobile homes (Matt, 2026-10-13).
+const OUTREACH_PROPERTY_TYPES = ["Single Family", "Multi-Family", "Townhouse", "Condo", "Apartment", "Land"];
 const OUTREACH_DEFAULT_TYPES = ["Single Family"];
 
 // A GHL workflow by name, or a pasted id/builder URL when the list can't load
@@ -778,6 +779,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         </p>
         <div className="grid grid-cols-2 gap-3">
           <Num label="New agents texted" suffix="a day" value={lineTargets.newAgentsPerDay} onChange={setLine("newAgentsPerDay")} />
+          <Num label="Warn below (new agents)" suffix="a day" value={lineTargets.minNewAgentsPerDay} onChange={setLine("minNewAgentsPerDay")} />
           <Num label="Offers out" suffix="a day" value={lineTargets.offersPerDay} onChange={setLine("offersPerDay")} />
           <Num label="Offers to one contract" value={lineTargets.offersPerContract} onChange={setLine("offersPerContract")} />
           <Num label="Deals" suffix="a month" value={lineTargets.dealsPerMonth} onChange={setLine("dealsPerMonth")} />
@@ -1026,7 +1028,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <div className="mt-4">
           <span className="block text-xs font-medium text-slate-600">Houses the auto-underwrite prices on its own</span>
           <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1">
-            {[["sfr", "Single family"], ["multi_family", "Multi-family (2-4 units)"], ["manufactured", "Mobile / manufactured"]].map(([k, label]) => {
+            {[["sfr", "Single family"], ["multi_family", "Multi-family (2-4 units)"]].map(([k, label]) => {
               const on = (form.focusKinds?.length ? form.focusKinds : ["sfr"]).includes(k);
               return (
                 <label key={k} className="flex items-center gap-1.5 text-sm">
@@ -1043,7 +1045,8 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <p className="mt-1 text-xs text-slate-400">
             Anything else an agent texts (a townhouse, a condo, land, or a kind not ticked here) is held before
             comps are bought and shows on Today as "Not single-family" with Underwrite anyway / Pass on it. The
-            bot tells agents what we buy. A house Zillow can't type goes ahead.
+            bot tells agents what we buy. A house Zillow can't type goes ahead. Mobile and manufactured homes
+            are never bought: they're passed at the next check and the bot says no when an agent asks.
           </p>
         </div>
       </section>
@@ -1173,6 +1176,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                     onChange={(e) => setOutreachAuto("opener")({ ...(form.outreachAutopilot?.opener || {}), examples: e.target.value })} />
                   <span className="mt-1 block text-xs text-slate-500">
                     A few of your own first texts, with a blank line between them. The bot writes every agent a fresh one in this voice, with one real detail from their listing (the town, the decade it was built, a big lot, sitting a while), and fills in {"{first}"}, {"{street}"}, {"{town}"} and {"{county}"}. The county is the only area it says you're looking in. A little humour is fine; it's never at the house's expense.
+                    Keep each to one question and about 150 characters: short first texts get answered, so the bot stays under 200, and an example over 220 isn't used. The ask for their other fixers waits for their first answer.
                     Leave off "Thanks, Matt" and "No worries if not can stop": GHL adds both to the end of the first text, so the bot never writes a sign-off and one in an example is cut.
                   </span>
                 </label>

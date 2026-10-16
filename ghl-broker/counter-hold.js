@@ -10,12 +10,12 @@
 // Rides the morning follow-up sweep, after the ladders, so it shares that
 // run's one-text-a-morning rule. Off unless parties.agent.counterHold is on.
 
-import { effectiveStatus, OPEN_STATUSES, priceAgreed, isHot } from "./shared/offer-status.js";
+import { effectiveStatus, OPEN_STATUSES, priceAgreed, isHot, saidYes } from "./shared/offer-status.js";
 import { currentOffers } from "./shared/current-offer.js";
 import { threadHealth } from "./shared/thread-health.js";
 import { botHold } from "./shared/bot-hold.js";
 import { recordEvent } from "./contact-record.js";
-import { holdState } from "./shared/counter-hold.js";
+import { holdState, callsInstead } from "./shared/counter-hold.js";
 
 export { holdState };
 
@@ -34,8 +34,10 @@ export async function runCounterHolds({ client, locationId, saved, store, config
   if (!(dryRun && ignoreSwitch) && (!config?.enabled || !hold?.enabled || !pb?.followUp?.enabled)) return out;
   const gapHours = Number(pb?.followUp?.minHoursBetween) || 72;
   const rows = await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []);
+  // A counter close to ours since the hold is a call now (2026-10-15): the
+  // clock stands down — no check-in, no pass (shared/counter-hold.js).
   const held = currentOffers(rows).filter((o) => o?.counterHold?.at && o.contactId && !o.deal
-    && OPEN_STATUSES.has(effectiveStatus(o)) && !priceAgreed(o) && !isHot(o));
+    && OPEN_STATUSES.has(effectiveStatus(o)) && !priceAgreed(o) && !isHot(o) && !callsInstead(o, hold?.callWithinPct ?? 10));
   for (const o of held) {
     const base = { contactId: o.contactId, address: o.address, kind: "counter_hold" };
     const drafts = await store.listReplyDrafts(locationId, { contactId: o.contactId, limit: 20 }).catch(() => []);
@@ -50,6 +52,11 @@ export async function runCounterHolds({ client, locationId, saved, store, config
     if (s.next === "pass") {
       // You picked the thread up since the hold: the pass is yours to make.
       if (health.reason === "person_has_it") { out.push({ ...base, status: "skipped", reason: "you have the thread — not passed" }); continue; }
+      // They said yes to our number since (2026-10-15): we never walk away from a yes.
+      if (saidYes({ offers: [o], drafts, events, address: o.address, since: o.counterHold.at, now })) {
+        out.push({ ...base, status: "skipped", reason: "they said yes to our number — not passed" });
+        continue;
+      }
       if (dryRun) { out.push({ ...base, status: "would_pass", reason: s.why }); continue; }
       const r = typeof deps.passHeldCounter === "function" ? await deps.passHeldCounter({ offerId: o.id, note: s.why }).catch((e) => ({ ok: false, reason: e.message })) : { ok: false, reason: "passing is not wired" };
       out.push({ ...base, status: r?.ok ? "passed" : "skipped", reason: r?.ok ? s.why : r?.reason });

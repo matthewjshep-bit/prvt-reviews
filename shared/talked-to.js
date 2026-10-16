@@ -90,14 +90,41 @@ export function voicemailGreeting(transcript = "", { durationSec = null } = {}) 
  * call that rang out is a call_attempt, but older rows carry the call that
  * rang out as a bare call_summary (no transcript, a few seconds, or a
  * voicemail greeting) — those were never a person talking. A call logged by
- * hand from Matt's own phone has no length and is taken at his word.
+ * hand from Matt's own phone has no length and is taken at his word. A
+ * voicemail they left us (`missed`) is their words, not a conversation.
  */
 export function callEventConnected(e) {
   if (e?.type !== "call_summary") return false;
   const d = e.data || {};
   if (d.tooShort === true) return false;
+  // They called, nobody picked up, and they left a voicemail (2026-10-15):
+  // the words are transcribed, but nobody talked.
+  if (d.missed === true) return false;
   if (d.transcribed === false) return connectedCall({ durationSec: d.durationSec, status: d.status });
   return true;
+}
+
+/**
+ * realCall(event, { minSec }) → boolean
+ *
+ * A phone call that was a conversation worth counting (2026-10-15: of every
+ * step on the line, a call is the one that best predicts a contract). A
+ * call_summary that connected (callEventConnected) and ran `minSec` (45) or
+ * more. With no length from GHL, a transcribed call whose summary has
+ * something to say (REAL_CALL_SUMMARY_CHARS). One Matt logged by hand from his
+ * own phone counts — he was on it.
+ */
+export const REAL_CALL_SECONDS = 45;
+export const REAL_CALL_SUMMARY_CHARS = 200;
+export function realCall(e, { minSec = REAL_CALL_SECONDS } = {}) {
+  if (!callEventConnected(e)) return false;
+  const d = e.data || {};
+  const secs = Number(d.durationSec);
+  if (Number.isFinite(secs) && secs > 0) return secs >= minSec;
+  // Logged by hand (routes/contacts.js): no transcript flag, no GHL message
+  // behind it. The replier backfill's marker is not a call anyone heard.
+  if (d.transcribed === undefined && !e.ref && !d.backfill && e.source !== "backfill") return true;
+  return String(d.summary || "").trim().length >= REAL_CALL_SUMMARY_CHARS;
 }
 
 function callConnected(m) {

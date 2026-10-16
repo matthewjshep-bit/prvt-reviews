@@ -39,6 +39,7 @@
 // maoPctOfArv% of ARV minus repairs, minus the fee, no jitter. "blended" is
 // the mean of those three.
 import { normalizeConversationAi } from "./conversation-ai.js";
+import { normalizeUnderwriteCalibration } from "./calibration.js";
 
 export const UNDERWRITE_MODES = [
   { key: "backstack", label: "Back-stack from ARV", hint: "ARV − selling costs − flip profit − repairs − holding − your fee" },
@@ -316,7 +317,34 @@ export function effectiveSettings(overrides = {}) {
   // and number is validated there); a saved partial is filled, not trusted.
   const cai = (overrides || {}).conversationAi;
   s.conversationAi = cai && typeof cai === "object" ? normalizeConversationAi(cai) : null;
+  // Matt's calibration from Lessons (shared/calibration.js): absent until he
+  // applies it, and absent changes nothing.
+  if ((overrides || {}).underwriteCalibration !== undefined) s.underwriteCalibration = normalizeUnderwriteCalibration(overrides.underwriteCalibration);
   return s;
+}
+
+/**
+ * writtenTerms(settings) → { earnestMoney, earnestDue, inspectionDaysMin, inspectionDays, closeDaysMin, closeDays, fromWriteUp }
+ *
+ * One set of terms (2026-10-15). With the Conversation AI saved, its write-up
+ * terms (what the bot tells an agent who writes the offer: $1,000 earnest
+ * after inspection, a 10 to 14 day inspection, roughly 10 to 21 days to close,
+ * a hard money loan) are what the letter and the email say too. Without it,
+ * the letter's own earnest money and the PSA's closing days, as before.
+ */
+export function writtenTerms(settings = {}) {
+  const w = settings?.conversationAi?.writeUp;
+  if (w && Number(w.earnestMoney) > 0) {
+    return {
+      earnestMoney: Math.round(Number(w.earnestMoney)), earnestDue: String(w.earnestDue || ""),
+      inspectionDaysMin: Number(w.inspectionDaysMin) || 0, inspectionDays: Number(w.inspectionDays) || 0,
+      closeDaysMin: Number(w.closeDaysMin) || 0, closeDays: Number(w.closeDays) || 0, fromWriteUp: true,
+    };
+  }
+  return {
+    earnestMoney: Math.round(num(settings?.earnestMoney)), earnestDue: "", inspectionDaysMin: 0, inspectionDays: 0,
+    closeDaysMin: 0, closeDays: Number(settings?.psa?.closingDays) || 0, fromWriteUp: false,
+  };
 }
 
 // inputs: { address, arv, repairs?, askingPrice? } — the offer is driven by

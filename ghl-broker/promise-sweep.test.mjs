@@ -710,3 +710,37 @@ test("a deal source who told us how often to check in leaves the weekly chain", 
   assert.equal(s.calls.length, 1, "this week's goes");
   assert.equal(store.events.filter((e) => e.type === "checkin_requested").length, 1, "no next week");
 });
+
+/* ---------- a call, a time to walk it, the earnest money (2026-10-15) ---------- */
+
+test("a call, a walk-through time and the earnest money read as promises only a person keeps", () => {
+  assert.equal(detectPromise("Sounds good, I'll give you a call tomorrow morning."), "call");
+  assert.equal(detectPromise("Let me call you back in a bit."), "call");
+  assert.equal(detectPromise("I'll get you a time to walk it this week."), "tour");
+  assert.equal(detectPromise("We'll get the earnest money over to title Monday."), "emd");
+  assert.equal(detectPromise("Will review the numbers and give you a call if it makes sense."), null, "a conditional call promises nothing");
+  assert.equal(detectPromise("Earnest money is 1k after inspection."), null, "a term, not a promise");
+  assert.equal(detectPromise("Can I give you a call?"), null, "asking isn't promising");
+  assert.equal(detectPromise("If you've got other fixers on your radar, I'd love a quick 5-minute call this week, what time works?"), null, "the call ask is a question");
+  assert.equal(detectPromise("Let's go over the terms on a quick call."), "call", "the prompts' own words for terms");
+  assert.equal(detectPromise("Got it, 480. Let me give you a quick call on that."), "call");
+});
+
+test("a promised call never gets a 'still working on it' text: Today carries it", async () => {
+  const call = promise(30, { data: { what: "call", draftId: "d30", dueAt: at(26), text: "I'll give you a call tomorrow." } });
+  const store = fakeStore({ events: [call] });
+  const s = starter();
+  const r = await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: { ...s, listUnderwriteJobs: () => [] } });
+  assert.equal(s.calls.length, 0);
+  assert.equal(r.owed, 0);
+  assert.ok(!store.events.some((e) => e.type === "promise_owed"));
+});
+
+test("dismissing a promised call closes it even after the machine kept a number", async () => {
+  const call = promise(30, { data: { what: "call", draftId: "d30", dueAt: at(26), text: "I'll give you a call tomorrow." } });
+  const kept = { id: "k1", contactId: "c1", type: "promise_kept", at: at(10), data: { by: "our_number" } };
+  const store = fakeStore({ events: [call, kept] });
+  store.listContactEventsSince = async (_l, since, { types = null } = {}) => store.events.filter((e) => e.at >= since && (!types || types.includes(e.type)));
+  const r = await settlePromise({ store, locationId: "LOC", contactId: "c1", by: "dismissed", reason: "handled_by_call", now: NOW });
+  assert.equal(r.settled, true);
+});

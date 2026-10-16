@@ -40,7 +40,9 @@ import { autopilotSummary, graduationReport, GRADUATION } from "../shared/gradua
 import { buildFlow, FLOW_STAGES } from "../shared/flow.js";
 import { buildDigest } from "../shared/digest.js";
 import { lessons, dealScorecard } from "../shared/post-mortem.js";
+import { calibrationReport } from "../shared/calibration.js";
 import { effectiveSettings } from "../shared/offer-calc.js";
+import { needsPreContract, preContractChecks } from "../shared/pre-contract.js";
 import { listPipelines, getContact, searchOpportunities } from "../ghl.js";
 import { mapPool } from "../map-pool.js";
 import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR, acquisitionsPipeline, pipelinesFor } from "../ghl-mirror.js";
@@ -85,6 +87,8 @@ const PIPELINE_EVENT_TYPES = [
   "follow_up_sent", "text_summary", "call_summary", "call_attempt",
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
+  // A booked time keeps a promised walk-through time (shared/promise-owed.js).
+  "call_booked",
   "underwrite_dropped", "texts_elsewhere",
   "drive_stopped", "drive_resumed", "hand_reply", "investor_minded", "referral_mentioned",
   // An agent's partner terms: the Desk's partner row (shared/call-list.js).
@@ -282,11 +286,17 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // A fell-through deal with no post-mortem yet still counts by its numbers.
       const all = [...postMortems, ...pending.map((p) => ({ offerId: p.offerId, address: p.address, street: String(p.address || "").split(",")[0], scorecard: p.scorecard, negotiation: null }))];
       const out = lessons({ postMortems: all, controls, settings });
+      // Matt's own revisions of the machine's numbers (shared/calibration.js):
+      // two more settings recommendations, or a note that there's not enough yet.
+      const calib = calibrationReport({ offers: await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []), settings });
+      out.recommendations = [...out.recommendations, ...calib.recommendations];
+      out.current = { ...out.current, underwriteCalibration: settings.underwriteCalibration || null };
       const secrets = ["aiApiKey", "compsApiKey", "apifyToken", "captureToken", "rentcastApiKey", "googleApiKey", "zillowRapidApiKey", "githubToken"];
       res.json({ ok: true, ...out,
         // Why buyers passed in the last 30 days, every deal, by the reason
         // their own words name (shared/funnel.js passThemes).
         passThemes: passThemes(deals, { days: 30 }),
+        calibration: { note: calib.note, sample: calib.sample },
         deals: all.map((pm) => ({ offerId: pm.offerId, address: pm.address, street: pm.street, hasPostMortem: Boolean(pm.analysis) || postMortems.includes(pm), generatedAt: pm.generatedAt || null, scorecard: pm.scorecard })),
         controls: controls.map((sc) => ({ offerId: sc.offerId, address: sc.address, street: sc.street, outcome: sc.outcome, scorecard: sc })),
         digestSaved: settings.postMortem?.digest || "",
@@ -325,6 +335,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     "import", "outreach_sent", "outreach_enrolled", "agent_pulse_texted", "text_summary", "call_summary", "offer_sent", "offer_revised", "offer_countered", "offer_passed", "offer_we_passed", "offer_unavailable",
     "offer_no_response", "realm_yes", "realm_no", "deal_promoted", "deal_stage", "blast_sent", "dataroom_sent", "dataroom_viewed",
     "investor_evaluating", "investor_committed", "investor_passed", "feedback", "follow_up_sent", "call_booked", "agent_estimate",
+    // What makes a reply "useful" on the Replied tile (shared/flow.js).
+    "house_mentioned", "referral_mentioned", "property_details",
   ];
   // The line, measured (shared/line.js): each station against its target,
   // the waits between stations, what fell off with nothing scheduled, the
@@ -477,6 +489,20 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     return v;
   }
 
+  // { offerId: preContractChecks } for the offers about to be signed (a
+  // handful; this route polls, so it stops at twenty).
+  async function preContractForHot({ offers = [], saved = null }) {
+    const settings = effectiveSettings(saved || {});
+    const out = {};
+    await Promise.all(offers.filter(needsPreContract).slice(0, 20).map(async (o) => {
+      const full = await store.getOffer(o.id).catch(() => null);
+      if (!full) return;
+      const videos = store.listOfferVideos ? await store.listOfferVideos(o.id).catch(() => []) : [];
+      out[o.id] = preContractChecks({ offer: full, settings, videos });
+    }));
+    return out;
+  }
+
   router.get("/pipeline", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
@@ -526,9 +552,12 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const heldTriageByOffer = await heldTriageForPromises({ store, locationId, offers, events, config, now }).catch(() => ({}));
       // Which live deals have a buyer package, for the "no buyer package" row.
       const dealRooms = await dealRoomIds({ store, locationId, offers });
+      // The few offers about to be signed, read in full: the lean row has no
+      // listing remarks, size or videos (shared/pre-contract.js).
+      const preContractByOffer = await preContractForHot({ offers, saved }).catch(() => ({}));
       // The limit is the windowed read's: the stop events merged in on top
       // must not read as "the read filled up".
-      const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT + (events.length - windowed.length), dealRooms });
+      const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, preContractByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT + (events.length - windowed.length), dealRooms });
       // Last night's audit: the rows that are Matt's join the queue under
       // "From last night"; the rest of the result rides along for the card.
       const auditCursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);
@@ -665,10 +694,11 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // Decide · Machine, and today against the line's targets. `actions`
       // stays as it was for the board and for a console that predates it.
       const { actions: shownCalls } = applyDismissals(callRows, dismissedDoc, now);
-      // Today is only what needs Matt (2026-10-13): no Call or Machine
-      // section; a counter above our number stays, as a decision.
+      // Today is only what needs Matt (2026-10-13): no Machine section; a
+      // counter above our number stays, as a decision. Since 2026-10-15 the
+      // call list's best `desk.dailyCalls` are back, as "Today's calls".
       const heldByOffer = heldVerdicts(audit);
-      const desk = foldDesk(urgentReasons([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer }), { drafts, heldByOffer, callCap: deskSettings.callCap });
+      const desk = foldDesk(urgentReasons([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer, dailyCalls: deskSettings.dailyCalls }), { drafts, heldByOffer, callCap: deskSettings.callCap });
       for (const r of desk.rows) if (r.kind === "call_counter" && !r.call) r.call = briefFor(r, { cards: out.cards, offers });
       const kpis = deskKpis({ offers, cards: out.cards, events, targets: normalizeLineTargets(saved?.lineTargets), now });
       res.json({

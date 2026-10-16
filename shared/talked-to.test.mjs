@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { tallyMessages, relationshipOf, isTalkEvent, matchesText, voicemailGreeting } from "./talked-to.js";
+import { tallyMessages, relationshipOf, isTalkEvent, matchesText, voicemailGreeting, callEventConnected, realCall, REAL_CALL_SECONDS } from "./talked-to.js";
 
 const sms = (direction) => ({ messageType: "TYPE_SMS", direction });
 
@@ -83,4 +83,31 @@ test("a real conversation is never read as a greeting, however it opens", () => 
   assert.equal(voicemailGreeting(""), null);
   // A short real call that opens with "unavailable" is still a call.
   assert.equal(voicemailGreeting("THEM: Hey, sorry I was unavailable earlier.\nTHEM: It's Matt, calling about Maple. THEM: Yeah the seller is around."), null);
+});
+
+// 2026-10-15: a voicemail they left is transcribed, but nobody talked.
+test("a voicemail they left is not a conversation", () => {
+  assert.equal(callEventConnected({ type: "call_summary", data: { transcribed: true, missed: true, durationSec: 0 } }), false);
+  assert.equal(callEventConnected({ type: "call_summary", data: { transcribed: true, durationSec: 240 } }), true);
+});
+
+/* ---------- a real call (2026-10-15) ---------- */
+
+// The Flow's Talked station: a phone call is the step that best predicts a
+// contract, and a 10-second "can I call you back" isn't one.
+test("a real call is 45 seconds or more, one you logged by hand, or a full summary when GHL gave no length", () => {
+  const ev = (data, over = {}) => ({ type: "call_summary", source: "call", ref: "m1", data, ...over });
+  assert.equal(REAL_CALL_SECONDS, 45);
+  assert.equal(realCall(ev({ transcribed: true, durationSec: 45, summary: "x" })), true);
+  assert.equal(realCall(ev({ transcribed: true, durationSec: 44, summary: "x" })), false);
+  assert.equal(realCall(ev({ transcribed: true, durationSec: 0, summary: "y".repeat(200) })), true, "no length, a summary with something in it");
+  assert.equal(realCall(ev({ transcribed: true, summary: "short" })), false);
+  assert.equal(realCall(ev({ summary: "called her from my phone" }, { ref: null })), true, "logged by hand");
+  assert.equal(realCall(ev({ summary: "They called us (read from GHL by the replier backfill)", backfill: true }, { ref: null, source: "backfill" })), false);
+  assert.equal(realCall(ev({ transcribed: true, durationSec: 300, tooShort: true })), false, "a call intake marked too short");
+  assert.equal(realCall(ev({ transcribed: false, durationSec: 20, summary: "(call, no transcript available)" })), false);
+  assert.equal(realCall(ev({ transcribed: false, durationSec: 90, summary: "(call, no transcript available)" })), true);
+  assert.equal(realCall({ type: "text_summary", data: { durationSec: 300 } }), false);
+  assert.equal(realCall(ev({ transcribed: true, durationSec: 30 }), { minSec: 30 }), true);
+  assert.equal(realCall(ev({ transcribed: true, missed: true, durationSec: 300, summary: "z".repeat(300) })), false, "a voicemail they left is not a call");
 });

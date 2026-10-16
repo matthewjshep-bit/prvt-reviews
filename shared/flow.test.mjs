@@ -9,7 +9,8 @@ const win = { windowStartMs: NOW - 7 * D, windowEndMs: NOW + 1, now: NOW };
 
 test("every stage is present in river order, two rows", () => {
   const r = buildFlow({ ...win });
-  assert.equal(r.stages.length, 12);
+  assert.equal(r.stages.length, 13);
+  assert.deepEqual(r.stages.slice(2, 5).map((s) => s.key), ["replied", "talked", "underwritten"]);
   assert.deepEqual(r.stages.map((s) => s.key), FLOW_STAGES.map((s) => s.key));
   assert.ok(r.stages.every((s) => s.count === 0));
 });
@@ -303,7 +304,61 @@ test("the reply rate is of agents first-texted in the window", () => {
   const s = Object.fromEntries(buildFlow({ ...win, events }).stages.map((x) => [x.key, x]));
   assert.equal(s.replied.count, 3, "every agent who answered anything");
   assert.equal(s.replied.conversion, 25, "one of the four we first texted");
-  assert.equal(s.replied.sub, "1 of 4 first-texted agents replied");
+  assert.equal(s.replied.sub, "1 of 4 first-texted agents replied · 3 useful");
+});
+
+/* ---------- Talked, and replies that say something (2026-10-15) ---------- */
+
+// The funnel review: of every step on the line, a phone call best predicts a
+// contract, and the Flow had no station for it.
+const call = (c, h, data = {}, over = {}) => ({ id: `c-${c}-${h}`, contactId: c, type: "call_summary", at: at(h), source: "call", ref: `m-${c}-${h}`, data: { transcribed: true, ...data }, ...over });
+const text = (c, h, data = {}) => ({ id: `t-${c}-${h}`, contactId: c, type: "text_summary", at: at(h), source: "conversation", data });
+
+test("a real call puts an agent on Talked: 45 seconds, one you logged, or a full summary with no length; a short one doesn't", () => {
+  const events = [
+    call("long", 50, { durationSec: 45, summary: "talked through the house" }),
+    call("short", 50, { durationSec: 44, summary: "quick hello" }),
+    call("logged", 50, { summary: "called her from my phone, seller wants 400", transcribed: undefined }, { ref: null }),
+    call("nolength", 50, { durationSec: 0, summary: "x".repeat(220) }),
+    call("nolength-thin", 50, { durationSec: 0, summary: "hung up" }),
+    call("rangout", 50, { durationSec: 0, summary: "(call, no transcript available)", transcribed: false }),
+    call("long", 40, { durationSec: 300, summary: "again" }),
+    call("buyer", 50, { durationSec: 200, summary: "a buyer" }, { party: "investor" }),
+  ];
+  const r = buildFlow({ ...win, events, itemsFor: "talked" });
+  const s = Object.fromEntries(r.stages.map((x) => [x.key, x]));
+  assert.equal(s.talked.count, 3, "long, logged and the full summary — each agent once");
+  assert.deepEqual(r.items.map((i) => i.contactId).sort(), ["logged", "long", "nolength"]);
+  assert.equal(s.talked.machine, 0, "a call is a person's");
+});
+
+test("Talked converts from Replied, and Underwritten is still measured against Replied", () => {
+  const events = [text("a1", 60, { inbound: "I have one" }), text("a2", 60, { inbound: "maybe" }), text("a3", 60, { inbound: "send it" }), text("a4", 60, { inbound: "ok" }),
+    call("a1", 50, { durationSec: 120, summary: "talked" })];
+  const offers = [
+    { id: "o1", contactId: "a1", address: "1 A St", status: "sent", createdAt: at(40), autoUnderwrite: { finishedAt: at(40) } },
+    { id: "o2", contactId: "a2", address: "2 B St", status: "sent", createdAt: at(40), autoUnderwrite: { finishedAt: at(40) } },
+  ];
+  const s = Object.fromEntries(buildFlow({ ...win, events, offers }).stages.map((x) => [x.key, x]));
+  assert.equal(s.replied.count, 4);
+  assert.equal(s.talked.count, 1);
+  assert.equal(s.talked.conversion, 25, "one of four who replied");
+  assert.equal(s.underwritten.conversion, 50, "two underwrites over four replies, not over one call");
+});
+
+test("useful replies leave out an opt-out, small talk, a phone answering for them and 'stop texting me', and count a house they named", () => {
+  const events = [
+    text("good", 60, { inbound: "I have a fixer in Kent", intent: "has_property" }),
+    text("optout", 60, { inbound: "remove me", intent: "opt_out" }),
+    text("small", 60, { inbound: "thanks!", intent: "small_talk" }),
+    text("auto", 60, { inbound: "I'm driving with Do Not Disturb turned on. I'll see your message when I get where I'm going.", intent: "question" }),
+    text("angry", 60, { inbound: "stop texting me", intent: "question" }),
+    text("named", 60, { inbound: "ok", intent: "other" }),
+    { id: "h1", contactId: "named", type: "house_mentioned", at: at(55), source: "conversation", address: "9 Oak St", data: {} },
+  ];
+  const s = Object.fromEntries(buildFlow({ ...win, events }).stages.map((x) => [x.key, x]));
+  assert.equal(s.replied.count, 6);
+  assert.equal(s.replied.sub, "2 useful");
 });
 
 // 2026-10-08: 4 of 11 "Under contract" in two weeks were houses that went to

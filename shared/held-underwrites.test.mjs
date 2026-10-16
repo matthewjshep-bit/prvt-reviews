@@ -176,7 +176,7 @@ test("a house that isn't single-family waits a day for you, then it's passed and
   const { triageHeldUnderwrite, heldOnTheMachine } = await import("./held-underwrites.js");
   const now = Date.parse("2026-10-01T20:00:00Z");
   const offer = { id: "h1", address: "1510 Maple Lane, Kent, WA 98030", contactId: "a1", status: "draft", createdAt: "2026-10-01T19:00:00Z",
-    autoUnderwrite: { finishedAt: "2026-10-01T19:00:00Z", held: ["not our kind of house — a mobile home (single-family only right now)"] } };
+    autoUnderwrite: { finishedAt: "2026-10-01T19:00:00Z", held: ["not our kind of house — a townhouse (single-family only right now)"] } };
   const t = triageHeldUnderwrite({ offer, now });
   assert.equal(t.action, "wait");
   assert.match(t.reason, /passes after a day unless you underwrite it anyway/);
@@ -275,6 +275,21 @@ test("a rural house is passed at the next check and the agent hears it's rural",
   const t = triageHeldUnderwrite({ offer, now });
   assert.deepEqual([t.action, t.status, t.passNote], ["retire", "we_passed", "rural"]);
   assert.match(heldOnTheMachine(offer, { now }).what, /passed at the 7pm check — rural: it sits on 5\.2 acres; we buy under 2 acres/);
+});
+
+// Matt, 2026-10-13: no manufactured homes as a rule. Like rural, no day to
+// wait: passed at the next check, and the agent hears we don't buy them.
+test("a mobile home is passed at the next check and the agent hears we don't buy mobile homes", async () => {
+  const { triageHeldUnderwrite, heldOnTheMachine } = await import("./held-underwrites.js");
+  const now = Date.parse("2026-10-13T20:00:00Z");
+  const offer = { id: "m1", address: "1510 Maple Lane, Kent, WA 98030", contactId: "a1", status: "draft", createdAt: "2026-10-13T19:00:00Z",
+    autoUnderwrite: { finishedAt: "2026-10-13T19:00:00Z", held: ["not our kind of house — a mobile home (we don't buy mobile or manufactured homes)"] } };
+  const t = triageHeldUnderwrite({ offer, now });
+  assert.deepEqual([t.action, t.status, t.passNote], ["retire", "we_passed", "manufactured"]);
+  assert.match(heldOnTheMachine(offer, { now }).what, /passed at the 7pm check — a mobile home; we don't buy mobile or manufactured homes/);
+  // A hold written before the rule (2026-10-01 wording) passes the same way.
+  const old = { ...offer, autoUnderwrite: { ...offer.autoUnderwrite, held: ["not our kind of house — a mobile home (single-family only right now)"] } };
+  assert.equal(triageHeldUnderwrite({ offer: old, now }).passNote, "manufactured");
 });
 
 test("a house the agent brought is never retired because the agent's GHL card says Tier 3 — 20 brought houses died that way unpriced", () => {
@@ -421,4 +436,16 @@ test("a retire that already tells them, or one we may not text, gets no second n
 test("'it's currently under contract' marks the house gone", () => {
   assert.equal(houseGone("It's currently under contract as a short sale.", "status_check"), true);
   assert.equal(houseGone("It's still pending", ""), true);
+});
+
+// 2026-10-15: a yes to our number is never closed out by the sweep.
+test("a house they said yes on is yours, never retired by the sweep", () => {
+  const yes = inbound("They're willing to accept it, all cash, close in two weeks", { createdAt: ago(STALE_DAYS + 3) });
+  const old = held({ createdAt: ago(STALE_DAYS + 5), updatedAt: ago(STALE_DAYS + 5), autoUnderwrite: { held: [THIN], finishedAt: ago(STALE_DAYS + 5) } });
+  const t = triage({ offer: old, drafts: [yes], now: NOW });
+  assert.equal(t.action, "yours", t.reason);
+  assert.match(t.reason, /said yes to our number/);
+  // Without the yes the same silence retires it.
+  const quiet = triage({ offer: old, drafts: [inbound("ok thanks", { createdAt: ago(STALE_DAYS + 3) })], now: NOW });
+  assert.equal(quiet.action, "retire");
 });

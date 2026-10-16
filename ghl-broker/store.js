@@ -721,6 +721,24 @@ const pgStore = {
     );
     return rows.map((r) => ({ ...r, importedAt: r.importedAt ? new Date(r.importedAt).toISOString() : null }));
   },
+  // Imported agents a pull saw again since `seenSince` whose GHL thread has
+  // no message at all (doc.ghl.lastMessageAt unset): the never-texted pass
+  // (routes/outreach.js retryFirstTexts). Newest seen first; one contact may
+  // have a row in several batches.
+  async listNeverTextedOutreach(locationId, { seenSince, limit = 500 } = {}) {
+    const { rows } = await query(
+      `select agent_key as "agentKey", batch_id as "batchId", status, contact_id as "contactId",
+              imported_at as "importedAt", first_seen as "firstSeen", last_seen as "lastSeen", doc
+         from outreach_agents
+        where location_id = $1 and status = 'imported' and contact_id is not null
+          and last_seen >= $2
+          and coalesce(doc->'ghl'->>'lastMessageAt', '') = ''
+        order by last_seen desc
+        limit $3`,
+      [locationId, seenSince, limit]
+    );
+    return rows;
+  },
   async getOutreachAgent(locationId, batchId, agentKey) {
     const { rows } = await query(
       `select agent_key as "agentKey", status, contact_id as "contactId",
@@ -1934,6 +1952,14 @@ const fileStore = (() => {
         .filter((a) => a.locationId === locationId && a.contactId && a.doc?.hook?.address && (!contactId || a.contactId === contactId))
         .map((a) => ({ contactId: a.contactId, address: a.doc.hook.address, importedAt: a.importedAt || null }))
         .sort((a, b) => String(a.importedAt || "~").localeCompare(String(b.importedAt || "~")));
+    },
+    async listNeverTextedOutreach(locationId, { seenSince, limit = 500 } = {}) {
+      ensure();
+      return Object.values(data.outreachAgents)
+        .filter((a) => a.locationId === locationId && a.status === "imported" && a.contactId
+          && String(a.lastSeen || "") >= String(seenSince || "") && !a.doc?.ghl?.lastMessageAt)
+        .sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""))
+        .slice(0, limit);
     },
     async getOutreachAgent(locationId, batchId, agentKey) {
       ensure();

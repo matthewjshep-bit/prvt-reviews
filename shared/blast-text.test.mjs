@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { blastMessage, blastNote, dealFacts, blastSubject, bundleMessage } from "./blast-text.js";
+import { blastMessage, blastNote, dealFacts, blastSubject, bundleMessage, presellMessage } from "./blast-text.js";
 import { carrierFlags } from "./carrier-words.js";
 
 test("a blast text names the street, the work, the buyer price in k, and no dollar sign or link", () => {
@@ -76,6 +76,10 @@ test("the operator's dataroom headline rides along, scrubbed", () => {
   // Too long to be a line in a text: left out rather than truncated mid-word.
   assert.equal(blastNote("x".repeat(120)), "");
   assert.equal(blastNote(""), "");
+  // A line that says what the carriers block is left out whole (2026-10-15).
+  assert.equal(blastNote("Cash only, sold as-is"), "");
+  assert.equal(blastNote("Investor special, quick close"), "");
+  assert.equal(blastNote("Big lot, ADU upside"), "Big lot, ADU upside");
 });
 
 test("with the buyer's own package link, the blast ends on the link instead of offering to send details", () => {
@@ -239,4 +243,23 @@ test("a bundle never carries more than three", () => {
   assert.match(t, /Any of these fit what you're buying\?$/);
   // One deal is just the deal's own text.
   assert.equal(bundleMessage([LFP], { firstName: "Buck", variant: 0 }), blastMessage({ ...LFP, firstName: "Buck", variant: 0 }));
+});
+
+/* ---------- a pre-sell, before we sign (2026-10-15) ---------- */
+
+test("a pre-sell text never says under contract, carries no link and no word carriers block", () => {
+  const f = { address: "41 Alder Way, Kent, WA 98030", city: "Kent", price: 383000, arv: 520000, repairs: 60000, beds: 3, baths: 2, yearBuilt: 1962 };
+  for (const variant of [0, 1, 2]) {
+    for (const intro of ["", "saw in the county records you've bought houses around Kent. I'm Matt, I fix up houses locally"]) {
+      const t = presellMessage({ ...f, firstName: "Sam Buyer", variant, intro });
+      assert.doesNotMatch(t, /under contract|https?:|\$/i, t);
+      assert.deepEqual(carrierFlags(t), [], t);
+      assert.match(t, /^Hey Sam/);
+      assert.match(t, /41 Alder Way/);
+      assert.match(t, /Buyer price around 383k, ARV around 520k, rehab about 60k/);
+      assert.match(t, /\?$/, "it asks");
+    }
+  }
+  assert.equal(blastSubject(f, { presell: true }), "41 Alder Way, Kent — coming up, 383k");
+  assert.equal(blastSubject(f), "41 Alder Way, Kent — under contract, 383k");
 });

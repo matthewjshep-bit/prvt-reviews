@@ -15,10 +15,18 @@ import { BTN, BTN_PRIMARY, ErrorBar, KpiRow, SkeletonRows } from "./ui.jsx";
 const pctText = (n) => (n == null ? "—" : `${Math.round(n * 10) / 10}%`);
 const CONF = { high: "bg-emerald-100 text-emerald-800", medium: "bg-amber-100 text-amber-800", low: "bg-slate-100 text-slate-600" };
 const KIND = { negotiation: "At the table", settings: "Settings", process: "Process" };
-const SETTING_LABEL = { underwriteMode: "Underwrite mode", maoPctOfArv: "Buyer line (% of ARV)", wholesaleFee: "Assignment fee in the model", cashPctOfArv: "Cash % of ARV", repairBuffer: "Repair buffer", underwriteChecks: "Buyer view checks" };
+const SETTING_LABEL = { underwriteMode: "Underwrite mode", maoPctOfArv: "Buyer line (% of ARV)", wholesaleFee: "Assignment fee in the model", cashPctOfArv: "Cash % of ARV", repairBuffer: "Repair buffer", underwriteChecks: "Buyer view checks",
+  underwriteCalibration: "Calibration from your revisions" };
+// The calibration block (shared/calibration.js): the rehab floors by era and the ARV haircut.
+const ERA_WORD = { 1950: "pre-1950", 1980: "1950–79", 10000: "1980 on" };
+const fmtCalibration = (v) => {
+  const floors = (v?.rehabFloorPsf || []).map((x) => `${ERA_WORD[x.beforeYear] || x.beforeYear} $${x.psf}/sqft`);
+  const parts = [floors.length ? `rehab floor ${floors.join(", ")}` : "", Number(v?.arvHaircutPct) > 0 ? `ARV −${v.arvHaircutPct}%` : ""].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "off";
+};
 // The buyer-view checks block is a whole object; say the part that moves.
 const fmtChecks = (v) => (!v?.enabled ? "off" : `on (busy road ${v.site?.busyRoadPct}%, distressed rehab ≥ ${v.rehab?.distressedMinPctOfArv}% of ARV)`);
-const fmtSetting = (k, v) => (k === "underwriteChecks" ? fmtChecks(v) : k === "wholesaleFee" || k === "repairBuffer" ? fmtMoney(v) : k === "maoPctOfArv" || k === "cashPctOfArv" ? `${v}%` : String(v));
+const fmtSetting = (k, v) => (k === "underwriteCalibration" ? fmtCalibration(v) : k === "underwriteChecks" ? fmtChecks(v) : k === "wholesaleFee" || k === "repairBuffer" ? fmtMoney(v) : k === "maoPctOfArv" || k === "cashPctOfArv" ? `${v}%` : String(v));
 
 /**
  * Why buyers passed in the last 30 days, every deal, by the reason their own
@@ -65,6 +73,7 @@ export function LessonsBody({ data, onApply, onDigest, applying = "", digestBusy
         }))} />
       )}
       {data.recommendations.length === 0 && <p className="text-sm text-slate-500">Nothing to learn yet — no deal has fallen through, or none has a post-mortem.</p>}
+      {data.calibration?.note && <p className="text-xs text-slate-500" data-testid="calibration-note">{data.calibration.note}</p>}
       <ul className="space-y-3">
         {data.recommendations.map((r) => (
           <li key={r.id} className="rounded-xl border border-slate-200 bg-white p-4">

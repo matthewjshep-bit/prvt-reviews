@@ -496,6 +496,9 @@ export const askAgentForWindow = (id, text) =>
 // { id, done?, due?, owner?, label?, note?, remove? } or { add: { gate, label, owner, due } }.
 export const updateDealChecklist = (id, edit) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/checklist`, edit);
+// Before we sign (shared/pre-contract.js): tick one item by hand, or take it back.
+export const tickPreContract = (id, key, { done = true, note = "" } = {}) =>
+  post(`/api/offers/${encodeURIComponent(id)}/precontract`, { key, done, ...(note ? { note } : {}) });
 export const setShowingRsvp = (id, { contactId, name, status }) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/showing/rsvp`, { contactId, name, status });
 export const suggestInvestors = (id) =>
@@ -663,6 +666,13 @@ export const previewCoachProposal = (id) => post(`/api/dashboard/coach/${encodeU
 export const actOnCoachProposal = (id, verb) => post(`/api/dashboard/coach/${encodeURIComponent(id)}/${verb}`, {});
 export const floatOffer = (id, kind) =>
   post(`/api/offers/${encodeURIComponent(id)}/float`, { kind });
+// Matt stands behind the number (Today's "Approve 410K"); `amount` guards a
+// number that moved since the row was drawn.
+export const approveNumber = (id, amount = 0) =>
+  post(`/api/offers/${encodeURIComponent(id)}/approve`, amount ? { amount } : {});
+// Someone has seen the house: eyes on it for a high-stakes number.
+export const markOfferSeen = (id, seen = true, note = "") =>
+  post(`/api/offers/${encodeURIComponent(id)}/seen`, { seen, note });
 export const getDashboardFlow = (days = 7, end = "") =>
   fetch(`${API_BASE}/api/dashboard/flow?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 // The records behind one Flow tile. Fetched on click, never polled.
@@ -775,6 +785,10 @@ export const getBuyerImportStatus = () => fetch(`${API_BASE}/api/dispo/import/st
 export const cancelBuyerImport = () => post(`/api/dispo/import/cancel`, {});
 export const matchInvestorsToDeal =(offerId, { strict = false, filters = {} } = {}) =>
   post(`/api/dispo/match`, { offerId, strict, ...filters });
+// A house about to be signed, drafted to the top buyers first (shared/pre-contract.js).
+// Drafts only: each waits in the outbox for your Send.
+export const preSell = (offerId, count = 3) =>
+  post(`/api/dispo/presell`, { offerId, count });
 export const blastInvestors = ({ contactIds, label, applyTag = true, dryRun = true, offerId = "", sendWith = null }) =>
   post(`/api/dispo/blast`, { contactIds, applyTag, dryRun, ...(label ? { label } : {}), ...(offerId ? { offerId } : {}), ...(sendWith ? { sendWith } : {}) });
 

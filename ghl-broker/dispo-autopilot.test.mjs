@@ -82,7 +82,8 @@ test("the operator's one line for a blast rides in the text and on the draft, so
 test("a buyer we found in county records is told where we found them and who we are", async () => {
   // 9311 12th Pl SE (2026-10-08): fifty-one manufactured home owners off the
   // Snohomish parcel roll got "Hey Colby, got 9311 … under contract" from a
-  // stranger. Matt: lead with where we found them, and that I'm a local investor.
+  // stranger. Matt: lead with where we found them, and who's writing — without
+  // "investor", which the carriers block (2026-10-15).
   const store = fakeStore();
   const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } } };
   const lake = { id: "o3", address: "9311 12th Pl SE, Lake Stevens, WA 98258", cashAmount: 200000, arv: 370000, repairs: 50000,
@@ -94,8 +95,9 @@ test("a buyer we found in county records is told where we found them and who we 
     { contactId: "c3", name: "Pat R", phone: "+12065550103", tags: ["investor", "dispo-source-county", "dispo-type-mobile-home", "dispo-city-arlington"], lastRepliedAt: "2026-10-01T00:00:00Z" },
   ] });
   const [mh, sfr, talked] = [...store.rows.values()];
-  assert.match(mh.reply, /^Hey Colby — saw in the county records you've bought mobile homes around Arlington\. I'm Matt, a local investor\. Got 9311 12th Pl SE/);
-  assert.match(sfr.reply, /^Hey Kim — saw in the county records you've bought houses around Mill Creek\. I'm Matt, a local investor\. /);
+  assert.match(mh.reply, /^Hey Colby — saw in the county records you've bought mobile homes around Arlington\. I'm Matt, I fix up houses locally\. Got 9311 12th Pl SE/);
+  assert.match(sfr.reply, /^Hey Kim — saw in the county records you've bought houses around Mill Creek\. I'm Matt, I fix up houses locally\. /);
+  assert.doesNotMatch(mh.reply + sfr.reply, /investor/i);
   assert.doesNotMatch(talked.reply, /county records/, "a buyer who has written back already knows us");
 });
 

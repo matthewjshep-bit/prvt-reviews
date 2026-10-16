@@ -142,9 +142,10 @@ export function runsLeftInMonth(now = Date.now(), { weekdaysOnly = true, tz = WO
 
 // RentCast's property types, spelled its way.
 export const PROPERTY_TYPES = ["Single Family", "Multi-Family", "Manufactured", "Townhouse", "Condo", "Apartment", "Land"];
-// Single-family houses only (Matt, 2026-10-01: focus on SFR). Multi-family,
-// manufactured and townhouses can still be ticked in Settings; they aren't
-// the default, and the auto-underwrite holds them anyway (settings.focusKinds).
+// Single-family houses only (Matt, 2026-10-01: focus on SFR). Multi-family
+// and townhouses can still be ticked in Settings; they aren't the default,
+// and the auto-underwrite holds them anyway (settings.focusKinds).
+// Manufactured is never kept, ticked or not (Matt, 2026-10-13).
 export const DEFAULT_PROPERTY_TYPES = ["Single Family"];
 export const DEFAULT_MIN_DAYS_ON_MARKET = 45;
 // The most a hook listing may ask. Above it the agent is not our buyer's
@@ -185,7 +186,7 @@ export function normalizeOutreachAutopilot(v = {}) {
   const monthly = Math.round(Number(o.monthlyRequests));
   const cycleDay = Math.round(Number(o.cycleDay));
   const types = (Array.isArray(o.propertyTypes) ? o.propertyTypes : String(o.propertyTypes ?? "").split("|"))
-    .map((t) => PROPERTY_TYPES.find((p) => p.toLowerCase() === String(t).trim().toLowerCase())).filter(Boolean);
+    .map((t) => PROPERTY_TYPES.find((p) => p.toLowerCase() === String(t).trim().toLowerCase())).filter((t) => t && t !== "Manufactured");
   return {
     enabled: o.enabled === true,
     dailyCap: Number.isFinite(cap) ? Math.min(MAX_DAILY_CAP, Math.max(1, cap)) : DEFAULT_DAILY_CAP,
@@ -225,6 +226,16 @@ export function normalizeOutreachAutopilot(v = {}) {
     zillowLookup: {
       enabled: o.zillowLookup?.enabled === true,
       perRun: Math.min(40, Math.max(1, Math.round(Number(o.zillowLookup?.perRun)) || 25)),
+    },
+    // Imported agents nobody ever texted, seen again by a pull, get the first
+    // text before anyone new is pulled (2026-10-15, retryFirstTexts). Off by default.
+    neverTexted: { enabled: o.neverTexted?.enabled === true },
+    // Listings that came off the market lately without selling (2026-10-15):
+    // `share` (0–100) of the day's new agents and of its RentCast requests go
+    // to one county's off-market pull, in turn. Off by default.
+    expired: {
+      enabled: o.expired?.enabled === true,
+      share: o.expired?.share === undefined ? 25 : Math.min(100, Math.max(0, Math.round(Number(o.expired.share)) || 0)),
     },
   };
 }
@@ -275,10 +286,13 @@ export function hookMeetsCutOrOld(hook = {}) {
 
 export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null, propertyTypes = [], maxYearBuilt = 0, turnkeyShare = 0 } = {}) {
   const types = new Set((propertyTypes || []).map((t) => String(t).toLowerCase()));
+  // Never a mobile home, whatever is ticked (Matt, 2026-10-13).
+  const mobile = (d) => String(d.hook?.propertyType || "").toLowerCase() === "manufactured";
   const reachable = (r) => r?.status === "new" && !r.contactId && !r.doc?.ghl?.contactId && Boolean(r.doc?.phone);
   // Same market rules as everyone else: the price cap, no rural, the types.
   const inMarket = (d) => (!maxPrice || (Number(d.hook?.price) > 0 && Number(d.hook.price) <= maxPrice))
     && !isRuralLot(d.hook?.lotSize)
+    && !mobile(d)
     && !(types.size && d.hook?.propertyType && !types.has(String(d.hook.propertyType).toLowerCase()));
   const ok = rows.filter((r) => {
     const d = r?.doc || {};
@@ -300,6 +314,7 @@ export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, require
     // manufactured homes): rows from pulls made before single-family-only
     // still sit in the batches. No type on record goes ahead.
     if (types.size && d.hook?.propertyType && !types.has(String(d.hook.propertyType).toLowerCase())) return false;
+    if (mobile(d)) return false;
     return true;
   });
   ok.sort((a, b) =>
@@ -406,8 +421,12 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
     id: job.id, trigger, dryRun: job.dryRun, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt,
     county: job.county, candidates: job.candidates, picked: job.picked, imported: job.imported, enrolled: job.enrolled,
     skippedExisting: job.skippedExisting || 0, requestsUsed: job.pull?.requestsUsed ?? null, error: job.error, warning: job.warnings[0] || "",
+    // First texts that went before the pull: retries, and agents nobody had texted.
+    retried: job.retried || 0, neverTexted: job.neverTexted || 0, opened: job.opened || 0,
     // Which counties this run read before it found somebody (or gave up).
     tried: (job.tried || []).slice(0, 12),
+    // The off-market seats' pull, when on (outreachAutopilot.expired).
+    ...(job.offMarket ? { offMarket: job.offMarket } : {}),
   });
   // A long run (many counties, hundreds of one-at-a-time imports) says it's
   // still alive after every pull and import, so the tick doesn't take it for
@@ -470,11 +489,13 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
       room = await Promise.resolve(deps.firstTextRoom({ locationId, saved })).catch(() => Infinity);
     }
     if (!job.dryRun && room > 0 && typeof deps.retryFirstTexts === "function") {
-      const r = await deps.retryFirstTexts({ locationId, client, limit: room })
+      const r = await deps.retryFirstTexts({ locationId, client, limit: room, neverTexted: oa.neverTexted.enabled })
         .catch((e) => { job.warnings.push(`retrying first texts: ${String(e?.message || e).slice(0, 120)}`); return null; });
       if (r?.retried) {
         job.retried = r.retried;
         job.reopened = r.opened || 0;
+        // How many of them were agents nobody had ever texted.
+        if (r.neverTexted) job.neverTexted = r.neverTexted;
         room -= r.retried;
       }
     }
@@ -520,11 +541,51 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     await store.setJobCursor?.(locationId, PAGES_CURSOR, { at: iso(now), doc: pages })
       .catch((e) => job.warnings.push(`page cursor: ${String(e?.message || e).slice(0, 120)}`));
   };
-  const groups = [];          // [{ key, batchId, picked }] in the order read
+  const groups = [];          // [{ key, batchId, picked, limit? }] in the order read
   const seenAgents = new Set();
   const seenPhones = new Set();
   let pickedTotal = 0;
   let pulls = 0;
+
+  // 1b. The off-market seats (2026-10-15, outreachAutopilot.expired, off by
+  // default): one county a run, in turn, read for listings that came off the
+  // market in the last 30 days without selling, into its own batch
+  // ("Autopilot · Off-market · King, WA" — the same listing in the county's
+  // batch would collide). `share` of the day's requests and new agents go to
+  // it, first; the regular pull gets the rest. Agents already in GHL hear
+  // about it from the check-in (shared/agent-pulse.js "off_market_listing").
+  // The regular pull always keeps at least one request: a run with only one
+  // left skips the off-market seats.
+  if (oa.expired.enabled && oa.expired.share > 0 && oa.counties.length && left > 1) {
+    const share = oa.expired.share / 100;
+    const seats = Math.max(1, Math.round(oa.dailyCap * share));
+    const reqs = Math.max(1, Math.min(left - 1, Math.round(perRun * share) || 1));
+    const turn = (Number(pages?.expiredTurn) || 0) % n;
+    const county = oa.counties[turn];
+    const key = `${county.county}, ${county.state}`;
+    job.phase = "pulling off-market";
+    try {
+      const batchId = await autopilotBatchId({ store, locationId, market: `Off-market · ${key}` });
+      const query = { ...pullQuery(oa), county: county.county, state: county.state, status: "Inactive", maxRequests: reqs, ...(batchId ? { batchId } : {}) };
+      const pull = await deps.runPull(locationId, client, query, { maxRequestsCap: MAX_REQUESTS_PER_RUN });
+      const used = Number(pull.requestsUsed) || 0;
+      left -= used;
+      const rows = typeof store.listOutreachPickable === "function"
+        ? await store.listOutreachPickable(locationId, { batchId: pull.batchId, limit: 1000 })
+        : await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
+      const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: false, maxPrice: oa.maxListPrice, propertyTypes: oa.propertyTypes, maxYearBuilt: oa.maxYearBuilt })
+        .filter((r) => r.doc?.hook?.offMarket && !seenAgents.has(r.agentKey) && !seenPhones.has(String(r.doc?.phone)));
+      for (const r of fresh) { seenAgents.add(r.agentKey); seenPhones.add(String(r.doc?.phone)); }
+      if (fresh.length) groups.push({ key, batchId: pull.batchId, picked: fresh, limit: seats, offMarket: true });
+      pickedTotal += Math.min(fresh.length, seats);
+      job.offMarket = { county: key, requestsUsed: used, listingsKept: Number(pull.listingsKept) || 0, candidates: rows.length, picked: fresh.length, seats };
+      job.warnings.push(...(pull.warnings || []).filter((w) => /^off-market/.test(w)).slice(0, 2).map((w) => `${key}: ${w}`));
+    } catch (e) {
+      job.warnings.push(`${key}: the off-market pull failed (${String(e?.message || e).slice(0, 120)}) — moving on`);
+    }
+    await savePages({ ...pages, expiredTurn: (turn + 1) % n });
+    await beat();
+  }
   // The first county this run left with pages and people still in it: the
   // next run starts there, whatever counties this one went on to.
   let keepTurn = null;
@@ -651,8 +712,9 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
   let dry = false;
   const outcomes = [];
   for (const g of groups) {
-    const room = oa.dailyCap - made;
-    if (room <= 0) break;
+    const room = Math.min(oa.dailyCap - made, g.limit ?? Infinity);
+    if (oa.dailyCap - made <= 0) break;
+    if (room <= 0) continue;
     await beat();
     const r = await deps.importAgents({
       locationId, client, agentKeys: g.picked.map((p) => p.agentKey), batchId: g.batchId,

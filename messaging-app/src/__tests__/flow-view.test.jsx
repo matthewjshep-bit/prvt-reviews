@@ -23,5 +23,8 @@ test("the feed renders a machine move and a person's move with their details and
   const s = Object.fromEntries(flow.stages.map((x) => [x.key, x]));
   expect(s.first_text.machine).toBe(1);
   expect(s.replied.count).toBe(1);
+  // A call you logged is a real call: the Talked station (2026-10-15).
+  expect(s.talked.count).toBe(1);
+  expect(flow.stages).toHaveLength(13);
   expect(s.offered.machine).toBe(1);
 });

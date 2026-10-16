@@ -299,6 +299,15 @@ test("a counter draft with a failed band exception is a now action carrying the 
   assert.deepEqual(r.cards[0].draftIds, ["d1"]);
 });
 
+test("their yes after we passed is a now row that says so", () => {
+  const r = build({ offers: [offer({ status: "we_passed", cashAmount: 261000 })],
+    drafts: [draft({ intent: "question", contactName: "Dana Agent", yesAfterPass: { offerId: "o1", address: "12 Elm St, Renton, WA", amount: 261000 } })] });
+  const a = r.actions.find((x) => x.kind === "draft_waiting");
+  assert.equal(a.severity, "now");
+  assert.equal(a.title, "They said yes after we passed: Dana Agent on 12 Elm St");
+  assert.match(a.detail, /took our \$261,000/);
+});
+
 test("a counter draft inside the band still waits on a person but is not urgent", () => {
   const r = build({ offers: [offer({ status: "countered" })],
     drafts: [draft({ intent: "question", exception: { passed: true, theirAmount: 280000, ceiling: 292000 } })] });
@@ -680,6 +689,33 @@ test("a hot push that repeats weekly keeps its stalled offer with the machine, w
   assert.equal(Date.parse(row.next.at), Date.parse(D(6)) + 7 * 86400000);
 });
 
+/* ---------- before you sign (shared/pre-contract.js) ---------- */
+
+// 2026-10-15: seven of eight listed-house contracts fell through on things
+// that were on the record before the signature.
+test("an offer about to be signed is on Today with what nobody has checked, and a listed one offers the pre-sell", () => {
+  const yes = offer({ status: "sent", realm: { answer: "yes", ts: D(1) } });
+  const row = build({ offers: [yes] }).actions.find((a) => a.kind === "pre_contract");
+  assert.ok(row, "there is a row");
+  assert.equal(row.severity, "soon");
+  assert.match(row.title, /12 Elm St, Renton, WA: before you sign, \d of 8 not checked/);
+  assert.match(row.detail, /eyes on the house/);
+  assert.deepEqual(row.ops.map((o) => o.key), ["presell", "open_editor", "promote_deal"]);
+  assert.equal(row.checks.length, 8);
+  // The agent is writing it up: now.
+  const writing = build({ offers: [{ ...yes, hot: { at: D(0), by: "conversation", signal: "writing_up" } }] }).actions.find((a) => a.kind === "pre_contract");
+  assert.equal(writing.severity, "now");
+  // Off-market: no pre-sell button, and the route's full read wins over the lean row.
+  const off = build({ offers: [{ ...yes, offMarket: { value: true, by: "you" } }], preContractByOffer: { o1: [{ key: "eyes", label: "Eyes on the house", state: "unknown", detail: "" }, { key: "remarks", label: "Listing remarks read", state: "ok", detail: "" }] } })
+    .actions.find((a) => a.kind === "pre_contract");
+  assert.deepEqual(off.ops.map((o) => o.key), ["open_editor", "promote_deal"]);
+  assert.match(off.title, /1 of 2 not checked/);
+  // Everything checked, or not close to paper: no row.
+  assert.equal(build({ offers: [yes], preContractByOffer: { o1: [{ key: "eyes", label: "Eyes on the house", state: "ok", detail: "" }] } }).actions.some((a) => a.kind === "pre_contract"), false);
+  assert.equal(build({ offers: [offer()] }).actions.some((a) => a.kind === "pre_contract"), false);
+  assert.ok(ACTION_KINDS.some((k) => k.key === "pre_contract"));
+});
+
 /* ---------- a price the investor band agreed ---------- */
 
 test("a price the machine agreed with a buyer is your call to follow up: the dataroom still shows the old one", () => {
@@ -865,4 +901,56 @@ test("an owed row inside the first three days stands aside for the promise row a
   const r = build({ events: [made(30), owed({ at: H(26) })] });
   assert.ok(promiseRow(r));
   assert.equal(owedRow(r), undefined);
+});
+
+/* ---------- a call we promised (2026-10-15) ---------- */
+
+test("a call we promised is a Call row at the top of the day; a walk-through time is an owed row", () => {
+  const callMade = { type: "promise_made", contactId: "a1", at: D(2), address: "12 Elm St, Renton, WA", data: { what: "call", text: "I'll give you a call tomorrow.", draftId: "s1" } };
+  const r = build({ offers: [offer()], events: [callMade] });
+  const row = r.actions.find((a) => a.kind === "call_owed");
+  assert.ok(row, "the call row");
+  assert.equal(row.section, "call");
+  assert.equal(row.title, "Owed: a call to Sarah on 12 Elm St");
+  assert.ok(row.score > 105, "ahead of a missed call");
+  assert.match(row.call.opener, /calling like I said I would/);
+  assert.ok(!r.actions.some((a) => a.kind === "promise_owed" || (a.kind === "number_owed" && a.what !== "tour")), "not a 'we owe them an answer' row");
+  const tourMade = { ...callMade, data: { what: "tour", text: "I'll get you a time to walk it.", draftId: "s2" } };
+  const t = build({ offers: [offer()], events: [tourMade] }).actions.find((a) => a.kind === "number_owed");
+  assert.equal(t.title, "Owed: a time to walk it to Sarah on 12 Elm St");
+});
+
+// Price once (2026-10-15, shared/number-stance.js listedFit): a listed house
+// too far under the seller's number got a polite no-fit and no number. Not a
+// pass: it is Matt's to price by hand.
+test("a listed house too far under the seller to text is a row for you, not a pass, until the number moves", async () => {
+  const { urgentReasons } = await import("./desk.js");
+  const noFit = { at: D(1), theirs: 600000, source: "seller", ratio: 0.683, ours: 410000 };
+  const o = offer({ status: "new", sends: [], cashAmount: 410000, autoUnderwrite: { passed: true }, noFit, createdAt: D(2) });
+  const r = build({ offers: [o] });
+  const a = r.actions.find((x) => x.kind === "no_fit");
+  assert.ok(a, "a row");
+  assert.match(a.title, /ours is 68% of the seller's 600K/);
+  assert.deepEqual(a.ops.map((x) => x.key), ["open_editor", "float_realm", "mark_we_passed"]);
+  assert.equal(kinds(r).includes("offer_ready"), false, "one row, not two");
+  assert.equal(urgentReasons([a]).length, 1, "on Today");
+  assert.ok(ACTION_KINDS.some((k) => k.key === "no_fit"));
+  // Re-priced by hand, floated anyway, or closed: gone.
+  assert.equal(kinds(build({ offers: [{ ...o, revisions: [{ ts: D(0), from: 410000, to: 470000 }] }] })).includes("no_fit"), false);
+  assert.equal(kinds(build({ offers: [{ ...o, proactive: { realmCheckAt: D(0) } }] })).includes("no_fit"), false);
+  assert.equal(kinds(build({ offers: [{ ...o, status: "we_passed", statusAt: D(0) }] })).includes("no_fit"), false);
+});
+
+test("an agreed number you haven't approved is a row for you: approve it before we ask for the write-up", async () => {
+  const { urgentReasons } = await import("./desk.js");
+  const o = offer({ status: "sent", cashAmount: 410000, autoUnderwrite: { passed: true }, realm: { answer: "yes", ts: D(0) } });
+  const a = build({ offers: [o] }).actions.find((x) => x.kind === "approve_number");
+  assert.ok(a, "a row");
+  assert.equal(a.amount, 410000);
+  assert.match(a.title, /they agreed at \$410,000 — approve it before we ask for the write-up/);
+  assert.deepEqual(a.ops.map((x) => [x.key, x.label]), [["approve_number", "Approve 410K"], ["open_editor", "Open"]]);
+  assert.equal(urgentReasons([a]).length, 1, "on Today");
+  assert.equal(kinds(build({ offers: [{ ...o, approved: { amount: 410000, at: D(0), by: "today" } }] })).includes("approve_number"), false, "approved");
+  assert.equal(kinds(build({ offers: [{ ...o, autoUnderwrite: null }] })).includes("approve_number"), false, "a hand-made number is yours already");
+  assert.equal(kinds(build({ offers: [{ ...o, realm: null }] })).includes("approve_number"), false, "nothing agreed");
 });

@@ -131,3 +131,22 @@ test("every kind has a label and a line for the draft", () => {
   }
   assert.equal(partnerTermsLine(null), "");
 });
+
+// 2026-10-15 (agents work for us): an agent who'd be our agent on the buy is
+// a buyer-agent offer, however it's put — it goes to Matt as a Call row.
+test("an agent offering to be our agent, or needing a buyer agreement, is a buyer-agent offer", () => {
+  for (const said of [
+    "I'd want to represent you on this one",
+    "I would love to be your agent on this one",
+    "Happy to be your agent if you want to write it",
+    "You'd have to sign a buyer's agreement with me first",
+    "We need a buyer rep agreement before I send the address",
+    "I can work as your buyers agent",
+    "Can I be your agent?",
+    "Let me be your agent on the buy",
+  ]) assert.equal(kindOf(said), "buyer_agent", said);
+  for (const said of ["I can't be your agent on my own listing", "Who is your agent?", "Do you have an agent?", "Your agent should send it over", "The buyer agreed to the price",
+    "Who will be your agent on this?", "Is anyone going to be your agent?"]) {
+    assert.notEqual(kindOf(said), "buyer_agent", said);
+  }
+});

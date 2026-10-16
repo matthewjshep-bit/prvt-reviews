@@ -40,6 +40,9 @@ export const LINE_TARGET_DEFAULTS = {
   feePerDeal: 15000,
   agentTouchDays: 21,
   buyerTouchDays: 30,
+  // The supply line warns below this many new agents texted a day, over the
+  // last 7 days (2026-10-15: supply had fallen to two a day). 0 = no warning.
+  minNewAgentsPerDay: 5,
 };
 
 /** normalizeLineTargets(v) → every target, a whole number in its range. */
@@ -55,6 +58,7 @@ export function normalizeLineTargets(v = {}) {
     feePerDeal: n(o.feePerDeal, d.feePerDeal, 0, 500000),
     agentTouchDays: n(o.agentTouchDays, d.agentTouchDays, 1, 365),
     buyerTouchDays: n(o.buyerTouchDays, d.buyerTouchDays, 1, 365),
+    minNewAgentsPerDay: n(o.minNewAgentsPerDay, d.minNewAgentsPerDay, 0, 500),
   };
 }
 
@@ -88,6 +92,57 @@ export function lineStations({ week = [], month = [], targets = LINE_TARGET_DEFA
       pace: target && target.perDay > 0 ? Math.round((s.count / 30 / target.perDay) * 100) / 100 : null,
     };
   });
+}
+
+/**
+ * supplyCheck({ week, cursors, targets, settings }) → { target, perDay, found7, firstTexts7, low, why, last }
+ *
+ * Whether new agents are still coming onto the line (2026-10-15: from 125 a
+ * day to 2, and nothing said so). `perDay` is first texts to new agents over
+ * the last 7 days; below `minNewAgentsPerDay` it is `low`, and `why` says
+ * what the outreach sweep's last run (job_cursors "outreach", doc.last) ran
+ * into: the sweep off or never run, the run failing, the RentCast budget
+ * spent, the Conversation AI's daily cap leaving no room, or the pool dry
+ * (nobody new on file, or most picks already in GHL).
+ */
+export function supplyCheck({ week = [], cursors = [], targets = LINE_TARGET_DEFAULTS, settings = {} } = {}) {
+  const t = normalizeLineTargets(targets);
+  const count = (k) => Number(week.find((s) => s.key === k)?.count) || 0;
+  const firstTexts7 = count("first_text");
+  const found7 = count("found");
+  const perDay = round1(firstTexts7 / 7);
+  const low = t.minNewAgentsPerDay > 0 && perDay < t.minNewAgentsPerDay;
+  const cursor = (cursors || []).find((c) => c?.name === "outreach");
+  const last = cursor?.doc?.last && typeof cursor.doc.last === "object" ? cursor.doc.last : null;
+  const why = [];
+  if (low) {
+    const oa = settings?.outreachAutopilot;
+    if (oa && typeof oa === "object" && oa.enabled !== true) why.push({ key: "off", text: "the outreach autopilot is switched off" });
+    if (!last) why.push({ key: "never", text: "the outreach sweep has no run on record" });
+    else {
+      const w = String(last.warning || "");
+      const tried = Array.isArray(last.tried) ? last.tried : [];
+      const candidates = Number(last.candidates) || tried.reduce((a, x) => a + (Number(x?.candidates) || 0), 0);
+      const picked = Number(last.picked) || 0;
+      const existing = Number(last.skippedExisting) || 0;
+      if (last.status === "error" || last.error) why.push({ key: "error", text: `the last run failed: ${String(last.error || "an error").slice(0, 120)}` });
+      if (/RentCast budget/i.test(w)) why.push({ key: "budget", text: "the RentCast budget for the month is spent, so the sweep stood down" });
+      if (/daily cap leaves room/i.test(w)) why.push({ key: "cap", text: "the Conversation AI's daily cap left little room for first texts" });
+      if (!picked || /nobody new|no county had anyone/i.test(w) || existing >= picked * 0.5) {
+        why.push({ key: "pool", text: `the pool is dry: ${candidates} on file, ${picked} picked, ${existing} already in GHL` });
+      }
+    }
+  }
+  return {
+    target: t.minNewAgentsPerDay, perDay, found7, firstTexts7, low, why,
+    last: last ? {
+      at: last.finishedAt || last.startedAt || cursor?.at || null, county: last.county || null,
+      candidates: Number(last.candidates) || 0, picked: Number(last.picked) || 0, imported: Number(last.imported) || 0,
+      skippedExisting: Number(last.skippedExisting) || 0, neverTexted: Number(last.neverTexted) || 0,
+      offMarket: last.offMarket ? { county: last.offMarket.county || null, picked: Number(last.offMarket.picked) || 0 } : null,
+      requestsUsed: last.requestsUsed ?? null, warning: String(last.warning || "").slice(0, 200),
+    } : null,
+  };
 }
 
 /**
@@ -408,6 +463,8 @@ export function buildLine({
     leaks, leakTotal: leakTotal(leaks), backlog: backlogTotal(leaks),
     coverage: { agents: leaks.agents?.coverage || null, buyers: leaks.buyers?.coverage || null },
     jobs: lineJobs(cursors, { now }),
+    // New agents coming onto the line, and why not when they aren't (2026-10-15).
+    supply: supplyCheck({ week, cursors, targets: t, settings }),
     errors: errorsByArea(errors),
     pricing: realizedPricing({ scorecards, settings }),
     // Off-market vs listed (shared/off-market.js): our best deals, counted

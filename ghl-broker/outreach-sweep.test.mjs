@@ -16,8 +16,9 @@ test("settings coerce to safe defaults", () => {
     workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14,
     minDaysOnMarket: 45, propertyTypes: ["Single Family"], maxYearBuilt: 0, reserveRequests: 2,
     monthlyRequests: 0, cycleDay: 1, maxListPrice: 1500000, coverage: "counties",
-    zillowLookup: { enabled: false, perRun: 25 },
+    zillowLookup: { enabled: false, perRun: 25 }, neverTexted: { enabled: false }, expired: { enabled: false, share: 25 },
   });
+  assert.deepEqual(normalizeOutreachAutopilot({ expired: { enabled: true, share: "140" } }).expired, { enabled: true, share: 100 });
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: 0 }).maxListPrice, 0, "0 = no cap");
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: "900000" }).maxListPrice, 900000);
   assert.equal(normalizeOutreachAutopilot({ enabled: true, dailyCap: "250" }).dailyCap, 250);
@@ -128,6 +129,7 @@ test("the query asks RentCast for stale houses, not everything", () => {
   assert.deepEqual(pullQuery(normalizeOutreachAutopilot({})), { daysOld: "45:*", propertyType: "Single Family", maxPrice: 1500000, distressRule: "cut-or-old", metro: true });
   assert.deepEqual(pullQuery(normalizeOutreachAutopilot({ minDaysOnMarket: 0, propertyTypes: [], maxYearBuilt: 1995, maxListPrice: 0, requireDistress: false })), { daysOld: "1:*", yearBuilt: "*:1995", metro: true });
   assert.deepEqual(normalizeOutreachAutopilot({ propertyTypes: "condo|bogus|Condo" }).propertyTypes, ["Condo"]);
+  assert.deepEqual(normalizeOutreachAutopilot({ propertyTypes: ["Single Family", "Manufactured"] }).propertyTypes, ["Single Family"], "mobile homes can't be ticked back on (2026-10-13)");
 });
 
 test("the month's requests are spread over the runs left in it", () => {
@@ -503,7 +505,10 @@ test("an agent whose hook is a manufactured home is not picked when outreach is 
     row("untyped", { distressedCount: 1, hook: { address: "3 Ash St", score: 10, price: 300000 } }),
   ];
   assert.deepEqual(pickAgentsToImport(rows, { cap: 10, propertyTypes: ["Single Family"] }).map((r) => r.agentKey).sort(), ["house", "untyped"]);
-  assert.equal(pickAgentsToImport(rows, { cap: 10 }).length, 3, "no types given, no type check");
+  // Matt, 2026-10-13: no manufactured homes as a rule — not even when
+  // Settings has Manufactured ticked, or no types are given.
+  assert.deepEqual(pickAgentsToImport(rows, { cap: 10 }).map((r) => r.agentKey).sort(), ["house", "untyped"], "no types given, still no mobile homes");
+  assert.deepEqual(pickAgentsToImport(rows, { cap: 10, propertyTypes: ["Single Family", "Manufactured"] }).map((r) => r.agentKey).sort(), ["house", "untyped"]);
 });
 
 test("a quarter of the day's first texts go to agents with turnkey listings — the off-market deals with buyers started on turnkey listings", () => {

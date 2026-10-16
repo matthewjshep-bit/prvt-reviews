@@ -1828,6 +1828,100 @@ test("a take check needs numbers to float, and its switch", async () => {
   assert.match(r.skipped, /take check is off/);
 });
 
+/* ---------- price once (2026-10-15): the seller's number first, a range on a big house ---------- */
+
+const withAgent = (saved, agent) => ({ ...saved, conversationAi: { ...saved.conversationAi, parties: { ...saved.conversationAi.parties,
+  agent: { ...saved.conversationAi.parties.agent, ...agent } } } });
+const LISTED_FIRST = withAgent(STARTER_SAVED, { listedFirst: { enabled: true, minPctOfTheirs: 75 } });
+
+test("a listed house's first text asks what the seller is hoping to get, and names no number of ours", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const landed = { ...LANDED, arv: 620000, repairs: 90000 };
+  store.listOffers = async () => [landed];
+  let seen;
+  const r = await startProactive({
+    client, locationId: "LOC", saved: LISTED_FIRST, store, contactId: "c1", kind: "realm_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "take_check", reply: "Quick underwrite on 12 Elm: I'm seeing it around 620K fixed up with 90K+ of work. What's the seller hoping to get?", summary: "Asks the seller's number." }; } },
+  });
+  assert.equal(r.skipped, null, r.skipped);
+  assert.equal(r.job.outbound, "take_check", "our read goes, not our number");
+  await settle();
+  assert.equal(r.job.status, "done", r.job.error);
+  assert.equal(seen.outbound.askSeller, true);
+  assert.equal(seen.outbound.sellerQuestion, "what's the seller hoping to get?");
+  const d = await store.getReplyDraft(r.job.draftId);
+  assert.equal(d.outbound.kind, "take_check");
+  assert.ok(!/410/.test(d.reply), "never our price");
+
+  // Switched off, nothing changes: the take check still goes first.
+  _resetJobs();
+  const off = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", kind: "realm_check", offer: landed, sendsEnabled: true });
+  assert.match(off.skipped, /take check goes first/);
+});
+
+test("a listed house far under the seller's number gets no number at all, and is left for Matt to price", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.events.set("LOC|c1", [{ type: "property_details", at: iso(900), address: LANDED.address, data: { sellerAsk: 600000 } }]);
+  let drafted = false;
+  const landed = { ...LANDED, arv: 620000, repairs: 90000 };
+  const r = await startProactive({
+    client, locationId: "LOC", saved: LISTED_FIRST, store, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return DRAFT; } },
+  });
+  assert.equal(r.job, null);
+  assert.equal(r.noFit?.move, "no_fit");
+  assert.equal(r.noFit.theirs, 600000);
+  assert.match(r.skipped, /ours is 68% of the seller's 600K — too far apart to text a number/);
+  assert.equal(drafted, false);
+
+  // Their number is close enough: the float goes as it always did.
+  _resetJobs();
+  const near = fakeStore();
+  near.events.set("LOC|c1", [{ type: "property_details", at: iso(900), address: LANDED.address, data: { sellerAsk: 500000 } }]);
+  const ok = await startProactive({ client, locationId: "LOC", saved: LISTED_FIRST, store: near, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "take_check", reply: "Thinking 620K ARV and 90K of work. What do you think?" }) } });
+  assert.equal(ok.noFit, undefined);
+  assert.ok(ok.job, ok.skipped);
+  await settle();
+
+  // A person pressing Float has decided.
+  _resetJobs();
+  const pressed = await startProactive({ client, locationId: "LOC", saved: LISTED_FIRST, store, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true, personAsked: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "take_check", reply: "Thinking 620K ARV and 90K of work. What do you think?" }) } });
+  assert.equal(pressed.noFit, undefined);
+  assert.ok(pressed.job);
+  await settle();
+});
+
+test("a big house floats a range and asks for their read, then for eyes on it, before it's a number we'd stand behind", async () => {
+  const { conversationConfig, leadsWithNumber, floatStance } = await import("./reply-agent.js");
+  const BIG = { ...LANDED, cashAmount: 610000, autoUnderwrite: { passed: true, compsUsedCount: 6, photosAnalyzed: 3 } };
+  const rc = { ...STARTER_SAVED.conversationAi.parties.agent.realmCheck, enabled: true, leadWhenConfident: true, range: { enabled: false, pct: 5 } };
+  const saved = withAgent(STARTER_SAVED, { realmCheck: { ...rc, highStakes: { enabled: true, overAmount: 500000 } } });
+  const config = conversationConfig(saved);
+  const stance = floatStance({ offer: BIG, config });
+  assert.equal(stance.mode, "range");
+  assert.equal(leadsWithNumber({ offer: BIG, config }), true, "a confident run leads with its number without the stance");
+  assert.equal(leadsWithNumber({ offer: BIG, config, stance }), false, "not on a big house in range mode");
+  const d = outboundDescriptor({ kind: "realm_check", offer: BIG, saved, dossier: null });
+  assert.equal(d.confident, false, "the rough wording");
+  assert.ok(d.range && d.range.high <= 610000 && d.range.low < d.range.high, "a range topped by our number");
+  assert.equal(d.question?.key, "their_read");
+  assert.ok(!d.math);
+  const read = { have: { arv: { value: 800000 }, rehab: { value: 90000 } } };
+  assert.equal(outboundDescriptor({ kind: "realm_check", offer: BIG, saved, dossier: read }).question?.key, "eyes", "their read is in: ask for photos or a video");
+  const seen = outboundDescriptor({ kind: "realm_check", offer: { ...BIG, seen: { at: iso(10), by: "you" } }, saved, dossier: read });
+  assert.equal(seen.stance, undefined, "their read and someone's been: firm");
+  assert.equal(seen.range, undefined);
+  const off = outboundDescriptor({ kind: "realm_check", offer: BIG, saved: withAgent(STARTER_SAVED, { realmCheck: rc }), dossier: null });
+  assert.equal(off.confident, true, "switch off: as before");
+  assert.equal(off.range, undefined);
+});
+
 test("their take arriving hands off to the realm check, and a confirmed address starts the underwrite", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
@@ -2599,27 +2693,34 @@ test("a counter just over the ceiling no longer goes out at our max by itself �
   assert.match(d.exception?.reason || "", /never goes above the \$300,000 we sent/);
 });
 
-test("after we came back at our max, another counter over it is their pass — no second round", async () => {
-  _resetJobs();
-  const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
-  const offer = { ...NEGOTIATION_OFFER, cashAmount: ceiling - 1000, counterBand: { at: new Date().toISOString(), acceptedAt: new Date().toISOString(), amount: ceiling } };
-  const theirs = ceiling + 5000;
-  const { client } = ghlStubFor(["agent"]);
-  const store = negotiationStore(offer);
-  const statuses = [];
-  const { job } = await startReply({
-    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
-    message: `they still need ${theirs / 1000}k`,
-    deps: {
-      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: theirs,
-        reply: "Let me check.", propertyAddress: "12 Elm St" }),
-      setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status }; },
-    },
-  });
-  await settle();
-  const d = await store.getReplyDraft(job.draftId);
-  assert.equal(d.intent, "rejection", d.summary);
-  assert.ok(d.actions.some((a) => a.type === "mark_offer_passed"), `filed as their pass: ${d.actions.map((a) => a.type)}`);
+// 2026-10-15: one just over our max is close enough for a call (a person's
+// counter, never a pass by text); one well past it is still their pass.
+test("after we came back at our max, a counter well over it is their pass — no second round; one just over it is a call", async () => {
+  const run = async (theirs) => {
+    _resetJobs();
+    const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
+    const offer = { ...NEGOTIATION_OFFER, cashAmount: ceiling - 1000, counterBand: { at: new Date().toISOString(), acceptedAt: new Date().toISOString(), amount: ceiling } };
+    const { client } = ghlStubFor(["agent"]);
+    const store = negotiationStore(offer);
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
+      message: `they still need ${Math.round(theirs(ceiling) / 1000)}k`,
+      deps: {
+        draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: theirs(ceiling),
+          reply: "Let me check.", propertyAddress: "12 Elm St" }),
+        setOfferStatus: async ({ status }) => ({ ok: true, address: offer.address, status }),
+      },
+    });
+    await settle();
+    return store.getReplyDraft(job.draftId);
+  };
+  const far = await run((ceiling) => Math.round(ceiling * 1.15 / 1000) * 1000);
+  assert.equal(far.intent, "rejection", far.summary);
+  assert.ok(far.actions.some((a) => a.type === "mark_offer_passed"), `filed as their pass: ${far.actions.map((a) => a.type)}`);
+  const near = await run((ceiling) => ceiling + 5000);
+  assert.equal(near.intent, "counter", near.summary);
+  assert.ok(!near.actions.some((a) => a.type === "mark_offer_passed"));
+  assert.notEqual(near.status, "scheduled");
 });
 
 test("the first no on a live offer asks for their number without filing it dead; the second no closes it", async () => {
@@ -2981,18 +3082,18 @@ const holdRun = async ({ message, draft, on = true }) => {
 };
 
 test("a counter above our number gets our number once, then we move on", async () => {
-  const { job, d, marks } = await holdRun({ message: "Seller says 315 and not a dollar less",
-    draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner and get back to you." } });
+  const { job, d, marks } = await holdRun({ message: "Seller says 335 and not a dollar less",
+    draft: { intent: "counter", counterAmount: 335000, reply: "Let me run that by my partner and get back to you." } });
   assert.equal(job.status, "done", job.error);
   assert.match(d.reply, /hold at 300,000/, d.reply);
   assert.doesNotMatch(d.reply, /\$/, "no dollar sign: the carrier filters");
   assert.doesNotMatch(d.reply, /partner|get back/);
   assert.equal(d.autoSend.decided, true, `${d.autoSend.reason} | flags: ${(d.flags || []).join(" · ")} | autoSendable ${d.autoSendable} gateClean ${d.gateClean}`);
   assert.equal(d.status, "scheduled");
-  assert.deepEqual(marks.map((m) => [m.offerId, m.ours, m.theirs]), [["o1", 300000, 315000]]);
+  assert.deepEqual(marks.map((m) => [m.offerId, m.ours, m.theirs]), [["o1", 300000, 335000]]);
   // Off: the counter waits for a person, exactly as before.
-  const off = await holdRun({ on: false, message: "Seller says 315 and not a dollar less",
-    draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner and get back to you." } });
+  const off = await holdRun({ on: false, message: "Seller says 335 and not a dollar less",
+    draft: { intent: "counter", counterAmount: 335000, reply: "Let me run that by my partner and get back to you." } });
   assert.notEqual(off.d.status, "scheduled");
   assert.equal(off.marks.length, 0);
 });
@@ -3002,9 +3103,9 @@ test("a counter above our number gets our number once, then we move on", async (
 // bot held our number and the offer sat on "countered" with check-ins still
 // to come. A seller who can't come down to our number has passed on it.
 test("an agent who says the seller can't go any lower than their counter has passed: we hold our number once and the offer is marked they passed", async () => {
-  for (const message of ["Seller needs 315, can't go any less.", "Seller can’t go any lower than 315", "315 is firm"]) {
+  for (const message of ["Seller needs 335, can't go any less.", "Seller can’t go any lower than 335", "335 is firm"]) {
     const { job, d, marks, statuses } = await holdRun({ message,
-      draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner." } });
+      draft: { intent: "counter", counterAmount: 335000, reply: "Let me run that by my partner." } });
     assert.equal(job.status, "done", job.error);
     assert.match(d.reply, /hold at 300,000/, message);
     assert.equal(d.status, "scheduled", message);
@@ -3013,12 +3114,31 @@ test("an agent who says the seller can't go any lower than their counter has pas
     assert.ok(statuses.indexOf("countered") < statuses.indexOf("passed"), "their number is filed first");
   }
   // A plain counter is a negotiation: held, the check-ins follow, not passed.
-  const plain = await holdRun({ message: "Seller says 315", draft: { intent: "counter", counterAmount: 315000, reply: "Let me see." } });
+  const plain = await holdRun({ message: "Seller says 335", draft: { intent: "counter", counterAmount: 335000, reply: "Let me see." } });
   assert.match(plain.d.reply, /hold at 300,000/);
   assert.ok(!plain.statuses.includes("passed"), JSON.stringify(plain.statuses));
   // With the hold off it waits for a person, and nothing is filed dead.
-  const off = await holdRun({ on: false, message: "Seller needs 315, can't go any less.", draft: { intent: "counter", counterAmount: 315000, reply: "Let me see." } });
+  const off = await holdRun({ on: false, message: "Seller needs 335, can't go any less.", draft: { intent: "counter", counterAmount: 335000, reply: "Let me see." } });
   assert.ok(!off.statuses.includes("passed"), JSON.stringify(off.statuses));
+});
+
+// The funnel review (2026-10-15): counters within 5% of our number agreed 13
+// times in 25, and past 25% never. A 5% gap got the hold text, then two
+// check-ins, then we passed — the kind of gap a phone call closes.
+test("a counter within 10% of our number is a call for you, not the hold text, and is never passed", async () => {
+  for (const message of ["Seller says 315 and not a dollar less", "Seller needs 315, can't go any less.", "Seller says 315"]) {
+    const { job, d, marks, statuses } = await holdRun({ message,
+      draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner and get back to you." } });
+    assert.equal(job.status, "done", job.error);
+    assert.equal(d.intent, "counter", message);
+    assert.notEqual(d.status, "scheduled", `${message}: nothing sends itself`);
+    assert.doesNotMatch(d.reply, /hold at/, message);
+    assert.equal(marks.length, 0, `${message}: no hold, so no check-ins and no pass after it`);
+    assert.deepEqual(d.callCounter, { offerId: "o1", ours: 300000, theirs: 315000, pct: 5 }, message);
+    assert.match(d.humanReason, /5% over our \$300,000 — call them/);
+    assert.ok(!statuses.includes("passed"), `${message}: ${statuses}`);
+    assert.ok(!d.actions.some((x) => x.type === "mark_offer_passed"), message);
+  }
 });
 
 test("'make an offer closer to where they are' with no number is held at ours too", async () => {
@@ -3137,8 +3257,10 @@ test("an invitation to make an appointment on a project we haven't priced gets '
 
 // Matt, 2026-10-05: an agent who says the house needs nothing has told us
 // it isn't a fit; the underwrite only spends credits. Velia's remodeled
-// triplex (9/14) used to run anyway — now it gets the pass.
-test("a showing offer on a remodeled house we haven't priced gets the pass, not an underwrite", async () => {
+// triplex (9/14) used to run anyway — now it gets the pass. 2026-10-15
+// (agents work for us): an agent opening the door is Matt's to answer, so the
+// pass is drafted and waits for him, on Today; it never sends itself.
+test("a showing offer on a remodeled house we haven't priced drafts the pass for you, with no underwrite, and doesn't send it", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
@@ -3156,8 +3278,33 @@ test("a showing offer on a remodeled house we haven't priced gets the pass, not 
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.intent, "investor_open", "remodeled with tenants is still Tier 2");
-  assert.match(d.reply, /need real work/);
+  assert.match(d.reply, /need real work/, "the pass is the draft");
+  assert.equal(d.showingOffered?.address, "4207 S Bateman St, Seattle, WA 98118");
+  assert.ok(d.flags.some((f) => /they offered a showing on 4207 S Bateman St — yours to book, call or pass/.test(f)), d.flags.join(" · "));
+  assert.notEqual(d.status, "scheduled", "it waits for you");
   assert.equal(uw.length, 0, `no underwrite: ${JSON.stringify(d.actions.map((a) => [a.type, a.status, a.detail]))}`);
+  const ev = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "showing_offered");
+  assert.equal(ev?.address, "4207 S Bateman St, Seattle, WA 98118", "on their timeline");
+});
+
+test("a showing offer on a house they already told us is turnkey still gets the pass line", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.events.set("LOC|c1", [{ type: "property_details", at: new Date(Date.now() - 86400000).toISOString(), address: "4207 S Bateman St, Seattle, WA 98118", data: { workNeeded: "none, fully remodeled" } }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: VELIA,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "scheduling", confidence: "high", needsHuman: true, propertyAddress: "4207 S Bateman St, Seattle, WA 98118",
+        reply: "Thanks, let me check my calendar and get back to you." }),
+      startUnderwrite: async () => ({ job: { id: "uw-9" } }),
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.match(d.reply, /need real work/);
+  assert.equal(d.showingOffered, undefined, "not held: they told us before");
 });
 
 test("a showing offer on a house we already sent an offer on is left alone", async () => {
@@ -3177,6 +3324,10 @@ test("a showing offer on a house we already sent an offer on is left alone", asy
   });
   await settle();
   assert.equal(uw.length, 0);
+  // 2026-10-15: the showing on a house we're working is Matt's to book.
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "scheduled", "nothing sends itself");
+  assert.equal(d.autoSend.decided, false);
 });
 
 test("an agent already on Tier 1 who brings a different house leaves Tier 1 first, so it runs again", async () => {
@@ -4473,6 +4624,9 @@ test("a showing on a house the agent says isn't a flip gets no underwrite, and t
   assert.doesNotMatch(d.reply, /run the numbers/);
   assert.match(d.reply, /need real work/);
   assert.equal((d.actions || []).filter((a) => a.type === "start_underwrite").length, 0);
+  // 2026-10-15: they opened the door, so the pass waits for Matt.
+  assert.ok(d.flags.some((f) => /they offered a showing on 13814 214th St E — yours to book, call or pass/.test(f)), d.flags.join(" · "));
+  assert.equal(d.autoSend.decided, false);
 });
 
 // Tier 1 is agents with a live house that needs work (Matt, 2026-10-07). The
@@ -4659,6 +4813,9 @@ test("a blast text quotes the deal's price when it sends, not the price when it 
   store.getDataroomInvite = async (id) => invites.find((i) => i.id === id) || null;
   store.updateDataroomInvite = async (id, patch) => Object.assign(invites.find((i) => i.id === id), patch);
   store.logDataroomEvent = async () => {};
+  // A buyer who has written back: the link goes (a cold one's would wait for
+  // you — the carrier backstop, 2026-10-15).
+  store.getInvestor = async () => ({ contactId: "c1", doc: { lastRepliedAt: "2026-09-20T00:00:00Z" } });
   const calls = [];
   const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
 
@@ -5850,6 +6007,53 @@ test("a deal text goes without its link when links wait for a reply — cold dea
   assert.equal((await store.getReplyDraft("d1")).blastWithoutLink, true);
   assert.equal(normalizeDispoAutopilot({}).blastLink, "always");
   assert.equal(normalizeDispoAutopilot({ blastLink: "on_reply" }).blastLink, "on_reply");
+});
+
+// 2026-10-15: the last look before a buyer text leaves by itself. With links
+// on every deal text, a buyer who never wrote back would get one — what the
+// carriers blocked a third of the time.
+test("a deal text that still says what the carriers block waits for you instead of going by itself", async () => {
+  const { store, invites } = linkLaterBlast();
+  store.getOfferSettings = async () => ({ wholesaleFee: 30000, dispoAutopilot: { blastLink: "always" } });
+  store.updateDataroomInvite = async (id, patch) => { const row = invites.find((i) => i.id === id); if (row) Object.assign(row, patch); return true; };
+  store.getDataroomInvite = async (id) => invites.find((i) => i.id === id) || null;
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "", dataroomBaseUrl: "https://deals.example" });
+  assert.equal(r.held, true);
+  assert.equal(calls.filter(([p]) => p === "/conversations/messages").length, 0, "nothing went");
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "draft");
+  assert.ok(d.flags.some((f) => /carriers block texts like this — it says "a link"/.test(f)), d.flags.join(" · "));
+  assert.ok(invites.every((i) => i.status === "revoked"), "the link minted for it is taken back");
+  // You pressing Send is you deciding: it goes.
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, readThread: async () => "", dataroomBaseUrl: "https://deals.example" });
+  assert.match(calls.find(([p]) => p === "/conversations/messages")[1].body.message, /https:\/\/deals\.example\/d\//);
+});
+
+test("a buyer who has written back still gets the link with a deal text", async () => {
+  const { store, invites } = linkLaterBlast();
+  store.getOfferSettings = async () => ({ wholesaleFee: 30000, dispoAutopilot: { blastLink: "always" } });
+  store.getDataroomInvite = async (id) => invites.find((i) => i.id === id) || null;
+  store.getInvestor = async () => ({ contactId: "c1", doc: { lastRepliedAt: "2026-10-01T00:00:00Z" } });
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "", dataroomBaseUrl: "https://deals.example" });
+  assert.match(calls.find(([p]) => p === "/conversations/messages")[1].body.message, /https:\/\/deals\.example\/d\//);
+  assert.equal((await store.getReplyDraft("d1")).status, "sent");
+});
+
+test("a walkthrough text that says cash waits for you", async () => {
+  const draft = { ...openDraft(), status: "scheduled", party: "investor", intent: "showing_reminder", inbound: "",
+    reply: "See you tomorrow at 41 Alder Way, Thu 4–5pm. Bring proof of cash.", outbound: { kind: "showing_reminder", offerId: "o1", address: "41 Alder Way, Kent, WA" } };
+  const store = fakeStore([draft]);
+  store.getInvestor = async () => ({ contactId: "c1", doc: { lastRepliedAt: "2026-10-01T00:00:00Z" } });
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  assert.equal(r.held, true);
+  assert.equal(calls.filter(([p]) => p === "/conversations/messages").length, 0);
+  assert.ok((await store.getReplyDraft("d1")).flags.some((f) => /"cash"/.test(f)));
 });
 
 const sentWithoutLink = () => ({ ...openDraft(), id: "d-blast", status: "sent", sentAt: new Date(Date.now() - 3600000).toISOString(), party: "investor", intent: "blast_open",
@@ -7249,4 +7453,247 @@ test("a buyer who wants deals by email with no address on file is asked for one,
   assert.equal(job.status, "done", job.error);
   assert.deepEqual(emailed, []);
   assert.ok((await store.getReplyDraft(job.draftId)).warnings.some((w) => /no address for them/.test(w)));
+});
+
+/* ---------- a yes after we passed (2026-10-15) ---------- */
+
+// The funnel review's worst thread: the seller took our 261k on an offer
+// marked we_passed four hours earlier, and 11 minutes later the bot answered
+// "We've actually moved on from this one for now". The agent asked us to stop
+// texting. A yes to our number is never a reason for the machine to
+// say goodbye: the reply waits for Matt, and Today says why.
+const PASSED_AT = new Date(Date.now() - 4 * 3600000).toISOString();
+const WALKED_OFFER = {
+  ...NEGOTIATION_OFFER, cashAmount: 261000, status: "we_passed", statusAt: PASSED_AT,
+  statusHistory: [{ status: "new", ts: iso(3 * 86400000) }, { status: "sent", ts: iso(2 * 86400000) }, { status: "we_passed", ts: PASSED_AT }],
+  sends: [{ ts: iso(2 * 86400000), results: { sms: { ok: true } } }],
+};
+const YES_SAVED = {
+  ...SAVED,
+  conversationAi: { enabled: true, autoSend: { debounceSec: 0 }, parties: { agent: {
+    autoSend: { enabled: true, intents: ["question", "status_check", "small_talk", "rejection"] } } } },
+};
+const yesRun = async (draft) => {
+  _resetJobs();
+  const { client, notes } = ghlStubFor(["agent"]);
+  const store = negotiationStore({ ...WALKED_OFFER });
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: YES_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "Good news, the seller is willing to accept your 261k, cash as-is",
+    deps: { draft: async () => ({ ...DRAFT, confidence: "high", propertyAddress: "12 Elm St", ...draft }) },
+  });
+  await settle();
+  return { job, d: await store.getReplyDraft(job.draftId), notes };
+};
+
+test("a seller who accepts our number never hears we've moved on", async () => {
+  for (const intent of ["question", "acceptance", "small_talk"]) {
+    const { job, d } = await yesRun({ intent, reply: "We've actually moved on from this one for now. Anything else that needs work?" });
+    assert.equal(job.status, "done", job.error);
+    assert.notEqual(d.status, "scheduled", `${intent}: a goodbye to a yes never sends itself`);
+    assert.notEqual(d.status, "sent", intent);
+    assert.equal(d.autoSend?.decided, false, intent);
+    assert.equal(d.yesAfterPass?.offerId, "o1", `${intent}: the draft says they said yes after we passed`);
+    assert.equal(d.yesAfterPass?.amount, 261000);
+    assert.match(d.humanReason || "", /said yes .*after we passed/i, intent);
+  }
+});
+
+test("their next text after a yes we passed on is still waiting on that yes, so the bot's answer waits too", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore({ ...WALKED_OFFER });
+  // Their yes from an hour ago is on file; nobody has answered it.
+  await store.createReplyDraft({ locationId: "LOC", contactId: "c1", status: "draft", party: "agent", intent: "question", propertyAddress: "12 Elm St",
+    inbound: "Good news, the seller is willing to accept your 261k, cash as-is", reply: "", flags: [] });
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: YES_SAVED, store, contactId: "c1", sendsEnabled: true, message: "Did you get my text?",
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", confidence: "high", propertyAddress: "", reply: "No worries, if anything off-market crosses your desk let me know." }) },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "scheduled");
+  assert.equal(d.yesAfterPass?.offerId, "o1");
+});
+
+test("a reply that walks away from a house they said yes on is held at the send, not sent", async () => {
+  const { client } = ghlStub();
+  const store = fakeStore([
+    { id: "d0", locationId: "LOC", contactId: "c1", status: "superseded", party: "agent", intent: "question", propertyAddress: "12 Elm St",
+      inbound: "Good news, the seller is willing to accept your 261k, cash as-is", createdAt: iso(3600000), flags: [] },
+    { id: "d1", locationId: "LOC", contactId: "c1", status: "scheduled", channel: "sms", party: "agent", intent: "question", propertyAddress: "12 Elm St",
+      inbound: "Hello?", reply: "We've actually moved on from this one for now. Anything else that needs work?", createdAt: iso(60000), flags: [],
+      autoSend: { decided: true, reason: "" } },
+  ]);
+  store.listOffers = async () => [WALKED_OFFER];
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true });
+  assert.match(r.skipped || "", /said yes to our number/);
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "draft", "a reply waits for you; it is never binned");
+  assert.equal(d.autoSend.decided, false);
+});
+
+test("a check-in counting down when they text about a live house is binned at the send", async () => {
+  const { client } = ghlStub();
+  const store = fakeStore([
+    { id: "d0", locationId: "LOC", contactId: "c1", status: "sent", party: "agent", intent: "status_check", propertyAddress: "12 Elm St",
+      inbound: "Seller is thinking it over, should know tomorrow", createdAt: iso(2 * 3600000), flags: [] },
+    { id: "d1", locationId: "LOC", contactId: "c1", status: "scheduled", channel: "sms", party: "agent", intent: "agent_pulse", inbound: "",
+      reply: "Anything new on your desk that needs work?", outbound: { kind: "agent_pulse" }, createdAt: iso(3 * 3600000), flags: [] },
+  ]);
+  store.listOffers = async () => [{ ...NEGOTIATION_OFFER }];
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true });
+  assert.match(r.skipped || "", /stays out of a live thread/);
+  assert.equal((await store.getReplyDraft("d1")).status, "dismissed");
+});
+
+test("a nudge the machine would start inside 48 hours of their text about a live house is never drafted", async () => {
+  _resetJobs();
+  const store = fakeStore([{ id: "d0", locationId: "LOC", contactId: "c1", status: "sent", party: "agent", intent: "question", propertyAddress: "12 Elm St",
+    inbound: "Let me talk to the seller tonight", createdAt: iso(5 * 3600000), flags: [] }]);
+  store.listOffers = async () => [{ ...NEGOTIATION_OFFER }];
+  let drafted = false;
+  const r = await startProactive({
+    client: deadClient, locationId: "LOC", saved: CHECKINS_ON, store, contactId: "c1", kind: "checkin_due", offer: null,
+    subject: { address: "12 Elm St" }, sendsEnabled: true, deps: { draft: async () => { drafted = true; return DRAFT; } },
+  });
+  assert.equal(r.job, null);
+  assert.match(r.skipped || "", /texted 5h ago .* stays out of a live thread/);
+  assert.equal(drafted, false);
+});
+
+/* ---------- the call ask on their first answer (2026-10-15) ---------- */
+
+// The funnel review: all 8 contracts from outreach agents came after a phone
+// call, and agents who talked brought houses 54% of the time against 8%. An
+// agent's first answer to our first text closes with one question: other
+// fixers, and a quick call this week (no times — no calendar).
+import { CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
+const callOn = (saved) => ({ ...saved, conversationAi: { ...saved.conversationAi, parties: { ...saved.conversationAi.parties,
+  agent: { ...saved.conversationAi.parties.agent, callAsk: { enabled: true } } } } });
+const questions = (t) => (String(t).match(/\?/g) || []).length;
+
+test("a turnkey first answer to our first text closes with one ask: other fixers and a quick call, no times", async () => {
+  const { d, uw } = await replyTo("This one's turnkey, the sellers redid it before listing.", { saved: callOn(QUALIFY_SAVED), intent: "deal_available", lines: [],
+    reply: "Makes sense, that one's not for us then. Anything else sitting that needs work?" });
+  assert.equal(uw.length, 0);
+  assert.match(d.reply, CALL_ASK_RX);
+  assert.match(d.reply, FIXERS_ASK_RX);
+  assert.equal(questions(d.reply), 1, d.reply);
+  assert.doesNotMatch(d.reply, /\b(?:monday|tuesday|wednesday|thursday|friday|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i, "no times offered");
+  // Off, the reply is the model's as it was.
+  const off = await replyTo("This one's turnkey, the sellers redid it before listing.", { intent: "deal_available", lines: [],
+    reply: "Makes sense, that one's not for us then. Anything else sitting that needs work?" });
+  assert.doesNotMatch(off.d.reply, CALL_ASK_RX);
+});
+
+// The first text no longer asks for other fixers (2026-10-15), so with the
+// call ask off their first answer still asks for the next house, and only that.
+test("with the call ask off, a first answer that forgot to ask for other fixers gets that ask and no call", async () => {
+  const { d } = await replyTo("This one's turnkey, the sellers redid it before listing.", { intent: "deal_available", lines: [],
+    reply: "Makes sense, that one's not for us then." });
+  assert.match(d.reply, FIXERS_ASK_RX);
+  assert.doesNotMatch(d.reply, CALL_ASK_RX);
+  assert.ok(questions(d.reply) <= 1, d.reply);
+  // Our second answer to them doesn't repeat it.
+  const second = await replyTo("Thanks, will keep you posted", { intent: "small_talk",
+    lines: [["inbound", "it's a nice one"], ["outbound", "Got it, thanks."]], reply: "Sounds good, thanks." });
+  assert.doesNotMatch(second.d.reply, FIXERS_ASK_RX);
+});
+
+test("the qualify question on a first answer carries the call ask, and still reads as our question", async () => {
+  const { d, uw } = await replyTo("Cosmetic fixer", { saved: callOn(QUALIFY_SAVED), lines: [] });
+  assert.equal(uw.length, 0);
+  assert.equal(d.qualify.stage, "ask");
+  assert.match(d.reply, QUALIFY_ASK_RX);
+  assert.match(d.reply, CALL_ASK_RX);
+  assert.equal(d.autoSendable, true, JSON.stringify(d.flags));
+});
+
+test("no call ask after we've already answered them, once we've asked, or when they bring us a house of their own", async () => {
+  // We answered their first reply already: this is the second.
+  const second = await replyTo("Thanks, will keep you posted", { saved: callOn(STARTER_SAVED), intent: "small_talk",
+    lines: [["inbound", "it's a nice one"], ["outbound", "Got it, thanks."]], reply: "Sounds good, thanks." });
+  assert.doesNotMatch(second.d.reply, CALL_ASK_RX);
+  // Asked before.
+  _resetJobs();
+  const asked = await iceStore();
+  await asked.appendContactEvents("LOC", "c1", [{ type: "call_asked", at: iso(3600000), source: "conversation" }]);
+  const { job } = await startReply({ client: threadClient([]), locationId: "LOC", saved: callOn(STARTER_SAVED), store: asked, contactId: "c1", message: "it's turnkey",
+    deps: { draft: async () => ({ ...DRAFT, intent: "investor_open", confidence: "high", needsHuman: false, propertyAddress: ICE, reply: "Got it. Anything else sitting?" }) } });
+  await settle();
+  assert.doesNotMatch((await asked.getReplyDraft(job.draftId)).reply, CALL_ASK_RX);
+  // Their own house is the lead (AGENT_BROUGHT): no call ask on top of the address talk.
+  const theirs = await replyTo("Got another one, 77 Birch Ln Everett, needs some work", { saved: callOn(STARTER_SAVED), intent: "new_property", address: "77 Birch Ln, Everett, WA 98201", lines: [],
+    reply: "Love it. What do you think it's worth fixed up, and what does it need?" });
+  assert.doesNotMatch(theirs.d.reply, CALL_ASK_RX);
+});
+
+test("a sent call ask is recorded once, and so is the ask for other fixers", async () => {
+  const store = fakeStore([{ id: "d1", locationId: "LOC", contactId: "c1", status: "draft", channel: "sms", party: "agent", intent: "investor_open",
+    inbound: "it's turnkey", reply: "Makes sense. If you've got other fixers on your radar, I'd love a quick 5-minute call this week, what time works?", createdAt: iso(60000), flags: [] }]);
+  const { client } = ghlStubFor(["agent"]);
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+  const evs = await store.listContactEvents("LOC", "c1");
+  assert.deepEqual(evs.filter((e) => ["call_asked", "fixers_asked"].includes(e.type)).map((e) => e.type).sort(), ["call_asked", "fixers_asked"]);
+});
+
+/* ---------- a voicemail they left (2026-10-15) ---------- */
+
+test("an agent who left a voicemail about a live house gets a call back first: the text after it waits for you", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore({ ...NEGOTIATION_OFFER });
+  const saved = { ...SAVED, conversationAi: { enabled: true, autoSend: { debounceSec: 0 }, parties: { agent: { autoSend: { enabled: true, intents: ["question", "call_followup"] } } } } };
+  const transcript = "Hi Matt, it's Dana, calling about the house on Elm, the seller has some news, give me a call back when you can";
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: transcript, sendsEnabled: true, inboundKind: "call",
+    call: { messageId: "m8", direction: "inbound", at: new Date().toISOString(), durationSec: 0, dedupeKey: "call:m8", transcript, missed: true },
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", confidence: "high", propertyAddress: "12 Elm St", reply: "Got your message, what's the news?" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "scheduled");
+  assert.match(d.autoSend.reason, /left a voicemail — call them back/);
+  const summary = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "call_summary");
+  assert.equal(summary.data.missed, true, "the summary says nobody talked");
+});
+
+/* ---------- 2026-10-15: a write-up ask only at a number Matt approved ---------- */
+
+import { writeUpOkFor, asksWriteUp } from "./reply-agent.js";
+
+test("a reply asking them to write it up at a number Matt hasn't approved waits for him", () => {
+  const ask = "Great, glad that works. If the seller's good at 410k, could you write it up on NWMLS forms for us to sign?";
+  const g = gate({ intent: "realm_yes", reply: ask }, { writeUpOk: false });
+  assert.ok(g.flags.some((f) => /write it up .* at a number you haven't approved — approve it on Today first/.test(f)), g.flags.join(" · "));
+  assert.ok(!gate({ intent: "realm_yes", reply: ask }, { writeUpOk: true }).flags.some((f) => /haven't approved/.test(f)), "approved: as before");
+  // Wanting them on our side in general is not a write-up ask.
+  assert.equal(asksWriteUp("If anything else comes up, we'd love to have you represent us on the buy side."), false);
+  assert.equal(asksWriteUp("Could you represent us on the offer?"), true);
+  // They handed the write-up back to us: saying we're not agents is required, not held.
+  const back = gate({ intent: "question", reply: "We're not agents and don't have one on this, so we can't put it on NWMLS forms ourselves. Who on your side would write it up?" },
+    { writeUpOk: false, inboundMessage: "Write up whatever you like and send it over" });
+  assert.ok(!back.flags.some((f) => /haven't approved/.test(f)), back.flags.join(" · "));
+});
+
+test("the write-up gate reads the house's number from the book", () => {
+  const numbers = [{ address: "12 Elm St, Renton, WA 98056", amount: 410000, approved: false }, { address: "9 Oak St, Kent, WA", amount: 300000, approved: true }];
+  assert.equal(writeUpOkFor(numbers, "12 Elm St"), false);
+  assert.equal(writeUpOkFor(numbers, "9 Oak St"), true);
+  assert.equal(writeUpOkFor(numbers, "1 Nowhere Rd"), true, "no number on that house: not this gate");
+  assert.equal(writeUpOkFor(numbers, ""), true, "no house named, and one is approved");
+  assert.equal(writeUpOkFor([numbers[0]], ""), false, "no house named, and none approved");
+  assert.equal(writeUpOkFor([], "12 Elm St"), true);
+});
+
+/* ---------- 2026-10-15: agents work for us ---------- */
+
+test("the agent rules say we'd love them to represent us on the purchase, never beside a number", async () => {
+  const { AGENT_GOAL_RULE, REPRESENT_US_LINE } = await import("./shared/conversation-ai.js");
+  assert.match(AGENT_GOAL_RULE, /AGENTS WORK FOR US/);
+  assert.ok(AGENT_GOAL_RULE.includes(REPRESENT_US_LINE));
+  assert.match(AGENT_GOAL_RULE, /never in the same text as a number of ours/);
+  assert.equal(asksWriteUp(`Thanks! If anything rough comes up, ${REPRESENT_US_LINE}.`), false, "the line itself never trips the write-up gate");
 });

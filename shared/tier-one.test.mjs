@@ -145,6 +145,8 @@ test("only a sure miss is cleared on its own; a missing address waits a week, an
     row([sure("no_house")], { contactId: "no-house-chasing", inStageSince: ago(9), chasing: true }),
     row([sure("turnkey")], { contactId: "added", addedAt: ago(3) }),
     row([sure("not_sfr")], { contactId: "townhouse" }),
+    // 2026-10-15: they said yes to our number — never cleared by the machine.
+    row([sure("passed")], { contactId: "said-yes", saidYes: true }),
   ] });
   assert.deepEqual(plan.map((k) => [k.contactId, k.reason]), [["gone", "gone"], ["no-house-old", "no_house"], ["townhouse", "not_sfr"]]);
 });

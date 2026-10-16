@@ -73,7 +73,8 @@ const FACTS =
   "FACTS: every number, date, address and term you use must come from the CONTEXT you are given — the " +
   "thread, the records listed, or the operator's standing instructions. Never invent a price, a closing " +
   "timeline, an earnest money amount, a contingency, a proof-of-funds claim, or a company detail. If they ask " +
-  "something the context does not answer, say you will check and get back to them today; do not guess. " +
+  "something the context does not answer, do not guess, and do not invent anyone to check with (no team, no " +
+  "underwriter, no partner): say you'll go over it on a quick call, and set needsHuman. " +
   "The ONE exception is your own contact details: when they are listed below under HOW THEY REACH YOU, and only " +
   "when someone ASKS for them (\"what's your email?\", \"send it over\", \"how do I reach you?\"), give exactly " +
   "what is listed, verbatim, in the same message — no \"I'll send it over\", no checking with anyone. Never " +
@@ -96,12 +97,12 @@ const COMMITMENTS = {
     "COMMITMENTS: you may NOT accept a counter, raise or lower an offer, propose or confirm a showing or " +
     "inspection time, promise proof of funds, or agree to terms other than the WRITE-UP TERMS below, which are " +
     "standing and yours to give. When the agent asks for anything else on this list, write a " +
-    "holding reply that answers it without reading their number back and promises a same-day answer (\"Let me run " +
-    "that by my partner and get back to you this afternoon\"), and set needsHuman to true with the reason. " +
+    "holding reply that answers it without reading their number back and says you'll go over it on a quick call " +
+    "(\"Let me give you a quick call on that\"), never a partner or a team to check with, and set needsHuman to true with the reason. " +
     // Matt, 2026-09-14: a number before a showing, always.
     "A SHOWING, TOUR OR WALKTHROUGH OFFER on a house we have no offer on yet: do not take or offer a time. Say " +
-    "you'd like to run the numbers first so nobody's time gets wasted, and that you'll come back today with where " +
-    "we'd be. " +
+    "you'd like to run the numbers first so nobody's time gets wasted, and that you'll text them where we'd be " +
+    "once they're done. " +
     // A plain counter is held by the broker whatever the model says, and a
     // needsHuman on every counter kept the counter band from ever opening.
     "A COUNTER BY ITSELF is the exception to needsHuman: when the only thing they did is name the seller's " +
@@ -317,7 +318,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
         "after a no, one sentence of the method is plenty before you ask for their number. Then turn it into the useful question: if they see " +
         "a higher value or lighter work, ask for their numbers and say we'll re-run it on them. If the line says the figures don't tie, " +
         "describe the method without doing the arithmetic out loud."
-      : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and that your partner reviews the numbers.");
+      : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and offer to walk them through it on a quick call.");
   }
   if (party === "agent") {
     // Matt's standing preference, 2026-09-12. The agent must never learn it:
@@ -400,7 +401,10 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "once, warmly and plainly, that we've moved on from that one for now, and ask whether they have anything else " +
       "that needs work. If they come back with a new number or new terms on it, don't engage the price at all: thank " +
       "them, say you'll pass it along, and set needsHuman with the reason — reopening a house we walked from is a " +
-      "person's call."
+      "person's call. A YES TO OUR NUMBER is not a new price (2026-10-15: a seller who took our number on a house " +
+      "we'd passed on got \"we've moved on\", and the agent was gone): when they accept the number we gave, " +
+      "thank them, say you'll confirm it with them today, and set needsHuman. Never tell someone who just said yes " +
+      "that we've moved on, and never ask them for other houses in the same text."
     );
   }
   if (playbook.mayCommit) parts.push(`YOU MAY, on your own: ${playbook.mayCommit}`);
@@ -560,8 +564,11 @@ function nudgeAside(o) {
 // The machine texts that introduce us to someone — the first text, its nudge,
 // the agent and buyer check-ins. These are what the carriers blocked
 // (shared/carrier-words.js); a float or a reply to someone mid-conversation
-// went through.
-export const CARRIER_CHECKED_KINDS = new Set(["outreach_open", "outreach_nudge", "agent_pulse", "buyer_pulse"]);
+// went through. And the texts a buyer gets about a deal — its follow-ups and
+// the walkthrough reminders (2026-10-15: a tenth of October's buyer texts
+// were blocked, all of them deal texts and walkthrough invites).
+export const CARRIER_CHECKED_KINDS = new Set(["outreach_open", "outreach_nudge", "agent_pulse", "buyer_pulse",
+  "blast_nudge", "dataroom_nudge", "deal_followup", "showing_reminder", "showing_followup"]);
 
 export function outboundOpening(outbound) {
   const base = openingFor(outbound);
@@ -598,11 +605,54 @@ export const OPENING_MOVES = [
   "start with your question about the house, then who you are",
 ];
 
+// A short, stable fingerprint of the examples list, so a sent first text says
+// which set of Matt's examples it was written from.
+function examplesHash(ex = []) {
+  let h = 0;
+  for (const ch of ex.join("\n")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return ex.length ? h.toString(36) : "";
+}
+
+/**
+ * openerPlan(o) → { variant, lead, voice, move, moveIndex, who, whoIndex,
+ *   notice, town, turnkey, examplesHash }
+ *
+ * The choices behind one agent's first text (outreach_open), all from
+ * `variant` (the contact id's hash): which of Matt's examples leads, the
+ * opening move, the way we say who we are, and the one detail to notice.
+ * The prompt is built from it, and the draft keeps it, so which first texts
+ * get answers can be read back by variant (2026-10-15).
+ */
+export function openerPlan(o = {}) {
+  const ex = Array.isArray(o.examples) ? o.examples : [];
+  const lead = ex.length ? ex[(Number(o.variant) || 0) % ex.length] : "";
+  const voice = lead ? [lead, ...ex.filter((x) => x !== lead)] : [];
+  const details = Array.isArray(o.details) ? o.details.filter(Boolean) : [];
+  const v = Math.max(0, Math.round(Number(o.variant) || 0));
+  const moveIndex = v % OPENING_MOVES.length;
+  const town = (details.find((d) => d.startsWith("it's in ")) || "").replace("it's in ", "");
+  const others = details.filter((d) => !d.startsWith("it's in "));
+  const notice = others.length ? others[Math.floor(v / OPENING_MOVES.length) % others.length] : "";
+  const whoIndex = v % WHO_WE_ARE.length;
+  return { variant: v, lead, voice, move: OPENING_MOVES[moveIndex], moveIndex, who: WHO_WE_ARE[whoIndex], whoIndex,
+    notice, town, turnkey: o.turnkey === true, examplesHash: examplesHash(ex) };
+}
+
 function openingFor(outbound) {
   if (!outbound?.kind) return "";
   const o = outbound;
   switch (o.kind) {
     case "take_check":
+      // A listed house (listedFirst, 2026-10-15): our read, then the one
+      // question is what the seller is hoping to get — never their read too.
+      if (o.askSeller) {
+        return `${START} We just ran a quick underwrite on ${o.address}: ` +
+          `${[o.arvText ? `ARV ${o.arvText}` : "", o.rehabText ? `rehab about ${o.rehabText}` : ""].filter(Boolean).join(", ")}. ` +
+          `Say so lightly and float those two as YOUR read, the way a colleague would (e.g. "I'm seeing it around ${o.arvK || "…"} fixed up with ${o.rehabK || "…"}+ of work"), ` +
+          `then ask exactly one question: "${o.sellerQuestion || "what's the seller hoping to get?"}" — one question mark in the whole text, written like a text, no dollar signs. ` +
+          `Do NOT mention an offer, a purchase price, or what we'd pay, and do NOT ask what they think it's worth. ${CONTINUE} ` +
+          `Set intent to take_check.`;
+      }
       return `${START} We just ran a quick underwrite on ${o.address}: ` +
         `${[o.arvText ? `ARV ${o.arvText}` : "", o.rehabText ? `rehab about ${o.rehabText}` : ""].filter(Boolean).join(", ")}. ` +
         `Say so lightly ("just did a quick underwrite") and float those two as YOUR read, in one question, the way a ` +
@@ -651,7 +701,10 @@ function openingFor(outbound) {
             : `Tell them in one short text — e.g. "based on our analysis we can likely do around ${o.amountK}ish on ${o.street || o.address}" — ` +
               `rounded to the nearest thousand or down (never up). `) +
           (o.math ? "" : `As-is and a quick close if the terms are listed. `) +
-          (ask || `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. `) +
+          // The write-up ask only at a number Matt approved (2026-10-15).
+          (ask || (o.approved
+            ? `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. `
+            : `Ask whether that works for the seller; if it does, our letter of intent comes next. Don't ask them to write it up yet. `)) +
           (o.math ? "" : `Don't volunteer the math (ARV, repairs) in this first text. `) +
           `Don't call it final. ${room}Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
       }
@@ -678,35 +731,36 @@ function openingFor(outbound) {
       // county the listing is in. GHL puts the stop line on the end itself.
       const street = o.address.split(",")[0];
       const where = o.county ? `${o.county} County` : "the area";
-      const ex = Array.isArray(o.examples) ? o.examples : [];
-      const lead = ex.length ? ex[(Number(o.variant) || 0) % ex.length] : "";
-      const voice = lead ? [lead, ...ex.filter((x) => x !== lead)] : [];
       // 2026-10-05: more of Matt in it — one real detail from the listing,
       // so the agent can tell somebody looked, and room for a light touch of
       // humour. Still short, still no pitch.
-      const details = Array.isArray(o.details) ? o.details.filter(Boolean) : [];
       // The first live batch with details (2026-10-05) came out five of six
       // alike: the bot always picked the decade and blended the examples into
       // one formula. So each agent gets its own opening move and its own
-      // detail to notice, both from `variant` (the contact id's hash).
-      const v = Math.max(0, Math.round(Number(o.variant) || 0));
-      const move = OPENING_MOVES[v % OPENING_MOVES.length];
-      const town = (details.find((d) => d.startsWith("it's in ")) || "").replace("it's in ", "");
-      const others = details.filter((d) => !d.startsWith("it's in "));
-      const notice = others.length ? others[Math.floor(v / OPENING_MOVES.length) % others.length] : "";
-      // …and its own way of saying who we are: 30 of the 45 drafts on
-      // 2026-10-05 said "hunting for my next flip", 10 "Seattle flipper".
-      const who = WHO_WE_ARE[v % WHO_WE_ARE.length];
+      // detail to notice, both from `variant` (the contact id's hash) — and
+      // its own way of saying who we are: 30 of the 45 drafts on 2026-10-05
+      // said "hunting for my next flip", 10 "Seattle flipper" (openerPlan).
+      const { voice, move, town, notice, who } = openerPlan(o);
       return `${START} This is the FIRST text this listing agent has ever had from us, about their listing at ` +
         `${o.address}. Write it the way Matt texts: a friendly local flipper who is easy to talk to, warm and a little ` +
-        `funny, never a pitch. Two or three short sentences that: mention their listing on ${street}, say who you are, say ` +
-        `you're looking anywhere in ${where}, and ask ONE question about whether it needs work. Then END with one short ` +
-        `line, in your own words, asking whether they have other fixers on their radar ${o.county ? `in ${o.county}` : "around there"}. ` +
-        `That line is required: the listing is only the door. ` +
-        `Three of our four deals with committed buyers were the agent's NEXT house, which they brought up because we asked. ` +
+        `funny, never a pitch. Two short sentences that: mention their listing on ${street}, say who you are, and ask ONE ` +
+        `question about ${o.offMarket ? "whether the seller still hopes to sell" : "whether it needs work"}. Saying you're looking anywhere in ${where} is optional, if it fits. ` +
+        // 2026-10-15 (the funnel review): first texts under about 230
+        // characters got 54% replies, longer ones a third, and the required
+        // "other fixers" line cost about 12 points. That ask now follows
+        // their first answer (the reply), not the first text.
+        `That one question is the whole ask: don't ask about their other fixers or other houses in this text, that comes once ` +
+        `they answer. Short first texts get answered. ` +
         (o.turnkey
-          ? `THIS LISTING LOOKS FINISHED: don't call it a fixer or ask about it as if it were one. Ask lightly whether it's more of a ` +
-            `project than it looks, and let the line about their other fixers carry the text. `
+          ? `THIS LISTING LOOKS FINISHED: don't call it a fixer or ask about it as if it were one. Say it looks finished and ask ` +
+            `lightly whether they ever see ones that need work. That is your one question. `
+          : "") +
+        // 2026-10-15: the off-market seats — a listing that came off the
+        // market lately without selling. The seller may still want out.
+        (o.offMarket
+          ? `THIS LISTING CAME OFF THE MARKET RECENTLY: say you saw it came off the market and ask whether the seller is still ` +
+            `hoping to sell. That is your one question. Never the word "expired", never "didn't sell" or anything that sounds like ` +
+            `the agent fell short, and never ask whether it sold. `
           : "") +
         (notice || town
           ? `WHAT TO NOTICE: ${notice || `it's in ${town}`}${notice && town ? ` (it's in ${town}; naming the town is fine too)` : ""}. ` +
@@ -772,7 +826,7 @@ function openingFor(outbound) {
         `the answer, leave nothing in it out, and do NOT say you'll check on anything else. ${CONTINUE} Set intent to partner_answer.`;
 
     // We're passing on a house the underwriter held (held-underwrites.js):
-    // not single-family, rural (two acres or more), outside the towns we buy
+    // not single-family, a mobile home, rural (two acres or more), outside the towns we buy
     // in, or no number we could stand behind after we asked them for theirs.
     case "kind_pass":
       // A house we told them we'd come back on, closed out with nothing sent
@@ -787,9 +841,14 @@ function openingFor(outbound) {
         (o.why === "area" ? "it's outside the area we buy in."
           : o.why === "numbers" ? "we couldn't get to a number we'd stand behind — not enough to go on to price it (we asked them for their read and didn't get a number)."
           : o.why === "rural" ? `it's a rural property${/sits on [\d.]+ acres/.test(o.heldReason || "") ? ` — it ${o.heldReason.match(/sits on [\d.]+ acres/)[0]}` : ""}, and we can't do rural — our buyers want houses on under 2 acres, where there are sales nearby to compare them to.`
+          : o.why === "manufactured" ? "it's a mobile or manufactured home, and we don't buy those."
+          // A listed house where ours would be far under the seller's number
+          // (listedFirst, 2026-10-15): no lowball, and no number at all.
+          : o.why === "too_far" ? "where we'd need to be on it is too far under where the seller is to be worth sending a number, and we'd rather say so than send a lowball."
           : `it isn't a single-family house${o.heldReason ? ` (${o.heldReason})` : ""}, and right now we only buy single-family.`) +
         ` In one or two lines, say so plainly and thank them, and ask them to keep us in mind for ` +
-        (o.why === "area" ? "fixers closer in. " : o.why === "rural" ? "fixers in town on a normal-size lot. " : o.why === "numbers" ? "the next fixer, especially one with photos or a seller price in mind. " : "single-family fixers. ") +
+        (o.why === "area" ? "fixers closer in. " : o.why === "rural" ? "fixers in town on a normal-size lot. " : o.why === "numbers" ? "the next fixer, especially one with photos or a seller price in mind. "
+          : o.why === "too_far" ? "other fixers, on or off market, especially ones that need real work. " : "single-family fixers. ") +
         `Do NOT name any number, do NOT apologise at length, and do NOT promise to look again. ${CONTINUE} Set intent to kind_pass.`;
 
     // Our numbers are stuck on something they can answer. Ask for exactly
@@ -955,7 +1014,8 @@ function openingFor(outbound) {
     // except an offer we're following up, which is the offer nudge's job, not
     // this one's. So: no house from before, ever; personable comes from the
     // tone, their first name and at most the area they work. A fresh listing
-    // of theirs is still named — that one is news, not history.
+    // of theirs is still named — that one is news, not history. 2026-10-15:
+    // and so is one other real thing, never a house we priced (see `hook`).
     case "agent_pulse": {
       const l = o.listing || null;
       const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
@@ -963,18 +1023,45 @@ function openingFor(outbound) {
       // the sellers behind every deal with a committed buyer), and — for an
       // agent we've never put a number to — what we buy, once.
       const situation = SELLER_SITUATIONS[(Number(o.variant) || 0) % SELLER_SITUATIONS.length];
-      const fits = ` If it fits naturally, name one kind of seller we're good for, in a few words: ${situation}. One, never a list.` +
-        (!o.offersWithUs && !o.dealsWithUs ? ` Say once, in a clause, what we buy: ${OUR_BOX_WORDS}.` : "");
-      const offAsk = `ask whether anything distressed — a house that needs work, listed or not — or anything off-market has come across their desk lately. ` +
-        `${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.${fits}`;
-      const listingText = o.reason === "fresh_listing" && l;
-      const why = listingText
+      const situationLine = `name one kind of seller we're good for, in a few words: ${situation}. One, never a list.`;
+      const what = !o.offersWithUs && !o.dealsWithUs ? ` Say once, in a clause, what we buy: ${OUR_BOX_WORDS}.` : "";
+      const askFor = (extra) => `ask whether anything distressed — a house that needs work, listed or not — or anything off-market has come across their desk lately. ` +
+        `${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.${extra}`;
+      const offAsk = askFor(` If it fits naturally, ${situationLine}${what}`);
+      const listingText = (o.reason === "fresh_listing" || o.reason === "off_market_listing") && l;
+      // Came off the market lately without selling (2026-10-15): the seller may still want out.
+      const offList = listingText && o.reason === "off_market_listing";
+      // 2026-10-15 (the funnel review): Matt's own specific texts got 70%
+      // replies, the generic check-ins 35%. So each names ONE real thing
+      // (shared/agent-pulse.js checkInHook): their fresh listing, a house
+      // they mentioned that we never priced, one of our closes in a town
+      // they work (the town only), or else a kind of seller we're good for.
+      const hook = !listingText && o.reason !== "deal_thanks" ? o.hook || null : null;
+      const mentioned = hook?.kind === "mentioned" && (hook.street || hook.label) ? hook : null;
+      const closedNear = !mentioned && hook?.kind === "closed_nearby" && hook.town ? hook : null;
+      const why = offList
+        ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""} came off the market recently. Say you saw it came off the market and ask, ` +
+          `plainly, whether the seller is still hoping to sell — we'd be glad to take a look. Name the street; never its price or any number, never the word ` +
+          `"expired", nothing that sounds like the agent fell short, and never ask whether it sold.`
+        : listingText
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
           `Ask, plainly, whether it's a bit of a project — if it needs work it may be one we'd want to take a look at. Name the street; never its price or any number.`
         : o.reason === "deal_thanks"
         ? `A deal we worked with them just closed. Thank them for working it with us, in a few plain words — never name the house or its street — then ${offAsk}`
-        : `A general check-in, about no house in particular: ${offAsk}`;
-      const generic = `KEEP IT GENERIC: never mention, name or hint at any house, listing, offer or deal from before${listingText ? " (the listing above is the only house in this text)" : ""} — ` +
+        : mentioned
+        ? `They mentioned a house${mentioned.street ? ` on ${mentioned.street}` : ` (${mentioned.label})`}${mentioned.town ? ` in ${mentioned.town}` : ""} ` +
+          `${mentioned.daysAgo <= 14 ? "recently" : "a few weeks back"}, and we never got to look at it properly. That house is the one thing this text is about: ` +
+          `ask lightly how it's coming along, or whether the seller is still thinking about selling, and say we'd love a look. ` +
+          `Name it the way they did, never with a price or any number.${what}`
+        : closedNear
+        ? `We just closed on a house in ${closedNear.town}, a town they work. Say so in a clause, by the town only — never a street or which house — then ${askFor(what)}`
+        : `A general check-in, about no house in particular. THE ONE THING it names: ${situationLine} Then ${askFor(what)}`;
+      const only = listingText ? "the listing above is the only house in this text"
+        : mentioned ? "the house they mentioned above is the only house in this text"
+        : closedNear ? `${closedNear.town} is the only place named, and no house at all`
+        : "no house at all";
+      const generic = `ONE THING ONLY (${only}): never mention, name or hint at any other house, listing, offer or deal from before — ` +
+        `never a house we priced or passed on, and never ask whether a house sold — ` +
         `no street, no "that last one", no "the one on …", no how one went. We don't know what happened to those houses, and this text is about what's next. ` +
         `Personable comes from the tone and their first name${(o.areas || []).length && !cold ? `, and if it fits in a few words, the area they work (${(o.areas || []).join(", ")})` : ""}` +
         `${o.dealsWithUs ? " — we have done a deal together, so write it like a text to a friend" : ""}. Never recite the thread, never a personal detail, never invented. `;
@@ -984,7 +1071,15 @@ function openingFor(outbound) {
         `${generic}` +
         `TONE: friendly and professional — how someone local who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
         `${CHECKIN_PERSONALITY} ` +
-        `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
+        // A cold agent's fresh listing (2026-10-15) is in effect a second first
+        // text: the short first-text voice, which gets answered.
+        (cold && listingText
+          ? `WHAT TO WRITE: the short first-text voice — two short sentences, under ${OPENER_MAX_CHARS} characters. Open with their first name, once; ` +
+            `name the street; ONE question, ${offList ? "whether the seller is still hoping to sell" : "whether it's a bit of a project"}. Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
+            (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the street and the question. ` : "")
+          : `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
+            // No calendar is connected (2026-10-15): a call is offered, never a time.
+            `If it fits, offer a quick call in a few words, as an easier way to talk ("happy to jump on a quick call if that's easier") — never a day or a time, and still only one question. `) +
         // A quiet agent we made an offer to (shared/agent-pulse.js, 2026-10-09)
         // has heard of us: the clause says so, never which house or number.
         `${cold ? (o.offersWithUs ? "One clause on who you are: the local buyer who looked at one of their listings a while back and is always after the next project house. " : "One clause on who you are: someone local who's always looking for the next project house. ") : "Do NOT reintroduce yourself. "}` +

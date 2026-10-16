@@ -71,9 +71,11 @@ import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
+  numberApproved, termsOnLetter,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperAfterAnswerDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS, sendsItselfOnClear, isRoughNumber } from "../shared/paper-follows.js";
+import { noFitLine, stanceWaitingFor } from "../shared/number-stance.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
@@ -114,11 +116,11 @@ import {
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, UW_ENRICH_CANDIDATES, paperAlreadyOut,
 } from "../auto-underwrite.js";
 import {
-  startReply, startProactive, previewProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
+  startReply, startProactive, previewProactive, chooseProactiveKind, leadsWithNumber, floatStanceFor, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
   stopMachineTextsForOffer, stopDealOutreach,
 } from "../reply-agent.js";
-import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
+import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
 import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
@@ -127,6 +129,7 @@ import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STAT
 import { mergeParties } from "../shared/deal-parties.js";
 import { mergeAccess, accessFor } from "../shared/deal-access.js";
 import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, tickById, GATES } from "../shared/deal-checklist.js";
+import { preContractChecks, preContractRecord, openChecks, tickPreContract, normalizePreContract, PRE_CONTRACT_KEYS } from "../shared/pre-contract.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
 import { normalizeTierOne } from "../shared/tier-one.js";
@@ -2165,7 +2168,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // resolves to the new letter. One pipeline, two outcomes — forking it would
   // guarantee the two drift, and a revised offer has to be the same artifact as
   // a fresh one (same PDFs, same fields) or History stops telling the truth.
-  async function createOfferFromRequest({ locationId, client, body = {}, existing = null }) {
+  // What a revision moved besides the price, for calibration: [from, to] of the
+  // ARV and the rehab, and the house's size and year built off its snapshot.
+  const revisionInputs = (was, now) => {
+    const a = was?.calc?.inputs || {}, b = now?.calc?.inputs || {};
+    const info = now?.snapshot?.subjectInfo || was?.snapshot?.subjectInfo || {};
+    const pair = (k) => (Number(a[k]) > 0 || Number(b[k]) > 0 ? { [k]: [Math.round(Number(a[k]) || 0), Math.round(Number(b[k]) || 0)] } : {});
+    const sqft = Math.round(Number(info.sqft) || 0), yearBuilt = Math.round(Number(info.yearBuilt) || 0);
+    return { ...pair("arv"), ...pair("repairs"), ...(sqft > 0 ? { sqft } : {}), ...(yearBuilt > 0 ? { yearBuilt } : {}) };
+  };
+  // `revisedBy`: who moved the number on a revision — "you" (the editor, the
+  // held-paper banner), or the machine ("requote", "counter_band"). Only a
+  // person's revision approves the number (shared/offer-status.js numberApproved).
+  async function createOfferFromRequest({ locationId, client, body = {}, existing = null, revisedBy = "you" }) {
     const revising = Boolean(existing);
     const { contactId: bodyContactId, newContact, inputs, settings: settingsOverride } = body || {};
     // Rehab scope of work (internal — saved + noted, never on the letter).
@@ -2342,6 +2357,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // can't erase it; null when the checks didn't run.
       checks: summarizeChecks(body.snapshot) || summarizeChecks(snapshot),
       ...(asset ? { asset } : {}),
+      // What this letter names (one set of terms, 2026-10-15), for the offer book.
+      terms: termsOnLetter(calc.settings),
     };
     let offer;
     if (revising) {
@@ -2361,10 +2378,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // this, offerExpiresAt() would keep deriving the old date off createdAt
         // and mark the offer expired while the document says otherwise.
         expiresAt: validUntil.toISOString(),
+        // The ARV and the rehab from → to, the size and the year built: what
+        // Lessons calibrates the underwriter on when a person moved them
+        // (shared/calibration.js, 2026-10-15).
         revisions: [
           ...(existing.revisions || []),
-          { ts: created.toISOString(), from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount },
+          { ts: created.toISOString(), from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount, by: revisedBy,
+            ...revisionInputs(existing, fresh) },
         ].slice(-20),
+        ...(revisedBy === "you" ? { approved: { amount: Math.round(Number(fresh.cashAmount) || 0), at: created.toISOString(), by: "revise" } } : {}),
       };
       await store.updateOffer(offer.id, offer);
     } else {
@@ -2492,6 +2514,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // travels so the 24h address dedupe still recognises the house.
         if (d.autoUnderwrite && !revising && offer.contactId) {
           offer.autoUnderwrite = { ...d.autoUnderwrite, publishedAt: new Date().toISOString() };
+          // Publishing a held run is Matt standing behind its number.
+          offer.approved = { amount: Math.round(Number(offer.cashAmount) || 0), at: offer.autoUnderwrite.publishedAt, by: "publish" };
           await store.updateOffer(offer.id, offer).catch(() => {});
           const fresh = (await store.getOfferSettings(locationId)) || {};
           Promise.resolve(underwriteDeps({ client, locationId, saved: fresh }).onOfferCreated({ offer }))
@@ -3360,6 +3384,34 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         warnings.push(`buyer ceiling: contract + fee is ${fmtMoney(asking)}, ${fmtMoney(asking - ceiling.noFee)} over the ${ceiling.pct}% line (${fmtMoney(ceiling.noFee)}) — buyers have passed on every deal that sat here`);
       }
     } catch { /* the readout is a courtesy */ }
+    // What nobody looked at before the signature (shared/pre-contract.js),
+    // kept on the deal and said as a warning — never a block.
+    try {
+      const videos = (await store.listOfferVideos?.(offer.id).catch(() => [])) || [];
+      const checks = preContractChecks({ offer, settings, videos, price: contractPrice, fee: assignmentFee });
+      offer.deal.preContractAtPromote = preContractRecord(checks);
+      const open = openChecks(checks);
+      if (open.length) warnings.push(`before signing, not checked: ${open.map((c) => `${c.label.toLowerCase()} (${c.detail})`).join("; ")}`);
+    } catch { /* the readout is a courtesy */ }
+    // The buyers it was pre-sold to (POST /api/dispo/presell): the ones you
+    // sent it to are on the deal as evaluating; a pre-sell text nobody sent
+    // stands down so the first wave can send them the deal itself.
+    if (offer.presell?.contactIds?.length) {
+      try {
+        for (const contactId of [...new Set(offer.presell.contactIds)].slice(0, 20)) {
+          const mine = (await store.listReplyDrafts(locationId, { contactId, limit: 20 }).catch(() => []))
+            .filter((d) => d?.outbound?.presell && d.outbound.offerId === offer.id);
+          const sent = mine.find((d) => d.status === "sent");
+          if (sent && !offer.deal.investors.some((i) => i.contactId === contactId)) {
+            offer.deal.investors.push({ contactId, name: sent.contactName || contactId, status: "evaluating", addedAt: ts, updatedAt: ts, source: "presell" });
+          }
+          for (const d of mine.filter((x) => x.status === "draft" || x.status === "scheduled")) {
+            await store.updateReplyDraft(d.id, { ...d, status: "superseded", sendAt: null, updatedAt: ts,
+              flags: [...(d.flags || []), "it went under contract — the deal text replaces the pre-sell"] }).catch(() => {});
+          }
+        }
+      } catch (e) { warnings.push(`pre-sell buyers: ${e.message}`); }
+    }
     const noteFailure = (step, e) => {
       console.error(`offers: deal attach failed [${step}] contact=${offer.contactId}:`, e?.message);
       warnings.push(`${step}: ${e.message}`);
@@ -3712,6 +3764,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           await store.updateOffer(full.id, full);
         }
         offer.pin = { at: ts, by: "operator", note: dealStr(req.body?.note, 200) };
+        // Choosing this row is choosing its number.
+        if (Number(offer.cashAmount) > 0) offer.approved = { amount: Math.round(Number(offer.cashAmount)), at: ts, by: "pin" };
       } else {
         delete offer.pin;
       }
@@ -3724,6 +3778,48 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           { offerId: offer.id, source: "operator", at: ts }).catch(() => {});
       }
       res.json({ ok: true, offer, currentId: current?.id || null });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Someone has seen the house (shared/number-stance.js): a walkthrough, a
+  // showing, a call through the photos. A big house stops floating as a range
+  // once we also have the agent's read. Body: { seen: true|false, note? }.
+  router.post("/:id/seen", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { offer } = ctx;
+      const ts = new Date().toISOString();
+      if (req.body?.seen === false) delete offer.seen;
+      else offer.seen = { at: ts, by: "you", note: dealStr(req.body?.note, 200) };
+      offer.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, seen: offer.seen || null });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Matt approves the number (Today's "Approve 450K", shared/pipeline.js
+  // approve_number): from here the machine may ask them to write it up at it
+  // (the hot push), and a high-stakes house stops floating as a range.
+  // Body: { amount? } — when given, it must still be the offer's number.
+  router.post("/:id/approve", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      const amount = Math.round(Number(offer.cashAmount) || 0);
+      if (!amount) return res.status(409).json({ error: "the offer has no number to approve" });
+      const asked = Math.round(Number(req.body?.amount) || 0);
+      if (asked && asked !== amount) return res.status(409).json({ error: `the number moved to ${fmtMoney(amount)} — look again before approving` });
+      const ts = new Date().toISOString();
+      offer.approved = { amount, at: ts, by: "today" };
+      offer.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      if (offer.contactId) {
+        await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
+          historyLine(ts, offer.address, `number approved (${fmtMoney(amount)})`, ""), { offerId: offer.id, source: "operator", at: ts }).catch(() => {});
+      }
+      res.json({ ok: true, approved: offer.approved });
     } catch (err) { fail(res, err); }
   });
 
@@ -4177,6 +4273,38 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- before we sign (shared/pre-contract.js) ---------- */
+
+  // What nobody has looked at yet on an offer about to be signed, read off
+  // the full record and its videos. GET for the pane; POST ticks one by hand
+  // ({ key, done = true, note }) or takes a tick back (done: false).
+  async function preContractFor(locationId, offer) {
+    const [settings, videos] = await Promise.all([
+      store.getOfferSettings(locationId).catch(() => null),
+      store.listOfferVideos ? store.listOfferVideos(offer.id).catch(() => []) : [],
+    ]);
+    return preContractChecks({ offer, settings: effectiveSettings(settings || {}), videos });
+  }
+  router.get("/:id/precontract", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      res.json({ ok: true, checks: await preContractFor(ctx.locationId, ctx.offer), preContract: normalizePreContract(ctx.offer.preContract), presell: ctx.offer.presell || null });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/:id/precontract", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { locationId, offer } = ctx;
+      const key = String(req.body?.key || "");
+      if (!PRE_CONTRACT_KEYS.includes(key)) return res.status(400).json({ error: `key must be one of: ${PRE_CONTRACT_KEYS.join(", ")}` });
+      offer.preContract = tickPreContract(offer.preContract, { key, done: req.body?.done !== false, note: req.body?.note || "" });
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, checks: await preContractFor(locationId, offer), preContract: offer.preContract });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- the closing checklist (shared/deal-checklist.js) ---------- */
 
   // One item per call — tick, re-date, reassign, rename, note, remove — or
@@ -4598,10 +4726,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       const cfg = conversationConfig(fresh);
       const so = cfg.parties.agent.sendOffer;
+      // A high-stakes house without their read or eyes on it floats a range
+      // and sends no paper by itself (shared/number-stance.js).
+      const stance = await floatStanceFor({ store, offer, config: cfg, dossier: propertyDossier(events, offer.address) });
       // A confident underwrite leads with the NUMBER in conversation — "based
       // on our analysis we can likely do around 450ish" — and the paper waits
       // for their answer (a yes sends it). Not confident: the old order.
-      const leadWithNumber = leadsWithNumber({ offer, job, config: cfg });
+      const leadWithNumber = leadsWithNumber({ offer, job, config: cfg, stance });
 
       // The offer itself, unattended — only for a CLEAN underwrite (status
       // "new", not a gate-held draft), only to an agent who has already
@@ -4611,7 +4742,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // An offer priced on the agent's own numbers (our comps were thin), or a
       // rough first pass priced past a hold, is a number to float, never paper
       // that sends itself.
-      const agentNumbers = !sendsItselfOnClear(offer);
+      const agentNumbers = !sendsItselfOnClear(offer, { stance });
       // You stopped the bot on them (shared/bot-hold.js): the letter doesn't
       // send itself and isn't queued for the retry. The float below waits
       // too, so the offer stays "priced, not floated" until you Resume.
@@ -4687,13 +4818,38 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // So is a stop (shared/bot-hold.js): it floats after Resume.
     if (r.skipped && (r.blocked || r.held)) console.log(`${kind} waiting for ${offer.id}: ${r.skipped}`);
     else if (r.skipped) { console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`); await markFloatSkipped(offer.id, kind, r.skipped); }
-    else await markProactive(offer.id, kind);
+    // A listed house asks the seller's number first: that went as a take check.
+    else await markProactive(offer.id, r.job?.outbound || kind);
+    if (r.noFit) await noFitPass({ client, locationId, fresh, offer, fit: r.noFit });
     if (r.raise) {
       await createContactNote(client, offer.contactId, {
         body: `Underwrote ${offer.address} at ${fmtMoney(offer.cashAmount)}, above the ${fmtMoney(r.raise.amount)} we last texted there — nothing was texted. Yours to decide whether to go up (Float on the offer sends it).`,
       }).catch(() => {});
     }
     return { skipped: r.skipped || null, blocked: r.blocked || null, held: r.held || null, kind, job: r.job || null };
+  }
+
+  // A listed house where ours is far under the seller's number (or the list
+  // price) before we ever said one (shared/number-stance.js listedFit,
+  // 2026-10-15). No number goes: a polite no-fit asks for other fixers, and
+  // `offer.noFit` puts a row on Today so Matt can price it by hand. Never
+  // we_passed: the house stays open.
+  async function noFitPass({ client, locationId, fresh, offer, fit }) {
+    if (!offer?.id || !fit) return null;
+    try {
+      const full = await store.getOffer(offer.id);
+      if (full && !full.noFit) {
+        full.noFit = { at: new Date().toISOString(), theirs: Math.round(fit.theirs) || 0, source: fit.source || "", ratio: fit.ratio != null ? Math.round(fit.ratio * 1000) / 1000 : null, ours: Math.round(Number(full.cashAmount) || 0) };
+        await store.updateOffer(full.id, full);
+      }
+    } catch (e) { console.error(`offers: no-fit stamp failed for ${offer.id}: ${e.message}`); }
+    await markFloatSkipped(offer.id, "realm_check", `${noFitLine(fit)} — a polite no-fit instead of a number`);
+    const r = await startProactive({
+      client, locationId, saved: fresh, store, contactId: offer.contactId, kind: "kind_pass", offer,
+      subject: { address: offer.address, why: "too_far" }, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
+    }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 120) }));
+    if (r?.skipped) console.log(`no-fit note skipped for ${offer.id}: ${r.skipped}`);
+    return r;
   }
 
   // Every conversation's last message, newest first, straight from GHL — one
@@ -4824,8 +4980,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       ]);
       // Silence first; then (onNeutral, 2026-10-08) an answer that wasn't a
       // pass — "can't answer for the seller", or a yes on a rough number.
-      const quiet = paperAfterSilenceDue({ offer, drafts, events, silenceHours: af.silenceHours, withFloat: af.withFloat, now });
-      const answered = !quiet.due && af.onNeutral ? paperAfterAnswerDue({ offer, drafts, events, now }) : null;
+      // A high-stakes house in range mode gets no paper by machine (shared/number-stance.js).
+      const stance = cfg.parties.agent.realmCheck?.highStakes?.enabled
+        ? await floatStanceFor({ store, offer, config: cfg, dossier: propertyDossier(events, offer.address) }) : null;
+      const quiet = paperAfterSilenceDue({ offer, drafts, events, silenceHours: af.silenceHours, withFloat: af.withFloat, stance, now });
+      const answered = !quiet.due && af.onNeutral ? paperAfterAnswerDue({ offer, drafts, events, stance, now }) : null;
       const due = quiet.due ? quiet : answered;
       if (!due?.due) continue;
       // They unsubscribed, or a person stopped the bot on them (shared/bot-hold.js): nothing goes.
@@ -5014,6 +5173,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         client, locationId, saved: fresh, store, contactId, kind: "realm_check", continues: draftId,
         offer: full || offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
       });
+      if (r.noFit) await noFitPass({ client, locationId, fresh, offer: full || offer, fit: r.noFit });
       if (r.skipped) { console.log(`realm check after take skipped for ${offer.id}: ${r.skipped}`); return { started: false, skipped: r.skipped }; }
       await markProactive(offer.id, "realm_check");
       return { started: true, offerId: offer.id };
@@ -5068,7 +5228,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!plan.ok) return { ok: false, reason: plan.reason, address: full.address };
 
       const out = await createOfferFromRequest({
-        locationId, client, existing: full,
+        locationId, client, existing: full, revisedBy: "requote",
         body: { contactId, scope: full.scope,
                 // A capped re-quote is priced AT the cap. Recomputing from the
                 // clamped ARV/repairs alone re-issued Thomas Rinow's offer at
@@ -5124,7 +5284,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // paper at their number through the SAME path a hand-made revision takes,
     // so the letter, the links, the revision ledger and the expiry all behave
     // identically. The band itself never reaches this — it is ask-only.
-    reviseOfferToCounter: async ({ contactId, addressHint, amount, draftId = null }) => {
+    // `by`: "counter_band" when the band ran it by itself, "you" when a person
+    // applied it from the row — only a person's press approves the number.
+    reviseOfferToCounter: async ({ contactId, addressHint, amount, draftId = null, by = "counter_band" }) => {
       const price = Math.round(Number(amount) || 0);
       if (!price) return { ok: false, reason: "no number to re-issue at" };
       // Open, or dead on their side and revived by this counter — the same
@@ -5137,7 +5299,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!full) return { ok: false, reason: "offer vanished" };
       const revived = !OPEN_STATUSES.has(effectiveStatus(full));
       const out = await createOfferFromRequest({
-        locationId, client, existing: full,
+        locationId, client, existing: full, revisedBy: by === "you" ? "you" : "counter_band",
         body: { contactId, scope: full.scope,
                 // priceOverride is the manual final price: the letter prints
                 // their number while the breakdown still shows the model that
@@ -5459,7 +5621,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // written offer goes "for your records" — after a float nobody answered,
     // or with the reply to a no — in its own words. `by` is who sent it, for
     // the timeline and Flow.
-    sendOfferDocs: async ({ contactId, addressHint = "", offerId = null, channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [], transcript = null, unattended = false, forRecord = false, by = "" }) => {
+    // `machine`: an intent rule's action ran by itself (nobody pressed it) —
+    // read only by the high-stakes range hold below.
+    sendOfferDocs: async ({ contactId, addressHint = "", offerId = null, channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [], transcript = null, unattended = false, forRecord = false, by = "", machine = false }) => {
       // Nobody pressed anything (a clean underwrite, the retry): a person
       // who stopped the bot gets no letter by itself (shared/bot-hold.js).
       // A person pressing "Do it" on the draft is deciding, and it goes.
@@ -5488,6 +5652,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!check.ok) {
         await markPaperHeld(offer, check, draftId);
         return { ok: false, held: true, address: offer.address, reason: check.reason };
+      }
+      // A high-stakes house still in range mode (shared/number-stance.js):
+      // the machine puts nothing on paper until we have their read and eyes
+      // on it, or Matt approved the number. A person pressing Send has decided.
+      if (unattended || forRecord || machine) {
+        const cfg = conversationConfig(fresh);
+        if (cfg.parties.agent.realmCheck?.highStakes?.enabled) {
+          const evs = await store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []);
+          const stance = await floatStanceFor({ store, offer, config: cfg, dossier: propertyDossier(evs, offer.address) });
+          if (stance.mode === "range") {
+            const why = { reason: `high-stakes (${stance.why}): a range only until we have ${stanceWaitingFor(stance)}, or you approve the number — no paper by machine` };
+            await markPaperHeld(offer, why, draftId);
+            return { ok: false, held: true, address: offer.address, reason: why.reason };
+          }
+        }
       }
       // Nobody pressed anything, and the agent said this house is not a
       // project: no paper on it by itself (Walker Park Rd, 2026-10-09).
@@ -6895,13 +7074,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // No "cash, as-is" in the text (2026-10-02): that is the wording the
       // carriers block (shared/carrier-words.js). The letter itself, attached,
       // carries the terms.
+      // The write-up ask goes only at a number Matt approved (numberApproved,
+      // 2026-10-15); the machine's own words leave it off otherwise.
+      const askWriteUp = numberApproved(offer);
       const text = message || (template === "for_record"
         ? `Hi ${firstName}, sending our written offer on ${offer.address || "your property"} over so you have it on file — ` +
           `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.`
+          (askWriteUp ? ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.` : ` Happy to answer any questions.`)
         : `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
           `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?`);
+          (askWriteUp ? ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?` : ` Let me know what the seller thinks.`));
 
       // The agent page — our arithmetic, the comps, the scope and what the
       // seller nets, at one link. An operator's message already carries it
@@ -6940,7 +7122,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ...(message ? [] : [
           `<p>Please find our letter of intent on <strong>${esc(offer.address || "your property")}</strong> attached — ` +
           `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
-          `If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? Happy to answer any questions.</p>`,
+          `${askWriteUp ? "If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? " : ""}Happy to answer any questions.</p>`,
+          // One set of terms (2026-10-15): what the bot tells an agent who
+          // writes it up — earnest, inspection, funding, close, the buyer's
+          // name — in the email too. Never in the text: "hard money" and
+          // "earnest" are fine, but the text stays short and carrier-safe.
+          `<p><strong>Our terms:</strong> ${esc(writeUpTermsText(conversationConfig(settings || {}).writeUp))}.</p>`,
         ]),
         // The whole column, tied out to the offer. "How we got to the number"
         // is where the transcript readers stop (shared/current-offer.js), so
@@ -7069,6 +7256,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // Optional: an address other than the contact's own, and people to copy.
         const emailTo = dealStr(b.emailTo, 200);
         const emailCc = (Array.isArray(b.emailCc) ? b.emailCc : []).map((x) => dealStr(x, 200)).filter(Boolean).slice(0, 5);
+        // Matt pressing Send is Matt standing behind the number (numberApproved).
+        if (live && Number(offer.cashAmount) > 0 && Math.round(Number(offer.approved?.amount) || 0) !== Math.round(Number(offer.cashAmount))) {
+          offer.approved = { amount: Math.round(Number(offer.cashAmount)), at: new Date().toISOString(), by: "send" };
+          await store.updateOffer(offer.id, offer).catch(() => {});
+        }
         const r = await sendOfferDocs({ locationId, client, offer, message, emailSubject, channels, docKeys, live, emailTo, emailCc });
         // A hand-sent offer is on the contact's timeline too, so the
         // conversation knows the paper went out and doesn't promise it again.

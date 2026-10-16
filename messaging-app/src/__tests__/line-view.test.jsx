@@ -76,3 +76,17 @@ test("the Line shows the houses agents brought us apart from the listings we tex
   expect(html).toContain("1 with a buyer");
   expect(html).toContain("first house 0d after our first text");
 });
+
+test("the Line says when new agents are drying up, and why", () => {
+  const data = buildLine({
+    now: NOW,
+    week: [{ key: "found", count: 14 }, { key: "first_text", count: 14 }],
+    cursors: [{ name: "outreach", at: "2026-09-28T17:00:00Z", doc: { last: { county: "King, WA", candidates: 6, picked: 4, imported: 1, skippedExisting: 3 } } }],
+  });
+  const html = renderToStaticMarkup(<LineBody data={data} />);
+  expect(html).toContain("New agents are drying up");
+  expect(html).toContain("under the 5 a day you set");
+  expect(html).toContain("the pool is dry");
+  const fine = buildLine({ now: NOW, week: [{ key: "first_text", count: 70 }] });
+  expect(renderToStaticMarkup(<LineBody data={fine} />)).not.toContain("drying up");
+});
