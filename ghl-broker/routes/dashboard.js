@@ -61,7 +61,8 @@ import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize as summarizeAudit } from "../shared/conversation-audit.js";
-import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives } from "../shared/desk.js";
+import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
+import { ghlCallsOn, liveGhlQueues, GHL_CALL_EVENT_TYPES } from "../shared/ghl-calls.js";
 import { knownCitiesFrom, heldOnTheMachine } from "../shared/held-underwrites.js";
 import { callList, briefFor, normalizeDesk } from "../shared/call-list.js";
 import { attachNextFollowUpsFor } from "../next-follow-up.js";
@@ -698,8 +699,18 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     // counter above our number stays, as a decision. Since 2026-10-15 the
     // call list's best `desk.dailyCalls` are back, as "Today's calls".
     const heldByOffer = heldVerdicts(audit);
-    const desk = foldDesk(urgentReasons([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer, dailyCalls: deskSettings.dailyCalls }), { drafts, heldByOffer, callCap: deskSettings.callCap });
-    for (const r of desk.rows) if (r.kind === "call_counter" && !r.call) r.call = briefFor(r, { cards: out.cards, offers });
+    const reasons = urgentReasons([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer, dailyCalls: deskSettings.dailyCalls });
+    // With calls going to GHL's Manual Actions (desk.ghlCalls, 2026-10-15), a
+    // call that's in GHL leaves Today (shared/desk.js withoutQueuedCalls);
+    // `deskAll` is Today before that, what the GHL calls runner picks from.
+    // The ledger is its own small read, only while it's on.
+    const ghlOn = ghlCallsOn(deskSettings.ghlCalls);
+    const ghlQueued = ghlOn ? liveGhlQueues(await store.listContactEventsSince(locationId, new Date(now - 7 * DAY_MS).toISOString(), { types: GHL_CALL_EVENT_TYPES, limit: 2000 }).catch(() => [])) : new Map();
+    const deskAll = foldDesk(reasons, { drafts, heldByOffer, callCap: deskSettings.callCap });
+    const desk = ghlOn ? foldDesk(withoutQueuedCalls(reasons, { queued: ghlQueued, enabled: true, drafts, now }), { drafts, heldByOffer, callCap: deskSettings.callCap }) : deskAll;
+    for (const r of new Set([...desk.rows, ...deskAll.rows])) if (r.kind === "call_counter" && !r.call) r.call = briefFor(r, { cards: out.cards, offers });
+    const dayStart = pacificStart(now);
+    const sections = ghlOn ? TODAY_SECTIONS.map((sec) => (sec.key === "call" ? { ...sec, empty: GHL_CALLS_EMPTY } : sec)) : TODAY_SECTIONS;
     const kpis = deskKpis({ offers, cards: out.cards, events, targets: normalizeLineTargets(saved?.lineTargets), now });
     const body = {
       dismissedCount: dismissedRows.length,
@@ -718,9 +729,10 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       drafts,
       ...out,
       actions: shownActions.map(withFeedback),
-      desk: { sections: TODAY_SECTIONS, rows: desk.rows, counts: desk.counts, kpis },
+      desk: { sections, rows: desk.rows, counts: desk.counts, kpis,
+        ...(ghlOn ? { ghlCalls: { on: true, inGhlToday: [...ghlQueued.values()].filter((q) => Date.parse(q.at) >= dayStart).length } } : {}) },
     };
-    return { body, desk, callRows, shownCalls, shownActions, drafts, offers, cards: out.cards, events, saved, deskSettings };
+    return { body, desk, deskAll, callRows, shownCalls, shownActions, drafts, offers, cards: out.cards, events, saved, deskSettings };
   }
   router.pipelineFor = pipelineFor;
 

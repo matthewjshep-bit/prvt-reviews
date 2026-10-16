@@ -281,6 +281,40 @@ export function ghlCallsDue(reasons = [], { drafts = [], heldByOffer = new Map()
   return due;
 }
 
+// Calls in GHL leave Today, except these: their buttons are decisions.
+const GHL_KEEP_ON_TODAY = new Set(["call_counter", "call_partner_terms"]);
+// What Today's calls says when they're all in GHL.
+export const GHL_CALLS_EMPTY = "Today's calls are in GHL's Manual Actions.";
+
+/**
+ * withoutQueuedCalls(reasons, { queued, enabled, drafts, now }) → reasons
+ *
+ * Matt, 2026-10-15: calls live in GHL only. With calls going to GHL, a call
+ * that is in GHL's Manual Actions — queued today, or queued since its reason
+ * began — leaves Today. A counter above ours and partner terms stay (their
+ * buttons are decisions), marked `ghlQueued: { at }` so the row says the call
+ * is in GHL too. A call that failed to go or was taken back isn't queued
+ * (shared/ghl-calls.js liveGhlQueues). Runs before foldDesk, so the counts
+ * and who leads a person's row follow.
+ *
+ *   queued  Map contactId → { at } — each person's live call in GHL
+ */
+export function withoutQueuedCalls(reasons = [], { queued = new Map(), enabled = false, drafts = [], now = Date.now() } = {}) {
+  if (!enabled || !queued?.size) return reasons;
+  const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
+  const today = pacificStart(now);
+  const out = [];
+  for (const a of reasons || []) {
+    const q = a?.contactId ? queued.get(a.contactId) : null;
+    if (!q || !ghlCallKind(a, { draftsById })) { out.push(a); continue; }
+    const at = ms(q.at);
+    const began = ms(a.call?.since ?? a.since ?? draftsById.get(a.draftId)?.createdAt);
+    if (at == null || !(at >= today || (began != null && at >= began))) { out.push(a); continue; }
+    if (GHL_KEEP_ON_TODAY.has(a.kind)) out.push({ ...a, ghlQueued: { at: q.at } });
+  }
+  return out;
+}
+
 /** foldKey(reason) → the row it belongs to: a person, a deal, an offer, or itself. */
 export function foldKey(a) {
   if (DEAL_KINDS.has(a?.kind) && a.offerId) return `deal:${a.offerId}`;
