@@ -202,3 +202,21 @@ test("they called and nobody picked up: an attempt for the call list, and still 
   assert.equal(store.events.find((e) => e.type === "call_attempt").data.direction, "inbound");
   assert.equal(store.events.find((e) => e.type === "call_summary").data.transcribed, false, "never read as a conversation");
 });
+
+// 2026-10-15: they called, nobody picked up, and they left a voicemail long
+// enough to read. It went to the reply agent as if we'd talked, so the call
+// list never showed "they called you".
+test("a voicemail they left is a missed call on the timeline before the reply agent reads it", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const saved = { aiApiKey: "k", conversationAi: { enabled: true } };
+  const { job } = await startCallIntake({ client: {}, locationId: "L", saved, store, contactId: "c8",
+    deps: { findCall: async () => ({ id: "m8", direction: "inbound", at: "2026-10-15T17:50:00Z", durationSec: 0, status: "no-answer" }),
+      transcript: async () => "Hi Matt, it's Dana, calling about the house on Elm, the seller has some news, give me a call back when you can", pollMs: 1, maxPolls: 1 } });
+  await settle(60);
+  const attempt = store.events.find((e) => e.type === "call_attempt");
+  assert.ok(attempt, "the missed call is on the timeline");
+  assert.deepEqual([attempt.data.direction, attempt.data.outcome, attempt.data.leftMessage], ["inbound", "voicemail", true]);
+  assert.equal(attempt.dedupeKey, "call_attempt:m8");
+  assert.ok(job.transcriptChars > 40, "and the words still go to the reply agent");
+});

@@ -7445,3 +7445,25 @@ test("a sent call ask is recorded once, and so is the ask for other fixers", asy
   const evs = await store.listContactEvents("LOC", "c1");
   assert.deepEqual(evs.filter((e) => ["call_asked", "fixers_asked"].includes(e.type)).map((e) => e.type).sort(), ["call_asked", "fixers_asked"]);
 });
+
+/* ---------- a voicemail they left (2026-10-15) ---------- */
+
+test("an agent who left a voicemail about a live house gets a call back first: the text after it waits for you", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore({ ...NEGOTIATION_OFFER });
+  const saved = { ...SAVED, conversationAi: { enabled: true, autoSend: { debounceSec: 0 }, parties: { agent: { autoSend: { enabled: true, intents: ["question", "call_followup"] } } } } };
+  const transcript = "Hi Matt, it's Dana, calling about the house on Elm, the seller has some news, give me a call back when you can";
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: transcript, sendsEnabled: true, inboundKind: "call",
+    call: { messageId: "m8", direction: "inbound", at: new Date().toISOString(), durationSec: 0, dedupeKey: "call:m8", transcript, missed: true },
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", confidence: "high", propertyAddress: "12 Elm St", reply: "Got your message, what's the news?" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "scheduled");
+  assert.match(d.autoSend.reason, /left a voicemail — call them back/);
+  const summary = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "call_summary");
+  assert.equal(summary.data.missed, true, "the summary says nobody talked");
+});

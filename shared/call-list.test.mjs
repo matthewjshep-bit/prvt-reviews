@@ -493,3 +493,12 @@ test("the day's number of calls is a setting, 10 by default, 0 to 30", () => {
   assert.equal(normalizeDesk({ dailyCalls: 0 }).dailyCalls, 0);
   assert.equal(normalizeDesk({ dailyCalls: 99 }).dailyCalls, 30);
 });
+
+// 2026-10-15: their voicemail's own summary doesn't clear "they called you".
+test("a missed call with a voicemail on a live house stays a call", () => {
+  const rang = { type: "call_attempt", contactId: "c1", at: ago(0.1), data: { outcome: "voicemail", direction: "inbound", leftMessage: true } };
+  const vm = { type: "call_summary", contactId: "c1", at: ago(0.1), data: { transcribed: true, missed: true, summary: "seller has news" } };
+  const rows = callList({ offers: [offer({ status: "sent" })], cards: [card({ lane: "sent" })], events: [rang, vm], now: NOW });
+  assert.equal(rows[0]?.kind, "call_missed");
+  assert.equal(rows[0].offerId, "o1", "about a live house, so it's one of Today's calls");
+});

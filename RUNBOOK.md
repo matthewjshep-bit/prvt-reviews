@@ -3597,6 +3597,21 @@ and, as before, a bare `call_summary` so the ladders and the check-in still
 see them reaching out — never read as a conversation. With no transcript the
 call is read once more before deciding, in case its length landed late.
 
+**A voicemail they leave is a missed call (2026-10-15).** Their inbound call
+that nobody picked up, with a voicemail long enough to read (40+ characters),
+used to go to the reply agent as if we'd talked: its `call_summary` read as a
+conversation, so "they called you" never showed. Now call-intake writes the
+inbound `call_attempt` first (`outcome: "voicemail"`, `leftMessage: true`, key
+`call_attempt:<messageId>`), then hands the words to the reply agent with
+`call.missed`. The reply agent's `call_summary` carries `missed: true`, which
+`callEventConnected` never counts as talking (so it doesn't clear the call
+row, and the 48-hour brake below doesn't fire). For an agent with a live
+house, the text after it waits for you ("they called about … and left a
+voicemail — call them back") and the Desk's `call_missed` row is one of
+Today's calls. No switch: it only holds a text back. Check: the contact's
+timeline shows the attempt with `leftMessage`, and the outbox row's reason
+says to call them back.
+
 **After a real call the machine stays off the thread for 48 hours**
 (`CALL_HAS_IT_HOURS`, `shared/thread-health.js`): a connected `call_summary`
 (transcribed, or logged by hand) makes the brake read `person_has_it` —

@@ -58,7 +58,7 @@ import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { holdFor } from "./bot-hold.js";
-import { machineMayStart, LIVE_THREAD_KINDS, PASS_SHAPED_KINDS, IRRITATED_RX } from "./shared/thread-health.js";
+import { machineMayStart, liveHouse, LIVE_THREAD_KINDS, PASS_SHAPED_KINDS, IRRITATED_RX } from "./shared/thread-health.js";
 import { closeCounter } from "./shared/counter-hold.js";
 import { agentTurnReason } from "./agent-focus.js";
 import { streetOf } from "./shared/agent-focus.js";
@@ -4102,6 +4102,17 @@ async function runReply(job, ctx) {
     return;
   }
 
+  // A voicemail an agent left about a live house (call-intake.js call.missed).
+  let missedCallHouse = "";
+  if (isCall && job.call?.missed && party === "agent") {
+    const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const live = liveHouse({ offers: book || [], now });
+    if (live) {
+      missedCallHouse = String(live.address || "their house").split(",")[0].trim();
+      draft = { ...draft, needsHuman: true, humanReason: `they called about ${missedCallHouse} and left a voicemail — call them back before any text` };
+    }
+  }
+
   // A yes after we passed (2026-10-15). The seller took our number on a
   // house we had walked from; the model, told we walked away, answered
   // "We've actually moved on". Whatever the model filed it as, the reply
@@ -4203,6 +4214,12 @@ async function runReply(job, ctx) {
   // Their yes on a house we walked from never gets a reply by itself.
   if (yesAfterPass) {
     auto = { ...auto, send: false, code: "needs_you", reason: "they said yes after we passed — you take this one" };
+  }
+  // An agent with a live house called and left a voicemail (2026-10-15): a
+  // call back from Matt first (the Desk's "they called you" row), so the text
+  // after it waits for him.
+  if (missedCallHouse) {
+    auto = { ...auto, send: false, code: "needs_you", reason: `they called about ${missedCallHouse} and left a voicemail — call them back` };
   }
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
@@ -4772,7 +4789,9 @@ async function runReply(job, ctx) {
     await recordEvent({
       store, locationId, contactId: job.contactId, party, type: "call_summary", at: job.call.at || new Date(now).toISOString(),
       address: draft.propertyAddress || "", source: "call", ref: job.call.messageId || record.id, dedupeKey: job.call.dedupeKey || `call:${job.call.messageId}`,
-      data: { summary: String(draft.summary || "").slice(0, 500), intent: draft.intent, direction: job.call.direction, durationSec: job.call.durationSec, transcribed: true, draftId: record.id },
+      data: { summary: String(draft.summary || "").slice(0, 500), intent: draft.intent, direction: job.call.direction, durationSec: job.call.durationSec, transcribed: true, draftId: record.id,
+        // A voicemail they left (call-intake.js): their words, not a conversation (talked-to.js).
+        ...(job.call.missed ? { missed: true } : {}) },
     });
   }
 

@@ -93,12 +93,16 @@ export function voicemailGreeting(transcript = "", { durationSec = null } = {}) 
  * call that rang out is a call_attempt, but older rows carry the call that
  * rang out as a bare call_summary (no transcript, a few seconds, or a
  * voicemail greeting) — those were never a person talking. A call logged by
- * hand from Matt's own phone has no length and is taken at his word.
+ * hand from Matt's own phone has no length and is taken at his word. A
+ * voicemail they left us (`missed`) is their words, not a conversation.
  */
 export function callEventConnected(e) {
   if (e?.type !== "call_summary") return false;
   const d = e.data || {};
   if (d.tooShort === true) return false;
+  // They called, nobody picked up, and they left a voicemail (2026-10-15):
+  // the words are transcribed, but nobody talked.
+  if (d.missed === true) return false;
   if (d.transcribed === false) return connectedCall({ durationSec: d.durationSec, status: d.status });
   return true;
 }

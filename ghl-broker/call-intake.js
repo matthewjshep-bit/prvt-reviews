@@ -173,11 +173,23 @@ async function run(job, { client, locationId, saved, store, sendsEnabled, deps }
       data: { direction: call.direction, durationSec: call.durationSec, summary: transcript, transcribed: true, tooShort: true } });
     job.status = "done"; job.skipped = "too short to be a conversation"; job.finishedAt = iso(); return;
   }
+  // They called, nobody picked up, and they left a voicemail (2026-10-15).
+  // The words are worth reading, but it was a missed call: the attempt goes
+  // on the timeline first, so the Desk's "they called you" row shows, and
+  // the reply agent is told (call.missed) — its call_summary isn't a
+  // conversation, and an agent with a live house gets a call back from Matt
+  // before any text.
+  const missed = call.direction === "inbound" && !talked;
+  if (missed) {
+    await recordEvent({ store, locationId, contactId: job.contactId, type: "call_attempt", at: call.at, source: "call", ref: call.id,
+      dedupeKey: `call_attempt:${call.id}`,
+      data: { outcome: "voicemail", direction: "inbound", durationSec: call.durationSec, leftMessage: true } });
+  }
 
   job.phase = "reading";
   const r = await startReply({
     client, locationId, saved, store, contactId: job.contactId, message: transcript, channel: "sms", sendsEnabled, deps,
-    inboundKind: "call", call: { messageId: call.id, direction: call.direction, at: call.at, durationSec: call.durationSec, dedupeKey, transcript },
+    inboundKind: "call", call: { messageId: call.id, direction: call.direction, at: call.at, durationSec: call.durationSec, dedupeKey, transcript, ...(missed ? { missed: true } : {}) },
   });
   if (r.skipped) { job.skipped = r.skipped; }
   else job.replyJobId = r.job?.id || null;
