@@ -39,6 +39,7 @@
 // maoPctOfArv% of ARV minus repairs, minus the fee, no jitter. "blended" is
 // the mean of those three.
 import { normalizeConversationAi } from "./conversation-ai.js";
+import { normalizeUnderwriteCalibration } from "./calibration.js";
 
 export const UNDERWRITE_MODES = [
   { key: "backstack", label: "Back-stack from ARV", hint: "ARV − selling costs − flip profit − repairs − holding − your fee" },
@@ -316,6 +317,9 @@ export function effectiveSettings(overrides = {}) {
   // and number is validated there); a saved partial is filled, not trusted.
   const cai = (overrides || {}).conversationAi;
   s.conversationAi = cai && typeof cai === "object" ? normalizeConversationAi(cai) : null;
+  // Matt's calibration from Lessons (shared/calibration.js): absent until he
+  // applies it, and absent changes nothing.
+  if ((overrides || {}).underwriteCalibration !== undefined) s.underwriteCalibration = normalizeUnderwriteCalibration(overrides.underwriteCalibration);
   return s;
 }
 

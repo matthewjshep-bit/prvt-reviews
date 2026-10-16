@@ -207,3 +207,16 @@ test("marking a house seen is eyes on it", async () => {
   await req("POST", `/api/offers/${o.id}/seen`, { seen: false });
   assert.equal((await store.getOffer(o.id)).seen, undefined);
 });
+
+test("a hand revision records the ARV and rehab it moved, the size and the year, for Lessons to calibrate on", async () => {
+  const o = await seed({ autoUnderwrite: { passed: true } });
+  const r = await req("PUT", `/api/offers/${o.id}`, { contactId: "contact-1", inputs: { ...INPUTS, arv: 600000, repairs: 140000 }, settings: SETTINGS,
+    scope: [{ label: "Roof", cost: 14500 }], snapshot: { subjectInfo: { sqft: 1450, yearBuilt: 1938 } } });
+  assert.equal(r.status, 200, JSON.stringify(r.json).slice(0, 300));
+  const rev = (await store.getOffer(o.id)).revisions.at(-1);
+  assert.equal(rev.by, "you");
+  assert.deepEqual(rev.arv, [660000, 600000]);
+  assert.deepEqual(rev.repairs, [110000, 140000]);
+  assert.equal(rev.sqft, 1450);
+  assert.equal(rev.yearBuilt, 1938);
+});

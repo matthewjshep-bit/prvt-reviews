@@ -40,6 +40,7 @@ import { autopilotSummary, graduationReport, GRADUATION } from "../shared/gradua
 import { buildFlow, FLOW_STAGES } from "../shared/flow.js";
 import { buildDigest } from "../shared/digest.js";
 import { lessons, dealScorecard } from "../shared/post-mortem.js";
+import { calibrationReport } from "../shared/calibration.js";
 import { effectiveSettings } from "../shared/offer-calc.js";
 import { listPipelines, getContact, searchOpportunities } from "../ghl.js";
 import { mapPool } from "../map-pool.js";
@@ -282,11 +283,17 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // A fell-through deal with no post-mortem yet still counts by its numbers.
       const all = [...postMortems, ...pending.map((p) => ({ offerId: p.offerId, address: p.address, street: String(p.address || "").split(",")[0], scorecard: p.scorecard, negotiation: null }))];
       const out = lessons({ postMortems: all, controls, settings });
+      // Matt's own revisions of the machine's numbers (shared/calibration.js):
+      // two more settings recommendations, or a note that there's not enough yet.
+      const calib = calibrationReport({ offers: await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []), settings });
+      out.recommendations = [...out.recommendations, ...calib.recommendations];
+      out.current = { ...out.current, underwriteCalibration: settings.underwriteCalibration || null };
       const secrets = ["aiApiKey", "compsApiKey", "apifyToken", "captureToken", "rentcastApiKey", "googleApiKey", "zillowRapidApiKey", "githubToken"];
       res.json({ ok: true, ...out,
         // Why buyers passed in the last 30 days, every deal, by the reason
         // their own words name (shared/funnel.js passThemes).
         passThemes: passThemes(deals, { days: 30 }),
+        calibration: { note: calib.note, sample: calib.sample },
         deals: all.map((pm) => ({ offerId: pm.offerId, address: pm.address, street: pm.street, hasPostMortem: Boolean(pm.analysis) || postMortems.includes(pm), generatedAt: pm.generatedAt || null, scorecard: pm.scorecard })),
         controls: controls.map((sc) => ({ offerId: sc.offerId, address: sc.address, street: sc.street, outcome: sc.outcome, scorecard: sc })),
         digestSaved: settings.postMortem?.digest || "",

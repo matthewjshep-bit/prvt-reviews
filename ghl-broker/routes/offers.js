@@ -2167,6 +2167,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // resolves to the new letter. One pipeline, two outcomes — forking it would
   // guarantee the two drift, and a revised offer has to be the same artifact as
   // a fresh one (same PDFs, same fields) or History stops telling the truth.
+  // What a revision moved besides the price, for calibration: [from, to] of the
+  // ARV and the rehab, and the house's size and year built off its snapshot.
+  const revisionInputs = (was, now) => {
+    const a = was?.calc?.inputs || {}, b = now?.calc?.inputs || {};
+    const info = now?.snapshot?.subjectInfo || was?.snapshot?.subjectInfo || {};
+    const pair = (k) => (Number(a[k]) > 0 || Number(b[k]) > 0 ? { [k]: [Math.round(Number(a[k]) || 0), Math.round(Number(b[k]) || 0)] } : {});
+    const sqft = Math.round(Number(info.sqft) || 0), yearBuilt = Math.round(Number(info.yearBuilt) || 0);
+    return { ...pair("arv"), ...pair("repairs"), ...(sqft > 0 ? { sqft } : {}), ...(yearBuilt > 0 ? { yearBuilt } : {}) };
+  };
   // `revisedBy`: who moved the number on a revision — "you" (the editor, the
   // held-paper banner), or the machine ("requote", "counter_band"). Only a
   // person's revision approves the number (shared/offer-status.js numberApproved).
@@ -2366,9 +2375,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // this, offerExpiresAt() would keep deriving the old date off createdAt
         // and mark the offer expired while the document says otherwise.
         expiresAt: validUntil.toISOString(),
+        // The ARV and the rehab from → to, the size and the year built: what
+        // Lessons calibrates the underwriter on when a person moved them
+        // (shared/calibration.js, 2026-10-15).
         revisions: [
           ...(existing.revisions || []),
-          { ts: created.toISOString(), from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount, by: revisedBy },
+          { ts: created.toISOString(), from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount, by: revisedBy,
+            ...revisionInputs(existing, fresh) },
         ].slice(-20),
         ...(revisedBy === "you" ? { approved: { amount: Math.round(Number(fresh.cashAmount) || 0), at: created.toISOString(), by: "revise" } } : {}),
       };

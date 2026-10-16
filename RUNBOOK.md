@@ -612,6 +612,40 @@ All the logic lives in `shared/underwrite-checks.js` (`buyerView`), which calls 
 
 **Re-reading the threads.** `node scripts/buyer-objections-report.mjs` repeats the tally. It is read-only, prints ids only, and writes quotes only to a local file with `--quotes`.
 
+### Calibration from your own revisions (2026-10-15)
+
+From the funnel review: our number fell after the agent saw it on 35 of 305
+houses, and hand and machine first numbers were cut about equally (12.6% and
+11%), so the inputs are the problem: rehab read low off the photos, ARV read
+high. When Matt revises an auto-underwrite by hand, the machine now learns how
+far off it was.
+
+- **Recorded.** Every revision (`offer.revisions[]`) now carries `by` (`you`,
+  `requote`, `counter_band`), and `arv` and `repairs` as `[from, to]`, plus the
+  house's `sqft` and `yearBuilt` off the snapshot (`routes/offers.js`
+  `revisionInputs`). Only revisions made from 2026-10-15 have them.
+- **Read.** `calibrationReport` (`shared/calibration.js`) looks at a person's
+  revisions of auto-underwrites (one correction per offer: the machine's
+  figures before the first, his after the last) and adds two recommendations
+  to **Lessons** (`GET /api/dashboard/lessons`), the same shape as the rest:
+  - `rehab_psf_floor`, by era (built before 1950, 1950–79, 1980 on): at least
+    5 corrections in the era, at least 60% of them raising the rehab; the floor
+    is the $/sqft a quarter of his revisions run under;
+  - `arv_haircut`: at least 5 corrections, at least 60% lowering the ARV; the
+    cut is his middle cut, at most 15%.
+  With fewer, Lessons says "Not enough of your revisions yet to calibrate:
+  N of 5" (`calibration.note`). Apply works as for every other row; it saves
+  the whole `underwriteCalibration` block.
+- **Applied.** `settings.underwriteCalibration = { rehabFloorPsf: [{beforeYear,
+  psf}], arvHaircutPct }`, absent by default (`effectiveSettings` leaves it
+  absent; absent changes nothing). When set, the underwriter takes the haircut
+  off the ARV (the basis says "calibrated: less N%") and, when the scan priced
+  a rehab and the house has a size and a year built, adds an allowance line up
+  to the era's $/sqft — never past the heavy band's top, so it can't hold a
+  run. `job.calibration` says what it did.
+- **Check it.** Lessons shows the rows or the note. After Apply, a new
+  underwrite's ARV basis and warnings name the calibration.
+
 ### Subject Property
 
 One contact field, `subject_property` ("Subject Property"), answers: *if I
