@@ -345,6 +345,11 @@ test("a first text over 200 characters is written again shorter once — the sho
   const fine = { reply: "z".repeat(195) };
   assert.equal(await writeShorterFirstText({ draft: fine, kind: "outreach_open", redraft: async () => { throw new Error("not asked"); } }), fine);
   assert.equal(await writeShorterFirstText({ draft: long, kind: "agent_pulse", redraft: async () => { throw new Error("not asked"); } }), long, "only the first text");
+  const cold = await writeShorterFirstText({ draft: long, kind: "agent_pulse", outbound: { coldOpen: true }, redraft: async () => ({ reply: "y".repeat(180) }) });
+  assert.equal(cold.reply.length, 180, "and a cold agent's fresh-listing check-in, which is a first text in all but name");
+  const o = outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { reason: "fresh_listing", segment: "cold", listing: { street: "1 A St" } } });
+  assert.equal(o.coldOpen, true);
+  assert.equal(outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { reason: "fresh_listing", segment: "engaged", listing: { street: "1 A St" } } }).coldOpen, false);
   const pitched = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async () => ({ reply: "We pay cash, as-is." }) });
   assert.equal(pitched, long, "a shorter one that pitches cash isn't taken");
 });

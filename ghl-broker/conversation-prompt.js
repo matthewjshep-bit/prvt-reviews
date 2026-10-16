@@ -1033,9 +1033,15 @@ function openingFor(outbound) {
         `${generic}` +
         `TONE: friendly and professional — how someone local who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
         `${CHECKIN_PERSONALITY} ` +
-        `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
-        // No calendar is connected (2026-10-15): a call is offered, never a time.
-        `If it fits, offer a quick call in a few words, as an easier way to talk ("happy to jump on a quick call if that's easier") — never a day or a time, and still only one question. ` +
+        // A cold agent's fresh listing (2026-10-15) is in effect a second first
+        // text: the short first-text voice, which gets answered.
+        (cold && listingText
+          ? `WHAT TO WRITE: the short first-text voice — two short sentences, under ${OPENER_MAX_CHARS} characters. Open with their first name, once; ` +
+            `name the street; ONE question, whether it's a bit of a project. Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
+            (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the street and the question. ` : "")
+          : `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
+            // No calendar is connected (2026-10-15): a call is offered, never a time.
+            `If it fits, offer a quick call in a few words, as an easier way to talk ("happy to jump on a quick call if that's easier") — never a day or a time, and still only one question. `) +
         // A quiet agent we made an offer to (shared/agent-pulse.js, 2026-10-09)
         // has heard of us: the clause says so, never which house or number.
         `${cold ? (o.offersWithUs ? "One clause on who you are: the local buyer who looked at one of their listings a while back and is always after the next project house. " : "One clause on who you are: someone local who's always looking for the next project house. ") : "Do NOT reintroduce yourself. "}` +

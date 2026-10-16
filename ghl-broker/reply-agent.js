@@ -2983,6 +2983,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       offMarketAskDue: p.offMarketAskDue !== false,
       // The one real thing it names (shared/agent-pulse.js checkInHook).
       hook: pulseHook(p.hook),
+      // A cold agent's fresh listing goes in the short first-text voice,
+      // held under OPENER_MAX_CHARS like the first text (2026-10-15).
+      coldOpen: (p.segment === "cold" || /gone quiet/.test(String(p.segment || ""))) && p.reason === "fresh_listing" && Boolean(p.listing),
       variant: Number(p.variant) || 0 };
   }
   if (kind === "showing_reminder" || kind === "showing_followup") {
@@ -3211,9 +3214,11 @@ export async function writeWithoutOverused({ draft, kind, variant = 0, redraft }
 // A first text over OPENER_MAX_CHARS (200 since 2026-10-15: the short ones
 // get answered) is written again once, shorter; the shorter one goes, unless
 // it picked up carrier words.
-export async function writeShorterFirstText({ draft, kind, redraft }) {
+export async function writeShorterFirstText({ draft, kind, redraft, outbound = null }) {
   const n = String(draft?.reply || "").length;
-  if (kind !== "outreach_open" || n <= OPENER_MAX_CHARS || typeof redraft !== "function") return draft;
+  // A cold agent's fresh-listing check-in is held to the same length (outbound.coldOpen).
+  const short = kind === "outreach_open" || (kind === "agent_pulse" && outbound?.coldOpen === true);
+  if (!short || n <= OPENER_MAX_CHARS || typeof redraft !== "function") return draft;
   const again = await redraft(n).catch(() => null);
   const m = String(again?.reply || "").length;
   return m && m < n && carrierFlags(again.reply).length <= carrierFlags(draft.reply).length ? again : draft;
@@ -3270,10 +3275,10 @@ export async function previewProactive({ client, locationId, saved, store, conta
       draft: await draftWith(previewArgs), kind,
       redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
     }), kind, a.signer),
-    kind, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
+    kind, outbound, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
   }).then((d) => writeWithoutOverused({ draft: d, kind, variant: outbound.variant,
     redraft: async (words) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, overused: words } }), kind, a.signer) }))
-    .then((d) => writeShorterFirstText({ draft: d, kind, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
+    .then((d) => writeShorterFirstText({ draft: d, kind, outbound, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
   draft.intent = kind;
   const gate = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound })(draft);
   const clean = Boolean(gate.ok || (gate.locked && gate.clean));
@@ -3332,10 +3337,10 @@ async function runProactive(job, ctx) {
       draft: await deps.draft(draftArgs), kind,
       redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
     }), kind, a.signer),
-    kind, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
+    kind, outbound, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
   }).then((d) => writeWithoutOverused({ draft: d, kind, variant: outbound.variant,
     redraft: async (words) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, overused: words } }), kind, a.signer) }))
-    .then((d) => writeShorterFirstText({ draft: d, kind, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
+    .then((d) => writeShorterFirstText({ draft: d, kind, outbound, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
   draft.intent = kind;
   if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
   job.summary = draft.summary;

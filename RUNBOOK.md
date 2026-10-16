@@ -4475,6 +4475,15 @@ event's `data.hook` record which kind went. No switch: it rides the check-in's
 own. Check: `POST /api/outreach/pulse/preview {limit: 3}` and read the hook in
 each sample.
 
+**A cold agent's fresh listing reads like a first text (2026-10-15).** A
+cold agent's `fresh_listing` check-in is in effect a second first text, so it
+gets the short first-text voice: their first name, the street, one question
+("a bit of a project?"), under `OPENER_MAX_CHARS` (200). No past house, no
+other ask, no call offer. A draft over 200 is written again once
+(`writeShorterFirstText`, `outbound.coldOpen`). `coldEveryDays` still
+defaults to 60 (Matt sets 30 live). No new switch: it rides the check-in's
+own. Check: `POST /api/outreach/pulse/preview {reason: "fresh_listing"}`.
+
 **Matt's 15 (2026-10-15, off by default).** Matt's own specific texts got
 70% replies. Once a week (`outreachAutopilot.pulse.mattsFifteen {enabled:
 false, size: 15, weekday: 1, hour: 8}`: Monday, from 8am Pacific) the tick

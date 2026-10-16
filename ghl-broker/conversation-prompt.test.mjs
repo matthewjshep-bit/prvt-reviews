@@ -380,6 +380,20 @@ test("a check-in offers a quick call if that's easier, with no day or time — n
   }
 });
 
+// 2026-10-15: short first texts got answered (54% under ~230 characters). A
+// cold agent's fresh listing is in effect a second first text.
+test("a cold agent's fresh listing gets the short first-text voice: their name, the street, one question, under 200 characters", () => {
+  const listing = { street: "123 Main St", city: "Kent", dom: 64, cut: true };
+  const t = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing });
+  assert.match(t, /the short first-text voice — two short sentences, under 200 characters/);
+  assert.match(t, /ONE question, whether it's a bit of a project\. Nothing else: no other ask, no call offer/);
+  assert.doesNotMatch(t, /offer a quick call in a few words/);
+  assert.match(t, /the listing above is the only house in this text/, "no past house");
+  assert.match(outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing, tooLong: 260 }), /YOUR LAST DRAFT WAS 260 CHARACTERS: write it again under 200/);
+  const warm = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing });
+  assert.doesNotMatch(warm, /short first-text voice/, "an agent we know gets the usual check-in");
+});
+
 test("the listing check-in and the thank-you keep their own one thing, whatever the hook says", () => {
   const l = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing: { street: "4706 64th St E", city: "Tacoma", dom: 70 },
     hook: { kind: "mentioned", street: "Pine St", daysAgo: 3 } });
