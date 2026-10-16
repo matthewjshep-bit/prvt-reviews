@@ -681,6 +681,19 @@ test("the spread only holds back a replier's first check-in, never one who has t
   assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60), joinedAt, listings: [listing()] }), ctx({ settings: S14 })).pulseReason, "fresh_listing", "a fresh listing of theirs is news now");
 });
 
+test("a cold agent's old listing ping doesn't make a found replier due the morning they join", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const joinedAt = ago(1);
+  const id = Array.from({ length: 40 }, (_, i) => `slot-${i}`).find((x) => Date.parse(firstCheckInAt({ contactId: x, joinedAt, everyDays: 14 })) > NOW + 2 * DAY);
+  const ping = (segment) => [
+    { type: "agent_pulse_sent", at: ago(40), dedupeKey: "k", data: { segment, reason: "fresh_listing" } },
+    { type: "agent_pulse_texted", at: ago(40), data: { segment, reason: "fresh_listing" } },
+  ];
+  assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60), joinedAt, ledger: ping("cold") }), ctx({ settings: S14 })).status, "not_due");
+  assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60), joinedAt, ledger: ping("engaged") }), ctx({ settings: S14 })).status, "due",
+    "a check-in on the regular clock: the clock decides");
+});
+
 test("a replier who said stop, or sounds annoyed, is not checked in on when they join", () => {
   const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
   const stopped = agent({ lastInboundAt: ago(60), joinedAt: ago(30), events: [{ type: "unsubscribed", at: ago(30) }] });

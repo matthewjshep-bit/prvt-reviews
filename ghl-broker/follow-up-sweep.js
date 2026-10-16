@@ -42,6 +42,11 @@ import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { runCounterHolds } from "./counter-hold.js";
+import { normalizeOutreachAutopilot } from "./outreach-sweep.js";
+import { allEventsSince } from "./contact-events.js";
+import { searchConversations, listConversationMessages, removeContactFromWorkflow } from "./ghl.js";
+import { withRetry } from "./buyer-import.js";
+import { countyName, firstTextHook } from "./shared/outreach-opener.js";
 
 const DAY_MS = 86400000;
 // GHL's burst cap is 100 req / 10s per location; the same pace the enrichment
@@ -324,16 +329,19 @@ const KIND_WORD = { hot_push: "the push to paper", offer_nudge: "the nudge on th
 const CHECKIN_QUIET_HOURS = 72;
 
 /**
- * outreachCandidates({ store, locationId, config, now }) → [candidate]
+ * outreachCandidates({ store, locationId, config, now, ghlCohort }) → [candidate]
  *
  * Cold agents: the app sent a first text (outreach_sent) and nothing has
  * come back. One ladder per contact, counted from the first text. An offer
  * on anything of theirs, a realm-yes, or a deal ends it — they are a warm
  * conversation now, and the offer ladder takes over. Replies end it the
  * usual way (runSweep reads the draft rows for an agent's inbound).
+ *
+ * `ghlCohort` (outreachAutopilot.nudgeGhlCohort): the agents the GHL
+ * workflow texted first join the same ladder (ghlCohortCandidates).
  */
 export const OUTREACH_WINDOW_DAYS = 60;
-export async function outreachCandidates({ store, locationId, config, now = Date.now() }) {
+export async function outreachCandidates({ store, locationId, config, now = Date.now(), ghlCohort = false }) {
   const pb = config?.parties?.agent;
   const ladder = pb?.followUp?.ladders?.outreach_nudge;
   if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
@@ -368,7 +376,180 @@ export async function outreachCandidates({ store, locationId, config, now = Date
       ladder,
     });
   }
+  if (ghlCohort) out.push(...await ghlCohortCandidates({ store, locationId, ladder, now }));
   return out;
+}
+
+/* ---------- the GHL workflow's cohort ---------- */
+
+// Until 2026-10-04 the first text went out from the GHL workflow "AGENT - SMS
+// blast campaign", and the app wrote an `outreach_enrolled` (kind "first")
+// instead of an `outreach_sent`, so the ladder above never counted those
+// agents: their follow-up was left to the GHL follow-up workflow
+// (outreach-followup.js). The 2026-10-16 audit found 195 of them who never
+// answered and had heard nothing in 15 to 45 days; the follow-up workflow had
+// sent about 73 texts since 10/1 in all. With `nudgeGhlCohort` on, the app
+// follows them up on the same ladder, counted from the GHL first text.
+//
+// Everything the sweep reads for them, in one paged walk of the window (the
+// capped read above keeps the newest rows, and these are the oldest).
+const GHL_COHORT_TYPES = ["outreach_enrolled", "outreach_sent", "follow_up_sent", "offer_sent", "realm_yes", "deal_promoted",
+  "text_summary", "call_summary", "agent_pulse_texted", "hand_reply", "checkin_sent", "address_chase_sent"];
+// After the first text, any of these means they are no longer a cold opener.
+const GHL_COHORT_ENDED_BY = new Set(["offer_sent", "realm_yes", "deal_promoted"]);
+// A text of ours since the first one: the app has them already, and
+// "following up on my text" would be stale.
+const OUR_LATER_TEXTS = new Set(["agent_pulse_texted", "hand_reply", "checkin_sent", "address_chase_sent", "follow_up_sent"]);
+
+/**
+ * ghlCohortCandidates({ store, locationId, ladder, now }) → [candidate]
+ *
+ * Agents whose first text was the GHL workflow's, in the same window, with
+ * no app first text (those are the ladder above), no offer, realm-yes or deal
+ * since, and no other text of ours since. Each carries `ghl` — the batch it
+ * was imported from (for the county), the first text's time, and when the
+ * app first nudged them — for the GHL read before the claim (ghlCohortCheck).
+ */
+export async function ghlCohortCandidates({ store, locationId, ladder, now = Date.now() }) {
+  const since = iso(now - OUTREACH_WINDOW_DAYS * DAY_MS);
+  const { events } = await allEventsSince(store, locationId, since, { types: GHL_COHORT_TYPES }, { ceiling: 200000 });
+  const byContact = new Map();
+  for (const e of events || []) {
+    if (!e?.contactId) continue;
+    if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
+    byContact.get(e.contactId).push(e);
+  }
+  const out = [];
+  for (const [contactId, list] of byContact) {
+    list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const first = list.find((e) => e.type === "outreach_enrolled" && e.data?.kind !== "followup");
+    if (!first) continue;
+    if (list.some((e) => e.type === "outreach_sent")) continue;          // the app's own first text: the ladder above
+    const after = (e) => String(e.at) > String(first.at);
+    if (list.some((e) => GHL_COHORT_ENDED_BY.has(e.type) && after(e))) continue;
+    const isNudge = (e) => e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge";
+    if (list.some((e) => OUR_LATER_TEXTS.has(e.type) && after(e) && !isNudge(e))) continue;
+    const nudges = list.filter(isNudge);
+    out.push({
+      kind: "outreach_nudge", party: "agent", contactId, subjectId: contactId,
+      offerId: null, address: first.address || "", startedAt: first.at, county: "",
+      ghl: { batchId: first.data?.batchId || null, firstAt: first.at, nudgedAt: nudges[0]?.at || null },
+      sentSteps: nudges.map((e) => Number(e.data?.step)),
+      lastInboundAt: list.filter((e) => e.type === "text_summary" || e.type === "call_summary").at(-1)?.at || null,
+      lastTouchAt: nudges.at(-1)?.at || null,
+      ladder,
+    });
+  }
+  return out;
+}
+
+// A workflow that sends its first text in parts (or a card after it) sent
+// one first text: anything GHL sent within these hours of the first is it.
+export const FIRST_TEXT_GRACE_HOURS = 6;
+const UNDELIVERED = new Set(["failed", "undelivered"]);
+const msgTime = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : Date.parse(v || ""); };
+
+/**
+ * afterFirstText(messages, { appSince }) → { wroteBack, firstTextAt, laterAt }
+ *
+ * Pure. One agent's GHL thread (raw conversation messages, any order),
+ * read for the GHL cohort. `wroteBack`: anything from them, a text or a
+ * call. `firstTextAt`: our oldest message. `laterAt`: our newest message
+ * that went more than FIRST_TEXT_GRACE_HOURS after it and wasn't marked
+ * failed — the GHL follow-up workflow, or a person, already followed up.
+ * `appSince` (the app's first nudge to them) ends that count: what went from
+ * then on is our own ladder.
+ */
+export function afterFirstText(messages = [], { appSince = null } = {}) {
+  const rows = (messages || []).map((m) => ({
+    dir: String(m?.direction || "").toLowerCase(),
+    at: msgTime(m?.dateAdded),
+    type: String(m?.messageType || m?.type || "").toUpperCase(),
+    status: String(m?.status || "").toLowerCase(),
+  })).filter((m) => Number.isFinite(m.at) && !/ACTIVITY|OPPORTUNITY/.test(m.type));
+  const wroteBack = rows.some((m) => m.dir === "inbound");
+  const ours = rows.filter((m) => m.dir === "outbound").sort((a, b) => a.at - b.at);
+  if (!ours.length) return { wroteBack, firstTextAt: null, laterAt: null };
+  const first = ours[0].at;
+  const until = msgTime(appSince);
+  const later = ours.filter((m) => m.at > first + FIRST_TEXT_GRACE_HOURS * 3600000 && !UNDELIVERED.has(m.status)
+    && !(Number.isFinite(until) && m.at >= until));
+  return { wroteBack, firstTextAt: iso(first), laterAt: later.length ? iso(later.at(-1).at) : null };
+}
+
+// One agent's GHL thread: their few latest conversations, the newest page of
+// each. A cold thread is a handful of messages. A 429 waits and tries again.
+async function readGhlThread(client, locationId, contactId) {
+  const { conversations = [] } = (await withRetry(() => searchConversations(client, locationId, { contactId, limit: 10 }))) || {};
+  const messages = [];
+  for (const c of conversations.slice(0, 3)) {
+    const r = (await withRetry(() => listConversationMessages(client, c.id, { limit: 100 }))) || {};
+    messages.push(...(r.messages || []));
+  }
+  return messages;
+}
+
+/**
+ * ghlCohortCheck({ client, locationId, store, c, deps, rowCache }) → { skip } | { county, address }
+ *
+ * Before the app claims a nudge for one of the GHL cohort: their GHL thread
+ * (`deps.ghlThread(contactId)` in tests). They wrote back there, GHL texted
+ * them again after the first text, or there's no first text to follow up:
+ * skipped, unclaimed. A thread that can't be read is skipped too: no
+ * follow-up on a guess. Otherwise the county their text names, from the
+ * agent's outreach row (the listing's own county) or else the batch the
+ * sweep imported them into ("Autopilot · Pierce, WA").
+ */
+export async function ghlCohortCheck({ client, locationId, store, c, deps = {}, rowCache = new Map() }) {
+  let messages;
+  try {
+    messages = typeof deps.ghlThread === "function" ? await deps.ghlThread(c.contactId) : await readGhlThread(client, locationId, c.contactId);
+  } catch (e) {
+    if (e?.status === 401 || e?.status === 403) return { skip: "can't read their GHL thread (the token lacks conversations.readonly)" };
+    return { skip: `couldn't read their GHL thread: ${String(e?.message || e).slice(0, 120)}` };
+  }
+  const t = afterFirstText(messages, { appSince: c.ghl?.nudgedAt || null });
+  if (t.wroteBack) return { skip: "they wrote back in GHL" };
+  if (!t.firstTextAt) return { skip: "GHL shows no first text to follow up" };
+  if (t.laterAt) return { skip: "GHL texted them again after the first text" };
+
+  const batchId = c.ghl?.batchId || null;
+  if (batchId && !rowCache.has(batchId)) {
+    const [rows, batch] = await Promise.all([
+      typeof store.listOutreachAgents === "function" ? store.listOutreachAgents(locationId, { batchId, status: "imported", limit: 50000 }).catch(() => []) : [],
+      typeof store.getOutreachBatch === "function" ? store.getOutreachBatch(locationId, batchId).catch(() => null) : null,
+    ]);
+    rowCache.set(batchId, { rows: rows || [], batch });
+  }
+  const { rows = [], batch = null } = (batchId && rowCache.get(batchId)) || {};
+  const row = rows.find((r) => r?.contactId === c.contactId || r?.doc?.ghl?.contactId === c.contactId) || null;
+  const market = /^Autopilot · /.test(String(batch?.name || "")) ? String(batch.name).replace(/^Autopilot · (?:Off-market · )?/, "") : "";
+  const hook = firstTextHook(row?.doc, { base: { address: c.address } });
+  // The listing the first text was about is the event's; the row's hook may
+  // have moved on to a newer listing of theirs since, so its county counts
+  // only while it is the same house.
+  const sameHouse = Boolean(c.address && hook.address && sameStreet(c.address, hook.address));
+  return { county: countyName(sameHouse || !c.address ? hook.county : "", market, hook.county), address: c.address || hook.address || "" };
+}
+
+/**
+ * leaveGhlFollowUp({ client, store, locationId, contactId, workflowId, deps }) → "removed" | "not_in" | "failed"
+ *
+ * Out of the GHL follow-up workflow before the app's nudge starts, so GHL
+ * can't text them the same follow-up. Best-effort: a contact who isn't in it
+ * (GHL 4xx) or a failed call never holds the nudge. A removal is written down
+ * as `workflow_left` (never `outreach_left`, which means they wrote back).
+ */
+export async function leaveGhlFollowUp({ client, store, locationId, contactId, workflowId, deps = {}, now = Date.now() }) {
+  const remove = typeof deps.removeFromWorkflow === "function" ? deps.removeFromWorkflow : (id, wf) => removeContactFromWorkflow(client, id, wf);
+  try { await remove(contactId, workflowId); }
+  catch (e) { return e?.status >= 400 && e?.status < 500 ? "not_in" : "failed"; }
+  await recordEvent({
+    store, locationId, contactId, party: "agent", type: "workflow_left", at: iso(now), source: "sweep", ref: workflowId,
+    dedupeKey: `workflow_left:${contactId}:${workflowId}:outreach_nudge`,
+    data: { workflowId, workflowName: "the GHL outreach follow-up", why: "the app's follow-up took them over" },
+  }).catch(() => {});
+  return "removed";
 }
 
 /**
@@ -471,6 +652,11 @@ async function runSweep(job, ctx) {
   const start = typeof deps.startProactive === "function" ? deps.startProactive : startProactive;
   // Injectable so a test suite isn't paced at GHL's rate limit.
   const pace = Number.isFinite(deps.paceMs) ? deps.paceMs : PACE_MS;
+  // The GHL workflow's cohort (ghlCohortCandidates): on with the switch, and
+  // their GHL thread read at this pace (the loop's own `pace` is the person's).
+  const oa = normalizeOutreachAutopilot(saved?.outreachAutopilot);
+  const ghlPace = pace;
+  const rowCache = new Map();
 
   const push = (row) => {
     job.results.push(row);
@@ -520,7 +706,7 @@ async function runSweep(job, ctx) {
     ...(await agentCandidates({ store, locationId, config, now }))
       .sort((a, b) => Number(focusFor(b.contactId)?.id === b.offerId) - Number(focusFor(a.contactId)?.id === a.offerId)),
     ...onTheirOwn,
-    ...(await outreachCandidates({ store, locationId, config, now })),
+    ...(await outreachCandidates({ store, locationId, config, now, ghlCohort: oa.nudgeGhlCohort })),
     ...(await investorCandidates({ store, locationId, config, now })),
   ];
   job.considered = candidates.length;
@@ -784,8 +970,23 @@ async function runSweep(job, ctx) {
       continue;
     }
 
+    // The GHL workflow's cohort: their GHL thread decides, read before
+    // anything is claimed (a dry run reads it too). They wrote back there, or
+    // GHL already followed up: not ours, and nothing is claimed.
+    if (c.ghl) {
+      const check = await ghlCohortCheck({ client, locationId, store, c, deps, rowCache });
+      if (ghlPace > 0) await sleep(ghlPace);
+      if (check.skip) {
+        job.skipped++;
+        push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: check.skip, ghl: true });
+        continue;
+      }
+      if (check.county) c.county = check.county;
+      if (check.address) c.address = check.address;
+    }
+
     if (job.dryRun) {
-      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "would send", ...(aside ? { aside: aside.address } : {}) });
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "would send", ...(aside ? { aside: aside.address } : {}), ...(c.ghl ? { ghl: true, county: c.county || "" } : {}) });
       if (c.party === "agent") startedFor.set(c.contactId, KIND_WORD[c.kind] || c.kind);
       continue;
     }
@@ -804,6 +1005,11 @@ async function runSweep(job, ctx) {
       push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: "already claimed" });
       continue;
     }
+    // One system follows them up: out of the GHL follow-up workflow before
+    // the app's nudge starts. Best-effort; it never holds the nudge.
+    const leftGhl = c.ghl && oa.followUpWorkflowId
+      ? await leaveGhlFollowUp({ client, store, locationId, contactId: c.contactId, workflowId: oa.followUpWorkflowId, deps, now })
+      : null;
 
     try {
       const offer = c.offerId ? await store.getOffer(c.offerId).catch(() => null) : null;
@@ -835,7 +1041,8 @@ async function runSweep(job, ctx) {
             await store.updateOffer(full.id, full).catch(() => {});
           }
         }
-        push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "started", jobId: r?.job?.id || null, ...(aside ? { aside: aside.address } : {}) });
+        push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "started", jobId: r?.job?.id || null, ...(aside ? { aside: aside.address } : {}),
+          ...(c.ghl ? { ghl: true, ...(leftGhl ? { ghlFollowUp: leftGhl } : {}) } : {}) });
         // The passed house's rung went out on the nudge: claimed now, so its
         // ladder moves on and the month before the next mention starts here.
         if (aside) {

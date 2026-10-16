@@ -45,6 +45,7 @@ import {
 import {
   startOutreachFollowUp, getOutreachFollowUpJob, CURSOR_NAME as FOLLOWUP_CURSOR, OUTREACH_FOLLOWUP_HOUR,
 } from "../outreach-followup.js";
+import { startReplierBackfill, getReplierBackfillJob } from "../replier-backfill.js";
 
 // Subject Property is created and seeded here but OWNED by the conversation
 // (see its definition in enrich.js) — hence its own list rather than a new
@@ -1715,6 +1716,28 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const saved = await getSettings(locationId);
       const job = startOutreachFollowUp({ locationId, client, saved, store, dryRun: req.body?.dryRun !== false, trigger: "manual" });
       res.status(202).json({ ok: true, job });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The replier backfill (replier-backfill.js) without the Render Shell.
+  // Body: { dryRun = true, includePool = true, limit }. Agents who wrote back
+  // in GHL that the app has no reply from join the check-in; the opted out
+  // are stopped. A dry run reads GHL and counts. Counts only, never a name,
+  // phone or word: GET has the progress and the result.
+  router.post("/repliers/backfill", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      const job = startReplierBackfill({ client, locationId, store, dryRun: b.dryRun !== false, includePool: b.includePool !== false,
+        limit: Math.max(0, Math.round(Number(b.limit)) || 0), deps: router.replierBackfillDeps || {} });
+      res.status(202).json({ ok: true, job });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.get("/repliers/backfill", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, job: getReplierBackfillJob(locationId) });
     } catch (err) { fail(res, err); }
   });
 

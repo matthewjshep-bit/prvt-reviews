@@ -288,7 +288,7 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   // back from it: the check-in is the one clock.
   const drips = tierDrips({ pulse: settings, conversationAi: saved.conversationAi, workflows });
   const planSettings = { ...settings, replacesWorkflowIds: drips.map((d) => d.id) };
-  const plan = pickPulseAgents({ agents: agents.filter((a) => !triedToday.has(a.contactId)), settings: planSettings, config, houses, outreachFollowUpDays: oa.followUpDays, seats, now });
+  const plan = pickPulseAgents({ agents: agents.filter((a) => !triedToday.has(a.contactId)), settings: planSettings, config, houses, outreachFollowUpDays: oa.followUpDays, outreachFollowUpOn: oa.followUpEnabled, seats, now });
   // Repliers in the pool by their reply alone with no join day on record:
   // the run writes one for each (agent_pulse_joined), so their spread holds.
   const unjoined = agents.filter((a) => a.joinedByReply && !a.joinedAt).map((a) => a.contactId);
@@ -325,7 +325,7 @@ export async function agentRoster({ locationId, saved = {}, store = defaultStore
     const name = a.name || a.offers.find((o) => o?.contactName)?.contactName || a.drafts.find((d) => d?.contactName)?.contactName || "";
     const row = { contactId: a.contactId, name, tier: t.tier, why: t.why, address: t.address || "", lastInboundAt: a.lastInboundAt };
     if (t.tier === "t2") {
-      const v = evaluateAgent(a, { settings, config, houses, outreachFollowUpDays: oa.followUpDays, now });
+      const v = evaluateAgent(a, { settings, config, houses, outreachFollowUpDays: oa.followUpDays, outreachFollowUpOn: oa.followUpEnabled, now });
       row.segment = v.segment || null;
       row.care = careLine(v, settings.enabled);
     }
@@ -515,7 +515,7 @@ export const getMattsFifteenJob = (locationId) => fifteenJobs.get(locationId) ||
  */
 export async function planMattsFifteen({ locationId, saved = {}, store = defaultStore, now = Date.now(), tierCards = null }) {
   const { agents, settings, config, oa, houses } = await loadPulseAgents({ locationId, saved, store, now, tierCards });
-  return { picks: pickMattsFifteen({ agents, settings, config, houses, outreachFollowUpDays: oa.followUpDays, now }), settings };
+  return { picks: pickMattsFifteen({ agents, settings, config, houses, outreachFollowUpDays: oa.followUpDays, outreachFollowUpOn: oa.followUpEnabled, now }), settings };
 }
 
 /**

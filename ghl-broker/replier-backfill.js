@@ -17,7 +17,15 @@
 // Without `write` it only reads (GHL and the store) and counts. The result
 // is counts only: no names, phones or words of theirs.
 //
-// Run by ghl-broker/scripts/backfill-replier-profiles.mjs.
+// `includePool` (2026-10-16): agents already IN the pool that the app thinks
+// never replied are read too. 59+ of them had written back in GHL (mostly to
+// the old workflow texts in August and September), so the check-in held
+// them as "cold" and texted them only about a fresh listing of theirs. The
+// same marker makes them engaged, on the regular cadence, their first
+// check-in spread from the run; the same stop path takes the opted out.
+//
+// Run by ghl-broker/scripts/backfill-replier-profiles.mjs, or as a job from
+// POST /api/outreach/repliers/backfill (startReplierBackfill, below).
 
 import { store as defaultStore } from "./store.js";
 import { ensureProfile, recordEvent } from "./contact-record.js";
@@ -26,7 +34,7 @@ import { conversationConfig, markUnsubscribed } from "./reply-agent.js";
 import { loadPulseAgents, pulseTierCards } from "./agent-pulse.js";
 import { mapPool } from "./map-pool.js";
 import { withRetry } from "./buyer-import.js";
-import { classifyReplierThread } from "./shared/agent-pulse.js";
+import { classifyReplierThread, agentSegment, agentStops } from "./shared/agent-pulse.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // GHL's 100 messages a page; a cold outreach thread is a handful.
@@ -66,15 +74,37 @@ async function readThread({ client, locationId, contactId, deps }) {
 }
 
 /**
- * runReplierBackfill({ client, locationId, store, write, deps, concurrency, limit, now, onProgress })
- *   → { outreachRows, outreachContacts, alreadyInPool, investors, candidates, read, failed, kinds, why, written }
+ * poolNeverReplied({ agents, investors, config, now }) → [contactId]
+ *
+ * The pool agents the app has no reply from: nothing inbound on their
+ * timeline or their drafts, and no offer only their answer could have moved
+ * (agentSegment "cold"). Never a buyer, and never one already stopped
+ * (opted out, a do-not-text or bot-off tag, a stop on the thread): there is
+ * nothing to change for them.
+ */
+export function poolNeverReplied({ agents = [], investors = new Set(), config = {}, now = Date.now() } = {}) {
+  const botOffTags = config?.routing?.botOffTags || [];
+  return (agents || []).filter((a) => a?.contactId && !investors.has(a.contactId) && !a.lastInboundAt
+    && !(a.drafts || []).some((d) => String(d?.inbound || "").trim())
+    && agentSegment({ offers: a.offers || a.current || [] }) === "cold"
+    && !agentStops({ drafts: a.drafts || [], events: a.events || [], tags: a.tags || [], botOffTags, now }))
+    .map((a) => a.contactId);
+}
+
+/**
+ * runReplierBackfill({ client, locationId, store, write, includePool, deps, concurrency, limit, now, onProgress })
+ *   → { outreachRows, outreachContacts, alreadyInPool, investors, candidates, read, failed, kinds, why, written, pool? }
+ *
+ * `pool` (with `includePool`): { candidates, hadReply, read, kinds } for the
+ * pool agents read — `hadReply` were skipped because a draft holds a reply.
+ * `limit` caps the whole read, the agents outside the pool first.
  *
  * `deps` (tests): getContact, searchConversations(contactId),
  * listConversationMessages(conversationId, { lastMessageId }),
  * markUnsubscribed, tierCards, paceMs.
  */
 export async function runReplierBackfill({
-  client, locationId, store = defaultStore, write = false, deps = {}, concurrency = 3, limit = 0, now = Date.now(), onProgress = null,
+  client, locationId, store = defaultStore, write = false, includePool = false, deps = {}, concurrency = 3, limit = 0, now = Date.now(), onProgress = null,
 }) {
   const saved = (await store.getOfferSettings(locationId)) || {};
   const optOut = conversationConfig(saved).optOut;
@@ -84,7 +114,7 @@ export async function runReplierBackfill({
 
   // Who the check-in already has (with the Tier 2/3 cards), and the buyers.
   const tierCards = await pulseTierCards(client, locationId, deps);
-  const { agents } = await loadPulseAgents({ locationId, saved, store, now, tierCards });
+  const { agents, config } = await loadPulseAgents({ locationId, saved, store, now, tierCards });
   const pool = new Set(agents.map((a) => a.contactId));
   const investors = new Set(((await store.listContactProfiles(locationId, { party: "investor", limit: 50000 })) || []).map((p) => p.contactId));
   const { ids, rows } = await outreachContactIds(store, locationId);
@@ -100,11 +130,26 @@ export async function runReplierBackfill({
     else candidates.push(id);
   }
   out.candidates = candidates.length;
+  const inPool = new Set(includePool ? poolNeverReplied({ agents, investors, config, now }) : []);
+  if (includePool) {
+    out.pool = { candidates: inPool.size, hadReply: 0, read: 0, kinds: {} };
+    candidates.push(...inPool);
+  }
   if (limit > 0) candidates = candidates.slice(0, limit);
 
   const joinedAt = new Date(now).toISOString();
   await mapPool(candidates, Math.max(1, concurrency), async (contactId) => {
     try {
+      // A pool agent with a reply in their drafts: the app saw them answer,
+      // whatever the timeline lacks. Not read, not written.
+      if (inPool.has(contactId)) {
+        const drafts = (await store.listReplyDrafts(locationId, { contactId, limit: 50 }).catch(() => [])) || [];
+        if (drafts.some((d) => String(d?.inbound || "").trim())) {
+          out.pool.hadReply++;
+          try { onProgress?.(out); } catch { /* the caller's */ }
+          return;
+        }
+      }
       const messages = await readThread({ client, locationId, contactId, deps });
       // Their GHL record only when they wrote back: DND and do-not-text tags.
       let v = classifyReplierThread({ messages, optOut });
@@ -112,6 +157,7 @@ export async function runReplierBackfill({
       out.read++;
       out.kinds[v.kind] = (out.kinds[v.kind] || 0) + 1;
       out.why[v.why] = (out.why[v.why] || 0) + 1;
+      if (inPool.has(contactId)) { out.pool.read++; out.pool.kinds[v.kind] = (out.pool.kinds[v.kind] || 0) + 1; }
       if (write && v.kind === "engaged") {
         await ensureProfile({ store, locationId, contactId, party: "agent" });
         out.written.profiles++;
@@ -135,4 +181,42 @@ export async function runReplierBackfill({
     if (pace) await sleep(pace);
   });
   return out;
+}
+
+/* ---------- as a job (POST /api/outreach/repliers/backfill) ---------- */
+
+// In memory, like the other jobs: a restart loses the job and corrupts
+// nothing, and a rerun is safe (the marker has a dedupe key, and the written
+// agents have a reply on record and are not read again).
+const jobs = new Map();
+export const getReplierBackfillJob = (locationId) => jobs.get(locationId) || null;
+export function _resetReplierBackfillJobs() { jobs.clear(); }
+
+/**
+ * startReplierBackfill({ client, locationId, store, dryRun, includePool, limit, deps, now }) → job
+ *
+ * The backfill without the Render Shell. A dry run (the default) reads GHL
+ * and counts, writing nothing. The job carries counts only — `progress`
+ * while it reads, `result` (runReplierBackfill's counts) when done — never a
+ * name, a phone or a word of theirs. Three threads at a time, paced, as the
+ * script reads them.
+ */
+export function startReplierBackfill({ client, locationId, store = defaultStore, dryRun = true, includePool = true, limit = 0, deps = {}, now = Date.now() }) {
+  if (jobs.get(locationId)?.status === "running") {
+    throw Object.assign(new Error("a replier backfill is already running for this location"), { http: 409 });
+  }
+  const job = {
+    id: `rb-${Date.now().toString(36)}`, locationId, dryRun: dryRun !== false, includePool: includePool !== false,
+    limit: Math.max(0, Math.round(Number(limit)) || 0),
+    status: "running", startedAt: new Date().toISOString(), finishedAt: null,
+    progress: { read: 0, failed: 0 }, result: null, error: null,
+  };
+  jobs.set(locationId, job);
+  runReplierBackfill({
+    client, locationId, store, write: !job.dryRun, includePool: job.includePool, limit: job.limit, deps, now,
+    onProgress: (o) => { job.progress = { read: o.read, failed: o.failed, ...(o.pool ? { poolHadReply: o.pool.hadReply } : {}) }; },
+  }).then((r) => { job.result = r; job.status = "done"; })
+    .catch((e) => { job.status = "error"; job.error = String(e?.message || e).slice(0, 300); })
+    .finally(() => { job.finishedAt = new Date().toISOString(); });
+  return job;
 }
