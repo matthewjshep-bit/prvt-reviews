@@ -3915,6 +3915,21 @@ The whole business as one line, measured the way a factory floor is: is each sta
 - Targets are in Settings → Line targets (`settings.lineTargets`, `normalizeLineTargets`). Defaults are the Agent Method's: 10 new agents a day, 10 offers a day, 120 offers to a contract, 2 deals a month, $15K a deal, every replied agent touched in 21 days, every buyer in 30.
 - The method line says what the month's offers should have made ("150 offers → 1.3 contracts expected") beside what they did.
 
+**Supply (2026-10-15).** New-agent supply fell from 125 a day to 2 and
+nothing said so. `supplyCheck` (`shared/line.js`, on `buildLine` as
+`supply`) counts first texts over the last 7 days. Below
+`lineTargets.minNewAgentsPerDay` (default 5; 0 turns it off; Settings → Line
+targets "Warn below") it is `low`. `why` reads the outreach sweep's last run
+(`job_cursors` "outreach", `doc.last`):
+- the autopilot is off, or the sweep has no run on record;
+- the last run failed;
+- the RentCast budget is spent;
+- the Conversation AI's daily cap left no room;
+- the pool is dry (no picks, "nobody new", or half the picks already in GHL).
+The Line shows a "New agents are drying up" card above Stations, with the
+last sweep's counts (on file, picked, imported, already in GHL,
+never-texted, off-market). Check: `GET /api/dashboard/line` → `supply`.
+
 **Waiting between stations** (`cycleTimes`). Median and slowest-tenth days for each hop that *finished* in the last 30 days:
 - priced → in front of the agent (letter or float);
 - in front of them → their first answer;

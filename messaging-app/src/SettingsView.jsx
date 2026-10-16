@@ -778,6 +778,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         </p>
         <div className="grid grid-cols-2 gap-3">
           <Num label="New agents texted" suffix="a day" value={lineTargets.newAgentsPerDay} onChange={setLine("newAgentsPerDay")} />
+          <Num label="Warn below (new agents)" suffix="a day" value={lineTargets.minNewAgentsPerDay} onChange={setLine("minNewAgentsPerDay")} />
           <Num label="Offers out" suffix="a day" value={lineTargets.offersPerDay} onChange={setLine("offersPerDay")} />
           <Num label="Offers to one contract" value={lineTargets.offersPerContract} onChange={setLine("offersPerContract")} />
           <Num label="Deals" suffix="a month" value={lineTargets.dealsPerMonth} onChange={setLine("dealsPerMonth")} />

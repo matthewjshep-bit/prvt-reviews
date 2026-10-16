@@ -64,6 +64,32 @@ function Stations({ stations = [], method }) {
   );
 }
 
+// New agents coming onto the line (shared/line.js supplyCheck, 2026-10-15):
+// a line of its own when they fall under the day's minimum, and why.
+function Supply({ supply }) {
+  if (!supply || !supply.low) return null;
+  const last = supply.last;
+  return (
+    <Card title="New agents are drying up">
+      <div className="text-sm text-amber-800">
+        {supply.perDay} new agents texted a day over the last 7 days — under the {n(supply.target)} a day you set ({n(supply.firstTexts7)} first texts, {n(supply.found7)} found).
+      </div>
+      {supply.why?.length ? (
+        <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm text-slate-700">
+          {supply.why.map((w) => <li key={w.key}>{w.text}</li>)}
+        </ul>
+      ) : null}
+      {last ? (
+        <div className="mt-1 text-[11px] text-slate-500">
+          Last sweep{last.county ? ` (${last.county})` : ""}: {n(last.candidates)} on file, {n(last.picked)} picked, {n(last.imported)} imported, {n(last.skippedExisting)} already in GHL
+          {last.neverTexted ? ` · ${n(last.neverTexted)} never-texted agents texted` : ""}
+          {last.offMarket ? ` · off-market: ${n(last.offMarket.picked)} picked in ${last.offMarket.county || "a county"}` : ""}
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
 function Cycle({ cycle = [] }) {
   return (
     <Card title="Waiting between stations — hops finished in the last 30 days">
@@ -387,6 +413,7 @@ export function LineBody({ data }) {
       <Paths paths={data.paths} />
       <Kinds kinds={data.kinds} />
       <Sources sources={data.sources} />
+      <Supply supply={data.supply} />
       <Stations stations={data.stations} method={data.method} />
       <div className="grid gap-4 lg:grid-cols-2">
         <Cycle cycle={data.cycle} />
