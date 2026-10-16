@@ -46,7 +46,7 @@ test("a check-in that still pitches is held by the gate", () => {
   assert.equal(g.ok, false);
   assert.ok(g.flags.some((f) => /carriers block/.test(f)), g.flags.join(" · "));
   assert.equal(evaluateReplyGates({ draft, party: "agent" }).flags.some((f) => /carriers block/.test(f)), false, "only where asked: a float to an agent we're talking to is fine");
-  assert.deepEqual([...CARRIER_CHECKED_KINDS].sort(), ["agent_pulse", "buyer_pulse", "outreach_nudge", "outreach_open"]);
+  assert.deepEqual([...CARRIER_CHECKED_KINDS].sort(), ["agent_pulse", "blast_nudge", "buyer_pulse", "dataroom_nudge", "deal_followup", "outreach_nudge", "outreach_open", "showing_followup", "showing_reminder"]);
 });
 
 test("a machine text with blocked words is written again without them, once", async () => {
@@ -73,6 +73,47 @@ test("a deal text without its link asks if they want it", () => {
     assert.doesNotMatch(t, /https?:/);
     assert.match(t, /details\?|Interested\?|package\./);
   }
+});
+
+/* ---------- 2026-10-15: deal texts to buyers ---------- */
+
+// October's buyer texts: 74 of 678 blocked (10.9%). The cold deal texts were
+// a third of them ("…it's Matt, a local investor… got one under contract…"),
+// and the walkthrough invites carrying a price another third; the buyer
+// check-ins, which already carried the carrier rule, went through.
+test("a deal text to a buyer who never replied carries no word carriers block", async () => {
+  const { blastIntro } = await import("./dispo-autopilot.js");
+  const { carrierFlags } = await import("./shared/carrier-words.js");
+  const facts = { address: "41 Alder Way, Kent, WA 98030", city: "Kent", price: 383000, arv: 520000, repairs: 60000, beds: 3, baths: 2 };
+  const strangers = [
+    { tags: ["investor", "dispo-source-county", "dispo-city-kent"] },
+    { tags: ["investor", "dispo-source-county", "dispo-type-mobile-home", "dispo-city-auburn"] },
+    { tags: ["investor", "dispo-source-fb-warei"] },
+  ];
+  for (const inv of strangers) {
+    const intro = blastIntro(inv);
+    assert.ok(intro, "a stranger is told how we found them");
+    for (const variant of [0, 1, 2]) {
+      for (const ask of ["", "Walkthrough is Thu 4–5pm. Can you make it?"]) {
+        // The operator's line off the package headline can say it too.
+        const t = blastMessage({ ...facts, firstName: "Sam Buyer", variant, intro, ask, linkOnReply: true, note: "Cash only, sold as-is" });
+        assert.deepEqual(carrierFlags(t), [], t);
+      }
+    }
+  }
+});
+
+test("the deal follow-ups and walkthrough texts to buyers carry the carrier rule and are held if they slip", () => {
+  const kinds = ["blast_nudge", "dataroom_nudge", "deal_followup", "showing_reminder", "showing_followup"];
+  for (const kind of kinds) {
+    assert.ok(CARRIER_CHECKED_KINDS.has(kind), kind);
+    const t = outboundOpening({ kind, address: "41 Alder Way, Kent, WA 98030", street: "41 Alder Way", windowLabel: "Thu 4–5pm" });
+    assert.match(t, /phone carriers block/i, kind);
+  }
+  const draft = { intent: "blast_nudge", confidence: "high", needsHuman: false, reply: "Hey Sam, still have 41 Alder Way if you want it. Cash buyers close fast on this one." };
+  const g = evaluateReplyGates({ draft, party: "investor", carrierCheck: CARRIER_CHECKED_KINDS.has("blast_nudge") });
+  assert.equal(g.ok, false);
+  assert.ok(g.flags.some((f) => /carriers block/.test(f)), g.flags.join(" · "));
 });
 
 // The "for your records" letter that went live today opened differently from

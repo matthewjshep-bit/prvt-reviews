@@ -57,7 +57,7 @@ test("a mobile home an agent texts is held as not our kind, before any comp sear
     assert.ok(await until(() => ["held", "done", "error"].includes(job.status)), `still ${job.status}/${job.phase}`);
     assert.equal(job.status, "held", job.error || "");
     assert.ok(KIND_HOLD.test(job.held[0]), job.held[0]);
-    assert.match(job.held[0], /a mobile home \(single-family only right now\)/);
+    assert.match(job.held[0], /a mobile home \(we don't buy mobile or manufactured homes\)/);
     assert.equal(calls.search, 0, "no comp search was bought");
     const draft = await store.getOffer(job.offerId);
     assert.equal(draft.status, "draft");

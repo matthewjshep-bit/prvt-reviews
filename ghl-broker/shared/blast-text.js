@@ -19,6 +19,7 @@
 
 import { buyerFacts } from "./underwrite-checks.js";
 import { assetOf, assetPhrase } from "./asset-type.js";
+import { carrierFlags } from "./carrier-words.js";
 
 const kText = (n) => {
   const v = Math.round(Number(n) || 0);
@@ -41,14 +42,16 @@ export function pickedRehabLevel(offer = {}) {
 
 // The operator's own line, from the dataroom headline. Their copy, so it is
 // trimmed rather than rewritten — but a dollar sign or a URL in a bulk text is
-// the carrier's business, not theirs, and neither survives.
+// the carrier's business, not theirs, and neither survives. A line that says
+// what the carriers block ("cash only, sold as-is") is left out whole rather
+// than cut into something nobody wrote (2026-10-15).
 export function blastNote(text = "", max = 90) {
   const clean = String(text || "")
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/\$/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (!clean || clean.length > max) return "";
+  if (!clean || clean.length > max || carrierFlags(clean).length) return "";
   return clean.replace(/[.!?]+$/, "");
 }
 
@@ -137,6 +140,43 @@ function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, 
 }
 
 /**
+ * presellMessage({ firstName, address, city, price, …, variant, intro }) → string
+ *
+ * A listed house we're about to sign, put to a few buyers first (shared/
+ * pre-contract.js, 2026-10-15: of eight listed-house contracts seven fell
+ * through, one signed with no buyer at all). Nothing is signed, so it never
+ * says "under contract", and it carries no link — the package waits for
+ * their answer. The same facts and figures a deal text has.
+ */
+export function presellMessage({
+  firstName = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0,
+  yearBuilt = 0, rehab = "", arv = 0, repairs = 0, variant = 0, kind = "", intro = "", septic = false, systems = false,
+} = {}) {
+  const first = String(firstName || "").trim().split(/\s+/)[0] || "";
+  const street = String(address || "").split(",")[0].trim() || "a house";
+  const where = city ? ` in ${city}` : "";
+  const size = [beds ? `${beds}bd` : "", baths ? `${baths}ba` : "", sqft ? `${Math.round(sqft).toLocaleString("en-US")} sqft` : ""].filter(Boolean).join(" ");
+  const built = Number(yearBuilt) > 1500 ? `built ${Math.round(yearBuilt)}` : "";
+  const spec = [String(kind || "").trim(), size, built, septic ? "septic" : "", REHAB_WORDS[rehab] ? `${REHAB_WORDS[rehab]} rehab` : ""].filter(Boolean).join(", ");
+  const money = [
+    kText(price) ? `Buyer price around ${kText(price)}` : "",
+    kText(arv) ? `ARV around ${kText(arv)}` : "",
+    kText(repairs) ? `rehab about ${kText(repairs)}${systems ? " incl. systems" : ""}` : "",
+  ].filter(Boolean).join(", ");
+  const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
+  const hi = first ? `Hey ${first}` : "Hey";
+  const lead = how ? `${hi} — ${how}. ` : `${hi}, `;
+  const cap = (s) => (how ? `${s.charAt(0).toUpperCase()}${s.slice(1)}` : s);
+  const v = Math.abs(Math.round(Number(variant) || 0)) % 3;
+  const body = v === 0
+    ? `${cap("lining one up")}${where}: ${street}${spec ? `, ${spec}` : ""}. ${money ? `${money}. ` : ""}Would it fit what you're buying?`
+    : v === 1
+      ? `${cap("might have one coming")}${where}: ${street}${spec ? `, ${spec}` : ""}. ${money ? `${money}. ` : ""}If I lock it up, want first look?`
+      : `${cap("working on")} ${street}${where}${spec ? ` (${spec})` : ""}. ${money ? `${money}. ` : ""}Would you want it at that number?`;
+  return `${lead}${body}`;
+}
+
+/**
  * bundleMessage(factsList, { firstName, linkOnReply, intro, variant }) → string
  *
  * Two or three deals for one buyer, in one text (Matt, 2026-10-05: a buyer
@@ -219,12 +259,13 @@ export function dealFacts(offer = {}, { price = 0, note = "" } = {}) {
 /**
  * blastSubject(facts) → the subject line when the deal goes by email:
  * "Mobile home in a park, Kent — under contract, 76k". A house without a
- * kind is named by its street.
+ * kind is named by its street. A pre-sell (`presell`) is "coming up": nothing
+ * is signed yet.
  */
-export function blastSubject({ address = "", city = "", price = 0, kind = "" } = {}) {
+export function blastSubject({ address = "", city = "", price = 0, kind = "" } = {}, { presell = false } = {}) {
   const street = String(address || "").split(",")[0].trim();
   const what = String(kind || "").trim();
   const head = what ? `${what.charAt(0).toUpperCase()}${what.slice(1)}` : street || "A new deal";
   const priceText = kText(price);
-  return `${head}${city ? `, ${city}` : ""} — under contract${priceText ? `, ${priceText}` : ""}`;
+  return `${head}${city ? `, ${city}` : ""} — ${presell ? "coming up" : "under contract"}${priceText ? `, ${priceText}` : ""}`;
 }

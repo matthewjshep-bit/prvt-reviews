@@ -182,6 +182,17 @@ test("a list row keeps what the table draws and drops the weight", () => {
   assert.deepEqual(toListOffer(row), row);
 });
 
+test("a lean row says how the house reached us, off its underwrite", () => {
+  const row = toListOffer({ id: "o2", status: "sent", autoUnderwrite: { leadSource: "agent_brought", finishedAt: "2026-10-10T00:00:00Z" } });
+  assert.deepEqual(row.leadSource, { source: "agent_brought" });
+  assert.deepEqual(toListOffer(row), row);
+  assert.equal(toListOffer({ id: "o3", status: "sent" }).leadSource, undefined);
+  // The before-we-sign record rides along too (shared/pre-contract.js).
+  const pc = toListOffer({ id: "o4", status: "sent", preContract: { ticks: { eyes: { at: "2026-10-10T00:00:00Z" } } }, presell: { at: "2026-10-10T00:00:00Z", contactIds: ["b1"] } });
+  assert.ok(pc.preContract.ticks.eyes);
+  assert.deepEqual(pc.presell.contactIds, ["b1"]);
+});
+
 
 /* ---------------- AI provenance ---------------- */
 

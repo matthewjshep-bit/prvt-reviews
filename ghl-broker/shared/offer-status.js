@@ -639,6 +639,9 @@ export const OFFER_LIST_FIELDS = [
   //               they say which row on a house is current (current-offer.js)
   //   pin         {at, by, note} — a person chose this row as current
   "proactive", "followUps", "counterBand", "requotes", "revisions",
+  // Before we sign (shared/pre-contract.js): your ticks {ticks: {key: {at}}}
+  // and who it was pre-sold to {at, contactIds}, so Today can say what's open.
+  "preContract", "presell",
   "createdAt", "updatedAt", "dateLabel", "validLabel",
   "pdfUrl", "imageUrl", "scopePdfUrl", "compsPdfUrl",
   "psaPdfUrl", "contractPdfUrl", "assignmentPdfUrl", "netSheetPdfUrl",
@@ -750,6 +753,11 @@ export function toListOffer(offer) {
     }
     if (Object.keys(terms).length) row.terms = terms;
   }
+  // How the house reached us (shared/lead-source.js), as its underwrite read
+  // it: "agent_brought", "hook", "direct". The Line annotates the full read
+  // over it; a plain row can say it without reading the timeline.
+  if (!row.leadSource && offer?.leadSource?.source) row.leadSource = offer.leadSource;
+  else if (!row.leadSource && offer?.autoUnderwrite?.leadSource) row.leadSource = { source: String(offer.autoUnderwrite.leadSource) };
   row.listOnly = true;
   return row;
 }

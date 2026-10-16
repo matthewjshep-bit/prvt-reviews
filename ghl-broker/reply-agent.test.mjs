@@ -4685,6 +4685,9 @@ test("a blast text quotes the deal's price when it sends, not the price when it 
   store.getDataroomInvite = async (id) => invites.find((i) => i.id === id) || null;
   store.updateDataroomInvite = async (id, patch) => Object.assign(invites.find((i) => i.id === id), patch);
   store.logDataroomEvent = async () => {};
+  // A buyer who has written back: the link goes (a cold one's would wait for
+  // you — the carrier backstop, 2026-10-15).
+  store.getInvestor = async () => ({ contactId: "c1", doc: { lastRepliedAt: "2026-09-20T00:00:00Z" } });
   const calls = [];
   const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
 
@@ -5876,6 +5879,53 @@ test("a deal text goes without its link when links wait for a reply — cold dea
   assert.equal((await store.getReplyDraft("d1")).blastWithoutLink, true);
   assert.equal(normalizeDispoAutopilot({}).blastLink, "always");
   assert.equal(normalizeDispoAutopilot({ blastLink: "on_reply" }).blastLink, "on_reply");
+});
+
+// 2026-10-15: the last look before a buyer text leaves by itself. With links
+// on every deal text, a buyer who never wrote back would get one — what the
+// carriers blocked a third of the time.
+test("a deal text that still says what the carriers block waits for you instead of going by itself", async () => {
+  const { store, invites } = linkLaterBlast();
+  store.getOfferSettings = async () => ({ wholesaleFee: 30000, dispoAutopilot: { blastLink: "always" } });
+  store.updateDataroomInvite = async (id, patch) => { const row = invites.find((i) => i.id === id); if (row) Object.assign(row, patch); return true; };
+  store.getDataroomInvite = async (id) => invites.find((i) => i.id === id) || null;
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "", dataroomBaseUrl: "https://deals.example" });
+  assert.equal(r.held, true);
+  assert.equal(calls.filter(([p]) => p === "/conversations/messages").length, 0, "nothing went");
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "draft");
+  assert.ok(d.flags.some((f) => /carriers block texts like this — it says "a link"/.test(f)), d.flags.join(" · "));
+  assert.ok(invites.every((i) => i.status === "revoked"), "the link minted for it is taken back");
+  // You pressing Send is you deciding: it goes.
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, readThread: async () => "", dataroomBaseUrl: "https://deals.example" });
+  assert.match(calls.find(([p]) => p === "/conversations/messages")[1].body.message, /https:\/\/deals\.example\/d\//);
+});
+
+test("a buyer who has written back still gets the link with a deal text", async () => {
+  const { store, invites } = linkLaterBlast();
+  store.getOfferSettings = async () => ({ wholesaleFee: 30000, dispoAutopilot: { blastLink: "always" } });
+  store.getDataroomInvite = async (id) => invites.find((i) => i.id === id) || null;
+  store.getInvestor = async () => ({ contactId: "c1", doc: { lastRepliedAt: "2026-10-01T00:00:00Z" } });
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "", dataroomBaseUrl: "https://deals.example" });
+  assert.match(calls.find(([p]) => p === "/conversations/messages")[1].body.message, /https:\/\/deals\.example\/d\//);
+  assert.equal((await store.getReplyDraft("d1")).status, "sent");
+});
+
+test("a walkthrough text that says cash waits for you", async () => {
+  const draft = { ...openDraft(), status: "scheduled", party: "investor", intent: "showing_reminder", inbound: "",
+    reply: "See you tomorrow at 41 Alder Way, Thu 4–5pm. Bring proof of cash.", outbound: { kind: "showing_reminder", offerId: "o1", address: "41 Alder Way, Kent, WA" } };
+  const store = fakeStore([draft]);
+  store.getInvestor = async () => ({ contactId: "c1", doc: { lastRepliedAt: "2026-10-01T00:00:00Z" } });
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  assert.equal(r.held, true);
+  assert.equal(calls.filter(([p]) => p === "/conversations/messages").length, 0);
+  assert.ok((await store.getReplyDraft("d1")).flags.some((f) => /"cash"/.test(f)));
 });
 
 const sentWithoutLink = () => ({ ...openDraft(), id: "d-blast", status: "sent", sentAt: new Date(Date.now() - 3600000).toISOString(), party: "investor", intent: "blast_open",

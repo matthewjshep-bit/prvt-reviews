@@ -497,7 +497,7 @@ test("a follow-up to a buyer never says last check", () => {
   assert.match(t, /do NOT call it a last check, do NOT say you'll leave it alone/);
   assert.match(t, /pick up exactly where they left off/);
   assert.match(t, /Do NOT name a price or any number/);
-  assert.match(t, /Set intent to deal_followup\.$/);
+  assert.match(t, /Set intent to deal_followup\. Phone carriers block/, "then the carrier rule (2026-10-15)");
 });
 
 test("the bot is told to describe a house only in the deal's words", () => {
@@ -567,6 +567,15 @@ test("the pass on a house we promised a number on owns that we owe them, gives t
   assert.match(t, /send the next fixer/);
   assert.match(t, /Do NOT name any number/);
   assert.doesNotMatch(t, /held 15 days/, "the sweep's own reason is ours, not theirs");
+});
+
+// Matt, 2026-10-13: no manufactured homes as a rule.
+test("the pass on a mobile home says we don't buy mobile homes, not that we're single-family only right now", () => {
+  const t = outboundOpening({ kind: "kind_pass", address: "1510 Maple Lane, Kent, WA 98030", why: "manufactured",
+    heldReason: "not our kind of house — a mobile home (we don't buy mobile or manufactured homes)" });
+  assert.match(t, /it's a mobile or manufactured home, and we don't buy those/);
+  assert.match(t, /single-family fixers/);
+  assert.doesNotMatch(t, /right now we only buy single-family/);
 });
 
 test("when an agent brings us a house, the bot gets the address with a promise not to bother the seller, and their read on value and work", () => {

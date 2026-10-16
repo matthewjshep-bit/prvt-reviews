@@ -3015,7 +3015,7 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "" };
   }
   if (kind === "kind_pass") {
-    const why = ["area", "numbers", "rural", "promised"].includes(subject?.why) ? subject.why : "kind";
+    const why = ["area", "numbers", "rural", "promised", "manufactured"].includes(subject?.why) ? subject.why : "kind";
     return { ...base, address: offer?.address || subject?.address || "", why, heldReason: String(subject?.heldReason || "").slice(0, 160),
       // A house we owed them a number on (held-underwrites.js, 2026-10-14).
       ...(why === "promised" ? { owed: ["number", "paper", "answer"].includes(subject?.owed) ? subject.owed : "number", passReason: String(subject?.reason || "").slice(0, 160) } : {}) };
@@ -3165,7 +3165,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "hot_push": return `Pushes the agreed price on ${where} toward paper: asks them to write it up on NWMLS forms for us to sign${rung}.`;
     case "kind_pass": return outbound.why === "promised"
       ? `We owed them ${outbound.owed === "paper" ? "the written offer" : outbound.owed === "answer" ? "an answer" : "a number"} on ${where}: says we're out${outbound.passReason ? ` (${outbound.passReason})` : ""} and asks for the next one.`
-      : `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : outbound.why === "numbers" ? "we couldn't get to a number on it" : outbound.why === "rural" ? "it's rural, and we buy houses on under 2 acres" : "we only buy single-family right now"}.`;
+      : `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : outbound.why === "numbers" ? "we couldn't get to a number on it" : outbound.why === "rural" ? "it's rural, and we buy houses on under 2 acres" : outbound.why === "manufactured" ? "it's a mobile home, and we don't buy those" : "we only buy single-family right now"}.`;
     case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
     case "passed_checkin": return outbound.relisted
       ? `Saw ${where} is back on the market; asks if the seller would look at our offer now${rung}.`
@@ -3266,6 +3266,11 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
  * second call.
  */
 export { CARRIER_CHECKED_KINDS };
+
+// The texts a buyer gets about a deal, checked once more as they leave by
+// themselves (sendReplyDraft): the deal text is written again at that moment,
+// after any gate saw it.
+export const BUYER_CARRIER_KINDS = new Set(["blast_open", "blast_nudge", "dataroom_nudge", "deal_followup", "buyer_pulse", "showing_reminder", "showing_followup"]);
 
 export async function writeAgainWithoutCarrierWords({ draft, kind, redraft }) {
   if (!CARRIER_CHECKED_KINDS.has(kind) || typeof redraft !== "function") return draft;
@@ -5965,6 +5970,31 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       return { ok: true, skipped: "couldn't read the deal's price" };
     }
     if (blast?.text) body = blast.text;
+  }
+
+  // The last look before a buyer's deal or walkthrough text leaves by itself
+  // (2026-10-15): one that still says what the carriers block waits for you,
+  // as the price hold above does. A link only counts to a buyer who has never
+  // written back. You pressing Send is you deciding.
+  if (auto && d.channel !== "email" && BUYER_CARRIER_KINDS.has(d.outbound?.kind)) {
+    let words = carrierFlags(body);
+    if (words.includes("a link")) {
+      const inv = await store.getInvestor?.(locationId, d.contactId).catch(() => null);
+      if (inv?.doc?.lastRepliedAt || inv?.lastRepliedAt) words = words.filter((w) => w !== "a link");
+    }
+    if (words.length) {
+      await release(bundle);
+      // The package link minted for it goes back; your Send mints a fresh one.
+      if (blast?.invite?.id) await store.updateDataroomInvite?.(blast.invite.id, { status: "revoked" })?.catch?.(() => {});
+      const ts = new Date(now).toISOString();
+      const why = `carriers block texts like this — it says ${words.map((w) => `"${w}"`).join(", ")}`;
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `held: ${why} — not sent`],
+        autoSend: { ...(d.autoSend || {}), decided: false, reason: `${why} — it waits for you` },
+      });
+      return { ok: true, skipped: why, held: true };
+    }
   }
 
   let result;

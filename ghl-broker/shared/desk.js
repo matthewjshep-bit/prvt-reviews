@@ -48,7 +48,7 @@ export const KIND_STRENGTH = [
   "call_owed", "call_hot", "call_brought", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
   // An agent's partner terms lead their held reply: the row says what they offered.
   "call_partner_terms",
-  "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral", "email_check",
+  "paper_to_sign", "pre_contract", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral", "email_check",
   "call_first_reply", "call_quiet", "call_turnkey_week", "ladder_exhausted",
   "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "texts_elsewhere", "stage_lag",
   "deal_no_buyers", "deal_no_dataroom", "showing_no_window", "underwrite_dropped",
@@ -161,6 +161,8 @@ const URGENT_KINDS = new Set([
   "email_check",
   // A call we said we'd make (2026-10-15): always on Today, under Today's calls.
   "call_owed",
+  // An offer about to be signed with things nobody has checked (shared/pre-contract.js).
+  "pre_contract",
 ]);
 // Urgent rows that sit under Today's calls rather than Needs you.
 const URGENT_CALLS = new Set(["call_owed"]);

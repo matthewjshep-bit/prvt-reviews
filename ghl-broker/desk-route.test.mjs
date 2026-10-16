@@ -88,8 +88,9 @@ test("a hot offer the machine isn't pushing is one of Today's calls", async () =
   await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "mary", contactName: "Maryanne A", address: "9311 12th Pl SE, Lake Stevens, WA 98258",
     status: "sent", cashAmount: 197500, statusHistory: [], createdAt: ago(200), sends: [{ ts: ago(150) }], realm: { answer: "yes", ts: ago(20) } });
   const rows = (await (await fetch(`${B}/api/dashboard/pipeline`)).json()).desk.rows;
-  const mary = rows.find((x) => x.contactId === "mary");
+  const mary = rows.find((x) => x.contactId === "mary" && x.section === "call");
   assert.equal(mary?.kind, "call_hot");
-  assert.equal(mary.section, "call");
   assert.ok(mary.call.boosts.some((b) => b.key === "partner"), "their yes makes them someone we've done business with");
+  // And what to check before signing it (shared/pre-contract.js, 2026-10-15).
+  assert.ok(rows.some((x) => x.contactId === "mary" && x.kind === "pre_contract" && x.section === "decide"), "the house they said yes to needs its checks before signing");
 });

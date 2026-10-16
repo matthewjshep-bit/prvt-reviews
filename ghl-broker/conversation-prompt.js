@@ -564,8 +564,11 @@ function nudgeAside(o) {
 // The machine texts that introduce us to someone — the first text, its nudge,
 // the agent and buyer check-ins. These are what the carriers blocked
 // (shared/carrier-words.js); a float or a reply to someone mid-conversation
-// went through.
-export const CARRIER_CHECKED_KINDS = new Set(["outreach_open", "outreach_nudge", "agent_pulse", "buyer_pulse"]);
+// went through. And the texts a buyer gets about a deal — its follow-ups and
+// the walkthrough reminders (2026-10-15: a tenth of October's buyer texts
+// were blocked, all of them deal texts and walkthrough invites).
+export const CARRIER_CHECKED_KINDS = new Set(["outreach_open", "outreach_nudge", "agent_pulse", "buyer_pulse",
+  "blast_nudge", "dataroom_nudge", "deal_followup", "showing_reminder", "showing_followup"]);
 
 export function outboundOpening(outbound) {
   const base = openingFor(outbound);
@@ -810,7 +813,7 @@ function openingFor(outbound) {
         `the answer, leave nothing in it out, and do NOT say you'll check on anything else. ${CONTINUE} Set intent to partner_answer.`;
 
     // We're passing on a house the underwriter held (held-underwrites.js):
-    // not single-family, rural (two acres or more), outside the towns we buy
+    // not single-family, a mobile home, rural (two acres or more), outside the towns we buy
     // in, or no number we could stand behind after we asked them for theirs.
     case "kind_pass":
       // A house we told them we'd come back on, closed out with nothing sent
@@ -825,6 +828,7 @@ function openingFor(outbound) {
         (o.why === "area" ? "it's outside the area we buy in."
           : o.why === "numbers" ? "we couldn't get to a number we'd stand behind — not enough to go on to price it (we asked them for their read and didn't get a number)."
           : o.why === "rural" ? `it's a rural property${/sits on [\d.]+ acres/.test(o.heldReason || "") ? ` — it ${o.heldReason.match(/sits on [\d.]+ acres/)[0]}` : ""}, and we can't do rural — our buyers want houses on under 2 acres, where there are sales nearby to compare them to.`
+          : o.why === "manufactured" ? "it's a mobile or manufactured home, and we don't buy those."
           : `it isn't a single-family house${o.heldReason ? ` (${o.heldReason})` : ""}, and right now we only buy single-family.`) +
         ` In one or two lines, say so plainly and thank them, and ask them to keep us in mind for ` +
         (o.why === "area" ? "fixers closer in. " : o.why === "rural" ? "fixers in town on a normal-size lot. " : o.why === "numbers" ? "the next fixer, especially one with photos or a seller price in mind. " : "single-family fixers. ") +

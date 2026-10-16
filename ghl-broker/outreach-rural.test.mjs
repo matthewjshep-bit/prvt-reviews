@@ -43,7 +43,9 @@ test.after(() => mock.close());
 
 test("an agent whose only listing sits on two acres or more is not picked, and a rural listing is never the hook", async () => {
   const r = await router.runPull(LOC, client, { zipCodes: "98402", daysOld: "45:*", distressOnly: false }, { maxRequestsCap: 1 });
-  assert.ok((r.warnings || []).some((w) => /rural filter \(under 2 acres\) kept 4 of 6/.test(w)), (r.warnings || []).join(" | "));
+  // The mobile home goes first, whatever was asked for (Matt, 2026-10-13).
+  assert.ok((r.warnings || []).some((w) => /no mobile homes: dropped 1 of 6/.test(w)), (r.warnings || []).join(" | "));
+  assert.ok((r.warnings || []).some((w) => /rural filter \(under 2 acres\) kept 3 of 5/.test(w)), (r.warnings || []).join(" | "));
   const rows = await store.listOutreachAgents(LOC, { batchId: r.batchId, limit: 50 });
   const byName = Object.fromEntries(rows.map((x) => [x.doc.name, x.doc]));
   assert.equal(byName["Rural Only"], undefined, "five acres: not a reason to text them");

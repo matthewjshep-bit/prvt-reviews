@@ -2616,6 +2616,56 @@ closing date in the same message ("closing 10/24") rides on the action. The
 deal's price is what `promoteToDeal` always read — the PSA's, else the
 offer's — never an "agreed" on record, which can sit above the book.
 
+### Before you sign: the pre-contract check (2026-10-15)
+
+The funnel review: 7 of 8 listed-house contracts fell through, against 1 of 5
+off-market. The dead ones had rehab low or ARV high, two were mobile homes
+signed and backed out of, one was signed with no buyer. `preContractChecks`
+(`shared/pre-contract.js`) reads eight things off the offer, each `ok`,
+`warn` (the record says something's wrong) or `unknown` (nobody looked):
+
+- **Listing remarks read**: `snapshot.rehab.listing.remarks` through
+  `remarkSignals` (a defect, low ceilings, rooms, contents left behind).
+- **Kind of house and title**: a mobile home (`assetOf`), or a land lease,
+  55+, HOA, easement, right-of-way or unpermitted work in the remarks or the
+  buyer-view flags.
+- **Eyes on the house**: 8+ listing photos scanned, or a video on the offer.
+- **Rehab at or above the light floor**: repairs vs `rehabBand(sqft).light[0]`.
+- **ARV under today's listings**: the buyer-view listings cap
+  (`snapshot.checks.cap` / `arv.capped`).
+- **At or under our number and the buyer ceiling**: the agreed (or contract)
+  price vs `cashAmount` and `buyerCeiling().withFee`.
+- **An extension, not their deadline**: ticked by hand only.
+- **Pre-sold to 3 buyers** (listed houses; none for off-market).
+
+Where it shows, all advisory (nothing blocks, no switch):
+
+- **Today**: a `pre_contract` row (Needs you) on an offer about to be signed
+  (`needsPreContract`: `pushesToPaper`, or the agent is writing it up; no
+  deal yet) while anything is open. "now" when they're writing it up. The pane
+  lists the items with a **Checked** button each (`POST
+  /api/offers/:id/precontract { key, done, note }`, kept at
+  `offer.preContract.ticks`; `GET` reads them). Buttons: **Pre-sell to 3
+  buyers** (listed houses), **Open the offer**, **It's signed — promote**.
+- **Promote**: open items are added to the promote's warnings ("before
+  signing, not checked: …") and the whole list is kept at
+  `deal.preContractAtPromote { at, open, checks }` for the post-mortem.
+- **Pre-sell** (`POST /api/dispo/presell { offerId, count = 3, dryRun }`):
+  the top `count` from `matchForDeal` (wave 1, topped up from wave 2), never
+  one it already went to, as **drafts only** — never scheduled, `needsHuman`,
+  reason `needs a person: a pre-sell waits for your Send…`, so no audit or
+  sweep releases them. `presellMessage` (shared/blast-text.js) never says
+  "under contract" and carries no link; the price is our number plus the
+  default fee. Saves `offer.presell { at, contactIds }`. At promote, buyers
+  whose pre-sell text was sent join the deal as `evaluating`
+  (`source: "presell"`); an unsent pre-sell draft is superseded so wave 1 can
+  send them the deal itself. A buyer who answers a pre-sell text before the
+  promote is answered by the investor bot, which has no deal to read yet —
+  work those by hand.
+
+Check: `GET /api/dashboard/pipeline` → `actions[]` with `kind: "pre_contract"`
+and its `checks`; a promoted deal's `deal.preContractAtPromote`.
+
 ### Tier 1 / Tier 2 — kept by the app, not GHL (2026-10-02)
 
 > 2026-10-07: GHL's Tier 1 stage is the list again (Matt: "that's my source
@@ -3724,6 +3774,30 @@ It is wording and links, not the number's registration. What changed:
 - `OUR_OFFER_TEXT_RX` also knows the for-the-record letter ("sending our
   written offer on …"), so the thread reader never takes it for a person.
 
+**Buyer texts (2026-10-15).** October's buyer texts: 74 of 678 blocked
+(10.9%), all of them cold deal texts ("it's Matt, a local investor… under
+contract…") and walkthrough invites with a price; buyer check-ins went
+through. What changed, no switch (these only hold more):
+
+- `CARRIER_CHECKED_KINDS` also covers the buyer follow-ups and walkthrough
+  texts: `blast_nudge`, `dataroom_nudge`, `deal_followup`, `showing_reminder`,
+  `showing_followup`. Same rule, one rewrite, then the gate holds it.
+- The county-records intro (dispo-autopilot.js `countyIntro`) says "I'm
+  Matt, I fix up houses locally", not "a local investor".
+- The operator's line in a deal text (`blastNote`, from the package headline
+  or the wave's own line) is left out whole when it says a carrier word
+  ("cash only, sold as-is").
+- **Send-time backstop** (`sendReplyDraft`, `BUYER_CARRIER_KINDS`): a deal,
+  walkthrough or buyer follow-up text going by itself that still says a
+  carrier word after the send-time rewrite goes back to Draft with
+  `held: carriers block texts like this — it says "…" — not sent`. A link
+  only counts to a buyer who has never written back (`investors.doc.lastRepliedAt`),
+  so with `blastLink: "always"` a cold buyer's deal text waits for your Send
+  (the minted invite is revoked; your Send mints a fresh one). Live is
+  `"on_reply"`, so a deal text carries no link and goes. Your Send is never held.
+- Check: the Outbox's Draft rows with that flag; or `carrierFlags(text)` on a
+  blast preview's rows (`POST /api/dispo/blast` with `dryRun`, the default).
+
 To re-run the measurement: page `searchConversations` for the window, read
 each conversation's messages, and group outbound `TYPE_SMS` by the `Error
 NNNNN` in `error` — read gently (two at a time, back off on 429), the broker
@@ -4053,8 +4127,8 @@ Old links redirect: `/dashboard?view=flow|dashboard|conversation` →
 
 ## Flow (the Reports landing tab)
 
-`/reports?view=flow` — the river. Twelve stages in two rows (acquisition:
-found → first text → replied → underwritten → floated → offered → countered
+`/reports?view=flow` — the river. Thirteen stages in two rows (acquisition:
+found → first text → replied → talked → underwritten → floated → offered → countered
 → under contract; disposition: blasted → opened → buyer → assigned/closed),
 each with its count in the window, a bar split violet (the machine on its
 own) / grey (a person), and arrows carrying the share of the previous stage
@@ -4072,6 +4146,25 @@ while visible. Pure builder `shared/flow.js` (`buildFlow`, `machineDid`);
 route `GET /api/dashboard/flow?days=&end=&tz_offset=`, uncached local tier.
 The timeline renderer is `messaging-app/src/EventFeed.jsx`, shared with the
 contact drawer.
+
+**Talked, and useful replies (2026-10-15).** Of every step on the line, a
+phone call best predicts a contract, and the river had no station for it.
+Thirteen stages now: **Talked** sits after Replied and counts each agent once
+with a real call in the window (`realCall`, `shared/talked-to.js`): a
+connected `call_summary` of 45 seconds or more; with no length from GHL, a
+transcribed call whose summary runs 200+ characters; or a call Matt logged by
+hand (no GHL message behind it). Its arrow is talked ÷ replied. Underwritten's
+arrow stays underwritten ÷ replied. Replied's sub-line adds **"N useful"**:
+agents whose reply said something (a text whose intent isn't opt_out, other or
+small_talk, that isn't a phone auto-reply or "stop texting me"), a real call,
+or a house, referral, property detail or estimate they gave
+(`house_mentioned`, `referral_mentioned`, `property_details`,
+`agent_estimate` — read by the Flow route, kept out of the feed). The Line gets
+the Talked station from the Flow, with no target. No switch: it only counts.
+Lean offer rows also carry `leadSource` (`{ source }` off
+`autoUnderwrite.leadSource`), so a row says "agent brought" without the
+timeline. Check: `GET /api/dashboard/flow` → `stages[3].key === "talked"`;
+`GET /api/dashboard/line` → a `talked` station.
 
 ## Line (Reports → Line, 2026-09-29)
 
@@ -5829,11 +5922,21 @@ Matt: "filter out rural properties when we reach out to agents, these are harder
 - **Pass.** `triageHeldUnderwrite` retires a rural hold to `we_passed` at the next check, with no 24h wait. The held sweep then sends `kind_pass` with `why: "rural"`: "we can't do rural — our buyers want houses on under 2 acres", and an ask for fixers in town. On the Desk the card reads "Rural: address" (Underwrite anyway / Pass on it). Tier 1 flags it `rural` (sure), and the morning auto-kick takes it off.
 - **Bot.** `agentFocusRule` tells the agent bot that we don't buy rural houses, acreage, farms or ranches. When an agent says 2+ acres, the bot says no kindly and doesn't promise numbers. A rural house we priced on purpose is named by `pricedOutsideFocus`, and lean rows carry `subjectLotSqft` for that in both store backends.
 
+### No mobile or manufactured homes (2026-10-13)
+
+Matt: "can we not do manufactured homes as a rule now, lets decline if someone asks if we do them."
+
+- **The rule.** `NEVER_BUY_KINDS = ["manufactured"]` in `shared/asset-type.js`. `normalizeFocusKinds` strips it, so it can't be ticked back on in Settings (the checkbox is gone). `kindHold` holds a mobile home as `not our kind of house — a mobile home (we don't buy mobile or manufactured homes)` whatever `focusKinds` says. `MOBILE_HOLD` matches it, and the older "(single-family only right now)" wording too.
+- **Pass.** Like rural, `triageHeldUnderwrite` retires a mobile-home hold to `we_passed` at the next check, with no 24h wait. The held sweep sends `kind_pass` with `why: "manufactured"`: "it's a mobile or manufactured home, and we don't buy those", plus an ask for single-family fixers. Underwrite anyway before then still prices it.
+- **Bot.** `agentFocusRule` has a MOBILE HOMES paragraph. If an agent asks whether we buy them, or brings one, the bot says no plainly and kindly, never "maybe" or "send it over", and asks for single-family fixers. A mobile home we priced on purpose is still named by `pricedOutsideFocus`.
+- **Outreach.** `ingestCohort` drops `Manufactured` listings whatever type was asked for, with a "no mobile homes: dropped N of M" warning. `pickAgentsToImport` refuses a `Manufactured` hook. `normalizeOutreachAutopilot` drops the type, and the Settings and Agent Outreach pickers no longer offer it.
+- **Unchanged.** Selling a mobile home we already hold: the buyer side, `pickWave({ manufactured })`, the mobile-home buyer tags and the Deals modal kind picker.
+
 ### Single-family focus (2026-10-01)
 
 Matt: focus the app on single-family residences. Multi-family stays a kind an offer can carry (it will be expanded into later), but it isn't priced on its own yet. Neither are townhouses, condos, mobile homes or land.
 
-- **`settings.focusKinds`** (default `["sfr"]`, `normalizeFocusKinds` in `shared/asset-type.js`) lists the kinds the auto-underwrite prices on its own. Set it in Settings → Auto-underwrite → "Houses the auto-underwrite prices on its own". Multi-family and mobile/manufactured can be ticked there later.
+- **`settings.focusKinds`** (default `["sfr"]`, `normalizeFocusKinds` in `shared/asset-type.js`) lists the kinds the auto-underwrite prices on its own. Set it in Settings → Auto-underwrite → "Houses the auto-underwrite prices on its own". Multi-family can be ticked there later (mobile/manufactured can't: see No mobile or manufactured homes).
 - **The hold** (`kindHold`, `auto-underwrite.js` step 2):
   - It runs right after the subject's Zillow lookup, before the comps and the photo scan are bought.
   - Any `homeType` outside the focus is held as `not our kind of house — a townhouse (single-family only right now)`.

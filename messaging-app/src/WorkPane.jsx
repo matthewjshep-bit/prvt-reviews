@@ -20,6 +20,7 @@ import { RowOpsBar, SEV, whenLabel } from "./RowOps.jsx";
 import { IntentPill } from "./ConversationOutbox.jsx";
 import { PaneActions, PaneBody, PaneHeading, usePane } from "./PaneParts.jsx";
 import CallCard from "./CallCard.jsx";
+import PreContractList from "./PreContractList.jsx";
 import { KEYS_HELP, KIND_LABEL, SECTION_LABEL, canDismissRow, groupOf, railLabel } from "./work-queue.js";
 
 export { OPEN_OFFER_EVENT } from "./PaneParts.jsx";
@@ -103,6 +104,7 @@ export function RowHeader({ item, targets, index, total, onPrev, onNext, picker,
           {why && <p className="mt-0.5 text-sm font-medium text-slate-800">{why}</p>}
           {item.detail && !item.call && <p className="mt-0.5 text-sm text-slate-600">{item.detail}</p>}
           <CallCard item={item} targets={targets} onDone={onDone} />
+          {item.kind === "pre_contract" && <PreContractList item={item} onDone={onDone} />}
           {item.group === "stuck" && item.why && <p className="mt-0.5 text-sm text-amber-800">Stuck because: {item.why}</p>}
           {item.next?.what && <p className="mt-0.5 text-sm text-violet-700">Next: {item.next.what}{item.next.at ? ` · ${whenLabel(item.next.at)}` : ""}</p>}
           <FoldedReasons item={item} targets={targets} pane={pane} onDone={onDone} />

@@ -302,3 +302,21 @@ test("an old link to one of a person's reasons opens that person", () => {
     expect(html).toContain("1 of 2");
   });
 });
+
+/* ---------- before you sign (shared/pre-contract.js, 2026-10-15) ---------- */
+
+test("an offer about to be signed opens with what nobody has checked, a Checked button on each, and the pre-sell", () => {
+  const offers = [{ id: "o9", contactId: "c9", contactName: "Dana", address: "41 Alder Way, Kent, WA", cashAmount: 300000, status: "sent",
+    createdAt: "2026-09-10T00:00:00Z", sends: [{ ts: "2026-09-11T00:00:00Z" }], realm: { answer: "yes", ts: "2026-09-19T00:00:00Z" },
+    autoUnderwrite: { photosAnalyzed: 20 } }];
+  const r = buildPipeline({ offers, now: NOW });
+  const row = r.actions.find((a) => a.kind === "pre_contract");
+  expect(row).toBeTruthy();
+  const html = render({ actions: [row], initialRowId: row.id });
+  expect(html).toContain("Before you sign");
+  expect(html).toContain("Eyes on the house");
+  expect(html).toContain("20 listing photos scanned");
+  expect(html).toContain("Checked");
+  expect(html).toContain("Pre-sell to 3 buyers");
+  expect(html).toContain("It&#x27;s signed — promote");
+});

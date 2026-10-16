@@ -466,7 +466,7 @@ test("a duplex we priced anyway counts as chosen; a passed one, a held draft and
     { id: "lean", contactId: "c1", address: "4 Ash St, Kent, WA 98030", createdAt: at, status: "sent", cashAmount: 90000, subjectHomeType: "MANUFACTURED" },
   ];
   assert.deepEqual(pricedOutsideFocus(offers, ["sfr"]).sort(), ["13348 32nd Ave S, Tukwila, WA 98168", "4 Ash St, Kent, WA 98030"]);
-  assert.deepEqual(pricedOutsideFocus(offers, ["sfr", "multi_family", "manufactured"]), [], "inside the focus, nothing to name");
+  assert.deepEqual(pricedOutsideFocus(offers, ["sfr", "multi_family"]), ["4 Ash St, Kent, WA 98030"], "a mobile home we priced is named, whatever the focus (2026-10-13)");
 });
 
 test("a buyer asking whether it's septic finds the answer in the deal line, from the record", async () => {
