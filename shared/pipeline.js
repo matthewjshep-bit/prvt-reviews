@@ -452,7 +452,7 @@ export function buildPipeline({
     // listing remarks, the title, a look inside, the rehab floor, the ARV
     // against today's listings, our number, the deadline, a pre-sell. Seven
     // of eight listed-house contracts fell through on things on this list.
-    if (needsPreContract(o)) {
+    if (needsPreContract(o, { now })) {
       const checks = preContractByOffer?.[o.id] || preContractChecks({ offer: o });
       const open = openChecks(checks);
       if (open.length) {
