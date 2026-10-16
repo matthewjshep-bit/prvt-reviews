@@ -36,6 +36,7 @@ import { maybeRunBookSync } from "./investor-sync.js";
 import { maybeRunBuyerPulse } from "./buyer-pulse.js";
 import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
+import { maybeRunGhlCalls } from "./ghl-calls.js";
 import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
 import { runLocationTick } from "./tick.js";
@@ -379,6 +380,14 @@ const TICK_JOBS = [
   { area: "calls", run: async ({ client, locationId, saved }) => {
     await maybeSweepCalls({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE, log: console.log,
       deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
+  } },
+  // Today's calls into GHL's Manual Actions (ghl-calls.js): the day's list at
+  // 8:30 Pacific on workdays, then the urgent ones every tick until 5pm.
+  // After the calls are read, so a call that just happened has cleared its
+  // row. Off until desk.ghlCalls is on with a workflow; never texts anyone.
+  { area: "ghl-calls", run: async ({ client, locationId, saved }) => {
+    const r = await maybeRunGhlCalls({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
+    if (r?.mode === "morning") console.log(`GHL calls: the day's list started for ${locationId}`);
   } },
 ];
 

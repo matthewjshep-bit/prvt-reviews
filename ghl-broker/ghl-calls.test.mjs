@@ -18,7 +18,7 @@ process.env.DATA_DIR = DIR;
 delete process.env.DATABASE_URL;
 
 const { store } = await import("./store.js");
-const { runGhlCalls, CURSOR_NAME } = await import("./ghl-calls.js");
+const { runGhlCalls, CURSOR_NAME, maybeRunGhlCalls, ghlCallsSettled } = await import("./ghl-calls.js");
 const { foldDesk, urgentReasons } = await import("./shared/desk.js");
 const { liveGhlQueues, GHL_CALL_EVENT_TYPES } = await import("./shared/ghl-calls.js");
 await store.init();
@@ -234,3 +234,55 @@ test("switched off, nothing goes; a dry run lists who would and writes nothing",
   assert.equal(dry.calls.filter((c) => c.method !== "GET").length, 0, "reads only");
   assert.equal((await ledger(LOC)).length, 0);
 });
+
+/* ---------- the tick ---------- */
+
+const at = (isoZ) => Date.parse(isoZ);
+const tick = async (LOC, now, { saved = ON, client = ghl(), who } = {}) => {
+  const r = await maybeRunGhlCalls({ client, locationId: LOC, saved, store, deps: { pipelineFor: pipelineFor(who ? { who } : {}) }, now });
+  await ghlCallsSettled(LOC);
+  return { r, client, cursor: (await store.getJobCursor(LOC, CURSOR_NAME))?.doc || {} };
+};
+
+test("the tick sends the day's list from 8:30 Pacific on a workday, then only the urgent ones until 5pm", async () => {
+  const LOC = "loc-tick";
+  assert.equal((await tick(LOC, at("2026-10-15T15:15:00Z"))).r, null, "8:15am: not yet");
+  const morning = await tick(LOC, at("2026-10-15T15:30:00Z"));
+  assert.deepEqual(morning.r, { mode: "morning" });
+  assert.equal(enrolled(morning.client).length, 5);
+  assert.equal(morning.cursor.day, "2026-10-15");
+  assert.equal(morning.cursor.tries, 1);
+  assert.equal(morning.cursor.run, null, "the run comes off the cursor when it's done");
+  assert.equal(morning.cursor.last.mode, "morning");
+  assert.equal(morning.cursor.last.queued.length, 5);
+  assert.ok(morning.cursor.last.queued.every((q) => !("why" in q) && !("say" in q)), "the cursor keeps who, not the words");
+  const later = await tick(LOC, at("2026-10-15T17:45:00Z"));
+  assert.deepEqual(later.r, { mode: "urgent" });
+  assert.equal(later.cursor.tries, 1, "the morning isn't run twice");
+  assert.equal(later.cursor.urgent.last.mode, "urgent");
+  assert.equal((await tick(LOC, at("2026-10-16T00:15:00Z"))).r, null, "5:15pm: done for the day");
+  assert.equal((await tick(LOC, at("2026-10-17T16:00:00Z"))).r, null, "Saturday: nothing");
+  assert.deepEqual((await tick(LOC, at("2026-10-17T16:00:00Z"), { saved: { desk: { ghlCalls: { ...ON.desk.ghlCalls, weekdaysOnly: false } } } })).r, { mode: "morning" }, "unless weekends are on");
+});
+
+test("the tick does nothing while it's off or has no workflow", async () => {
+  assert.equal((await tick("loc-tick-off", at("2026-10-15T16:00:00Z"), { saved: {} })).r, null);
+  assert.equal((await tick("loc-tick-off", at("2026-10-15T16:00:00Z"), { saved: { desk: { ghlCalls: { enabled: true } } } })).r, null);
+  assert.equal(await store.getJobCursor("loc-tick-off", CURSOR_NAME), null);
+});
+
+test("a morning a deploy killed is run again once it's stale, and the day's tries are capped", async () => {
+  const LOC = "loc-tick-stale";
+  await store.setJobCursor(LOC, CURSOR_NAME, { at: "2026-10-15T16:00:00Z", doc: { day: "2026-10-15", tries: 1, lastDaily: "2026-10-15T16:00:00Z", run: { startedAt: "2026-10-15T16:00:00Z" } } });
+  assert.equal((await tick(LOC, at("2026-10-15T16:15:00Z"))).r, null, "fifteen minutes in, it may still be going");
+  const retry = await tick(LOC, at("2026-10-15T16:45:00Z"));
+  assert.deepEqual(retry.r, { mode: "morning" });
+  assert.equal(retry.cursor.tries, 2);
+  assert.equal(retry.cursor.staleRun.startedAt, "2026-10-15T16:00:00Z");
+  const LOC2 = "loc-tick-capped";
+  await store.setJobCursor(LOC2, CURSOR_NAME, { at: "2026-10-15T17:00:00Z", doc: { day: "2026-10-15", tries: 4, failed: true, lastDaily: "2026-10-15T17:00:00Z" } });
+  const capped = await tick(LOC2, at("2026-10-15T18:00:00Z"));
+  assert.deepEqual(capped.r, { mode: "urgent" }, "four tries: the urgent ones still go");
+  assert.equal(capped.cursor.tries, 4);
+});
+

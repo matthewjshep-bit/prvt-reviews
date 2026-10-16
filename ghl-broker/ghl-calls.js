@@ -29,8 +29,9 @@ import { recordError, scrubMessage } from "./app-errors.js";
 import { getContact, updateContact, addContactToWorkflow, removeContactFromWorkflow, findOrCreateCustomFieldByKey } from "./ghl.js";
 import { normalizeDesk } from "./shared/call-list.js";
 import { ghlCallRows, ghlCallsDue } from "./shared/desk.js";
-import { callFields, ghlCallsOn, GHL_CALL_FIELDS, GHL_CALL_EVENT_TYPES, liveGhlQueues, ghlCallClaimKey } from "./shared/ghl-calls.js";
+import { callFields, ghlCallsOn, ghlCallWindow, GHL_CALL_FIELDS, GHL_CALL_EVENT_TYPES, liveGhlQueues, ghlCallClaimKey } from "./shared/ghl-calls.js";
 import { callEventConnected } from "./shared/talked-to.js";
+import { isWorkday } from "./outreach-sweep.js";
 
 export const CURSOR_NAME = "ghlCalls";
 // How far back a call still in GHL is looked for: a week covers a weekend
@@ -169,3 +170,99 @@ export async function runGhlCalls({ store = defaultStore, locationId, client, sa
   }
   return done();
 }
+
+/* ---------- the tick: the day's list at 8:30, the urgent ones until 5pm ---------- */
+
+// The morning's gating is the nightly audit's (conversation-audit.js
+// maybeRunConversationAudit): the cursor is written before the run, a run
+// that died under a deploy is retried once it's stale, and the day's tries
+// are capped. The day is the Pacific date, so a morning that only got going
+// late is still the day's one.
+export const MAX_MORNING_TRIES = 4;
+export const RETRY_GAP_MS = 20 * 60 * 1000;
+export const STALE_RUN_MS = 30 * 60 * 1000;
+
+const jobs = new Map();
+const pending = new Map();
+export const getGhlCallsJob = (locationId) => jobs.get(locationId) || null;
+/** For tests and the hand run: the location's run in flight, settled. */
+export const ghlCallsSettled = (locationId) => pending.get(locationId) || Promise.resolve();
+export function _resetGhlCalls() { jobs.clear(); pending.clear(); noPhone.clear(); }
+
+const pacificHours = (t) => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", minute: "numeric", hourCycle: "h23" })
+    .formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  return (Number(p.hour) % 24) + Number(p.minute) / 60;
+};
+
+// What a run did, for the cursor and the route: who, not what was said.
+export const summarizeRun = (job) => ({
+  id: job.id, mode: job.mode, trigger: job.trigger, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error || null,
+  picked: job.result?.picked ?? 0,
+  queued: (job.result?.queued || []).map((q) => ({ contactId: q.contactId, kind: q.kind, status: q.status })),
+  skipped: (job.result?.skipped || []).map((q) => ({ contactId: q.contactId, kind: q.kind, why: q.why })),
+  failed: (job.result?.failed || []).map((q) => ({ contactId: q.contactId, kind: q.kind, stage: q.stage, error: q.error })),
+  withdrawn: (job.result?.withdrawn || []).map((q) => ({ contactId: q.contactId, kind: q.kind, status: q.status })),
+});
+
+/**
+ * startGhlCalls({ store, locationId, client, saved, deps, mode, trigger, dryRun, now, onDone }) → job
+ *
+ * One run per location at a time, in the background; `onDone(job)` when it ends.
+ */
+export function startGhlCalls({ store = defaultStore, locationId, client, saved = {}, deps = {}, mode = "morning", trigger = "manual", dryRun = false, now = Date.now(), onDone = null }) {
+  if (jobs.get(locationId)?.status === "running") throw Object.assign(new Error("GHL calls are already running for this location"), { http: 409 });
+  const job = { id: `gc-${Date.now().toString(36)}`, locationId, mode, trigger, dryRun, status: "running", startedAt: iso(now), finishedAt: null, result: null, error: null };
+  jobs.set(locationId, job);
+  const p = runGhlCalls({ store, locationId, client, saved, deps, mode, now, dryRun, trigger })
+    .then((r) => { job.result = r; job.status = "done"; })
+    .catch((e) => { job.status = "error"; job.error = scrubMessage(e).slice(0, 300); })
+    .then(async () => {
+      job.finishedAt = iso(Date.now());
+      if (job.status === "error") await recordError(store, { locationId, area: "ghl-calls", err: job.error, context: { trigger, stage: mode } });
+      if (typeof onDone === "function") await Promise.resolve(onDone(job)).catch(() => {});
+    })
+    .finally(() => { if (pending.get(locationId) === p) pending.delete(locationId); });
+  pending.set(locationId, p);
+  return job;
+}
+
+/**
+ * maybeRunGhlCalls({ client, locationId, saved, store, deps, now }) → { mode } | null
+ *
+ * Off the 15-minute tick. Only with desk.ghlCalls on and a workflow, on a
+ * workday (unless weekdaysOnly is off), from hour:minute Pacific until
+ * `until`: the first tick of the day sends the day's list ("morning"), and
+ * every tick after it the urgent ones ("urgent").
+ */
+export async function maybeRunGhlCalls({ client, locationId, saved = {}, store = defaultStore, deps = {}, now = Date.now() }) {
+  const cfg = normalizeDesk(saved?.desk).ghlCalls;
+  if (!ghlCallsOn(cfg)) return null;
+  if (cfg.weekdaysOnly && !isWorkday(now)) return null;
+  const { start, end } = ghlCallWindow(cfg);
+  const h = pacificHours(now);
+  if (h < start || h >= end) return null;
+  if (jobs.get(locationId)?.status === "running") return null;
+  const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
+  const doc = cursor?.doc || {};
+  const today = pacificDay(now);
+  const triesToday = doc.day === today ? Number(doc.tries) || 0 : 0;
+  const stale = Boolean(doc.run?.startedAt) && now - Date.parse(doc.run.startedAt) > STALE_RUN_MS;
+  let mode = "urgent";
+  if (doc.day !== today) mode = "morning";
+  // A morning the cursor says is going, and not yet stale: going (here or on another broker).
+  else if (doc.run?.startedAt && !stale) return null;
+  else if ((doc.failed || stale) && triesToday < MAX_MORNING_TRIES && now - (Date.parse(doc.lastDaily || "") || 0) >= RETRY_GAP_MS) mode = "morning";
+  if (mode === "morning") {
+    await patchCursor(store, locationId, { day: today, tries: triesToday + 1, lastDaily: iso(now), run: { startedAt: iso(now) }, failed: false, error: null, ...(stale ? { staleRun: doc.run } : {}) });
+    startGhlCalls({ store, locationId, client, saved, deps, mode, trigger: "daily", now,
+      onDone: (job) => patchCursor(store, locationId, { run: null, failed: job.status === "error", error: job.error || null, last: summarizeRun(job) }) });
+  } else {
+    // A morning that died and is out of tries still clears its run, so the day goes on.
+    if (doc.run?.startedAt && stale) await patchCursor(store, locationId, { run: null, failed: true, error: doc.error || "the morning's run died" });
+    startGhlCalls({ store, locationId, client, saved, deps, mode, trigger: "urgent", now,
+      onDone: (job) => patchCursor(store, locationId, { urgent: { at: job.finishedAt, last: summarizeRun(job) } }) });
+  }
+  return { mode };
+}
+
