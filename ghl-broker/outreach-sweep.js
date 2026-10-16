@@ -549,10 +549,12 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
   // batch would collide). `share` of the day's requests and new agents go to
   // it, first; the regular pull gets the rest. Agents already in GHL hear
   // about it from the check-in (shared/agent-pulse.js "off_market_listing").
-  if (oa.expired.enabled && oa.expired.share > 0 && oa.counties.length && left > 0) {
+  // The regular pull always keeps at least one request: a run with only one
+  // left skips the off-market seats.
+  if (oa.expired.enabled && oa.expired.share > 0 && oa.counties.length && left > 1) {
     const share = oa.expired.share / 100;
     const seats = Math.max(1, Math.round(oa.dailyCap * share));
-    const reqs = Math.max(1, Math.min(left, Math.round(perRun * share) || 1));
+    const reqs = Math.max(1, Math.min(left - 1, Math.round(perRun * share) || 1));
     const turn = (Number(pages?.expiredTurn) || 0) % n;
     const county = oa.counties[turn];
     const key = `${county.county}, ${county.state}`;

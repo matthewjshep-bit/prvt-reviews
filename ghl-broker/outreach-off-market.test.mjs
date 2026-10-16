@@ -175,4 +175,5 @@ test("with the off-market seats on, the sweep reads one county's Inactive listin
   assert.equal(job.offMarket.county, "King, WA");
   assert.equal(fake.cursors.get("loc-off-sweep|outreachPages").doc.expiredTurn, 1, "Pierce's turn next run");
   assert.equal(normalizeOutreachAutopilot({}).expired.enabled, false, "off by default");
+  assert.ok(pulls[0].maxRequests >= 1 && pulls[0].maxRequests < job.budget.perRun, "a share of the run's requests, never all of them");
 });
