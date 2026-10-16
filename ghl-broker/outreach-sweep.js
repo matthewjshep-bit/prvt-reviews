@@ -203,6 +203,12 @@ export function normalizeOutreachAutopilot(v = {}) {
     followUpEnabled: o.followUpEnabled === true,
     followUpWorkflowId: workflowIdFrom(o.followUpWorkflowId),
     followUpDays: Number.isFinite(days) && days > 0 ? Math.min(90, Math.max(3, days)) : DEFAULT_FOLLOW_UP_DAYS,
+    // The app's "Reached out, no reply" nudge also follows up the agents the
+    // GHL workflow texted first (2026-10-16, follow-up-sweep.js
+    // ghlCohortCandidates), and takes them out of the GHL follow-up
+    // workflow before it does. Off by default; with it on, turn
+    // `followUpEnabled` off so one system owns their follow-up.
+    nudgeGhlCohort: o.nudgeGhlCohort === true,
     // What RentCast is asked for, so a 500-listing page is already mostly
     // distress: listed at least this long ago (0 = any), these types, this old.
     minDaysOnMarket: o.minDaysOnMarket === 0 || o.minDaysOnMarket === "0" ? 0

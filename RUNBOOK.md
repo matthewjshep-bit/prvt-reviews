@@ -4948,7 +4948,9 @@ runs it) owns an agent when nothing else does:
     promise, a check-in they asked for, a lead they gave us a date for (only
     once its day is within `everyDays`), or an address chase;
   - the outreach first-text workflow (until its follow-up is due) or its
-    follow-up (`ghlWorkflowDays`, 21);
+    follow-up (`ghlWorkflowDays`, 21). The follow-up holds them only while
+    `outreachAutopilot.followUpEnabled` is on (2026-10-16): switched off, its
+    old enrollments hold nobody, and the app's nudge has that cohort;
   - any GHL workflow the app enrolled them in (now recorded as
     `workflow_enrolled`) unless its id is in `quietWorkflowIds`;
   - a thread you picked up in the last 3 days.
@@ -5434,6 +5436,43 @@ counts from. Any reply, an offer, a realm-yes, or a deal ends the ladder;
 when it runs out the agent is counted on Reports → Flow ("N cold agents never
 answered", `counts.coldNoReply`). It is not a row on Today (2026-09-17): there
 is nothing for a person to do about an agent who never answered.
+
+**The GHL workflow's cohort gets the app's follow-up (2026-10-16, off by
+default).** Agents whose first text came from the GHL workflow (before
+2026-10-04) carry an `outreach_enrolled` (kind `first`), not an
+`outreach_sent`, so the ladder above never counted them. Their follow-up was
+the GHL follow-up workflow's, and on 10/16 195 of them who never answered had
+heard nothing in 15 to 45 days (about 73 workflow texts had gone out since
+10/1 in all). `outreachAutopilot.nudgeGhlCohort` (default false) puts them on
+the same "Reached out, no reply" ladder (`ghlCohortCandidates` in
+follow-up-sweep.js):
+- **Who.** A GHL first text in the last 60 days, no app first text, no offer,
+  realm-yes or deal since, and no text of ours since (a check-in, a hand
+  reply, an address chase, another follow-up). Counted from the GHL first
+  text; any reply ends it, as for everyone.
+- **GHL decides last.** Before a rung is claimed (a dry run too), their GHL
+  thread is read (`afterFirstText`). Skipped, unclaimed: they wrote back
+  there (a text or a call); GHL sent anything more than 6 hours after the
+  first text that wasn't marked failed (the follow-up workflow did deliver,
+  or a person texted); no first text in the thread; a thread that can't be
+  read.
+- **One system.** After the claim and before the draft starts, the contact
+  is taken out of `followUpWorkflowId` (best-effort, written down as
+  `workflow_left`). The GHL follow-up (`outreach-followup.js`) also skips
+  anyone the app already followed up.
+- **County.** The nudge names the county of their outreach row's listing
+  (`doc.hook.county`), else the batch they were imported into ("Autopilot ·
+  Pierce, WA"), and the listing from the enrollment.
+- **Turning it on.** `nudgeGhlCohort: true` and `followUpEnabled: false`
+  (keep `followUpWorkflowId` set: the removal needs it). The agent check-in
+  then stops treating "the outreach follow-up workflow" as their owner.
+- **Check.** `POST /api/offers/automations/conversation/follow-ups/run
+  {dryRun: true}` (or the morning run), then `GET
+  /api/offers/automations/conversation/follow-ups` for the job's `results`:
+  rows with `ghl: true` say "would send" with the county, or why they were
+  skipped. After a live run, a started row carries `ghlFollowUp: "removed"`,
+  and the contact's timeline has the `follow_up_sent` (`outreach_nudge`) and
+  a `workflow_left`.
 
 **The app's first text (2026-10-04).** Matt moved the first text from the
 agent-smsblast workflow to the app, so each one is written fresh in his voice:

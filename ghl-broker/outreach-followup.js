@@ -142,9 +142,12 @@ async function run(job, { locationId, client, saved, store, now, paceMs }) {
   for (const c of due) {
     if (candidates.length >= MAX_PER_RUN) { more = true; break; }
     const since = typeof store.listContactEvents === "function"
-      ? await store.listContactEvents(locationId, c.contactId, { types: [...ENDED_BY], since: c.enrolledAt, limit: 5 }).catch(() => [])
+      ? await store.listContactEvents(locationId, c.contactId, { types: [...ENDED_BY, "follow_up_sent"], since: c.enrolledAt, limit: 20 }).catch(() => [])
       : [];
     if ((since || []).some((e) => ENDED_BY.has(e.type) && String(e.at) > String(c.enrolledAt))) continue;
+    // The app's own follow-up already went (outreachAutopilot.nudgeGhlCohort,
+    // follow-up-sweep.js): GHL doesn't send a second one.
+    if ((since || []).some((e) => e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge")) continue;
     candidates.push(c);
   }
   job.candidates = candidates.length;

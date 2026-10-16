@@ -338,12 +338,13 @@ export function offerOwner({ offers = [], drafts: allDrafts = [], events = [], c
 }
 
 /**
- * agentOwner({ offers, drafts, events, config, settings, outreachFollowUpDays, lastInboundAt, now }) → owner | null
+ * agentOwner({ offers, drafts, events, config, settings, outreachFollowUpDays, outreachFollowUpOn, lastInboundAt, now }) → owner | null
  *
  * The clock that has this agent right now, in words, or null when nothing
  * does. `offers` are this agent's CURRENT rows (shared/current-offer.js).
+ * `outreachFollowUpOn`: outreachAutopilot.followUpEnabled.
  */
-export function agentOwner({ offers = [], drafts: allDrafts = [], events = [], config = {}, settings = {}, outreachFollowUpDays = 14, lastInboundAt = null, now = Date.now() } = {}) {
+export function agentOwner({ offers = [], drafts: allDrafts = [], events = [], config = {}, settings = {}, outreachFollowUpDays = 14, outreachFollowUpOn = true, lastInboundAt = null, now = Date.now() } = {}) {
   const s = normalizeAgentPulse(settings);
   // A held draft owns the agent for a week, not for good (forgetStaleHeld).
   const drafts = forgetStaleHeld(allDrafts, now);
@@ -376,7 +377,9 @@ export function agentOwner({ offers = [], drafts: allDrafts = [], events = [], c
   const left = byTime.filter((e) => e.type === "outreach_left").at(-1)?.at || "";
   const first = byTime.filter((e) => e.type === "outreach_enrolled" && e.data?.kind !== "followup").at(-1);
   const fu = byTime.filter((e) => e.type === "outreach_enrolled" && e.data?.kind === "followup").at(-1);
-  if (fu && after(fu, left) && now - (ms(fu.at) ?? 0) < s.ghlWorkflowDays * DAY_MS) return "the outreach follow-up workflow";
+  // With the GHL follow-up switched off (2026-10-16) its enrollments text
+  // nobody: the app's nudge has that cohort, then this check-in does.
+  if (outreachFollowUpOn && fu && after(fu, left) && now - (ms(fu.at) ?? 0) < s.ghlWorkflowDays * DAY_MS) return "the outreach follow-up workflow";
   if (first && !fu && after(first, left) && now - (ms(first.at) ?? 0) < (outreachFollowUpDays + 2) * DAY_MS) return "the outreach workflow";
   // Any other GHL workflow the app put them in, unless it's known not to text
   // or it's a drip this check-in replaces (the TIER 2/3 check-ins).
@@ -530,11 +533,11 @@ const listingReason = (listing) => (listing?.doc?.offMarket === true ? "off_mark
  *   agent  { contactId, name, tags, offers (all), current (current rows),
  *            drafts, events, ledger, lastInboundAt, listings, facts,
  *            joinedAt, joinedByReply }
- *   ctx    { settings, config, houses, outreachFollowUpDays, now }
+ *   ctx    { settings, config, houses, outreachFollowUpDays, outreachFollowUpOn, now }
  *
  * status: "stopped" | "owned" | "not_due" | "cold_dropped" | "due".
  */
-export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses = {}, outreachFollowUpDays = 14, now = Date.now() } = {}) {
+export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses = {}, outreachFollowUpDays = 14, outreachFollowUpOn = true, now = Date.now() } = {}) {
   const s = normalizeAgentPulse(settings);
   const out = (status, reason, more = {}) => ({ contactId: agent.contactId, status, reason, ...more });
   const drafts = agent.drafts || [];
@@ -543,7 +546,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
 
   const stop = agentStops({ drafts, events, tags: agent.tags || [], botOffTags: config?.routing?.botOffTags || [], now });
   if (stop) return out("stopped", stop);
-  const owner = agentOwner({ offers: agent.current || [], drafts, events, config, settings: s, outreachFollowUpDays, lastInboundAt: agent.lastInboundAt, now });
+  const owner = agentOwner({ offers: agent.current || [], drafts, events, config, settings: s, outreachFollowUpDays, outreachFollowUpOn, lastInboundAt: agent.lastInboundAt, now });
   if (owner) return out("owned", owner);
 
   // Where they stand with us, and how many of our check-ins met silence.
@@ -640,7 +643,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
  * then cold agents' fresh listings (best listing first). `seats` is what is
  * left of the day's cap.
  */
-export function pickPulseAgents({ agents = [], settings = {}, config = {}, houses = {}, outreachFollowUpDays = 14, seats = null, now = Date.now() } = {}) {
+export function pickPulseAgents({ agents = [], settings = {}, config = {}, houses = {}, outreachFollowUpDays = 14, outreachFollowUpOn = true, seats = null, now = Date.now() } = {}) {
   const s = normalizeAgentPulse(settings);
   const counts = {
     pool: agents.length, bySegment: { partner: 0, source: 0, engaged: 0, cold: 0 }, stopped: {}, owned: {}, notDue: 0, coldDropped: 0,
@@ -652,7 +655,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   // One line per agent (no names): what the check-in will do and when.
   const verdicts = [];
   for (const a of agents) {
-    const v = evaluateAgent(a, { settings: s, config, houses, outreachFollowUpDays, now });
+    const v = evaluateAgent(a, { settings: s, config, houses, outreachFollowUpDays, outreachFollowUpOn, now });
     const card = tierCard(a);
     if (card) { counts.ghlTier[card.tier]++; if (v.status === "due") counts.ghlTier.due++; }
     verdicts.push({ contactId: a.contactId, status: v.status, reason: v.reason || v.pulseReason || "", segment: v.segment || null,
@@ -709,11 +712,11 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
  */
 const MATT_SEGMENT_RANK = { partner: 0, source: 1, engaged: 2 };
 const MATT_QUIET_DAYS = 7;
-export function pickMattsFifteen({ agents = [], settings = {}, config = {}, houses = {}, outreachFollowUpDays = 14, now = Date.now() } = {}) {
+export function pickMattsFifteen({ agents = [], settings = {}, config = {}, houses = {}, outreachFollowUpDays = 14, outreachFollowUpOn = true, now = Date.now() } = {}) {
   const s = normalizeAgentPulse(settings);
   const rows = [];
   for (const a of agents || []) {
-    const v = evaluateAgent(a, { settings: s, config, houses, outreachFollowUpDays, now });
+    const v = evaluateAgent(a, { settings: s, config, houses, outreachFollowUpDays, outreachFollowUpOn, now });
     if (v.status === "stopped" || v.status === "owned") continue;
     if (!(v.segment in MATT_SEGMENT_RANK)) continue;
     const touched = latest([
