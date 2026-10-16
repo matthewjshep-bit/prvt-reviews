@@ -209,7 +209,8 @@ const OUR_PASS_RX = [
   /\b(?:too|more)\s+(?:turnkey|finished|nice)\s+(?:for\s+us|than\s+what\s+we)\b/i,
   /\b(?:mostly|usually|really)\s+after\s+(?:places|houses|homes|stuff|properties)\s+(?:that\s+)?need(?:ing|s)?\s+(?:real\s+|more\s+)?work\b/i,
   /\boutside\s+the\s+box\s+for\s+us\b/i,
-  /\b(?:we(?:'d|'ve|\s+have|\s+had)?|i(?:'ve)?)\s+(?:already\s+)?moved\s+on\s+from\s+(?:that|this)\s+one\b/i,
+  // "We've actually moved on from this one" (2026-10-15) said it too.
+  /\b(?:we(?:'d|'ve|\s+have|\s+had)?|i(?:'ve)?)\s+(?:(?:already|actually|just|kind\s+of|since)\s+)?moved\s+on\s+from\s+(?:that|this)\s+one\b/i,
   /\b(?:we'?ll|we\s+will|going\s+to|gonna)\s+pass\s+on\s+(?:that|this|it)\b/i,
 ];
 // The same reply still chasing a house — ours or another one ("pass on 184th,

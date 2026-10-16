@@ -299,6 +299,15 @@ test("a counter draft with a failed band exception is a now action carrying the 
   assert.deepEqual(r.cards[0].draftIds, ["d1"]);
 });
 
+test("their yes after we passed is a now row that says so", () => {
+  const r = build({ offers: [offer({ status: "we_passed", cashAmount: 261000 })],
+    drafts: [draft({ intent: "question", contactName: "Dana Agent", yesAfterPass: { offerId: "o1", address: "12 Elm St, Renton, WA", amount: 261000 } })] });
+  const a = r.actions.find((x) => x.kind === "draft_waiting");
+  assert.equal(a.severity, "now");
+  assert.equal(a.title, "They said yes after we passed: Dana Agent on 12 Elm St");
+  assert.match(a.detail, /took our \$261,000/);
+});
+
 test("a counter draft inside the band still waits on a person but is not urgent", () => {
   const r = build({ offers: [offer({ status: "countered" })],
     drafts: [draft({ intent: "question", exception: { passed: true, theirAmount: 280000, ceiling: 292000 } })] });

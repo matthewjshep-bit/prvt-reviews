@@ -142,3 +142,57 @@ test("a call nobody picked up doesn't", () => {
   const rangOut = { type: "call_summary", at: ago(0.2), source: "call", data: { summary: "(call, no transcript available)", transcribed: false, durationSec: 8 } };
   assert.equal(health({ drafts: [theirs("what's your timeline?", 3)], events: [rangOut] }).drive, true);
 });
+
+/* ---------- the machine stays out of a live thread (2026-10-15) ---------- */
+
+import { machineMayStart, LIVE_THREAD_KINDS } from "./thread-health.js";
+const hoursAgo = (h) => new Date(NOW - h * 3600000).toISOString();
+
+test("a check-in or a nudge never lands within 48 hours of their text about a live house", () => {
+  const drafts = [theirs("seller is thinking it over, should know tomorrow", 0, { createdAt: hoursAgo(5) })];
+  for (const kind of ["agent_pulse", "offer_nudge", "promise_due", "passed_checkin", "kind_pass", "hot_push", "checkin_due"]) {
+    const v = machineMayStart({ kind, drafts, offers: [offer()], now: NOW });
+    assert.equal(v.ok, false, kind);
+    assert.equal(v.rule, "live_thread", kind);
+    assert.match(v.reason, /texted 5h ago/);
+  }
+  // Two days later the machine may speak again.
+  const later = machineMayStart({ kind: "offer_nudge", drafts: [theirs("thinking it over", 0, { createdAt: hoursAgo(49) })], offers: [offer()], now: NOW });
+  assert.equal(later.ok, true);
+});
+
+test("the floats answer a live thread, and an auto-reply or a dead house doesn't make one", () => {
+  const drafts = [theirs("what would you pay?", 0, { createdAt: hoursAgo(2) })];
+  for (const kind of ["realm_check", "take_check"]) {
+    assert.equal(LIVE_THREAD_KINDS.has(kind), false);
+    assert.equal(machineMayStart({ kind, drafts, offers: [offer()], now: NOW }).ok, true, kind);
+  }
+  const auto = [theirs("I'm out of the office until Monday and will reply when I return.", 0, { createdAt: hoursAgo(2) })];
+  assert.equal(machineMayStart({ kind: "offer_nudge", drafts: auto, offers: [offer()], now: NOW }).ok, true, "an auto-reply is nobody talking");
+  assert.equal(machineMayStart({ kind: "agent_pulse", drafts, offers: [offer({ status: "passed" })], now: NOW }).ok, true, "nothing live");
+  // A house they named this week is live with no offer on it yet.
+  const named = machineMayStart({ kind: "agent_pulse", drafts, offers: [], events: [{ type: "house_mentioned", address: "40 Oak Ave, Kent, WA", at: ago(2) }], now: NOW });
+  assert.equal(named.ok, false);
+  assert.match(named.reason, /40 Oak Ave/);
+});
+
+test("nothing that walks away goes out after they said yes to our number", () => {
+  // The 261k thread: the yes came in an hour ago, days after their last other text.
+  const yes = [theirs("Good news, the seller is willing to accept your 261k, cash as-is", 0, { createdAt: hoursAgo(60), intent: "question", propertyAddress: "12 Elm St" })];
+  const walked = offer({ status: "we_passed", cashAmount: 261000 });
+  for (const kind of ["kind_pass", "passed_checkin"]) {
+    const v = machineMayStart({ kind, drafts: yes, offers: [walked], address: "12 Elm St, Renton, WA", now: NOW });
+    assert.equal(v.ok, false, kind);
+    assert.equal(v.rule, "said_yes", kind);
+    assert.match(v.reason, /said yes to our number on 12 Elm St/);
+  }
+  // A reply whose words walk away is held the same way.
+  assert.equal(machineMayStart({ kind: "", passes: true, drafts: yes, offers: [walked], now: NOW }).rule, "said_yes");
+  // A yes on another house doesn't hold a pass on this one.
+  assert.equal(machineMayStart({ kind: "kind_pass", drafts: yes, offers: [walked], address: "40 Oak Ave, Kent, WA", now: NOW }).ok, true);
+  // The book's own yes: an agreed price, an acceptance on the timeline.
+  assert.equal(machineMayStart({ kind: "passed_checkin", offers: [offer({ status: "passed", agreed: { amount: 300000, at: ago(3), via: "acceptance" } })], now: NOW }).rule, "said_yes");
+  assert.equal(machineMayStart({ kind: "kind_pass", events: [{ type: "realm_yes", address: "12 Elm St", at: ago(1) }], now: NOW }).rule, "said_yes");
+  // A month on, the yes is history.
+  assert.equal(machineMayStart({ kind: "passed_checkin", events: [{ type: "realm_yes", address: "12 Elm St", at: ago(40) }], now: NOW }).ok, true);
+});

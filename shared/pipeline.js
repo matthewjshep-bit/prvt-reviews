@@ -607,12 +607,20 @@ export function buildPipeline({
     const never = (NEVER_AUTO[d.party] || []).includes(d.intent);
     const x = d.exception;
     if (d.status === "draft") {
-      const hot = never || (x && !x.passed);
-      const title = x && !x.passed && x.theirAmount && x.ceiling
+      // Their yes landed on a house we passed on (2026-10-15): the most
+      // important row of the day, said plainly.
+      const yesAfter = d.yesAfterPass?.offerId ? d.yesAfterPass : null;
+      const hot = never || (x && !x.passed) || Boolean(yesAfter);
+      const title = yesAfter
+        ? `They said yes after we passed: ${d.contactName || "an agent"} on ${String(yesAfter.address || base.address || "the house").split(",")[0]}`
+        : x && !x.passed && x.theirAmount && x.ceiling
         ? `Counter ${money(x.theirAmount)} is ${money(x.theirAmount - x.ceiling)} over the ${money(x.ceiling)} ceiling`
         : `${d.contactName || "Someone"}: ${String(d.intent || "reply").replace(/_/g, " ")}`;
       const id = push({ ...base, kind: "draft_waiting", severity: hot ? "now" : "soon", title,
-        detail: x && !x.passed ? (x.basis || x.reason || "") : (d.autoSend?.reason || ""), ops: [] });
+        ...(yesAfter ? { yesAfterPass: true } : {}),
+        detail: yesAfter
+          ? `they took our ${money(yesAfter.amount)} after we marked it we passed — reopen it, or tell them yourself; the bot's reply waits for you`
+          : x && !x.passed ? (x.basis || x.reason || "") : (d.autoSend?.reason || ""), ops: [] });
       if (card) card.actionIds.push(id);
     } else if (d.status === "scheduled" && d.outbound?.kind === "blast_open") {
       // A blast is one decision, not two hundred rows: one line per deal.

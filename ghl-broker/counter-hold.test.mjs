@@ -70,6 +70,16 @@ test("an agreed price or a deal is never passed by the clock", async () => {
   assert.deepEqual(await runCounterHolds({ locationId: "L", store: fakeStore([deal]), config: CFG(), deps, now: NOW }), []);
 });
 
+// 2026-10-15: a yes the reply agent filed, then two check-ins that went
+// nowhere — the clock must not walk away from it.
+test("a counter they said yes on after our hold is never passed by the clock", async () => {
+  const store = fakeStore([heldOffer({ at: ago(12), nudges: [ago(8), ago(4)] })]);
+  store.events.push({ type: "realm_yes", contactId: "c1", address: "12 Elm St, Seattle, WA 98101", at: ago(10) });
+  const r = await runCounterHolds({ locationId: "L", store, config: CFG(), deps: { passHeldCounter: async () => { throw new Error("must not pass"); } }, now: NOW });
+  assert.deepEqual(r.map((x) => x.status), ["skipped"]);
+  assert.match(r[0].reason, /said yes/);
+});
+
 // Review, 2026-10-04: a check-in skipped for the day spent its rung for
 // good, a reply we answered froze the clock, and a thread you'd picked up
 // was still passed.

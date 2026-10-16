@@ -3740,6 +3740,49 @@ reply-agent.js (`WALK_AWAY_GAP`, `listPriceFloor`):
   workflow + `mark_offer_passed`) and the passed-offer check-in ladder
   (every 10 days) — that is the "stay in touch".
 
+### The machine stays out of a live thread, and never walks away from a yes (2026-10-15)
+
+**Why.** The funnel review (485 threads, Jul–Oct) found machine texts landing
+in the middle of 92 live negotiations. The worst: a seller took our 261k on an
+offer we had marked we_passed four hours earlier, and 11 minutes later the
+bot answered "We've actually moved on from this one for now". The agent asked
+us to stop texting.
+
+**Two rules** (`machineMayStart`, shared/thread-health.js), asked in
+`startProactive` before anything is drafted and again in `sendReplyDraft`
+before an auto-send:
+
+- **48 hours.** They texted us (not an auto-reply) in the last 48h and a house
+  is live for them (an offer new/sent/countered, hot or agreed, a house they
+  named in the last 14 days): no `kind_pass`, `passed_checkin`, `agent_pulse`,
+  `checkin_due`, nudge, `address_chase`, `price_drop`, `promise_due`,
+  `take_ask` or `hot_push` is started, and one already counting down is
+  binned. The floats (`realm_check`, `take_check`) are exempt: they answer
+  the conversation.
+- **A yes.** Any yes to our number in the last 30 days on that house
+  (`saidYes`, shared/offer-status.js: an agreed price, the acceptance mark, a
+  `realm_yes`/`offer_accepted` event, an inbound read as an acceptance or a
+  realm yes, or their own words — `saysYes`): nothing pass-shaped goes out by
+  itself. That's `kind_pass`, `passed_checkin`, and any text whose words pass
+  (`ourReplyPasses`, which now also reads "we've actually/just moved on"). A
+  machine text is binned; a reply goes back to wait for you. The same yes
+  stops the held-underwrite sweep closing the house (it's "yours"), the
+  counter-hold clock passing it, the Tier 1 morning clear-out kicking the
+  card, and a reply that passes from retiring the unsent offer.
+
+**A yes after we passed.** A yes (by intent or in their words) on a house we
+marked we passed holds the reply for you whatever the model filed it as, and
+the draft carries `yesAfterPass`. Today shows it as **"They said yes after we
+passed: Name on Street"** (a `draft_waiting` row, now). Their next texts stay
+held until somebody sends something. The prompt's WE PASSED rule now says a
+yes to our number is not a new price: thank them, say you'll confirm today,
+needsHuman, never "we've moved on".
+
+**No switch.** Both rules only hold things back. **Check:** the outbox row's
+flag says "the machine stays out of a live thread for 48h" or "they said yes
+to our number"; the follow-up sweep's report lists the same reason as
+`skipped`.
+
 ### Terms the bot holds (2026-09-16)
 
 **The inspection period.** Our diligence is the feasibility window after mutual

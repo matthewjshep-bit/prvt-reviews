@@ -10,7 +10,7 @@
 // Rides the morning follow-up sweep, after the ladders, so it shares that
 // run's one-text-a-morning rule. Off unless parties.agent.counterHold is on.
 
-import { effectiveStatus, OPEN_STATUSES, priceAgreed, isHot } from "./shared/offer-status.js";
+import { effectiveStatus, OPEN_STATUSES, priceAgreed, isHot, saidYes } from "./shared/offer-status.js";
 import { currentOffers } from "./shared/current-offer.js";
 import { threadHealth } from "./shared/thread-health.js";
 import { botHold } from "./shared/bot-hold.js";
@@ -50,6 +50,11 @@ export async function runCounterHolds({ client, locationId, saved, store, config
     if (s.next === "pass") {
       // You picked the thread up since the hold: the pass is yours to make.
       if (health.reason === "person_has_it") { out.push({ ...base, status: "skipped", reason: "you have the thread — not passed" }); continue; }
+      // They said yes to our number since (2026-10-15): we never walk away from a yes.
+      if (saidYes({ offers: [o], drafts, events, address: o.address, since: o.counterHold.at, now })) {
+        out.push({ ...base, status: "skipped", reason: "they said yes to our number — not passed" });
+        continue;
+      }
       if (dryRun) { out.push({ ...base, status: "would_pass", reason: s.why }); continue; }
       const r = typeof deps.passHeldCounter === "function" ? await deps.passHeldCounter({ offerId: o.id, note: s.why }).catch((e) => ({ ok: false, reason: e.message })) : { ok: false, reason: "passing is not wired" };
       out.push({ ...base, status: r?.ok ? "passed" : "skipped", reason: r?.ok ? s.why : r?.reason });

@@ -236,7 +236,8 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         ? "— we passed on it before we ever priced it, and it is OPEN TO THEIR NUMBERS: don't chase it, but if they give their value, " +
           "the work, or a price on it, thank them and say you'll run it on their numbers and come back with ours — never say we've moved on " +
           "from it, and name no number yet"
-        : status === "we_passed" ? "WE WALKED AWAY from this house: closed on our side, do not chase it or name its number" : "",
+        : status === "we_passed" ? "WE WALKED AWAY from this house: closed on our side, do not chase it or name its number; " +
+          "if they say yes to our number on it, never say we've moved on: thank them and say you'll confirm it with them today (a person reopens it)" : "",
       status === "unavailable" ? "THE HOUSE IS GONE (sold or off the market, per the agent): do not chase it or name its number; if it comes back, a person re-offers" : "",
       lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" ? "" : "not sent yet",
       // No expiry date: the offer stands until they answer, and a date here

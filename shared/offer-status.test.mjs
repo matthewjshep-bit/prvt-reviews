@@ -463,3 +463,40 @@ test("a yes followed by our own move down still guards the price: no paper at th
   assert.equal(priceAgreed(repriced)?.amount, 289750);
   assert.equal(priceLocked(repriced), true);
 });
+
+/* ---------- a yes from their side (2026-10-15) ---------- */
+
+import { saysYes, saidYes } from "./offer-status.js";
+
+test("their yes to our number is read from their words, and a counter or a presentation is not one", () => {
+  for (const t of [
+    "Good news, the seller is willing to accept your 261k, cash as-is",
+    "Seller accepted!",
+    "the sellers have accepted your offer",
+    "They'll take your offer",
+    "We have a deal",
+    "seller agreed to take 261,000",
+  ]) assert.equal(saysYes(t, 261000), true, t);
+  for (const t of [
+    "They're not willing to accept that",
+    "Seller won't take your offer",
+    "They accepted another offer, sorry",
+    "I'll take your offer to the seller tonight",
+    "They'd be willing to accept 280k",
+    "What would you take for it?",
+  ]) assert.equal(saysYes(t, 261000), false, t);
+});
+
+test("saidYes finds the newest yes on the house, inside the month, after a given moment", () => {
+  const now = Date.parse("2026-10-15T20:00:00Z");
+  const at = (h) => new Date(now - h * 3600000).toISOString();
+  const drafts = [{ inbound: "the seller is willing to accept your 261k", intent: "question", propertyAddress: "12 Elm St", createdAt: at(1) }];
+  const offers = [{ id: "o1", address: "12 Elm St, Renton, WA", cashAmount: 261000, status: "we_passed" }];
+  const yes = saidYes({ offers, drafts, address: "12 Elm St, Renton, WA", now });
+  assert.equal(yes.via, "their_words");
+  assert.equal(yes.amount, 261000);
+  assert.equal(saidYes({ offers, drafts, address: "12 Elm St", since: at(0.5), now }), null, "only a yes after `since`");
+  assert.equal(saidYes({ offers, drafts, address: "40 Oak Ave", now }), null, "another house");
+  assert.equal(saidYes({ drafts: [{ inbound: "ok", intent: "acceptance", createdAt: at(24 * 31) }], now }), null, "older than a month");
+  assert.equal(saidYes({ events: [{ type: "offer_accepted", at: at(2) }], now }).via, "offer_accepted");
+});

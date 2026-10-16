@@ -400,7 +400,10 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "once, warmly and plainly, that we've moved on from that one for now, and ask whether they have anything else " +
       "that needs work. If they come back with a new number or new terms on it, don't engage the price at all: thank " +
       "them, say you'll pass it along, and set needsHuman with the reason — reopening a house we walked from is a " +
-      "person's call."
+      "person's call. A YES TO OUR NUMBER is not a new price (2026-10-15: a seller who took our number on a house " +
+      "we'd passed on got \"we've moved on\", and the agent was gone): when they accept the number we gave, " +
+      "thank them, say you'll confirm it with them today, and set needsHuman. Never tell someone who just said yes " +
+      "that we've moved on, and never ask them for other houses in the same text."
     );
   }
   if (playbook.mayCommit) parts.push(`YOU MAY, on your own: ${playbook.mayCommit}`);

@@ -37,7 +37,7 @@ import { annotateCurrent } from "./shared/current-offer.js";
 import { assetOf, normalizeFocusKinds } from "./shared/asset-type.js";
 import { normalizeMirror } from "./shared/ghl-mirror.js";
 import { houseGone } from "./shared/held-underwrites.js";
-import { effectiveStatus, isHot, OPEN_STATUSES } from "./shared/offer-status.js";
+import { effectiveStatus, isHot, OPEN_STATUSES, saidYes, saysYes } from "./shared/offer-status.js";
 
 const DAY_MS = 86400000;
 const WORDS_DAYS = 14;          // their last text counts for the screen this long
@@ -128,6 +128,9 @@ export async function loadTierOne({ client, locationId, saved = {}, store = defa
     const addedAt = events.filter((e) => e?.type === "tier1_added").map((e) => e.at).sort().at(-1) || null;
     const pending = events.filter((e) => e?.type === "address_pending").map((e) => e.at).sort().at(-1);
     const chasing = Boolean(pending) && !events.some((e) => e?.type === "address_pending_closed" && String(e.at) >= String(pending));
+    // They said yes to our number on it (2026-10-15): the clear-out never takes that card.
+    const yes = Boolean(saidYes({ offers, events, address: house?.address || "", now })
+      || (words.text && saysYes(words.text, Number(house?.offer?.cashAmount) || 0)));
     return {
       contactId,
       name: name || offers.find((o) => o.contactName)?.contactName || "",
@@ -141,6 +144,7 @@ export async function loadTierOne({ client, locationId, saved = {}, store = defa
       lastInboundAt: words.lastInboundAt,
       lastWord: words.text ? { at: words.textAt, text: words.text.slice(0, 240) } : null,
       addedAt, chasing,
+      ...(yes ? { saidYes: true } : {}),
     };
   };
 

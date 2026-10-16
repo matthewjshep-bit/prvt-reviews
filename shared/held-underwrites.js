@@ -36,7 +36,7 @@
 
 import { addressKey, sameStreet, parseUsAddress, completeAddress } from "./us-address.js";
 import { propertyDossier } from "./contact-record.js";
-import { aiHoldReasons, effectiveStatus, DEAD_STATUSES } from "./offer-status.js";
+import { aiHoldReasons, effectiveStatus, DEAD_STATUSES, saidYes } from "./offer-status.js";
 import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
 import { WA_CITY_COORDS } from "./wa-city-coords.js";
 import { ourReplyPasses, threadPassed } from "./flip-read.js";
@@ -303,6 +303,11 @@ function triageCore({
   if (events.some((e) => e?.type === "unsubscribed")) return { ...base, action: "retire", status: "we_passed", reason: "they unsubscribed" };
   const off = tags.find((t) => botOffTags.includes(t));
   if (off) return { ...base, action: "retire", status: "we_passed", reason: `the bot is off for this contact (tag: ${off})` };
+  // They said yes to our number on this house (2026-10-15: a yes on a house
+  // we'd walked from was answered "we've moved on"). Nothing the sweep does
+  // by itself closes it: it's Matt's.
+  const yes = saidYes({ offers: siblings, drafts, events, address, now });
+  if (yes) return { ...base, action: "yours", reason: `they said yes to our number on this house (${yes.at.slice(0, 10)}) — the sweep never closes it` };
   // The agent's card in a cold stage is about the agent, not this house: a
   // house they BROUGHT us (shared/lead-source.js) is never retired for it.
   // 2026-10-09: 20 brought houses were closed this way, never priced — the

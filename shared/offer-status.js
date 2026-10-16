@@ -297,6 +297,107 @@ export function priceAgreed(offer) {
 export const priceLocked = (offer) =>
   Boolean(priceAgreed(offer)) && !DEAD_STATUSES.has(effectiveStatus(offer));
 
+/* ---------- a yes from their side (2026-10-15) ---------- */
+
+// The funnel review's worst thread: the seller took our 261k, in so many
+// words, on an offer we had marked we_passed four hours before, and 11
+// minutes later the bot answered "We've actually moved on from this one for
+// now". Every yes they give is read
+// here, so nothing the machine sends can walk away from it.
+//
+// Words first, because the model can misfile a yes (as a question, as small
+// talk). Narrow on purpose: "not willing to accept", "won't take" and
+// "accepted another offer" are not a yes.
+export const SAYS_YES_RX = new RegExp([
+  /(?<!\bnot\s)(?<!n't\s)(?<!\bnever\s)\b(?:willing|happy|ready|agreed|agrees?|going|able|okay|ok)\s+to\s+(?:accept|take)\s+(?:your|the|our|that|it\b|\$?\d)/.source,
+  /\b(?:sellers?|they|she|he|owners?|clients?)\s+(?:has\s+|have\s+|just\s+|already\s+|officially\s+)*accepted\b(?!\s+(?:an?other|a\s+different|the\s+other|other|a\s+backup|an\s+offer|offers?))/.source,
+  /(?<!n't\s)(?<!\bnot\s)\b(?:will|'ll|would|'d)\s+(?:accept|take)\s+(?:your|the|our|that)\s+(?:offer|number|price|\$?\d)/.source,
+  /(?<!n't\s)(?<!\bnot\s)\baccept(?:s|ed)?\s+(?:your|our)\s+(?:offer|number|price|\$?\d)/.source,
+  /\b(?:you(?:'ve|\s+have)\s+got|we\s+have|we'?ve\s+got)\s+a\s+deal\b/.source,
+].join("|"), "i");
+// "I'll take your offer to the seller" is presenting it, not taking it.
+const PRESENTS_RX = /\b(?:take|bring|present|run|show)\s+(?:it|this|that|(?:your|our|the)\s+(?:offer|number|price))\s+(?:to|by|past)\s+(?:the\s+|my\s+|our\s+|his\s+|her\s+|their\s+)?(?:sellers?|clients?|owners?|them|him|her)\b/gi;
+// The street-number-free figures in a text: "261k", "$261,000", "261,500".
+const YES_MONEY_RX = /\$\s?\d[\d,]*(?:\.\d+)?\s?[kKmM]?\b|\b\d+(?:\.\d+)?\s?[kK]\b|\b\d{1,3}(?:,\d{3})+\b/g;
+function yesAmounts(text = "") {
+  const out = [];
+  for (const m of String(text || "").matchAll(YES_MONEY_RX)) {
+    const t = m[0].replace(/[$,\s]/g, "");
+    const suffix = t.slice(-1).toLowerCase();
+    const base = Number(suffix === "k" || suffix === "m" ? t.slice(0, -1) : t);
+    if (!Number.isFinite(base)) continue;
+    const n = Math.round(suffix === "k" ? base * 1e3 : suffix === "m" ? base * 1e6 : base);
+    if (n >= 10000) out.push(n);
+  }
+  return out;
+}
+/**
+ * saysYes(text, ours) → true when their words take our number.
+ *
+ * A figure in the same text that isn't ours (within half a percent) makes it
+ * their number, a counter, not a yes: "they'd accept 280" on our 261k.
+ */
+export function saysYes(text = "", ours = 0) {
+  const t = String(text || "").replace(PRESENTS_RX, " ");
+  if (!SAYS_YES_RX.test(t)) return false;
+  const named = yesAmounts(t);
+  if (!named.length) return true;
+  const n = Math.round(Number(ours) || 0);
+  if (!(n > 0)) return false;
+  const slack = Math.max(1000, Math.round(n * 0.005));
+  return named.every((x) => Math.abs(x - n) <= slack);
+}
+
+// A yes older than this is history: the house has moved on since, one way or
+// the other, and a check-in on it is not walking away from anything.
+export const YES_WINDOW_DAYS = 30;
+const YES_EVENT_TYPES = new Set(["realm_yes", "offer_accepted"]);
+const YES_INTENTS = new Set(["acceptance", "realm_yes"]);
+
+/**
+ * saidYes({ offers, drafts, events, address, since, now }) → { at, via, address, offerId, amount } | null
+ *
+ * Their newest yes to our number in the last YES_WINDOW_DAYS: an agreed price
+ * on the offer (priceAgreed), the acceptance mark, a realm_yes or
+ * offer_accepted on the timeline, an inbound the reply agent read as an
+ * acceptance or a realm yes, or their own words (saysYes). With `address`,
+ * only that house or a yes that named no house; `since` keeps only a yes
+ * after it (a yes after we passed). The contact's seller-accepted tag isn't
+ * read: it carries no date, and the acceptance draft that set it is here.
+ */
+export function saidYes({ offers = [], drafts = [], events = [], address = "", since = null, now = Date.now() } = {}) {
+  const t = (v) => { const x = Date.parse(v || ""); return Number.isFinite(x) ? x : null; };
+  const floor = Math.max(now - YES_WINDOW_DAYS * 86400000, t(since) ?? -Infinity);
+  const here = (a) => !String(address || "").trim() || !String(a || "").trim() || sameStreetLoose(a, address);
+  const ourFor = (a) => {
+    const o = (offers || []).find((x) => x && Number(x.cashAmount) > 0 && (!a || sameStreetLoose(x.address, a)));
+    return o ? Number(o.cashAmount) : 0;
+  };
+  const hits = [];
+  const hit = (at, via, a, offerId = null, amount = 0) => {
+    const ts = t(at);
+    if (ts == null || ts < floor || ts > now + 60000 || !here(a)) return;
+    hits.push({ at: new Date(ts).toISOString(), via, address: String(a || ""), offerId, amount: Math.round(Number(amount) || 0) });
+  };
+  for (const o of offers || []) {
+    if (!o) continue;
+    const agreed = priceAgreed(o);
+    if (agreed) hit(agreed.at, agreed.via || "agreed", o.address, o.id || null, agreed.amount);
+    if (o.acceptanceSignal?.at) hit(o.acceptanceSignal.at, "acceptance", o.address, o.id || null, o.cashAmount);
+  }
+  for (const e of events || []) {
+    if (e && YES_EVENT_TYPES.has(e.type)) hit(e.at, e.type, e.address, e.offerId || null, e.data?.amount);
+  }
+  for (const d of drafts || []) {
+    const said = String(d?.inbound || "").trim();
+    if (!said) continue;
+    const a = d.propertyAddress || "";
+    if (YES_INTENTS.has(d.intent) && !d.inRange) hit(d.createdAt, d.intent, a, null, ourFor(a));
+    else if (saysYes(said, ourFor(a))) hit(d.createdAt, "their_words", a, null, ourFor(a));
+  }
+  return hits.sort((x, y) => y.at.localeCompare(x.at))[0] || null;
+}
+
 /* ---------- heat: which offers are close to a contract ---------- */
 
 // "Hot" is a second axis, like provenance above, and for the same reason: a

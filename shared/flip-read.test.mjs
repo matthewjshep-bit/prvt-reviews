@@ -104,6 +104,8 @@ test("our reply passing on the house reads as a pass; a reply still chasing one 
     "Ah, cosmetic usually means it's not quite distressed enough for us. Anything else on your desk?",
     "Appreciate the numbers. Turns out Fox Rd's outside the box for us size-wise, so we've moved on from that one for now.",
     "We'd already moved on from that one for now, Brent. Got anything else sitting that needs work?",
+    // 2026-10-15: the one that answered a yes to our 261k.
+    "We've actually moved on from this one for now. Anything else that needs work?",
     // The qualify step stamps its own pass; these two read as one anyway.
     ...QUALIFY_PASSES.slice(0, 2),
   ]) assert.equal(ourReplyPasses(said), true, said);

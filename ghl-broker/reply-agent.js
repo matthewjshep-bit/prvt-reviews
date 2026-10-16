@@ -58,6 +58,7 @@ import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { holdFor } from "./bot-hold.js";
+import { machineMayStart, LIVE_THREAD_KINDS, PASS_SHAPED_KINDS } from "./shared/thread-health.js";
 import { agentTurnReason } from "./agent-focus.js";
 import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
@@ -72,7 +73,7 @@ import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./share
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper, saysYes, saidYes, YES_WINDOW_DAYS } from "./shared/offer-status.js";
 import { signedContractIn, themLines } from "./shared/contract-signed.js";
 import { sameStreet, sameHouse } from "./shared/us-address.js";
 import { releasableHeld } from "./shared/conversation-audit.js";
@@ -1485,6 +1486,47 @@ function pickOfferByAddress(offers, hint) {
   }) || null;
 }
 
+/**
+ * yesAfterOurPass({ offers, drafts, events, draft, message, now }) → { offerId, address, amount, passedAt, at } | null
+ *
+ * Their yes to our number landed on a house we had marked we passed (the
+ * funnel review, 2026-10-15: the seller took our 261k four hours after we
+ * passed, and the bot answered "We've actually moved on"). The house they named,
+ * or with no house named and nothing open, the newest one we walked from in
+ * the last month. Only a house we put a number to: one we passed on before
+ * pricing it reopens on their numbers (held-underwrites.js) and the book
+ * already says so.
+ *
+ * This text's yes, or an earlier one since the pass that nobody has answered
+ * yet: their "did you get my text?" after it is still waiting on that yes,
+ * and the bot, told we walked away, would answer it with a goodbye.
+ */
+export function yesAfterOurPass({ offers = [], drafts = [], events = [], draft = {}, message = "", now = Date.now() } = {}) {
+  const walked = currentOffers(offers || []).filter((o) => offerStatus(o) === "we_passed" && Number(o.cashAmount) > 0 && !o.deal);
+  if (!walked.length) return null;
+  let picked = draft.propertyAddress ? pickOfferByAddress(walked, draft.propertyAddress) : null;
+  if (!picked) {
+    const open = currentOffers(offers || []).filter(isNegotiable);
+    if (draft.propertyAddress && pickOfferByAddress(open, draft.propertyAddress)) return null;
+    if (open.length) return null;
+    const passedAt = (o) => Date.parse(o.statusAt || "") || 0;
+    picked = [...walked].sort((x, y) => passedAt(y) - passedAt(x))[0];
+    if (now - passedAt(picked) > YES_WINDOW_DAYS * 86400000) return null;
+  }
+  const ours = Math.round(Number(picked.cashAmount) || 0);
+  const found = { offerId: picked.id, address: picked.address || "", amount: ours, passedAt: picked.statusAt || null };
+  const yesNow = (["acceptance", "realm_yes"].includes(draft.intent) && !draft.inRange && !(Number(draft.counterAmount) > 0)) || saysYes(message, ours);
+  if (yesNow) return { ...found, at: new Date(now).toISOString() };
+  const before = saidYes({ offers: [picked], drafts, events, address: picked.address, since: picked.statusAt, now });
+  if (!before) return null;
+  // Answered since: a person sent something after it (the bot's own replies
+  // to it are held, so a sent one is somebody's Send) or typed one on Today.
+  const after = (t) => (Date.parse(t || "") || 0) > Date.parse(before.at);
+  const answered = (drafts || []).some((d) => d?.status === "sent" && after(d.sentAt || d.updatedAt || d.createdAt))
+    || (events || []).some((e) => e?.type === "hand_reply" && after(e.at));
+  return answered ? null : { ...found, at: before.at };
+}
+
 /* ---------- GHL writeback ---------- */
 
 const contactName = (c) =>
@@ -2579,6 +2621,19 @@ async function fellThroughFor({ store, locationId, addresses = [] }) {
 }
 const fellThroughLine = (o) => `the deal on ${String(o?.address || "the house").split(",")[0].trim()} fell through`;
 
+// machineMayStart (shared/thread-health.js) on this contact's book, drafts
+// and timeline. A read that fails holds nothing back: the other doors still
+// ask their own questions.
+async function machineMayStartFor({ store, locationId, contactId, kind, address = "", passes = false, now = Date.now() }) {
+  if (!LIVE_THREAD_KINDS.has(kind) && !PASS_SHAPED_KINDS.has(kind) && !passes) return { ok: true };
+  const [drafts, events, offers] = await Promise.all([
+    typeof store?.listReplyDrafts === "function" ? store.listReplyDrafts(locationId, { contactId, limit: 50 }).catch(() => []) : [],
+    typeof store?.listContactEvents === "function" ? store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []) : [],
+    typeof store?.listOffers === "function" ? store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []) : [],
+  ]);
+  return machineMayStart({ kind, drafts: drafts || [], events: events || [], offers: offers || [], address, passes, now });
+}
+
 export async function startProactive({
   client, locationId, saved, store, contactId, kind = "realm_check",
   offer = null, subject = null, sendsEnabled = false, deps = {}, personAsked = false, continues = null,
@@ -2609,6 +2664,10 @@ export async function startProactive({
     // listing agent, their TC, a buyer (5232 S Yakima, 2026-10-03).
     const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
     if (gone) return { skipped: fellThroughLine(gone), job: null };
+    // A live thread, or a yes we'd be walking away from (shared/thread-health.js).
+    const live = await machineMayStartFor({ store, locationId, contactId, kind, address: offer?.address || subject?.address || "",
+      now: typeof deps.now === "function" ? deps.now() : Date.now() });
+    if (!live.ok) return { skipped: live.reason, liveThread: live.rule, job: null };
     const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues, kind });
     // The holding reply this number answers: the float carries on from it
     // (floatAnswersHeldReply). Anything else waiting holds the float.
@@ -3975,6 +4034,25 @@ async function runReply(job, ctx) {
     return;
   }
 
+  // A yes after we passed (2026-10-15). The seller took our number on a
+  // house we had walked from; the model, told we walked away, answered
+  // "We've actually moved on". Whatever the model filed it as, the reply
+  // waits for Matt — reopening it is his call — and Today says why.
+  let yesAfterPass = null;
+  if (party === "agent" && !isCall) {
+    const [book, earlier, timeline] = await Promise.all([
+      store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []),
+      store.listReplyDrafts(locationId, { contactId: job.contactId, limit: 50 }).catch(() => []),
+      typeof store.listContactEvents === "function" ? store.listContactEvents(locationId, job.contactId, { limit: 200 }).catch(() => []) : [],
+    ]);
+    yesAfterPass = yesAfterOurPass({ offers: book || [], drafts: earlier || [], events: timeline || [], draft, message: job.originalMessage || job.message, now });
+    if (yesAfterPass) {
+      const where = String(yesAfterPass.address || "the house").split(",")[0].trim();
+      draft = { ...draft, needsHuman: true, yesAfterPass,
+        humanReason: `they said yes to our ${fmtMoney(yesAfterPass.amount)} on ${where} after we passed on it — reopening it is your call; never answer a yes with a goodbye` };
+    }
+  }
+
   // Partner terms are Matt's: the reply waits for him whatever else rewrote
   // it above, and a person's flag keeps a redraft from being spent on it.
   if (terms) {
@@ -4004,8 +4082,11 @@ async function runReply(job, ctx) {
   // Welfare Ave, Korey P.'s turnkey Puyallup). What we said wins: it files
   // as "nothing right now" (Tier 2), the house is stamped passed so a racing
   // underwrite stops (threadPassed), and an unsent offer on it is closed.
-  const replyPassed = party === "agent" && !qualifyHeld && !numberFirst && !notOurKind
-    && ["deal_available", "new_property"].includes(draft.intent) && ourReplyPasses(draft.reply);
+  // Never on a yes (2026-10-15): a reply that turns down a house they just
+  // said yes on is the bot's mistake, not our decision.
+  const replyPassed = party === "agent" && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass
+    && ["deal_available", "new_property"].includes(draft.intent) && ourReplyPasses(draft.reply)
+    && !saysYes(job.originalMessage || job.message);
   if (replyPassed) {
     draft = {
       ...draft,
@@ -4050,6 +4131,10 @@ async function runReply(job, ctx) {
   // machine already lost the thread once, so it doesn't answer for you.
   if (auto.send && party === "agent" && soundsCrossedUp(theirLatestWords(a.transcript, job.message))) {
     auto = { ...auto, send: false, code: "needs_you", reason: "they sound confused, or say they already told us — you take this one" };
+  }
+  // Their yes on a house we walked from never gets a reply by itself.
+  if (yesAfterPass) {
+    auto = { ...auto, send: false, code: "needs_you", reason: "they said yes after we passed — you take this one" };
   }
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
@@ -4598,6 +4683,8 @@ async function runReply(job, ctx) {
     warnings: warnings.slice(0, 6),
     noteOnAutoSend: config.notes?.onAutoSend !== false,
     ...(draft.counterHold ? { counterHold: draft.counterHold } : {}),
+    // Their yes landed on a house we passed on: Today's row says so.
+    ...(draft.yesAfterPass ? { yesAfterPass: draft.yesAfterPass } : {}),
     promptVersion: 3,
     updatedAt: ts,
   });
@@ -5570,6 +5657,33 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       });
       await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
       return { ok: true, skipped: why };
+    }
+  }
+
+  // A live thread, or a yes (2026-10-15, shared/thread-health.js): a text the
+  // machine started that now lands on a conversation they're having, or any
+  // text — a reply too — that walks away from a house they said yes on. The
+  // machine's own text is binned; a reply waits for you. Only the auto path.
+  if (auto && d.party !== "investor") {
+    const machineText = Boolean(d.outbound?.kind) && !String(d.inbound || "").trim();
+    const live = await machineMayStartFor({ store, locationId, contactId: d.contactId, kind: machineText ? d.outbound.kind : "",
+      address: d.outbound?.address || d.propertyAddress || "", passes: ourReplyPasses(body), now });
+    if (!live.ok) {
+      const ts = new Date(now).toISOString();
+      if (machineText) {
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), `${live.reason} — not sent`],
+        });
+        await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      } else {
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), `held: ${live.reason}`],
+          autoSend: { ...(d.autoSend || {}), decided: false, reason: `needs a person: ${live.reason}` },
+        });
+      }
+      return { ok: true, skipped: live.reason, held: !machineText };
     }
   }
 
