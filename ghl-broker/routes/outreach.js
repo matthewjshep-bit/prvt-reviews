@@ -1098,18 +1098,27 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * a person, or the GHL workflow's trigger tag — get the first text about
    * their current listing. New-agent supply had fallen to two a day.
    */
-  async function retryFirstTexts({ locationId, client, limit = Infinity, now = Date.now(), dryRun = false, minAgeMs = FIRST_TEXT_LOST_AFTER_MS, autopilotSince = null, neverTexted = false }) {
-    if (typeof firstTouch !== "function" || !(limit > 0)) return { retried: 0, opened: 0, results: [] };
-    // The agent's row in the batch it was imported from: the hook there knows
-    // the house (year, size, lot, cut), the import event only its address.
+  // The agent's row in the batch it was imported from: the hook there knows
+  // the house (year, size, lot, cut), the import event only its address.
+  // Each batch is read once a run.
+  const rowFinder = (locationId) => {
     const rowsByBatch = new Map();
-    const rowFor = async (batchId, contactId) => {
+    return async (batchId, contactId) => {
       if (!batchId) return null;
       if (!rowsByBatch.has(batchId)) {
         rowsByBatch.set(batchId, await store.listOutreachAgents(locationId, { batchId, status: "imported", limit: 5000 }).catch(() => []));
       }
       return (rowsByBatch.get(batchId) || []).find((r) => r.contactId === contactId) || null;
     };
+  };
+
+  // A first text put aside to be written again (restyleFirstTexts). It never
+  // went, so it doesn't count as the agent having a draft.
+  const isRestyled = (d) => d?.dismissedBy === "restyle";
+
+  async function retryFirstTexts({ locationId, client, limit = Infinity, now = Date.now(), dryRun = false, minAgeMs = FIRST_TEXT_LOST_AFTER_MS, autopilotSince = null, neverTexted = false }) {
+    if (typeof firstTouch !== "function" || !(limit > 0)) return { retried: 0, opened: 0, results: [] };
+    const rowFor = rowFinder(locationId);
     const since = new Date(now - FIRST_TEXT_RETRY_DAYS * 86400000).toISOString();
     const events = await store.listContactEventsSince(locationId, since, { types: ["outreach_open_skipped", "outreach_sent", "outreach_enrolled", "import", "outreach_open_queued"], limit: 5000 }).catch(() => []);
     const byContact = new Map();
@@ -1148,8 +1157,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const made = list.find((e) => ((e.type === "import" && e.data?.action === "created" && appMade(e)) || e.type === "outreach_open_queued")
         && now - Date.parse(e.at) >= minAgeMs);
       if (!made) continue;
-      const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 1 }).catch(() => null);
-      if (!Array.isArray(drafts) || drafts.length) continue;
+      // A first text put aside to be written again, whose new one a restart
+      // dropped, is lost too.
+      const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 5 }).catch(() => null);
+      if (!Array.isArray(drafts) || drafts.some((d) => !isRestyled(d))) continue;
       const row = await rowFor(made.data?.batchId, contactId);
       const hook = firstTextHook(row?.doc, { base: made.data?.hook || {},
         county: countyName(made.data?.county, String(made.data?.batchName || "").replace(/^Autopilot · (?:Off-market · )?/, "")) });
@@ -1186,6 +1197,56 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       }
     }
     return { retried: results.length, opened: results.filter((r) => r.jobId).length, neverTexted: results.filter((r) => r.neverTexted).length, results };
+  }
+
+  /**
+   * restyleFirstTexts({ locationId, client, since, limit, dryRun }) → { found, restarted, results }
+   *
+   * First texts you held before they went (Hold on a scheduled first text),
+   * written again from the start in today's first-text voice. Matt,
+   * 2026-10-16: the day's first texts read like a mass text, so the unsent
+   * ones were held, the prompt changed, and these were redrafted. Each held
+   * draft is put aside (dismissed, flagged "restyled — not sent", so the
+   * coach doesn't read it as you binning the words) and the agent's first
+   * text starts again about the same listing, through the door every first
+   * text takes (openFirstText): a refusal is written down and retried like
+   * any other, and one a restart drops is found by the lost path. Never one
+   * that went, one held for any other reason, or an agent we already texted.
+   */
+  async function restyleFirstTexts({ locationId, client, since = null, limit = Infinity, dryRun = false }) {
+    if (typeof firstTouch !== "function" || !(limit > 0)) return { found: 0, restarted: 0, results: [] };
+    const held = ((await store.listReplyDrafts(locationId, { status: "draft", since, limit: 5000 }).catch(() => [])) || [])
+      .filter((d) => d?.contactId && d.outbound?.kind === "outreach_open" && !d.sentAt && (d.flags || []).includes("held by you"));
+    const rowFor = rowFinder(locationId);
+    const sameStreet = (a, b) => String(a || "").split(",")[0].trim().toLowerCase() === String(b || "").split(",")[0].trim().toLowerCase();
+    const results = [];
+    const seen = new Set();
+    for (const d of held) {
+      if (results.length >= limit) break;
+      if (seen.has(d.contactId)) continue;
+      seen.add(d.contactId);
+      const events = await store.listContactEvents(locationId, d.contactId, { types: ["outreach_sent", "outreach_enrolled", "import", "outreach_open_queued"], limit: 50 }).catch(() => null);
+      if (!Array.isArray(events)) { results.push({ contactId: d.contactId, draftId: d.id, skipped: "couldn't read their timeline" }); continue; }
+      if (events.some((e) => e.type === "outreach_sent" || e.type === "outreach_enrolled")) { results.push({ contactId: d.contactId, draftId: d.id, skipped: "already texted" }); continue; }
+      const made = events.find((e) => e.type === "import" && e.data?.batchId) || events.find((e) => e.type === "outreach_open_queued" && e.data?.batchId) || null;
+      const address = d.outbound.address || d.propertyAddress || "";
+      // The row only when it's still about the listing the held text was.
+      const row = await rowFor(made?.data?.batchId, d.contactId);
+      const doc = row?.doc?.hook?.address && !sameStreet(row.doc.hook.address, address) ? null : row?.doc;
+      const hook = firstTextHook(doc, { base: { ...(made?.data?.hook || {}), address, ...(d.outbound.turnkey ? { turnkey: true } : {}), ...(d.outbound.offMarket ? { offMarket: true } : {}) },
+        county: countyName(d.outbound.county, made?.data?.county, String(made?.data?.batchName || "").replace(/^Autopilot · (?:Off-market · )?/, "")) });
+      if (!hook.address) { results.push({ contactId: d.contactId, draftId: d.id, skipped: "no listing on the held text" }); continue; }
+      if (dryRun) { results.push({ contactId: d.contactId, draftId: d.id, would: "restyle", address: hook.address, county: hook.county, turnkey: hook.turnkey === true }); continue; }
+      // Read again: you may have sent or binned it since the list was read.
+      const fresh = await store.getReplyDraft(d.id).catch(() => null);
+      if (fresh?.status !== "draft") { results.push({ contactId: d.contactId, draftId: d.id, skipped: `it's ${fresh?.status || "gone"} now` }); continue; }
+      const ts = new Date().toISOString();
+      await store.updateReplyDraft(d.id, { ...fresh, status: "dismissed", sendAt: null, dismissedAt: ts, dismissedBy: "restyle",
+        flags: [...(fresh.flags || []), "restyled — not sent"], updatedAt: ts });
+      const r = await openFirstText({ locationId, client, contactId: d.contactId, hook, ref: made?.ref || null, tries: 0 });
+      results.push({ contactId: d.contactId, draftId: d.id, ...r });
+    }
+    return { found: held.length, restarted: results.filter((r) => r.jobId).length, results };
   }
 
   /**
@@ -1562,6 +1623,21 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     } catch (err) { fail(res, err); }
   });
 
+  // Body: { dryRun = true, since, limit }. First texts you held before they
+  // went, written again from the start in today's first-text voice
+  // (restyleFirstTexts, 2026-10-16). `since` (default the last day) is when
+  // the held drafts were written. A dry run lists who; nothing is drafted.
+  router.post("/autopilot/first-texts/restyle", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      const since = b.since && Number.isFinite(Date.parse(b.since)) ? new Date(b.since).toISOString() : new Date(Date.now() - 86400000).toISOString();
+      const r = await restyleFirstTexts({ locationId, client, since, dryRun: b.dryRun !== false,
+        limit: Math.max(1, Math.min(MAX_DAILY_CAP, Math.round(Number(b.limit)) || MAX_DAILY_CAP)) });
+      res.json({ ok: true, dryRun: b.dryRun !== false, since, ...r });
+    } catch (err) { fail(res, err); }
+  });
+
   // Body: { dryRun }. The follow-up by hand: who is due, who wrote back, and
   // (live) into the follow-up workflow. Dry by default.
   // The agent check-in (agent-pulse.js, shared/agent-pulse.js): who it would
@@ -1746,6 +1822,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
   router.runPull = (locationId, client, body = {}, opts = {}) => runPull(locationId, client, body, opts);
   router.importAgents = importAgents;
   router.retryFirstTexts = retryFirstTexts;
+  router.restyleFirstTexts = restyleFirstTexts;
   // What the daily sweep (outreach-sweep.js) is handed, from the tick and
   // from Run now alike.
   router.sweepDeps = {

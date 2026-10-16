@@ -117,7 +117,7 @@ test("the first text about a listing that came off the market asks whether the s
   assert.equal(o.offMarket, true);
   const t = outboundOpening(o);
   assert.match(t, /THIS LISTING CAME OFF THE MARKET RECENTLY: say you saw it came off the market and ask whether the seller is still hoping to sell\. That is your one question/);
-  assert.match(t, /ask ONE question about whether the seller still hopes to sell/);
+  assert.match(t, /ask ONE plain question about whether the seller still hopes to sell/);
   assert.match(t, /Never the word "expired"/);
   assert.match(t, /Phone carriers block texts/, "the carrier rule still rides on it");
 });

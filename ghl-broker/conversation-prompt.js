@@ -10,7 +10,7 @@ import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REA
 import { heldInPlainWords } from "./shared/held-underwrites.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { CARRIER_RULE } from "./shared/carrier-words.js";
-import { OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
+import { OPENER_MAX_CHARS, streetName } from "./shared/outreach-opener.js";
 import { OUR_BOX_WORDS } from "./shared/asset-type.js";
 
 const LENGTH_RULE = {
@@ -159,9 +159,9 @@ const COMMITMENTS = {
 // been a month since we last asked. 2026-10-06: the asks came out as
 // "anything before it hits the MLS"; Matt wants the word itself, "off-market".
 // How a check-in should sound (Matt, 2026-10-08): "personable, professional,
-// even slightly funny". The same rules as the first text's PERSONALITY line,
-// leaned a little further toward the funny side, because these go to agents
-// who already know us.
+// even slightly funny". The first text had the same rules until 2026-10-16,
+// when it went plain; these lean a little further toward the funny side,
+// because they go to agents who already know us.
 const CHECKIN_PERSONALITY =
   "PERSONALITY: personable and professional, and a little funny — aim for one light touch of humour when it comes naturally: " +
   "a wry line, a bit of self-deprecation, or the \"honestly, the uglier the better\" kind of line about the houses WE like. " +
@@ -588,23 +588,23 @@ export function outboundOpening(outbound) {
 }
 
 // How the first text says who we are, one per agent (outreach_open). Ideas,
-// not lines: the model words each one itself. The last is Matt's own.
+// not lines: the model words each one itself.
+// 2026-10-16: a few plain words, nothing a mass text would say ("based in
+// Seattle and flip a few houses a year", "bringing tired houses back to life").
 export const WHO_WE_ARE = [
-  "you're based in Seattle and flip a few houses a year",
-  "you like bringing tired houses back to life",
-  "you're on the lookout for your next project house",
-  "you renovate older homes, the ones that need some love",
-  "you're a local who'd rather fix one up than buy one done",
-  "you're in Seattle and looking for your next flip",
+  "you fix up older homes locally",
+  "you renovate a few houses a year",
+  "you're local and fix up houses",
+  "you fix up houses that need some work",
+  "you're looking for your next house to fix up",
 ];
 
 // How the first text to a new agent starts, one per agent (outreach_open).
+// 2026-10-16: no move starts from a remark about the house any more.
 export const OPENING_MOVES = [
-  "start with the street catching your eye",
-  "start with the one thing you noticed about the house",
-  "start plainly: you came across their listing",
-  "start with a short, friendly line about who you are, then the listing",
-  "start with your question about the house, then who you are",
+  "start plainly: you saw their listing on the street",
+  "start with your question about their listing, then who you are",
+  "start with a few plain words about who you are, then the question",
 ];
 
 // A short, stable fingerprint of the examples list, so a sent first text says
@@ -615,15 +615,20 @@ function examplesHash(ex = []) {
   return ex.length ? h.toString(36) : "";
 }
 
+// Which way of writing the first text a draft came from, so replies can be
+// read back by it: "plain" since 2026-10-16 (no remark about the house).
+export const OPENER_STYLE = "plain";
+
 /**
  * openerPlan(o) → { variant, lead, voice, move, moveIndex, who, whoIndex,
- *   notice, town, turnkey, examplesHash }
+ *   notice, town, turnkey, examplesHash, style }
  *
  * The choices behind one agent's first text (outreach_open), all from
  * `variant` (the contact id's hash): which of Matt's examples leads, the
- * opening move, the way we say who we are, and the one detail to notice.
- * The prompt is built from it, and the draft keeps it, so which first texts
- * get answers can be read back by variant (2026-10-15).
+ * opening move and the way we say who we are. The prompt is built from it,
+ * and the draft keeps it, so which first texts get answers can be read back
+ * by variant (2026-10-15). `notice` is always "" since 2026-10-16: the first
+ * text says nothing about the house itself.
  */
 export function openerPlan(o = {}) {
   const ex = Array.isArray(o.examples) ? o.examples : [];
@@ -632,12 +637,10 @@ export function openerPlan(o = {}) {
   const details = Array.isArray(o.details) ? o.details.filter(Boolean) : [];
   const v = Math.max(0, Math.round(Number(o.variant) || 0));
   const moveIndex = v % OPENING_MOVES.length;
-  const town = (details.find((d) => d.startsWith("it's in ")) || "").replace("it's in ", "");
-  const others = details.filter((d) => !d.startsWith("it's in "));
-  const notice = others.length ? others[Math.floor(v / OPENING_MOVES.length) % others.length] : "";
+  const town = String(o.city || "").trim() || (details.find((d) => d.startsWith("it's in ")) || "").replace("it's in ", "");
   const whoIndex = v % WHO_WE_ARE.length;
   return { variant: v, lead, voice, move: OPENING_MOVES[moveIndex], moveIndex, who: WHO_WE_ARE[whoIndex], whoIndex,
-    notice, town, turnkey: o.turnkey === true, examplesHash: examplesHash(ex) };
+    notice: "", town, turnkey: o.turnkey === true, examplesHash: examplesHash(ex), style: OPENER_STYLE };
 }
 
 function openingFor(outbound) {
@@ -729,33 +732,36 @@ function openingFor(outbound) {
       // carriers block. The workflow's own opener — a plain question about
       // the listing — went through 99.9% of the time.
       // 2026-10-04: the app writes it instead of the workflow, in Matt's
-      // voice (his examples, shared/outreach-opener.js), naming only the
-      // county the listing is in. GHL puts the stop line on the end itself.
-      const street = o.address.split(",")[0];
-      const where = o.county ? `${o.county} County` : "the area";
-      // 2026-10-05: more of Matt in it — one real detail from the listing,
-      // so the agent can tell somebody looked, and room for a light touch of
-      // humour. Still short, still no pitch.
-      // The first live batch with details (2026-10-05) came out five of six
-      // alike: the bot always picked the decade and blended the examples into
-      // one formula. So each agent gets its own opening move and its own
-      // detail to notice, both from `variant` (the contact id's hash) — and
-      // its own way of saying who we are: 30 of the 45 drafts on 2026-10-05
-      // said "hunting for my next flip", 10 "Seattle flipper" (openerPlan).
-      const { voice, move, town, notice, who } = openerPlan(o);
-      return `${START} This is the FIRST text this listing agent has ever had from us, about their listing at ` +
-        `${o.address}. Write it the way Matt texts: a friendly local flipper who is easy to talk to, warm and a little ` +
-        `funny, never a pitch. Two short sentences that: mention their listing on ${street}, say who you are, and ask ONE ` +
-        `question about ${o.offMarket ? "whether the seller still hopes to sell" : "whether it needs work"}. Saying you're looking anywhere in ${where} is optional, if it fits. ` +
+      // voice (his examples, shared/outreach-opener.js). GHL puts the stop
+      // line on the end itself.
+      // 2026-10-05 to 2026-10-15 it noticed one detail of the house and had
+      // room for a joke, and each agent got its own opening move and its own
+      // way of saying who we are (openerPlan), so a day's batch didn't read
+      // the same.
+      // 2026-10-16 (Matt: "the first text to agents look slightly spammy, can
+      // we make them more approachable and like a human"): the remarks were
+      // the spammy part ("dates back to the 60s, always curious what's behind
+      // those walls", "surprised it's been sitting"), with "I flip houses
+      // around Whatcom County", the full street number, and "project or pretty
+      // turnkey?" on most of them. Now: the street by name, a few plain words
+      // about who we are, one plain question. The moves and the who still
+      // vary per agent.
+      const { voice, move, who, town } = openerPlan(o);
+      const street = streetName(o.address) || o.address.split(",")[0];
+      return `${START} This is the FIRST text this listing agent has ever had from us, about their listing on ${street}` +
+        `${town ? ` in ${town}` : ""}. Write it the way a real person texts someone they haven't met: plain, polite and easy ` +
+        `to answer. It must not read like marketing or a mass text. At most two short sentences that: mention their listing on ` +
+        `${street} (the street name only, never the house number), say who you are in a few plain words, and ask ONE plain ` +
+        `question about ${o.offMarket ? "whether the seller still hopes to sell" : o.turnkey ? "whether they ever get ones that need work" : "whether it needs much work"}. ` +
         // 2026-10-15 (the funnel review): first texts under about 230
         // characters got 54% replies, longer ones a third, and the required
         // "other fixers" line cost about 12 points. That ask now follows
         // their first answer (the reply), not the first text.
         `That one question is the whole ask: don't ask about their other fixers or other houses in this text, that comes once ` +
-        `they answer. Short first texts get answered. ` +
+        `they answer. ` +
         (o.turnkey
-          ? `THIS LISTING LOOKS FINISHED: don't call it a fixer or ask about it as if it were one. Say it looks finished and ask ` +
-            `lightly whether they ever see ones that need work. That is your one question. `
+          ? `THIS LISTING LOOKS FINISHED: don't ask about it as if it were a fixer. Say it looks nicely done and ask whether they ` +
+            `ever get ones that need work. That is your one question. `
           : "") +
         // 2026-10-15: the off-market seats — a listing that came off the
         // market lately without selling. The seller may still want out.
@@ -764,33 +770,24 @@ function openingFor(outbound) {
             `hoping to sell. That is your one question. Never the word "expired", never "didn't sell" or anything that sounds like ` +
             `the agent fell short, and never ask whether it sold. `
           : "") +
-        (notice || town
-          ? `WHAT TO NOTICE: ${notice || `it's in ${town}`}${notice && town ? ` (it's in ${town}; naming the town is fine too)` : ""}. ` +
-            `Work that in once, in your own words, so it's obvious you actually looked at the listing. No other detail, never ` +
-            `a list, and never in a way that knocks the house — it's their listing. `
-          : "") +
-        `OPENING MOVE for this one: ${move}. WHO YOU ARE, for this one: ${who}. Put it in your own words. ` +
-        (o.county
-          ? `${where} is the only area you say you're looking in: no other county, no list of cities, no region ("greater ` +
-            `Seattle", "Puget Sound", "Seatac"). The listing's own town may describe the house. `
-          : `Name no county or region. `) +
-        `PERSONALITY: one light, human touch is welcome when it comes naturally — a wry aside, a bit of self-deprecation, ` +
-        `the "honestly, the uglier the better" kind of line about what WE like. Never a pun, never a joke that needs a setup, ` +
-        `never at the agent's, the seller's or the house's expense. If nothing comes naturally, plain and friendly is fine. ` +
+        `OPENING MOVE for this one: ${move}. WHO YOU ARE, for this one: ${who}. Put it in your own words, and keep it to a few. ` +
+        `Say nothing about the house itself: not its age, size, lot, look, kitchen, "character" or "bones", how long it has been ` +
+        `listed, or its price. No compliments, no jokes, no clever lines. Name no county and no region ("greater Seattle", ` +
+        `"Puget Sound"); the listing's own town is fine. Say "fix up" or "renovate" rather than "flip". ` +
         (voice.length
-          ? `HOW MATT WRITES THESE ({first}, {street}, {town} and {county} are the blanks): ${voice.map((x) => `"${x}"`).join(" / ")}. ` +
-            `Use them for his voice and humour, not as a template: follow the opening move above. Never copy one word for word, ` +
-            `because a hundred agents a day get one of these and no two should read the same. `
+          ? `HOW MATT WRITES THESE ({first}, {street} and {town} are the blanks; {street} is the street name without the number): ` +
+            `${voice.map((x) => `"${x}"`).join(" / ")}. Use them for his voice, not as a template: follow the opening move ` +
+            `above. Never copy one word for word, because a hundred agents a day get one of these and no two should read the same. `
           : "") +
-        `Use their first name once if you have it. Keep it under ${OPENER_MAX_CHARS} characters. ` +
-        (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the detail and the question. ` : "") +
+        `Use their first name once if you have it. Keep it under ${OPENER_MAX_CHARS} characters; shorter is better. ` +
+        (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the street and the question. ` : "") +
         (Array.isArray(o.overused) && o.overused.length
           ? `YOUR LAST DRAFT SAID ${o.overused.map((w) => `"${w}"`).join(", ")}, WHICH MOST OF TODAY'S AGENTS ARE GETTING: write it again and say that another way. `
           : "") +
         `End on your question or one short line after it: NO sign-off, no name, no thanks, and no opt-out line — the phone ` +
         `system adds "Thanks, Matt" and "No worries if not can stop" on the end by itself. ` +
         `It must not read like AI: no dashes (— or –), no exclamation marks, no emoji, no "I hope this finds you well", ` +
-        `"quick question", "I'm reaching out", "touching base" or "hunting". ` +
+        `"quick question", "I'm reaching out", "touching base", "came across" or "hunting". ` +
         `Do NOT name a price, how many days it's been listed, a percentage, or a link. Do NOT ask about this listing's ` +
         `price. Set intent to outreach_open.`;
     }
@@ -1074,10 +1071,11 @@ function openingFor(outbound) {
         `TONE: friendly and professional — how someone local who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
         `${CHECKIN_PERSONALITY} ` +
         // A cold agent's fresh listing (2026-10-15) is in effect a second first
-        // text: the short first-text voice, which gets answered.
+        // text: the short first-text voice, which gets answered. Plain like
+        // the first text since 2026-10-16: no remark about the house, no joke.
         (cold && listingText
-          ? `WHAT TO WRITE: the short first-text voice — two short sentences, under ${OPENER_MAX_CHARS} characters. Open with their first name, once; ` +
-            `name the street; ONE question, ${offList ? "whether the seller is still hoping to sell" : "whether it's a bit of a project"}. Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
+          ? `WHAT TO WRITE: the short first-text voice — two short sentences, under ${OPENER_MAX_CHARS} characters, plain, the way a person texts someone they haven't met; the PERSONALITY line above doesn't apply to this one. Open with their first name, once; ` +
+            `name the street (the street name, never the house number); ONE question, ${offList ? "whether the seller is still hoping to sell" : "whether it needs much work"}. Say nothing about the house itself (its age, lot, look, or how long it has been listed). Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
             (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the street and the question. ` : "")
           : `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
             // No calendar is connected (2026-10-15): a call is offered, never a time.

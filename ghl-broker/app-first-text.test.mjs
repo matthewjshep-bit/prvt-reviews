@@ -18,7 +18,7 @@ process.env.OUTREACH_IMPORTS_ENABLED = "true";
 
 const { outboundOpening, OPENING_MOVES, WHO_WE_ARE, openerPlan } = await import("./conversation-prompt.js");
 const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText, writeWithoutOverused, startProactive, sendReplyDraft, lastLineIsOurFirstText } = await import("./reply-agent.js");
-const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, DEFAULT_OPENER_EXAMPLES, LEGACY_DEFAULT_OPENER_EXAMPLES, OPENER_MAX_CHARS } = await import("./shared/outreach-opener.js");
+const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, streetName, DEFAULT_OPENER_EXAMPLES, LEGACY_DEFAULT_OPENER_EXAMPLES, PREVIOUS_DEFAULT_OPENER_EXAMPLES, OPENER_MAX_CHARS } = await import("./shared/outreach-opener.js");
 const { normalizeOutreachAutopilot, startOutreachSweep, _resetJobs } = await import("./outreach-sweep.js");
 const { store } = await import("./store.js");
 const { default: createOutreachRouter } = await import("./routes/outreach.js");
@@ -28,12 +28,13 @@ const ask = (o) => outboundOpening({ kind: "outreach_open", address: "1911 9th A
 
 /* ---------- the prompt ---------- */
 
-test("the first text names the county the listing is in and nowhere else — the workflow said 'greater Seatac' to every agent", () => {
+test("the first text names no county and no house number — 'I flip houses around Whatcom County' and a full address read like a mass text", () => {
   const t = ask({ county: "Pierce", examples: DEFAULT_OPENER_EXAMPLES });
-  assert.match(t, /anywhere in Pierce County/);
-  assert.match(t, /Pierce County is the only area you say you.re looking in/);
-  assert.match(t, /on 1911 9th Ave W/, "the listing by street");
-  assert.doesNotMatch(t.replace(/no region \([^)]*\)/, ""), /Seatac|King County|Snohomish/i);
+  assert.match(t, /Name no county and no region/);
+  assert.match(t, /their listing on 9th Ave W/, "the listing by street name");
+  assert.match(t, /the street name only, never the house number/);
+  assert.doesNotMatch(t, /1911|98119/, "no house number or ZIP anywhere in what it's told");
+  assert.doesNotMatch(t.replace(/no region \([^)]*\)/, ""), /Pierce|Seatac|King County|Snohomish/i);
 });
 
 test("the first text never writes its own sign-off, because GHL adds 'Thanks, Matt' and 'No worries if not can stop'", () => {
@@ -41,7 +42,7 @@ test("the first text never writes its own sign-off, because GHL adds 'Thanks, Ma
   assert.match(t, /NO sign-off/);
   assert.match(t, /no opt-out line/);
   assert.match(t, /adds "Thanks, Matt" and "No worries if not can stop" on the end by itself/);
-  assert.match(t, /under 200 characters/, "short first texts get answered, and GHL's two lines still fit");
+  assert.match(t, /under 160 characters/, "short first texts get answered, and GHL's two lines still fit");
 });
 
 test("a first text the bot signed anyway reaches the agent with one 'Thanks, Matt', not two", () => {
@@ -91,10 +92,11 @@ test("the first text doesn't read like AI: no dashes, no exclamation marks, no '
   assert.match(t, /"I'm reaching out"/);
 });
 
-test("with no county on the listing, the first text names no place at all", () => {
-  const t = ask({ examples: DEFAULT_OPENER_EXAMPLES });
-  assert.match(t, /anywhere in the area/);
-  assert.match(t, /Name no county or region/);
+test("the first text may name the listing's own town and nothing wider", () => {
+  const t = ask({ county: "Island", city: "Oak Harbor", examples: DEFAULT_OPENER_EXAMPLES });
+  assert.match(t, /their listing on 9th Ave W in Oak Harbor/);
+  assert.match(t, /the listing's own town is fine/);
+  assert.doesNotMatch(ask({ examples: DEFAULT_OPENER_EXAMPLES }), / in the area|anywhere in/);
 });
 
 test("the follow-up to a first text that got no answer names the same county", () => {
@@ -186,7 +188,7 @@ async function batchWith(name, agents, loc = LOC) {
   return batch;
 }
 
-test("the first text is told what the agent can see on the listing — a 1950s house on a big lot — so it isn't generic", async () => {
+test("the first text says nothing about the house — 'dates back to the 60s, always curious what's behind those walls' was the spammy part", async () => {
   const seen = [];
   const router = createOutreachRouter({ resolveLocation: () => ({ locationId: LOC, client: ghlClient() }),
     firstTouch: async (a) => { seen.push(a.hook); return { job: { id: "j-house" } }; } });
@@ -207,10 +209,10 @@ test("the first text is told what the agent can see on the listing — a 1950s h
   assert.deepEqual(o.details, ["it's in Shelton", "built in the 1950s", "3 bedrooms, on the small side", "it sits on a big lot",
     "it has been on the market a while", "the price has come down since it listed", "this agent has a few other listings out right now"]);
   const t = outboundOpening(o);
-  assert.match(t, /WHAT TO NOTICE: built in the 1950s \(it's in Shelton; naming the town is fine too\)/);
-  assert.match(t, /No other detail, never a list/);
-  assert.match(t, /never in a way that knocks the house/);
-  assert.ok(o.details.every((d) => !/\$|\bk\b|days?\b/i.test(d)), "no price, no days-on-market count");
+  assert.doesNotMatch(t, /WHAT TO NOTICE|1950s|big lot|on the market a while|price has come down/);
+  assert.match(t, /Say nothing about the house itself: not its age, size, lot, look/);
+  assert.match(t, /No compliments, no jokes/);
+  assert.match(t, /their listing on N Potlatch Dr in Shelton/, "the street and its town are still named");
 });
 
 test("an agent picked for a turnkey seat gets the turnkey first text, not 'is this one a project?' — 79 of 80 did", async () => {
@@ -279,7 +281,8 @@ test("a first text that went says which one it was: its variant, opening move, t
   assert.equal(d.outbound.variant, 7);
   assert.equal(d.outbound.move, 7 % OPENING_MOVES.length);
   assert.equal(d.outbound.who, 7 % WHO_WE_ARE.length);
-  assert.equal(d.outbound.notice, "built in the 1950s");
+  assert.equal(d.outbound.notice, "", "nothing about the house");
+  assert.equal(d.outbound.style, "plain");
   assert.equal(d.outbound.turnkey, true);
   assert.equal(d.outbound.examplesHash, plan.examplesHash);
   assert.ok(d.outbound.examplesHash, "which examples it was written from");
@@ -292,19 +295,20 @@ test("a first text that went says which one it was: its variant, opening move, t
   assert.equal(sent.data.turnkey, true);
   assert.equal(sent.data.chars, edited.length);
   assert.equal(sent.data.edited, true);
+  assert.equal(sent.data.style, "plain", "replies can be read by style");
   assert.equal(openerPlan({ examples: ["a", "b"], variant: 3 }).lead, "b", "the lead example is the one the prompt leads with");
 });
 
-test("the first six with house details came out alike, so each agent gets its own opening move and its own detail", () => {
+test("each agent still gets its own opening move, so a day's batch doesn't read the same", () => {
   const details = ["it's in Packwood", "built in the 1960s", "3 bedrooms", "it sits on a big lot", "it has been on the market a while"];
-  const moves = new Set(), notices = new Set();
+  const moves = new Set();
   for (let v = 0; v < 20; v++) {
     const t = ask({ county: "Lewis", examples: DEFAULT_OPENER_EXAMPLES, details, variant: v });
     moves.add(/OPENING MOVE for this one: ([^.]*)\./.exec(t)[1]);
-    notices.add(/WHAT TO NOTICE: ([^(]*?) \(/.exec(t)[1]);
+    assert.doesNotMatch(t, /WHAT TO NOTICE|1960s/);
   }
   assert.equal(moves.size, OPENING_MOVES.length, "every opening move is used");
-  assert.equal(notices.size, 4, "and not always the decade");
+  assert.ok(OPENING_MOVES.every((m) => !/noticed|catching your eye/.test(m)), "no move starts from a remark about the house");
 });
 
 test("each agent gets its own way of saying who we are — 30 of the 45 drafts on 2026-10-05 said 'hunting for my next flip'", () => {
@@ -312,9 +316,10 @@ test("each agent gets its own way of saying who we are — 30 of the 45 drafts o
   for (let v = 0; v < 30; v++) whos.add(/WHO YOU ARE, for this one: ([^.]*)\./.exec(ask({ county: "Kitsap", variant: v }))[1]);
   assert.equal(whos.size, WHO_WE_ARE.length, "every one is used");
   const t = ask({ county: "Kitsap", variant: 0 });
-  assert.match(t, /"touching base" or "hunting"/, "hunting is out");
+  assert.match(t, /"touching base", "came across" or "hunting"/, "hunting is out");
   assert.doesNotMatch(t.split("HOW MATT WRITES")[0], /say you're in Seattle looking for your next flip/, "the rules don't dictate one introduction");
-  assert.match(t, /you're looking anywhere in Kitsap County/);
+  assert.ok(WHO_WE_ARE.every((w) => !/seattle|flip/i.test(w)), "a few plain words, no 'Seattle flipper'");
+  assert.match(t, /Say "fix up" or "renovate" rather than "flip"/);
 });
 
 test("a first text still saying 'hunting' or 'Seattle flipper' after being told not to is written again once without it", async () => {
@@ -324,29 +329,30 @@ test("a first text still saying 'hunting' or 'Seattle flipper' after being told 
   const asked = [];
   const clean = { reply: "Hi Amy, 231 Central St caught my eye. I renovate older homes and I'm looking anywhere in Thurston County. Is it a bit of a fixer?" };
   const r = await writeWithoutOverused({ draft, kind: "outreach_open", variant: 0, redraft: async (w) => { asked.push(w); return clean; } });
-  assert.deepEqual(asked, [["hunting", "Seattle flipper"]], "the street opening may say 'caught my eye'");
+  assert.deepEqual(asked, [["hunting", "Seattle flipper", "caught my eye"]], "no opening may say 'caught my eye' any more");
   assert.equal(r, clean);
   const other = await writeWithoutOverused({ draft: clean, kind: "outreach_open", variant: 1, redraft: async (w) => ({ reply: clean.reply.replace("caught my eye", "stood out"), w }) });
-  assert.match(other.reply, /stood out/, "another opening may not");
+  assert.match(other.reply, /stood out/, "and is written again without it");
+  assert.deepEqual(overusedPhrases("Those 50s builds usually have good bones, and I have a soft spot for them."), ["good bones", "soft spot"]);
   assert.equal(await writeWithoutOverused({ draft, kind: "agent_pulse", redraft: async () => { throw new Error("not asked"); } }), draft, "only the first text");
   assert.equal(await writeWithoutOverused({ draft, kind: "outreach_open", variant: 1, redraft: async () => ({ reply: "We pay cash for houses." }) }), draft, "never trades it for carrier words");
   assert.match(ask({ county: "King", overused: ["hunting"] }), /YOUR LAST DRAFT SAID "hunting", WHICH MOST OF TODAY'S AGENTS ARE GETTING/);
   assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => !/seattle flipper|hunting/i.test(x)), "the examples don't teach them either");
 });
 
-test("a first text over 200 characters is written again shorter once — the short ones get answered", async () => {
-  assert.equal(OPENER_MAX_CHARS, 200);
+test("a first text over 160 characters is written again shorter once — the plain one is about 120", async () => {
+  assert.equal(OPENER_MAX_CHARS, 160);
   const long = { reply: "x".repeat(288), summary: "s" };
   const asked = [];
-  const short = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async (n) => { asked.push(n); return { reply: "y".repeat(190) }; } });
+  const short = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async (n) => { asked.push(n); return { reply: "y".repeat(150) }; } });
   assert.deepEqual(asked, [288]);
-  assert.equal(short.reply.length, 190);
-  assert.match(ask({ county: "King", tooLong: 288 }), /YOUR LAST DRAFT WAS 288 CHARACTERS: write it again under 200/);
-  const fine = { reply: "z".repeat(195) };
+  assert.equal(short.reply.length, 150);
+  assert.match(ask({ county: "King", tooLong: 288 }), /YOUR LAST DRAFT WAS 288 CHARACTERS: write it again under 160/);
+  const fine = { reply: "z".repeat(155) };
   assert.equal(await writeShorterFirstText({ draft: fine, kind: "outreach_open", redraft: async () => { throw new Error("not asked"); } }), fine);
   assert.equal(await writeShorterFirstText({ draft: long, kind: "agent_pulse", redraft: async () => { throw new Error("not asked"); } }), long, "only the first text");
-  const cold = await writeShorterFirstText({ draft: long, kind: "agent_pulse", outbound: { coldOpen: true }, redraft: async () => ({ reply: "y".repeat(180) }) });
-  assert.equal(cold.reply.length, 180, "and a cold agent's fresh-listing check-in, which is a first text in all but name");
+  const cold = await writeShorterFirstText({ draft: long, kind: "agent_pulse", outbound: { coldOpen: true }, redraft: async () => ({ reply: "y".repeat(150) }) });
+  assert.equal(cold.reply.length, 150, "and a cold agent's fresh-listing check-in, which is a first text in all but name");
   const o = outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { reason: "fresh_listing", segment: "cold", listing: { street: "1 A St" } } });
   assert.equal(o.coldOpen, true);
   assert.equal(outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { reason: "fresh_listing", segment: "engaged", listing: { street: "1 A St" } } }).coldOpen, false);
@@ -354,13 +360,14 @@ test("a first text over 200 characters is written again shorter once — the sho
   assert.equal(pitched, long, "a shorter one that pitches cash isn't taken");
 });
 
-test("the first text has room for a little of Matt's humour, but never at the agent's, the seller's or the house's expense", () => {
+test("the first text is plain, with no jokes and no remarks about the house — Matt: 'slightly spammy … more approachable and like a human'", () => {
   const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES });
-  assert.match(t, /warm and a little funny, never a pitch/);
-  assert.match(t, /PERSONALITY: one light, human touch/);
-  assert.match(t, /never at the agent's, the seller's or the house's expense/);
-  assert.match(t, /plain and friendly is fine/, "humour is optional, never forced");
-  assert.doesNotMatch(ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES }), /WHAT TO NOTICE/, "no details, no details line");
+  assert.match(t, /the way a real person texts someone they haven't met: plain, polite and easy to answer/);
+  assert.match(t, /must not read like marketing or a mass text/);
+  assert.match(t, /No compliments, no jokes, no clever lines/);
+  assert.doesNotMatch(t, /PERSONALITY|uglier the better|a little funny|WHAT TO NOTICE/);
+  assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => !/character|bones|kitchen|soft spot|excited|\{county\}/i.test(x)), "the examples don't teach a remark or a county");
+  assert.deepEqual(normalizeOpener({ examples: PREVIOUS_DEFAULT_OPENER_EXAMPLES }).examples, DEFAULT_OPENER_EXAMPLES, "yesterday's defaults, saved word for word, become today's");
 });
 
 test("a first text lost to a deploy restart (no draft, no skip written) is sent by the next run", async () => {
@@ -631,21 +638,21 @@ test("the first text asks one question and leaves their other fixers for their a
   const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES });
   const rules = t.split("HOW MATT WRITES")[0];
   assert.doesNotMatch(rules, /That line is required|END with one short line|other fixers on their radar/);
-  assert.match(rules, /Two short sentences/);
+  assert.match(rules, /At most two short sentences/);
   assert.match(rules, /don't ask about their other fixers or other houses in this text/);
-  assert.match(rules, /anywhere in King County is optional/, "the county line is optional");
+  assert.match(rules, /Name no county and no region/);
   const fill = (x) => x.replace("{first}", "Dana").replace("{street}", "14820 SE 172nd St").replace("{town}", "Renton").replace("{county}", "King");
   for (const x of DEFAULT_OPENER_EXAMPLES) {
     assert.doesNotMatch(x, /other fixers|anything else that needs work|all ears/i, x);
     assert.equal((x.match(/\?/g) || []).length, 1, `one question: ${x}`);
-    assert.ok(fill(x).length >= 130 && fill(x).length <= 190, `about 150 characters filled in: ${fill(x).length}`);
+    assert.ok(fill(x).length <= 140, `about 120 characters filled in: ${fill(x).length}`);
   }
 });
 
 test("a turnkey seat's first text says it looks finished and asks, once, whether they see ones that need work", () => {
   const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES, turnkey: true });
-  assert.match(t, /THIS LISTING LOOKS FINISHED: don't call it a fixer/);
-  assert.match(t, /ask lightly whether they ever see ones that need work\. That is your one question/);
+  assert.match(t, /THIS LISTING LOOKS FINISHED: don't ask about it as if it were a fixer/);
+  assert.match(t, /Say it looks nicely done and ask whether they ever get ones that need work\. That is your one question/);
   assert.doesNotMatch(t, /other fixers carry/);
 });
 
@@ -660,4 +667,67 @@ test("an agent answering one of the new short first texts is answering us, thoug
     transcript: thread("Hi, came across your listing at 12 Elm St. Is it a bit of a project?") }), true, "the GHL workflow's template still counts");
   const notOpen = { listReplyDrafts: async () => [{ id: "d2", contactId: "c1", status: "sent", sentText: ours, outbound: { kind: "agent_pulse" } }] };
   assert.equal(await lastLineIsOurFirstText({ store: notOpen, locationId: "L", contactId: "c1", transcript: thread(ours) }), false, "only the first text");
+});
+
+/* ---------- the plain first text (2026-10-16) ---------- */
+
+test("the first text names the street the way a person would, without the house number", () => {
+  assert.equal(streetName("48 Wren Ct, Oak Harbor, WA"), "Wren Ct");
+  assert.equal(streetName("1911 9th Ave W, Seattle, WA 98119"), "9th Ave W");
+  assert.equal(streetName("12345 Sw Harbor Way"), "SW Harbor Way", "directions as people write them");
+  assert.equal(streetName("12026-B Shuksan Rim Dr #4, Glacier, WA"), "Shuksan Rim Dr", "no unit either");
+  assert.equal(streetName("4521 S 128th St Unit 2"), "S 128th St");
+  assert.equal(streetName("N Fern Rd, Lynden"), "N Fern Rd");
+  assert.equal(streetName("123"), "");
+});
+
+test("first texts you held are written again in the plain voice: put aside as never sent, and started again about the same listing", async () => {
+  const L = "loc-first-text-restyle";
+  const asked = [];
+  const router = createOutreachRouter({ resolveLocation: () => ({ locationId: L, client: ghlClient() }),
+    firstTouch: async (a) => { asked.push(a); return { job: { id: `j-restyle-${asked.length}` } }; } });
+  const batch = await batchWith("Autopilot · Island, WA", [
+    { key: "held", hook: { address: "77 Cedar Ln, Oak Harbor, WA", county: "Island", city: "Oak Harbor", yearBuilt: 1962 } },
+    { key: "finished", hook: { address: "9 Bay View Ct, Coupeville, WA", county: "Island", city: "Coupeville", turnkey: true } },
+    { key: "texted", hook: { address: "3 Pier St, Langley, WA", county: "Island", city: "Langley" } },
+    { key: "other", hook: { address: "5 Fir St, Clinton, WA", county: "Island", city: "Clinton" } },
+  ], L);
+  const r = await router.importAgents({ locationId: L, client: ghlClient(), agentKeys: ["held", "finished", "texted", "other"], batchId: batch.id, dryRun: false, applyTag: false, openWith: "app" });
+  const [held, finished, texted, other] = r.results.map((x) => x.contactId);
+  asked.length = 0;
+  const heldDraft = (contactId, address, flags = ["held by you"], extra = {}) => store.createReplyDraft({ locationId: L, contactId, status: "draft", channel: "sms",
+    reply: "Hi Dana, your listing dates back to the 60s, always curious what's behind those walls. Project or pretty turnkey?", flags,
+    outbound: { kind: "outreach_open", address, county: "Island", ...extra }, updatedAt: new Date().toISOString() });
+  const a = await heldDraft(held, "77 Cedar Ln, Oak Harbor, WA");
+  const b = await heldDraft(finished, "9 Bay View Ct, Coupeville, WA", ["held by you"], { turnkey: true });
+  const c = await heldDraft(texted, "3 Pier St, Langley, WA");
+  await store.appendContactEvents(L, texted, [{ type: "outreach_sent", party: "agent", at: new Date().toISOString(), data: {}, dedupeKey: "sent-restyle" }]);
+  const d = await heldDraft(other, "5 Fir St, Clinton, WA", ["a person's call — waiting for you"]);
+
+  const dry = await router.restyleFirstTexts({ locationId: L, client: ghlClient(), since: "2026-01-01T00:00:00Z", dryRun: true });
+  assert.equal(asked.length, 0, "a dry run drafts nothing");
+  assert.deepEqual(dry.results.filter((x) => x.would).map((x) => x.contactId).sort(), [held, finished].sort());
+  assert.equal(dry.results.find((x) => x.contactId === texted).skipped, "already texted");
+  assert.equal((await store.getReplyDraft(a.id)).status, "draft");
+
+  const live = await router.restyleFirstTexts({ locationId: L, client: ghlClient(), since: "2026-01-01T00:00:00Z" });
+  assert.equal(live.restarted, 2);
+  const again = asked.find((x) => x.contactId === held);
+  assert.equal(again.hook.address, "77 Cedar Ln, Oak Harbor, WA", "the same listing");
+  assert.equal(again.hook.city, "Oak Harbor");
+  assert.equal(again.hook.county, "Island");
+  assert.equal(asked.find((x) => x.contactId === finished).hook.turnkey, true, "a turnkey seat stays one");
+  const put = await store.getReplyDraft(a.id);
+  assert.equal(put.status, "dismissed");
+  assert.equal(put.dismissedBy, "restyle", "not you binning the words");
+  assert.ok(put.flags.includes("restyled — not sent"));
+  assert.equal((await store.getReplyDraft(b.id)).status, "dismissed");
+  assert.equal((await store.getReplyDraft(c.id)).status, "draft", "an agent we already texted keeps theirs");
+  assert.equal((await store.getReplyDraft(d.id)).status, "draft", "a draft held for another reason is left alone");
+  assert.equal(asked.some((x) => x.contactId === other || x.contactId === texted), false);
+
+  // A restart drops the new one before it's drafted: the lost path finds it.
+  asked.length = 0;
+  const lost = await router.retryFirstTexts({ locationId: L, client: ghlClient(), now: Date.now() + 3 * 3600000 });
+  assert.deepEqual(lost.results.filter((x) => x.lost).map((x) => x.contactId).sort(), [held, finished].sort());
 });
