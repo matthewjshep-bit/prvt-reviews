@@ -3868,6 +3868,39 @@ nothing. **A held draft a person published is not "needs a look"** any more
 — the queue row is only for an unpublished draft (Erin Twedt's 20531 S
 Danvers sat there a day after its number had been floated).
 
+**Numbers we never sent, closed out (2026-10-16, ON at 10 days).** The audit
+found six priced offers whose number never went out, some since August: the
+Offers column said "Our number never went out — float or send it" ("the
+float timer didn't send it") and they sat on Today for Matt for good. The
+same nightly pass now closes them (`retireStaleUnsent`,
+`ghl-broker/held-underwrites.js`; the verdict is `staleUnsent`,
+`shared/stale-unsent.js`):
+- **Which.** The house's current row, status new, a number on it, and nothing
+  of ours ever in front of them: no letter that went, no `floatSentAt` (a
+  number texted in a plain reply), no realm or take check, no nudge. It is
+  `retireUnsentDays` past the day it was due out (the float timer's hours
+  after it was priced, or a day for one made by hand; a re-quote restarts
+  it). Not a deal, a held draft (the triage above has those), or a yes.
+- **Never** while a person has the thread (a hand reply or a call), while a
+  float you pressed is still waiting in the outbox, or within 14 days of a
+  person's own work on the row: made by hand, revised, pinned, approved or
+  published.
+- **What it does.** `we_passed`, `statusNote` "never sent: closed after N
+  days", `retired: {by: "stale-unsent", at, reason}` (the held sweep's own
+  shape), an `offer_we_passed` timeline line, and any machine text still
+  queued about it dismissed, as the status menu's "we passed" does. Nothing is
+  texted and no GHL note is written. The agent is then nobody's offer and goes
+  to the agent check-in (`offerOwner` reads a pass of ours as nothing coming).
+  A second look never revives one (`numbersPass` skips sweep-retired rows).
+- **Switch:** `conversationAi.parties.agent.followUp.retireUnsentDays`,
+  default **10** — this one ships on, because it only closes our own stale
+  rows and sends nothing. 0 turns it off; so does `nightlyAudit.heldSweep:
+  false`.
+- **Check:** the audit's Run now as a dry run lists them as "Numbers we never
+  sent, closed out" (kind `stale_unsent`, `counts.byKind.stale_unsent`) with
+  the days; a real run shows each under "Done on its own" as `close unsent
+  (closed: never sent: closed after N days)`.
+
 ### Sounding like a person (the send layer)
 
 Conversation AI page → "When it sends on its own". Three things beyond the

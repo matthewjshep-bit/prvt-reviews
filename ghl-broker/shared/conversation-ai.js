@@ -1133,9 +1133,16 @@ function normalizeFollowUp(src = {}, party = "agent") {
     watchFloated: bool(f.watchFloated, false),
     // A second look at a strong past offer (shared/second-look.js), agent
     // only and off. Outside the dial's fingerprint, like the two above.
-    ...(party === "agent" ? { secondLook: normalizeSecondLook(f.secondLook) } : {}),
+    // And a number we priced and never sent, closed out quietly after this
+    // many days overdue (shared/stale-unsent.js) — ON at 10, since it only
+    // closes our own stale rows and sends nothing; 0 turns it off.
+    ...(party === "agent" ? {
+      secondLook: normalizeSecondLook(f.secondLook),
+      retireUnsentDays: int(f.retireUnsentDays, RETIRE_UNSENT_DEFAULT_DAYS, 0, 120),
+    } : {}),
   };
 }
+export const RETIRE_UNSENT_DEFAULT_DAYS = 10;
 
 // The second look (2026-10-16, shared/second-look.js): a strong past offer —
 // they passed, went quiet or countered, with the seller's number (or the list
