@@ -86,8 +86,9 @@ import { parseUsAddress, addressKey, lastMention } from "./shared/us-address.js"
 import {
   normalizeConversationAi, shadowModelFor, INTENTS, NEVER_AUTO, GUARDED_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
   SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutInTranscript, optOutActions, normalizePassReason, normalizeDraftFeedback,
-  setupQuestionFor,
+  setupQuestionFor, EYES_QUESTION, SELLER_NUMBER_QUESTION,
 } from "./shared/conversation-ai.js";
+import { numberStance, listedFit, noFitLine } from "./shared/number-stance.js";
 import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail, smsUnsubscribed, emailUnsubscribed, DND_TAG,
 } from "./ghl.js";
@@ -2075,7 +2076,8 @@ export async function assembleConversation({
   if (light) {
     /* an opt-out needs the party and nothing else */
   } else if (party === "agent") {
-    context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath), transcript: real, focusKinds: saved?.focusKinds });
+    context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath), transcript: real, focusKinds: saved?.focusKinds,
+      highStakes: config.parties.agent?.realmCheck?.highStakes });
     // The write-up terms' earnest money is a number the bot may say.
     if (config.writeUp?.earnestMoney) context = { ...context, amounts: [...new Set([...context.amounts, Math.round(config.writeUp.earnestMoney)])] };
     // The post-mortem digest rides along only when the switch is on AND a
@@ -2328,18 +2330,21 @@ export const OUTBOUND_KINDS = {
   realm_check: {
     party: "agent",
     enabled: (pb) => pb?.realmCheck?.enabled,
-    ready: ({ offer, config, dossier }) => {
+    ready: ({ offer, config, dossier, stance = null }) => {
       if (!offer?.cashAmount) return "the offer has no number to float";
       // Their read before our price. A number that arrives with nothing
       // anchoring it reads as a lowball and ends the thread — so unless the
       // operator has deliberately switched the first step off, the take check
       // goes first and this waits for their answer.
       const takeOn = config?.parties?.agent?.takeCheck?.enabled;
-      const haveTheirs = Boolean(dossier?.have?.arv || dossier?.have?.rehab);
+      // A listed house where we asked the seller's number (listedFirst): their
+      // answer is the read the number waits for.
+      const haveTheirs = Boolean(dossier?.have?.arv || dossier?.have?.rehab
+        || (config?.parties?.agent?.listedFirst?.enabled && dossier?.have?.sellerAsk));
       // …unless the underwrite is confident: then our number leads. A rough
       // first pass goes too: it was promised, and it asks for their read
       // itself (floatExtras' their_read question).
-      if (takeOn && !haveTheirs && !leadsWithNumber({ offer, config }) && !isRoughNumber(offer)) return "no read from the agent yet — the take check goes first";
+      if (takeOn && !haveTheirs && !leadsWithNumber({ offer, config, stance }) && !isRoughNumber(offer)) return "no read from the agent yet — the take check goes first";
       return true;
     },
     // The exact number and its rough forms ("around 445ish"), never rounded
@@ -2590,8 +2595,33 @@ export async function startProactive({
   const spec = OUTBOUND_KINDS[kind];
   if (!spec) return { skipped: `unknown outbound kind ${kind}`, job: null };
   const playbook = config.parties?.[spec.party];
-  if (!spec.enabled(playbook)) return { skipped: `${outboundLabel(kind)} is off for ${PARTY_LABEL[spec.party].toLowerCase()}s`, job: null };
+  // The seller's-number ask on a listed house is its own switch (listedFirst).
+  const asksSeller = kind === "take_check" && subject?.askSeller && playbook?.listedFirst?.enabled;
+  if (!spec.enabled(playbook) && !asksSeller) return { skipped: `${outboundLabel(kind)} is off for ${PARTY_LABEL[spec.party].toLowerCase()}s`, job: null };
   if (!contactId) return { skipped: "there is nobody to send it to", job: null };
+
+  // A listed house (shared/number-stance.js listedFit, 2026-10-15): what the
+  // seller is hoping to get comes before any number of ours, and a number far
+  // under theirs isn't texted at all. The machine's first word on the house
+  // only; a person pressing Float has decided, and a re-quote is past it.
+  if (!personAsked && playbook?.listedFirst?.enabled && FLOAT_KINDS.has(kind) && !subject?.requote && !subject?.askSeller && offer?.address && offer?.cashAmount) {
+    const events = await store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []);
+    let fit = listedFit({ offer, dossier: propertyDossier(events, offer.address), events, pct: playbook.listedFirst.minPctOfTheirs });
+    if (fit.move !== "float") {
+      // Only before our first quote on the house, whichever row it came off.
+      let thread = null;
+      try { thread = (await buildTranscript(client, locationId, contactId, { maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 60, maxChars: 16000, maxCallTranscripts: 0 })).text || ""; }
+      catch { thread = null; }
+      if (thread == null || paperWent(offer) || lastQuoteOnHouse(offer, thread)) fit = { ...fit, move: "float" };
+    }
+    if (fit.move === "no_fit") {
+      return { skipped: `${offer.address}: ${noFitLine(fit)} — too far apart to text a number; a polite no-fit instead, yours to price by hand`, noFit: fit, job: null };
+    }
+    if (fit.move === "ask_number") {
+      return startProactive({ client, locationId, saved, store, contactId, kind: "take_check", offer,
+        subject: { ...(subject || {}), address: offer.address, askSeller: true }, sendsEnabled, deps, personAsked, continues });
+    }
+  }
 
   // One voice at a time (outbox-guard.js). A text the machine starts never
   // replaces a reply to their text, or a person's own draft, that is waiting
@@ -2642,7 +2672,10 @@ export async function startProactive({
       dossier = propertyDossier(events, offer.address);
     } catch { dossier = null; }
   }
-  const ready = spec.ready({ offer, subject, config, dossier });
+  // A high-stakes house floats a range until we have their read and eyes on
+  // it (shared/number-stance.js).
+  const stance = kind === "realm_check" ? await floatStanceFor({ store, offer, config, dossier }) : null;
+  const ready = spec.ready({ offer, subject, config, dossier, stance });
   if (ready !== true) return { skipped: ready, job: null };
 
   // A number the machine puts to the agent is never above the last one we
@@ -2680,7 +2713,7 @@ export async function startProactive({
   // person on the location's lane.
   const batched = Boolean(config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind));
   runOnLane(batched ? `${locationId}:machine` : locationId, () =>
-    runProactive(job, { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, subject, spec, config, dossier, machine, continues, deps: { ...deps, draft: deps.draft || draftReply } })
+    runProactive(job, { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, subject, spec, config, dossier, stance, machine, continues, deps: { ...deps, draft: deps.draft || draftReply } })
       .catch(async (e) => {
         job.status = "error";
         job.error = String(e?.message || e).slice(0, 300);
@@ -2771,12 +2804,29 @@ export function numberConfidence({ offer = null, job = null } = {}) {
 }
 
 // Lead with our number (skip "what do you think it's worth?") when the
-// underwrite is confident and the operator hasn't turned it off.
-export function leadsWithNumber({ offer = null, job = null, config = null } = {}) {
+// underwrite is confident and the operator hasn't turned it off. Never on a
+// high-stakes house still in range mode (shared/number-stance.js).
+export function leadsWithNumber({ offer = null, job = null, config = null, stance = null } = {}) {
   const rc = config?.parties?.agent?.realmCheck;
   if (!rc?.enabled || rc.leadWhenConfident === false) return false;
+  if (stance?.mode === "range") return false;
   if (!(Number(offer?.cashAmount) > 0)) return false;
   return ["high", "medium"].includes(numberConfidence({ offer, job }));
+}
+
+/**
+ * floatStance({ offer, config, dossier, videos }) → numberStance()
+ *
+ * The house's number stance from the agent playbook's switch
+ * (realmCheck.highStakes). floatStanceFor reads the offer's videos first.
+ */
+export function floatStance({ offer = null, config = null, dossier = null, videos = null } = {}) {
+  return numberStance({ offer, dossier, highStakes: config?.parties?.agent?.realmCheck?.highStakes, videos });
+}
+export async function floatStanceFor({ store, offer, config, dossier = null }) {
+  if (!config?.parties?.agent?.realmCheck?.highStakes?.enabled || !offer?.id) return floatStance({ offer, config, dossier });
+  const videos = typeof store?.listOfferVideos === "function" ? await store.listOfferVideos(offer.id).catch(() => []) : [];
+  return floatStance({ offer, config, dossier, videos });
 }
 
 // The descriptor the prompt reads for one outbound kind: everything the model
@@ -2834,7 +2884,7 @@ export function realmFloats({ offer, outbound }) {
 // answering it. The float goes without the math.
 export const FLOAT_MATH_MIN_PCT = 60;
 
-export function floatExtras({ offer, saved, dossier = null, requote = false, theirs = false }) {
+export function floatExtras({ offer, saved, dossier = null, requote = false, theirs = false, stance = null }) {
   if (requote || !offer?.cashAmount) return {};
   const rc = conversationConfig(saved || {}).parties?.agent?.realmCheck || {};
   const out = {};
@@ -2847,6 +2897,17 @@ export function floatExtras({ offer, saved, dossier = null, requote = false, the
     const q = setupQuestionFor({ offerId: offer.id || offer.address || "", dossier, ask: ["their_read"] })
       || (rc.setupQuestion?.enabled ? setupQuestionFor({ offerId: offer.id || offer.address || "", dossier, ask: rc.setupQuestion.ask }) : null);
     if (q) out.question = q;
+    return out;
+  }
+  // A high-stakes house still in range mode (2026-10-15): the same shape —
+  // a range, no math, and the question is what's missing: their read first,
+  // then eyes on it.
+  if (stance?.mode === "range") {
+    const r = floatRange(offer.cashAmount, rc.range?.pct);
+    if (r) out.range = { ...r, words: rangeWords(r) };
+    const q = stance.missing.includes("their_read") ? setupQuestionFor({ offerId: offer.id || offer.address || "", dossier, ask: ["their_read"] }) : null;
+    out.question = q || (stance.missing.includes("eyes") ? { ...EYES_QUESTION } : null);
+    if (!out.question) delete out.question;
     return out;
   }
   if (rc.withMath && !theirs) {
@@ -2880,7 +2941,7 @@ export function floatExtras({ offer, saved, dossier = null, requote = false, the
   return out;
 }
 
-export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
+export function outboundDescriptor({ kind, offer, subject, saved, dossier, stance = null }) {
   const address = offer?.address || subject?.address || "the property";
   const step = subject?.step ?? null;
   const steps = subject?.steps || [];
@@ -2891,10 +2952,12 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     return { ...base,
       arv: n.arv, rehab: n.rehab,
       arvText: n.arv ? fmtMoney(n.arv) : "", rehabText: n.rehab ? fmtMoney(n.rehab) : "",
-      arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "" };
+      arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "",
+      // A listed house (listedFirst): the one question is the seller's number.
+      ...(subject?.askSeller ? { askSeller: true, sellerQuestion: SELLER_NUMBER_QUESTION } : {}) };
   }
   if (kind === "kind_pass") {
-    const why = ["area", "numbers", "rural", "promised"].includes(subject?.why) ? subject.why : "kind";
+    const why = ["area", "numbers", "rural", "promised", "too_far"].includes(subject?.why) ? subject.why : "kind";
     return { ...base, address: offer?.address || subject?.address || "", why, heldReason: String(subject?.heldReason || "").slice(0, 160),
       // A house we owed them a number on (held-underwrites.js, 2026-10-14).
       ...(why === "promised" ? { owed: ["number", "paper", "answer"].includes(subject?.owed) ? subject.owed : "number", passReason: String(subject?.reason || "").slice(0, 160) } : {}) };
@@ -2928,17 +2991,21 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
     // a hedge; with them it is an explanation.
     const theirArv = Math.round(Number(dossier?.have?.arv?.value) || 0);
     const theirRehab = Math.round(Number(dossier?.have?.rehab?.value) || 0);
+    const st = subject?.requote ? null : stance || floatStance({ offer, config: conversationConfig(saved || {}), dossier });
+    const ranged = st?.mode === "range";
     return { ...base,
       amount: offer.cashAmount, amountText: fmtMoney(offer.cashAmount),
       amountK: kText(Number(offer.cashAmount) || 0),
       askingText: asking ? fmtMoney(asking) : "", terms,
       theirArv, theirRehab,
       theirArvK: theirArv ? kText(theirArv) : "", theirRehabK: theirRehab ? kText(theirRehab) : "",
-      // A confident auto-underwrite leads with the number, plainly.
-      confident: ["high", "medium"].includes(numberConfidence({ offer })),
+      // A confident auto-underwrite leads with the number, plainly — never a
+      // high-stakes house still in range mode.
+      confident: !ranged && ["high", "medium"].includes(numberConfidence({ offer })),
+      ...(ranged ? { stance: { mode: "range", missing: st.missing } } : {}),
       street: String(offer.address || "").split(",")[0].trim(),
       requote: Boolean(subject?.requote),
-      ...floatExtras({ offer, saved, dossier, requote: Boolean(subject?.requote), theirs: Boolean(theirArv || theirRehab) }) };
+      ...floatExtras({ offer, saved, dossier, requote: Boolean(subject?.requote), theirs: Boolean(theirArv || theirRehab), stance: st }) };
   }
   if (kind === "agent_pulse") {
     // shared/agent-pulse.js agentPulseSubject: a listing by street (never its
@@ -3025,7 +3092,7 @@ function outboundSummary({ kind, offer, outbound }) {
   switch (kind) {
     case "take_check": {
       const parts = [outbound.arv ? `${outbound.arvK} ARV` : "", outbound.rehab ? `${outbound.rehabK} rehab` : ""].filter(Boolean);
-      return `Floats our ${parts.join(" / ")} read on ${where} and asks what they think.`;
+      return `Floats our ${parts.join(" / ")} read on ${where} and asks ${outbound.askSeller ? "what the seller is hoping to get" : "what they think"}.`;
     }
     case "realm_check":
       return outbound.requote
@@ -3037,7 +3104,9 @@ function outboundSummary({ kind, offer, outbound }) {
     case "hot_push": return `Pushes the agreed price on ${where} toward paper: asks them to write it up on NWMLS forms for us to sign${rung}.`;
     case "kind_pass": return outbound.why === "promised"
       ? `We owed them ${outbound.owed === "paper" ? "the written offer" : outbound.owed === "answer" ? "an answer" : "a number"} on ${where}: says we're out${outbound.passReason ? ` (${outbound.passReason})` : ""} and asks for the next one.`
-      : `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : outbound.why === "numbers" ? "we couldn't get to a number on it" : outbound.why === "rural" ? "it's rural, and we buy houses on under 2 acres" : "we only buy single-family right now"}.`;
+      : outbound.why === "too_far"
+        ? `Tells them ${where} doesn't fit: ours would be too far under the seller's number to send. Names no number; asks for other fixers, on or off market.`
+        : `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : outbound.why === "numbers" ? "we couldn't get to a number on it" : outbound.why === "rural" ? "it's rural, and we buy houses on under 2 acres" : "we only buy single-family right now"}.`;
     case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
     case "passed_checkin": return outbound.relisted
       ? `Saw ${where} is back on the market; asks if the seller would look at our offer now${rung}.`
@@ -3204,7 +3273,8 @@ export async function previewProactive({ client, locationId, saved, store, conta
   if (kind === "realm_check" && offer?.address) {
     try { dossier = propertyDossier(await store.listContactEvents(locationId, contactId, { limit: 200 }), offer.address); } catch { dossier = null; }
   }
-  const ready = spec.ready({ offer, subject, config, dossier });
+  const stance = kind === "realm_check" ? await floatStanceFor({ store, offer, config, dossier }) : null;
+  const ready = spec.ready({ offer, subject, config, dossier, stance });
   if (ready !== true) return { skipped: ready };
   const a = await assembleConversation({
     client, locationId, saved, store, contactId, message: "", channel: "sms", explicitParty: party, now: Date.now(), warnings: [], aiApiKey,
@@ -3214,7 +3284,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
   const askedOff = optOutInTranscript(a.transcript, config.optOut);
   if (askedOff) return { skipped: `they asked to be left alone on ${askedOff.at}`, contactName: a.contactName };
   const { context } = a;
-  const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier });
+  const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier, stance });
   const previewArgs = {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
     contact: { name: a.contactName || name, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
@@ -3238,7 +3308,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
 }
 
 async function runProactive(job, ctx) {
-  const { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, subject, spec, config, dossier, deps } = ctx;
+  const { client, locationId, saved, store, aiApiKey, sendsEnabled, offer, subject, spec, config, dossier, stance = null, deps } = ctx;
   const now = typeof deps.now === "function" ? deps.now() : Date.now();
   const warnings = job.warnings;
   const kind = job.outbound;
@@ -3271,7 +3341,7 @@ async function runProactive(job, ctx) {
     return;
   }
   const { context } = a;
-  const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier });
+  const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier, stance });
 
   job.phase = "drafting";
   const draftArgs = {
@@ -4386,7 +4456,12 @@ async function runReply(job, ctx) {
     const offer = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
     const mine = offer ? await store.listReplyDrafts(locationId, { contactId: job.contactId, limit: 30 }).catch(() => []) : [];
     const floated = offer && (floatSentAt(mine, offer.id) || lastQuoteOnHouse(offer, a.transcript));
-    if (floated && !paperWent(offer) && paperWorthy(offer) && paperCheck({ offer, transcript: a.transcript }).ok) {
+    // Never on a house we told them didn't fit (listedFirst), nor a
+    // high-stakes one still in range mode (shared/number-stance.js).
+    const stance = floated && config.parties.agent.realmCheck?.highStakes?.enabled
+      ? await floatStanceFor({ store, offer, config, dossier: propertyDossier(await store.listContactEvents(locationId, job.contactId, { limit: 200 }).catch(() => []), offer.address) })
+      : null;
+    if (floated && !offer.noFit && !paperWent(offer) && paperWorthy(offer, { stance }) && paperCheck({ offer, transcript: a.transcript }).ok) {
       const action = { id: `a-record-send-${job.id}`, type: "send_offer", mode: "auto", status: "pending", party, offerId: offer.id,
         channels: ["sms", "email"], via: "for record", forRecord: true,
         why: "they pushed back on the number we floated — the written offer goes anyway, for their records" };
@@ -4882,6 +4957,13 @@ async function runReply(job, ctx) {
       store, locationId, contactId: job.contactId, party: "agent", type: "property_details", at: new Date(now).toISOString(),
       address: draft.propertyAddress, source: "conversation", ref: record.id, data: propertyDetails,
     });
+    // A listed house where we asked what the seller is hoping to get
+    // (listedFirst): their answer is what the number waited for, the way
+    // their read is (4c).
+    if (propertyDetails.sellerAsk && !agentTake && config.parties.agent?.listedFirst?.enabled && typeof deps.afterAgentTake === "function") {
+      try { await deps.afterAgentTake({ contactId: job.contactId, address: draft.propertyAddress, draftId: record.id }); }
+      catch (e) { warnings.push(`realm follow-up: ${String(e?.message || e).slice(0, 120)}`); }
+    }
   }
 
   /* --- 4d. a new property is a new property, whatever the intent was --- */
@@ -6005,7 +6087,7 @@ export async function applyDraftAction({ client, store, locationId, draftId, act
   const action = (d.actions || []).find((a) => a.id === actionId);
   if (!action) throw Object.assign(new Error("no such action on that draft"), { http: 404 });
   if (action.status !== "pending") throw Object.assign(new Error(`that action was already ${action.status}`), { http: 409 });
-  const [done] = await runActions({ client, locationId, contactId: d.contactId, actions: [action], draft: d, deps, store });
+  const [done] = await runActions({ client, locationId, contactId: d.contactId, actions: [action], draft: d, deps: { ...deps, byPerson: true }, store });
   const applied = { ...done, status: done.status === "done" ? "applied" : done.status };
   const updated = { ...d, actions: d.actions.map((a) => (a.id === actionId ? applied : a)), updatedAt: new Date().toISOString() };
   await store.updateReplyDraft(d.id, updated);

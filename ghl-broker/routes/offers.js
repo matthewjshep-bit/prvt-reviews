@@ -74,6 +74,7 @@ import {
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperAfterAnswerDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS, sendsItselfOnClear, isRoughNumber } from "../shared/paper-follows.js";
+import { noFitLine, stanceWaitingFor } from "../shared/number-stance.js";
 import { planRequote } from "../shared/requote.js";
 import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeGhlActivity } from "../shared/last-activity.js";
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
@@ -114,7 +115,7 @@ import {
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, UW_ENRICH_CANDIDATES, paperAlreadyOut,
 } from "../auto-underwrite.js";
 import {
-  startReply, startProactive, previewProactive, chooseProactiveKind, leadsWithNumber, listJobs as listReplyJobs, publicJob as publicReplyJob,
+  startReply, startProactive, previewProactive, chooseProactiveKind, leadsWithNumber, floatStanceFor, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
   stopMachineTextsForOffer, stopDealOutreach,
 } from "../reply-agent.js";
@@ -3727,6 +3728,23 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // Someone has seen the house (shared/number-stance.js): a walkthrough, a
+  // showing, a call through the photos. A big house stops floating as a range
+  // once we also have the agent's read. Body: { seen: true|false, note? }.
+  router.post("/:id/seen", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { offer } = ctx;
+      const ts = new Date().toISOString();
+      if (req.body?.seen === false) delete offer.seen;
+      else offer.seen = { at: ts, by: "you", note: dealStr(req.body?.note, 200) };
+      offer.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, seen: offer.seen || null });
+    } catch (err) { fail(res, err); }
+  });
+
   // Re-quote this offer at a number — the held-paper banner's "Re-quote at
   // 400K" (paperHeldNow). The same in-place revision a hand edit makes, so
   // the letter, links, revision ledger and expiry all follow, and the row is
@@ -4598,10 +4616,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       const cfg = conversationConfig(fresh);
       const so = cfg.parties.agent.sendOffer;
+      // A high-stakes house without their read or eyes on it floats a range
+      // and sends no paper by itself (shared/number-stance.js).
+      const stance = await floatStanceFor({ store, offer, config: cfg, dossier: propertyDossier(events, offer.address) });
       // A confident underwrite leads with the NUMBER in conversation — "based
       // on our analysis we can likely do around 450ish" — and the paper waits
       // for their answer (a yes sends it). Not confident: the old order.
-      const leadWithNumber = leadsWithNumber({ offer, job, config: cfg });
+      const leadWithNumber = leadsWithNumber({ offer, job, config: cfg, stance });
 
       // The offer itself, unattended — only for a CLEAN underwrite (status
       // "new", not a gate-held draft), only to an agent who has already
@@ -4611,7 +4632,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // An offer priced on the agent's own numbers (our comps were thin), or a
       // rough first pass priced past a hold, is a number to float, never paper
       // that sends itself.
-      const agentNumbers = !sendsItselfOnClear(offer);
+      const agentNumbers = !sendsItselfOnClear(offer, { stance });
       // You stopped the bot on them (shared/bot-hold.js): the letter doesn't
       // send itself and isn't queued for the retry. The float below waits
       // too, so the offer stays "priced, not floated" until you Resume.
@@ -4687,13 +4708,38 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // So is a stop (shared/bot-hold.js): it floats after Resume.
     if (r.skipped && (r.blocked || r.held)) console.log(`${kind} waiting for ${offer.id}: ${r.skipped}`);
     else if (r.skipped) { console.log(`${kind} skipped for ${offer.id}: ${r.skipped}`); await markFloatSkipped(offer.id, kind, r.skipped); }
-    else await markProactive(offer.id, kind);
+    // A listed house asks the seller's number first: that went as a take check.
+    else await markProactive(offer.id, r.job?.outbound || kind);
+    if (r.noFit) await noFitPass({ client, locationId, fresh, offer, fit: r.noFit });
     if (r.raise) {
       await createContactNote(client, offer.contactId, {
         body: `Underwrote ${offer.address} at ${fmtMoney(offer.cashAmount)}, above the ${fmtMoney(r.raise.amount)} we last texted there — nothing was texted. Yours to decide whether to go up (Float on the offer sends it).`,
       }).catch(() => {});
     }
     return { skipped: r.skipped || null, blocked: r.blocked || null, held: r.held || null, kind, job: r.job || null };
+  }
+
+  // A listed house where ours is far under the seller's number (or the list
+  // price) before we ever said one (shared/number-stance.js listedFit,
+  // 2026-10-15). No number goes: a polite no-fit asks for other fixers, and
+  // `offer.noFit` puts a row on Today so Matt can price it by hand. Never
+  // we_passed: the house stays open.
+  async function noFitPass({ client, locationId, fresh, offer, fit }) {
+    if (!offer?.id || !fit) return null;
+    try {
+      const full = await store.getOffer(offer.id);
+      if (full && !full.noFit) {
+        full.noFit = { at: new Date().toISOString(), theirs: Math.round(fit.theirs) || 0, source: fit.source || "", ratio: fit.ratio != null ? Math.round(fit.ratio * 1000) / 1000 : null, ours: Math.round(Number(full.cashAmount) || 0) };
+        await store.updateOffer(full.id, full);
+      }
+    } catch (e) { console.error(`offers: no-fit stamp failed for ${offer.id}: ${e.message}`); }
+    await markFloatSkipped(offer.id, "realm_check", `${noFitLine(fit)} — a polite no-fit instead of a number`);
+    const r = await startProactive({
+      client, locationId, saved: fresh, store, contactId: offer.contactId, kind: "kind_pass", offer,
+      subject: { address: offer.address, why: "too_far" }, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
+    }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 120) }));
+    if (r?.skipped) console.log(`no-fit note skipped for ${offer.id}: ${r.skipped}`);
+    return r;
   }
 
   // Every conversation's last message, newest first, straight from GHL — one
@@ -4824,8 +4870,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       ]);
       // Silence first; then (onNeutral, 2026-10-08) an answer that wasn't a
       // pass — "can't answer for the seller", or a yes on a rough number.
-      const quiet = paperAfterSilenceDue({ offer, drafts, events, silenceHours: af.silenceHours, withFloat: af.withFloat, now });
-      const answered = !quiet.due && af.onNeutral ? paperAfterAnswerDue({ offer, drafts, events, now }) : null;
+      // A high-stakes house in range mode gets no paper by machine (shared/number-stance.js).
+      const stance = cfg.parties.agent.realmCheck?.highStakes?.enabled
+        ? await floatStanceFor({ store, offer, config: cfg, dossier: propertyDossier(events, offer.address) }) : null;
+      const quiet = paperAfterSilenceDue({ offer, drafts, events, silenceHours: af.silenceHours, withFloat: af.withFloat, stance, now });
+      const answered = !quiet.due && af.onNeutral ? paperAfterAnswerDue({ offer, drafts, events, stance, now }) : null;
       const due = quiet.due ? quiet : answered;
       if (!due?.due) continue;
       // They unsubscribed, or a person stopped the bot on them (shared/bot-hold.js): nothing goes.
@@ -5014,6 +5063,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         client, locationId, saved: fresh, store, contactId, kind: "realm_check", continues: draftId,
         offer: full || offer, sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved: fresh }),
       });
+      if (r.noFit) await noFitPass({ client, locationId, fresh, offer: full || offer, fit: r.noFit });
       if (r.skipped) { console.log(`realm check after take skipped for ${offer.id}: ${r.skipped}`); return { started: false, skipped: r.skipped }; }
       await markProactive(offer.id, "realm_check");
       return { started: true, offerId: offer.id };
@@ -5459,7 +5509,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // written offer goes "for your records" — after a float nobody answered,
     // or with the reply to a no — in its own words. `by` is who sent it, for
     // the timeline and Flow.
-    sendOfferDocs: async ({ contactId, addressHint = "", offerId = null, channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [], transcript = null, unattended = false, forRecord = false, by = "" }) => {
+    // `machine`: an intent rule's action ran by itself (nobody pressed it) —
+    // read only by the high-stakes range hold below.
+    sendOfferDocs: async ({ contactId, addressHint = "", offerId = null, channels = null, docs = null, draftId = null, afterCounter = false, emailTo = "", emailCc = [], transcript = null, unattended = false, forRecord = false, by = "", machine = false }) => {
       // Nobody pressed anything (a clean underwrite, the retry): a person
       // who stopped the bot gets no letter by itself (shared/bot-hold.js).
       // A person pressing "Do it" on the draft is deciding, and it goes.
@@ -5488,6 +5540,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!check.ok) {
         await markPaperHeld(offer, check, draftId);
         return { ok: false, held: true, address: offer.address, reason: check.reason };
+      }
+      // A high-stakes house still in range mode (shared/number-stance.js):
+      // the machine puts nothing on paper until we have their read and eyes
+      // on it, or Matt approved the number. A person pressing Send has decided.
+      if (unattended || forRecord || machine) {
+        const cfg = conversationConfig(fresh);
+        if (cfg.parties.agent.realmCheck?.highStakes?.enabled) {
+          const evs = await store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []);
+          const stance = await floatStanceFor({ store, offer, config: cfg, dossier: propertyDossier(evs, offer.address) });
+          if (stance.mode === "range") {
+            const why = { reason: `high-stakes (${stance.why}): a range only until we have ${stanceWaitingFor(stance)}, or you approve the number — no paper by machine` };
+            await markPaperHeld(offer, why, draftId);
+            return { ok: false, held: true, address: offer.address, reason: why.reason };
+          }
+        }
       }
       // Nobody pressed anything, and the agent said this house is not a
       // project: no paper on it by itself (Walker Park Rd, 2026-10-09).

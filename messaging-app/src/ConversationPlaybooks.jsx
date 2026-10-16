@@ -940,10 +940,40 @@ export function PartyPlaybooks({ config, patch, workflows }) {
                         {SETUP_QUESTIONS[k]}
                       </label>
                     ))}
+                    {party === "agent" && (
+                      <>
+                        <Toggle checked={rc.highStakes?.enabled} onChange={(v) => setRc({ highStakes: { ...(rc.highStakes || { overAmount: 500000 }), enabled: v } })}>
+                          High-stakes houses: a range until we have their read and eyes on it
+                        </Toggle>
+                        {rc.highStakes?.enabled && (
+                          <label className="flex items-center gap-2 text-xs text-slate-500">
+                            Over $
+                            <span className="w-28"><Text type="number" value={rc.highStakes?.overAmount ?? 500000} onChange={(v) => setRc({ highStakes: { ...(rc.highStakes || {}), overAmount: Number(v) } })} /></span>
+                            , off-market, or a house the agent brought us
+                          </label>
+                        )}
+                        <p className={HINT}>Floats a range topped by our number and asks for their read (then for photos or a walkthrough video), and the machine sends no written offer, until we have their read and 8+ photos, a video, or someone has been. Your Approve on Today lifts it.</p>
+                      </>
+                    )}
                   </div>
                 );
               })()}
             </div>
+            {party === "agent" && (
+              <div>
+                <Toggle checked={pb.listedFirst?.enabled} onChange={(v) => setPb({ listedFirst: { ...(pb.listedFirst || { minPctOfTheirs: 75 }), enabled: v } })}>
+                  <span className="font-semibold">Listed houses: the seller's number first</span>
+                </Toggle>
+                {pb.listedFirst?.enabled && (
+                  <label className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                    No number when ours is under
+                    <span className="w-16"><Text type="number" value={pb.listedFirst?.minPctOfTheirs ?? 75} onChange={(v) => setPb({ listedFirst: { ...(pb.listedFirst || {}), minPctOfTheirs: Number(v) } })} /></span>
+                    % of theirs
+                  </label>
+                )}
+                <p className={HINT}>On a listed house the first text floats our read and asks what the seller is hoping to get. When ours is far under their number (or the list price), no number goes: a polite "doesn't fit, send me other fixers", and a row on Today so you can price it by hand. Never marked passed.</p>
+              </div>
+            )}
             {party === "agent" && (
               <div>
                 <Toggle checked={pb.qualifyFirst?.enabled} onChange={(v) => setPb({ qualifyFirst: { enabled: v } })}>

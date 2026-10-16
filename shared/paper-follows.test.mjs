@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   workingHoursBetween, paperWent, paperWorthy, floatSentAt, floatSentIndex, answeredSince, paperAfterSilenceDue, PAPER_FLOAT_MAX_DAYS,
-  paperAfterAnswerDue, saidYesOn,
+  paperAfterAnswerDue, saidYesOn, sendsItselfOnClear,
 } from "./paper-follows.js";
 
 // Friday 2026-10-02, 2pm Pacific.
@@ -195,4 +195,21 @@ test("a pass after a float doesn't send paper on the neutral rule", () => {
   assert.equal(paperAfterAnswerDue({ offer: offer(), drafts: [floatDraft(old), answer("ok", { createdAt: new Date(old + H).toISOString() })], now: FRI_2PM }).due, false, "an old float");
   const otherHouse = answer("I can't speak for the seller", { propertyAddress: "99 Other Rd, Tacoma, WA 98402" });
   assert.equal(paperAfterAnswerDue({ offer: offer(), drafts: [floatDraft(), otherHouse], now: LATER }).due, false, "an answer about another house");
+});
+
+// Price once (2026-10-15, shared/number-stance.js): a high-stakes house still
+// in range mode never goes on paper by machine, whatever was said.
+test("a high-stakes house in range mode gets no written offer by itself, even after a yes", () => {
+  const range = { mode: "range", highStakes: true, why: "over 500K", missing: ["their_read"] };
+  const o = offer({ cashAmount: 610000 });
+  assert.equal(paperWorthy(o), true, "as before without a stance");
+  assert.equal(paperWorthy(o, { stance: range }), false);
+  assert.equal(paperWorthy(o, { saidYes: true, stance: range }), false, "a yes to a range is not a yes to paper");
+  assert.equal(paperWorthy(o, { stance: { mode: "firm" } }), true);
+  assert.equal(sendsItselfOnClear(o), true);
+  assert.equal(sendsItselfOnClear(o, { stance: range }), false);
+  const v = paperAfterSilenceDue({ offer: o, drafts: [floatDraft()], silenceHours: 24, stance: range, now: FRI_2PM + 80 * H });
+  assert.equal(v.due, false);
+  assert.match(v.reason, /high-stakes/);
+  assert.equal(paperAfterSilenceDue({ offer: o, drafts: [floatDraft()], silenceHours: 24, now: FRI_2PM + 80 * H }).due, true, "the same house without the stance");
 });

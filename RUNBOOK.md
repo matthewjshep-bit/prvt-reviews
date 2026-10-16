@@ -1214,6 +1214,63 @@ that the agent sees what the gap between the ARV and our price is made of.
   model call. Turn the switches on with one PUT of the whole conversation
   config (GET it first).
 
+### Price once: a range on a big house, the seller's number first (2026-10-15)
+
+The funnel review (July to October) found our number fell after the agent had
+seen it on 35 of 305 houses, 11 of them after a counter or a yes. Hand and
+machine first numbers were cut about equally (12.6% and 11%), so the inputs
+are the problem (rehab read low, ARV read high). The gap between their number
+and ours decided the outcome: within 5%, 13 of 25 agreed; past 25%, none of 95.
+Both halves live in `shared/number-stance.js` (pure).
+
+- **A range until we know more** (`parties.agent.realmCheck.highStakes`:
+  `enabled` off by default, `overAmount` 500000). A house is high-stakes when
+  it is off-market, the agent brought it (`autoUnderwrite.leadSource:
+  agent_brought`), or our number is over `overAmount`. Until we have the
+  agent's read of the value and the work AND eyes on it (8+ photos scanned, a
+  walkthrough video on the offer, or `offer.seen`), the house is in range mode
+  (`numberStance` → `mode: "range"`):
+  - the float never leads with the number (`leadsWithNumber` is false), uses
+    the rough wording with a range topped by ours, and asks for their read,
+    then (once their read is in) "any chance of a few more photos or a quick
+    walkthrough video?";
+  - nothing goes on paper by machine: `paperWorthy`/`sendsItselfOnClear` say
+    no, the silence and answer timers skip it, the pushback paper skips it,
+    and the conversation's `sendOfferDocs` holds any send nobody pressed
+    (`unattended`, `forRecord`, or an auto rule's `send_offer`) with a
+    "Paper held" banner. A person pressing Send has decided;
+  - the offer book tells the bot "RANGE ONLY until …": no firm number, no
+    "our offer", no write-up ask.
+  A person-made or published offer is firm. Matt's approval (below) clears it.
+- **A listed house: the seller's number first** (`parties.agent.listedFirst`:
+  `enabled` off by default, `minPctOfTheirs` 75). Agents only, the machine's
+  first word on a house only (a person pressing Float, and a re-quote, skip
+  it). `listedFit` in `startProactive`:
+  - **ask_number** — a listed house (a list price, or our hook listing, and
+    not off-market), nothing of ours on it yet, and no seller number known:
+    the float becomes a take check that floats our ARV/rehab read and asks
+    "what's the seller hoping to get?" (`subject.askSeller`). Their answer
+    (filed as `property_details.sellerAsk`) fires the realm check the way
+    their read does.
+  - **no_fit** — ours is under `minPctOfTheirs`% of the seller's number (their
+    words, a `house_mentioned` with one, or a counter), or of the list price
+    once we've asked, and no number of ours has gone on the house (no price in
+    the thread, no paper, no floated number): nothing with a number goes. A
+    `kind_pass` with `why: "too_far"` says it's too far from where the seller
+    is to send a number and asks for other fixers on or off market (no
+    number). `offer.noFit {at, theirs, source, ratio, ours}` puts a **no_fit**
+    row on Today ("ours is 68% of the seller's 600K") with Price it by hand ·
+    Float ours anyway · We passed. It is never we_passed. The row goes when the
+    number moves, a number is floated, paper goes, or the offer closes. The
+    pushback paper never goes on a no-fit house.
+  - 75% of theirs is not the counter walk-away (`WALK_AWAY_GAP`, 25% over the
+    most we'd pay, so ours under about 80% of theirs): that rule answers a
+    counter after ours went out and is unchanged.
+- **Check it.** `POST /api/offers/:id/float {preview: true, realmCheck:
+  {highStakes: {enabled: true}}}` on a big house shows the range and the
+  question. Offers with `noFit` show on Today; `GET /api/offers/:id` shows
+  `noFit` and `paperHeld`.
+
 ### The current offer — one live row per house (2026-09-25)
 
 13041 SE 208th St, Kent. Five offer rows on one house: a July offer, two

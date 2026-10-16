@@ -866,3 +866,24 @@ test("an owed row inside the first three days stands aside for the promise row a
   assert.ok(promiseRow(r));
   assert.equal(owedRow(r), undefined);
 });
+
+// Price once (2026-10-15, shared/number-stance.js listedFit): a listed house
+// too far under the seller's number got a polite no-fit and no number. Not a
+// pass: it is Matt's to price by hand.
+test("a listed house too far under the seller to text is a row for you, not a pass, until the number moves", async () => {
+  const { urgentReasons } = await import("./desk.js");
+  const noFit = { at: D(1), theirs: 600000, source: "seller", ratio: 0.683, ours: 410000 };
+  const o = offer({ status: "new", sends: [], cashAmount: 410000, autoUnderwrite: { passed: true }, noFit, createdAt: D(2) });
+  const r = build({ offers: [o] });
+  const a = r.actions.find((x) => x.kind === "no_fit");
+  assert.ok(a, "a row");
+  assert.match(a.title, /ours is 68% of the seller's 600K/);
+  assert.deepEqual(a.ops.map((x) => x.key), ["open_editor", "float_realm", "mark_we_passed"]);
+  assert.equal(kinds(r).includes("offer_ready"), false, "one row, not two");
+  assert.equal(urgentReasons([a]).length, 1, "on Today");
+  assert.ok(ACTION_KINDS.some((k) => k.key === "no_fit"));
+  // Re-priced by hand, floated anyway, or closed: gone.
+  assert.equal(kinds(build({ offers: [{ ...o, revisions: [{ ts: D(0), from: 410000, to: 470000 }] }] })).includes("no_fit"), false);
+  assert.equal(kinds(build({ offers: [{ ...o, proactive: { realmCheckAt: D(0) } }] })).includes("no_fit"), false);
+  assert.equal(kinds(build({ offers: [{ ...o, status: "we_passed", statusAt: D(0) }] })).includes("no_fit"), false);
+});

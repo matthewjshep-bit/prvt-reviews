@@ -603,6 +603,16 @@ function openingFor(outbound) {
   const o = outbound;
   switch (o.kind) {
     case "take_check":
+      // A listed house (listedFirst, 2026-10-15): our read, then the one
+      // question is what the seller is hoping to get — never their read too.
+      if (o.askSeller) {
+        return `${START} We just ran a quick underwrite on ${o.address}: ` +
+          `${[o.arvText ? `ARV ${o.arvText}` : "", o.rehabText ? `rehab about ${o.rehabText}` : ""].filter(Boolean).join(", ")}. ` +
+          `Say so lightly and float those two as YOUR read, the way a colleague would (e.g. "I'm seeing it around ${o.arvK || "…"} fixed up with ${o.rehabK || "…"}+ of work"), ` +
+          `then ask exactly one question: "${o.sellerQuestion || "what's the seller hoping to get?"}" — one question mark in the whole text, written like a text, no dollar signs. ` +
+          `Do NOT mention an offer, a purchase price, or what we'd pay, and do NOT ask what they think it's worth. ${CONTINUE} ` +
+          `Set intent to take_check.`;
+      }
       return `${START} We just ran a quick underwrite on ${o.address}: ` +
         `${[o.arvText ? `ARV ${o.arvText}` : "", o.rehabText ? `rehab about ${o.rehabText}` : ""].filter(Boolean).join(", ")}. ` +
         `Say so lightly ("just did a quick underwrite") and float those two as YOUR read, in one question, the way a ` +
@@ -787,9 +797,13 @@ function openingFor(outbound) {
         (o.why === "area" ? "it's outside the area we buy in."
           : o.why === "numbers" ? "we couldn't get to a number we'd stand behind — not enough to go on to price it (we asked them for their read and didn't get a number)."
           : o.why === "rural" ? `it's a rural property${/sits on [\d.]+ acres/.test(o.heldReason || "") ? ` — it ${o.heldReason.match(/sits on [\d.]+ acres/)[0]}` : ""}, and we can't do rural — our buyers want houses on under 2 acres, where there are sales nearby to compare them to.`
+          // A listed house where ours would be far under the seller's number
+          // (listedFirst, 2026-10-15): no lowball, and no number at all.
+          : o.why === "too_far" ? "where we'd need to be on it is too far under where the seller is to be worth sending a number, and we'd rather say so than send a lowball."
           : `it isn't a single-family house${o.heldReason ? ` (${o.heldReason})` : ""}, and right now we only buy single-family.`) +
         ` In one or two lines, say so plainly and thank them, and ask them to keep us in mind for ` +
-        (o.why === "area" ? "fixers closer in. " : o.why === "rural" ? "fixers in town on a normal-size lot. " : o.why === "numbers" ? "the next fixer, especially one with photos or a seller price in mind. " : "single-family fixers. ") +
+        (o.why === "area" ? "fixers closer in. " : o.why === "rural" ? "fixers in town on a normal-size lot. " : o.why === "numbers" ? "the next fixer, especially one with photos or a seller price in mind. "
+          : o.why === "too_far" ? "other fixers, on or off market, especially ones that need real work. " : "single-family fixers. ") +
         `Do NOT name any number, do NOT apologise at length, and do NOT promise to look again. ${CONTINUE} Set intent to kind_pass.`;
 
     // Our numbers are stuck on something they can answer. Ask for exactly

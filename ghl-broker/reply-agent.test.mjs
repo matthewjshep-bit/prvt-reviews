@@ -1828,6 +1828,100 @@ test("a take check needs numbers to float, and its switch", async () => {
   assert.match(r.skipped, /take check is off/);
 });
 
+/* ---------- price once (2026-10-15): the seller's number first, a range on a big house ---------- */
+
+const withAgent = (saved, agent) => ({ ...saved, conversationAi: { ...saved.conversationAi, parties: { ...saved.conversationAi.parties,
+  agent: { ...saved.conversationAi.parties.agent, ...agent } } } });
+const LISTED_FIRST = withAgent(STARTER_SAVED, { listedFirst: { enabled: true, minPctOfTheirs: 75 } });
+
+test("a listed house's first text asks what the seller is hoping to get, and names no number of ours", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const landed = { ...LANDED, arv: 620000, repairs: 90000 };
+  store.listOffers = async () => [landed];
+  let seen;
+  const r = await startProactive({
+    client, locationId: "LOC", saved: LISTED_FIRST, store, contactId: "c1", kind: "realm_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "take_check", reply: "Quick underwrite on 12 Elm: I'm seeing it around 620K fixed up with 90K+ of work. What's the seller hoping to get?", summary: "Asks the seller's number." }; } },
+  });
+  assert.equal(r.skipped, null, r.skipped);
+  assert.equal(r.job.outbound, "take_check", "our read goes, not our number");
+  await settle();
+  assert.equal(r.job.status, "done", r.job.error);
+  assert.equal(seen.outbound.askSeller, true);
+  assert.equal(seen.outbound.sellerQuestion, "what's the seller hoping to get?");
+  const d = await store.getReplyDraft(r.job.draftId);
+  assert.equal(d.outbound.kind, "take_check");
+  assert.ok(!/410/.test(d.reply), "never our price");
+
+  // Switched off, nothing changes: the take check still goes first.
+  _resetJobs();
+  const off = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", kind: "realm_check", offer: landed, sendsEnabled: true });
+  assert.match(off.skipped, /take check goes first/);
+});
+
+test("a listed house far under the seller's number gets no number at all, and is left for Matt to price", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.events.set("LOC|c1", [{ type: "property_details", at: iso(900), address: LANDED.address, data: { sellerAsk: 600000 } }]);
+  let drafted = false;
+  const landed = { ...LANDED, arv: 620000, repairs: 90000 };
+  const r = await startProactive({
+    client, locationId: "LOC", saved: LISTED_FIRST, store, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return DRAFT; } },
+  });
+  assert.equal(r.job, null);
+  assert.equal(r.noFit?.move, "no_fit");
+  assert.equal(r.noFit.theirs, 600000);
+  assert.match(r.skipped, /ours is 68% of the seller's 600K — too far apart to text a number/);
+  assert.equal(drafted, false);
+
+  // Their number is close enough: the float goes as it always did.
+  _resetJobs();
+  const near = fakeStore();
+  near.events.set("LOC|c1", [{ type: "property_details", at: iso(900), address: LANDED.address, data: { sellerAsk: 500000 } }]);
+  const ok = await startProactive({ client, locationId: "LOC", saved: LISTED_FIRST, store: near, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "take_check", reply: "Thinking 620K ARV and 90K of work. What do you think?" }) } });
+  assert.equal(ok.noFit, undefined);
+  assert.ok(ok.job, ok.skipped);
+  await settle();
+
+  // A person pressing Float has decided.
+  _resetJobs();
+  const pressed = await startProactive({ client, locationId: "LOC", saved: LISTED_FIRST, store, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true, personAsked: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "take_check", reply: "Thinking 620K ARV and 90K of work. What do you think?" }) } });
+  assert.equal(pressed.noFit, undefined);
+  assert.ok(pressed.job);
+  await settle();
+});
+
+test("a big house floats a range and asks for their read, then for eyes on it, before it's a number we'd stand behind", async () => {
+  const { conversationConfig, leadsWithNumber, floatStance } = await import("./reply-agent.js");
+  const BIG = { ...LANDED, cashAmount: 610000, autoUnderwrite: { passed: true, compsUsedCount: 6, photosAnalyzed: 3 } };
+  const rc = { ...STARTER_SAVED.conversationAi.parties.agent.realmCheck, enabled: true, leadWhenConfident: true, range: { enabled: false, pct: 5 } };
+  const saved = withAgent(STARTER_SAVED, { realmCheck: { ...rc, highStakes: { enabled: true, overAmount: 500000 } } });
+  const config = conversationConfig(saved);
+  const stance = floatStance({ offer: BIG, config });
+  assert.equal(stance.mode, "range");
+  assert.equal(leadsWithNumber({ offer: BIG, config }), true, "a confident run leads with its number without the stance");
+  assert.equal(leadsWithNumber({ offer: BIG, config, stance }), false, "not on a big house in range mode");
+  const d = outboundDescriptor({ kind: "realm_check", offer: BIG, saved, dossier: null });
+  assert.equal(d.confident, false, "the rough wording");
+  assert.ok(d.range && d.range.high <= 610000 && d.range.low < d.range.high, "a range topped by our number");
+  assert.equal(d.question?.key, "their_read");
+  assert.ok(!d.math);
+  const read = { have: { arv: { value: 800000 }, rehab: { value: 90000 } } };
+  assert.equal(outboundDescriptor({ kind: "realm_check", offer: BIG, saved, dossier: read }).question?.key, "eyes", "their read is in: ask for photos or a video");
+  const seen = outboundDescriptor({ kind: "realm_check", offer: { ...BIG, seen: { at: iso(10), by: "you" } }, saved, dossier: read });
+  assert.equal(seen.stance, undefined, "their read and someone's been: firm");
+  assert.equal(seen.range, undefined);
+  const off = outboundDescriptor({ kind: "realm_check", offer: BIG, saved: withAgent(STARTER_SAVED, { realmCheck: rc }), dossier: null });
+  assert.equal(off.confident, true, "switch off: as before");
+  assert.equal(off.range, undefined);
+});
+
 test("their take arriving hands off to the realm check, and a confirmed address starts the underwrite", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);

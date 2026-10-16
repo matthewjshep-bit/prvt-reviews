@@ -316,6 +316,9 @@ const EXECUTORS = {
       // The written offer with the reply to a no (reply-agent.js): pinned to
       // the offer it was decided on, in its "for your records" words.
       ...(action?.forRecord === true ? { forRecord: true, by: "for_record", ...(action.offerId ? { offerId: action.offerId } : {}) } : {}),
+      // Nobody pressed it: an auto rule ran it (a person applying it from the
+      // row comes through applyDraftAction with deps.byPerson).
+      ...(action?.mode === "auto" && !deps?.byPerson ? { machine: true } : {}),
     });
     if (!r?.ok) return r?.reason || "no open offer to send";
     if (r.unchanged) return `offer on ${r.address} already went out ${r.sentAt ? `on ${String(r.sentAt).slice(0, 10)}` : ""}`.trim();

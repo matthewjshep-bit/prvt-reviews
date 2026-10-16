@@ -32,6 +32,7 @@ import { assetOf, assetPhrase, isRuralLot, kindHold, normalizeAsset } from "./sh
 import { buyerFacts } from "./shared/underwrite-checks.js";
 import { blastNote, pickedRehabLevel } from "./shared/blast-text.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
+import { numberStance, stanceWaitingFor } from "./shared/number-stance.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -116,7 +117,9 @@ export { ourComeDown };
 
 const theirs = (note) => note.replace(/^countered at\b/i, "they countered at");
 
-export function summarizeOffers(offers = [], { now = Date.now(), showMath = false, transcript = "" } = {}) {
+// `stanceOf(offer)`: the house's number stance (shared/number-stance.js), when
+// the playbook has the high-stakes switch on.
+export function summarizeOffers(offers = [], { now = Date.now(), showMath = false, transcript = "", stanceOf = null } = {}) {
   const stale = new Set();
   // One line per house: its current offer (shared/current-offer.js), or its
   // newest draft when nothing on it is priced yet. The rows it superseded are
@@ -216,6 +219,13 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         : status === "draft" ? (o.autoUnderwrite?.held?.length ? "numbers held for our team's review (no number yet)" : "still being underwritten (no number yet)")
         : "no amount recorded",
       range ? `— we floated "${rangeWords(range)}" by text ${dateWord(range.at)}: our number is ${fmtMoney(amount)}, the top of it; the bottom was never an offer on its own (never say ${Math.round(range.low / 1000)} by itself), and if they name a number inside it, a person decides` : "",
+      // A high-stakes house (2026-10-15): the number isn't firm yet.
+      (() => {
+        const st = amount && !down && typeof stanceOf === "function" ? stanceOf(o) : null;
+        return st?.mode === "range"
+          ? `— RANGE ONLY until we have ${stanceWaitingFor(st)} (${st.why}): talk about it as a rough range topped by ${fmtMoney(amount)}, never as a firm number, "our offer" or a written offer, and don't ask them to write it up yet`
+          : "";
+      })(),
       asking ? `(asking ${fmtMoney(asking)})` : "",
       terms ? `terms: ${terms}` : "",
       showMath && ties
@@ -300,9 +310,10 @@ function offMarketLines({ offers = [], events = [], now = Date.now() }) {
   return [ask, theirs ? `They have brought us an off-market house before (${String(theirs.address || "").split(",")[0]}) — a proven source; thank them like one.` : ""].filter(Boolean).join("\n");
 }
 
-export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "" }) {
+export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "", highStakes = null }) {
   const custom = recordOverCustom(rawCustom, facts);
-  const book = summarizeOffers(offers, { now, showMath, transcript });
+  const stanceOf = highStakes?.enabled ? (o) => numberStance({ offer: o, dossier: propertyDossier(events, o.address), highStakes }) : null;
+  const book = summarizeOffers(offers, { now, showMath, transcript, stanceOf });
   const amounts = new Set(book.amounts);
   const fields = fieldLines(custom, AGENT_FIELD_KEYS);
 
@@ -447,10 +458,10 @@ export function lessonsContextText(digest = "") {
     d.split(/(?<=[.!?])\s+/).filter(Boolean).map((l) => `- ${l.trim()}`).join("\n");
 }
 
-export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined }) {
+export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined, highStakes = null }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const { facts, events } = await loadRecord(store, locationId, contactId);
-  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds) };
+  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript, highStakes }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds) };
 }
 
 // Zillow's word for the house: the kind a person set on the offer first, then

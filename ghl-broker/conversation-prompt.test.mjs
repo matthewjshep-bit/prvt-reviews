@@ -515,6 +515,33 @@ test("the pass on a house we promised a number on owns that we owe them, gives t
   assert.doesNotMatch(t, /held 15 days/, "the sweep's own reason is ours, not theirs");
 });
 
+// Price once (2026-10-15): a listed house far under the seller's number gets
+// a polite no-fit with no number, and the first text on a listed house asks
+// the seller's number instead of their read.
+test("the no-fit on a listed house says we're too far from the seller, names no number, and asks for other fixers on or off market", async () => {
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  const o = outboundDescriptor({ kind: "kind_pass", offer: null, saved: {}, subject: { address: "18 Fern Way, Kent, WA 98030", why: "too_far" } });
+  assert.equal(o.why, "too_far");
+  const t = outboundOpening(o);
+  assert.match(t, /too far under where the seller is to be worth sending a number/);
+  assert.match(t, /other fixers, on or off market/);
+  assert.match(t, /Do NOT name any number/);
+  assert.doesNotMatch(t, /single-family/);
+});
+
+test("the first text on a listed house floats our read and asks only what the seller is hoping to get", async () => {
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  const offer = { id: "o1", address: "18 Fern Way, Kent, WA 98030", cashAmount: 410000, arv: 620000, repairs: 90000 };
+  const o = outboundDescriptor({ kind: "take_check", offer, saved: {}, subject: { address: offer.address, askSeller: true } });
+  assert.equal(o.askSeller, true);
+  const t = outboundOpening(o);
+  assert.match(t, /"what's the seller hoping to get\?"/);
+  assert.match(t, /do NOT ask what they think it's worth/);
+  assert.match(t, /Do NOT mention an offer, a purchase price/);
+  const plain = outboundOpening(outboundDescriptor({ kind: "take_check", offer, saved: {}, subject: { address: offer.address } }));
+  assert.doesNotMatch(plain, /seller hoping/, "without the ask, the take check is as before");
+});
+
 test("when an agent brings us a house, the bot gets the address with a promise not to bother the seller, and their read on value and work", () => {
   const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
   assert.match(sys, /A HOUSE THEY BRING US[^]*won't approach, drive by or bother the seller/);

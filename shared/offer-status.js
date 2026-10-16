@@ -506,6 +506,10 @@ export const OFFER_LIST_FIELDS = [
   "retired",
   // Off-market (shared/off-market.js): {value, by, why, at} — our best deals.
   "offMarket",
+  // Price once (shared/number-stance.js, 2026-10-15): a listed house too far
+  // under the seller's number to text ({at, theirs, source, ratio, ours}, a
+  // Today row), and a person marking that someone has seen it ({at, by}).
+  "noFit", "seen",
   // The kind of house (shared/asset-type.js): {type, land, by, at}, so the
   // Offers and Deals rows can say "Manufactured · in a park".
   "asset",

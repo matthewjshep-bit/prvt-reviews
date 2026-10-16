@@ -38,6 +38,11 @@ export const SETUP_QUESTIONS = {
   their_read: "what's your read on the work it needs, and where it sells once it's done?",
 };
 export const SETUP_QUESTION_KEYS = Object.keys(SETUP_QUESTIONS);
+// Not in the rotation above: the high-stakes range asks for eyes on the house
+// once their read is in, and a listed house asks the seller's number before
+// any of ours (shared/number-stance.js, 2026-10-15).
+export const EYES_QUESTION = { key: "eyes", text: "any chance of a few more photos or a quick walkthrough video?" };
+export const SELLER_NUMBER_QUESTION = "what's the seller hoping to get?";
 
 // Floats a question the dossier hasn't answered: their read (arv / rehab),
 // the condition, the timeline. Starts at a hash of the offer so an agent with
@@ -617,11 +622,21 @@ const PLAYBOOK = () => ({
   // (shared/offer-breakdown.js); `range` floats "the 280s to 295" — the top
   // is always our number, the bottom `pct` under it — instead of "295ish";
   // `setupQuestion` ends it with one of SETUP_QUESTIONS.
+  // `highStakes` (2026-10-15, shared/number-stance.js): an off-market house,
+  // one the agent brought us, or one over `overAmount` floats a range and
+  // asks for their read (or photos), and no letter goes out by machine,
+  // until we have their read and eyes on it, or Matt approved the number.
   realmCheck: {
     enabled: false, leadWhenConfident: true, withMath: false,
     range: { enabled: false, pct: 5 },
     setupQuestion: { enabled: false, ask: [...SETUP_QUESTION_KEYS] },
+    highStakes: { enabled: false, overAmount: 500000 },
   },
+  // A listed house (2026-10-15, shared/number-stance.js listedFit): the first
+  // text asks what the seller is hoping to get, and when ours is under
+  // `minPctOfTheirs`% of theirs (or of the list price) it's a polite no-fit
+  // with no number, and a row on Today for Matt to price by hand. Agents only.
+  listedFirst: { enabled: false, minPctOfTheirs: 75 },
   // The lessons digest from our own fell-through deals, in the agent
   // context. Off: the digest exists only once a person saved it.
   lessons: { enabled: false },
@@ -981,6 +996,14 @@ function normalizePlaybook(p, party, seed = {}) {
           ? [...new Set(src.realmCheck.setupQuestion.ask.filter((k) => SETUP_QUESTION_KEYS.includes(k)))]
           : [...SETUP_QUESTION_KEYS],
       },
+      highStakes: {
+        enabled: party === "agent" && bool(src.realmCheck?.highStakes?.enabled, false),
+        overAmount: int(src.realmCheck?.highStakes?.overAmount, 500000, 50000, 100000000),
+      },
+    },
+    listedFirst: {
+      enabled: party === "agent" && bool(src.listedFirst?.enabled, false),
+      minPctOfTheirs: int(src.listedFirst?.minPctOfTheirs, 75, 40, 100),
     },
     takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
     // May the bot carry the post-mortem digest (percentages only, never a
