@@ -5718,8 +5718,10 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   starts again about the same listing through `openFirstText`. Never an agent
   with an `outreach_sent`, nor a draft held for another reason. A restyled
   draft doesn't count as the agent having a draft, so one whose new text a
-  restart drops is found by the lost path of `retryFirstTexts`. Check: the dry
-  run lists who.
+  restart drops is found by the lost path of `retryFirstTexts`. These are
+  drafted directly (`subject.direct`), not through the Batch API: you held them
+  to send today, and a batch round can take 15 minutes for each rewrite. They
+  still run on the machine lane, 24 at a time. Check: the dry run lists who.
 - **Nobody is created and left untexted.** Before importing, the sweep asks how
   many machine drafts the Conversation AI's daily cap still allows after the
   reply reserve (`machineRoomToday`), and lowers the day's number to fit. A

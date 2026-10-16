@@ -3620,8 +3620,10 @@ async function runProactive(job, ctx) {
     contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
     aiApiKey, party, config, context, channel: "sms", outbound,
     // Nobody is waiting on a sweep's text: half price through the Batch API,
-    // falling back to a direct call (draft-batch.js).
-    batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) ? batcherFor(aiApiKey) : null,
+    // falling back to a direct call (draft-batch.js). `subject.direct`: a
+    // person is waiting on this one (first texts held and written again,
+    // 2026-10-16), so it's a direct call, on the same machine lane.
+    batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) && subject?.direct !== true ? batcherFor(aiApiKey) : null,
   };
   // Still reads like an ad the carriers block: written once more without it.
   const draft = await writeShorterFirstText({

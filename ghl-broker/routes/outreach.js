@@ -1065,14 +1065,14 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * failing or held on its lane — is written down as outreach_open_skipped,
    * with the hook, and the next sweep tries them again (retryFirstTexts).
    */
-  async function openFirstText({ locationId, client, contactId, hook = {}, ref = null, tries = 0 }) {
+  async function openFirstText({ locationId, client, contactId, hook = {}, ref = null, tries = 0, direct = false }) {
     const skip = (reason) => recordEvent({
       store, locationId, contactId, party: "agent", type: "outreach_open_skipped", source: "outreach",
       address: hook.address || "", ref, dedupeKey: `outreach_open_skipped:${contactId}:${tries + 1}`,
       data: { reason: String(reason || "").slice(0, 200), hook, tries: tries + 1 },
     }).catch(() => {});
     try {
-      const r = await firstTouch({ locationId, client, contactId, hook,
+      const r = await firstTouch({ locationId, client, contactId, hook, ...(direct ? { direct: true } : {}),
         onSettled: (job) => { if (job?.status === "error" || (job?.status === "held" && !job.draftId)) skip(job.error || job.heldReason || job.status); } });
       if (r?.skipped) { await skip(r.skipped); return { skipped: r.skipped }; }
       return { jobId: r?.job?.id || null };
@@ -1243,7 +1243,9 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const ts = new Date().toISOString();
       await store.updateReplyDraft(d.id, { ...fresh, status: "dismissed", sendAt: null, dismissedAt: ts, dismissedBy: "restyle",
         flags: [...(fresh.flags || []), "restyled — not sent"], updatedAt: ts });
-      const r = await openFirstText({ locationId, client, contactId: d.contactId, hook, ref: made?.ref || null, tries: 0 });
+      // You held these to send today: drafted directly, not through the
+      // Batch API, which can take a quarter of an hour a round.
+      const r = await openFirstText({ locationId, client, contactId: d.contactId, hook, ref: made?.ref || null, tries: 0, direct: true });
       results.push({ contactId: d.contactId, draftId: d.id, ...r });
     }
     return { found: held.length, restarted: results.filter((r) => r.jobId).length, results };

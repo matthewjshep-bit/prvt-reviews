@@ -671,6 +671,21 @@ test("an agent answering one of the new short first texts is answering us, thoug
 
 /* ---------- the plain first text (2026-10-16) ---------- */
 
+test("a first text a person is waiting on is drafted directly, not through the Batch API", async () => {
+  const saved = { aiApiKey: "test-key", conversationAi: { enabled: true, ai: { batchMachineDrafts: true }, parties: { agent: { outreach: { enabled: true } } } } };
+  const client = { call: async () => ({}) };
+  for (const [direct, contactId] of [[true, "c-direct"], [false, "c-batched"]]) {
+    const seen = [];
+    const { job, skipped } = await startProactive({ client, locationId: "loc-first-text-direct", saved, store, contactId, kind: "outreach_open",
+      subject: { address: "4 Alder St, Kent, WA", county: "King", ...(direct ? { direct: true } : {}) },
+      deps: { draft: async (a) => { seen.push(a.batch); return { reply: "Hi Dana, does your listing on Alder St need much work?", summary: "s", confidence: "high", needsHuman: false }; } } });
+    assert.ok(job, skipped);
+    for (let i = 0; i < 100 && !["done", "held", "error"].includes(job.status); i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(seen.length, job.error || job.heldReason);
+    assert.equal(seen.every((b) => (b === null) === direct), true, direct ? "no batcher" : "the batcher, as before");
+  }
+});
+
 test("the first text names the street the way a person would, without the house number", () => {
   assert.equal(streetName("48 Wren Ct, Oak Harbor, WA"), "Wren Ct");
   assert.equal(streetName("1911 9th Ave W, Seattle, WA 98119"), "9th Ave W");
@@ -717,6 +732,7 @@ test("first texts you held are written again in the plain voice: put aside as ne
   assert.equal(again.hook.city, "Oak Harbor");
   assert.equal(again.hook.county, "Island");
   assert.equal(asked.find((x) => x.contactId === finished).hook.turnkey, true, "a turnkey seat stays one");
+  assert.ok(asked.every((x) => x.direct === true), "drafted directly: you're waiting on these");
   const put = await store.getReplyDraft(a.id);
   assert.equal(put.status, "dismissed");
   assert.equal(put.dismissedBy, "restyle", "not you binning the words");
