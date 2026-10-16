@@ -652,6 +652,11 @@ export function toListOffer(offer) {
     }
     if (Object.keys(terms).length) row.terms = terms;
   }
+  // How the house reached us (shared/lead-source.js), as its underwrite read
+  // it: "agent_brought", "hook", "direct". The Line annotates the full read
+  // over it; a plain row can say it without reading the timeline.
+  if (!row.leadSource && offer?.leadSource?.source) row.leadSource = offer.leadSource;
+  else if (!row.leadSource && offer?.autoUnderwrite?.leadSource) row.leadSource = { source: String(offer.autoUnderwrite.leadSource) };
   row.listOnly = true;
   return row;
 }

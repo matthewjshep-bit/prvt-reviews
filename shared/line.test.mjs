@@ -83,6 +83,17 @@ test("stations carry their targets and the month's pace; the method says what th
   assert.deepEqual(methodMath({ month, targets: {} }), { offers30: 150, contracts30: 1, expectedContracts: 1.3, offersForTarget: 240, feeAtTarget: 30000 });
 });
 
+// 2026-10-15: a phone call best predicts a contract; the Line shows it.
+test("the Line has a Talked station right after Replied, straight from the Flow", async () => {
+  const { buildFlow } = await import("./flow.js");
+  const now = Date.parse("2026-10-15T18:00:00Z");
+  const events = [{ id: "c1", contactId: "a1", type: "call_summary", at: "2026-10-14T18:00:00Z", source: "call", ref: "m1", data: { transcribed: true, durationSec: 120, summary: "talked" } }];
+  const month = buildFlow({ events, now, windowStartMs: now - 30 * 86400000, windowEndMs: now }).stages;
+  const st = lineStations({ week: month, month, targets: {} });
+  assert.deepEqual(st.slice(2, 4).map((x) => x.key), ["replied", "talked"]);
+  assert.equal(st.find((x) => x.key === "talked").month, 1);
+});
+
 test("targets default to the Agent Method and clamp", () => {
   assert.deepEqual(normalizeLineTargets(), { newAgentsPerDay: 10, offersPerDay: 10, offersPerContract: 120, dealsPerMonth: 2, feePerDeal: 15000, agentTouchDays: 21, buyerTouchDays: 30 });
   assert.equal(normalizeLineTargets({ offersPerDay: "25" }).offersPerDay, 25);

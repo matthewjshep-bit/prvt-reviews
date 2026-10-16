@@ -326,6 +326,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     "import", "outreach_sent", "outreach_enrolled", "agent_pulse_texted", "text_summary", "call_summary", "offer_sent", "offer_revised", "offer_countered", "offer_passed", "offer_we_passed", "offer_unavailable",
     "offer_no_response", "realm_yes", "realm_no", "deal_promoted", "deal_stage", "blast_sent", "dataroom_sent", "dataroom_viewed",
     "investor_evaluating", "investor_committed", "investor_passed", "feedback", "follow_up_sent", "call_booked", "agent_estimate",
+    // What makes a reply "useful" on the Replied tile (shared/flow.js).
+    "house_mentioned", "referral_mentioned", "property_details",
   ];
   // The line, measured (shared/line.js): each station against its target,
   // the waits between stations, what fell off with nothing scheduled, the

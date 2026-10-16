@@ -17,6 +17,9 @@ import { effectiveStatus, isAiGenerated, needsAiReview } from "./offer-status.js
 import { EVENT_LABEL, AI_SOURCES } from "./contact-record.js";
 import { paperWent } from "./paper-follows.js";
 import { addressKey } from "./us-address.js";
+import { realCall } from "./talked-to.js";
+import { isAutoReply } from "./brush-offs.js";
+import { IRRITATED_RX } from "./thread-health.js";
 
 // A deal_promoted that is really a loss: the house went to someone else
 // (2026-10-08: 4 of 11 in two weeks). Read off the note, never the phrase —
@@ -30,11 +33,13 @@ export const promotedButLost = (e) => {
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const inWin = (t, a, b) => t != null && t >= a && t < b;
 
-// The twelve stages, in river order. `side` groups the two rows.
+// The thirteen stages, in river order. `side` groups the two rows.
 export const FLOW_STAGES = [
   { key: "found",      side: "agent", label: "Found",          hint: "listing agents imported from a pull" },
   { key: "first_text", side: "agent", label: "First text",     hint: "the cold open went out" },
   { key: "replied",    side: "agent", label: "Replied",        hint: "an agent answered, by text or call — the machine's when the bot answered on its own" },
+  // 2026-10-15: of every step, a real phone call best predicts a contract.
+  { key: "talked",     side: "agent", label: "Talked",         hint: "a phone call with an agent: 45 seconds or more, or one you logged" },
   { key: "underwritten", side: "agent", label: "Underwritten", hint: "an auto-underwrite finished" },
   // The float comes before the paper (2026-10-02): a number goes by text,
   // the written offer follows it. Offered's arrow is the share of the
@@ -114,6 +119,9 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
 
   /* --- events-driven stages --- */
   const replied = new Set();
+  // Agents we spoke with on the phone (talked-to.js realCall), and the ones
+  // whose reply said something we can use.
+  const talked = new Set(); const useful = new Set(); const usefulFacts = new Set();
   // deal key → the blast event that first put it in front of a buyer. A Map,
   // not a Set, because the machine/person split has to be answerable PER DEAL
   // (see below) and the drill-down needs the row itself.
@@ -159,8 +167,16 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
         if (e.party === "investor" || !theirs) break;
         if (e.contactId) replyTimes.set(e.contactId, [...(replyTimes.get(e.contactId) || []), t]);
         if (e.contactId && !replied.has(e.contactId)) { replied.add(e.contactId); bump("replied", botAnswered.has(e.contactId), feedRow(e, names)); }
+        if (e.contactId && usefulReply(e)) useful.add(e.contactId);
+        // A real call, once per agent: a person's act.
+        if (e.type === "call_summary" && e.contactId && !talked.has(e.contactId) && realCall(e)) { talked.add(e.contactId); bump("talked", false, feedRow(e, names)); }
         break;
       }
+      // What they told us that moves a house: one they named, someone else
+      // with one, its details, their read on value or work.
+      case "house_mentioned": case "referral_mentioned": case "property_details": case "agent_estimate":
+        if (e.contactId && e.party !== "investor") usefulFacts.add(e.contactId);
+        break;
       // Only a real send: the row the send itself writes carries its channels
       // (and who sent it). The "we offered $X" ledger line is written when an
       // offer is CREATED — counting it made every offer the machine priced and
@@ -204,6 +220,11 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   let cohortReplied = 0;
   for (const [c, t0] of outreachOpen) if ((replyTimes.get(c) || []).some((t) => t >= t0)) cohortReplied++;
   if (outreachOpen.size) counts.replied.sub = `${cohortReplied} of ${outreachOpen.size} first-texted agent${outreachOpen.size === 1 ? "" : "s"} replied`;
+  // Useful: a reply about a house or their business, not "who is this", a
+  // phone answering for them, or "stop texting me" — or a fact that moves a
+  // house. Only agents who replied in the window.
+  const usefulN = [...replied].filter((c) => useful.has(c) || usefulFacts.has(c)).length;
+  if (replied.size) counts.replied.sub = `${counts.replied.sub ? `${counts.replied.sub} · ` : ""}${usefulN} useful`;
 
   /* --- offer-driven stages --- */
   let held = 0, clear = 0, realmYes = 0, floats = 0, floatsOnPaper = 0;
@@ -264,7 +285,9 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     const prev = i > 0 && FLOW_STAGES[i - 1].side === s.side ? counts[FLOW_STAGES[i - 1].key] : null;
     // Opened counts buyer–deal pairs and Blasted counts deals, so the share
     // is measured against the buyers blasted — it can't pass 100%.
-    const base = s.key === "opened" ? { count: blastedBuyers } : prev;
+    // Underwritten stays measured against Replied: Talked sits between them
+    // and isn't the way most houses reach an underwrite.
+    const base = s.key === "opened" ? { count: blastedBuyers } : s.key === "underwritten" ? counts.replied : prev;
     // Two arrows are cohorts, not tile over tile: Replied is the share of the
     // agents first texted in the window who answered after it, and Offered is
     // the share of the window's floats that are on paper.
@@ -277,7 +300,7 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
 
   /* --- the feed --- */
   const feed = events
-    .filter((e) => inWin(ms(e.at), a, b) && !["tag_added", "tag_removed", "fact_learned", "fact_removed", "enrich_run", "note", "subject_property_set", "property_details"].includes(e.type))
+    .filter((e) => inWin(ms(e.at), a, b) && !["tag_added", "tag_removed", "fact_learned", "fact_removed", "enrich_run", "note", "subject_property_set", "property_details", "house_mentioned", "referral_mentioned"].includes(e.type))
     .map((e) => feedRow(e, names))
     .sort((x, y) => String(y.at).localeCompare(String(x.at)))
     .slice(0, feedLimit);
@@ -297,6 +320,16 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     messages: { autoSent, personSent },
   };
   return { stages, feed, totals, items: capped, itemsTotal, itemsTruncated: itemsTotal > capped.length };
+}
+
+// A reply that says something: not an opt-out, small talk or a reply the bot
+// couldn't place; not their phone answering for them; not "stop texting me".
+const NOT_USEFUL_INTENTS = new Set(["opt_out", "other", "small_talk"]);
+function usefulReply(e) {
+  if (e.type === "call_summary") return realCall(e);
+  const inbound = String(e.data?.inbound || "").trim();
+  if (!inbound || NOT_USEFUL_INTENTS.has(e.data?.intent)) return false;
+  return !isAutoReply(inbound) && !IRRITATED_RX.test(inbound);
 }
 
 // One timeline row, in the shape both the feed and the drill-down render.

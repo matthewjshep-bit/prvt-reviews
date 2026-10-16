@@ -3959,8 +3959,8 @@ Old links redirect: `/dashboard?view=flow|dashboard|conversation` →
 
 ## Flow (the Reports landing tab)
 
-`/reports?view=flow` — the river. Twelve stages in two rows (acquisition:
-found → first text → replied → underwritten → floated → offered → countered
+`/reports?view=flow` — the river. Thirteen stages in two rows (acquisition:
+found → first text → replied → talked → underwritten → floated → offered → countered
 → under contract; disposition: blasted → opened → buyer → assigned/closed),
 each with its count in the window, a bar split violet (the machine on its
 own) / grey (a person), and arrows carrying the share of the previous stage
@@ -3978,6 +3978,25 @@ while visible. Pure builder `shared/flow.js` (`buildFlow`, `machineDid`);
 route `GET /api/dashboard/flow?days=&end=&tz_offset=`, uncached local tier.
 The timeline renderer is `messaging-app/src/EventFeed.jsx`, shared with the
 contact drawer.
+
+**Talked, and useful replies (2026-10-15).** Of every step on the line, a
+phone call best predicts a contract, and the river had no station for it.
+Thirteen stages now: **Talked** sits after Replied and counts each agent once
+with a real call in the window (`realCall`, `shared/talked-to.js`): a
+connected `call_summary` of 45 seconds or more; with no length from GHL, a
+transcribed call whose summary runs 200+ characters; or a call Matt logged by
+hand (no GHL message behind it). Its arrow is talked ÷ replied. Underwritten's
+arrow stays underwritten ÷ replied. Replied's sub-line adds **"N useful"**:
+agents whose reply said something (a text whose intent isn't opt_out, other or
+small_talk, that isn't a phone auto-reply or "stop texting me"), a real call,
+or a house, referral, property detail or estimate they gave
+(`house_mentioned`, `referral_mentioned`, `property_details`,
+`agent_estimate` — read by the Flow route, kept out of the feed). The Line gets
+the Talked station from the Flow, with no target. No switch: it only counts.
+Lean offer rows also carry `leadSource` (`{ source }` off
+`autoUnderwrite.leadSource`), so a row says "agent brought" without the
+timeline. Check: `GET /api/dashboard/flow` → `stages[3].key === "talked"`;
+`GET /api/dashboard/line` → a `talked` station.
 
 ## Line (Reports → Line, 2026-09-29)
 
