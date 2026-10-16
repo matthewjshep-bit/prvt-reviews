@@ -610,6 +610,7 @@ export function buildPipeline({
       const hot = never || (x && !x.passed);
       const title = x && !x.passed && x.theirAmount && x.ceiling
         ? `Counter ${money(x.theirAmount)} is ${money(x.theirAmount - x.ceiling)} over the ${money(x.ceiling)} ceiling`
+        : d.outbound?.forMatt ? `Matt's 15: ${d.contactName || "an agent"}, a check-in to make your own`
         : `${d.contactName || "Someone"}: ${String(d.intent || "reply").replace(/_/g, " ")}`;
       const id = push({ ...base, kind: "draft_waiting", severity: hot ? "now" : "soon", title,
         detail: x && !x.passed ? (x.basis || x.reason || "") : (d.autoSend?.reason || ""), ops: [] });

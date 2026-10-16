@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import {
   normalizeAgentPulse, evaluateAgent, pickPulseAgents, agentSegment, agentStops, agentOwner,
   freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor, dealToThank, openOfferIdle, tierCard,
-  firstCheckInAt, classifyReplierThread, checkInHook, mentionedHouseFor, recentCloses,
+  firstCheckInAt, classifyReplierThread, checkInHook, mentionedHouseFor, recentCloses, pickMattsFifteen,
 } from "./agent-pulse.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
@@ -381,6 +381,33 @@ test("the plan hands each pick its hook, from our closes", () => {
   const a = agent({ lastInboundAt: ago(30), listings: [listing({ firstSeen: ago(40) })] });
   const { picks } = pickPulseAgents({ agents: [a], settings: S, config: CONFIG, houses: { live: new Set(), walked: new Map(), closes: [{ town: "Kent", at: ago(10) }] }, now: NOW });
   assert.deepEqual(picks[0].subject.hook, { kind: "closed_nearby", town: "Kent" });
+});
+
+// Matt's 15 (2026-10-15): his own specific texts got 70% replies. Once a
+// week his best agents' check-ins are drafted for him to send.
+test("Matt's 15 ships off: Monday, fifteen, before his day starts", () => {
+  assert.deepEqual(normalizeAgentPulse({}).mattsFifteen, { enabled: false, size: 15, weekday: 1, hour: 8 });
+  assert.deepEqual(normalizeAgentPulse({ mattsFifteen: { enabled: true, size: 99, weekday: 9, hour: "7" } }).mattsFifteen, { enabled: true, size: 40, weekday: 6, hour: 7 });
+});
+
+test("Matt's 15 are partners first, then agents who brought us houses, then the ones who write back, newest word first — never one already talking or cold", () => {
+  const people = [
+    agent({ contactId: "eng-old", lastInboundAt: ago(90), offers: [passed({ id: "x1" }), passed({ id: "x2", address: "2 Elm St, Kent, WA 98031" })] }),
+    agent({ contactId: "eng-new", lastInboundAt: ago(20) }),
+    agent({ contactId: "source", lastInboundAt: ago(50), events: [{ type: "investor_minded", at: ago(50) }] }),
+    agent({ contactId: "partner", lastInboundAt: ago(60), offers: [passed({ realm: { answer: "yes", at: ago(100) }, statusAt: ago(100) })] }),
+    agent({ contactId: "talking", lastInboundAt: ago(3) }),
+    agent({ contactId: "texted", lastInboundAt: ago(40), events: [{ type: "follow_up_sent", at: ago(2) }] }),
+    agent({ contactId: "cold" }),
+    agent({ contactId: "stopped", lastInboundAt: ago(30), events: [{ type: "unsubscribed", at: ago(20) }] }),
+  ];
+  const settings = { ...S, mattsFifteen: { enabled: true, size: 3 } };
+  const picks = pickMattsFifteen({ agents: people, settings, config: CONFIG, houses: { live: new Set(), walked: new Map() }, now: NOW });
+  assert.deepEqual(picks.map((p) => p.contactId), ["partner", "source", "eng-new"]);
+  assert.ok(picks.every((p) => p.subject.forMatt === true), "each is his to send");
+  assert.ok(picks.every((p) => p.subject.hook), "and names one real thing");
+  const all = pickMattsFifteen({ agents: people, settings: { ...S, mattsFifteen: { enabled: true, size: 15 } }, config: CONFIG, houses: { live: new Set(), walked: new Map() }, now: NOW });
+  assert.deepEqual(all.map((p) => p.contactId), ["partner", "source", "eng-new", "eng-old"]);
 });
 
 test("Matt's notes on how the check-in should sound are kept, trimmed and capped", () => {

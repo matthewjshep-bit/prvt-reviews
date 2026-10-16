@@ -3351,7 +3351,8 @@ async function runProactive(job, ctx) {
   // moment they're queued (realmCheckAt, takeCheckAt, the outreach record),
   // so a dropped one would read as sent and never be tried again. They still
   // wait for you, as before (review, 2026-10-04).
-  if (ctx.machine && !passes(gate) && !KEEP_FOR_A_PERSON.has(kind)) {
+  // Matt's 15 is his to fix and send, like these (subject.forMatt).
+  if (ctx.machine && !passes(gate) && !KEEP_FOR_A_PERSON.has(kind) && !subject?.forMatt) {
     const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
     const again = tripped.length ? await deps.draft({ ...draftArgs, outbound: { ...outbound, fix: tripped } }).catch(() => null) : null;
     if (again?.reply) {
@@ -3407,7 +3408,9 @@ async function runProactive(job, ctx) {
       ...(kind === "take_check" ? { arv: outbound.arv, rehab: outbound.rehab } : {}),
       ...(kind === "realm_check" ? { amount: offer.cashAmount, requote: outbound.requote, ...(outbound.range ? { range: { low: outbound.range.low, high: outbound.range.high, step: outbound.range.step } } : {}) } : {}),
       ...(outbound.step != null ? { step: outbound.step, steps: subject?.steps || [], stepLabel: outbound.stepLabel } : {}),
-      ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: subject?.listingKey || null, hook: outbound.hook?.kind || null } : {}),
+      ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: subject?.listingKey || null, hook: outbound.hook?.kind || null,
+        // Matt's 15 (agent-pulse.js startMattsFifteen): his to make his own and send, on Today.
+        ...(subject?.forMatt ? { forMatt: true } : {}) } : {}),
       ...((kind === "outreach_open" || kind === "outreach_nudge") && outbound.county ? { county: outbound.county } : {}),
       // Which first text this was (conversation-prompt.js openerPlan), so
       // replies can be read back by opening, voice and detail.

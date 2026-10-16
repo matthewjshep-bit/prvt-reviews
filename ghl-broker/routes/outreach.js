@@ -23,7 +23,8 @@
 // recorded to power the month-to-date meter in the UI.
 
 import express from "express";
-import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, startLeaveDrips, getLeaveDripsJob, pulseWorkflows, pulseTierCards, CURSOR_NAME as AGENT_PULSE_CURSOR } from "../agent-pulse.js";
+import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, startLeaveDrips, getLeaveDripsJob, pulseWorkflows, pulseTierCards, CURSOR_NAME as AGENT_PULSE_CURSOR,
+  planMattsFifteen, startMattsFifteen, getMattsFifteenJob, MATTS_FIFTEEN_CURSOR } from "../agent-pulse.js";
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
@@ -1491,6 +1492,33 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         lastRunAt: cursor?.at || null, last: cursor?.doc?.last || null, run: cursor?.doc?.run || null,
         tries: Number(cursor?.doc?.tries) || 0, failed: Boolean(cursor?.doc?.failed), error: cursor?.doc?.error || null,
       });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Matt's 15: who this week's would be (no names in the counts), the last
+  // run off the cursor, and the job in memory.
+  router.get("/pulse/matts-fifteen", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const { picks, settings } = await planMattsFifteen({ locationId, saved, store, tierCards: await pulseTierCards(client, locationId) });
+      const cursor = await store.getJobCursor?.(locationId, MATTS_FIFTEEN_CURSOR).catch(() => null);
+      res.json({ ok: true, settings: settings.mattsFifteen,
+        picks: picks.map((p) => ({ contactId: p.contactId, name: p.name, segment: p.segment, reason: p.reason, hook: p.subject?.hook?.kind || null })),
+        job: getMattsFifteenJob(locationId), lastRunAt: cursor?.at || null, last: cursor?.doc?.last || null, run: cursor?.doc?.run || null,
+        tries: Number(cursor?.doc?.tries) || 0, failed: Boolean(cursor?.doc?.failed), error: cursor?.doc?.error || null });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Body: { dryRun }. A dry run (the default) picks and reports; live drafts
+  // this week's fifteen now, held for Matt — nothing sends itself.
+  router.post("/pulse/matts-fifteen/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const job = startMattsFifteen({ client, locationId, saved, store, sendsEnabled: PULSE_SENDS_LIVE, trigger: "manual", dryRun: req.body?.dryRun !== false,
+        deps: router.conversationDepsFor?.({ locationId, client, saved }) || {} });
+      res.json({ ok: true, job });
     } catch (err) { fail(res, err); }
   });
 

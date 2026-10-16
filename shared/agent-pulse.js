@@ -70,6 +70,9 @@ export const AGENT_PULSE_DEFAULTS = {
   replacesWorkflowIds: [],
   // Matt's own notes on how the check-in should sound, handed to the drafter.
   voice: "",
+  // Matt's 15 (2026-10-15): once a week, his best agents' check-ins drafted
+  // for him to make his own and send. Off by default.
+  mattsFifteen: { enabled: false, size: 15, weekday: 1, hour: 8 },
 };
 export const AGENT_PULSE_VOICE_MAX = 600;
 // 0 means no cap (Matt, 2026-10-05: "there should be no caps"): every agent
@@ -108,6 +111,24 @@ export function normalizeAgentPulse(v = {}) {
     quietWorkflowIds: ids,
     replacesWorkflowIds: idList(o.replacesWorkflowIds),
     voice: String(o.voice || "").trim().slice(0, AGENT_PULSE_VOICE_MAX),
+    mattsFifteen: normalizeMattsFifteen(o.mattsFifteen),
+  };
+}
+
+/**
+ * normalizeMattsFifteen(v) → { enabled, size, weekday, hour }
+ *
+ * `weekday` is 0 (Sunday) … 6 in Pacific time, Monday by default; `hour` the
+ * Pacific hour the drafts are written, before his day starts.
+ */
+export function normalizeMattsFifteen(v = {}) {
+  const o = v && typeof v === "object" ? v : {};
+  const D = AGENT_PULSE_DEFAULTS.mattsFifteen;
+  return {
+    enabled: o.enabled === true,
+    size: clamp(o.size, D.size, 1, 40),
+    weekday: clamp(o.weekday, D.weekday, 0, 6),
+    hour: clamp(o.hour, D.hour, 6, 17),
   };
 }
 
@@ -664,6 +685,51 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   // claimed (unsubscribed in GHL, tagged off, no phone) hands the seat on.
   const spares = cap === Infinity ? [] : due.slice(cap, cap + Math.max(5, Math.ceil(s.dailyCap / 2))).map(toPick);
   return { picks, spares, counts, verdicts };
+}
+
+/**
+ * pickMattsFifteen({ agents, settings, config, houses, outreachFollowUpDays, now }) → [pick]
+ *
+ * Matt's 15 (2026-10-15): the funnel review found his own specific texts got
+ * 70% replies and the bot's generic check-ins 35%. Once a week, his best
+ * agents get a check-in drafted for HIM to make his own and send: partners
+ * first, then the agents who brought us houses, then the ones who write
+ * back, each by their latest word to us and then how many houses we've had
+ * with them. Never one who is stopped, never one another clock has, and
+ * never one we or they texted this past week (they're already talking).
+ * Cold agents are the machine's.
+ */
+const MATT_SEGMENT_RANK = { partner: 0, source: 1, engaged: 2 };
+const MATT_QUIET_DAYS = 7;
+export function pickMattsFifteen({ agents = [], settings = {}, config = {}, houses = {}, outreachFollowUpDays = 14, now = Date.now() } = {}) {
+  const s = normalizeAgentPulse(settings);
+  const rows = [];
+  for (const a of agents || []) {
+    const v = evaluateAgent(a, { settings: s, config, houses, outreachFollowUpDays, now });
+    if (v.status === "stopped" || v.status === "owned") continue;
+    if (!(v.segment in MATT_SEGMENT_RANK)) continue;
+    const touched = latest([
+      ...(a.events || []).filter((e) => OUR_TEXT_TYPES.has(e?.type)).map((e) => e.at),
+      ...(a.ledger || []).filter((e) => e?.type === "agent_pulse_texted").map((e) => e.at),
+      a.lastInboundAt,
+    ]);
+    if (touched && now - (ms(touched) ?? 0) < MATT_QUIET_DAYS * DAY_MS) continue;
+    rows.push({ a, v });
+  }
+  rows.sort((x, y) => MATT_SEGMENT_RANK[x.v.segment] - MATT_SEGMENT_RANK[y.v.segment]
+    || String(y.a.lastInboundAt || "").localeCompare(String(x.a.lastInboundAt || ""))
+    || (y.a.offers || []).length - (x.a.offers || []).length
+    || String(x.a.contactId).localeCompare(String(y.a.contactId)));
+  return rows.slice(0, s.mattsFifteen.size).map(({ a, v }) => {
+    // Due today: the check-in it was due (their listing, a thank-you).
+    // Otherwise a general one, with its one real thing (checkInHook).
+    const verdict = v.status === "due" ? v : { pulseReason: "general", segment: v.segment };
+    return {
+      contactId: a.contactId, name: a.name || "", segment: v.segment, reason: verdict.pulseReason,
+      listingKey: verdict.listing?.listingKey || null,
+      subject: { ...agentPulseSubject({ agent: a, verdict, houses, now }), forMatt: true },
+    };
+  });
 }
 
 const street = (address) => String(address || "").split(",")[0].trim();

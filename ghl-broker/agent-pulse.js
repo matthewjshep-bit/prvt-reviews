@@ -32,7 +32,7 @@ import { agentTier } from "./shared/tiers.js";
 import { effectiveStatus, OPEN_STATUSES, dealIsOver } from "./shared/offer-status.js";
 import { addressKey } from "./shared/us-address.js";
 import {
-  normalizeAgentPulse, pickPulseAgents, blockedByTags, tierDrips, evaluateAgent, recentCloses,
+  normalizeAgentPulse, pickPulseAgents, blockedByTags, tierDrips, evaluateAgent, recentCloses, pickMattsFifteen,
   AGENT_PULSE_EVENT_TYPES, AGENT_PULSE_LEDGER_TYPES, INBOUND_EVENT_TYPES,
 } from "./shared/agent-pulse.js";
 import { leadSourcesFor } from "./shared/lead-source.js";
@@ -277,7 +277,8 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   // gets the seats still empty. A voided claim gave its seat back.
   const voided = new Set((ledgerRead.events || []).filter((e) => e.type === "agent_pulse_voided").map((e) => e.data?.claimKey).filter(Boolean));
   const today = (ledgerRead.events || []).filter((e) => e.type === "agent_pulse_sent" && pacificDay(Date.parse(e.at)) === pacificDay(now));
-  const claimedToday = today.filter((e) => !voided.has(e.dedupeKey)).length;
+  // Matt's 15 are his, not the day's seats (they still count as tried).
+  const claimedToday = today.filter((e) => !voided.has(e.dedupeKey) && e.data?.reason !== MATTS_FIFTEEN_REASON).length;
   const seats = settings.dailyCap > 0 ? Math.max(0, settings.dailyCap - claimedToday) : Infinity;   // 0 = no cap
   // Tried today already — a claim that drafted nothing is voided and gives
   // its seat back, but the agent waits for tomorrow (the day's claim key is
@@ -491,6 +492,118 @@ export async function maybeRunAgentPulse({ client, locationId, saved = {}, store
     onDone: (job) => closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, failed: job.status === "error", error: job.error,
       last: { id: job.id, status: job.status, picked: job.picked, started: job.started, skipped: job.skipped, finishedAt: job.finishedAt,
         due: job.counts?.due || null, dueNoSeat: job.counts?.dueNoSeat ?? null } }),
+  });
+  return true;
+}
+
+/* ---------- Matt's 15: his best agents, once a week, drafted for him ---------- */
+
+export const MATTS_FIFTEEN_CURSOR = "mattsFifteen";
+export const MATTS_FIFTEEN_REASON = "matt15";
+const MATTS_FIFTEEN_HOLD = "Matt's 15: a check-in for you to make your own and send";
+const pacificWeekday = (ms) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+  .indexOf(new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short" }).format(new Date(ms)));
+
+const fifteenJobs = new Map();
+export const getMattsFifteenJob = (locationId) => fifteenJobs.get(locationId) || null;
+
+/**
+ * planMattsFifteen({ locationId, saved, store, now }) → { picks, settings }
+ *
+ * The week's fifteen (shared/agent-pulse.js pickMattsFifteen), read the way
+ * the check-in reads its book.
+ */
+export async function planMattsFifteen({ locationId, saved = {}, store = defaultStore, now = Date.now(), tierCards = null }) {
+  const { agents, settings, config, oa, houses } = await loadPulseAgents({ locationId, saved, store, now, tierCards });
+  return { picks: pickMattsFifteen({ agents, settings, config, houses, outreachFollowUpDays: oa.followUpDays, now }), settings };
+}
+
+/**
+ * startMattsFifteen({ client, locationId, saved, store, sendsEnabled, deps, trigger, dryRun, now, onDone }) → job
+ *
+ * Each pick is checked in GHL (unsubscribed, tagged off, no phone), claimed
+ * with the day's agent_pulse_sent (reason "matt15", the same key the daily
+ * check-in uses, so nobody gets two), and drafted as an agent_pulse with
+ * `subject.forMatt` and held for a person: it waits on Today, in the work
+ * pane, for Matt to edit and send. Nothing sends itself. A claim that drafted
+ * nothing is voided.
+ */
+export function startMattsFifteen({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, trigger = "manual", dryRun = false, now = Date.now(), onDone = null }) {
+  if (fifteenJobs.get(locationId)?.status === "running") throw Object.assign(new Error("Matt's 15 is already being drafted"), { http: 409 });
+  const job = { id: `m15-${Date.now().toString(36)}`, locationId, trigger, dryRun: Boolean(dryRun), status: "running",
+    startedAt: iso(now), finishedAt: null, picked: 0, started: 0, skipped: 0, results: [], error: null };
+  fifteenJobs.set(locationId, job);
+  const start = typeof deps.startProactive === "function" ? deps.startProactive : startProactive;
+  const read = typeof deps.getContact === "function" ? deps.getContact : (id) => getContact(client, id);
+  const finish = (patch) => { Object.assign(job, patch, { finishedAt: new Date().toISOString() }); try { onDone?.(job); } catch { /* the caller's */ } };
+  (async () => {
+    const { picks } = await planMattsFifteen({ locationId, saved, store, now, tierCards: await pulseTierCards(client, locationId, deps) });
+    job.picked = picks.length;
+    const botOff = conversationConfig(saved).routing?.botOffTags || [];
+    for (const [i, p] of picks.entries()) {
+      const row = { contactId: p.contactId, segment: p.segment, pulse: p.reason, hook: p.subject?.hook?.kind || null };
+      job.results.push(row);
+      const skip = (why) => { row.status = "skipped"; row.detail = why; job.skipped++; };
+      if (dryRun) { row.status = "would draft"; continue; }
+      let contact = null;
+      try { contact = await read(p.contactId); } catch (e) { skip(`couldn't read the contact (${String(e?.message || e).slice(0, 80)})`); continue; }
+      if (smsUnsubscribed(contact)) { skip("they unsubscribed"); continue; }
+      const tag = blockedByTags(contact?.tags || [], botOff);
+      if (tag) { skip(`tagged "${tag}"`); continue; }
+      if (!String(contact?.phone || "").trim()) { skip("no phone"); continue; }
+      const claimKey = `agent_pulse_sent:${p.contactId}:${pacificDay(now)}`;
+      const claim = await recordEvent({ store, locationId, contactId: p.contactId, party: "agent", type: "agent_pulse_sent", at: iso(now), source: "sweep",
+        address: p.subject?.address || "", dedupeKey: claimKey, data: { segment: p.segment, reason: MATTS_FIFTEEN_REASON, pulse: p.reason, listingKey: p.listingKey || null, trigger } });
+      if (!claim.inserted) { skip("already checked in on today"); continue; }
+      const pingKey = p.reason === "fresh_listing" && p.listingKey ? `listing_pinged:${p.contactId}:${p.listingKey}` : null;
+      if (pingKey) {
+        await recordEvent({ store, locationId, contactId: p.contactId, party: "agent", type: "listing_pinged", at: iso(now), source: "sweep",
+          address: p.subject?.address || "", dedupeKey: pingKey, data: { listingKey: p.listingKey } }).catch(() => {});
+      }
+      let voided = false;
+      const voidClaim = async (why) => {
+        if (voided) return;
+        voided = true;
+        await recordEvent({ store, locationId, contactId: p.contactId, party: "agent", type: "agent_pulse_voided", at: iso(Date.now()), source: "sweep",
+          dedupeKey: `agent_pulse_voided:${claimKey}`, data: { claimKey, why: String(why || "").slice(0, 160) } }).catch(() => {});
+        if (pingKey) {
+          await recordEvent({ store, locationId, contactId: p.contactId, party: "agent", type: "listing_ping_voided", at: iso(Date.now()), source: "sweep",
+            dedupeKey: `listing_ping_voided:${pingKey}`, data: { listingKey: p.listingKey } }).catch(() => {});
+        }
+      };
+      const r = await start({
+        client, locationId, saved, store, contactId: p.contactId, kind: "agent_pulse", offer: null,
+        subject: { ...p.subject, listingKey: p.listingKey || null, variant: i },
+        sendsEnabled: Boolean(sendsEnabled),
+        deps: { ...deps, holdForAPerson: MATTS_FIFTEEN_HOLD, onSettled: (j) => { if (!j?.draftId) voidClaim(j?.heldReason || j?.error || "nothing was drafted"); } },
+      }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
+      if (r?.skipped) { await voidClaim(r.skipped); skip(r.skipped); }
+      else { job.started++; row.status = "drafting"; row.jobId = r?.job?.id || null; }
+    }
+    finish({ status: "done" });
+  })().catch((e) => finish({ status: "error", error: String(e?.message || e).slice(0, 300) }));
+  return job;
+}
+
+/**
+ * maybeRunMattsFifteen({ client, locationId, saved, store, sendsEnabled, deps, now }) → boolean
+ *
+ * Off the 15-minute tick: on the set Pacific weekday (Monday), from the set
+ * hour, once that day — the daily gate writes the cursor before the run,
+ * retries a run a deploy killed, and caps the day's tries. Off until
+ * outreachAutopilot.pulse.mattsFifteen.enabled.
+ */
+export async function maybeRunMattsFifteen({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now() }) {
+  const m = agentPulseSettings(saved).mattsFifteen;
+  if (!m.enabled || !conversationConfig(saved).enabled) return false;
+  if (pacificWeekday(now) !== m.weekday) return false;
+  const gate = await claimDailyRun({ store, locationId, cursorName: MATTS_FIFTEEN_CURSOR, now, hourNow: workHour(now), startHour: m.hour,
+    windowHours: WINDOW_HOURS, running: fifteenJobs.get(locationId)?.status === "running" });
+  if (!gate.go) return false;
+  startMattsFifteen({
+    client, locationId, saved, store, sendsEnabled, deps, trigger: "weekly", now,
+    onDone: (job) => closeDailyRun({ store, locationId, cursorName: MATTS_FIFTEEN_CURSOR, failed: job.status === "error", error: job.error,
+      last: { id: job.id, status: job.status, picked: job.picked, started: job.started, skipped: job.skipped, finishedAt: job.finishedAt } }),
   });
   return true;
 }

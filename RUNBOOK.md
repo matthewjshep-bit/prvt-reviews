@@ -4474,6 +4474,31 @@ is connected). The draft's `outbound.hook` and the `agent_pulse_texted`
 event's `data.hook` record which kind went. No switch: it rides the check-in's
 own. Check: `POST /api/outreach/pulse/preview {limit: 3}` and read the hook in
 each sample.
+
+**Matt's 15 (2026-10-15, off by default).** Matt's own specific texts got
+70% replies. Once a week (`outreachAutopilot.pulse.mattsFifteen {enabled:
+false, size: 15, weekday: 1, hour: 8}`: Monday, from 8am Pacific) the tick
+drafts check-ins for his best agents, for him to make his own and send:
+- **Who** (`pickMattsFifteen`, `shared/agent-pulse.js`): partners, then
+  sources, then engaged agents. Within each, the newest word to us first, then
+  the most houses with us. Never an agent who is stopped or owned by another
+  clock, a cold one, or one either side texted in the last 7 days.
+- **How** (`startMattsFifteen`, `ghl-broker/agent-pulse.js`): each is
+  checked in GHL and claimed with the day's `agent_pulse_sent` (`reason:
+  "matt15"`, the same daily key as the check-in, so nobody gets two). It is
+  drafted as an `agent_pulse` with `subject.forMatt` and
+  `holdForAPerson("Matt's 15 …")`. Nothing sends itself; a draft that trips a
+  gate waits for him instead of being dropped.
+- **Where it shows.** The draft's `outbound.forMatt` keeps it on Today
+  (`urgentReasons`) as "Matt's 15: {name}, a check-in to make your own", with
+  the editable draft in the work pane. Send records `agent_pulse_texted` as
+  usual. His claims don't count against the daily check-in's seats.
+- **Gating.** `job_cursors` row `mattsFifteen` via the daily gate (cursor
+  written before the run, a stale run retried, tries capped), on the set
+  weekday only.
+- **Check.** `GET /api/outreach/pulse/matts-fifteen` lists who this week's
+  would be, plus the last run. `POST /api/outreach/pulse/matts-fifteen/run
+  {dryRun}` runs it by hand (a dry run by default).
 **Write 3 sample check-ins** (`POST /api/outreach/pulse/preview {limit, reason}`, `reason` e.g. "general")
 drafts the next ones from their real threads with the saved settings —
 `reply-agent.js previewProactive`, which writes nothing and sends nothing.
