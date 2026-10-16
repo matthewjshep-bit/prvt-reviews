@@ -14,7 +14,7 @@
 import { fmtMoney } from "./shared/offer-calc.js";
 import { offerMath, compactMath, mathAllowedAmounts } from "./shared/offer-breakdown.js";
 import { isOffMarket, offMarketAskDaysAgo, OFF_MARKET_ASK_EVERY_DAYS } from "./shared/off-market.js";
-import { effectiveStatus, offerHeat, agreedAboveOurNumber, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused, priceAgreed, numberApproved } from "./shared/offer-status.js";
+import { effectiveStatus, offerHeat, agreedAboveOurNumber, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused, priceAgreed, numberApproved, isDraftOnly } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
 import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
@@ -219,6 +219,9 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         : amount ? `our cash offer ${fmtMoney(amount)}`
         // A held run is finished, not in progress: someone on the team is
         // checking the numbers, and "coming shortly" would be a promise.
+        // Draft only (2026-10-16): Matt prices it himself. No figure and no
+        // time: 71 "I'll have your number today" promises went unkept.
+        : status === "draft" && isDraftOnly(o) ? "MATT IS PRICING THIS ONE HIMSELF (no number yet): say he'll take a look and get back to them — never a figure, a range or a time for it"
         : status === "draft" ? (o.autoUnderwrite?.held?.length ? "numbers held for our team's review (no number yet)" : "still being underwritten (no number yet)")
         : "no amount recorded",
       range ? `— we floated "${rangeWords(range)}" by text ${dateWord(range.at)}: our number is ${fmtMoney(amount)}, the top of it; the bottom was never an offer on its own (never say ${Math.round(range.low / 1000)} by itself), and if they name a number inside it, a person decides` : "",

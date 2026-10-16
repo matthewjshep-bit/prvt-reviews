@@ -225,6 +225,42 @@ should load and contact search should return results.
 
 ## Auto-underwrite (inbound text → offer)
 
+### Draft only: the app makes the draft, you price it (2026-10-16)
+
+**Why.** Read against all 363 runs and their 269 threads:
+- Matt reworked the comps or the number on 43% of the machine's offers.
+- Of the numbers that went out untouched, about half were visibly wrong (mixed up, cut after the agent saw them, wrong asset, high ARV).
+- Every agent "yes" to a machine number was to one we then walked back.
+- No contract came from a machine price Matt wouldn't have reached himself.
+- A run costs about $0.43: the Claude photo scan is $0.15, Apify comps about $0.28.
+
+**What it does** (`settings.autoUnderwriteMode`: `"full"` default | `"draft"`; Settings → "When an agent names a house"):
+- A run the conversation starts stops after the listing lookup and the not-our-kind and rural holds.
+- It saves a held draft: the agent, the address, the listing's facts and the list price. The reason is `DRAFT_ONLY_HOLD` ("ready for your comps…", `isDraftOnly` in shared/offer-status.js).
+- `autoUnderwrite` carries `draftOnly` and a `subjectLine`.
+- No comps are bought, no photo scan runs, no offer is made, and nothing floats.
+- A run a person starts is still the full machine: Re-run, Retry and Underwrite anyway go through `/automations/underwrite/retry` with `full: true`, and the editor's Auto-underwrite is a fill run.
+
+**Today.** The draft is a **Price it** row (`price_it`, severity now, under Needs you): the listing line, what they said, then **Price it** (opens the editor) and **Pass** (we_passed).
+- Saving the priced draft publishes it, which approves the number (`approved.by = "publish"`).
+- The float then leads with that number as a realm check, firm even on a high-stakes house.
+
+**The bot meanwhile:**
+- The offer book says "MATT IS PRICING THIS ONE HIMSELF" — no figure, no range, no time.
+- A showing offer on an unpriced house is held for you (`showingOffered`) instead of "let me run the numbers first". The draft is still made.
+- The nightly held sweep never asks the agent for numbers on a draft-only draft. It's "yours", and retires only when the house is over (they passed, or 14 days of silence).
+
+**Also in this change:**
+- **Work already done isn't a rehab budget.** "It had 56k in work done before it was listed" read as a 56k budget and called a refresh a flip (217 N French Ave). See `isPastWork` (shared/flip-read.js), used by `agentTakeFromText` and `qualifyRehab`.
+- **No run on a place with no house number** ("Horizon Hill", "Finn Hill", "62nd St NW"). The `start_underwrite` action waits for the address (`hasHouseNumber`, conversation-actions.js).
+- **No run on the house the thread was on when their text names another street.** `otherStreetIn` (shared/mentioned-houses.js) holds it as an address to confirm, on the street they named.
+
+**Check:**
+- `/automations/ai-spend` shows `photo_scan` near 0 a day.
+- History shows no realm_check or take_check on draft-only houses.
+- Today shows Price it rows.
+- To roll back, set the mode to "full".
+
 An agent texts "you still buying? 1234 NE 8th St, asking 525k" and an offer is
 waiting in History a few minutes later. The broker does the whole New Offer
 flow: reads the address out of the message (falling back to the thread for a
@@ -3643,6 +3679,16 @@ Their words are every line they've sent since the first text. A showing offer
 ("come take a look") on the icebreaker house gets the question, not "number
 first". A house the agent brings up themselves underwrites right away, and so
 does any house we already priced. The draft row carries `qualify: {stage, address, why}`.
+
+**Houses the agent brings, screened too (2026-10-16).** Switch: `parties.agent.qualifyFirst.brought`, off by default.
+
+Of 132 houses agents raised, 47 were real flips, but 51 the agent had already called cosmetic or turnkey. `qualifyBrought` (reply-agent.js) applies `broughtStep` (shared/flip-read.js) to a house that isn't the first-text one and that we have no offer or draft on:
+- **Real trouble or their own work budget of 50k or more** → it runs (or is drafted in draft-only mode).
+- **Off-market with the seller's number** → it runs, even if cosmetic (7034 S K St was an off-market cosmetic fixer at $250K and became a contract).
+- **Cosmetic or turnkey in their words** (`saysCosmeticOnly`: light words and no big-ticket item named) → the pass, plus the ask for others.
+- **Unclear** → our one question. Still unclear after it → it runs anyway: their own house is worth Matt's look.
+
+Backtest on the 132 graded houses: no real flip or live house was passed. Most got the question first.
 
 ### Their first answer asks for a call (2026-10-15)
 

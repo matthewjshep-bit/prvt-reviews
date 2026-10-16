@@ -4669,7 +4669,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           return res.status(404).json({ error: "that run is no longer in memory (the broker restarted) — start it again from the contact" });
         }
         if (prior.status === "queued" || prior.status === "running") return res.status(409).json({ error: "that run is still going" });
-        args = retryUnderwriteArgs(prior);
+        // A person pressed it: the full machine, even with draft only on.
+        args = { ...retryUnderwriteArgs(prior), full: true };
       } else {
         args = {
           contactId: String(b.contactId || "").trim().slice(0, 64),
@@ -4680,6 +4681,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           origin: "workflow",
           replaceOfferId: b.replaceOfferId ? String(b.replaceOfferId) : null,
           anyKind: b.anyKind === true,
+          full: true,
         };
         if (!args.contactId) return res.status(400).json({ error: "contactId or jobId required" });
       }

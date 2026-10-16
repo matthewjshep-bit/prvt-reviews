@@ -21,7 +21,7 @@
 import {
   effectiveStatus, isExpired, offerExpiresAt, investorStatus, needsAiReview, aiHoldReasons, isAiGenerated, isHot,
   DEAD_STATUSES, LIVE_DEAL_STAGES, OPEN_STATUSES,
-  offerHeat, priceAgreed, agreedAboveOurNumber, numberApproved,
+  offerHeat, priceAgreed, agreedAboveOurNumber, numberApproved, isDraftOnly,
 } from "./offer-status.js";
 import { stepLabel, exhausted, normalizeSteps, questionIn } from "./follow-up.js";
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
@@ -85,6 +85,7 @@ export const ACTION_KINDS = [
   { key: "closing_task_due",  label: "Closing checklist" },
   { key: "hot_stalled",       label: "Price agreed, gone quiet" },
   { key: "pre_contract",      label: "Before you sign" },
+  { key: "price_it",          label: "Houses to price" },
   { key: "underwrite_held",   label: "Underwrites that need a look" },
   { key: "offer_ready",       label: "Priced, not floated" },
   { key: "no_fit",            label: "Too far under the seller to text" },
@@ -370,7 +371,20 @@ export function buildPipeline({
 
     /* actions on this card */
     const base = { offerId: o.id, contactId: card.contactId, contactName: card.contactName, address: card.address };
-    if (aiHeld) {
+    if (aiHeld && isDraftOnly(o)) {
+      // Draft only (2026-10-16): an agent named this house, and the app made
+      // the draft — the agent, the address, the listing's facts — instead of
+      // pricing it. Matt prices it, or passes. Severity now: an agent is
+      // usually waiting on a number, and nothing is coming unless he does it.
+      const au = o.autoUnderwrite || {};
+      const said = String(au.message || "").replace(/\s+/g, " ").trim();
+      card.actionIds.push(push({ ...base, kind: "price_it", severity: "now",
+        readyAt: au.finishedAt || o.createdAt || null,
+        title: `Price it: ${card.address}`,
+        why: "an agent named it — the app made the draft, you price it",
+        detail: [au.subjectLine || "", said ? `they said "${said.length > 140 ? `${said.slice(0, 140)}…` : said}"` : ""].filter(Boolean).join(" · "),
+        ops: [{ key: "open_editor", label: "Price it", intent: "primary" }, { key: "mark_we_passed", label: "Pass", intent: "secondary" }] }));
+    } else if (aiHeld) {
       // Not our kind of house (shared/asset-type.js): single-family only for
       // now, so the question is whether to price it at all. "Underwrite
       // anyway" runs the underwriter again past that hold.

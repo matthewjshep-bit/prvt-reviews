@@ -54,7 +54,7 @@ import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_STATUSES } from "./shared/second-look.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
 import { normalizeOpener, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
-import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
+import { OFF_MARKET_ASK_RX, offMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
@@ -68,7 +68,7 @@ import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcce
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
-import { qualifyStep, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
+import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
@@ -84,7 +84,7 @@ import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { expandListingLinks } from "./listing-links.js";
-import { fmtMoney } from "./shared/offer-calc.js";
+import { fmtMoney, underwriteMode } from "./shared/offer-calc.js";
 import { parseUsAddress, addressKey, lastMention } from "./shared/us-address.js";
 import {
   normalizeConversationAi, shadowModelFor, INTENTS, NEVER_AUTO, GUARDED_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
@@ -691,7 +691,8 @@ export function agentTakeFromText(message = "") {
   // "repairs around 60", "rehab is 45k"
   const r2 = text.match(new RegExp(`\\b(?:repairs?|rehab)\\s*(?:is|are|at|around|about|of|~)?\\s*${num}`, "i"));
   const rm = r1 || r2;
-  if (rm) rehab = shorthandDollars(range(rm[1].replace(/,/g, ""), rm[2]?.replace(/,/g, "")), rm[3], { millionsUnder: 0 });
+  // Work already done ("56k in work done before it was listed") isn't a take.
+  if (rm && !isPastWork(text, rm.index, rm[0].length)) rehab = shorthandDollars(range(rm[1].replace(/,/g, ""), rm[2]?.replace(/,/g, "")), rm[3], { millionsUnder: 0 });
   // "worth 850", "value closer to 1.6-1.8", "ARV 715k"
   const a1 = text.match(new RegExp(`\\b(?:worth|value[ds]?|arv|after repair value)\\s*(?:is|at|of|around|about|closer to|more like|~)?\\s*${num}`, "i"));
   // "715 done", "1.6-1.8 fixed up"
@@ -1874,6 +1875,50 @@ export async function qualifyIcebreaker({ store, locationId, contactId, draft, m
   const passed = ours("pass");
   const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: openerVariant(contactId, 3), callAsk });
   return { stage: step.move === "underwrite" ? "qualified" : step.move, address: ice.address, why: step.read.why, reply: step.reply };
+}
+
+/**
+ * qualifyRehab(take, message) → their rehab number for the screen, or 0
+ *
+ * The model's read of it, unless the only work figure in their words is
+ * work already done: "It had 56k in work done before it was listed"
+ * (217 N French Ave, 2026-10-16) is not a 56k rehab budget.
+ */
+export function qualifyRehab(take, message = "") {
+  const r = Math.round(Number(take?.rehab) || 0);
+  if (!r) return 0;
+  if (agentTakeFromText(message)?.rehab) return r;
+  return /\b(?:done|completed|put|spent|invested|sunk|poured)\b/i.test(String(message || "")) ? 0 : r;
+}
+
+/**
+ * qualifyBrought({ ... }) → null | { stage, address, why, reply }
+ *
+ * shared/flip-read.js broughtStep applied to a house the agent raised
+ * themselves (parties.agent.qualifyFirst.brought, Matt 2026-10-16). null when
+ * it isn't one (it's the first-text house, or there's no street address to
+ * it), or we already have it: an offer, or a draft that's waiting on Matt.
+ */
+export async function qualifyBrought({ store, locationId, contactId, draft, message, transcript, now = Date.now(), agentRehab = 0, ice = null, callAsk = false }) {
+  const address = String(draft?.propertyAddress || "").trim();
+  if (!underwritableAddress(address)) return null;
+  if (ice?.address && sameStreet(address, ice.address)) return null;
+  const book = await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []);
+  if (knownOfferFor(book, address, now)) return null;
+  const sent = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 30 }).catch(() => []);
+  const ours = (stage) => sent.filter((d) => d.qualify?.stage === stage && sameStreet(d.qualify.address || "", address));
+  const asks = ours("ask");
+  const asked = asks.length > 0;
+  const passed = ours("pass").length > 0;
+  // What they've said about it: the two days before our question (or before
+  // now), so their first word on it still counts once they've answered.
+  const from = asked ? Math.min(...asks.map((d) => Date.parse(d.sentAt || d.createdAt || "") || now)) : now;
+  const words = theirWordsSince(transcript, from - 2 * 86400000, message);
+  const step = broughtStep({
+    words, asked, passed, agentRehab, callAsk, variant: openerVariant(contactId, 3),
+    offMarket: Boolean(offMarketCue(words)), sellerAsk: Number(draft?.propertyDetails?.sellerAsk) || 0,
+  });
+  return { stage: step.move === "underwrite" ? "qualified" : step.move, address, why: step.read.why, reply: step.reply };
 }
 
 // A call is a line too: "[…] US call" bare, or "[…] US call TRANSCRIPT:"
@@ -4185,9 +4230,20 @@ async function runReply(job, ctx) {
       && (["deal_available", "new_property", "wants_walkthrough"].includes(draft.intent) || isShowingOffer(job.message))
       && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)) {
     const take = draft.agentTake ?? normalizeAgentTake(draft) ?? agentTakeFromText(job.message);
-    qualify = await qualifyIcebreaker({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: take?.rehab || 0, ice: iceHouse, callAsk: Boolean(callAsk) })
+    qualify = await qualifyIcebreaker({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: qualifyRehab(take, job.message), ice: iceHouse, callAsk: Boolean(callAsk) })
       .catch((e) => { warnings.push(`qualify: ${e.message}`); return null; });
-    if (qualify && qualify.stage !== "qualified") {
+  }
+  // A house they raised themselves (2026-10-16, qualifyFirst.brought): the
+  // same screen, a little kinder (shared/flip-read.js broughtStep). Their
+  // own house unclear after our question still goes to Matt.
+  if (!qualify && party === "agent" && !isCall && !notOurKind && config.parties.agent.qualifyFirst?.brought
+      && ["deal_available", "new_property"].includes(draft.intent) && !isShowingOffer(job.message)) {
+    const take = draft.agentTake ?? normalizeAgentTake(draft) ?? agentTakeFromText(job.message);
+    qualify = await qualifyBrought({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: qualifyRehab(take, job.message), ice: iceHouse, callAsk: Boolean(callAsk) })
+      .catch((e) => { warnings.push(`qualify: ${e.message}`); return null; });
+  }
+  if (qualify) {
+    if (qualify.stage !== "qualified") {
       draft = {
         ...draft,
         intent: qualify.stage === "ask" ? "deal_available" : "investor_open",
@@ -4263,6 +4319,20 @@ async function runReply(job, ctx) {
           reply: "Appreciate it, but that one sounds more finished than what we buy. We go after houses that need real work, so if something rough crosses your desk, I'd love a first look.",
         };
         if (!ruledBefore) holdForShowing(street);
+      } else if (underwriteMode(saved) === "draft") {
+        // Draft only (2026-10-16): Matt prices it, so a showing is his to
+        // book — not "let me run the numbers first", which put off 42
+        // walkthroughs in the review. The draft is still made, so the house
+        // is ready to price when he looks.
+        // Reclassified like number-first, so the heads-up-only path for a
+        // scheduling reply doesn't swallow the draft's action.
+        numberFirst = { replaceOfferId: known?.id || null, showing: true };
+        draft = {
+          ...draft,
+          intent: draft.intent === "investor_open" ? "investor_open" : "deal_available",
+          reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
+        };
+        holdForShowing(street);
       } else {
         numberFirst = { replaceOfferId: known?.id || null };
         draft = {
@@ -4591,7 +4661,7 @@ async function runReply(job, ctx) {
     } else {
       plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
       plan.auto.push({ id: `a-nf-${job.id}`, type: "start_underwrite", mode: "auto", status: "pending", party, ...extra,
-        why: "they offered a showing — get them a number first" });
+        why: numberFirst.showing ? "they offered a showing — the draft is made for you to price" : "they offered a showing — get them a number first" });
     }
   }
   // The re-quote toggle has to mean something on its own. Without this it is

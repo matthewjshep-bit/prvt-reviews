@@ -192,3 +192,17 @@ test("a name in passing is not a referral", () => {
   ]) assert.equal(referralMention(t), null, t);
   assert.equal(referralMention("Call Pat Agent at Windermere if you need anything, she has one", { self: "Pat Agent" }), null, "their own signature");
 });
+
+// 2026-10-16: two runs priced the house the thread had been on while the
+// agent's text was about a house on SE 188th St in Renton.
+test("the street their text is about, when it isn't the house we were about to price", async () => {
+  const { otherStreetIn } = await import("./mentioned-houses.js");
+  assert.equal(otherStreetIn("Address - 129 39 SE 188th ST Renton - He is asking 650k", "311 R St NE, Auburn, WA 98002"), "SE 188th ST");
+  assert.equal(otherStreetIn("talking to my friend about 12939 SE. - 188th St., Renton WA 98058", "715 141st St S, Tacoma, WA 98444"), "188th St, Renton");
+  assert.equal(otherStreetIn("The one on Pine St in Shelton", "88 Alder St, Shelton, WA"), "Pine St, Shelton");
+  // The same street, a cross street beside it, or no street at all: nothing.
+  assert.equal(otherStreetIn("It needs a roof, the one at 715 141st St S", "715 141st St S, Tacoma, WA 98444"), "");
+  assert.equal(otherStreetIn("4417 Somerset Ln, just off 41st St", "4417 Somerset Ln, Everett, WA 98203"), "");
+  assert.equal(otherStreetIn("311 R St NE needs paint", "311 R St NE, Auburn, WA 98002"), "");
+  assert.equal(otherStreetIn("Needs a new roof and the kitchen is gutted", "4417 Somerset Ln, Everett, WA 98203"), "");
+});

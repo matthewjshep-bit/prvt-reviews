@@ -153,6 +153,46 @@ export function housesInText({ houses = [], message = "", except = [] } = {}) {
   return [...streets, ...named].slice(0, MAX_HOUSES);
 }
 
+/* ---------- the run's house vs the house their text is about (2026-10-16) ---------- */
+
+// A numbered street in their words, however it's written: "129 39 SE 188th
+// ST Renton", "12939 SE. - 188th St.", "715 141st St S". streetMentions reads
+// a street name; this reads the number a numbered street goes by.
+const NUMBERED_STREET_RX = new RegExp(`\\b(?:[NSEW]{1,2}\\.?\\s*[-–]?\\s*)?(\\d{1,3})(?:st|nd|rd|th)\\.?\\s+(?:${SUFFIX})\\b\\.?`, "gi");
+
+// What a street goes by: its number ("188") for a numbered street, else its
+// first name word ("somerset"). "" when it isn't a street.
+function streetCore(address = "") {
+  const p = parseUsAddress(String(address || ""));
+  const street = String(p.street || "").trim();
+  if (!street) return "";
+  const n = street.match(/\b(\d{1,3})(?:st|nd|rd|th)\b/i);
+  if (n) return n[1];
+  // "R St NE", "N Pine St": the name, not the directions or the suffix.
+  const words = street.split(/\s+/).filter((w) => !/^(?:[NSEW]{1,2})\.?$/i.test(w) && !SUFFIX_WORD_RX.test(w.replace(/\.$/, "")));
+  return (words[0] || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * otherStreetIn(message, address) → the street their text names, or ""
+ *
+ * When the words that started a run name a street and none of them is the
+ * street of the house about to be priced, the street they did name.
+ * "Address - 129 39 SE 188th ST Renton" priced 311 R St NE, and "talking to
+ * my friend about 12939 SE. - 188th St., Renton" priced 715 141st St S: the
+ * runs took the house the thread had been on, not the one in the text.
+ */
+export function otherStreetIn(message = "", address = "") {
+  const mine = streetCore(address);
+  if (!mine) return "";
+  const t = String(message || "");
+  const named = [];
+  for (const h of streetMentions(t)) { const c = streetCore(h.address); if (c) named.push({ core: c, label: h.address }); }
+  for (const m of t.matchAll(NUMBERED_STREET_RX)) named.push({ core: m[1], label: m[0].replace(/\s+/g, " ").trim() });
+  if (!named.length || named.some((n) => n.core === mine)) return "";
+  return named[0].label;
+}
+
 /* ---------- houses named with no street (2026-10-14) ---------- */
 
 // "I got one in Medina. I got 2 in Stanwood", "a Federal Way duplex coming

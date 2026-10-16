@@ -15,6 +15,7 @@ import {
   addContactTags, removeContactTags, addContactToWorkflow, removeContactFromWorkflow, findOrCreateCustomFieldByKey, updateContact,
 } from "./ghl.js";
 import { fmtMoney } from "./shared/offer-calc.js";
+import { parseUsAddress } from "./shared/us-address.js";
 import { recordEvent, learnFacts } from "./contact-record.js";
 import { FACT_KEYS } from "./shared/contact-record.js";
 
@@ -69,6 +70,15 @@ async function noteWorkflowMove({ store, locationId, contactId, action, type }) 
     dedupeKey: `${type}:${contactId}:${action.workflowId}:${day}`,
     data: { workflowId: String(action.workflowId), workflowName: String(action.workflowName || "").slice(0, 80) },
   }).catch(() => {});
+}
+
+// A street line with a house number on it: "3 Horizon Hill Ln", "N 1234
+// Division St", "Lot 27, 1510 Maple Ln" — not "Finn Hill" or "62nd St NW",
+// where the only number is the street's own.
+export function hasHouseNumber(address = "") {
+  const a = String(address || "");
+  if (parseUsAddress(a).houseNo) return true;
+  return /\b\d+[a-z]?\b/i.test(a.split(",").slice(0, 2).join(" ").replace(/\b\d+(?:st|nd|rd|th)\b/gi, ""));
 }
 
 const EXECUTORS = {
@@ -236,6 +246,12 @@ const EXECUTORS = {
     const address = String(action?.address || draft?.propertyAddress || "").trim();
     if (draft?.intent === "new_property" && !address && !action?.replaceOfferId) {
       return "waiting for the address: a new property with no address isn't underwritten";
+    }
+    // "Horizon Hill", "Finn Hill", "62nd St NW" (2026-10-16): a neighbourhood
+    // or a street with no house number can't be placed, and 27 of 337 runs in
+    // the review were spent trying. The address chase asks for it.
+    if (address && !hasHouseNumber(address) && !action?.replaceOfferId) {
+      return `waiting for the address: "${address.slice(0, 60)}" has no house number`;
     }
     // A number the agent named ("not less than 450k") rides along as the
     // asking price, so the offer is priced against the seller's floor.

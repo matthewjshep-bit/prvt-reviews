@@ -384,3 +384,22 @@ test("while the check-in replaces the TIER drips, a tier rule tags the agent but
   assert.match(kept.detail, /kept out of TIER 3/);
   assert.equal(rows.some((e) => e.type === "workflow_enrolled" && e.data.workflowId === "wf-tier3"), false);
 });
+
+// "Horizon Hill", "Finn Hill", "62nd St NW" (2026-10-16): a neighbourhood or
+// a street with no house number started a run that couldn't place it — 27 of
+// 337 houses in the review. Wait for the address instead.
+test("no underwrite or draft is started on a neighbourhood or a street with no house number", async () => {
+  const calls = [];
+  const deps = { startUnderwrite: async (args) => { calls.push(args); return { job: {} }; } };
+  const run = (draft, action = {}) => runActions({ client: {}, locationId: "LOC", contactId: "c1", draft, deps, actions: [{ id: "u1", type: "start_underwrite", ...action }] });
+  for (const place of ["Horizon Hill", "Finn Hill", "62nd St NW", "Everett Avenue"]) {
+    const [r] = await run({ intent: "deal_available", propertyAddress: place, inbound: `Have one on ${place}` });
+    assert.equal(r.status, "done", place);
+    assert.match(r.detail, /waiting for the address: .* has no house number/, place);
+  }
+  const [named] = await run({ intent: "deal_available", propertyAddress: "" }, { address: "Finn Hill" });
+  assert.match(named.detail, /no house number/);
+  assert.equal(calls.length, 0);
+  await run({ intent: "deal_available", propertyAddress: "3 Horizon Hill Ln, Bellingham, WA", inbound: "3 Horizon Hill Ln" });
+  assert.equal(calls.length, 1, "with a number it runs");
+});

@@ -3255,6 +3255,33 @@ test("an invitation to make an appointment on a project we haven't priced gets '
   assert.equal(d.autoSend.decided, true, `it sends itself: ${d.autoSend.reason}`);
 });
 
+// Draft only (Matt, 2026-10-16): he prices it, so a showing is his to book.
+// "Let me run the numbers first" put off 42 walkthroughs in the review.
+test("with draft only on, an invitation to see a house we haven't priced is yours to book, and the draft is still made", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const uw = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: { ...STARTER_SAVED, autoUnderwriteMode: "draft" }, store, contactId: "c1", sendsEnabled: true,
+    message: "Feel free to make an appointment to see it.",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "scheduling", confidence: "high", needsHuman: true, propertyAddress: "450 Overlake Dr E, Medina, WA 98039",
+        reply: "Thanks, what work does it need?" }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-11" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.doesNotMatch(d.reply, /run the numbers/);
+  assert.equal(d.needsHuman, true);
+  assert.equal(d.showingOffered?.address, "450 Overlake Dr E, Medina, WA 98039");
+  assert.ok(d.flags.some((f) => /they offered a showing on 450 Overlake Dr E — yours to book, call or pass/.test(f)), d.flags.join(" · "));
+  assert.equal(d.autoSend.decided, false, "it waits for you");
+  assert.equal(uw.length, 1, "the draft is made so the house is ready to price");
+});
+
 // Matt, 2026-10-05: an agent who says the house needs nothing has told us
 // it isn't a fit; the underwrite only spends credits. Velia's remodeled
 // triplex (9/14) used to run anyway — now it gets the pass. 2026-10-15
@@ -7696,4 +7723,92 @@ test("the agent rules say we'd love them to represent us on the purchase, never 
   assert.ok(AGENT_GOAL_RULE.includes(REPRESENT_US_LINE));
   assert.match(AGENT_GOAL_RULE, /never in the same text as a number of ours/);
   assert.equal(asksWriteUp(`Thanks! If anything rough comes up, ${REPRESENT_US_LINE}.`), false, "the line itself never trips the write-up gate");
+});
+
+/* ---------- a house the agent brings us gets the screen too (qualifyFirst.brought) ---------- */
+
+// Matt, 2026-10-16: of 132 houses agents raised, 51 they had already called
+// cosmetic or turnkey, and the machine's number on those died. Their own
+// house is still the lead: unclear after our question, it goes to Matt.
+const BROUGHT = "4417 Somerset Ln, Everett, WA 98203";
+const BROUGHT_SAVED = { ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi,
+  parties: { ...STARTER_SAVED.conversationAi.parties, agent: { ...STARTER_SAVED.conversationAi.parties.agent, qualifyFirst: { enabled: true, brought: true } } } } };
+
+test("a house the agent brings that they call cosmetic gets the pass and the ask for others, not an underwrite", async () => {
+  const { d, uw } = await replyTo("I have another one, 4417 Somerset Ln in Everett. Just needs paint and carpet, pretty dated.", { saved: BROUGHT_SAVED, address: BROUGHT });
+  assert.equal(uw.length, 0);
+  assert.equal(d.qualify?.stage, "pass");
+  assert.equal(d.qualify?.address, BROUGHT);
+  assert.match(d.reply, /on or off-market|listed or off-market/);
+  assert.deepEqual(tierOneActions(d.actions).map((a) => a.type), [], "not Tier 1");
+});
+
+test("a house the agent brings with real trouble in their words runs at once", async () => {
+  const { d, uw } = await replyTo("Got one for you, 4417 Somerset Ln Everett. Estate sale, needs a new roof and the foundation is settling.", { saved: BROUGHT_SAVED, address: BROUGHT });
+  assert.equal(uw.length, 1);
+  assert.equal(d.qualify?.stage, "qualified");
+});
+
+test("a house the agent brings with nothing said about it gets our one question first", async () => {
+  const { d, uw } = await replyTo("Have this one for you, 4417 Somerset Ln Everett", { saved: BROUGHT_SAVED, address: BROUGHT });
+  assert.equal(uw.length, 0, "the answer decides");
+  assert.equal(d.qualify?.stage, "ask");
+  assert.match(d.reply, QUALIFY_ASK_RX);
+});
+
+test("an off-market cosmetic house the agent brings with the seller's number is still run (7034 S K St)", async () => {
+  _resetJobs();
+  const store = await iceStore();
+  const uw = [];
+  const { job } = await startReply({
+    client: threadClient([["outbound", OPENER]]), locationId: "LOC", saved: BROUGHT_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: "4417 Somerset Ln. $250,000. Off market. Cosmetic fixer",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", needsHuman: false, propertyAddress: BROUGHT,
+        propertyDetails: { sellerAsk: 250000 }, reply: "Thanks, I'll take a look." }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-q" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.qualify?.stage, "qualified");
+  assert.equal(uw.length, 1);
+});
+
+test("with the brought screen off, a house the agent brings underwrites at once as before", async () => {
+  const { d, uw } = await replyTo("I have another one, 4417 Somerset Ln in Everett. Just needs paint and carpet.", { address: BROUGHT });
+  assert.equal(uw.length, 1);
+  assert.equal(d.qualify, undefined);
+});
+
+import { agentTakeFromText } from "./reply-agent.js";
+test("work already done is not the agent's rehab number (217 N French Ave: 56k done before it was listed)", () => {
+  assert.equal(agentTakeFromText("It had 56k in work done before it was listed.  Still needs updating.  It was built in 1967."), null);
+  assert.equal(agentTakeFromText("they put 40k into repairs last year"), null);
+  assert.equal(agentTakeFromText("needs about 60k of work")?.rehab, 60000, "work to do still reads");
+});
+
+test("the first-text house with 56k of work already done gets our question even when the model reads 56k as their rehab", async () => {
+  const { qualifyRehab } = await import("./reply-agent.js");
+  const said = "It had 56k in work done before it was listed.  Still needs updating.  It was built in 1967.";
+  assert.equal(qualifyRehab({ rehab: 56000 }, said), 0);
+  assert.equal(qualifyRehab({ rehab: 60000 }, "needs about 60k of work"), 60000);
+  assert.equal(qualifyRehab({ rehab: 60000 }, "roof and kitchen, call it 60"), 60000, "the model's read stands when nothing says it's done");
+  _resetJobs();
+  const store = await iceStore();
+  const uw = [];
+  const { job } = await startReply({
+    client: threadClient([["outbound", OPENER]]), locationId: "LOC", saved: QUALIFY_SAVED, store, contactId: "c1", sendsEnabled: true, message: said,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "deal_available", confidence: "high", needsHuman: false, propertyAddress: ICE,
+        agentTake: { arv: 0, rehab: 56000 }, reply: "Good to know." }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-q" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.qualify?.stage, "ask");
+  assert.equal(uw.length, 0);
 });

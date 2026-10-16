@@ -1017,6 +1017,18 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
               : "Set AUTO_UNDERWRITE_ENABLED=true on the broker to let runs publish. Until then every run saves a draft."}
           </span>
         </div>
+        <label className="mb-1 block">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">When an agent names a house</span>
+          <select value={form.autoUnderwriteMode === "draft" ? "draft" : "full"} onChange={(e) => set("autoUnderwriteMode")(e.target.value)}
+            className={INPUT_CLS}>
+            <option value="draft">Make a draft — I price it (no comps, no photo scan)</option>
+            <option value="full">Underwrite it — comps, photo scan and a priced offer</option>
+          </select>
+        </label>
+        <p className="mb-3 text-xs text-slate-400">
+          A draft carries the agent, the address and the listing's facts, and waits on Today as "Price it". Nothing is
+          texted until you save a number. Re-run, Retry and the editor's Auto-underwrite still run the full machine.
+        </p>
         <div className="mb-3 grid gap-3 sm:grid-cols-2">
           <label className="block">
             <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Comps from</span>

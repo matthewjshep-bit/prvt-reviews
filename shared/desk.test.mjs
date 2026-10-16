@@ -191,6 +191,17 @@ test("Today keeps only what needs Matt: replies waiting, owed numbers, a counter
   assert.deepEqual(TODAY_SECTIONS.map((s) => [s.key, s.label]), [["decide", "Needs you"], ["call", "Today's calls"]]);
 });
 
+test("a house drafted for Matt to price is on Today under Needs you, while a held underwrite isn't", () => {
+  // Draft only (2026-10-16): nothing prices it unless he does.
+  const reasons = [
+    { id: "price_it:o1", kind: "price_it", severity: "now", contactId: "c1", offerId: "o1", ops: [] },
+    held({ contactId: "h2", id: "underwrite_held:o2", offerId: "o2" }),
+  ];
+  const kept = urgentReasons(reasons, { dailyCalls: 0 });
+  assert.deepEqual(kept.map((r) => [r.id, r.section]), [["price_it:o1", "decide"]]);
+  assert.ok(KIND_STRENGTH.includes("price_it"));
+});
+
 test("Today's calls are the call list's best few, by score, and never one handed back to the machine", () => {
   const call = (kind, cid, score, over = {}) => ({ id: `${kind}:${cid}`, kind, section: "call", severity: "now", contactId: cid, score, offerId: `o-${cid}`, ops: [], ...over });
   const reasons = [call("call_quiet", "a", 60), call("call_hot", "b", 115), call("call_first_reply", "c", 70), call("call_gap", "d", 85),

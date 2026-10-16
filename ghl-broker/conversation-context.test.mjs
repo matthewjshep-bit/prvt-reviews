@@ -586,3 +586,16 @@ test("an agreed price at a number we haven't approved tells the bot not to ask f
   assert.match(ok.text, /HOT \(.*\) — the price conversation is done; the next step is asking them to write it up on NWMLS forms/);
   assert.equal(ok.numbers[0].approved, true);
 });
+
+test("a house drafted for Matt to price tells the bot he's pricing it himself, with no figure and no time", () => {
+  // Draft only (2026-10-16): 71 "I'll have your number today" promises went unkept.
+  const drafted = { id: "d1", contactId: "c", address: "4417 Somerset Ln, Everett, WA 98203", cashAmount: null, status: "draft",
+    createdAt: "2026-10-16T20:00:00Z",
+    autoUnderwrite: { draftOnly: true, held: ["ready for your comps — the app made the draft, you price it"] } };
+  const book = summarizeOffers([drafted], { now: Date.parse("2026-10-16T21:00:00Z") });
+  assert.match(book.text, /MATT IS PRICING THIS ONE HIMSELF \(no number yet\)/);
+  assert.match(book.text, /never a figure, a range or a time/);
+  assert.doesNotMatch(book.text, /our team's review/);
+  const heldRun = { ...drafted, id: "d2", autoUnderwrite: { held: ["only 1 listing photo to scan"] } };
+  assert.match(summarizeOffers([heldRun]).text, /numbers held for our team's review/, "a held run reads as before");
+});
