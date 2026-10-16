@@ -1070,7 +1070,9 @@ async function runSweep(job, ctx) {
       job.errors++;
       push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "error", reason: String(e?.message || e).slice(0, 160) });
     }
-    if (pace > 0) await sleep(pace);
+    // The sweep's own pace between starts (PACE_MS), not the person's pace
+    // factor the loop's `pace` shadows it with (that slept ~1ms).
+    if (ghlPace > 0) await sleep(ghlPace);
   }
 
   // Hold, then pass (counter-hold.js): the check-ins after our held number,
