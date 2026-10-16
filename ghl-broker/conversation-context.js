@@ -156,7 +156,9 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     } else if (amount) for (const n of roughAmounts(amount)) amounts.add(n);
     // `approved`: Matt stands behind the number (2026-10-15) — the gate holds
     // a write-up ask at one he hasn't.
-    if (amount) numbers.push({ address: o.address, amount: Math.round(down ? down.amount : amount), approved: !down && numberApproved(o) });
+    // `arv`: our value on it, for the gate that never argues a value up past theirs.
+    if (amount) numbers.push({ address: o.address, amount: Math.round(down ? down.amount : amount), approved: !down && numberApproved(o),
+      arv: Math.round(Number(o.arv ?? o.calc?.inputs?.arv) || 0) });
     // A higher number we texted that the offer never moved to (Jesse,
     // 2026-09-25: "workable for us at 650" on a 550K offer). Not allowed, and
     // the model is told plainly so it neither repeats nor confirms it.

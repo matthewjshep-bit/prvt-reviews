@@ -70,7 +70,7 @@ import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction,
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
 import { qualifyStep, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey } from "./shared/mentioned-houses.js";
-import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
+import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
@@ -692,8 +692,10 @@ export function agentTakeFromText(message = "") {
   const r2 = text.match(new RegExp(`\\b(?:repairs?|rehab)\\s*(?:is|are|at|around|about|of|~)?\\s*${num}`, "i"));
   const rm = r1 || r2;
   if (rm) rehab = shorthandDollars(range(rm[1].replace(/,/g, ""), rm[2]?.replace(/,/g, "")), rm[3], { millionsUnder: 0 });
-  // "worth 850", "value closer to 1.6-1.8", "ARV 715k"
-  const a1 = text.match(new RegExp(`\\b(?:worth|value[ds]?|arv|after repair value)\\s*(?:is|at|of|around|about|closer to|more like|~)?\\s*${num}`, "i"));
+  // "worth 850", "value closer to 1.6-1.8", "ARV 715k", and "value fixed up
+  // could be" two figures (2026-10-16 — the take came back empty and the
+  // reply argued our 842k at him)
+  const a1 = text.match(new RegExp(`\\b(?:worth|value[ds]?|arv|after repair value)(?:\\s+(?:fixed up|done|finished|updated|after repairs?))?\\s*(?:(?:could|would|should|might|will)\\s+be|is|at|of|around|about|closer to|more like|~)?\\s*(?:around|about|~)?\\s*${num}`, "i"));
   // "715 done", "1.6-1.8 fixed up"
   const a2 = text.match(new RegExp(`${num}\\s*(?:done|fixed up|finished|after repairs?)\\b`, "i"));
   // "1.6-1.8 value", "850 ARV"
@@ -912,7 +914,7 @@ const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], hiddenAmounts = [], ranges = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", ourAmount = 0,
-  vacantOk = false, carrierCheck = false, houseWords = "", writeUpOk = true,
+  vacantOk = false, carrierCheck = false, houseWords = "", writeUpOk = true, theirValue = 0, ourValue = 0,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -1063,6 +1065,26 @@ export function evaluateReplyGates({
     overOffer = pricesWeName(draft.reply, ours).filter((n) => n > ours + slack && !forbidden.has(n));
     if (overOffer.length && draft.intent !== "counter") {
       flags.push(`the draft says ${overOffer.map((n) => fmtMoney(n)).join(", ")}, above our ${fmtMoney(ours)} offer — only the counter band or a person agrees to more`);
+    }
+  }
+  // Their value under ours is never argued up (2026-10-16, Shoreline: "650–
+  // 680 fixed up" answered with "we're actually seeing comps closer to 842k
+  // fixed up", and he agreed with our number). Once they've said what it's
+  // worth, a value we name above that holds — and so does our own ARV said
+  // back without a value word. Before they've said, floating ours to get
+  // theirs is the take check, and stands. Their own figures may be echoed.
+  const theirs = party === "agent" ? Math.max(0, Math.round(Number(theirValue) || 0)) : 0;
+  if (theirs > 0) {
+    const echo = new Set([...moneyIn(inboundMessage), ...shorthandPrices(inboundMessage, theirs)].map((n) => Math.round(n)));
+    const ourArv = Math.max(0, Math.round(Number(ourValue) || 0));
+    const above = (n) => n > theirs * 1.05 && !echo.has(n);
+    const named = [...new Set([
+      ...valuesWeName(draft.reply, theirs),
+      ...(ourArv > theirs * 1.05 ? said.filter((n) => Math.abs(n - ourArv) <= ourArv * 0.02) : []),
+    ])].filter(above);
+    if (named.length) {
+      flags.push(`the draft says ${named.map((n) => fmtMoney(n)).join(", ")} for what it's worth fixed up — they said ${fmtMoney(theirs)}; ` +
+        "when their value is under ours we price on theirs, never argue it up");
     }
   }
   // `ok` is the row's word — a counter is not auto-sendable, full stop. But
@@ -1440,6 +1462,31 @@ export function ourNumberFor(numbers = [], address = "") {
     return named ? Math.round(named.amount) : 0;
   }
   return Math.round(Math.max(...list.map((n) => n.amount)));
+}
+
+// Our value fixed up on the house a draft is about, from the same book.
+export function ourValueFor(numbers = [], address = "") {
+  const list = (numbers || []).filter((n) => n && Number(n.arv) > 0);
+  if (!list.length) return 0;
+  if (address) {
+    const named = list.find((n) => sameStreet(n.address, address));
+    return named ? Math.round(named.arv) : 0;
+  }
+  return list.length === 1 ? Math.round(list[0].arv) : 0;
+}
+
+/**
+ * theirValueFor({ draft, message, events, address }) → dollars
+ *
+ * What the agent told us the house is worth fixed up: this message's take
+ * first (the model's read, else the shorthand backstop), then the latest on
+ * their timeline for the house. 0 when they haven't said.
+ */
+export function theirValueFor({ draft = null, message = "", events = [], address = "" } = {}) {
+  const take = draft?.agentTake ?? normalizeAgentTake(draft) ?? (message ? agentTakeFromText(message) : null);
+  if (Number(take?.arv) > 0) return Math.round(take.arv);
+  const dossier = address && events?.length ? propertyDossier(events, address) : null;
+  return Math.round(Number(dossier?.have?.arv?.value) || 0);
 }
 
 /**
@@ -3389,7 +3436,7 @@ export function namesHouse(text = "", address = "") {
   return [houseNo, core].filter(said).join(", ");
 }
 
-function outboundGateFor({ spec, offer, subject, context, config, party, a, kind = "", outbound = null }) {
+function outboundGateFor({ spec, offer, subject, context, config, party, a, kind = "", outbound = null, dossier = null }) {
   const floats = spec.floats({ offer, subject, outbound }).filter(Boolean);
   const allows = (spec.allows?.({ offer, subject, outbound }) || []).filter(Boolean);
   const allowed = spec.onlyFloats ? floats : [...new Set([...(context.amounts || []), ...floats, ...allows])];
@@ -3410,7 +3457,9 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
-    houseWords: houseWordsFor(context?.deals, a.transcript) });
+    houseWords: houseWordsFor(context?.deals, a.transcript),
+    theirValue: party === "agent" ? Math.round(Number(dossier?.have?.arv?.value) || 0) : 0,
+    ourValue: ourValueFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address) });
   // The second look is one or two short lines (shared/second-look.js), and
   // says our same number and nothing above it — not even the book's own
   // rounding up ("378K" on 377,552).
@@ -3572,7 +3621,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
     redraft: async (words) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, overused: words } }), kind, a.signer) }))
     .then((d) => writeShorterFirstText({ draft: d, kind, outbound, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
   draft.intent = kind;
-  const gate = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound })(draft);
+  const gate = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound, dossier })(draft);
   const clean = Boolean(gate.ok || (gate.locked && gate.clean));
   return { contactName: a.contactName || name, reply: String(draft.reply || ""), summary: String(draft.summary || ""),
     held: !clean, flags: (gate.flags || []).filter((f) => f !== gate.locked) };
@@ -3638,7 +3687,7 @@ async function runProactive(job, ctx) {
   draft.intent = kind;
   if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
   job.summary = draft.summary;
-  const gateFor = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound });
+  const gateFor = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound, dossier });
   let gate = gateFor(draft);
   // A text the machine started that a gate caught (not the kind's own
   // lock): written once more, told what tripped it. If it still trips,
@@ -4400,12 +4449,15 @@ async function runReply(job, ctx) {
   // "We've actually moved on". Whatever the model filed it as, the reply
   // waits for Matt — reopening it is his call — and Today says why.
   let yesAfterPass = null;
+  // Their timeline, kept for the gate's "what they said it's worth".
+  let agentEvents = [];
   if (party === "agent" && !isCall) {
     const [book, earlier, timeline] = await Promise.all([
       store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []),
       store.listReplyDrafts(locationId, { contactId: job.contactId, limit: 50 }).catch(() => []),
       typeof store.listContactEvents === "function" ? store.listContactEvents(locationId, job.contactId, { limit: 200 }).catch(() => []) : [],
     ]);
+    agentEvents = timeline || [];
     yesAfterPass = yesAfterOurPass({ offers: book || [], drafts: earlier || [], events: timeline || [], draft, message: job.originalMessage || job.message, now });
     if (yesAfterPass) {
       const where = String(yesAfterPass.address || "the house").split(",")[0].trim();
@@ -4427,6 +4479,8 @@ async function runReply(job, ctx) {
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, inboundText),
+    theirValue: party === "agent" ? theirValueFor({ draft: d, message: isCall ? "" : job.message, events: agentEvents, address: d.propertyAddress }) : 0,
+    ourValue: ourValueFor(context.offers?.numbers, d.propertyAddress),
   });
   let gate = gateFor(draft);
   // A draft a content gate caught — a number not in the book, "cash close",
