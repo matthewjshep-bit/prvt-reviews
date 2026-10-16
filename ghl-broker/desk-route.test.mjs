@@ -87,6 +87,7 @@ test("a hot offer isn't a call on Today", async () => {
   await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "mary", contactName: "Maryanne A", address: "9311 12th Pl SE, Lake Stevens, WA 98258",
     status: "sent", cashAmount: 197500, statusHistory: [], createdAt: ago(200), sends: [{ ts: ago(150) }], realm: { answer: "yes", ts: ago(20) } });
   const rows = (await (await fetch(`${B}/api/dashboard/pipeline`)).json()).desk.rows;
-  assert.equal(rows.some((x) => x.contactId === "mary"), false);
+  // Only what to check before signing it (shared/pre-contract.js, 2026-10-15).
+  assert.deepEqual(rows.filter((x) => x.contactId === "mary").map((x) => x.kind), ["pre_contract"]);
   assert.equal(rows.some((x) => String(x.kind).startsWith("call_") && x.kind !== "call_counter"), false, "no call rows at all");
 });

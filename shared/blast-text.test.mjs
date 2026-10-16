@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { blastMessage, blastNote, dealFacts, blastSubject, bundleMessage } from "./blast-text.js";
+import { blastMessage, blastNote, dealFacts, blastSubject, bundleMessage, presellMessage } from "./blast-text.js";
 import { carrierFlags } from "./carrier-words.js";
 
 test("a blast text names the street, the work, the buyer price in k, and no dollar sign or link", () => {
@@ -243,4 +243,23 @@ test("a bundle never carries more than three", () => {
   assert.match(t, /Any of these fit what you're buying\?$/);
   // One deal is just the deal's own text.
   assert.equal(bundleMessage([LFP], { firstName: "Buck", variant: 0 }), blastMessage({ ...LFP, firstName: "Buck", variant: 0 }));
+});
+
+/* ---------- a pre-sell, before we sign (2026-10-15) ---------- */
+
+test("a pre-sell text never says under contract, carries no link and no word carriers block", () => {
+  const f = { address: "41 Alder Way, Kent, WA 98030", city: "Kent", price: 383000, arv: 520000, repairs: 60000, beds: 3, baths: 2, yearBuilt: 1962 };
+  for (const variant of [0, 1, 2]) {
+    for (const intro of ["", "saw in the county records you've bought houses around Kent. I'm Matt, I fix up houses locally"]) {
+      const t = presellMessage({ ...f, firstName: "Sam Buyer", variant, intro });
+      assert.doesNotMatch(t, /under contract|https?:|\$/i, t);
+      assert.deepEqual(carrierFlags(t), [], t);
+      assert.match(t, /^Hey Sam/);
+      assert.match(t, /41 Alder Way/);
+      assert.match(t, /Buyer price around 383k, ARV around 520k, rehab about 60k/);
+      assert.match(t, /\?$/, "it asks");
+    }
+  }
+  assert.equal(blastSubject(f, { presell: true }), "41 Alder Way, Kent — coming up, 383k");
+  assert.equal(blastSubject(f), "41 Alder Way, Kent — under contract, 383k");
 });

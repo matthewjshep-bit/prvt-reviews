@@ -44,7 +44,7 @@ export const KIND_STRENGTH = [
   "call_hot", "call_brought", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
   // An agent's partner terms lead their held reply: the row says what they offered.
   "call_partner_terms",
-  "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral", "email_check",
+  "paper_to_sign", "pre_contract", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral", "email_check",
   "call_first_reply", "call_quiet", "ladder_exhausted",
   "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "texts_elsewhere", "stage_lag",
   "deal_no_buyers", "deal_no_dataroom", "showing_no_window", "underwrite_dropped",
@@ -146,6 +146,8 @@ const URGENT_KINDS = new Set([
   "referral",
   // An email they texted that GHL couldn't simply take (shared/contact-email.js).
   "email_check",
+  // An offer about to be signed with things nobody has checked (shared/pre-contract.js).
+  "pre_contract",
 ]);
 
 /**

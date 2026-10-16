@@ -101,3 +101,49 @@ test("a mobile home's wave goes to the buyers who buy them, by email when there'
     assert.equal(r.alreadySent, 1, "the buyer carrying the deal's tag already has it");
   } finally { srv.close(); }
 });
+
+/* ---------- pre-sell, before we sign (2026-10-15) ---------- */
+
+// Seven of eight listed-house contracts fell through; one was signed with no
+// buyer at all. A house about to be signed goes to the top three first — as
+// drafts that wait for Matt's Send, saying nothing about a contract.
+test("a pre-sell drafts the house to the top three buyers, never schedules one, and never says under contract", async () => {
+  const loc = "LOC-presell";
+  const app3 = express();
+  app3.use(express.json());
+  app3.use("/api/dispo", createDispoRouter({ resolveLocation: () => ({ locationId: loc, client: null }) }));
+  const srv = app3.listen(0);
+  const base3 = `http://127.0.0.1:${srv.address().port}/api/dispo`;
+  try {
+    await store.saveOfferSettings(loc, { wholesaleFee: 20000, dispoAutopilot: { secondWaveMinScore: 0, minMatchScore: 0 },
+      conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } } });
+    await store.upsertInvestors(loc, ["p1", "p2", "p3", "p4"].map(buyer));
+    const offer = await store.createOffer({
+      id: crypto.randomUUID(), locationId: loc, contactId: "agent-3", address: "41 Alder Way, Kent, WA 98031", cashAmount: 300000, status: "sent",
+      statusHistory: [], realm: { answer: "yes", ts: new Date().toISOString() }, calc: { inputs: { arv: 480000, repairs: 60000 } },
+    });
+    const r = await (await fetch(`${base3}/presell`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ offerId: offer.id }) })).json();
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.drafted, 3);
+    assert.equal(r.price, 320000, "our number plus the default fee");
+    const drafts = (await store.listReplyDrafts(loc, { limit: 50 })).filter((d) => d.outbound?.presell);
+    assert.equal(drafts.length, 3);
+    for (const d of drafts) {
+      assert.equal(d.status, "draft", "a pre-sell waits for your Send");
+      assert.equal(d.autoSendable, false);
+      assert.match(d.autoSend.reason, /^needs a person: a pre-sell waits for your Send/);
+      assert.doesNotMatch(d.reply, /under contract|https?:/i, d.reply);
+      assert.match(d.reply, /41 Alder Way/);
+    }
+    const after = await store.getOffer(offer.id);
+    assert.equal(after.presell.contactIds.length, 3);
+    // Again: only the one it hasn't gone to.
+    const again = await (await fetch(`${base3}/presell`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ offerId: offer.id }) })).json();
+    assert.equal(again.drafted, 1);
+    assert.equal((await store.getOffer(offer.id)).presell.contactIds.length, 4);
+    // A deal is blasted from the deal, not pre-sold.
+    const deal = await store.createOffer({ id: crypto.randomUUID(), locationId: loc, contactId: "agent-3", address: "9 Birch St, Kent, WA 98031", cashAmount: 250000, status: "accepted",
+      statusHistory: [], deal: { stage: "under_contract", investors: [], stageHistory: [] } });
+    assert.equal((await fetch(`${base3}/presell`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ offerId: deal.id }) })).status, 409);
+  } finally { srv.close(); }
+});

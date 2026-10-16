@@ -127,6 +127,7 @@ import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STAT
 import { mergeParties } from "../shared/deal-parties.js";
 import { mergeAccess, accessFor } from "../shared/deal-access.js";
 import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, tickById, GATES } from "../shared/deal-checklist.js";
+import { preContractChecks, preContractRecord, openChecks, tickPreContract, normalizePreContract, PRE_CONTRACT_KEYS } from "../shared/pre-contract.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
 import { normalizeTierOne } from "../shared/tier-one.js";
@@ -3360,6 +3361,34 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         warnings.push(`buyer ceiling: contract + fee is ${fmtMoney(asking)}, ${fmtMoney(asking - ceiling.noFee)} over the ${ceiling.pct}% line (${fmtMoney(ceiling.noFee)}) — buyers have passed on every deal that sat here`);
       }
     } catch { /* the readout is a courtesy */ }
+    // What nobody looked at before the signature (shared/pre-contract.js),
+    // kept on the deal and said as a warning — never a block.
+    try {
+      const videos = (await store.listOfferVideos?.(offer.id).catch(() => [])) || [];
+      const checks = preContractChecks({ offer, settings, videos, price: contractPrice, fee: assignmentFee });
+      offer.deal.preContractAtPromote = preContractRecord(checks);
+      const open = openChecks(checks);
+      if (open.length) warnings.push(`before signing, not checked: ${open.map((c) => `${c.label.toLowerCase()} (${c.detail})`).join("; ")}`);
+    } catch { /* the readout is a courtesy */ }
+    // The buyers it was pre-sold to (POST /api/dispo/presell): the ones you
+    // sent it to are on the deal as evaluating; a pre-sell text nobody sent
+    // stands down so the first wave can send them the deal itself.
+    if (offer.presell?.contactIds?.length) {
+      try {
+        for (const contactId of [...new Set(offer.presell.contactIds)].slice(0, 20)) {
+          const mine = (await store.listReplyDrafts(locationId, { contactId, limit: 20 }).catch(() => []))
+            .filter((d) => d?.outbound?.presell && d.outbound.offerId === offer.id);
+          const sent = mine.find((d) => d.status === "sent");
+          if (sent && !offer.deal.investors.some((i) => i.contactId === contactId)) {
+            offer.deal.investors.push({ contactId, name: sent.contactName || contactId, status: "evaluating", addedAt: ts, updatedAt: ts, source: "presell" });
+          }
+          for (const d of mine.filter((x) => x.status === "draft" || x.status === "scheduled")) {
+            await store.updateReplyDraft(d.id, { ...d, status: "superseded", sendAt: null, updatedAt: ts,
+              flags: [...(d.flags || []), "it went under contract — the deal text replaces the pre-sell"] }).catch(() => {});
+          }
+        }
+      } catch (e) { warnings.push(`pre-sell buyers: ${e.message}`); }
+    }
     const noteFailure = (step, e) => {
       console.error(`offers: deal attach failed [${step}] contact=${offer.contactId}:`, e?.message);
       warnings.push(`${step}: ${e.message}`);
@@ -4174,6 +4203,38 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         await syncInvestorDealTag(client, locationId, inv.contactId);
       }
       res.json({ ok: true, offer });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- before we sign (shared/pre-contract.js) ---------- */
+
+  // What nobody has looked at yet on an offer about to be signed, read off
+  // the full record and its videos. GET for the pane; POST ticks one by hand
+  // ({ key, done = true, note }) or takes a tick back (done: false).
+  async function preContractFor(locationId, offer) {
+    const [settings, videos] = await Promise.all([
+      store.getOfferSettings(locationId).catch(() => null),
+      store.listOfferVideos ? store.listOfferVideos(offer.id).catch(() => []) : [],
+    ]);
+    return preContractChecks({ offer, settings: effectiveSettings(settings || {}), videos });
+  }
+  router.get("/:id/precontract", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      res.json({ ok: true, checks: await preContractFor(ctx.locationId, ctx.offer), preContract: normalizePreContract(ctx.offer.preContract), presell: ctx.offer.presell || null });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/:id/precontract", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { locationId, offer } = ctx;
+      const key = String(req.body?.key || "");
+      if (!PRE_CONTRACT_KEYS.includes(key)) return res.status(400).json({ error: `key must be one of: ${PRE_CONTRACT_KEYS.join(", ")}` });
+      offer.preContract = tickPreContract(offer.preContract, { key, done: req.body?.done !== false, note: req.body?.note || "" });
+      await store.updateOffer(offer.id, offer);
+      res.json({ ok: true, checks: await preContractFor(locationId, offer), preContract: offer.preContract });
     } catch (err) { fail(res, err); }
   });
 

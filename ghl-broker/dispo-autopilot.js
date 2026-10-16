@@ -22,7 +22,7 @@
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { store as defaultStore } from "./store.js";
-import { blastMessage, blastNote, dealFacts, blastSubject } from "./shared/blast-text.js";
+import { blastMessage, blastNote, dealFacts, blastSubject, presellMessage } from "./shared/blast-text.js";
 import { normalizeBookSync } from "./investor-sync.js";
 import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
 import { walkthroughAsk } from "./shared/showing.js";
@@ -171,6 +171,9 @@ export function normalizeShowings(v = {}) {
   };
 }
 
+// Why a pre-sell text never goes by itself: nothing is signed yet.
+export const PRESELL_WAITS = "a pre-sell waits for your Send — nothing is signed yet";
+
 /** blastAsk(offer, saved, now) → the walkthrough question for this deal's blast, or "". */
 export function blastAsk(offer, saved = {}, now = Date.now()) {
   const da = normalizeDispoAutopilot(saved?.dispoAutopilot);
@@ -186,14 +189,19 @@ export function blastAsk(offer, saved = {}, now = Date.now()) {
  * allowlist; otherwise a plain draft in the outbox — the shakedown. Send
  * times are staggered `spreadSec` apart from the next open minute, so a
  * blast never lands as a burst and never at night.
+ *
+ * `presell`: a house we haven't signed, put to a few buyers first (shared/
+ * pre-contract.js). Its own words (presellMessage: never "under contract",
+ * no link), and always a draft that waits for your Send — nothing is
+ * scheduled, and nothing the audit or a sweep does can release it.
  */
-export async function queueBlastDrafts({ store = defaultStore, locationId, offer, investors = [], saved = {}, now = Date.now(), dryRun = false, sendsEnabled = false, blastsEnabled = DISPO_BLASTS_ENABLED, label = "", startAfterMs = 0, note: noteOverride = "" }) {
+export async function queueBlastDrafts({ store = defaultStore, locationId, offer, investors = [], saved = {}, now = Date.now(), dryRun = false, sendsEnabled = false, blastsEnabled = DISPO_BLASTS_ENABLED, label = "", startAfterMs = 0, note: noteOverride = "", presell = false }) {
   const da = normalizeDispoAutopilot(saved.dispoAutopilot);
   const config = conversationConfig(saved);
   const pb = config.parties.investor;
   const allowed = Boolean(pb.autoSend?.enabled && (pb.autoSend.intents || []).includes("blast_open"));
   const live = !dryRun && sendsEnabled && blastsEnabled;
-  const willSchedule = live && config.enabled && allowed;
+  const willSchedule = live && config.enabled && allowed && !presell;
   const reason = !live ? (dryRun ? "dry run" : !sendsEnabled ? "sends are off on the broker (CARD_SENDS_ENABLED)" : "blasts are off on the broker (DISPO_BLASTS_ENABLED)")
     : !config.enabled ? "Conversation AI is switched off" : !allowed ? "'sent them a deal' is not on the investor auto-send list" : "";
 
@@ -211,7 +219,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     note = room?.snapshot?.headline || "";
   } catch { /* the line is a courtesy, never the message */ }
   const facts = dealFacts(offer, { price: numbers.investorPrice, note });
-  const ask = blastAsk(offer, saved, now);
+  const ask = presell ? "" : blastAsk(offer, saved, now);
   // Buyers you stopped the bot on (shared/bot-hold.js): their deal text is
   // drafted and waits for you. One read for the whole list; a read that
   // fails holds every text rather than guess.
@@ -234,7 +242,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const hold = holdOf(contactId);
     const intro = blastIntro(inv);
     const variant = i;
-    const text = blastMessage({ ...facts, firstName: name, variant, ask, intro });
+    const text = presell ? presellMessage({ ...facts, firstName: name, variant, intro }) : blastMessage({ ...facts, firstName: name, variant, ask, intro });
     if (i > 0) cursor += da.spreadSec * 1000 + Math.round(Math.random() * 15000);
     let sendAt = nextSendTime({ now: cursor, delayMs: 0, quietHours: machineHours(config.autoSend) });
     cursor = Date.parse(sendAt);
@@ -265,7 +273,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     for (const channel of channels) {
       // An email waits for you unless emailed deals may send themselves.
       const schedule = !hold.held && willSchedule && (channel === "sms" || da.email.autoSend);
-      const subject = channel === "email" ? blastSubject(facts) : "";
+      const subject = channel === "email" ? blastSubject(facts, { presell }) : "";
       // Said on the row, so the outbox and the wave preview show why this
       // buyer gets an email as well as the text.
       const flags = [channel === "sms" ? waits : "", channel === "email" && inv.phone && !inv.channel ? "they asked for deals by email too — the text goes as well" : ""].filter(Boolean);
@@ -274,12 +282,14 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
       const record = await store.createReplyDraft({
         locationId, contactId, contactName: name, status: schedule ? "scheduled" : "draft", channel, jobId: null,
         inbound: "", outbound: { kind: "blast_open", offerId: offer.id, address: offer.address, label: label || "", variant, ...(ownLine ? { note: ownLine } : {}),
-          ...(intro ? { intro } : {}), ...(subject ? { subject } : {}) },
-        reply: text, intent: "blast_open", confidence: "high", needsHuman: false, humanReason: "",
-        summary: `Puts ${offer.address} in front of ${name || "a buyer"} at ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}.`,
-        propertyAddress: offer.address || "", counterAmount: null, autoSendable: true, flags, party: "investor", partySource: "deal",
+          ...(intro ? { intro } : {}), ...(subject ? { subject } : {}), ...(presell ? { presell: true } : {}) },
+        reply: text, intent: "blast_open", confidence: "high", needsHuman: Boolean(presell), humanReason: presell ? PRESELL_WAITS : "",
+        summary: presell
+          ? `Pre-sells ${offer.address} to ${name || "a buyer"} at about ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}, before we sign.`
+          : `Puts ${offer.address} in front of ${name || "a buyer"} at ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}.`,
+        propertyAddress: offer.address || "", counterAmount: null, autoSendable: !presell, flags, party: "investor", partySource: "deal",
         matchedTags: { agent: [], investor: [] }, contextSummary: { deal: offer.id }, offersInContext: 0,
-        autoSend: { decided: schedule, reason: schedule ? "" : hold.held ? `${holdLine(hold)} — it waits for you` : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
+        autoSend: { decided: schedule, reason: schedule ? "" : presell ? `needs a person: ${PRESELL_WAITS}` : hold.held ? `${holdLine(hold)} — it waits for you` : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
         supersededIds: replaced.filter((o) => (o.channel === "email" ? "email" : "sms") === channel).map((o) => o.id), warnings: [], noteOnAutoSend: config.notes?.onAutoSend !== false, promptVersion: 3,
         ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
       });

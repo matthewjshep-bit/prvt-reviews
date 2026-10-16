@@ -2551,6 +2551,56 @@ closing date in the same message ("closing 10/24") rides on the action. The
 deal's price is what `promoteToDeal` always read — the PSA's, else the
 offer's — never an "agreed" on record, which can sit above the book.
 
+### Before you sign: the pre-contract check (2026-10-15)
+
+The funnel review: 7 of 8 listed-house contracts fell through, against 1 of 5
+off-market. The dead ones had rehab low or ARV high, two were mobile homes
+signed and backed out of, one was signed with no buyer. `preContractChecks`
+(`shared/pre-contract.js`) reads eight things off the offer, each `ok`,
+`warn` (the record says something's wrong) or `unknown` (nobody looked):
+
+- **Listing remarks read**: `snapshot.rehab.listing.remarks` through
+  `remarkSignals` (a defect, low ceilings, rooms, contents left behind).
+- **Kind of house and title**: a mobile home (`assetOf`), or a land lease,
+  55+, HOA, easement, right-of-way or unpermitted work in the remarks or the
+  buyer-view flags.
+- **Eyes on the house**: 8+ listing photos scanned, or a video on the offer.
+- **Rehab at or above the light floor**: repairs vs `rehabBand(sqft).light[0]`.
+- **ARV under today's listings**: the buyer-view listings cap
+  (`snapshot.checks.cap` / `arv.capped`).
+- **At or under our number and the buyer ceiling**: the agreed (or contract)
+  price vs `cashAmount` and `buyerCeiling().withFee`.
+- **An extension, not their deadline**: ticked by hand only.
+- **Pre-sold to 3 buyers** (listed houses; none for off-market).
+
+Where it shows, all advisory (nothing blocks, no switch):
+
+- **Today**: a `pre_contract` row (Needs you) on an offer about to be signed
+  (`needsPreContract`: `pushesToPaper`, or the agent is writing it up; no
+  deal yet) while anything is open. "now" when they're writing it up. The pane
+  lists the items with a **Checked** button each (`POST
+  /api/offers/:id/precontract { key, done, note }`, kept at
+  `offer.preContract.ticks`; `GET` reads them). Buttons: **Pre-sell to 3
+  buyers** (listed houses), **Open the offer**, **It's signed — promote**.
+- **Promote**: open items are added to the promote's warnings ("before
+  signing, not checked: …") and the whole list is kept at
+  `deal.preContractAtPromote { at, open, checks }` for the post-mortem.
+- **Pre-sell** (`POST /api/dispo/presell { offerId, count = 3, dryRun }`):
+  the top `count` from `matchForDeal` (wave 1, topped up from wave 2), never
+  one it already went to, as **drafts only** — never scheduled, `needsHuman`,
+  reason `needs a person: a pre-sell waits for your Send…`, so no audit or
+  sweep releases them. `presellMessage` (shared/blast-text.js) never says
+  "under contract" and carries no link; the price is our number plus the
+  default fee. Saves `offer.presell { at, contactIds }`. At promote, buyers
+  whose pre-sell text was sent join the deal as `evaluating`
+  (`source: "presell"`); an unsent pre-sell draft is superseded so wave 1 can
+  send them the deal itself. A buyer who answers a pre-sell text before the
+  promote is answered by the investor bot, which has no deal to read yet —
+  work those by hand.
+
+Check: `GET /api/dashboard/pipeline` → `actions[]` with `kind: "pre_contract"`
+and its `checks`; a promoted deal's `deal.preContractAtPromote`.
+
 ### Tier 1 / Tier 2 — kept by the app, not GHL (2026-10-02)
 
 > 2026-10-07: GHL's Tier 1 stage is the list again (Matt: "that's my source

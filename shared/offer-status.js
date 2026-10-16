@@ -535,6 +535,9 @@ export const OFFER_LIST_FIELDS = [
   //               they say which row on a house is current (current-offer.js)
   //   pin         {at, by, note} — a person chose this row as current
   "proactive", "followUps", "counterBand", "requotes", "revisions",
+  // Before we sign (shared/pre-contract.js): your ticks {ticks: {key: {at}}}
+  // and who it was pre-sold to {at, contactIds}, so Today can say what's open.
+  "preContract", "presell",
   "createdAt", "updatedAt", "dateLabel", "validLabel",
   "pdfUrl", "imageUrl", "scopePdfUrl", "compsPdfUrl",
   "psaPdfUrl", "contractPdfUrl", "assignmentPdfUrl", "netSheetPdfUrl",
