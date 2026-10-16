@@ -103,6 +103,7 @@ import {
   investorFacingPrice, INVESTOR_DEAL_STAGES } from "./conversation-context.js";
 import {
   buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext, CARRIER_CHECKED_KINDS, OPENING_MOVES,
+  openerPlan,
 } from "./conversation-prompt.js";
 import { carrierFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
@@ -1967,9 +1968,34 @@ export function roundsFromBook(n, allowed) {
   return false;
 }
 
-// Our first text to an agent about their listing (outreach_open): a reply to it
-// is them answering us, not something for a person to decide.
+// Our first text to an agent about their listing: a reply to it is them
+// answering us, not something for a person to decide. The phrase is the GHL
+// workflow template's; the app's own first texts are told apart by their
+// sent draft (lastLineIsOurFirstText), since no two say the same thing.
 export const OUTREACH_OPEN_RX = /\bcame across your listing\b/i;
+
+/**
+ * lastLineIsOurFirstText({ store, locationId, contactId, transcript }) → bool
+ *
+ * The last US line in the thread is our first text: the workflow template's
+ * words, or a sent outreach_open draft (GHL may put its stop line on the end
+ * of what we sent, so ours is a match when it starts theirs). 2026-10-15: the
+ * short first texts mostly don't say "came across your listing".
+ */
+export async function lastLineIsOurFirstText({ store, locationId, contactId, transcript }) {
+  const last = lastOutbound(transcript);
+  if (!last) return false;
+  if (OUTREACH_OPEN_RX.test(String(last.text || ""))) return true;
+  if (!contactId || typeof store?.listReplyDrafts !== "function") return false;
+  const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 10 }).catch(() => []);
+  const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const said = norm(last.text);
+  return (ours || []).some((d) => {
+    if ((d.outbound?.kind || d.intent) !== "outreach_open") return false;
+    const t = norm(d.sentText || d.reply);
+    return Boolean(t) && (said === t || said.startsWith(t));
+  });
+}
 // The opt-out line every one of Matt's GHL workflow templates ends on.
 export const WORKFLOW_FOOTER_RX = /\bno worries if not,? can stop\b/i;
 export async function humanHasThread({ store, client = null, locationId, contactId, transcript, minutes = 30, now = Date.now() }) {
@@ -3050,6 +3076,11 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       areas: list(p.areas, 3).map((x) => String(x).slice(0, 60)),
       voice: normalizeAgentPulse(saved?.outreachAutopilot?.pulse).voice,
       offMarketAskDue: p.offMarketAskDue !== false,
+      // The one real thing it names (shared/agent-pulse.js checkInHook).
+      hook: pulseHook(p.hook),
+      // A cold agent's fresh listing goes in the short first-text voice,
+      // held under OPENER_MAX_CHARS like the first text (2026-10-15).
+      coldOpen: (p.segment === "cold" || /gone quiet/.test(String(p.segment || ""))) && (p.reason === "fresh_listing" || p.reason === "off_market_listing") && Boolean(p.listing),
       variant: Number(p.variant) || 0 };
   }
   if (kind === "showing_reminder" || kind === "showing_followup") {
@@ -3089,7 +3120,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       // One real thing about the house for the text to notice.
       details: houseDetails({ ...(subject?.house || {}), city: subject?.city || subject?.house?.city || "", dom: Number(subject?.hookDom) || subject?.house?.dom || 0 }),
       // A finished listing, texted for the agent rather than the house (the turnkey seats).
-      turnkey: subject?.house?.turnkey === true };
+      turnkey: subject?.house?.turnkey === true,
+      // A listing that came off the market lately without selling (the off-market seats).
+      offMarket: subject?.house?.offMarket === true };
   }
   // The nudges. They carry what the message is ABOUT and no numbers at all.
   return { ...base,
@@ -3142,6 +3175,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;
     case "agent_pulse":
       if (outbound.reason === "fresh_listing") return `Checks in about their listing at ${outbound.listing?.street || where}: would the seller look at an as-is cash offer?`;
+      if (outbound.reason === "off_market_listing") return `Checks in about their listing at ${outbound.listing?.street || where}, off the market lately: is the seller still hoping to sell?`;
       if (outbound.reason === "deal_thanks") return "Thanks them for the deal that just closed and asks whether anything distressed or off-market has come across their desk.";
       return "Checks in: anything distressed or off-market come across their desk lately?";
     case "showing_reminder": return `Reminds them about the walkthrough at ${outbound.street || where} tomorrow, ${outbound.windowLabel}.`;
@@ -3241,6 +3275,23 @@ export async function writeAgainWithoutCarrierWords({ draft, kind, redraft }) {
   return again?.reply && carrierFlags(again.reply).length < before.length ? again : draft;
 }
 
+// A check-in's hook, trimmed: the street of a house they named, or the town
+// one of our deals closed in — never the closed house's street.
+function pulseHook(h) {
+  if (!h || typeof h !== "object" || !["listing", "mentioned", "closed_nearby", "situation"].includes(h.kind)) return null;
+  if (h.kind === "mentioned") return { kind: h.kind, street: String(h.street || "").slice(0, 80), label: String(h.label || "").slice(0, 60), town: String(h.town || "").slice(0, 40), daysAgo: Number(h.daysAgo) || 0 };
+  if (h.kind === "closed_nearby") return h.town ? { kind: h.kind, town: String(h.town).slice(0, 40) } : { kind: "situation" };
+  return { kind: h.kind };
+}
+
+// The opener's choices, kept on the draft's outbound (openerPlan): small
+// numbers and the one detail, never the examples themselves.
+function openerChoices(outbound = {}) {
+  const p = openerPlan(outbound);
+  return { variant: p.variant, move: p.moveIndex, who: p.whoIndex, notice: p.notice || "", turnkey: p.turnkey, examplesHash: p.examplesHash,
+    ...(outbound.offMarket === true ? { offMarket: true } : {}) };
+}
+
 // The cold open and its nudge never sign off: GHL puts "Thanks, Matt" and
 // "No worries if not can stop" on the first text a contact gets, so a sign-off
 // the model wrote anyway would reach the agent twice (Matt, 2026-10-05).
@@ -3259,12 +3310,14 @@ export async function writeWithoutOverused({ draft, kind, variant = 0, redraft }
     && carrierFlags(again.reply).length <= carrierFlags(draft.reply).length ? again : draft;
 }
 
-// A first text over OPENER_MAX_CHARS goes out as three SMS segments once GHL
-// adds its two lines (two of the first six with house details did). Written
-// again once, shorter; the shorter one goes, unless it picked up carrier words.
-export async function writeShorterFirstText({ draft, kind, redraft }) {
+// A first text over OPENER_MAX_CHARS (200 since 2026-10-15: the short ones
+// get answered) is written again once, shorter; the shorter one goes, unless
+// it picked up carrier words.
+export async function writeShorterFirstText({ draft, kind, redraft, outbound = null }) {
   const n = String(draft?.reply || "").length;
-  if (kind !== "outreach_open" || n <= OPENER_MAX_CHARS || typeof redraft !== "function") return draft;
+  // A cold agent's fresh-listing check-in is held to the same length (outbound.coldOpen).
+  const short = kind === "outreach_open" || (kind === "agent_pulse" && outbound?.coldOpen === true);
+  if (!short || n <= OPENER_MAX_CHARS || typeof redraft !== "function") return draft;
   const again = await redraft(n).catch(() => null);
   const m = String(again?.reply || "").length;
   return m && m < n && carrierFlags(again.reply).length <= carrierFlags(draft.reply).length ? again : draft;
@@ -3321,10 +3374,10 @@ export async function previewProactive({ client, locationId, saved, store, conta
       draft: await draftWith(previewArgs), kind,
       redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
     }), kind, a.signer),
-    kind, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
+    kind, outbound, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
   }).then((d) => writeWithoutOverused({ draft: d, kind, variant: outbound.variant,
     redraft: async (words) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, overused: words } }), kind, a.signer) }))
-    .then((d) => writeShorterFirstText({ draft: d, kind, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
+    .then((d) => writeShorterFirstText({ draft: d, kind, outbound, redraft: async (n) => withoutSignOff(await draftWith({ ...previewArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
   draft.intent = kind;
   const gate = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound })(draft);
   const clean = Boolean(gate.ok || (gate.locked && gate.clean));
@@ -3383,10 +3436,10 @@ async function runProactive(job, ctx) {
       draft: await deps.draft(draftArgs), kind,
       redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
     }), kind, a.signer),
-    kind, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
+    kind, outbound, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
   }).then((d) => writeWithoutOverused({ draft: d, kind, variant: outbound.variant,
     redraft: async (words) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, overused: words } }), kind, a.signer) }))
-    .then((d) => writeShorterFirstText({ draft: d, kind, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
+    .then((d) => writeShorterFirstText({ draft: d, kind, outbound, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
   draft.intent = kind;
   if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
   job.summary = draft.summary;
@@ -3402,7 +3455,8 @@ async function runProactive(job, ctx) {
   // moment they're queued (realmCheckAt, takeCheckAt, the outreach record),
   // so a dropped one would read as sent and never be tried again. They still
   // wait for you, as before (review, 2026-10-04).
-  if (ctx.machine && !passes(gate) && !KEEP_FOR_A_PERSON.has(kind)) {
+  // Matt's 15 is his to fix and send, like these (subject.forMatt).
+  if (ctx.machine && !passes(gate) && !KEEP_FOR_A_PERSON.has(kind) && !subject?.forMatt) {
     const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
     const again = tripped.length ? await deps.draft({ ...draftArgs, outbound: { ...outbound, fix: tripped } }).catch(() => null) : null;
     if (again?.reply) {
@@ -3458,8 +3512,13 @@ async function runProactive(job, ctx) {
       ...(kind === "take_check" ? { arv: outbound.arv, rehab: outbound.rehab } : {}),
       ...(kind === "realm_check" ? { amount: offer.cashAmount, requote: outbound.requote, ...(outbound.range ? { range: { low: outbound.range.low, high: outbound.range.high, step: outbound.range.step } } : {}) } : {}),
       ...(outbound.step != null ? { step: outbound.step, steps: subject?.steps || [], stepLabel: outbound.stepLabel } : {}),
-      ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: subject?.listingKey || null } : {}),
+      ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: subject?.listingKey || null, hook: outbound.hook?.kind || null,
+        // Matt's 15 (agent-pulse.js startMattsFifteen): his to make his own and send, on Today.
+        ...(subject?.forMatt ? { forMatt: true } : {}) } : {}),
       ...((kind === "outreach_open" || kind === "outreach_nudge") && outbound.county ? { county: outbound.county } : {}),
+      // Which first text this was (conversation-prompt.js openerPlan), so
+      // replies can be read back by opening, voice and detail.
+      ...(kind === "outreach_open" ? openerChoices(outbound) : {}),
     },
     reply: draft.reply, intent: kind, confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
     usage: draft.usage || null, shadow: shadowRow(draft.shadow, gateFor),
@@ -4016,7 +4075,7 @@ async function runReply(job, ctx) {
   // them answering us: the reply that keeps it going sends, provided it names
   // no number of ours.
   if (party === "agent" && draft.intent === "other" && !draft.needsHuman && String(draft.reply || "").trim()
-    && !moneyIn(draft.reply).length && OUTREACH_OPEN_RX.test(String(lastOutbound(a.transcript)?.text || ""))) {
+    && !moneyIn(draft.reply).length && (await lastLineIsOurFirstText({ store, locationId, contactId: job.contactId, transcript: a.transcript }))) {
     draft = { ...draft, intent: "question", reclassifiedFrom: "other" };
     job.intent = draft.intent;
   }
@@ -5993,7 +6052,9 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     await recordEvent({
       store, locationId, contactId: d.contactId, party: "agent", type: "agent_pulse_texted", at: ts,
       address: d.outbound.address || "", source: "conversation", ref: d.id, dedupeKey: `agent_pulse_texted:${d.id}`,
-      data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null },
+      data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null,
+        // What it named (shared/agent-pulse.js checkInHook), to read replies by.
+        ...(d.outbound.hook ? { hook: d.outbound.hook } : {}) },
     }).catch(() => {});
   }
   // Our number actually went by text: the offer is Sent from here
@@ -6028,7 +6089,12 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       store, locationId, contactId: d.contactId, party: "agent", type: "outreach_sent", at: ts,
       address: d.outbound.address || d.propertyAddress || "", source: "conversation", ref: d.id,
       dedupeKey: `outreach:${d.contactId}:${d.id}`,
-      data: { draftId: d.id, auto: Boolean(auto), contactName: d.contactName || "", ...(d.outbound.county ? { county: d.outbound.county } : {}) },
+      data: { draftId: d.id, auto: Boolean(auto), contactName: d.contactName || "", ...(d.outbound.county ? { county: d.outbound.county } : {}),
+        // What went, for reading replies by opening (2026-10-15): the
+        // variant and opening move it was written from, whether it was a
+        // turnkey seat, how long it was, and whether a person changed it.
+        ...(d.outbound.variant != null ? { variant: d.outbound.variant, openingMove: d.outbound.move } : {}),
+        turnkey: d.outbound.turnkey === true, chars: body.length, edited: Boolean(updated.edited), ...(d.outbound.offMarket ? { offMarket: true } : {}) },
     }).catch(() => {});
   }
   // A reply that promised to come back starts a clock (promise-sweep.js). The

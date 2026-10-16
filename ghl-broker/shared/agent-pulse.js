@@ -45,7 +45,7 @@ import { threadTimes, staleHeld, leadCheckInPending } from "./follow-up.js";
 import { nextFollowUp } from "./next-follow-up.js";
 import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT, HOUSE_OVER_REASONS, threadHealth } from "./thread-health.js";
 import { offerHasTheirAnswer } from "./tiers.js";
-import { addressKey, sameStreet } from "./us-address.js";
+import { addressKey, sameStreet, parseUsAddress } from "./us-address.js";
 import { offMarketAskDue } from "./off-market.js";
 import { botHold, paceOf, paceScale } from "./bot-hold.js";
 import { cadenceDays, requestStands, isAutoReply } from "./brush-offs.js";
@@ -73,6 +73,9 @@ export const AGENT_PULSE_DEFAULTS = {
   replacesWorkflowIds: [],
   // Matt's own notes on how the check-in should sound, handed to the drafter.
   voice: "",
+  // Matt's 15 (2026-10-15): once a week, his best agents' check-ins drafted
+  // for him to make his own and send. Off by default.
+  mattsFifteen: { enabled: false, size: 15, weekday: 1, hour: 8 },
 };
 export const AGENT_PULSE_VOICE_MAX = 600;
 // 0 means no cap (Matt, 2026-10-05: "there should be no caps"): every agent
@@ -111,6 +114,24 @@ export function normalizeAgentPulse(v = {}) {
     quietWorkflowIds: ids,
     replacesWorkflowIds: idList(o.replacesWorkflowIds),
     voice: String(o.voice || "").trim().slice(0, AGENT_PULSE_VOICE_MAX),
+    mattsFifteen: normalizeMattsFifteen(o.mattsFifteen),
+  };
+}
+
+/**
+ * normalizeMattsFifteen(v) → { enabled, size, weekday, hour }
+ *
+ * `weekday` is 0 (Sunday) … 6 in Pacific time, Monday by default; `hour` the
+ * Pacific hour the drafts are written, before his day starts.
+ */
+export function normalizeMattsFifteen(v = {}) {
+  const o = v && typeof v === "object" ? v : {};
+  const D = AGENT_PULSE_DEFAULTS.mattsFifteen;
+  return {
+    enabled: o.enabled === true,
+    size: clamp(o.size, D.size, 1, 40),
+    weekday: clamp(o.weekday, D.weekday, 0, 6),
+    hour: clamp(o.hour, D.hour, 6, 17),
   };
 }
 
@@ -124,6 +145,9 @@ export const AGENT_PULSE_EVENT_TYPES = [
   "offmarket_asked",
   // Houses passed or kicked off the Tier 1 list: never raised again.
   "tier1_passed", "tier1_kicked", "tier1_added",
+  // A house they named that we never priced: the one thing a check-in may
+  // ask about (2026-10-15, checkInHook).
+  "house_mentioned",
 ];
 export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided", "agent_pulse_joined"];
 // What counts as them having written back (store.lastContactActivity with
@@ -151,6 +175,8 @@ export function blockedByTags(tags = [], botOffTags = []) {
  */
 export function listingDistressed(doc = {}, rule = null) {
   if (!doc?.qualifies) return false;
+  // Came off the market lately without selling (the off-market pull): that is the distress.
+  if (doc.offMarket === true) return true;
   const d = doc.distress || {};
   if (rule === "cut-or-old") {
     const y = Number(doc.yearBuilt) || 0;
@@ -495,6 +521,12 @@ export function firstCheckInAt({ contactId = "", joinedAt = null, everyDays = 21
   return iso(t + workdays[checkInSlot(contactId, workdays.length)] * DAY_MS);
 }
 
+// A check-in about a listing of theirs: a fresh one, or one that came off the
+// market lately without selling (2026-10-15, "off_market_listing": the text
+// asks whether the seller still hopes to sell).
+export const LISTING_REASONS = new Set(["fresh_listing", "off_market_listing"]);
+const listingReason = (listing) => (listing?.doc?.offMarket === true ? "off_market_listing" : "fresh_listing");
+
 /**
  * evaluateAgent(agent, ctx) → { status, reason, segment, pulseReason, listing, house, priority }
  *
@@ -574,7 +606,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     const lastPing = latest(texted.map((e) => e.at));
     if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", waitWhy(coldEveryDays, `pinged within ${coldEveryDays} days`), { segment: coldSeg, dueAt: after(lastPing, coldEveryDays) });
     if (!quietFor(quietDays)) return out("not_due", waitWhy(quietDays, `touched within ${quietDays} days`), { segment: coldSeg, dueAt: after(since, quietDays) });
-    return out("due", "", { segment: coldSeg, pulseReason: "fresh_listing", listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
+    return out("due", "", { segment: coldSeg, pulseReason: listingReason(listing), listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
   }
 
   const tier = TOP_SEGMENTS.has(segment) ? 0 : 1;
@@ -583,7 +615,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const thanks = dealToThank({ offers: agent.offers || agent.current || [], events, ledger, now });
   if (thanks) return out("due", "", { segment, pulseReason: "deal_thanks", house: thanks, priority: [-1, -(ms(thanks.closedAt) ?? 0)] });
   if (listing && quietFor(quietDays)) {
-    return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
+    return out("due", "", { segment, pulseReason: listingReason(listing), listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
   }
   if (!quietFor(everyDays)) return out("not_due", waitWhy(everyDays, card && since === card.movedAt ? `moved to Tier ${card.tier.slice(1)} within ${everyDays} days` : `talked within ${everyDays} days`), { segment, dueAt: after(since, everyDays) });
   // Joined the check-in long after their last word (the repliers, 2026-10-14):
@@ -615,7 +647,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   const s = normalizeAgentPulse(settings);
   const counts = {
     pool: agents.length, bySegment: { partner: 0, source: 0, engaged: 0, cold: 0 }, stopped: {}, owned: {}, notDue: 0, coldDropped: 0,
-    due: { deal_thanks: 0, fresh_listing: 0, our_house: 0, general: 0 }, dueNoSeat: 0,
+    due: { deal_thanks: 0, fresh_listing: 0, off_market_listing: 0, our_house: 0, general: 0 }, dueNoSeat: 0,
     fresh: { withListing: 0 }, coverage: { touched: 0, pool: 0 },
     ghlTier: { t2: 0, t3: 0, due: 0 },
   };
@@ -644,7 +676,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
     if (v.status === "cold_dropped") { counts.coldDropped++; continue; }
     if (v.status === "not_due") { counts.notDue++; continue; }
     counts.due[v.pulseReason]++;
-    if (v.pulseReason === "fresh_listing") counts.fresh.withListing++;
+    if (LISTING_REASONS.has(v.pulseReason)) counts.fresh.withListing++;
     due.push({ agent: a, verdict: v });
   }
   const cmp = (x, y) => {
@@ -657,13 +689,58 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   const toPick = ({ agent, verdict }) => ({
     contactId: agent.contactId, name: agent.name || "", segment: verdict.segment, reason: verdict.pulseReason,
     listingKey: verdict.listing?.listingKey || null,
-    subject: agentPulseSubject({ agent, verdict, now }),
+    subject: agentPulseSubject({ agent, verdict, houses, now }),
   });
   const picks = due.slice(0, cap).map(toPick);
   // The next in line after the day's seats: an agent skipped before being
   // claimed (unsubscribed in GHL, tagged off, no phone) hands the seat on.
   const spares = cap === Infinity ? [] : due.slice(cap, cap + Math.max(5, Math.ceil(s.dailyCap / 2))).map(toPick);
   return { picks, spares, counts, verdicts };
+}
+
+/**
+ * pickMattsFifteen({ agents, settings, config, houses, outreachFollowUpDays, now }) → [pick]
+ *
+ * Matt's 15 (2026-10-15): the funnel review found his own specific texts got
+ * 70% replies and the bot's generic check-ins 35%. Once a week, his best
+ * agents get a check-in drafted for HIM to make his own and send: partners
+ * first, then the agents who brought us houses, then the ones who write
+ * back, each by their latest word to us and then how many houses we've had
+ * with them. Never one who is stopped, never one another clock has, and
+ * never one we or they texted this past week (they're already talking).
+ * Cold agents are the machine's.
+ */
+const MATT_SEGMENT_RANK = { partner: 0, source: 1, engaged: 2 };
+const MATT_QUIET_DAYS = 7;
+export function pickMattsFifteen({ agents = [], settings = {}, config = {}, houses = {}, outreachFollowUpDays = 14, now = Date.now() } = {}) {
+  const s = normalizeAgentPulse(settings);
+  const rows = [];
+  for (const a of agents || []) {
+    const v = evaluateAgent(a, { settings: s, config, houses, outreachFollowUpDays, now });
+    if (v.status === "stopped" || v.status === "owned") continue;
+    if (!(v.segment in MATT_SEGMENT_RANK)) continue;
+    const touched = latest([
+      ...(a.events || []).filter((e) => OUR_TEXT_TYPES.has(e?.type)).map((e) => e.at),
+      ...(a.ledger || []).filter((e) => e?.type === "agent_pulse_texted").map((e) => e.at),
+      a.lastInboundAt,
+    ]);
+    if (touched && now - (ms(touched) ?? 0) < MATT_QUIET_DAYS * DAY_MS) continue;
+    rows.push({ a, v });
+  }
+  rows.sort((x, y) => MATT_SEGMENT_RANK[x.v.segment] - MATT_SEGMENT_RANK[y.v.segment]
+    || String(y.a.lastInboundAt || "").localeCompare(String(x.a.lastInboundAt || ""))
+    || (y.a.offers || []).length - (x.a.offers || []).length
+    || String(x.a.contactId).localeCompare(String(y.a.contactId)));
+  return rows.slice(0, s.mattsFifteen.size).map(({ a, v }) => {
+    // Due today: the check-in it was due (their listing, a thank-you).
+    // Otherwise a general one, with its one real thing (checkInHook).
+    const verdict = v.status === "due" ? v : { pulseReason: "general", segment: v.segment };
+    return {
+      contactId: a.contactId, name: a.name || "", segment: v.segment, reason: verdict.pulseReason,
+      listingKey: verdict.listing?.listingKey || null,
+      subject: { ...agentPulseSubject({ agent: a, verdict, houses, now }), forMatt: true },
+    };
+  });
 }
 
 const street = (address) => String(address || "").split(",")[0].trim();
@@ -694,6 +771,103 @@ function houseHow(o) {
   return HOUSE_HOW[effectiveStatus(o)] || "";
 }
 
+// The same house, or for one named with no number ("Pine St, Shelton"), the
+// same street: an offer on 1412 Pine St is that house priced.
+const streetNameKey = (raw) => addressKey(parseUsAddress(raw).street || "");
+function sameHouseLoose(a, b) {
+  if (sameStreet(a, b)) return true;
+  const pa = parseUsAddress(a), pb = parseUsAddress(b);
+  if (pa.houseNo && pb.houseNo) return false;
+  const ka = streetNameKey(a);
+  return Boolean(ka) && ka === streetNameKey(b);
+}
+
+// How long a house they named stays a reason to check in, and how long one
+// of our closes is news in their town.
+export const MENTIONED_HOOK_DAYS = 60;
+export const CLOSE_HOOK_DAYS = 60;
+
+/**
+ * mentionedHouseFor({ events, offers, now }) → { address, street, label, town, at } | null
+ *
+ * The newest house they named in the last MENTIONED_HOOK_DAYS that we never
+ * priced (no offer on it, sent or drafted), never passed or kicked off the
+ * Tier 1 list, and that isn't the listing our first text was about.
+ */
+export function mentionedHouseFor({ events = [], offers = [], now = Date.now() } = {}) {
+  const priced = (offers || []).map((o) => o?.address).filter(Boolean);
+  const passed = (events || []).filter((e) => e?.address && (e.type === "tier1_passed" || e.type === "tier1_kicked")).map((e) => e.address);
+  const opened = (events || []).filter((e) => e?.address && (e.type === "outreach_sent" || e.type === "outreach_enrolled")).map((e) => e.address);
+  const gone = [...priced, ...passed, ...opened];
+  const list = (events || []).filter((e) => e?.type === "house_mentioned" && (e.address || e.data?.label))
+    .filter((e) => { const t = ms(e.at); return t != null && now - t <= MENTIONED_HOOK_DAYS * DAY_MS; })
+    .filter((e) => !e.address || !gone.some((a) => sameHouseLoose(a, e.address)))
+    .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  const e = list[0];
+  if (!e) return null;
+  return { address: String(e.address || ""), street: street(e.address), label: String(e.data?.label || "").slice(0, 60),
+    town: String(e.data?.town || cityOf(e.address) || "").slice(0, 40), at: e.at };
+}
+
+/**
+ * recentCloses(offers, now) → [{ town, at }]
+ *
+ * Our deals that closed in the last CLOSE_HOOK_DAYS, by town only: a check-in
+ * may say "we just closed on one in Kent", never which house.
+ */
+export function recentCloses(offers = [], now = Date.now()) {
+  const out = [];
+  for (const o of offers || []) {
+    if (!o?.deal || o.deal.stage !== "closed" || !o.address) continue;
+    const at = (o.deal.stageHistory || []).filter((h) => h?.stage === "closed").map((h) => h.ts || h.at).filter(Boolean).sort().at(-1) || o.deal.closedAt || null;
+    const t = ms(at);
+    const town = cityOf(o.address);
+    if (t == null || !town || now - t > CLOSE_HOOK_DAYS * DAY_MS || t > now) continue;
+    out.push({ town, at });
+  }
+  return out.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+}
+
+// The towns an agent works: their listings, the houses we've had with them,
+// and the areas they told us.
+function agentTowns(agent = {}) {
+  const towns = new Set();
+  for (const l of agent.listings || []) if (l?.doc?.city || l?.doc?.address) towns.add(String(l.doc.city || cityOf(l.doc.address)).trim().toLowerCase());
+  for (const o of agent.offers || []) if (o?.address) towns.add(cityOf(o.address).toLowerCase());
+  for (const e of agent.events || []) if (e?.type === "house_mentioned" && (e.data?.town || e.address)) towns.add(String(e.data?.town || cityOf(e.address)).toLowerCase());
+  for (const f of agent.facts?.agent_market_area || []) towns.add(String(f?.value || "").trim().toLowerCase());
+  towns.delete("");
+  return towns;
+}
+
+/**
+ * checkInHook({ agent, verdict, houses, now }) → { kind, … } | null
+ *
+ * The ONE real thing a check-in names (2026-10-15, the funnel review: Matt's
+ * own specific texts got 70% replies, the generic check-ins 35%). In order:
+ *   listing        their fresh listing (the check-in is about it)
+ *   mentioned      a house they named in the last 60 days that we never
+ *                  priced or passed on
+ *   closed_nearby  one of our deals closed in the last 60 days in a town they
+ *                  work, named by town only
+ *   situation      otherwise, a kind of seller we're good for
+ * Never a house we priced or passed on, and never "did it sell?" (Matt,
+ * 2026-10-08). The thank-you after a close has none: it is about that deal.
+ */
+export function checkInHook({ agent = {}, verdict = {}, houses = {}, now = Date.now() } = {}) {
+  if (verdict.pulseReason === "deal_thanks") return null;
+  if (LISTING_REASONS.has(verdict.pulseReason) && verdict.listing) return { kind: "listing" };
+  const m = mentionedHouseFor({ events: agent.events || [], offers: agent.offers || [], now });
+  if (m) {
+    const days = Math.max(0, Math.floor((now - (ms(m.at) ?? now)) / DAY_MS));
+    return { kind: "mentioned", address: m.address, street: m.street, label: m.label, town: m.town, daysAgo: days };
+  }
+  const towns = agentTowns(agent);
+  const close = (houses.closes || []).find((c) => towns.has(String(c.town || "").toLowerCase()));
+  if (close) return { kind: "closed_nearby", town: close.town };
+  return { kind: "situation" };
+}
+
 /**
  * agentPulseSubject({ agent, verdict, now }) → what the text may lean on
  *
@@ -703,8 +877,9 @@ function houseHow(o) {
  * about themselves and the areas they work, each with how long ago. Nothing
  * else, and never a number: the check-in's money guard holds any.
  */
-export function agentPulseSubject({ agent = {}, verdict = {}, now = Date.now() } = {}) {
+export function agentPulseSubject({ agent = {}, verdict = {}, houses = {}, now = Date.now() } = {}) {
   const l = verdict.listing?.doc || null;
+  const hook = checkInHook({ agent, verdict, houses, now });
   const h = verdict.house || null;
   const how = !h ? "" : h.deal ? (h.deal.stage === "closed" ? "closed" : "fell through") : effectiveStatus(h) === "no_response" ? "never heard back" : "passed";
   const at = (o) => o?.statusAt || o?.createdAt || "";
@@ -726,7 +901,8 @@ export function agentPulseSubject({ agent = {}, verdict = {}, now = Date.now() }
     // was asked for the city we'd had from RentCast (2026-10-13). The text
     // itself names the listing by street (listing.street, listing.city).
     address: l ? String(l.address || "").trim() : h ? String(h.address || "").trim() : "",
-    listing: l ? { street: street(l.address), city: l.city || cityOf(l.address), dom: Number(l.daysOnMarket) || 0, cut: Boolean(l.distress?.cut), type: String(l.propertyType || "") } : null,
+    listing: l ? { street: street(l.address), city: l.city || cityOf(l.address), dom: Number(l.daysOnMarket) || 0, cut: Boolean(l.distress?.cut), type: String(l.propertyType || ""),
+      ...(l.offMarket === true ? { offMarket: true } : {}) } : null,
     house: h ? { street: street(h.address), how } : null,
     dealsWithUs: (agent.offers || []).filter((o) => o?.deal).length,
     offersWithUs: (agent.offers || []).length,
@@ -736,13 +912,20 @@ export function agentPulseSubject({ agent = {}, verdict = {}, now = Date.now() }
     aboutThem: factList(agent.facts, "personal_details", now),
     areas,
     avoid,
+    // The one real thing this check-in names (checkInHook): their fresh
+    // listing, a house they mentioned that we never priced, one of our
+    // closes in their town (by town only), or a kind of seller we're good for.
+    hook,
     // Every house we've had with them, for the gate that holds a check-in
-    // naming one (ghl-broker/reply-agent.js): the check-in is generic
-    // (Matt, 2026-10-09). Never shown to the drafter.
+    // naming one (ghl-broker/reply-agent.js): never a house we priced or
+    // passed on (Matt, 2026-10-09). The hook's own house is left out.
+    // Never shown to the drafter.
     pastHouses: [...new Set([
       ...(agent.offers || []).map((o) => o?.address),
       ...(agent.events || []).filter((e) => e?.type === "tier1_passed" || e?.type === "tier1_kicked" || e?.type === "subject_property_set").map((e) => e?.address),
-    ].filter(Boolean).map(String))].filter((a) => !l || street(a) !== street(l.address)).slice(0, 30),
+    ].filter(Boolean).map(String))]
+      .filter((a) => (!l || street(a) !== street(l.address)) && !(hook?.kind === "mentioned" && hook.address && sameHouseLoose(a, hook.address)))
+      .slice(0, 30),
     // Asked about off-market houses in the last month? Then not this time.
     offMarketAskDue: offMarketAskDue(agent.events || [], now),
   };

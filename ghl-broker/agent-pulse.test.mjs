@@ -10,7 +10,8 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "agent-pulse-test-"
 
 const { store } = await import("./store.js");
 const { recordEvent } = await import("./contact-record.js");
-const { planAgentPulse, startAgentPulse, maybeRunAgentPulse, _resetJobs, CURSOR_NAME, tierCardsFrom, pulseTierCards } = await import("./agent-pulse.js");
+const { planAgentPulse, startAgentPulse, maybeRunAgentPulse, _resetJobs, CURSOR_NAME, tierCardsFrom, pulseTierCards,
+  startMattsFifteen, maybeRunMattsFifteen, MATTS_FIFTEEN_CURSOR } = await import("./agent-pulse.js");
 const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
 await store.init();
 
@@ -425,4 +426,66 @@ test("repliers seen for the first time a week after the deploy are still spread 
   }
   assert.ok((await verdictsOf(loc2, ran + 3600000)).plan.picks.length <= 8, "backfilled repliers are spread from the run");
   assert.ok((await verdictsOf(loc2, ran + 7 * DAY)).plan.picks.length < 30, "and still spread a week on");
+});
+
+/* ---------- Matt's 15 (2026-10-15) ---------- */
+
+// The funnel review: Matt's own specific texts got 70% replies, the bot's
+// generic check-ins 35%. Once a week, his best agents' check-ins are drafted
+// for him to make his own and send.
+const fifteenSaved = (m = {}) => savedWith({ enabled: false, mattsFifteen: { enabled: true, ...m } });
+
+test("Matt's 15 ships off, and drafts once, Monday morning Pacific", async () => {
+  const loc = "loc-m15-gate";
+  const monday8 = Date.parse("2026-10-19T15:05:00Z");   // Monday 8:05am Pacific
+  const deps = { getContact: reachable, startProactive: async () => ({ job: { id: "j", draftId: "d" } }) };
+  assert.equal(await maybeRunMattsFifteen({ client, locationId: loc, saved: savedWith(), store, deps, now: monday8 }), false, "off by default");
+  assert.equal(await maybeRunMattsFifteen({ client, locationId: loc, saved: fifteenSaved(), store, deps, now: monday8 + 86400000 }), false, "not on a Tuesday");
+  assert.equal(await maybeRunMattsFifteen({ client, locationId: loc, saved: fifteenSaved(), store, deps, now: monday8 - 2 * 3600000 }), false, "not before its hour");
+  assert.equal(await maybeRunMattsFifteen({ client, locationId: loc, saved: fifteenSaved(), store, deps, now: monday8 }), true);
+  await settle();
+  assert.equal(await maybeRunMattsFifteen({ client, locationId: loc, saved: fifteenSaved(), store, deps, now: monday8 + 3600000 }), false, "once that day");
+  const cursor = await store.getJobCursor(loc, MATTS_FIFTEEN_CURSOR);
+  assert.ok(cursor.doc.lastDaily, "the cursor is written before the run");
+  assert.equal(cursor.doc.last.status, "done");
+});
+
+test("Matt's 15 drafts each check-in held for him, marked his, and leaves the day's check-in seats alone", async () => {
+  const loc = "loc-m15-run";
+  await repliedAgent(loc, "m15-a", 30);
+  await repliedAgent(loc, "m15-b", 50);
+  const calls = [];
+  const job = startMattsFifteen({ client, locationId: loc, saved: fifteenSaved({ size: 1 }), store,
+    deps: { getContact: reachable, startProactive: async (args) => { calls.push(args); return { job: { id: "j", draftId: "d" } }; } } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(calls.map((c) => c.contactId), ["m15-a"], "the newest word to us first, one seat");
+  assert.equal(calls[0].kind, "agent_pulse");
+  assert.equal(calls[0].subject.forMatt, true);
+  assert.match(calls[0].deps.holdForAPerson, /Matt's 15/, "nothing sends itself");
+  assert.equal(calls[0].deps.releaseHeld, undefined);
+  const claim = (await store.listContactEvents(loc, "m15-a", { types: ["agent_pulse_sent"] }))[0];
+  assert.equal(claim.data.reason, "matt15");
+  const plan = await planAgentPulse({ locationId: loc, saved: savedWith({ dailyCap: 5 }), store });
+  assert.equal(plan.claimedToday, 0, "his fifteen don't use the day's check-in seats");
+  assert.ok(!plan.picks.some((p) => p.contactId === "m15-a"), "and the agent isn't checked in on twice today");
+});
+
+test("a Matt's 15 draft that trips a gate waits for him instead of being dropped, and is marked his on the draft", async () => {
+  const loc = "loc-m15-gate-miss";
+  await repliedAgent(loc, "m15-c", 30);
+  const made = await store.createOffer({ locationId: loc, contactId: "m15-c", address: "41 Alder Ln, Shelton, WA 98584", cashAmount: 210000, status: "passed", statusAt: new Date(Date.now() - 90 * DAY).toISOString() });
+  await store.updateOffer(made.id, { ...made, createdAt: new Date(Date.now() - 100 * DAY).toISOString() });
+  const named = { reply: "Hi Pat, any news on 41 Alder Ln? Happy to jump on a quick call if that's easier.", summary: "s", confidence: "high", needsHuman: false };
+  const job = startMattsFifteen({ client, locationId: loc, saved: fifteenSaved(), store,
+    deps: { getContact: reachable, draft: async () => named } });
+  for (let i = 0; i < 100 && job.status === "running"; i++) await settle();
+  let drafts = [];
+  for (let i = 0; i < 100 && !drafts.length; i++) { await settle(); drafts = await store.listReplyDrafts(loc, { contactId: "m15-c", limit: 5 }); }
+  assert.equal(drafts.length, 1, JSON.stringify(job.results));
+  const d = drafts[0];
+  assert.equal(d.status, "draft");
+  assert.equal(d.outbound.forMatt, true);
+  assert.ok((d.flags || []).some((f) => /named a house from before/.test(f)), "the gate still flags it for him");
+  assert.match(d.autoSend.reason, /Matt's 15/);
 });

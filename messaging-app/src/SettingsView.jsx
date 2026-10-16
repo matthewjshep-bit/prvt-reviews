@@ -778,6 +778,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         </p>
         <div className="grid grid-cols-2 gap-3">
           <Num label="New agents texted" suffix="a day" value={lineTargets.newAgentsPerDay} onChange={setLine("newAgentsPerDay")} />
+          <Num label="Warn below (new agents)" suffix="a day" value={lineTargets.minNewAgentsPerDay} onChange={setLine("minNewAgentsPerDay")} />
           <Num label="Offers out" suffix="a day" value={lineTargets.offersPerDay} onChange={setLine("offersPerDay")} />
           <Num label="Offers to one contract" value={lineTargets.offersPerContract} onChange={setLine("offersPerContract")} />
           <Num label="Deals" suffix="a month" value={lineTargets.dealsPerMonth} onChange={setLine("dealsPerMonth")} />
@@ -1173,6 +1174,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                     onChange={(e) => setOutreachAuto("opener")({ ...(form.outreachAutopilot?.opener || {}), examples: e.target.value })} />
                   <span className="mt-1 block text-xs text-slate-500">
                     A few of your own first texts, with a blank line between them. The bot writes every agent a fresh one in this voice, with one real detail from their listing (the town, the decade it was built, a big lot, sitting a while), and fills in {"{first}"}, {"{street}"}, {"{town}"} and {"{county}"}. The county is the only area it says you're looking in. A little humour is fine; it's never at the house's expense.
+                    Keep each to one question and about 150 characters: short first texts get answered, so the bot stays under 200, and an example over 220 isn't used. The ask for their other fixers waits for their first answer.
                     Leave off "Thanks, Matt" and "No worries if not can stop": GHL adds both to the end of the first text, so the bot never writes a sign-off and one in an example is cut.
                   </span>
                 </label>

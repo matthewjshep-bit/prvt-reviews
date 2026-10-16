@@ -4083,6 +4083,21 @@ The whole business as one line, measured the way a factory floor is: is each sta
 - Targets are in Settings → Line targets (`settings.lineTargets`, `normalizeLineTargets`). Defaults are the Agent Method's: 10 new agents a day, 10 offers a day, 120 offers to a contract, 2 deals a month, $15K a deal, every replied agent touched in 21 days, every buyer in 30.
 - The method line says what the month's offers should have made ("150 offers → 1.3 contracts expected") beside what they did.
 
+**Supply (2026-10-15).** New-agent supply fell from 125 a day to 2 and
+nothing said so. `supplyCheck` (`shared/line.js`, on `buildLine` as
+`supply`) counts first texts over the last 7 days. Below
+`lineTargets.minNewAgentsPerDay` (default 5; 0 turns it off; Settings → Line
+targets "Warn below") it is `low`. `why` reads the outreach sweep's last run
+(`job_cursors` "outreach", `doc.last`):
+- the autopilot is off, or the sweep has no run on record;
+- the last run failed;
+- the RentCast budget is spent;
+- the Conversation AI's daily cap left no room;
+- the pool is dry (no picks, "nobody new", or half the picks already in GHL).
+The Line shows a "New agents are drying up" card above Stations, with the
+last sweep's counts (on file, picked, imported, already in GHL,
+never-texted, off-market). Check: `GET /api/dashboard/line` → `supply`.
+
 **Waiting between stations** (`cycleTimes`). Median and slowest-tenth days for each hop that *finished* in the last 30 days:
 - priced → in front of the agent (letter or float);
 - in front of them → their first answer;
@@ -4317,6 +4332,9 @@ house came.
 - **Opener.** Every default example ends asking for their other fixers, and
   the `outreach_open` rule makes that line required. The rule describes the
   line and never quotes it, so the texts don't all read the same.
+  (Superseded 2026-10-15: the first text is one question, and the fixers
+  ask follows their first answer. See "Short, one question" under The daily
+  sweep.)
 - **"It's turnkey".** A clear turnkey first answer skips the qualify question
   and gets the open-door pass at once (`saysTurnkey` in `shared/flip-read.js`;
   any "needs", "fixer" or "repairs" cancels it).
@@ -4354,6 +4372,14 @@ house came.
     never more than the share.
   - Their opener is told the listing looks finished and leans on the
     other-fixers line.
+  - **The flag reaches the text (fix, 2026-10-15).** The funnel review found
+    79 of 80 turnkey-seat agents asked "is this one a project?": the import
+    and the lost-text retry wrote the hook out field by field and dropped
+    `turnkey`. One builder, `firstTextHook(doc, { county, base })` in
+    `shared/outreach-opener.js`, now makes the hook for the import, the
+    skipped retry (which re-reads the agent's row, so an old skip gets the
+    flag back) and the lost retry. Check: `POST /api/outreach/opener/preview`
+    on a turnkey row, or an `outreach_open_skipped` event's `data.hook.turnkey`.
 
 ### Converting the houses agents bring (2026-10-09)
 
@@ -4609,6 +4635,62 @@ it is news, not history. The subject carries `pastHouses`, which the drafter
 never sees. A draft naming one of those houses (`namesHouse`) is written
 again once and dropped if it still names one. `pulse.voice` (Settings, 600
 characters) is Matt's own note on the voice, passed to the drafter.
+
+**One real thing, and a call (2026-10-15).** The funnel review: Matt's own
+specific texts got 70% replies, the generic check-ins 35%. Each check-in now
+names ONE real thing, picked by `checkInHook` in `shared/agent-pulse.js`
+(`subject.hook`), in this order:
+- `listing`: their fresh listing (as before);
+- `mentioned`: a house they named (`house_mentioned`, now read by the pulse)
+  in the last 60 days that we never priced (no offer on it, sent or drafted),
+  never passed or kicked off Tier 1, and that isn't our first text's listing;
+- `closed_nearby`: one of our deals at stage `closed` in the last 60 days, in
+  a town they work (their listings, their houses, their market areas). The
+  text names the town only, never the house;
+- `situation`: otherwise, one kind of seller we're good for.
+Never a house we priced or passed on, and never "did it sell?". The thank-you
+after a close has no hook. The hook's own house is taken out of `pastHouses`;
+the gate still holds every other one. A mentioned house sets no `address` or
+`listingKey`, so the reply isn't treated as a first-text house. The text may
+offer a quick call "if that's easier", never with a day or time (no calendar
+is connected). The draft's `outbound.hook` and the `agent_pulse_texted`
+event's `data.hook` record which kind went. No switch: it rides the check-in's
+own. Check: `POST /api/outreach/pulse/preview {limit: 3}` and read the hook in
+each sample.
+
+**A cold agent's fresh listing reads like a first text (2026-10-15).** A
+cold agent's `fresh_listing` check-in is in effect a second first text, so it
+gets the short first-text voice: their first name, the street, one question
+("a bit of a project?"), under `OPENER_MAX_CHARS` (200). No past house, no
+other ask, no call offer. A draft over 200 is written again once
+(`writeShorterFirstText`, `outbound.coldOpen`). `coldEveryDays` still
+defaults to 60 (Matt sets 30 live). No new switch: it rides the check-in's
+own. Check: `POST /api/outreach/pulse/preview {reason: "fresh_listing"}`.
+
+**Matt's 15 (2026-10-15, off by default).** Matt's own specific texts got
+70% replies. Once a week (`outreachAutopilot.pulse.mattsFifteen {enabled:
+false, size: 15, weekday: 1, hour: 8}`: Monday, from 8am Pacific) the tick
+drafts check-ins for his best agents, for him to make his own and send:
+- **Who** (`pickMattsFifteen`, `shared/agent-pulse.js`): partners, then
+  sources, then engaged agents. Within each, the newest word to us first, then
+  the most houses with us. Never an agent who is stopped or owned by another
+  clock, a cold one, or one either side texted in the last 7 days.
+- **How** (`startMattsFifteen`, `ghl-broker/agent-pulse.js`): each is
+  checked in GHL and claimed with the day's `agent_pulse_sent` (`reason:
+  "matt15"`, the same daily key as the check-in, so nobody gets two). It is
+  drafted as an `agent_pulse` with `subject.forMatt` and
+  `holdForAPerson("Matt's 15 …")`. Nothing sends itself; a draft that trips a
+  gate waits for him instead of being dropped.
+- **Where it shows.** The draft's `outbound.forMatt` keeps it on Today
+  (`urgentReasons`) as "Matt's 15: {name}, a check-in to make your own", with
+  the editable draft in the work pane. Send records `agent_pulse_texted` as
+  usual. His claims don't count against the daily check-in's seats.
+- **Gating.** `job_cursors` row `mattsFifteen` via the daily gate (cursor
+  written before the run, a stale run retried, tries capped), on the set
+  weekday only.
+- **Check.** `GET /api/outreach/pulse/matts-fifteen` lists who this week's
+  would be, plus the last run. `POST /api/outreach/pulse/matts-fifteen/run
+  {dryRun}` runs it by hand (a dry run by default).
 **Write 3 sample check-ins** (`POST /api/outreach/pulse/preview {limit, reason}`, `reason` e.g. "general")
 drafts the next ones from their real threads with the saved settings —
 `reply-agent.js previewProactive`, which writes nothing and sends nothing.
@@ -4979,9 +5061,25 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   `stripSignOff` cuts any sign-off or opt-out line from the end of an
   `outreach_open`/`outreach_nudge` draft anyway. An example containing "can
   stop" is dropped, and a sign-off at the end of an example is cut. The first
-  text stays under 250 characters so it fits in two SMS segments with GHL's
-  two lines added. A reply that arrives within minutes still
+  text stays under 200 characters (`OPENER_MAX_CHARS`; it was 250 until
+  2026-10-15). A reply that arrives within minutes still
   matches our draft, so it isn't held as a person's thread.
+- **Short, one question (2026-10-15).** The funnel review: first texts under
+  about 230 characters got 54% replies, longer ones 33–36%, and the required
+  other-fixers line cost about 12 points. The defaults are now four examples
+  of about 150 characters with one question each and no fixers line, and the
+  `outreach_open` rule asks for two short sentences and one question, with the
+  county line optional. A turnkey seat is told to say it looks finished and
+  ask lightly whether they ever see ones that need work. The fixers ask moves
+  to the reply to their first answer. `normalizeOpener` reads a saved list of
+  the old defaults (`LEGACY_DEFAULT_OPENER_EXAMPLES`) as unchanged and serves
+  the new ones; an old default mixed in with Matt's own is dropped, and so is
+  any saved example over 220 characters. An answer to our first text is
+  recognised by its sent `outreach_open` draft (`lastLineIsOurFirstText`), not
+  the words "came across your listing", which the new texts mostly don't say;
+  the phrase still counts for the GHL workflow's template. Check: `POST
+  /api/outreach/opener/preview` gives three samples, each at most 200
+  characters, none asking for other fixers.
 - **Nobody is created and left untexted.** Before importing, the sweep asks how
   many machine drafts the Conversation AI's daily cap still allows after the
   reply reserve (`machineRoomToday`), and lowers the day's number to fit. A
@@ -4999,6 +5097,56 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   memory without recording a skip. The retry also picks up any contact the
   app created to text (`import` event with `openWith: "app"`) more than 2
   hours ago that has no draft of any kind.
+- **Which first text went (2026-10-15).** `openerPlan(o)` in
+  `conversation-prompt.js` makes every per-agent choice from `variant`: the
+  lead example, the opening move, the way we say who we are and the one detail
+  to notice. The prompt is built from it. The draft's `outbound` keeps
+  `variant`, `move` (index into `OPENING_MOVES`), `who` (index into
+  `WHO_WE_ARE`), `notice`, `turnkey` and `examplesHash` (which saved examples
+  it was written from). The `outreach_sent` event adds `variant`,
+  `openingMove`, `turnkey`, `chars` (the length that went) and `edited` (a
+  person changed it). No switch. Check: an `outreach_sent` event's `data` on
+  any agent texted after the deploy.
+- **Agents nobody ever texted (2026-10-15, off by default).** New-agent
+  supply fell from 125 a day to 2. `outreachAutopilot.neverTexted {enabled:
+  false}`: inside the same daily room, after the retries, `retryFirstTexts`
+  gives the first text to imported agents a pull saw in the last 3 days
+  (`store.listNeverTextedOutreach`, both backends: status `imported`, a
+  contact id, no `doc.ghl.lastMessageAt`). It skips anyone with
+  `outreach_sent`, `outreach_enrolled`, an `outreach_open_skipped`,
+  `agent_pulse_texted`, `hand_reply`, a text or call summary, a follow-up,
+  check-in or address-chase text, an unsubscribe, the GHL trigger tag
+  (`tag_added agent-outreach`), or any reply draft. It also skips anyone the
+  app created to text, which the lost path covers. The hook is their current
+  listing from the latest pull (`firstTextHook`). Each is claimed first with
+  `outreach_open_queued` (one per contact, ever), so no second run starts
+  another; one a deploy drops is retried by the lost path. The sweep's cursor
+  `last` carries `retried`, `neverTexted` and `opened`. Check: `GET
+  /api/outreach/autopilot` → `last.neverTexted` after the 10am run.
+- **Listings that came off the market (2026-10-15, off by default).**
+  `outreachAutopilot.expired {enabled: false, share: 25}`. Before the regular
+  pull, each run reads ONE county (in turn, `outreachPages` cursor
+  `expiredTurn`) for RentCast `status=Inactive` listings, which include the
+  sold ones (`body.status: "Inactive"` on the pull; `rentcastPage` lets it
+  override Active). The listings go into their own batch, "Autopilot ·
+  Off-market · King, WA"; the county's own batch would collide on the listing
+  key. `keepOffMarket` (routes/outreach.js) keeps only listings with a
+  `removedDate` in the last 30 days that didn't sell
+  (`offMarketListings`, outreach-score.js):
+  - with an Apify token, Zillow's status decides for the freshest 40 (sold,
+    pending or back for sale are dropped);
+  - otherwise RentCast's history decides, which rarely shows a sale, so
+    without a token a sold house can slip through.
+  Coming off the market is the distress, so no distress rule applies after
+  it. Each listing and hook carries `offMarket` and `removedDate`.
+  `share` % of the run's RentCast requests and of the day's new agents go to
+  it first (the import's `createLimit` for that batch); the regular pull gets
+  the rest, inside the same monthly budget. A new agent's first text says we
+  saw it came off the market and asks whether the seller still hopes to sell,
+  never "expired". An agent already in GHL gets it from the check-in as
+  `off_market_listing` (`listingDistressed` reads `offMarket` as news), in
+  the same words. The cursor's `last.offMarket` says what the pull found.
+  Check: `GET /api/outreach/autopilot` → `last.offMarket`.
 - **Samples.** "Write 3 sample first texts" under the examples box
   (`POST /api/outreach/opener/preview`) drafts texts for agents waiting in the
   autopilot batches. Nothing is imported, saved or sent.

@@ -325,13 +325,15 @@ test("the walkthrough reminder names the street and window, says only what the a
 // Matt, 2026-09-30: "make it reference pieces of the conversation we've had if
 // any, make it personalized, concise, friendly, professional, like we're
 // building a relationship".
-test("the check-in is generic: no house from before, personable from the tone and their area, and it asks about distressed or off-market houses", () => {
+test("the check-in names one thing and no house from before, personable from the tone and their area, and it asks about distressed or off-market houses", () => {
   const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged",
     lastHouse: { street: "9 Oak St", how: "passed", daysAgo: 35 },
     aboutThem: [{ what: "daughter just started at UW", daysAgo: 40 }],
     areas: ["South King"], lastSummary: "said a Burien fixer might list after the holidays",
     voice: "Keep it short. Sign off -Matt." });
-  assert.match(t, /KEEP IT GENERIC: never mention, name or hint at any house, listing, offer or deal from before/);
+  assert.match(t, /ONE THING ONLY \(no house at all\): never mention, name or hint at any other house, listing, offer or deal from before/);
+  assert.match(t, /never a house we priced or passed on, and never ask whether a house sold/);
+  assert.match(t, /THE ONE THING it names: name one kind of seller we're good for/);
   assert.doesNotMatch(t, /9 Oak St/, "the last house is never handed to the drafter");
   assert.doesNotMatch(t, /daughter/, "no personal detail");
   assert.doesNotMatch(t, /Burien fixer/, "no thread recital");
@@ -346,6 +348,58 @@ test("the check-in is generic: no house from before, personable from the tone an
   const thanks = outboundOpening({ kind: "agent_pulse", reason: "deal_thanks", segment: "partner", house: { street: "4747 46th Ave S", how: "closed" } });
   assert.doesNotMatch(thanks, /4747/);
   assert.match(thanks, /never name the house or its street/);
+});
+
+// 2026-10-15, the funnel review: Matt's own specific texts got 70% replies,
+// the bot's generic check-ins 35%. So a check-in names one real thing.
+test("a check-in names a house they mentioned that we never priced, as the one thing, and no other", () => {
+  const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", variant: 0,
+    hook: { kind: "mentioned", street: "Pine St", town: "Shelton", daysAgo: 20 }, lastHouse: { street: "9 Oak St", how: "passed" } });
+  assert.match(t, /They mentioned a house on Pine St in Shelton a few weeks back/);
+  assert.match(t, /how it's coming along, or whether the seller is still thinking about selling/);
+  assert.match(t, /the house they mentioned above is the only house in this text/);
+  assert.doesNotMatch(t, /9 Oak St/);
+  assert.doesNotMatch(t, /an estate that hasn't been listed/, "one thing: no seller situation on top");
+  assert.doesNotMatch(t, /\b20 days\b/, "no count of days");
+  const recent = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", hook: { kind: "mentioned", label: "some Stanwood houses", daysAgo: 3 } });
+  assert.match(recent, /They mentioned a house \(some Stanwood houses\) recently/);
+});
+
+test("a check-in may say we just closed one in their town, by the town only, never the house", () => {
+  const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", hook: { kind: "closed_nearby", town: "Kent" } });
+  assert.match(t, /We just closed on a house in Kent, a town they work\. Say so in a clause, by the town only — never a street or which house/);
+  assert.match(t, /Kent is the only place named, and no house at all/);
+  assert.match(t, /anything off-market has come across their desk/);
+});
+
+test("a check-in offers a quick call if that's easier, with no day or time — no calendar is connected", () => {
+  for (const o of [{ reason: "general" }, { reason: "fresh_listing", listing: { street: "1 A St", city: "Kent", dom: 10 } }]) {
+    const t = outboundOpening({ kind: "agent_pulse", segment: "engaged", ...o });
+    assert.match(t, /offer a quick call in a few words/);
+    assert.match(t, /never a day or a time, and still only one question/);
+  }
+});
+
+// 2026-10-15: short first texts got answered (54% under ~230 characters). A
+// cold agent's fresh listing is in effect a second first text.
+test("a cold agent's fresh listing gets the short first-text voice: their name, the street, one question, under 200 characters", () => {
+  const listing = { street: "123 Main St", city: "Kent", dom: 64, cut: true };
+  const t = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing });
+  assert.match(t, /the short first-text voice — two short sentences, under 200 characters/);
+  assert.match(t, /ONE question, whether it's a bit of a project\. Nothing else: no other ask, no call offer/);
+  assert.doesNotMatch(t, /offer a quick call in a few words/);
+  assert.match(t, /the listing above is the only house in this text/, "no past house");
+  assert.match(outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing, tooLong: 260 }), /YOUR LAST DRAFT WAS 260 CHARACTERS: write it again under 200/);
+  const warm = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing });
+  assert.doesNotMatch(warm, /short first-text voice/, "an agent we know gets the usual check-in");
+});
+
+test("the listing check-in and the thank-you keep their own one thing, whatever the hook says", () => {
+  const l = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing: { street: "77 Heron Way", city: "Tacoma", dom: 70 },
+    hook: { kind: "mentioned", street: "Pine St", daysAgo: 3 } });
+  assert.doesNotMatch(l, /Pine St/);
+  const thanks = outboundOpening({ kind: "agent_pulse", reason: "deal_thanks", segment: "partner", hook: { kind: "closed_nearby", town: "Kent" } });
+  assert.doesNotMatch(thanks, /Kent/);
 });
 
 // The first samples: "…had a price cut and is still sitting, aside from the

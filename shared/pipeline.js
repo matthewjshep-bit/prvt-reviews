@@ -619,6 +619,7 @@ export function buildPipeline({
         ? `They said yes after we passed: ${d.contactName || "an agent"} on ${String(yesAfter.address || base.address || "the house").split(",")[0]}`
         : x && !x.passed && x.theirAmount && x.ceiling
         ? `Counter ${money(x.theirAmount)} is ${money(x.theirAmount - x.ceiling)} over the ${money(x.ceiling)} ceiling`
+        : d.outbound?.forMatt ? `Matt's 15: ${d.contactName || "an agent"}, a check-in to make your own`
         : `${d.contactName || "Someone"}: ${String(d.intent || "reply").replace(/_/g, " ")}`;
       const id = push({ ...base, kind: "draft_waiting", severity: hot ? "now" : "soon", title,
         ...(yesAfter ? { yesAfterPass: true } : {}),

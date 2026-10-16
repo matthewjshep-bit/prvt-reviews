@@ -138,3 +138,46 @@ export function medianIndex(listings, { min = 15, countyOf = (l) => l.county } =
   const countyMedian = new Map([...byCounty].map(([k, v]) => [k, median(v)]));
   return (l) => zipMedian.get(String(l.zipCode || "")) ?? countyMedian.get(String(countyOf(l) || "")) ?? 0;
 }
+
+/* ---------- listings that came off the market (2026-10-15) ---------- */
+
+// How recently a listing must have come off the market to be worth a text.
+export const OFF_MARKET_WITHIN_DAYS = 30;
+// Zillow statuses that mean it isn't a seller still hoping to sell: it sold,
+// it's under contract, or it's back up for sale.
+const NOT_OFF_MARKET_STATUS = /sold|pending|contingent|for_sale|for sale|under_contract/i;
+
+/**
+ * soldInHistory(listing) → true when RentCast's history on the listing shows a
+ * sale (a "Sold" event, a sold date or a sale price). RentCast's sale-listing
+ * history usually doesn't carry one; when it does, it counts.
+ */
+export function soldInHistory(listing = {}) {
+  const h = listing?.history;
+  const rows = Array.isArray(h) ? h : h && typeof h === "object" ? Object.values(h) : [];
+  return rows.some((x) => /\bsold\b/i.test(String(x?.event || "")) || x?.soldDate || Number(x?.salePrice) > 0)
+    || Boolean(listing?.soldDate || listing?.lastSaleDate) || /sold/i.test(String(listing?.status || ""));
+}
+
+/**
+ * offMarketListings(listings, { now, withinDays, zillowStatus }) → { kept, dropped }
+ *
+ * The RentCast "Inactive" listings (which include the sold ones) that came off
+ * the market in the last `withinDays` and, as far as we can tell, didn't sell:
+ * by Zillow's status when we have one for the street (`zillowStatus`, a
+ * Map(streetKey → status) with `keyOf`), else by RentCast's own history.
+ * Each kept one is flagged `offMarket` with its `removedDate`.
+ */
+export function offMarketListings(listings = [], { now = Date.now(), withinDays = OFF_MARKET_WITHIN_DAYS, zillowStatus = null, keyOf = null } = {}) {
+  const kept = [];
+  const dropped = { notRecent: 0, sold: 0, zillow: 0 };
+  for (const l of listings || []) {
+    const t = Date.parse(l?.removedDate || "");
+    if (!Number.isFinite(t) || t > now || now - t > withinDays * 86400000 || String(l?.status || "Inactive").toLowerCase() === "active") { dropped.notRecent++; continue; }
+    const z = zillowStatus && keyOf ? zillowStatus.get(keyOf(l)) : undefined;
+    if (z && NOT_OFF_MARKET_STATUS.test(String(z))) { dropped.zillow++; continue; }
+    if (!z && soldInHistory(l)) { dropped.sold++; continue; }
+    kept.push({ ...l, offMarket: true });
+  }
+  return { kept, dropped };
+}

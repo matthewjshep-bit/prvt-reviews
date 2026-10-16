@@ -201,6 +201,17 @@ test("Today's calls are the call list's best few, by score, and never one handed
   assert.deepEqual(rows.map((r) => r.contactId), ["b", "ring", "d"], "worked best first");
 });
 
+// Matt's 15 (2026-10-15): the week's check-ins drafted for him are his work.
+test("Matt's 15 check-ins are on Today for him to send; the machine's own check-ins stay off it", () => {
+  const drafts = [
+    { id: "mine", intent: "agent_pulse", outbound: { kind: "agent_pulse", forMatt: true } },
+    { id: "machine", intent: "agent_pulse", outbound: { kind: "agent_pulse" } },
+  ];
+  const kept = urgentReasons([draftRow("mine", { contactId: "m1", severity: "soon" }), draftRow("machine", { contactId: "m2", severity: "soon" })], { drafts });
+  assert.deepEqual(kept.map((r) => r.draftId), ["mine"]);
+  assert.equal(kept[0].section, "decide");
+});
+
 test("partner terms lead the person's row on Today, with the held reply folded under it", () => {
   const drafts = [{ id: "reply", intent: "question", partnerTerms: { kind: "list_back" } }];
   const partner = { id: "call_partner_terms:c9", kind: "call_partner_terms", section: "call", severity: "now", contactId: "c9", contactName: "Pat Agent", draftId: "reply", ops: [] };

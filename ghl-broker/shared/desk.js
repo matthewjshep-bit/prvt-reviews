@@ -193,7 +193,8 @@ export function urgentReasons(reasons = [], { drafts = [], heldByOffer = new Map
     if (a.kind === "draft_waiting") {
       const d = draftsById.get(a.draftId);
       // A text the machine started (a check-in, a first text, a float): nobody is waiting on it.
-      if (NOT_URGENT_OUTBOUND.has(d?.outbound?.kind) && !isCounterDraft(d)) continue;
+      // Matt's 15 are drafted for him to send (2026-10-15), so they stay.
+      if (NOT_URGENT_OUTBOUND.has(d?.outbound?.kind) && !isCounterDraft(d) && !d?.outbound?.forMatt) continue;
     }
     out.push({ ...a, section: URGENT_CALLS.has(a.kind) ? "call" : "decide" });
   }
