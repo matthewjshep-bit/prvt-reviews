@@ -7383,3 +7383,65 @@ test("a nudge the machine would start inside 48 hours of their text about a live
   assert.match(r.skipped || "", /texted 5h ago .* stays out of a live thread/);
   assert.equal(drafted, false);
 });
+
+/* ---------- the call ask on their first answer (2026-10-15) ---------- */
+
+// The funnel review: all 8 contracts from outreach agents came after a phone
+// call, and agents who talked brought houses 54% of the time against 8%. An
+// agent's first answer to our first text closes with one question: other
+// fixers, and a quick call this week (no times — no calendar).
+import { CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
+const callOn = (saved) => ({ ...saved, conversationAi: { ...saved.conversationAi, parties: { ...saved.conversationAi.parties,
+  agent: { ...saved.conversationAi.parties.agent, callAsk: { enabled: true } } } } });
+const questions = (t) => (String(t).match(/\?/g) || []).length;
+
+test("a turnkey first answer to our first text closes with one ask: other fixers and a quick call, no times", async () => {
+  const { d, uw } = await replyTo("This one's turnkey, the sellers redid it before listing.", { saved: callOn(QUALIFY_SAVED), intent: "deal_available", lines: [],
+    reply: "Makes sense, that one's not for us then. Anything else sitting that needs work?" });
+  assert.equal(uw.length, 0);
+  assert.match(d.reply, CALL_ASK_RX);
+  assert.match(d.reply, FIXERS_ASK_RX);
+  assert.equal(questions(d.reply), 1, d.reply);
+  assert.doesNotMatch(d.reply, /\b(?:monday|tuesday|wednesday|thursday|friday|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i, "no times offered");
+  // Off, the reply is the model's as it was.
+  const off = await replyTo("This one's turnkey, the sellers redid it before listing.", { intent: "deal_available", lines: [],
+    reply: "Makes sense, that one's not for us then. Anything else sitting that needs work?" });
+  assert.doesNotMatch(off.d.reply, CALL_ASK_RX);
+});
+
+test("the qualify question on a first answer carries the call ask, and still reads as our question", async () => {
+  const { d, uw } = await replyTo("Cosmetic fixer", { saved: callOn(QUALIFY_SAVED), lines: [] });
+  assert.equal(uw.length, 0);
+  assert.equal(d.qualify.stage, "ask");
+  assert.match(d.reply, QUALIFY_ASK_RX);
+  assert.match(d.reply, CALL_ASK_RX);
+  assert.equal(d.autoSendable, true, JSON.stringify(d.flags));
+});
+
+test("no call ask after we've already answered them, once we've asked, or when they bring us a house of their own", async () => {
+  // We answered their first reply already: this is the second.
+  const second = await replyTo("Thanks, will keep you posted", { saved: callOn(STARTER_SAVED), intent: "small_talk",
+    lines: [["inbound", "it's a nice one"], ["outbound", "Got it, thanks."]], reply: "Sounds good, thanks." });
+  assert.doesNotMatch(second.d.reply, CALL_ASK_RX);
+  // Asked before.
+  _resetJobs();
+  const asked = await iceStore();
+  await asked.appendContactEvents("LOC", "c1", [{ type: "call_asked", at: iso(3600000), source: "conversation" }]);
+  const { job } = await startReply({ client: threadClient([]), locationId: "LOC", saved: callOn(STARTER_SAVED), store: asked, contactId: "c1", message: "it's turnkey",
+    deps: { draft: async () => ({ ...DRAFT, intent: "investor_open", confidence: "high", needsHuman: false, propertyAddress: ICE, reply: "Got it. Anything else sitting?" }) } });
+  await settle();
+  assert.doesNotMatch((await asked.getReplyDraft(job.draftId)).reply, CALL_ASK_RX);
+  // Their own house is the lead (AGENT_BROUGHT): no call ask on top of the address talk.
+  const theirs = await replyTo("Got another one, 77 Birch Ln Everett, needs some work", { saved: callOn(STARTER_SAVED), intent: "new_property", address: "77 Birch Ln, Everett, WA 98201", lines: [],
+    reply: "Love it. What do you think it's worth fixed up, and what does it need?" });
+  assert.doesNotMatch(theirs.d.reply, CALL_ASK_RX);
+});
+
+test("a sent call ask is recorded once, and so is the ask for other fixers", async () => {
+  const store = fakeStore([{ id: "d1", locationId: "LOC", contactId: "c1", status: "draft", channel: "sms", party: "agent", intent: "investor_open",
+    inbound: "it's turnkey", reply: "Makes sense. If you've got other fixers on your radar, I'd love a quick 5-minute call this week, what time works?", createdAt: iso(60000), flags: [] }]);
+  const { client } = ghlStubFor(["agent"]);
+  await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true });
+  const evs = await store.listContactEvents("LOC", "c1");
+  assert.deepEqual(evs.filter((e) => ["call_asked", "fixers_asked"].includes(e.type)).map((e) => e.type).sort(), ["call_asked", "fixers_asked"]);
+});

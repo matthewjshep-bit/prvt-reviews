@@ -58,7 +58,7 @@ import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { holdFor } from "./bot-hold.js";
-import { machineMayStart, LIVE_THREAD_KINDS, PASS_SHAPED_KINDS } from "./shared/thread-health.js";
+import { machineMayStart, LIVE_THREAD_KINDS, PASS_SHAPED_KINDS, IRRITATED_RX } from "./shared/thread-health.js";
 import { closeCounter } from "./shared/counter-hold.js";
 import { agentTurnReason } from "./agent-focus.js";
 import { streetOf } from "./shared/agent-focus.js";
@@ -67,7 +67,7 @@ import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcce
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
-import { qualifyStep, QUALIFY_ASK_RX, ourReplyPasses } from "./shared/flip-read.js";
+import { qualifyStep, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
@@ -1760,6 +1760,41 @@ export async function firstTextHouse(store, locationId, contactId) {
   return icebreakerHouse(evs);
 }
 
+// What the model is told on their first answer (shared/flip-read.js FIXERS_CALL_ASKS).
+const CALL_ASK_LINE =
+  "FIRST ANSWER: this is their first answer to our first text. Close with ONE question that asks for both other fixers and a " +
+  "quick call, in your words or these: \"If you've got other fixers on your radar, I'd love a quick 5-minute call this week, what " +
+  "time works?\" Never name a day or a time (there's no calendar: they pick), and ask nothing else in the same text. Leave it out " +
+  "if they brought up a house of their own (that house is the lead) or don't want to hear from us.";
+// Replies the call ask never rides on: the conversation turned, or a person has it.
+const CALL_ASK_SKIP_INTENTS = new Set(["counter", "acceptance", "realm_yes", "rejection", "proof_of_funds", "opt_out", "wants_call", "scheduling", "wants_walkthrough", "media"]);
+
+/**
+ * callAskFor({ events, transcript, message, ice }) → { first } | null
+ *
+ * Whether this reply may carry the call ask (shared/flip-read.js
+ * FIXERS_CALL_ASKS, 2026-10-15): we texted them first (the app's first text
+ * or the GHL workflow's), we've never asked them for a call (call_asked),
+ * and they don't sound annoyed. `first`: this is their first answer — no
+ * text or call of ours since the first text. Pure; the caller reads the
+ * timeline.
+ */
+export function callAskFor({ events = [], transcript = "", message = "", ice = null } = {}) {
+  if ((events || []).some((e) => e?.type === "call_asked")) return null;
+  const opener = (events || []).filter((e) => e?.type === "outreach_sent" || (e?.type === "outreach_enrolled" && e.data?.kind !== "followup"))
+    .map((e) => Date.parse(e.at || "") || 0).sort((a, b) => b - a)[0];
+  if (!opener) return null;
+  const words = theirLatestWords(transcript, message);
+  if (IRRITATED_RX.test(words) || soundsCrossedUp(words)) return null;
+  // Our first text, or a check-in about a fresh listing of theirs since, is the icebreaker either way.
+  const since = Math.max(opener, ice?.at || 0);
+  const ours = String(transcript || "").split("\n").some((line) => {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\]\s+US\b/.exec(line);
+    return m && Date.parse(`${m[1]}T${m[2]}:00Z`) > since + 60000;
+  });
+  return { first: !ours };
+}
+
 /**
  * qualifyIcebreaker({ ... }) → null | { stage, address, why, reply }
  *
@@ -1768,7 +1803,7 @@ export async function firstTextHouse(store, locationId, contactId) {
  * switch is off. Stage "qualified" lets everything run as before; "ask",
  * "pass" and "closed" carry the reply and hold the underwrite.
  */
-export async function qualifyIcebreaker({ store, locationId, contactId, draft, message, transcript, now = Date.now(), agentRehab = 0, ice: given }) {
+export async function qualifyIcebreaker({ store, locationId, contactId, draft, message, transcript, now = Date.now(), agentRehab = 0, ice: given, callAsk = false }) {
   const ice = given !== undefined ? given : await firstTextHouse(store, locationId, contactId);
   if (!ice) return null;
   // They named another house of theirs (2026-10-13: a street name and a
@@ -1784,7 +1819,7 @@ export async function qualifyIcebreaker({ store, locationId, contactId, draft, m
   const ours = (stage) => sent.some((d) => d.qualify?.stage === stage && sameStreet(d.qualify.address || "", ice.address));
   const asked = ours("ask") || String(transcript || "").split("\n").some((l) => /^\[[^\]]*\]\s+US\b/.test(l) && QUALIFY_ASK_RX.test(l));
   const passed = ours("pass");
-  const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: openerVariant(contactId, 3) });
+  const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: openerVariant(contactId, 3), callAsk });
   return { stage: step.move === "underwrite" ? "qualified" : step.move, address: ice.address, why: step.read.why, reply: step.reply };
 }
 
@@ -3619,7 +3654,17 @@ async function runReply(job, ctx) {
   const booking = await prepareBooking({ client, store, locationId, contactId: job.contactId, party, message: job.message, config, now, deps }).catch(() => null);
   if (booking?.error) warnings.push(`calendar: ${booking.error}`);
   const bookingText = booking ? bookingContextText(booking) : "";
-  const extraText = [bookingText, partnerTermsLine(terms)].filter(Boolean).join("\n\n");
+  // The house our first text opened with (read before the draft since
+  // 2026-10-15: the call ask below needs it too).
+  const iceHouse = party === "agent" ? await firstTextHouse(store, locationId, job.contactId) : null;
+  // The call ask (2026-10-15): their first answer to our first text closes
+  // with one question — other fixers, and a quick call this week. Texts
+  // only, once, never to someone annoyed; parties.agent.callAsk, off.
+  const callAsk = party === "agent" && !isCall && config.parties?.agent?.callAsk?.enabled
+    ? callAskFor({ events: (await store.listContactEvents?.(locationId, job.contactId, { types: ["outreach_sent", "outreach_enrolled", "call_asked"], limit: 50 }).catch(() => [])) || [],
+      transcript: a.transcript, message: job.originalMessage || job.message, ice: iceHouse })
+    : null;
+  const extraText = [bookingText, partnerTermsLine(terms), callAsk?.first ? CALL_ASK_LINE : ""].filter(Boolean).join("\n\n");
   const draftContext = extraText ? { ...context, text: [context.text, extraText].filter(Boolean).join("\n\n") } : context;
 
   /* --- 2. the draft --- */
@@ -3855,7 +3900,6 @@ async function runReply(job, ctx) {
   // below leaves the message alone.
   // Only on a text that reads as a lead: "the one on Pine St sold" is not
   // a house to ask about.
-  const iceHouse = party === "agent" ? await firstTextHouse(store, locationId, job.contactId) : null;
   // On a call (2026-10-14: "I'll have one up in Mount Vernon in a few
   // weeks" was said on the phone and never kept) only their side counts
   // when the transcript says whose words are whose; a call covers many
@@ -3879,7 +3923,7 @@ async function runReply(job, ctx) {
       && (["deal_available", "new_property", "wants_walkthrough"].includes(draft.intent) || isShowingOffer(job.message))
       && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)) {
     const take = draft.agentTake ?? normalizeAgentTake(draft) ?? agentTakeFromText(job.message);
-    qualify = await qualifyIcebreaker({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: take?.rehab || 0, ice: iceHouse })
+    qualify = await qualifyIcebreaker({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: take?.rehab || 0, ice: iceHouse, callAsk: Boolean(callAsk) })
       .catch((e) => { warnings.push(`qualify: ${e.message}`); return null; });
     if (qualify && qualify.stage !== "qualified") {
       draft = {
@@ -3982,6 +4026,16 @@ async function runReply(job, ctx) {
     await createContactNote(client, job.contactId, {
       body: `Needs you — the bot acknowledged it, the substance is yours: ${String(draft.summary || job.message || "").slice(0, 400)}`,
     }).catch(() => {});
+  }
+
+  // The call ask's backstop (2026-10-15): their first answer, and the model
+  // didn't close with it. Not when they brought us a house of their own (that
+  // house is the lead), not on a canned qualify or number-first text, not on
+  // a reply that turned the conversation (a counter, a yes, a no-contact).
+  const theirHouse = Boolean(namedHouses.length) || (Boolean(draft.propertyAddress) && Boolean(iceHouse?.address) && !sameStreet(draft.propertyAddress, iceHouse.address));
+  if (callAsk?.first && !qualifyHeld && !numberFirst && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
+      && String(draft.reply || "").trim() && !CALL_ASK_RX.test(draft.reply)) {
+    draft = { ...draft, reply: withCallAsk(draft.reply, openerVariant(job.contactId, 3)), callAskAdded: true };
   }
 
   // The model read an opt-out the keywords didn't catch ("lose my number",
@@ -5902,6 +5956,17 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       store, locationId, contactId: d.contactId, party: "agent", type: "offmarket_asked", at: ts, source: "conversation", ref: d.id,
       dedupeKey: `offmarket_asked:${d.contactId}:${ts.slice(0, 10)}`, data: { draftId: d.id, auto: Boolean(auto) },
     }).catch(() => {});
+  }
+  // Our ask for a call, and for their other fixers, actually went (the call
+  // ask, 2026-10-15): asked once, and the Desk can see who was asked.
+  if ((d.party || "agent") === "agent") {
+    for (const [type, rx] of [["call_asked", CALL_ASK_RX], ["fixers_asked", FIXERS_ASK_RX]]) {
+      if (!rx.test(body)) continue;
+      await recordEvent({
+        store, locationId, contactId: d.contactId, party: "agent", type, at: ts, source: "conversation", ref: d.id,
+        dedupeKey: `${type}:${d.contactId}:${ts.slice(0, 10)}`, data: { draftId: d.id, auto: Boolean(auto) },
+      }).catch(() => {});
+    }
   }
   // The agent's check-in actually went: the cadence and the "unanswered"
   // counts (shared/agent-pulse.js) read this, never the claim.

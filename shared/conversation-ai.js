@@ -655,6 +655,11 @@ const PLAYBOOK = () => ({
   // underwrites at once; a vague answer to the question is a polite pass and
   // an ask for what else they have. See shared/flip-read.js.
   qualifyFirst: { enabled: false },
+  // Agent only (2026-10-15). An agent's first answer to our first text ends
+  // with one question: other fixers, and a quick 5-minute call this week —
+  // what time works (no times offered; no calendar is connected). See
+  // shared/flip-read.js FIXERS_CALL_ASKS. Off.
+  callAsk: { enabled: false },
   // The one door through NEVER_AUTO. When the agent counters at or under what
   // our own calculator would have produced at its most generous, the bot may
   // say yes in words — and then hand off. It never mints a deal and never
@@ -1029,6 +1034,9 @@ function normalizePlaybook(p, party, seed = {}) {
     },
     qualifyFirst: {
       enabled: party === "agent" && bool(src.qualifyFirst?.enabled, false),
+    },
+    callAsk: {
+      enabled: party === "agent" && bool(src.callAsk?.enabled, false),
     },
     requote: {
       enabled: bool(src.requote?.enabled, false),

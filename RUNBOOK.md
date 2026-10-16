@@ -3237,6 +3237,37 @@ Their words are every line they've sent since the first text. A showing offer
 first". A house the agent brings up themselves underwrites right away, and so
 does any house we already priced. The draft row carries `qualify: {stage, address, why}`.
 
+### Their first answer asks for a call (2026-10-15)
+
+**Why.** The funnel review (485 threads): all 8 contracts from outreach
+agents came after a phone call; agents who talked brought us houses 54% of
+the time against 8%; only 15% of repliers ever talked.
+
+**What it does** (`parties.agent.callAsk { enabled }`, **off** by default). An
+agent's first answer to our first text (no text or call of ours since the
+`outreach_sent`/`outreach_enrolled`), turnkey answers included, closes with
+ONE question that asks for both other fixers and a quick call: "If you've got
+other fixers on your radar, I'd love a quick 5-minute call this week, what
+time works?" (`FIXERS_CALL_ASKS`, shared/flip-read.js). No day or time is
+offered: no calendar is connected, so they pick. The model is told to (a
+FIRST ANSWER line in the context); `withCallAsk` is the backstop when it
+didn't, taking over a closing "anything else that needs work?" so the text
+still asks one thing. The canned qualify question and pass have call
+variants (`QUALIFY_ASKS_CALL`, `QUALIFY_PASSES_CALL`). Never on a call, never
+when they brought a house of their own (that house is the lead), never on a
+counter, yes, no, opt-out, or a reply asking for a call or a time, never to
+someone who sounds annoyed, and only once: the send records `call_asked`
+(and `fixers_asked` when the text asks for other houses).
+
+**A turnkey reply is a small call (`call_turnkey_week`).** The call list
+dropped turnkey first replies on 2026-10-08. They're back for 7 days at score
+50 (below a lead's 70): "what else are you working on?". Today's calls shows
+them only when the day has room.
+
+**Check:** with the switch on, a first answer's draft ends with the call ask;
+the contact's timeline has `call_asked` once it's sent; when they answer with
+a time it's a `scheduling` heads-up for you.
+
 ### Every house an agent names is kept, and a missing address is asked for (2026-10-13)
 
 Rules: `shared/mentioned-houses.js`. Wiring: `runReply` in `ghl-broker/reply-agent.js`.

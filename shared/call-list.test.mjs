@@ -121,11 +121,27 @@ test("a new agent's first reply about a house is a relationship call; a reply af
 const iceEvents = [{ type: "outreach_sent", contactId: "n1", at: ago(3), address: "210 4th Ave, Kent, WA 98032" }];
 const firstReply = (over = {}) => ({ id: "f", contactId: "n1", contactName: "Nadia P", party: "agent", intent: "deal_available", propertyAddress: "210 4th Ave, Kent, WA", createdAt: ago(0.5), ...over });
 
-test("an agent who says the house is turnkey isn't put on the call list", () => {
+test("an agent who says the house is turnkey isn't a first-reply lead", () => {
   for (const inbound of ["It's turnkey, not a fix", "Move-in ready! New roof and updated kitchen", "Not a fixer, it's in great shape"]) {
     const r = callList({ events: iceEvents, drafts: [firstReply({ inbound })], now: NOW });
     assert.equal(r.filter((x) => x.kind === "call_first_reply").length, 0, inbound);
   }
+});
+
+// 2026-10-15: the agents behind deals with committed buyers said "it's
+// turnkey" first and brought their next house once we talked. A small call
+// for a week: what else are they working on?
+test("a turnkey first reply is a small call for a week: what else are they working on", () => {
+  const r = callList({ events: iceEvents, drafts: [firstReply({ inbound: "It's turnkey, not a fix" })], now: NOW });
+  assert.equal(r[0]?.kind, "call_turnkey_week");
+  assert.equal(r[0].section, "call");
+  assert.match(r[0].call.opener, /What else are you working on\?/);
+  assert.ok(r[0].score < 70, "below a lead's first reply");
+  // Six days on it's still there; past the week it's gone.
+  assert.equal(callList({ events: iceEvents, drafts: [firstReply({ inbound: "It's turnkey, not a fix", createdAt: ago(6) })], now: NOW })[0]?.kind, "call_turnkey_week");
+  assert.equal(callList({ events: iceEvents, drafts: [firstReply({ inbound: "It's turnkey, not a fix", createdAt: ago(8) })], now: NOW }).length, 0);
+  // A lead's first reply still only lasts firstReplyDays.
+  assert.equal(callList({ events: iceEvents, drafts: [firstReply({ inbound: "Yes it's a project, foundation issues", createdAt: ago(5) })], now: NOW }).length, 0);
 });
 
 test("an agent who says it's a project is", () => {

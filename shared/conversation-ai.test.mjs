@@ -666,3 +666,12 @@ test("a close counter's percent defaults to 10, stays in 0–30, and survives a 
   const saved = normalizeConversationAi({ parties: { agent: { counterHold: { enabled: true, callWithinPct: 7 } } } });
   assert.equal(normalizeConversationAi(saved).parties.agent.counterHold.callWithinPct, 7);
 });
+
+// 2026-10-15: the call ask on an agent's first answer ships off, agent only.
+test("the call ask is off until switched on, agent only, and survives a save", () => {
+  assert.equal(normalizeConversationAi({}).parties.agent.callAsk.enabled, false);
+  const on = normalizeConversationAi({ parties: { agent: { callAsk: { enabled: true } }, investor: { callAsk: { enabled: true } } } });
+  assert.equal(on.parties.agent.callAsk.enabled, true);
+  assert.equal(on.parties.investor.callAsk.enabled, false);
+  assert.equal(normalizeConversationAi(on).parties.agent.callAsk.enabled, true);
+});

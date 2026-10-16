@@ -24,7 +24,7 @@ import { agentSegment } from "./agent-pulse.js";
 import { IRRITATED_RX } from "./thread-health.js";
 import { handsWriteUpBack } from "./conversation-ai.js";
 import { holdState, callsInstead, closeCounter } from "./counter-hold.js";
-import { flipRead } from "./flip-read.js";
+import { flipRead, saysTurnkey } from "./flip-read.js";
 import { offMarketCue } from "./off-market.js";
 import { sameStreet } from "./us-address.js";
 import { buyerCeiling } from "./post-mortem.js";
@@ -93,6 +93,7 @@ export const CALL_KINDS = [
   { key: "call_counter",     label: "Counter above our number" },
   { key: "call_gap",         label: "Their number is close to ours" },
   { key: "call_first_reply", label: "New agent, first reply" },
+  { key: "call_turnkey_week", label: "Turnkey reply: what else are they working on?" },
   { key: "call_quiet",       label: "Gone quiet: a call beats another text" },
   { key: "call_phone_only",  label: "Phone only" },
   { key: "call_partner",     label: "Relationship check-in" },
@@ -104,7 +105,9 @@ export const CALL_KINDS = [
   { key: "email_check",      label: "An email they texted, to check" },
 ];
 // They called you: ring back first — they reached out.
-const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_investor: 45, call_partner: 30, call_partner_terms: 80 };
+const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_turnkey_week: 50, call_investor: 45, call_partner: 30, call_partner_terms: 80 };
+// A turnkey first reply stays a (small) call this long.
+const TURNKEY_WEEK_DAYS = 7;
 // Points off for each call that didn't connect since the row's reason, and
 // for each day their last word has aged (hot, counters, quiet threads).
 const PER_TRY = 15;
@@ -482,7 +485,7 @@ export function callList({
     if (!outreached.has(c) || unsubscribed.has(c) || irritated(c)) continue;
     const ins = list.filter((d) => String(d.inbound || "").trim() && d.party !== "investor").sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     const firstIn = ins[0];
-    if (!firstIn || now - (ms(firstIn.createdAt) ?? 0) > cfg.firstReplyDays * DAY_MS) continue;
+    if (!firstIn || now - (ms(firstIn.createdAt) ?? 0) > Math.max(cfg.firstReplyDays, TURNKEY_WEEK_DAYS) * DAY_MS) continue;
     // Their first word ever: nothing earlier on the timeline either.
     const earlier = (eventsBy.get(c) || []).some((e) => (e.type === "text_summary" || callEventConnected(e)) && (ms(e.at) ?? 0) < (ms(firstIn.createdAt) ?? 0) - 60000);
     if (earlier) continue;
@@ -493,11 +496,24 @@ export function callList({
       .filter((e) => (e.type === "outreach_sent" || (e.type === "outreach_enrolled" && e.data?.kind !== "followup")) && e.address)
       .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0]?.address || "";
     const lead = firstReplyLead({ ins, iceAddress });
-    if (!lead) continue;
     const priorOffer = (offersBy.get(c) || []).some((o) => (ms(o.createdAt) ?? 0) < (ms(firstIn.createdAt) ?? 0));
     if (priorOffer) continue;
     const name = named.contactName || nameOf(c, offersBy, draftsBy);
     const house = String(named.propertyAddress || "").trim();
+    if (!lead) {
+      // "It's turnkey" (2026-10-15): not a lead (4e50f9a), but the agents
+      // behind deals with committed buyers said exactly that and brought
+      // their next house once we talked. A small call for a week: what
+      // else are they working on?
+      if (!saysTurnkey(ins.map((d) => d.inbound).join("\n"))) continue;
+      add("call_turnkey_week", { contactId: c, contactName: name, address: house, since: firstIn.createdAt,
+        why: `said ${house ? street(house) : "our listing"} is turnkey — ask what else they're working on`,
+        goal: "Not a deal on that one. Put a voice to the name and ask what else they're working on: anything rough, on or off-market, and how they like to work with investors.",
+        opener: `Hi ${first(name)}, it's Matt — thanks for the heads-up on ${house ? street(house) : "the listing"}. What else are you working on?`,
+        agePenaltyFrom: ms(firstIn.createdAt) });
+      continue;
+    }
+    if (now - (ms(firstIn.createdAt) ?? 0) > cfg.firstReplyDays * DAY_MS) continue;
     add("call_first_reply", { contactId: c, contactName: name, address: house, since: firstIn.createdAt,
       why: house ? `first reply, about ${street(house)} — ${lead}` : `first reply — ${lead}`,
       goal: "Relationship intro: who they are, what they list, and how they like to work with investors.",
