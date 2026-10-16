@@ -3231,8 +3231,10 @@ test("an invitation to make an appointment on a project we haven't priced gets '
 
 // Matt, 2026-10-05: an agent who says the house needs nothing has told us
 // it isn't a fit; the underwrite only spends credits. Velia's remodeled
-// triplex (9/14) used to run anyway — now it gets the pass.
-test("a showing offer on a remodeled house we haven't priced gets the pass, not an underwrite", async () => {
+// triplex (9/14) used to run anyway — now it gets the pass. 2026-10-15
+// (agents work for us): an agent opening the door is Matt's to answer, so the
+// pass is drafted and waits for him, on Today; it never sends itself.
+test("a showing offer on a remodeled house we haven't priced drafts the pass for you, with no underwrite, and doesn't send it", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
@@ -3250,8 +3252,33 @@ test("a showing offer on a remodeled house we haven't priced gets the pass, not 
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.intent, "investor_open", "remodeled with tenants is still Tier 2");
-  assert.match(d.reply, /need real work/);
+  assert.match(d.reply, /need real work/, "the pass is the draft");
+  assert.equal(d.showingOffered?.address, "4207 S Bateman St, Seattle, WA 98118");
+  assert.ok(d.flags.some((f) => /they offered a showing on 4207 S Bateman St — yours to book, call or pass/.test(f)), d.flags.join(" · "));
+  assert.notEqual(d.status, "scheduled", "it waits for you");
   assert.equal(uw.length, 0, `no underwrite: ${JSON.stringify(d.actions.map((a) => [a.type, a.status, a.detail]))}`);
+  const ev = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "showing_offered");
+  assert.equal(ev?.address, "4207 S Bateman St, Seattle, WA 98118", "on their timeline");
+});
+
+test("a showing offer on a house they already told us is turnkey still gets the pass line", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.events.set("LOC|c1", [{ type: "property_details", at: new Date(Date.now() - 86400000).toISOString(), address: "4207 S Bateman St, Seattle, WA 98118", data: { workNeeded: "none, fully remodeled" } }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: VELIA,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "scheduling", confidence: "high", needsHuman: true, propertyAddress: "4207 S Bateman St, Seattle, WA 98118",
+        reply: "Thanks, let me check my calendar and get back to you." }),
+      startUnderwrite: async () => ({ job: { id: "uw-9" } }),
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.match(d.reply, /need real work/);
+  assert.equal(d.showingOffered, undefined, "not held: they told us before");
 });
 
 test("a showing offer on a house we already sent an offer on is left alone", async () => {
@@ -3271,6 +3298,10 @@ test("a showing offer on a house we already sent an offer on is left alone", asy
   });
   await settle();
   assert.equal(uw.length, 0);
+  // 2026-10-15: the showing on a house we're working is Matt's to book.
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "scheduled", "nothing sends itself");
+  assert.equal(d.autoSend.decided, false);
 });
 
 test("an agent already on Tier 1 who brings a different house leaves Tier 1 first, so it runs again", async () => {
@@ -4567,6 +4598,9 @@ test("a showing on a house the agent says isn't a flip gets no underwrite, and t
   assert.doesNotMatch(d.reply, /run the numbers/);
   assert.match(d.reply, /need real work/);
   assert.equal((d.actions || []).filter((a) => a.type === "start_underwrite").length, 0);
+  // 2026-10-15: they opened the door, so the pass waits for Matt.
+  assert.ok(d.flags.some((f) => /they offered a showing on 13814 214th St E — yours to book, call or pass/.test(f)), d.flags.join(" · "));
+  assert.equal(d.autoSend.decided, false);
 });
 
 // Tier 1 is agents with a live house that needs work (Matt, 2026-10-07). The
@@ -7371,4 +7405,14 @@ test("the write-up gate reads the house's number from the book", () => {
   assert.equal(writeUpOkFor(numbers, ""), true, "no house named, and one is approved");
   assert.equal(writeUpOkFor([numbers[0]], ""), false, "no house named, and none approved");
   assert.equal(writeUpOkFor([], "12 Elm St"), true);
+});
+
+/* ---------- 2026-10-15: agents work for us ---------- */
+
+test("the agent rules say we'd love them to represent us on the purchase, never beside a number", async () => {
+  const { AGENT_GOAL_RULE, REPRESENT_US_LINE } = await import("./shared/conversation-ai.js");
+  assert.match(AGENT_GOAL_RULE, /AGENTS WORK FOR US/);
+  assert.ok(AGENT_GOAL_RULE.includes(REPRESENT_US_LINE));
+  assert.match(AGENT_GOAL_RULE, /never in the same text as a number of ours/);
+  assert.equal(asksWriteUp(`Thanks! If anything rough comes up, ${REPRESENT_US_LINE}.`), false, "the line itself never trips the write-up gate");
 });

@@ -952,6 +952,8 @@ export function evaluateReplyGates({
     // themselves. Matt answers terms; no intent, guard or audit sends it.
     const terms = draft.partnerTerms?.kind ? PARTNER_TERMS_LABEL[draft.partnerTerms.kind] : "";
     if (terms) flags.push(`they ${terms} — partner terms are yours to answer`);
+    // They offered a showing on a live house (2026-10-15): book it, call, or pass is Matt's.
+    if (draft.showingOffered) flags.push(`they offered a showing on ${String(draft.showingOffered.address || "the house").split(",")[0]} — yours to book, call or pass`);
     // "and/or assigns" is how the buyer is written on the contract, not a
     // word about how we exit.
     const slip = draft.reply.replace(/\band\/or assigns\b/gi, "").match(/\b(assign(?:ment|ing|ed|s)?|wholesal(?:e|er|ing)|end buyer|our fee|my fee|spread)\b/i);
@@ -3957,6 +3959,15 @@ async function runReply(job, ctx) {
   // reply that says so. A house we already priced is left alone: the offer is
   // the conversation there.
   let numberFirst = null;
+  // An agent opening the door on a live house (2026-10-15, agents work for
+  // us): booking it, calling, or passing is Matt's. The reply waits for him
+  // (the "more finished than what we buy" line is drafted, never sent by
+  // itself). A house they told us was turnkey before this, or one that's
+  // closed, gets the line as it always did.
+  const holdForShowing = (street) => {
+    draft = { ...draft, needsHuman: true, showingOffered: { address: draft.propertyAddress },
+      humanReason: `they offered a showing on ${street || "the house"} — yours: book it, call them, or pass` };
+  };
   if (party === "agent" && !qualifyHeld && !SILENT_INTENTS.has(draft.intent)
       && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)
       // A showing, not a call: "give me a call tomorrow" stays with the calendar.
@@ -3964,8 +3975,15 @@ async function runReply(job, ctx) {
       && underwritableAddress(draft.propertyAddress)) {
     const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
     const known = knownOfferFor(rows, draft.propertyAddress, now);
-    if (!known || known.status === "draft") {
-      const street = String(draft.propertyAddress || "").split(",")[0].trim();
+    const street = String(draft.propertyAddress || "").split(",")[0].trim();
+    // Ruled turnkey before this message (their property details on record).
+    const ruledBefore = notOurKind
+      ? agentRuledOut(await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => []) || [], draft.propertyAddress)
+      : null;
+    if (known && known.status !== "draft" && OPEN_OFFER_STATUSES.has(offerStatus(known))) {
+      // A house we priced and they're still working: the showing is the next step, and it's Matt's.
+      holdForShowing(street);
+    } else if (!known || known.status === "draft") {
       if (notOurKind) {
         // They've told us it needs nothing: not a number to chase (Matt,
         // 2026-10-05: the underwrite spends credits on a house we won't buy,
@@ -3978,6 +3996,7 @@ async function runReply(job, ctx) {
           notOurKind: true,
           reply: "Appreciate it, but that one sounds more finished than what we buy. We go after houses that need real work, so if something rough crosses your desk, I'd love a first look.",
         };
+        if (!ruledBefore) holdForShowing(street);
       } else {
         numberFirst = { replaceOfferId: known?.id || null };
         draft = {
@@ -4672,6 +4691,8 @@ async function runReply(job, ctx) {
     ...(draft.qualify ? { qualify: draft.qualify } : {}),
     // What they offered to work together on (shared/partner-terms.js).
     ...(draft.partnerTerms ? { partnerTerms: draft.partnerTerms } : {}),
+    // A showing they offered on a live house, held for Matt (2026-10-15).
+    ...(draft.showingOffered ? { showingOffered: draft.showingOffered } : {}),
     // They told us it isn't our kind of house: a pass on it, which the
     // contact card reads (shared/contact-card.js).
     ...(notOurKind ? { notOurKind: true } : {}),
@@ -4995,6 +5016,17 @@ async function runReply(job, ctx) {
           `They said: ${String(job.message || "").replace(/\s+/g, " ").slice(0, 200)}`,
       }).catch((e) => warnings.push(`note: ${e.message}`));
     }
+  }
+
+  // A showing they offered on a live house is on their timeline, one a day
+  // per house: the hold's reason, for Today and the tour promise to read.
+  if (party === "agent" && draft.showingOffered?.address) {
+    await recordEvent({
+      store, locationId, contactId: job.contactId, party: "agent", type: "showing_offered", at: new Date(now).toISOString(),
+      address: draft.showingOffered.address, source: "conversation", ref: record.id,
+      dedupeKey: `showing_offered:${job.contactId}:${propertyKey(draft.showingOffered.address)}:${new Date(now).toISOString().slice(0, 10)}`,
+      data: { draftId: record.id },
+    }).catch((e) => warnings.push(`showing: ${String(e?.message || e).slice(0, 120)}`));
   }
 
   if (party === "agent" && propertyDetails && draft.propertyAddress) {

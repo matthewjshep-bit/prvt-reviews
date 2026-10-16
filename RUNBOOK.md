@@ -4476,6 +4476,40 @@ Replay over the 5,503 texts agents sent us (saved threads, 2026-10-14): 56 hits 
 partner terms: a wholesaler pointing us to their dispo person about one house, and "I'm a
 wholesaler myself so I understand".
 
+### Agents work for us (2026-10-15)
+
+From the funnel review: agents asked for written offers, NWMLS forms and to
+represent us, and the agents we let represent us became off-market sources.
+No switch: one rule, a wider detector, and a hold (these only tighten).
+
+- **The rule.** `AGENT_REPRESENT_RULE` (in `AGENT_GOAL_RULE`,
+  `shared/conversation-ai.js`) tells the bot that when it fits — its reply to
+  their first answer, a check-in, a house they bring us — it may say
+  `REPRESENT_US_LINE`: "we'd love to have you represent us on the purchase, so
+  you'd earn the buyer side too". Once in a thread at most, never as a
+  condition, never beside a number of ours (the write-up gate reads "represent
+  us" beside a price as a write-up ask).
+- **Their offer to be our agent is partner terms.** `buyer_agent` in
+  `shared/partner-terms.js` now also reads "I'd love to be your agent", "happy
+  to be your agent", "work as your buyer's agent", "a buyer's agreement", "a
+  buyer rep agreement" (never "who's your agent?" or "I can't be your agent").
+  As before: the reply is held for Matt and a `call_partner_terms` row goes on
+  Today.
+- **A showing on a live house is Matt's.** When an agent offers a showing or a
+  tour (`isShowingOffer`, or the model's walkthrough read) on a house we're
+  working — an open offer on it, or one we haven't priced that their words say
+  is finished — the reply is held: `draft.showingOffered`, and
+  `evaluateReplyGates` flags "they offered a showing on … — yours to book,
+  call or pass" (a content gate: the nightly audit never releases it). A
+  `showing_offered` event goes on their timeline (one a day per house). On an
+  unpriced finished house the drafted reply is still the "more finished than
+  what we buy" pass, so Send is one press; it just never goes by itself. A
+  house they told us was turnkey before this message (`agentRuledOut`) gets
+  the pass sent as it always did. An unpriced house with work still gets
+  "numbers first" and the underwrite.
+- **Check it.** Today shows the held draft under Drafts waiting on you with
+  the showing reason; the contact's timeline shows "they offered a showing".
+
 ### Every agent on a clock: the agent check-in (2026-09-29)
 
 Matt: "reach out to these agents proactively and frequently, every 3 weeks or

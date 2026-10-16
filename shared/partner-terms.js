@@ -49,9 +49,16 @@ const PATTERNS = {
     // "with me representing you", "I will be representing you?" — never
     // "an agent representing you should…" or "anyone representing you".
     "(?:me|us|our\\s+team|i(?:'ll|\\s+will|\\s+would|\\s+can|\\s+could)?\\s+be)\\s+representing\\s+you(?!r)",
-    `(?:be|act\\s+as|serve\\s+as|considered)\\s+your\\s+${AGENT}`,
+    `(?:be|act\\s+as|serve\\s+as|work\\s+as|considered)\\s+your\\s+${AGENT}`,
     "buyer'?s?'?\\s+(?:agency|brokerage|broker|representation)\\s+(?:agreement|form|contract)",
     "buyer\\s+agency(?!\\s+commission)",
+    // 2026-10-15 (agents work for us): "I'd love to be your agent on this
+    // one", "you'd sign a buyer's agreement with me", "a buyer rep agreement
+    // first". Them, in the first person — never "who will be your agent?",
+    // "I can't be your agent" or "your agent should send it".
+    "(?:i|me|we|us)\\b(?:(?!\\b(?:can'?t|cannot|won'?t|not|couldn'?t|unable)\\b)[^.?!\\n]){0,30}?\\b(?:be|act\\s+as|serve\\s+as|work\\s+as)\\s+your\\s+(?:agent|realtor)\\b",
+    "(?:happy|glad|love|would\\s+love)\\s+to\\s+(?:be|act\\s+as|serve\\s+as|work\\s+as)\\s+your\\s+(?:agent|realtor)\\b",
+    "buyer'?s?'?\\s+(?:rep\\s+)?agreement",
   ],
   referral_fee: [
     "finder'?s?\\s+fees?",

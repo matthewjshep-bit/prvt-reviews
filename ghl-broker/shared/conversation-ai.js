@@ -438,6 +438,17 @@ export const AGENT_HONESTY_RULE =
   "something by email, say you'll get it over to them (the app sends it and corrects your wording when it has); if they say it never arrived, don't " +
   "insist that it went — say you'll check and resend.";
 
+// Agents work for us (2026-10-15). In the funnel review the agents we let
+// represent us on the buy became our off-market sources. The words the bot
+// may use, and when: the reply to their first answer, a check-in, a house
+// they bring us. Never in a text with a number of ours (the write-up gate in
+// reply-agent.js reads "represent us" beside a price as a write-up ask).
+export const REPRESENT_US_LINE = "we'd love to have you represent us on the purchase, so you'd earn the buyer side too";
+export const AGENT_REPRESENT_RULE =
+  "AGENTS WORK FOR US: when it fits — your reply to their first answer, a check-in, a house they bring us — say " +
+  `something like "${REPRESENT_US_LINE}". Once in a thread at most, never as a condition of anything, and never in ` +
+  "the same text as a number of ours.";
+
 // Where every listing-agent conversation is going — fixed beside the paper
 // rule for the same reason. Each step has one job; the bot's reply should move
 // the thread one step along, never skip ahead and never circle.
@@ -451,7 +462,7 @@ export const AGENT_GOAL_RULE =
   "'I can take that to them', 'let me present it') is progress: acknowledge it and move straight to the next step, " +
   "don't reopen the price; (5) get the AGENT to write it up — ask them to represent us and put it on NWMLS forms for us to sign. " +
   "Every reply to a listing agent should be doing one of those five things. When the thread is at step 4 or 5, keep it short and keep it moving: " +
-  "the only open question is who writes it and when.";
+  "the only open question is who writes it and when. " + AGENT_REPRESENT_RULE;
 
 // How warm the agent's newest message is toward OUR number, read by the model
 // (dealSignal in the output schema) with a plain-text fallback. Any of these on
