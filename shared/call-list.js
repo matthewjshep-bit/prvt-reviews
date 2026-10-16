@@ -30,6 +30,7 @@ import { sameStreet } from "./us-address.js";
 import { buyerCeiling } from "./post-mortem.js";
 import { ASSIGNMENT_RX } from "./lead-source.js";
 import { PARTNER_TERMS_LABEL } from "./partner-terms.js";
+import { GHL_CALLS_DEFAULTS, normalizeGhlCalls } from "./ghl-calls.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -61,9 +62,12 @@ export const DESK_DEFAULTS = Object.freeze({
   // under "Today's calls". The funnel review: every contract from outreach
   // agents came from a phone call, and only 15% of repliers ever talked.
   dailyCalls: 10,
+  // Today's calls in GHL's Manual Actions (shared/ghl-calls.js): off until
+  // the GHL workflow is built and its link pasted.
+  ghlCalls: GHL_CALLS_DEFAULTS,
 });
 
-/** normalizeDesk(v) → every setting, a whole number in its range. */
+/** normalizeDesk(v) → every setting, a whole number in its range (and the GHL calls block, normalised). */
 export function normalizeDesk(v = {}) {
   const o = v && typeof v === "object" ? v : {};
   const n = (x, d, lo, hi) => { const k = Math.round(Number(x)); return x == null || x === "" || !Number.isFinite(k) ? d : Math.min(hi, Math.max(lo, k)); };
@@ -77,6 +81,7 @@ export function normalizeDesk(v = {}) {
     gapPct: n(o.gapPct, d.gapPct, 0, 30),
     revisitDays: n(o.revisitDays, d.revisitDays, 0, 180),
     dailyCalls: n(o.dailyCalls, d.dailyCalls, 0, 30),
+    ghlCalls: normalizeGhlCalls(o.ghlCalls),
   };
 }
 

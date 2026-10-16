@@ -487,6 +487,34 @@ test("calls are ranked by what's behind the deals: a partner or source, an inves
   assert.ok(ctr[0].call.boosts.some((b) => b.key === "close_counter"));
 });
 
+// 2026-10-15: Today's calls go to GHL's Manual Actions, off until Matt pastes his workflow.
+test("calls to GHL are off by default and keep a pasted workflow link as its id", () => {
+  assert.deepEqual(normalizeDesk({}).ghlCalls, { enabled: false, workflowId: "", hour: 8, minute: 30, until: "17:00", weekdaysOnly: true });
+  const pasted = normalizeDesk({ ghlCalls: { enabled: true, workflowId: "https://app.gohighlevel.com/location/loc123/workflow/7f1c2a9e-0b3d-4e5f-8a6b-1c2d3e4f5a6b" } }).ghlCalls;
+  assert.equal(pasted.enabled, true);
+  assert.equal(pasted.workflowId, "7f1c2a9e-0b3d-4e5f-8a6b-1c2d3e4f5a6b", "the builder link reads down to the id");
+  assert.equal(normalizeDesk({ ghlCalls: { workflowId: "not a link!" } }).ghlCalls.workflowId, "", "anything else is blank");
+  assert.equal(normalizeDesk({ ghlCalls: { enabled: "yes" } }).ghlCalls.enabled, false, "only a real true turns it on");
+  const odd = normalizeDesk({ ghlCalls: { hour: 30, minute: -5, until: "25:99", weekdaysOnly: false } }).ghlCalls;
+  assert.deepEqual([odd.hour, odd.minute, odd.until, odd.weekdaysOnly], [23, 0, "17:00", false]);
+  assert.equal(normalizeDesk({ ghlCalls: { until: "9:15" } }).ghlCalls.until, "09:15");
+});
+
+test("the desk settings survive a whole-settings save, the GHL calls block included", () => {
+  const typed = { dailyCalls: 7, callCap: 15, ghlCalls: { enabled: true, workflowId: "https://app.gohighlevel.com/location/loc123/workflow/7f1c2a9e-0b3d-4e5f-8a6b-1c2d3e4f5a6b", hour: 9 } };
+  // The Settings form normalises desk on save; the broker stores what it gets; the form reads it back and saves again.
+  const once = normalizeDesk(typed);
+  const twice = normalizeDesk(JSON.parse(JSON.stringify(once)));
+  assert.deepEqual(twice, once);
+  assert.equal(twice.dailyCalls, 7);
+  assert.equal(twice.callCap, 15);
+  assert.deepEqual(twice.ghlCalls, { enabled: true, workflowId: "7f1c2a9e-0b3d-4e5f-8a6b-1c2d3e4f5a6b", hour: 9, minute: 30, until: "17:00", weekdaysOnly: true });
+  // An older saved desk with no GHL block keeps its numbers and reads as off.
+  const old = normalizeDesk({ dailyCalls: 4 });
+  assert.equal(old.dailyCalls, 4);
+  assert.equal(old.ghlCalls.enabled, false);
+});
+
 test("the day's number of calls is a setting, 10 by default, 0 to 30", () => {
   assert.equal(normalizeDesk({}).dailyCalls, 10);
   assert.equal(DESK_DEFAULTS.dailyCalls, 10);
