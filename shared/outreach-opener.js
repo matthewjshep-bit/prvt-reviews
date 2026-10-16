@@ -150,6 +150,43 @@ export function countyName(...candidates) {
 }
 
 /**
+ * firstTextHook(doc, { county, base }) → the hook the first text is drafted from
+ *
+ * Out of the agent's outreach row (`doc`): the house (year, size, lot, cut),
+ * the county the text names, and whether the listing looks finished (the
+ * turnkey seats). The import and both retries build it here, so none of
+ * them drops a flag the others carry: the 2026-10-15 funnel review found 79
+ * of 80 agents picked for a turnkey seat asked "is this one a project?",
+ * because the import wrote the hook out field by field and left `turnkey`
+ * behind. `base` is
+ * what was written down before (the import event's or the skip's hook); the
+ * row wins where it knows the house. `county` is the sweep's county, for a
+ * row older than the listing's own.
+ */
+export function firstTextHook(doc = {}, { county = "", base = {} } = {}) {
+  const d = doc && typeof doc === "object" ? doc : {};
+  const h = d.hook && typeof d.hook === "object" ? d.hook : {};
+  const b = base && typeof base === "object" ? base : {};
+  const own = Boolean(h.address);
+  const cut = Boolean(h.priceCut || (Array.isArray(h.components) && h.components.some((c) => c?.key === "cuts" && Number(c.points) > 0)));
+  const turnkey = h.turnkey === true || d.turnkey === true || b.turnkey === true;
+  return {
+    ...b,
+    address: (own ? h.address : b.address) || "",
+    price: (own ? h.price : b.price) || null,
+    dom: (own ? h.dom : b.dom) || null,
+    county: countyName(h.county, b.county, county),
+    city: h.city || b.city || "",
+    brokerage: d.brokerage || b.brokerage || "",
+    yearBuilt: h.yearBuilt || b.yearBuilt || null, beds: h.beds || b.beds || null,
+    sqft: h.sqft || b.sqft || null, lotSize: h.lotSize || b.lotSize || null,
+    priceCut: cut || Boolean(b.priceCut),
+    listingCount: Number(d.listingCount) || Number(b.listingCount) || 0,
+    ...(turnkey ? { turnkey: true } : {}),
+  };
+}
+
+/**
  * openerVariant(contactId, n) → 0..n-1
  *
  * Which example the bot leads with for this agent: the same agent always

@@ -4186,6 +4186,14 @@ house came.
     never more than the share.
   - Their opener is told the listing looks finished and leans on the
     other-fixers line.
+  - **The flag reaches the text (fix, 2026-10-15).** The funnel review found
+    79 of 80 turnkey-seat agents asked "is this one a project?": the import
+    and the lost-text retry wrote the hook out field by field and dropped
+    `turnkey`. One builder, `firstTextHook(doc, { county, base })` in
+    `shared/outreach-opener.js`, now makes the hook for the import, the
+    skipped retry (which re-reads the agent's row, so an old skip gets the
+    flag back) and the lost retry. Check: `POST /api/outreach/opener/preview`
+    on a turnkey row, or an `outreach_open_skipped` event's `data.hook.turnkey`.
 
 ### Converting the houses agents bring (2026-10-09)
 

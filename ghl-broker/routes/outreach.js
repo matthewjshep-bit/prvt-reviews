@@ -30,7 +30,7 @@ import { mapPool } from "../map-pool.js";
 import { scoreListing, medianPricePerSqft, distressSignals, meetsDistressRule, OLD_HOUSE_YEAR, medianIndex } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
-import { countyName } from "../shared/outreach-opener.js";
+import { countyName, firstTextHook } from "../shared/outreach-opener.js";
 import { isRuralLot, RURAL_LOT_ACRES } from "../shared/asset-type.js";
 import { previewProactive, machineRoomToday } from "../reply-agent.js";
 import { fetchZillowAgentContacts } from "../rehab-scan.js";
@@ -1062,7 +1062,12 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       if (skips.length) {
         const last = skips.at(-1);
         if (dryRun) { results.push({ contactId, would: "retry", address: last.data?.hook?.address || "" }); continue; }
-        const r = await openFirstText({ locationId, client, contactId, hook: last.data?.hook || {}, ref: last.ref || null, tries: skips.length });
+        // The agent's row, when the import says which batch: a skip written
+        // before the hook carried every flag (turnkey) gets it back from there.
+        const imported = list.find((e) => e.type === "import" && e.data?.batchId);
+        const row = await rowFor(imported?.data?.batchId, contactId);
+        const hook = row ? firstTextHook(row.doc, { base: last.data?.hook || {} }) : last.data?.hook || {};
+        const r = await openFirstText({ locationId, client, contactId, hook, ref: last.ref || null, tries: skips.length });
         results.push({ contactId, ...r });
         continue;
       }
@@ -1080,11 +1085,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 1 }).catch(() => null);
       if (!Array.isArray(drafts) || drafts.length) continue;
       const row = await rowFor(made.data?.batchId, contactId);
-      const h = row?.doc?.hook || {};
-      const hook = { ...(made.data?.hook || {}), ...(h.address ? { address: h.address, price: h.price || null, dom: h.dom || null } : {}),
-        county: countyName(h.county, made.data?.county, String(made.data?.batchName || "").replace(/^Autopilot · /, "")),
-        city: h.city || "", brokerage: row?.doc?.brokerage || "", yearBuilt: h.yearBuilt || null, beds: h.beds || null, sqft: h.sqft || null,
-        lotSize: h.lotSize || null, priceCut: priceCutOf(h), listingCount: Number(row?.doc?.listingCount) || 0 };
+      const hook = firstTextHook(row?.doc, { base: made.data?.hook || {},
+        county: countyName(made.data?.county, String(made.data?.batchName || "").replace(/^Autopilot · /, "")) });
       if (dryRun) { results.push({ contactId, lost: true, would: "send", address: hook.address || "", county: hook.county }); continue; }
       const r = await openFirstText({ locationId, client, contactId, ref: made.ref || null, tries: 0, hook });
       results.push({ contactId, lost: true, ...r });
@@ -1271,11 +1273,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           // is the bot forgetting who it's talking to.
           let opened = null;
           if (openWith === "app" && typeof firstTouch === "function" && action === "created") {
-            opened = await openFirstText({ locationId, client, contactId, ref: batch.id,
-              hook: { address: hook.address || "", price: hook.price || null, dom: hook.dom || null,
-                county: countyName(hook.county, county), city: hook.city || "", brokerage: a.brokerage || "",
-                yearBuilt: hook.yearBuilt || null, beds: hook.beds || null, sqft: hook.sqft || null, lotSize: hook.lotSize || null,
-                priceCut: priceCutOf(hook), listingCount: Number(a.listingCount) || 0 } });
+            opened = await openFirstText({ locationId, client, contactId, ref: batch.id, hook: firstTextHook(a, { county }) });
             if (opened.skipped) warnings.push(`${agentKey}: first text: ${opened.skipped}`);
           }
           let enrolled = null;

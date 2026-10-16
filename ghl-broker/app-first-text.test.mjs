@@ -202,6 +202,56 @@ test("the first text is told what the agent can see on the listing — a 1950s h
   assert.ok(o.details.every((d) => !/\$|\bk\b|days?\b/i.test(d)), "no price, no days-on-market count");
 });
 
+test("an agent picked for a turnkey seat gets the turnkey first text, not 'is this one a project?' — 79 of 80 did", async () => {
+  const L = "loc-first-text-turnkey";
+  const seen = [];
+  let refuse = true;
+  const router = createOutreachRouter({ resolveLocation: () => ({ locationId: L, client: ghlClient() }),
+    firstTouch: async (a) => { seen.push(a); return refuse && a.hook.address?.startsWith("7 ") ? { skipped: "no room" } : { job: { id: `j-tk-${seen.length}` } }; } });
+  const finished = (address) => ({ address, price: 650000, dom: 30, county: "King", city: "Kent", yearBuilt: 2004, turnkey: true });
+  const batch = await batchWith("Autopilot · King, WA", [
+    { key: "seat", hook: finished("3 Shine Ct, Kent, WA") },
+    { key: "refused", hook: finished("7 Shine Ct, Kent, WA") },
+  ], L);
+  const r = await router.importAgents({ locationId: L, client: ghlClient(), agentKeys: ["seat", "refused"], batchId: batch.id, dryRun: false, applyTag: false, openWith: "app" });
+  assert.equal(seen[0].hook.turnkey, true, "the import hands the flag to the first text");
+  const o = outboundDescriptor({ kind: "outreach_open", offer: null, saved: {},
+    subject: { address: seen[0].hook.address, county: seen[0].hook.county, city: seen[0].hook.city, house: seen[0].hook } });
+  assert.equal(o.turnkey, true);
+  assert.match(outboundOpening(o), /LOOKS FINISHED/);
+
+  // A skip written before this fix carried no flag: the retry reads the agent's row.
+  const refusedId = r.results.find((x) => x.agentKey === "refused").contactId;
+  await store.appendContactEvents(L, refusedId, [{ type: "outreach_open_skipped", party: "agent", at: new Date().toISOString(),
+    data: { reason: "old build", hook: { address: "7 Shine Ct, Kent, WA", county: "King" }, tries: 2 }, dedupeKey: `outreach_open_skipped:${refusedId}:old` }]);
+  refuse = false;
+  seen.length = 0;
+  await router.retryFirstTexts({ locationId: L, client: ghlClient() });
+  const again = seen.find((a) => a.contactId === refusedId);
+  assert.ok(again, "the refused one is tried again");
+  assert.equal(again.hook.turnkey, true, "the skipped retry keeps the flag");
+  assert.equal(again.hook.address, "7 Shine Ct, Kent, WA");
+});
+
+test("a turnkey seat whose first text a deploy lost is sent the turnkey text too", async () => {
+  const L = "loc-first-text-turnkey-lost";
+  const asked = [];
+  const router = createOutreachRouter({ resolveLocation: () => ({ locationId: L, client: ghlClient() }),
+    firstTouch: async (a) => { asked.push(a); return { job: { id: `j-${asked.length}` } }; } });
+  const batch = await batchWith("Autopilot · King, WA", [
+    { key: "dropped", hook: { address: "11 Done Ln, Auburn, WA", county: "King", city: "Auburn", turnkey: true } },
+  ], L);
+  const r = await router.importAgents({ locationId: L, client: ghlClient(), agentKeys: ["dropped"], batchId: batch.id, dryRun: false, applyTag: false, openWith: "app" });
+  await store.createReplyDraft({ locationId: L, contactId: "nobody", status: "draft", channel: "sms", reply: "Hi", outbound: { kind: "outreach_open" }, updatedAt: new Date().toISOString() });
+  asked.length = 0;
+  // The first try was dropped in memory: nothing written, no draft.
+  const later = await router.retryFirstTexts({ locationId: L, client: ghlClient(), now: Date.now() + 3 * 3600000 });
+  assert.equal(later.retried, 1);
+  assert.equal(asked[0].contactId, r.results[0].contactId);
+  assert.equal(asked[0].hook.turnkey, true, "the lost retry keeps the flag");
+  assert.equal(asked[0].hook.city, "Auburn");
+});
+
 test("the first six with house details came out alike, so each agent gets its own opening move and its own detail", () => {
   const details = ["it's in Packwood", "built in the 1960s", "3 bedrooms", "it sits on a big lot", "it has been on the market a while"];
   const moves = new Set(), notices = new Set();
