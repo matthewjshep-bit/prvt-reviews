@@ -48,3 +48,20 @@ test("the lessons block renders the recommendations with their evidence and an A
   expect(html).toContain("Save digest");
   expect(data.digest).not.toMatch(/\$/);
 });
+
+// 2026-10-15: Matt's own revisions calibrate the underwriter (shared/calibration.js).
+test("the lessons block shows a calibration from his revisions with its Apply, and a note when there isn't enough yet", async () => {
+  const { calibrationReport } = await import("@shared/calibration.js");
+  const offers = [4, 5, 6, 7, 8].map((pct, i) => ({ id: `o${i}`, address: `${100 + i} Fern Way, Kent, WA 98030`, cashAmount: 300000, autoUnderwrite: { passed: true },
+    revisions: [{ ts: "2026-10-15T18:00:00Z", from: 320000, to: 300000, by: "you", arv: [500000, 500000 * (1 - pct / 100)], repairs: [50000, 50000], sqft: 1400, yearBuilt: 1962 }] }));
+  const calib = calibrationReport({ offers });
+  const base = lessons({ postMortems: [], controls: [], settings });
+  const data = { ...base, recommendations: calib.recommendations, current: { ...base.current, underwriteCalibration: null }, calibration: { note: calib.note }, digestSaved: "" };
+  const html = renderToStaticMarkup(<LessonsBody data={data} />);
+  expect(html).toContain("Our ARV runs high against your revisions — take 6% off it");
+  expect(html).toContain("Calibration from your revisions → ARV −6%");
+  expect(html).toContain("Now: Calibration from your revisions off");
+  const thin = calibrationReport({ offers: offers.slice(0, 2) });
+  const note = renderToStaticMarkup(<LessonsBody data={{ ...base, recommendations: [], calibration: { note: thin.note }, digestSaved: "" }} />);
+  expect(note).toContain("Not enough of your revisions yet to calibrate: 2 of 5");
+});

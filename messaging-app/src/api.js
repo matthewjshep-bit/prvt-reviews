@@ -666,6 +666,13 @@ export const previewCoachProposal = (id) => post(`/api/dashboard/coach/${encodeU
 export const actOnCoachProposal = (id, verb) => post(`/api/dashboard/coach/${encodeURIComponent(id)}/${verb}`, {});
 export const floatOffer = (id, kind) =>
   post(`/api/offers/${encodeURIComponent(id)}/float`, { kind });
+// Matt stands behind the number (Today's "Approve 410K"); `amount` guards a
+// number that moved since the row was drawn.
+export const approveNumber = (id, amount = 0) =>
+  post(`/api/offers/${encodeURIComponent(id)}/approve`, amount ? { amount } : {});
+// Someone has seen the house: eyes on it for a high-stakes number.
+export const markOfferSeen = (id, seen = true, note = "") =>
+  post(`/api/offers/${encodeURIComponent(id)}/seen`, { seen, note });
 export const getDashboardFlow = (days = 7, end = "") =>
   fetch(`${API_BASE}/api/dashboard/flow?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 // The records behind one Flow tile. Fetched on click, never polled.

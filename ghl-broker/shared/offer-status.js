@@ -30,6 +30,7 @@
 import { assetOf } from "./asset-type.js";
 import { sameStreetLoose } from "./us-address.js";
 import { offerMath, compactMath } from "./offer-breakdown.js";
+import { writtenTerms } from "./offer-calc.js";
 
 export const OFFER_STATUSES = [
   { key: "draft", label: "Draft", cls: "bg-blue-100 text-blue-800", dot: "bg-blue-500" },
@@ -498,6 +499,49 @@ export function weDecline(text = "") {
   return null;
 }
 
+/**
+ * numberApproved(offer) → boolean
+ *
+ * Matt stands behind this number (2026-10-15). The funnel review: "since
+ * we're aligned at 752,500, can you write it up on NWMLS forms?", and the
+ * next day "can't get there"; a $583,500 letter, then "closer to $489K" the
+ * next afternoon. A number goes to a write-up only once a person owns it:
+ *
+ *   - an offer built by hand, that no machine has moved since;
+ *   - `offer.approved = { amount, at, by }` at today's number: Send, publish,
+ *     a hand revision, a pin, or Approve on Today;
+ *   - a held run published, or a row pinned, after the machine last moved
+ *     the number.
+ *
+ * The machine moving the number (a re-quote on their figures, the counter
+ * band) is not approval, and a new number voids an old approval.
+ */
+export const MACHINE_REVISERS = new Set(["requote", "counter_band"]);
+const tsOf = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : 0; };
+export function numberApproved(offer) {
+  if (!offer) return false;
+  const amount = Math.round(Number(offer.cashAmount) || 0);
+  if (!amount) return false;
+  if (Number(offer.approved?.amount) > 0 && Math.round(Number(offer.approved.amount)) === amount) return true;
+  const machineAt = Math.max(0,
+    ...(offer.requotes || []).map((r) => tsOf(r?.ts)),
+    ...(offer.revisions || []).filter((r) => MACHINE_REVISERS.has(r?.by)).map((r) => tsOf(r?.ts)),
+    tsOf(offer.counterBand?.acceptedAt));
+  if (!offer.autoUnderwrite) return machineAt === 0;
+  const personAt = Math.max(tsOf(offer.autoUnderwrite.publishedAt), tsOf(offer.pin?.at));
+  return personAt > 0 && personAt >= machineAt;
+}
+
+/**
+ * asksForWriteUp(offer) → boolean
+ *
+ * May the machine ask them to write it up on NWMLS forms (the hot push)? A
+ * price both sides said yes to (pushesToPaper) at a number Matt approved.
+ * pushesToPaper alone still means "a price is agreed" to everything else
+ * that reads it (the focus house, the call list, the offer ladder).
+ */
+export const asksForWriteUp = (offer) => pushesToPaper(offer) && numberApproved(offer);
+
 export function pushesToPaper(offer) {
   const heat = offerHeat(offer);
   if (!heat) return false;
@@ -601,6 +645,8 @@ export const OFFER_LIST_FIELDS = [
   // Heat (offerHeat): the hand-set flag and the agreed price it is derived from,
   // and the take-back that cancels every agreed marker before it (priceAgreed).
   "hot", "agreed", "agreedCleared", "pin", "paperHeld",
+  // Matt's approval of the number ({amount, at, by}, numberApproved).
+  "approved",
   // When our number went out by text (a sent realm check): the offer is Sent
   // from then (shared/offer-stage.js) and its agent's card is at Offer Out.
   "floatSentAt",
@@ -610,6 +656,13 @@ export const OFFER_LIST_FIELDS = [
   "retired",
   // Off-market (shared/off-market.js): {value, by, why, at} — our best deals.
   "offMarket",
+  // The terms the letter named, stamped when it was made (termsOnLetter):
+  // newer letters read the write-up terms, so the book says what the letter says.
+  "terms",
+  // Price once (shared/number-stance.js, 2026-10-15): a listed house too far
+  // under the seller's number to text ({at, theirs, source, ratio, ours}, a
+  // Today row), and a person marking that someone has seen it ({at, by}).
+  "noFit", "seen",
   // The kind of house (shared/asset-type.js): {type, land, by, at}, so the
   // Offers and Deals rows can say "Manufactured · in a park".
   "asset",
@@ -667,6 +720,35 @@ const pickKeys = (obj, keys) => {
   if (obj && typeof obj === "object" && !Array.isArray(obj)) for (const k of keys) if (k in obj) out[k] = obj[k];
   return out;
 };
+
+// Only the terms the letter actually names — a row must stay a row.
+function settingsTerms(st) {
+  const terms = {};
+  if (Number(st?.psa?.closingDays) > 0) terms.closingDays = Number(st.psa.closingDays);
+  if (Number(st?.earnestMoney) > 0) terms.earnestMoney = Number(st.earnestMoney);
+  for (const [k, v] of [["financing", st?.termFinancing], ["condition", st?.termCondition], ["possession", st?.termPossession]]) {
+    if (String(v || "").trim()) terms[k] = String(v).trim();
+  }
+  return terms;
+}
+
+/**
+ * termsOnLetter(settings) → the terms a new letter names, for the offer book
+ *
+ * One set of terms (2026-10-15): with the write-up terms saved, the letter's
+ * earnest money is theirs ($1,000, not the letter's old $2,500) and it names
+ * the inspection window. Stamped on the offer when it's made, so a letter
+ * that went out before keeps the terms it said.
+ */
+export function termsOnLetter(settings = {}) {
+  const terms = settingsTerms(settings);
+  const w = writtenTerms(settings);
+  if (w.fromWriteUp) {
+    terms.earnestMoney = w.earnestMoney;
+    if (w.inspectionDays > 0) Object.assign(terms, { inspectionDays: w.inspectionDays, ...(w.inspectionDaysMin > 0 && w.inspectionDaysMin < w.inspectionDays ? { inspectionDaysMin: w.inspectionDaysMin } : {}) });
+  }
+  return terms;
+}
 
 /**
  * leanOfferDoc(doc) → what Postgres hands back for a lean read
@@ -744,13 +826,7 @@ export function toListOffer(offer) {
   const st = offer?.calc?.settings || null;
   if (offer?.terms) row.terms = offer.terms;
   else if (st) {
-    // Only the terms the letter actually names — a row must stay a row.
-    const terms = {};
-    if (Number(st.psa?.closingDays) > 0) terms.closingDays = Number(st.psa.closingDays);
-    if (Number(st.earnestMoney) > 0) terms.earnestMoney = Number(st.earnestMoney);
-    for (const [k, v] of [["financing", st.termFinancing], ["condition", st.termCondition], ["possession", st.termPossession]]) {
-      if (String(v || "").trim()) terms[k] = String(v).trim();
-    }
+    const terms = settingsTerms(st);
     if (Object.keys(terms).length) row.terms = terms;
   }
   // How the house reached us (shared/lead-source.js), as its underwrite read

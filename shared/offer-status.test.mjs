@@ -511,3 +511,24 @@ test("saidYes finds the newest yes on the house, inside the month, after a given
   assert.equal(saidYes({ drafts: [{ inbound: "ok", intent: "acceptance", createdAt: at(24 * 31) }], now }), null, "older than a month");
   assert.equal(saidYes({ events: [{ type: "offer_accepted", at: at(2) }], now }).via, "offer_accepted");
 });
+
+// Price once (2026-10-15): only a number Matt stands behind goes to a write-up.
+test("a number is approved when a person owns it, and a machine move takes the approval away", async () => {
+  const { numberApproved, asksForWriteUp } = await import("./offer-status.js");
+  const at = (d) => `2026-10-${String(d).padStart(2, "0")}T18:00:00.000Z`;
+  const machine = { id: "o1", cashAmount: 410000, status: "new", autoUnderwrite: { passed: true } };
+  assert.equal(numberApproved(machine), false, "a clean run is the machine's number");
+  assert.equal(numberApproved({ ...machine, autoUnderwrite: null }), true, "built by hand");
+  assert.equal(numberApproved({ ...machine, approved: { amount: 410000, at: at(10), by: "today" } }), true);
+  assert.equal(numberApproved({ ...machine, approved: { amount: 395000, at: at(10), by: "today" } }), false, "approved at a number it isn't any more");
+  assert.equal(numberApproved({ ...machine, autoUnderwrite: { passed: false, publishedAt: at(10) } }), true, "published by a person");
+  assert.equal(numberApproved({ ...machine, autoUnderwrite: { passed: false, publishedAt: at(10) }, requotes: [{ ts: at(11), from: 400000, to: 410000 }] }), false,
+    "re-quoted on their figures after it was published");
+  assert.equal(numberApproved({ ...machine, autoUnderwrite: null, revisions: [{ ts: at(11), from: 400000, to: 410000, by: "counter_band" }] }), false,
+    "the counter band moved a hand-made number");
+  assert.equal(numberApproved({ ...machine, autoUnderwrite: null, revisions: [{ ts: at(11), from: 400000, to: 410000 }] }), true, "an old revision with no `by` was a person's");
+  assert.equal(numberApproved({ ...machine, pin: { at: at(12), by: "operator" } }), true, "pinned by a person");
+  const agreed = { ...machine, status: "countered", realm: { answer: "yes", ts: at(12) }, hot: { at: at(12), by: "conversation", signal: "writing_up" } };
+  assert.equal(asksForWriteUp(agreed), false);
+  assert.equal(asksForWriteUp({ ...agreed, approved: { amount: 410000, at: at(12), by: "today" } }), true);
+});

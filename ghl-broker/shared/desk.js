@@ -49,6 +49,8 @@ export const KIND_STRENGTH = [
   // An agent's partner terms lead their held reply: the row says what they offered.
   "call_partner_terms",
   "paper_to_sign", "pre_contract", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral", "email_check",
+  // A listed house too far under the seller to text (shared/number-stance.js): his price.
+  "no_fit", "approve_number",
   "call_first_reply", "call_quiet", "call_turnkey_week", "ladder_exhausted",
   "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "texts_elsewhere", "stage_lag",
   "deal_no_buyers", "deal_no_dataroom", "showing_no_window", "underwrite_dropped",
@@ -163,6 +165,10 @@ const URGENT_KINDS = new Set([
   "call_owed",
   // An offer about to be signed with things nobody has checked (shared/pre-contract.js).
   "pre_contract",
+  // A listed house too far under the seller to text a number (shared/number-stance.js): his to price.
+  "no_fit",
+  // An agreed number he hasn't approved (shared/offer-status.js numberApproved).
+  "approve_number",
 ]);
 // Urgent rows that sit under Today's calls rather than Needs you.
 const URGENT_CALLS = new Set(["call_owed"]);

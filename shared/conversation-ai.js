@@ -35,6 +35,11 @@ export const SETUP_QUESTIONS = {
   their_read: "what's your read on the work it needs, and where it sells once it's done?",
 };
 export const SETUP_QUESTION_KEYS = Object.keys(SETUP_QUESTIONS);
+// Not in the rotation above: the high-stakes range asks for eyes on the house
+// once their read is in, and a listed house asks the seller's number before
+// any of ours (shared/number-stance.js, 2026-10-15).
+export const EYES_QUESTION = { key: "eyes", text: "any chance of a few more photos or a quick walkthrough video?" };
+export const SELLER_NUMBER_QUESTION = "what's the seller hoping to get?";
 
 // Floats a question the dossier hasn't answered: their read (arv / rehab),
 // the condition, the timeline. Starts at a hash of the offer so an agent with
@@ -395,7 +400,10 @@ export const AGENT_PAPER_RULE =
   "'who's your agent?' — they think we'll write our own offer. Clear that up first, in plain words: we're not agents and don't have one " +
   "on this, so we can't put it on NWMLS forms ourselves; ask whether they can write it up for us to sign, or who on their side would. " +
   "If they point you to someone else (the listing broker), ask whether that person could write it up for us and how to reach them. " +
-  "Never just say 'sounds good' or ask for a phone number as if the write-up were sorted.";
+  "Never just say 'sounds good' or ask for a phone number as if the write-up were sorted. " +
+  // 2026-10-15: only a number Matt approved goes to a write-up.
+  "A house the offer book marks NOT APPROVED: don't ask them to write it up, use NWMLS forms or represent us on it yet — " +
+  "say you'll confirm the number on our side today and come right back.";
 
 // The bot only writes words; the app sends things. A text that says a thing
 // was done when it wasn't is the worst text it can write (Lee Dedinsky,
@@ -437,6 +445,17 @@ export const PROMISE_RULE =
   "nothing behind it. Terms, a price we don't have, a time, anything only Matt settles: say you'll go over it on a " +
   "quick call, and set needsHuman.";
 
+// Agents work for us (2026-10-15). In the funnel review the agents we let
+// represent us on the buy became our off-market sources. The words the bot
+// may use, and when: the reply to their first answer, a check-in, a house
+// they bring us. Never in a text with a number of ours (the write-up gate in
+// reply-agent.js reads "represent us" beside a price as a write-up ask).
+export const REPRESENT_US_LINE = "we'd love to have you represent us on the purchase, so you'd earn the buyer side too";
+export const AGENT_REPRESENT_RULE =
+  "AGENTS WORK FOR US: when it fits — your reply to their first answer, a check-in, a house they bring us — say " +
+  `something like "${REPRESENT_US_LINE}". Once in a thread at most, never as a condition of anything, and never in ` +
+  "the same text as a number of ours.";
+
 // Where every listing-agent conversation is going — fixed beside the paper
 // rule for the same reason. Each step has one job; the bot's reply should move
 // the thread one step along, never skip ahead and never circle.
@@ -450,7 +469,7 @@ export const AGENT_GOAL_RULE =
   "'I can take that to them', 'let me present it') is progress: acknowledge it and move straight to the next step, " +
   "don't reopen the price; (5) get the AGENT to write it up — ask them to represent us and put it on NWMLS forms for us to sign. " +
   "Every reply to a listing agent should be doing one of those five things. When the thread is at step 4 or 5, keep it short and keep it moving: " +
-  "the only open question is who writes it and when.";
+  "the only open question is who writes it and when. " + AGENT_REPRESENT_RULE;
 
 // How warm the agent's newest message is toward OUR number, read by the model
 // (dealSignal in the output schema) with a plain-text fallback. Any of these on
@@ -624,11 +643,21 @@ const PLAYBOOK = () => ({
   // (shared/offer-breakdown.js); `range` floats "the 280s to 295" — the top
   // is always our number, the bottom `pct` under it — instead of "295ish";
   // `setupQuestion` ends it with one of SETUP_QUESTIONS.
+  // `highStakes` (2026-10-15, shared/number-stance.js): an off-market house,
+  // one the agent brought us, or one over `overAmount` floats a range and
+  // asks for their read (or photos), and no letter goes out by machine,
+  // until we have their read and eyes on it, or Matt approved the number.
   realmCheck: {
     enabled: false, leadWhenConfident: true, withMath: false,
     range: { enabled: false, pct: 5 },
     setupQuestion: { enabled: false, ask: [...SETUP_QUESTION_KEYS] },
+    highStakes: { enabled: false, overAmount: 500000 },
   },
+  // A listed house (2026-10-15, shared/number-stance.js listedFit): the first
+  // text asks what the seller is hoping to get, and when ours is under
+  // `minPctOfTheirs`% of theirs (or of the list price) it's a polite no-fit
+  // with no number, and a row on Today for Matt to price by hand. Agents only.
+  listedFirst: { enabled: false, minPctOfTheirs: 75 },
   // The lessons digest from our own fell-through deals, in the agent
   // context. Off: the digest exists only once a person saved it.
   lessons: { enabled: false },
@@ -997,6 +1026,14 @@ function normalizePlaybook(p, party, seed = {}) {
           ? [...new Set(src.realmCheck.setupQuestion.ask.filter((k) => SETUP_QUESTION_KEYS.includes(k)))]
           : [...SETUP_QUESTION_KEYS],
       },
+      highStakes: {
+        enabled: party === "agent" && bool(src.realmCheck?.highStakes?.enabled, false),
+        overAmount: int(src.realmCheck?.highStakes?.overAmount, 500000, 50000, 100000000),
+      },
+    },
+    listedFirst: {
+      enabled: party === "agent" && bool(src.listedFirst?.enabled, false),
+      minPctOfTheirs: int(src.listedFirst?.minPctOfTheirs, 75, 40, 100),
     },
     takeCheck: { enabled: bool(src.takeCheck?.enabled, false) },
     // May the bot carry the post-mortem digest (percentages only, never a

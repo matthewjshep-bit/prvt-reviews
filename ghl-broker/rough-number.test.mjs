@@ -260,3 +260,20 @@ test("their numbers after a rough offer re-run it", () => {
   const papered = { ...ROUGH, sends: [{ ts: "2026-10-08T19:00:00Z" }] };
   assert.equal(rerunsRoughOffer({ known: papered, book: [papered], events: told }), false, "paper went out — a person's to re-price");
 });
+
+/* ---------- 2026-10-15: Matt's calibration from Lessons ---------- */
+
+test("Matt's calibration takes his share off the ARV and floors the rehab at his $/sqft, and changes nothing when absent", async () => {
+  const plain = await run({ sqft: 1500, photos: 12 });
+  const cal = await run({ sqft: 1500, photos: 12, saved: { underwriteCalibration: { rehabFloorPsf: [{ beforeYear: 1980, psf: 60 }], arvHaircutPct: 5 } } });
+  assert.equal(plain.job.status, "done", says(plain.job));
+  assert.equal(cal.job.status, "done", says(cal.job));
+  assert.equal(plain.job.calibration, undefined, "absent: nothing ran");
+  assert.equal(cal.job.arv, Math.round(plain.job.arv * 0.95));
+  assert.match(cal.job.arvBasis, /calibrated: less 5%/);
+  assert.ok(plain.job.repairs < 90000, `the scan's own rehab, ${plain.job.repairs}`);
+  assert.ok(cal.job.repairs >= 89500 && cal.job.repairs <= 90500, `floored at 60 × 1,500, capped at the heavy band's 90K: ${cal.job.repairs}`);
+  assert.ok(says(cal.job).includes("calibrated rehab floor: houses built 1950–79 run about $60/sqft"), says(cal.job));
+  assert.ok(cal.made[0].cashAmount < plain.made[0].cashAmount, "a lower number");
+  assert.equal(cal.made[0].autoUnderwrite.passed, true, "the floor never holds a run");
+});

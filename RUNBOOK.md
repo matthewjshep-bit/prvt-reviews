@@ -612,6 +612,40 @@ All the logic lives in `shared/underwrite-checks.js` (`buyerView`), which calls 
 
 **Re-reading the threads.** `node scripts/buyer-objections-report.mjs` repeats the tally. It is read-only, prints ids only, and writes quotes only to a local file with `--quotes`.
 
+### Calibration from your own revisions (2026-10-15)
+
+From the funnel review: our number fell after the agent saw it on 35 of 305
+houses, and hand and machine first numbers were cut about equally (12.6% and
+11%), so the inputs are the problem: rehab read low off the photos, ARV read
+high. When Matt revises an auto-underwrite by hand, the machine now learns how
+far off it was.
+
+- **Recorded.** Every revision (`offer.revisions[]`) now carries `by` (`you`,
+  `requote`, `counter_band`), and `arv` and `repairs` as `[from, to]`, plus the
+  house's `sqft` and `yearBuilt` off the snapshot (`routes/offers.js`
+  `revisionInputs`). Only revisions made from 2026-10-15 have them.
+- **Read.** `calibrationReport` (`shared/calibration.js`) looks at a person's
+  revisions of auto-underwrites (one correction per offer: the machine's
+  figures before the first, his after the last) and adds two recommendations
+  to **Lessons** (`GET /api/dashboard/lessons`), the same shape as the rest:
+  - `rehab_psf_floor`, by era (built before 1950, 1950–79, 1980 on): at least
+    5 corrections in the era, at least 60% of them raising the rehab; the floor
+    is the $/sqft a quarter of his revisions run under;
+  - `arv_haircut`: at least 5 corrections, at least 60% lowering the ARV; the
+    cut is his middle cut, at most 15%.
+  With fewer, Lessons says "Not enough of your revisions yet to calibrate:
+  N of 5" (`calibration.note`). Apply works as for every other row; it saves
+  the whole `underwriteCalibration` block.
+- **Applied.** `settings.underwriteCalibration = { rehabFloorPsf: [{beforeYear,
+  psf}], arvHaircutPct }`, absent by default (`effectiveSettings` leaves it
+  absent; absent changes nothing). When set, the underwriter takes the haircut
+  off the ARV (the basis says "calibrated: less N%") and, when the scan priced
+  a rehab and the house has a size and a year built, adds an allowance line up
+  to the era's $/sqft — never past the heavy band's top, so it can't hold a
+  run. `job.calibration` says what it did.
+- **Check it.** Lessons shows the rows or the note. After Apply, a new
+  underwrite's ARV basis and warnings name the calibration.
+
 ### Subject Property
 
 One contact field, `subject_property` ("Subject Property"), answers: *if I
@@ -1213,6 +1247,63 @@ that the agent sees what the gap between the ARV and our price is made of.
   its length and the gate's flags. Nothing is filed or sent; it costs one
   model call. Turn the switches on with one PUT of the whole conversation
   config (GET it first).
+
+### Price once: a range on a big house, the seller's number first (2026-10-15)
+
+The funnel review (July to October) found our number fell after the agent had
+seen it on 35 of 305 houses, 11 of them after a counter or a yes. Hand and
+machine first numbers were cut about equally (12.6% and 11%), so the inputs
+are the problem (rehab read low, ARV read high). The gap between their number
+and ours decided the outcome: within 5%, 13 of 25 agreed; past 25%, none of 95.
+Both halves live in `shared/number-stance.js` (pure).
+
+- **A range until we know more** (`parties.agent.realmCheck.highStakes`:
+  `enabled` off by default, `overAmount` 500000). A house is high-stakes when
+  it is off-market, the agent brought it (`autoUnderwrite.leadSource:
+  agent_brought`), or our number is over `overAmount`. Until we have the
+  agent's read of the value and the work AND eyes on it (8+ photos scanned, a
+  walkthrough video on the offer, or `offer.seen`), the house is in range mode
+  (`numberStance` → `mode: "range"`):
+  - the float never leads with the number (`leadsWithNumber` is false), uses
+    the rough wording with a range topped by ours, and asks for their read,
+    then (once their read is in) "any chance of a few more photos or a quick
+    walkthrough video?";
+  - nothing goes on paper by machine: `paperWorthy`/`sendsItselfOnClear` say
+    no, the silence and answer timers skip it, the pushback paper skips it,
+    and the conversation's `sendOfferDocs` holds any send nobody pressed
+    (`unattended`, `forRecord`, or an auto rule's `send_offer`) with a
+    "Paper held" banner. A person pressing Send has decided;
+  - the offer book tells the bot "RANGE ONLY until …": no firm number, no
+    "our offer", no write-up ask.
+  A person-made or published offer is firm. Matt's approval (below) clears it.
+- **A listed house: the seller's number first** (`parties.agent.listedFirst`:
+  `enabled` off by default, `minPctOfTheirs` 75). Agents only, the machine's
+  first word on a house only (a person pressing Float, and a re-quote, skip
+  it). `listedFit` in `startProactive`:
+  - **ask_number** — a listed house (a list price, or our hook listing, and
+    not off-market), nothing of ours on it yet, and no seller number known:
+    the float becomes a take check that floats our ARV/rehab read and asks
+    "what's the seller hoping to get?" (`subject.askSeller`). Their answer
+    (filed as `property_details.sellerAsk`) fires the realm check the way
+    their read does.
+  - **no_fit** — ours is under `minPctOfTheirs`% of the seller's number (their
+    words, a `house_mentioned` with one, or a counter), or of the list price
+    once we've asked, and no number of ours has gone on the house (no price in
+    the thread, no paper, no floated number): nothing with a number goes. A
+    `kind_pass` with `why: "too_far"` says it's too far from where the seller
+    is to send a number and asks for other fixers on or off market (no
+    number). `offer.noFit {at, theirs, source, ratio, ours}` puts a **no_fit**
+    row on Today ("ours is 68% of the seller's 600K") with Price it by hand ·
+    Float ours anyway · We passed. It is never we_passed. The row goes when the
+    number moves, a number is floated, paper goes, or the offer closes. The
+    pushback paper never goes on a no-fit house.
+  - 75% of theirs is not the counter walk-away (`WALK_AWAY_GAP`, 25% over the
+    most we'd pay, so ours under about 80% of theirs): that rule answers a
+    counter after ours went out and is unchanged.
+- **Check it.** `POST /api/offers/:id/float {preview: true, realmCheck:
+  {highStakes: {enabled: true}}}` on a big house shows the range and the
+  question. Offers with `noFit` show on Today; `GET /api/offers/:id` shows
+  `noFit` and `paperHeld`.
 
 ### The current offer — one live row per house (2026-09-25)
 
@@ -1954,6 +2045,42 @@ follow-up-sweep.js: open offers where `isHot` and there is no deal.
 The auto-send list's length bound went from 20 to 40: with this ladder the
 agent side has 21 eligible intents, and the last one was being dropped on
 save. Every entry is still filtered against `autoEligible`.
+
+### Approved numbers only go to a write-up (2026-10-15)
+
+From the funnel review: "since we're aligned at 752,500, can you write it up on
+NWMLS forms?", then "can't get there" the next day. The machine now asks an
+agent to write it up, use NWMLS forms or represent us only at a number Matt
+stands behind (`numberApproved` in `shared/offer-status.js`). No switch: this
+only tightens.
+
+- **Approved** means one of: an offer built by hand that no machine has moved;
+  `offer.approved = {amount, at, by}` at today's number, written by Send
+  (`by: "send"`), publishing a held run (`publish`), a hand revision in the
+  editor or the held-paper banner's re-quote (`revise`; revisions now carry
+  `by`), pinning a row (`pin`), or **Approve** on Today (`today`,
+  `POST /api/offers/:id/approve {amount?}`); or a run published or pinned after
+  the machine last moved the number. A re-quote on their figures
+  (`by: "requote"`) and the counter band running by itself
+  (`by: "counter_band"`) are not approval, and a new number voids an old one.
+- **What it holds.** The hot push (`asksForWriteUp` = `pushesToPaper` and
+  approved) — its `ready` and `hotCandidates`; the offer ladder still leaves an
+  agreed price alone, so nothing texts until Matt approves. The offer book says
+  "AGREED … but the number is NOT APPROVED on our side yet — don't ask them to
+  write it up … say you'll confirm the number on our side today". A gate
+  (`writeUpOk` in `evaluateReplyGates`) holds any agent draft that asks for a
+  write-up ("NWMLS", "write it up", or "represent us" beside an offer or a
+  price) on a house whose number isn't approved — except the "we're not
+  agents" answer when they handed the write-up back to us. The machine's own
+  letter text and email drop the NWMLS ask; so does the "taking it to the
+  seller" reply; the confident float doesn't promise the write-up.
+  `pushesToPaper` itself is unchanged: the focus house, the call list and the
+  offer ladder still read it as "a price is agreed".
+- **Today.** An agreed price (`priceAgreed`) at an unapproved number is an
+  **approve_number** row, "they agreed at $410,000 — approve it before we ask
+  for the write-up", with **Approve 410K** and Open.
+- **Check it.** `GET /api/offers/:id` shows `approved`; Today shows the row;
+  the hot push's skip reason is "the agreed number isn't approved yet".
 
 ### Timers on Today's rows (2026-09-17)
 
@@ -4006,6 +4133,34 @@ contingency is a killer… she wants you to preinspect, so obviously the fewer
 days the better." The bot had a policy for neither half, so it promised twice
 to run it by a partner and the thread sat two days.
 
+### One set of terms (2026-10-15)
+
+Agents asked for written offers, earnest money terms and the inspection window,
+and got two answers: the bot's write-up terms ($1,000 earnest after
+inspection, a 10 to 14 day inspection, a hard money loan, roughly 10 to 21
+days to close; `writeUp` in the Conversation AI config, Matt 2026-09-18) and
+the letter's ($2,500 on acceptance, 14 days). Now there is one set. No switch:
+it follows `writeUp`.
+
+- **The letter** (`offer-doc.js`): with the Conversation AI saved, the earnest
+  money row is `writeUp.earnestMoney` "deposited with escrow after the
+  inspection period", a new **Inspection** row says "10 to 14 days from mutual
+  acceptance", and the closing row says "Roughly 10 to 21 days from acceptance,
+  inspection included — or a date of your choosing" (a closing date set by
+  hand in Settings still wins). `writtenTerms` in `shared/offer-calc.js`. A
+  visible change: new letters show $1,000, not $2,500. Letters already made
+  keep what they said. Per-offer letter terms from the editor are untouched.
+- **The email** the machine writes (no operator message) adds "Our terms:"
+  with `writeUpTermsText(writeUp)`. An operator's own message gets nothing
+  added. The text message is unchanged (carrier-safe: no "cash", no "as-is",
+  no link). No proof of funds goes (Matt skipped it).
+- **The offer book** reads the terms stamped on the offer when its letter was
+  made (`offer.terms`, `termsOnLetter`, now on lean rows), so the bot says
+  $1,000 and the inspection window for new letters and the old terms for old
+  ones.
+- **Check it.** Preview a send (`POST /api/offers/:id/send` with no message):
+  the email has "Our terms:"; a new offer's letter shows the Inspection row.
+
 ### A counter typed short, and a thread nobody answered (2026-09-16)
 
 Thomas Rinow answered our $456,250 on 10412 SE 219th with **"That are willing
@@ -4607,6 +4762,40 @@ Replay over the 5,503 texts agents sent us (saved threads, 2026-10-14): 56 hits 
 (list_back 15, referral_fee 16, buyer_agent 13, co_wholesale 9, investor_buyer 3). Two were not
 partner terms: a wholesaler pointing us to their dispo person about one house, and "I'm a
 wholesaler myself so I understand".
+
+### Agents work for us (2026-10-15)
+
+From the funnel review: agents asked for written offers, NWMLS forms and to
+represent us, and the agents we let represent us became off-market sources.
+No switch: one rule, a wider detector, and a hold (these only tighten).
+
+- **The rule.** `AGENT_REPRESENT_RULE` (in `AGENT_GOAL_RULE`,
+  `shared/conversation-ai.js`) tells the bot that when it fits — its reply to
+  their first answer, a check-in, a house they bring us — it may say
+  `REPRESENT_US_LINE`: "we'd love to have you represent us on the purchase, so
+  you'd earn the buyer side too". Once in a thread at most, never as a
+  condition, never beside a number of ours (the write-up gate reads "represent
+  us" beside a price as a write-up ask).
+- **Their offer to be our agent is partner terms.** `buyer_agent` in
+  `shared/partner-terms.js` now also reads "I'd love to be your agent", "happy
+  to be your agent", "work as your buyer's agent", "a buyer's agreement", "a
+  buyer rep agreement" (never "who's your agent?" or "I can't be your agent").
+  As before: the reply is held for Matt and a `call_partner_terms` row goes on
+  Today.
+- **A showing on a live house is Matt's.** When an agent offers a showing or a
+  tour (`isShowingOffer`, or the model's walkthrough read) on a house we're
+  working — an open offer on it, or one we haven't priced that their words say
+  is finished — the reply is held: `draft.showingOffered`, and
+  `evaluateReplyGates` flags "they offered a showing on … — yours to book,
+  call or pass" (a content gate: the nightly audit never releases it). A
+  `showing_offered` event goes on their timeline (one a day per house). On an
+  unpriced finished house the drafted reply is still the "more finished than
+  what we buy" pass, so Send is one press; it just never goes by itself. A
+  house they told us was turnkey before this message (`agentRuledOut`) gets
+  the pass sent as it always did. An unpriced house with work still gets
+  "numbers first" and the underwrite.
+- **Check it.** Today shows the held draft under Drafts waiting on you with
+  the showing reason; the contact's timeline shows "they offered a showing".
 
 ### Every agent on a clock: the agent check-in (2026-09-29)
 

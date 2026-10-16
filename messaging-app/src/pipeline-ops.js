@@ -7,7 +7,7 @@
 // after any of them.
 
 import {
-  applyDraftAction, createDataroom, deleteOffer, dismissPromise, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
+  applyDraftAction, approveNumber, createDataroom, deleteOffer, dismissPromise, floatOffer, getFollowUps, matchInvestorsToDeal, offerEditorUrl,
   askAgentForWindow, updateDealChecklist, rerunHeldUnderwrite, resumeDrive, retryUnderwrite, runFollowUps, stopDrive, setOfferStatus, updateDeal, nudgeDealBuyers,
   setContactEmail, preSell, promoteDeal, tickPreContract,
 } from "./api.js";
@@ -51,6 +51,8 @@ export async function runOp(key, item, extra = null) {
     case "drop":               return deleteOffer(item.offerId);
     case "float_take":         return floatOffer(item.offerId, "take_check");
     case "float_realm":        return floatOffer(item.offerId, "realm_check");
+    // An agreed number you stand behind: the write-up ask may go (shared/pipeline.js approve_number).
+    case "approve_number":     return approveNumber(item.offerId, item.amount || 0);
     // A hand-made offer whose number you texted yourself: the record catches up.
     case "mark_sent":          return setOfferStatus(item.offerId, "sent", "sent by hand");
     case "mark_no_response":   return setOfferStatus(item.offerId, "no_response", "from the pipeline board");
@@ -118,6 +120,7 @@ export function describeResult(key, r) {
   if (key === "rerun_held") return "Running it again — the number lands in the outbox when it clears.";
   if (key === "underwrite_anyway") return "Underwriting it — the number lands in the outbox when it clears.";
   if (key === "dismiss_promise") return r.settled ? "Cleared." : "Already cleared.";
+  if (key === "approve_number") return "Approved. The machine may ask them to write it up at this number.";
   if (key === "apply") return r.action?.detail || "Done.";
   return "Done.";
 }

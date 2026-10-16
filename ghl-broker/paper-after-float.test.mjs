@@ -186,3 +186,76 @@ test("a pass after a float doesn't send paper on the neutral rule", async () => 
   await router.sendPaperAfterSilence({ client, locationId: LOC, now: THURSDAY + 120000 });
   assert.equal(sent.filter((m) => ["agent-no", "agent-sold"].includes(m.contactId)).length, 0);
 });
+
+/* ---------- 2026-10-15: price once (shared/number-stance.js) ---------- */
+
+test("a big house with no read from the agent gets no written offer by machine while the high-stakes switch is on", async () => {
+  const saved = await store.getOfferSettings(LOC);
+  const hs = (enabled) => store.saveOfferSettings(LOC, { ...saved, conversationAi: { enabled: true, parties: { agent: {
+    sendOffer: { afterFloat: { enabled: true } }, realmCheck: { enabled: true, highStakes: { enabled, overAmount: 500000 } } } } } });
+  await hs(true);
+  const big = await floated("agent-big", { cashAmount: 610000, autoUnderwrite: { passed: true, photosAnalyzed: 12 } });
+  const fri = Date.parse("2026-10-09T18:00:00Z");
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: fri });
+  assert.equal(sent.filter((m) => m.contactId === "agent-big").length, 0, "range only until we have their read");
+  assert.equal((await store.getOffer(big.id)).paperAfterFloat, undefined, "nothing claimed");
+  // The same house once the agent gave us their read: paper as before.
+  await recordEvent({ store, locationId: LOC, contactId: "agent-big", type: "agent_estimate", at: "2026-10-02T21:30:00.000Z", address: big.address, source: "conversation", data: { arv: 820000, rehab: 90000 } });
+  // Their read came in a reply, which the silence rule leaves to the
+  // conversation; the conversation's send goes through the same door.
+  const deps = router.conversationDepsFor({ locationId: LOC, client, saved: await store.getOfferSettings(LOC) });
+  const r = await deps.sendOfferDocs({ contactId: "agent-big", offerId: big.id, unattended: true, forRecord: true, by: "after_float", transcript: "" });
+  assert.equal(r.ok, true, r.reason);
+  // With no read, the door itself holds machine paper and says why.
+  const other = await floated("agent-big-2", { cashAmount: 610000, autoUnderwrite: { passed: true, photosAnalyzed: 12 } });
+  const held = await deps.sendOfferDocs({ contactId: "agent-big-2", offerId: other.id, unattended: true, forRecord: true, by: "after_float", transcript: "" });
+  assert.equal(held.ok, false);
+  assert.equal(held.held, true);
+  assert.match(held.reason, /high-stakes \(over 500K\): a range only until we have their read on the value and the work/);
+  assert.match((await store.getOffer(other.id)).paperHeld.reason, /no paper by machine/);
+  // A person pressing Send has decided.
+  const pressed = await deps.sendOfferDocs({ contactId: "agent-big-2", offerId: other.id, transcript: "" });
+  assert.equal(pressed.ok, true, pressed.reason);
+  await hs(false);
+  await store.saveOfferSettings(LOC, saved);
+});
+
+test("a listed house far under the seller's number is stamped no-fit for Matt, with no number floated and no paper", async () => {
+  const saved = await store.getOfferSettings(LOC);
+  await store.saveOfferSettings(LOC, { ...saved, aiApiKey: "k", conversationAi: { enabled: true, parties: { agent: {
+    realmCheck: { enabled: true }, takeCheck: { enabled: true }, listedFirst: { enabled: true, minPctOfTheirs: 75 } } } } });
+  const offer = await store.createOffer({
+    id: crypto.randomUUID(), locationId: LOC, contactId: "agent-far", contactName: "Pat Agent", address: "18 Fern Way, Kent, WA 98030",
+    cashAmount: 410000, calc: { settings: {}, inputs: { askingPrice: 525000, arv: 620000, repairs: 90000 }, offers: {} },
+    createdAt: new Date().toISOString(), status: "new", statusHistory: [], autoUnderwrite: { passed: true },
+  });
+  await recordEvent({ store, locationId: LOC, contactId: "agent-far", type: "property_details", at: new Date().toISOString(), address: offer.address, source: "conversation", data: { sellerAsk: 600000 } });
+  const before = sent.length;
+  const deps = router.conversationDepsFor({ locationId: LOC, client, saved: await store.getOfferSettings(LOC) });
+  const r = await deps.floatOffer({ offerId: offer.id });
+  assert.match(String(r.skipped), /ours is 68% of the seller's 600K/);
+  const after = await store.getOffer(offer.id);
+  assert.equal(after.noFit.theirs, 600000);
+  assert.equal(after.noFit.source, "seller");
+  assert.equal(after.status, "new", "not passed: Matt prices it");
+  assert.equal(after.proactive?.realmCheckAt, undefined, "no number floated");
+  assert.equal(sent.length, before, "nothing sent");
+  await store.saveOfferSettings(LOC, saved);
+});
+
+test("the machine's letter asks for the write-up only at a number Matt approved", async () => {
+  const deps = router.conversationDepsFor({ locationId: LOC, client, saved: await store.getOfferSettings(LOC) });
+  const plain = await floated("agent-unapproved");
+  const before = sent.length;
+  const r = await deps.sendOfferDocs({ contactId: "agent-unapproved", offerId: plain.id, unattended: true, forRecord: true, by: "after_float", transcript: "" });
+  assert.equal(r.ok, true, r.reason);
+  const sms = sent.slice(before).find((m) => m.contactId === "agent-unapproved" && m.type === "SMS");
+  assert.doesNotMatch(sms.message, /NWMLS|represent us/, sms.message);
+  const mail = sent.slice(before).find((m) => m.contactId === "agent-unapproved" && m.type === "Email");
+  assert.doesNotMatch(String(mail?.html || ""), /NWMLS/);
+  const ok = await floated("agent-approved", { approved: { amount: 300000, at: "2026-10-02T20:30:00.000Z", by: "today" } });
+  const mid = sent.length;
+  await deps.sendOfferDocs({ contactId: "agent-approved", offerId: ok.id, unattended: true, forRecord: true, by: "after_float", transcript: "" });
+  const sms2 = sent.slice(mid).find((m) => m.contactId === "agent-approved" && m.type === "SMS");
+  assert.match(sms2.message, /represent us and write it up on NWMLS forms/);
+});

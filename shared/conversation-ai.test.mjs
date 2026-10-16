@@ -687,3 +687,18 @@ test("the agent defaults never invent an underwriting team or a partner to check
   assert.match(PROMISE_RULE, /I'll text you the number by 3/);
   assert.match(PROMISE_RULE, /quick call/);
 });
+
+// Price once (2026-10-15): two new agent switches, both off until Matt flips them.
+test("the high-stakes range and the listed-house seller number default off and survive a save", () => {
+  const d = normalizeConversationAi(null).parties.agent;
+  assert.deepEqual(d.realmCheck.highStakes, { enabled: false, overAmount: 500000 });
+  assert.deepEqual(d.listedFirst, { enabled: false, minPctOfTheirs: 75 });
+  const on = normalizeConversationAi({ parties: { agent: {
+    realmCheck: { enabled: true, highStakes: { enabled: true, overAmount: 650000 } }, listedFirst: { enabled: "true", minPctOfTheirs: 80 } } } }).parties.agent;
+  assert.deepEqual(on.realmCheck.highStakes, { enabled: true, overAmount: 650000 });
+  assert.deepEqual(on.listedFirst, { enabled: true, minPctOfTheirs: 80 });
+  assert.equal(normalizeConversationAi({ parties: { agent: { listedFirst: { enabled: true, minPctOfTheirs: 5 } } } }).parties.agent.listedFirst.minPctOfTheirs, 40, "never a floor under 40%");
+  const inv = normalizeConversationAi({ parties: { investor: { listedFirst: { enabled: true }, realmCheck: { highStakes: { enabled: true } } } } }).parties.investor;
+  assert.equal(inv.listedFirst.enabled, false, "agents only");
+  assert.equal(inv.realmCheck.highStakes.enabled, false, "agents only");
+});

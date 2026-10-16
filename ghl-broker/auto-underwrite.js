@@ -33,6 +33,7 @@ import { pullZillowComps, pullZillowActives, filterByUnits, streetKey, mergeFact
 import { checkSite, fetchBarriers } from "./site-context.js";
 import { checksFor, buyerView, checksLines, summarizeChecks } from "./shared/underwrite-checks.js";
 import { withAllowance } from "./shared/rehab-checks.js";
+import { calibrate } from "./shared/calibration.js";
 import { gradeComps } from "./comps-grade.js";
 import { recordError } from "./app-errors.js";
 import { fetchZillowPhotos, fetchListingPhotos, fetchZillowFacts, MAX_FACT_LOOKUPS, scanRehabFromPhotos, anthropicErrorToHttp } from "./rehab-scan.js";
@@ -2107,6 +2108,32 @@ async function runUnderwrite(job, ctx) {
       listing: listing ? { remarks: listing.remarks || "", status: listing.status || null } : null,
       declined: view?.summary?.declined || null,
     };
+  }
+
+  /* --- Matt's calibration (shared/calibration.js, 2026-10-15) --- */
+  // Applied from Lessons, off his own revisions: the ARV comes off by the
+  // share he takes off it, and the scanned rehab is never under his $/sqft for
+  // the house's era — an allowance line up to the heavy band's top, never past
+  // it, so it can't hold a run. Absent: nothing changes.
+  if (saved?.underwriteCalibration) {
+    const cal = calibrate({ calibration: saved.underwriteCalibration, arv: arv?.arv || 0, repairs, sqft, yearBuilt, heavyTop: heavyCeiling(sqft) });
+    if (cal.arvCutPct && arv) {
+      arv = { ...arv, arv: cal.arv, basis: `${arv.basis || ""} — ${cal.arvNote}`.replace(/^ — /, "") };
+      job.arv = arv.arv;
+      job.arvBasis = arv.basis;
+      got.arv = arv;
+    }
+    if (cal.repairsAdd > 0 && scan) {
+      const contingency = 1 + (Number(rehabState?.contingency) || 0) / 100;
+      const row = { id: "calibration_floor", key: "calibration_floor", label: cal.repairsNote, cost: Math.ceil(cal.repairsAdd / contingency / 100) * 100 };
+      rehabState = withAllowance(rehabState, [...(rehabState.allowance || []), row]);
+      const priced = priceScope(rehabState, sqft);
+      scope = priced.lines;
+      repairs = priced.total;
+      Object.assign(got, { rehabState, scope, repairs });
+      warnings.push(cal.repairsNote);
+    }
+    job.calibration = { arvCutPct: cal.arvCutPct, floorPsf: cal.floorPsf, repairsAdded: cal.repairsAdd > 0 && scan ? cal.repairsAdd : 0 };
   }
 
   /* --- the gates --- */

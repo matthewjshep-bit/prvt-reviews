@@ -1828,6 +1828,100 @@ test("a take check needs numbers to float, and its switch", async () => {
   assert.match(r.skipped, /take check is off/);
 });
 
+/* ---------- price once (2026-10-15): the seller's number first, a range on a big house ---------- */
+
+const withAgent = (saved, agent) => ({ ...saved, conversationAi: { ...saved.conversationAi, parties: { ...saved.conversationAi.parties,
+  agent: { ...saved.conversationAi.parties.agent, ...agent } } } });
+const LISTED_FIRST = withAgent(STARTER_SAVED, { listedFirst: { enabled: true, minPctOfTheirs: 75 } });
+
+test("a listed house's first text asks what the seller is hoping to get, and names no number of ours", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  const landed = { ...LANDED, arv: 620000, repairs: 90000 };
+  store.listOffers = async () => [landed];
+  let seen;
+  const r = await startProactive({
+    client, locationId: "LOC", saved: LISTED_FIRST, store, contactId: "c1", kind: "realm_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "take_check", reply: "Quick underwrite on 12 Elm: I'm seeing it around 620K fixed up with 90K+ of work. What's the seller hoping to get?", summary: "Asks the seller's number." }; } },
+  });
+  assert.equal(r.skipped, null, r.skipped);
+  assert.equal(r.job.outbound, "take_check", "our read goes, not our number");
+  await settle();
+  assert.equal(r.job.status, "done", r.job.error);
+  assert.equal(seen.outbound.askSeller, true);
+  assert.equal(seen.outbound.sellerQuestion, "what's the seller hoping to get?");
+  const d = await store.getReplyDraft(r.job.draftId);
+  assert.equal(d.outbound.kind, "take_check");
+  assert.ok(!/410/.test(d.reply), "never our price");
+
+  // Switched off, nothing changes: the take check still goes first.
+  _resetJobs();
+  const off = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: fakeStore(), contactId: "c1", kind: "realm_check", offer: landed, sendsEnabled: true });
+  assert.match(off.skipped, /take check goes first/);
+});
+
+test("a listed house far under the seller's number gets no number at all, and is left for Matt to price", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.events.set("LOC|c1", [{ type: "property_details", at: iso(900), address: LANDED.address, data: { sellerAsk: 600000 } }]);
+  let drafted = false;
+  const landed = { ...LANDED, arv: 620000, repairs: 90000 };
+  const r = await startProactive({
+    client, locationId: "LOC", saved: LISTED_FIRST, store, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return DRAFT; } },
+  });
+  assert.equal(r.job, null);
+  assert.equal(r.noFit?.move, "no_fit");
+  assert.equal(r.noFit.theirs, 600000);
+  assert.match(r.skipped, /ours is 68% of the seller's 600K — too far apart to text a number/);
+  assert.equal(drafted, false);
+
+  // Their number is close enough: the float goes as it always did.
+  _resetJobs();
+  const near = fakeStore();
+  near.events.set("LOC|c1", [{ type: "property_details", at: iso(900), address: LANDED.address, data: { sellerAsk: 500000 } }]);
+  const ok = await startProactive({ client, locationId: "LOC", saved: LISTED_FIRST, store: near, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "take_check", reply: "Thinking 620K ARV and 90K of work. What do you think?" }) } });
+  assert.equal(ok.noFit, undefined);
+  assert.ok(ok.job, ok.skipped);
+  await settle();
+
+  // A person pressing Float has decided.
+  _resetJobs();
+  const pressed = await startProactive({ client, locationId: "LOC", saved: LISTED_FIRST, store, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true, personAsked: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "take_check", reply: "Thinking 620K ARV and 90K of work. What do you think?" }) } });
+  assert.equal(pressed.noFit, undefined);
+  assert.ok(pressed.job);
+  await settle();
+});
+
+test("a big house floats a range and asks for their read, then for eyes on it, before it's a number we'd stand behind", async () => {
+  const { conversationConfig, leadsWithNumber, floatStance } = await import("./reply-agent.js");
+  const BIG = { ...LANDED, cashAmount: 610000, autoUnderwrite: { passed: true, compsUsedCount: 6, photosAnalyzed: 3 } };
+  const rc = { ...STARTER_SAVED.conversationAi.parties.agent.realmCheck, enabled: true, leadWhenConfident: true, range: { enabled: false, pct: 5 } };
+  const saved = withAgent(STARTER_SAVED, { realmCheck: { ...rc, highStakes: { enabled: true, overAmount: 500000 } } });
+  const config = conversationConfig(saved);
+  const stance = floatStance({ offer: BIG, config });
+  assert.equal(stance.mode, "range");
+  assert.equal(leadsWithNumber({ offer: BIG, config }), true, "a confident run leads with its number without the stance");
+  assert.equal(leadsWithNumber({ offer: BIG, config, stance }), false, "not on a big house in range mode");
+  const d = outboundDescriptor({ kind: "realm_check", offer: BIG, saved, dossier: null });
+  assert.equal(d.confident, false, "the rough wording");
+  assert.ok(d.range && d.range.high <= 610000 && d.range.low < d.range.high, "a range topped by our number");
+  assert.equal(d.question?.key, "their_read");
+  assert.ok(!d.math);
+  const read = { have: { arv: { value: 800000 }, rehab: { value: 90000 } } };
+  assert.equal(outboundDescriptor({ kind: "realm_check", offer: BIG, saved, dossier: read }).question?.key, "eyes", "their read is in: ask for photos or a video");
+  const seen = outboundDescriptor({ kind: "realm_check", offer: { ...BIG, seen: { at: iso(10), by: "you" } }, saved, dossier: read });
+  assert.equal(seen.stance, undefined, "their read and someone's been: firm");
+  assert.equal(seen.range, undefined);
+  const off = outboundDescriptor({ kind: "realm_check", offer: BIG, saved: withAgent(STARTER_SAVED, { realmCheck: rc }), dossier: null });
+  assert.equal(off.confident, true, "switch off: as before");
+  assert.equal(off.range, undefined);
+});
+
 test("their take arriving hands off to the realm check, and a confirmed address starts the underwrite", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
@@ -3163,8 +3257,10 @@ test("an invitation to make an appointment on a project we haven't priced gets '
 
 // Matt, 2026-10-05: an agent who says the house needs nothing has told us
 // it isn't a fit; the underwrite only spends credits. Velia's remodeled
-// triplex (9/14) used to run anyway — now it gets the pass.
-test("a showing offer on a remodeled house we haven't priced gets the pass, not an underwrite", async () => {
+// triplex (9/14) used to run anyway — now it gets the pass. 2026-10-15
+// (agents work for us): an agent opening the door is Matt's to answer, so the
+// pass is drafted and waits for him, on Today; it never sends itself.
+test("a showing offer on a remodeled house we haven't priced drafts the pass for you, with no underwrite, and doesn't send it", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
@@ -3182,8 +3278,33 @@ test("a showing offer on a remodeled house we haven't priced gets the pass, not 
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.intent, "investor_open", "remodeled with tenants is still Tier 2");
-  assert.match(d.reply, /need real work/);
+  assert.match(d.reply, /need real work/, "the pass is the draft");
+  assert.equal(d.showingOffered?.address, "4207 S Bateman St, Seattle, WA 98118");
+  assert.ok(d.flags.some((f) => /they offered a showing on 4207 S Bateman St — yours to book, call or pass/.test(f)), d.flags.join(" · "));
+  assert.notEqual(d.status, "scheduled", "it waits for you");
   assert.equal(uw.length, 0, `no underwrite: ${JSON.stringify(d.actions.map((a) => [a.type, a.status, a.detail]))}`);
+  const ev = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "showing_offered");
+  assert.equal(ev?.address, "4207 S Bateman St, Seattle, WA 98118", "on their timeline");
+});
+
+test("a showing offer on a house they already told us is turnkey still gets the pass line", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = fakeStore();
+  store.events.set("LOC|c1", [{ type: "property_details", at: new Date(Date.now() - 86400000).toISOString(), address: "4207 S Bateman St, Seattle, WA 98118", data: { workNeeded: "none, fully remodeled" } }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true,
+    message: VELIA,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "scheduling", confidence: "high", needsHuman: true, propertyAddress: "4207 S Bateman St, Seattle, WA 98118",
+        reply: "Thanks, let me check my calendar and get back to you." }),
+      startUnderwrite: async () => ({ job: { id: "uw-9" } }),
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.match(d.reply, /need real work/);
+  assert.equal(d.showingOffered, undefined, "not held: they told us before");
 });
 
 test("a showing offer on a house we already sent an offer on is left alone", async () => {
@@ -3203,6 +3324,10 @@ test("a showing offer on a house we already sent an offer on is left alone", asy
   });
   await settle();
   assert.equal(uw.length, 0);
+  // 2026-10-15: the showing on a house we're working is Matt's to book.
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "scheduled", "nothing sends itself");
+  assert.equal(d.autoSend.decided, false);
 });
 
 test("an agent already on Tier 1 who brings a different house leaves Tier 1 first, so it runs again", async () => {
@@ -4499,6 +4624,9 @@ test("a showing on a house the agent says isn't a flip gets no underwrite, and t
   assert.doesNotMatch(d.reply, /run the numbers/);
   assert.match(d.reply, /need real work/);
   assert.equal((d.actions || []).filter((a) => a.type === "start_underwrite").length, 0);
+  // 2026-10-15: they opened the door, so the pass waits for Matt.
+  assert.ok(d.flags.some((f) => /they offered a showing on 13814 214th St E — yours to book, call or pass/.test(f)), d.flags.join(" · "));
+  assert.equal(d.autoSend.decided, false);
 });
 
 // Tier 1 is agents with a live house that needs work (Matt, 2026-10-07). The
@@ -7516,4 +7644,42 @@ test("an agent who left a voicemail about a live house gets a call back first: t
   assert.match(d.autoSend.reason, /left a voicemail — call them back/);
   const summary = (await store.listContactEvents("LOC", "c1")).find((e) => e.type === "call_summary");
   assert.equal(summary.data.missed, true, "the summary says nobody talked");
+});
+
+/* ---------- 2026-10-15: a write-up ask only at a number Matt approved ---------- */
+
+import { writeUpOkFor, asksWriteUp } from "./reply-agent.js";
+
+test("a reply asking them to write it up at a number Matt hasn't approved waits for him", () => {
+  const ask = "Great, glad that works. If the seller's good at 410k, could you write it up on NWMLS forms for us to sign?";
+  const g = gate({ intent: "realm_yes", reply: ask }, { writeUpOk: false });
+  assert.ok(g.flags.some((f) => /write it up .* at a number you haven't approved — approve it on Today first/.test(f)), g.flags.join(" · "));
+  assert.ok(!gate({ intent: "realm_yes", reply: ask }, { writeUpOk: true }).flags.some((f) => /haven't approved/.test(f)), "approved: as before");
+  // Wanting them on our side in general is not a write-up ask.
+  assert.equal(asksWriteUp("If anything else comes up, we'd love to have you represent us on the buy side."), false);
+  assert.equal(asksWriteUp("Could you represent us on the offer?"), true);
+  // They handed the write-up back to us: saying we're not agents is required, not held.
+  const back = gate({ intent: "question", reply: "We're not agents and don't have one on this, so we can't put it on NWMLS forms ourselves. Who on your side would write it up?" },
+    { writeUpOk: false, inboundMessage: "Write up whatever you like and send it over" });
+  assert.ok(!back.flags.some((f) => /haven't approved/.test(f)), back.flags.join(" · "));
+});
+
+test("the write-up gate reads the house's number from the book", () => {
+  const numbers = [{ address: "12 Elm St, Renton, WA 98056", amount: 410000, approved: false }, { address: "9 Oak St, Kent, WA", amount: 300000, approved: true }];
+  assert.equal(writeUpOkFor(numbers, "12 Elm St"), false);
+  assert.equal(writeUpOkFor(numbers, "9 Oak St"), true);
+  assert.equal(writeUpOkFor(numbers, "1 Nowhere Rd"), true, "no number on that house: not this gate");
+  assert.equal(writeUpOkFor(numbers, ""), true, "no house named, and one is approved");
+  assert.equal(writeUpOkFor([numbers[0]], ""), false, "no house named, and none approved");
+  assert.equal(writeUpOkFor([], "12 Elm St"), true);
+});
+
+/* ---------- 2026-10-15: agents work for us ---------- */
+
+test("the agent rules say we'd love them to represent us on the purchase, never beside a number", async () => {
+  const { AGENT_GOAL_RULE, REPRESENT_US_LINE } = await import("./shared/conversation-ai.js");
+  assert.match(AGENT_GOAL_RULE, /AGENTS WORK FOR US/);
+  assert.ok(AGENT_GOAL_RULE.includes(REPRESENT_US_LINE));
+  assert.match(AGENT_GOAL_RULE, /never in the same text as a number of ours/);
+  assert.equal(asksWriteUp(`Thanks! If anything rough comes up, ${REPRESENT_US_LINE}.`), false, "the line itself never trips the write-up gate");
 });

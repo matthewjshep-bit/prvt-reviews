@@ -573,3 +573,16 @@ test("houses they named only by town are listed for the next reply by what they 
   const ctx = buildAgentContext({ offers: [], events });
   assert.match(ctx.text, /- the Stanwood houses \(no street yet\) — need a lot of work/);
 });
+
+// 2026-10-15: an agreed number Matt hasn't approved isn't written up yet.
+test("an agreed price at a number we haven't approved tells the bot not to ask for the write-up yet", () => {
+  const o = { id: "o1", address: "12 Elm St, Renton, WA 98056", cashAmount: 410000, status: "countered", statusAt: "2026-10-14T18:00:00Z", createdAt: "2026-10-13T18:00:00Z",
+    autoUnderwrite: { passed: true }, realm: { answer: "yes", ts: "2026-10-14T18:00:00Z" }, hot: { at: "2026-10-14T18:00:00Z", by: "conversation", signal: "writing_up" } };
+  const r = summarizeOffers([o], { now: Date.parse("2026-10-15T18:00:00Z") });
+  assert.match(r.text, /AGREED \(.*\) at \$410,000, but the number is NOT APPROVED on our side yet — don't ask them to write it up/);
+  assert.doesNotMatch(r.text, /the next step is asking them to write it up/);
+  assert.equal(r.numbers[0].approved, false);
+  const ok = summarizeOffers([{ ...o, approved: { amount: 410000, at: "2026-10-15T17:00:00Z", by: "today" } }], { now: Date.parse("2026-10-15T18:00:00Z") });
+  assert.match(ok.text, /HOT \(.*\) — the price conversation is done; the next step is asking them to write it up on NWMLS forms/);
+  assert.equal(ok.numbers[0].approved, true);
+});

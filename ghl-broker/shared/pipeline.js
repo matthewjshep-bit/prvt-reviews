@@ -20,8 +20,8 @@
 
 import {
   effectiveStatus, isExpired, offerExpiresAt, investorStatus, needsAiReview, aiHoldReasons, isAiGenerated, isHot,
-  DEAD_STATUSES, LIVE_DEAL_STAGES,
-  offerHeat,
+  DEAD_STATUSES, LIVE_DEAL_STAGES, OPEN_STATUSES,
+  offerHeat, priceAgreed, agreedAboveOurNumber, numberApproved,
 } from "./offer-status.js";
 import { stepLabel, exhausted, normalizeSteps, questionIn } from "./follow-up.js";
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
@@ -30,7 +30,7 @@ import { openPromises, resolvePromise } from "./promise-resolver.js";
 import { owedPromises, owedPersonPromises, PERSON_PROMISE_WORDS } from "./promise-owed.js";
 import { UNANSWERED_LIMIT } from "./thread-health.js";
 import { botHold, holdLine } from "./bot-hold.js";
-import { groupHouses, resolveHouse } from "./current-offer.js";
+import { groupHouses, resolveHouse, pricedAt } from "./current-offer.js";
 import { showingSummary } from "./showing.js";
 import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
 import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
@@ -87,6 +87,8 @@ export const ACTION_KINDS = [
   { key: "pre_contract",      label: "Before you sign" },
   { key: "underwrite_held",   label: "Underwrites that need a look" },
   { key: "offer_ready",       label: "Priced, not floated" },
+  { key: "no_fit",            label: "Too far under the seller to text" },
+  { key: "approve_number",    label: "Agreed — approve the number" },
   { key: "ladder_exhausted",  label: "Followed up, no reply" },
   { key: "showing_soon",      label: "Walkthroughs coming up" },
   { key: "showing_no_window", label: "No walkthrough window yet" },
@@ -381,7 +383,34 @@ export function buildPipeline({
           ? [{ key: "underwrite_anyway", label: "Underwrite anyway", intent: "secondary" }, { key: "drop", label: "Pass on it", intent: "primary" }]
           : [{ key: "open_editor", label: "Open and fix", intent: "primary" }, { key: "drop", label: "Drop it", intent: "danger" }] }));
     }
-    if (lane === "ready" && card.ai.made && !(o.sends || []).length) {
+    // A listed house where ours is far under the seller's number (or the
+    // list price), so the machine sent a polite no-fit instead of a number
+    // (shared/number-stance.js listedFit, 2026-10-15). Not a pass: Matt
+    // prices it by hand, floats ours anyway, or walks. Gone once the number
+    // moves, a number goes out, or the offer closes.
+    const nf = o.noFit;
+    const noFitLive = Boolean(nf?.at && OPEN_STATUSES.has(status) && !o.deal && !(o.sends || []).length
+      && (ms(o.proactive?.realmCheckAt) ?? 0) <= ms(nf.at) && pricedAt(o) <= ms(nf.at));
+    if (noFitLive) {
+      const theirsK = nf.theirs ? `${Math.round(nf.theirs / 1000)}K` : "";
+      card.actionIds.push(push({ ...base, kind: "no_fit", severity: "soon",
+        title: `${card.address}: ours is ${nf.ratio ? `${Math.round(nf.ratio * 100)}% of ` : "far under "}${nf.source === "seller" ? "the seller's" : "the list price,"} ${theirsK}`,
+        detail: [`cash ${money(o.cashAmount)}`, "the machine told them it doesn't fit and sent no number"].join(" · "),
+        why: "too far apart to text a number",
+        ops: [{ key: "open_editor", label: "Price it by hand", intent: "primary" }, { key: "float_realm", label: "Float ours anyway", intent: "secondary" },
+          { key: "mark_we_passed", label: "We passed", intent: "secondary" }] }));
+    }
+    // They said yes to a number Matt hasn't approved (2026-10-15): the machine
+    // won't ask them to write it up, or to represent us at it, until he does.
+    const agreed = !o.deal && OPEN_STATUSES.has(status) ? priceAgreed(o) : null;
+    if (agreed && !agreedAboveOurNumber(o) && !numberApproved(o)) {
+      const k = `${Math.round((Number(o.cashAmount) || 0) / 1000)}K`;
+      card.actionIds.push(push({ ...base, kind: "approve_number", severity: "now", amount: Math.round(Number(o.cashAmount) || 0),
+        title: `${card.address}: they agreed at ${money(o.cashAmount)} — approve it before we ask for the write-up`,
+        detail: [`agreed by ${String(agreed.via || "their yes").replace(/_/g, " ")}`, "no write-up ask, no NWMLS, until you approve"].join(" · "),
+        ops: [{ key: "approve_number", label: `Approve ${k}`, intent: "primary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
+    }
+    if (lane === "ready" && card.ai.made && !(o.sends || []).length && !noFitLive) {
       card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon",
         readyAt: o.autoUnderwrite?.finishedAt || o.createdAt || null,
         title: `${card.address} is priced and nothing has gone out`, why: o.proactive?.skipped?.reason ? String(o.proactive.skipped.reason).slice(0, 140) : "",

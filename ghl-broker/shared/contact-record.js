@@ -137,6 +137,8 @@ export const EVENT_TYPES = [
   // An agent offered to work together on terms — a list-back, being our
   // buyer's agent, a fee, their deal list (shared/partner-terms.js).
   "partner_terms",
+  // An agent offered a showing on a live house (2026-10-15): held for Matt.
+  "showing_offered",
   // An email address they texted us (shared/contact-email.js). Saved: GHL's
   // email field now has it (data.email, data.previous). Offered: they gave
   // one GHL can't take as is — a different one is on file, or another
@@ -185,6 +187,7 @@ export const EVENT_LABEL = {
   contact_card_sent: "we sent our contact card",
   texts_elsewhere: "an auto-reply says their texts go to another number",
   partner_terms: "they offered to work together",
+  showing_offered: "they offered a showing",
   email_saved: "their email saved to GHL", email_offered: "they gave an email to check",
 };
 
@@ -228,6 +231,7 @@ export const EVENT_ICON = {
   contact_card_sent: "Contact",
   texts_elsewhere: "CircleSlash",
   partner_terms: "Handshake",
+  showing_offered: "Home",
   email_saved: "AtSign", email_offered: "AtSign",
 };
 
