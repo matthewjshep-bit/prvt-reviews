@@ -117,6 +117,10 @@ test("the morning sends the day's calls and the urgent ones to GHL, and never a 
   assert.equal(dana.dedupeKey, "ghl_call:dana:2026-10-15");
   assert.equal(dana.data.kind, "call_hot");
   assert.equal(dana.data.workflowId, WF);
+  // The note beside the Manual Action (GHL's Manual call step has no instructions box).
+  const note = client.of("POST", /^\/contacts\/dana\/notes$/)[0];
+  assert.ok(note, "a note for Dana");
+  assert.match(note.body.body, /^App call today\nWhy: .*12 Elm St is hot at 300K.*\nSay: Hi Dana, it's Matt/s);
   // Nothing was texted.
   assert.equal(client.calls.filter((c) => /conversations\/messages/.test(c.path)).length, 0);
   // The field ids are kept on the job cursor.

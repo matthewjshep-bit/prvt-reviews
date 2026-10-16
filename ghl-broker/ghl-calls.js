@@ -3,10 +3,12 @@
 // Matt dials from his computer in GHL's Manual Actions, not from Today
 // (2026-10-15). GHL's API can't create a Manual Action — only a workflow step
 // can — so Matt keeps one workflow ("App: call today") with a single Manual
-// Action → Phone Call step whose instructions read {{contact.app_call_why}}
-// and {{contact.app_call_say}}. For each call this fills those two contact
-// fields and puts the contact in that workflow. GHL records the call on the
-// contact, call-intake reads it, and the Desk's call row clears itself.
+// call step. GHL's newer Manual call step has no instructions box (Matt,
+// 2026-10-16), so what the call is for and what to say go on a contact note,
+// which GHL shows beside the call; the two contact fields
+// (contact.app_call_why / contact.app_call_say) carry the same words. GHL
+// records the call on the contact, call-intake reads it, and the Desk's call
+// row clears itself.
 //
 // shared/desk.js decides which rows go (ghlCallRows) and which have gone
 // (ghlCallsDue); shared/ghl-calls.js has the words and the ledger. This reads,
@@ -26,7 +28,7 @@
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
 import { recordError, scrubMessage } from "./app-errors.js";
-import { getContact, updateContact, addContactToWorkflow, removeContactFromWorkflow, findOrCreateCustomFieldByKey } from "./ghl.js";
+import { getContact, updateContact, createContactNote, addContactToWorkflow, removeContactFromWorkflow, findOrCreateCustomFieldByKey } from "./ghl.js";
 import { normalizeDesk } from "./shared/call-list.js";
 import { ghlCallRows, ghlCallsDue } from "./shared/desk.js";
 import { callFields, ghlCallsOn, ghlCallWindow, GHL_CALL_FIELDS, GHL_CALL_EVENT_TYPES, liveGhlQueues, ghlCallClaimKey } from "./shared/ghl-calls.js";
@@ -157,7 +159,10 @@ export async function runGhlCalls({ store = defaultStore, locationId, client, sa
       if (prior && prior.claimKey !== claimKey) await removeContactFromWorkflow(client, p.contactId, prior.workflowId || cfg.workflowId).catch(() => null);
       await updateContact(client, p.contactId, { customFields: [{ id: fields.why, value: why }, { id: fields.say, value: say }] });
       await addContactToWorkflow(client, p.contactId, cfg.workflowId);
-      out.queued.push({ ...row, why, say, status: "in GHL" });
+      // The note Matt reads beside the Manual Action. Best-effort: a note
+      // that doesn't land never takes the call back out.
+      const noted = await createContactNote(client, p.contactId, { body: ghlCallNote({ why, say }) }).then(() => true).catch(() => false);
+      out.queued.push({ ...row, why, say, status: "in GHL", ...(noted ? {} : { note: "the note didn't save" }) });
     } catch (e) {
       const error = scrubMessage(e).slice(0, 160);
       await recordError(store, { locationId, area: "ghl-calls", err: e, context: { contactId: p.contactId, kind: r.kind, stage: "queue" } });
@@ -170,6 +175,10 @@ export async function runGhlCalls({ store = defaultStore, locationId, client, sa
   }
   return done();
 }
+
+/** ghlCallNote({ why, say }) → the contact note Matt reads beside the Manual Action. */
+export const ghlCallNote = ({ why = "", say = "" } = {}) =>
+  ["App call today", `Why: ${String(why).trim()}`, say ? `Say: ${String(say).trim()}` : ""].filter(Boolean).join("\n");
 
 /* ---------- the tick: the day's list at 8:30, the urgent ones until 5pm ---------- */
 

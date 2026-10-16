@@ -3,10 +3,11 @@
 // Matt, 2026-10-15: he dials from his computer in GHL's Manual Actions queue,
 // not from Today. GHL's API can't create a Manual Action — only a workflow
 // step can — so he builds one workflow ("App: call today") with a single
-// Manual Action → Phone Call step whose instructions read two contact fields,
-// {{contact.app_call_why}} and {{contact.app_call_say}}. The app fills those
-// two fields and puts the contact in that workflow (ghl-broker/ghl-calls.js);
-// GHL records the call, call-intake reads it, and the call row clears itself.
+// Manual call step. That step has no instructions box (2026-10-16), so the
+// app writes the words twice: two contact fields (contact.app_call_why /
+// contact.app_call_say) and a contact note GHL shows beside the call
+// (ghl-broker/ghl-calls.js). GHL records the call, call-intake reads it, and
+// the call row clears itself.
 //
 // Pure: the setting (saved.desk.ghlCalls, normalised through normalizeDesk in
 // shared/call-list.js) and the words that go in the two fields. Which rows go
