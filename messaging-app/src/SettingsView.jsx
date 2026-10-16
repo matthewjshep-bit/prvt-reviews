@@ -754,7 +754,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         <Txt label="GHL workflow link" value={ghlCalls.workflowId} onChange={setGhlCalls("workflowId")}
           placeholder="https://app.gohighlevel.com/location/…/workflow/…" />
         <p className="mt-1 text-xs text-slate-500">
-          Build a GHL workflow with one Manual Action → Phone Call step reading {"{{contact.app_call_why}}"} and {"{{contact.app_call_say}}"}, publish it, paste its link here.
+          Build a GHL workflow with one Manual call step (re-entry on), publish it, and paste its link here. Each call also gets a contact note saying why and what to say.
         </p>
         {ghlCalls.workflowId && !workflowIdFrom(ghlCalls.workflowId)
           ? <p className="mt-1 text-xs text-red-600">That doesn't look like a GHL workflow link.</p>

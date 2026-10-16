@@ -2540,8 +2540,12 @@ which rows in `shared/desk.js` `ghlCallRows`):
   **App call why** (`contact.app_call_why`: what the call is about and what
   it's for, ≤300 characters — e.g. "Countered 315K on 12 Elm St against our
   300K — 5% apart, a call lands it. Land a number. …") and **App call say**
-  (`contact.app_call_say`: the call card's opener), then adds the contact
-  to the workflow below. Nothing is texted, ever.
+  (`contact.app_call_say`: the call card's opener), adds the contact to the
+  workflow below, and leaves a **contact note** with the same words ("App
+  call today / Why: … / Say: …"). GHL's newer **Manual call** step has no
+  instructions box (2026-10-16), so the note — shown beside the call in
+  Manual Actions — is where Matt reads them. The note is best-effort: one
+  that doesn't save never takes the call back. Nothing is texted, ever.
 
 **Today with it on** (`withoutQueuedCalls`): a call that's in GHL (queued
 today, or since its reason began) leaves Today, and the counts follow. A
@@ -2566,24 +2570,22 @@ GHL write failed; `ghl_call_withdrawn` when a call was taken back out.
 
 **The GHL workflow Matt builds once** (the GHL API can't create a Manual
 Action; only a workflow step can):
-1. GHL → Settings → Custom Fields → add two **Single Line** contact fields
-   named exactly **App call why** and **App call say** (their keys become
-   `contact.app_call_why` and `contact.app_call_say`). The app makes them on
-   its first run if they're missing, but making them first lets the
-   workflow builder offer them.
-2. Automation → Workflows → Create Workflow → Start from scratch. Name it
-   **App: call today**.
-3. No trigger: the app adds contacts itself. (If GHL won't publish without
+1. Automation → Workflows → Create Workflow → Start from scratch. Name it
+   **App: call today** (any name works).
+2. No trigger: the app adds contacts itself. (If GHL won't publish without
    one, use Contact Tag Added → `app-call-today`; the app never sets it.)
-4. Workflow settings: **Allow re-entry ON** (the same person can come back
-   on another day).
-5. Add action → **Manual Action** → type **Phone Call**, assigned to Matt.
-   Instructions: `Why: {{contact.app_call_why}}` on one line,
-   `Say: {{contact.app_call_say}}` on the next.
-6. Save, then **Publish**.
-7. Copy the workflow's link from the browser (…/workflow/<id>) → the app's
+3. Workflow **Settings** tab: **Allow re-entry ON** (the same person can
+   come back on another day).
+4. Add action → **Manual call**. Action name: anything (e.g. "App call").
+   Under **Advanced settings**, assign it to Matt if there's a user field.
+   There's no instructions box — the app's contact note carries the words.
+5. **Save action**, flip **Draft → Publish**.
+6. Copy the workflow's link from the browser (…/workflow/<id>) → the app's
    Settings → **Today's calls in GHL** → paste it in "GHL workflow link",
    tick **Calls go to GHL Manual Actions**, Save.
+
+The two contact fields (**App call why**, **App call say**) are made by the
+app on its first run; nothing to set up for them.
 
 No new Private Integration scopes: contact updates, custom fields and adding
 to a workflow are what outreach already uses (`contacts.write`,
