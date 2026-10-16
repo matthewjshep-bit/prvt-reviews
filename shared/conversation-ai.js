@@ -677,7 +677,11 @@ const PLAYBOOK = () => ({
   // check-in on the normal spacing; after `checkIns` with no movement the
   // house is marked we_passed. A counter with no number that asks nothing of
   // us goes out like a status reply. Agent only. Off; Full on the dial.
-  counterHold: { enabled: false, checkIns: 2 },
+  // A counter within `callWithinPct` of our number is a phone call, not the
+  // hold text (2026-10-15: counters within 5% agreed 13 times in 25, past
+  // 25% never): it stays a person's counter and leads the Desk's call list.
+  // 0 turns that off and the hold answers every counter as before.
+  counterHold: { enabled: false, checkIns: 2, callWithinPct: 10 },
   // The clock. Off by default, and off again per ladder — and even switched
   // on a nudge only DRAFTS unless its intent is also ticked on the auto-send
   // allowlist above. Two switches is the guard, deliberately.
@@ -1021,6 +1025,7 @@ function normalizePlaybook(p, party, seed = {}) {
       // Agent only: a buyer's price is the investor band's business.
       enabled: party === "agent" && bool(src.counterHold?.enabled, false),
       checkIns: int(src.counterHold?.checkIns, 2, 1, 6),
+      callWithinPct: int(src.counterHold?.callWithinPct, 10, 0, 30),
     },
     qualifyFirst: {
       enabled: party === "agent" && bool(src.qualifyFirst?.enabled, false),

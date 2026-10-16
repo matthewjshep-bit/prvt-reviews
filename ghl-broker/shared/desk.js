@@ -307,7 +307,7 @@ export function machineDrives(config) {
     offerNudge: on && Boolean(fu?.ladders?.offer_nudge?.enabled),
     // The hold's check-ins ride the follow-up clock (counter-hold.js).
     counterHold: on && pb?.counterHold?.enabled
-      ? { enabled: true, checkIns: Number(pb.counterHold.checkIns) || 2, gapHours: Number(fu?.minHoursBetween) || 72 } : null,
+      ? { enabled: true, checkIns: Number(pb.counterHold.checkIns) || 2, gapHours: Number(fu?.minHoursBetween) || 72, callWithinPct: pb.counterHold.callWithinPct ?? 10 } : null,
     nudges: on && Boolean(fu?.ladders?.offer_nudge?.enabled) && Number(fu?.ladders?.offer_nudge?.repeatEvery) > 0,
   };
 }

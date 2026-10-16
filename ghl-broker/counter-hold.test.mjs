@@ -14,7 +14,7 @@ const NOW = Date.parse("2026-10-10T16:00:00Z");
 const ago = (d) => new Date(NOW - d * DAY).toISOString();
 const CFG = (on = true) => normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, minHoursBetween: 72 }, counterHold: { enabled: on, checkIns: 2 } } } });
 const heldOffer = (hold) => ({ id: "o1", contactId: "c1", address: "12 Elm St, Seattle, WA 98101", status: "countered", cashAmount: 300000,
-  createdAt: ago(30), sends: [{ ts: ago(20) }], counter: { amount: 315000, at: ago(9) }, counterHold: { ours: 300000, theirs: 315000, nudges: [], replies: [], ...hold } });
+  createdAt: ago(30), sends: [{ ts: ago(20) }], counter: { amount: 340000, at: ago(9) }, counterHold: { ours: 300000, theirs: 340000, nudges: [], replies: [], ...hold } });
 
 test("after the hold: a check-in once the spacing has passed, then the pass after two quiet ones", () => {
   assert.equal(holdState(heldOffer({ at: ago(1) }), { now: NOW }).next, "wait");
@@ -112,4 +112,17 @@ test("the check-in after we hold our number on a counter sends by itself instead
   assert.equal(started[0].kind, "counter_nudge");
   assert.equal(started[0].deps.releaseHeld, true, "released when its gates are clean, like the nightly audit's own");
   assert.match(started[0].deps.releaseReason, /names no number of ours/);
+});
+
+// 2026-10-15: they came down close to our number after the hold. That's a
+// phone call (the Desk's call_counter), so the clock stands down.
+test("a counter close to ours after the hold stops the clock: no check-in and no pass", async () => {
+  const offer = { ...heldOffer({ at: ago(12), nudges: [ago(8), ago(4)] }), counter: { amount: 312000, at: ago(1) } };
+  const deps = { passHeldCounter: async () => { throw new Error("must not pass"); }, startProactive: async () => { throw new Error("must not check in"); } };
+  assert.deepEqual(await runCounterHolds({ locationId: "L", store: fakeStore([offer]), config: CFG(), deps, now: NOW }), []);
+  // Set to 0, the hold's clock runs as before.
+  const off = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, minHoursBetween: 72 }, counterHold: { enabled: true, checkIns: 2, callWithinPct: 0 } } } });
+  const passed = [];
+  await runCounterHolds({ locationId: "L", store: fakeStore([offer]), config: off, deps: { passHeldCounter: async (a) => { passed.push(a); return { ok: true }; } }, now: NOW });
+  assert.equal(passed.length, 1);
 });

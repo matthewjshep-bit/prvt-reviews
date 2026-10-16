@@ -657,3 +657,12 @@ test("the pass on a house we promised a number on is off until switched on, and 
   assert.equal(normalizeConversationAi({ heldTriage: { passOnRetire: "yes" } }).heldTriage.passOnRetire, false);
   assert.equal(normalizeConversationAi(normalizeConversationAi({ heldTriage: { passOnRetire: true } })).heldTriage.passOnRetire, true);
 });
+
+// 2026-10-15: a counter within this percent of our number is a call, not the hold text.
+test("a close counter's percent defaults to 10, stays in 0–30, and survives a save", () => {
+  assert.equal(normalizeConversationAi({}).parties.agent.counterHold.callWithinPct, 10);
+  assert.equal(normalizeConversationAi({ parties: { agent: { counterHold: { callWithinPct: 0 } } } }).parties.agent.counterHold.callWithinPct, 0);
+  assert.equal(normalizeConversationAi({ parties: { agent: { counterHold: { callWithinPct: 80 } } } }).parties.agent.counterHold.callWithinPct, 30);
+  const saved = normalizeConversationAi({ parties: { agent: { counterHold: { enabled: true, callWithinPct: 7 } } } });
+  assert.equal(normalizeConversationAi(saved).parties.agent.counterHold.callWithinPct, 7);
+});

@@ -429,3 +429,21 @@ test("an email they texted that GHL couldn't take is on Today until an email is 
 
   assert.equal(callList({ events: [{ ...offered, at: ago(30) }], now: NOW }).find((x) => x.kind === "email_check"), undefined, "three weeks, then it's gone");
 });
+
+/* ---------- a counter close to ours is a call (2026-10-15) ---------- */
+
+test("a counter that comes in close to our number after the hold is a call again, not the machine's", () => {
+  const MACHINE = { hotPush: true, offerNudge: true, counterHold: { enabled: true, checkIns: 2, gapHours: 72, callWithinPct: 10 }, nudges: true };
+  const held = (counter) => offer({ id: "5", contactId: "held", contactName: "Agent held", address: "5 Main St, Seattle, WA 98101", status: "countered", cashAmount: 300000,
+    counter, counterHold: { at: ago(4), ours: 300000, theirs: 340000, nudges: [ago(1)], replies: [] } });
+  const heldCard = card({ lane: "countered", offerId: "5", contactId: "held", contactName: "Agent held", address: "5 Main St, Seattle, WA 98101", cashAmount: 300000, status: "countered" });
+  // Their 340K before the hold: the machine holds it.
+  const before = callList({ offers: [held({ amount: 340000, at: ago(5) })], cards: [heldCard], now: NOW, machine: MACHINE });
+  assert.equal(before[0].kind, "counter_held");
+  // They came down to 315K since: 5% apart, a call.
+  const after = callList({ offers: [held({ amount: 315000, at: ago(0.5) })], cards: [heldCard], now: NOW, machine: MACHINE });
+  assert.equal(after[0].kind, "call_counter");
+  assert.equal(after[0].section, "call");
+  assert.equal(after[0].counter.closePct, 5);
+  assert.match(after[0].title, /5% apart, a call lands it/);
+});

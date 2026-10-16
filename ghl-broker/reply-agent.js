@@ -59,6 +59,7 @@ import { agentFocusRule } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { holdFor } from "./bot-hold.js";
 import { machineMayStart, LIVE_THREAD_KINDS, PASS_SHAPED_KINDS } from "./shared/thread-health.js";
+import { closeCounter } from "./shared/counter-hold.js";
 import { agentTurnReason } from "./agent-focus.js";
 import { streetOf } from "./shared/agent-focus.js";
 import { holdLine } from "./shared/bot-hold.js";
@@ -3746,7 +3747,11 @@ async function runReply(job, ctx) {
         // not a gap to work however softly it's put; the list price as their
         // floor is the same thing said plainly.
         const beyondReach = reference > 0 && (theirs > reference * (1 + WALK_AWAY_GAP) || draft.counterFloor === "list_price");
-        if (reference > 0 && theirs > passLine && firmness === "soft" && !beyondReach && !(full.requotes || []).length) {
+        // Close to our number (2026-10-15): a call, never a pass or a soft
+        // round by text — the hold below hands it to a person.
+        const close = closeCounter({ ours: full.cashAmount, theirs, pct: config.parties?.agent?.counterHold?.callWithinPct ?? 10 });
+        if (close) { /* a person's call: see the hold below */ }
+        else if (reference > 0 && theirs > passLine && firmness === "soft" && !beyondReach && !(full.requotes || []).length) {
           // A soft floor is an opening. Keep it a live negotiation: file their
           // number on the offer, and ask for the value and the work so the
           // re-quote has something to run on. No number of ours, no goodbye.
@@ -3793,7 +3798,16 @@ async function runReply(job, ctx) {
     const hold = full ? holdNumber({ offer: full, transcript: a.transcript || "" }) : null;
     const theirs = Math.round(Number(draft.counterAmount) || 0);
     const comeUp = asksUsToComeUp(job.originalMessage || job.message);
-    if (hold && (theirs > hold.amount || (!theirs && comeUp))) {
+    // Close to our number: a phone call lands these and the hold text loses
+    // them (2026-10-15: within 5%, 13 of 25 agreed; past 25%, none). No hold,
+    // no pass: it stays a person's counter, and the Desk's call list leads
+    // with it (call_counter).
+    const close = hold ? closeCounter({ ours: hold.amount, theirs, pct: config.parties?.agent?.counterHold?.callWithinPct ?? 10 }) : null;
+    if (close) {
+      const where = String(full.address || "").split(",")[0].trim() || "the house";
+      draft = { ...draft, needsHuman: true, callCounter: { offerId: full.id, ours: hold.amount, theirs, pct: close.pct },
+        humanReason: `their ${fmtMoney(theirs)} on ${where} is ${close.pct}% over our ${fmtMoney(hold.amount)} — call them; a held number by text loses these` };
+    } else if (hold && (theirs > hold.amount || (!theirs && comeUp))) {
       const where = String(full.address || "").split(",")[0].trim() || "the house";
       // Said once; a second ask that didn't move gets the short version.
       const again = Boolean(full.counterHold?.at) && !(theirs > 0 && theirs < (Number(full.counterHold.theirs) || Infinity));
@@ -4685,6 +4699,8 @@ async function runReply(job, ctx) {
     ...(draft.counterHold ? { counterHold: draft.counterHold } : {}),
     // Their yes landed on a house we passed on: Today's row says so.
     ...(draft.yesAfterPass ? { yesAfterPass: draft.yesAfterPass } : {}),
+    // A counter close to ours: a call, not the hold text (call_counter).
+    ...(draft.callCounter ? { callCounter: draft.callCounter } : {}),
     promptVersion: 3,
     updatedAt: ts,
   });

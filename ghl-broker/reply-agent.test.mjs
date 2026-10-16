@@ -2599,27 +2599,34 @@ test("a counter just over the ceiling no longer goes out at our max by itself �
   assert.match(d.exception?.reason || "", /never goes above the \$300,000 we sent/);
 });
 
-test("after we came back at our max, another counter over it is their pass — no second round", async () => {
-  _resetJobs();
-  const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
-  const offer = { ...NEGOTIATION_OFFER, cashAmount: ceiling - 1000, counterBand: { at: new Date().toISOString(), acceptedAt: new Date().toISOString(), amount: ceiling } };
-  const theirs = ceiling + 5000;
-  const { client } = ghlStubFor(["agent"]);
-  const store = negotiationStore(offer);
-  const statuses = [];
-  const { job } = await startReply({
-    client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
-    message: `they still need ${theirs / 1000}k`,
-    deps: {
-      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: theirs,
-        reply: "Let me check.", propertyAddress: "12 Elm St" }),
-      setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status }; },
-    },
-  });
-  await settle();
-  const d = await store.getReplyDraft(job.draftId);
-  assert.equal(d.intent, "rejection", d.summary);
-  assert.ok(d.actions.some((a) => a.type === "mark_offer_passed"), `filed as their pass: ${d.actions.map((a) => a.type)}`);
+// 2026-10-15: one just over our max is close enough for a call (a person's
+// counter, never a pass by text); one well past it is still their pass.
+test("after we came back at our max, a counter well over it is their pass — no second round; one just over it is a call", async () => {
+  const run = async (theirs) => {
+    _resetJobs();
+    const ceiling = autoAcceptCeiling({ offer: NEGOTIATION_OFFER, settings: bandSaved() }).ceiling;
+    const offer = { ...NEGOTIATION_OFFER, cashAmount: ceiling - 1000, counterBand: { at: new Date().toISOString(), acceptedAt: new Date().toISOString(), amount: ceiling } };
+    const { client } = ghlStubFor(["agent"]);
+    const store = negotiationStore(offer);
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: bandSaved(), store, contactId: "c1", sendsEnabled: true,
+      message: `they still need ${Math.round(theirs(ceiling) / 1000)}k`,
+      deps: {
+        draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: theirs(ceiling),
+          reply: "Let me check.", propertyAddress: "12 Elm St" }),
+        setOfferStatus: async ({ status }) => ({ ok: true, address: offer.address, status }),
+      },
+    });
+    await settle();
+    return store.getReplyDraft(job.draftId);
+  };
+  const far = await run((ceiling) => Math.round(ceiling * 1.15 / 1000) * 1000);
+  assert.equal(far.intent, "rejection", far.summary);
+  assert.ok(far.actions.some((a) => a.type === "mark_offer_passed"), `filed as their pass: ${far.actions.map((a) => a.type)}`);
+  const near = await run((ceiling) => ceiling + 5000);
+  assert.equal(near.intent, "counter", near.summary);
+  assert.ok(!near.actions.some((a) => a.type === "mark_offer_passed"));
+  assert.notEqual(near.status, "scheduled");
 });
 
 test("the first no on a live offer asks for their number without filing it dead; the second no closes it", async () => {
@@ -2981,18 +2988,18 @@ const holdRun = async ({ message, draft, on = true }) => {
 };
 
 test("a counter above our number gets our number once, then we move on", async () => {
-  const { job, d, marks } = await holdRun({ message: "Seller says 315 and not a dollar less",
-    draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner and get back to you." } });
+  const { job, d, marks } = await holdRun({ message: "Seller says 335 and not a dollar less",
+    draft: { intent: "counter", counterAmount: 335000, reply: "Let me run that by my partner and get back to you." } });
   assert.equal(job.status, "done", job.error);
   assert.match(d.reply, /hold at 300,000/, d.reply);
   assert.doesNotMatch(d.reply, /\$/, "no dollar sign: the carrier filters");
   assert.doesNotMatch(d.reply, /partner|get back/);
   assert.equal(d.autoSend.decided, true, `${d.autoSend.reason} | flags: ${(d.flags || []).join(" · ")} | autoSendable ${d.autoSendable} gateClean ${d.gateClean}`);
   assert.equal(d.status, "scheduled");
-  assert.deepEqual(marks.map((m) => [m.offerId, m.ours, m.theirs]), [["o1", 300000, 315000]]);
+  assert.deepEqual(marks.map((m) => [m.offerId, m.ours, m.theirs]), [["o1", 300000, 335000]]);
   // Off: the counter waits for a person, exactly as before.
-  const off = await holdRun({ on: false, message: "Seller says 315 and not a dollar less",
-    draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner and get back to you." } });
+  const off = await holdRun({ on: false, message: "Seller says 335 and not a dollar less",
+    draft: { intent: "counter", counterAmount: 335000, reply: "Let me run that by my partner and get back to you." } });
   assert.notEqual(off.d.status, "scheduled");
   assert.equal(off.marks.length, 0);
 });
@@ -3002,9 +3009,9 @@ test("a counter above our number gets our number once, then we move on", async (
 // bot held our number and the offer sat on "countered" with check-ins still
 // to come. A seller who can't come down to our number has passed on it.
 test("an agent who says the seller can't go any lower than their counter has passed: we hold our number once and the offer is marked they passed", async () => {
-  for (const message of ["Seller needs 315, can't go any less.", "Seller can’t go any lower than 315", "315 is firm"]) {
+  for (const message of ["Seller needs 335, can't go any less.", "Seller can’t go any lower than 335", "335 is firm"]) {
     const { job, d, marks, statuses } = await holdRun({ message,
-      draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner." } });
+      draft: { intent: "counter", counterAmount: 335000, reply: "Let me run that by my partner." } });
     assert.equal(job.status, "done", job.error);
     assert.match(d.reply, /hold at 300,000/, message);
     assert.equal(d.status, "scheduled", message);
@@ -3013,12 +3020,31 @@ test("an agent who says the seller can't go any lower than their counter has pas
     assert.ok(statuses.indexOf("countered") < statuses.indexOf("passed"), "their number is filed first");
   }
   // A plain counter is a negotiation: held, the check-ins follow, not passed.
-  const plain = await holdRun({ message: "Seller says 315", draft: { intent: "counter", counterAmount: 315000, reply: "Let me see." } });
+  const plain = await holdRun({ message: "Seller says 335", draft: { intent: "counter", counterAmount: 335000, reply: "Let me see." } });
   assert.match(plain.d.reply, /hold at 300,000/);
   assert.ok(!plain.statuses.includes("passed"), JSON.stringify(plain.statuses));
   // With the hold off it waits for a person, and nothing is filed dead.
-  const off = await holdRun({ on: false, message: "Seller needs 315, can't go any less.", draft: { intent: "counter", counterAmount: 315000, reply: "Let me see." } });
+  const off = await holdRun({ on: false, message: "Seller needs 335, can't go any less.", draft: { intent: "counter", counterAmount: 335000, reply: "Let me see." } });
   assert.ok(!off.statuses.includes("passed"), JSON.stringify(off.statuses));
+});
+
+// The funnel review (2026-10-15): counters within 5% of our number agreed 13
+// times in 25, and past 25% never. A 5% gap got the hold text, then two
+// check-ins, then we passed — the kind of gap a phone call closes.
+test("a counter within 10% of our number is a call for you, not the hold text, and is never passed", async () => {
+  for (const message of ["Seller says 315 and not a dollar less", "Seller needs 315, can't go any less.", "Seller says 315"]) {
+    const { job, d, marks, statuses } = await holdRun({ message,
+      draft: { intent: "counter", counterAmount: 315000, reply: "Let me run that by my partner and get back to you." } });
+    assert.equal(job.status, "done", job.error);
+    assert.equal(d.intent, "counter", message);
+    assert.notEqual(d.status, "scheduled", `${message}: nothing sends itself`);
+    assert.doesNotMatch(d.reply, /hold at/, message);
+    assert.equal(marks.length, 0, `${message}: no hold, so no check-ins and no pass after it`);
+    assert.deepEqual(d.callCounter, { offerId: "o1", ours: 300000, theirs: 315000, pct: 5 }, message);
+    assert.match(d.humanReason, /5% over our \$300,000 — call them/);
+    assert.ok(!statuses.includes("passed"), `${message}: ${statuses}`);
+    assert.ok(!d.actions.some((x) => x.type === "mark_offer_passed"), message);
+  }
 });
 
 test("'make an offer closer to where they are' with no number is held at ours too", async () => {

@@ -23,7 +23,7 @@ import { callEventConnected } from "./talked-to.js";
 import { agentSegment } from "./agent-pulse.js";
 import { IRRITATED_RX } from "./thread-health.js";
 import { handsWriteUpBack } from "./conversation-ai.js";
-import { holdState } from "./counter-hold.js";
+import { holdState, callsInstead, closeCounter } from "./counter-hold.js";
 import { flipRead } from "./flip-read.js";
 import { offMarketCue } from "./off-market.js";
 import { sameStreet } from "./us-address.js";
@@ -373,7 +373,9 @@ export function callList({
     const theirs = Number(o.counter?.amount) || 0;
     // Held at our number (counter-hold.js): the machine checks in and passes
     // — "come closer to where they are" too, which carries no number.
-    if (machine.counterHold?.enabled && o.counterHold?.at) {
+    // Unless their newest counter came in close to ours since (2026-10-15):
+    // that one is a call again.
+    if (machine.counterHold?.enabled && o.counterHold?.at && !callsInstead(o, machine.counterHold.callWithinPct ?? 10)) {
       const ourLast = (draftsBy.get(c) || []).filter((d) => d.status === "sent").map((d) => d.sentAt || d.updatedAt || d.createdAt).filter(Boolean).sort().at(-1) || null;
       const st = holdState(o, { lastInboundAt: lastWordIso(lastWord(c)), lastOutboundAt: ourLast, checkIns: machine.counterHold.checkIns, gapHours: machine.counterHold.gapHours, now });
       machineRow("counter_held", { contactId: c, contactName: card.contactName, offerId: card.offerId, address: card.address,
@@ -385,10 +387,14 @@ export function callList({
     if (!(theirs > ours)) continue;
     const band = newestBand(draftsBy.get(c) || [], card.offerId);
     const ceiling = Number(band?.exception?.ceiling) || 0;
-    const counter = { ours, theirs, gap: theirs - ours, ceiling: ceiling || null, overCeiling: ceiling ? Math.max(0, theirs - ceiling) : null, basis: band?.exception?.basis || "", draftId: band?.status === "draft" ? band.id : null };
+    // Within callWithinPct of ours (2026-10-15): the reply agent held no
+    // number by text — this call is how it lands.
+    const close = closeCounter({ ours, theirs, pct: machine.counterHold?.callWithinPct ?? 10 });
+    const counter = { ours, theirs, gap: theirs - ours, ceiling: ceiling || null, overCeiling: ceiling ? Math.max(0, theirs - ceiling) : null, basis: band?.exception?.basis || "", draftId: band?.status === "draft" ? band.id : null,
+      ...(close ? { closePct: close.pct } : {}) };
     add("call_counter", { contactId: c, contactName: card.contactName, offerId: card.offerId, address: card.address, since: o.counter?.at || o.statusAt,
       draftId: counter.draftId,
-      why: `countered ${kText(theirs)} on ${street(card.address)} against our ${kText(ours)}`,
+      why: `countered ${kText(theirs)} on ${street(card.address)} against our ${kText(ours)}${close ? ` — ${close.pct}% apart, a call lands it` : ""}`,
       goal: `Land a number. Ours ${kText(ours)}, theirs ${kText(theirs)} (${kText(theirs - ours)} apart)${ceiling ? `; the buyer ceiling is ${kText(ceiling)}` : ""}. Never above what we sent without deciding it yourself.`,
       opener: `Hi ${first(card.contactName)}, it's Matt — got your ${kText(theirs)} on ${street(card.address)}. Easier to talk it through than text.`,
       extra: { counter }, agePenaltyFrom: lastWord(c) });

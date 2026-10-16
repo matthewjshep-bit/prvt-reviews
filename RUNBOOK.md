@@ -2626,6 +2626,20 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
     of NEVER_AUTO.
   - Preview: `GET …/follow-ups?preview=1` → `counterHolds.rows`, even with
     the switch off.
+  - **A counter close to ours is a call, not the hold (2026-10-15).** The
+    funnel review: counters within 5% of our number agreed 13 times in 25;
+    past 25%, none of 95. A counter within
+    `parties.agent.counterHold.callWithinPct` (default **10**, 0–30, 0 = off)
+    of our number gets no hold text and is never passed by text (the soft
+    round, the pass line and the firm-floor pass all stand aside). It stays a
+    person's `counter` draft carrying `callCounter { offerId, ours, theirs,
+    pct }`, the offer is marked countered as before, and the Desk's
+    `call_counter` row says "N% apart, a call lands it". A close counter that
+    comes in after an earlier hold takes the house off the hold's clock (no
+    check-in, no pass) and back onto the call list (`callsInstead`,
+    shared/counter-hold.js). The counter band and `never_above_sent` are
+    unchanged. Check: the counter's draft in the outbox shows "N% over our
+    $X — call them"; the Desk shows the `call_counter` row.
 - **Your texts in GHL count** (`ghl-broker/hand-reply-sweep.js`, every tick).
   - It reads the moved conversations and picks out the outbound texts with a
     GHL `userId` (a person). The app's own sends come as source `app` with no
