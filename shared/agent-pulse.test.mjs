@@ -365,14 +365,14 @@ test("a house we priced, passed on, or texted them about first is never the chec
 });
 
 test("with no house to name, a check-in may say we just closed one in a town they work — by the town only", () => {
-  const closes = recentCloses([closedDeal("4747 46th Ave S, Kent, WA 98032"), closedDeal("1 Far Rd, Yakima, WA 98901", 70),
+  const closes = recentCloses([closedDeal("88 Quill Ave S, Kent, WA 98032"), closedDeal("1 Far Rd, Yakima, WA 98901", 70),
     { ...closedDeal("2 Mid St, Kent, WA 98032"), deal: { stage: "assigned", stageHistory: [{ stage: "assigned", ts: ago(3) }] } }], NOW);
   assert.deepEqual(closes.map((c) => c.town), ["Kent"], "closed in the last 60 days; an assignment isn't a close");
   const works = agent({ lastInboundAt: ago(30), listings: [listing({ firstSeen: ago(40) })] });
   assert.deepEqual(checkInHook({ agent: works, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }), { kind: "closed_nearby", town: "Kent" });
   const elsewhere = agent({ lastInboundAt: ago(30), offers: [passed({ address: "3 Bay St, Everett, WA 98201" })] });
   assert.deepEqual(checkInHook({ agent: elsewhere, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }), { kind: "situation" });
-  assert.doesNotMatch(JSON.stringify(agentPulseSubject({ agent: works, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }).hook), /4747|46th/);
+  assert.doesNotMatch(JSON.stringify(agentPulseSubject({ agent: works, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }).hook), /88 Quill|Quill Ave/);
   assert.equal(checkInHook({ agent: works, verdict: { pulseReason: "deal_thanks" }, houses: { closes }, now: NOW }), null, "the thank-you is about that deal");
   assert.deepEqual(checkInHook({ agent: works, verdict: { pulseReason: "fresh_listing", listing: listing() }, houses: { closes }, now: NOW }), { kind: "listing" });
 });

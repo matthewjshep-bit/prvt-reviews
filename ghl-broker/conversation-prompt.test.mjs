@@ -395,7 +395,7 @@ test("a cold agent's fresh listing gets the short first-text voice: their name, 
 });
 
 test("the listing check-in and the thank-you keep their own one thing, whatever the hook says", () => {
-  const l = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing: { street: "4706 64th St E", city: "Tacoma", dom: 70 },
+  const l = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing: { street: "77 Heron Way", city: "Tacoma", dom: 70 },
     hook: { kind: "mentioned", street: "Pine St", daysAgo: 3 } });
   assert.doesNotMatch(l, /Pine St/);
   const thanks = outboundOpening({ kind: "agent_pulse", reason: "deal_thanks", segment: "partner", hook: { kind: "closed_nearby", town: "Kent" } });
