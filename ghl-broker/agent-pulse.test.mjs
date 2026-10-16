@@ -11,7 +11,7 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "agent-pulse-test-"
 const { store } = await import("./store.js");
 const { recordEvent } = await import("./contact-record.js");
 const { planAgentPulse, startAgentPulse, maybeRunAgentPulse, _resetJobs, CURSOR_NAME, tierCardsFrom, pulseTierCards,
-  startMattsFifteen, maybeRunMattsFifteen, MATTS_FIFTEEN_CURSOR } = await import("./agent-pulse.js");
+  startMattsFifteen, maybeRunMattsFifteen, MATTS_FIFTEEN_CURSOR, voidDroppedClaims } = await import("./agent-pulse.js");
 const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
 await store.init();
 
@@ -118,6 +118,53 @@ test("a known agent's fresh distressed listing from the pull is raised by street
   assert.ok(events.some((e) => e.type === "listing_pinged" && e.data?.listingKey === "L-123"), "one text per listing, ever");
   const again = await planAgentPulse({ locationId: loc, saved: savedWith(), store });
   assert.equal(again.picks.some((p) => p.contactId === "ag3"), false);
+});
+
+test("an agent whose check-in a restart dropped before it was drafted is checked in on at the next run, not three weeks later", async () => {
+  _resetJobs();
+  const loc = "loc-ap-dropped";
+  await repliedAgent(loc, "ag-drop");
+  await repliedAgent(loc, "ag-kept");
+  // Friday's run: ag-drop's job is queued in memory when a deploy restarts
+  // the broker, so it never drafts and never settles; ag-kept's draft is written.
+  startAgentPulse({ client, locationId: loc, saved: savedWith(), store,
+    deps: { getContact: reachable, startProactive: async (a) => {
+      if (a.contactId === "ag-kept") {
+        const d = await store.createReplyDraft({ locationId: loc, contactId: "ag-kept", status: "draft", channel: "sms", reply: "Hi", outbound: { kind: "agent_pulse" }, updatedAt: new Date().toISOString() });
+        return { job: { id: "j-kept", draftId: d.id } };
+      }
+      return { job: { id: "j-lost" } };
+    } } });
+  await settle();
+  _resetJobs();
+  const events = await store.listContactEvents(loc, "ag-drop", { limit: 50 });
+  assert.ok(events.some((e) => e.type === "agent_pulse_sent"));
+  assert.equal(events.some((e) => e.type === "agent_pulse_voided"), false, "nothing settled, so nothing voided it");
+
+  // Monday's run.
+  const calls = [];
+  const monday = Date.now() + 3 * DAY;
+  startAgentPulse({ client, locationId: loc, saved: savedWith(), store, now: monday,
+    deps: { getContact: reachable, startProactive: async (a) => { calls.push(a.contactId); return { job: { id: "j2", draftId: "d2" } }; } } });
+  await settle();
+  assert.ok(calls.includes("ag-drop"), "the dropped one is checked in on again");
+  assert.equal(calls.includes("ag-kept"), false, "the one whose draft was written waits its turn");
+  const after = await store.listContactEvents(loc, "ag-drop", { limit: 50 });
+  assert.match(after.find((e) => e.type === "agent_pulse_voided")?.data?.why || "", /restart dropped it/);
+});
+
+test("a check-in claim still drafting, or under two hours old, is never voided as dropped", async () => {
+  _resetJobs();
+  const loc = "loc-ap-drafting";
+  await recordEvent({ store, locationId: loc, contactId: "ag-young", party: "agent", type: "agent_pulse_sent", at: new Date().toISOString(), source: "sweep",
+    dedupeKey: "agent_pulse_sent:ag-young:today", data: { reason: "general" } });
+  await recordEvent({ store, locationId: loc, contactId: "ag-queued", party: "agent", type: "agent_pulse_sent", at: new Date(Date.now() - 5 * 3600000).toISOString(), source: "sweep",
+    dedupeKey: "agent_pulse_sent:ag-queued:today", data: { reason: "general" } });
+  const r = await voidDroppedClaims({ store, locationId: loc, live: new Set(["ag-queued"]) });
+  assert.equal(r.voided, 0);
+  const r2 = await voidDroppedClaims({ store, locationId: loc, live: new Set() });
+  assert.equal(r2.voided, 1, "once nothing is drafting it, the five-hour-old one is dropped");
+  assert.equal((await store.listContactEvents(loc, "ag-young", { limit: 10 })).some((e) => e.type === "agent_pulse_voided"), false);
 });
 
 test("a dry run picks and reports, and claims nobody", async () => {

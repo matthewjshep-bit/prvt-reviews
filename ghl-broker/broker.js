@@ -162,12 +162,12 @@ app.use("/api/offers", createPostMortemRouter({ resolveLocation, feedbackFor: of
 // unless outreach_open is on the agent allowlist.
 const outreachRouter = createOutreachRouter({
   resolveLocation,
-  firstTouch: async ({ locationId, client, contactId, hook = {}, onSettled = null }) => {
+  firstTouch: async ({ locationId, client, contactId, hook = {}, onSettled = null, direct = false }) => {
     const saved = (await store.getOfferSettings(locationId)) || {};
     return startProactive({
       client, locationId, saved, store, contactId, kind: "outreach_open",
       subject: { address: hook.address || "", hookPrice: hook.price || 0, hookDom: hook.dom || 0, brokerage: hook.brokerage || "",
-        county: hook.county || "", city: hook.city || "", variant: openerVariant(contactId, 1000), house: hook },
+        county: hook.county || "", city: hook.city || "", variant: openerVariant(contactId, 1000), house: hook, ...(direct ? { direct: true } : {}) },
       sendsEnabled: CONVERSATION_SENDS_LIVE,
       deps: { ...offersRouter.conversationDepsFor({ locationId, client, saved }), ...(onSettled ? { onSettled } : {}) },
     });

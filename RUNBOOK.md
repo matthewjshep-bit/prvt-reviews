@@ -5088,6 +5088,18 @@ listing come back, and the agent is tried the next day. `agent_pulse_texted`
 is written when a check-in actually sends, and is what the cadence and the
 unanswered counts read.
 
+**A claim a restart dropped comes back (2026-10-16).** A deploy restarts the
+broker while check-in drafts are still queued in memory; those never settle,
+so their claims were never voided, and an unvoided claim reads as "checked in
+on today" (`lastPulseAt`): the agent waited the full three or four weeks having
+heard nothing. A deploy on 2026-10-16 dropped about 80 that way. Now each run
+(the daily one and Matt's 15) first calls `voidDroppedClaims`: a claim from
+the last 7 days that is over 2 hours old (`DROPPED_CLAIM_AFTER_MS`), with no
+check-in draft for that agent after it, no `agent_pulse_texted` since, and no
+job for them still queued or running, is voided ("a restart dropped it before
+it was drafted"), with its listing ping. The run's job shows `recovered`.
+Check: `GET /api/outreach/pulse` → `job.recovered` after a run.
+
 **Switches** (`settings.outreachAutopilot.pulse`, outside the autonomy dial,
 like the buyer pulse): `enabled` drafts the day's check-ins into the outbox,
 and `autoSend` lets a clean one send itself. Both ship off, and
@@ -5167,7 +5179,8 @@ each sample.
 **A cold agent's fresh listing reads like a first text (2026-10-15).** A
 cold agent's `fresh_listing` check-in is in effect a second first text, so it
 gets the short first-text voice: their first name, the street, one question
-("a bit of a project?"), under `OPENER_MAX_CHARS` (200). No past house, no
+("a bit of a project?"), under `OPENER_MAX_CHARS` (200; 160 and plain, with no
+remark about the house and no joke, since 2026-10-16). No past house, no
 other ask, no call offer. A draft over 200 is written again once
 (`writeShorterFirstText`, `outbound.coldOpen`). `coldEveryDays` still
 defaults to 60 (Matt sets 30 live). No new switch: it rides the check-in's
@@ -5322,6 +5335,15 @@ A released agent gets the general check-in. An open offer is never the
 check-in's house, and the past-house gate holds a draft that names it. "You
 have the thread" was already bounded: 3 days after your last hand reply
 (`PERSON_HAS_IT_DAYS`).
+
+**An open offer never holds a silent agent (2026-10-16).** `openOfferIdle`
+(shared/agent-pulse.js) lets the agent go to the check-in when the offer's
+nudge, push or passed-house clock hasn't fired once in `SILENT_OPEN_DAYS` (14)
+— since its last step, or since our number went out — and nobody has texted
+either way in that time. A pause with a date, a person on the thread, or a
+clock that is firing still holds them. Found on an agent texted 377K in a plain
+reply: "that won't work", our ask for their number, then 15 days of nothing
+while "an open offer" held him and no nudge ever went.
 
 ### How often they asked, and when to stop asking (2026-10-14)
 
@@ -5667,6 +5689,39 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   the phrase still counts for the GHL workflow's template. Check: `POST
   /api/outreach/opener/preview` gives three samples, each at most 200
   characters, none asking for other fixers.
+- **Plain, like a person (2026-10-16).** Matt: "the first text to agents look
+  slightly spammy, can we make them more approachable and like a human". The
+  day's batch read like a mass text: a remark about the house ("dates back to
+  the 60s, always curious what's behind those walls", "surprised it's been
+  sitting"), "I flip houses around Whatcom County", the full street address,
+  and "project or pretty turnkey?" on most. Now the `outreach_open` rule asks
+  for the street by name without the house number (`streetName`), the town
+  at most (no county or region), a few plain words about who we are ("I fix
+  up older homes locally"), and one plain question ("does it need much work,
+  or is it pretty move-in ready?"). Nothing about the house itself, no
+  compliments, no jokes, "fix up" or "renovate" rather than "flip".
+  `OPENER_MAX_CHARS` is 160 (the plain text is about 120). The opening moves
+  and the who-we-are lines still vary per agent; `WHAT TO NOTICE` and the
+  humour line are gone (`outbound.notice` is always ""). New defaults; the
+  2026-10-15 set (`PREVIOUS_DEFAULT_OPENER_EXAMPLES`) saved word for word
+  reads as unchanged. "good bones" and "soft spot" join the overused phrases,
+  and no opening move may say "caught my eye" any more. A cold agent's
+  fresh-listing check-in gets the same plain voice. The draft and
+  `outreach_sent` carry `style: "plain"`, so replies can be compared with the
+  texts before. No switch: it is how the first text is written.
+- **Redrafting held first texts (2026-10-16).** `POST
+  /api/outreach/autopilot/first-texts/restyle {dryRun = true, since, limit}`
+  (`restyleFirstTexts`): every first text you held before it went (flag "held
+  by you", written since `since`, default the last day) is put aside —
+  dismissed, `dismissedBy: "restyle"`, flag "restyled — not sent", which the
+  coach reads as the machine binning it, not you — and the agent's first text
+  starts again about the same listing through `openFirstText`. Never an agent
+  with an `outreach_sent`, nor a draft held for another reason. A restyled
+  draft doesn't count as the agent having a draft, so one whose new text a
+  restart drops is found by the lost path of `retryFirstTexts`. These are
+  drafted directly (`subject.direct`), not through the Batch API: you held them
+  to send today, and a batch round can take 15 minutes for each rewrite. They
+  still run on the machine lane, 24 at a time. Check: the dry run lists who.
 - **Nobody is created and left untexted.** Before importing, the sweep asks how
   many machine drafts the Conversation AI's daily cap still allows after the
   reply reserve (`machineRoomToday`), and lowers the day's number to fit. A

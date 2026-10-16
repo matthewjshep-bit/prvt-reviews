@@ -25,7 +25,23 @@
 // ended on cost about 12 points and most of the length. So each is one
 // question about the listing, about 150 characters filled in, and the ask for
 // their other fixers waits for their first answer.
+// 2026-10-16 (Matt: "the first text to agents look slightly spammy, can we
+// make them more approachable and like a human"): the day's batch read like
+// a mass text — a remark about the house, "I flip houses around X County",
+// and "project or pretty turnkey?" on most of them. Now it's what a person
+// texts someone they haven't met: the street, a few plain words about who we
+// are, one plain question. {street} is the street name without the number.
 export const DEFAULT_OPENER_EXAMPLES = [
+  "Hi {first}, I saw your listing on {street}. I fix up older homes locally. Does it need much work, or is it pretty move-in ready?",
+  "Hey {first}, does your listing on {street} need much work? I renovate a few houses a year and I'm looking for my next one.",
+  "Hi {first}, I'm local and fix up houses. Is the place you have listed on {street} in decent shape, or does it need some updating?",
+  "Hey {first}, saw your listing on {street} in {town}. Has it been updated, or does it still need some work?",
+];
+
+// The defaults from 2026-10-15 to 2026-10-16: shorter than the first ones,
+// still with a remark and a county in them. A stored copy is read as
+// "never changed", like the older ones below.
+export const PREVIOUS_DEFAULT_OPENER_EXAMPLES = [
   "Hi {first}, came across your listing at {street}. I'm local and fix up houses around {county} County. Is this one a bit of a project, or pretty turnkey?",
   "Hey {first}, saw {street} come up. I flip a few houses a year and have a soft spot for the ones that need a little love. Is this one a project?",
   "Hi {first}, your {town} listing on {street} looks like it has some character. Fixer, or already pretty turnkey? I'm after my next flip in {county} County.",
@@ -41,7 +57,7 @@ export const LEGACY_DEFAULT_OPENER_EXAMPLES = [
   "Hi {first}, saw your {town} listing on {street}, looks like it has some character. Fixer, or already pretty turnkey? I'm after my next flip in {county} County, so if you know of anything else that needs work, I'd love to hear.",
   "Hey {first}, I'm someone who gets way too excited about original kitchens. Does {street} need some work? Looking for my next flip in {county} County, so if you've got other fixers on your radar, I'm all ears.",
 ];
-const LEGACY = new Set(LEGACY_DEFAULT_OPENER_EXAMPLES);
+const LEGACY = new Set([...LEGACY_DEFAULT_OPENER_EXAMPLES, ...PREVIOUS_DEFAULT_OPENER_EXAMPLES]);
 
 export const OPENER_MAX_EXAMPLES = 8;
 export const OPENER_EXAMPLE_MAX_CHARS = 400;
@@ -53,7 +69,9 @@ export const OPENER_EXAMPLE_KEEP_CHARS = 220;
 // text a contact gets (Settings → Phone System → Messaging Compliance), "Thanks,
 // Matt" and "No worries if not can stop", about 45 characters; 200 leaves the
 // whole thing inside two SMS segments (306) with room to spare.
-export const OPENER_MAX_CHARS = 200;
+// 2026-10-16: 160. The plain first text (street, who we are, one question)
+// is about 120; anything longer has picked up a remark about the house.
+export const OPENER_MAX_CHARS = 160;
 
 // The footer GHL adds. An example carrying it would teach the bot to write
 // it, and the agent would get it twice.
@@ -149,6 +167,9 @@ const OVERUSED = [
   ["hunting", /\bhunt(?:ing)?\b/i],
   ["Seattle flipper", /\bseattle flipper\b/i],
   ["caught my eye", /\bcaught my eye\b/i],
+  // 2026-10-16: the remarks that made the day's batch read like a template.
+  ["good bones", /\bgood bones\b/i],
+  ["soft spot", /\bsoft spot\b/i],
 ];
 
 /**
@@ -158,6 +179,26 @@ const OVERUSED = [
  */
 export function overusedPhrases(text = "", { allow = [] } = {}) {
   return OVERUSED.filter(([word, rx]) => !allow.includes(word) && rx.test(String(text || ""))).map(([word]) => word);
+}
+
+// "SW", "NE" and the rest as people write them; listing feeds send "Sw".
+const DIRECTIONS_RX = /\b(?:ne|nw|se|sw)\b/gi;
+
+/**
+ * streetName(address) → "Wren Ct"
+ *
+ * The street a listing is on, without the house number or unit, the way a
+ * person names it in a text ("your listing on Wren Ct"). A full street
+ * address is what a mailing reads like (2026-10-16). "" for nothing usable.
+ */
+export function streetName(address = "") {
+  const line = String(address || "").split(",")[0].replace(/\s+/g, " ").trim();
+  const street = line
+    .replace(/\s+(?:#|apt\.?|unit|ste\.?|suite)\s*[\w-]+$/i, "")
+    .replace(/^\d+[a-z]?(?:-\d*[a-z]?)?\s+(?=\S)/i, "")
+    .replace(DIRECTIONS_RX, (d) => d.toUpperCase())
+    .trim();
+  return /[a-z]/i.test(street) ? street : "";
 }
 
 /**

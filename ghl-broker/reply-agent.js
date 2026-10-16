@@ -104,7 +104,7 @@ import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts,
   investorFacingPrice, INVESTOR_DEAL_STAGES } from "./conversation-context.js";
 import {
-  buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext, CARRIER_CHECKED_KINDS, OPENING_MOVES,
+  buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext, CARRIER_CHECKED_KINDS,
   openerPlan,
 } from "./conversation-prompt.js";
 import { carrierFlags } from "./shared/carrier-words.js";
@@ -3334,7 +3334,11 @@ function outboundSummary({ kind, offer, outbound }) {
     case "passed_checkin": return outbound.relisted
       ? `Saw ${where} is back on the market; asks if the seller would look at our offer now${rung}.`
       : `Checks in after ${where} — asks if any other houses that need work, on the market or off, have come across their desk${rung}.`;
-    case "outreach_open": return `First text: came across their listing at ${where}${outbound.county ? `, looking for a flip in ${outbound.county} County` : ""}, asks if it's a bit of a project.`;
+    case "outreach_open": return outbound.offMarket
+      ? `First text: saw their listing at ${where} came off the market, asks whether the seller still hopes to sell.`
+      : outbound.turnkey
+        ? `First text: their listing at ${where} looks finished, asks whether they ever get ones that need work.`
+        : `First text: saw their listing at ${where}, asks whether it needs much work.`;
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;
     case "agent_pulse":
@@ -3471,11 +3475,11 @@ function pulseHook(h) {
 }
 
 // The opener's choices, kept on the draft's outbound (openerPlan): small
-// numbers and the one detail, never the examples themselves.
+// numbers and the style, never the examples themselves.
 function openerChoices(outbound = {}) {
   const p = openerPlan(outbound);
   return { variant: p.variant, move: p.moveIndex, who: p.whoIndex, notice: p.notice || "", turnkey: p.turnkey, examplesHash: p.examplesHash,
-    ...(outbound.offMarket === true ? { offMarket: true } : {}) };
+    style: p.style, ...(outbound.offMarket === true ? { offMarket: true } : {}) };
 }
 
 // The cold open and its nudge never sign off: GHL puts "Thanks, Matt" and
@@ -3485,10 +3489,12 @@ const NO_SIGN_OFF_KINDS = new Set(["outreach_open", "outreach_nudge"]);
 
 // A first text that leans on what every other agent today is getting
 // ("hunting", "Seattle flipper") is written again once without it; the new one
-// goes if it uses fewer of them and picked up no carrier words.
-export async function writeWithoutOverused({ draft, kind, variant = 0, redraft }) {
+// goes if it uses fewer of them and picked up no carrier words. No opening
+// move starts with the street catching your eye any more (2026-10-16), so
+// none of them is allowed.
+export async function writeWithoutOverused({ draft, kind, redraft }) {
   if (kind !== "outreach_open" || typeof redraft !== "function" || !draft?.reply) return draft;
-  const allow = Math.round(Number(variant) || 0) % OPENING_MOVES.length === 0 ? ["caught my eye"] : [];
+  const allow = [];
   const before = overusedPhrases(draft.reply, { allow });
   if (!before.length) return draft;
   const again = await redraft(before).catch(() => null);
@@ -3614,8 +3620,10 @@ async function runProactive(job, ctx) {
     contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
     aiApiKey, party, config, context, channel: "sms", outbound,
     // Nobody is waiting on a sweep's text: half price through the Batch API,
-    // falling back to a direct call (draft-batch.js).
-    batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) ? batcherFor(aiApiKey) : null,
+    // falling back to a direct call (draft-batch.js). `subject.direct`: a
+    // person is waiting on this one (first texts held and written again,
+    // 2026-10-16), so it's a direct call, on the same machine lane.
+    batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) && subject?.direct !== true ? batcherFor(aiApiKey) : null,
   };
   // Still reads like an ad the carriers block: written once more without it.
   const draft = await writeShorterFirstText({
@@ -6378,6 +6386,8 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         // variant and opening move it was written from, whether it was a
         // turnkey seat, how long it was, and whether a person changed it.
         ...(d.outbound.variant != null ? { variant: d.outbound.variant, openingMove: d.outbound.move } : {}),
+        // "plain" since 2026-10-16; none before that.
+        ...(d.outbound.style ? { style: d.outbound.style } : {}),
         turnkey: d.outbound.turnkey === true, chars: body.length, edited: Boolean(updated.edited), ...(d.outbound.offMarket ? { offMarket: true } : {}) },
     }).catch(() => {});
   }
