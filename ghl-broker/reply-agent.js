@@ -147,8 +147,13 @@ export const RA_MAX_SMS_CHARS = 480;      // three segments; longer than that is
 export const RA_MAX_CONCURRENT = 2;
 // Sweep-started texts that may wait on a batch (BATCHABLE_KINDS) run on their
 // own lane this wide: enough for a sweep to fill one batch, few enough that
-// the GHL reads around each draft stay under its rate limit.
-export const RA_MACHINE_CONCURRENT = 8;
+// the GHL reads around each draft stay under its rate limit. 8 until
+// 2026-10-16: with the outreach cap gone a day held ~530 machine drafts, each
+// two or three batch round trips (draft, then the carrier/length rewrites),
+// and 8 at a time wrote ~0.6 a minute — most of the day's first texts would
+// have waited for Monday. 24 is three times that and ~70 GHL reads in a burst,
+// still under GHL's 100 per 10 seconds.
+export const RA_MACHINE_CONCURRENT = 24;
 
 export const RA_TAGS = {
   draft: process.env.REPLY_DRAFT_TAG || "reply-draft",
