@@ -3599,6 +3599,30 @@ It is wording and links, not the number's registration. What changed:
 - `OUR_OFFER_TEXT_RX` also knows the for-the-record letter ("sending our
   written offer on …"), so the thread reader never takes it for a person.
 
+**Buyer texts (2026-10-15).** October's buyer texts: 74 of 678 blocked
+(10.9%), all of them cold deal texts ("it's Matt, a local investor… under
+contract…") and walkthrough invites with a price; buyer check-ins went
+through. What changed, no switch (these only hold more):
+
+- `CARRIER_CHECKED_KINDS` also covers the buyer follow-ups and walkthrough
+  texts: `blast_nudge`, `dataroom_nudge`, `deal_followup`, `showing_reminder`,
+  `showing_followup`. Same rule, one rewrite, then the gate holds it.
+- The county-records intro (dispo-autopilot.js `countyIntro`) says "I'm
+  Matt, I fix up houses locally", not "a local investor".
+- The operator's line in a deal text (`blastNote`, from the package headline
+  or the wave's own line) is left out whole when it says a carrier word
+  ("cash only, sold as-is").
+- **Send-time backstop** (`sendReplyDraft`, `BUYER_CARRIER_KINDS`): a deal,
+  walkthrough or buyer follow-up text going by itself that still says a
+  carrier word after the send-time rewrite goes back to Draft with
+  `held: carriers block texts like this — it says "…" — not sent`. A link
+  only counts to a buyer who has never written back (`investors.doc.lastRepliedAt`),
+  so with `blastLink: "always"` a cold buyer's deal text waits for your Send
+  (the minted invite is revoked; your Send mints a fresh one). Live is
+  `"on_reply"`, so a deal text carries no link and goes. Your Send is never held.
+- Check: the Outbox's Draft rows with that flag; or `carrierFlags(text)` on a
+  blast preview's rows (`POST /api/dispo/blast` with `dryRun`, the default).
+
 To re-run the measurement: page `searchConversations` for the window, read
 each conversation's messages, and group outbound `TYPE_SMS` by the `Error
 NNNNN` in `error` — read gently (two at a time, back off on 429), the broker

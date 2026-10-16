@@ -560,8 +560,11 @@ function nudgeAside(o) {
 // The machine texts that introduce us to someone — the first text, its nudge,
 // the agent and buyer check-ins. These are what the carriers blocked
 // (shared/carrier-words.js); a float or a reply to someone mid-conversation
-// went through.
-export const CARRIER_CHECKED_KINDS = new Set(["outreach_open", "outreach_nudge", "agent_pulse", "buyer_pulse"]);
+// went through. And the texts a buyer gets about a deal — its follow-ups and
+// the walkthrough reminders (2026-10-15: a tenth of October's buyer texts
+// were blocked, all of them deal texts and walkthrough invites).
+export const CARRIER_CHECKED_KINDS = new Set(["outreach_open", "outreach_nudge", "agent_pulse", "buyer_pulse",
+  "blast_nudge", "dataroom_nudge", "deal_followup", "showing_reminder", "showing_followup"]);
 
 export function outboundOpening(outbound) {
   const base = openingFor(outbound);

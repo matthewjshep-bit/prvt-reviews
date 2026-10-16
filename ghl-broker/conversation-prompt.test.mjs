@@ -443,7 +443,7 @@ test("a follow-up to a buyer never says last check", () => {
   assert.match(t, /do NOT call it a last check, do NOT say you'll leave it alone/);
   assert.match(t, /pick up exactly where they left off/);
   assert.match(t, /Do NOT name a price or any number/);
-  assert.match(t, /Set intent to deal_followup\.$/);
+  assert.match(t, /Set intent to deal_followup\. Phone carriers block/, "then the carrier rule (2026-10-15)");
 });
 
 test("the bot is told to describe a house only in the deal's words", () => {

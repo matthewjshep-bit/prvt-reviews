@@ -16,6 +16,7 @@
 
 import { buyerFacts } from "./underwrite-checks.js";
 import { assetOf, assetPhrase } from "./asset-type.js";
+import { carrierFlags } from "./carrier-words.js";
 
 const kText = (n) => {
   const v = Math.round(Number(n) || 0);
@@ -38,14 +39,16 @@ export function pickedRehabLevel(offer = {}) {
 
 // The operator's own line, from the dataroom headline. Their copy, so it is
 // trimmed rather than rewritten — but a dollar sign or a URL in a bulk text is
-// the carrier's business, not theirs, and neither survives.
+// the carrier's business, not theirs, and neither survives. A line that says
+// what the carriers block ("cash only, sold as-is") is left out whole rather
+// than cut into something nobody wrote (2026-10-15).
 export function blastNote(text = "", max = 90) {
   const clean = String(text || "")
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/\$/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (!clean || clean.length > max) return "";
+  if (!clean || clean.length > max || carrierFlags(clean).length) return "";
   return clean.replace(/[.!?]+$/, "");
 }
 

@@ -104,11 +104,14 @@ const SOURCE_INTROS = { "dispo-source-fb-warei": "found you through the WA real 
 // Buyers off the county sale and parcel records (dispo-source-county) never
 // heard of us. Matt, 2026-10-08: "hey saw you buy mobile homes in the area
 // from xyz, im a local investor" — what we saw, where, and who's writing.
+// Not the word "investor", though (2026-10-15): it is one the carriers
+// block (shared/carrier-words.js), and the cold deal texts that said it
+// were blocked a third of the time.
 function countyIntro(tags) {
   const mobile = tags.includes("dispo-type-mobile-home") || tags.includes("dispo-asset-manufactured");
   const city = (tags.find((t) => t.startsWith("dispo-city-")) || "").slice("dispo-city-".length)
     .split("-").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
-  return `saw in the county records you've bought ${mobile ? "mobile homes" : "houses"} ${city ? `around ${city}` : "in the area"}. I'm Matt, a local investor`;
+  return `saw in the county records you've bought ${mobile ? "mobile homes" : "houses"} ${city ? `around ${city}` : "in the area"}. I'm Matt, I fix up houses locally`;
 }
 
 /** blastIntro({ tags, lastRepliedAt }) → the how-we-found-you line for a buyer who has never written back, or "". */

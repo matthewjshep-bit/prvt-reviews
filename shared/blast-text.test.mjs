@@ -76,6 +76,10 @@ test("the operator's dataroom headline rides along, scrubbed", () => {
   // Too long to be a line in a text: left out rather than truncated mid-word.
   assert.equal(blastNote("x".repeat(120)), "");
   assert.equal(blastNote(""), "");
+  // A line that says what the carriers block is left out whole (2026-10-15).
+  assert.equal(blastNote("Cash only, sold as-is"), "");
+  assert.equal(blastNote("Investor special, quick close"), "");
+  assert.equal(blastNote("Big lot, ADU upside"), "Big lot, ADU upside");
 });
 
 test("with the buyer's own package link, the blast ends on the link instead of offering to send details", () => {

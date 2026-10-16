@@ -3138,6 +3138,11 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
  */
 export { CARRIER_CHECKED_KINDS };
 
+// The texts a buyer gets about a deal, checked once more as they leave by
+// themselves (sendReplyDraft): the deal text is written again at that moment,
+// after any gate saw it.
+export const BUYER_CARRIER_KINDS = new Set(["blast_open", "blast_nudge", "dataroom_nudge", "deal_followup", "buyer_pulse", "showing_reminder", "showing_followup"]);
+
 export async function writeAgainWithoutCarrierWords({ draft, kind, redraft }) {
   if (!CARRIER_CHECKED_KINDS.has(kind) || typeof redraft !== "function") return draft;
   const before = carrierFlags(draft?.reply);
@@ -5703,6 +5708,31 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       return { ok: true, skipped: "couldn't read the deal's price" };
     }
     if (blast?.text) body = blast.text;
+  }
+
+  // The last look before a buyer's deal or walkthrough text leaves by itself
+  // (2026-10-15): one that still says what the carriers block waits for you,
+  // as the price hold above does. A link only counts to a buyer who has never
+  // written back. You pressing Send is you deciding.
+  if (auto && d.channel !== "email" && BUYER_CARRIER_KINDS.has(d.outbound?.kind)) {
+    let words = carrierFlags(body);
+    if (words.includes("a link")) {
+      const inv = await store.getInvestor?.(locationId, d.contactId).catch(() => null);
+      if (inv?.doc?.lastRepliedAt || inv?.lastRepliedAt) words = words.filter((w) => w !== "a link");
+    }
+    if (words.length) {
+      await release(bundle);
+      // The package link minted for it goes back; your Send mints a fresh one.
+      if (blast?.invite?.id) await store.updateDataroomInvite?.(blast.invite.id, { status: "revoked" })?.catch?.(() => {});
+      const ts = new Date(now).toISOString();
+      const why = `carriers block texts like this — it says ${words.map((w) => `"${w}"`).join(", ")}`;
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `held: ${why} — not sent`],
+        autoSend: { ...(d.autoSend || {}), decided: false, reason: `${why} — it waits for you` },
+      });
+      return { ok: true, skipped: why, held: true };
+    }
   }
 
   let result;
