@@ -397,6 +397,49 @@ export function weDecline(text = "") {
   return null;
 }
 
+/**
+ * numberApproved(offer) → boolean
+ *
+ * Matt stands behind this number (2026-10-15). The funnel review: "since
+ * we're aligned at 752,500, can you write it up on NWMLS forms?", and the
+ * next day "can't get there"; a $583,500 letter, then "closer to $489K" the
+ * next afternoon. A number goes to a write-up only once a person owns it:
+ *
+ *   - an offer built by hand, that no machine has moved since;
+ *   - `offer.approved = { amount, at, by }` at today's number: Send, publish,
+ *     a hand revision, a pin, or Approve on Today;
+ *   - a held run published, or a row pinned, after the machine last moved
+ *     the number.
+ *
+ * The machine moving the number (a re-quote on their figures, the counter
+ * band) is not approval, and a new number voids an old approval.
+ */
+export const MACHINE_REVISERS = new Set(["requote", "counter_band"]);
+const tsOf = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : 0; };
+export function numberApproved(offer) {
+  if (!offer) return false;
+  const amount = Math.round(Number(offer.cashAmount) || 0);
+  if (!amount) return false;
+  if (Number(offer.approved?.amount) > 0 && Math.round(Number(offer.approved.amount)) === amount) return true;
+  const machineAt = Math.max(0,
+    ...(offer.requotes || []).map((r) => tsOf(r?.ts)),
+    ...(offer.revisions || []).filter((r) => MACHINE_REVISERS.has(r?.by)).map((r) => tsOf(r?.ts)),
+    tsOf(offer.counterBand?.acceptedAt));
+  if (!offer.autoUnderwrite) return machineAt === 0;
+  const personAt = Math.max(tsOf(offer.autoUnderwrite.publishedAt), tsOf(offer.pin?.at));
+  return personAt > 0 && personAt >= machineAt;
+}
+
+/**
+ * asksForWriteUp(offer) → boolean
+ *
+ * May the machine ask them to write it up on NWMLS forms (the hot push)? A
+ * price both sides said yes to (pushesToPaper) at a number Matt approved.
+ * pushesToPaper alone still means "a price is agreed" to everything else
+ * that reads it (the focus house, the call list, the offer ladder).
+ */
+export const asksForWriteUp = (offer) => pushesToPaper(offer) && numberApproved(offer);
+
 export function pushesToPaper(offer) {
   const heat = offerHeat(offer);
   if (!heat) return false;
@@ -500,6 +543,8 @@ export const OFFER_LIST_FIELDS = [
   // Heat (offerHeat): the hand-set flag and the agreed price it is derived from,
   // and the take-back that cancels every agreed marker before it (priceAgreed).
   "hot", "agreed", "agreedCleared", "pin", "paperHeld",
+  // Matt's approval of the number ({amount, at, by}, numberApproved).
+  "approved",
   // When our number went out by text (a sent realm check): the offer is Sent
   // from then (shared/offer-stage.js) and its agent's card is at Offer Out.
   "floatSentAt",

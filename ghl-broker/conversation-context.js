@@ -14,7 +14,7 @@
 import { fmtMoney } from "./shared/offer-calc.js";
 import { offerMath, compactMath, mathAllowedAmounts } from "./shared/offer-breakdown.js";
 import { isOffMarket, offMarketAskDaysAgo, OFF_MARKET_ASK_EVERY_DAYS } from "./shared/off-market.js";
-import { effectiveStatus, offerHeat, agreedAboveOurNumber, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused, priceAgreed } from "./shared/offer-status.js";
+import { effectiveStatus, offerHeat, agreedAboveOurNumber, investorStatus, WORKING_INVESTOR_STATUSES, dealSpokenFor, dealOutreachPaused, priceAgreed, numberApproved } from "./shared/offer-status.js";
 import { normalizeBuybox, buildBuyboxProfile, matchBuybox } from "./shared/buybox.js";
 import { dealToQuery } from "./dispo.js";
 import { dealNumbers } from "./dataroom.js";
@@ -154,7 +154,9 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       for (const n of roughAmounts(down.amount)) amounts.add(n);
       stale.add(Math.round(amount));
     } else if (amount) for (const n of roughAmounts(amount)) amounts.add(n);
-    if (amount) numbers.push({ address: o.address, amount: Math.round(down ? down.amount : amount) });
+    // `approved`: Matt stands behind the number (2026-10-15) — the gate holds
+    // a write-up ask at one he hasn't.
+    if (amount) numbers.push({ address: o.address, amount: Math.round(down ? down.amount : amount), approved: !down && numberApproved(o) });
     // A higher number we texted that the offer never moved to (Jesse,
     // 2026-09-25: "workable for us at 650" on a 550K offer). Not allowed, and
     // the model is told plainly so it neither repeats nor confirms it.
@@ -260,7 +262,11 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       // the agent was asking us to come up, and it asked him for a number
       // he'd already given.
       heat && !up ? (priceAgreed(o)
-        ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign`
+        ? (numberApproved(o)
+          ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign`
+          // Agreed, but not a number Matt has approved (2026-10-15).
+          : `AGREED (${heat.reason}) at ${fmtMoney(amount)}, but the number is NOT APPROVED on our side yet — don't ask them to write it up, ` +
+            `use NWMLS forms or represent us on it yet; say you'll confirm the number on our side today and come right back`)
         : `warm (${heat.reason}) — they're weighing our number, nothing is agreed; answer what they last said before asking anything new`) : "",
       o.statusNote ? `note: ${theirs(String(o.statusNote).slice(0, 120))}` : "",
       superseded.length ? `(${superseded.length} older offer${superseded.length === 1 ? "" : "s"} on this house superseded — this is the only number on it; never quote an older one)` : "",

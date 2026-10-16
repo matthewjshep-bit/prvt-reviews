@@ -2012,6 +2012,42 @@ The auto-send list's length bound went from 20 to 40: with this ladder the
 agent side has 21 eligible intents, and the last one was being dropped on
 save. Every entry is still filtered against `autoEligible`.
 
+### Approved numbers only go to a write-up (2026-10-15)
+
+From the funnel review: "since we're aligned at 752,500, can you write it up on
+NWMLS forms?", then "can't get there" the next day. The machine now asks an
+agent to write it up, use NWMLS forms or represent us only at a number Matt
+stands behind (`numberApproved` in `shared/offer-status.js`). No switch: this
+only tightens.
+
+- **Approved** means one of: an offer built by hand that no machine has moved;
+  `offer.approved = {amount, at, by}` at today's number, written by Send
+  (`by: "send"`), publishing a held run (`publish`), a hand revision in the
+  editor or the held-paper banner's re-quote (`revise`; revisions now carry
+  `by`), pinning a row (`pin`), or **Approve** on Today (`today`,
+  `POST /api/offers/:id/approve {amount?}`); or a run published or pinned after
+  the machine last moved the number. A re-quote on their figures
+  (`by: "requote"`) and the counter band running by itself
+  (`by: "counter_band"`) are not approval, and a new number voids an old one.
+- **What it holds.** The hot push (`asksForWriteUp` = `pushesToPaper` and
+  approved) — its `ready` and `hotCandidates`; the offer ladder still leaves an
+  agreed price alone, so nothing texts until Matt approves. The offer book says
+  "AGREED … but the number is NOT APPROVED on our side yet — don't ask them to
+  write it up … say you'll confirm the number on our side today". A gate
+  (`writeUpOk` in `evaluateReplyGates`) holds any agent draft that asks for a
+  write-up ("NWMLS", "write it up", or "represent us" beside an offer or a
+  price) on a house whose number isn't approved — except the "we're not
+  agents" answer when they handed the write-up back to us. The machine's own
+  letter text and email drop the NWMLS ask; so does the "taking it to the
+  seller" reply; the confident float doesn't promise the write-up.
+  `pushesToPaper` itself is unchanged: the focus house, the call list and the
+  offer ladder still read it as "a price is agreed".
+- **Today.** An agreed price (`priceAgreed`) at an unapproved number is an
+  **approve_number** row, "they agreed at $410,000 — approve it before we ask
+  for the write-up", with **Approve 410K** and Open.
+- **Check it.** `GET /api/offers/:id` shows `approved`; Today shows the row;
+  the hot push's skip reason is "the agreed number isn't approved yet".
+
 ### Timers on Today's rows (2026-09-17)
 
 `driver.timers` (off by default; Normal on the dial): `{ enabled,

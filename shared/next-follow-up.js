@@ -15,7 +15,7 @@
 //
 // Pure. `now` is passed in.
 
-import { effectiveStatus, OPEN_STATUSES, pushesToPaper, offerHeat, aiHoldReasons, isAiGenerated } from "./offer-status.js";
+import { effectiveStatus, OPEN_STATUSES, pushesToPaper, asksForWriteUp, offerHeat, aiHoldReasons, isAiGenerated } from "./offer-status.js";
 import { paperWent } from "./paper-follows.js";
 import {
   nextRungAt, offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, stepLabel, normalizeSteps,
@@ -180,7 +180,10 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
   let ladderNote = "";
   if (fu.enabled && OPEN_STATUSES.has(status)) {
     const hotOn = ladders.hot_push?.enabled && ladders.hot_push.steps?.length;
-    if (hotOn && pushesToPaper(offer)) {
+    // Agreed, at a number Matt hasn't approved (2026-10-15): neither ladder
+    // texts; Today asks him first.
+    if (hotOn && pushesToPaper(offer) && !asksForWriteUp(offer)) ladderNote = "the price is agreed — waiting on your approval of the number (Today)";
+    else if (hotOn && asksForWriteUp(offer)) {
       const heat = offerHeat(offer);
       const hotAt = heat?.at || offer.counterBand?.acceptedAt || offer.realm?.ts || offer.statusAt || offer.createdAt;
       const anchor = latest([hotAt, times.lastInboundAt]);

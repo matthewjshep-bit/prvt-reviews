@@ -887,3 +887,17 @@ test("a listed house too far under the seller to text is a row for you, not a pa
   assert.equal(kinds(build({ offers: [{ ...o, proactive: { realmCheckAt: D(0) } }] })).includes("no_fit"), false);
   assert.equal(kinds(build({ offers: [{ ...o, status: "we_passed", statusAt: D(0) }] })).includes("no_fit"), false);
 });
+
+test("an agreed number you haven't approved is a row for you: approve it before we ask for the write-up", async () => {
+  const { urgentReasons } = await import("./desk.js");
+  const o = offer({ status: "sent", cashAmount: 410000, autoUnderwrite: { passed: true }, realm: { answer: "yes", ts: D(0) } });
+  const a = build({ offers: [o] }).actions.find((x) => x.kind === "approve_number");
+  assert.ok(a, "a row");
+  assert.equal(a.amount, 410000);
+  assert.match(a.title, /they agreed at \$410,000 — approve it before we ask for the write-up/);
+  assert.deepEqual(a.ops.map((x) => [x.key, x.label]), [["approve_number", "Approve 410K"], ["open_editor", "Open"]]);
+  assert.equal(urgentReasons([a]).length, 1, "on Today");
+  assert.equal(kinds(build({ offers: [{ ...o, approved: { amount: 410000, at: D(0), by: "today" } }] })).includes("approve_number"), false, "approved");
+  assert.equal(kinds(build({ offers: [{ ...o, autoUnderwrite: null }] })).includes("approve_number"), false, "a hand-made number is yours already");
+  assert.equal(kinds(build({ offers: [{ ...o, realm: null }] })).includes("approve_number"), false, "nothing agreed");
+});

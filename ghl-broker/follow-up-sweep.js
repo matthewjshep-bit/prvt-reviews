@@ -21,7 +21,7 @@
 //   The dedupe key is still the real defence — the cursor just stops us
 //   spending model calls on drafts that would be superseded anyway.
 
-import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason, pushesToPaper, offerHeat, investorStatus } from "./shared/offer-status.js";
+import { OPEN_STATUSES, effectiveStatus, dealIsOver, dealOutreachPaused, outreachPausedReason, pushesToPaper, asksForWriteUp, offerHeat, investorStatus } from "./shared/offer-status.js";
 import { paperWent } from "./shared/paper-follows.js";
 import { addressKey } from "./shared/us-address.js";
 import { sameStreet } from "./shared/us-address.js";
@@ -287,7 +287,8 @@ export async function hotCandidates({ store, locationId, config, now = Date.now(
     // A hot flag on a superseded row (13041 SE 208th St's July row was
     // flagged "writing it up") must not push a write-up at its number.
     if (replaced.has(o.id)) continue;
-    if (!OPEN_STATUSES.has(effectiveStatus(o)) || !pushesToPaper(o)) continue;
+    // An agreed number Matt hasn't approved waits for him on Today (2026-10-15).
+    if (!OPEN_STATUSES.has(effectiveStatus(o)) || !asksForWriteUp(o)) continue;
     const heat = offerHeat(o);
     const hotAt = heat?.at || o.counterBand?.acceptedAt || o.realm?.ts || o.statusAt || o.createdAt;
     if (!hotAt) continue;

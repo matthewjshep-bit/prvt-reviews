@@ -72,7 +72,7 @@ import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./share
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper, asksForWriteUp, numberApproved } from "./shared/offer-status.js";
 import { signedContractIn, themLines } from "./shared/contract-signed.js";
 import { sameStreet, sameHouse } from "./shared/us-address.js";
 import { releasableHeld } from "./shared/conversation-audit.js";
@@ -903,7 +903,7 @@ const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], hiddenAmounts = [], ranges = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", ourAmount = 0,
-  vacantOk = false, carrierCheck = false, houseWords = "",
+  vacantOk = false, carrierCheck = false, houseWords = "", writeUpOk = true,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -971,6 +971,13 @@ export function evaluateReplyGates({
     // that doesn't clear that up is going on past a misunderstanding.
     if (handsWriteUpBack(inboundMessage) && !clearsWriteUp(draft.reply)) {
       flags.push("they handed the write-up back to us — the reply has to say we're not agents and ask who on their side writes it on NWMLS forms");
+    }
+    // A write-up ask at a number Matt hasn't approved (2026-10-15): "since
+    // we're aligned at 752,500, can you write it up?" and the next day "can't
+    // get there". Not the clarification the rule above asks for when they
+    // handed the write-up back to us.
+    if (!writeUpOk && asksWriteUp(draft.reply) && !(handsWriteUpBack(inboundMessage) && NOT_AGENTS_RX.test(draft.reply))) {
+      flags.push("the draft asks them to write it up (NWMLS, represent us) at a number you haven't approved — approve it on Today first");
     }
     // 10917 48th St E, 2026-09-27: "cash means no lender". We use hard money.
     const cash = claimsAllCash(draft.reply);
@@ -1423,6 +1430,35 @@ export function ourNumberFor(numbers = [], address = "") {
   }
   return Math.round(Math.max(...list.map((n) => n.amount)));
 }
+
+/**
+ * writeUpOkFor(numbers, address) → boolean
+ *
+ * May a draft ask them to write it up (NWMLS, represent us) on this house?
+ * Only at a number Matt approved (shared/offer-status.js numberApproved,
+ * 2026-10-15). `numbers` is the offer book's [{ address, amount, approved }].
+ * A house we have no number on is not this gate's business; with no house
+ * named, it's fine while any house in the book is approved.
+ */
+export function writeUpOkFor(numbers = [], address = "") {
+  const list = (numbers || []).filter((n) => n && Number(n.amount) > 0);
+  if (!list.length) return true;
+  if (address) {
+    const named = list.find((n) => sameStreet(n.address, address));
+    return !named || named.approved !== false;
+  }
+  return list.some((n) => n.approved !== false);
+}
+// A write-up ask: NWMLS, "write it up", or "represent us" beside an offer
+// or a price. "We'd love to have you represent us on the buy" is not one.
+const WRITE_UP_ASK_RX = /\bnwmls\b|\bwrite (?:it|this|that|one) up\b|\bwrite up (?:an? |the |our )?offer\b/i;
+const REPRESENT_ASK_RX = /\brepresent us\b/i;
+const OFFER_OR_PRICE_RX = /\boffer\b|\$?\d{2,3}(?:,\d{3}|\s?k)\b/i;
+const NOT_AGENTS_RX = /\bnot (?:an? |licensed )?(?:agents?|realtors?)\b|\b(?:don'?t|do not) have (?:an? |our own )?(?:agent|realtor)\b|\bno agent\b/i;
+export const asksWriteUp = (reply = "") => {
+  const t = String(reply || "");
+  return WRITE_UP_ASK_RX.test(t) || (REPRESENT_ASK_RX.test(t) && OFFER_OR_PRICE_RX.test(t));
+};
 
 // Do we already have this house in the agent's book? A live or recent offer
 // (60 days) or a held draft someone is still reviewing (7 days) counts; an old
@@ -2406,6 +2442,8 @@ export const OUTBOUND_KINDS = {
       if (!offer?.address) return "no offer to push";
       if (offer.deal) return "it became a deal";
       if (!pushesToPaper(offer)) return "no price is agreed on it";
+      // Agreed, but Matt hasn't approved the number (2026-10-15): Today asks him first.
+      if (!asksForWriteUp(offer)) return "the agreed number isn't approved yet — Today asks you first";
       return true;
     },
     floats: ({ offer }) => [Math.round(Number(offer?.cashAmount) || 0)].filter(Boolean),
@@ -3003,6 +3041,8 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       // high-stakes house still in range mode.
       confident: !ranged && ["high", "medium"].includes(numberConfidence({ offer })),
       ...(ranged ? { stance: { mode: "range", missing: st.missing } } : {}),
+      // The write-up ask only at a number Matt approved (2026-10-15).
+      approved: numberApproved(offer),
       street: String(offer.address || "").split(",")[0].trim(),
       requote: Boolean(subject?.requote),
       ...floatExtras({ offer, saved, dossier, requote: Boolean(subject?.requote), theirs: Boolean(theirArv || theirRehab), stance: st }) };
@@ -3179,6 +3219,7 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   const pastHouses = kind === "agent_pulse" ? (Array.isArray(subject?.pastHouses) ? subject.pastHouses : []).filter(Boolean) : [];
   const gate = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
+    writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
     houseWords: houseWordsFor(context?.deals, a.transcript) });
   if (pastHouses.length) {
@@ -4055,6 +4096,7 @@ async function runReply(job, ctx) {
     hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: inboundText, channel: job.channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: ourNumberFor(context.offers?.numbers, d.propertyAddress),
+    writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, inboundText),
   });
@@ -4275,8 +4317,11 @@ async function runReply(job, ctx) {
     // The reply says the paper is on its way; step 5 puts the model's own
     // words back if the offer didn't actually go.
     const first = firstNameOf(job.contactName || a.contactName || "");
+    // The write-up ask only at a number Matt approved (2026-10-15).
+    const writeUp = writeUpOkFor(context.offers?.numbers, draft.propertyAddress);
     draft = { ...draft, replyBeforeSend: draft.reply,
-      reply: `Sounds good${first ? ` ${first}` : ""}, no rush. Sent our letter of intent over by text and email so you have it to share with them. If they're open to it, could you write it up on NWMLS forms for us to sign?` };
+      reply: `Sounds good${first ? ` ${first}` : ""}, no rush. Sent our letter of intent over by text and email so you have it to share with them.` +
+        (writeUp ? " If they're open to it, could you write it up on NWMLS forms for us to sign?" : " Let me know what they think.") };
   }
   // They gave us an address to email it to ("my email is …, please cc …"), or
   // ask where the email is. The documents go to THAT address, by email, and
@@ -5496,6 +5541,7 @@ export async function previewConversation({
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [], hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: message, channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
     ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
+    writeUpOk: writeUpOkFor(context.offers?.numbers, draft.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, message),
   });

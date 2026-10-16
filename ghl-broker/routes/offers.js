@@ -71,6 +71,7 @@ import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
+  numberApproved,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperAfterAnswerDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS, sendsItselfOnClear, isRoughNumber } from "../shared/paper-follows.js";
@@ -2166,7 +2167,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // resolves to the new letter. One pipeline, two outcomes — forking it would
   // guarantee the two drift, and a revised offer has to be the same artifact as
   // a fresh one (same PDFs, same fields) or History stops telling the truth.
-  async function createOfferFromRequest({ locationId, client, body = {}, existing = null }) {
+  // `revisedBy`: who moved the number on a revision — "you" (the editor, the
+  // held-paper banner), or the machine ("requote", "counter_band"). Only a
+  // person's revision approves the number (shared/offer-status.js numberApproved).
+  async function createOfferFromRequest({ locationId, client, body = {}, existing = null, revisedBy = "you" }) {
     const revising = Boolean(existing);
     const { contactId: bodyContactId, newContact, inputs, settings: settingsOverride } = body || {};
     // Rehab scope of work (internal — saved + noted, never on the letter).
@@ -2364,8 +2368,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         expiresAt: validUntil.toISOString(),
         revisions: [
           ...(existing.revisions || []),
-          { ts: created.toISOString(), from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount },
+          { ts: created.toISOString(), from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount, by: revisedBy },
         ].slice(-20),
+        ...(revisedBy === "you" ? { approved: { amount: Math.round(Number(fresh.cashAmount) || 0), at: created.toISOString(), by: "revise" } } : {}),
       };
       await store.updateOffer(offer.id, offer);
     } else {
@@ -2493,6 +2498,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // travels so the 24h address dedupe still recognises the house.
         if (d.autoUnderwrite && !revising && offer.contactId) {
           offer.autoUnderwrite = { ...d.autoUnderwrite, publishedAt: new Date().toISOString() };
+          // Publishing a held run is Matt standing behind its number.
+          offer.approved = { amount: Math.round(Number(offer.cashAmount) || 0), at: offer.autoUnderwrite.publishedAt, by: "publish" };
           await store.updateOffer(offer.id, offer).catch(() => {});
           const fresh = (await store.getOfferSettings(locationId)) || {};
           Promise.resolve(underwriteDeps({ client, locationId, saved: fresh }).onOfferCreated({ offer }))
@@ -3713,6 +3720,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           await store.updateOffer(full.id, full);
         }
         offer.pin = { at: ts, by: "operator", note: dealStr(req.body?.note, 200) };
+        // Choosing this row is choosing its number.
+        if (Number(offer.cashAmount) > 0) offer.approved = { amount: Math.round(Number(offer.cashAmount)), at: ts, by: "pin" };
       } else {
         delete offer.pin;
       }
@@ -3742,6 +3751,31 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
       res.json({ ok: true, seen: offer.seen || null });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Matt approves the number (Today's "Approve 450K", shared/pipeline.js
+  // approve_number): from here the machine may ask them to write it up at it
+  // (the hot push), and a high-stakes house stops floating as a range.
+  // Body: { amount? } — when given, it must still be the offer's number.
+  router.post("/:id/approve", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res, { requireDeal: false });
+      if (!ctx) return;
+      const { locationId, client, offer } = ctx;
+      const amount = Math.round(Number(offer.cashAmount) || 0);
+      if (!amount) return res.status(409).json({ error: "the offer has no number to approve" });
+      const asked = Math.round(Number(req.body?.amount) || 0);
+      if (asked && asked !== amount) return res.status(409).json({ error: `the number moved to ${fmtMoney(amount)} — look again before approving` });
+      const ts = new Date().toISOString();
+      offer.approved = { amount, at: ts, by: "today" };
+      offer.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
+      if (offer.contactId) {
+        await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
+          historyLine(ts, offer.address, `number approved (${fmtMoney(amount)})`, ""), { offerId: offer.id, source: "operator", at: ts }).catch(() => {});
+      }
+      res.json({ ok: true, approved: offer.approved });
     } catch (err) { fail(res, err); }
   });
 
@@ -5118,7 +5152,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!plan.ok) return { ok: false, reason: plan.reason, address: full.address };
 
       const out = await createOfferFromRequest({
-        locationId, client, existing: full,
+        locationId, client, existing: full, revisedBy: "requote",
         body: { contactId, scope: full.scope,
                 // A capped re-quote is priced AT the cap. Recomputing from the
                 // clamped ARV/repairs alone re-issued Thomas Rinow's offer at
@@ -5174,7 +5208,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // paper at their number through the SAME path a hand-made revision takes,
     // so the letter, the links, the revision ledger and the expiry all behave
     // identically. The band itself never reaches this — it is ask-only.
-    reviseOfferToCounter: async ({ contactId, addressHint, amount, draftId = null }) => {
+    // `by`: "counter_band" when the band ran it by itself, "you" when a person
+    // applied it from the row — only a person's press approves the number.
+    reviseOfferToCounter: async ({ contactId, addressHint, amount, draftId = null, by = "counter_band" }) => {
       const price = Math.round(Number(amount) || 0);
       if (!price) return { ok: false, reason: "no number to re-issue at" };
       // Open, or dead on their side and revived by this counter — the same
@@ -5187,7 +5223,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!full) return { ok: false, reason: "offer vanished" };
       const revived = !OPEN_STATUSES.has(effectiveStatus(full));
       const out = await createOfferFromRequest({
-        locationId, client, existing: full,
+        locationId, client, existing: full, revisedBy: by === "you" ? "you" : "counter_band",
         body: { contactId, scope: full.scope,
                 // priceOverride is the manual final price: the letter prints
                 // their number while the breakdown still shows the model that
@@ -6962,13 +6998,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // No "cash, as-is" in the text (2026-10-02): that is the wording the
       // carriers block (shared/carrier-words.js). The letter itself, attached,
       // carries the terms.
+      // The write-up ask goes only at a number Matt approved (numberApproved,
+      // 2026-10-15); the machine's own words leave it off otherwise.
+      const writeUp = numberApproved(offer);
       const text = message || (template === "for_record"
         ? `Hi ${firstName}, sending our written offer on ${offer.address || "your property"} over so you have it on file — ` +
           `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.`
+          (writeUp ? ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.` : ` Happy to answer any questions.`)
         : `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
           `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?`);
+          (writeUp ? ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?` : ` Let me know what the seller thinks.`));
 
       // The agent page — our arithmetic, the comps, the scope and what the
       // seller nets, at one link. An operator's message already carries it
@@ -7007,7 +7046,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ...(message ? [] : [
           `<p>Please find our letter of intent on <strong>${esc(offer.address || "your property")}</strong> attached — ` +
           `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
-          `If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? Happy to answer any questions.</p>`,
+          `${writeUp ? "If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? " : ""}Happy to answer any questions.</p>`,
         ]),
         // The whole column, tied out to the offer. "How we got to the number"
         // is where the transcript readers stop (shared/current-offer.js), so
@@ -7136,6 +7175,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // Optional: an address other than the contact's own, and people to copy.
         const emailTo = dealStr(b.emailTo, 200);
         const emailCc = (Array.isArray(b.emailCc) ? b.emailCc : []).map((x) => dealStr(x, 200)).filter(Boolean).slice(0, 5);
+        // Matt pressing Send is Matt standing behind the number (numberApproved).
+        if (live && Number(offer.cashAmount) > 0 && Math.round(Number(offer.approved?.amount) || 0) !== Math.round(Number(offer.cashAmount))) {
+          offer.approved = { amount: Math.round(Number(offer.cashAmount)), at: new Date().toISOString(), by: "send" };
+          await store.updateOffer(offer.id, offer).catch(() => {});
+        }
         const r = await sendOfferDocs({ locationId, client, offer, message, emailSubject, channels, docKeys, live, emailTo, emailCc });
         // A hand-sent offer is on the contact's timeline too, so the
         // conversation knows the paper went out and doesn't promise it again.

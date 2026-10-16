@@ -661,7 +661,10 @@ function openingFor(outbound) {
             : `Tell them in one short text — e.g. "based on our analysis we can likely do around ${o.amountK}ish on ${o.street || o.address}" — ` +
               `rounded to the nearest thousand or down (never up). `) +
           (o.math ? "" : `As-is and a quick close if the terms are listed. `) +
-          (ask || `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. `) +
+          // The write-up ask only at a number Matt approved (2026-10-15).
+          (ask || (o.approved
+            ? `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. `
+            : `Ask whether that works for the seller; if it does, our letter of intent comes next. Don't ask them to write it up yet. `)) +
           (o.math ? "" : `Don't volunteer the math (ARV, repairs) in this first text. `) +
           `Don't call it final. ${room}Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
       }

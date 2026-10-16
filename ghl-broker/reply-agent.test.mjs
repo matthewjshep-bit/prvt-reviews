@@ -7344,3 +7344,31 @@ test("a buyer who wants deals by email with no address on file is asked for one,
   assert.deepEqual(emailed, []);
   assert.ok((await store.getReplyDraft(job.draftId)).warnings.some((w) => /no address for them/.test(w)));
 });
+
+/* ---------- 2026-10-15: a write-up ask only at a number Matt approved ---------- */
+
+import { writeUpOkFor, asksWriteUp } from "./reply-agent.js";
+
+test("a reply asking them to write it up at a number Matt hasn't approved waits for him", () => {
+  const ask = "Great, glad that works. If the seller's good at 410k, could you write it up on NWMLS forms for us to sign?";
+  const g = gate({ intent: "realm_yes", reply: ask }, { writeUpOk: false });
+  assert.ok(g.flags.some((f) => /write it up .* at a number you haven't approved — approve it on Today first/.test(f)), g.flags.join(" · "));
+  assert.ok(!gate({ intent: "realm_yes", reply: ask }, { writeUpOk: true }).flags.some((f) => /haven't approved/.test(f)), "approved: as before");
+  // Wanting them on our side in general is not a write-up ask.
+  assert.equal(asksWriteUp("If anything else comes up, we'd love to have you represent us on the buy side."), false);
+  assert.equal(asksWriteUp("Could you represent us on the offer?"), true);
+  // They handed the write-up back to us: saying we're not agents is required, not held.
+  const back = gate({ intent: "question", reply: "We're not agents and don't have one on this, so we can't put it on NWMLS forms ourselves. Who on your side would write it up?" },
+    { writeUpOk: false, inboundMessage: "Write up whatever you like and send it over" });
+  assert.ok(!back.flags.some((f) => /haven't approved/.test(f)), back.flags.join(" · "));
+});
+
+test("the write-up gate reads the house's number from the book", () => {
+  const numbers = [{ address: "12 Elm St, Renton, WA 98056", amount: 410000, approved: false }, { address: "9 Oak St, Kent, WA", amount: 300000, approved: true }];
+  assert.equal(writeUpOkFor(numbers, "12 Elm St"), false);
+  assert.equal(writeUpOkFor(numbers, "9 Oak St"), true);
+  assert.equal(writeUpOkFor(numbers, "1 Nowhere Rd"), true, "no number on that house: not this gate");
+  assert.equal(writeUpOkFor(numbers, ""), true, "no house named, and one is approved");
+  assert.equal(writeUpOkFor([numbers[0]], ""), false, "no house named, and none approved");
+  assert.equal(writeUpOkFor([], "12 Elm St"), true);
+});

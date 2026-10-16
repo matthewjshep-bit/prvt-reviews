@@ -21,7 +21,7 @@
 import {
   effectiveStatus, isExpired, offerExpiresAt, investorStatus, needsAiReview, aiHoldReasons, isAiGenerated, isHot,
   DEAD_STATUSES, LIVE_DEAL_STAGES, OPEN_STATUSES,
-  offerHeat,
+  offerHeat, priceAgreed, agreedAboveOurNumber, numberApproved,
 } from "./offer-status.js";
 import { stepLabel, exhausted, normalizeSteps, questionIn } from "./follow-up.js";
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
@@ -84,6 +84,7 @@ export const ACTION_KINDS = [
   { key: "underwrite_held",   label: "Underwrites that need a look" },
   { key: "offer_ready",       label: "Priced, not floated" },
   { key: "no_fit",            label: "Too far under the seller to text" },
+  { key: "approve_number",    label: "Agreed — approve the number" },
   { key: "ladder_exhausted",  label: "Followed up, no reply" },
   { key: "showing_soon",      label: "Walkthroughs coming up" },
   { key: "showing_no_window", label: "No walkthrough window yet" },
@@ -388,6 +389,16 @@ export function buildPipeline({
         why: "too far apart to text a number",
         ops: [{ key: "open_editor", label: "Price it by hand", intent: "primary" }, { key: "float_realm", label: "Float ours anyway", intent: "secondary" },
           { key: "mark_we_passed", label: "We passed", intent: "secondary" }] }));
+    }
+    // They said yes to a number Matt hasn't approved (2026-10-15): the machine
+    // won't ask them to write it up, or to represent us at it, until he does.
+    const agreed = !o.deal && OPEN_STATUSES.has(status) ? priceAgreed(o) : null;
+    if (agreed && !agreedAboveOurNumber(o) && !numberApproved(o)) {
+      const k = `${Math.round((Number(o.cashAmount) || 0) / 1000)}K`;
+      card.actionIds.push(push({ ...base, kind: "approve_number", severity: "now", amount: Math.round(Number(o.cashAmount) || 0),
+        title: `${card.address}: they agreed at ${money(o.cashAmount)} — approve it before we ask for the write-up`,
+        detail: [`agreed by ${String(agreed.via || "their yes").replace(/_/g, " ")}`, "no write-up ask, no NWMLS, until you approve"].join(" · "),
+        ops: [{ key: "approve_number", label: `Approve ${k}`, intent: "primary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
     }
     if (lane === "ready" && card.ai.made && !(o.sends || []).length && !noFitLive) {
       card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon",

@@ -602,6 +602,23 @@ test("a deal is past hot, a dead offer is cold, and the ladder off means nobody 
   assert.deepEqual(await hotCandidates({ store: fakeStore({ offers: [anOffer()] }), locationId: "LOC", config: cfg, now }), [], "an offer nobody agreed to is not hot");
 });
 
+// 2026-10-15: "since we're aligned at 752,500, can you write it up?" and the
+// next day "can't get there". The machine asks for the write-up only at a
+// number Matt approved; until then neither ladder texts and Today asks him.
+test("an agreed price on a machine number Matt hasn't approved gets no write-up ask and no nudge", async () => {
+  _resetJobs();
+  const machine = hotOffer({ autoUnderwrite: { passed: true } });
+  const store = fakeStore({ offers: [machine] });
+  const { started } = hotSweep(store, T0 + 1.2 * DAY);
+  await settle();
+  assert.deepEqual(started, [], "no hot push, and the offer ladder leaves an agreed price alone");
+  assert.deepEqual(await hotCandidates({ store, locationId: "LOC", config: HOT_SAVED.conversationAi, now: T0 + 1.2 * DAY }), []);
+  const approved = hotOffer({ autoUnderwrite: { passed: true }, approved: { amount: machine.cashAmount, at: at(0), by: "today" } });
+  const { started: s2 } = hotSweep(fakeStore({ offers: [approved] }), T0 + 1.2 * DAY);
+  await settle();
+  assert.deepEqual(s2.map((s) => s.kind), ["hot_push"], "approved: the ask goes");
+});
+
 test("the hot push ignores the weekly cap, but never goes twice inside twenty hours", async () => {
   _resetJobs();
   const others = [anOffer({ id: "o2", address: "9 Oak St, Kent, WA" }), anOffer({ id: "o3", address: "44 Pine St, Kent, WA" })];

@@ -242,3 +242,20 @@ test("a listed house far under the seller's number is stamped no-fit for Matt, w
   assert.equal(sent.length, before, "nothing sent");
   await store.saveOfferSettings(LOC, saved);
 });
+
+test("the machine's letter asks for the write-up only at a number Matt approved", async () => {
+  const deps = router.conversationDepsFor({ locationId: LOC, client, saved: await store.getOfferSettings(LOC) });
+  const plain = await floated("agent-unapproved");
+  const before = sent.length;
+  const r = await deps.sendOfferDocs({ contactId: "agent-unapproved", offerId: plain.id, unattended: true, forRecord: true, by: "after_float", transcript: "" });
+  assert.equal(r.ok, true, r.reason);
+  const sms = sent.slice(before).find((m) => m.contactId === "agent-unapproved" && m.type === "SMS");
+  assert.doesNotMatch(sms.message, /NWMLS|represent us/, sms.message);
+  const mail = sent.slice(before).find((m) => m.contactId === "agent-unapproved" && m.type === "Email");
+  assert.doesNotMatch(String(mail?.html || ""), /NWMLS/);
+  const ok = await floated("agent-approved", { approved: { amount: 300000, at: "2026-10-02T20:30:00.000Z", by: "today" } });
+  const mid = sent.length;
+  await deps.sendOfferDocs({ contactId: "agent-approved", offerId: ok.id, unattended: true, forRecord: true, by: "after_float", transcript: "" });
+  const sms2 = sent.slice(mid).find((m) => m.contactId === "agent-approved" && m.type === "SMS");
+  assert.match(sms2.message, /represent us and write it up on NWMLS forms/);
+});

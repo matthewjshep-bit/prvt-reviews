@@ -169,3 +169,41 @@ test("the offers list says when our number was floated, when activity is asked f
   const without = await req("GET", "/api/offers?contact_id=contact-1&lean=1");
   assert.equal(without.json.offers.find((x) => x.id === o.id).floatedAt, undefined);
 });
+
+/* ---------- 2026-10-15: Matt approves the number ---------- */
+
+test("a person's press approves the number; the machine moving it does not", async () => {
+  const { numberApproved } = await import("./shared/offer-status.js");
+  const o = await seed({ autoUnderwrite: { passed: true }, createdAt: "2026-10-10T18:00:00Z" });
+  assert.equal(numberApproved(o), false, "the machine's number");
+  const ok = await req("POST", `/api/offers/${o.id}/approve`, { amount: o.cashAmount });
+  assert.equal(ok.status, 200, JSON.stringify(ok.json));
+  assert.equal(ok.json.approved.by, "today");
+  assert.equal(numberApproved(await store.getOffer(o.id)), true);
+  const moved = await req("POST", `/api/offers/${o.id}/approve`, { amount: o.cashAmount - 5000 });
+  assert.equal(moved.status, 409, "the number moved under you");
+
+  // Pinning a row is choosing its number.
+  const p = await seed({ autoUnderwrite: { passed: true } });
+  await req("PATCH", `/api/offers/${p.id}/current`, { pin: true });
+  assert.equal((await store.getOffer(p.id)).approved.by, "pin");
+
+  // The held-paper banner's re-quote is a person's revision.
+  const q = await seed({ autoUnderwrite: { passed: true }, status: "sent", sends: [{ ts: "2026-10-11T18:00:00Z" }] });
+  const rq = await req("POST", `/api/offers/${q.id}/requote`, { amount: 400000 });
+  assert.equal(rq.status, 200, JSON.stringify(rq.json).slice(0, 300));
+  const after = await store.getOffer(q.id);
+  assert.equal(after.revisions.at(-1).by, "you");
+  assert.equal(after.approved.amount, 400000);
+  assert.equal(after.approved.by, "revise");
+  assert.equal(numberApproved(after), true);
+});
+
+test("marking a house seen is eyes on it", async () => {
+  const o = await seed();
+  const r = await req("POST", `/api/offers/${o.id}/seen`, { note: "walked it Tuesday" });
+  assert.equal(r.status, 200);
+  assert.equal((await store.getOffer(o.id)).seen.by, "you");
+  await req("POST", `/api/offers/${o.id}/seen`, { seen: false });
+  assert.equal((await store.getOffer(o.id)).seen, undefined);
+});

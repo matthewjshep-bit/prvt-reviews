@@ -273,7 +273,9 @@ const EXECUTORS = {
     if (typeof deps?.reviseOfferToCounter !== "function") throw new Error("re-issuing an offer is not wired on this broker");
     const amount = Math.round(Number(action?.amount ?? draft?.counterAmount) || 0);
     if (!amount) return "no number to re-issue at";
-    const r = await deps.reviseOfferToCounter({ contactId, addressHint: draft?.propertyAddress || "", amount, draftId: draft?.id || null });
+    const r = await deps.reviseOfferToCounter({ contactId, addressHint: draft?.propertyAddress || "", amount, draftId: draft?.id || null,
+      // The band ran it by itself, or a person applied it from the row.
+      by: action?.mode === "auto" && !deps?.byPerson ? "counter_band" : "you" });
     if (!r?.ok) return r?.reason || "no offer to re-issue";
     return `re-issued ${r.address} at ${fmtMoney(amount)}`;
   },

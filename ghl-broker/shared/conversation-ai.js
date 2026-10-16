@@ -403,7 +403,10 @@ export const AGENT_PAPER_RULE =
   "'who's your agent?' — they think we'll write our own offer. Clear that up first, in plain words: we're not agents and don't have one " +
   "on this, so we can't put it on NWMLS forms ourselves; ask whether they can write it up for us to sign, or who on their side would. " +
   "If they point you to someone else (the listing broker), ask whether that person could write it up for us and how to reach them. " +
-  "Never just say 'sounds good' or ask for a phone number as if the write-up were sorted.";
+  "Never just say 'sounds good' or ask for a phone number as if the write-up were sorted. " +
+  // 2026-10-15: only a number Matt approved goes to a write-up.
+  "A house the offer book marks NOT APPROVED: don't ask them to write it up, use NWMLS forms or represent us on it yet — " +
+  "say you'll confirm the number on our side today and come right back.";
 
 // The bot only writes words; the app sends things. A text that says a thing
 // was done when it wasn't is the worst text it can write (Lee Dedinsky,

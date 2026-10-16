@@ -27,6 +27,7 @@
 // (shared/conversation-ai.js), both off by default.
 
 import { isOffMarket } from "./off-market.js";
+import { numberApproved } from "./offer-status.js";
 import { sameStreet } from "./us-address.js";
 
 // "Eyes on it": a photo scan this deep, a walkthrough video, or a person
@@ -58,9 +59,6 @@ export function hasEyes({ offer = null, videos = null } = {}) {
   return round(offer?.autoUnderwrite?.photosAnalyzed) >= EYES_MIN_PHOTOS;
 }
 
-// A number a person stands behind: built by hand, or a held run a person
-// published. Matt's approval (offer-status.js numberApproved) is passed in.
-const personsNumber = (offer) => !offer?.autoUnderwrite || Boolean(offer.autoUnderwrite.publishedAt);
 
 /**
  * numberStance({ offer, dossier, leadSource, highStakes, videos, approved })
@@ -91,7 +89,9 @@ export function numberStance({ offer = null, dossier = null, leadSource = "", hi
   ].filter(Boolean);
   if (!reasons.length) return firm();
   const why = reasons.join(", ");
-  if (approved || personsNumber(offer)) return firm({ highStakes: true, why });
+  // A number a person stands behind (offer-status.js numberApproved): built
+  // by hand, published, pinned, sent, or approved on Today.
+  if (approved || numberApproved(offer)) return firm({ highStakes: true, why });
   const missing = [];
   if (!(dossier?.have?.arv || dossier?.have?.rehab)) missing.push("their_read");
   if (!hasEyes({ offer, videos })) missing.push("eyes");
