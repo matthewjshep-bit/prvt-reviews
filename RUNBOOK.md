@@ -5324,6 +5324,15 @@ check-in's house, and the past-house gate holds a draft that names it. "You
 have the thread" was already bounded: 3 days after your last hand reply
 (`PERSON_HAS_IT_DAYS`).
 
+**An open offer never holds a silent agent (2026-10-16).** `openOfferIdle`
+(shared/agent-pulse.js) lets the agent go to the check-in when the offer's
+nudge, push or passed-house clock hasn't fired once in `SILENT_OPEN_DAYS` (14)
+— since its last step, or since our number went out — and nobody has texted
+either way in that time. A pause with a date, a person on the thread, or a
+clock that is firing still holds them. Found on an agent texted 377K in a plain
+reply: "that won't work", our ask for their number, then 15 days of nothing
+while "an open offer" held him and no nudge ever went.
+
 ### How often they asked, and when to stop asking (2026-10-14)
 
 Reading 2,014 threads turned up agents who told us how often to check in,

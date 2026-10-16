@@ -287,6 +287,27 @@ test("an agent who said no to an open offer and never gave a number gets the che
   assert.equal(evaluateAgent(agent({ lastInboundAt: ago(60), offers: [sent], current: [sent] }), ctx()).reason, "an open offer");
 });
 
+// Matt, 2026-10-16: an agent texted our 377K in a plain reply said "that
+// won't work", never gave a number, and heard nothing for two weeks — the
+// offer still read "new", its clock said a nudge was coming, and "an open
+// offer" held him from the check-in. Whatever the clock says, an open offer
+// with no word either way for two weeks lets the agent go.
+test("an agent with an open offer and no word either way for two weeks gets the check-in, whatever the offer's clock says", () => {
+  const texted = { id: "o-quiet", contactId: "a1", address: "88 Quarry Rd, Granite Falls, WA 98252", cashAmount: 377000, status: "new",
+    createdAt: ago(16), statusHistory: [], floatSentAt: ago(15) };
+  const drafts = [
+    { id: "d-num", status: "sent", inbound: "He would", intent: "question", reply: "We can likely do around 377Kish, in the realm?", createdAt: ago(15), sentAt: ago(15) },
+    { id: "d-no", status: "sent", inbound: "That won't work", intent: "rejection", reply: "Any number he'd actually take?", createdAt: ago(15), sentAt: ago(15) },
+  ];
+  const v = evaluateAgent(agent({ lastInboundAt: ago(15), offers: [texted], current: [texted], drafts }), ctx());
+  assert.notEqual(v.status, "owned", v.reason);
+  assert.match(openOfferIdle({ offer: texted, drafts, config: CONFIG, lastInboundAt: ago(15), now: NOW }) || "", /hasn.t gone in 14 days|stands down/);
+  // Ten days in, the offer still has them.
+  const recent = drafts.map((d) => ({ ...d, createdAt: ago(10), sentAt: ago(10) }));
+  const tenDays = { ...texted, createdAt: ago(11), floatSentAt: ago(10) };
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(10), offers: [tenDays], current: [tenDays], drafts: recent }), ctx()).reason, "an open offer");
+});
+
 test("an agent whose priced offer we never sent gets the check-in once the number has sat a week", () => {
   const unsent = { id: "o-unsent", contactId: "a1", address: "2227 Sidney Ave, Port Orchard, WA 98366", cashAmount: 300600, status: "new", createdAt: ago(50), statusHistory: [] };
   const v = evaluateAgent(agent({ lastInboundAt: ago(60), offers: [unsent], current: [unsent] }), ctx());
@@ -620,8 +641,12 @@ test("an agent mid-negotiation this week is still owned by the offer", () => {
   // An offer made this week is fresh business, even with nothing said on it.
   const fresh = stuck({ createdAt: ago(4), statusAt: ago(4), sends: [{ ts: ago(4) }] });
   assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), offers: [fresh], current: [fresh] }), ctx({ config: OFF })).reason, "an open offer");
-  // A nudge still coming keeps them with the offer, however quiet.
-  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(60), offers: [stuck()], current: [stuck()] }), ctx()).reason, "an open offer");
+  // A nudge clock that is firing keeps them with the offer, however quiet
+  // they are (a nudge went three days ago, the next one is coming).
+  const nudging = stuck({ followUps: [{ kind: "offer_nudge", step: 3, at: ago(3) }] });
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(60), offers: [nudging], current: [nudging] }), ctx()).reason, "an open offer");
+  // One that has never fired since the number went out 45 days ago isn't running (2026-10-16).
+  assert.notEqual(evaluateAgent(agent({ lastInboundAt: ago(60), offers: [stuck()], current: [stuck()] }), ctx()).status, "owned");
 });
 
 test("a held draft from a month ago doesn't silence the agent", () => {

@@ -260,12 +260,35 @@ export const UNSENT_STALE_DAYS = 7;
  * `drafts` are read with stale held rows forgotten (forgetStaleHeld).
  */
 export const STOOD_DOWN_QUIET_DAYS = 7;
+// The safety net (2026-10-16): an open offer whose machine clock claims a
+// step is coming, but hasn't fired once in this long (since its last step, or
+// since our number went out), with no word either way in that time, doesn't
+// hold the agent — that clock isn't running. A pause with a date, a person on
+// the thread, or a clock that is firing still holds them.
+export const SILENT_OPEN_DAYS = 14;
+const MACHINE_CLOCKS = new Set(["offer_nudge", "hot_push", "passed_checkin"]);
+function clockStalled({ offer, next, now }) {
+  // Whoever sends the step (the machine, or a draft for you), one that never
+  // fires is the same stall.
+  if (!MACHINE_CLOCKS.has(next.kind)) return false;
+  const fired = (offer.followUps || []).filter((f) => f?.kind === next.kind).map((f) => ms(f.at)).filter((t) => t != null);
+  const presented = [offer.floatSentAt, offer.proactive?.realmCheckAt, ...(offer.sends || []).map((x) => x?.ts || x?.at)].map(ms).filter((t) => t != null);
+  const since = fired.length ? Math.max(...fired) : presented.length ? Math.min(...presented) : null;
+  return since != null && now - since >= SILENT_OPEN_DAYS * DAY_MS;
+}
 export function openOfferIdle({ offer, drafts = [], events = [], config = {}, lastInboundAt = null, now = Date.now() } = {}) {
   if (!offer) return null;
   const list = forgetStaleHeld(drafts, now);
   const next = nextFollowUp({ offer, drafts: list, events, config, now });
   const stoodDown = next.kind === "none" || (next.kind === "stopped" && !next.until);
   if (!stoodDown) {
+    if (clockStalled({ offer, next, now })) {
+      const lastAny = lastWordAt({ offer, drafts: list, events, lastInboundAt });
+      if ((lastAny == null || now - lastAny >= SILENT_OPEN_DAYS * DAY_MS)
+          && threadHealth({ offer, drafts: list, events, now }).reason !== "person_has_it") {
+        return `its ${next.kind.replace(/_/g, " ")} hasn't gone in ${SILENT_OPEN_DAYS} days and nobody has texted either way`;
+      }
+    }
     if (next.kind === "float" && next.who === "you" && next.at && now - (ms(next.at) ?? now) > UNSENT_STALE_DAYS * DAY_MS) {
       return "our number never went out";
     }
@@ -294,7 +317,7 @@ export function forgetStaleHeld(drafts = [], now = Date.now()) {
 const WORD_EVENT_TYPES = new Set([...OUR_TEXT_TYPES, "text_summary", "call_summary", "email_received", "offer_sent"]);
 function lastWordAt({ offer = {}, drafts = [], events = [], lastInboundAt = null } = {}) {
   const times = [
-    lastInboundAt, offer.createdAt, offer.statusAt, offer.proactive?.realmCheckAt, offer.proactive?.takeCheckAt,
+    lastInboundAt, offer.createdAt, offer.statusAt, offer.proactive?.realmCheckAt, offer.proactive?.takeCheckAt, offer.floatSentAt,
     ...(offer.sends || []).map((s) => s?.ts || s?.at),
     ...(offer.followUps || []).map((f) => f?.at),
     ...(drafts || []).filter((d) => d && (d.status === "sent" || String(d.inbound || "").trim())).map((d) => (d.status === "sent" ? d.sentAt || d.updatedAt || d.createdAt : d.createdAt)),
