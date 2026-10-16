@@ -81,7 +81,7 @@ import { LAST_ACTIVITY_TYPES, lastActivityFromEvents, mergeDraftActivity, mergeG
 import { buildFeedbackPackage, renderFeedbackHtml } from "../shared/deal-feedback.js";
 import { startFeedbackScan, getScanJob, publicScanJob } from "../feedback-scan.js";
 import {
-  startFollowUpSweep, getFollowUpJob, publicFollowUpJob, cancelFollowUpSweep, CURSOR_NAME as FOLLOW_UP_CURSOR,
+  startFollowUpSweep, getFollowUpJob, publicFollowUpJob, cancelFollowUpSweep, CURSOR_NAME as FOLLOW_UP_CURSOR, secondLookCandidates,
   agentCandidates, investorCandidates,
 } from "../follow-up-sweep.js";
 import { runCounterHolds } from "../counter-hold.js";
@@ -6320,7 +6320,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // Hold, then pass: who'd get a check-in after our held number, and
       // which houses would be passed — shown even with the switch off.
       const holds = await runCounterHolds({ locationId, saved, store, config, now, dryRun: true, ignoreSwitch: true }).catch(() => []);
-      res.json({ ok: true, job, daily, sendsEnabled: CARD_SENDS_ENABLED, considered: due.length, candidates: due, counterHolds: { enabled: Boolean(config.parties.agent.counterHold?.enabled), rows: holds } });
+      // The second look at a strong past offer (shared/second-look.js): who
+      // the next sweep would ask, and why — shown even with the switch off.
+      const looks = await secondLookCandidates({ store, locationId, config, now, ignoreSwitch: true }).catch(() => []);
+      res.json({ ok: true, job, daily, sendsEnabled: CARD_SENDS_ENABLED, considered: due.length, candidates: due, counterHolds: { enabled: Boolean(config.parties.agent.counterHold?.enabled), rows: holds },
+        secondLooks: { enabled: Boolean(config.parties.agent.followUp?.secondLook?.enabled), rows: looks.map((c) => ({ contactId: c.contactId, offerId: c.offerId, address: c.address, step: c.step, theirs: c.theirs, source: c.source, gapPct: c.gapPct, why: c.why })) } });
     } catch (err) { fail(res, err); }
   });
 

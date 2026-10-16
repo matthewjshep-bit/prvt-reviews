@@ -36,6 +36,7 @@ import {
   AGENT_PULSE_EVENT_TYPES, AGENT_PULSE_LEDGER_TYPES, INBOUND_EVENT_TYPES,
 } from "./shared/agent-pulse.js";
 import { leadSourcesFor } from "./shared/lead-source.js";
+import { selfNames, isSelfName } from "./shared/self-contact.js";
 import { LEAD_MAX_DAYS, LEAD_STALE_DAYS } from "./shared/follow-up.js";
 
 export const CURSOR_NAME = "agentPulse";
@@ -174,9 +175,10 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   // The stop events come with no time window (ghl-broker/bot-hold.js): the
   // pulse's own read keeps 130 days, and a stop pressed in May still holds.
   // Not caught — a plan that can't tell who is stopped texts no one.
-  const [profiles, investors, offers, evRead, ledgerRead, openDrafts, recentDrafts, threadDrafts, inbound, listings, stops, leadRead] = await Promise.all([
-    store.listContactProfiles(locationId, { party: "agent", limit: 20000 }).catch(() => []),
-    store.listContactProfiles(locationId, { party: "investor", limit: 20000 }).catch(() => []),
+  const [allProfiles, offers, evRead, ledgerRead, openDrafts, recentDrafts, threadDrafts, inbound, listings, stops, leadRead] = await Promise.all([
+    // Every profile in one read: agents, buyers, and the ones an event wrote
+    // with no party, which an offer contact may have (2026-10-16).
+    store.listContactProfiles(locationId, { limit: 20000 }).catch(() => []),
     store.listOffers(locationId, { limit: 5000, lean: true }).catch(() => []),
     allEventsSince(store, locationId, iso(now - EVENTS_DAYS * DAY_MS), { types: AGENT_PULSE_EVENT_TYPES }, { ceiling: 100000 }).catch(() => ({ events: [] })),
     allEventsSince(store, locationId, iso(now - LEDGER_DAYS * DAY_MS), { types: AGENT_PULSE_LEDGER_TYPES }, { ceiling: 100000 }).catch(() => ({ events: [] })),
@@ -219,10 +221,21 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
     .filter((d) => d?.id && !seenDraft.has(d.id) && seenDraft.add(d.id)));
   const inboundRow = new Map((inbound || []).filter((r) => r?.contactId).map((r) => [r.contactId, r]));
   const listingsBy = byContact(listings);
-  const profileBy = new Map((profiles || []).map((p) => [p.contactId, p]));
+  const profiles = (allProfiles || []).filter((p) => p?.party === "agent");
+  const investors = (allProfiles || []).filter((p) => p?.party === "investor");
+  // An agent's own profile, or one with no party yet (an offer contact whose
+  // first event carried none): their tags and what they told us about how
+  // often to check in count either way. Never a buyer's.
+  const profileBy = new Map((allProfiles || []).filter((p) => p?.contactId && (p.party === "agent" || !p.party)).map((p) => [p.contactId, p]));
+  for (const p of profiles) profileBy.set(p.contactId, p);
   // A buyer the pull happened to match (some buyers list houses too) is the
   // buyer pulse's, not this one's.
   const investorIds = new Set((investors || []).map((p) => p.contactId));
+  // Our own contact (shared/self-contact.js): Matt texting the line to try
+  // it is never checked in on, offers on the board or not.
+  const mine = selfNames({ company: saved?.company, persona: config.persona });
+  const nameOf = (id) => profileBy.get(id)?.name || (offersBy.get(id) || []).find((o) => o?.contactName)?.contactName || "";
+  const isSelf = (id) => mine.length > 0 && isSelfName(nameOf(id), mine);
   // Contact profiles, listing agents, and anyone we made an offer to, sent
   // or drafted (Matt, 2026-10-09: every agent with an offer is followed up).
   // An offer contact with no profile has no tags here; the runner checks
@@ -249,9 +262,19 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
     if (e?.type === "agent_pulse_joined" && e.contactId && (!joinedBy.has(e.contactId) || String(e.at) < String(joinedBy.get(e.contactId)))) joinedBy.set(e.contactId, e.at);
   }
 
+  // Everyone we made an offer to, and where they went: in the pool, a buyer's
+  // (the buyer pulse has them), or us.
+  const offerContacts = { total: 0, inPool: 0, buyers: 0, self: 0 };
+  for (const id of offersBy.keys()) {
+    if (!id) continue;
+    offerContacts.total++;
+    if (investorIds.has(id)) offerContacts.buyers++;
+    else if (isSelf(id)) offerContacts.self++;
+    else offerContacts.inPool++;
+  }
   const agents = [];
   for (const id of ids) {
-    if (!id || investorIds.has(id)) continue;
+    if (!id || investorIds.has(id) || isSelf(id)) continue;
     const p = profileBy.get(id) || {};
     const mine = offersBy.get(id) || [];
     agents.push({
@@ -267,11 +290,11 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
       joinedByReply: repliers.has(id),
     });
   }
-  return { agents, settings, config, oa, houses, ledgerRead, evRead };
+  return { agents, settings, config, oa, houses, ledgerRead, evRead, offerContacts };
 }
 
 export async function planAgentPulse({ locationId, saved = {}, store = defaultStore, now = Date.now(), workflows = null, tierCards = null }) {
-  const { agents, settings, config, oa, houses, ledgerRead, evRead } = await loadPulseAgents({ locationId, saved, store, now, tierCards });
+  const { agents, settings, config, oa, houses, ledgerRead, evRead, offerContacts } = await loadPulseAgents({ locationId, saved, store, now, tierCards });
 
   // The day's cap is the DAY's: a retry, or a second press of Run now, only
   // gets the seats still empty. A voided claim gave its seat back.
@@ -292,7 +315,7 @@ export async function planAgentPulse({ locationId, saved = {}, store = defaultSt
   // Repliers in the pool by their reply alone with no join day on record:
   // the run writes one for each (agent_pulse_joined), so their spread holds.
   const unjoined = agents.filter((a) => a.joinedByReply && !a.joinedAt).map((a) => a.contactId);
-  return { ...plan, settings, drips, claimedToday, seats, unjoined, tierCardsRead: tierCards instanceof Map, truncated: Boolean(evRead.truncated || ledgerRead.truncated) };
+  return { ...plan, counts: { ...plan.counts, offerContacts }, settings, drips, claimedToday, seats, unjoined, tierCardsRead: tierCards instanceof Map, truncated: Boolean(evRead.truncated || ledgerRead.truncated) };
 }
 
 // What keeps a Tier 2 agent warm, in a few words (shared/agent-pulse.js

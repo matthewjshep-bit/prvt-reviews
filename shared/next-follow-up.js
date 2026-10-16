@@ -31,6 +31,10 @@ const DAY_MS = 24 * HOUR_MS;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const iso = (t) => new Date(t).toISOString();
 const latest = (xs) => xs.filter(Boolean).sort().at(-1) || null;
+// When our number (or our read) reached them by text: the sweep's own read
+// (follow-up-sweep.js agentCandidates). floatSentAt is a number texted in any
+// reply, not only a realm check.
+const floatedAt = (o) => o?.floatSentAt || o?.proactive?.realmCheckAt || o?.proactive?.takeCheckAt || null;
 
 export const SWEEP_UTC_HOUR = 16;
 // The promise sweep's clock: a promise we made is owed four hours on.
@@ -198,12 +202,13 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
     } else if (ladders.offer_nudge?.enabled && ladders.offer_nudge.steps?.length
         // Nothing went out on it yet (no letter, nothing floated): not a
         // nudge — the float below is its next move (follow-up-sweep.js
-        // agentCandidates skips it the same way).
-        && !(status === "new" && !paperWent(offer) && !offer.proactive?.realmCheckAt && !offer.proactive?.takeCheckAt)) {
+        // agentCandidates skips it the same way). Our number texted in a
+        // plain reply went out: it carries only floatSentAt (2026-10-16).
+        && !(status === "new" && !paperWent(offer) && !floatedAt(offer))) {
       const L = ladders.offer_nudge;
       // A send that failed on every channel is in the ledger but isn't paper.
       const onPaper = paperWent(offer);
-      const nudgeFrom = onPaper ? offerNudgeStart(offer) : (offer.proactive?.realmCheckAt || offer.proactive?.takeCheckAt || offerNudgeStart(offer));
+      const nudgeFrom = onPaper ? offerNudgeStart(offer) : (floatedAt(offer) || offerNudgeStart(offer));
       const a = offerNudgeAnchor({ startedAt: nudgeFrom, lastInboundAt: times.lastInboundAt, lastHandledAt: times.lastHandledAt });
       if (a.waitingOnUs) ladderNote = "they replied and nothing has answered it";
       else {
@@ -224,7 +229,7 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
       }
     }
     // A priced offer nobody has floated: the timer floats it.
-    const floated = offer.proactive?.realmCheckAt || offer.proactive?.takeCheckAt || (offer.sends || []).length;
+    const floated = floatedAt(offer) || (offer.sends || []).length;
     const timers = config?.driver?.timers;
     if (status === "new" && !floated && !isAiGenerated(offer)) {
       // Made by hand: the machine never floats it (pipeline.js timerMoves).

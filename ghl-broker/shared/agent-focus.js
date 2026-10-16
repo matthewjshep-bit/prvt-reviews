@@ -45,12 +45,13 @@ export const LIGHT_TOUCH_DAYS = 30;
 // coming (address_chase), a price drop (the market moved — rare, and the
 // reason to text), and the hot push (its own 20-hour floor).
 export const UNPROMPTED_AGENT_KINDS = new Set([
-  "offer_nudge", "counter_nudge", "passed_checkin", "agent_pulse", "outreach_open", "outreach_nudge",
+  "offer_nudge", "counter_nudge", "passed_checkin", "agent_pulse", "outreach_open", "outreach_nudge", "second_look",
 ]);
 
 // Texts about something other than the live offer. While one is out, these
-// wait — a passed house rides on the nudge instead.
-export const OFF_FOCUS_KINDS = new Set(["passed_checkin", "agent_pulse"]);
+// wait — a passed house rides on the nudge instead. The second look at a
+// past offer (shared/second-look.js) waits the same way.
+export const OFF_FOCUS_KINDS = new Set(["passed_checkin", "agent_pulse", "second_look"]);
 
 /* ---------- the live offer ---------- */
 

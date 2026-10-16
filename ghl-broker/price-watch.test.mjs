@@ -236,3 +236,20 @@ test("an offer that just became current on a house doesn't report a drop the age
   assert.equal(s2.calls.length, 1);
   assert.equal(s2.calls[0].subject.from, 624975, "the last price seen on the house, not the re-underwrite's 649,000");
 });
+
+/* ---------- a number texted in a plain reply (2026-10-16) ---------- */
+
+// The audit: a number we texted in an ordinary reply leaves the offer "new"
+// with only floatSentAt — no realm check's own stamp — and the watch skipped
+// it, so a price cut on a house we'd put a number to went unseen.
+test("a number we texted in a plain reply is watched like a floated one", async () => {
+  const texted = lisa({ status: "new", sends: [], statusAt: null, createdAt: new Date(NOW - 12 * DAY).toISOString(), floatSentAt: new Date(NOW - 10 * DAY).toISOString() });
+  const fetch = listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 715000, status: "FOR_SALE" }]]);
+  const on = { ...SAVED, conversationAi: normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, watchFloated: true } } } }) };
+  const r = await runPriceWatch({ locationId: "LOC", saved: on, store: fakeStore([texted]), now: NOW, deps: { ...starter(), fetchListings: fetch } });
+  assert.equal(r.watched, 1);
+  assert.equal(r.checked, 1);
+  // Still only with the switch: an unsent number's house is not watched by default.
+  const off = await runPriceWatch({ locationId: "LOC", saved: SAVED, store: fakeStore([texted]), now: NOW, deps: { ...starter(), fetchListings: fetch } });
+  assert.equal(off.watched, 0);
+});
