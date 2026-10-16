@@ -2229,6 +2229,25 @@ floats — the Conversation outbox), deal housekeeping not yet due. The call
 list only ever fed this screen, so nothing about who gets texted changed. The
 Settings section for the call list is gone. Live snapshot: 85 rows → 18.
 
+**Today's calls (2026-10-15).** The funnel review: all 8 contracts from
+outreach agents came after a phone call; agents who talked brought houses
+54% of the time against 8%; and only 15% of the agents who answered us
+ever talked. So the call list is back on Today as a second section, **Today's
+calls**, under Needs you: the best `desk.dailyCalls` (default **10**, 0–30, 0 =
+none) call list rows still in Call, best score first (`urgentReasons`). A
+counter above ours and partner terms stay under Needs you as before. A missed
+call only makes it with a live house on it. A person with a decision and a
+call shows once, led by the call, with the decision under "Also on".
+Scores now carry boosts (`CALL_BOOSTS`, shared/call-list.js), shown on the
+call card as "Up the list: …": +15 an agent we've done business with or
+who brought us a house (`agentSegment` partner/source), +10 one who talks
+like an investor (`investor_minded` in the last 90 days), +10 a seller going
+through a life event or an estate in their words (last 60 days), +10 a
+counter within `counterHold.callWithinPct` of ours. Setting: `saved.desk.dailyCalls`
+(PUT the settings doc; there's no Settings field). Check: `GET
+/api/dashboard/pipeline` → `desk.sections` has `call`, and at most
+`dailyCalls` rows have `section: "call"`.
+
 **GHL stage beside the name.** The work pane's name line (Today and the
 Offers split, `GhlStagePill` in PaneParts.jsx) shows the agent's Acquisitions
 card — "GHL: Tier 2", "GHL: Offer Out", "GHL: no card" — from

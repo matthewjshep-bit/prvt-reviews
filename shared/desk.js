@@ -25,6 +25,7 @@
 
 import { SEVERITY_RANK } from "./pipeline.js";
 import { callEventConnected } from "./talked-to.js";
+import { DESK_DEFAULTS } from "./call-list.js";
 
 export const DESK_SECTIONS = [
   { key: "call", label: "Call", hint: "Worth a phone call today: the conversations only you can have." },
@@ -131,9 +132,18 @@ export function sectionFor(a, { draftsById = new Map(), heldByOffer = new Map() 
 // text, a buyer pulse, a float — the Conversation outbox has them), and deal
 // housekeeping that isn't due. A deal blast Settings holds for him stays:
 // selling a house under contract is his.
+// Today's calls (2026-10-15): the funnel review found every contract from an
+// outreach agent came from a phone call, and only 15% of the agents who
+// answered us ever talked to Matt. The call list's best `desk.dailyCalls`
+// (10) are back on Today, under the decisions; the rest stay off it.
 export const TODAY_SECTIONS = [
   { key: "decide", label: "Needs you", hint: "Urgent, and only you can do it." },
+  { key: "call", label: "Today's calls", hint: "The calls most likely to become a deal, best first.", empty: "No calls today." },
 ];
+// The kinds a call list row can be, apart from the two that are decisions
+// (a counter above ours, partner terms) and stay under Needs you.
+const DAILY_CALL_EXCLUDED = new Set(["call_counter", "call_partner_terms"]);
+const DAILY_CALLS_DEFAULT = DESK_DEFAULTS.dailyCalls;
 const NOT_URGENT_OUTBOUND = new Set(["agent_pulse", "outreach_open", "buyer_pulse", "realm_check", "take_check"]);
 // An agent's partner terms (shared/partner-terms.js) are someone waiting on an
 // answer only Matt gives.
@@ -149,15 +159,26 @@ const URGENT_KINDS = new Set([
 ]);
 
 /**
- * urgentReasons(reasons, { drafts, heldByOffer }) → the reasons that belong on Today, each placed in "decide"
+ * urgentReasons(reasons, { drafts, heldByOffer, dailyCalls }) → the reasons that belong on Today:
+ * the decisions placed in "decide", and the day's best `dailyCalls` call
+ * list rows in "call"
  *
  * Runs before foldDesk, so a person whose strongest reason was a call still
  * shows for the decision folded under it.
  */
-export function urgentReasons(reasons = [], { drafts = [], heldByOffer = new Map() } = {}) {
+export function urgentReasons(reasons = [], { drafts = [], heldByOffer = new Map(), dailyCalls = DAILY_CALLS_DEFAULT } = {}) {
   const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
   const held = heldByOffer instanceof Map ? heldByOffer : new Map(Object.entries(heldByOffer || {}));
   const out = [];
+  // Today's calls: the call list's own rows still in "call" (not handed back
+  // to the machine), best score first, `dailyCalls` of them. A missed call
+  // only when it's about a live house — a ring from someone with nothing
+  // open is not one of the day's best.
+  const calls = (reasons || []).filter((a) => a && String(a.kind || "").startsWith("call_") && !DAILY_CALL_EXCLUDED.has(a.kind)
+    && sectionFor(a, { draftsById, heldByOffer: held }) === "call" && !(a.kind === "call_missed" && !a.offerId))
+    .sort((x, y) => callScore(y) - callScore(x))
+    .slice(0, Math.max(0, Math.round(Number(dailyCalls) || 0)));
+  for (const a of calls) out.push({ ...a, section: "call" });
   for (const a of reasons || []) {
     if (!a || !URGENT_KINDS.has(a.kind)) continue;
     if (a.kind !== "call_counter" && sectionFor(a, { draftsById, heldByOffer: held }) === "machine") continue;

@@ -57,6 +57,10 @@ export const DESK_DEFAULTS = Object.freeze({
   // with nobody picking up the phone.
   gapPct: 15,
   revisitDays: 60,         // a house lost within the gap stays worth one call this long
+  // Today's calls (2026-10-15): the top this many Call rows go on Today
+  // under "Today's calls". The funnel review: every contract from outreach
+  // agents came from a phone call, and only 15% of repliers ever talked.
+  dailyCalls: 10,
 });
 
 /** normalizeDesk(v) → every setting, a whole number in its range. */
@@ -72,6 +76,7 @@ export function normalizeDesk(v = {}) {
     triesBeforeMachine: n(o.triesBeforeMachine, d.triesBeforeMachine, 1, 5),
     gapPct: n(o.gapPct, d.gapPct, 0, 30),
     revisitDays: n(o.revisitDays, d.revisitDays, 0, 180),
+    dailyCalls: n(o.dailyCalls, d.dailyCalls, 0, 30),
   };
 }
 
@@ -104,6 +109,19 @@ const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 
 // for each day their last word has aged (hot, counters, quiet threads).
 const PER_TRY = 15;
 const PER_DAY = 1, MAX_AGE_PENALTY = 30;
+// Points on for what the funnel review (2026-10-15) found behind the deals:
+// an agent we've done business with or who brought us a house, one who
+// talks like an investor, a seller going through a life event, a counter
+// close to ours. Shown on the row (call.boosts) so the order reads.
+export const CALL_BOOSTS = {
+  partner: { points: 15, label: "you've done business" },
+  source: { points: 15, label: "they've brought us a house" },
+  investor_minded: { points: 10, label: "talks like an investor" },
+  life_event: { points: 10, label: "a seller going through a life event" },
+  close_counter: { points: 10, label: "their counter is close to ours" },
+};
+const INVESTOR_MINDED_DAYS = 90;
+const LIFE_EVENT_DAYS = 60;
 
 const FIRST_REPLY_INTENTS = new Set(["deal_available", "new_property", "investor_open"]);
 // A price in their words: "$425,000", "425k", "1.2M", "425,000". A street
@@ -213,16 +231,35 @@ export function callList({
     const lastTry = tries.map((e) => e.at).sort().at(-1) || null;
     const aged = agePenaltyFrom != null ? Math.min(MAX_AGE_PENALTY, Math.max(0, Math.floor((now - agePenaltyFrom) / DAY_MS)) * PER_DAY) : 0;
     const spent = tries.length >= cfg.triesBeforeMachine;
+    const theHouses = houses || housesOf(contactId);
+    const boosts = boostsFor(contactId, { houses: theHouses, counter: extra.counter || null });
     taken.add(contactId);
     out.push({
       id: `${kind}:${offerId || contactId}`, kind, section: spent ? "machine" : "call", group: spent ? "machine" : "yours",
       severity: spent ? "fyi" : "now", contactId, contactName, offerId, address, draftId,
-      score: BASE[kind] - aged - PER_TRY * tries.length,
+      score: BASE[kind] - aged - PER_TRY * tries.length + boosts.reduce((sum, b) => sum + b.points, 0),
       title: `${contactName || "Someone"}: ${why}`, detail: goal,
       ...(spent ? { next: { what: `called ${tries.length}× with no answer — back to texting`, at: null } } : {}),
-      call: { reason: kind, why, goal, opener, houses: houses || housesOf(contactId), since: since || null, tries: tries.length, lastTryAt: lastTry, lastWordAt: (() => { const t = lastWord(contactId); return t ? new Date(t).toISOString() : null; })() },
+      call: { reason: kind, why, goal, opener, houses: theHouses, since: since || null, tries: tries.length, lastTryAt: lastTry, lastWordAt: (() => { const t = lastWord(contactId); return t ? new Date(t).toISOString() : null; })(),
+        ...(boosts.length ? { boosts } : {}) },
       ops: [], ...extra,
     });
+  };
+
+  // What moves a call up the list (CALL_BOOSTS): who they are to us, what
+  // they've said, how close their number is.
+  const boostsFor = (c, { houses = [], counter = null } = {}) => {
+    const out = [];
+    const boost = (key) => out.push({ key, ...CALL_BOOSTS[key] });
+    const seg = agentSegment({ offers: offersBy.get(c) || [], lastInboundAt: lastWordIso(lastWord(c)) });
+    if (seg === "partner" || seg === "source") boost(seg);
+    if ((eventsBy.get(c) || []).some((e) => e.type === "investor_minded" && now - (ms(e.at) ?? 0) <= INVESTOR_MINDED_DAYS * DAY_MS)) boost("investor_minded");
+    const words = theirWords(c).filter((d) => now - (ms(d.createdAt) ?? 0) <= LIFE_EVENT_DAYS * DAY_MS).map((d) => d.inbound).join("\n");
+    if (words && flipRead(words).strong.some((x) => x === "life event" || x === "estate or probate")) boost("life_event");
+    const close = counter?.closePct != null
+      || (houses || []).some((h) => closeCounter({ ours: h.ours, theirs: h.theirs, pct: machine.counterHold?.callWithinPct ?? 10 }));
+    if (close) boost("close_counter");
+    return out;
   };
 
   // A row the machine is already driving: in "The machine is on it", with

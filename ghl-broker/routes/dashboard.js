@@ -665,10 +665,11 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // Decide · Machine, and today against the line's targets. `actions`
       // stays as it was for the board and for a console that predates it.
       const { actions: shownCalls } = applyDismissals(callRows, dismissedDoc, now);
-      // Today is only what needs Matt (2026-10-13): no Call or Machine
-      // section; a counter above our number stays, as a decision.
+      // Today is only what needs Matt (2026-10-13): no Machine section; a
+      // counter above our number stays, as a decision. Since 2026-10-15 the
+      // call list's best `desk.dailyCalls` are back, as "Today's calls".
       const heldByOffer = heldVerdicts(audit);
-      const desk = foldDesk(urgentReasons([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer }), { drafts, heldByOffer, callCap: deskSettings.callCap });
+      const desk = foldDesk(urgentReasons([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer, dailyCalls: deskSettings.dailyCalls }), { drafts, heldByOffer, callCap: deskSettings.callCap });
       for (const r of desk.rows) if (r.kind === "call_counter" && !r.call) r.call = briefFor(r, { cards: out.cards, offers });
       const kpis = deskKpis({ offers, cards: out.cards, events, targets: normalizeLineTargets(saved?.lineTargets), now });
       res.json({

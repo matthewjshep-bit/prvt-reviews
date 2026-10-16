@@ -55,10 +55,11 @@ test("a connected call since the reason clears the row; one before it doesn't", 
 test("two no-answers hand the person back to the machine", () => {
   const offers = [offer({ realm: { answer: "yes", ts: ago(1) } })];
   const miss = (d) => ({ type: "call_attempt", contactId: "c1", at: ago(d), data: { outcome: "no_answer", direction: "outbound" } });
+  const fresh = callList({ offers, cards: [card()], now: NOW })[0];
   const once = callList({ offers, cards: [card()], events: [miss(0.2)], now: NOW })[0];
   assert.equal(once.section, "call");
   assert.equal(once.call.tries, 1);
-  assert.ok(once.score < 100, "lower for the day");
+  assert.ok(once.score < fresh.score, "lower for the day");
   const twice = callList({ offers, cards: [card()], events: [miss(0.3), miss(0.1)], now: NOW })[0];
   assert.equal(twice.section, "machine");
   assert.match(twice.next.what, /back to texting/);
@@ -97,7 +98,8 @@ test("an agent who said 'stop calling' is never on the list", () => {
 
 test("they called and nobody picked up: call them back first", () => {
   const missed = { type: "call_attempt", contactId: "c9", at: ago(0.1), data: { outcome: "no_answer", direction: "inbound" } };
-  const rows = callList({ offers: [offer({ realm: { answer: "yes", ts: ago(1) } })], cards: [card()], events: [missed], drafts: [{ id: "d", contactId: "c9", contactName: "Rob G", inbound: "hi", createdAt: ago(5) }], now: NOW });
+  // A hot offer nobody has agreed yet: no boosts, so the ring back leads.
+  const rows = callList({ offers: [offer({ hot: { at: ago(1), by: "operator" } })], cards: [card()], events: [missed], drafts: [{ id: "d", contactId: "c9", contactName: "Rob G", inbound: "hi", createdAt: ago(5) }], now: NOW });
   assert.equal(rows[0].kind, "call_missed");
   assert.match(rows[0].call.opener, /sorry I missed your call/);
 });
@@ -446,4 +448,32 @@ test("a counter that comes in close to our number after the hold is a call again
   assert.equal(after[0].section, "call");
   assert.equal(after[0].counter.closePct, 5);
   assert.match(after[0].title, /5% apart, a call lands it/);
+});
+
+/* ---------- what moves a call up (2026-10-15) ---------- */
+
+test("calls are ranked by what's behind the deals: a partner or source, an investor-minded agent, a life event, a close counter", () => {
+  const hotOffer = (id, c, over = {}) => offer({ id, contactId: c, contactName: `Agent ${c}`, address: `${id} Main St, Seattle, WA 98101`, hot: { at: ago(1), by: "operator" }, ...over });
+  const hotCard = (id, c) => card({ offerId: id, contactId: c, contactName: `Agent ${c}`, address: `${id} Main St, Seattle, WA 98101` });
+  const offers = [hotOffer("1", "plain"), hotOffer("2", "warm"), offer({ id: "3", contactId: "warm", address: "3 Oak Ave, Kent, WA", status: "passed", realm: { answer: "yes", ts: ago(40) } })];
+  const events = [{ type: "investor_minded", contactId: "warm", at: ago(20), data: { cue: "I own a few rentals" } }];
+  const drafts = [{ id: "w", contactId: "warm", inbound: "The owner passed away and the executor wants it gone", createdAt: ago(2) }];
+  const rows = callList({ offers, cards: [hotCard("1", "plain"), hotCard("2", "warm")], events, drafts, now: NOW });
+  const by = Object.fromEntries(rows.map((r) => [r.contactId, r]));
+  assert.equal(by.plain.call.boosts, undefined);
+  assert.deepEqual(by.warm.call.boosts.map((b) => [b.key, b.points]), [["partner", 15], ["investor_minded", 10], ["life_event", 10]]);
+  assert.equal(by.warm.call.boosts.reduce((s, b) => s + b.points, 0), 35);
+  assert.ok(by.warm.score > by.plain.score);
+  assert.equal(rows[0].contactId, "warm");
+  // A counter 5% over ours.
+  const ctr = callList({ offers: [offer({ id: "o4", contactId: "c4", status: "countered", cashAmount: 300000, counter: { amount: 315000, at: ago(1) } })],
+    cards: [card({ lane: "countered", contactId: "c4", offerId: "o4", cashAmount: 300000, status: "countered" })], now: NOW });
+  assert.ok(ctr[0].call.boosts.some((b) => b.key === "close_counter"));
+});
+
+test("the day's number of calls is a setting, 10 by default, 0 to 30", () => {
+  assert.equal(normalizeDesk({}).dailyCalls, 10);
+  assert.equal(DESK_DEFAULTS.dailyCalls, 10);
+  assert.equal(normalizeDesk({ dailyCalls: 0 }).dailyCalls, 0);
+  assert.equal(normalizeDesk({ dailyCalls: 99 }).dailyCalls, 30);
 });
