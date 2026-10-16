@@ -17,6 +17,7 @@ import { store as defaultStore } from "./store.js";
 import { normalizeOpener } from "./shared/outreach-opener.js";
 import { isRuralLot } from "./shared/asset-type.js";
 import { isOldHouse } from "./outreach-score.js";
+import { workflowIdFrom } from "./shared/ghl-calls.js";
 
 export const CURSOR_NAME = "outreach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -53,12 +54,9 @@ const DAY_MS = 86400000;
 export const DEFAULT_FOLLOW_UP_DAYS = 14;
 
 // A GHL workflow id, or the builder URL it was copied from
-// (".../automation/workflow/640e73d6-…"). Anything else is blank.
-export function workflowIdFrom(v) {
-  const s = String(v || "").trim();
-  const id = s.match(/workflow\/([A-Za-z0-9-]+)/)?.[1] || s;
-  return /^[A-Za-z0-9-]{6,64}$/.test(id) ? id : "";
-}
+// (".../automation/workflow/640e73d6-…"). Anything else is blank. Shared
+// since 2026-10-15: Settings' GHL calls link is read the same way.
+export { workflowIdFrom };
 
 import { findCounty } from "./shared/us-counties.js";
 

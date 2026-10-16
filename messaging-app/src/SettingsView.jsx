@@ -12,6 +12,7 @@ import { getBuyerPulse, runBuyerPulse, sampleBuyerPulse, getAgentPulse, sampleAg
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
 import { normalizeDesk } from "@shared/call-list.js";
+import { workflowIdFrom } from "@shared/ghl-calls.js";
 import { UNDERWRITE_CHECKS_DEFAULTS, normalizeUnderwriteChecks } from "@shared/underwrite-checks.js";
 import { normalizeTierOne } from "@shared/tier-one.js";
 import { normalizeGhlStages } from "@shared/ghl-stages.js";
@@ -602,6 +603,10 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const setTierOne = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, tierOne: { ...(f.tierOne || {}), [k]: v } })); };
   const ghlStages = normalizeGhlStages(form.ghlStages);
   const setGhlStages = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, ghlStages: { ...(f.ghlStages || {}), [k]: v } })); };
+  // Today's calls in GHL's Manual Actions (saved.desk.ghlCalls). The link is
+  // kept as typed and read down to the workflow id on save (normalizeDesk).
+  const ghlCalls = { ...normalizeDesk(form.desk).ghlCalls, workflowId: form.desk?.ghlCalls?.workflowId ?? "" };
+  const setGhlCalls = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, desk: { ...(f.desk || {}), ghlCalls: { ...(f.desk?.ghlCalls || {}), [k]: v } } })); };
   const setTouch = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), touchBudget: { ...(f.dispoAutopilot?.touchBudget || {}), [k]: v } } })); };
   const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
@@ -733,6 +738,29 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <span>Move into Tier 2 even while a "nurture" workflow is published in GHL — <span className="font-semibold">it will text them</span>.</span>
         </label>
         <OldStagesMove />
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="ghl-calls-settings">
+        <h2 className="mb-1 text-sm font-bold">Today's calls in GHL</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          At 8:30am Pacific on workdays the day's calls go to GHL's Manual Actions, and the urgent ones (a call we promised, an
+          agent asking to talk, a counter, partner terms, a missed call on a live house) follow as they come in until 5pm. A call
+          in GHL leaves Today; a counter or partner terms stay on Today for their buttons. Nothing is texted.
+        </p>
+        <label className="mb-3 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={ghlCalls.enabled} onChange={(e) => setGhlCalls("enabled")(e.target.checked)} />
+          <span className="font-semibold">Calls go to GHL Manual Actions</span>
+        </label>
+        <Txt label="GHL workflow link" value={ghlCalls.workflowId} onChange={setGhlCalls("workflowId")}
+          placeholder="https://app.gohighlevel.com/location/…/workflow/…" />
+        <p className="mt-1 text-xs text-slate-500">
+          Build a GHL workflow with one Manual Action → Phone Call step reading {"{{contact.app_call_why}}"} and {"{{contact.app_call_say}}"}, publish it, paste its link here.
+        </p>
+        {ghlCalls.workflowId && !workflowIdFrom(ghlCalls.workflowId)
+          ? <p className="mt-1 text-xs text-red-600">That doesn't look like a GHL workflow link.</p>
+          : ghlCalls.enabled && !ghlCalls.workflowId
+          ? <p className="mt-1 text-xs text-amber-700">Nothing goes to GHL until the workflow link is here.</p>
+          : null}
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="buyer-view-settings">

@@ -6,7 +6,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { foldDesk, sectionFor, foldKey, heldVerdicts, deskKpis, pacificStart, nameRows, DESK_SECTIONS, KIND_STRENGTH, isCounterDraft, urgentReasons, TODAY_SECTIONS } from "./desk.js";
+import { foldDesk, sectionFor, foldKey, heldVerdicts, deskKpis, pacificStart, nameRows, DESK_SECTIONS, KIND_STRENGTH, isCounterDraft, urgentReasons, TODAY_SECTIONS,
+  ghlCallKind, ghlCallRows, ghlCallsDue, withoutQueuedCalls } from "./desk.js";
 import { addDismissal, isDismissed } from "./today-dismiss.js";
 import { ACTION_KINDS } from "./pipeline.js";
 
@@ -246,3 +247,78 @@ test("a call we promised is on Today under Today's calls even with no daily call
   assert.deepEqual(kept.map((r) => [r.kind, r.section]), [["call_owed", "call"]]);
   assert.equal(urgentReasons([owed]).length, 1, "and never twice");
 });
+
+/* ---------- Today's calls in GHL's Manual Actions (2026-10-15) ---------- */
+
+const callRow = (kind, c, over = {}) => ({ id: `${kind}:${c}`, kind, section: "call", severity: "now", contactId: c, contactName: `${c} Agent`, score: 70, ops: [], call: { why: "x", opener: "y" }, ...over });
+
+test("the morning sends Today's calls and the urgent ones to GHL; by day only the urgent ones", () => {
+  const drafts = [{ id: "d1", contactId: "hal", intent: "wants_call" }, { id: "d2", contactId: "ivy", intent: "counter" }];
+  const reasons = [
+    callRow("call_owed", "jo", { score: 110 }), callRow("call_hot", "dana", { score: 100 }), callRow("call_quiet", "eli", { score: 60 }), callRow("call_partner", "fay", { score: 30 }),
+    callRow("call_counter", "gus", { score: 90 }), draftRow("d1", { contactId: "hal" }), draftRow("d2", { contactId: "ivy" }),
+    // A missed call with nothing live on it isn't on Today, so it isn't for GHL.
+    callRow("call_missed", "kim", { score: 105 }),
+  ];
+  const { rows } = foldDesk(urgentReasons(reasons, { drafts, dailyCalls: 3 }), { drafts, callCap: 3 });
+  const morning = ghlCallRows(rows, { mode: "morning", drafts });
+  assert.deepEqual(morning.map((p) => p.contactId).sort(), ["dana", "eli", "gus", "hal", "jo"], "Fay waits behind \"N more\"; Ivy's counter draft is a decision");
+  assert.deepEqual(ghlCallRows(rows, { mode: "urgent", drafts }).map((p) => [p.contactId, p.reason.kind]).sort(),
+    [["gus", "call_counter"], ["hal", "draft_waiting"], ["jo", "call_owed"]]);
+  assert.equal(ghlCallKind(callRow("call_missed", "kim", { offerId: "o9" })), "urgent", "a missed call on a live house is urgent");
+  assert.equal(ghlCallKind(callRow("call_missed", "kim")), null);
+});
+
+test("a call folded under a decision still goes to GHL, as that call", () => {
+  const drafts = [{ id: "d1", contactId: "c1", intent: "scheduling" }];
+  // Hanna's paperwork to sign leads; her ask to set a time rides under it.
+  const paper = promise({ id: "paper_to_sign:o1", kind: "paper_to_sign", title: "Hanna F: the paperwork is ready to sign" });
+  const { rows } = foldDesk(urgentReasons([paper, draftRow("d1", { contactId: "c1", contactName: "" })], { drafts }), { drafts });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "paper_to_sign");
+  const picks = ghlCallRows(rows, { mode: "urgent", drafts });
+  assert.equal(picks.length, 1);
+  assert.equal(picks[0].reason.kind, "draft_waiting");
+  assert.equal(picks[0].reason.contactName, "Hanna F");
+});
+
+test("a call stays due at any rank; one handed back to the machine is not", () => {
+  const due = ghlCallsDue([callRow("call_partner", "fay"), callRow("call_quiet", "eli", { section: "machine" }), promise({ contactId: "ivy" })]);
+  assert.deepEqual([...due], ["fay"]);
+});
+
+// Matt, 2026-10-15: calls live in GHL only.
+test("a call in GHL's Manual Actions leaves Today; a counter and partner terms stay, marked", () => {
+  const now = Date.parse("2026-10-15T18:00:00Z");   // 11am Pacific
+  const drafts = [{ id: "d1", contactId: "hal", intent: "wants_call", createdAt: "2026-10-15T17:00:00Z" }];
+  const reasons = urgentReasons([
+    callRow("call_hot", "dana", { score: 100 }), callRow("call_quiet", "eli", { score: 60 }), callRow("call_counter", "gus", { score: 90 }),
+    callRow("call_partner_terms", "pia", { score: 80 }), draftRow("d1", { contactId: "hal" }), promise({ contactId: "dana" }),
+  ], { drafts, dailyCalls: 5 });
+  // In GHL since 8:30 this morning: everyone but Eli.
+  const queued = new Map(["dana", "gus", "pia", "hal"].map((c) => [c, { at: "2026-10-15T15:30:00Z" }]));
+  const kept = withoutQueuedCalls(reasons, { queued, enabled: true, drafts, now });
+  const kinds = kept.map((r) => `${r.contactId}:${r.kind}`).sort();
+  assert.deepEqual(kinds, ["dana:promise_owed", "eli:call_quiet", "gus:call_counter", "pia:call_partner_terms"],
+    "Dana's call and Hal's ask to talk are in GHL; Dana's owed number is still a decision");
+  assert.deepEqual(kept.find((r) => r.contactId === "gus").ghlQueued, { at: "2026-10-15T15:30:00Z" });
+  assert.equal(kept.find((r) => r.contactId === "eli").ghlQueued, undefined);
+  // Counts follow: the fold sees only what's left.
+  const { counts } = foldDesk(kept, { drafts });
+  assert.equal(counts.call, 1);
+  // Off, or nobody in GHL: Today as it was.
+  assert.equal(withoutQueuedCalls(reasons, { queued, enabled: false, drafts, now }), reasons);
+  assert.equal(withoutQueuedCalls(reasons, { queued: new Map(), enabled: true, drafts, now }), reasons);
+});
+
+test("a call that went to GHL before its reason began, on an earlier day, is back on Today", () => {
+  const now = Date.parse("2026-10-15T18:00:00Z");
+  const quiet = callRow("call_quiet", "eli", { call: { why: "quiet", opener: "hi", since: "2026-10-15T16:00:00Z" } });
+  const owed = callRow("call_owed", "jo", { call: { why: "owed", opener: "hi", since: "2026-10-12T16:00:00Z" } });
+  const reasons = urgentReasons([quiet, owed], { dailyCalls: 5 });
+  // Eli went in yesterday, for something older; Jo went in yesterday, after her promise.
+  const queued = new Map([["eli", { at: "2026-10-14T15:30:00Z" }], ["jo", { at: "2026-10-14T15:30:00Z" }]]);
+  const kept = withoutQueuedCalls(reasons, { queued, enabled: true, now });
+  assert.deepEqual(kept.map((r) => r.contactId), ["eli"], "Jo's call is still in GHL from yesterday; Eli's is a new reason");
+});
+

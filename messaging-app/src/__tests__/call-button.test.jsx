@@ -79,3 +79,15 @@ test("a counter row offers Hold our number, Meet at, and Walk away beside the ca
   const hot = renderToStaticMarkup(<CallCard item={{ ...item, kind: "call_hot", counter: null }} targets={{ contactId: "c2" }} phone="" />);
   expect(hot).not.toContain("Hold our number");
 });
+
+// 2026-10-15: calls go to GHL's Manual Actions; a counter stays on Today for its buttons.
+test("a counter whose call is in GHL says so and keeps its answers", async () => {
+  const { default: CallCard } = await import("../CallCard.jsx");
+  const item = { id: "call_counter:o2", kind: "call_counter", contactId: "c2", contactName: "Kel B", offerId: "o2", address: "23908 SE 168th St, Issaquah, WA",
+    counter: { ours: 690000, theirs: 715000, gap: 25000, ceiling: 700000, overCeiling: 15000, draftId: "k1" }, ghlQueued: { at: "2026-10-15T15:30:00Z" },
+    call: { reason: "call_counter", goal: "Land a number.", opener: "Hi Kel.", tries: 0, houses: [] } };
+  const html = renderToStaticMarkup(<CallCard item={item} targets={{ contactId: "c2" }} phone="" />);
+  expect(html).toContain("In GHL Manual Actions");
+  expect(html).toContain("Hold our number");
+  expect(renderToStaticMarkup(<CallCard item={{ ...item, ghlQueued: undefined }} targets={{ contactId: "c2" }} phone="" />)).not.toContain("In GHL Manual Actions");
+});

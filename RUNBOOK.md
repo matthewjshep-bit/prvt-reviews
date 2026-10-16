@@ -2419,7 +2419,8 @@ through a life event or an estate in their words (last 60 days), +10 a
 counter within `counterHold.callWithinPct` of ours. Setting: `saved.desk.dailyCalls`
 (PUT the settings doc; there's no Settings field). Check: `GET
 /api/dashboard/pipeline` → `desk.sections` has `call`, and at most
-`dailyCalls` rows have `section: "call"`.
+`dailyCalls` rows have `section: "call"`. With calls going to GHL (below),
+these go to GHL's Manual Actions instead and leave Today.
 
 **GHL stage beside the name.** The work pane's name line (Today and the
 Offers split, `GhlStagePill` in PaneParts.jsx) shows the agent's Acquisitions
@@ -2517,6 +2518,104 @@ four answers under the call card, each a person's tap — the band and
 - **Call them** — the card's Call in GHL.
 - **Walk away** — confirm, then the offer is `we_passed` (machine texts about
   it stop) and the counter draft is dismissed.
+
+### Today's calls in GHL's Manual Actions (2026-10-15)
+
+Matt dials from his computer in GHL's Manual Actions queue, not from Today.
+Matt's decisions: calls live in GHL **only** (once a call is in GHL it leaves
+Today), the day's list goes in at **8:30am Pacific** on workdays, and the
+urgent ones go in as they turn up until **5pm**.
+
+**What goes, and when** (`ghl-broker/ghl-calls.js`, the `ghl-calls` tick job;
+which rows in `shared/desk.js` `ghlCallRows`):
+- **8:30, the morning list:** Today's calls (the best `desk.dailyCalls`, not
+  the ones behind "N more to call") plus every urgent one.
+- **Every tick after it until 5pm, the urgent ones:** a call we promised
+  (`call_owed`), an agent asking to talk (a held reply whose intent is
+  `wants_call` / `scheduling` / `wants_walkthrough`), a counter above ours
+  (`call_counter`), partner terms (`call_partner_terms`), a missed call on a
+  live house (`call_missed`). Other call rows that show up after 8:30 stay
+  on Today until the next morning's list.
+- For each person (once per Pacific day): the app fills two contact fields,
+  **App call why** (`contact.app_call_why`: what the call is about and what
+  it's for, ≤300 characters — e.g. "Countered 315K on 12 Elm St against our
+  300K — 5% apart, a call lands it. Land a number. …") and **App call say**
+  (`contact.app_call_say`: the call card's opener), then adds the contact
+  to the workflow below. Nothing is texted, ever.
+
+**Today with it on** (`withoutQueuedCalls`): a call that's in GHL (queued
+today, or since its reason began) leaves Today, and the counts follow. A
+counter above ours and partner terms **stay** — their Hold / Meet / Walk
+buttons are decisions — and say "In GHL Manual Actions". Today's calls,
+empty, reads "Today's calls are in GHL's Manual Actions." A call GHL records
+(call-intake reads it, as before) clears the row by itself.
+
+**The ledger** (each person's timeline): `ghl_call_queued` is the day's claim,
+written before anything goes to GHL (key `ghl_call:<contactId>:<day>`, so
+two ticks or brokers never put someone in twice); `ghl_call_failed` when a
+GHL write failed; `ghl_call_withdrawn` when a call was taken back out.
+- **No phone in GHL:** never claimed; the row stays on Today.
+- **A GHL write failed:** a durable error (area `ghl-calls`) and
+  `ghl_call_failed`; the row stays on Today for the rest of the day.
+- **Taken back:** a call still in GHL whose reason is gone from Today (not
+  just pushed down the list) with no call since it went in is removed from
+  the workflow. At most ten a run, and never off a read that came back empty.
+- **Next workday:** a call still due goes back in once, with that day's
+  words; the app takes the contact out of the workflow first, so GHL holds
+  one action for them.
+
+**The GHL workflow Matt builds once** (the GHL API can't create a Manual
+Action; only a workflow step can):
+1. GHL → Settings → Custom Fields → add two **Single Line** contact fields
+   named exactly **App call why** and **App call say** (their keys become
+   `contact.app_call_why` and `contact.app_call_say`). The app makes them on
+   its first run if they're missing, but making them first lets the
+   workflow builder offer them.
+2. Automation → Workflows → Create Workflow → Start from scratch. Name it
+   **App: call today**.
+3. No trigger: the app adds contacts itself. (If GHL won't publish without
+   one, use Contact Tag Added → `app-call-today`; the app never sets it.)
+4. Workflow settings: **Allow re-entry ON** (the same person can come back
+   on another day).
+5. Add action → **Manual Action** → type **Phone Call**, assigned to Matt.
+   Instructions: `Why: {{contact.app_call_why}}` on one line,
+   `Say: {{contact.app_call_say}}` on the next.
+6. Save, then **Publish**.
+7. Copy the workflow's link from the browser (…/workflow/<id>) → the app's
+   Settings → **Today's calls in GHL** → paste it in "GHL workflow link",
+   tick **Calls go to GHL Manual Actions**, Save.
+
+No new Private Integration scopes: contact updates, custom fields and adding
+to a workflow are what outreach already uses (`contacts.write`,
+`locations/customFields.write`).
+
+**The switch** (`saved.desk.ghlCalls`, normalised by `normalizeDesk`, so
+Settings' whole-blob save keeps it): `{ enabled: false, workflowId: "",
+hour: 8, minute: 30, until: "17:00", weekdaysOnly: true }`. **Off by
+default**; it runs only with `enabled` and a `workflowId` (a pasted builder
+link is read down to the id). Settings has the switch and the link; the
+times are PUT-only. Turning it off leaves what's already in GHL's queue
+there and puts every call back on Today.
+
+**Check:**
+- `GET /api/dashboard/ghl-calls` — the setting, today's calls in GHL (`inGhl`,
+  `ended`), the failures and take-backs, and the job cursor (`last` = the
+  morning, `urgent.last`, `hand.last`).
+- `POST /api/dashboard/ghl-calls/run` `{"mode":"morning"}` — a dry run (the
+  default): who would go in and who would be taken back; writes nothing.
+  `{"mode":"morning","dryRun":false}` runs it for real (switch on only).
+- GHL → Contacts → Manual Actions → the phone calls are there with the why
+  and the words; Today's calls is empty; a counter row says "In GHL Manual
+  Actions".
+- Errors: app_errors area `ghl-calls` (Reports → Line's errors).
+
+**Known limits.** Completing or skipping a Manual Action in GHL without a
+call isn't seen by the app: the row stays off Today the rest of the day, and
+goes back in the next workday if it's still due. One call per person a day,
+in the words of the first reason that sent it: a counter that arrives at 2pm
+for someone already in GHL for a hot offer doesn't change the GHL words (the
+counter row stays on Today with its buttons, marked as in GHL). A call that
+failed to go waits on Today until the next morning.
 
 ### The pipeline — GHL follows the offers (2026-10-13)
 

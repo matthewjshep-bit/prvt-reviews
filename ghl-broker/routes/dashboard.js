@@ -61,7 +61,9 @@ import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize as summarizeAudit } from "../shared/conversation-audit.js";
-import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives } from "../shared/desk.js";
+import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
+import { ghlCallsOn, liveGhlQueues, GHL_CALL_EVENT_TYPES, ghlCallWindow } from "../shared/ghl-calls.js";
+import { runGhlCalls, startGhlCalls, getGhlCallsJob, summarizeRun, patchCursor as patchGhlCallsCursor, pacificDay, CURSOR_NAME as GHL_CALLS_CURSOR } from "../ghl-calls.js";
 import { knownCitiesFrom, heldOnTheMachine } from "../shared/held-underwrites.js";
 import { callList, briefFor, normalizeDesk } from "../shared/call-list.js";
 import { attachNextFollowUpsFor } from "../next-follow-up.js";
@@ -503,223 +505,301 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     return out;
   }
 
-  router.get("/pipeline", async (req, res) => {
-    try {
-      const { locationId, client } = resolveLocation(req);
-      const now = Date.now();
-      const since = new Date(now - PIPELINE_EVENT_DAYS * DAY_MS).toISOString();
-      const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
-      const [allOffers, allDrafts, windowed, saved, investors, allRecentDrafts, feedbackEvents, botEvents] = await Promise.all([
-        store.listOffers(locationId, { limit: 2000, lean: true }),
-        store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }),
-        store.listContactEventsSince(locationId, since, { types: PIPELINE_EVENT_TYPES, limit: PIPELINE_EVENT_LIMIT }).catch(() => []),
-        store.getOfferSettings(locationId).catch(() => null),
-        store.listInvestors(locationId).catch(() => []),
-        // The graduation window, for the "N intents are ready" line on the
-        // autopilot card. One indexed read; the verdicts themselves live on
-        // the Conversation AI tab.
-        store.listReplyDrafts(locationId, { since: gradSince, limit: 1000 }).catch(() => []),
-        // What you said each row's bot should have done, so the row reads "noted".
-        store.listContactEventsSince(locationId, new Date(now - ROW_FEEDBACK_DAYS * DAY_MS).toISOString(), { types: [ROW_FEEDBACK_EVENT], limit: 2000 }).catch(() => []),
-        // Stops, pauses and unsubscribes with no time window — one query
-        // (this route polls every 15s): a stop pressed in June still holds.
-        store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: BOT_EVENT_TYPES, limit: 20000 }).catch(() => []),
-      ]);
-      const config = conversationConfig(saved || {});
-      // Your own contact (a test text to the line) is not work
-      // (shared/self-contact.js): its offers and drafts never reach the board.
-      const mine = selfNames({ company: saved?.company, persona: config.persona });
-      const selfIds = selfContactIds([...allOffers, ...allDrafts, ...allRecentDrafts, ...investors.map((i) => ({ contactId: i?.contactId, contactName: i?.name }))], mine);
-      const [offers, drafts, recentDrafts] = [allOffers, allDrafts, allRecentDrafts].map((rows) => withoutSelf(rows, selfIds));
-      // eventsLimit below is built from this same array, so "the read filled
-      // up" still means the windowed read hit its limit.
-      const events = withoutSelf(mergeEvents(windowed, botEvents), selfIds);
-      const autopilot = autopilotFor({ saved, config, recentDrafts });
-      const contactNames = {};
-      for (const i of investors) if (i?.contactId && i.name) contactNames[i.contactId] = i.name;
-      const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
-      // What the machine would do about each owed promise: the answers we
-      // have since given, and the triage of any held underwrite in the way.
-      const recentSent = recentDrafts.filter((d) => d?.status === "sent");
-      // A number we still owe (shared/promise-owed.js) reaches back further
-      // than these two weeks of sends: each person it would name has their
-      // own sent texts read, so a number that went out three weeks ago is
-      // never read as owed. A handful of people, one small read each.
-      const owedIds = owedPromises({ events, sentDrafts: recentSent, offers, now }).map((p) => p.contactId).slice(0, 40);
-      const olderSent = (await Promise.all(owedIds.map((c) => store.listReplyDrafts(locationId, { contactId: c, status: "sent", limit: 40 }).catch(() => [])))).flat();
-      const seenSent = new Set(recentSent.map((d) => d.id));
-      const sentDrafts = [...recentSent, ...olderSent.filter((d) => d?.id && !seenSent.has(d.id) && seenSent.add(d.id))];
-      const heldTriageByOffer = await heldTriageForPromises({ store, locationId, offers, events, config, now }).catch(() => ({}));
-      // Which live deals have a buyer package, for the "no buyer package" row.
-      const dealRooms = await dealRoomIds({ store, locationId, offers });
-      // The few offers about to be signed, read in full: the lean row has no
-      // listing remarks, size or videos (shared/pre-contract.js).
-      const preContractByOffer = await preContractForHot({ offers, saved }).catch(() => ({}));
-      // The limit is the windowed read's: the stop events merged in on top
-      // must not read as "the read filled up".
-      const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, preContractByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT + (events.length - windowed.length), dealRooms });
-      // Last night's audit: the rows that are Matt's join the queue under
-      // "From last night"; the rest of the result rides along for the card.
-      const auditCursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);
-      // The daytime pass's last run, for the line above the machine's group.
-      const dayCursor = config.driver?.daytime?.enabled ? await store.getJobCursor?.(locationId, DAY_CURSOR_NAME).catch(() => null) : null;
-      const dayLast = dayCursor?.doc?.last || null;
-      const audit = auditCursor?.doc?.last || null;
-      // Names the sweep and the pipeline didn't have, off the contact record,
-      // then GHL for the few still missing (bounded; a failure just leaves
-      // "An agent").
-      const names = await namesFor({ store, client, locationId, rows: [...(audit?.findings || []), ...out.actions] }).catch(() => ({}));
-      out.actions = nameRows(out.actions, names);
-      // The call list (shared/call-list.js): who to call today and why. Its
-      // rows are the Desk's alone — the board and an older console read
-      // `actions` and never see them.
-      const deskSettings = normalizeDesk(saved?.desk);
-      const touches = await lastTouches(locationId).catch(() => ({ lastIn: new Map(), lastAny: new Map() }));
-      const unsubscribedIds = new Set(botEvents.filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
-      // What sellers told us they need (property_details sellerAsk), for the
-      // "their number is close to ours" call.
-      const asks = await store.listContactEventsSince(locationId, new Date(now - 120 * DAY_MS).toISOString(), { types: ["property_details"], limit: 5000 })
-        .then((rows) => rows.filter((e) => Number(e?.data?.sellerAsk) > 0)).catch(() => []);
-      const callRows = nameRows(callList({ offers, cards: out.cards, actions: out.actions, drafts: [...drafts, ...recentDrafts], events,
-        lastIn: touches.lastIn, lastAny: touches.lastAny, unsubscribed: unsubscribedIds, settings: deskSettings, now, machine: machineDrives(config), asks }), names);
-      // A hot offer the machine keeps nudging says when, or that it has
-      // stood down (2026-10-05: 12502 SE 73rd Pl read "the next nudge on the
-      // offer" while Matt had the thread). The Offers column's own rule, one
-      // person at a time; there are only a few of these.
-      for (const r of callRows) {
-        if (r.kind !== "hot_machine" || !r.offerId || !r.contactId || r.next?.at) continue;
-        const theirs = offers.filter((o) => o?.contactId === r.contactId).map((o) => ({ ...o }));
-        await attachNextFollowUpsFor({ store, locationId, saved, contactId: r.contactId, offers: theirs, now }).catch(() => null);
-        const nf = theirs.find((o) => o.id === r.offerId)?.nextFollowUp;
-        if (nf?.at && nf.who === "machine") r.next = { what: String(nf.label || r.next?.what || "").toLowerCase(), at: nf.at };
-        else if (nf && !nf.at && nf.reason) r.next = { what: nf.reason, at: null };
-      }
-      // A held reply the 7pm check will send as it stands (releasableHeld,
-      // the audit's own rule) is the machine's, not a decision: it shows
-      // with the time it goes. You can still open it and send it sooner.
-      const audit7 = config.nightlyAudit?.enabled !== false ? (() => {
-        const hour = Number(config.nightlyAudit?.hour ?? 19);
-        let at = pacificStart(now) + hour * 3600000;
-        if (at <= now) at += DAY_MS;
-        return at;
-      })() : null;
-      // A held underwrite whose verdict is plain from the row — nothing to
-      // place, outside our area, not our kind of house, an address to
-      // confirm — is the machine's tonight (shared/held-underwrites.js).
-      const knownCities = knownCitiesFrom(offers);
-      const offerById = new Map(offers.map((o) => [o.id, o]));
-      for (const a of out.actions) {
-        if (a.kind !== "underwrite_held" || a.group === "machine") continue;
-        const v = heldOnTheMachine(offerById.get(a.offerId), { knownCities, now });
-        if (!v) continue;
+  // Today, read: the board, the call list and the Desk, exactly as GET
+  // /pipeline sends them. A function so the GHL calls runner (ghl-calls.js)
+  // works from the same rows Today shows; the route only answers with `body`.
+  async function pipelineFor({ locationId, client, now = Date.now() }) {
+    const since = new Date(now - PIPELINE_EVENT_DAYS * DAY_MS).toISOString();
+    const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
+    const [allOffers, allDrafts, windowed, saved, investors, allRecentDrafts, feedbackEvents, botEvents] = await Promise.all([
+      store.listOffers(locationId, { limit: 2000, lean: true }),
+      store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }),
+      store.listContactEventsSince(locationId, since, { types: PIPELINE_EVENT_TYPES, limit: PIPELINE_EVENT_LIMIT }).catch(() => []),
+      store.getOfferSettings(locationId).catch(() => null),
+      store.listInvestors(locationId).catch(() => []),
+      // The graduation window, for the "N intents are ready" line on the
+      // autopilot card. One indexed read; the verdicts themselves live on
+      // the Conversation AI tab.
+      store.listReplyDrafts(locationId, { since: gradSince, limit: 1000 }).catch(() => []),
+      // What you said each row's bot should have done, so the row reads "noted".
+      store.listContactEventsSince(locationId, new Date(now - ROW_FEEDBACK_DAYS * DAY_MS).toISOString(), { types: [ROW_FEEDBACK_EVENT], limit: 2000 }).catch(() => []),
+      // Stops, pauses and unsubscribes with no time window — one query
+      // (this route polls every 15s): a stop pressed in June still holds.
+      store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: BOT_EVENT_TYPES, limit: 20000 }).catch(() => []),
+    ]);
+    const config = conversationConfig(saved || {});
+    // Your own contact (a test text to the line) is not work
+    // (shared/self-contact.js): its offers and drafts never reach the board.
+    const mine = selfNames({ company: saved?.company, persona: config.persona });
+    const selfIds = selfContactIds([...allOffers, ...allDrafts, ...allRecentDrafts, ...investors.map((i) => ({ contactId: i?.contactId, contactName: i?.name }))], mine);
+    const [offers, drafts, recentDrafts] = [allOffers, allDrafts, allRecentDrafts].map((rows) => withoutSelf(rows, selfIds));
+    // eventsLimit below is built from this same array, so "the read filled
+    // up" still means the windowed read hit its limit.
+    const events = withoutSelf(mergeEvents(windowed, botEvents), selfIds);
+    const autopilot = autopilotFor({ saved, config, recentDrafts });
+    const contactNames = {};
+    for (const i of investors) if (i?.contactId && i.name) contactNames[i.contactId] = i.name;
+    const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
+    // What the machine would do about each owed promise: the answers we
+    // have since given, and the triage of any held underwrite in the way.
+    const recentSent = recentDrafts.filter((d) => d?.status === "sent");
+    // A number we still owe (shared/promise-owed.js) reaches back further
+    // than these two weeks of sends: each person it would name has their
+    // own sent texts read, so a number that went out three weeks ago is
+    // never read as owed. A handful of people, one small read each.
+    const owedIds = owedPromises({ events, sentDrafts: recentSent, offers, now }).map((p) => p.contactId).slice(0, 40);
+    const olderSent = (await Promise.all(owedIds.map((c) => store.listReplyDrafts(locationId, { contactId: c, status: "sent", limit: 40 }).catch(() => [])))).flat();
+    const seenSent = new Set(recentSent.map((d) => d.id));
+    const sentDrafts = [...recentSent, ...olderSent.filter((d) => d?.id && !seenSent.has(d.id) && seenSent.add(d.id))];
+    const heldTriageByOffer = await heldTriageForPromises({ store, locationId, offers, events, config, now }).catch(() => ({}));
+    // Which live deals have a buyer package, for the "no buyer package" row.
+    const dealRooms = await dealRoomIds({ store, locationId, offers });
+    // The few offers about to be signed, read in full: the lean row has no
+    // listing remarks, size or videos (shared/pre-contract.js).
+    const preContractByOffer = await preContractForHot({ offers, saved }).catch(() => ({}));
+    // The limit is the windowed read's: the stop events merged in on top
+    // must not read as "the read filled up".
+    const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, preContractByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT + (events.length - windowed.length), dealRooms });
+    // Last night's audit: the rows that are Matt's join the queue under
+    // "From last night"; the rest of the result rides along for the card.
+    const auditCursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);
+    // The daytime pass's last run, for the line above the machine's group.
+    const dayCursor = config.driver?.daytime?.enabled ? await store.getJobCursor?.(locationId, DAY_CURSOR_NAME).catch(() => null) : null;
+    const dayLast = dayCursor?.doc?.last || null;
+    const audit = auditCursor?.doc?.last || null;
+    // Names the sweep and the pipeline didn't have, off the contact record,
+    // then GHL for the few still missing (bounded; a failure just leaves
+    // "An agent").
+    const names = await namesFor({ store, client, locationId, rows: [...(audit?.findings || []), ...out.actions] }).catch(() => ({}));
+    out.actions = nameRows(out.actions, names);
+    // The call list (shared/call-list.js): who to call today and why. Its
+    // rows are the Desk's alone — the board and an older console read
+    // `actions` and never see them.
+    const deskSettings = normalizeDesk(saved?.desk);
+    const touches = await lastTouches(locationId).catch(() => ({ lastIn: new Map(), lastAny: new Map() }));
+    const unsubscribedIds = new Set(botEvents.filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
+    // What sellers told us they need (property_details sellerAsk), for the
+    // "their number is close to ours" call.
+    const asks = await store.listContactEventsSince(locationId, new Date(now - 120 * DAY_MS).toISOString(), { types: ["property_details"], limit: 5000 })
+      .then((rows) => rows.filter((e) => Number(e?.data?.sellerAsk) > 0)).catch(() => []);
+    const callRows = nameRows(callList({ offers, cards: out.cards, actions: out.actions, drafts: [...drafts, ...recentDrafts], events,
+      lastIn: touches.lastIn, lastAny: touches.lastAny, unsubscribed: unsubscribedIds, settings: deskSettings, now, machine: machineDrives(config), asks }), names);
+    // A hot offer the machine keeps nudging says when, or that it has
+    // stood down (2026-10-05: 12502 SE 73rd Pl read "the next nudge on the
+    // offer" while Matt had the thread). The Offers column's own rule, one
+    // person at a time; there are only a few of these.
+    for (const r of callRows) {
+      if (r.kind !== "hot_machine" || !r.offerId || !r.contactId || r.next?.at) continue;
+      const theirs = offers.filter((o) => o?.contactId === r.contactId).map((o) => ({ ...o }));
+      await attachNextFollowUpsFor({ store, locationId, saved, contactId: r.contactId, offers: theirs, now }).catch(() => null);
+      const nf = theirs.find((o) => o.id === r.offerId)?.nextFollowUp;
+      if (nf?.at && nf.who === "machine") r.next = { what: String(nf.label || r.next?.what || "").toLowerCase(), at: nf.at };
+      else if (nf && !nf.at && nf.reason) r.next = { what: nf.reason, at: null };
+    }
+    // A held reply the 7pm check will send as it stands (releasableHeld,
+    // the audit's own rule) is the machine's, not a decision: it shows
+    // with the time it goes. You can still open it and send it sooner.
+    const audit7 = config.nightlyAudit?.enabled !== false ? (() => {
+      const hour = Number(config.nightlyAudit?.hour ?? 19);
+      let at = pacificStart(now) + hour * 3600000;
+      if (at <= now) at += DAY_MS;
+      return at;
+    })() : null;
+    // A held underwrite whose verdict is plain from the row — nothing to
+    // place, outside our area, not our kind of house, an address to
+    // confirm — is the machine's tonight (shared/held-underwrites.js).
+    const knownCities = knownCitiesFrom(offers);
+    const offerById = new Map(offers.map((o) => [o.id, o]));
+    for (const a of out.actions) {
+      if (a.kind !== "underwrite_held" || a.group === "machine") continue;
+      const v = heldOnTheMachine(offerById.get(a.offerId), { knownCities, now });
+      if (!v) continue;
+      if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
+      out.counts.actions.byGroup.machine = (out.counts.actions.byGroup.machine || 0) + 1;
+      a.group = "machine";
+      a.next = { what: v.what, at: v.at || (audit7 ? new Date(audit7).toISOString() : null) };
+    }
+    // Last night's verdict after an ask, which the row alone can't show:
+    // a week's wait says when it passes; an answer without a number is
+    // a call (shared/desk.js sectionFor) and says why.
+    const afterAsk = new Map((audit?.findings || [])
+      .filter((f) => f?.offerId && (f.kind === "held_waiting" || f.kind === "held_call")).map((f) => [f.offerId, f]));
+    for (const a of out.actions) {
+      const f = a.kind === "underwrite_held" ? afterAsk.get(a.offerId) : null;
+      if (!f) continue;
+      if (f.kind === "held_call") { a.detail = f.why; continue; }
+      if (a.group !== "machine") {
         if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
         out.counts.actions.byGroup.machine = (out.counts.actions.byGroup.machine || 0) + 1;
         a.group = "machine";
-        a.next = { what: v.what, at: v.at || (audit7 ? new Date(audit7).toISOString() : null) };
       }
-      // Last night's verdict after an ask, which the row alone can't show:
-      // a week's wait says when it passes; an answer without a number is
-      // a call (shared/desk.js sectionFor) and says why.
-      const afterAsk = new Map((audit?.findings || [])
-        .filter((f) => f?.offerId && (f.kind === "held_waiting" || f.kind === "held_call")).map((f) => [f.offerId, f]));
+      a.next = { what: "passes unless they send a number — and tells them", at: f.passAt || null };
+    }
+    if (audit7) {
+      const byId = new Map(drafts.map((d) => [d.id, d]));
       for (const a of out.actions) {
-        const f = a.kind === "underwrite_held" ? afterAsk.get(a.offerId) : null;
-        if (!f) continue;
-        if (f.kind === "held_call") { a.detail = f.why; continue; }
-        if (a.group !== "machine") {
-          if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
-          out.counts.actions.byGroup.machine = (out.counts.actions.byGroup.machine || 0) + 1;
-          a.group = "machine";
-        }
-        a.next = { what: "passes unless they send a number — and tells them", at: f.passAt || null };
-      }
-      if (audit7) {
-        const byId = new Map(drafts.map((d) => [d.id, d]));
-        for (const a of out.actions) {
-          if (a.kind !== "draft_waiting" || a.group === "machine") continue;
-          const d = byId.get(a.draftId);
-          // As the audit sees it: never a text after a call (our own call is
-          // the thread's last word, so it reads as yours) and never someone
-          // we can't place.
-          if (!d || d.inboundKind === "call" || !["agent", "investor"].includes(d.party)) continue;
-          // And only a reply to something they said: the check releases a
-          // holding answer to their text, never a text the machine started.
-          // Fourteen 9311 12th Pl SE emails (2026-10-05) read "goes out at
-          // the 7pm check" while Settings held every one for a person.
-          if (!String(d.inbound || "").trim()) continue;
-          if (!releasableHeld(d, { loose: config.nightlyAudit?.loose !== false, mode: "night", now: audit7 })) continue;
-          if (botHold({ events: botEvents.filter((e) => e.contactId === d.contactId), now }).held) continue;
-          if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
-          out.counts.actions.byGroup.machine = (out.counts.actions.byGroup.machine || 0) + 1;
-          a.group = "machine";
-          a.next = { what: "goes out at the 7pm check", at: new Date(audit7).toISOString() };
-        }
-      }
-      // Those names can show you as well (a test text with no offer or draft).
-      const auditRows = auditActions(audit, { now, names });
-      const auditSelfIds = new Set([...selfIds, ...selfContactIds(auditRows, mine)]);
-      // The offer is looked up after the de-dupe, so a row about an
-      // unanswered text isn't hidden behind a pipeline row on the same offer.
-      const lastNight = withCurrentOffers(withoutSelf(auditRows, auditSelfIds).filter((a) =>
-        !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled"))), offers)
-        .map((a) => ({ ...a, group: "yours" }));
-      // Last night is over by morning (shared/conversation-audit.js stillOwed):
-      // a text answered or queued since isn't owed, and nothing that would
-      // text someone who unsubscribed is a call to make.
-      const unsubscribed = new Set(botEvents.filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
-      const fromLastNight = stillOwed(lastNight, { drafts: [...drafts, ...recentDrafts], unsubscribed, events });
-      out.counts.actions.byGroup.yours += fromLastNight.length;
-      const reachable = stillOwed(out.actions, { unsubscribed });
-      for (const a of out.actions) {
-        if (reachable.includes(a)) continue;
+        if (a.kind !== "draft_waiting" || a.group === "machine") continue;
+        const d = byId.get(a.draftId);
+        // As the audit sees it: never a text after a call (our own call is
+        // the thread's last word, so it reads as yours) and never someone
+        // we can't place.
+        if (!d || d.inboundKind === "call" || !["agent", "investor"].includes(d.party)) continue;
+        // And only a reply to something they said: the check releases a
+        // holding answer to their text, never a text the machine started.
+        // Fourteen 9311 12th Pl SE emails (2026-10-05) read "goes out at
+        // the 7pm check" while Settings held every one for a person.
+        if (!String(d.inbound || "").trim()) continue;
+        if (!releasableHeld(d, { loose: config.nightlyAudit?.loose !== false, mode: "night", now: audit7 })) continue;
+        if (botHold({ events: botEvents.filter((e) => e.contactId === d.contactId), now }).held) continue;
         if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
-        if (out.counts.actions[a.severity] > 0) out.counts.actions[a.severity]--;
+        out.counts.actions.byGroup.machine = (out.counts.actions.byGroup.machine || 0) + 1;
+        a.group = "machine";
+        a.next = { what: "goes out at the 7pm check", at: new Date(audit7).toISOString() };
       }
-      out.actions = reachable;
-      // Feedback by row id, newest per row. Draft rows are keyed
-      // `draft:<draftId>` (the console renders them from `drafts`, and two
-      // drafts on one offer share the pipeline's own id).
-      const rowFeedback = {};
-      for (const [rowId, e] of latestRowFeedback(feedbackEvents, { now })) rowFeedback[rowId] = publicRowFeedback(e);
-      const withFeedback = (a) => (rowFeedback[a.id] ? { ...a, feedback: rowFeedback[a.id] } : a);
-      // Rows you dismissed stay off until they say something new
-      // (shared/today-dismiss.js); the counts drop with them.
-      const dismissedDoc = (await store.getJobCursor?.(locationId, TODAY_DISMISS_CURSOR).catch(() => null))?.doc || null;
-      const { actions: shownActions, hidden: dismissedRows } = applyDismissals([...out.actions, ...fromLastNight], dismissedDoc, now);
-      for (const a of dismissedRows) {
-        if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
-        if (out.actions.includes(a) && out.counts.actions[a.severity] > 0) out.counts.actions[a.severity]--;
-      }
-      // The Desk (shared/desk.js): the same rows, one per person, in Call ·
-      // Decide · Machine, and today against the line's targets. `actions`
-      // stays as it was for the board and for a console that predates it.
-      const { actions: shownCalls } = applyDismissals(callRows, dismissedDoc, now);
-      // Today is only what needs Matt (2026-10-13): no Machine section; a
-      // counter above our number stays, as a decision. Since 2026-10-15 the
-      // call list's best `desk.dailyCalls` are back, as "Today's calls".
-      const heldByOffer = heldVerdicts(audit);
-      const desk = foldDesk(urgentReasons([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer, dailyCalls: deskSettings.dailyCalls }), { drafts, heldByOffer, callCap: deskSettings.callCap });
-      for (const r of desk.rows) if (r.kind === "call_counter" && !r.call) r.call = briefFor(r, { cards: out.cards, offers });
-      const kpis = deskKpis({ offers, cards: out.cards, events, targets: normalizeLineTargets(saved?.lineTargets), now });
+    }
+    // Those names can show you as well (a test text with no offer or draft).
+    const auditRows = auditActions(audit, { now, names });
+    const auditSelfIds = new Set([...selfIds, ...selfContactIds(auditRows, mine)]);
+    // The offer is looked up after the de-dupe, so a row about an
+    // unanswered text isn't hidden behind a pipeline row on the same offer.
+    const lastNight = withCurrentOffers(withoutSelf(auditRows, auditSelfIds).filter((a) =>
+      !out.actions.some((p) => (a.draftId && p.draftId === a.draftId) || (a.offerId && p.offerId === a.offerId && p.kind !== "draft_scheduled"))), offers)
+      .map((a) => ({ ...a, group: "yours" }));
+    // Last night is over by morning (shared/conversation-audit.js stillOwed):
+    // a text answered or queued since isn't owed, and nothing that would
+    // text someone who unsubscribed is a call to make.
+    const unsubscribed = new Set(botEvents.filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
+    const fromLastNight = stillOwed(lastNight, { drafts: [...drafts, ...recentDrafts], unsubscribed, events });
+    out.counts.actions.byGroup.yours += fromLastNight.length;
+    const reachable = stillOwed(out.actions, { unsubscribed });
+    for (const a of out.actions) {
+      if (reachable.includes(a)) continue;
+      if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
+      if (out.counts.actions[a.severity] > 0) out.counts.actions[a.severity]--;
+    }
+    out.actions = reachable;
+    // Feedback by row id, newest per row. Draft rows are keyed
+    // `draft:<draftId>` (the console renders them from `drafts`, and two
+    // drafts on one offer share the pipeline's own id).
+    const rowFeedback = {};
+    for (const [rowId, e] of latestRowFeedback(feedbackEvents, { now })) rowFeedback[rowId] = publicRowFeedback(e);
+    const withFeedback = (a) => (rowFeedback[a.id] ? { ...a, feedback: rowFeedback[a.id] } : a);
+    // Rows you dismissed stay off until they say something new
+    // (shared/today-dismiss.js); the counts drop with them.
+    const dismissedDoc = (await store.getJobCursor?.(locationId, TODAY_DISMISS_CURSOR).catch(() => null))?.doc || null;
+    const { actions: shownActions, hidden: dismissedRows } = applyDismissals([...out.actions, ...fromLastNight], dismissedDoc, now);
+    for (const a of dismissedRows) {
+      if (out.counts.actions.byGroup[a.group] > 0) out.counts.actions.byGroup[a.group]--;
+      if (out.actions.includes(a) && out.counts.actions[a.severity] > 0) out.counts.actions[a.severity]--;
+    }
+    // The Desk (shared/desk.js): the same rows, one per person, in Call ·
+    // Decide · Machine, and today against the line's targets. `actions`
+    // stays as it was for the board and for a console that predates it.
+    const { actions: shownCalls } = applyDismissals(callRows, dismissedDoc, now);
+    // Today is only what needs Matt (2026-10-13): no Machine section; a
+    // counter above our number stays, as a decision. Since 2026-10-15 the
+    // call list's best `desk.dailyCalls` are back, as "Today's calls".
+    const heldByOffer = heldVerdicts(audit);
+    const reasons = urgentReasons([...shownActions, ...shownCalls].map(withFeedback), { drafts, heldByOffer, dailyCalls: deskSettings.dailyCalls });
+    // With calls going to GHL's Manual Actions (desk.ghlCalls, 2026-10-15), a
+    // call that's in GHL leaves Today (shared/desk.js withoutQueuedCalls);
+    // `deskAll` is Today before that, what the GHL calls runner picks from.
+    // The ledger is its own small read, only while it's on.
+    const ghlOn = ghlCallsOn(deskSettings.ghlCalls);
+    const ghlQueued = ghlOn ? liveGhlQueues(await store.listContactEventsSince(locationId, new Date(now - 7 * DAY_MS).toISOString(), { types: GHL_CALL_EVENT_TYPES, limit: 2000 }).catch(() => [])) : new Map();
+    const deskAll = foldDesk(reasons, { drafts, heldByOffer, callCap: deskSettings.callCap });
+    const desk = ghlOn ? foldDesk(withoutQueuedCalls(reasons, { queued: ghlQueued, enabled: true, drafts, now }), { drafts, heldByOffer, callCap: deskSettings.callCap }) : deskAll;
+    for (const r of new Set([...desk.rows, ...deskAll.rows])) if (r.kind === "call_counter" && !r.call) r.call = briefFor(r, { cards: out.cards, offers });
+    const dayStart = pacificStart(now);
+    const sections = ghlOn ? TODAY_SECTIONS.map((sec) => (sec.key === "call" ? { ...sec, empty: GHL_CALLS_EMPTY } : sec)) : TODAY_SECTIONS;
+    const kpis = deskKpis({ offers, cards: out.cards, events, targets: normalizeLineTargets(saved?.lineTargets), now });
+    const body = {
+      dismissedCount: dismissedRows.length,
+      rowFeedback,
+      audit: audit ? { lastRunAt: auditCursor.at, run: auditCursor.doc?.run || null, counts: audit.counts, summary: summarizeAudit(audit), finishedAt: audit.finishedAt, trigger: audit.trigger, dryRun: audit.dryRun, error: audit.error, ghlRead: audit.ghlRead, leaks: audit.leaks || null } : null,
+      daytime: dayLast ? { finishedAt: dayLast.finishedAt, started: (dayLast.acted || []).filter((a) => ["started", "queued", "clocked"].includes(a.status)).length,
+        stopped: (dayLast.acted || []).filter((a) => a.status === "stopped").length, error: dayLast.error || null } : null,
+      ok: true,
+      now: new Date(now).toISOString(),
+      sendsEnabled: CARD_SENDS_ENABLED,
+      conversationEnabled: config.enabled,
+      ladders: { agent: config.parties.agent.followUp, investor: config.parties.investor.followUp },
+      autopilot,
+      // The open drafts verbatim — the console renders them with the same
+      // row the outbox uses, so send/edit/dismiss/apply come for free.
+      drafts,
+      ...out,
+      actions: shownActions.map(withFeedback),
+      desk: { sections, rows: desk.rows, counts: desk.counts, kpis,
+        ...(ghlOn ? { ghlCalls: { on: true, inGhlToday: [...ghlQueued.values()].filter((q) => Date.parse(q.at) >= dayStart).length } } : {}) },
+    };
+    return { body, desk, deskAll, callRows, shownCalls, shownActions, drafts, offers, cards: out.cards, events, saved, deskSettings };
+  }
+  router.pipelineFor = pipelineFor;
+
+  router.get("/pipeline", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const { body } = await pipelineFor({ locationId, client });
+      res.json(body);
+    } catch (err) { fail(res, err); }
+  });
+
+  // Today's calls in GHL's Manual Actions (ghl-calls.js), read-only: the
+  // setting, who went in today, who came back out or failed, and the job's
+  // last runs. Ids, kinds and the words that went in the two fields.
+  router.get("/ghl-calls", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const now = Date.now();
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const settings = normalizeDesk(saved.desk).ghlCalls;
+      const day = pacificDay(now);
+      const dayStart = pacificStart(now);
+      const ledger = await store.listContactEventsSince(locationId, new Date(now - 7 * DAY_MS).toISOString(), { types: GHL_CALL_EVENT_TYPES, limit: 2000 }).catch(() => []);
+      const live = liveGhlQueues(ledger);
+      const todays = ledger.filter((e) => Date.parse(e.at) >= dayStart).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+      const ended = new Map(todays.filter((e) => e.type !== "ghl_call_queued").map((e) => [e.data?.claimKey, e]));
+      const row = (e) => ({ contactId: e.contactId, kind: e.data?.kind || "", at: e.at, address: e.address || e.data?.address || "" });
+      const cursor = await store.getJobCursor?.(locationId, GHL_CALLS_CURSOR).catch(() => null);
+      const { fields, ...doc } = cursor?.doc || {};
+      const job = getGhlCallsJob(locationId);
       res.json({
-        dismissedCount: dismissedRows.length,
-        rowFeedback,
-        audit: audit ? { lastRunAt: auditCursor.at, run: auditCursor.doc?.run || null, counts: audit.counts, summary: summarizeAudit(audit), finishedAt: audit.finishedAt, trigger: audit.trigger, dryRun: audit.dryRun, error: audit.error, ghlRead: audit.ghlRead, leaks: audit.leaks || null } : null,
-        daytime: dayLast ? { finishedAt: dayLast.finishedAt, started: (dayLast.acted || []).filter((a) => ["started", "queued", "clocked"].includes(a.status)).length,
-          stopped: (dayLast.acted || []).filter((a) => a.status === "stopped").length, error: dayLast.error || null } : null,
-        ok: true,
-        now: new Date(now).toISOString(),
-        sendsEnabled: CARD_SENDS_ENABLED,
-        conversationEnabled: config.enabled,
-        ladders: { agent: config.parties.agent.followUp, investor: config.parties.investor.followUp },
-        autopilot,
-        // The open drafts verbatim — the console renders them with the same
-        // row the outbox uses, so send/edit/dismiss/apply come for free.
-        drafts,
-        ...out,
-        actions: shownActions.map(withFeedback),
-        desk: { sections: TODAY_SECTIONS, rows: desk.rows, counts: desk.counts, kpis },
+        ok: true, now: new Date(now).toISOString(), day,
+        settings, on: ghlCallsOn(settings), window: ghlCallWindow(settings),
+        today: {
+          queued: todays.filter((e) => e.type === "ghl_call_queued").map((e) => ({ ...row(e), mode: e.data?.mode || "", trigger: e.data?.trigger || "",
+            why: e.data?.why || "", say: e.data?.opener || "", inGhl: live.get(e.contactId)?.claimKey === e.dedupeKey, ended: ended.get(e.dedupeKey)?.type || null })),
+          withdrawn: todays.filter((e) => e.type === "ghl_call_withdrawn").map((e) => ({ ...row(e), why: e.data?.why || "" })),
+          failed: todays.filter((e) => e.type === "ghl_call_failed").map((e) => ({ ...row(e), error: e.data?.error || "" })),
+        },
+        inGhl: live.size,
+        cursor: cursor ? { at: cursor.at, ...doc, fieldsSet: Boolean(fields?.why && fields?.say) } : null,
+        running: job?.status === "running" ? summarizeRun(job) : null,
       });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Run it by hand: { mode: "morning" | "urgent", dryRun }. A dry run (the
+  // default) reads Today and GHL's contacts and lists who would go in and who
+  // would be taken back; it writes nothing. A real run needs the switch on
+  // and a workflow, goes in the background, and GET /ghl-calls shows it.
+  router.post("/ghl-calls/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const mode = req.body?.mode === "urgent" ? "urgent" : "morning";
+      const dryRun = req.body?.dryRun !== false;
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      if (dryRun) {
+        const r = await runGhlCalls({ store, locationId, client, saved, deps: { pipelineFor }, mode, dryRun: true, trigger: "manual" });
+        return res.json({ ok: true, ...r });
+      }
+      if (!ghlCallsOn(normalizeDesk(saved.desk).ghlCalls)) {
+        return res.status(400).json({ error: "Calls to GHL are off: switch on \"Calls go to GHL Manual Actions\" and paste the workflow link in Settings first." });
+      }
+      const job = startGhlCalls({ store, locationId, client, saved, deps: { pipelineFor }, mode, trigger: "manual",
+        onDone: (j) => patchGhlCallsCursor(store, locationId, { hand: { at: j.finishedAt, last: summarizeRun(j) } }) });
+      res.status(202).json({ ok: true, started: true, job: summarizeRun(job) });
     } catch (err) { fail(res, err); }
   });
 

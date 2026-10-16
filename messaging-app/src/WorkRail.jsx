@@ -22,7 +22,7 @@ function RailRow({ item, selected, onSelect, taught }) {
         <span className="min-w-0 flex-1">
           <span className={`block truncate text-sm ${selected ? "font-semibold text-blue-900" : "font-medium text-slate-800"}`} title={item.address || item.title}>{railLabel(item)}</span>
           <span className="block truncate text-xs text-slate-500">
-            {KIND_LABEL[item.kind] || item.kind}{item.also?.length ? ` +${item.also.length}` : ""}{item.contactName && item.address ? ` · ${item.contactName}` : ""}
+            {KIND_LABEL[item.kind] || item.kind}{item.also?.length ? ` +${item.also.length}` : ""}{item.ghlQueued ? " · in GHL" : ""}{item.contactName && item.address ? ` · ${item.contactName}` : ""}
           </span>
         </span>
         {taught && <Check size={12} className="mt-1 shrink-0 text-emerald-600" aria-label="taught" />}

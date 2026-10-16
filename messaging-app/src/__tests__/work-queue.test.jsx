@@ -131,6 +131,10 @@ test("Today is Needs you, then Today's calls, worked in the broker's order", asy
   const { DESK_GROUPS, rowFor, reasonsOf, groupOf } = await import("../work-queue.js");
   expect(DESK_GROUPS.map((g) => [g.key, g.label])).toEqual([["decide", "Needs you"], ["call", "Today's calls"]]);
   expect(DESK_GROUPS.map((g) => g.empty)).toEqual(["Nothing needs you right now.", "No calls today."]);
+  // Calls in GHL's Manual Actions (2026-10-15): Today's calls says where they went.
+  const { deskGroupsFor } = await import("../work-queue.js");
+  expect(deskGroupsFor({ ghlCalls: { on: true } }).map((g) => g.empty)).toEqual(["Nothing needs you right now.", "Today's calls are in GHL's Manual Actions."]);
+  expect(deskGroupsFor({})).toBe(DESK_GROUPS);
   const rows = [{ id: "c1", section: "call" }, { id: "d1", section: "decide" }, { id: "x" }, { id: "d2", section: "decide" }];
   expect(orderRows(rows, DESK_GROUPS).map((r) => r.id)).toEqual(["d1", "x", "d2", "c1"]);
   expect(groupOf({ id: "x" }, DESK_GROUPS)).toBe("decide");

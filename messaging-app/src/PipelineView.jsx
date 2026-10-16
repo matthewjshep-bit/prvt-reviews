@@ -19,7 +19,7 @@ import { getDashboardPipeline } from "./api.js";
 import { appHref } from "./links.js";
 import { BTN, ErrorBar, FilterChips, SearchInput, SkeletonRows } from "./ui.jsx";
 import WorkView from "./WorkView.jsx";
-import { DESK_GROUPS, TODAY_GROUPS } from "./work-queue.js";
+import { deskGroupsFor, TODAY_GROUPS } from "./work-queue.js";
 import PipelineBoard from "./PipelineBoard.jsx";
 
 const POLL_MS = 15000;
@@ -159,7 +159,7 @@ export default function PipelineView({ section = "queue", settings = null }) {
         <>
           <DeskKpis kpis={data?.desk?.kpis} />
           <StatusStrip autopilot={data?.autopilot} working={working} liveDeals={liveDeals} daytime={data?.daytime} leaks={data?.audit?.leaks || null} refreshBtn={refreshBtn} />
-          <WorkView actions={data?.desk ? data.desk.rows : actions} groups={data?.desk ? DESK_GROUPS : TODAY_GROUPS} drafts={drafts} rowFeedback={data?.rowFeedback || {}} sendsEnabled={data?.sendsEnabled}
+          <WorkView actions={data?.desk ? data.desk.rows : actions} groups={data?.desk ? deskGroupsFor(data.desk) : TODAY_GROUPS} drafts={drafts} rowFeedback={data?.rowFeedback || {}} sendsEnabled={data?.sendsEnabled}
             serverOffsetMs={offsetRef.current} onDone={refresh} settings={settings} />
         </>
       )}
