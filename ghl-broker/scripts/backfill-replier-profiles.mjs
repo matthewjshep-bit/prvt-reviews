@@ -21,12 +21,16 @@
 //   node scripts/backfill-replier-profiles.mjs                 dry run, counts
 //   node scripts/backfill-replier-profiles.mjs --limit 20      dry run, a slice
 //   node scripts/backfill-replier-profiles.mjs --write         writes
+//   ... --include-pool   also the pool agents the app thinks never replied
+//
+// The same run, without the Shell: POST /api/outreach/repliers/backfill.
 
 import { makeClient } from "../ghl.js";
 
 const argv = process.argv.slice(2);
 const flag = (name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : ""; };
 const write = argv.includes("--write");
+const includePool = argv.includes("--include-pool");
 const limit = Number(flag("--limit")) || 0;
 
 const locationId = flag("--location") || process.env.GHL_LOCATION_ID || "";
@@ -40,23 +44,24 @@ const { store } = await import("../store.js");
 const { runReplierBackfill } = await import("../replier-backfill.js");
 await store.init();
 
-console.log(`mode: ${write ? "WRITE" : "DRY RUN (pass --write to write)"}${limit ? `, first ${limit} candidates` : ""}`);
+console.log(`mode: ${write ? "WRITE" : "DRY RUN (pass --write to write)"}${includePool ? ", pool agents too" : ""}${limit ? `, first ${limit} candidates` : ""}`);
 let shown = 0;
 const r = await runReplierBackfill({
-  client: makeClient(token), locationId, store, write, limit,
+  client: makeClient(token), locationId, store, write, limit, includePool,
   onProgress: (o) => { const done = o.read + o.failed; if (done - shown >= 50) { shown = done; console.log(`  read ${done}`); } },
 });
 
 console.log(`outreach rows:        ${r.outreachRows} (${r.outreachContacts} GHL contacts)`);
 console.log(`already in check-in:  ${r.alreadyInPool}`);
 console.log(`buyers (skipped):     ${r.investors}`);
-console.log(`read from GHL:        ${r.read} of ${r.candidates} candidates${r.failed ? `, ${r.failed} failed` : ""}`);
+console.log(`read from GHL:        ${r.read} of ${r.candidates + (r.pool?.candidates || 0)} candidates${r.failed ? `, ${r.failed} failed` : ""}`);
 console.log(`replied (join):       ${r.kinds.engaged || 0}`);
 console.log(`opted out (stop):     ${r.kinds.opted_out || 0}`);
 console.log(`auto-reply only:      ${r.kinds.auto_reply || 0} (left out)`);
 console.log(`annoyed:              ${r.kinds.annoyed || 0} (left out)`);
 console.log(`never wrote back:     ${r.kinds.none || 0}`);
 console.log(`why:                  ${Object.entries(r.why).map(([k, v]) => `${k} ${v}`).join(" · ")}`);
+if (r.pool) console.log(`pool, never replied:  ${r.pool.candidates} (${r.pool.hadReply} had a reply in their drafts; read ${r.pool.read}: ${Object.entries(r.pool.kinds).map(([k, v]) => `${k} ${v}`).join(" · ") || "none"})`);
 if (write) console.log(`written:              ${r.written.profiles} profiles, ${r.written.markers} timeline markers, ${r.written.optedOut} opted out`);
 else console.log("Nothing written. Check the counts (opted out should hold the stops and wrong numbers), then re-run with --write.");
 process.exit(0);

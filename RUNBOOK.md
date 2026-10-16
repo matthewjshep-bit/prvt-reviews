@@ -5311,6 +5311,36 @@ Matt: all of them go into the check-in.
   Afterwards, `GET /api/outreach/pulse?agents=1` should show the engaged pool
   up by about 70, with their `dueAt` spread over the next `everyDays`.
 
+**Repliers the pool already has (2026-10-16).** The 10/16 audit found 59+
+agents IN the pool, sorted "cold" because the app had no reply from them,
+who had written back in GHL (mostly to the old workflow texts in August and
+September). Cold agents hear from us only about a fresh listing, so they
+went months without a touch.
+- **What.** `includePool` on the backfill also reads every pool agent with
+  no reply on their timeline or drafts, no offer only their answer could
+  have moved, and no stop (`poolNeverReplied`). A reply in GHL gets the same
+  last-word marker, so they become engaged and join the regular check-in;
+  an opt-out goes through `markUnsubscribed`. Auto-replies and annoyed
+  replies are left alone. A reply found in their drafts is counted
+  (`pool.hadReply`) and not read from GHL.
+- **Spread.** Their first check-in is spread over `everyDays` from the run,
+  like every joiner. A listing ping we sent them while they were cold (a
+  ledger event with `data.segment: "cold"`, before the join) doesn't count as
+  being on the clock, so it doesn't make them due all at once.
+- **Running it, without the Render Shell.** `POST
+  /api/outreach/repliers/backfill {dryRun = true, includePool = true,
+  limit}` starts it as an in-memory job (one at a time, 409 otherwise),
+  three GHL threads at a time and paced, as the script reads them. `GET
+  /api/outreach/repliers/backfill` has `progress` while it reads and
+  `result` when done: counts by class (`kinds`, `why`, `pool.kinds`,
+  `written`), never a name, phone or word. Run the dry run first and check
+  that `pool.kinds.opted_out` holds the stops; then `{dryRun: false}`. A
+  `limit` reads a slice (the agents outside the pool first). The script
+  takes `--include-pool` too. Reruns are safe. No switch: it runs only when
+  asked.
+- **Check.** `GET /api/outreach/pulse?agents=1`: the engaged count up by
+  about `written.markers`, their `dueAt` spread over the next `everyDays`.
+
 ### The daily sweep (outreach autopilot)
 
 Settings → Agent Outreach → "Run outreach every day on its own". Once a

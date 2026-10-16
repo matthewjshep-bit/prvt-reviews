@@ -628,9 +628,14 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   // `joinedAt`: the runner's agent_pulse_joined, or the replier backfill's
   // run. One who joined by their reply and isn't written down yet joins
   // today, so a preview spreads them from today, as the next run will.
+  // A ping we sent them as a cold agent before they joined is not the clock:
+  // the pool agents whose old reply the backfill found (2026-10-16) had
+  // those, and are spread like every other joiner.
   const joinedAt = agent.joinedAt || (agent.joinedByReply ? iso(now) : null);
+  const onClock = (e) => !(e.data?.segment === "cold" && String(e.at) <= String(joinedAt));
+  const clockPulse = ledger.some((e) => e.type === "agent_pulse_sent" && !voided.has(e.dedupeKey) && onClock(e));
   const firstAt = firstCheckInAt({ contactId: agent.contactId, joinedAt, everyDays });
-  if (firstAt && !lastPulseAt && !texted.length && !(since && String(since) > String(joinedAt)) && now < ms(firstAt)) {
+  if (firstAt && !clockPulse && !texted.some(onClock) && !(since && String(since) > String(joinedAt)) && now < ms(firstAt)) {
     return out("not_due", `joined the check-in; first one spread over ${everyDays} days`, { segment, dueAt: firstAt });
   }
   const house = ourHouseFor({ offers: agent.current || [], drafts, events, config, now });
