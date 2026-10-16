@@ -19,7 +19,7 @@ import { rehabBand } from "./rehab-catalog.js";
 import { assetOf, assetPhrase } from "./asset-type.js";
 import { isOffMarket } from "./off-market.js";
 import { buyerCeiling } from "./post-mortem.js";
-import { priceAgreed, pushesToPaper, effectiveStatus, DEAD_STATUSES } from "./offer-status.js";
+import { priceAgreed, pushesToPaper, offerHeat, effectiveStatus, DEAD_STATUSES } from "./offer-status.js";
 
 // The order they're read in, and what each is called on the row.
 export const PRE_CONTRACT_ITEMS = [
@@ -77,13 +77,23 @@ export function tickPreContract(pc, { key, done = true, note = "" } = {}, now = 
  * needsPreContract(offer) → boolean
  *
  * The offer is close to paper: the price is agreed, you flagged it, or the
- * agent said they're writing it up — and it isn't a deal yet.
+ * agent said they're writing it up — and it isn't a deal yet. Only inside
+ * PRE_CONTRACT_FRESH_DAYS of that moment: an old yes is history.
  */
-export function needsPreContract(offer) {
+// A yes or a write-up older than this is history, not a signing (2026-10-15:
+// the first live read had six rows for agreements weeks old).
+export const PRE_CONTRACT_FRESH_DAYS = 14;
+
+export function needsPreContract(offer, { now = Date.now(), freshDays = PRE_CONTRACT_FRESH_DAYS } = {}) {
   if (!offer || offer.deal) return false;
   const status = effectiveStatus(offer);
   if (DEAD_STATUSES.has(status) || status === "draft") return false;
-  return pushesToPaper(offer) || offer.hot?.signal === "writing_up";
+  const fresh = (at) => { const t = Date.parse(at || ""); return Number.isFinite(t) && now - t <= freshDays * 86400000; };
+  if (offer.hot?.signal === "writing_up" && fresh(offer.hot.at)) return true;
+  if (!pushesToPaper(offer)) return false;
+  // A fresh yes, or a house you flagged hot yourself lately.
+  const heat = offerHeat(offer);
+  return fresh(priceAgreed(offer)?.at) || (heat?.by === "you" && fresh(heat.at));
 }
 
 // The snapshot a priced offer keeps, or a held draft's workspace.

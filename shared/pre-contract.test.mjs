@@ -13,6 +13,7 @@ import {
 import { buyerCeiling } from "./post-mortem.js";
 
 const T = "2026-10-10T18:00:00.000Z";
+const NOW = Date.parse("2026-10-11T18:00:00.000Z");
 // A listed house the agent said yes on: realm yes at our number.
 const hot = (over = {}) => ({
   id: "o1", contactId: "a1", address: "41 Alder Way, Kent, WA 98030", cashAmount: 300000, status: "sent",
@@ -23,7 +24,7 @@ const byKey = (checks) => Object.fromEntries(checks.map((c) => [c.key, c]));
 
 test("an offer about to be signed with nothing looked at has every item open", () => {
   const o = hot();
-  assert.equal(needsPreContract(o), true);
+  assert.equal(needsPreContract(o, { now: NOW }), true);
   const checks = preContractChecks({ offer: o });
   assert.deepEqual(checks.map((c) => c.key), PRE_CONTRACT_KEYS);
   assert.equal(openChecks(checks).length, checks.length);
@@ -35,11 +36,19 @@ test("an offer about to be signed with nothing looked at has every item open", (
 });
 
 test("a deal, a dead offer or one nobody agreed to needs no check", () => {
-  assert.equal(needsPreContract(hot({ deal: { stage: "under_contract" } })), false);
-  assert.equal(needsPreContract(hot({ status: "we_passed" })), false);
-  assert.equal(needsPreContract(hot({ realm: null })), false);
+  assert.equal(needsPreContract(hot({ deal: { stage: "under_contract" } }), { now: NOW }), false);
+  assert.equal(needsPreContract(hot({ status: "we_passed" }), { now: NOW }), false);
+  assert.equal(needsPreContract(hot({ realm: null }), { now: NOW }), false);
   // The agent says they're writing it up.
-  assert.equal(needsPreContract(hot({ realm: null, hot: { at: T, by: "conversation", signal: "writing_up" } })), true);
+  assert.equal(needsPreContract(hot({ realm: null, hot: { at: T, by: "conversation", signal: "writing_up" } }), { now: NOW }), true);
+});
+
+test("an old yes or an old write-up is history: no check row after two weeks", () => {
+  const later = Date.parse("2026-10-25T18:00:01.000Z");
+  assert.equal(needsPreContract(hot(), { now: later }), false, "a realm yes 15 days old");
+  assert.equal(needsPreContract(hot({ realm: null, hot: { at: T, by: "conversation", signal: "writing_up" } }), { now: later }), false);
+  assert.equal(needsPreContract(hot({ realm: null, hot: { at: T, by: "you" } }), { now: NOW }), true, "a house you flagged hot this week");
+  assert.equal(needsPreContract(hot({ realm: null, hot: { at: T, by: "you" } }), { now: later }), false);
 });
 
 test("the listing remarks say what to look at — a defect, a park lot with lot rent, a mobile home", () => {

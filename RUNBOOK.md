@@ -2769,7 +2769,9 @@ Where it shows, all advisory (nothing blocks, no switch):
 
 - **Today**: a `pre_contract` row (Needs you) on an offer about to be signed
   (`needsPreContract`: `pushesToPaper`, or the agent is writing it up; no
-  deal yet) while anything is open. "now" when they're writing it up. The pane
+  deal yet) while anything is open. Only within 14 days of the yes, the
+  write-up or your Hot flag (`PRE_CONTRACT_FRESH_DAYS`): the first live read
+  had six rows for agreements weeks old. "now" when they're writing it up. The pane
   lists the items with a **Checked** button each (`POST
   /api/offers/:id/precontract { key, done, note }`, kept at
   `offer.preContract.ticks`; `GET` reads them). Buttons: **Pre-sell to 3
