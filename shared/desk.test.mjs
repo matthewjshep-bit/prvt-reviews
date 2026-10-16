@@ -227,3 +227,11 @@ test("a person whose strongest reason was a call still shows for the decision un
   assert.deepEqual(on[0].also.map((r) => r.kind), ["promise_owed"]);
 });
 
+
+// 2026-10-15: a call we promised is always on Today, under Today's calls.
+test("a call we promised is on Today under Today's calls even with no daily calls", () => {
+  const owed = { id: "call_owed:c1:x", kind: "call_owed", section: "call", severity: "now", contactId: "c1", score: 110, ops: [] };
+  const kept = urgentReasons([owed], { dailyCalls: 0 });
+  assert.deepEqual(kept.map((r) => [r.kind, r.section]), [["call_owed", "call"]]);
+  assert.equal(urgentReasons([owed]).length, 1, "and never twice");
+});

@@ -45,7 +45,7 @@ export const CALL_INTENTS = new Set(["wants_call", "scheduling", "wants_walkthro
 // drafts, then the house-level and deal-level work. Anything unlisted sorts
 // after these, by severity.
 export const KIND_STRENGTH = [
-  "call_hot", "call_brought", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
+  "call_owed", "call_hot", "call_brought", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
   // An agent's partner terms lead their held reply: the row says what they offered.
   "call_partner_terms",
   "paper_to_sign", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral", "email_check",
@@ -145,7 +145,7 @@ export const TODAY_SECTIONS = [
 ];
 // The kinds a call list row can be, apart from the two that are decisions
 // (a counter above ours, partner terms) and stay under Needs you.
-const DAILY_CALL_EXCLUDED = new Set(["call_counter", "call_partner_terms"]);
+const DAILY_CALL_EXCLUDED = new Set(["call_counter", "call_partner_terms", "call_owed"]);
 const DAILY_CALLS_DEFAULT = DESK_DEFAULTS.dailyCalls;
 const NOT_URGENT_OUTBOUND = new Set(["agent_pulse", "outreach_open", "buyer_pulse", "realm_check", "take_check"]);
 // An agent's partner terms (shared/partner-terms.js) are someone waiting on an
@@ -159,7 +159,11 @@ const URGENT_KINDS = new Set([
   "referral",
   // An email they texted that GHL couldn't simply take (shared/contact-email.js).
   "email_check",
+  // A call we said we'd make (2026-10-15): always on Today, under Today's calls.
+  "call_owed",
 ]);
+// Urgent rows that sit under Today's calls rather than Needs you.
+const URGENT_CALLS = new Set(["call_owed"]);
 
 /**
  * urgentReasons(reasons, { drafts, heldByOffer, dailyCalls }) → the reasons that belong on Today:
@@ -191,7 +195,7 @@ export function urgentReasons(reasons = [], { drafts = [], heldByOffer = new Map
       // A text the machine started (a check-in, a first text, a float): nobody is waiting on it.
       if (NOT_URGENT_OUTBOUND.has(d?.outbound?.kind) && !isCounterDraft(d)) continue;
     }
-    out.push({ ...a, section: "decide" });
+    out.push({ ...a, section: URGENT_CALLS.has(a.kind) ? "call" : "decide" });
   }
   return out;
 }

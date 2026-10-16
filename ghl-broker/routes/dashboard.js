@@ -85,6 +85,8 @@ const PIPELINE_EVENT_TYPES = [
   "follow_up_sent", "text_summary", "call_summary", "call_attempt",
   "outreach_sent",
   "promise_made", "promise_owed", "promise_kept",
+  // A booked time keeps a promised walk-through time (shared/promise-owed.js).
+  "call_booked",
   "underwrite_dropped", "texts_elsewhere",
   "drive_stopped", "drive_resumed", "hand_reply", "investor_minded", "referral_mentioned",
   // An agent's partner terms: the Desk's partner row (shared/call-list.js).

@@ -229,7 +229,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
           : "",
       up
         ? `— WE TEXTED ${fmtMoney(up.amount)} ${dateWord(up.ts)} ("${up.text}"), but the offer was never revised to it. ` +
-          `It is NOT our number: never repeat it, confirm it, or treat a yes as agreement to it. A person is settling the price — say you're confirming with your partner`
+          `It is NOT our number: never repeat it, confirm it, or treat a yes as agreement to it. A person is settling the price — say you'll go over it on a quick call`
         : "",
       `— status: ${statusWord(status)}`,
       status === "we_passed" && reopensOnTheirNumbers(o)

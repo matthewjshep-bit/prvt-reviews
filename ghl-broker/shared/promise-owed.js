@@ -10,8 +10,9 @@
 
 import { sameStreet } from "./us-address.js";
 import { effectiveStatus, weDecline } from "./offer-status.js";
-import { detectPromise, isConditionalPromise } from "./follow-up.js";
+import { detectPromise, isConditionalPromise, PERSON_PROMISES } from "./follow-up.js";
 import { ourReplyPasses } from "./flip-read.js";
+import { callEventConnected } from "./talked-to.js";
 
 const HOUR_MS = 3600000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -157,6 +158,80 @@ export function owedPromises({ events = [], sentDrafts = [], offers = [], now = 
       draftId: newest.data?.draftId || null,
       by: newest.data?.by || "",
     });
+  }
+  return out;
+}
+
+/* ---------- a call, a time to walk it, the earnest money (2026-10-15) ---------- */
+
+// The funnel review: in 37 of the 58 negotiations we dropped, a promise
+// wasn't kept, and the ones nothing tracked were these. "I'll give you a call
+// tomorrow", "I'll get you a time to walk it", "we'll get the earnest money
+// over". Only a person keeps them, so they're rows, never a machine text.
+// A time in a text of ours: "Thursday at 2", "tomorrow at 10am", "3pm".
+const TIME_RX = /\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b|\btomorrow\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\bat\s+\d{1,2}(?::\d{2})?\b|\bnoon\b/i;
+export const PERSON_PROMISE_WORDS = { call: "a call", tour: "a time to walk it", emd: "the earnest money" };
+
+/**
+ * owedPersonPromises({ events, sentDrafts, offers, now, afterHours, windowDays })
+ *   → [{ contactId, what, since, lastAt, dates, address, text, draftId, by }]
+ *
+ * One per contact and kind: the calls, walk-through times and earnest money
+ * we promised that are `afterHours` old and nothing has kept since.
+ *   call  a call that connected, or one of ours that was tried (a call_attempt);
+ *   tour  a booking (call_booked), or a text of ours that names a time;
+ *   emd   the deal's earnest-money item ticked on the closing checklist.
+ * A Dismiss (promise_kept by "dismissed") clears any of them; the machine's
+ * own promise_kept (a number went out) doesn't — a price isn't a call.
+ */
+export function owedPersonPromises({ events = [], sentDrafts = [], offers = [], now = Date.now(), afterHours = OWED_AFTER_HOURS, windowDays = OWED_WINDOW_DAYS } = {}) {
+  const floor = now - windowDays * 86400000;
+  const byContact = new Map();
+  for (const e of events || []) {
+    if (!e?.contactId || (ms(e.at) ?? 0) < floor) continue;
+    if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
+    byContact.get(e.contactId).push(e);
+  }
+  const out = [];
+  for (const [contactId, list] of byContact) {
+    list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const ours = (sentDrafts || []).filter((d) => d?.contactId === contactId && d.status === "sent");
+    const theirOffers = (offers || []).filter((o) => o?.contactId === contactId);
+    const open = new Map();
+    for (const p of list) {
+      if (p.type !== "promise_made" || !PERSON_PROMISES.has(p.data?.what)) continue;
+      if (p.data?.conditional === true || (p.data?.text && isConditionalPromise(p.data.text))) continue;
+      const what = p.data.what;
+      const t = ms(p.at) ?? 0;
+      const after = (x) => (ms(x) ?? 0) > t;
+      if (list.some((k) => k.type === "promise_kept" && k.data?.by === "dismissed" && (ms(k.at) ?? 0) >= t)) continue;
+      const on = (a) => !p.address || !a || sameStreet(a, p.address);
+      let kept = false;
+      if (what === "call") kept = list.some((e) => after(e.at) && (callEventConnected(e) || (e.type === "call_attempt" && e.data?.direction !== "inbound")));
+      if (what === "tour") {
+        kept = list.some((e) => after(e.at) && e.type === "call_booked")
+          || ours.some((d) => (sentAtOf(d) ?? 0) > t && !d.outbound?.kind && TIME_RX.test(d.sentText || d.reply || d.body || ""));
+      }
+      if (what === "emd") {
+        kept = theirOffers.some((o) => on(o.address) && (o.deal?.checklist?.items || []).some((i) => i?.id === "earnest_money" && i.done));
+      }
+      if (kept) continue;
+      open.set(what, [...(open.get(what) || []), p]);
+    }
+    for (const [what, ps] of open) {
+      if (now - (ms(ps[0].at) ?? now) < afterHours * HOUR_MS) continue;
+      const newest = ps.at(-1);
+      out.push({
+        contactId, what,
+        since: ps[0].at,
+        lastAt: newest.at,
+        dates: [...new Set(ps.map((p) => pacificDay(ms(p.at))))],
+        address: [...ps].reverse().find((p) => p.address)?.address || "",
+        text: String(newest.data?.text || ""),
+        draftId: newest.data?.draftId || null,
+        by: newest.data?.by || "",
+      });
+    }
   }
   return out;
 }

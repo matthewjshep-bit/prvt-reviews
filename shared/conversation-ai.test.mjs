@@ -675,3 +675,15 @@ test("the call ask is off until switched on, agent only, and survives a save", (
   assert.equal(on.parties.investor.callAsk.enabled, false);
   assert.equal(normalizeConversationAi(on).parties.agent.callAsk.enabled, true);
 });
+
+// 2026-10-15: in 37 of 58 dropped negotiations we'd promised something
+// nobody delivered, often from an "underwriting team" or a "partner".
+import { AGENT_PAPER_RULE, AGENT_GOAL_RULE, PROMISE_RULE } from "./conversation-ai.js";
+test("the agent defaults never invent an underwriting team or a partner to check with, and promise only with a time", () => {
+  const agent = starterConfig({ signer: "Matt Shepherd" }).parties.agent;
+  const words = JSON.stringify({ i: agent.instructions, m: agent.mayCommit, rules: starterConfig({ signer: "Matt Shepherd" }).rules,
+    ex: starterConfig({ signer: "Matt Shepherd" }).examples.filter((e) => e.party === "agent") }) + AGENT_PAPER_RULE + AGENT_GOAL_RULE;
+  assert.doesNotMatch(words, /underwriting team|my partner|your partner|back to you (?:today|this afternoon)|by underwriting/i);
+  assert.match(PROMISE_RULE, /I'll text you the number by 3/);
+  assert.match(PROMISE_RULE, /quick call/);
+});

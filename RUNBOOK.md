@@ -2171,6 +2171,52 @@ days and 28 never got one at all. On deploy, expect up to about that many
 (bot sends from 2026-09-14) show, and your own typed promises only from now
 on.
 
+### A call, a time to walk it, the earnest money: promises we keep (2026-10-15)
+
+**Why.** The funnel review: in 37 of the 58 negotiations we dropped, we'd
+promised something nobody delivered, and the bot's defaults kept inventing
+people to check with ("my underwriting team", "my partner … back to you this
+afternoon").
+
+**Three more kinds of promise** (`detectPromise`, shared/follow-up.js):
+`call` ("I'll give you a call tomorrow", "let me call you back"), `tour`
+("I'll get you a time to walk it", "let me set up a walkthrough") and `emd`
+("we'll get the earnest money over to title"). A conditional one ("…give you a
+call if it makes sense") is not a promise. They're `PERSON_PROMISES`: only a
+person keeps them, so the promise sweep never sends its "still working on it"
+text for one and the driver never acts on one. `sendReplyDraft` and your own
+typed texts (`notePromiseInHandText`) record them as `promise_made` with
+`what: call | tour | emd`.
+
+**Owed rows** (`owedPersonPromises`, shared/promise-owed.js), a day after the
+promise, for 60 days:
+- `call`: a **call_owed** Call row ("Owed: a call to Pat on 12 Elm St"),
+  score 110, so it leads Today's calls, and it's on Today even when
+  `desk.dailyCalls` is 0. Kept by a connected call or one of ours that was
+  tried (`call_attempt`, not their missed call to us).
+- `tour`: an owed row "Owed: a time to walk it to …". Kept by a booking
+  (`call_booked`) or a text of ours that names a time.
+- `emd`: an owed row "Owed: the earnest money to …". Kept when the deal's
+  "Earnest money to title" checklist item is ticked.
+Dismiss closes any of them (`promise_kept` by `dismissed`). The machine's own
+keeps (a price went out) don't: a price isn't a call.
+
+**The default words** (no setting; the live config's saved instructions are
+separate and get the same rewrite by hand). A new fixed `PROMISE_RULE` rides
+on every agent draft: promise only what will actually happen, and say when
+("I'll text you the number by 3"); never invent a team or a partner; anything
+only Matt settles goes on a quick call, with needsHuman. FACTS, COMMITMENTS
+and MATH (conversation-prompt.js), the starter rules, examples, PRICING,
+REALM CHECK and mayCommit (shared/conversation-ai.js), AGENT_PAPER_RULE and
+AGENT_GOAL_RULE, the come-down line in the offer book, and the number-first
+reply ("…I'll text you where we'd be once they're done") all lost their
+"underwriting team / my partner / back to you today". "I'll text you the
+number" and "text you where we'd land" still read as a promised number.
+
+**Check:** a sent "I'll give you a call tomorrow" puts `promise_made {what:
+"call"}` on the timeline; a day on, Today's calls shows "Owed: a call to …"
+until a call is logged or tried.
+
 ### Answers the bot didn't have (2026-09-17)
 
 **Why.** Three of Today's "we owe them an answer" rows were the bot saying "let

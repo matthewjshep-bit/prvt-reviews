@@ -288,3 +288,10 @@ test("a reply held for a month doesn't keep the agent check-in out, and the chec
   assert.deepEqual(supersededBy([old, oldNudge], { kind: "agent_pulse", now }).map((d) => d.id), ["n1"]);
   assert.deepEqual(supersededBy([old, oldNudge], { kind: "offer_nudge", now }).map((d) => d.id), ["h1", "n1"]);
 });
+
+// 2026-10-15: what only a person keeps.
+import { PERSON_PROMISES, detectPromise } from "./follow-up.js";
+test("a call, a walk-through time and the earnest money are person promises", () => {
+  assert.deepEqual([...PERSON_PROMISES].sort(), ["call", "emd", "tour"]);
+  assert.equal(detectPromise("I'll run it by underwriting and give you a call tomorrow"), "number", "a number we owe still reads as a number");
+});

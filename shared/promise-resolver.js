@@ -15,7 +15,7 @@
 
 import { sameStreet } from "./us-address.js";
 import { aiHoldReasons, effectiveStatus, OPEN_STATUSES } from "./offer-status.js";
-import { detectPromise } from "./follow-up.js";
+import { detectPromise, PERSON_PROMISES } from "./follow-up.js";
 import { currentOffers } from "./current-offer.js";
 import { stillQualifying } from "./flip-read.js";
 import { paperWorthy, saidYesOn } from "./paper-follows.js";
@@ -26,7 +26,7 @@ const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t
 // Older than this, the thread has moved on and a "we owe you" would be odd.
 export const PROMISE_WINDOW_HOURS = 72;
 
-export const PROMISE_MOVES = ["send_number", "send_paper", "start_underwrite", "ask_numbers", "rerun", "wait", "not_owed", "yours"];
+export const PROMISE_MOVES = ["send_number", "send_paper", "start_underwrite", "ask_numbers", "rerun", "wait", "not_owed", "yours", "call_owed"];
 
 /**
  * promiseWhat(events) → "number" | "paper" | "answer"
@@ -86,8 +86,9 @@ export function openPromises(events = [], { now = Date.now(), windowHours = PROM
     list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
     const lastKept = list.filter((e) => e.type === "promise_kept").at(-1)?.at || "";
     // One you typed yourself is not the machine's to drive or text about
-    // (owedPromises in promise-owed.js keeps it on Today instead).
-    const made = list.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && String(e.at) > lastKept);
+    // (owedPromises in promise-owed.js keeps it on Today instead), and nor is
+    // a call, a time to walk it or the earnest money (owedPersonPromises).
+    const made = list.filter((e) => e.type === "promise_made" && e.data?.by !== "you" && !PERSON_PROMISES.has(e.data?.what) && String(e.at) > lastKept);
     const owed = list.filter((e) => e.type === "promise_owed" && String(e.at) >= lastKept).at(-1) || null;
     if (!made.length && !owed) continue;
     const newest = made.at(-1) || owed;
@@ -129,6 +130,12 @@ export function resolvePromise({ promise, offers = [], drafts = [], jobs = [], h
   const mine = (offers || []).filter((o) => o && (!p.contactId || o.contactId === p.contactId) && onHouse(o.address));
   const held = mine.find((o) => effectiveStatus(o) === "draft" && aiHoldReasons(o).length) || null;
   const base = { offerId: null };
+
+  // A call we said we'd make (2026-10-15): the Desk's call_owed row. A time
+  // to walk it or the earnest money: a person's, with what we said.
+  if (p.what === "call") return { ...base, move: "call_owed", reason: "we said we'd call them" };
+  if (p.what === "tour") return { ...base, move: "yours", reason: "we said we'd get them a time to walk it" };
+  if (p.what === "emd") return { ...base, move: "yours", reason: "we said we'd get the earnest money over" };
 
   // 0. "Can have it over today" (2026-10-08): the written offer is owed, and
   //    only the written offer keeps it — not an answer, not a question back.

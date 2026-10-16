@@ -875,3 +875,20 @@ test("an owed row inside the first three days stands aside for the promise row a
   assert.ok(promiseRow(r));
   assert.equal(owedRow(r), undefined);
 });
+
+/* ---------- a call we promised (2026-10-15) ---------- */
+
+test("a call we promised is a Call row at the top of the day; a walk-through time is an owed row", () => {
+  const callMade = { type: "promise_made", contactId: "a1", at: D(2), address: "12 Elm St, Renton, WA", data: { what: "call", text: "I'll give you a call tomorrow.", draftId: "s1" } };
+  const r = build({ offers: [offer()], events: [callMade] });
+  const row = r.actions.find((a) => a.kind === "call_owed");
+  assert.ok(row, "the call row");
+  assert.equal(row.section, "call");
+  assert.equal(row.title, "Owed: a call to Sarah on 12 Elm St");
+  assert.ok(row.score > 105, "ahead of a missed call");
+  assert.match(row.call.opener, /calling like I said I would/);
+  assert.ok(!r.actions.some((a) => a.kind === "promise_owed" || (a.kind === "number_owed" && a.what !== "tour")), "not a 'we owe them an answer' row");
+  const tourMade = { ...callMade, data: { what: "tour", text: "I'll get you a time to walk it.", draftId: "s2" } };
+  const t = build({ offers: [offer()], events: [tourMade] }).actions.find((a) => a.kind === "number_owed");
+  assert.equal(t.title, "Owed: a time to walk it to Sarah on 12 Elm St");
+});

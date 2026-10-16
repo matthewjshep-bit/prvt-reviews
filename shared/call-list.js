@@ -90,6 +90,8 @@ export const CALL_KINDS = [
   { key: "hot_machine",      label: "Hot: the machine is pushing to paper" },
   { key: "counter_held",     label: "Counter: held at our number" },
   { key: "call_missed",      label: "They called you" },
+  // Built by the pipeline from a promise (shared/promise-owed.js, 2026-10-15).
+  { key: "call_owed",        label: "We said we'd call" },
   { key: "call_counter",     label: "Counter above our number" },
   { key: "call_gap",         label: "Their number is close to ours" },
   { key: "call_first_reply", label: "New agent, first reply" },
