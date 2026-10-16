@@ -71,7 +71,7 @@ import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
-  numberApproved,
+  numberApproved, termsOnLetter,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperAfterAnswerDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS, sendsItselfOnClear, isRoughNumber } from "../shared/paper-follows.js";
@@ -120,7 +120,7 @@ import {
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
   stopMachineTextsForOffer, stopDealOutreach,
 } from "../reply-agent.js";
-import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL } from "../shared/conversation-ai.js";
+import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
 import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
@@ -2356,6 +2356,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // can't erase it; null when the checks didn't run.
       checks: summarizeChecks(body.snapshot) || summarizeChecks(snapshot),
       ...(asset ? { asset } : {}),
+      // What this letter names (one set of terms, 2026-10-15), for the offer book.
+      terms: termsOnLetter(calc.settings),
     };
     let offer;
     if (revising) {
@@ -7013,14 +7015,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // carries the terms.
       // The write-up ask goes only at a number Matt approved (numberApproved,
       // 2026-10-15); the machine's own words leave it off otherwise.
-      const writeUp = numberApproved(offer);
+      const askWriteUp = numberApproved(offer);
       const text = message || (template === "for_record"
         ? `Hi ${firstName}, sending our written offer on ${offer.address || "your property"} over so you have it on file — ` +
           `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          (writeUp ? ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.` : ` Happy to answer any questions.`)
+          (askWriteUp ? ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.` : ` Happy to answer any questions.`)
         : `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
           `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          (writeUp ? ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?` : ` Let me know what the seller thinks.`));
+          (askWriteUp ? ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?` : ` Let me know what the seller thinks.`));
 
       // The agent page — our arithmetic, the comps, the scope and what the
       // seller nets, at one link. An operator's message already carries it
@@ -7059,7 +7061,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ...(message ? [] : [
           `<p>Please find our letter of intent on <strong>${esc(offer.address || "your property")}</strong> attached — ` +
           `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
-          `${writeUp ? "If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? " : ""}Happy to answer any questions.</p>`,
+          `${askWriteUp ? "If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? " : ""}Happy to answer any questions.</p>`,
+          // One set of terms (2026-10-15): what the bot tells an agent who
+          // writes it up — earnest, inspection, funding, close, the buyer's
+          // name — in the email too. Never in the text: "hard money" and
+          // "earnest" are fine, but the text stays short and carrier-safe.
+          `<p><strong>Our terms:</strong> ${esc(writeUpTermsText(conversationConfig(settings || {}).writeUp))}.</p>`,
         ]),
         // The whole column, tied out to the offer. "How we got to the number"
         // is where the transcript readers stop (shared/current-offer.js), so

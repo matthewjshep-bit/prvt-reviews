@@ -27,6 +27,7 @@
 import { assetOf } from "./asset-type.js";
 import { sameStreetLoose } from "./us-address.js";
 import { offerMath, compactMath } from "./offer-breakdown.js";
+import { writtenTerms } from "./offer-calc.js";
 
 export const OFFER_STATUSES = [
   { key: "draft", label: "Draft", cls: "bg-blue-100 text-blue-800", dot: "bg-blue-500" },
@@ -551,6 +552,9 @@ export const OFFER_LIST_FIELDS = [
   "retired",
   // Off-market (shared/off-market.js): {value, by, why, at} — our best deals.
   "offMarket",
+  // The terms the letter named, stamped when it was made (termsOnLetter):
+  // newer letters read the write-up terms, so the book says what the letter says.
+  "terms",
   // Price once (shared/number-stance.js, 2026-10-15): a listed house too far
   // under the seller's number to text ({at, theirs, source, ratio, ours}, a
   // Today row), and a person marking that someone has seen it ({at, by}).
@@ -609,6 +613,35 @@ const pickKeys = (obj, keys) => {
   if (obj && typeof obj === "object" && !Array.isArray(obj)) for (const k of keys) if (k in obj) out[k] = obj[k];
   return out;
 };
+
+// Only the terms the letter actually names — a row must stay a row.
+function settingsTerms(st) {
+  const terms = {};
+  if (Number(st?.psa?.closingDays) > 0) terms.closingDays = Number(st.psa.closingDays);
+  if (Number(st?.earnestMoney) > 0) terms.earnestMoney = Number(st.earnestMoney);
+  for (const [k, v] of [["financing", st?.termFinancing], ["condition", st?.termCondition], ["possession", st?.termPossession]]) {
+    if (String(v || "").trim()) terms[k] = String(v).trim();
+  }
+  return terms;
+}
+
+/**
+ * termsOnLetter(settings) → the terms a new letter names, for the offer book
+ *
+ * One set of terms (2026-10-15): with the write-up terms saved, the letter's
+ * earnest money is theirs ($1,000, not the letter's old $2,500) and it names
+ * the inspection window. Stamped on the offer when it's made, so a letter
+ * that went out before keeps the terms it said.
+ */
+export function termsOnLetter(settings = {}) {
+  const terms = settingsTerms(settings);
+  const w = writtenTerms(settings);
+  if (w.fromWriteUp) {
+    terms.earnestMoney = w.earnestMoney;
+    if (w.inspectionDays > 0) Object.assign(terms, { inspectionDays: w.inspectionDays, ...(w.inspectionDaysMin > 0 && w.inspectionDaysMin < w.inspectionDays ? { inspectionDaysMin: w.inspectionDaysMin } : {}) });
+  }
+  return terms;
+}
 
 /**
  * leanOfferDoc(doc) → what Postgres hands back for a lean read
@@ -686,13 +719,7 @@ export function toListOffer(offer) {
   const st = offer?.calc?.settings || null;
   if (offer?.terms) row.terms = offer.terms;
   else if (st) {
-    // Only the terms the letter actually names — a row must stay a row.
-    const terms = {};
-    if (Number(st.psa?.closingDays) > 0) terms.closingDays = Number(st.psa.closingDays);
-    if (Number(st.earnestMoney) > 0) terms.earnestMoney = Number(st.earnestMoney);
-    for (const [k, v] of [["financing", st.termFinancing], ["condition", st.termCondition], ["possession", st.termPossession]]) {
-      if (String(v || "").trim()) terms[k] = String(v).trim();
-    }
+    const terms = settingsTerms(st);
     if (Object.keys(terms).length) row.terms = terms;
   }
   row.listOnly = true;

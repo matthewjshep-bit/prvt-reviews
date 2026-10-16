@@ -3891,6 +3891,34 @@ contingency is a killer… she wants you to preinspect, so obviously the fewer
 days the better." The bot had a policy for neither half, so it promised twice
 to run it by a partner and the thread sat two days.
 
+### One set of terms (2026-10-15)
+
+Agents asked for written offers, earnest money terms and the inspection window,
+and got two answers: the bot's write-up terms ($1,000 earnest after
+inspection, a 10 to 14 day inspection, a hard money loan, roughly 10 to 21
+days to close; `writeUp` in the Conversation AI config, Matt 2026-09-18) and
+the letter's ($2,500 on acceptance, 14 days). Now there is one set. No switch:
+it follows `writeUp`.
+
+- **The letter** (`offer-doc.js`): with the Conversation AI saved, the earnest
+  money row is `writeUp.earnestMoney` "deposited with escrow after the
+  inspection period", a new **Inspection** row says "10 to 14 days from mutual
+  acceptance", and the closing row says "Roughly 10 to 21 days from acceptance,
+  inspection included — or a date of your choosing" (a closing date set by
+  hand in Settings still wins). `writtenTerms` in `shared/offer-calc.js`. A
+  visible change: new letters show $1,000, not $2,500. Letters already made
+  keep what they said. Per-offer letter terms from the editor are untouched.
+- **The email** the machine writes (no operator message) adds "Our terms:"
+  with `writeUpTermsText(writeUp)`. An operator's own message gets nothing
+  added. The text message is unchanged (carrier-safe: no "cash", no "as-is",
+  no link). No proof of funds goes (Matt skipped it).
+- **The offer book** reads the terms stamped on the offer when its letter was
+  made (`offer.terms`, `termsOnLetter`, now on lean rows), so the bot says
+  $1,000 and the inspection window for new letters and the old terms for old
+  ones.
+- **Check it.** Preview a send (`POST /api/offers/:id/send` with no message):
+  the email has "Our terms:"; a new offer's letter shows the Inspection row.
+
 ### A counter typed short, and a thread nobody answered (2026-09-16)
 
 Thomas Rinow answered our $456,250 on 10412 SE 219th with **"That are willing

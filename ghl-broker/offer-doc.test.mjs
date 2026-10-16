@@ -76,3 +76,26 @@ test("with the setting off, the letter is the letter it always was", () => {
   const validity = doc.layers.find((l) => l.type === "text" && /^This offer is valid through/.test(l.content));
   assert.equal(validity.width, 84, "full width again");
 });
+
+// One set of terms (2026-10-15): with the write-up terms saved, the letter
+// says what the bot tells an agent: $1,000 earnest after the inspection, a 10
+// to 14 day inspection, roughly 10 to 21 days to close.
+test("with the write-up terms saved, the letter names their earnest money, the inspection and the close, and still fits the page", async () => {
+  const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
+  const { termsOnLetter } = await import("./shared/offer-status.js");
+  const withWriteUp = { ...MAO, earnestMoney: 2500, conversationAi: normalizeConversationAi({ enabled: true }) };
+  const { calc, doc } = letter({ arv: 500000, repairs: 50000 }, withWriteUp);
+  const t = texts(doc);
+  assert.ok(t.includes("$1,000, deposited with escrow after the inspection period"), t.join(" | "));
+  assert.ok(t.includes("Inspection"));
+  assert.ok(t.includes("10 to 14 days from mutual acceptance"));
+  assert.ok(t.includes("Roughly 10 to 21 days from acceptance, inspection included — or a date of your choosing"));
+  assert.ok(!t.some((x) => /\$2,500/.test(x)), "not the old $2,500");
+  for (const l of doc.layers.filter((x) => x.type === "text" && x.y < FINE_PRINT_RULE)) assert.ok(l.y + l.height <= FINE_PRINT_RULE + 0.01, `${l.content} runs into the fine print`);
+  const book = termsOnLetter(calc.settings);
+  assert.deepEqual([book.earnestMoney, book.inspectionDaysMin, book.inspectionDays], [1000, 10, 14], "the offer book says the same");
+  // Without it, the letter it always was.
+  const plain = texts(letter({ arv: 500000, repairs: 50000 }, { ...MAO, earnestMoney: 2500 }).doc);
+  assert.ok(plain.includes("$2,500, deposited with escrow upon mutual acceptance"));
+  assert.ok(!plain.includes("Inspection"));
+});

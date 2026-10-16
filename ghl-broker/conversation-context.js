@@ -171,6 +171,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     const terms = [
       t.closingDays ? `${t.closingDays}-day close` : "",
       t.earnestMoney ? `${fmtMoney(t.earnestMoney)} earnest money` : "",
+      t.inspectionDays ? `${t.inspectionDaysMin ? `${t.inspectionDaysMin} to ` : ""}${t.inspectionDays}-day inspection` : "",
       t.condition ? "as-is" : "",
     ].filter(Boolean).join(", ");
     if (t.earnestMoney) amounts.add(Math.round(t.earnestMoney));

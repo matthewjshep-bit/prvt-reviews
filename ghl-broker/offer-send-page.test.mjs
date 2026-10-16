@@ -130,6 +130,20 @@ test("no page, no link — the send still goes", async () => {
   assert.equal(await pageFor(o.id), null, "a preview writes nothing");
 });
 
+// One set of terms (2026-10-15): the email says what the bot tells an agent
+// who writes it up; the text stays short and carrier-safe.
+test("the offer email carries our standard terms, and the text doesn't", async () => {
+  const o = await mkOffer();
+  const r = await req("POST", `/api/offers/${o.id}/send`, { channels: ["sms", "email"], docs: ["image"] });
+  assert.equal(r.status, 200);
+  const html = r.json.previews.email.html;
+  assert.match(html, /<strong>Our terms:<\/strong> \$1,000 earnest money, preferably due after the inspection period; 10 to 14 day inspection; funded with a hard money loan; close in roughly 10 to 21 days from mutual acceptance/);
+  assert.doesNotMatch(r.json.previews.sms.message, /earnest|hard money|inspection/i);
+  // An operator's own message is theirs: no paragraph added under it.
+  const own = await req("POST", `/api/offers/${o.id}/send`, { channels: ["email"], docs: ["image"], message: "Offer attached." });
+  assert.doesNotMatch(own.json.previews.email.html, /Our terms/);
+});
+
 test.after(() => server.close());
 
 /* ---------- how we got our number (2026-10-07) ---------- */
