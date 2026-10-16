@@ -152,6 +152,8 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
   const [closedId, setClosedId] = useState(null);   // scroll back to it in the table
   const liveRail = useRef([]);
   const [error, setError] = useState("");
+  // A pass that left the agent's GHL card where it was: which house holds it.
+  const [cardNote, setCardNote] = useState("");
   const [selected, setSelected] = useState(null); // the OPEN offer, hydrated (see openDetail)
   const [opening, setOpening] = useState(null);   // offer id being hydrated
   const [sending, setSending] = useState(null);
@@ -342,8 +344,10 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
     if (statusBusy) return;
     setStatusBusy(o.id);
     setError("");
+    setCardNote("");
     try {
       const r = await setOfferStatus(o.id, status);
+      setCardNote(r.card?.text || "");
       // A pin moves: the server cleared it on this row's siblings, so do the
       // same to our copies before the row itself lands.
       if (status === MAKE_CURRENT && r.offer) {
@@ -636,6 +640,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
             placeholder="Search by contact, address, amount, or date…" label="Search offers" />
         </div>
         {error && <div className="mb-3"><ErrorBar>{error}</ErrorBar></div>}
+        {cardNote && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{cardNote}</div>}
         <div className="relative flex min-h-[560px] gap-3 lg:h-[calc(100vh-11rem)]">
           <div className="hidden w-80 shrink-0 lg:block">
             <OfferRail rows={railRows} selectedId={openId} onSelect={goTo} label={activeFilter.key === "all" ? "All offers" : activeFilter.label} />
@@ -672,6 +677,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
       </div>
 
       {error && <div className="mb-3"><ErrorBar>{error}</ErrorBar></div>}
+      {cardNote && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{cardNote}</div>}
 
       {picked.size > 0 && (
         <div className="sticky top-14 z-20 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-slate-300 bg-white p-3 shadow-sm">

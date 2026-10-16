@@ -155,6 +155,28 @@ export function targetStage({ offers = [], now = Date.now(), lastIn = null, stal
 }
 
 /**
+ * cardHeldBy({ offers, now, staleDays }) → null | { to, label, offerId, address, text }
+ *
+ * After a pass: the house that keeps the card above Tier 2, in words. Null
+ * when nothing does (the card goes to Tier 2). Matt, 2026-10-16 (Toril S.):
+ * he passed her house and the card stayed in Tier 1. Her other house, a held
+ * draft, kept it there as the rule says, but nothing told him so.
+ */
+export function cardHeldBy({ offers = [], now = Date.now(), staleDays = GHL_STAGES_DEFAULTS.staleTier1Days } = {}) {
+  const t = targetStage({ offers, now, staleDays });
+  if (!t.to || t.to === "tier2" || t.won) return null;
+  const o = (offers || []).find((x) => x?.id === t.offerId) || null;
+  const street = String(o?.address || "").split(",")[0].trim() || "another house";
+  const label = CARD_STAGE_LABEL[t.to];
+  const because = {
+    tier1: o?.status === "draft" ? `${street} is still being priced. Pass that house too and it goes to Tier 2` : `${street} is priced and our number isn't out yet`,
+    offerOut: `our number on ${street} is still out`,
+    contract: `${street} is under contract`,
+  }[t.to];
+  return { to: t.to, label, offerId: t.offerId, address: o?.address || "", text: `The GHL card stays in ${label}: ${because}.` };
+}
+
+/**
  * planCard({ acq, keys, cards, offers, contactId, name, lastIn, openPromise, nurtureLive, settings, now })
  *   → { move } | { create } | { youMoved } | { skip }
  *

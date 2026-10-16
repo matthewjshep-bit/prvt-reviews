@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planStageMoves, planCard, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts } from "./ghl-stages.js";
+import { planStageMoves, planCard, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy } from "./ghl-stages.js";
 
 const NOW = Date.parse("2026-10-13T20:00:00Z");
 const ago = (d) => new Date(NOW - d * 86400000).toISOString();
@@ -230,4 +230,20 @@ test("a card the app moved itself is not read as one you moved", () => {
   const ours = planCard({ acq: ACQ, cards: [card("k", "s-t1", { lastStageChangeAt: moved })], offers: [stale], contactId: "k", lastIn: ago(55),
     appMoves: [new Date(Date.parse(moved) + 4000).toISOString()], now: NOW });
   assert.equal(ours.move?.to, "Tier 2", JSON.stringify(ours));
+});
+
+// Matt, 2026-10-16 (Toril S.): he passed her house and her card never left
+// Tier 1. Her other house, a held draft, kept it there, as the rule says, but
+// nothing told him which house or why, so the pass looked broken.
+test("a pass that leaves another house live says which house keeps the card, and why", () => {
+  const passed = offer("t", { address: "16910 132nd Ave E, Puyallup, WA 98374", status: "we_passed", statusAt: ago(0) });
+  const held = offer("t", { address: "29308 158th Ave E, Graham, WA 98338", status: "draft", cashAmount: null, sends: [], createdAt: ago(3) });
+  const r = cardHeldBy({ offers: [passed, held], now: NOW });
+  assert.equal(r.to, "tier1");
+  assert.equal(r.offerId, held.id);
+  assert.match(r.text, /stays in Tier 1: 29308 158th Ave E is still being priced/);
+  const out = cardHeldBy({ offers: [passed, offer("t", { address: "5 Out St, Kent, WA" })], now: NOW });
+  assert.match(out.text, /stays in Offer Out: our number on 5 Out St is still out/);
+  assert.equal(cardHeldBy({ offers: [passed], now: NOW }), null, "nothing else live: the card goes to Tier 2, nothing to explain");
+  assert.equal(cardHeldBy({ offers: [passed, { ...held, createdAt: ago(15) }], now: NOW }), null, "a draft quiet past staleTier1Days doesn't hold it");
 });

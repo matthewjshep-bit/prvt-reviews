@@ -133,7 +133,7 @@ import { preContractChecks, preContractRecord, openChecks, tickPreContract, norm
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
 import { normalizeTierOne } from "../shared/tier-one.js";
-import { normalizeGhlStages } from "../shared/ghl-stages.js";
+import { normalizeGhlStages, cardHeldBy, HELD_DAYS } from "../shared/ghl-stages.js";
 import { syncAgentCard } from "../tier-check.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
@@ -3511,9 +3511,23 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // Their number, when the status is their counter: the band reads it.
       const amount = status === "countered" ? Math.max(0, Math.round(Number(req.body?.amount) || 0)) : 0;
       const stopped = await applyOperatorStatus({ locationId, client, offer, status, note, ts, amount });
-      res.json({ ok: true, offer, stoppedDrafts: stopped.length });
+      const card = PASSING_STATUSES.has(status) ? await cardHeldAfterPass(locationId, offer.contactId) : null;
+      res.json({ ok: true, offer, stoppedDrafts: stopped.length, ...(card ? { card } : {}) });
     } catch (err) { fail(res, err); }
   });
+
+  // A pass that leaves the agent's GHL card where it is: which house holds
+  // it (shared/ghl-stages.js cardHeldBy), so the pass doesn't look broken.
+  // Read from the book, not GHL: the card itself moves in the background.
+  const PASSING_STATUSES = new Set(["passed", "we_passed", "unavailable", "no_response"]);
+  async function cardHeldAfterPass(locationId, contactId) {
+    if (!contactId) return null;
+    const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+    const cfg = normalizeGhlStages(saved.ghlStages);
+    if (cfg.mode !== "on") return null;
+    const offers = await store.listOffers(locationId, { contactId, limit: 100, lean: true }).catch(() => []);
+    return cardHeldBy({ offers, staleDays: cfg.staleTier1Days });
+  }
 
   // A status a person set: the route above, and a person's own words
   // (passOnOurNo). Returns the machine texts it stopped.
@@ -5719,7 +5733,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // "unavailable" is not a decision — the agent told us the house sold
       // or came off the market (reply-agent.js houseGone).
       if (!["countered", "passed", "no_response", "unavailable"].includes(status)) return { ok: false, reason: `not a status this can set: ${status}` };
-      const offer = pickOfferForStatus(await currentOffersFor(locationId, contactId), addressHint, status);
+      const rows = await store.listOffers(locationId, { contactId, limit: 50 });
+      const offer = pickOfferForStatus(currentOffers(rows), addressHint, status, { drafts: rows });
       if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer to mark" };
       if (effectiveStatus(offer) === status) return { ok: true, unchanged: true, address: offer.address, status };
       const ts = new Date().toISOString();
@@ -5902,12 +5917,23 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // several open and no address named is refused rather than guessed. A
   // counter may also reopen a closed offer, but only by address — an agent
   // coming back with a number on a house they passed on is real, a guess isn't.
-  function pickOfferForStatus(offers = [], hint = "", status = "") {
+  //
+  // `drafts`: their no, or "it sold", on a house we priced and never sent (a
+  // held draft) closes that draft. Brent S., 2026-10-16: the underwrite on
+  // 4203 E Congress stopped early, Matt texted a number by hand, the agent
+  // said "not at this time", and the pass found no open offer, so the draft
+  // held his GHL card in Tier 1. A counter never lands on one: we never sent
+  // a number to counter.
+  const DRAFT_CLOSING_STATUSES = new Set(["passed", "unavailable"]);
+  function pickOfferForStatus(offers = [], hint = "", status = "", { drafts = [] } = {}) {
     const live = offers.filter((o) => o && o.status !== "draft" && !o.deal);
     const open = live.filter((o) => OPEN_STATUSES.has(effectiveStatus(o)));
     const byAddress = pickDealByAddress(open, hint) || (open.length === 1 && !String(hint || "").trim() ? open[0] : null);
     if (byAddress) return byAddress;
+    const held = DRAFT_CLOSING_STATUSES.has(status) ? drafts.filter((o) => o && o.status === "draft" && !o.deal && o.address) : [];
     if (String(hint || "").trim()) {
+      const draft = pickDealByAddress(held, hint);
+      if (draft) return draft;
       const closed = pickDealByAddress(live, hint);
       if (closed && (status === "countered" || effectiveStatus(closed) === status)) return closed;
       // "It sold", in answer to a check-in on a house they passed on: it
@@ -5920,7 +5946,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!open.length) return { reason: "no open offer on that address" };
       return open.length === 1 ? open[0] : { reason: "the message named a house with no open offer, and the agent has several" };
     }
-    if (!open.length) return { reason: "no open offer to mark" };
+    // No house named: the only one being priced lately, never a guess among several.
+    const recent = held.filter((o) => Date.now() - (Date.parse(o.createdAt || "") || 0) <= HELD_DAYS * 86400000);
+    if (!open.length && recent.length === 1) return recent[0];
+    if (!open.length) return { reason: recent.length ? "several houses being priced and the message named none" : "no open offer to mark" };
     return { reason: "more than one open offer and the message named no address" };
   }
 

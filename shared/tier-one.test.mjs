@@ -97,6 +97,24 @@ test("the house is their open offer, or a newer house they named, or the card's 
   assert.equal(pickHouse({ offers: [], cardName: "Sam Lee", now: NOW }), null);
 });
 
+// Matt, 2026-10-16 (Toril S.): she named a Graham farmhouse after the
+// turnkey house we'd turned down, and its underwrite held (no priced comps).
+// The house's row was that held draft, which the pick never looked at, so a
+// Pass from Tier 1 couldn't close it; and once Matt passed the turnkey house
+// by hand, the card showed the turnkey house again: the pass made the old row
+// look newer than the house in play.
+test("the house in play is the one they named last, held draft and all; passing an older house doesn't make it newer", () => {
+  const turnkey = { id: "t", address: "16910 132nd Ave E, Puyallup, WA 98374", status: "we_passed", createdAt: ago(10), statusAt: ago(0) };
+  const held = { id: "g", address: "29308 158th Ave E, Graham, WA 98338", status: "draft", createdAt: ago(9) };
+  const events = [{ type: "subject_property_set", address: "29308 158th Ave E, Graham, WA 98338", at: ago(7) }];
+  const p = pickHouse({ offers: [turnkey, held], events, now: NOW });
+  assert.equal(p.address, held.address);
+  assert.equal(p.offer?.id, "g", "the held draft is the house's row, so Pass closes it");
+  assert.equal(p.source, "held");
+  // An open offer on the older house is still being worked: it stays the house.
+  assert.equal(pickHouse({ offers: [{ ...turnkey, status: "countered" }, held], events, now: NOW }).offer.id, "t");
+});
+
 /* ---------- moving the card ---------- */
 
 const ACQ = { id: "acq", stages: [
