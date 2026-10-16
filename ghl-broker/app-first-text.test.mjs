@@ -17,8 +17,8 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "app-first-text-tes
 process.env.OUTREACH_IMPORTS_ENABLED = "true";
 
 const { outboundOpening, OPENING_MOVES, WHO_WE_ARE, openerPlan } = await import("./conversation-prompt.js");
-const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText, writeWithoutOverused, startProactive, sendReplyDraft } = await import("./reply-agent.js");
-const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
+const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText, writeWithoutOverused, startProactive, sendReplyDraft, lastLineIsOurFirstText } = await import("./reply-agent.js");
+const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, DEFAULT_OPENER_EXAMPLES, LEGACY_DEFAULT_OPENER_EXAMPLES, OPENER_MAX_CHARS } = await import("./shared/outreach-opener.js");
 const { normalizeOutreachAutopilot, startOutreachSweep, _resetJobs } = await import("./outreach-sweep.js");
 const { store } = await import("./store.js");
 const { default: createOutreachRouter } = await import("./routes/outreach.js");
@@ -41,7 +41,7 @@ test("the first text never writes its own sign-off, because GHL adds 'Thanks, Ma
   assert.match(t, /NO sign-off/);
   assert.match(t, /no opt-out line/);
   assert.match(t, /adds "Thanks, Matt" and "No worries if not can stop" on the end by itself/);
-  assert.match(t, /under 250 characters/, "with GHL's two lines it stays inside two SMS segments");
+  assert.match(t, /under 200 characters/, "short first texts get answered, and GHL's two lines still fit");
 });
 
 test("a first text the bot signed anyway reaches the agent with one 'Thanks, Matt', not two", () => {
@@ -125,8 +125,19 @@ test("an opener example carrying the stop line is dropped, so the agent never ge
   assert.deepEqual(normalizeOpener({ examples: ["Hey {first}, {street} a project? Thanks, Matt"] }).examples, ["Hey {first}, {street} a project?"],
     "an example signed 'Thanks, Matt' would teach the bot to sign off");
   assert.deepEqual(normalizeOpener({ examples: "one\n\ntwo" }).examples, ["one", "two"], "the Settings box splits on blank lines");
-  assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => !/can stop/i.test(x) && /\{county\} County/.test(x)));
+  assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => !/can stop/i.test(x)));
   assert.deepEqual(normalizeOutreachAutopilot({}).opener.examples, DEFAULT_OPENER_EXAMPLES, "kept on the outreach settings");
+});
+
+test("the old long defaults Settings saved word for word become the new short ones, and a long example of Matt's own isn't used", () => {
+  assert.deepEqual(normalizeOpener({ examples: LEGACY_DEFAULT_OPENER_EXAMPLES }).examples, DEFAULT_OPENER_EXAMPLES, "the live list is the old defaults, saved verbatim");
+  assert.deepEqual(normalizeOpener({ examples: LEGACY_DEFAULT_OPENER_EXAMPLES.join("\n\n") }).examples, DEFAULT_OPENER_EXAMPLES, "or as the Settings box sends it");
+  const mine = "Hey {first}, {street} looks like my kind of house. A bit of a project?";
+  assert.deepEqual(normalizeOpener({ examples: [...LEGACY_DEFAULT_OPENER_EXAMPLES, mine] }).examples, [mine], "Matt's own stays, the old ones go");
+  const long = `Hi {first}, ${"I really like old houses with character and good bones. ".repeat(4)}Is {street} one of them?`;
+  assert.ok(long.length > 220);
+  assert.deepEqual(normalizeOpener({ examples: [long, mine] }).examples, [mine]);
+  assert.deepEqual(normalizeOpener({ examples: [long] }).examples, DEFAULT_OPENER_EXAMPLES, "nothing left is the defaults");
 });
 
 test("the county reads the same from RentCast or from the sweep's county key", () => {
@@ -323,14 +334,15 @@ test("a first text still saying 'hunting' or 'Seattle flipper' after being told 
   assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => !/seattle flipper|hunting/i.test(x)), "the examples don't teach them either");
 });
 
-test("a first text over 250 characters is written again shorter once — two of the first six were 266 and 288", async () => {
+test("a first text over 200 characters is written again shorter once — the short ones get answered", async () => {
+  assert.equal(OPENER_MAX_CHARS, 200);
   const long = { reply: "x".repeat(288), summary: "s" };
   const asked = [];
-  const short = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async (n) => { asked.push(n); return { reply: "y".repeat(230) }; } });
+  const short = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async (n) => { asked.push(n); return { reply: "y".repeat(190) }; } });
   assert.deepEqual(asked, [288]);
-  assert.equal(short.reply.length, 230);
-  assert.match(ask({ county: "King", tooLong: 288 }), /YOUR LAST DRAFT WAS 288 CHARACTERS/);
-  const fine = { reply: "z".repeat(240) };
+  assert.equal(short.reply.length, 190);
+  assert.match(ask({ county: "King", tooLong: 288 }), /YOUR LAST DRAFT WAS 288 CHARACTERS: write it again under 200/);
+  const fine = { reply: "z".repeat(195) };
   assert.equal(await writeShorterFirstText({ draft: fine, kind: "outreach_open", redraft: async () => { throw new Error("not asked"); } }), fine);
   assert.equal(await writeShorterFirstText({ draft: long, kind: "agent_pulse", redraft: async () => { throw new Error("not asked"); } }), long, "only the first text");
   const pitched = await writeShorterFirstText({ draft: long, kind: "outreach_open", redraft: async () => ({ reply: "We pay cash, as-is." }) });
@@ -538,8 +550,37 @@ test("a dry run reads the room but texts nobody", async () => {
   assert.equal(seen.createLimit, 3);
 });
 
-test("every first text asks for their other fixers — the deals with committed buyers were the agent's next house, not the listing", () => {
+test("the first text asks one question and leaves their other fixers for their answer — the fixers line cost 12 points of replies", () => {
   const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES });
-  assert.match(t.split("HOW MATT WRITES")[0], /END with one short line[^.]*other fixers on their radar in King\. That line is required/);
-  assert.ok(DEFAULT_OPENER_EXAMPLES.every((x) => /other fixers|anything else that needs work/i.test(x)), "each example asks for the next house");
+  const rules = t.split("HOW MATT WRITES")[0];
+  assert.doesNotMatch(rules, /That line is required|END with one short line|other fixers on their radar/);
+  assert.match(rules, /Two short sentences/);
+  assert.match(rules, /don't ask about their other fixers or other houses in this text/);
+  assert.match(rules, /anywhere in King County is optional/, "the county line is optional");
+  const fill = (x) => x.replace("{first}", "Dana").replace("{street}", "14820 SE 172nd St").replace("{town}", "Renton").replace("{county}", "King");
+  for (const x of DEFAULT_OPENER_EXAMPLES) {
+    assert.doesNotMatch(x, /other fixers|anything else that needs work|all ears/i, x);
+    assert.equal((x.match(/\?/g) || []).length, 1, `one question: ${x}`);
+    assert.ok(fill(x).length >= 130 && fill(x).length <= 190, `about 150 characters filled in: ${fill(x).length}`);
+  }
+});
+
+test("a turnkey seat's first text says it looks finished and asks, once, whether they see ones that need work", () => {
+  const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES, turnkey: true });
+  assert.match(t, /THIS LISTING LOOKS FINISHED: don't call it a fixer/);
+  assert.match(t, /ask lightly whether they ever see ones that need work\. That is your one question/);
+  assert.doesNotMatch(t, /other fixers carry/);
+});
+
+test("an agent answering one of the new short first texts is answering us, though it never says 'came across your listing'", async () => {
+  const stamp = new Date(Date.now() - 60 * 60000).toISOString().slice(0, 16).replace("T", " ");
+  const ours = "Hey Dana, saw 12 Elm St come up. I flip a few houses a year. Is this one a project?";
+  const store = { listReplyDrafts: async () => [{ id: "d1", contactId: "c1", status: "sent", sentText: ours, outbound: { kind: "outreach_open" } }] };
+  const thread = (us) => `[${stamp}] US sms: ${us}\n[${stamp}] THEM sms: It's for sale`;
+  assert.equal(await lastLineIsOurFirstText({ store, locationId: "L", contactId: "c1", transcript: thread(`${ours} No worries if not can stop`) }), true, "GHL's stop line on the end");
+  assert.equal(await lastLineIsOurFirstText({ store, locationId: "L", contactId: "c1", transcript: thread("Following up on the offer we sent.") }), false, "another text of ours isn't the first one");
+  assert.equal(await lastLineIsOurFirstText({ store: { listReplyDrafts: async () => [] }, locationId: "L", contactId: "c1",
+    transcript: thread("Hi, came across your listing at 12 Elm St. Is it a bit of a project?") }), true, "the GHL workflow's template still counts");
+  const notOpen = { listReplyDrafts: async () => [{ id: "d2", contactId: "c1", status: "sent", sentText: ours, outbound: { kind: "agent_pulse" } }] };
+  assert.equal(await lastLineIsOurFirstText({ store: notOpen, locationId: "L", contactId: "c1", transcript: thread(ours) }), false, "only the first text");
 });

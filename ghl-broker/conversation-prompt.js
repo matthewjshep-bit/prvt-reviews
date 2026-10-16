@@ -723,14 +723,17 @@ function openingFor(outbound) {
       const { voice, move, town, notice, who } = openerPlan(o);
       return `${START} This is the FIRST text this listing agent has ever had from us, about their listing at ` +
         `${o.address}. Write it the way Matt texts: a friendly local flipper who is easy to talk to, warm and a little ` +
-        `funny, never a pitch. Two or three short sentences that: mention their listing on ${street}, say who you are, say ` +
-        `you're looking anywhere in ${where}, and ask ONE question about whether it needs work. Then END with one short ` +
-        `line, in your own words, asking whether they have other fixers on their radar ${o.county ? `in ${o.county}` : "around there"}. ` +
-        `That line is required: the listing is only the door. ` +
-        `Three of our four deals with committed buyers were the agent's NEXT house, which they brought up because we asked. ` +
+        `funny, never a pitch. Two short sentences that: mention their listing on ${street}, say who you are, and ask ONE ` +
+        `question about whether it needs work. Saying you're looking anywhere in ${where} is optional, if it fits. ` +
+        // 2026-10-15 (the funnel review): first texts under about 230
+        // characters got 54% replies, longer ones a third, and the required
+        // "other fixers" line cost about 12 points. That ask now follows
+        // their first answer (the reply), not the first text.
+        `That one question is the whole ask: don't ask about their other fixers or other houses in this text, that comes once ` +
+        `they answer. Short first texts get answered. ` +
         (o.turnkey
-          ? `THIS LISTING LOOKS FINISHED: don't call it a fixer or ask about it as if it were one. Ask lightly whether it's more of a ` +
-            `project than it looks, and let the line about their other fixers carry the text. `
+          ? `THIS LISTING LOOKS FINISHED: don't call it a fixer or ask about it as if it were one. Say it looks finished and ask ` +
+            `lightly whether they ever see ones that need work. That is your one question. `
           : "") +
         (notice || town
           ? `WHAT TO NOTICE: ${notice || `it's in ${town}`}${notice && town ? ` (it's in ${town}; naming the town is fine too)` : ""}. ` +

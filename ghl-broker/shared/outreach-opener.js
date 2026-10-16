@@ -20,23 +20,40 @@
 // 2026-10-05: Matt wanted more personality ("personable, concise, friendly,
 // even humorous"), so the last three have a little more of him in them. The
 // humour is about us and what we like, never about their listing.
-// 2026-10-09: every one ends asking for their other fixers. The deals with
-// committed buyers (Issaquah, Snohomish 23706, 7034 S K) were each the
-// agent's next house, offered within minutes of that line or a check-in.
+// 2026-10-15 (the funnel review): first texts under about 230 characters got
+// 54% replies, longer ones 33–36%, and the "other fixers" line every example
+// ended on cost about 12 points and most of the length. So each is one
+// question about the listing, about 150 characters filled in, and the ask for
+// their other fixers waits for their first answer.
 export const DEFAULT_OPENER_EXAMPLES = [
+  "Hi {first}, came across your listing at {street}. I'm local and fix up houses around {county} County. Is this one a bit of a project, or pretty turnkey?",
+  "Hey {first}, saw {street} come up. I flip a few houses a year and have a soft spot for the ones that need a little love. Is this one a project?",
+  "Hi {first}, your {town} listing on {street} looks like it has some character. Fixer, or already pretty turnkey? I'm after my next flip in {county} County.",
+  "Hey {first}, I'm someone who gets way too excited about original kitchens. Does {street} need some work, or has it already been done?",
+];
+
+// The defaults until 2026-10-15, each ending on the other-fixers line. Settings
+// saved them verbatim, so a stored list of these is read as "never changed"
+// and gets today's defaults; one mixed in with Matt's own is dropped.
+export const LEGACY_DEFAULT_OPENER_EXAMPLES = [
   "Hi {first}, came across your listing at {street}. I'm local in Seattle and buy places to fix up around {county} County. Is this one a bit of a project, or pretty turnkey? And if you've got other fixers on your radar, I'm all ears.",
   "Hey {first}, {street} caught my eye. I flip houses around Seattle and have a soft spot for ones that need a little love. Is this one a project? Either way, if you've got other fixers on your radar in {county} County, I'm all ears.",
   "Hi {first}, saw your {town} listing on {street}, looks like it has some character. Fixer, or already pretty turnkey? I'm after my next flip in {county} County, so if you know of anything else that needs work, I'd love to hear.",
   "Hey {first}, I'm someone who gets way too excited about original kitchens. Does {street} need some work? Looking for my next flip in {county} County, so if you've got other fixers on your radar, I'm all ears.",
 ];
+const LEGACY = new Set(LEGACY_DEFAULT_OPENER_EXAMPLES);
 
 export const OPENER_MAX_EXAMPLES = 8;
 export const OPENER_EXAMPLE_MAX_CHARS = 400;
-// GHL adds two lines to the first text a contact gets (Settings → Phone
-// System → Messaging Compliance): the sender, "Thanks, Matt", and the opt-out,
-// "No worries if not can stop". With those ~45 characters and their line
-// breaks, 250 keeps the whole text inside two SMS segments (306).
-export const OPENER_MAX_CHARS = 250;
+// A saved example longer than this teaches the bot a long first text, so it
+// isn't used (2026-10-15).
+export const OPENER_EXAMPLE_KEEP_CHARS = 220;
+// The first text the bot writes stays under this. 2026-10-15: under about 230
+// characters got 54% replies, longer 33–36%. GHL adds two lines to the first
+// text a contact gets (Settings → Phone System → Messaging Compliance), "Thanks,
+// Matt" and "No worries if not can stop", about 45 characters; 200 leaves the
+// whole thing inside two SMS segments (306) with room to spare.
+export const OPENER_MAX_CHARS = 200;
 
 // The footer GHL adds. An example carrying it would teach the bot to write
 // it, and the agent would get it twice.
@@ -47,6 +64,8 @@ const FOOTER_RX = /\bcan stop\b|\bstop to end\b|\breply stop\b/i;
  *
  * Unset (or emptied) → Matt's defaults. Each example trimmed and capped; one
  * that carries the stop footer is dropped, and a sign-off on the end is cut.
+ * One of the pre-2026-10-15 defaults, or one over OPENER_EXAMPLE_KEEP_CHARS,
+ * is dropped too; a list left empty is today's defaults.
  */
 export function normalizeOpener(v = {}) {
   const o = v && typeof v === "object" ? v : {};
@@ -57,6 +76,9 @@ export function normalizeOpener(v = {}) {
     // "…I'm all ears. Thanks, Matt" would teach the bot to sign off.
     .map((x) => stripSignOff(x))
     .filter(Boolean)
+    // The old defaults (each ends asking for other fixers) and anything long
+    // enough to teach a long first text are left out (2026-10-15).
+    .filter((x) => !LEGACY.has(x) && x.length <= OPENER_EXAMPLE_KEEP_CHARS)
     .slice(0, OPENER_MAX_EXAMPLES);
   return { examples: examples.length ? examples : [...DEFAULT_OPENER_EXAMPLES] };
 }

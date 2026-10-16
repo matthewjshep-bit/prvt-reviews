@@ -1890,9 +1890,34 @@ export function roundsFromBook(n, allowed) {
   return false;
 }
 
-// Our first text to an agent about their listing (outreach_open): a reply to it
-// is them answering us, not something for a person to decide.
+// Our first text to an agent about their listing: a reply to it is them
+// answering us, not something for a person to decide. The phrase is the GHL
+// workflow template's; the app's own first texts are told apart by their
+// sent draft (lastLineIsOurFirstText), since no two say the same thing.
 export const OUTREACH_OPEN_RX = /\bcame across your listing\b/i;
+
+/**
+ * lastLineIsOurFirstText({ store, locationId, contactId, transcript }) → bool
+ *
+ * The last US line in the thread is our first text: the workflow template's
+ * words, or a sent outreach_open draft (GHL may put its stop line on the end
+ * of what we sent, so ours is a match when it starts theirs). 2026-10-15: the
+ * short first texts mostly don't say "came across your listing".
+ */
+export async function lastLineIsOurFirstText({ store, locationId, contactId, transcript }) {
+  const last = lastOutbound(transcript);
+  if (!last) return false;
+  if (OUTREACH_OPEN_RX.test(String(last.text || ""))) return true;
+  if (!contactId || typeof store?.listReplyDrafts !== "function") return false;
+  const ours = await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 10 }).catch(() => []);
+  const norm = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const said = norm(last.text);
+  return (ours || []).some((d) => {
+    if ((d.outbound?.kind || d.intent) !== "outreach_open") return false;
+    const t = norm(d.sentText || d.reply);
+    return Boolean(t) && (said === t || said.startsWith(t));
+  });
+}
 // The opt-out line every one of Matt's GHL workflow templates ends on.
 export const WORKFLOW_FOOTER_RX = /\bno worries if not,? can stop\b/i;
 export async function humanHasThread({ store, client = null, locationId, contactId, transcript, minutes = 30, now = Date.now() }) {
@@ -3172,9 +3197,9 @@ export async function writeWithoutOverused({ draft, kind, variant = 0, redraft }
     && carrierFlags(again.reply).length <= carrierFlags(draft.reply).length ? again : draft;
 }
 
-// A first text over OPENER_MAX_CHARS goes out as three SMS segments once GHL
-// adds its two lines (two of the first six with house details did). Written
-// again once, shorter; the shorter one goes, unless it picked up carrier words.
+// A first text over OPENER_MAX_CHARS (200 since 2026-10-15: the short ones
+// get answered) is written again once, shorter; the shorter one goes, unless
+// it picked up carrier words.
 export async function writeShorterFirstText({ draft, kind, redraft }) {
   const n = String(draft?.reply || "").length;
   if (kind !== "outreach_open" || n <= OPENER_MAX_CHARS || typeof redraft !== "function") return draft;
@@ -3910,7 +3935,7 @@ async function runReply(job, ctx) {
   // them answering us: the reply that keeps it going sends, provided it names
   // no number of ours.
   if (party === "agent" && draft.intent === "other" && !draft.needsHuman && String(draft.reply || "").trim()
-    && !moneyIn(draft.reply).length && OUTREACH_OPEN_RX.test(String(lastOutbound(a.transcript)?.text || ""))) {
+    && !moneyIn(draft.reply).length && (await lastLineIsOurFirstText({ store, locationId, contactId: job.contactId, transcript: a.transcript }))) {
     draft = { ...draft, intent: "question", reclassifiedFrom: "other" };
     job.intent = draft.intent;
   }

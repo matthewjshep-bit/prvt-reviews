@@ -4149,6 +4149,9 @@ house came.
 - **Opener.** Every default example ends asking for their other fixers, and
   the `outreach_open` rule makes that line required. The rule describes the
   line and never quotes it, so the texts don't all read the same.
+  (Superseded 2026-10-15: the first text is one question, and the fixers
+  ask follows their first answer. See "Short, one question" under The daily
+  sweep.)
 - **"It's turnkey".** A clear turnkey first answer skips the qualify question
   and gets the open-door pass at once (`saysTurnkey` in `shared/flip-read.js`;
   any "needs", "fixer" or "repairs" cancels it).
@@ -4819,9 +4822,25 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   `stripSignOff` cuts any sign-off or opt-out line from the end of an
   `outreach_open`/`outreach_nudge` draft anyway. An example containing "can
   stop" is dropped, and a sign-off at the end of an example is cut. The first
-  text stays under 250 characters so it fits in two SMS segments with GHL's
-  two lines added. A reply that arrives within minutes still
+  text stays under 200 characters (`OPENER_MAX_CHARS`; it was 250 until
+  2026-10-15). A reply that arrives within minutes still
   matches our draft, so it isn't held as a person's thread.
+- **Short, one question (2026-10-15).** The funnel review: first texts under
+  about 230 characters got 54% replies, longer ones 33–36%, and the required
+  other-fixers line cost about 12 points. The defaults are now four examples
+  of about 150 characters with one question each and no fixers line, and the
+  `outreach_open` rule asks for two short sentences and one question, with the
+  county line optional. A turnkey seat is told to say it looks finished and
+  ask lightly whether they ever see ones that need work. The fixers ask moves
+  to the reply to their first answer. `normalizeOpener` reads a saved list of
+  the old defaults (`LEGACY_DEFAULT_OPENER_EXAMPLES`) as unchanged and serves
+  the new ones; an old default mixed in with Matt's own is dropped, and so is
+  any saved example over 220 characters. An answer to our first text is
+  recognised by its sent `outreach_open` draft (`lastLineIsOurFirstText`), not
+  the words "came across your listing", which the new texts mostly don't say;
+  the phrase still counts for the GHL workflow's template. Check: `POST
+  /api/outreach/opener/preview` gives three samples, each at most 200
+  characters, none asking for other fixers.
 - **Nobody is created and left untexted.** Before importing, the sweep asks how
   many machine drafts the Conversation AI's daily cap still allows after the
   reply reserve (`machineRoomToday`), and lowers the day's number to fit. A
