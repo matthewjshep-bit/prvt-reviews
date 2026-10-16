@@ -227,3 +227,18 @@ test("a nudge the audit already sent counts as that rung on the column too", () 
   assert.equal(n.kind, "offer_nudge");
   assert.match(n.label, /step 2 of 3/, "day three was the audit's; day seven is next");
 });
+
+/* ---------- a number texted in a plain reply (2026-10-16) ---------- */
+
+// The sweep nudges an offer whose number went out in an ordinary reply
+// (floatSentAt, no realm check's stamp); the column said "Our number never
+// went out" about the same offer, and the agent check-in read it as unsent.
+test("an offer whose number we texted in a reply shows its nudge, not 'our number never went out'", () => {
+  const texted = offer({ status: "new", statusAt: null, sends: [], floatSentAt: at(0), autoUnderwrite: { jobId: "j1" } });
+  const n = next(texted, { now: T0 + 4 * DAY });
+  assert.equal(n.kind, "offer_nudge", n.label);
+  const hand = offer({ status: "new", statusAt: null, sends: [], floatSentAt: at(0) });
+  assert.equal(next(hand, { now: T0 + 4 * DAY }).kind, "offer_nudge", "made by hand: nothing for you to send");
+  const unsent = offer({ status: "new", statusAt: null, sends: [] });
+  assert.equal(next(unsent, { now: T0 + 4 * DAY }).kind, "float", "a number that never went out is still the float's");
+});

@@ -1709,6 +1709,26 @@ while their text (or your own draft) is waiting in the outbox is kept
 before the drop. With `followUp.watchFloated` on, a number floated by text
 and never sent is watched too. Both switches ship off.
 
+**A number texted in a plain reply counts as out (2026-10-16).** Our number
+said in an ordinary reply leaves the offer "new" with only `floatSentAt`, no
+realm check's own stamp. The follow-up sweep learned to nudge it the same
+morning (b8c360e); three readers still took it for a number that never went
+out:
+- **The price watch** skipped it, so a cut on that house went unseen. It now
+  reads `floatSentAt` like a realm check's stamp, still behind
+  `followUp.watchFloated` (off in code; the coordinator turns it on).
+- **The Offers column** (`nextFollowUp`) said "Our number never went out" and
+  the agent check-in read the offer as unsent and took the agent; it now
+  shows the offer nudge, counted from `floatSentAt`, the way the sweep acts.
+- **Today's "Priced, not floated"** row (and the float timer it drives) no
+  longer lists it, so the number is never floated a second time.
+No switch beyond `watchFloated`. Check: an offer with `floatSentAt` and status
+new shows "Nudge · …" in Next follow-up, and once `watchFloated` is on the
+next morning's watch (`job_cursors` row `priceWatch`, `last.watched`) counts
+it. Not changed: the board's
+lane (`laneFor`) still places such a row in "ready", which the GHL mirror
+reads.
+
 ### The tick: every job on its own, every day comes back (2026-09-29)
 
 **One job can't stop the others.** The 15-minute tick ran every job for a

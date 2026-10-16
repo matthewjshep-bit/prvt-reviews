@@ -24,6 +24,10 @@
 // is kept on the offer (`priceWatch.dropOwed`) and texted on a later run —
 // measured from where it started, because the baseline moves every run.
 //
+// A number floated by text — a realm check, or our number in a plain reply
+// (floatSentAt) — and never sent on paper is watched too, with
+// followUp.watchFloated.
+//
 // A drop that still sits at or above what their agent last asked us for is
 // recorded and not texted (521 Avenue C, 2026-09-24): she had asked us for
 // 580 the day before the list came down to 599,950, so the seller had moved
@@ -119,7 +123,9 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
   for (const o of rows) {
     if (!o?.id || !o.address || !o.contactId || o.deal || replaced.has(o.id)) continue;
     if (!statuses.includes(effectiveStatus(o))) continue;
-    if (effectiveStatus(o) === "new" && !o.proactive?.realmCheckAt) continue;   // nothing of ours in front of them yet
+    // Nothing of ours in front of them yet. A number texted in a plain reply
+    // carries only floatSentAt, not a realm check's own stamp (2026-10-16).
+    if (effectiveStatus(o) === "new" && !o.proactive?.realmCheckAt && !o.floatSentAt) continue;
     const t = Date.parse(o.statusAt || o.createdAt || "");
     if (!(t >= now - WATCH_DAYS * DAY_MS)) continue;
     const k = addressKey(o.address);

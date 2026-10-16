@@ -410,7 +410,9 @@ export function buildPipeline({
         detail: [`agreed by ${String(agreed.via || "their yes").replace(/_/g, " ")}`, "no write-up ask, no NWMLS, until you approve"].join(" · "),
         ops: [{ key: "approve_number", label: `Approve ${k}`, intent: "primary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
     }
-    if (lane === "ready" && card.ai.made && !(o.sends || []).length && !noFitLive) {
+    // Our number texted in a plain reply (floatSentAt) went out: not this row,
+    // and no timer floats it a second time (2026-10-16).
+    if (lane === "ready" && card.ai.made && !(o.sends || []).length && !noFitLive && !o.floatSentAt) {
       card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon",
         readyAt: o.autoUnderwrite?.finishedAt || o.createdAt || null,
         title: `${card.address} is priced and nothing has gone out`, why: o.proactive?.skipped?.reason ? String(o.proactive.skipped.reason).slice(0, 140) : "",
@@ -421,7 +423,7 @@ export function buildPipeline({
     // on it — no send, no float, no nudge (2026-10-02: seven sat in Not sent
     // with no row anywhere). Yours: send it, or say you texted it yourself.
     // The machine never floats a hand-made offer (timerMoves skips it).
-    if (lane === "ready" && !card.ai.made && !(o.sends || []).length && !o.proactive?.takeCheckAt && !o.proactive?.realmCheckAt && !(o.followUps || []).length) {
+    if (lane === "ready" && !card.ai.made && !(o.sends || []).length && !o.proactive?.takeCheckAt && !o.proactive?.realmCheckAt && !o.floatSentAt && !(o.followUps || []).length) {
       const pricedMs = ms(o.statusAt) ?? ms(o.createdAt);
       // A week, then it is history, not a decision (2026-10-04: five rows
       // priced 40–69 days ago sat on the Desk).
