@@ -5251,6 +5251,20 @@ The plan also reads every offer contact, not only contact profiles and
 listing agents (`loadPulseAgents`). The runner's GHL preflight checks the tags
 of a contact with no profile.
 
+**Offer contacts without an agent profile (2026-10-16).** The audit counted
+seven contacts with an offer and no agent profile (offers made by hand from
+the Offers form, where no text ever came through the app). They were already
+in the pool through their offers; what they lost was their own record. The
+plan now reads every profile in one read: an offer contact whose only profile
+has no party (an event wrote it with none) has its tags and facts read, so a
+do-not-contact tag or "check in every few months" holds for them too. Our own
+contact (`shared/self-contact.js`, the signer's or persona's full name) is
+never in the pool. A buyer with an offer stays the buyer pulse's. The first
+check-in's claim (`agent_pulse_sent`, party agent) gives them an agent profile.
+No switch: it rides the check-in's own. Check: `GET /api/outreach/pulse`
+`counts.offerContacts` — `{ total, inPool, buyers, self }`; total minus inPool
+is buyers plus us, so nobody with an offer is missing for any other reason.
+
 **Tier 2 and Tier 3 from the app (2026-10-09).** Matt confirmed GHL's "Tier
 2+3 nurture" sends nothing now: "we need to be doing everything from the
 app". The plan reads GHL's Acquisitions board (`pulseTierCards`, ten
