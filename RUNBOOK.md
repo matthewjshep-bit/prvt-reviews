@@ -4452,6 +4452,28 @@ it is news, not history. The subject carries `pastHouses`, which the drafter
 never sees. A draft naming one of those houses (`namesHouse`) is written
 again once and dropped if it still names one. `pulse.voice` (Settings, 600
 characters) is Matt's own note on the voice, passed to the drafter.
+
+**One real thing, and a call (2026-10-15).** The funnel review: Matt's own
+specific texts got 70% replies, the generic check-ins 35%. Each check-in now
+names ONE real thing, picked by `checkInHook` in `shared/agent-pulse.js`
+(`subject.hook`), in this order:
+- `listing`: their fresh listing (as before);
+- `mentioned`: a house they named (`house_mentioned`, now read by the pulse)
+  in the last 60 days that we never priced (no offer on it, sent or drafted),
+  never passed or kicked off Tier 1, and that isn't our first text's listing;
+- `closed_nearby`: one of our deals at stage `closed` in the last 60 days, in
+  a town they work (their listings, their houses, their market areas). The
+  text names the town only, never the house;
+- `situation`: otherwise, one kind of seller we're good for.
+Never a house we priced or passed on, and never "did it sell?". The thank-you
+after a close has no hook. The hook's own house is taken out of `pastHouses`;
+the gate still holds every other one. A mentioned house sets no `address` or
+`listingKey`, so the reply isn't treated as a first-text house. The text may
+offer a quick call "if that's easier", never with a day or time (no calendar
+is connected). The draft's `outbound.hook` and the `agent_pulse_texted`
+event's `data.hook` record which kind went. No switch: it rides the check-in's
+own. Check: `POST /api/outreach/pulse/preview {limit: 3}` and read the hook in
+each sample.
 **Write 3 sample check-ins** (`POST /api/outreach/pulse/preview {limit, reason}`, `reason` e.g. "general")
 drafts the next ones from their real threads with the saved settings —
 `reply-agent.js previewProactive`, which writes nothing and sends nothing.

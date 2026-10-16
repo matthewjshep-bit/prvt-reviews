@@ -32,7 +32,7 @@ import { agentTier } from "./shared/tiers.js";
 import { effectiveStatus, OPEN_STATUSES, dealIsOver } from "./shared/offer-status.js";
 import { addressKey } from "./shared/us-address.js";
 import {
-  normalizeAgentPulse, pickPulseAgents, blockedByTags, tierDrips, evaluateAgent,
+  normalizeAgentPulse, pickPulseAgents, blockedByTags, tierDrips, evaluateAgent, recentCloses,
   AGENT_PULSE_EVENT_TYPES, AGENT_PULSE_LEDGER_TYPES, INBOUND_EVENT_TYPES,
 } from "./shared/agent-pulse.js";
 import { leadSourcesFor } from "./shared/lead-source.js";
@@ -122,13 +122,15 @@ const byContact = (rows) => {
 };
 
 /**
- * housesFrom(offers, events) → { live: Set<addressKey>, walked: Map<addressKey, at> }
+ * housesFrom(offers, events, now) → { live: Set<addressKey>, walked: Map<addressKey, at>, closes: [{ town, at }] }
  *
  * A house with any live offer or deal of ours is that offer's business, and a
  * house we walked away from isn't raised with anyone for six months — passed
  * on its offer, or passed / kicked off the Tier 1 list with no offer at all.
+ * `closes` are our recent closes by town, for a check-in to mention
+ * (shared/agent-pulse.js checkInHook).
  */
-export function housesFrom(offers = [], events = []) {
+export function housesFrom(offers = [], events = [], now = Date.now()) {
   const live = new Set();
   const walked = new Map();
   for (const o of offers || []) {
@@ -147,7 +149,7 @@ export function housesFrom(offers = [], events = []) {
     const k = addressKey(e.address);
     if (k && (!walked.has(k) || String(e.at || "") > String(walked.get(k)))) walked.set(k, e.at || "");
   }
-  return { live, walked };
+  return { live, walked, closes: recentCloses(offers, now) };
 }
 
 /**
@@ -199,7 +201,7 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
   const leads = leadSourcesFor({ offers: offers || [], hooks, events: [...(evRead.events || []), ...(ledgerRead.events || [])] });
 
   const annotated = annotateCurrent((offers || []).map((o) => (o && leads.has(o.id) ? { ...o, leadSource: leads.get(o.id) } : o))).filter(Boolean);
-  const houses = housesFrom(annotated, evRead.events);
+  const houses = housesFrom(annotated, evRead.events, now);
   const offersBy = byContact(annotated);
   const eventsBy = byContact(evRead.events);
   for (const [id, list] of stops) eventsBy.set(id, mergeEvents(eventsBy.get(id) || [], list));

@@ -2981,6 +2981,8 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier }) {
       areas: list(p.areas, 3).map((x) => String(x).slice(0, 60)),
       voice: normalizeAgentPulse(saved?.outreachAutopilot?.pulse).voice,
       offMarketAskDue: p.offMarketAskDue !== false,
+      // The one real thing it names (shared/agent-pulse.js checkInHook).
+      hook: pulseHook(p.hook),
       variant: Number(p.variant) || 0 };
   }
   if (kind === "showing_reminder" || kind === "showing_followup") {
@@ -3170,6 +3172,15 @@ export async function writeAgainWithoutCarrierWords({ draft, kind, redraft }) {
   if (!before.length) return draft;
   const again = await redraft(before).catch(() => null);
   return again?.reply && carrierFlags(again.reply).length < before.length ? again : draft;
+}
+
+// A check-in's hook, trimmed: the street of a house they named, or the town
+// one of our deals closed in — never the closed house's street.
+function pulseHook(h) {
+  if (!h || typeof h !== "object" || !["listing", "mentioned", "closed_nearby", "situation"].includes(h.kind)) return null;
+  if (h.kind === "mentioned") return { kind: h.kind, street: String(h.street || "").slice(0, 80), label: String(h.label || "").slice(0, 60), town: String(h.town || "").slice(0, 40), daysAgo: Number(h.daysAgo) || 0 };
+  if (h.kind === "closed_nearby") return h.town ? { kind: h.kind, town: String(h.town).slice(0, 40) } : { kind: "situation" };
+  return { kind: h.kind };
 }
 
 // The opener's choices, kept on the draft's outbound (openerPlan): small
@@ -3396,7 +3407,7 @@ async function runProactive(job, ctx) {
       ...(kind === "take_check" ? { arv: outbound.arv, rehab: outbound.rehab } : {}),
       ...(kind === "realm_check" ? { amount: offer.cashAmount, requote: outbound.requote, ...(outbound.range ? { range: { low: outbound.range.low, high: outbound.range.high, step: outbound.range.step } } : {}) } : {}),
       ...(outbound.step != null ? { step: outbound.step, steps: subject?.steps || [], stepLabel: outbound.stepLabel } : {}),
-      ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: subject?.listingKey || null } : {}),
+      ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: subject?.listingKey || null, hook: outbound.hook?.kind || null } : {}),
       ...((kind === "outreach_open" || kind === "outreach_nudge") && outbound.county ? { county: outbound.county } : {}),
       // Which first text this was (conversation-prompt.js openerPlan), so
       // replies can be read back by opening, voice and detail.
@@ -5815,7 +5826,9 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     await recordEvent({
       store, locationId, contactId: d.contactId, party: "agent", type: "agent_pulse_texted", at: ts,
       address: d.outbound.address || "", source: "conversation", ref: d.id, dedupeKey: `agent_pulse_texted:${d.id}`,
-      data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null },
+      data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null,
+        // What it named (shared/agent-pulse.js checkInHook), to read replies by.
+        ...(d.outbound.hook ? { hook: d.outbound.hook } : {}) },
     }).catch(() => {});
   }
   // Our number actually went by text: the offer is Sent from here

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import {
   normalizeAgentPulse, evaluateAgent, pickPulseAgents, agentSegment, agentStops, agentOwner,
   freshListingFor, listingDistressed, agentPulseSubject, tierDrips, ourHouseFor, dealToThank, openOfferIdle, tierCard,
-  firstCheckInAt, classifyReplierThread,
+  firstCheckInAt, classifyReplierThread, checkInHook, mentionedHouseFor, recentCloses,
 } from "./agent-pulse.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
@@ -335,6 +335,52 @@ test("the check-in carries what it can mention: the last house, the areas they w
   assert.deepEqual(subj.areas, ["South King"]);
   assert.equal(subj.lastSummary, "said a Burien fixer might list after the holidays");
   assert.doesNotMatch(JSON.stringify(subj), /300000|300k/i, "never a price");
+});
+
+// 2026-10-15, the funnel review: Matt's own specific texts got 70% replies,
+// the generic check-ins 35%. One real thing, never a house we priced.
+const mention = (address, d = 10, data = {}) => ({ type: "house_mentioned", at: ago(d), address, data });
+const closedDeal = (address, d = 20) => ({ id: `c-${address}`, contactId: "other", address, status: "accepted",
+  deal: { stage: "closed", stageHistory: [{ stage: "under_contract", ts: ago(d + 30) }, { stage: "closed", ts: ago(d) }] } });
+
+test("a check-in names a house they mentioned that we never priced, and the gate stops holding that one", () => {
+  const a = agent({ lastInboundAt: ago(30), events: [mention("Pine St, Shelton, WA", 12), { type: "subject_property_set", at: ago(12), address: "Pine St, Shelton, WA" }],
+    offers: [passed({ address: "9 Oak St, Kent, WA 98031" })] });
+  const subj = agentPulseSubject({ agent: a, verdict: { pulseReason: "general", segment: "engaged" }, now: NOW });
+  assert.deepEqual({ kind: subj.hook.kind, street: subj.hook.street, daysAgo: subj.hook.daysAgo }, { kind: "mentioned", street: "Pine St", daysAgo: 12 });
+  assert.ok(!subj.pastHouses.includes("Pine St, Shelton, WA"), "the hook's own house may be named");
+  assert.ok(subj.pastHouses.includes("9 Oak St, Kent, WA 98031"), "a house we priced stays behind the gate");
+  assert.equal(subj.address, "", "no house of record, so the reply isn't gated as a first-text house");
+});
+
+test("a house we priced, passed on, or texted them about first is never the check-in's house — nor one named two months back", () => {
+  const priced = mentionedHouseFor({ events: [mention("1412 Pine St, Shelton, WA")], offers: [passed({ address: "1412 Pine St, Shelton, WA 98584" })], now: NOW });
+  assert.equal(priced, null, "an offer on it, sent or drafted");
+  const noNumber = mentionedHouseFor({ events: [mention("Pine St, Shelton, WA")], offers: [passed({ address: "1412 Pine St, Shelton, WA 98584" })], now: NOW });
+  assert.equal(noNumber, null, "the street they named is the house we priced");
+  assert.equal(mentionedHouseFor({ events: [mention("5 Ash Ave, Kent, WA"), { type: "tier1_passed", at: ago(5), address: "5 Ash Ave, Kent, WA" }], now: NOW }), null);
+  assert.equal(mentionedHouseFor({ events: [mention("5 Ash Ave, Kent, WA"), { type: "outreach_sent", at: ago(20), address: "5 Ash Ave, Kent, WA" }], now: NOW }), null, "the listing from our first text");
+  assert.equal(mentionedHouseFor({ events: [mention("5 Ash Ave, Kent, WA", 61)], now: NOW }), null);
+  assert.equal(mentionedHouseFor({ events: [mention("5 Ash Ave, Kent, WA", 30), mention("7 Fir Ln, Kent, WA", 5)], now: NOW }).street, "7 Fir Ln", "the newest");
+});
+
+test("with no house to name, a check-in may say we just closed one in a town they work — by the town only", () => {
+  const closes = recentCloses([closedDeal("4747 46th Ave S, Kent, WA 98032"), closedDeal("1 Far Rd, Yakima, WA 98901", 70),
+    { ...closedDeal("2 Mid St, Kent, WA 98032"), deal: { stage: "assigned", stageHistory: [{ stage: "assigned", ts: ago(3) }] } }], NOW);
+  assert.deepEqual(closes.map((c) => c.town), ["Kent"], "closed in the last 60 days; an assignment isn't a close");
+  const works = agent({ lastInboundAt: ago(30), listings: [listing({ firstSeen: ago(40) })] });
+  assert.deepEqual(checkInHook({ agent: works, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }), { kind: "closed_nearby", town: "Kent" });
+  const elsewhere = agent({ lastInboundAt: ago(30), offers: [passed({ address: "3 Bay St, Everett, WA 98201" })] });
+  assert.deepEqual(checkInHook({ agent: elsewhere, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }), { kind: "situation" });
+  assert.doesNotMatch(JSON.stringify(agentPulseSubject({ agent: works, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }).hook), /4747|46th/);
+  assert.equal(checkInHook({ agent: works, verdict: { pulseReason: "deal_thanks" }, houses: { closes }, now: NOW }), null, "the thank-you is about that deal");
+  assert.deepEqual(checkInHook({ agent: works, verdict: { pulseReason: "fresh_listing", listing: listing() }, houses: { closes }, now: NOW }), { kind: "listing" });
+});
+
+test("the plan hands each pick its hook, from our closes", () => {
+  const a = agent({ lastInboundAt: ago(30), listings: [listing({ firstSeen: ago(40) })] });
+  const { picks } = pickPulseAgents({ agents: [a], settings: S, config: CONFIG, houses: { live: new Set(), walked: new Map(), closes: [{ town: "Kent", at: ago(10) }] }, now: NOW });
+  assert.deepEqual(picks[0].subject.hook, { kind: "closed_nearby", town: "Kent" });
 });
 
 test("Matt's notes on how the check-in should sound are kept, trimmed and capped", () => {

@@ -982,7 +982,8 @@ function openingFor(outbound) {
     // except an offer we're following up, which is the offer nudge's job, not
     // this one's. So: no house from before, ever; personable comes from the
     // tone, their first name and at most the area they work. A fresh listing
-    // of theirs is still named — that one is news, not history.
+    // of theirs is still named — that one is news, not history. 2026-10-15:
+    // and so is one other real thing, never a house we priced (see `hook`).
     case "agent_pulse": {
       const l = o.listing || null;
       const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
@@ -990,18 +991,39 @@ function openingFor(outbound) {
       // the sellers behind every deal with a committed buyer), and — for an
       // agent we've never put a number to — what we buy, once.
       const situation = SELLER_SITUATIONS[(Number(o.variant) || 0) % SELLER_SITUATIONS.length];
-      const fits = ` If it fits naturally, name one kind of seller we're good for, in a few words: ${situation}. One, never a list.` +
-        (!o.offersWithUs && !o.dealsWithUs ? ` Say once, in a clause, what we buy: ${OUR_BOX_WORDS}.` : "");
-      const offAsk = `ask whether anything distressed — a house that needs work, listed or not — or anything off-market has come across their desk lately. ` +
-        `${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.${fits}`;
+      const situationLine = `name one kind of seller we're good for, in a few words: ${situation}. One, never a list.`;
+      const what = !o.offersWithUs && !o.dealsWithUs ? ` Say once, in a clause, what we buy: ${OUR_BOX_WORDS}.` : "";
+      const askFor = (extra) => `ask whether anything distressed — a house that needs work, listed or not — or anything off-market has come across their desk lately. ` +
+        `${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.${extra}`;
+      const offAsk = askFor(` If it fits naturally, ${situationLine}${what}`);
       const listingText = o.reason === "fresh_listing" && l;
+      // 2026-10-15 (the funnel review): Matt's own specific texts got 70%
+      // replies, the generic check-ins 35%. So each names ONE real thing
+      // (shared/agent-pulse.js checkInHook): their fresh listing, a house
+      // they mentioned that we never priced, one of our closes in a town
+      // they work (the town only), or else a kind of seller we're good for.
+      const hook = !listingText && o.reason !== "deal_thanks" ? o.hook || null : null;
+      const mentioned = hook?.kind === "mentioned" && (hook.street || hook.label) ? hook : null;
+      const closedNear = !mentioned && hook?.kind === "closed_nearby" && hook.town ? hook : null;
       const why = listingText
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
           `Ask, plainly, whether it's a bit of a project — if it needs work it may be one we'd want to take a look at. Name the street; never its price or any number.`
         : o.reason === "deal_thanks"
         ? `A deal we worked with them just closed. Thank them for working it with us, in a few plain words — never name the house or its street — then ${offAsk}`
-        : `A general check-in, about no house in particular: ${offAsk}`;
-      const generic = `KEEP IT GENERIC: never mention, name or hint at any house, listing, offer or deal from before${listingText ? " (the listing above is the only house in this text)" : ""} — ` +
+        : mentioned
+        ? `They mentioned a house${mentioned.street ? ` on ${mentioned.street}` : ` (${mentioned.label})`}${mentioned.town ? ` in ${mentioned.town}` : ""} ` +
+          `${mentioned.daysAgo <= 14 ? "recently" : "a few weeks back"}, and we never got to look at it properly. That house is the one thing this text is about: ` +
+          `ask lightly how it's coming along, or whether the seller is still thinking about selling, and say we'd love a look. ` +
+          `Name it the way they did, never with a price or any number.${what}`
+        : closedNear
+        ? `We just closed on a house in ${closedNear.town}, a town they work. Say so in a clause, by the town only — never a street or which house — then ${askFor(what)}`
+        : `A general check-in, about no house in particular. THE ONE THING it names: ${situationLine} Then ${askFor(what)}`;
+      const only = listingText ? "the listing above is the only house in this text"
+        : mentioned ? "the house they mentioned above is the only house in this text"
+        : closedNear ? `${closedNear.town} is the only place named, and no house at all`
+        : "no house at all";
+      const generic = `ONE THING ONLY (${only}): never mention, name or hint at any other house, listing, offer or deal from before — ` +
+        `never a house we priced or passed on, and never ask whether a house sold — ` +
         `no street, no "that last one", no "the one on …", no how one went. We don't know what happened to those houses, and this text is about what's next. ` +
         `Personable comes from the tone and their first name${(o.areas || []).length && !cold ? `, and if it fits in a few words, the area they work (${(o.areas || []).join(", ")})` : ""}` +
         `${o.dealsWithUs ? " — we have done a deal together, so write it like a text to a friend" : ""}. Never recite the thread, never a personal detail, never invented. `;
@@ -1012,6 +1034,8 @@ function openingFor(outbound) {
         `TONE: friendly and professional — how someone local who values the relationship texts an agent they like working with: warm, direct, respectful of their time. ` +
         `${CHECKIN_PERSONALITY} ` +
         `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
+        // No calendar is connected (2026-10-15): a call is offered, never a time.
+        `If it fits, offer a quick call in a few words, as an easier way to talk ("happy to jump on a quick call if that's easier") — never a day or a time, and still only one question. ` +
         // A quiet agent we made an offer to (shared/agent-pulse.js, 2026-10-09)
         // has heard of us: the clause says so, never which house or number.
         `${cold ? (o.offersWithUs ? "One clause on who you are: the local buyer who looked at one of their listings a while back and is always after the next project house. " : "One clause on who you are: someone local who's always looking for the next project house. ") : "Do NOT reintroduce yourself. "}` +
