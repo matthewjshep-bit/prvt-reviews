@@ -479,6 +479,56 @@ test("the 45 first texts a deploy dropped on 2026-10-05, imported before imports
   assert.equal(asked[0].hook.listingCount, 3);
 });
 
+/* ---------- agents nobody ever texted (2026-10-15) ---------- */
+
+// The funnel review: new-agent supply fell from 125 a day to 2. Agents we
+// imported (an older flow, or already in GHL) whom nobody ever texted are
+// still out there, and a pull that sees them again finds their listing.
+test("an imported agent nobody ever texted, seen again by a pull, gets the first text — only with the switch on, and never one with a thread", async () => {
+  const L = "loc-never-texted";
+  const asked = [];
+  const router = createOutreachRouter({ resolveLocation: () => ({ locationId: L, client: ghlClient() }),
+    firstTouch: async (a) => { asked.push(a); return { job: { id: `j-nt-${asked.length}` } }; } });
+  const keys = ["quiet", "talked", "tagged", "threaded", "drafted", "pulsed", "other"];
+  const batch = await batchWith("Autopilot · Pierce, WA", keys.map((key, i) => ({ key,
+    hook: { address: `${10 + i} Cedar St, Tacoma, WA`, county: "Pierce", city: "Tacoma", ...(key === "quiet" ? { turnkey: true } : {}) } })), L);
+  for (const key of keys) await store.setOutreachAgentStatus(L, batch.id, key, { status: "imported", contactId: `c-nt-${key}`, importedAt: new Date().toISOString() });
+  const row = await store.getOutreachAgent(L, batch.id, "threaded");
+  await store.upsertOutreachAgents(L, batch.id, [{ agentKey: "threaded", doc: { ...row.doc, ghl: { lastMessageAt: new Date().toISOString() } } }]);
+  const at = new Date().toISOString();
+  await store.appendContactEvents(L, "c-nt-talked", [{ type: "text_summary", party: "agent", at, data: { inbound: "not now" }, dedupeKey: "nt-talked" }]);
+  await store.appendContactEvents(L, "c-nt-tagged", [{ type: "tag_added", party: "agent", at, data: { tag: "agent-outreach" }, dedupeKey: "nt-tagged" }]);
+  await store.appendContactEvents(L, "c-nt-pulsed", [{ type: "agent_pulse_texted", party: "agent", at, data: {}, dedupeKey: "nt-pulsed" }]);
+  await store.appendContactEvents(L, "c-nt-other", [{ type: "tag_added", party: "agent", at, data: { tag: "agent-outreach-cedar-fixers" }, dedupeKey: "nt-other" }]);
+  await store.createReplyDraft({ locationId: L, contactId: "c-nt-drafted", status: "dismissed", channel: "sms", reply: "Hi", outbound: { kind: "agent_pulse" }, updatedAt: at });
+
+  assert.equal((await router.retryFirstTexts({ locationId: L, client: ghlClient() })).retried, 0, "off by default");
+  const dry = await router.retryFirstTexts({ locationId: L, client: ghlClient(), neverTexted: true, dryRun: true });
+  assert.deepEqual(dry.results.map((r) => r.contactId).sort(), ["c-nt-other", "c-nt-quiet"], "a batch tag isn't the workflow's trigger tag");
+  assert.equal(asked.length, 0, "a dry run texts nobody");
+
+  const stale = await router.retryFirstTexts({ locationId: L, client: ghlClient(), neverTexted: true, now: Date.now() + 4 * 86400000 });
+  assert.equal(stale.retried, 0, "not seen by a pull in the last three days");
+  const one = await router.retryFirstTexts({ locationId: L, client: ghlClient(), neverTexted: true, limit: 1 });
+  assert.equal(one.retried, 1, "inside the day's room");
+  assert.equal(one.neverTexted, 1);
+  await router.retryFirstTexts({ locationId: L, client: ghlClient(), neverTexted: true });
+  await router.retryFirstTexts({ locationId: L, client: ghlClient(), neverTexted: true });
+  assert.deepEqual(asked.map((a) => a.contactId).sort(), ["c-nt-other", "c-nt-quiet"], "each once: the claim stops a second run starting another");
+  const claim = await store.listContactEvents(L, "c-nt-quiet", { types: ["outreach_open_queued"] });
+  assert.equal(claim.length, 1);
+  // Dropped by a deploy before any draft: the lost path sends it later.
+  asked.length = 0;
+  await router.retryFirstTexts({ locationId: L, client: ghlClient(), now: Date.now() + 3 * 3600000 });
+  assert.deepEqual(asked.map((a) => a.contactId).sort(), ["c-nt-other", "c-nt-quiet"]);
+  const q = asked.find((a) => a.contactId === "c-nt-quiet");
+  assert.equal(q.hook.address, "10 Cedar St, Tacoma, WA", "their listing from the latest pull");
+  assert.equal(q.hook.county, "Pierce");
+  assert.equal(q.hook.turnkey, true);
+  assert.equal(normalizeOutreachAutopilot({}).neverTexted.enabled, false);
+  assert.equal(normalizeOutreachAutopilot({ neverTexted: { enabled: true } }).neverTexted.enabled, true);
+});
+
 /* ---------- the sweep ---------- */
 
 function sweepFake(rows) {
@@ -515,6 +565,28 @@ test("with room for 5 more machine texts today, the sweep creates 5 agents, not 
   assert.equal(seen.openWith, "app");
   assert.equal(seen.enrollWorkflowId, null, "nobody goes into a GHL workflow");
   assert.ok(job.warnings.some((w) => /room for 5 first texts today/.test(w)), job.warnings.join(" · "));
+});
+
+test("the sweep hands its never-texted switch to the retry, and counts them inside the day's room", async () => {
+  _resetJobs();
+  let asked = null;
+  let seen = null;
+  const deps = {
+    runPull: async () => ({ batchId: "b1", warnings: [] }),
+    importAgents: async (a) => { seen = a; return { results: [], imported: 0 }; },
+    firstTextRoom: async () => 7,
+    retryFirstTexts: async (a) => { asked = a; return { retried: 3, opened: 3, neverTexted: 2 }; },
+  };
+  const store = sweepFake(ranked);
+  const job = startOutreachSweep({ locationId: "loc-nt-sweep", client: {}, store, deps,
+    saved: { outreachAutopilot: { enabled: true, dailyCap: 100, firstTouch: "app", neverTexted: { enabled: true } } } });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(job.status, "done", job.error);
+  assert.equal(asked.neverTexted, true);
+  assert.equal(job.neverTexted, 2);
+  assert.equal(seen.createLimit, 4, "the room left after them");
+  const last = store.cursors.get("loc-nt-sweep|outreach")?.doc?.last;
+  assert.equal(last?.neverTexted, 2, "on the cursor, for the supply line");
 });
 
 test("with no room left today, the sweep doesn't pull or create anyone", async () => {

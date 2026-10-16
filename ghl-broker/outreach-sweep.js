@@ -226,6 +226,9 @@ export function normalizeOutreachAutopilot(v = {}) {
       enabled: o.zillowLookup?.enabled === true,
       perRun: Math.min(40, Math.max(1, Math.round(Number(o.zillowLookup?.perRun)) || 25)),
     },
+    // Imported agents nobody ever texted, seen again by a pull, get the first
+    // text before anyone new is pulled (2026-10-15, retryFirstTexts). Off by default.
+    neverTexted: { enabled: o.neverTexted?.enabled === true },
   };
 }
 
@@ -406,6 +409,8 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
     id: job.id, trigger, dryRun: job.dryRun, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt,
     county: job.county, candidates: job.candidates, picked: job.picked, imported: job.imported, enrolled: job.enrolled,
     skippedExisting: job.skippedExisting || 0, requestsUsed: job.pull?.requestsUsed ?? null, error: job.error, warning: job.warnings[0] || "",
+    // First texts that went before the pull: retries, and agents nobody had texted.
+    retried: job.retried || 0, neverTexted: job.neverTexted || 0, opened: job.opened || 0,
     // Which counties this run read before it found somebody (or gave up).
     tried: (job.tried || []).slice(0, 12),
   });
@@ -470,11 +475,13 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
       room = await Promise.resolve(deps.firstTextRoom({ locationId, saved })).catch(() => Infinity);
     }
     if (!job.dryRun && room > 0 && typeof deps.retryFirstTexts === "function") {
-      const r = await deps.retryFirstTexts({ locationId, client, limit: room })
+      const r = await deps.retryFirstTexts({ locationId, client, limit: room, neverTexted: oa.neverTexted.enabled })
         .catch((e) => { job.warnings.push(`retrying first texts: ${String(e?.message || e).slice(0, 120)}`); return null; });
       if (r?.retried) {
         job.retried = r.retried;
         job.reopened = r.opened || 0;
+        // How many of them were agents nobody had ever texted.
+        if (r.neverTexted) job.neverTexted = r.neverTexted;
         room -= r.retried;
       }
     }

@@ -4915,6 +4915,22 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   `openingMove`, `turnkey`, `chars` (the length that went) and `edited` (a
   person changed it). No switch. Check: an `outreach_sent` event's `data` on
   any agent texted after the deploy.
+- **Agents nobody ever texted (2026-10-15, off by default).** New-agent
+  supply fell from 125 a day to 2. `outreachAutopilot.neverTexted {enabled:
+  false}`: inside the same daily room, after the retries, `retryFirstTexts`
+  gives the first text to imported agents a pull saw in the last 3 days
+  (`store.listNeverTextedOutreach`, both backends: status `imported`, a
+  contact id, no `doc.ghl.lastMessageAt`). It skips anyone with
+  `outreach_sent`, `outreach_enrolled`, an `outreach_open_skipped`,
+  `agent_pulse_texted`, `hand_reply`, a text or call summary, a follow-up,
+  check-in or address-chase text, an unsubscribe, the GHL trigger tag
+  (`tag_added agent-outreach`), or any reply draft. It also skips anyone the
+  app created to text, which the lost path covers. The hook is their current
+  listing from the latest pull (`firstTextHook`). Each is claimed first with
+  `outreach_open_queued` (one per contact, ever), so no second run starts
+  another; one a deploy drops is retried by the lost path. The sweep's cursor
+  `last` carries `retried`, `neverTexted` and `opened`. Check: `GET
+  /api/outreach/autopilot` → `last.neverTexted` after the 10am run.
 - **Samples.** "Write 3 sample first texts" under the examples box
   (`POST /api/outreach/opener/preview`) drafts texts for agents waiting in the
   autopilot batches. Nothing is imported, saved or sent.

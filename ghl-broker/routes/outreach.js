@@ -73,6 +73,12 @@ const priceCutOf = (h) => Boolean(h?.priceCut || (Array.isArray(h?.components) &
 const FIRST_TEXT_RETRY_DAYS = 7;
 // A first text with no draft this long after the import was lost to a restart.
 const FIRST_TEXT_LOST_AFTER_MS = 2 * 3600 * 1000;
+// The never-texted pass (outreachAutopilot.neverTexted): an imported agent a
+// pull saw this recently, and anything on their timeline that means somebody
+// already texted, talked to, or tagged them for the GHL workflow.
+const NEVER_TEXTED_SEEN_DAYS = 3;
+const NEVER_TEXTED_BLOCKERS = ["outreach_sent", "outreach_enrolled", "outreach_open_skipped", "outreach_open_queued", "agent_pulse_texted", "hand_reply",
+  "text_summary", "call_summary", "follow_up_sent", "checkin_sent", "address_chase_sent", "unsubscribed", "tag_added"];
 
 /* ---------- normalization ---------- */
 
@@ -1033,8 +1039,15 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * no outreach_sent since), tried again, at most
    * FIRST_TEXT_TRIES times each and `limit` a run. The sweep runs this
    * before it pulls anyone new.
+   *
+   * `neverTexted` (outreachAutopilot.neverTexted, off by default, 2026-10-15):
+   * then, inside the same `limit`, imported agents a pull saw in the last
+   * NEVER_TEXTED_SEEN_DAYS whom nobody ever texted — no message in their GHL
+   * thread, and nothing on their timeline from the outreach, the check-in,
+   * a person, or the GHL workflow's trigger tag — get the first text about
+   * their current listing. New-agent supply had fallen to two a day.
    */
-  async function retryFirstTexts({ locationId, client, limit = Infinity, now = Date.now(), dryRun = false, minAgeMs = FIRST_TEXT_LOST_AFTER_MS, autopilotSince = null }) {
+  async function retryFirstTexts({ locationId, client, limit = Infinity, now = Date.now(), dryRun = false, minAgeMs = FIRST_TEXT_LOST_AFTER_MS, autopilotSince = null, neverTexted = false }) {
     if (typeof firstTouch !== "function" || !(limit > 0)) return { retried: 0, opened: 0, results: [] };
     // The agent's row in the batch it was imported from: the hook there knows
     // the house (year, size, lot, cut), the import event only its address.
@@ -1047,7 +1060,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       return (rowsByBatch.get(batchId) || []).find((r) => r.contactId === contactId) || null;
     };
     const since = new Date(now - FIRST_TEXT_RETRY_DAYS * 86400000).toISOString();
-    const events = await store.listContactEventsSince(locationId, since, { types: ["outreach_open_skipped", "outreach_sent", "outreach_enrolled", "import"], limit: 5000 }).catch(() => []);
+    const events = await store.listContactEventsSince(locationId, since, { types: ["outreach_open_skipped", "outreach_sent", "outreach_enrolled", "import", "outreach_open_queued"], limit: 5000 }).catch(() => []);
     const byContact = new Map();
     for (const e of events) {
       if (!e?.contactId) continue;
@@ -1080,7 +1093,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       // started recording openWith (2026-10-05).
       const appMade = (e) => e.data?.openWith === "app"
         || (autopilotSince && String(e.at) >= String(autopilotSince) && /^Autopilot · /.test(String(e.data?.batchName || "")));
-      const made = list.find((e) => e.type === "import" && e.data?.action === "created" && appMade(e)
+      // Or one the never-texted pass started (outreach_open_queued).
+      const made = list.find((e) => ((e.type === "import" && e.data?.action === "created" && appMade(e)) || e.type === "outreach_open_queued")
         && now - Date.parse(e.at) >= minAgeMs);
       if (!made) continue;
       const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 1 }).catch(() => null);
@@ -1092,7 +1106,35 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const r = await openFirstText({ locationId, client, contactId, ref: made.ref || null, tries: 0, hook });
       results.push({ contactId, lost: true, ...r });
     }
-    return { retried: results.length, opened: results.filter((r) => r.jobId).length, results };
+    if (neverTexted && results.length < limit && typeof store.listNeverTextedOutreach === "function") {
+      const rows = await store.listNeverTextedOutreach(locationId, { seenSince: new Date(now - NEVER_TEXTED_SEEN_DAYS * 86400000).toISOString(), limit: 500 }).catch(() => []);
+      const done = new Set(results.map((r) => r.contactId));
+      for (const row of rows || []) {
+        if (results.length >= limit) break;
+        const contactId = row?.contactId;
+        if (!contactId || done.has(contactId)) continue;
+        done.add(contactId);
+        // One the app created to text is the lost path's, above.
+        if ((byContact.get(contactId) || []).some((e) => e.type === "import" && e.data?.openWith === "app")) continue;
+        const ev = await store.listContactEvents(locationId, contactId, { types: NEVER_TEXTED_BLOCKERS, limit: 200 }).catch(() => null);
+        if (!Array.isArray(ev)) continue;
+        if (ev.some((e) => e.type !== "tag_added" || e.data?.tag === OUTREACH_TAG)) continue;
+        const drafts = await store.listReplyDrafts(locationId, { contactId, limit: 1 }).catch(() => null);
+        if (!Array.isArray(drafts) || drafts.length) continue;
+        const hook = firstTextHook(row.doc);
+        if (!hook.address) continue;
+        if (dryRun) { results.push({ contactId, neverTexted: true, would: "send", address: hook.address, county: hook.county }); continue; }
+        // The claim first: no other run starts a second one, and a deploy
+        // that drops it in memory leaves the lost path something to retry.
+        const claim = await recordEvent({ store, locationId, contactId, party: "agent", type: "outreach_open_queued", at: new Date(now).toISOString(), source: "outreach",
+          address: hook.address, ref: row.batchId || null, dedupeKey: `outreach_open_queued:${contactId}`,
+          data: { batchId: row.batchId || null, hook: { address: hook.address, price: hook.price || null, dom: hook.dom || null } } }).catch(() => null);
+        if (!claim?.inserted) continue;
+        const r = await openFirstText({ locationId, client, contactId, ref: row.batchId || null, tries: 0, hook });
+        results.push({ contactId, neverTexted: true, ...r });
+      }
+    }
+    return { retried: results.length, opened: results.filter((r) => r.jobId).length, neverTexted: results.filter((r) => r.neverTexted).length, results };
   }
 
   /**
