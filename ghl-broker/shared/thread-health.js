@@ -186,7 +186,7 @@ export function liveHouse({ offers = [], events = [], drafts = [], now = Date.no
  *
  * Pure. `ok: false` says which rule held it and why, in words for the row.
  */
-export function machineMayStart({ kind = "", drafts = [], events = [], offers = [], address = "", passes = false, now = Date.now() } = {}) {
+export function machineMayStart({ kind = "", why = "", drafts = [], events = [], offers = [], address = "", passes = false, now = Date.now() } = {}) {
   if (PASS_SHAPED_KINDS.has(kind) || passes) {
     const yes = saidYes({ offers, drafts, events, address, now });
     if (yes) {
@@ -195,7 +195,11 @@ export function machineMayStart({ kind = "", drafts = [], events = [], offers = 
         reason: `they said yes to our number${where} — nothing that walks away from it goes out by itself` };
     }
   }
-  if (LIVE_THREAD_KINDS.has(kind)) {
+  // The no-fit on a listed house (shared/number-stance.js listedFit) IS the
+  // answer to the text they just sent: no number, a kind no and an ask for
+  // their other fixers. The live-thread rule is for texts that start
+  // something new, so it lets this one through; the yes rule above still holds.
+  if (LIVE_THREAD_KINDS.has(kind) && !(kind === "kind_pass" && why === "too_far")) {
     const last = inboundsNewestFirst(drafts).find((d) => !isAutoReply(d.inbound));
     const at = ms(last?.createdAt);
     if (at != null && now - at < LIVE_THREAD_HOURS * 3600000 && at <= now + 60000) {

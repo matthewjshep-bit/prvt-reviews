@@ -172,6 +172,16 @@ test("the floats answer a live thread, and an auto-reply or a dead house doesn't
   assert.equal(machineMayStart({ kind: "agent_pulse", drafts, offers: [offer({ status: "passed" })], now: NOW }).ok, true, "nothing live");
   // A house they named this week is live with no offer on it yet.
   const named = machineMayStart({ kind: "agent_pulse", drafts, offers: [], events: [{ type: "house_mentioned", address: "40 Oak Ave, Kent, WA", at: ago(2) }], now: NOW });
+
+// The no-fit on a listed house is the answer to the text they just sent
+// (shared/number-stance.js listedFit), so the live-thread rule lets it through.
+test("a no-fit on a listed house answers their text; any other pass still waits out a live thread", () => {
+  const drafts = [theirs("seller wants 600k firm", 0, { createdAt: hoursAgo(1) })];
+  assert.equal(machineMayStart({ kind: "kind_pass", why: "too_far", drafts, offers: [offer()], now: NOW }).ok, true);
+  const plain = machineMayStart({ kind: "kind_pass", why: "numbers", drafts, offers: [offer()], now: NOW });
+  assert.equal(plain.ok, false);
+  assert.equal(plain.rule, "live_thread");
+});
   assert.equal(named.ok, false);
   assert.match(named.reason, /40 Oak Ave/);
 });

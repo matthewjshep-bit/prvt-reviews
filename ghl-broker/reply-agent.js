@@ -2731,14 +2731,14 @@ const fellThroughLine = (o) => `the deal on ${String(o?.address || "the house").
 // machineMayStart (shared/thread-health.js) on this contact's book, drafts
 // and timeline. A read that fails holds nothing back: the other doors still
 // ask their own questions.
-async function machineMayStartFor({ store, locationId, contactId, kind, address = "", passes = false, now = Date.now() }) {
+async function machineMayStartFor({ store, locationId, contactId, kind, why = "", address = "", passes = false, now = Date.now() }) {
   if (!LIVE_THREAD_KINDS.has(kind) && !PASS_SHAPED_KINDS.has(kind) && !passes) return { ok: true };
   const [drafts, events, offers] = await Promise.all([
     typeof store?.listReplyDrafts === "function" ? store.listReplyDrafts(locationId, { contactId, limit: 50 }).catch(() => []) : [],
     typeof store?.listContactEvents === "function" ? store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []) : [],
     typeof store?.listOffers === "function" ? store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []) : [],
   ]);
-  return machineMayStart({ kind, drafts: drafts || [], events: events || [], offers: offers || [], address, passes, now });
+  return machineMayStart({ kind, why, drafts: drafts || [], events: events || [], offers: offers || [], address, passes, now });
 }
 
 export async function startProactive({
@@ -2797,7 +2797,7 @@ export async function startProactive({
     const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
     if (gone) return { skipped: fellThroughLine(gone), job: null };
     // A live thread, or a yes we'd be walking away from (shared/thread-health.js).
-    const live = await machineMayStartFor({ store, locationId, contactId, kind, address: offer?.address || subject?.address || "",
+    const live = await machineMayStartFor({ store, locationId, contactId, kind, why: subject?.why || "", address: offer?.address || subject?.address || "",
       now: typeof deps.now === "function" ? deps.now() : Date.now() });
     if (!live.ok) return { skipped: live.reason, liveThread: live.rule, job: null };
     const waiting = await draftWaitingOnYou({ store, locationId, contactId, continues, kind });
@@ -3634,6 +3634,8 @@ async function runProactive(job, ctx) {
         // Matt's 15 (agent-pulse.js startMattsFifteen): his to make his own and send, on Today.
         ...(subject?.forMatt ? { forMatt: true } : {}) } : {}),
       ...((kind === "outreach_open" || kind === "outreach_nudge") && outbound.county ? { county: outbound.county } : {}),
+      // Why we passed: the send-time live-thread check lets a no-fit ("too_far") through.
+      ...(kind === "kind_pass" && outbound.why ? { why: outbound.why } : {}),
       // Which first text this was (conversation-prompt.js openerPlan), so
       // replies can be read back by opening, voice and detail.
       ...(kind === "outreach_open" ? openerChoices(outbound) : {}),
@@ -5979,7 +5981,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // machine's own text is binned; a reply waits for you. Only the auto path.
   if (auto && d.party !== "investor") {
     const machineText = Boolean(d.outbound?.kind) && !String(d.inbound || "").trim();
-    const live = await machineMayStartFor({ store, locationId, contactId: d.contactId, kind: machineText ? d.outbound.kind : "",
+    const live = await machineMayStartFor({ store, locationId, contactId: d.contactId, kind: machineText ? d.outbound.kind : "", why: d.outbound?.why || "",
       address: d.outbound?.address || d.propertyAddress || "", passes: ourReplyPasses(body), now });
     if (!live.ok) {
       const ts = new Date(now).toISOString();
