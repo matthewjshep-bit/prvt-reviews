@@ -5088,6 +5088,18 @@ listing come back, and the agent is tried the next day. `agent_pulse_texted`
 is written when a check-in actually sends, and is what the cadence and the
 unanswered counts read.
 
+**A claim a restart dropped comes back (2026-10-16).** A deploy restarts the
+broker while check-in drafts are still queued in memory; those never settle,
+so their claims were never voided, and an unvoided claim reads as "checked in
+on today" (`lastPulseAt`): the agent waited the full three or four weeks having
+heard nothing. A deploy on 2026-10-16 dropped about 80 that way. Now each run
+(the daily one and Matt's 15) first calls `voidDroppedClaims`: a claim from
+the last 7 days that is over 2 hours old (`DROPPED_CLAIM_AFTER_MS`), with no
+check-in draft for that agent after it, no `agent_pulse_texted` since, and no
+job for them still queued or running, is voided ("a restart dropped it before
+it was drafted"), with its listing ping. The run's job shows `recovered`.
+Check: `GET /api/outreach/pulse` → `job.recovered` after a run.
+
 **Switches** (`settings.outreachAutopilot.pulse`, outside the autonomy dial,
 like the buyer pulse): `enabled` drafts the day's check-ins into the outbox,
 and `autoSend` lets a clean one send itself. Both ship off, and

@@ -18,7 +18,7 @@
 
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
-import { conversationConfig, startProactive, previewProactive, markUnsubscribed } from "./reply-agent.js";
+import { conversationConfig, startProactive, previewProactive, markUnsubscribed, listJobs } from "./reply-agent.js";
 import { getContact, smsUnsubscribed, removeContactFromWorkflow, searchAllContactsByTags, listWorkflows, listPipelines } from "./ghl.js";
 import { acquisitionsPipeline } from "./ghl-mirror.js";
 import { listAcquisitionOpportunities } from "./tier-check.js";
@@ -378,6 +378,58 @@ async function leaveDrip({ store, locationId, contactId, drip, remove, why = "",
   return "removed";
 }
 
+// A claim older than this with no draft after it, and no job of its own
+// still in memory, was dropped by a restart: its draft was queued in memory
+// when a deploy came. A batch waits at most 15 minutes (draft-batch.js).
+export const DROPPED_CLAIM_AFTER_MS = 2 * 3600000;
+const DROPPED_CLAIM_DAYS = 7;
+
+/**
+ * voidDroppedClaims({ store, locationId, now, live }) → { voided }
+ *
+ * Every check-in claim a restart dropped, voided, so the agent comes back
+ * at this run. An unvoided claim reads as "checked in on today", so until
+ * 2026-10-16 an agent whose draft a deploy dropped waited the whole three or
+ * four weeks for their next one, having heard nothing (a deploy that morning
+ * dropped about 80). A claim is dropped when it is over two hours old, no
+ * check-in draft was written for that agent after it, nothing of ours went
+ * since, and no job for them is still queued or running here (`live`, the
+ * contact ids with one; read from the reply agent's jobs when not given).
+ * Its listing ping comes back too. Runs before each run plans.
+ */
+export async function voidDroppedClaims({ store = defaultStore, locationId, now = Date.now(), live = null }) {
+  if (typeof store?.listReplyDrafts !== "function") return { voided: 0 };
+  const busy = live instanceof Set ? live
+    : new Set(listJobs(locationId, { limit: Infinity }).filter((j) => ["queued", "running"].includes(j.status)).map((j) => j.contactId));
+  const { events } = await allEventsSince(store, locationId, iso(now - DROPPED_CLAIM_DAYS * DAY_MS),
+    { types: ["agent_pulse_sent", "agent_pulse_voided", "agent_pulse_texted", "listing_ping_voided"] }).catch(() => ({ events: [] }));
+  const voided = new Set(events.filter((e) => e.type === "agent_pulse_voided").map((e) => e.data?.claimKey).filter(Boolean));
+  const textedAt = new Map();
+  for (const e of events) if (e.type === "agent_pulse_texted" && String(e.at) > String(textedAt.get(e.contactId) || "")) textedAt.set(e.contactId, String(e.at));
+  let n = 0;
+  for (const e of events) {
+    if (e.type !== "agent_pulse_sent" || !e.contactId || !e.dedupeKey || voided.has(e.dedupeKey)) continue;
+    if (now - (Date.parse(e.at) || now) < DROPPED_CLAIM_AFTER_MS || busy.has(e.contactId)) continue;
+    if (String(textedAt.get(e.contactId) || "") >= String(e.at)) continue;
+    const drafts = await store.listReplyDrafts(locationId, { contactId: e.contactId, since: e.at, limit: 10 }).catch(() => null);
+    if (!Array.isArray(drafts) || drafts.some((d) => d?.outbound?.kind === "agent_pulse")) continue;
+    voided.add(e.dedupeKey);
+    await recordEvent({
+      store, locationId, contactId: e.contactId, party: "agent", type: "agent_pulse_voided", at: iso(now), source: "sweep",
+      dedupeKey: `agent_pulse_voided:${e.dedupeKey}`, data: { claimKey: e.dedupeKey, why: "a restart dropped it before it was drafted" },
+    }).catch(() => {});
+    const listingKey = e.data?.listingKey;
+    if (listingKey) {
+      await recordEvent({
+        store, locationId, contactId: e.contactId, party: "agent", type: "listing_ping_voided", at: iso(now), source: "sweep",
+        dedupeKey: `listing_ping_voided:listing_pinged:${e.contactId}:${listingKey}`, data: { listingKey },
+      }).catch(() => {});
+    }
+    n++;
+  }
+  return { voided: n };
+}
+
 /**
  * startAgentPulse({ client, locationId, saved, store, sendsEnabled, deps, trigger, dryRun, limit, now, onDone }) → job
  *
@@ -400,6 +452,8 @@ export function startAgentPulse({
   const finish = (patch) => { Object.assign(job, patch, { finishedAt: new Date().toISOString() }); try { onDone?.(job); } catch { /* the caller's */ } };
 
   (async () => {
+    // A restart's dropped claims give their agents back first.
+    if (!dryRun) job.recovered = (await voidDroppedClaims({ store, locationId, now }).catch(() => ({ voided: 0 }))).voided;
     const plan = await planAgentPulse({ locationId, saved, store, now, workflows: await pulseWorkflows(client, locationId, deps), tierCards: await pulseTierCards(client, locationId, deps) });
     const picks = limit != null ? plan.picks.slice(0, Math.max(0, Math.round(Number(limit)) || 0)) : plan.picks;
     job.counts = plan.counts;
@@ -560,6 +614,7 @@ export function startMattsFifteen({ client, locationId, saved = {}, store = defa
   const read = typeof deps.getContact === "function" ? deps.getContact : (id) => getContact(client, id);
   const finish = (patch) => { Object.assign(job, patch, { finishedAt: new Date().toISOString() }); try { onDone?.(job); } catch { /* the caller's */ } };
   (async () => {
+    if (!dryRun) job.recovered = (await voidDroppedClaims({ store, locationId, now }).catch(() => ({ voided: 0 }))).voided;
     const { picks } = await planMattsFifteen({ locationId, saved, store, now, tierCards: await pulseTierCards(client, locationId, deps) });
     job.picked = picks.length;
     const botOff = conversationConfig(saved).routing?.botOffTags || [];
