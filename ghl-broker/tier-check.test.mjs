@@ -247,16 +247,18 @@ test("only the app's own card moves count as the app's, not the bot's TIER workf
 // so no offer, so no card — nothing in GHL said to follow up with her.
 // With ghlStages.tier2Repliers, a conversation gets a Tier 2 card.
 const word = (contactId, at, over = {}) => ({ contactId, party: "agent", type: "text_summary", at, data: { inbound: "no fixers right now, I'll call when I have one" }, ...over });
+const TAGS = { dw: ["agent-outreach"], "has-t1": ["agent"], "aa-talk": ["agent-outreach-pierce"], stop: ["agent"], unsub: ["agent"], buyer: ["investor"], home: ["wholesaling_pipeline_automation"] };
 const replierStore = ({ last = [], events = [], offers = [], saved = { ghlStages: { mode: "on", tier2Repliers: true } } } = {}) => ({
   ...cardStore(offers, saved),
   async lastContactActivity() { return last; },
+  async listContactProfiles() { return Object.entries(TAGS).map(([contactId, tags]) => ({ contactId, party: "agent", tags })); },
   async listContactEventsSince(_l, since, { types } = {}) { return [...last, ...events].filter((e) => String(e.at) >= since && (!types || types.includes(e.type))); },
   async listContactEvents(_l, contactId, { types } = {}) { return [...last, ...events].filter((e) => e.contactId === contactId && (!types || types.includes(e.type))); },
 });
 const replierGhl = ({ made = [], moved = [], cards = [] } = {}) => ({
   ...cardGhl({ made, moved, cards }),
   listAcquisitionOpportunities: async () => cards,
-  getContact: async (_c, id) => ({ id, firstName: "Dee", lastName: "W" }),
+  getContact: async (_c, id) => ({ id, firstName: "Dee", lastName: "W", tags: TAGS[id] || [] }),
 });
 
 test("an agent who wrote back with nothing to price gets a Tier 2 card at the morning sweep; a buyer and an agent who opted out don't", async () => {
@@ -306,4 +308,32 @@ test("every 15 minutes, an agent who wrote back since the last run and has no ca
   assert.equal(r.repliers, 2);
   assert.deepEqual(made.map((m) => [m.contactId, m.stageId]), [["dw", "t2"]]);
   assert.equal(moved.length, 0, "a Tier 1 card with no offers is the morning sweep's, not this path's");
+});
+
+// The preview before switching it on (2026-10-16) planned a card for a
+// homeowner from the June seller texts: "No thanks. That's our primary home".
+// Their texts were filed as an agent's. Only a contact GHL tags as an agent
+// (the Conversation AI routing: agent, agent-*) gets a conversation's card.
+test("a homeowner whose text was filed as an agent's gets no Tier 2 card; only a contact tagged as an agent does", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const store = replierStore({ last: [word("dw", "2026-10-13T01:06:00Z"), word("home", "2026-10-13T01:00:00Z")] });
+  const saved = await store.getOfferSettings();
+  const r = await runStagePlan({ client: {}, locationId: "L-rep4", store, ghl: replierGhl({ made }), saved, dryRun: false, now: NOW13 });
+  assert.deepEqual(r.creates.map((c) => c.contactId), ["dw"]);
+  assert.deepEqual(made.map((m) => m.contactId), ["dw"]);
+  // Profile tags can be stale: GHL's own tags are checked before the card is made.
+  const stale = { ...store, async listContactProfiles() { return [{ contactId: "home", party: "agent", tags: ["agent"] }]; } };
+  const r2 = await runStagePlan({ client: {}, locationId: "L-rep5", store: stale, ghl: replierGhl({ made }), saved, dryRun: false, now: NOW13 });
+  assert.deepEqual([r2.created, made.length], [0, 1]);
+  assert.match(r2.creates.find((c) => c.contactId === "home").skipped, /not tagged as an agent/);
+  // The 15-minute path checks the same.
+  const tick = replierStore({ last: [] });
+  await syncChangedCards({ client: {}, locationId: "L-rep6", store: tick, saved, ghl: replierGhl({ made }), now: Date.parse("2026-10-13T19:30:00Z") });
+  tick.lastContactActivity = async () => [word("home", "2026-10-13T19:50:00Z")];
+  const tickWords = [word("home", "2026-10-13T19:50:00Z")];
+  tick.listContactEventsSince = async () => tickWords;
+  tick.listContactEvents = async (_l, id) => tickWords.filter((e) => e.contactId === id);
+  const t = await syncChangedCards({ client: {}, locationId: "L-rep6", store: tick, saved, ghl: replierGhl({ made }), now: NOW13 });
+  assert.deepEqual([t.repliers, t.moved, made.length], [1, 0, 1]);
 });
