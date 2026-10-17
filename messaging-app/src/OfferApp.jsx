@@ -14,7 +14,7 @@
 
 import { offerEditorUrl } from "./api.js";
 import React, { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { PanelRight, Plus } from "lucide-react";
 import { brandMarkSvg } from "@shared/brand-mark.js";
 import NewOffer from "./NewOffer.jsx";
 import OffersHistory from "./OffersHistory.jsx";
@@ -32,6 +32,9 @@ import LineView from "./LineView.jsx";
 import AutopilotView from "./AutopilotView.jsx";
 import LessonsTab from "./LessonsTab.jsx";
 import ContactDrawer from "./ContactDrawer.jsx";
+import CompanionView from "./CompanionView.jsx";
+import { COMPANION_WINDOW } from "./companion.js";
+import { appHref } from "./links.js";
 import { ContactDrawerContext } from "./ContactLink.jsx";
 import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
 
@@ -55,6 +58,8 @@ const APP_MODE = (() => {
     if (/^\/reports(\/|$)/.test(window.location.pathname)) return "reports";
     if (/^\/deals(\/|$)/.test(window.location.pathname)) return "deals";
     if (/^\/dispo(\/|$)/.test(window.location.pathname)) return "dispo";
+    // The companion window beside GHL (CompanionView.jsx).
+    if (/^\/contact(\/|$)/.test(window.location.pathname)) return "companion";
     return /^\/agents(\/|$)/.test(window.location.pathname) ? "outreach" : "offers";
   } catch {
     return "offers";
@@ -98,6 +103,8 @@ const NAV =
       ]
     : APP_MODE === "deals"
     ? [{ view: "deals", label: "Deals" }]
+    : APP_MODE === "companion"
+    ? [{ view: "companion", label: "Companion" }]
     : [
         { view: "history", label: "Offers" },
         { view: "deals", label: "Deals" },
@@ -111,6 +118,7 @@ const APP_TITLE =
   : APP_MODE === "reports" ? "Reports"
   : APP_MODE === "deals" ? "Deals"
   : APP_MODE === "dispo" ? "Dispositions"
+  : APP_MODE === "companion" ? "Companion"
   : "Offer Generator";
 
 // Links saved before the split (/dashboard?view=flow, a bookmark, the GHL
@@ -263,6 +271,10 @@ export default function OfferApp() {
     );
   }
 
+  // The companion window is its own page: no tabs, no drawer (the record is
+  // on the page), the location gate above all the same.
+  if (APP_MODE === "companion") return <CompanionView settings={settings} />;
+
   // New Offer keeps a centered cap (the form reads better constrained); the
   // table-heavy views run full-bleed to use the GHL iframe's width. Header and
   // content share the class so their edges always align.
@@ -293,12 +305,22 @@ export default function OfferApp() {
               {n.label}
             </button>
           ))}
+          {/* A narrow window to keep beside GHL that shows whoever is open
+              there (CompanionView.jsx; the extension does the following). */}
+          <button
+            type="button"
+            onClick={() => window.open(appHref("/contact"), COMPANION_WINDOW, "popup,width=560,height=900")}
+            title="Open a window to keep beside GoHighLevel: it shows whoever you open there"
+            className="ml-auto inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
+          >
+            <PanelRight size={15} aria-hidden="true" /> <span className="hidden sm:inline">Companion</span>
+          </button>
           {APP_MODE === "offers" && (
             <button
               type="button"
               onClick={() => { setEditing(null); setView("new"); }}
               aria-current={view === "new" ? "page" : undefined}
-              className={`ml-auto inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors ${
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors ${
                 view === "new"
                   ? "bg-blue-700 text-white"
                   : "bg-blue-600 text-white hover:bg-blue-700"

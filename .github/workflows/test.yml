@@ -30,7 +30,7 @@ jobs:
       - name: vendored shared/ copies are in sync
         run: |
           node scripts/sync-shared.mjs
-          git diff --exit-code -- ghl-broker/shared cardgen/shared
+          git diff --exit-code -- ghl-broker/shared cardgen/shared companion-extension/shared
 
       - run: npm ci
         working-directory: shared

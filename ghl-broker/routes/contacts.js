@@ -11,6 +11,7 @@
 //   POST /api/contacts/:id/gmail          read the email with them from Gmail onto the record (read-only)
 //   POST /api/contacts/backfill           fill the record from existing offers, deals, drafts, invites and GHL fields
 //   GET  /api/contacts/backfill/status    the running or last job, plus the record's counts
+//   GET  /api/contacts/by-conversation/:conversationId   whose GHL conversation this is (the companion window)
 //
 // Same location gate as every other router. The record itself is written by
 // ghl-broker/contact-record.js; this is the thin HTTP layer over it.
@@ -20,7 +21,7 @@ import { store } from "../store.js";
 import { getContactRecord, learnFacts, forgetFact, recordEvent, projectToGhl, reconcileFromGhl } from "../contact-record.js";
 import { startContactBackfill, getBackfillJob, publicBackfillJob, cancelBackfill } from "../contact-backfill.js";
 import { FACT_KEYS } from "../shared/contact-record.js";
-import { searchConversations, listConversationMessages, getContact } from "../ghl.js";
+import { searchConversations, listConversationMessages, getContact, getConversation } from "../ghl.js";
 import { syncContactGmail, contactEmails } from "../gmail-sync.js";
 import { sendHandReply } from "../hand-reply.js";
 import { contactTimeline } from "../contact-timeline.js";
@@ -55,6 +56,21 @@ export default function createContactsRouter({ resolveLocation, onHandText = nul
     if (code >= 500) console.error("contacts error:", code, err.message, err.detail || "");
     res.status(code).json({ error: err.message, detail: err.detail });
   };
+
+  // The companion window follows a GHL conversation page too; that address
+  // names the conversation, not the person (shared/ghl-url.js). Reads GHL.
+  router.get("/by-conversation/:conversationId", async (req, res) => {
+    try {
+      const { client } = resolveLocation(req);
+      const conversationId = str(req.params.conversationId, 64);
+      if (!conversationId) return res.status(400).json({ error: "conversation id is required" });
+      let convo = null;
+      try { convo = await getConversation(client, conversationId); }
+      catch (err) { if (err.status !== 404 && err.status !== 400) throw err; }
+      if (!convo) return res.status(404).json({ error: "GHL has no contact for that conversation" });
+      res.json({ ok: true, contactId: convo.contactId });
+    } catch (err) { fail(res, err); }
+  });
 
   // The work pane's header (ghl-broker/contact-timeline.js). ?offerId= is
   // the offer the pane shows; ?party=investor for a buyer. Reads one person.
