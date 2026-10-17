@@ -124,3 +124,45 @@ test("a pass in our reply never closes a number that went out, or another house"
   assert.equal((await store.getOffer(sent.id)).status, "sent");
   assert.equal((await store.getOffer(other.id)).status, "new");
 });
+
+// Matt, 2026-10-16 (Brent S.): the underwrite on the house the agent brought
+// stopped early, so its row stayed a held draft. Matt texted "about 300K" by
+// hand, the agent said "Not at this time", and the bot's pass found "no open
+// offer on that address". The draft kept him in GHL's Tier 1 until Matt
+// dragged the card to Tier 2 himself.
+test("an agent's no on a house we never sent a written offer on closes it, so the card can leave Tier 1", async () => {
+  await mkOffer({ contactId: "a-held", address: "36714 N West Branch Rd, Deer Park, WA 99006", status: "we_passed" });
+  const held = await mkOffer({ contactId: "a-held", address: "4203 E Congress", status: "draft", cashAmount: null });
+  const r = await deps.setOfferStatus({ contactId: "a-held", addressHint: "4203 E Congress", status: "passed", note: "not at this time" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.address, "4203 E Congress");
+  assert.equal((await store.getOffer(held.id)).status, "passed");
+});
+
+test("a no naming the house being priced lands on it, not on the agent's one open offer on another house", async () => {
+  const open = await mkOffer({ contactId: "a-held-4", address: "15 Alder St, Kent, WA", status: "sent" });
+  const held = await mkOffer({ contactId: "a-held-4", address: "16 Alder St, Kent, WA", status: "draft", cashAmount: null });
+  const r = await deps.setOfferStatus({ contactId: "a-held-4", addressHint: "16 Alder St", status: "passed" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal((await store.getOffer(held.id)).status, "passed");
+  assert.equal((await store.getOffer(open.id)).status, "sent", "the other house's offer is still out");
+});
+
+test("with no address named, a no lands on the agent's only house being priced, never one of several; a counter never lands on a draft", async () => {
+  const only = await mkOffer({ contactId: "a-held-1", address: "11 Alder St, Kent, WA", status: "draft", cashAmount: null });
+  let r = await deps.setOfferStatus({ contactId: "a-held-1", addressHint: "", status: "passed" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal((await store.getOffer(only.id)).status, "passed");
+
+  const d1 = await mkOffer({ contactId: "a-held-2", address: "12 Alder St, Kent, WA", status: "draft", cashAmount: null });
+  const d2 = await mkOffer({ contactId: "a-held-2", address: "13 Alder St, Kent, WA", status: "draft", cashAmount: null });
+  r = await deps.setOfferStatus({ contactId: "a-held-2", addressHint: "", status: "passed" });
+  assert.equal(r.ok, false, "two houses being priced and none named: not guessed");
+  assert.equal((await store.getOffer(d1.id)).status, "draft");
+  assert.equal((await store.getOffer(d2.id)).status, "draft");
+
+  const d3 = await mkOffer({ contactId: "a-held-3", address: "14 Alder St, Kent, WA", status: "draft", cashAmount: null });
+  r = await deps.setOfferStatus({ contactId: "a-held-3", addressHint: "14 Alder St", status: "countered", amount: 400000 });
+  assert.equal(r.ok, false, "we never sent a number on it, so there's nothing to counter");
+  assert.equal((await store.getOffer(d3.id)).status, "draft");
+});

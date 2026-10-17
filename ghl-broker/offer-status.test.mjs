@@ -192,6 +192,27 @@ test("bulk marks many, and can never overwrite an active deal", async () => {
   assert.equal((await store.getOffer(dealt.id)).status, "accepted", "the deal is untouched");
 });
 
+// Matt, 2026-10-16 (Toril S.): he passed her house and the GHL card never
+// left Tier 1, with nothing saying why. Her other house, still being priced,
+// holds it there; the answer to the pass now says so.
+test("a pass that leaves the GHL card where it is says which house holds it there", async () => {
+  const before = (await store.getOfferSettings(LOC)) || {};
+  await store.saveOfferSettings(LOC, { ...before, ghlStages: { mode: "on" } });
+  try {
+    const passed = await mkOffer({ contactId: "c-held", address: "16910 132nd Ave E, Puyallup, WA 98374" });
+    await mkOffer({ contactId: "c-held", address: "29308 158th Ave E, Graham, WA 98338", status: "draft", cashAmount: null });
+    const r = await req("PATCH", `/api/offers/${passed.id}/status`, { status: "we_passed" });
+    assert.equal(r.status, 200);
+    assert.match(r.json.card?.text || "", /stays in Tier 1: 29308 158th Ave E is still being priced/);
+
+    const alone = await mkOffer({ contactId: "c-alone", address: "77 Solo St, Kent, WA" });
+    const r2 = await req("PATCH", `/api/offers/${alone.id}/status`, { status: "we_passed" });
+    assert.equal(r2.json.card, undefined, "nothing else live: the card is free to go to Tier 2");
+  } finally {
+    await store.saveOfferSettings(LOC, before);
+  }
+});
+
 test("bulk refuses accepted — mass-promoting is never what you meant", async () => {
   const a = await mkOffer();
   const r = await req("PATCH", "/api/offers/status", { ids: [a.id], status: "accepted" });

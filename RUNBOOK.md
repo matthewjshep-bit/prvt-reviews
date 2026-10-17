@@ -2765,6 +2765,22 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   house), and `retire_unsent_offer` closes a number we priced on that house
   and never sent (`we_passed`, `retired.by: "conversation"`). An offer that
   went out — floated or sent — is never touched.
+- **Their no on a house we never sent → not Tier 1 (2026-10-16).** Brent S.:
+  the underwrite on 4203 E Congress stopped early, so the row stayed a held
+  draft. Matt texted a number by hand, the agent said "not at this time", and
+  `mark_offer_passed` found "no open offer on that address"; the draft kept
+  the card in Tier 1. The conversation's `passed` or `unavailable` now lands
+  on the held draft for the house it names, ahead of a guess at another
+  house's open offer. With no house named, it lands on the only draft from
+  the last 21 days, never one of several. A counter never lands on a draft:
+  we sent no number to counter.
+- **A pass that leaves the card says why (2026-10-16).** Toril S.: Matt passed
+  one house by hand and the card stayed in Tier 1, because her other house
+  was a held draft. That's the rule working, but nothing said so. The status
+  route now answers with `card: { to, label, offerId, address, text }`
+  (`cardHeldBy`), and the work pane and the Offers table show the text: "The
+  GHL card stays in Tier 1: 29308 158th Ave E is still being priced. Pass
+  that house too and it goes to Tier 2."
 - **Tier 2 is the agent nurture** (Matt): everyone with nothing live,
   former Tier 3s included, replied or not. The app's agent check-in is the
   nurture. A card that still lands in Tier 3 (a workflow, a drag) is moved on
@@ -2829,6 +2845,10 @@ our numbers and the machine's first look. `?view=inplay` opens it;
 - **The house** (`pickHouse`, `shared/tier-one.js`): their current open
   offer, else a house they named in the last 21 days if it's newer, else a
   held draft, else the card's name when it reads like a street address.
+  A named house carries its held draft as its row (`source: "held"`), so
+  Pass closes the draft and the card can leave Tier 1. A closed offer counts
+  from when it came in, not from its status change, so passing an old house
+  doesn't make it outrank the house they named since (Toril S., 2026-10-16).
 - **The screen** (`screenTierOne`). Red = sure, amber = their words only,
   grey = soft:
 

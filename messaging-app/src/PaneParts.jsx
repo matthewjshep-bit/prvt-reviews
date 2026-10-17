@@ -182,6 +182,8 @@ export function PaneActions({ pane, item, targets, rowOfferId = null, onStatusCh
     try {
       const r = await setOfferStatus(offer.id, key);
       if (r.promoted) setNote({ tone: "green", text: "It's a deal now — it's on the Deals board." });
+      // A pass that leaves the GHL card where it is says which house holds it.
+      else if (r.card?.text) setNote({ tone: "amber", text: r.card.text });
       pane.side.reload();
       pane.botChanged?.();
       onStatusChanged?.(r);
@@ -192,7 +194,7 @@ export function PaneActions({ pane, item, targets, rowOfferId = null, onStatusCh
   const goDeals = onDealNav || (() => { window.location.href = `/deals${window.location.search}`; });
   return (
     <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-      {note && <span className={`text-xs ${note.tone === "red" ? "text-red-700" : "text-emerald-700"}`}>{note.text}</span>}
+      {note && <span className={`text-xs ${note.tone === "red" ? "text-red-700" : note.tone === "amber" ? "text-amber-700" : "text-emerald-700"}`}>{note.text}</span>}
       {menuOffer && (
         <span className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1" title="Status, Hot and Current for this offer">
           {/* Another of their offers is showing: say which one the menu changes. */}

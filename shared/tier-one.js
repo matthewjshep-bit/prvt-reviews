@@ -137,9 +137,16 @@ export function pickHouse({ offers = [], events = [], cardName = "", now = Date.
   const named = events.filter((e) => e?.type === "subject_property_set" && e.address && now - (Date.parse(e.at || "") || 0) <= NAMED_DAYS * DAY_MS)
     .sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
   const offer = live[0] || null;
-  // A house named after the newest offer is the one in play now.
-  if (named && (!offer || (Date.parse(named.at) || 0) > at(offer)) && !(offer && addressKey(offer.address) === addressKey(named.address))) {
-    const sameAsOffer = live.find((o) => addressKey(o.address) === addressKey(named.address) || sameStreetLoose(o.address, named.address));
+  // A house named after the newest offer is the one in play now. A closed
+  // offer counts from when it came in: passing an old house today doesn't
+  // make it newer than the one they named since (Toril S., 2026-10-16).
+  const offerAt = (o) => (OPEN.has(o.status) || o.deal ? at(o) : Date.parse(o.createdAt || "") || at(o));
+  if (named && (!offer || (Date.parse(named.at) || 0) > offerAt(offer)) && !(offer && addressKey(offer.address) === addressKey(named.address))) {
+    const same = (o) => addressKey(o.address) === addressKey(named.address) || sameStreetLoose(o.address, named.address);
+    const sameAsOffer = live.find(same);
+    // Its held draft is its row, so a Pass from Tier 1 closes it.
+    const heldDraft = !sameAsOffer && offers.filter((o) => o?.status === "draft" && !o.supersededBy && o.address && same(o)).sort((a, b) => at(b) - at(a))[0];
+    if (heldDraft) return { address: named.address, offer: heldDraft, source: "held", namedEvent: named };
     return { address: named.address, offer: sameAsOffer || null, source: sameAsOffer ? "offer" : "named", namedEvent: named };
   }
   if (offer) return { address: offer.address, offer, source: "offer" };
