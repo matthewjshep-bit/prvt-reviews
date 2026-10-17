@@ -2869,7 +2869,12 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   has nothing live and no open card gets one in Tier 2 (`repliedCard` in
   `shared/ghl-stages.js`, `agentRepliers` in `ghl-broker/tier-check.js`).
   Buyers are left out, and so are agents who opted out (an `unsubscribed`
-  event, or a last word with `opt_out`). The rules for the card:
+  event, or a last word with `opt_out`). Only a contact tagged as an agent
+  by the Conversation AI routing (`agent`, `agent-*`) qualifies. The plan
+  checks profile tags, and GHL's live tags are checked again right before a
+  card is made or reopened ("not tagged as an agent in GHL"). The first
+  preview had planned a card for a homeowner from the June seller texts,
+  whose replies had been filed as an agent's. The rules for the card:
   - A closed card reopens in Tier 2 only when they wrote after it closed.
     A lost card stays lost. A won card stays won, and a word since makes a
     new card.

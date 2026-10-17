@@ -30,6 +30,8 @@ import { offerStageAt } from "./shared/offer-stage.js";
 import { openPromises } from "./shared/promise-resolver.js";
 import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
 import { runTierOneScreen } from "./tier-one.js";
+import { normalizeConversationAi } from "./shared/conversation-ai.js";
+import { resolveParty } from "./conversation-party.js";
 
 export const CURSOR_NAME = "tierCheck";
 export const CHECK_HOUR = 7;             // PT
@@ -194,19 +196,28 @@ const cardsMadeBy = (events = []) => new Set((events || []).filter((e) => e?.con
 // Their word to us: a call, or a text summary of THEIR text (store.lastContactActivity inboundOnly).
 const isTheirWord = (e) => INBOUND_EVENT_TYPES.includes(e?.type) && (e.type !== "text_summary" || String(e.data?.inbound || "").trim() !== "");
 
+// An agent by their GHL tags, the way the conversation routes them (Settings →
+// Conversation AI: agent, agent-*). A text filed as an agent's isn't enough:
+// the preview before tier2Repliers went on (2026-10-16) planned a card for a
+// homeowner from the June seller texts, whose replies were filed that way.
+const routingOf = (saved) => normalizeConversationAi(saved?.conversationAi).routing || {};
+const taggedAgent = (tags, routing) => resolveParty({ tags: tags || [], routing }).party === "agent";
+
 /**
- * agentRepliers(lastRows, optOuts) → Map contactId → ISO of their last word
+ * agentRepliers(lastRows, optOuts, isAgent) → Map contactId → ISO of their last word
  *
  * The agents we've talked with, for their Tier 2 card (shared/ghl-stages.js
  * repliedCard): `lastRows` is each contact's newest word to us. A buyer is
  * left out (their board is Dispositions), and so is an agent who opted out —
- * an unsubscribed event, or a last word that said stop.
+ * an unsubscribed event, or a last word that said stop. `isAgent(contactId)`,
+ * when given, must say yes too (their tags).
  */
-export function agentRepliers(lastRows = [], optOuts = []) {
+export function agentRepliers(lastRows = [], optOuts = [], isAgent = null) {
   const out = new Map();
   const stopped = new Set((optOuts || []).map((e) => e?.contactId).filter(Boolean));
   for (const r of lastRows || []) {
     if (!r?.contactId || r.party !== "agent" || stopped.has(r.contactId) || !isTheirWord(r)) continue;
+    if (isAgent && !isAgent(r.contactId)) continue;
     if (r.data?.intent === "opt_out") continue;
     out.set(r.contactId, r.at);
   }
@@ -229,7 +240,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
   const pipelines = read?.pipelines || await api.listPipelines(client, locationId);
   const acq = acquisitionsPipeline(pipelines);
   if (!acq) { out.errors.push("no pipeline with Tier 1/2/3 stages"); return out; }
-  const [opportunities, offers, promiseEvents, moveEvents, lastRows, workflows, optOuts] = await Promise.all([
+  const [opportunities, offers, promiseEvents, moveEvents, lastRows, workflows, optOuts, profiles] = await Promise.all([
     read?.opportunities || api.listAcquisitionOpportunities(client, locationId, acq.id),
     store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []),
     store.listContactEventsSince?.(locationId, iso(now - 7 * 86400000), { types: ["promise_made", "promise_owed", "promise_kept"], limit: 5000 }).catch(() => []) || [],
@@ -239,13 +250,16 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     store.lastContactActivity?.(locationId, { types: INBOUND_EVENT_TYPES, inboundOnly: true, limit: 20000 }).catch(() => []) || [],
     (api.listWorkflows ? api.listWorkflows(client, locationId) : Promise.resolve(null)).catch(() => null),
     cfg.tier2Repliers ? store.listContactEventsSince?.(locationId, iso(now - 3 * YEAR_MS), { types: ["unsubscribed"], limit: 20000 }).catch(() => []) || [] : [],
+    cfg.tier2Repliers ? store.listContactProfiles?.(locationId, { limit: 20000 }).catch(() => []) || [] : [],
   ]);
+  const routing = routingOf(saved);
+  const agentIds = new Set((profiles || []).filter((p) => p?.contactId && p.party !== "investor" && taggedAgent(p.tags, routing)).map((p) => p.contactId));
   const plan = planStageMoves({
     acq, opportunities, offers, now, settings: cfg,
     lastIn: new Map((lastRows || []).map((r) => [r.contactId, r.at])),
     openPromiseContacts: new Set(openPromises(promiseEvents || [], { now }).map((p) => p.contactId)),
     appMoves: appMovesByContact(moveEvents),
-    repliers: cfg.tier2Repliers ? agentRepliers(lastRows, optOuts) : new Map(),
+    repliers: cfg.tier2Repliers ? agentRepliers(lastRows, optOuts, (id) => agentIds.has(id)) : new Map(),
     cardsMade: cardsMadeBy(moveEvents),
     // Can't read the workflow list: assume the nurture is live, so nothing moves into Tier 2 blind.
     nurtureLive: workflows == null ? [{ id: "?", name: "a nurture workflow (GHL's list couldn't be read)" }] : nurtureWorkflows(workflows),
@@ -264,8 +278,9 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     const row = { contactId: m.contactId, opportunityId: m.opportunityId, from: m.from, to: m.to, why: m.why, ...(m.status ? { status: m.status } : {}), ...(m.blocked ? { blocked: m.blocked } : {}) };
     if (go && !m.blocked && left > 0) {
       try {
-        await applyCardPlan({ client, locationId, store, api, acq, plan: { move: m }, source: "ghl_stages" });
-        row.applied = true; out.applied++; left--;
+        const done = await applyCardPlan({ client, locationId, store, api, acq, routing, plan: { move: m }, source: "ghl_stages" });
+        if (done?.skip) row.skipped = done.skip;
+        else { row.applied = true; out.applied++; left--; }
         await sleep(120);
       } catch (e) { out.errors.push(`${m.opportunityId}: ${String(e?.message || e).slice(0, 160)}`); }
     }
@@ -276,8 +291,9 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     const row = { contactId: c.contactId, to: c.to, why: c.why, ...(c.blocked ? { blocked: c.blocked } : {}) };
     if (go && !c.blocked && left > 0) {
       try {
-        await applyCardPlan({ client, locationId, store, api, acq, plan: { create: c }, source: "ghl_stages" });
-        row.applied = true; out.created++; left--;
+        const done = await applyCardPlan({ client, locationId, store, api, acq, routing, plan: { create: c }, source: "ghl_stages" });
+        if (done?.skip) row.skipped = done.skip;
+        else { row.applied = true; out.created++; left--; }
         await sleep(120);
       } catch (e) { out.errors.push(`create ${c.contactId}: ${String(e?.message || e).slice(0, 160)}`); }
     }
@@ -287,12 +303,20 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
 }
 
 /**
- * applyCardPlan({ client, locationId, store, api, acq, plan, source }) → { opportunityId, from, to } | null
+ * applyCardPlan({ client, locationId, store, api, acq, routing, plan, source }) → { opportunityId, from, to } | { skip } | null
  *
  * Writes one planCard result to GHL and the contact's record. Throws on a GHL
- * failure (the callers count it). Ids and stage names only.
+ * failure (the callers count it). Ids and stage names only. A conversation's
+ * Tier 2 card (`replier`) is made or reopened only for a contact GHL tags as
+ * an agent right now; their name comes from the same read.
  */
-async function applyCardPlan({ client, locationId, store, api, acq, plan, source }) {
+async function applyCardPlan({ client, locationId, store, api, acq, routing = {}, plan, source }) {
+  let who = null;
+  if (plan.create?.replier || plan.move?.replier) {
+    const id = (plan.create || plan.move).contactId;
+    who = api.getContact ? await api.getContact(client, id).catch(() => null) : null;
+    if (!who || !taggedAgent(who.tags, routing)) return { skip: "not tagged as an agent in GHL" };
+  }
   if (plan.move && !plan.move.blocked) {
     const m = plan.move;
     await api.updateOpportunity(client, m.opportunityId, { stageId: m.toStageId, ...(m.status ? { status: m.status } : {}) });
@@ -303,11 +327,7 @@ async function applyCardPlan({ client, locationId, store, api, acq, plan, source
   if (plan.create && !plan.create.blocked) {
     const c = plan.create;
     // A conversation's card has no offer to name it from: the contact's own name.
-    let name = c.name;
-    if (!name && api.getContact) {
-      const who = await api.getContact(client, c.contactId).catch(() => null);
-      name = [who?.firstName, who?.lastName].filter(Boolean).join(" ") || String(who?.name || who?.contactName || "");
-    }
+    const name = c.name || [who?.firstName, who?.lastName].filter(Boolean).join(" ") || String(who?.name || who?.contactName || "");
     const made = await api.createOpportunity(client, { locationId, pipelineId: acq.id, contactId: c.contactId, name: name || "Agent", stageId: c.toStageId });
     await recordEvent({ store, locationId, contactId: c.contactId, party: "agent", type: "ghl_stage_moved", source,
       data: { from: "", to: c.to, why: c.why, created: true } }).catch(() => {});
@@ -366,7 +386,8 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
     });
     if (repliersOnly && !(plan.create?.replier || plan.move?.replier)) return { skip: plan.skip || "not a conversation's Tier 2 card" };
     if (plan.skip || plan.youMoved || plan.move?.blocked || plan.create?.blocked) return plan;
-    const applied = await applyCardPlan({ client, locationId, store, api, acq, plan, source: "offers" });
+    const applied = await applyCardPlan({ client, locationId, store, api, acq, routing: routingOf(settings), plan, source: "offers" });
+    if (applied?.skip) return { skip: applied.skip };
     console.log(`card follows offers loc=${locationId} contact=${contactId} ${applied?.from || "new"} → ${applied?.to}`);
     return { ...plan, applied };
   } catch (e) {
