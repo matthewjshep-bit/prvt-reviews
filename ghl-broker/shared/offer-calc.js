@@ -134,6 +134,12 @@ export const DEFAULT_OFFER_SETTINGS = {
   // the spend ceiling, because each run costs Apify credits and two Claude
   // vision calls. See ghl-broker/auto-underwrite.js.
   autoUnderwriteDailyCap: 25,
+  // "full": comps, photo scan and a priced offer. "draft" (Matt, 2026-10-16):
+  // the run stops after the listing's facts and saves a draft for him to
+  // price by hand — no comps bought, no photo scan, nothing floated. A run a
+  // person starts (Re-run, Underwrite anyway, Retry, the editor) is always full.
+  // See underwriteMode below and ghl-broker/auto-underwrite.js.
+  autoUnderwriteMode: "full",
   // Reply agent, first version (2026-09-03). DEPRECATED as settings: both now
   // only SEED the Conversation AI config below the first time a location
   // opens that tab, and are ignored once `conversationAi` exists. Kept so an
@@ -310,6 +316,11 @@ export function netComparison(cashAmount, s = {}) {
 }
 
 // Merge partial settings over the defaults (one level deep + company).
+/** underwriteMode(saved) → "draft" | "full" (anything but "draft" is full) */
+export function underwriteMode(saved = {}) {
+  return String(saved?.autoUnderwriteMode || "").trim().toLowerCase() === "draft" ? "draft" : "full";
+}
+
 export function effectiveSettings(overrides = {}) {
   const s = { ...DEFAULT_OFFER_SETTINGS, ...(overrides || {}) };
   // The nested blobs need their own merge — a saved partial would otherwise

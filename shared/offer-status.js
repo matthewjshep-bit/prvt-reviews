@@ -92,6 +92,18 @@ export const isAiGenerated = (offer) => Boolean(offer?.autoUnderwrite);
 // run that cleared everything.
 export const aiHoldReasons = (offer) => offer?.autoUnderwrite?.held || [];
 
+// Draft only (Matt, 2026-10-16). Read against 363 runs and their threads:
+// Matt reworked the machine's comps and number on 43% of its offers, the
+// numbers that went out untouched were wrong about half the time, and none of
+// the contracts came from a machine price he wouldn't have reached himself.
+// So with `autoUnderwriteMode: "draft"` a house an agent names becomes a draft
+// — the agent, the address and the listing's facts, no comps and no photo
+// scan — held on this one reason, and Matt prices it by hand.
+export const DRAFT_ONLY_HOLD = "ready for your comps — the app made the draft, you price it";
+export const DRAFT_ONLY_RX = /^ready for your comps\b/i;
+export const isDraftOnly = (offer) => Boolean(offer?.autoUnderwrite?.draftOnly)
+  || DRAFT_ONLY_RX.test(String(aiHoldReasons(offer)[0] || ""));
+
 // Waiting on a pair of human eyes. Two shapes, one queue:
 //
 //   a HELD draft   — the run couldn't clear its quality gates and stopped

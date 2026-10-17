@@ -697,7 +697,9 @@ const PLAYBOOK = () => ({
   // with buys one short question, not an underwrite. Specific bad news
   // underwrites at once; a vague answer to the question is a polite pass and
   // an ask for what else they have. See shared/flip-read.js.
-  qualifyFirst: { enabled: false },
+  // `brought` (2026-10-16): the same screen for a house the agent raises
+  // themselves (shared/flip-read.js broughtStep) — off by default.
+  qualifyFirst: { enabled: false, brought: false },
   // Agent only (2026-10-15). An agent's first answer to our first text ends
   // with one question: other fixers, and a quick 5-minute call this week —
   // what time works (no times offered; no calendar is connected). See
@@ -1085,6 +1087,7 @@ function normalizePlaybook(p, party, seed = {}) {
     },
     qualifyFirst: {
       enabled: party === "agent" && bool(src.qualifyFirst?.enabled, false),
+      brought: party === "agent" && bool(src.qualifyFirst?.brought, false),
     },
     callAsk: {
       enabled: party === "agent" && bool(src.callAsk?.enabled, false),

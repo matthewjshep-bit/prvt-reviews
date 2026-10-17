@@ -18,8 +18,9 @@
 //      what else they've got, on market or off. That is the real point of
 //      the thread.
 //
-// Houses the agent brings up themselves are not read here: those underwrite
-// right away (Matt's call), as before.
+// Houses the agent brings up themselves underwrite right away (Matt's call),
+// unless parties.agent.qualifyFirst.brought is on (2026-10-16): then
+// broughtStep below reads them the same way, a little more kindly.
 //
 // Pure. The reply agent (ghl-broker/reply-agent.js) applies it when
 // parties.agent.qualifyFirst is on.
@@ -60,7 +61,7 @@ const MAJOR = [
 // Why the seller has to sell. Alone it is not a flip; with real work it is.
 const MOTIVATION = [
   ["in a hurry", /\basap\b|\bquick(?:ly)?\s+(?:sale|close)\b|\bneeds?\s+to\s+(?:sell|close)\b|\bmotivated\b|\burgent\b/i],
-  ["moving on", /\brelocat(?:e|ing|ed)\b|\bout\s+of\s+state\b|\bmoving\s+(?:out|away|to)\b|\belderly\b|\bfrail\b|\btired\s+landlord\b/i],
+  ["moving on", /\brelocat(?:e|ing|ed)\b|\bout\s+of\s+state\b|\bmoving\s+(?:out|away|to)\b|\belderly\b|\bfrail\b|\btired\s+landlord\b|\b(?:seller|owner|she|he)\s+is\s+(?:[89]\d|1\d\d)\b/i],
   ["sitting", /\bsat\s+on\b|\bbeen\s+sitting\b|\bsitting\s+(?:on|for)\b|\bprice\s+(?:cut|drop|reduc)|\breduced\b|\bno\s+offers\b|\bfell\s+through\b|\bwalked\s+away\b/i],
 ];
 
@@ -127,6 +128,30 @@ const WORK_LEFT_RX = /\bneed(?:s|ing|ed)?\b|\bfixer\b|(?<!\bnot\s(?:really\s)?a\
 export function saysTurnkey(text = "") {
   const t = String(text || "");
   return hits(TURNKEY, t).length > 0 && !WORK_LEFT_RX.test(t);
+}
+
+// "Cosmetic", "paint and carpet", "just needs updating", "a facelift": the
+// agent telling us it's light work. Read only when nothing in flipRead makes
+// it a flip — "cosmetic, but the foundation's settling" is a flip.
+const COSMETIC = [
+  ["cosmetic", /\bcosmetic(?:s|ally)?\b|\blipstick\b|\bface[\s-]?lift\b|\brefresh\b|\bspruce\b|\bfreshen(?:\s+up|ing)?\b|\bupdat(?:e|es|ing)\b|\bdated\b|\bpaint\b|\bcarpet\b|\bflooring\b|\blight\s+(?:fixer|rehab|work|lift)\b|\bgood\s+(?:shape|condition|bones)\b|\blivable\b|\bTLC\b/i],
+];
+// "More than cosmetic", "not just paint": the opposite of light. "Needs some
+// work", "a project": not light either, just unclear — that gets the question.
+const MORE_THAN_LIGHT_RX = /\bmore\s+than\s+(?:just\s+|a\s+)?(?:cosmetic|a\s+refresh|refresh|paint|lipstick|updat)|\bnot\s+just\s+(?:cosmetic|paint|a\s+refresh|updat)|\bneeds?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+|real\s+)?work\b|(?<!\bnot\s(?:really\s)?a\s|\bisn'?t\sa\s)\bproject\b/i;
+
+/**
+ * saysCosmeticOnly(text, { agentRehab }) → true when their words call it light work and nothing more.
+ * Any big-ticket item named at all ("needs a roof … and cosmetic work",
+ * "probably a new roof, carpet, paint") is not cosmetic only: the question
+ * sorts it out. 385 Glengarry and 20531 S Danvers read that way and were flips.
+ */
+export function saysCosmeticOnly(text = "", { agentRehab = 0 } = {}) {
+  const t = String(text || "");
+  if (!t.trim() || MORE_THAN_LIGHT_RX.test(t)) return false;
+  if (flipRead(t, { agentRehab }).qualifies) return false;
+  if (hits(MAJOR, t).length) return false;
+  return hits(COSMETIC, t).length > 0;
 }
 
 // Our one question. A few wordings, so a day of them doesn't read as a form.
@@ -245,6 +270,67 @@ export function qualifyStep({ words = "", asked = false, passed = false, agentRe
   if (passed) return { move: "closed", read, reply: "Appreciate it. Keep me in mind if anything rougher comes up." };
   // `callAsk`: the ask and the pass carry the call ask (FIXERS_CALL_ASKS).
   if (asked || saysTurnkey(words)) return { move: "pass", read, reply: pick(callAsk ? QUALIFY_PASSES_CALL : QUALIFY_PASSES, variant) };
+  return { move: "ask", read, reply: pick(callAsk ? QUALIFY_ASKS_CALL : QUALIFY_ASKS, variant) };
+}
+
+// "It had 56k in work done before it was listed" (217 N French Ave,
+// 2026-10-16), "they put 40k into repairs": money already spent on the house
+// is not a rehab budget. A figure for work is a budget only when the words
+// around it don't say it's done.
+const PAST_WORK_AFTER_RX = /^\s*(?:already\s+)?(?:done|completed|finished|put\s+in(?:to)?|invested|spent|sunk)\b/i;
+const PAST_WORK_BEFORE_RX = /\b(?:put|spent|invested|sunk|poured|did|they(?:'ve|\s+have)\s+(?:done|put|spent))\s+(?:\w+\s+){0,3}$/i;
+/** isPastWork(text, index, length) → true when the figure at text[index…] is work already done. */
+export function isPastWork(text = "", index = 0, length = 0) {
+  const t = String(text || "");
+  const before = t.slice(Math.max(0, index - 40), index).split(/[.!?\n;]/).pop();
+  const after = t.slice(index + length, index + length + 40).split(/[.!?\n;]/)[0];
+  return PAST_WORK_AFTER_RX.test(after) || PAST_WORK_BEFORE_RX.test(before);
+}
+
+// "Probably 50-75K in updates", "about 60k of work", "rehab around 80,000":
+// a work budget in their words, the low end of a range (29308 158th Ave E,
+// 2026-10-07, was a flip the cosmetic word "updates" would have passed).
+const WORK_BUDGET_RX = /\$?\s*(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(k\b)?(?:\s*(?:-|–|to)\s*\$?\s*\d+(?:\.\d+)?\s*(k\b)?)?\s+(?:in|of|for)\s+(?:updates|updating|work|repairs|rehab|renovations?|remodel(?:ing)?|improvements)\b|\b(?:rehab|repairs|work|updates)\s+(?:of|around|about|at|is|runs?|would\s+be)\s+(?:about\s+|around\s+)?\$?\s*(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(k\b)?/i;
+/** workBudgetIn(text) → dollars of work they named, or 0. */
+export function workBudgetIn(text = "") {
+  const t = String(text || "");
+  const m = t.match(WORK_BUDGET_RX);
+  if (!m || isPastWork(t, m.index, m[0].length)) return 0;
+  // "50-75K": the K on the top of a range is the K on its bottom too.
+  const [num, k] = m[1] ? [m[1], m[2] || m[3]] : [m[4], m[5]];
+  const n = Number(String(num).replace(/,/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  const dollars = k ? n * 1000 : n;
+  return dollars >= 1000 && dollars < 5000000 ? Math.round(dollars) : 0;
+}
+
+/**
+ * broughtStep({ words, asked, passed, offMarket, sellerAsk, agentRehab, variant, callAsk }) → { move, read, reply }
+ *
+ * The same screen for a house the agent brings up themselves
+ * (parties.agent.qualifyFirst.brought, Matt 2026-10-16). Read against 132 of
+ * them: 47 were real flips and both live contracts were among them, but 51
+ * were houses the agent had already called cosmetic or turnkey, and the
+ * machine's number on those died.
+ *
+ *   "underwrite"  real trouble in their words; or off-market with the
+ *                 seller's number (7034 S K St: an off-market cosmetic fixer
+ *                 at $250K became a contract); or still unclear after our
+ *                 question — their own house is worth Matt's look
+ *   "pass"        cosmetic or turnkey in their words
+ *   "ask"         unclear, and we haven't asked: our one question
+ *   "closed"      we already passed and it still doesn't qualify
+ */
+export function broughtStep({ words = "", asked = false, passed = false, offMarket = false, sellerAsk = 0, agentRehab: given = 0, variant = 0, callAsk = false } = {}) {
+  const agentRehab = Math.max(Math.round(Number(given) || 0), workBudgetIn(words));
+  const read = flipRead(words, { agentRehab });
+  if (read.qualifies) return { move: "underwrite", read, reply: "" };
+  if (offMarket && Number(sellerAsk) > 0) return { move: "underwrite", read: { ...read, why: "off-market, with the seller's number" }, reply: "" };
+  if (passed) return { move: "closed", read, reply: "Appreciate it. Keep me in mind if anything rougher comes up." };
+  if (saysTurnkey(words) || saysCosmeticOnly(words, { agentRehab })) {
+    return { move: "pass", read, reply: pick(callAsk ? QUALIFY_PASSES_CALL : QUALIFY_PASSES, variant) };
+  }
+  if (asked) return { move: "underwrite", read: { ...read, why: "their own house, still unclear after our question" }, reply: "" };
   return { move: "ask", read, reply: pick(callAsk ? QUALIFY_ASKS_CALL : QUALIFY_ASKS, variant) };
 }
 

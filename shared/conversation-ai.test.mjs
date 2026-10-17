@@ -702,3 +702,14 @@ test("the high-stakes range and the listed-house seller number default off and s
   assert.equal(inv.listedFirst.enabled, false, "agents only");
   assert.equal(inv.realmCheck.highStakes.enabled, false, "agents only");
 });
+
+test("the screen for houses the agent brings (qualifyFirst.brought) is kept on save, off by default, agents only", () => {
+  const off = normalizeConversationAi({});
+  assert.equal(off.parties.agent.qualifyFirst.brought, false);
+  const on = normalizeConversationAi({ parties: { agent: { qualifyFirst: { enabled: true, brought: true } }, investor: { qualifyFirst: { brought: true } } } });
+  assert.equal(on.parties.agent.qualifyFirst.brought, true);
+  assert.equal(on.parties.agent.qualifyFirst.enabled, true);
+  assert.equal(on.parties.investor.qualifyFirst.brought, false);
+  // A round trip through the normaliser keeps it (a dropped key is a switch that turns itself off on save).
+  assert.equal(normalizeConversationAi(on).parties.agent.qualifyFirst.brought, true);
+});

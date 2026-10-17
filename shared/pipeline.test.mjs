@@ -46,6 +46,31 @@ test("a house that isn't single-family asks whether to price it at all: pass, or
   assert.deepEqual(a.ops.map((o) => [o.key, o.label]), [["underwrite_anyway", "Underwrite anyway"], ["drop", "Pass on it"]]);
 });
 
+test("a house an agent named, drafted for Matt to price, is a Price it row with what they said and the listing's facts", () => {
+  // Draft only (2026-10-16): the app made the draft; nothing prices it unless he does.
+  const r = build({ offers: [offer({ status: "draft", sends: [], cashAmount: null, address: "4417 Somerset Ln, Everett, WA 98203",
+    autoUnderwrite: { jobId: "j1", draftOnly: true, finishedAt: D(0), message: "Needs a new roof and   the kitchen is gutted",
+      subjectLine: "3 bd · 1.75 ba · 1,480 sqft · built 1962 · listed $525,000",
+      held: ["ready for your comps — the app made the draft, you price it"] } })] });
+  assert.equal(laneOf(r, "o1"), "needs_review");
+  assert.ok(!r.actions.some((x) => x.kind === "underwrite_held"), "not an underwrite that needs a look");
+  const a = r.actions.find((x) => x.kind === "price_it");
+  assert.ok(a);
+  assert.equal(a.severity, "now");
+  assert.equal(a.title, "Price it: 4417 Somerset Ln, Everett, WA 98203");
+  assert.match(a.detail, /3 bd · 1\.75 ba · 1,480 sqft · built 1962 · listed \$525,000/);
+  assert.match(a.detail, /they said "Needs a new roof and the kitchen is gutted"/);
+  assert.deepEqual(a.ops.map((o) => [o.key, o.label]), [["open_editor", "Price it"], ["mark_we_passed", "Pass"]]);
+  assert.ok(ACTION_KINDS.some((k) => k.key === "price_it"));
+});
+
+test("a drafted house Matt priced is an offer, not a Price it row", () => {
+  const r = build({ offers: [offer({ status: "new", cashAmount: 311000, sends: [],
+    autoUnderwrite: { jobId: "j1", draftOnly: true, finishedAt: D(1), publishedAt: D(0),
+      held: ["ready for your comps — the app made the draft, you price it"] } })] });
+  assert.ok(!r.actions.some((x) => x.kind === "price_it"));
+});
+
 test("a held draft a person published is a priced offer, not a look nobody took", () => {
   const r = build({ offers: [offer({ status: "new", cashAmount: 429000, sends: [], proactive: { realmCheckAt: D(1) },
     autoUnderwrite: { jobId: "j1", held: ["only 1 listing photo to scan"], finishedAt: D(1), publishedAt: D(1) } })] });

@@ -42,7 +42,7 @@ import { deriveArv, timeTrend, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
 import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
-import { fmtMoney, calculateOffers } from "./shared/offer-calc.js";
+import { fmtMoney, calculateOffers, underwriteMode } from "./shared/offer-calc.js";
 import { offMarketSignals, OFF_MARKET_TAG } from "./shared/off-market.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
 import { threadPassed } from "./shared/flip-read.js";
@@ -50,7 +50,7 @@ import { leadSourceOf, theirNumberCheck } from "./shared/lead-source.js";
 import { buyerCeiling } from "./shared/post-mortem.js";
 import { markSides, sameSideFirst, isAcross, acrossLabel } from "./shared/same-side.js";
 import { addressKey, completeAddress, sameStreet, sameHouse } from "./shared/us-address.js";
-import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed } from "./shared/offer-status.js";
+import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed, DRAFT_ONLY_HOLD } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
 import { buildTranscript } from "./enrich.js";
 import {
@@ -63,6 +63,7 @@ import { currentFacts } from "./shared/contact-record.js";
 import { propertyDossier } from "./shared/contact-record.js";
 import { VALUE_HOLD, WORK_HOLD, STRUCTURAL_HOLD } from "./shared/held-underwrites.js";
 import { mostRecentlyMentioned } from "./shared/us-address.js";
+import { otherStreetIn } from "./shared/mentioned-houses.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { meterAi } from "./ai-spend.js";
 
@@ -1187,6 +1188,10 @@ async function note(client, contactId, body, warnings) {
 export async function startUnderwrite({
   client, locationId, saved, store, contactId, message, address, askingPrice, dryRun, deps, origin = "workflow", fill = false,
   queueIfCapped = false, replaceOfferId = null, retryOf = null, anyKind = false,
+  // FULL: a person pressed Re-run, Retry or Run it now. With
+  // autoUnderwriteMode "draft" a run the conversation starts stops at the
+  // draft; one a person asks for prices the house in full.
+  full = false,
   // The buyer-view checks (shared/underwrite-checks.js): `forceChecks` runs
   // them whatever the saved switch says (the backtest); `declined` is what a
   // person removed on the editor; `quiet` is the backtest's no-trace mode.
@@ -1261,6 +1266,10 @@ export async function startUnderwrite({
     // hold. The run skips that one hold and nothing else — every other gate
     // and dedupe still applies, and it makes the offer like any other run.
     anyKind: Boolean(anyKind),
+    full: Boolean(full),
+    // Set when the run stopped at the draft (autoUnderwriteMode "draft").
+    draftOnly: false,
+    subjectLine: "",
     forceChecks: Boolean(forceChecks),
     quiet: Boolean(quiet),
     declined: declined && typeof declined === "object" ? declined : null,
@@ -1555,6 +1564,24 @@ async function runUnderwrite(job, ctx) {
     return finishHeld(job, ctx, { extraction, held: ["no property address in the message"], partial: {} });
   }
 
+  // Their text is about another street (2026-10-16). "Address - 129 39 SE
+  // 188th ST Renton" priced 311 R St NE, and "talking to my friend about
+  // 12939 SE. - 188th St." priced 715 141st St S: the run took the house the
+  // thread had been on. When the words that started it name a street and
+  // none of them is this one, nothing is looked up: the draft is for the
+  // street they named, held as an address to confirm with them.
+  if (["workflow", "thread", "subject_property"].includes(extraction.source)) {
+    const other = otherStreetIn(job.message, extraction.address);
+    if (other) {
+      warnings.push(`their text names ${other}, not ${extraction.address} — not priced`);
+      return finishHeld(job, ctx, {
+        extraction: { ...extraction, address: other },
+        held: [`couldn't locate "${other}" on the map — their text is about it, not ${extraction.address}`],
+        partial: {},
+      });
+    }
+  }
+
   // Resolve the address BEFORE anything is looked up with it, and work from
   // the address that resolved.
   //
@@ -1721,6 +1748,31 @@ async function runUnderwrite(job, ctx) {
     got.subject = subjectOnly;
     return finishHeld(job, ctx, { extraction, held: [kindHeld], partial: {
       compsData: null, subject: subjectOnly, subjectSqft: Number(facts?.sqft) || 0, grades: {}, rehabbed: null, arv: null, rehabState: null, scope: [], repairs: null,
+    } });
+  }
+
+  /* --- 2b. draft only: stop here, Matt prices it (2026-10-16) --- */
+  // Read against 363 runs: Matt redid the comps or the number on 43% of the
+  // machine's offers, half the numbers that went out untouched were wrong,
+  // and every agent's "yes" to one was to a number we then walked back. So
+  // in draft mode the conversation's run ends at the listing: the agent, the
+  // address and the house's facts on a draft, held for him — no comps
+  // bought, no photo scan, no number, nothing floated. A run a person starts
+  // (Re-run, Retry, Underwrite anyway, the editor) goes on in full.
+  if (underwriteMode(saved) === "draft" && !job.fill && !job.full && !job.anyKind && !job.quiet && job.origin !== "operator") {
+    const subjectOnly = {
+      lat: resolved?.lat ?? null, lng: resolved?.lng ?? null,
+      beds: facts?.beds ?? null, baths: facts?.baths ?? null, sqft: facts?.sqft ?? null, yearBuilt: facts?.yearBuilt ?? null,
+      lotSqft: facts?.lotSqft ?? null, homeType: facts?.homeType ?? null, units: facts?.units ?? null,
+      stories: null, subdivision: null, material: null,
+    };
+    got.subject = subjectOnly;
+    job.draftOnly = true;
+    job.subjectLine = subjectLineOf(subjectOnly, job.listPrice);
+    const asking = extraction.askingPrice || job.listPrice || 0;
+    return finishHeld(job, ctx, { extraction: { ...extraction, askingPrice: asking }, held: [DRAFT_ONLY_HOLD], partial: {
+      compsData: null, subject: subjectOnly, subjectSqft: Number(facts?.sqft) || 0, grades: {}, rehabbed: null, arv: null, rehabState: null, scope: [], repairs: null,
+      listing, photosCount,
     } });
   }
 
@@ -2739,7 +2791,26 @@ function auditTrail(job, extraction, gate) {
     photosAnalyzed: job.photosAnalyzed,
     arvBasis: job.arvBasis,
     passed: Boolean(gate?.ok),
+    // Draft only: the house in one line for the Today row, which reads the
+    // lean offer row and never the draft itself.
+    ...(job.draftOnly ? { draftOnly: true, subjectLine: job.subjectLine || "" } : {}),
   };
+}
+
+/**
+ * subjectLineOf(subject, listPrice) → "3 bd · 1.75 ba · 1,480 sqft · built 1962 · listed $525,000"
+ * Whatever the listing told us, in that order; blank parts are left out.
+ */
+export function subjectLineOf(s = {}, listPrice = 0) {
+  const n = (v) => (Number(v) > 0 ? Number(v) : null);
+  return [
+    n(s?.beds) != null ? `${n(s.beds)} bd` : "",
+    n(s?.baths) != null ? `${n(s.baths)} ba` : "",
+    n(s?.sqft) != null ? `${Math.round(n(s.sqft)).toLocaleString("en-US")} sqft` : "",
+    n(s?.yearBuilt) != null ? `built ${n(s.yearBuilt)}` : "",
+    n(s?.lotSqft) != null && n(s.lotSqft) >= 21780 ? `${Math.round((n(s.lotSqft) / 43560) * 10) / 10} acres` : "",
+    n(listPrice) != null ? `listed ${fmtMoney(n(listPrice))}` : "",
+  ].filter(Boolean).join(" · ");
 }
 
 /* ---------- the notes a human reads ---------- */
@@ -2771,6 +2842,14 @@ function heldNote(job, held) {
   // (Apify 402)", which is the difference between a house with no pictures and
   // an account out of credits. They were collected and then shown to nobody.
   const warnings = (job.warnings || []).slice(0, 6);
+  if (job.draftOnly) {
+    return [
+      `Draft ready for your comps — ${job.address || "no address found"}.`,
+      ...(job.subjectLine ? [``, job.subjectLine] : []),
+      ``,
+      `No comps were pulled and nothing was priced or sent. Open the draft in the app to price it.`,
+    ].join("\n");
+  }
   return [
     `Auto-underwrite held for review — ${job.address || "no address found"}.`,
     ``,

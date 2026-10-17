@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { flipRead, qualifyStep, QUALIFY_ASKS, QUALIFY_ASK_RX, QUALIFY_PASSES } from "./flip-read.js";
+import { flipRead, qualifyStep, QUALIFY_ASKS, QUALIFY_ASK_RX, QUALIFY_PASSES, broughtStep, saysCosmeticOnly, workBudgetIn } from "./flip-read.js";
 
 // The kinds of answer to our first text that, on 2026-10-08, each started an
 // underwrite (paraphrased); the vague ones should have bought one question.
@@ -158,4 +158,57 @@ test("withFixersAsk ends a reply on one ask for other fixers, and leaves a reply
   const swapped = withFixersAsk("Thanks! Keep me in mind?", 2);
   assert.doesNotMatch(swapped, /keep me in mind/i, "the stay-in-touch question is taken over");
   assert.equal((swapped.match(/\?/g) || []).length <= 1, true);
+});
+
+/* ---------- houses the agent brings us (qualifyFirst.brought, 2026-10-16) ---------- */
+
+test("a work budget in their words is read, the low end of a range, and a list price or a year is not", () => {
+  assert.equal(workBudgetIn("Probably 50-75K in updates"), 50000);
+  assert.equal(workBudgetIn("about 60k of work"), 60000);
+  assert.equal(workBudgetIn("rehab around 80,000"), 80000);
+  assert.equal(workBudgetIn("$45,000 in updates"), 45000);
+  assert.equal(workBudgetIn("listed at 550k"), 0);
+  assert.equal(workBudgetIn("built in 1962"), 0);
+  assert.equal(workBudgetIn("2 to 3 weeks of work"), 0);
+});
+
+test("cosmetic only means light words and nothing big-ticket, nothing vague, nothing distressed", () => {
+  assert.equal(saysCosmeticOnly("Mainly paint and carpet, pretty dated"), true);
+  assert.equal(saysCosmeticOnly("Cosmetic fixer"), true);
+  // The flips the first read would have passed (backtest on 132 brought houses).
+  assert.equal(saysCosmeticOnly("Seller is 99 years old. Needs a roof, repairs on deck and cosmetic work."), false);
+  assert.equal(saysCosmeticOnly("Probably a new roof Carpet doors paint appliances Windows are good"), false);
+  assert.equal(saysCosmeticOnly("Rambler, needs some work and updates"), false, "vague: the question sorts it");
+  assert.equal(saysCosmeticOnly("More than cosmetic, it's dated throughout"), false);
+  assert.equal(saysCosmeticOnly("Cosmetic, but the foundation is settling"), false);
+  assert.equal(saysCosmeticOnly(""), false);
+});
+
+test("a house the agent brings: trouble drafts it, cosmetic passes, unclear asks once, and still unclear after that drafts it", () => {
+  assert.equal(broughtStep({ words: "Hoarder house, needs everything" }).move, "underwrite");
+  assert.equal(broughtStep({ words: "Probably 50-75K in updates" }).move, "underwrite", "their own budget");
+  assert.equal(broughtStep({ words: "Just needs paint and carpet" }).move, "pass");
+  assert.match(broughtStep({ words: "Just needs paint and carpet" }).reply, /on or off-market|listed or off-market/);
+  assert.equal(broughtStep({ words: "It's turnkey, fully remodeled" }).move, "pass");
+  assert.equal(broughtStep({ words: "Have this one for you, 4417 Somerset Ln" }).move, "ask");
+  assert.equal(broughtStep({ words: "It needs some work", asked: true }).move, "underwrite", "their own house: worth Matt's look");
+  assert.equal(broughtStep({ words: "Just needs paint", passed: true }).move, "closed");
+});
+
+test("an off-market cosmetic house with the seller's number is still drafted (7034 S K St became a contract)", () => {
+  const s = broughtStep({ words: "7034 South K. $250,000. Off market. Cosmetic fixer", offMarket: true, sellerAsk: 250000 });
+  assert.equal(s.move, "underwrite");
+  assert.match(s.read.why, /off-market, with the seller's number/);
+  assert.equal(broughtStep({ words: "Cosmetic fixer", offMarket: true, sellerAsk: 0 }).move, "pass", "no number: the pass");
+});
+
+// 217 N French Ave (2026-10-16): "It had 56k in work done before it was
+// listed. Still needs updating." read as a 56k rehab budget, so a refresh was
+// called a flip, underwritten, and floated at 611 on a 716 ask.
+test("work already done is not a rehab budget, so a house with 56k of work done gets the question", async () => {
+  const said = "It had 56k in work done before it was listed.  Still needs updating.  It was built in 1967.";
+  assert.equal(workBudgetIn(said), 0);
+  assert.equal(workBudgetIn("they put 40k into repairs last year"), 0);
+  assert.equal(workBudgetIn("about 60k of work left"), 60000, "work still to do is");
+  assert.equal(qualifyStep({ words: said }).move, "ask");
 });
