@@ -437,6 +437,34 @@ export function pricesWeName(text = "", reference = 0) {
   return [...out];
 }
 
+// What the house is worth fixed up, in our words: "842k fixed up", "comps
+// closer to 842k", "ARV around 842k". The value only — never the work, the
+// list price or a cost.
+const VALUE_AFTER = /^\s*(?:arv\b|after[- ]repairs?\b|(?:once\s+)?(?:it'?s\s+)?(?:fixed(?:\s+up)?|done|finished|renovated|updated|remodeled|flipped)\b|retail\b|(?:on\s+)?resale\b)/i;
+const VALUE_BEFORE = /(?:\barv|after[- ]repair value|\bworth|\bvalued?|\bcomps?\b[^.!?\d$]{0,24}|\bresale|\bretail|\bsells?\s+for|\bsold\s+(?:for|at))\s*(?:is|of|at|=|:|around|about|~|closer\s+to|more\s+like|near|for|in\s+the)?\s*$/i;
+
+/**
+ * valuesWeName(text, reference) → [dollars]
+ *
+ * The values a reply of ours puts on the house fixed up. The reply gate
+ * holds one above what the agent told us it's worth (15426 Stone Ave N,
+ * 2026-10-16: "650–680 fixed up" answered with "we're actually seeing comps
+ * closer to 842k fixed up"). `reference` steers the shorthand ("closer to
+ * 842") the way pricesWeName's does. Pure.
+ */
+export function valuesWeName(text = "", reference = 0) {
+  const t = String(text || "");
+  const out = new Set();
+  const value = (start, end) => VALUE_AFTER.test(t.slice(end, end + 28)) || VALUE_BEFORE.test(t.slice(Math.max(0, start - 40), start));
+  for (const m of t.matchAll(LINE_MONEY_RX)) {
+    if (!value(m.index, m.index + m[0].length)) continue;
+    const n = toDollars(m[0]);
+    if (n > 0) out.add(n);
+  }
+  for (const h of shorthandHits(t, reference)) if (value(h.start, h.end)) out.add(h.v);
+  return [...out];
+}
+
 /**
  * ourMoveUp(offer, transcript) → { amount, ts, text } | null
  *

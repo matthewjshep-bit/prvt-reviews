@@ -1366,6 +1366,48 @@ Both halves live in `shared/number-stance.js` (pure).
   question. Offers with `noFit` show on Today; `GET /api/offers/:id` shows
   `noFit` and `paperHeld`.
 
+### The agent's own numbers only ever lower ours (2026-10-16)
+
+An agent brought us a Shoreline house and said it was worth 650–680K fixed up
+and needed 80–100K of work. Zillow had no record of the house. The rough pass
+guessed its size from the comps and stretched three small sales to 842K. The
+bot texted "we're actually seeing comps closer to 842k fixed up", then
+"around 531.5k". He said yes. On his own numbers it is about 380K. The county
+has no house at that number, so the address was probably wrong too.
+
+- **No record of the house, no number.** The map places an address whether
+  or not a house stands there. A subject with a point but no size, beds, baths,
+  year built, home type or lot (`knowsTheHouse` in auto-underwrite.js) holds
+  with `NO_HOUSE_RECORD`. That reason is an address hold:
+  - the triage asks the agent to confirm the address;
+  - no rough number or rescue prices past it;
+  - the comps' size is never lent to such a house.
+
+  Over 2026-10-05 to 10-16 this would have held 3 of the 19 rough numbers
+  (Shoreline, a 1.19M Redmond offer, and a Puyallup house).
+- **Their value under ours prices the house** (`theirNumbersBound`, pure). It
+  takes the agent's value (the dossier's `agent_estimate`) when it is under
+  ours, with or without a list price. A higher value of theirs changes nothing
+  here; that is the rescue's and the re-quote's. It runs after the rescue and
+  the rough pass, on clean runs too. The offer carries `autoUnderwrite.agentValue
+  {theirs, ours}`, and the basis reads "their 665k value (our comps read
+  842k)".
+- **Their repairs over ours are budgeted.** A repair figure of theirs above
+  ours replaces ours. A lower one leaves ours alone (the rescue's own
+  quarter-cut is unchanged).
+- **The reply never argues the value up.** Once they've said what it's worth,
+  `evaluateReplyGates` holds a draft that names a value above theirs (more
+  than 5%; `valuesWeName` in shared/current-offer.js reads "842k fixed up",
+  "comps closer to 842k", "ARV around 842k"). It also holds our own ARV said
+  back within 2% without a value word. Their own figures may be echoed. Their
+  value comes from this message's take (the model's, else `agentTakeFromText`,
+  which now reads "value fixed up could be" followed by two figures), else their
+  timeline (`theirValueFor`). Outbound texts read it from the dossier. Before
+  they've said, floating our ARV to get theirs (the take check) is unchanged.
+- **Check it.** `GET /api/offers/:id` → `autoUnderwrite.agentValue`, and the
+  `warnings` "priced on their … value" / "repairs at their …". A held reply
+  shows "… for what it's worth fixed up — they said …".
+
 ### The current offer — one live row per house (2026-09-25)
 
 13041 SE 208th St, Kent. Five offer rows on one house: a July offer, two

@@ -702,6 +702,18 @@ export function gradeByPriceProxy(nearby = [], { subjectSqft = 0 } = {}) {
 
 /* ---------- the gates ---------- */
 
+// Worded as the map hold is, so the triage asks the agent to confirm the
+// address (shared/held-underwrites.js ADDRESS_HOLD) and no rough number or
+// rescue prices past it (ROUGH_NEVER).
+export const NO_HOUSE_RECORD = "that address didn't resolve to a property record — the map placed it, " +
+  "but there's no size, beds, baths or year built for a house there; check the house number with the agent";
+
+// Anything at all about the house itself, beyond where the map put it.
+export function knowsTheHouse(subject) {
+  const has = (v) => v != null && v !== "" && !(typeof v === "number" && !(v > 0));
+  return Boolean(subject) && ["sqft", "beds", "baths", "yearBuilt", "homeType", "lotSqft"].some((k) => has(subject[k]));
+}
+
 /**
  * Everything that has to be true before an unattended run is allowed to
  * publish an offer. Pure — this is the function to read (and to test) if you
@@ -724,6 +736,14 @@ export function evaluateGates({
 
   if (!subject || subject.lat == null) {
     held.push("that address didn't resolve to a property record");
+  }
+  // The map places an address whether or not a house stands there. On
+  // 2026-10-16 an agent texted a Shoreline house number the county has no
+  // record of; it placed mid-block, Zillow came back with nothing at all
+  // about the house, and a rough pass priced it on the comps' size. Nothing
+  // known about the house is a wrong address until someone checks it.
+  else if (!knowsTheHouse(subject)) {
+    held.push(NO_HOUSE_RECORD);
   }
   // Without the subject's floor area, two things quietly go wrong at once: the
   // comp search runs with no size filter, and deriveArv falls back to a plain
@@ -878,6 +898,30 @@ export function agentNumbersRescue({
     needRepairs ? `their ${k(theirRehab)} repairs` : "",
   ].filter(Boolean).join(" and ");
   return { value, fix, capped, basis: `priced on the agent's numbers — ${used} — because ${String(held[0]).split(" — ")[0]}` };
+}
+
+/**
+ * theirNumbersBound({ arv, repairs, theirArv, theirRehab })
+ *   → { arv, repairs, arvLowered, repairsRaised }
+ *
+ * What the agent told us only ever lowers our number. A house an agent
+ * brought us in Shoreline (2026-10-16): he said 650–680K fixed up and
+ * 80–100K of work; our comps read 842K and a light 70K, and we floated
+ * 531.5K — about 150K over what his own figures leave. The rescue above
+ * prices on their value only with a list price to cap it to, and a house
+ * an agent brings rarely has one. A cap is only needed for a value ABOVE
+ * ours, so a value under ours is taken as it stands, and a repair figure
+ * over ours is budgeted. Higher values and lower repairs change nothing
+ * here. Pure.
+ */
+export function theirNumbersBound({ arv = 0, repairs = 0, theirArv = 0, theirRehab = 0 } = {}) {
+  const ours = Math.round(Number(arv) || 0);
+  const fix = Math.round(Number(repairs) || 0);
+  const value = Math.round(Number(theirArv) || 0);
+  const work = Math.round(Number(theirRehab) || 0);
+  const arvLowered = ours > 0 && value > 0 && value < ours;
+  const repairsRaised = work > fix;
+  return { arv: arvLowered ? value : ours, repairs: repairsRaised ? work : fix, arvLowered, repairsRaised };
 }
 
 /* ---------- a rough number instead of a hold (2026-10-08) ---------- */
@@ -1875,7 +1919,9 @@ async function runUnderwrite(job, ctx) {
   const roughOn = !job.fill && roughNumbersOn(saved);
   let sqftSource = Number(subject?.sqft) > 0 ? "listing" : null;
   let sqftFilled = 0;
-  if (roughOn && subject && subject.lat != null && !(Number(subject.sqft) > 0)) {
+  // Not for a house nothing is known about: that is the address to check
+  // (NO_HOUSE_RECORD), and a size borrowed from the comps would hide it.
+  if (roughOn && subject && subject.lat != null && !(Number(subject.sqft) > 0) && knowsTheHouse(subject)) {
     sqftFilled = medianSqft(nearby.length ? nearby : compsData?.comps || []);
     if (sqftFilled > 0) {
       subject.sqft = sqftFilled;
@@ -2209,6 +2255,22 @@ async function runUnderwrite(job, ctx) {
     warnings.push(`rough number: ${rough.reasons.map((r) => String(r).split(" — ")[0]).join("; ")}` +
       (rough.repairsSource === "tier" ? ` — repairs budgeted at the top of the ${rough.tier} band, ${fmtMoney(rough.fix)}` : ""));
   }
+  // Their value under ours prices the house; their repairs over ours are
+  // budgeted (theirNumbersBound). After the rescue and the rough pass, so
+  // whichever number they made, the agent's own figures bound it.
+  const bound = theirNumbersBound({ arv: arvForOffer, repairs, theirArv, theirRehab });
+  let agentValue = null;
+  if (bound.arvLowered) {
+    const k = (v) => `${Math.round(v / 1000)}k`;
+    agentValue = { theirs: bound.arv, ours: arvForOffer };
+    warnings.push(`priced on their ${k(bound.arv)} value — our comps read ${k(arvForOffer)}`);
+    job.arvBasis = `their ${k(bound.arv)} value (our comps read ${k(arvForOffer)})${job.arvBasis ? ` — ${job.arvBasis}` : ""}`;
+    arvForOffer = bound.arv;
+  }
+  if (bound.repairsRaised) {
+    warnings.push(`repairs at their ${fmtMoney(bound.repairs)} — we had ${fmtMoney(repairs)}`);
+    repairs = bound.repairs;
+  }
   // Held after all: a size the comps lent is not a size we know — say so.
   const heldReasons = sqftFilled && !gate.ok ? [sqftHeld, ...gate.held] : gate.held;
   // Manufactured homes and luxury listings are priced, but aren't the core.
@@ -2288,6 +2350,7 @@ async function runUnderwrite(job, ctx) {
     ...(rough ? { basis: "rough", rough: rough.reasons.slice(0, 6), numberConfidence: "low",
       ...(sqftSource ? { sqftSource } : {}), repairsSource: rough.repairsSource, ...(rough.tier ? { repairsTier: rough.tier } : {}) } : {}),
     ...(nonCore ? { nonCore: true } : {}),
+    ...(agentValue ? { agentValue } : {}),
   };
   // Off-market (shared/off-market.js): the agent said so, or Zillow shows it
   // coming soon or not listed. Our best deals — marked the moment they land.
@@ -2333,7 +2396,7 @@ async function runUnderwrite(job, ctx) {
   }
 
   await setTag(client, job.contactId, UW_TAGS.done, warnings);
-  await note(client, job.contactId, doneNote(job, rescued ? { ...(arv || {}), arv: arvForOffer } : arv, repairs), warnings);
+  await note(client, job.contactId, doneNote(job, rescued || agentValue ? { ...(arv || {}), arv: arvForOffer } : arv, repairs), warnings);
 
   // Numbers are back: the Conversation AI may float them to the agent as a
   // soft number before the formal offer goes. Wired by the route; a failure
