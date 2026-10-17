@@ -532,3 +532,17 @@ test("a number is approved when a person owns it, and a machine move takes the a
   assert.equal(asksForWriteUp(agreed), false);
   assert.equal(asksForWriteUp({ ...agreed, approved: { amount: 410000, at: at(12), by: "today" } }), true);
 });
+
+import { WE_PASS_REASONS, parseStatusKey, wePassedKey, wePassReasonOf, normalizeWePassReason } from "./offer-status.js";
+
+test("why we passed: a few buckets, carried on the status menu's key", () => {
+  assert.deepEqual(WE_PASS_REASONS.map((r) => r.code), ["turnkey", "neighborhood", "rural", "comps", "property_type"]);
+  assert.deepEqual(parseStatusKey(wePassedKey("rural")), { status: "we_passed", reason: "rural" });
+  assert.deepEqual(parseStatusKey("we_passed"), { status: "we_passed", reason: null });
+  assert.deepEqual(parseStatusKey("we_passed:vibes"), { status: "we_passed", reason: null });
+  assert.deepEqual(parseStatusKey("passed:rural"), { status: "passed", reason: null }, "only our pass has a reason");
+  assert.equal(normalizeWePassReason("toString"), null, "not an inherited key");
+  assert.equal(wePassReasonOf({ status: "we_passed", passReason: { code: "turnkey" } }).label, "Too turnkey");
+  assert.equal(wePassReasonOf({ status: "sent", passReason: { code: "turnkey" } }), null);
+  assert.equal(wePassReasonOf({ status: "we_passed" }), null);
+});

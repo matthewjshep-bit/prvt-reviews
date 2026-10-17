@@ -19,6 +19,7 @@ import { offMarketOf } from "@shared/off-market.js";
 import { paperHeldNow } from "@shared/current-offer.js";
 import {
   OFFER_STATUS, OFFER_STATUS_KEYS, SETTABLE_STATUSES, DEAD_STATUSES, effectiveStatus, offerHeat,
+  WE_PASS_REASONS, wePassedKey, wePassReasonOf,
 } from "@shared/offer-status.js";
 import { EVENT_LABEL } from "@shared/contact-record.js";
 
@@ -111,8 +112,10 @@ export function StatusPill({ offer, small }) {
   if (offer.deal) return <StagePill stage={offer.deal.stage} small={small} />;
   const key = effectiveStatus(offer);
   const s = OFFER_STATUS[key] || { label: key, cls: "bg-slate-100 text-slate-600" };
+  // Why we passed, when he said: "We passed · Rural".
+  const why = key === "we_passed" ? wePassReasonOf(offer) : null;
   // No expiry marker: an offer stands until the agent answers.
-  return <Pill label={s.label} cls={s.cls} small={small} />;
+  return <Pill label={why ? `${s.label} · ${why.short}` : s.label} cls={s.cls} small={small} />;
 }
 
 // The CRM write can partially fail (fields saved, tag didn't). That's rare and
@@ -233,6 +236,31 @@ export function PaperHeldBanner({ offer, onRequote, busy = false }) {
   );
 }
 
+/**
+ * statusItems(offer, onSelect) → the status menu's outcome items.
+ * "We passed" is picked with its reason (Matt, 2026-10-17): one item per
+ * bucket (WE_PASS_REASONS), so every pass says why and the bot can tell the
+ * agent. On a house already passed, another bucket corrects the reason.
+ */
+export function statusItems(offer, onSelect) {
+  const current = effectiveStatus(offer);
+  const why = wePassReasonOf(offer);
+  // A draft has no documents yet, so it can't become a deal from here.
+  return SETTABLE_STATUSES.filter((key) => !(offer.status === "draft" && key === "accepted")).flatMap((key) => (key === "we_passed"
+    ? WE_PASS_REASONS.map((r) => ({
+      key: wePassedKey(r.code),
+      label: `We passed: ${r.label.toLowerCase()}${r.hint ? ` (${r.hint})` : ""}`,
+      selected: current === "we_passed" && why?.code === r.code,
+      onSelect: () => onSelect?.(wePassedKey(r.code)),
+    }))
+    : [{
+      key,
+      label: key === "accepted" ? "Accepted → track as deal" : OFFER_STATUS[key].label,
+      selected: key === current,
+      onSelect: () => onSelect?.(key),
+    }]));
+}
+
 export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
   // A promoted offer's outcome is settled; the pill becomes a link to the deal.
   if (offer.deal) {
@@ -244,13 +272,7 @@ export function StatusMenu({ offer, onSelect, busy, onDealNav }) {
     );
   }
   const current = effectiveStatus(offer);
-  // A draft has no documents yet, so it can't become a deal from here.
-  const items = SETTABLE_STATUSES.filter((key) => !(offer.status === "draft" && key === "accepted")).map((key) => ({
-    key,
-    label: key === "accepted" ? "Accepted → track as deal" : OFFER_STATUS[key].label,
-    selected: key === current,
-    onSelect: () => onSelect?.(key),
-  }));
+  const items = statusItems(offer, onSelect);
   // Heat is a flag beside the status, not one of them: a hot offer is still
   // sent or countered. Dead offers and deals can't be hot, so no item there.
   const heat = offerHeat(offer);

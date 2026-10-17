@@ -49,6 +49,8 @@ test("the agent prompt never offers a walkthrough, and never admits why", () => 
 test("a house we passed on is closed on our side — the bot never chases it or names its number", () => {
   const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
   assert.match(sys, /WE PASSED:/);
+  assert.match(sys, /WHY WE PASSED on that house and they ask why/, "the bot may give Matt's reason");
+  assert.match(sys, /never a reason the book doesn't give/);
   assert.match(sys, /do not ask whether the seller has moved/);
   assert.match(sys, /set needsHuman/);
 });

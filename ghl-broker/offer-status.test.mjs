@@ -276,3 +276,40 @@ test("the spend ledger is readable by day and feature", async () => {
   assert.equal(r.json.byFeature[0].feature, "photo_scan");
   assert.ok(r.json.totalUsd > 0.3, "60k in + 20k out on Sonnet is about 32 cents");
 });
+
+// Matt, 2026-10-17: why we passed, in a few buckets the bot can say.
+test("we passed with a reason keeps the reason on the offer, its ledger row and the lean row", async () => {
+  const o = await mkOffer();
+  const r = await req("PATCH", `/api/offers/${o.id}/status`, { status: "we_passed", reason: "rural" });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const back = await store.getOffer(o.id);
+  assert.equal(back.passReason.code, "rural");
+  assert.equal(back.passReason.by, "operator");
+  assert.equal(back.statusHistory.at(-1).reason, "rural");
+  const lean = (await store.listOffers(LOC, { contactId: "contact-1", lean: true })).find((x) => x.id === o.id);
+  assert.equal(lean.passReason.code, "rural", "the bot and the table read lean rows");
+});
+
+test("picking another reason on a house we passed on corrects it without a second pass", async () => {
+  const o = await mkOffer();
+  await req("PATCH", `/api/offers/${o.id}/status`, { status: "we_passed", reason: "comps" });
+  const rows = (await store.getOffer(o.id)).statusHistory.length;
+  const r = await req("PATCH", `/api/offers/${o.id}/status`, { status: "we_passed", reason: "neighborhood" });
+  assert.equal(r.status, 200);
+  const back = await store.getOffer(o.id);
+  assert.equal(back.passReason.code, "neighborhood");
+  assert.equal(back.statusHistory.length, rows, "no new ledger row");
+});
+
+test("a reason that isn't one of the buckets is refused, and a later status clears the old reason", async () => {
+  const o = await mkOffer();
+  assert.equal((await req("PATCH", `/api/offers/${o.id}/status`, { status: "we_passed", reason: "vibes" })).status, 400);
+  await req("PATCH", `/api/offers/${o.id}/status`, { status: "we_passed", reason: "turnkey" });
+  await req("PATCH", `/api/offers/${o.id}/status`, { status: "sent" });
+  assert.equal((await store.getOffer(o.id)).passReason, undefined, "a reopened house carries no old why");
+  await req("PATCH", `/api/offers/${o.id}/status`, { status: "we_passed" });
+  assert.equal((await store.getOffer(o.id)).passReason, undefined, "a pass with no reason has none");
+  const theirs = await req("PATCH", `/api/offers/${o.id}/status`, { status: "passed", reason: "rural" });
+  assert.equal(theirs.status, 200);
+  assert.equal((await store.getOffer(o.id)).passReason, undefined, "a reason only goes with our pass");
+});

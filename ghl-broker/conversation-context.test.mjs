@@ -121,6 +121,17 @@ test("an offer we passed on is marked closed on our side in the offer book", () 
   const r = summarizeOffers([o], { now: Date.parse("2026-09-22T20:00:00Z") });
   assert.match(r.text, /we passed on it \(withdrawn\)/);
   assert.match(r.text, /WE WALKED AWAY from this house/);
+  assert.doesNotMatch(r.text, /WHY WE PASSED/, "no reason given, none told");
+});
+
+// Matt, 2026-10-17: he marks why we passed, and the bot can say it.
+test("the reason Matt gave for passing reaches the offer book in words the bot can say", () => {
+  const o = { id: "o1", address: "88 Hilltop Rd, Enumclaw, WA 98022", cashAmount: 410000, status: "we_passed", createdAt: "2026-10-01T19:58:08Z",
+    passReason: { code: "rural", at: "2026-10-16T17:00:00Z", by: "operator" }, statusHistory: [{ ts: "2026-10-16T17:00:00Z", status: "we_passed", reason: "rural" }] };
+  const r = summarizeOffers([o], { now: Date.parse("2026-10-17T20:00:00Z") });
+  assert.match(r.text, /WHY WE PASSED \(rural\): it's too rural for our buyers/);
+  // A reason left on an offer that's no longer passed is not told.
+  assert.doesNotMatch(summarizeOffers([{ ...o, status: "sent", sends: [{ ts: "2026-10-17T00:00:00Z" }] }], { now: Date.parse("2026-10-17T20:00:00Z") }).text, /WHY WE PASSED/);
 });
 
 import { blastTagged } from "./conversation-context.js";
