@@ -733,6 +733,10 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <input type="checkbox" checked={ghlStages.mode === "on"} onChange={(e) => setGhlStages("mode")(e.target.checked ? "on" : "off")} />
           <span><span className="font-semibold">Move each agent's GHL card with their offers</span> — and make a card for an agent with a live offer and none.</span>
         </label>
+        <label className="mb-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={ghlStages.tier2Repliers} onChange={(e) => setGhlStages("tier2Repliers")(e.target.checked)} />
+          <span><span className="font-semibold">Give every agent we've talked with a Tier 2 card</span>, offer or not, so you can see who to follow up with. A lost card or one you deleted stays that way.</span>
+        </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={ghlStages.allowNurtureTrigger} onChange={(e) => setGhlStages("allowNurtureTrigger")(e.target.checked)} />
           <span>Move into Tier 2 even while a "nurture" workflow is published in GHL — <span className="font-semibold">it will text them</span>.</span>

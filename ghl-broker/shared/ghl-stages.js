@@ -20,8 +20,10 @@
 // into Tier 2 while a published "Tier 2+3 nurture" workflow would text them on
 // it (unless `allowNurtureTrigger`), or a card in a stage that's going away —
 // the one-time migration (ghl-broker/acq-migrate.js) moves those. A card is
-// created for an agent with something live and no card; never just to put
-// someone in Tier 2.
+// created for an agent with something live and no card, and — with
+// `tier2Repliers` — in Tier 2 for an agent we've talked with and have
+// nothing live for (Matt, 2026-10-16: "should have an opp in tier 2 so we
+// know to follow up with her").
 //
 // Ships OFF (`ghlStages.mode`); the plan is kept every morning as a report.
 // Pure. The runners (ghl-broker/tier-check.js) read GHL and the book.
@@ -33,9 +35,9 @@ import { LIVE_DEAL_STAGES } from "./offer-status.js";
 const DAY_MS = 86400000;
 const ms = (v) => { const t = typeof v === "number" ? v : Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 
-export const GHL_STAGES_DEFAULTS = Object.freeze({ mode: "off", staleTier1Days: 10, allowNurtureTrigger: false, maxMovesPerRun: 100 });
+export const GHL_STAGES_DEFAULTS = Object.freeze({ mode: "off", staleTier1Days: 10, allowNurtureTrigger: false, maxMovesPerRun: 100, tier2Repliers: false });
 
-/** normalizeGhlStages(v) → { mode: "off"|"on", staleTier1Days, allowNurtureTrigger, maxMovesPerRun } */
+/** normalizeGhlStages(v) → { mode: "off"|"on", staleTier1Days, allowNurtureTrigger, maxMovesPerRun, tier2Repliers } */
 export function normalizeGhlStages(v = {}) {
   const o = v && typeof v === "object" ? v : {};
   const n = (x, d, lo, hi) => { const k = Math.round(Number(x)); return x == null || x === "" || !Number.isFinite(k) ? d : Math.min(hi, Math.max(lo, k)); };
@@ -44,6 +46,7 @@ export function normalizeGhlStages(v = {}) {
     staleTier1Days: n(o.staleTier1Days, GHL_STAGES_DEFAULTS.staleTier1Days, 3, 90),
     allowNurtureTrigger: o.allowNurtureTrigger === true,
     maxMovesPerRun: n(o.maxMovesPerRun, GHL_STAGES_DEFAULTS.maxMovesPerRun, 1, 300),
+    tier2Repliers: o.tier2Repliers === true,
   };
 }
 
@@ -186,8 +189,11 @@ export function cardHeldBy({ offers = [], now = Date.now(), staleDays = GHL_STAG
  * One agent. `cards` are their opportunities in the Acquisitions pipeline
  * (pipelineStageId, status, lastStageChangeAt when the read has it — the
  * per-contact search doesn't, and then the newest offer event wins).
+ * `replied`: an agent's last word to us (never one who opted out) — the
+ * Tier 2 card for a conversation (repliedCard). `cardMade`: the app has
+ * made a card for them before.
  */
-export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], settings = {}, now = Date.now() } = {}) {
+export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], replied = null, cardMade = false, settings = {}, now = Date.now() } = {}) {
   const cfg = normalizeGhlStages(settings);
   const k = keys || stageKeys(acq);
   const label = (key) => CARD_STAGE_LABEL[key] || key;
@@ -201,7 +207,10 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
 
   // No open card: create one for something live; a lost or abandoned card is reopened instead.
   if (!open.length) {
-    if (!t.to || t.to === "tier2" || t.won) return { skip: t.to ? "nothing live and no open card" : "no offers and no open card" };
+    if (!t.to || t.to === "tier2" || t.won) {
+      const r = cfg.tier2Repliers && replied ? repliedCard({ k, mine, nameOf, contactId, name, replied, cardMade, nurtureLive, cfg }) : null;
+      return r || { skip: t.to ? "nothing live and no open card" : "no offers and no open card" };
+    }
     if (!k[t.to]) return { skip: `no ${label(t.to)} stage in the Acquisitions pipeline` };
     const closed = mine.filter((c) => !/^won$/i.test(String(c.status || ""))).sort((a, b) => String(b.lastStageChangeAt || b.updatedAt || "").localeCompare(String(a.lastStageChangeAt || a.updatedAt || "")))[0];
     if (closed) return { move: { ...base, opportunityId: closed.id, from: `${nameOf.get(closed.pipelineStageId) || "?"} (${closed.status})`, to: label(t.to), toKey: t.to, toStageId: k[t.to], status: "open" } };
@@ -253,6 +262,42 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
 }
 
 /**
+ * repliedCard(…) → { create } | { move } | { skip } | null
+ *
+ * An agent we've talked with and have nothing live for, with no open card,
+ * goes in Tier 2: that's where Matt looks for who to follow up with (Matt,
+ * 2026-10-16, Deanna W.: "no fixers right now, I'll call when I have one" —
+ * no offer, so no card, and nothing in GHL said to check in). The create and
+ * the reopen carry `replier: true` so a runner can put them behind the
+ * offers' own moves.
+ *   - their newest card is closed: reopened in Tier 2 only when they wrote
+ *     after it was closed (whoever closed it had seen the conversation);
+ *     lost is a person's call and stays lost; won stays won and a word since
+ *     makes a new card;
+ *   - no card at all, but the app made one before: someone deleted it, and it
+ *     stays deleted (Tyler E., 2026-10-15). It also keeps a card GHL's search
+ *     hasn't caught up with yet from being made twice.
+ */
+function repliedCard({ k, mine, nameOf, contactId, name, replied, cardMade, nurtureLive, cfg }) {
+  if (!k.tier2) return null;
+  const why = "they wrote back, nothing live";
+  const blocked = (nurtureLive || []).length && !cfg.allowNurtureTrigger
+    ? { blocked: `${nurtureLive.map((w) => w.name).join(", ")} is published and would text them on this move` } : {};
+  const closedAt = (c) => ms(c.lastStatusChangeAt || c.updatedAt || c.lastStageChangeAt);
+  const last = [...mine].sort((a, b) => (closedAt(b) ?? 0) - (closedAt(a) ?? 0))[0];
+  if (last) {
+    const status = String(last.status || "");
+    if (/^lost$/i.test(status)) return { skip: "their card is marked lost — a person's call" };
+    const at = closedAt(last);
+    if (at != null && !((ms(replied) ?? 0) > at)) return { skip: `their card was closed (${status}) after their last word` };
+    if (!/^won$/i.test(status)) {
+      return { move: { contactId, why, opportunityId: last.id, from: `${nameOf.get(last.pipelineStageId) || "?"} (${status})`, to: CARD_STAGE_LABEL.tier2, toKey: "tier2", toStageId: k.tier2, status: "open", replier: true, ...blocked } };
+    }
+  } else if (cardMade) return { skip: "the card the app made for them is gone; a deleted card stays deleted" };
+  return { create: { contactId, why, name: name || "", to: CARD_STAGE_LABEL.tier2, toKey: "tier2", toStageId: k.tier2, replier: true, ...blocked } };
+}
+
+/**
  * planStageMoves({ acq, opportunities, offers, lastIn, openPromiseContacts, nurtureLive, settings, now })
  *   → { moves, creates, youMoved, counts }
  *
@@ -262,9 +307,11 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
  *   openPromiseContacts  Set of contactIds we owe a number or an answer
  *   nurtureLive          [{ id, name }] published nurture workflows a Tier 2 move would start
  *   appMoves             Map contactId → [ISO] of card moves the app made (ghl_stage_moved; APP_MOVE_SLACK_MS)
+ *   repliers             Map contactId → ISO of an agent's last word (opt-outs left out): Tier 2 cards, with tier2Repliers
+ *   cardsMade            Set of contactIds the app has made a card for
  */
-export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), settings = {}, now = Date.now() } = {}) {
-  const counts = { considered: 0, planned: 0, blocked: 0, created: 0, youMoved: 0, old: 0, byMove: {} };
+export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), repliers = new Map(), cardsMade = new Set(), settings = {}, now = Date.now() } = {}) {
+  const counts = { considered: 0, planned: 0, blocked: 0, created: 0, youMoved: 0, old: 0, tier2Repliers: 0, byMove: {} };
   const out = { moves: [], creates: [], youMoved: [], counts };
   if (!acq?.id) return out;
   const keys = stageKeys(acq);
@@ -277,17 +324,19 @@ export function planStageMoves({ acq = null, opportunities = [], offers = [], la
     if (!cardsBy.has(o.contactId)) cardsBy.set(o.contactId, []);
     cardsBy.get(o.contactId).push(o);
   }
-  const contacts = new Set([...cardsBy.keys(), ...offersBy.keys()]);
+  const withRepliers = normalizeGhlStages(settings).tier2Repliers;
+  const contacts = new Set([...cardsBy.keys(), ...offersBy.keys(), ...(withRepliers ? repliers?.keys?.() || [] : [])]);
   for (const contactId of contacts) {
     counts.considered++;
     const mineOffers = offersBy.get(contactId) || [];
     const name = mineOffers.find((o) => o.contactName)?.contactName || "";
     const r = planCard({ acq, keys, cards: cardsBy.get(contactId) || [], offers: mineOffers, contactId, name,
       lastIn: lastIn?.get?.(contactId) || null, openPromise: openPromiseContacts?.has?.(contactId) || false, nurtureLive,
-      appMoves: appMoves?.get?.(contactId) || [], settings, now });
+      appMoves: appMoves?.get?.(contactId) || [], replied: repliers?.get?.(contactId) || null, cardMade: cardsMade?.has?.(contactId) || false, settings, now });
     if (r.old) counts.old++;
     if (r.youMoved) { counts.youMoved++; out.youMoved.push(r.youMoved); continue; }
-    if (r.create) { counts.created++; out.creates.push(r.create); continue; }
+    if (r.create?.replier || r.move?.replier) counts.tier2Repliers++;
+    if (r.create) { if (r.create.blocked) counts.blocked++; else counts.created++; out.creates.push(r.create); continue; }
     if (!r.move) continue;
     if (r.move.blocked) counts.blocked++; else counts.planned++;
     const key = `${r.move.from}→${r.move.to}${r.move.status === "won" ? " (won)" : ""}`;

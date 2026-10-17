@@ -242,3 +242,68 @@ test("only the app's own card moves count as the app's, not the bot's TIER workf
   assert.deepEqual(m.get("a"), ["2026-10-13T23:07:31Z"]);
   assert.equal(m.has("b"), false);
 });
+
+// Matt, 2026-10-16 (Deanna W.): an agent wrote back with nothing to price,
+// so no offer, so no card — nothing in GHL said to follow up with her.
+// With ghlStages.tier2Repliers, a conversation gets a Tier 2 card.
+const word = (contactId, at, over = {}) => ({ contactId, party: "agent", type: "text_summary", at, data: { inbound: "no fixers right now, I'll call when I have one" }, ...over });
+const replierStore = ({ last = [], events = [], offers = [], saved = { ghlStages: { mode: "on", tier2Repliers: true } } } = {}) => ({
+  ...cardStore(offers, saved),
+  async lastContactActivity() { return last; },
+  async listContactEventsSince(_l, since, { types } = {}) { return [...last, ...events].filter((e) => String(e.at) >= since && (!types || types.includes(e.type))); },
+  async listContactEvents(_l, contactId, { types } = {}) { return [...last, ...events].filter((e) => e.contactId === contactId && (!types || types.includes(e.type))); },
+});
+const replierGhl = ({ made = [], moved = [], cards = [] } = {}) => ({
+  ...cardGhl({ made, moved, cards }),
+  listAcquisitionOpportunities: async () => cards,
+  getContact: async (_c, id) => ({ id, firstName: "Dee", lastName: "W" }),
+});
+
+test("an agent who wrote back with nothing to price gets a Tier 2 card at the morning sweep; a buyer and an agent who opted out don't", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const store = replierStore({
+    last: [word("dw", "2026-10-13T01:06:00Z"), word("buyer", "2026-10-13T01:00:00Z", { party: "investor" }),
+      word("stop", "2026-10-13T01:00:00Z", { data: { inbound: "STOP", intent: "opt_out" } }), word("unsub", "2026-10-12T01:00:00Z")],
+    events: [{ contactId: "unsub", party: "agent", type: "unsubscribed", at: "2026-10-12T02:00:00Z" }],
+  });
+  const saved = await store.getOfferSettings();
+  const preview = await runStagePlan({ client: {}, locationId: "L-rep1", store, ghl: replierGhl({ made }), saved, dryRun: true, now: NOW13 });
+  assert.deepEqual(preview.creates.map((c) => [c.contactId, c.to]), [["dw", "Tier 2"]]);
+  assert.equal(made.length, 0, "a dry run makes nothing");
+  const r = await runStagePlan({ client: {}, locationId: "L-rep1", store, ghl: replierGhl({ made }), saved, dryRun: false, now: NOW13 });
+  assert.equal(r.created, 1);
+  assert.deepEqual(made.map((m) => [m.contactId, m.stageId, m.name]), [["dw", "t2", "Dee W"]]);
+  assert.equal(store.events.at(-1).type, "ghl_stage_moved");
+  assert.equal(JSON.stringify(store.events.at(-1)).includes("Dee"), false, "no names on the record line");
+  // Switched off: no card.
+  const off = await runStagePlan({ client: {}, locationId: "L-rep1", store, ghl: replierGhl(), saved: { ghlStages: { mode: "on" } }, dryRun: true, now: NOW13 });
+  assert.equal(off.creates.length, 0);
+});
+
+test("a conversation's Tier 2 card waits behind the offers' own cards when the run's cap is reached", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const store = replierStore({ last: [word("aa-talk", "2026-10-13T01:06:00Z")], offers: [sentOffer("zz-live")],
+    saved: { ghlStages: { mode: "on", tier2Repliers: true, maxMovesPerRun: 1 } } });
+  const r = await runStagePlan({ client: {}, locationId: "L-rep2", store, ghl: replierGhl({ made }), saved: await store.getOfferSettings(), dryRun: false, now: NOW13 });
+  assert.deepEqual(made.map((m) => [m.contactId, m.stageId]), [["zz-live", "out"]]);
+  assert.equal(r.creates.find((c) => c.contactId === "aa-talk").applied, undefined);
+});
+
+test("every 15 minutes, an agent who wrote back since the last run and has no card gets a Tier 2 card; that path never moves a card they have", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const moved = [];
+  const last = [];
+  const store = replierStore({ last });
+  const saved = await store.getOfferSettings();
+  const ghl = { ...replierGhl({ made, moved }), searchOpportunities: async (_c, _l, { contactId }) => (contactId === "has-t1"
+    ? [{ id: "op-t1", pipelineId: "pA", stageId: "t1", status: "open", lastStageChangeAt: "2026-09-01T00:00:00Z" }] : []) };
+  await syncChangedCards({ client: {}, locationId: "L-rep3", store, saved, ghl, now: Date.parse("2026-10-13T19:30:00Z") });
+  last.push(word("dw", "2026-10-13T19:40:00Z"), word("has-t1", "2026-10-13T19:41:00Z"), word("buyer", "2026-10-13T19:42:00Z", { party: "investor" }));
+  const r = await syncChangedCards({ client: {}, locationId: "L-rep3", store, saved, ghl, now: NOW13 });
+  assert.equal(r.repliers, 2);
+  assert.deepEqual(made.map((m) => [m.contactId, m.stageId]), [["dw", "t2"]]);
+  assert.equal(moved.length, 0, "a Tier 1 card with no offers is the morning sweep's, not this path's");
+});
