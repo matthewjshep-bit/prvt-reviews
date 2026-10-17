@@ -53,7 +53,8 @@ import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blocki
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_STATUSES } from "./shared/second-look.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
-import { normalizeOpener, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
+import { normalizeOpener, openerVoice, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
+import { standardText } from "./shared/standard-texts.js";
 import { OFF_MARKET_ASK_RX, offMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -3323,6 +3324,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       aboutThem: list(p.aboutThem, 3).map((x) => ({ what: String(x?.what || "").slice(0, 120), daysAgo: x?.daysAgo ?? null })).filter((x) => x.what),
       areas: list(p.areas, 3).map((x) => String(x).slice(0, 60)),
       voice: normalizeAgentPulse(saved?.outreachAutopilot?.pulse).voice,
+      // Matt's fixed check-in, or the model's (shared/standard-texts.js).
+      mode: normalizeAgentPulse(saved?.outreachAutopilot?.pulse).mode,
+      forMatt: subject?.forMatt === true,
       offMarketAskDue: p.offMarketAskDue !== false,
       // The one real thing it names (shared/agent-pulse.js checkInHook).
       hook: pulseHook(p.hook),
@@ -3370,7 +3374,12 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       // The county the listing is in, the only place the text names, and
       // Matt's own openers as the voice (shared/outreach-opener.js).
       county: countyName(subject?.county), city: String(subject?.city || ""),
-      examples: normalizeOpener(saved?.outreachAutopilot?.opener).examples, variant: Number(subject?.variant) || 0,
+      // Matt's fixed first texts (mode "template", 2026-10-17), and the voice
+      // the model writes one in when it does (mode "ai", the turnkey and
+      // off-market seats).
+      templates: normalizeOpener(saved?.outreachAutopilot?.opener).examples,
+      examples: openerVoice(normalizeOpener(saved?.outreachAutopilot?.opener)), variant: Number(subject?.variant) || 0,
+      mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode,
       // One real thing about the house for the text to notice.
       details: houseDetails({ ...(subject?.house || {}), city: subject?.city || subject?.house?.city || "", dom: Number(subject?.hookDom) || subject?.house?.dom || 0 }),
       // A finished listing, texted for the agent rather than the house (the turnkey seats).
@@ -3382,6 +3391,7 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
   return { ...base,
     ...(kind === "offer_nudge" || kind === "price_drop" ? { went: whatWentOut(offer) } : {}),
     ...(kind === "outreach_nudge" && countyName(subject?.county) ? { county: countyName(subject.county) } : {}),
+    ...(kind === "outreach_nudge" ? { mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode } : {}),
     // A passed house riding on this nudge as one line (follow-up-sweep.js).
     ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
@@ -3608,6 +3618,16 @@ export async function writeShorterFirstText({ draft, kind, redraft, outbound = n
   const m = String(again?.reply || "").length;
   return m && m < n && carrierFlags(again.reply).length <= carrierFlags(draft.reply).length ? again : draft;
 }
+// Matt's fixed texts (shared/standard-texts.js, 2026-10-17): the first text,
+// its follow-up and the plain check-in, filled in as he writes them. No model
+// call and nothing to rewrite; the gates still read it like any draft.
+function standardDraft({ kind, offer, outbound, name, contactId }) {
+  const s = standardText({ kind, outbound, name, contactId });
+  if (!s) return null;
+  return { reply: s.text, summary: outboundSummary({ kind, offer, outbound }), confidence: "high", needsHuman: false, usage: null,
+    standard: { set: s.set, index: s.index } };
+}
+
 function withoutSignOff(draft, kind, signer = "") {
   if (!NO_SIGN_OFF_KINDS.has(kind) || !draft?.reply) return draft;
   const reply = stripSignOff(draft.reply, { names: [signer, String(signer || "").split(/\s+/)[0]] });
@@ -3656,7 +3676,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
     aiApiKey, party, config, context, channel: "sms", outbound, batch: null,
   };
   const draftWith = deps.draft || draftReply;
-  const draft = await writeShorterFirstText({
+  const draft = standardDraft({ kind, offer, outbound, name: a.contactName || name, contactId }) || await writeShorterFirstText({
     draft: withoutSignOff(await writeAgainWithoutCarrierWords({
       draft: await draftWith(previewArgs), kind,
       redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
@@ -3720,7 +3740,7 @@ async function runProactive(job, ctx) {
     batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) && subject?.direct !== true ? batcherFor(aiApiKey) : null,
   };
   // Still reads like an ad the carriers block: written once more without it.
-  const draft = await writeShorterFirstText({
+  const draft = standardDraft({ kind, offer, outbound, name: a.contactName, contactId: job.contactId }) || await writeShorterFirstText({
     draft: withoutSignOff(await writeAgainWithoutCarrierWords({
       draft: await deps.draft(draftArgs), kind,
       redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
@@ -3813,6 +3833,8 @@ async function runProactive(job, ctx) {
       // Which first text this was (conversation-prompt.js openerPlan), so
       // replies can be read back by opening, voice and detail.
       ...(kind === "outreach_open" ? openerChoices(outbound) : {}),
+      // Which of Matt's fixed texts went, when one did.
+      ...(draft.standard ? { standard: draft.standard, ...(kind === "outreach_open" ? { style: "standard" } : {}) } : {}),
     },
     reply: draft.reply, intent: kind, confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
     usage: draft.usage || null, shadow: shadowRow(draft.shadow, gateFor),

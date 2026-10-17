@@ -111,6 +111,10 @@ export function normalizeAgentPulse(v = {}) {
     quietWorkflowIds: ids,
     replacesWorkflowIds: idList(o.replacesWorkflowIds),
     voice: String(o.voice || "").trim().slice(0, AGENT_PULSE_VOICE_MAX),
+    // "template" (2026-10-17, the default): the plain check-in and the
+    // listing ping are one of Matt's fixed texts (shared/standard-texts.js);
+    // "ai": the model writes each one, as before.
+    mode: o.mode === "ai" ? "ai" : "template",
     mattsFifteen: normalizeMattsFifteen(o.mattsFifteen),
   };
 }

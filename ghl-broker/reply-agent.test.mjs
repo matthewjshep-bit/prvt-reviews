@@ -1006,6 +1006,9 @@ import { starterConfig, detectOptOut } from "./shared/conversation-ai.js";
 // debounce has a test of its own.
 const STARTER_RAW = starterConfig({ signer: "Matt Shepherd" });
 const STARTER_SAVED = { ...SAVED, conversationAi: { ...STARTER_RAW, autoSend: { ...STARTER_RAW.autoSend, debounceSec: 0 } } };
+// The model writes the check-in (pulse mode "ai"); by default since
+// 2026-10-17 the plain one is Matt's fixed text (shared/standard-texts.js).
+const MODEL_CHECKIN_SAVED = { ...STARTER_SAVED, outreachAutopilot: { pulse: { mode: "ai" } } };
 
 test("STOP gets silence and the tags, no model call, and cancels anything counting down", async () => {
   _resetJobs();
@@ -5448,7 +5451,7 @@ test("an agent check-in that names any number never goes out: written again with
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
   store.listOffers = async () => [LANDED];
-  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "agent_pulse", subject: AGENT_CHECKIN_SUBJECT, sendsEnabled: true,
+  const { job } = await startProactive({ client, locationId: "LOC", saved: MODEL_CHECKIN_SAVED, store, contactId: "c1", kind: "agent_pulse", subject: AGENT_CHECKIN_SUBJECT, sendsEnabled: true,
     deps: { releaseHeld: true, releaseReason: "test", draft: async () => ({ ...DRAFT, reply: "Hey Dana, still around 410k on 12 Elm if the seller moves. Anything else coming up?" }) } });
   await settle();
   assert.equal(job.status, "held", "not even a number from the book rides on a check-in");
@@ -5459,7 +5462,7 @@ test("an agent check-in that names any number never goes out: written again with
   const fixed = fakeStore();
   fixed.listOffers = async () => [LANDED];
   const asked = [];
-  const { job: j2 } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: fixed, contactId: "c1", kind: "agent_pulse", subject: AGENT_CHECKIN_SUBJECT, sendsEnabled: true,
+  const { job: j2 } = await startProactive({ client, locationId: "LOC", saved: MODEL_CHECKIN_SAVED, store: fixed, contactId: "c1", kind: "agent_pulse", subject: AGENT_CHECKIN_SUBJECT, sendsEnabled: true,
     deps: { releaseHeld: true, releaseReason: "test", now: () => NOW, random: () => 0, draft: async (args) => { asked.push(args.outbound.fix || null); return { ...DRAFT,
       reply: asked.length === 1 ? "Hey Dana, still around 410k on 12 Elm if the seller moves. Anything else coming up?" : "Hey Dana, anything coming up that needs work?" }; } } });
   await settle();
@@ -5518,7 +5521,7 @@ test("an agent check-in that brings up a past house is written again without it,
   _resetJobs();
   const store = fakeStore();
   store.listOffers = async () => [LANDED];
-  const { job } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "agent_pulse", subject, sendsEnabled: true,
+  const { job } = await startProactive({ client, locationId: "LOC", saved: MODEL_CHECKIN_SAVED, store, contactId: "c1", kind: "agent_pulse", subject, sendsEnabled: true,
     deps: { releaseHeld: true, releaseReason: "test", now: () => NOW, random: () => 0, draft: async () => ({ ...DRAFT, reply: NAMES_IT }) } });
   await settle();
   assert.equal(job.status, "held", job.error);
@@ -5528,7 +5531,7 @@ test("an agent check-in that brings up a past house is written again without it,
   const fixed = fakeStore();
   fixed.listOffers = async () => [LANDED];
   const asked = [];
-  const { job: j2 } = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store: fixed, contactId: "c1", kind: "agent_pulse", subject, sendsEnabled: true,
+  const { job: j2 } = await startProactive({ client, locationId: "LOC", saved: MODEL_CHECKIN_SAVED, store: fixed, contactId: "c1", kind: "agent_pulse", subject, sendsEnabled: true,
     deps: { releaseHeld: true, releaseReason: "test", now: () => NOW, random: () => 0, draft: async (args) => { asked.push(args.outbound.fix || null); return { ...DRAFT,
       reply: asked.length === 1 ? NAMES_IT : "Hey Dana, anything distressed or off-market come across your desk lately? The uglier the better." }; } } });
   await settle();

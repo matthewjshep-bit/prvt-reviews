@@ -5676,6 +5676,45 @@ Pacific, row `outreachFollowUp`) puts agents enrolled by the "GHL workflow"
 first touch who haven't answered in N days (default 14) into the follow-up
 workflow. It needs `conversations.readonly` to see who wrote back.
 
+**The listing says it needs work (2026-10-17).** Matt: "we're simply
+reaching out on a listing that has distress signals … double-check that it
+has distress signals." The 10/16 run texted 375 agents off RentCast's numbers
+alone (a price cut, or built before 1980), and the answers were "move in
+ready", "new construction", "it's pending", "did you look at the listing?".
+With `outreachAutopilot.distressCheck.enabled` (off by default; `perRun`
+default 200, max 600 lookups) the sweep reads each picked agent's listing on
+Zillow (`deps.screenListings` → `fetchZillowListings`, 40 to an actor run,
+about a fifth of a cent each) in the pick's order, until it has 1.2 × the
+day's number or the lookups are spent, and keeps only listings still for
+sale whose remarks say they need work (`shared/listing-distress.js`: a
+strong word like fixer, TLC, as-is, estate, contractor special; or a soft
+one like dated, make it your own, with nothing saying remodeled, move-in
+ready, turnkey or new). Built in the last ten years is out whatever it says.
+No remarks, or Zillow can't find it, is out. What Zillow said is remembered
+30 days on the `outreachScreen` cursor, so a listing isn't bought twice. A
+failed lookup texts nobody it would have checked. `last.screen` has the
+counts (`checked`, `remembered`, `kept`, `dropped` by reason, `waiting`).
+The off-market seats keep their own Zillow status check.
+
+**The texts are Matt's own (2026-10-17).** The first text, its 14-day
+follow-up (`outreach_nudge`) and the plain agent check-in are fixed texts in
+his voice, filled in (`shared/standard-texts.js`), not written by the model:
+modelled on the Brenda and Rigo threads that became deals. First text:
+"Hi Brenda, saw your listing at 14820 SE 172nd St. I'm local and fix up
+houses. Is it a bit of a project, or pretty turnkey? If you've got other
+fixers on your radar, I'm all ears." Which text an agent gets follows its
+variant or contact id. The first-text set is `outreachAutopilot.opener.examples`
+(blanks `{first}`, `{address}` = number and street, `{street}`, `{town}`,
+`{county}`); `opener.mode` `"ai"` goes back to the model writing each one
+(the 10/16 "plain" voice). The nudge and check-in sets are in code;
+`outreachAutopilot.pulse.mode` `"ai"` goes back to the model for check-ins.
+The model still writes the turnkey and off-market seats, a check-in about a
+house they mentioned, the deal-thanks, the off-market listing ping and
+Matt's 15. A sent first text records `style: "standard"` and
+`standard: { set, index }` on the draft's outbound. The pass after a "too
+nice" answer (`QUALIFY_PASSES`) is a thanks plus their other fixers, with no
+list of what we buy.
+
 **The run fills the day (2026-10-02).** A run used to stop at the first
 county that yielded anyone: Pierce gave up one new agent and the day was over
 with requests unspent. Now a run reads county after county, each at most

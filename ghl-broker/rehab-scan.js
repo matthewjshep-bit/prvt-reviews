@@ -221,7 +221,7 @@ async function fetchZillowDetail(address, apifyToken, { houseNo = "" } = {}) {
 export const MAX_LISTING_LOOKUPS = 40;
 
 /**
- * fetchZillowListings(addresses, apifyToken) → Map(streetKey → { listPrice, status })
+ * fetchZillowListings(addresses, apifyToken) → Map(streetKey → { listPrice, status, homeType, description, yearBuilt })
  *
  * One detail-actor run over the houses we have offers on, for the two facts
  * that change after we price them: the list price, and whether it's still for
@@ -252,6 +252,7 @@ export async function fetchZillowListings(addresses = [], apifyToken) {
       listPrice: price > 0 ? Math.round(price) : 0, status: item.listingStatus || item.homeStatus || null,
       // For the outreach screen: is this listing a house that needs work?
       homeType: item.homeType || null, description: String(item.description || "").slice(0, 1500),
+      yearBuilt: Number(item.yearBuilt) || Number(item.resoFacts?.yearBuilt) || null,
     });
   }
   return out;

@@ -18,6 +18,8 @@ import { normalizeOpener } from "./shared/outreach-opener.js";
 import { isRuralLot } from "./shared/asset-type.js";
 import { isOldHouse } from "./outreach-score.js";
 import { workflowIdFrom } from "./shared/ghl-calls.js";
+import { listingDistress } from "./shared/listing-distress.js";
+import { streetKey } from "./comps-zillow.js";
 
 export const CURSOR_NAME = "outreach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -241,7 +243,116 @@ export function normalizeOutreachAutopilot(v = {}) {
       enabled: o.expired?.enabled === true,
       share: o.expired?.share === undefined ? 25 : Math.min(100, Math.max(0, Math.round(Number(o.expired.share)) || 0)),
     },
+    // Read each picked listing on Zillow before its agent is texted
+    // (2026-10-17, screenPicked): still for sale, and remarks that say it
+    // needs work. At most `perRun` lookups a run, about a fifth of a cent
+    // each. Off by default.
+    distressCheck: {
+      enabled: o.distressCheck?.enabled === true,
+      perRun: Math.min(MAX_SCREEN_PER_RUN, Math.max(SCREEN_CHUNK, Math.round(Number(o.distressCheck?.perRun)) || DEFAULT_SCREEN_PER_RUN)),
+    },
   };
+}
+
+// The listing check (outreachAutopilot.distressCheck). Zillow is read 40
+// listings to an actor run; what it said about a listing is remembered a
+// month, so an agent passed over today isn't paid for again tomorrow.
+export const SCREEN_CHUNK = 40;
+export const DEFAULT_SCREEN_PER_RUN = 200;
+export const MAX_SCREEN_PER_RUN = 600;
+export const SCREEN_CURSOR = "outreachScreen";
+export const SCREEN_REMEMBER_DAYS = 30;
+const SCREEN_REMEMBER_MAX = 6000;
+
+// Why a listing didn't pass, grouped for the run's summary.
+function screenBucket(why = "") {
+  if (/^not for sale/.test(why)) return "pending or sold";
+  if (/^built in/.test(why)) return "new build";
+  if (/^reads finished/.test(why)) return "reads finished";
+  if (/^nothing in the remarks/.test(why)) return "no sign it needs work";
+  if (/^no listing remarks/.test(why)) return "no remarks";
+  if (/^Zillow couldn't find/.test(why)) return "not on Zillow";
+  return "other";
+}
+
+/**
+ * screenPicked({ groups, oa, job, locationId, store, deps, now, beat })
+ *
+ * Matt, 2026-10-17: "we're simply reaching out on a listing that has
+ * distress signals. We should definitely double-check that it has distress
+ * signals." The 10/16 run texted 375 agents off RentCast's numbers (a price
+ * cut, or built before 1980), and the answers were "it's move in ready",
+ * "new construction", "it's pending", "did you look at the listing?". So each
+ * picked agent's listing is read on Zillow, in the pick's order, until the
+ * day has its number (with a fifth over, for the ones the import finds
+ * already in GHL) or the run's lookups are spent; only those whose listing
+ * is still for sale and says it needs work (shared/listing-distress.js) stay
+ * picked. One the run didn't get to waits for the next. A failed lookup texts
+ * nobody it would have checked. The off-market seats have their own Zillow
+ * check (routes/outreach.js keepOffMarket) and are left alone.
+ */
+async function screenPicked({ groups, oa, job, locationId, store, deps, now, beat = async () => {} }) {
+  const stats = { checked: 0, remembered: 0, kept: 0, dropped: {}, waiting: 0 };
+  job.screen = stats;
+  if (typeof deps.screenListings !== "function") {
+    job.warnings.push("listing check is on but this broker can't read Zillow — nobody is texted today");
+    for (const g of groups) if (!g.offMarket) g.picked = [];
+    return;
+  }
+  const cursor = (await store.getJobCursor?.(locationId, SCREEN_CURSOR).catch(() => null))?.doc || {};
+  const seen = { ...(cursor.seen || {}) };
+  const recent = (e) => e && Date.parse(e.at) > now - SCREEN_REMEMBER_DAYS * DAY_MS;
+  const drop = (why) => { const b = screenBucket(why); stats.dropped[b] = (stats.dropped[b] || 0) + 1; };
+  const keyOf = (r) => streetKey(r.doc?.hook?.address || "");
+  const want = Math.ceil(oa.dailyCap * 1.2);
+  const verdict = new Map();
+  const rows = groups.filter((g) => !g.offMarket).flatMap((g) => g.picked);
+  const toRead = [];
+  for (const r of rows) {
+    const k = keyOf(r);
+    if (!k) { verdict.set(r.agentKey, false); drop("no address"); continue; }
+    if (recent(seen[k])) {
+      verdict.set(r.agentKey, seen[k].ok === true);
+      stats.remembered++;
+      if (seen[k].ok) stats.kept++; else drop(seen[k].why);
+      continue;
+    }
+    toRead.push(r);
+  }
+  let i = 0;
+  while (i < toRead.length && stats.kept < want && stats.checked < oa.distressCheck.perRun) {
+    const chunk = toRead.slice(i, i + Math.min(SCREEN_CHUNK, oa.distressCheck.perRun - stats.checked));
+    i += chunk.length;
+    let found;
+    try {
+      found = await deps.screenListings({ locationId, addresses: chunk.map((r) => r.doc.hook.address) });
+    } catch (e) {
+      job.warnings.push(`listing check: ${String(e?.message || e).slice(0, 120)} — the agents it didn't get to wait for the next run`);
+      break;
+    }
+    stats.checked += chunk.length;
+    for (const r of chunk) {
+      const z = found?.get?.(keyOf(r)) || null;
+      const v = z
+        ? listingDistress({ status: z.status, description: z.description, yearBuilt: z.yearBuilt || r.doc.hook.yearBuilt }, { now })
+        : { ok: false, why: "Zillow couldn't find the listing", signals: [] };
+      verdict.set(r.agentKey, v.ok);
+      seen[keyOf(r)] = { at: iso(now), ok: v.ok, ...(v.why ? { why: v.why } : {}), ...(v.signals?.length ? { signals: v.signals.slice(0, 3) } : {}) };
+      if (v.ok) stats.kept++; else drop(v.why);
+    }
+    await beat();
+  }
+  stats.waiting = rows.filter((r) => !verdict.has(r.agentKey)).length;
+  for (const g of groups) if (!g.offMarket) g.picked = g.picked.filter((r) => verdict.get(r.agentKey) === true);
+  if (stats.checked) {
+    const dropped = Object.entries(stats.dropped).map(([b, n]) => `${n} ${b}`).join(", ");
+    job.warnings.push(`listing check: ${stats.kept} of ${stats.checked + stats.remembered} listings read as needing work${dropped ? ` (left out: ${dropped})` : ""}`);
+  }
+  if (job.dryRun) return;
+  const keep = Object.entries(seen).filter(([, e]) => recent(e))
+    .sort((a, b) => String(b[1].at).localeCompare(String(a[1].at))).slice(0, SCREEN_REMEMBER_MAX);
+  await store.setJobCursor?.(locationId, SCREEN_CURSOR, { at: iso(now), doc: { seen: Object.fromEntries(keep) } })
+    .catch((e) => job.warnings.push(`listing check memory: ${String(e?.message || e).slice(0, 120)}`));
 }
 
 /**
@@ -431,6 +542,8 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
     tried: (job.tried || []).slice(0, 12),
     // The off-market seats' pull, when on (outreachAutopilot.expired).
     ...(job.offMarket ? { offMarket: job.offMarket } : {}),
+    // The listing check, when on (outreachAutopilot.distressCheck).
+    ...(job.screen ? { screen: job.screen } : {}),
   });
   // A long run (many counties, hundreds of one-at-a-time imports) says it's
   // still alive after every pull and import, so the tick doesn't take it for
@@ -699,10 +812,16 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     if (!county) break;
   }
   job.county = groups.map((g) => g.key).filter(Boolean).join(" · ") || job.county;
+  // 2b. The listing itself says it needs work (outreachAutopilot.distressCheck).
+  if (oa.distressCheck.enabled && groups.length) {
+    job.phase = "checking listings";
+    await screenPicked({ groups, oa, job, locationId, store, deps, now, beat });
+    job.picked = groups.reduce((n, g) => n + g.picked.length, 0);
+  }
   const picked = groups.flatMap((g) => g.picked);
   job.results = picked.map((r) => ({ agentKey: r.agentKey, name: r.doc?.name || "", hook: r.doc?.hook?.address || "", distressed: r.doc?.distressedCount || 0 }));
   if (!picked.length) {
-    job.warnings.push("no county had anyone new to text today");
+    job.warnings.push(job.screen ? "no picked listing read as needing work today" : "no county had anyone new to text today");
     job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
     return;
   }
