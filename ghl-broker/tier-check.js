@@ -20,7 +20,7 @@
 // the bot added never moves a card.
 
 import { store as defaultStore } from "./store.js";
-import { listPipelines, addContactTags, removeContactTags, updateOpportunity, createOpportunity, searchOpportunities, listWorkflows } from "./ghl.js";
+import { listPipelines, addContactTags, removeContactTags, updateOpportunity, createOpportunity, searchOpportunities, listWorkflows, getContact } from "./ghl.js";
 import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { recordEvent } from "./contact-record.js";
 import { localHour } from "./promise-sweep.js";
@@ -188,6 +188,31 @@ export function appMovesByContact(events = []) {
   }
   return out;
 }
+// The contacts the app has made a card for (a deleted one stays deleted).
+const cardsMadeBy = (events = []) => new Set((events || []).filter((e) => e?.contactId && APP_MOVE_EVENT_TYPES.includes(e.type) && e.data?.created).map((e) => e.contactId));
+
+// Their word to us: a call, or a text summary of THEIR text (store.lastContactActivity inboundOnly).
+const isTheirWord = (e) => INBOUND_EVENT_TYPES.includes(e?.type) && (e.type !== "text_summary" || String(e.data?.inbound || "").trim() !== "");
+
+/**
+ * agentRepliers(lastRows, optOuts) → Map contactId → ISO of their last word
+ *
+ * The agents we've talked with, for their Tier 2 card (shared/ghl-stages.js
+ * repliedCard): `lastRows` is each contact's newest word to us. A buyer is
+ * left out (their board is Dispositions), and so is an agent who opted out —
+ * an unsubscribed event, or a last word that said stop.
+ */
+export function agentRepliers(lastRows = [], optOuts = []) {
+  const out = new Map();
+  const stopped = new Set((optOuts || []).map((e) => e?.contactId).filter(Boolean));
+  for (const r of lastRows || []) {
+    if (!r?.contactId || r.party !== "agent" || stopped.has(r.contactId) || !isTheirWord(r)) continue;
+    if (r.data?.intent === "opt_out") continue;
+    out.set(r.contactId, r.at);
+  }
+  return out;
+}
+const YEAR_MS = 365 * 86400000;
 
 /**
  * runStagePlan({ client, locationId, store, saved, ghl, read, dryRun, now }) → { mode, planned, blocked, applied, moves, errors }
@@ -198,26 +223,30 @@ export function appMovesByContact(events = []) {
  * card ids and stage names, never a name or a message.
  */
 export async function runStagePlan({ client, locationId, store = defaultStore, saved = {}, ghl = null, read = null, dryRun = true, now = Date.now() }) {
-  const api = ghl || { listPipelines, updateOpportunity, createOpportunity, listAcquisitionOpportunities, listWorkflows };
+  const api = ghl || { listPipelines, updateOpportunity, createOpportunity, listAcquisitionOpportunities, listWorkflows, getContact };
   const cfg = normalizeGhlStages(saved?.ghlStages);
   const out = { mode: cfg.mode, planned: 0, blocked: 0, applied: 0, moves: [], byMove: {}, errors: [] };
   const pipelines = read?.pipelines || await api.listPipelines(client, locationId);
   const acq = acquisitionsPipeline(pipelines);
   if (!acq) { out.errors.push("no pipeline with Tier 1/2/3 stages"); return out; }
-  const [opportunities, offers, promiseEvents, moveEvents, lastRows, workflows] = await Promise.all([
+  const [opportunities, offers, promiseEvents, moveEvents, lastRows, workflows, optOuts] = await Promise.all([
     read?.opportunities || api.listAcquisitionOpportunities(client, locationId, acq.id),
     store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []),
     store.listContactEventsSince?.(locationId, iso(now - 7 * 86400000), { types: ["promise_made", "promise_owed", "promise_kept"], limit: 5000 }).catch(() => []) || [],
-    // Card moves the app made, so "newest wins" never reads one as yours.
-    store.listContactEventsSince?.(locationId, iso(now - 60 * 86400000), { types: APP_MOVE_EVENT_TYPES, limit: 20000 }).catch(() => []) || [],
-    store.lastContactActivity?.(locationId, { types: INBOUND_EVENT_TYPES, inboundOnly: true }).catch(() => []) || [],
+    // Card moves the app made, so "newest wins" never reads one as yours, and
+    // the cards it made, so one someone deleted stays deleted.
+    store.listContactEventsSince?.(locationId, iso(now - YEAR_MS), { types: APP_MOVE_EVENT_TYPES, limit: 20000 }).catch(() => []) || [],
+    store.lastContactActivity?.(locationId, { types: INBOUND_EVENT_TYPES, inboundOnly: true, limit: 20000 }).catch(() => []) || [],
     (api.listWorkflows ? api.listWorkflows(client, locationId) : Promise.resolve(null)).catch(() => null),
+    cfg.tier2Repliers ? store.listContactEventsSince?.(locationId, iso(now - 3 * YEAR_MS), { types: ["unsubscribed"], limit: 20000 }).catch(() => []) || [] : [],
   ]);
   const plan = planStageMoves({
     acq, opportunities, offers, now, settings: cfg,
     lastIn: new Map((lastRows || []).map((r) => [r.contactId, r.at])),
     openPromiseContacts: new Set(openPromises(promiseEvents || [], { now }).map((p) => p.contactId)),
     appMoves: appMovesByContact(moveEvents),
+    repliers: cfg.tier2Repliers ? agentRepliers(lastRows, optOuts) : new Map(),
+    cardsMade: cardsMadeBy(moveEvents),
     // Can't read the workflow list: assume the nurture is live, so nothing moves into Tier 2 blind.
     nurtureLive: workflows == null ? [{ id: "?", name: "a nurture workflow (GHL's list couldn't be read)" }] : nurtureWorkflows(workflows),
   });
@@ -229,7 +258,9 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
   out.counts = plan.counts;
   const go = cfg.mode === "on" && !dryRun;
   let left = cfg.maxMovesPerRun;
-  for (const m of plan.moves) {
+  // The offers' own moves and cards first; a conversation's Tier 2 card waits behind them under the cap.
+  const offersFirst = (list) => [...list.filter((x) => !x.replier), ...list.filter((x) => x.replier)];
+  for (const m of offersFirst(plan.moves)) {
     const row = { contactId: m.contactId, opportunityId: m.opportunityId, from: m.from, to: m.to, why: m.why, ...(m.status ? { status: m.status } : {}), ...(m.blocked ? { blocked: m.blocked } : {}) };
     if (go && !m.blocked && left > 0) {
       try {
@@ -241,9 +272,9 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     if (out.moves.length < 80) out.moves.push(row);
   }
   out.creates = [];
-  for (const c of plan.creates) {
-    const row = { contactId: c.contactId, to: c.to, why: c.why };
-    if (go && left > 0) {
+  for (const c of offersFirst(plan.creates)) {
+    const row = { contactId: c.contactId, to: c.to, why: c.why, ...(c.blocked ? { blocked: c.blocked } : {}) };
+    if (go && !c.blocked && left > 0) {
       try {
         await applyCardPlan({ client, locationId, store, api, acq, plan: { create: c }, source: "ghl_stages" });
         row.applied = true; out.created++; left--;
@@ -269,9 +300,15 @@ async function applyCardPlan({ client, locationId, store, api, acq, plan, source
       data: { from: m.from, to: m.to, why: m.why, ...(m.status ? { status: m.status } : {}) } }).catch(() => {});
     return { opportunityId: m.opportunityId, from: m.from, to: m.to };
   }
-  if (plan.create) {
+  if (plan.create && !plan.create.blocked) {
     const c = plan.create;
-    const made = await api.createOpportunity(client, { locationId, pipelineId: acq.id, contactId: c.contactId, name: c.name, stageId: c.toStageId });
+    // A conversation's card has no offer to name it from: the contact's own name.
+    let name = c.name;
+    if (!name && api.getContact) {
+      const who = await api.getContact(client, c.contactId).catch(() => null);
+      name = [who?.firstName, who?.lastName].filter(Boolean).join(" ") || String(who?.name || who?.contactName || "");
+    }
+    const made = await api.createOpportunity(client, { locationId, pipelineId: acq.id, contactId: c.contactId, name: name || "Agent", stageId: c.toStageId });
     await recordEvent({ store, locationId, contactId: c.contactId, party: "agent", type: "ghl_stage_moved", source,
       data: { from: "", to: c.to, why: c.why, created: true } }).catch(() => {});
     return { opportunityId: made?.id || "", from: "", to: c.to };
@@ -293,13 +330,16 @@ async function liveNurture(client, locationId, api, now) {
 export function _resetWorkflowCache() { workflowCache.clear(); }
 
 /**
- * syncAgentCard({ client, locationId, contactId, store, saved, ghl, now }) → planCard's result, plus { applied } | { skip } | { error }
+ * syncAgentCard({ client, locationId, contactId, store, saved, ghl, repliersOnly, now }) → planCard's result, plus { applied } | { skip } | { error }
  *
  * One agent's card, right after their offers moved (shared/ghl-stages.js
- * planCard). Only with `ghlStages.mode` "on". Never throws.
+ * planCard). Only with `ghlStages.mode` "on". Never throws. With
+ * `tier2Repliers`, their record says whether we've talked (the Tier 2 card
+ * for a conversation); `repliersOnly` applies only that card, for an agent
+ * who just wrote to us and whose offers didn't move.
  */
-export async function syncAgentCard({ client, locationId, contactId, store = defaultStore, saved = null, ghl = null, now = Date.now() }) {
-  const api = ghl || { listPipelines, searchOpportunities, updateOpportunity, createOpportunity, listWorkflows };
+export async function syncAgentCard({ client, locationId, contactId, store = defaultStore, saved = null, ghl = null, repliersOnly = false, now = Date.now() }) {
+  const api = ghl || { listPipelines, searchOpportunities, updateOpportunity, createOpportunity, listWorkflows, getContact };
   try {
     if (!contactId) return { skip: "no contact" };
     const settings = saved || (await store.getOfferSettings(locationId).catch(() => null)) || {};
@@ -307,17 +347,25 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
     if (cfg.mode !== "on") return { skip: "GHL doesn't follow the offers (ghlStages off)" };
     const acq = acquisitionsPipeline(await pipelinesFor(client, locationId, { ghl: api, now }));
     if (!acq) return { skip: "no Acquisitions pipeline" };
-    const [cards, offers] = await Promise.all([
+    const [cards, offers, events] = await Promise.all([
       api.searchOpportunities(client, locationId, { contactId, pipelineId: acq.id }),
       store.listOffers(locationId, { contactId, limit: 100, lean: true }).catch(() => []),
+      cfg.tier2Repliers
+        ? store.listContactEvents?.(locationId, contactId, { types: [...INBOUND_EVENT_TYPES, "unsubscribed", ...APP_MOVE_EVENT_TYPES], limit: 500 }).catch(() => []) || []
+        : [],
     ]);
+    const mine = (events || []).map((e) => ({ ...e, contactId }));
+    const lastWord = mine.filter(isTheirWord).sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
     const plan = planCard({
       acq, keys: stageKeys(acq), contactId, offers, settings: cfg, now,
       cards: (cards || []).map((c) => ({ ...c, pipelineStageId: c.pipelineStageId || c.stageId })),
       name: (offers || []).find((o) => o?.contactName)?.contactName || "",
       nurtureLive: await liveNurture(client, locationId, api, now),
+      replied: agentRepliers(lastWord ? [lastWord] : [], mine.filter((e) => e.type === "unsubscribed")).get(contactId) || null,
+      cardMade: cardsMadeBy(mine).has(contactId),
     });
-    if (plan.skip || plan.youMoved || plan.move?.blocked) return plan;
+    if (repliersOnly && !(plan.create?.replier || plan.move?.replier)) return { skip: plan.skip || "not a conversation's Tier 2 card" };
+    if (plan.skip || plan.youMoved || plan.move?.blocked || plan.create?.blocked) return plan;
     const applied = await applyCardPlan({ client, locationId, store, api, acq, plan, source: "offers" });
     console.log(`card follows offers loc=${locationId} contact=${contactId} ${applied?.from || "new"} → ${applied?.to}`);
     return { ...plan, applied };
@@ -348,9 +396,16 @@ export async function syncChangedCards({ client, locationId, store = defaultStor
     const offers = await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []);
     const changed = [...new Set((offers || []).filter((o) => o?.contactId
       && Math.max(offerStageAt(o) ?? 0, Date.parse(o.updatedAt || "") || 0) > since).map((o) => o.contactId))];
-    const out = { since: iso(since), contacts: changed.length, moved: 0, errors: [] };
-    for (const contactId of changed.slice(0, limit)) {
-      const r = await syncAgentCard({ client, locationId, contactId, store, saved, ghl, now });
+    // With tier2Repliers: an agent who wrote to us since, whose offers didn't
+    // move, gets their conversation's Tier 2 card now rather than at 7am.
+    const words = normalizeGhlStages(saved?.ghlStages).tier2Repliers
+      ? await store.listContactEventsSince?.(locationId, iso(since + 1), { types: INBOUND_EVENT_TYPES, limit: 500 }).catch(() => []) || []
+      : [];
+    const talked = [...new Set((words || []).filter((e) => e?.party === "agent" && isTheirWord(e) && !changed.includes(e.contactId)).map((e) => e.contactId))];
+    const out = { since: iso(since), contacts: changed.length, repliers: talked.length, moved: 0, errors: [] };
+    const work = [...changed.map((contactId) => ({ contactId })), ...talked.map((contactId) => ({ contactId, repliersOnly: true }))];
+    for (const { contactId, repliersOnly } of work.slice(0, limit)) {
+      const r = await syncAgentCard({ client, locationId, contactId, store, saved, ghl, repliersOnly, now });
       if (r?.applied) out.moved++;
       if (r?.error) out.errors.push(`${contactId}: ${r.error}`);
       await sleep(100);

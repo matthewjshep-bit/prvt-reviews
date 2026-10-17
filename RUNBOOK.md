@@ -2815,8 +2815,8 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   new card), a card still in a stage that's going away (the migration), or a
   move into Tier 2 while a published "nurture" workflow would text them
   (`allowNurtureTrigger` overrides). A card is made for an agent with
-  something live and no card, never just for Tier 2. A lost or abandoned card
-  is reopened instead.
+  something live and no card. A lost or abandoned card is reopened instead.
+  With `tier2Repliers` (below), a conversation gets a Tier 2 card too.
 - **Who moves it** (`ghl-broker/tier-check.js`):
   - `syncAgentCard`, one agent, right after your status change, promote, hot
     flag, send, Tier 1 Pass/Kick, or the conversation's status change;
@@ -2859,6 +2859,29 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   (`cardHeldBy`), and the work pane and the Offers table show the text: "The
   GHL card stays in Tier 1: 29308 158th Ave E is still being priced. Pass
   that house too and it goes to Tier 2."
+- **A conversation gets a Tier 2 card (2026-10-16).** Deanna W. wrote back
+  "no fixers right now, I'll call when I have one". There was nothing to
+  price, so no offer and no card, and since the bot's TIER 2 enrollment stood
+  down (10-14) nothing else made one. Matt: "should have an opp in tier 2 so
+  we know to follow up with her". With Settings → "Give every agent we've
+  talked with a Tier 2 card" (`ghlStages.tier2Repliers`, **off**), an agent
+  whose last word to us is on record (a call, or a text of theirs) and who
+  has nothing live and no open card gets one in Tier 2 (`repliedCard` in
+  `shared/ghl-stages.js`, `agentRepliers` in `ghl-broker/tier-check.js`).
+  Buyers are left out, and so are agents who opted out (an `unsubscribed`
+  event, or a last word with `opt_out`). The rules for the card:
+  - A closed card reopens in Tier 2 only when they wrote after it closed.
+    A lost card stays lost. A won card stays won, and a word since makes a
+    new card.
+  - When the app made a card for them before and it's gone, someone deleted
+    it, and it stays deleted. This also stops GHL's search lag from making a
+    card twice.
+  - The 7am sweep makes them, after the offers' own moves and under the same
+    `maxMovesPerRun`. The 15-minute tick makes one for an agent who wrote
+    since its last run; that path never moves a card they already have.
+  - The nurture guard holds them too.
+  - Preview before switching on: `GET /api/dashboard/ghl/pipeline?repliers=1`
+    (`plan.counts.tier2Repliers`, `plan.creates`).
 - **Tier 2 is the agent nurture** (Matt): everyone with nothing live,
   former Tier 3s included, replied or not. The app's agent check-in is the
   nurture. A card that still lands in Tier 3 (a workflow, a drag) is moved on

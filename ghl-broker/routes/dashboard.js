@@ -901,9 +901,13 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     try {
       const { locationId, client } = resolveLocation(req);
       const fresh = req.query.fresh === "1";
+      // ?repliers=1: the same dry run with ghlStages.tier2Repliers on — what
+      // switching it on would make before anyone does. Never cached.
+      const preview = req.query.repliers === "1";
       const hit = pipelineCache.get(locationId);
-      if (!fresh && hit && Date.now() - hit.at < 5 * 60 * 1000) return res.json(hit.body);
-      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      if (!fresh && !preview && hit && Date.now() - hit.at < 5 * 60 * 1000) return res.json(hit.body);
+      const stored = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      const saved = preview ? { ...stored, ghlStages: { ...(stored.ghlStages || {}), tier2Repliers: true } } : stored;
       const pipelines = await listPipelines(client, locationId);
       const acq = acquisitionsPipeline(pipelines);
       if (!acq) return res.json({ ok: false, error: "no Acquisitions pipeline with Tier 1 and Tier 2 stages in GHL" });
@@ -915,8 +919,9 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const current = annotateCurrent(offers || []).filter((o) => !o.supersededBy);
       const body = { ok: true, at: new Date().toISOString(), mode: plan.mode,
         ghl: boardCounts({ acq, opportunities }), offers: stageCounts(current),
-        plan: { counts: plan.counts || {}, moves: plan.moves || [], creates: plan.creates || [], youMoved: plan.youMoved || [], errors: plan.errors || [] } };
-      pipelineCache.set(locationId, { at: Date.now(), body });
+        plan: { counts: plan.counts || {}, moves: plan.moves || [], creates: plan.creates || [], youMoved: plan.youMoved || [], errors: plan.errors || [] },
+        ...(preview ? { preview: "tier2Repliers" } : {}) };
+      if (!preview) pipelineCache.set(locationId, { at: Date.now(), body });
       res.json(body);
     } catch (err) { fail(res, err); }
   });

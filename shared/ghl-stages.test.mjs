@@ -147,6 +147,50 @@ test("board counts open cards per kept stage and lumps the rest as old", () => {
 test("ships off", () => {
   assert.equal(normalizeGhlStages({}).mode, "off");
   assert.equal(normalizeGhlStages({ mode: "on" }).mode, "on");
+  assert.equal(normalizeGhlStages({}).tier2Repliers, false);
+  assert.equal(normalizeGhlStages({ tier2Repliers: true }).tier2Repliers, true);
+});
+
+// Matt, 2026-10-16 (Deanna W.): she wrote back "no fixers right now, I'll
+// call when I have one". Nothing to price, so no offer, so no card, and
+// nothing in GHL said to follow up with her. Tier 2 is where he looks.
+const said = (id, d) => new Map([[id, ago(d)]]);
+const ON = { tier2Repliers: true };
+
+test("an agent we talked with and have no offer for gets a Tier 2 card, so we know to follow up", () => {
+  const r = plan({ settings: ON, repliers: said("dw", 0.5) });
+  assert.deepEqual(r.creates.map((c) => [c.contactId, c.to, c.replier]), [["dw", "Tier 2", true]]);
+  assert.equal(r.counts.tier2Repliers, 1);
+  // Every house of theirs passed and no card: the same.
+  const passed = plan({ settings: ON, offers: [offer("p", { status: "passed", statusAt: ago(3) })], repliers: said("p", 1) });
+  assert.deepEqual(passed.creates.map((c) => [c.contactId, c.to]), [["p", "Tier 2"]]);
+  // Switched off, nothing changes.
+  assert.equal(plan({ repliers: said("dw", 0.5) }).creates.length, 0);
+});
+
+test("a conversation's closed card reopens in Tier 2 only for a word after it was closed; lost and deleted cards stay that way", () => {
+  // Abandoned (the migration closed never-repliers), then they wrote: reopened.
+  const re = plan({ settings: ON, opportunities: [card("ab", "s-t2", { status: "abandoned", lastStatusChangeAt: ago(3) })], repliers: said("ab", 1) });
+  assert.deepEqual(re.moves.map((m) => [m.contactId, m.to, m.status, m.replier]), [["ab", "Tier 2", "open", true]]);
+  // Closed after their last word: whoever closed it had seen the conversation.
+  assert.equal(plan({ settings: ON, opportunities: [card("ab", "s-t2", { status: "abandoned", lastStatusChangeAt: ago(1) })], repliers: said("ab", 3) }).moves.length, 0);
+  // Lost is a person's call.
+  const lost = plan({ settings: ON, opportunities: [card("lo", "s-t2", { status: "lost", lastStatusChangeAt: ago(9) })], repliers: said("lo", 1) });
+  assert.equal(lost.moves.length + lost.creates.length, 0);
+  // A card the app made that isn't there any more was deleted (Tyler E., 2026-10-15).
+  assert.equal(plan({ settings: ON, repliers: said("gone", 1), cardsMade: new Set(["gone"]) }).creates.length, 0);
+  // A won card stays won; a word since makes a new Tier 2 card.
+  const won = plan({ settings: ON, opportunities: [card("wn", "s-cs", { status: "won", lastStatusChangeAt: ago(30) })], repliers: said("wn", 1) });
+  assert.deepEqual([won.moves.length, won.creates.map((c) => c.to)], [0, ["Tier 2"]]);
+  // An open card is left to the usual rules.
+  assert.equal(plan({ settings: ON, opportunities: [card("op", "s-t1", { lastStageChangeAt: ago(2) })], repliers: said("op", 1) }).moves.length, 0);
+});
+
+test("no Tier 2 card for a conversation while a texting nurture workflow is published", () => {
+  const r = plan({ settings: ON, repliers: said("ng", 1), nurtureLive: [{ id: "w1", name: "Tier 2+3 nurture" }] });
+  assert.match(r.creates[0].blocked, /Tier 2\+3 nurture/);
+  assert.equal(r.counts.blocked, 1);
+  assert.equal(r.counts.created, 0);
 });
 
 /* ---------- the one-time move off the old stages ---------- */
