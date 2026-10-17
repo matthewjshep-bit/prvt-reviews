@@ -112,6 +112,9 @@ export const EVENT_TYPES = [
   // The Tier 1 list (shared/tier-one.js): a house passed or kicked off it,
   // or an agent added to it; and a GHL card the app moved (data.from/to).
   "tier1_passed", "tier1_kicked", "tier1_added", "ghl_stage_moved",
+  // A GHL card's stage a person set in the app (the companion window): theirs,
+  // like a drag in GHL, so the offers don't move it back (shared/ghl-stages.js).
+  "ghl_stage_set",
   "subject_property_set", "fact_learned", "fact_removed", "import", "agent_estimate", "property_details",
   // A house they named in a text, address or not (shared/mentioned-houses.js):
   // data.sellerAsk, data.note, data.needsAddress.
@@ -167,7 +170,7 @@ export const EVENT_LABEL = {
   blast_sent: "deal blasted to them", dataroom_sent: "dataroom link sent", dataroom_viewed: "opened the dataroom",
   call_summary: "call", text_summary: "text conversation", note: "note",
   enrich_run: "AI enrichment ran", tag_added: "tag added", tag_removed: "tag removed",
-  tier1_passed: "passed on it from Tier 1", tier1_kicked: "taken off Tier 1", tier1_added: "put on Tier 1", ghl_stage_moved: "GHL card moved",
+  tier1_passed: "passed on it from Tier 1", tier1_kicked: "taken off Tier 1", tier1_added: "put on Tier 1", ghl_stage_moved: "GHL card moved", ghl_stage_set: "you moved their GHL card",
   subject_property_set: "subject property set", fact_learned: "learned about them", fact_removed: "fact removed",
   import: "imported", agent_estimate: "agent's own take", property_details: "property details", house_mentioned: "they named a house", referral_mentioned: "they named someone with a house",
   follow_up_sent: "we followed up",
@@ -207,7 +210,7 @@ export const EVENT_ICON = {
   blast_sent: "Megaphone", dataroom_sent: "FolderOpen", dataroom_viewed: "Eye",
   call_summary: "Phone", text_summary: "MessageSquare", note: "StickyNote",
   enrich_run: "Sparkles", tag_added: "Tag", tag_removed: "Tag",
-  tier1_passed: "XCircle", tier1_kicked: "CircleSlash", tier1_added: "CheckCircle2", ghl_stage_moved: "ArrowLeftRight",
+  tier1_passed: "XCircle", tier1_kicked: "CircleSlash", tier1_added: "CheckCircle2", ghl_stage_moved: "ArrowLeftRight", ghl_stage_set: "ArrowLeftRight",
   subject_property_set: "Crosshair", fact_learned: "Lightbulb", fact_removed: "Eraser", import: "Download", agent_estimate: "Calculator", property_details: "ClipboardList", house_mentioned: "Home", referral_mentioned: "Handshake",
   follow_up_sent: "BellRing",
   property_financed: "Landmark",

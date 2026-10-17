@@ -191,9 +191,11 @@ export function cardHeldBy({ offers = [], now = Date.now(), staleDays = GHL_STAG
  * per-contact search doesn't, and then the newest offer event wins).
  * `replied`: an agent's last word to us (never one who opted out) — the
  * Tier 2 card for a conversation (repliedCard). `cardMade`: the app has
- * made a card for them before.
+ * made a card for them before. `handMoves`: when a person set the card's
+ * stage in the app (ghl_stage_set, the companion window) — theirs, like a
+ * drag in GHL, and it stands until an offer event comes after it.
  */
-export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], replied = null, cardMade = false, settings = {}, now = Date.now() } = {}) {
+export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], handMoves = [], replied = null, cardMade = false, settings = {}, now = Date.now() } = {}) {
   const cfg = normalizeGhlStages(settings);
   const k = keys || stageKeys(acq);
   const label = (key) => CARD_STAGE_LABEL[key] || key;
@@ -225,13 +227,18 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
   const folded = at === "tier3";
   if (!CARD_STAGES.includes(at) && !folded) return { skip: `in ${from} — the migration moves it`, old: true };
 
+  // The newest stage a person set in the app. GHL's per-contact search
+  // doesn't say when the card last moved, so this time stands in for it.
+  const handAt = Math.max(-Infinity, ...(handMoves || []).map(ms).filter((x) => x != null));
+
   let to = t.to;
   let why = t.why;
   if (!to && folded) { to = "tier2"; why = "Tier 3 joins Tier 2"; }
   if (!to) {
     // No offers: a Tier 1 card nothing came of goes back to nurture after a while.
     if (at !== "tier1" || openPromise) return { skip: "no offers" };
-    const inTier = ms(card.lastStageChangeAt || card.updatedAt || card.dateAdded);
+    const latest = Math.max(ms(card.lastStageChangeAt || card.updatedAt || card.dateAdded) ?? -Infinity, handAt);
+    const inTier = Number.isFinite(latest) ? latest : null;
     const spoke = ms(lastIn);
     const staleMs = cfg.staleTier1Days * DAY_MS;
     if (inTier == null || now - inTier < staleMs || (spoke != null && now - spoke < staleMs)) return { skip: "a new Tier 1 card, nothing priced yet" };
@@ -247,7 +254,11 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
   // migration's own move into Tier 1, so nothing could ever take them out.
   const cardAt = ms(card.lastStageChangeAt);
   const appMade = cardAt != null && (appMoves || []).some((x) => { const m = ms(x); return m != null && Math.abs(m - cardAt) <= APP_MOVE_SLACK_MS; });
-  if (!folded && !appMade && t.to && cardAt != null && t.at != null && cardAt > t.at && (to !== at || t.won)) {
+  // A stage set in the companion is the card's last move unless GHL says it
+  // moved again after (the PUT itself lands within seconds of the record).
+  const handLast = Number.isFinite(handAt) && (cardAt == null || handAt >= cardAt - APP_MOVE_SLACK_MS);
+  const personAt = handLast ? handAt : appMade ? null : cardAt;
+  if (!folded && t.to && personAt != null && t.at != null && personAt > t.at && (to !== at || t.won)) {
     return { youMoved: { ...base, opportunityId: card.id, from, wanted: label(to) } };
   }
   if (to === at) {
@@ -298,6 +309,46 @@ function repliedCard({ k, mine, nameOf, contactId, name, replied, cardMade, nurt
 }
 
 /**
+ * planHandMove({ acq, keys, cards, to, contactId, name, nurtureLive })
+ *   → { move } | { create } | { skip } | { refuse }
+ *
+ * Matt sets an agent's Acquisitions stage from the companion window (2026-10-17:
+ * "what pipeline stage the person is in AND ability to edit/move stage").
+ * `to` is one of CARD_STAGES. Their open card moves; with none open, their
+ * newest closed card that isn't won is reopened there (he chose the stage, so
+ * a lost card is his to reopen), and with no card at all one is made.
+ * Refused: two open cards (which one is a person's call in GHL), a stage the
+ * pipeline doesn't have, and a move into Tier 2 while a published tier
+ * nurture would text them on it — the same guard the offers' moves keep.
+ * The runner records it as `ghl_stage_set`, so planCard leaves it alone
+ * until an offer event comes after it.
+ */
+export function planHandMove({ acq = null, keys = null, cards = [], to = "", contactId = "", name = "", nurtureLive = [] } = {}) {
+  if (!CARD_STAGES.includes(to)) return { refuse: "That isn't one of the four Acquisitions stages." };
+  if (!acq?.id) return { refuse: "GHL has no Acquisitions pipeline with Tier 1 and Tier 2 stages." };
+  const k = keys || stageKeys(acq);
+  const label = CARD_STAGE_LABEL[to];
+  if (!k[to]) return { refuse: `GHL's Acquisitions pipeline has no ${label} stage.` };
+  const nameOf = new Map((acq.stages || []).map((s) => [s.id, String(s.name || "").trim()]));
+  const mine = (cards || []).filter((c) => c && (!c.pipelineId || c.pipelineId === acq.id));
+  const open = mine.filter((c) => String(c.status || "open") === "open");
+  if (open.length > 1) return { refuse: "They have two open cards in Acquisitions. Move the right one in GHL." };
+  if (to === "tier2" && (nurtureLive || []).length) {
+    return { refuse: `${nurtureLive.map((w) => w.name).join(", ")} is published in GHL and would text them on a move to Tier 2. Move it in GHL if that's what you want.` };
+  }
+  const base = { contactId, to: label, toKey: to, toStageId: k[to] };
+  if (open.length) {
+    const card = open[0];
+    if (card.pipelineStageId === k[to]) return { skip: `Already in ${label}.` };
+    return { move: { ...base, opportunityId: card.id, from: nameOf.get(card.pipelineStageId) || "" } };
+  }
+  const when = (c) => String(c.lastStatusChangeAt || c.updatedAt || c.lastStageChangeAt || "");
+  const closed = mine.filter((c) => !/^won$/i.test(String(c.status || ""))).sort((a, b) => when(b).localeCompare(when(a)))[0];
+  if (closed) return { move: { ...base, opportunityId: closed.id, from: `${nameOf.get(closed.pipelineStageId) || "?"} (${closed.status})`, status: "open" } };
+  return { create: { ...base, name: name || "Agent" } };
+}
+
+/**
  * planStageMoves({ acq, opportunities, offers, lastIn, openPromiseContacts, nurtureLive, settings, now })
  *   → { moves, creates, youMoved, counts }
  *
@@ -310,7 +361,7 @@ function repliedCard({ k, mine, nameOf, contactId, name, replied, cardMade, nurt
  *   repliers             Map contactId → ISO of an agent's last word (opt-outs left out): Tier 2 cards, with tier2Repliers
  *   cardsMade            Set of contactIds the app has made a card for
  */
-export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), repliers = new Map(), cardsMade = new Set(), settings = {}, now = Date.now() } = {}) {
+export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), handMoves = new Map(), repliers = new Map(), cardsMade = new Set(), settings = {}, now = Date.now() } = {}) {
   const counts = { considered: 0, planned: 0, blocked: 0, created: 0, youMoved: 0, old: 0, tier2Repliers: 0, byMove: {} };
   const out = { moves: [], creates: [], youMoved: [], counts };
   if (!acq?.id) return out;
@@ -332,7 +383,7 @@ export function planStageMoves({ acq = null, opportunities = [], offers = [], la
     const name = mineOffers.find((o) => o.contactName)?.contactName || "";
     const r = planCard({ acq, keys, cards: cardsBy.get(contactId) || [], offers: mineOffers, contactId, name,
       lastIn: lastIn?.get?.(contactId) || null, openPromise: openPromiseContacts?.has?.(contactId) || false, nurtureLive,
-      appMoves: appMoves?.get?.(contactId) || [], replied: repliers?.get?.(contactId) || null, cardMade: cardsMade?.has?.(contactId) || false, settings, now });
+      appMoves: appMoves?.get?.(contactId) || [], handMoves: handMoves?.get?.(contactId) || [], replied: repliers?.get?.(contactId) || null, cardMade: cardsMade?.has?.(contactId) || false, settings, now });
     if (r.old) counts.old++;
     if (r.youMoved) { counts.youMoved++; out.youMoved.push(r.youMoved); continue; }
     if (r.create?.replier || r.move?.replier) counts.tier2Repliers++;

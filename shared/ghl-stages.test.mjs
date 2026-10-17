@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planStageMoves, planCard, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy } from "./ghl-stages.js";
+import { planStageMoves, planCard, planHandMove, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy } from "./ghl-stages.js";
 
 const NOW = Date.parse("2026-10-13T20:00:00Z");
 const ago = (d) => new Date(NOW - d * 86400000).toISOString();
@@ -290,4 +290,57 @@ test("a pass that leaves another house live says which house keeps the card, and
   assert.match(out.text, /stays in Offer Out: our number on 5 Out St is still out/);
   assert.equal(cardHeldBy({ offers: [passed], now: NOW }), null, "nothing else live: the card goes to Tier 2, nothing to explain");
   assert.equal(cardHeldBy({ offers: [passed, { ...held, createdAt: ago(15) }], now: NOW }), null, "a draft quiet past staleTier1Days doesn't hold it");
+});
+
+// The companion window (Matt, 2026-10-17): he sets an agent's stage by hand.
+test("a stage set by hand moves their open card to that stage", () => {
+  const r = planHandMove({ acq: ACQ, contactId: "m", to: "tier1", cards: [card("m", "s-t2")] });
+  assert.deepEqual(r.move, { contactId: "m", to: "Tier 1", toKey: "tier1", toStageId: "s-t1", opportunityId: "opp-m", from: "Tier 2 - Warm, No Active Deal" });
+  assert.equal(planHandMove({ acq: ACQ, contactId: "m", to: "offerOut", cards: [card("m", "s-out")] }).skip, "Already in Offer Out.");
+});
+
+test("a stage set by hand with no open card reopens their last card, or makes one; a won card stays won", () => {
+  const lost = card("m", "s-out", { status: "lost", updatedAt: ago(3) });
+  const r = planHandMove({ acq: ACQ, contactId: "m", to: "tier1", cards: [lost] });
+  assert.equal(r.move.opportunityId, "opp-m");
+  assert.equal(r.move.status, "open");
+  assert.equal(r.move.toStageId, "s-t1");
+  const made = planHandMove({ acq: ACQ, contactId: "m", to: "tier2", name: "Agent M", cards: [card("m", "s-cs", { status: "won" })] });
+  assert.deepEqual(made.create, { contactId: "m", to: "Tier 2", toKey: "tier2", toStageId: "s-t2", name: "Agent M" });
+});
+
+test("a stage set by hand is refused with two open cards, a stage GHL lacks, or a Tier 2 move that would start a texting nurture", () => {
+  assert.match(planHandMove({ acq: ACQ, contactId: "m", to: "tier1", cards: [card("m", "s-t2"), card("m", "s-out", { id: "opp-2" })] }).refuse, /two open cards/);
+  assert.match(planHandMove({ acq: { id: "acq", stages: ACQ.stages.slice(0, 2) }, contactId: "m", to: "offerOut", cards: [] }).refuse, /no Offer Out stage/);
+  assert.match(planHandMove({ acq: ACQ, contactId: "m", to: "tier2", cards: [card("m", "s-t1")], nurtureLive: [{ id: "w", name: "Tier 2+3 nurture" }] }).refuse, /Tier 2\+3 nurture is published/);
+  assert.ok(planHandMove({ acq: ACQ, contactId: "m", to: "tier1", cards: [card("m", "s-t2")], nurtureLive: [{ id: "w", name: "Tier 2+3 nurture" }] }).move, "the guard is only for Tier 2");
+  assert.match(planHandMove({ acq: ACQ, contactId: "m", to: "won", cards: [] }).refuse, /four Acquisitions stages/);
+});
+
+test("the offers don't drag back a card moved in the companion, even when GHL doesn't say when it moved", () => {
+  // His offer is Sent (Offer Out); he set Tier 1 by hand yesterday, after the send.
+  const opp = card("m", "s-t1", { lastStageChangeAt: undefined });
+  const offers = [offer("m", { sends: [{ ts: ago(5) }] })];
+  const r = planCard({ acq: ACQ, contactId: "m", cards: [opp], offers, handMoves: [ago(1)], now: NOW });
+  assert.ok(r.youMoved, JSON.stringify(r));
+  assert.equal(r.youMoved.wanted, "Offer Out");
+  // Without the record it would have moved.
+  assert.equal(planCard({ acq: ACQ, contactId: "m", cards: [opp], offers, now: NOW }).move?.to, "Offer Out");
+  // GHL's own time for the PUT, seconds after the record, is the same move.
+  assert.ok(planCard({ acq: ACQ, contactId: "m", cards: [card("m", "s-t1", { lastStageChangeAt: new Date(Date.parse(ago(1)) + 5000).toISOString() })], offers, handMoves: [ago(1)], appMoves: [], now: NOW }).youMoved);
+  // The sweep reads the same record.
+  assert.equal(planStageMoves({ acq: ACQ, now: NOW, opportunities: [opp], offers, handMoves: new Map([["m", [ago(1)]]]) }).youMoved.length, 1);
+});
+
+test("a hand move stands until something new happens on an offer, then the offers win", () => {
+  const offers = [offer("m", { sends: [{ ts: ago(1) }] })];   // sent after the hand move
+  const r = planCard({ acq: ACQ, contactId: "m", cards: [card("m", "s-t1", { lastStageChangeAt: undefined })], offers, handMoves: [ago(3)], now: NOW });
+  assert.equal(r.move?.to, "Offer Out");
+});
+
+test("an app move after the hand move is the app's, not his", () => {
+  // He set Tier 1 five days ago; the planner moved it to Tier 2 two days ago (recorded); an offer event three days ago.
+  const offers = [offer("m", { status: "passed", statusAt: ago(4), sends: [{ ts: ago(6) }] }), offer("m", { status: "new", sends: [], createdAt: ago(3) })];
+  const r = planCard({ acq: ACQ, contactId: "m", cards: [card("m", "s-t2", { lastStageChangeAt: ago(2) })], offers, handMoves: [ago(5)], appMoves: [ago(2)], now: NOW });
+  assert.ok(!r.youMoved, JSON.stringify(r));
 });

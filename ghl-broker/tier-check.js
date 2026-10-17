@@ -20,12 +20,12 @@
 // the bot added never moves a card.
 
 import { store as defaultStore } from "./store.js";
-import { listPipelines, addContactTags, removeContactTags, updateOpportunity, createOpportunity, searchOpportunities, listWorkflows, getContact } from "./ghl.js";
+import { listPipelines, addContactTags, removeContactTags, updateOpportunity, createOpportunity, searchOpportunities, listWorkflows, getContact, getOpportunity } from "./ghl.js";
 import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { recordEvent } from "./contact-record.js";
 import { localHour } from "./promise-sweep.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
-import { planStageMoves, planCard, normalizeGhlStages, stageKeys } from "./shared/ghl-stages.js";
+import { planStageMoves, planCard, planHandMove, normalizeGhlStages, stageKeys, CARD_STAGE_LABEL } from "./shared/ghl-stages.js";
 import { offerStageAt } from "./shared/offer-stage.js";
 import { openPromises } from "./shared/promise-resolver.js";
 import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
@@ -182,15 +182,21 @@ const nurtureWorkflows = (list) => (Array.isArray(list) ? list : [])
 // the Tier 1 list). Not the bot's TIER workflows: those followed the
 // conversation at the time, and stand as a person's move would.
 export const APP_MOVE_EVENT_TYPES = ["ghl_stage_moved"];
-export function appMovesByContact(events = []) {
+// A stage a person set in the app (the companion window, setCardStage): a
+// person's move, like a drag in GHL. Never in APP_MOVE_EVENT_TYPES, or the
+// offers would read it as their own and move the card straight back.
+export const HAND_MOVE_EVENT_TYPES = ["ghl_stage_set"];
+const movesByContact = (types) => (events = []) => {
   const out = new Map();
   for (const e of events || []) {
-    if (!e?.contactId || !e.at || !APP_MOVE_EVENT_TYPES.includes(e.type)) continue;
+    if (!e?.contactId || !e.at || !types.includes(e.type)) continue;
     if (!out.has(e.contactId)) out.set(e.contactId, []);
     out.get(e.contactId).push(e.at);
   }
   return out;
-}
+};
+export const appMovesByContact = movesByContact(APP_MOVE_EVENT_TYPES);
+export const handMovesByContact = movesByContact(HAND_MOVE_EVENT_TYPES);
 // The contacts the app has made a card for (a deleted one stays deleted).
 const cardsMadeBy = (events = []) => new Set((events || []).filter((e) => e?.contactId && APP_MOVE_EVENT_TYPES.includes(e.type) && e.data?.created).map((e) => e.contactId));
 
@@ -264,7 +270,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     store.listContactEventsSince?.(locationId, iso(now - 7 * 86400000), { types: ["promise_made", "promise_owed", "promise_kept"], limit: 5000 }).catch(() => []) || [],
     // Card moves the app made, so "newest wins" never reads one as yours, and
     // the cards it made, so one someone deleted stays deleted.
-    store.listContactEventsSince?.(locationId, iso(now - YEAR_MS), { types: APP_MOVE_EVENT_TYPES, limit: 20000 }).catch(() => []) || [],
+    store.listContactEventsSince?.(locationId, iso(now - YEAR_MS), { types: [...APP_MOVE_EVENT_TYPES, ...HAND_MOVE_EVENT_TYPES], limit: 20000 }).catch(() => []) || [],
     store.lastContactActivity?.(locationId, { types: INBOUND_EVENT_TYPES, inboundOnly: true, limit: 20000 }).catch(() => []) || [],
     (api.listWorkflows ? api.listWorkflows(client, locationId) : Promise.resolve(null)).catch(() => null),
     cfg.tier2Repliers ? store.listContactEventsSince?.(locationId, iso(now - 3 * YEAR_MS), { types: ["unsubscribed"], limit: 20000 }).catch(() => []) || [] : [],
@@ -280,6 +286,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     lastIn: new Map((lastRows || []).map((r) => [r.contactId, r.at])),
     openPromiseContacts: new Set(openPromises(promiseEvents || [], { now }).map((p) => p.contactId)),
     appMoves: appMovesByContact(moveEvents),
+    handMoves: handMovesByContact(moveEvents),
     repliers: cfg.tier2Repliers ? agentRepliers(lastRows, optOuts, (id) => agentIds.has(id)) : new Map(),
     cardsMade: cardsMadeBy(moveEvents),
     // Can't read the workflow list: assume the nurture is live, so nothing moves into Tier 2 blind.
@@ -391,9 +398,11 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
     const [cards, offers, events] = await Promise.all([
       api.searchOpportunities(client, locationId, { contactId, pipelineId: acq.id }),
       store.listOffers(locationId, { contactId, limit: 100, lean: true }).catch(() => []),
-      cfg.tier2Repliers
-        ? store.listContactEvents?.(locationId, contactId, { types: [...INBOUND_EVENT_TYPES, "unsubscribed", ...APP_MOVE_EVENT_TYPES], limit: 500 }).catch(() => []) || []
-        : [],
+      // A stage set in the companion is read every time: this search has no
+      // lastStageChangeAt, so without it any offer update would undo it.
+      store.listContactEvents?.(locationId, contactId, {
+        types: cfg.tier2Repliers ? [...INBOUND_EVENT_TYPES, "unsubscribed", ...APP_MOVE_EVENT_TYPES, ...HAND_MOVE_EVENT_TYPES] : HAND_MOVE_EVENT_TYPES, limit: 500,
+      }).catch(() => []) || [],
     ]);
     const mine = (events || []).map((e) => ({ ...e, contactId }));
     const lastWord = mine.filter(isTheirWord).sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
@@ -404,6 +413,7 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
       nurtureLive: await liveNurture(client, locationId, api, now),
       replied: agentRepliers(lastWord ? [lastWord] : [], mine.filter((e) => e.type === "unsubscribed")).get(contactId) || null,
       cardMade: cardsMadeBy(mine).has(contactId),
+      handMoves: handMovesByContact(mine).get(contactId) || [],
     });
     if (repliersOnly && !(plan.create?.replier || plan.move?.replier)) return { skip: plan.skip || "not a conversation's Tier 2 card" };
     if (plan.skip || plan.youMoved || plan.move?.blocked || plan.create?.blocked) return plan;
@@ -414,6 +424,61 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
   } catch (e) {
     return { error: String(e?.message || e).slice(0, 160) };
   }
+}
+
+/**
+ * setCardStage({ client, locationId, contactId, to, store, ghl, now })
+ *   → { ok, opportunityId, from, to, key, created? } | { refused } | { skip }
+ *
+ * Matt sets an agent's Acquisitions stage from the companion window (shared/
+ * ghl-stages.js planHandMove). Works whether or not ghlStages is on: it's a
+ * person's move, as a drag in GHL is. Recorded as `ghl_stage_set` so the
+ * offers leave it until an offer event comes after it. The card is read back
+ * by id (GHL's search lags). Ids and stage names only.
+ */
+export async function setCardStage({ client, locationId, contactId, to, store = defaultStore, ghl = null, now = Date.now() }) {
+  const api = ghl || { listPipelines, searchOpportunities, updateOpportunity, createOpportunity, getOpportunity, listWorkflows, getContact };
+  const acq = acquisitionsPipeline(await pipelinesFor(client, locationId, { ghl: api, now }));
+  if (!acq) return { refused: "GHL has no Acquisitions pipeline with Tier 1 and Tier 2 stages." };
+  const keys = stageKeys(acq);
+  const cards = await api.searchOpportunities(client, locationId, { contactId, pipelineId: acq.id });
+  const plan = planHandMove({
+    acq, keys, contactId, to,
+    cards: (cards || []).map((c) => ({ ...c, pipelineStageId: c.pipelineStageId || c.stageId })),
+    nurtureLive: to === "tier2" ? await liveNurture(client, locationId, api, now) : [],
+  });
+  if (plan.refuse) return { refused: plan.refuse };
+  if (plan.skip) return { skip: plan.skip };
+  let opportunityId;
+  let from = "";
+  if (plan.move) {
+    const m = plan.move;
+    await api.updateOpportunity(client, m.opportunityId, { stageId: m.toStageId, ...(m.status ? { status: m.status } : {}) });
+    const back = api.getOpportunity ? await api.getOpportunity(client, m.opportunityId).catch(() => null) : null;
+    if (back && back.stageId && back.stageId !== m.toStageId) {
+      const e = new Error(`GHL kept the card in ${(acq.stages || []).find((x) => x.id === back.stageId)?.name || "its stage"}`);
+      e.http = 502;
+      throw e;
+    }
+    opportunityId = m.opportunityId;
+    from = m.from;
+  } else {
+    const c = plan.create;
+    const offers = await store.listOffers(locationId, { contactId, limit: 20, lean: true }).catch(() => []);
+    let name = (offers || []).find((o) => o?.contactName)?.contactName || "";
+    if (!name && api.getContact) {
+      const who = await api.getContact(client, contactId).catch(() => null);
+      name = [who?.firstName, who?.lastName].filter(Boolean).join(" ") || String(who?.name || who?.contactName || "");
+    }
+    const made = await api.createOpportunity(client, { locationId, pipelineId: acq.id, contactId, name: name || c.name, stageId: c.toStageId });
+    opportunityId = made?.id || "";
+  }
+  // Without this record the offers would read the move as nobody's and could
+  // put the card back on their next change; say so rather than pass quietly.
+  const recorded = await recordEvent({ store, locationId, contactId, party: "agent", type: "ghl_stage_set", source: "companion",
+    data: { from, to: CARD_STAGE_LABEL[to], ...(plan.create ? { created: true } : {}) } }).then((r) => r?.inserted === true, () => false);
+  return { ok: true, opportunityId, from, to: CARD_STAGE_LABEL[to], key: to, ...(plan.create ? { created: true } : {}),
+    ...(recorded ? {} : { warning: "Moved in GHL, but the app couldn't note it was you. The offers may move it back on their next change." }) };
 }
 
 /**

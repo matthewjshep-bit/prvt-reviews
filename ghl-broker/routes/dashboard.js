@@ -46,9 +46,9 @@ import { needsPreContract, preContractChecks } from "../shared/pre-contract.js";
 import { listPipelines, getContact, searchOpportunities } from "../ghl.js";
 import { mapPool } from "../map-pool.js";
 import { reconcileLocation, CURSOR_NAME as MIRROR_CURSOR, acquisitionsPipeline, pipelinesFor } from "../ghl-mirror.js";
-import { runStagePlan, listAcquisitionOpportunities } from "../tier-check.js";
+import { runStagePlan, listAcquisitionOpportunities, setCardStage } from "../tier-check.js";
 import { runMigration } from "../acq-migrate.js";
-import { boardCounts, stageKeys, stageKeyOf, CARD_STAGE_LABEL } from "../shared/ghl-stages.js";
+import { boardCounts, stageKeys, stageKeyOf, CARD_STAGE_LABEL, CARD_STAGES } from "../shared/ghl-stages.js";
 import { stageCounts } from "../shared/offer-stage.js";
 import { annotateCurrent } from "../shared/current-offer.js";
 import { listJobs as listUnderwriteJobs, publicJob as publicUnderwriteJob, AUTO_UNDERWRITE_ENABLED } from "../auto-underwrite.js";
@@ -893,7 +893,25 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       if (!card) return res.json({ ok: true, stage: null });
       const key = stageKeyOf(stageKeys(acq), card.stageId);
       const name = (acq.stages || []).find((x) => x.id === card.stageId)?.name || "";
-      res.json({ ok: true, stage: CARD_STAGE_LABEL[key] || name || null, key: key || null, name, status: card.status || "open", opportunityId: card.id, cards: cards.length });
+      res.json({ ok: true, stage: CARD_STAGE_LABEL[key] || name || null, key: key || null, name, status: card.status || "open", opportunityId: card.id, cards: cards.length, open: cards.filter((c) => (c.status || "open") === "open").length });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Matt sets the agent's Acquisitions stage from the companion window
+  // (2026-10-17). { contact_id, to: "tier2"|"tier1"|"offerOut"|"contract" }.
+  // A person's move: tier-check.js setCardStage records it as his, so the
+  // offers don't move the card back. 409 with the reason when it can't move.
+  router.post("/ghl/card", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = String(req.body?.contact_id || "").trim().slice(0, 64);
+      const to = String(req.body?.to || "").trim();
+      if (!contactId) return res.status(400).json({ error: "contact_id required" });
+      if (!CARD_STAGES.includes(to)) return res.status(400).json({ error: `to must be one of ${CARD_STAGES.join(", ")}` });
+      const r = await setCardStage({ client, locationId, contactId, to, store });
+      if (r.refused) return res.status(409).json({ error: r.refused });
+      pipelineCache.delete(locationId);
+      res.json({ ok: true, ...r });
     } catch (err) { fail(res, err); }
   });
 
