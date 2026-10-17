@@ -71,3 +71,17 @@ test("the companion's pane opens on the Offer tab; the Desk's still opens on Con
   expect(selected(renderToStaticMarkup(<PaneBody pane={pane} item={item} targets={targets} convo={convo} bodies={bodies} defaultTab="offer" />))).toBe("Offer");
   expect(selected(renderToStaticMarkup(<PaneBody pane={pane} item={item} targets={targets} convo={convo} bodies={bodies} />))).toBe("Conversation");
 });
+
+test("the stage picker shows GHL's four stages in the board's order, and says what a pick will do with their card", async () => {
+  const { default: GhlStagePicker, cardNote } = await import("../GhlStagePicker.jsx");
+  const html = renderToStaticMarkup(<GhlStagePicker contactId={CONTACT} party="agent" />);
+  const labels = [...html.matchAll(/role="radio"[^>]*>(?:<svg[\s\S]*?<\/svg>)?([^<]+)</g)].map((m) => m[1]);
+  expect(labels).toEqual(["Tier 2", "Tier 1", "Offer Out", "Contract"]);
+  expect(renderToStaticMarkup(<GhlStagePicker contactId={CONTACT} party="investor" />)).toBe("", "a buyer has no Acquisitions card");
+  expect(cardNote({ stage: null })).toMatch(/No card in Acquisitions yet/);
+  expect(cardNote({ stage: "Tier 2", key: "tier2", status: "lost", open: 0 })).toMatch(/lost \(was Tier 2\)\. Picking a stage reopens it\.$/);
+  expect(cardNote({ stage: "Contract", key: "contract", status: "won", open: 0 })).toBe("Their card is won. Picking a stage makes a new one.");
+  expect(cardNote({ stage: "Offer Out", key: "offerOut", status: "open", open: 2 })).toMatch(/two open cards/);
+  expect(cardNote({ stage: "Negotiations", name: "Negotiations", key: null, status: "open", open: 1 })).toMatch(/an old stage/);
+  expect(cardNote({ stage: "Tier 1", key: "tier1", status: "open", open: 1 })).toBe("");
+});

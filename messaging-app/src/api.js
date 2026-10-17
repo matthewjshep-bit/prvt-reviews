@@ -402,6 +402,10 @@ export const getGhlPipeline = (fresh = false) =>
 // One agent's GHL Acquisitions card: { stage: "Tier 2" | "Tier 1" | "Offer Out" | "Contract" | other name | null }.
 export const getGhlCard = (contactId) =>
   fetch(`${API_BASE}/api/dashboard/ghl/card?${locq()}&contact_id=${encodeURIComponent(contactId)}`).then(j);
+// Matt sets their Acquisitions stage (the companion window): to is "tier2" |
+// "tier1" | "offerOut" | "contract". Recorded as his move, so the offers leave
+// it until something new happens on an offer. 409 says why it can't move.
+export const setGhlCardStage = (contactId, to) => post("/api/dashboard/ghl/card", { contact_id: contactId, to });
 // The one-time move off GHL's old stages: a report, or { apply: true } to move
 // up to 300 cards a press.
 export const migratePipeline = (apply = false) => post("/api/dashboard/ghl/pipeline/migrate", { apply });

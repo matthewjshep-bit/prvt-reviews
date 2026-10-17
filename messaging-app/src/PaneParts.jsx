@@ -113,7 +113,7 @@ export function usePane({ item, targets, bodies = null, feedback = null, onDone 
 /** The person (their name opens their record) · the house, and the strip under it. */
 // Where the agent sits on GHL's Acquisitions board, beside their name
 // (Matt, 2026-10-13). Agents only; a buyer has no card there.
-const GHL_STAGE_CLS = {
+export const GHL_STAGE_CLS = {
   tier2: "bg-slate-100 text-slate-700", tier1: "bg-amber-100 text-amber-800",
   offerOut: "bg-blue-100 text-blue-800", contract: "bg-emerald-100 text-emerald-800",
 };
@@ -134,14 +134,14 @@ export function GhlStagePill({ contactId, party }) {
   );
 }
 
-export function PaneHeading({ item, targets, pane, fallback = "" }) {
+export function PaneHeading({ item, targets, pane, fallback = "", stagePill = true }) {
   const street = String(item.address || pane.side.offer?.address || "").split(",")[0].trim();
   const name = pane.name;
   return (
     <div className="min-w-0">
       <h2 className="mt-1 text-base font-bold leading-snug text-slate-900">
         {targets.contactId && name
-          ? <><ContactLink contactId={targets.contactId} name={name} party={targets.party} className="font-bold">{name}</ContactLink>{street ? <span> · {street}</span> : null}<GhlStagePill contactId={targets.contactId} party={targets.party} /></>
+          ? <><ContactLink contactId={targets.contactId} name={name} party={targets.party} className="font-bold">{name}</ContactLink>{street ? <span> · {street}</span> : null}{stagePill && <GhlStagePill contactId={targets.contactId} party={targets.party} />}</>
           : (fallback || street || name || "Untitled")}
       </h2>
       {targets.contactId && <MomentStrip timeline={pane.timeline} onHistory={pane.openContact} />}

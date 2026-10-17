@@ -5,10 +5,11 @@
 // the person in (companion.js); a GHL conversation page is turned into its
 // person by the broker.
 //
-// The person's Desk pane is on top (their current offer, the conversation
-// and reply box, Status · Bot · Edit offer · Call, the same as the Desk), and
-// their whole record is under it (ContactDrawer's body). ?contact= keeps the
-// person across a reload.
+// Their GHL pipeline stage is on top, with buttons to move it
+// (GhlStagePicker.jsx). Under it, the person's Desk pane (their current
+// offer, the conversation and reply box, Status · Bot · Edit offer · Call, the
+// same as the Desk), and their whole record under that (ContactDrawer's
+// body). ?contact= keeps the person across a reload.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, Loader2 } from "lucide-react";
@@ -20,6 +21,7 @@ import { draftsKey, loadDrafts } from "./OfferPane.jsx";
 import { forget, useLoad } from "./work-data.js";
 import { rowTargets } from "./work-queue.js";
 import { COMPANION_HELLO, companionPaneItem, readCompanionMessage } from "./companion.js";
+import GhlStagePicker from "./GhlStagePicker.jsx";
 
 const PING = "shepflips:companion-ping";
 
@@ -53,7 +55,8 @@ function CompanionPane({ contactId, name, party, settings }) {
   return (
     <section aria-label="Their offer and conversation" className="flex h-[80vh] min-h-[28rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
       <div className="shrink-0 space-y-2 border-b border-slate-200 px-4 py-3">
-        <PaneHeading item={item} targets={targets} pane={pane} fallback={name || "Their offers"} />
+        {/* The stage is the picker above, not a pill here. */}
+        <PaneHeading item={item} targets={targets} pane={pane} fallback={name || "Their offers"} stagePill={false} />
         <div className="flex flex-wrap items-start gap-1.5">
           <PaneActions pane={pane} item={item} targets={targets} />
         </div>
@@ -152,6 +155,7 @@ export default function CompanionView({ settings = null }) {
           </div>
         ) : (
           <div className="space-y-4 p-3 sm:p-4">
+            <GhlStagePicker key={`stage:${contactId}`} contactId={contactId} party={party} />
             <CompanionPane key={contactId} contactId={contactId} name={name} party={party} settings={settings} />
             <section ref={recordRef} aria-label="Their record" className="scroll-mt-12 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
               <ContactRecordBody key={contactId} contactId={contactId} inline onLoaded={setRec} />

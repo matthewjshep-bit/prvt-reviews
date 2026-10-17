@@ -20,6 +20,7 @@ const { store } = await import("./store.js");
 const { recordEvent } = await import("./contact-record.js");
 const { default: createDashboardRouter } = await import("./routes/dashboard.js");
 const { _resetPipelineCache } = await import("./ghl-mirror.js");
+const { syncAgentCard, _resetWorkflowCache } = await import("./tier-check.js");
 
 const DAY = 86400000;
 const ago = (d) => new Date(Date.now() - d * DAY).toISOString();
@@ -29,7 +30,7 @@ const STAGES = [
 ].map(([id, name], position) => ({ id, name, position }));
 
 // A GHL board in memory: cards by id, tag calls, every call logged.
-function ghlBoard(cards) {
+function ghlBoard(cards, workflows = []) {
   const board = new Map(cards.map((c) => [c.id, { pipelineId: "acq", status: "open", ...c }]));
   const tagCalls = [];
   const calls = [];
@@ -48,6 +49,7 @@ function ghlBoard(cards) {
       if (m && method === "PUT") { Object.assign(board.get(m[1]), opts.body.pipelineStageId ? { pipelineStageId: opts.body.pipelineStageId } : {}, opts.body.status ? { status: opts.body.status } : {}); return {}; }
       if (m && method === "GET") return { opportunity: board.get(m[1]) };
       if (p === "/opportunities/" && method === "POST") { const id = `op-new-${board.size}`; board.set(id, { id, ...opts.body }); return { opportunity: { id } }; }
+      if (p.startsWith("/workflows/")) return { workflows: workflows.map((w) => ({ ...w })) };
       if (/^\/contacts\/[^/]+\/tags$/.test(p)) { tagCalls.push([method, p.split("/")[2], opts.body.tags]); return { tags: [] }; }
       return {};
     },
@@ -56,10 +58,11 @@ function ghlBoard(cards) {
 }
 
 let seq = 0;
-async function harness({ cards, saved = {} }) {
+async function harness({ cards, saved = {}, workflows = [] }) {
   const LOC = `loc-tier-one-${++seq}`;
   _resetPipelineCache();
-  const ghl = ghlBoard(cards);
+  _resetWorkflowCache();
+  const ghl = ghlBoard(cards, workflows);
   const statusCalls = [];
   const operatorStatus = async ({ offer, status, note }) => {
     statusCalls.push({ offerId: offer.id, status, note });
@@ -347,5 +350,74 @@ test("one agent's GHL stage is read for the name line: the open card, its four-s
     assert.equal((await h.req("GET", "/api/dashboard/ghl/card?contact_id=nobody")).json.stage, null);
     assert.equal((await h.req("GET", "/api/dashboard/ghl/card")).status, 400);
     assert.deepEqual(h.ghl.calls.filter(([m]) => m !== "GET"), [], "reading moves nothing");
+  } finally { h.close(); }
+});
+
+/* ---------- Matt sets the stage from the companion window (2026-10-17) ---------- */
+
+const setStage = (h, contact_id, to) => h.req("POST", "/api/dashboard/ghl/card", { contact_id, to });
+
+test("a stage picked in the companion moves their GHL card there, and the record says Matt did it", async () => {
+  const h = await harness({ cards: [{ id: "opA", contactId: "a1", name: "A", pipelineStageId: "s-t2" }] });
+  try {
+    const r = await setStage(h, "a1", "tier1");
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.deepEqual([r.json.to, r.json.key, r.json.opportunityId], ["Tier 1", "tier1", "opA"]);
+    assert.equal(h.ghl.board.get("opA").pipelineStageId, "s-t1");
+    assert.deepEqual((await h.req("GET", "/api/dashboard/ghl/card?contact_id=a1")).json.key, "tier1");
+    const evs = await store.listContactEvents(h.LOC, "a1", { types: ["ghl_stage_set", "ghl_stage_moved"] });
+    assert.deepEqual(evs.map((e) => [e.type, e.source, e.data.to]), [["ghl_stage_set", "companion", "Tier 1"]], "his move, not the app's");
+    assert.equal((await setStage(h, "a1", "tier1")).json.skip, "Already in Tier 1.");
+  } finally { h.close(); }
+});
+
+test("the offers don't move a card back that Matt set in the companion, until something new happens on an offer", async () => {
+  const saved = { ghlStages: { mode: "on" } };
+  const h = await harness({ saved, cards: [{ id: "opS", contactId: "c1", name: "Sam Lee", pipelineStageId: "s-out" }] });
+  try {
+    await offer(h.LOC, { sends: [{ ts: ago(2), results: { sms: { ok: true } } }] });   // Sent: the offers want Offer Out
+    assert.equal((await setStage(h, "c1", "tier1")).status, 200);
+    const r = await syncAgentCard({ client: h.ghl.client, locationId: h.LOC, contactId: "c1", store, saved });
+    assert.ok(r.youMoved, JSON.stringify(r));
+    assert.equal(h.ghl.board.get("opS").pipelineStageId, "s-t1", "still where he put it");
+  } finally { h.close(); }
+});
+
+test("with no open card, a stage picked reopens their closed card or makes one; a won card stays won", async () => {
+  const h = await harness({ cards: [
+    { id: "opL", contactId: "l1", name: "L", pipelineStageId: "s-out", status: "lost" },
+    { id: "opW", contactId: "w1", name: "W", pipelineStageId: "s-cs", status: "won" },
+  ] });
+  try {
+    await offer(h.LOC, { contactId: "w1", contactName: "Wes Ng" });
+    assert.equal((await setStage(h, "l1", "tier1")).status, 200);
+    assert.deepEqual([h.ghl.board.get("opL").pipelineStageId, h.ghl.board.get("opL").status], ["s-t1", "open"]);
+    const made = await setStage(h, "w1", "tier2");
+    assert.equal(made.json.created, true);
+    assert.equal(h.ghl.board.get("opW").status, "won");
+    const card = h.ghl.board.get(made.json.opportunityId);
+    assert.deepEqual([card.pipelineStageId, card.contactId, card.name, card.pipelineId], ["s-t2", "w1", "Wes Ng", "acq"]);
+  } finally { h.close(); }
+});
+
+test("a stage pick is refused with two open cards, an unknown stage, or a Tier 2 move that would start a texting nurture", async () => {
+  const h = await harness({
+    cards: [
+      { id: "op1", contactId: "two", name: "T", pipelineStageId: "s-t2" }, { id: "op2", contactId: "two", name: "T", pipelineStageId: "s-out" },
+      { id: "opN", contactId: "n1", name: "N", pipelineStageId: "s-t1" },
+    ],
+    workflows: [{ id: "wf1", name: "Tier 2+3 nurture", status: "published" }],
+  });
+  try {
+    const two = await setStage(h, "two", "tier1");
+    assert.equal(two.status, 409);
+    assert.match(two.json.error, /two open cards/);
+    assert.equal((await setStage(h, "n1", "won")).status, 400);
+    assert.equal((await setStage(h, "", "tier1")).status, 400);
+    const nurture = await setStage(h, "n1", "tier2");
+    assert.equal(nurture.status, 409);
+    assert.match(nurture.json.error, /Tier 2\+3 nurture is published/);
+    assert.deepEqual(h.ghl.calls.filter(([m]) => m === "PUT" || m === "POST"), [], "nothing moved");
+    assert.equal((await setStage(h, "n1", "offerOut")).status, 200, "other stages still move");
   } finally { h.close(); }
 });
