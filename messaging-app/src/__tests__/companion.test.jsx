@@ -58,3 +58,16 @@ test("the drawer is still a slide-over with a close button; the companion's reco
   expect(inline).not.toContain("sticky top-0");
   expect(inline).toContain("Loading their record");
 });
+
+test("the companion's pane opens on the Offer tab; the Desk's still opens on Conversation", async () => {
+  const { PaneBody } = await import("../PaneParts.jsx");
+  const item = { ...companionPaneItem(CONTACT), contactName: "Dana Reyes" };
+  const targets = rowTargets(item, []);
+  const pane = { side: { offer: null, siblings: [], replaced: null, loading: false, error: "", reload: () => {} }, theirs: { loading: false },
+    offerId: null, editing: null, requote: () => {}, requoting: false, setOfferId: () => {}, edit: () => {}, setEditing: () => {} };
+  const convo = { item, targets, sendsEnabled: false, serverOffsetMs: 0, onDone: () => {}, fb: null, taught: [], bot: null };
+  const bodies = { thread: { messages: [] } };
+  const selected = (html) => html.match(/aria-selected="true"[^>]*>([^<]+)</)?.[1];
+  expect(selected(renderToStaticMarkup(<PaneBody pane={pane} item={item} targets={targets} convo={convo} bodies={bodies} defaultTab="offer" />))).toBe("Offer");
+  expect(selected(renderToStaticMarkup(<PaneBody pane={pane} item={item} targets={targets} convo={convo} bodies={bodies} />))).toBe("Conversation");
+});

@@ -213,11 +213,14 @@ export function PaneActions({ pane, item, targets, rowOfferId = null, onStatusCh
 }
 
 /**
- * <PaneBody pane item targets convo settings bodies onDeal />
+ * <PaneBody pane item targets convo settings bodies onDeal defaultTab />
  * The offer on the left, the conversation on the right; tabs below lg.
+ *   defaultTab  which tab shows first below lg: "conversation" (the Desk), or
+ *               "offer" (the companion window, which sits beside GHL's own
+ *               conversation)
  */
-export function PaneBody({ pane, item, targets, convo, settings = null, bodies = null, onDone, onDeal = null }) {
-  const [tab, setTab] = useState("conversation");   // below lg the two sides are tabs
+export function PaneBody({ pane, item, targets, convo, settings = null, bodies = null, onDone, onDeal = null, defaultTab = "conversation" }) {
+  const [tab, setTab] = useState(defaultTab === "offer" ? "offer" : "conversation");   // below lg the two sides are tabs
   // T below laptop width: the Feedback control is on the Conversation tab.
   useEffect(() => {
     const onTeach = () => setTab("conversation");

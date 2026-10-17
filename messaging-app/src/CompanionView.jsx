@@ -58,7 +58,8 @@ function CompanionPane({ contactId, name, party, settings }) {
           <PaneActions pane={pane} item={item} targets={targets} />
         </div>
       </div>
-      <PaneBody pane={pane} item={item} targets={targets} convo={convo} settings={settings} onDone={done} />
+      {/* GHL's own window already shows the conversation; the offer is what he comes here for. */}
+      <PaneBody pane={pane} item={item} targets={targets} convo={convo} settings={settings} onDone={done} defaultTab="offer" />
     </section>
   );
 }
