@@ -25,7 +25,7 @@ import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { recordEvent } from "./contact-record.js";
 import { localHour } from "./promise-sweep.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
-import { planStageMoves, planCard, normalizeGhlStages, stageKeys } from "./shared/ghl-stages.js";
+import { planStageMoves, planCard, normalizeGhlStages, stageKeys, raisedHouses, HOUSE_EVENT_TYPES } from "./shared/ghl-stages.js";
 import { offerStageAt } from "./shared/offer-stage.js";
 import { openPromises } from "./shared/promise-resolver.js";
 import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
@@ -243,6 +243,24 @@ export function agentRepliers(lastRows = [], optOuts = [], isAgent = null) {
 }
 const YEAR_MS = 365 * 86400000;
 
+/** raisedByContact({ events, offers, now, staleDays }) → Map contactId → raisedHouses(…) for agents' events, the non-empty ones only. */
+export function raisedByContact({ events = [], offers = [], now = Date.now(), staleDays = 10 } = {}) {
+  const evs = new Map();
+  for (const e of events || []) {
+    if (!e?.contactId || e.party !== "agent") continue;
+    if (!evs.has(e.contactId)) evs.set(e.contactId, []);
+    evs.get(e.contactId).push(e);
+  }
+  const rows = new Map();
+  for (const o of offers || []) { if (!o?.contactId) continue; if (!rows.has(o.contactId)) rows.set(o.contactId, []); rows.get(o.contactId).push(o); }
+  const out = new Map();
+  for (const [id, list] of evs) {
+    const r = raisedHouses({ events: list, offers: rows.get(id) || [], now, staleDays });
+    if (r.length) out.set(id, r);
+  }
+  return out;
+}
+
 /**
  * runStagePlan({ client, locationId, store, saved, ghl, read, dryRun, now }) → { mode, planned, blocked, applied, moves, errors }
  *
@@ -274,7 +292,17 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
       : [],
   ]);
   const routing = routingOf(saved);
-  const agentIds = cfg.tier2Repliers ? knownAgents({ profiles, signs, offers, routing }) : new Set();
+  // Houses the conversation raised (shared/ghl-stages.js raisedHouses): Tier 1
+  // with no row behind them, for a contact we know is an agent.
+  const houseEvents = await store.listContactEventsSince?.(locationId, iso(now - (cfg.staleTier1Days + 1) * 86400000), { types: HOUSE_EVENT_TYPES, limit: 20000 }).catch(() => []) || [];
+  const raisedBy = raisedByContact({ events: houseEvents, offers, now, staleDays: cfg.staleTier1Days });
+  const needAgents = cfg.tier2Repliers || raisedBy.size > 0;
+  const [agentProfiles, agentSigns] = cfg.tier2Repliers || !needAgents ? [profiles, signs] : await Promise.all([
+    store.listContactProfiles?.(locationId, { limit: 20000 }).catch(() => []) || [],
+    allEventsSince(store, locationId, iso(now - 3 * YEAR_MS), { types: AGENT_SIGN_TYPES }, { ceiling: 200000 }).then((r) => r.events).catch(() => []),
+  ]);
+  const agentIds = needAgents ? knownAgents({ profiles: agentProfiles, signs: agentSigns, offers, routing }) : new Set();
+  for (const id of [...raisedBy.keys()]) if (!agentIds.has(id)) raisedBy.delete(id);
   const plan = planStageMoves({
     acq, opportunities, offers, now, settings: cfg,
     lastIn: new Map((lastRows || []).map((r) => [r.contactId, r.at])),
@@ -282,6 +310,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     appMoves: appMovesByContact(moveEvents),
     repliers: cfg.tier2Repliers ? agentRepliers(lastRows, optOuts, (id) => agentIds.has(id)) : new Map(),
     cardsMade: cardsMadeBy(moveEvents),
+    raised: raisedBy,
     // Can't read the workflow list: assume the nurture is live, so nothing moves into Tier 2 blind.
     nurtureLive: workflows == null ? [{ id: "?", name: "a nurture workflow (GHL's list couldn't be read)" }] : nurtureWorkflows(workflows),
   });
@@ -296,7 +325,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
   // The offers' own moves and cards first; a conversation's Tier 2 card waits behind them under the cap.
   const offersFirst = (list) => [...list.filter((x) => !x.replier), ...list.filter((x) => x.replier)];
   for (const m of offersFirst(plan.moves)) {
-    const row = { contactId: m.contactId, opportunityId: m.opportunityId, from: m.from, to: m.to, why: m.why, ...(m.status ? { status: m.status } : {}), ...(m.blocked ? { blocked: m.blocked } : {}) };
+    const row = { contactId: m.contactId, opportunityId: m.opportunityId, from: m.from, to: m.to, why: m.why, ...(m.status ? { status: m.status } : {}), ...(m.blocked ? { blocked: m.blocked } : {}), ...(m.conversation ? { conversation: true } : {}) };
     if (go && !m.blocked && left > 0) {
       try {
         const done = await applyCardPlan({ client, locationId, store, api, acq, routing, plan: { move: m }, source: "ghl_stages" });
@@ -309,7 +338,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
   }
   out.creates = [];
   for (const c of offersFirst(plan.creates)) {
-    const row = { contactId: c.contactId, to: c.to, why: c.why, ...(c.blocked ? { blocked: c.blocked } : {}) };
+    const row = { contactId: c.contactId, to: c.to, why: c.why, ...(c.blocked ? { blocked: c.blocked } : {}), ...(c.conversation ? { conversation: true } : {}) };
     if (go && !c.blocked && left > 0) {
       try {
         const done = await applyCardPlan({ client, locationId, store, api, acq, routing, plan: { create: c }, source: "ghl_stages" });
@@ -328,12 +357,13 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
  *
  * Writes one planCard result to GHL and the contact's record. Throws on a GHL
  * failure (the callers count it). Ids and stage names only. A conversation's
- * Tier 2 card (`replier`) is made or reopened only for a contact GHL tags as
- * an agent right now; their name comes from the same read.
+ * Tier 2 card (`replier`) or Tier 1 card (`conversation`, a house they
+ * raised) is made, reopened or moved only for a contact GHL tags as an agent
+ * right now; their name comes from the same read.
  */
 async function applyCardPlan({ client, locationId, store, api, acq, routing = {}, plan, source }) {
   let who = null;
-  if (plan.create?.replier || plan.move?.replier) {
+  if (plan.create?.replier || plan.move?.replier || plan.create?.conversation || plan.move?.conversation) {
     const id = (plan.create || plan.move).contactId;
     who = api.getContact ? await api.getContact(client, id).catch(() => null) : null;
     if (!who || !taggedAgent(who.tags, routing)) return { skip: "not tagged as an agent in GHL" };
@@ -376,8 +406,9 @@ export function _resetWorkflowCache() { workflowCache.clear(); }
  * One agent's card, right after their offers moved (shared/ghl-stages.js
  * planCard). Only with `ghlStages.mode` "on". Never throws. With
  * `tier2Repliers`, their record says whether we've talked (the Tier 2 card
- * for a conversation); `repliersOnly` applies only that card, for an agent
- * who just wrote to us and whose offers didn't move.
+ * for a conversation). A house they raised puts the card in Tier 1 with no
+ * row (raisedHouses). `repliersOnly` applies only what the conversation
+ * moves, for an agent who just wrote to us and whose offers didn't move.
  */
 export async function syncAgentCard({ client, locationId, contactId, store = defaultStore, saved = null, ghl = null, repliersOnly = false, now = Date.now() }) {
   const api = ghl || { listPipelines, searchOpportunities, updateOpportunity, createOpportunity, listWorkflows, getContact };
@@ -391,11 +422,11 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
     const [cards, offers, events] = await Promise.all([
       api.searchOpportunities(client, locationId, { contactId, pipelineId: acq.id }),
       store.listOffers(locationId, { contactId, limit: 100, lean: true }).catch(() => []),
-      cfg.tier2Repliers
-        ? store.listContactEvents?.(locationId, contactId, { types: [...INBOUND_EVENT_TYPES, "unsubscribed", ...APP_MOVE_EVENT_TYPES], limit: 500 }).catch(() => []) || []
-        : [],
+      store.listContactEvents?.(locationId, contactId, { types: [...new Set([...INBOUND_EVENT_TYPES, "unsubscribed", ...APP_MOVE_EVENT_TYPES, ...HOUSE_EVENT_TYPES])], limit: 500 }).catch(() => []) || [],
     ]);
     const mine = (events || []).map((e) => ({ ...e, contactId }));
+    const since = now - (cfg.staleTier1Days + 1) * 86400000;
+    const raised = raisedHouses({ events: mine.filter((e) => HOUSE_EVENT_TYPES.includes(e.type) && (Date.parse(e.at || "") || 0) >= since), offers, now, staleDays: cfg.staleTier1Days });
     const lastWord = mine.filter(isTheirWord).sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
     const plan = planCard({
       acq, keys: stageKeys(acq), contactId, offers, settings: cfg, now,
@@ -404,8 +435,10 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
       nurtureLive: await liveNurture(client, locationId, api, now),
       replied: agentRepliers(lastWord ? [lastWord] : [], mine.filter((e) => e.type === "unsubscribed")).get(contactId) || null,
       cardMade: cardsMadeBy(mine).has(contactId),
+      raised,
     });
-    if (repliersOnly && !(plan.create?.replier || plan.move?.replier)) return { skip: plan.skip || "not a conversation's Tier 2 card" };
+    const fromConversation = (p) => Boolean(p.create?.replier || p.move?.replier || p.create?.conversation || p.move?.conversation);
+    if (repliersOnly && !fromConversation(plan)) return { skip: plan.skip || "not a card the conversation moves" };
     if (plan.skip || plan.youMoved || plan.move?.blocked || plan.create?.blocked) return plan;
     const applied = await applyCardPlan({ client, locationId, store, api, acq, routing: routingOf(settings), plan, source: "offers" });
     if (applied?.skip) return { skip: applied.skip };
@@ -444,6 +477,9 @@ export async function syncChangedCards({ client, locationId, store = defaultStor
       ? await store.listContactEventsSince?.(locationId, iso(since + 1), { types: INBOUND_EVENT_TYPES, limit: 500 }).catch(() => []) || []
       : [];
     const talked = [...new Set((words || []).filter((e) => e?.party === "agent" && isTheirWord(e) && !changed.includes(e.contactId)).map((e) => e.contactId))];
+    // A house they raised (or one we closed) since: their Tier 1 card now.
+    const houseWords = await store.listContactEventsSince?.(locationId, iso(since + 1), { types: HOUSE_EVENT_TYPES, limit: 500 }).catch(() => []) || [];
+    for (const e of houseWords) if (e?.party === "agent" && e.contactId && !changed.includes(e.contactId) && !talked.includes(e.contactId)) talked.push(e.contactId);
     const out = { since: iso(since), contacts: changed.length, repliers: talked.length, moved: 0, errors: [] };
     const work = [...changed.map((contactId) => ({ contactId })), ...talked.map((contactId) => ({ contactId, repliersOnly: true }))];
     for (const { contactId, repliersOnly } of work.slice(0, limit)) {

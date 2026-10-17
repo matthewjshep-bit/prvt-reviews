@@ -5320,6 +5320,26 @@ async function runReply(job, ctx) {
           heard: isCall ? (heard.labelled ? "them" : "unlabelled") : "text" },
       }).catch(() => {});
     }
+    // A house this reply closed: the GHL card's Tier 1 reads it beside the
+    // houses they raised (shared/ghl-stages.js raisedHouses), so a house
+    // raised and passed in the same thread leaves Tier 1 with no row to close
+    // (Matt, 2026-10-16). A millisecond after the mentions above, so the
+    // close is the later word on a house named and passed in one text.
+    const closedHouse = draft.qualify && ["pass", "closed"].includes(draft.qualify.stage) && draft.qualify.address ? draft.qualify.address : draft.propertyAddress;
+    const closedWhy = !closedHouse ? ""
+      : gone ? "it sold or came off the market"
+      : replyPassed || (draft.qualify && ["pass", "closed"].includes(draft.qualify.stage)) ? "we passed on it"
+      : notOurKind ? "they said it's turnkey"
+      : draft.intent === "rejection" ? "they passed"
+      : "";
+    if (closedWhy) {
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: "house_closed", at: new Date(now + 1).toISOString(),
+        address: closedHouse, source: isCall ? "call" : "conversation", ref: record.id,
+        dedupeKey: `house_closed:${job.contactId}:${addressKey(closedHouse)}:${record.id}`,
+        data: { why: closedWhy, intent: draft.intent },
+      }).catch(() => {});
+    }
     // A house with no number starts the chase too, even when propertyAddress
     // holds the street; its hint names each one the way they did.
     let pend = addressPending({ intent: draft.intent, propertyAddress: draft.propertyAddress, message: job.message, now });

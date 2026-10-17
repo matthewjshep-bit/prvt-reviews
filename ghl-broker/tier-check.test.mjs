@@ -356,3 +356,54 @@ test("an agent whose profile has no tags is known by the agent tag the outreach 
   const r = await runStagePlan({ client: {}, locationId: "L-rep7", store, ghl: replierGhl({ made }), saved: await store.getOfferSettings(), dryRun: true, now: NOW13 });
   assert.deepEqual(r.creates.map((c) => c.contactId).sort(), ["aa-talk", "dw", "has-t1"]);
 });
+
+// Matt, 2026-10-16: "Tier 1 should be allowed even if there is no draft or
+// offer." An agent answered our first text with "It needs a lot of work";
+// the bot asked its one question, nothing was priced, and the card stayed
+// out of Tier 1. The conversation's own record raises the house
+// (shared/ghl-stages.js raisedHouses), with tier2Repliers on or off.
+const raisedEv = (contactId, type, data, at = "2026-10-13T19:45:00Z", address = "20911 78th Ave W, Edmonds, WA 98026") => ({ contactId, party: "agent", type, at, address, data });
+const ONLY_OFFERS = { ghlStages: { mode: "on" } };
+
+test("an agent who says the house needs a lot of work gets a Tier 1 card at the morning sweep with nothing priced; a homeowner saying it about their own house doesn't", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const store = replierStore({ saved: ONLY_OFFERS, events: [
+    raisedEv("dw", "property_details", { condition: "needs a lot of work" }),
+    raisedEv("home", "property_details", { condition: "needs a lot of work" }),
+  ] });
+  const r = await runStagePlan({ client: {}, locationId: "L-raise1", store, ghl: replierGhl({ made }), saved: ONLY_OFFERS, dryRun: false, now: NOW13 });
+  assert.deepEqual(r.creates.map((c) => [c.contactId, c.to, c.conversation]), [["dw", "Tier 1", true]]);
+  assert.deepEqual(made.map((m) => [m.contactId, m.stageId]), [["dw", "t1"]]);
+  assert.equal(r.counts.conversation, 1);
+});
+
+test("a Tier 1 card from the conversation waits for GHL's agent tag, even when the profile says agent", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const store = { ...replierStore({ saved: ONLY_OFFERS, events: [raisedEv("home", "house_mentioned", { needsAddress: false })] }),
+    async listContactProfiles() { return [{ contactId: "home", party: "agent", tags: ["agent"] }]; } };
+  const r = await runStagePlan({ client: {}, locationId: "L-raise2", store, ghl: replierGhl({ made }), saved: ONLY_OFFERS, dryRun: false, now: NOW13 });
+  assert.equal(made.length, 0);
+  assert.match(r.creates.find((c) => c.contactId === "home")?.skipped || "", /not tagged as an agent/);
+});
+
+test("every 15 minutes, a house an agent raised since the last run puts their card in Tier 1, and our pass on it takes the card back to Tier 2", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const moved = [];
+  const events = [];
+  const store = replierStore({ saved: ONLY_OFFERS, events });
+  let cards = [];
+  const ghl = { ...replierGhl({ made, moved }), searchOpportunities: async () => cards };
+  await syncChangedCards({ client: {}, locationId: "L-raise3", store, saved: ONLY_OFFERS, ghl, now: Date.parse("2026-10-13T19:30:00Z") });
+  events.push(raisedEv("dw", "house_mentioned", { needsAddress: false, note: "rambler, needs some work and updates" }, "2026-10-13T19:40:00Z"));
+  const r = await syncChangedCards({ client: {}, locationId: "L-raise3", store, saved: ONLY_OFFERS, ghl, now: Date.parse("2026-10-13T19:45:00Z") });
+  assert.equal(r.moved, 1);
+  assert.deepEqual(made.map((m) => [m.contactId, m.stageId]), [["dw", "t1"]]);
+  cards = [{ id: "op-dw", contactId: "dw", pipelineId: "pA", stageId: "t1", status: "open", lastStageChangeAt: "2026-10-13T19:45:00Z" }];
+  events.push(raisedEv("dw", "house_closed", { why: "we passed on it" }, "2026-10-13T19:50:00Z"));
+  const back = await syncChangedCards({ client: {}, locationId: "L-raise3", store, saved: ONLY_OFFERS, ghl, now: NOW13 });
+  assert.equal(back.moved, 1);
+  assert.deepEqual(moved.map((m) => [m.id, m.stageId]), [["op-dw", "t2"]]);
+});

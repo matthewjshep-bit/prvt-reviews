@@ -6793,7 +6793,7 @@ function threadClient(lines) {
 }
 const OPENER = "Hi Sam, came across your listing at 48 Cedar Hollow Rd. Is this one a bit of a project, or pretty turnkey?";
 async function replyTo(message, { saved = QUALIFY_SAVED, intent = "deal_available", address = ICE, lines = [["outbound", OPENER]], sent = [],
-  reply = "Good to know. I'll run the numbers with underwriting today and get back to you.", houses } = {}) {
+  reply = "Good to know. I'll run the numbers with underwriting today and get back to you.", houses, extra = {} } = {}) {
   _resetJobs();
   const store = await iceStore(sent);
   const uw = [];
@@ -6801,7 +6801,7 @@ async function replyTo(message, { saved = QUALIFY_SAVED, intent = "deal_availabl
     client: threadClient(lines), locationId: "LOC", saved, store, contactId: "c1", sendsEnabled: true, message,
     deps: {
       draft: async () => ({ ...DRAFT, intent, confidence: "high", needsHuman: false, propertyAddress: address, reply,
-        ...(houses ? { houses } : {}) }),
+        ...(houses ? { houses } : {}), ...extra }),
       startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-q" } }; },
     },
   });
@@ -7811,4 +7811,43 @@ test("the first-text house with 56k of work already done gets our question even 
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.qualify?.stage, "ask");
   assert.equal(uw.length, 0);
+});
+
+/* ---------- a house the conversation raised is Tier 1 (2026-10-16) ---------- */
+
+// Matt, 2026-10-16: "Tier 1 should be allowed even if there is no draft or
+// offer. As long as they've offered a valid address or have indicated it's
+// an actual flip opportunity." An agent answered our first text with "It
+// needs a lot of work"; the bot rightly asked its one question, priced
+// nothing, and nothing put the card in Tier 1. The planner reads what the
+// reply files (shared/ghl-stages.js raisedHouses).
+import { raisedHouses } from "./shared/ghl-stages.js";
+const houseRecord = async (store) => (await store.listContactEvents("LOC", "c1")).filter((e) => ["house_mentioned", "property_details", "house_closed", "subject_property_set"].includes(e.type));
+
+test("an agent who says the first-text house needs a lot of work raises it for Tier 1 while the bot asks its one question", async () => {
+  const { d, uw, store } = await replyTo("It needs a lot of work.", { extra: { propertyDetails: { condition: "needs a lot of work" } } });
+  assert.equal(d.qualify.stage, "ask");
+  assert.equal(uw.length, 0, "still no underwrite: the question comes first");
+  const raised = raisedHouses({ events: await houseRecord(store) });
+  assert.deepEqual(raised.map((h) => [h.address, h.open]), [[ICE, true]]);
+});
+
+test("a house the agent brings us with its address is raised for Tier 1", async () => {
+  const birch = "77 Birch Ln, Everett, WA 98201";
+  const { store } = await replyTo("Got another one, 77 Birch Ln Everett, needs some work", { intent: "new_property", address: birch, houses: [{ address: birch, note: "needs some work" }] });
+  const raised = raisedHouses({ events: await houseRecord(store) });
+  assert.deepEqual(raised.map((h) => [h.address, h.open]), [[birch, true]]);
+});
+
+test("our pass after their answer closes the house they raised, so the card goes back to Tier 2", async () => {
+  const sent = [{ id: "q1", locationId: "LOC", contactId: "c1", status: "sent", createdAt: iso(3600000), reply: "…", qualify: { stage: "ask", address: ICE } }];
+  const { d, store } = await replyTo("Mostly paint and floors, seller just wants list", {
+    sent, lines: [["outbound", OPENER], ["inbound", "It needs a lot of work."], ["outbound", "Good to know. Is it big-ticket stuff like roof, foundation or systems, or more paint and flooring? And what's got the seller selling?"]],
+  });
+  assert.equal(d.qualify.stage, "pass");
+  await store.appendContactEvents("LOC", "c1", [{ type: "property_details", party: "agent", at: iso(3 * 3600000), address: ICE, data: { condition: "needs a lot of work" } }]);
+  const events = await houseRecord(store);
+  const closed = events.find((e) => e.type === "house_closed");
+  assert.equal(closed?.data?.why, "we passed on it");
+  assert.deepEqual(raisedHouses({ events }).map((h) => h.open), [false]);
 });

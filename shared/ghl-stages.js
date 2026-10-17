@@ -28,9 +28,106 @@
 import { annotateCurrent } from "./current-offer.js";
 import { offerStage, offerStageAt } from "./offer-stage.js";
 import { LIVE_DEAL_STAGES } from "./offer-status.js";
+import { saysRealWork, saysTurnkey, saysCosmeticOnly } from "./flip-read.js";
+import { parseUsAddress, normalizeUsAddress, sameStreetLoose } from "./us-address.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = typeof v === "number" ? v : Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
+
+/* ---------- a house the conversation raised (2026-10-16) ---------- */
+
+// Matt, 2026-10-16: "Tier 1 should be allowed even if there is no draft or
+// offer. As long as they've offered a valid address or have indicated it's
+// an actual flip opportunity." An agent answered our first text with "it
+// needs a lot of work"; the bot asked its one question, nothing was priced,
+// and the card never left Tier 2. The conversation's own record says which
+// houses they raised (ghl-broker/reply-agent.js files these events).
+export const HOUSE_EVENT_TYPES = Object.freeze(["house_mentioned", "property_details", "agent_estimate", "subject_property_set", "house_closed", "tier1_passed", "tier1_kicked", "unsubscribed"]);
+
+// A house number, a street, and a town or ZIP: a place the map can find.
+export function validAddress(raw) {
+  const p = parseUsAddress(raw);
+  return Boolean(p.houseNo && p.street && (p.city || p.zip));
+}
+
+// The same house however the thread spelled it: "15426 Stone Ave,
+// Shoreline" is "15426 Stone Ave N, Shoreline, WA 98133". The number and the
+// street, a direction or suffix one side left off, and the town when both
+// name one.
+const DIRECTIONS = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw", "north", "south", "east", "west"]);
+const streetWords = (p) => normalizeUsAddress(`${p.houseNo} ${p.street}`).toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/).filter((w) => w && !DIRECTIONS.has(w));
+export function sameRaisedHouse(a, b) {
+  const pa = parseUsAddress(a), pb = parseUsAddress(b);
+  if (!pa.houseNo || pa.houseNo !== pb.houseNo) return false;
+  const ca = String(pa.city || "").trim().toLowerCase(), cb = String(pb.city || "").trim().toLowerCase();
+  if (ca && cb && ca !== cb) return false;
+  if (sameStreetLoose(a, b)) return true;
+  const wa = streetWords(pa), wb = streetWords(pb);
+  return wa.length > 1 && wa.join(" ") === wb.join(" ");
+}
+
+/**
+ * raisedHouses({ events, offers, now, staleDays }) → [{ address, at, why, open }]
+ *
+ * The houses an agent raised as a candidate, newest first: `open` while
+ * nothing has closed them, and closed ones too, so the card goes back to
+ * Tier 2 when we pass the way it does after an offer is passed. `events`
+ * are one agent's HOUSE_EVENT_TYPES. A house is raised by:
+ *   - house_mentioned with a valid address (their own words named it), or
+ *   - their words about it reading as real work (property_details
+ *     condition / workNeeded, a house_mentioned note: flip-read.js
+ *     saysRealWork), or their own rehab budget of 50K or more.
+ * It is closed by a later house_closed (we passed, they passed, it's gone,
+ * not our kind), a later read of their words as turnkey or cosmetic, a
+ * subject_property_set marked notOurKind, Pass or Kick on the Tier 1 list
+ * (that house, or every house before it when the pass named none), or an
+ * opt-out. A house with an
+ * offer row of ours is the row's to say (targetStage), and a raise is live
+ * for `staleDays` (ghlStages.staleTier1Days) like an unsent row.
+ */
+export function raisedHouses({ events = [], offers = [], now = Date.now(), staleDays = GHL_STAGES_DEFAULTS.staleTier1Days } = {}) {
+  const evs = (events || []).filter((e) => e?.type && ms(e.at) != null).sort((x, y) => ms(x.at) - ms(y.at));
+  const optOut = evs.filter((e) => e.type === "unsubscribed").map((e) => ms(e.at)).pop() ?? null;
+  const houses = [];
+  const find = (a) => houses.find((h) => sameRaisedHouse(h.address, a));
+  const raise = (a, at, why) => {
+    const h = find(a);
+    if (h) { h.at = at; h.why = why; h.open = true; if (!validAddress(h.address) && validAddress(a)) h.address = a; }
+    else houses.push({ address: a, at, why, open: true });
+  };
+  // Only a house it raised is closed: a pass on the house we texted about,
+  // which they never called a candidate, says nothing about the card.
+  const close = (a, at, why) => { const h = find(a); if (h && h.open) { h.open = false; h.at = at; h.why = why; } };
+  for (const e of evs) {
+    const a = String(e.address || "").trim();
+    // Pass or Kick on the Tier 1 list: you looked at their card.
+    if (e.type === "tier1_passed" || e.type === "tier1_kicked") {
+      const why = e.type === "tier1_passed" ? "you passed from Tier 1" : "you took it off Tier 1";
+      const named = parseUsAddress(a).houseNo ? find(a) : null;
+      for (const h of named ? [named] : houses) close(h.address, ms(e.at), `${String(h.address).split(",")[0].trim()}: ${why}`);
+      continue;
+    }
+    if (!parseUsAddress(a).houseNo) continue;
+    const d = e.data || {};
+    const at = ms(e.at);
+    const street = a.split(",")[0].trim();
+    if (e.type === "house_closed") { close(a, at, `${street}: ${d.why || "closed in the conversation"}`); continue; }
+    if (e.type === "subject_property_set" && d.notOurKind) { close(a, at, `${street}: they said it's turnkey`); continue; }
+    const words = e.type === "property_details" ? [d.condition, d.workNeeded].filter(Boolean).join(". ")
+      : e.type === "house_mentioned" ? String(d.note || "") : "";
+    const rehab = e.type === "agent_estimate" ? Number(d.rehab) || 0 : 0;
+    if (words && (saysTurnkey(words) || saysCosmeticOnly(words))) { close(a, at, `${street}: they said it's ${saysTurnkey(words) ? "turnkey" : "light work"}`); continue; }
+    if (rehab >= 50000 || (words && saysRealWork(words))) { raise(a, at, `they said ${street} needs real work`); continue; }
+    if (e.type === "house_mentioned" && !d.needsAddress && validAddress(a)) raise(a, at, `they gave us ${street}`);
+  }
+  for (const h of houses) if (h.open && optOut != null && optOut >= h.at) { h.open = false; h.at = optOut; h.why = "they opted out"; }
+  const rows = (offers || []).filter((o) => o?.address);
+  return houses
+    .filter((h) => now - h.at <= staleDays * DAY_MS)
+    .filter((h) => !rows.some((o) => sameRaisedHouse(o.address, h.address)))
+    .sort((x, y) => y.at - x.at)
+    .map(({ address, at, why, open }) => ({ address, at: new Date(at).toISOString(), why, open }));
+}
 
 export const GHL_STAGES_DEFAULTS = Object.freeze({ mode: "off", staleTier1Days: 10, allowNurtureTrigger: false, maxMovesPerRun: 100, tier2Repliers: false });
 
@@ -122,7 +219,7 @@ const RANK = { contract: 5, offerOut: 4, tier1: 3, won: 2, tier2: 1 };
  * Their texts about something else don't keep a number alive: a re-run, a
  * float or a send is what does. `lastIn` is accepted and unused here.
  */
-export function targetStage({ offers = [], now = Date.now(), lastIn = null, staleDays = GHL_STAGES_DEFAULTS.staleTier1Days } = {}) {
+export function targetStage({ offers = [], now = Date.now(), lastIn = null, staleDays = GHL_STAGES_DEFAULTS.staleTier1Days, raised = [] } = {}) {
   const rows = annotateCurrent((offers || []).filter(Boolean)).filter((o) => !o.supersededBy);
   let best = null;
   let at = null;
@@ -152,9 +249,21 @@ export function targetStage({ offers = [], now = Date.now(), lastIn = null, stal
     }
     else consider("tier2", o, `every house passed (${s.why})`);
   }
+  // A house they raised that nothing closed is Tier 1 with no row behind it
+  // (raisedHouses), and one the conversation closed is Tier 2 when nothing
+  // else is live. The conversation is then the newest thing the card follows.
+  const said = (raised || []).find((h) => h.open);
+  const shut = said ? null : (raised || []).find((h) => !h.open);
+  const heard = said && (!best || RANK.tier1 > RANK[best.key]) ? { key: "tier1", h: said }
+    : shut && !best ? { key: "tier2", h: shut } : null;
+  if (heard) {
+    best = { key: heard.key, offerId: null, why: heard.h.why, raised: heard.h.address };
+    const t = ms(heard.h.at);
+    if (t != null) at = Math.max(at ?? t, t);
+  }
   if (!best) return { to: null, won: false, why: "no offers", at, offerId: null };
   const won = best.key === "won";
-  return { to: won ? "contract" : best.key, won, why: best.why, at, offerId: best.offerId };
+  return { to: won ? "contract" : best.key, won, why: best.why, at, offerId: best.offerId, ...(best.raised ? { raised: best.raised } : {}) };
 }
 
 /**
@@ -165,9 +274,14 @@ export function targetStage({ offers = [], now = Date.now(), lastIn = null, stal
  * he passed her house and the card stayed in Tier 1. Her other house, a held
  * draft, kept it there as the rule says, but nothing told him so.
  */
-export function cardHeldBy({ offers = [], now = Date.now(), staleDays = GHL_STAGES_DEFAULTS.staleTier1Days } = {}) {
-  const t = targetStage({ offers, now, staleDays });
+export function cardHeldBy({ offers = [], now = Date.now(), staleDays = GHL_STAGES_DEFAULTS.staleTier1Days, raised = [] } = {}) {
+  const t = targetStage({ offers, now, staleDays, raised });
   if (!t.to || t.to === "tier2" || t.won) return null;
+  if (t.raised && t.to === "tier1") {
+    const street = String(t.raised).split(",")[0].trim();
+    return { to: "tier1", label: CARD_STAGE_LABEL.tier1, offerId: null, address: t.raised,
+      text: `The GHL card stays in Tier 1: they raised ${street} in the conversation and nothing has closed it. It goes to Tier 2 once we pass on it or ${staleDays} days go by.` };
+  }
   const o = (offers || []).find((x) => x?.id === t.offerId) || null;
   const street = String(o?.address || "").split(",")[0].trim() || "another house";
   const label = CARD_STAGE_LABEL[t.to];
@@ -190,7 +304,7 @@ export function cardHeldBy({ offers = [], now = Date.now(), staleDays = GHL_STAG
  * Tier 2 card for a conversation (repliedCard). `cardMade`: the app has
  * made a card for them before.
  */
-export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], replied = null, cardMade = false, settings = {}, now = Date.now() } = {}) {
+export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], replied = null, cardMade = false, raised = [], settings = {}, now = Date.now() } = {}) {
   const cfg = normalizeGhlStages(settings);
   const k = keys || stageKeys(acq);
   const label = (key) => CARD_STAGE_LABEL[key] || key;
@@ -199,8 +313,11 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
   const mine = (cards || []).filter((c) => c && (!c.pipelineId || c.pipelineId === acq.id));
   const open = mine.filter((c) => String(c.status || "open") === "open");
   if (open.length > 1) return { skip: "two open cards — a person's call" };
-  const t = targetStage({ offers, now, lastIn, staleDays: cfg.staleTier1Days });
-  const base = { contactId, why: t.why };
+  const t = targetStage({ offers, now, lastIn, staleDays: cfg.staleTier1Days, raised });
+  // A card the conversation put in Tier 1 (raisedHouses): the runner checks
+  // GHL's tags first, as it does for a conversation's Tier 2 card, so a
+  // homeowner telling us about their own house is never an agent's lead.
+  const base = { contactId, why: t.why, ...(t.raised ? { conversation: true, house: t.raised } : {}) };
 
   // No open card: create one for something live; a lost or abandoned card is reopened instead.
   if (!open.length) {
@@ -307,8 +424,8 @@ function repliedCard({ k, mine, nameOf, contactId, name, replied, cardMade, nurt
  *   repliers             Map contactId → ISO of an agent's last word (opt-outs left out): Tier 2 cards, with tier2Repliers
  *   cardsMade            Set of contactIds the app has made a card for
  */
-export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), repliers = new Map(), cardsMade = new Set(), settings = {}, now = Date.now() } = {}) {
-  const counts = { considered: 0, planned: 0, blocked: 0, created: 0, youMoved: 0, old: 0, tier2Repliers: 0, byMove: {} };
+export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), repliers = new Map(), cardsMade = new Set(), raised = new Map(), settings = {}, now = Date.now() } = {}) {
+  const counts = { considered: 0, planned: 0, blocked: 0, created: 0, youMoved: 0, old: 0, tier2Repliers: 0, conversation: 0, byMove: {} };
   const out = { moves: [], creates: [], youMoved: [], counts };
   if (!acq?.id) return out;
   const keys = stageKeys(acq);
@@ -322,17 +439,19 @@ export function planStageMoves({ acq = null, opportunities = [], offers = [], la
     cardsBy.get(o.contactId).push(o);
   }
   const withRepliers = normalizeGhlStages(settings).tier2Repliers;
-  const contacts = new Set([...cardsBy.keys(), ...offersBy.keys(), ...(withRepliers ? repliers?.keys?.() || [] : [])]);
+  const contacts = new Set([...cardsBy.keys(), ...offersBy.keys(), ...(withRepliers ? repliers?.keys?.() || [] : []), ...(raised?.keys?.() || [])]);
   for (const contactId of contacts) {
     counts.considered++;
     const mineOffers = offersBy.get(contactId) || [];
     const name = mineOffers.find((o) => o.contactName)?.contactName || "";
     const r = planCard({ acq, keys, cards: cardsBy.get(contactId) || [], offers: mineOffers, contactId, name,
       lastIn: lastIn?.get?.(contactId) || null, openPromise: openPromiseContacts?.has?.(contactId) || false, nurtureLive,
-      appMoves: appMoves?.get?.(contactId) || [], replied: repliers?.get?.(contactId) || null, cardMade: cardsMade?.has?.(contactId) || false, settings, now });
+      appMoves: appMoves?.get?.(contactId) || [], replied: repliers?.get?.(contactId) || null, cardMade: cardsMade?.has?.(contactId) || false,
+      raised: raised?.get?.(contactId) || [], settings, now });
     if (r.old) counts.old++;
     if (r.youMoved) { counts.youMoved++; out.youMoved.push(r.youMoved); continue; }
     if (r.create?.replier || r.move?.replier) counts.tier2Repliers++;
+    if (r.create?.conversation || r.move?.conversation) counts.conversation++;
     if (r.create) { if (r.create.blocked) counts.blocked++; else counts.created++; out.creates.push(r.create); continue; }
     if (!r.move) continue;
     if (r.move.blocked) counts.blocked++; else counts.planned++;

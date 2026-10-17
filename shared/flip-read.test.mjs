@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { flipRead, qualifyStep, QUALIFY_ASKS, QUALIFY_ASK_RX, QUALIFY_PASSES, broughtStep, saysCosmeticOnly, workBudgetIn } from "./flip-read.js";
+import { flipRead, qualifyStep, QUALIFY_ASKS, QUALIFY_ASK_RX, QUALIFY_PASSES, broughtStep, saysCosmeticOnly, workBudgetIn, saysRealWork } from "./flip-read.js";
 
 // The kinds of answer to our first text that, on 2026-10-08, each started an
 // underwrite (paraphrased); the vague ones should have bought one question.
@@ -211,4 +211,23 @@ test("work already done is not a rehab budget, so a house with 56k of work done 
   assert.equal(workBudgetIn("they put 40k into repairs last year"), 0);
   assert.equal(workBudgetIn("about 60k of work left"), 60000, "work still to do is");
   assert.equal(qualifyStep({ words: said }).move, "ask");
+});
+
+// Matt, 2026-10-16: an agent's word that the house is a flip opportunity
+// puts them in Tier 1 with nothing priced (shared/ghl-stages.js
+// raisedHouses). Their framing counts; a list of rooms, "not a fixer" or a
+// remodel already done doesn't.
+test("an agent's word that the house needs work makes it a candidate", () => {
+  for (const t of ["needs a lot of work", "It needs work", "a bit of a project", "needs a fair amount of work", "needs some work", "tear down", "it's a fixer upper", "estate sale, never updated"]) {
+    assert.equal(saysRealWork(t), true, t);
+  }
+  assert.equal(saysRealWork("roof and windows", { agentRehab: 80000 }), true, "their own 80K budget");
+});
+
+test("'not a fixer', new construction, a remodel already done, or a list of rooms is not their word that it's a flip", () => {
+  for (const t of ["not a fixer", "not a fixer / turnkey", "new construction, not a fixer", "newer home", "Full remodel done in 2002 by owners",
+    "kitchen and baths original", "very well kept. kitchen remodel to modernize, upstairs bath update", "fully updated. roof and siding needed in the next 2-3 years",
+    "basement is unfinished with no planned floor plan, possible ADU potential", "mostly cosmetic, paint and flooring", "turnkey"]) {
+    assert.equal(saysRealWork(t), false, t);
+  }
 });
