@@ -4732,6 +4732,105 @@ never-texted, off-market). Check: `GET /api/dashboard/line` → `supply`.
 
 **Last night's leaks on Today.** The nightly audit runs `lineFor` after its sweep and keeps `leakSummary` on its result (`audit.leaks`). Today's status strip shows "Leaks last night: N", linking to this tab, with the backlog beside it ("· M waiting for a check-in seat"). N counts what fell off, not what waits on you or waits for a seat.
 
+## Follow-up (Reports → Follow-up, 2026-10-17)
+
+Matt couldn't see what follow-up the app was generating, or what was queued for any one agent, offer or buyer. The answer was spread over the Offers column (offers only, next touch only), the check-in plan, the follow-ups preview and the Line, and buyers had nothing. This page puts it in one place, laid out like his sketch. It only reads.
+
+**Where it lives.** `/reports?view=followup` (`&period=today|week|month|ytd` opens a period). The route is `GET /api/dashboard/followup?period=`, cached a minute per location and period (`?fresh=1` skips it). The rows behind a bar or a row come from `GET /api/dashboard/followup/items?period=&bucket=|mechanism=|group=|state=`, capped at 300.
+- Arithmetic and catalog: `shared/follow-up-engine.js` (`buildFollowUpEngine`, `FOLLOW_UP_MECHANISMS`).
+- Reads: `ghl-broker/follow-up-engine.js` (`followUpEngineFor`).
+- Page: `messaging-app/src/FollowUpView.jsx`.
+
+**Periods.** These are Pacific calendar periods that contain now:
+- Today, by the hour.
+- This week (Monday to Sunday) and this month, by the day.
+- Year to date, by the week, plus the next 30 days.
+
+The past part of a period counts what went; the rest counts what's coming.
+
+**Blocks.** One row per mechanism, keyed to the `outbound.kind` its drafts carry, so a count is the texts that kind sent:
+
+| Block | Rows |
+|---|---|
+| Agent outreach | First text (`outreach_open`), First text by GHL workflow |
+| Agent follow-up | Agent check-in (`agent_pulse`), Matt's 15, Cold-agent follow-up (`outreach_nudge`), GHL follow-up workflow, Check-in they asked for (`checkin_due`), Promise we made (`promise_due`), Address chase, Held underwrite ask / pass (`take_ask`, `kind_pass`) |
+| Offer follow-up · sent | Offer nudge, Push to paper (`hot_push`), Counter hold check-in (`counter_nudge`), Written offer after a float, Float our number (`take_check`/`realm_check`) |
+| Offer follow-up · passed | Relisted house check-in (`passed_checkin`), Second look, Price drop |
+| Buyers | Buyer check-in (`buyer_pulse`), Deal blast first wave / next waves (`blast_open`), Deal follow-up, Walkthrough reminder / follow-up (`showing_*`) |
+
+Each row shows:
+- what starts it, in words built from the live settings;
+- its status, read from the same gates the sender checks;
+- sent;
+- replied: they answered within 72 hours, before our next text (last touch takes the credit);
+- next touches;
+- next send.
+
+The page leaves out:
+- a person's own texts: `check_in`, `partner_answer`, `showing_ask`;
+- replies;
+- the retired `blast_nudge` and `dataroom_nudge`.
+
+A test fails if a new `OUTBOUND_KINDS` entry has no row and isn't on that list.
+
+**First touches.** First texts, the float and a deal's first wave are shown but not counted in the follow-up totals.
+
+**Status.**
+- **On**: it sends itself.
+- **Drafts only**: it is written and held for you. For example, the kind isn't on the auto-send list, a feature's own autoSend is off, or `CARD_SENDS_ENABLED` / `DISPO_BLASTS_ENABLED` is off.
+- **Off**: nothing is written.
+- **GHL sends it**: a workflow, outside the app's outbox.
+
+Hover the pill for the job's last run.
+
+**Where each number comes from.**
+- **Sent.** From the send events, which are written when a text actually leaves and are never pruned:
+  - `outreach_sent`
+  - `outreach_enrolled`
+  - `agent_pulse_texted`
+  - `pulse_texted`
+  - `blast_sent`
+  - `second_look_sent`
+  - `offer_sent` with `by` of `after_float` or `after_answer`
+
+  Every other kind is counted from the outbox's sent rows (`store.listReplyDraftLedger`, trimmed in SQL). The outbox keeps those rows `retentionDays` (180), so on Year to date the page says where those counts begin.
+- **`follow_up_sent` is never counted.** It is the sweep's claim, written before a draft exists.
+- **Queued.** Outbox rows with a send time. These are exact, and a queued row stands in for the plan on the same contact and offer.
+- **Waiting on you.** Machine drafts held under 7 days old (`staleHeld`).
+- **Planned.** Each sweep's own planner:
+
+  | Rows | Planner |
+  |---|---|
+  | Offer nudge, push to paper, relisted check-in, machine float | `nextFollowUp` on each house's current offer |
+  | Agent check-in | `planAgentPulse` verdicts, rolled onto the weekday noon runs at `dailyCap` |
+  | Buyer check-in | `planBuyerPulse` picks; the rest of the due buyers at the daily cap |
+  | Cold-agent follow-up, deal follow-up | `outreachCandidates` / `investorCandidates` with `nextRungAt` |
+  | Counter hold check-in | `holdState` |
+  | Written offer after a float | `paperAfterSilenceDue` plus `addWorkingHours` |
+  | Address chase | `addressChaseRungs` |
+  | Next wave | `nextWave` |
+  | Walkthrough texts | `showingTouches` |
+  | Check-in they asked for, promise we made | their `dueAt` |
+
+  Times land on the job's real run: the 16:00 UTC sweep, the noon check-in, machine hours.
+- **One text a morning per contact.** The page keeps the sweep's order: push to paper, nudge, counter, passed, cold.
+
+**What it can't promise.**
+- A plan isn't a guarantee. The weekly per-contact cap, the model holding a draft, and a thread-health stand-down can't be seen ahead.
+- Next touches counts each thread's next touch only, so a month undercounts a ladder's later rungs.
+- Some rows depend on something that hasn't happened yet: a price drop, a held underwrite, a deal's first wave, the audit's stalled-counter nudge. These show "—" with what sets them off, never a made-up zero.
+- A second look is picked each morning, so only today's is known.
+- If GHL's Tier 2/3 cards can't be read, the page says so: agents who are only on a card are missing from the check-in plan.
+
+**Tiles.**
+- Agents reached out to / responded: Flow's own first-text cohort (`buildFlow().cohort`).
+- Follow-ups sent, with the replied share.
+- Scheduled ahead: queued plus planned.
+- Waiting on you.
+- Live offers with nothing scheduled: `offerLeaks`, the Line's own count.
+
+Check: `GET /api/dashboard/followup?period=week` → `kpis`, `groups[].mechanisms[]`.
+
 ## Contact record (the app is the system of record; GHL is the digest)
 
 Every agent and investor has a record in the app: **facts** with provenance
