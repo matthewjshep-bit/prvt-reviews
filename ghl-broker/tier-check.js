@@ -32,6 +32,7 @@ import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
 import { runTierOneScreen } from "./tier-one.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { resolveParty } from "./conversation-party.js";
+import { allEventsSince } from "./contact-events.js";
 
 export const CURSOR_NAME = "tierCheck";
 export const CHECK_HOUR = 7;             // PT
@@ -202,6 +203,23 @@ const isTheirWord = (e) => INBOUND_EVENT_TYPES.includes(e?.type) && (e.type !== 
 // homeowner from the June seller texts, whose replies were filed that way.
 const routingOf = (saved) => normalizeConversationAi(saved?.conversationAi).routing || {};
 const taggedAgent = (tags, routing) => resolveParty({ tags: tags || [], routing }).party === "agent";
+// What says someone is an agent before GHL is asked. Most profiles carry no
+// tags (Deanna W.'s was []), so their timeline counts: an agent tag the app
+// added (the outreach import), or our outreach opener.
+const AGENT_SIGN_TYPES = ["tag_added", "outreach_enrolled", "outreach_sent", "outreach_left"];
+function knownAgents({ profiles = [], signs = [], offers = [], routing = {} } = {}) {
+  const buyers = new Set((profiles || []).filter((p) => p?.party === "investor").map((p) => p.contactId));
+  const out = new Set();
+  for (const p of profiles || []) if (p?.contactId && taggedAgent(p.tags, routing)) out.add(p.contactId);
+  for (const e of signs || []) {
+    if (!e?.contactId) continue;
+    if (e.type !== "tag_added" || taggedAgent([e.data?.tag], routing)) out.add(e.contactId);
+  }
+  // A house of theirs we priced: a listing agent.
+  for (const o of offers || []) if (o?.contactId) out.add(o.contactId);
+  for (const id of buyers) out.delete(id);
+  return out;
+}
 
 /**
  * agentRepliers(lastRows, optOuts, isAgent) → Map contactId → ISO of their last word
@@ -240,7 +258,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
   const pipelines = read?.pipelines || await api.listPipelines(client, locationId);
   const acq = acquisitionsPipeline(pipelines);
   if (!acq) { out.errors.push("no pipeline with Tier 1/2/3 stages"); return out; }
-  const [opportunities, offers, promiseEvents, moveEvents, lastRows, workflows, optOuts, profiles] = await Promise.all([
+  const [opportunities, offers, promiseEvents, moveEvents, lastRows, workflows, optOuts, profiles, signs] = await Promise.all([
     read?.opportunities || api.listAcquisitionOpportunities(client, locationId, acq.id),
     store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []),
     store.listContactEventsSince?.(locationId, iso(now - 7 * 86400000), { types: ["promise_made", "promise_owed", "promise_kept"], limit: 5000 }).catch(() => []) || [],
@@ -251,9 +269,12 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     (api.listWorkflows ? api.listWorkflows(client, locationId) : Promise.resolve(null)).catch(() => null),
     cfg.tier2Repliers ? store.listContactEventsSince?.(locationId, iso(now - 3 * YEAR_MS), { types: ["unsubscribed"], limit: 20000 }).catch(() => []) || [] : [],
     cfg.tier2Repliers ? store.listContactProfiles?.(locationId, { limit: 20000 }).catch(() => []) || [] : [],
+    cfg.tier2Repliers
+      ? allEventsSince(store, locationId, iso(now - 3 * YEAR_MS), { types: AGENT_SIGN_TYPES }, { ceiling: 200000 }).then((r) => r.events).catch(() => [])
+      : [],
   ]);
   const routing = routingOf(saved);
-  const agentIds = new Set((profiles || []).filter((p) => p?.contactId && p.party !== "investor" && taggedAgent(p.tags, routing)).map((p) => p.contactId));
+  const agentIds = cfg.tier2Repliers ? knownAgents({ profiles, signs, offers, routing }) : new Set();
   const plan = planStageMoves({
     acq, opportunities, offers, now, settings: cfg,
     lastIn: new Map((lastRows || []).map((r) => [r.contactId, r.at])),

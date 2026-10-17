@@ -2871,8 +2871,10 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   Buyers are left out, and so are agents who opted out (an `unsubscribed`
   event, or a last word with `opt_out`). Only a contact tagged as an agent
   by the Conversation AI routing (`agent`, `agent-*`) qualifies. The plan
-  checks profile tags, and GHL's live tags are checked again right before a
-  card is made or reopened ("not tagged as an agent in GHL"). The first
+  knows an agent by profile tags, a `tag_added` agent tag on their timeline
+  (the outreach import; most profiles carry no tags), our outreach opener, or
+  an offer row. GHL's live tags are checked again right before a card is
+  made or reopened ("not tagged as an agent in GHL"). The first
   preview had planned a card for a homeowner from the June seller texts,
   whose replies had been filed as an agent's. The rules for the card:
   - A closed card reopens in Tier 2 only when they wrote after it closed.

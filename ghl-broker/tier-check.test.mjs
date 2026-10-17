@@ -337,3 +337,22 @@ test("a homeowner whose text was filed as an agent's gets no Tier 2 card; only a
   const t = await syncChangedCards({ client: {}, locationId: "L-rep6", store: tick, saved, ghl: replierGhl({ made }), now: NOW13 });
   assert.deepEqual([t.repliers, t.moved, made.length], [1, 0, 1]);
 });
+
+// The second preview planned none: most profiles carry no tags (Deanna W.'s
+// is []). Her agent tag is on her timeline, from the outreach import.
+test("an agent whose profile has no tags is known by the agent tag the outreach import added, or by our opener, or by an offer", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const at = "2026-10-12T17:22:38Z";
+  const store = {
+    ...replierStore({ last: [word("dw", "2026-10-13T01:06:00Z"), word("aa-talk", "2026-10-13T01:05:00Z"), word("has-t1", "2026-10-13T01:04:00Z"), word("home", "2026-10-13T01:00:00Z")],
+      offers: [sentOffer("has-t1", { status: "passed", statusAt: "2026-10-12T00:00:00Z" })] }),
+    async listContactProfiles() { return ["dw", "aa-talk", "has-t1", "home"].map((contactId) => ({ contactId, party: "agent", tags: [] })); },
+  };
+  const signals = [{ contactId: "dw", type: "tag_added", at, data: { tag: "agent-outreach-autopilot-king-wa" } },
+    { contactId: "aa-talk", type: "outreach_sent", at }, { contactId: "home", type: "tag_added", at, data: { tag: "wholesaling_pipeline_automation" } }];
+  const events = store.listContactEventsSince;
+  store.listContactEventsSince = async (l, since, o = {}) => [...(await events.call(store, l, since, o)), ...signals.filter((e) => !o.types || o.types.includes(e.type))];
+  const r = await runStagePlan({ client: {}, locationId: "L-rep7", store, ghl: replierGhl({ made }), saved: await store.getOfferSettings(), dryRun: true, now: NOW13 });
+  assert.deepEqual(r.creates.map((c) => c.contactId).sort(), ["aa-talk", "dw", "has-t1"]);
+});
