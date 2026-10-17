@@ -57,6 +57,37 @@ export const OFFER_STATUS_KEYS = OFFER_STATUSES.map((s) => s.key);
 // not an outcome — you leave draft by generating the offer, never by choosing.
 export const SETTABLE_STATUSES = OFFER_STATUS_KEYS.filter((k) => k !== "draft");
 
+// Why WE passed (Matt, 2026-10-17, a sketch): a few buckets, picked when he
+// marks a house "We passed", kept on the offer as passReason {code, at, by},
+// and told to the conversation AI so it can say why we moved on. Ours, not
+// the buyers' (PASS_REASONS in conversation-ai.js is why an investor passed
+// on one of our deals). `words` is how the bot may put it to an agent.
+export const WE_PASS_REASONS = Object.freeze([
+  { code: "turnkey", label: "Too turnkey", short: "Turnkey", hint: "not enough value to add",
+    words: "it's in too good a shape for us, there isn't enough work in it for us to add value" },
+  { code: "neighborhood", label: "Neighborhood", short: "Neighborhood", hint: "too hard to comp",
+    words: "the neighborhood made it too hard to comp, so we couldn't get confident on a number" },
+  { code: "rural", label: "Rural", short: "Rural", hint: "out in the boonies",
+    words: "it's too rural for our buyers" },
+  { code: "comps", label: "Not enough comps", short: "Few comps", hint: "",
+    words: "there weren't enough recent sales nearby to back a number" },
+  { code: "property_type", label: "Property type", short: "Property type", hint: "a log cabin, say",
+    words: "it isn't a type of property we buy" },
+]);
+export const WE_PASS_REASON = Object.freeze(Object.fromEntries(WE_PASS_REASONS.map((r) => [r.code, r])));
+/** normalizeWePassReason(v) → a WE_PASS_REASONS code, or null. */
+export const normalizeWePassReason = (v) => (Object.hasOwn(WE_PASS_REASON, String(v || "")) ? String(v) : null);
+// The status menu's key for "we passed, and why": "we_passed:rural". Every
+// menu caller hands its key to setOfferStatus, which splits it back.
+export const wePassedKey = (code) => `we_passed:${code}`;
+/** parseStatusKey(key) → { status, reason } — reason null unless the key carries one. */
+export function parseStatusKey(key) {
+  const [status, code] = String(key || "").split(":");
+  return { status, reason: status === "we_passed" ? normalizeWePassReason(code) : null };
+}
+/** wePassReasonOf(offer) → the WE_PASS_REASONS entry for a "we passed" offer, or null. */
+export const wePassReasonOf = (o) => (o?.status === "we_passed" && !o?.deal ? WE_PASS_REASON[o?.passReason?.code] || null : null);
+
 // Still waiting on the agent: these are the offers that are actually working.
 export const OPEN_STATUSES = new Set(["new", "sent", "countered"]);
 // Nothing more will happen here without a new offer.
@@ -644,6 +675,8 @@ export function investorStatus(s) {
 export const OFFER_LIST_FIELDS = [
   "id", "locationId", "contactId", "contactName", "address", "cashAmount",
   "status", "statusAt", "statusNote", "deal", "sends", "ghl", "warnings",
+  // Why we passed ({code, at, by}, WE_PASS_REASONS): the bot says it, the pill shows it.
+  "passReason",
   // Small on purpose (scalars only — see auditTrail in auto-underwrite.js).
   // It rides on the lean row so the auto-underwrite daily cap and the 24h
   // dedupe can be answered without reading every offer document in full.

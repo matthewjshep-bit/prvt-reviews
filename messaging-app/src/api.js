@@ -2,6 +2,8 @@
 // location-scoped; the iframe never talks to GHL directly. The page runs
 // inside a GHL Custom Menu Link iframe that supplies ?location_id=.
 
+import { parseStatusKey } from "@shared/offer-status.js";
+
 const API_BASE = import.meta.env.VITE_API_BASE || "https://offers.shepflips.com";
 
 // The public link a saved contact card is served from (ghl-broker/contact-card.js).
@@ -450,7 +452,8 @@ export const setOfferStatus = (id, status, note = "") =>
     ? post(`/api/offers/${encodeURIComponent(id)}/hot`, { hot: status === HOT_ON, note }, "PATCH")
     : status === MAKE_CURRENT || status === UNPIN_CURRENT
       ? post(`/api/offers/${encodeURIComponent(id)}/current`, { pin: status === MAKE_CURRENT, note }, "PATCH")
-      : post(`/api/offers/${encodeURIComponent(id)}/status`, { status, note }, "PATCH");
+      // "we_passed:rural": we passed, and why (WE_PASS_REASONS).
+      : (({ status: key, reason }) => post(`/api/offers/${encodeURIComponent(id)}/status`, { status: key, note, ...(reason ? { reason } : {}) }, "PATCH"))(parseStatusKey(status));
 // Re-price an offer in place at `amount` — the held-paper banner's one tap.
 // Sends nothing. Returns { offer }.
 export const requoteOffer = (id, amount) =>

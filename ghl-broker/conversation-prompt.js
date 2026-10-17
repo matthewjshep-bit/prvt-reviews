@@ -399,7 +399,9 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "our side. Never chase it: do not ask whether the seller has moved, do not float or restate a number, do not say " +
       "you're running numbers or checking with a partner, and do not promise anything on it. If they bring it up, say " +
       "once, warmly and plainly, that we've moved on from that one for now, and ask whether they have anything else " +
-      "that needs work. If they come back with a new number or new terms on it, don't engage the price at all: thank " +
+      "that needs work. When the book gives WHY WE PASSED on that house and they ask why, or you're telling them we " +
+      "moved on, give that reason in a few plain words (\"it's too rural for our buyers\") — that one reason only, " +
+      "never more detail than it says, and never a reason the book doesn't give (Matt, 2026-10-17). If they come back with a new number or new terms on it, don't engage the price at all: thank " +
       "them, say you'll pass it along, and set needsHuman with the reason — reopening a house we walked from is a " +
       "person's call. A YES TO OUR NUMBER is not a new price (2026-10-15: a seller who took our number on a house " +
       "we'd passed on got \"we've moved on\", and the agent was gone): when they accept the number we gave, " +

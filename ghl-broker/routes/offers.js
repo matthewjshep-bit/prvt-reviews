@@ -71,7 +71,7 @@ import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
-  numberApproved, termsOnLetter,
+  numberApproved, termsOnLetter, WE_PASS_REASONS, WE_PASS_REASON, normalizeWePassReason,
 } from "../shared/offer-status.js";
 import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperAfterAnswerDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS, sendsItselfOnClear, isRoughNumber } from "../shared/paper-follows.js";
@@ -3225,12 +3225,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // both ask, and walking a ledger for it (or worse, regexing the note) is not
   // an answer. The note text is unchanged: it is what the operator reads on
   // the row, and forking it would fork history for no gain.
+  //
+  // `extra.passReason` is why we passed (WE_PASS_REASONS), for "we_passed"
+  // only. It belongs to this pass: any other status, or a pass with no
+  // reason, clears an older one so the bot never gives a stale why.
   function recordStatus(offer, status, note = "", ts = new Date().toISOString(), extra = {}) {
     const amount = Math.max(0, Math.round(Number(extra.amount) || 0));
+    const reason = status === "we_passed" ? normalizeWePassReason(extra.passReason) : null;
     offer.status = status;
     offer.statusAt = ts;
     offer.statusNote = note;
-    offer.statusHistory = [...(offer.statusHistory || []), { status, ts, ...(note ? { note } : {}), ...(amount ? { amount } : {}) }];
+    if (reason) offer.passReason = { code: reason, at: ts, by: extra.source || "operator" };
+    else delete offer.passReason;
+    offer.statusHistory = [...(offer.statusHistory || []), { status, ts, ...(note ? { note } : {}), ...(amount ? { amount } : {}), ...(reason ? { reason } : {}) }];
     if (status === "countered" && amount) {
       offer.counter = { amount, at: ts, source: extra.source || "operator" };
     }
@@ -3487,6 +3494,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         return res.status(400).json({ error: "create the offer first — a draft can't be tracked as a deal" });
       }
       const note = dealStr(req.body?.note, 200);
+      // Why we passed: one of WE_PASS_REASONS, only with "we_passed".
+      const passReason = status === "we_passed" ? normalizeWePassReason(req.body?.reason) : null;
+      if (req.body?.reason && status === "we_passed" && !passReason) {
+        return res.status(400).json({ error: `reason must be one of: ${WE_PASS_REASONS.map((r) => r.code).join(", ")}` });
+      }
+      // Already ours to pass on: a new reason is a correction, not a second
+      // pass — no ledger row, no texts stopped again, no history line.
+      if (passReason && offer.status === "we_passed" && !offer.deal) {
+        offer.passReason = { code: passReason, at: new Date().toISOString(), by: "operator" };
+        await store.updateOffer(offer.id, offer);
+        return res.json({ ok: true, offer, stoppedDrafts: 0 });
+      }
 
       if (status === "accepted") {
         // Already a deal: nothing to promote, and the status is already right.
@@ -3510,7 +3529,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       // Their number, when the status is their counter: the band reads it.
       const amount = status === "countered" ? Math.max(0, Math.round(Number(req.body?.amount) || 0)) : 0;
-      const stopped = await applyOperatorStatus({ locationId, client, offer, status, note, ts, amount });
+      const stopped = await applyOperatorStatus({ locationId, client, offer, status, note, ts, amount, passReason });
       const card = PASSING_STATUSES.has(status) ? await cardHeldAfterPass(locationId, offer.contactId) : null;
       res.json({ ok: true, offer, stoppedDrafts: stopped.length, ...(card ? { card } : {}) });
     } catch (err) { fail(res, err); }
@@ -3531,14 +3550,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
   // A status a person set: the route above, and a person's own words
   // (passOnOurNo). Returns the machine texts it stopped.
-  async function applyOperatorStatus({ locationId, client, offer, status, note = "", ts = new Date().toISOString(), amount = 0 }) {
-    recordStatus(offer, status, note, ts, amount ? { amount, source: "operator" } : {});
+  async function applyOperatorStatus({ locationId, client, offer, status, note = "", ts = new Date().toISOString(), amount = 0, passReason = null }) {
+    recordStatus(offer, status, note, ts, { ...(amount ? { amount } : {}), ...(passReason ? { passReason } : {}), source: "operator" });
     await store.updateOffer(offer.id, offer);
 
     // Best-effort CRM mirror: the ledger line keeps AI enrichment from
     // pitching an agent who already said no; the tag lets workflows branch.
+    // The GHL line says why we passed, when he said.
+    const why = WE_PASS_REASON[offer.passReason?.code]?.label || "";
     await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
-      historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), note),
+      historyLine(ts, offer.address, STATUS_HISTORY_PHRASE[status] || status.replace(/_/g, " "), [why && `why: ${why.toLowerCase()}`, note].filter(Boolean).join("; ")),
       { type: `offer_${status}`, offerId: offer.id, source: "operator", at: ts });
     await syncAgentOfferTag(client, locationId, offer.contactId);
     // What we owed them on this house is settled by the outcome.

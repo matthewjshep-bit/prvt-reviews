@@ -11,7 +11,7 @@
 import React, { useState } from "react";
 import { Check, ExternalLink, FileText, Pencil, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { OFFER_STATUS, offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
+import { OFFER_STATUS, WE_PASS_REASON, offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
 import { clearAgreedPrice, getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
 import { annotateCurrent } from "@shared/current-offer.js";
 import { BTN, ChecksLine, CurrentPill, HotPill, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
@@ -211,6 +211,8 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
   const asking = Number(offer.askingPrice ?? offer.calc?.inputs?.askingPrice) || 0;
   const ours = Number(offer.cashAmount) || 0;
   const history = [...(offer.statusHistory || [])].filter((h) => h?.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts))).slice(0, 4);
+  // The row of the pass the offer is in now (newest first): its reason is the offer's.
+  const lastPassAt = offer.status === "we_passed" ? history.findIndex((h) => h.status === "we_passed") : -1;
   const lastSend = (offer.sends || []).at(-1);
   // Every offer with them, each told which row on its house is current
   // (shared/current-offer.js).
@@ -279,7 +281,10 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
             {history.map((h, i) => (
               <li key={i}>
                 <span className="tabular-nums text-slate-500">{day(h.ts)}</span> · {OFFER_STATUS[h.status]?.label?.toLowerCase() || String(h.status || "").replace(/_/g, " ")}
-                {Number(h.amount) > 0 ? ` at ${fmtMoney(h.amount)}` : ""}{h.note ? <span className="text-slate-500"> — {h.note}</span> : null}
+                {Number(h.amount) > 0 ? ` at ${fmtMoney(h.amount)}` : ""}
+                {/* Why we passed: the offer's own reason on its last pass (a correction lands there), the row's on older ones. */}
+                {(() => { const code = h.status === "we_passed" && i === lastPassAt ? offer.passReason?.code || h.reason : h.reason; return WE_PASS_REASON[code] ? `: ${WE_PASS_REASON[code].label.toLowerCase()}` : ""; })()}
+                {h.note ? <span className="text-slate-500"> — {h.note}</span> : null}
               </li>
             ))}
           </ul>
