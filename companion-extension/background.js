@@ -7,7 +7,13 @@
 
 import { parseGhlUrl } from "./shared/ghl-url.js";
 
-const COMPANION_URLS = ["https://app.shepflips.com/contact*", "http://localhost:5173/contact*"];
+// The console answers on app.shepflips.com and on its Netlify name; the GHL
+// menu links use the Netlify name, so the Companion button opens that one.
+const COMPANION_URLS = [
+  "https://*.shepflips.com/contact*",
+  "https://monumental-biscochitos-35bbee.netlify.app/contact*",
+  "http://localhost:5173/contact*",
+];
 
 // The person last opened in GHL, for a companion that opens after it.
 async function remember(target) {

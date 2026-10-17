@@ -4820,7 +4820,7 @@ The companion is a narrow app window that sits beside GoHighLevel and shows whoe
 - **Toolbar button:** brings the companion forward, or reopens it at the last companion address it saw. It stores that address in the extension's local storage. The address carries the location key, as GHL menu links do.
 - **Always on top:** Chrome can't keep a window above others. Place the companion beside GHL instead, with macOS split view or a window manager.
 - **When it doesn't follow, check in this order:**
-  1. The dot at the top of the companion. Grey means the extension isn't talking to that window: is the extension loaded, and is the window at `app.shepflips.com/contact`?
+  1. The dot at the top of the companion. Grey means the extension isn't talking to that window: is the extension loaded, and is the window on a host listed in `companion-extension/manifest.json`? The GHL menu links serve the app from `monumental-biscochitos-35bbee.netlify.app`, so the companion opens there, not on app.shepflips.com. A new console host has to be added to `manifest.json` and to `COMPANION_URLS` in `background.js`, then the extension reloaded.
   2. Is the GHL tab on a contact page or a conversation page? A list view is no one.
   3. On a conversation page, an amber note means GHL didn't name a contact for it.
 - **Sends:** nothing new sends. The reply box and buttons go through the same gates as the Desk.

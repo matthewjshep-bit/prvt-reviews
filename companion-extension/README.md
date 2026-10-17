@@ -1,8 +1,8 @@
 # Shep Flips Companion (Chrome extension)
 
-This extension makes the companion window (`app.shepflips.com/contact`) follow whoever you open in GoHighLevel. Open a contact, or that contact's conversation, in GHL, and the companion shows their offer, conversation and record.
+This extension makes the companion window (`/contact` on the console) follow whoever you open in GoHighLevel. Open a contact, or that contact's conversation, in GHL, and the companion shows their offer, conversation and record.
 
-It only reads GHL tab **addresses**, never GHL page content. Chrome lets it see GHL and app.shepflips.com and nothing else.
+It only reads GHL tab **addresses**, never GHL page content. Chrome lets it see GHL and our console (shepflips.com and its Netlify address) and nothing else.
 
 ## Install (once)
 1. Open `chrome://extensions` and turn on **Developer mode** (top right).
