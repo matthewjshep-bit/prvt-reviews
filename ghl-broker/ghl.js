@@ -585,6 +585,16 @@ export async function listConversationMessages(client, conversationId, { lastMes
   };
 }
 
+// One conversation's header: whose it is. The companion window gets a GHL
+// conversation page's id and needs the person (routes/contacts.js
+// /by-conversation). Tolerates { conversation: {...} } and the flat shape.
+// Returns { id, contactId } or null when GHL names no contact.
+export async function getConversation(client, conversationId) {
+  const data = await client.call(`/conversations/${encodeURIComponent(conversationId)}`, { version: V_CONVERSATIONS });
+  const c = data.conversation && typeof data.conversation === "object" ? data.conversation : data;
+  return c?.contactId ? { id: c.id || conversationId, contactId: String(c.contactId) } : null;
+}
+
 // The newest inbound message with words in it, across the contact's most
 // recently active conversations. Returns { body, at, id, type, attachments }
 // or null. For re-running a reply the webhook never delivered — the text is

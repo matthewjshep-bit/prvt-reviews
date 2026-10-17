@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Shep Flips Companion",
+  "version": "1.0.0",
+  "description": "Points the Shep Flips companion window at whoever you open in GoHighLevel. Reads GHL tab addresses only, never the page.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://app.gohighlevel.com/*",
+    "https://*.leadconnectorhq.com/*",
+    "https://app.shepflips.com/*",
+    "http://localhost:5173/*"
+  ],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "Open the Shep Flips companion window" },
+  "content_scripts": [
+    {
+      "matches": ["https://app.shepflips.com/contact*", "http://localhost:5173/contact*"],
+      "js": ["companion-bridge.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

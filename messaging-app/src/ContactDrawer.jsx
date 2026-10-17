@@ -97,7 +97,15 @@ function FactsSection({ title, keys, record, busy, onRemove, onAdd }) {
 }
 
 
-export default function ContactDrawer({ contactId, party: hint = null, onClose }) {
+/**
+ * <ContactRecordBody contactId party onClose inline />
+ * The record itself, without the slide-over: the drawer wraps it, and the
+ * companion window (/contact, CompanionView.jsx) shows it in the page.
+ *   onClose  the header's ✕; none, no ✕
+ *   inline   in a page, not a panel: the header doesn't stick
+ *   onLoaded(rec)  each time the record is read (the companion's name and party)
+ */
+export function ContactRecordBody({ contactId, party: hint = null, onClose = null, inline = false, onLoaded = null }) {
   const [rec, setRec] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -113,12 +121,7 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
     catch (e) { setError(e.message); }
   };
   useEffect(() => { setRec(null); if (contactId) load(false); }, [contactId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
+  useEffect(() => { if (rec) onLoaded?.(rec); }, [rec]); // eslint-disable-line react-hooks/exhaustive-deps
   const party = rec?.party || hint || null;
   const groups = useMemo(() => groupByDay(rec?.events || []), [rec]);
   const shown = showAll ? groups : groups.slice(0, 8);
@@ -143,9 +146,8 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
   const toggleDealsBy = () => run(() => setContactDealsBy(contactId, dealsBy === "email" ? "text" : "email"));
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label="Contact record" className="flex h-full w-[600px] max-w-full flex-col overflow-y-auto bg-slate-50 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
+    <>
+        <header className={`${inline ? "" : "sticky top-0 z-10 "}flex items-start gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur`}>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="truncate text-base font-bold text-slate-900">{p?.name || rec?.drafts?.[0]?.contactName || rec?.investor?.name || "Contact"}</span>
@@ -174,7 +176,7 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
               {gmailNote && <span className="text-slate-600">{gmailNote}</span>}
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close"><X size={18} /></button>
+          {onClose && <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close"><X size={18} /></button>}
         </header>
 
         <div className="space-y-3 p-4">
@@ -250,6 +252,21 @@ export default function ContactDrawer({ contactId, party: hint = null, onClose }
             )}
           </>)}
         </div>
+    </>
+  );
+}
+
+export default function ContactDrawer({ contactId, party = null, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  if (!contactId) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label="Contact record" className="flex h-full w-[600px] max-w-full flex-col overflow-y-auto bg-slate-50 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <ContactRecordBody contactId={contactId} party={party} onClose={onClose} />
       </div>
     </div>
   );

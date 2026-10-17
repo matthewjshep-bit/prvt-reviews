@@ -4796,6 +4796,35 @@ holds and renders the cache's buy box record-first.
 under `contactProfiles` and `contactEvents`, never pruned — fine for dev,
 not a production shape.
 
+## Companion window (2026-10-16)
+
+The companion is a narrow app window that sits beside GoHighLevel and shows whoever is open there. When Matt opens a contact, or that contact's conversation, in GHL, the companion switches to that person. Nothing has to be clicked in the app.
+
+- **Page:** `/contact?location_id=…&key=…` (`messaging-app/src/CompanionView.jsx`).
+  - Top: the person's Desk pane, the same as on the Desk. It shows their current offer, the conversation and reply box, and the Status · Bot · Edit offer · Call buttons.
+  - Below that: their whole record (`ContactRecordBody` from `ContactDrawer.jsx`).
+  - `?contact=` keeps the person across a reload.
+- **How to open it:** the **Companion** button in any app header (top right) opens it as a popup window.
+- **Following GHL:** the Chrome extension in `companion-extension/` does this.
+  - It reads the GHL tab's **address only** (`shared/ghl-url.js`, synced into `companion-extension/shared/`). It never reads GHL page content.
+  - Its host permissions limit it to GHL and `app.shepflips.com`.
+  - Addresses it follows:
+    - `/v2/location/{loc}/contacts/detail/{contactId}`
+    - `/v2/location/{loc}/conversations/conversations/{conversationId}`. The broker turns this into a contact with `GET /api/contacts/by-conversation/:conversationId`, which reads GHL `GET /conversations/:id` and needs the `conversations.readonly` scope.
+  - A GHL tab on another sub-account is ignored, because the location ids differ.
+- **Install (once):**
+  1. Open chrome://extensions and turn on Developer mode.
+  2. Click **Load unpacked** and choose `companion-extension/`.
+  3. Pin it from the puzzle-piece menu.
+  - After pulling a change to the extension, press its reload arrow on chrome://extensions.
+- **Toolbar button:** brings the companion forward, or reopens it at the last companion address it saw. It stores that address in the extension's local storage. The address carries the location key, as GHL menu links do.
+- **Always on top:** Chrome can't keep a window above others. Place the companion beside GHL instead, with macOS split view or a window manager.
+- **When it doesn't follow, check in this order:**
+  1. The dot at the top of the companion. Grey means the extension isn't talking to that window: is the extension loaded, and is the window at `app.shepflips.com/contact`?
+  2. Is the GHL tab on a contact page or a conversation page? A list view is no one.
+  3. On a conversation page, an amber note means GHL didn't name a contact for it.
+- **Sends:** nothing new sends. The reply box and buttons go through the same gates as the Desk.
+
 ## Agent Outreach
 
 **Separate app, same Netlify site.** Agent Outreach lives at the `/agents`

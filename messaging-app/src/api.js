@@ -106,6 +106,10 @@ export const cancelEnrichSweep = () => post(`/api/offers/enrich/sweep/cancel`, {
 // reads GHL; these read the app's record.
 export const getContactProfile = (id, { pull = false, party = "" } = {}) =>
   fetch(`${API_BASE}/api/contacts/${encodeURIComponent(id)}/record?${locq()}${pull ? "&pull=1" : ""}${party ? `&party=${party}` : ""}`).then(j);
+// Whose GHL conversation this is: the companion window follows a GHL
+// conversation page too, and that address names no person.
+export const getContactByConversation = (conversationId) =>
+  fetch(`${API_BASE}/api/contacts/by-conversation/${encodeURIComponent(conversationId)}?${locq()}`).then(j).then((r) => r.contactId);
 export const getContactThread = (id, limit = 30) =>
   fetch(`${API_BASE}/api/contacts/${encodeURIComponent(id)}/thread?${locq()}&limit=${limit}`).then(j);
 // The work pane's header: this house's moments, what the machine does next,
