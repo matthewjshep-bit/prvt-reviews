@@ -2889,6 +2889,44 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   - The nurture guard holds them too.
   - Preview before switching on: `GET /api/dashboard/ghl/pipeline?repliers=1`
     (`plan.counts.tier2Repliers`, `plan.creates`).
+- **A house the conversation raised is Tier 1, with nothing priced
+  (2026-10-16).** An agent answered our first text with "It needs a lot of
+  work". The bot rightly asked its one question first, so no underwrite ran,
+  no row was made, and the card stayed out of Tier 1. Matt: "Tier 1 should be
+  allowed even if there is no draft or offer. As long as they've offered a
+  valid address or have indicated it's an actual flip opportunity."
+  `raisedHouses` (`shared/ghl-stages.js`) reads their timeline
+  (`HOUSE_EVENT_TYPES`):
+  - **Raised:** a `house_mentioned` with a full address (a house number, a
+    street, and a town or ZIP; not `needsAddress`). Or their words about a
+    house read as a candidate (`saysRealWork` in `shared/flip-read.js`):
+    their own framing ("needs a lot of work", "a bit of a project", "a
+    fixer"), real trouble (flipRead's strong list: foundation, estate, tear
+    down…), or a rehab budget of their own of 50K+. A list of rooms ("kitchen
+    and baths original") is not their word that it's a flip. Neither is "not
+    a fixer", new construction, a remodel already done, or an unfinished
+    basement.
+  - **Closed:** a later `house_closed`. The reply agent files one when our
+    reply or the qualify step passes, they say it's turnkey, they pass, or it
+    sold. Also closed by: a later read of their words as turnkey or light, a
+    `subject_property_set` marked notOurKind, Tier 1 Pass or Kick (that house,
+    or every house before it when the pass named none), or an opt-out.
+  - **The rule:**
+    - an open house is Tier 1 for `staleTier1Days` (10), like an unsent row;
+    - a closed one sends the card to Tier 2 when nothing else is live;
+    - a house with an offer row is the row's to say;
+    - it never pulls a card down from Offer Out or Contract;
+    - newest wins as before: the raise or the close is the event, and a card
+      you drag after it stands.
+  - **Homeowners:** the plan carries `conversation: true`. As with a
+    conversation's Tier 2 card, it's planned only for a known agent, and GHL's
+    live tags are checked before the card is made or moved, so a homeowner
+    from the seller texts is never an agent's lead.
+  - **Who moves it:** the 15-minute tick syncs an agent whose house events
+    arrived since its last run. The 7am sweep plans the rest.
+  - **Check it:** `GET /api/dashboard/ghl/pipeline?fresh=1`. Look at
+    `plan.counts.conversation`, and the rows with `conversation: true`. The
+    work pane's pass note names a raised house that keeps the card in Tier 1.
 - **Tier 2 is the agent nurture** (Matt): everyone with nothing live,
   former Tier 3s included, replied or not. The app's agent check-in is the
   nurture. A card that still lands in Tier 3 (a workflow, a drag) is moved on

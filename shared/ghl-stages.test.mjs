@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planStageMoves, planCard, planHandMove, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy } from "./ghl-stages.js";
+import { planStageMoves, planCard, planHandMove, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy, raisedHouses, sameRaisedHouse, validAddress } from "./ghl-stages.js";
 
 const NOW = Date.parse("2026-10-13T20:00:00Z");
 const ago = (d) => new Date(NOW - d * 86400000).toISOString();
@@ -343,4 +343,112 @@ test("an app move after the hand move is the app's, not his", () => {
   const offers = [offer("m", { status: "passed", statusAt: ago(4), sends: [{ ts: ago(6) }] }), offer("m", { status: "new", sends: [], createdAt: ago(3) })];
   const r = planCard({ acq: ACQ, contactId: "m", cards: [card("m", "s-t2", { lastStageChangeAt: ago(2) })], offers, handMoves: [ago(5)], appMoves: [ago(2)], now: NOW });
   assert.ok(!r.youMoved, JSON.stringify(r));
+});
+
+/* ---------- a house the conversation raised (2026-10-16) ---------- */
+
+// Matt, 2026-10-16: "Tier 1 should be allowed even if there is no draft or
+// offer. As long as they've offered a valid address or have indicated it's
+// an actual flip opportunity." An agent answered our first text with "It
+// needs a lot of work", the bot asked its one question, nothing was priced,
+// and nothing put the card in Tier 1.
+const ev = (type, address, data = {}, at = ago(1)) => ({ contactId: "kw", party: "agent", type, address, at, data });
+const EDMONDS = "20911 78th Ave W, Edmonds, WA 98026";
+
+test("an agent who says the house needs a lot of work is in Tier 1 with nothing priced", () => {
+  const raised = raisedHouses({ events: [ev("property_details", EDMONDS, { condition: "needs a lot of work" })], now: NOW });
+  assert.deepEqual(raised.map((h) => [h.address, h.open]), [[EDMONDS, true]]);
+  assert.match(raised[0].why, /needs real work/);
+  const t = targetStage({ offers: [], raised, now: NOW });
+  assert.equal(t.to, "tier1");
+  assert.equal(t.raised, EDMONDS);
+  const r = planCard({ acq: ACQ, contactId: "kw", raised, now: NOW });
+  assert.equal(r.create?.to, "Tier 1");
+  assert.equal(r.create?.conversation, true, "the runner checks GHL's tags before making it");
+});
+
+test("an agent who gives us a house with a full address is in Tier 1; a street with no number or town isn't", () => {
+  const given = raisedHouses({ events: [ev("house_mentioned", "15426 Stone Ave, Shoreline", { note: "rambler", needsAddress: false })], now: NOW });
+  assert.equal(given[0]?.open, true);
+  assert.match(given[0].why, /they gave us 15426 Stone Ave/);
+  assert.equal(raisedHouses({ events: [ev("house_mentioned", "Pine St, Shelton", { needsAddress: true })], now: NOW }).length, 0);
+  assert.equal(raisedHouses({ events: [ev("house_mentioned", "123 Main St", { needsAddress: false })], now: NOW }).length, 0, "no town or ZIP to find it by");
+  assert.equal(validAddress("13239 166th Ave SE, Renton WA 98059"), true);
+});
+
+test("their word that it's turnkey or light work never raises a house, and closes one they raised", () => {
+  assert.equal(raisedHouses({ events: [ev("property_details", EDMONDS, { condition: "fully remodeled, move-in ready" })], now: NOW }).length, 0);
+  const later = raisedHouses({ events: [
+    ev("property_details", EDMONDS, { condition: "needs a lot of work" }, ago(3)),
+    ev("property_details", EDMONDS, { condition: "no big stuff, mostly cosmetic", workNeeded: "paint and flooring" }, ago(2)),
+  ], now: NOW });
+  assert.deepEqual(later.map((h) => h.open), [false]);
+  assert.equal(targetStage({ raised: later, now: NOW }).to, "tier2");
+});
+
+test("a house we passed on, they passed on, or that sold in the conversation sends the card back to Tier 2", () => {
+  for (const why of ["we passed on it", "they passed", "it sold or came off the market"]) {
+    const raised = raisedHouses({ events: [
+      ev("house_mentioned", EDMONDS, { needsAddress: false }, ago(3)),
+      ev("house_closed", EDMONDS, { why }, ago(1)),
+    ], now: NOW });
+    const r = planCard({ acq: ACQ, contactId: "kw", cards: [card("kw", "s-t1", { lastStageChangeAt: ago(3) })], raised, now: NOW });
+    assert.equal(r.move?.to, "Tier 2", why);
+    assert.match(r.move.why, new RegExp(why), why);
+  }
+});
+
+test("an opt-out after the raise closes it", () => {
+  const raised = raisedHouses({ events: [ev("house_mentioned", EDMONDS, { needsAddress: false }, ago(3)), ev("unsubscribed", "", {}, ago(1))], now: NOW });
+  assert.deepEqual(raised.map((h) => [h.open, h.why]), [[false, "they opted out"]]);
+});
+
+test("a house we priced is the offer's to say, however the thread spelled it", () => {
+  assert.equal(sameRaisedHouse("15426 Stone Ave, Shoreline", "15426 Stone Ave N, Shoreline, WA 98133"), true);
+  assert.equal(sameRaisedHouse("123 Main St, Kent", "123 Main St, Renton"), false);
+  const events = [ev("house_mentioned", "15426 Stone Ave, Shoreline", { needsAddress: false })];
+  const passed = offer("kw", { address: "15426 Stone Ave N, Shoreline, WA 98133", status: "we_passed", statusAt: ago(0.5) });
+  assert.equal(raisedHouses({ events, offers: [passed], now: NOW }).length, 0);
+  assert.equal(targetStage({ offers: [passed], raised: raisedHouses({ events, offers: [passed], now: NOW }), now: NOW }).to, "tier2");
+});
+
+test("a raise goes quiet after the same 10 days an unsent offer does", () => {
+  const raised = raisedHouses({ events: [ev("property_details", EDMONDS, { condition: "needs a lot of work" }, ago(11))], now: NOW });
+  assert.equal(raised.length, 0);
+});
+
+test("a house they raised never pulls a card down from Offer Out", () => {
+  const raised = raisedHouses({ events: [ev("house_mentioned", EDMONDS, { needsAddress: false })], now: NOW });
+  assert.equal(targetStage({ offers: [offer("kw")], raised, now: NOW }).to, "offerOut");
+});
+
+test("a person's move after the raise stands; a raise after the person's move wins", () => {
+  const raised = raisedHouses({ events: [ev("house_mentioned", EDMONDS, { needsAddress: false }, ago(2))], now: NOW });
+  const after = planCard({ acq: ACQ, contactId: "kw", cards: [card("kw", "s-t2", { lastStageChangeAt: ago(1) })], raised, now: NOW });
+  assert.ok(after.youMoved, JSON.stringify(after));
+  const before = planCard({ acq: ACQ, contactId: "kw", cards: [card("kw", "s-t2", { lastStageChangeAt: ago(3) })], raised, now: NOW });
+  assert.equal(before.move?.to, "Tier 1");
+  assert.equal(before.move?.conversation, true);
+});
+
+test("the sweep plans a Tier 1 card for an agent whose conversation raised a house, with no offer", () => {
+  const raised = raisedHouses({ events: [ev("property_details", EDMONDS, { condition: "needs a lot of work" })], now: NOW });
+  const r = plan({ opportunities: [], offers: [], raised: new Map([["kw", raised]]) });
+  assert.deepEqual(r.creates.map((c) => [c.contactId, c.to, c.conversation]), [["kw", "Tier 1", true]]);
+  assert.equal(r.counts.conversation, 1);
+});
+
+test("after a pass, a house they raised that's still open is named as what keeps the card in Tier 1", () => {
+  const raised = raisedHouses({ events: [ev("house_mentioned", EDMONDS, { needsAddress: false })], now: NOW });
+  const held = cardHeldBy({ offers: [offer("kw", { status: "we_passed", statusAt: ago(0.5) })], raised, now: NOW });
+  assert.match(held?.text || "", /they raised 20911 78th Ave W/);
+});
+
+test("Pass on the Tier 1 list closes the house they raised; a pass that named no house closes every house before it", () => {
+  const raisedAt = ago(3);
+  const named = raisedHouses({ events: [ev("house_mentioned", EDMONDS, { needsAddress: false }, raisedAt), ev("tier1_passed", EDMONDS, { by: "you" }, ago(1))], now: NOW });
+  assert.deepEqual(named.map((h) => h.open), [false]);
+  const unnamed = raisedHouses({ events: [ev("property_details", EDMONDS, { condition: "needs a lot of work" }, raisedAt), ev("tier1_kicked", "", { by: "you" }, ago(1))], now: NOW });
+  assert.deepEqual(unnamed.map((h) => h.open), [false]);
+  assert.equal(targetStage({ raised: unnamed, now: NOW }).to, "tier2");
 });

@@ -154,6 +154,33 @@ export function saysCosmeticOnly(text = "", { agentRehab = 0 } = {}) {
   return hits(COSMETIC, t).length > 0;
 }
 
+// Their own framing of a candidate: "needs a lot of work", "a bit of a
+// project", "a fixer", "flip potential". Not a list of rooms: "kitchen and
+// baths original" is a scope for the question, not their word that it's a flip.
+const CANDIDATE_RX = /\bneeds?\s+(?:a\s+(?:lot|bunch|ton|fair\s+amount)\s+of\s+|lots\s+of\s+|some\s+|real\s+|major\s+|significant\s+)?(?:work|rehab|repairs|TLC|love)\b|\bproject\b|\bfixer(?:[\s-]upper)?\b|\bflip\s+(?:potential|opportunity|candidate)\b|\bgood\s+flip\b/i;
+// "Not a fixer", "new construction", "full remodel done in 2002": the opposite.
+const NOT_A_CANDIDATE_RX = /\b(?:not|isn'?t|never|no)\s+(?:really\s+)?(?:a\s+|an\s+)?(?:fixer|project|flip)\b|\bnew(?:er)?\s+(?:construction|build|home)\b|\b(?:remodel|renovation|rehab|update)s?\s+(?:was\s+|were\s+)?(?:done|completed|finished)\b/i;
+
+/**
+ * saysRealWork(text, { agentRehab }) → true when the agent's own words make
+ * the house a candidate: their framing (CANDIDATE_RX), real trouble
+ * (flipRead's strong list), or a rehab budget of their own of 50K or more,
+ * and nothing in them calls it done, new or light.
+ *
+ * Not flipRead's `qualifies`, which decides whether we underwrite at once and
+ * counts big-ticket rooms. This decides whether they raised a candidate
+ * (Matt, 2026-10-16: "it needs a lot of work" on the house we texted about is
+ * a Tier 1, even while the bot asks its one question).
+ */
+export function saysRealWork(text = "", { agentRehab = 0 } = {}) {
+  const t = String(text || "");
+  if (!t.trim() || NOT_A_CANDIDATE_RX.test(t) || saysTurnkey(t) || saysCosmeticOnly(t, { agentRehab })) return false;
+  if ((Number(agentRehab) || 0) >= REAL_SCOPE_REHAB) return true;
+  // An unfinished basement is a room to finish, not an unfinished house.
+  const said = t.replace(/\bunfinished\s+basement\b|\bbasement\s+(?:is\s+)?(?:still\s+)?unfinished\b/gi, "basement");
+  return flipRead(said, { agentRehab }).strong.length > 0 || CANDIDATE_RX.test(said);
+}
+
 // Our one question. A few wordings, so a day of them doesn't read as a form.
 export const QUALIFY_ASKS = [
   "Good to know. Is it big-ticket stuff like roof, foundation or systems, or more paint and flooring? And what's got the seller selling?",

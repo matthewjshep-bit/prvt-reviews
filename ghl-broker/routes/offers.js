@@ -133,7 +133,7 @@ import { preContractChecks, preContractRecord, openChecks, tickPreContract, norm
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
 import { normalizeTierOne } from "../shared/tier-one.js";
-import { normalizeGhlStages, cardHeldBy, HELD_DAYS } from "../shared/ghl-stages.js";
+import { normalizeGhlStages, cardHeldBy, HELD_DAYS, raisedHouses, HOUSE_EVENT_TYPES } from "../shared/ghl-stages.js";
 import { syncAgentCard } from "../tier-check.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
@@ -3544,8 +3544,13 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
     const cfg = normalizeGhlStages(saved.ghlStages);
     if (cfg.mode !== "on") return null;
-    const offers = await store.listOffers(locationId, { contactId, limit: 100, lean: true }).catch(() => []);
-    return cardHeldBy({ offers, staleDays: cfg.staleTier1Days });
+    const [offers, events] = await Promise.all([
+      store.listOffers(locationId, { contactId, limit: 100, lean: true }).catch(() => []),
+      // A house they raised in the conversation holds Tier 1 with no row behind it.
+      store.listContactEvents?.(locationId, contactId, { types: HOUSE_EVENT_TYPES, limit: 300 }).catch(() => []) || [],
+    ]);
+    const raised = raisedHouses({ events, offers, staleDays: cfg.staleTier1Days });
+    return cardHeldBy({ offers, raised, staleDays: cfg.staleTier1Days });
   }
 
   // A status a person set: the route above, and a person's own words
