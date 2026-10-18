@@ -192,14 +192,17 @@ export const QUALIFY_ASKS = [
 export const QUALIFY_ASK_RX = /\b(?:big[\s-]ticket\s+stuff|real\s+repairs\s+like|the\s+big\s+stuff\s+like)\b[\s\S]*\bseller/i;
 
 // The pass. The house was the icebreaker; the ask is the point.
-// Each says what we buy (OUR_BOX_WORDS) and names ONE kind of seller that
-// becomes a deal — the sellers behind the deals with committed buyers: an
-// estate, a parent moving into care, someone who has to move by a date
-// (2026-10-09).
+// 2026-10-17 (Matt: "short and sweet, personable, and to the point"): the
+// bot's answer that kept Brenda talking was "Got it, thanks for
+// letting me know. If you come across anything that needs work in the
+// future, feel free to reach out." — so each is a thanks, that it's lighter
+// than we go for, and their other fixers, on or off market. No list of what
+// we buy, no kinds of seller (until 2026-10-17 they named "an unlisted
+// estate" or "a parent moving into care").
 export const QUALIFY_PASSES = [
-  `Thanks, sounds too nice for us. We buy ${OUR_BOX_WORDS}. Anything like that, on or off-market? An unlisted estate is perfect.`,
-  `Appreciate it. Lighter than we go for: ${OUR_BOX_WORDS}. Anything like that, listed or off-market? Even a parent moving into care.`,
-  `Good to know. We buy ${OUR_BOX_WORDS}. If a seller who has to move by a date crosses your desk, on or off-market, I'd love a look.`,
+  "Got it, thanks for letting me know. Sounds a bit too nice for us. If you come across anything that needs work, on or off-market, I'm all ears.",
+  "Appreciate it, sounds lighter than what we usually go for. Any fixers on your radar, listed or off-market?",
+  "Good to know, thanks. Not quite distressed enough for us. If anything that needs real work comes across your desk, on or off-market, I'd love a look.",
 ];
 
 // The call ask (2026-10-15). The funnel review: all 8 contracts from outreach

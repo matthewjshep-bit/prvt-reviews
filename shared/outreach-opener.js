@@ -22,18 +22,37 @@
 // ended on cost about 12 points and most of the length. So each is one
 // question about the listing, about 150 characters filled in, and the ask for
 // their other fixers waits for their first answer.
-// 2026-10-16 (Matt: "the first text to agents look slightly spammy, can we
-// make them more approachable and like a human"): the day's batch read like
-// a mass text — a remark about the house, "I flip houses around X County",
-// and "project or pretty turnkey?" on most of them. Now it's what a person
-// texts someone they haven't met: the street, a few plain words about who we
-// are, one plain question. {street} is the street name without the number.
+// 2026-10-17 (Matt: "keep it short and sweet, personable, and to the point …
+// we're getting too creative"): the texts that started real deals were his
+// own plain ones — Brenda ("came across your listing for [the street
+// address] … Is this one a bit of a project, or pretty turnkey? And if
+// you've got other fixers on your radar, I'm all ears") and Rigo ("looking
+// for stuff that needs a little TLC … figured I'd ask? Or any other fixers
+// you've seen"). So the first text is one of these, filled in as written
+// (mode "template", shared/standard-texts.js), not a fresh one from the
+// model: the listing by its address, who we are in a few words, is it a
+// project, and their other fixers. {address} is the street address (number
+// and street), {street} the street alone.
 export const DEFAULT_OPENER_EXAMPLES = [
+  "Hi {first}, saw your listing at {address}. I'm local and fix up houses. Is it a bit of a project, or pretty turnkey? If you've got other fixers on your radar, I'm all ears.",
+  "Hi {first}, came across your listing at {address}. I'm Seattle based and fix up places that need some TLC. Is this one a bit of a project? Or any other fixers you've seen?",
+  "Hey {first}, saw your listing at {address}. I'm local here in Seattle and fix up houses. Does this one need much work? And if you've got other fixers on your radar, I'm all ears.",
+];
+
+// The defaults from 2026-10-16 to 2026-10-17, written by the model in a
+// "plain" voice: the street without its number, one question, no fixers ask.
+// Settings saved them verbatim, so a stored copy is read as "never changed".
+export const PLAIN_DEFAULT_OPENER_EXAMPLES = [
   "Hi {first}, I saw your listing on {street}. I fix up older homes locally. Does it need much work, or is it pretty move-in ready?",
   "Hey {first}, does your listing on {street} need much work? I renovate a few houses a year and I'm looking for my next one.",
   "Hi {first}, I'm local and fix up houses. Is the place you have listed on {street} in decent shape, or does it need some updating?",
   "Hey {first}, saw your listing on {street} in {town}. Has it been updated, or does it still need some work?",
 ];
+
+// How the first text is written: "template" fills one of the examples in as
+// written (2026-10-17, the default); "ai" has the model write a fresh one in
+// their voice, as from 2026-10-04 to 2026-10-16.
+export const OPENER_MODES = ["template", "ai"];
 
 // The defaults from 2026-10-15 to 2026-10-16: shorter than the first ones,
 // still with a remark and a county in them. A stored copy is read as
@@ -54,7 +73,7 @@ export const LEGACY_DEFAULT_OPENER_EXAMPLES = [
   "Hi {first}, saw your {town} listing on {street}, looks like it has some character. Fixer, or already pretty turnkey? I'm after my next flip in {county} County, so if you know of anything else that needs work, I'd love to hear.",
   "Hey {first}, I'm someone who gets way too excited about original kitchens. Does {street} need some work? Looking for my next flip in {county} County, so if you've got other fixers on your radar, I'm all ears.",
 ];
-const LEGACY = new Set([...LEGACY_DEFAULT_OPENER_EXAMPLES, ...PREVIOUS_DEFAULT_OPENER_EXAMPLES]);
+const LEGACY = new Set([...LEGACY_DEFAULT_OPENER_EXAMPLES, ...PREVIOUS_DEFAULT_OPENER_EXAMPLES, ...PLAIN_DEFAULT_OPENER_EXAMPLES]);
 
 export const OPENER_MAX_EXAMPLES = 8;
 export const OPENER_EXAMPLE_MAX_CHARS = 400;
@@ -75,7 +94,7 @@ export const OPENER_MAX_CHARS = 160;
 const FOOTER_RX = /\bcan stop\b|\bstop to end\b|\breply stop\b/i;
 
 /**
- * normalizeOpener(v) → { examples: string[] }
+ * normalizeOpener(v) → { examples: string[], mode: "template" | "ai" }
  *
  * Unset (or emptied) → Matt's defaults. Each example trimmed and capped; one
  * that carries the stop footer is dropped, and a sign-off on the end is cut.
@@ -95,7 +114,21 @@ export function normalizeOpener(v = {}) {
     // enough to teach a long first text are left out (2026-10-15).
     .filter((x) => !LEGACY.has(x) && x.length <= OPENER_EXAMPLE_KEEP_CHARS)
     .slice(0, OPENER_MAX_EXAMPLES);
-  return { examples: examples.length ? examples : [...DEFAULT_OPENER_EXAMPLES] };
+  return { examples: examples.length ? examples : [...DEFAULT_OPENER_EXAMPLES], mode: o.mode === "ai" ? "ai" : "template" };
+}
+
+/**
+ * openerVoice(opener) → the examples the model writes a first text from
+ *
+ * Matt's fixed texts name the house number and ask for other fixers, which
+ * the model's own first text doesn't do (the turnkey and off-market seats, or
+ * mode "ai"). With his defaults in place, the model is shown the 2026-10-16
+ * plain ones it was written for; examples he saved himself are his voice.
+ */
+export function openerVoice(opener = {}) {
+  const ex = Array.isArray(opener.examples) ? opener.examples : [];
+  const mine = ex.length && !(ex.length === DEFAULT_OPENER_EXAMPLES.length && ex.every((x, i) => x === DEFAULT_OPENER_EXAMPLES[i]));
+  return mine ? ex : [...PLAIN_DEFAULT_OPENER_EXAMPLES];
 }
 
 // A sign-off at the very end: "Thanks, Matt", "- Matt", "Best, Matthew",

@@ -18,7 +18,7 @@ process.env.OUTREACH_IMPORTS_ENABLED = "true";
 
 const { outboundOpening, OPENING_MOVES, WHO_WE_ARE, openerPlan } = await import("./conversation-prompt.js");
 const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText, writeWithoutOverused, startProactive, sendReplyDraft, lastLineIsOurFirstText } = await import("./reply-agent.js");
-const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, streetName, DEFAULT_OPENER_EXAMPLES, LEGACY_DEFAULT_OPENER_EXAMPLES, PREVIOUS_DEFAULT_OPENER_EXAMPLES, OPENER_MAX_CHARS } = await import("./shared/outreach-opener.js");
+const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, streetName, DEFAULT_OPENER_EXAMPLES, LEGACY_DEFAULT_OPENER_EXAMPLES, PREVIOUS_DEFAULT_OPENER_EXAMPLES, PLAIN_DEFAULT_OPENER_EXAMPLES, OPENER_MAX_CHARS } = await import("./shared/outreach-opener.js");
 const { normalizeOutreachAutopilot, startOutreachSweep, _resetJobs } = await import("./outreach-sweep.js");
 const { store } = await import("./store.js");
 const { default: createOutreachRouter } = await import("./routes/outreach.js");
@@ -58,7 +58,7 @@ test("a first text the bot signed anyway reaches the agent with one 'Thanks, Mat
 });
 
 test("the first text's draft comes back with the sign-off taken off before anyone reads it", async () => {
-  const saved = { aiApiKey: "test-key", conversationAi: { enabled: true, persona: { name: "Matt" } } };
+  const saved = { aiApiKey: "test-key", conversationAi: { enabled: true, persona: { name: "Matt" } }, outreachAutopilot: { opener: { mode: "ai" } } };
   const draft = async () => ({ reply: "Hey Dana, 12 Elm St caught my eye. Is that one a bit of a project? Thanks, Matt", summary: "s", confidence: "high", needsHuman: false });
   const r = await previewProactive({ client: { call: async () => ({}) }, locationId: "loc-signoff", saved, store, contactId: "", kind: "outreach_open", name: "Dana",
     subject: { address: "12 Elm St, Tacoma, WA", county: "Pierce" }, deps: { draft } });
@@ -113,7 +113,9 @@ test("the reply agent hands the prompt the listing's county and Matt's saved exa
   assert.equal(o.county, "Pierce");
   assert.deepEqual(o.examples, ["Hi {first}, {street} in {county}?"]);
   assert.equal(o.variant, 7);
-  assert.deepEqual(outboundDescriptor({ kind: "outreach_open", offer: null, saved: {}, subject: { address: "x" } }).examples, DEFAULT_OPENER_EXAMPLES);
+  const plain = outboundDescriptor({ kind: "outreach_open", offer: null, saved: {}, subject: { address: "x" } });
+  assert.deepEqual(plain.templates, DEFAULT_OPENER_EXAMPLES, "Matt's texts, filled in as written");
+  assert.deepEqual(plain.examples, PLAIN_DEFAULT_OPENER_EXAMPLES, "the voice the model writes in when it writes one");
   const nudge = outboundDescriptor({ kind: "outreach_nudge", offer: null, saved: {}, subject: { address: "x", county: "King" } });
   assert.equal(nudge.county, "King");
 });
@@ -634,15 +636,17 @@ test("a dry run reads the room but texts nobody", async () => {
   assert.equal(seen.createLimit, 3);
 });
 
-test("the first text asks one question and leaves their other fixers for their answer — the fixers line cost 12 points of replies", () => {
-  const t = ask({ county: "King", examples: DEFAULT_OPENER_EXAMPLES });
+// Since 2026-10-17 Matt's own texts go as written and do ask for other
+// fixers (plain-outreach.test.mjs); this is the model's first text.
+test("a first text the model writes asks one question and leaves their other fixers for their answer — the fixers line cost 12 points of replies", () => {
+  const t = ask({ county: "King", examples: PLAIN_DEFAULT_OPENER_EXAMPLES });
   const rules = t.split("HOW MATT WRITES")[0];
   assert.doesNotMatch(rules, /That line is required|END with one short line|other fixers on their radar/);
   assert.match(rules, /At most two short sentences/);
   assert.match(rules, /don't ask about their other fixers or other houses in this text/);
   assert.match(rules, /Name no county and no region/);
   const fill = (x) => x.replace("{first}", "Dana").replace("{street}", "14820 SE 172nd St").replace("{town}", "Renton").replace("{county}", "King");
-  for (const x of DEFAULT_OPENER_EXAMPLES) {
+  for (const x of PLAIN_DEFAULT_OPENER_EXAMPLES) {
     assert.doesNotMatch(x, /other fixers|anything else that needs work|all ears/i, x);
     assert.equal((x.match(/\?/g) || []).length, 1, `one question: ${x}`);
     assert.ok(fill(x).length <= 140, `about 120 characters filled in: ${fill(x).length}`);
@@ -672,7 +676,8 @@ test("an agent answering one of the new short first texts is answering us, thoug
 /* ---------- the plain first text (2026-10-16) ---------- */
 
 test("a first text a person is waiting on is drafted directly, not through the Batch API", async () => {
-  const saved = { aiApiKey: "test-key", conversationAi: { enabled: true, ai: { batchMachineDrafts: true }, parties: { agent: { outreach: { enabled: true } } } } };
+  const saved = { aiApiKey: "test-key", conversationAi: { enabled: true, ai: { batchMachineDrafts: true }, parties: { agent: { outreach: { enabled: true } } } },
+    outreachAutopilot: { opener: { mode: "ai" } } };
   const client = { call: async () => ({}) };
   for (const [direct, contactId] of [[true, "c-direct"], [false, "c-batched"]]) {
     const seen = [];

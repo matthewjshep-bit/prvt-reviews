@@ -34,7 +34,7 @@ import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { countyName, firstTextHook } from "../shared/outreach-opener.js";
 import { isRuralLot, RURAL_LOT_ACRES } from "../shared/asset-type.js";
 import { previewProactive, machineRoomToday } from "../reply-agent.js";
-import { fetchZillowAgentContacts, fetchZillowListings } from "../rehab-scan.js";
+import { fetchZillowAgentContacts, fetchZillowListings, MAX_LISTING_LOOKUPS } from "../rehab-scan.js";
 import { streetKey } from "../comps-zillow.js";
 import { OUTREACH_FIELDS } from "../field-registry.js";
 import { SUBJECT_PROPERTY_FIELD, seedSubjectProperty } from "../enrich.js";
@@ -1830,6 +1830,20 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
   router.sweepDeps = {
     runPull: (...args) => router.runPull(...args), importAgents, retryFirstTexts,
     firstTextRoom: ({ locationId, saved }) => machineRoomToday({ store, locationId, saved }),
+    // The listing check (outreachAutopilot.distressCheck): Zillow's page
+    // for each listing, 40 to an actor run, two runs at a time.
+    screenListings: async ({ locationId, addresses }) => {
+      const token = String((await getSettings(locationId)).apifyToken || "").trim();
+      if (!token) throw new Error("no Apify token in Settings");
+      const chunks = [];
+      for (let i = 0; i < addresses.length; i += MAX_LISTING_LOOKUPS) chunks.push(addresses.slice(i, i + MAX_LISTING_LOOKUPS));
+      const out = new Map();
+      for (let i = 0; i < chunks.length; i += 2) {
+        const maps = await Promise.all(chunks.slice(i, i + 2).map((c) => fetchZillowListings(c, token)));
+        for (const m of maps) for (const [k, v] of m) out.set(k, v);
+      }
+      return out;
+    },
   };
   router.resolveBatch = resolveBatch;
 
