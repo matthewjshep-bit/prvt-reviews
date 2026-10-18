@@ -231,7 +231,7 @@ export const FOLLOW_UP_MECHANISMS = [
 
   { key: "buyer_pulse", group: "buyer", label: "Buyer check-in", kinds: ["buyer_pulse"], sentFrom: "event", ahead: "plan", followUp: true },
   { key: "blast_first", group: "buyer", label: "Deal blast · first wave", kinds: [], sentFrom: "event", ahead: "event", followUp: false,
-    fires: "when an offer becomes a deal" },
+    fires: "when an offer becomes a deal, or you press Blast" },
   { key: "blast_wave", group: "buyer", label: "Deal blast · next waves", kinds: [], sentFrom: "event", ahead: "plan", followUp: true },
   { key: "deal_followup", group: "buyer", label: "Deal follow-up", kinds: ["deal_followup"], sentFrom: "draft", ahead: "plan", followUp: true },
   { key: "showing", group: "buyer", label: "Walkthrough reminder / follow-up", kinds: ["showing_reminder", "showing_followup"], sentFrom: "draft", ahead: "plan", followUp: true },
@@ -307,7 +307,7 @@ export function describeMechanism(key, s = {}) {
     case "second_look": return `A strong past offer, ${s.secondLook?.afterDays ?? 21} days on and every ${s.secondLook?.everyDays ?? 45} after, at most ${s.secondLook?.maxPerHouse ?? 2} per house. Picked each morning.`;
     case "price_drop": return "The price watch sees a house we offered on drop at least $5k and 2%.";
     case "buyer_pulse": return `Every buyer about every ${bp.everyDays ?? 90} days, ${bp.dailyCap ?? 10} a weekday, from ${hourText(bp.hour ?? 11)}.`;
-    case "blast_first": return "When an offer becomes a deal, the best-fit buyers get it, ten minutes after promote.";
+    case "blast_first": return "A deal's first wave to buyers: the best-fit buyers ten minutes after promote, or whoever you pick when you press Blast.";
     case "blast_wave": return `Nobody committed: the next wave ${da.secondWaveHours ?? 48} hours after the last, up to ${da.maxWaves ?? 2} waves.`;
     case "deal_followup": return ladder(s.ifu?.ladders?.deal_followup ? { ...s.ifu.ladders.deal_followup, repeatEvery: 0, steps: (s.ifu.ladders.deal_followup.steps || []).slice(0, 1) } : null, "A buyer spoke up on a deal and went quiet") + " (once per house).";
     case "showing": return `The afternoon before a walkthrough to buyers coming${da.showings?.followUpAfter ? ", and a follow-up two hours after it" : ""}.`;

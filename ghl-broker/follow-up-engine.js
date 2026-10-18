@@ -336,18 +336,22 @@ export async function followUpEngineFor({ store, locationId, saved = {}, period 
   for (const e of periodEvents) if (e?.contactId && e.data?.contactName && !names.has(e.contactId)) names.set(e.contactId, e.data.contactName);
   const nameOf = (id) => names.get(id) || "";
 
-  // Which wave a deal text was: the deal's own blasts, by time.
+  // Which wave a deal text was: the `wave` the deal's blasts entry recorded
+  // (routes/dispo.js blastFromApp), for the entry queued last before the
+  // text. Not the count of entries: every Blast pressed by hand adds one at
+  // wave 1, and the sweep's next waves are 2 and up.
   const blastsBy = new Map();
   for (const o of [...ctx.deals, ...ctx.offers]) {
     const b = Array.isArray(o?.deal?.blasts) ? o.deal.blasts : [];
-    if (o?.id && b.length && !blastsBy.has(o.id)) blastsBy.set(o.id, b.map((x) => ms(x.at)).filter((t) => t != null).sort((a, b) => a - b));
+    if (o?.id && b.length && !blastsBy.has(o.id)) {
+      blastsBy.set(o.id, b.map((x, i) => ({ t: ms(x.at), wave: Number(x.wave) || i + 1 })).filter((x) => x.t != null).sort((a, b) => a.t - b.t));
+    }
   }
   const waveOf = (offerId, at) => {
-    const times = blastsBy.get(offerId) || [];
     const t = ms(at);
-    if (!times.length || t == null) return 1;
-    // The wave whose queueing came last before this text (a minute's grace).
-    return Math.max(1, times.filter((x) => x <= t + 60000).length);
+    // A minute's grace: the entry is written as the drafts are queued.
+    const entry = t == null ? null : (blastsBy.get(offerId) || []).filter((x) => x.t <= t + 60000).at(-1);
+    return entry ? Math.max(1, entry.wave) : 1;
   };
 
   /* --- what went --- */

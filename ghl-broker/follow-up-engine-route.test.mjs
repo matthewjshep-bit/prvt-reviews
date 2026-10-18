@@ -108,3 +108,26 @@ test("every kind the bot can start is on the page or left out on purpose", () =>
   const known = new Set(FOLLOW_UP_MECHANISMS.flatMap((m) => m.kinds));
   for (const k of Object.keys(OUTBOUND_KINDS)) assert.ok(known.has(k) || EXCLUDED_KINDS.has(k), `${k} has no row on Reports → Follow-up`);
 });
+
+// What went wrong (2026-10-17, first read on prod): a deal blasted by hand
+// twice has two `blasts` entries, both wave 1, and the page counted entries:
+// 306 deal texts read as the machine's "next waves" and none as a first wave.
+test("a deal blasted by hand twice is still its first wave; only a wave the sweep sent is a next wave", async () => {
+  const LOC2 = "loc-follow-up-waves";
+  _resetPlanMemo();
+  const deal = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC2, contactId: "seller-agent", address: "5 Wave St, Kent, WA 98031", status: "accepted", statusHistory: [], createdAt: ago(10),
+    deal: { stage: "under_contract", investors: [], blasts: [
+      { at: ago(3), wave: 1, via: "app", count: 2 },
+      { at: ago(2), wave: 1, via: "app", count: 2 },
+      { at: ago(1), wave: 2, via: "app", count: 2 },
+    ] } });
+  const sent = async (contactId, at) => recordEvent({ store, locationId: LOC2, contactId, party: "investor", type: "blast_sent", at, offerId: deal.id, address: deal.address,
+    source: "blast", dedupeKey: `blast:${deal.id}:${contactId}`, data: { via: "app" } });
+  await sent("b1", new Date(Date.parse(ago(3)) + 600000).toISOString());
+  await sent("b2", new Date(Date.parse(ago(2)) + 600000).toISOString());
+  await sent("b3", new Date(Date.parse(ago(1)) + 600000).toISOString());
+  const page = await followUpEngineFor({ store, locationId: LOC2, saved: {}, period: "ytd" });
+  const buyers = page.groups.find((g) => g.key === "buyer").mechanisms;
+  assert.equal(buyers.find((m) => m.key === "blast_first").sent, 2);
+  assert.equal(buyers.find((m) => m.key === "blast_wave").sent, 1);
+});
