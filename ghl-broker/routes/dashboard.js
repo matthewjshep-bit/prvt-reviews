@@ -59,6 +59,7 @@ import { holdFor, botEventsFor } from "../bot-hold.js";
 import { holdLine, pauseUntil, mergeEvents, BOT_EVENT_TYPES, PACES, paceOf, botHold } from "../shared/bot-hold.js";
 import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
+import { followUpEngineFor } from "../follow-up-engine.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
@@ -361,6 +362,45 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       lineCache.set(locationId, { at: Date.now(), body });
       res.json(body);
     } catch (err) { fail(res, err); }
+  });
+
+  // Reports → Follow-up (shared/follow-up-engine.js): every follow-up the
+  // app sends, by the mechanism that sends it — what went in the period,
+  // what's queued, and what each sweep's own planner says comes next. Reads
+  // only. Cached a minute a location and period (it runs the check-in
+  // planners); ?fresh=1 skips the cache. The rows behind a bar or a
+  // mechanism are /followup/items, sliced from the same cached page.
+  const followUpCache = new Map();
+  const FOLLOW_UP_ITEMS_MAX = 300;
+  async function followUpPage(req) {
+    const { locationId, client } = resolveLocation(req);
+    const period = String(req.query?.period || "week");
+    const key = `${locationId}|${period}`;
+    const hit = followUpCache.get(key);
+    if (hit && Date.now() - hit.at < 60000 && req.query?.fresh !== "1") return hit.page;
+    const saved = (await store.getOfferSettings(locationId)) || {};
+    const page = await followUpEngineFor({
+      store, locationId, saved, period, client,
+      deps: { buyerBook: router.buyerBook || null },
+      env: { sends: CARD_SENDS_ENABLED, blasts: process.env.DISPO_BLASTS_ENABLED === "true", imports: process.env.OUTREACH_IMPORTS_ENABLED === "true" },
+    });
+    followUpCache.set(key, { at: Date.now(), page });
+    return page;
+  }
+  router.get("/followup", async (req, res) => {
+    try {
+      const { items, ...page } = await followUpPage(req);
+      res.json({ ok: true, ...page, itemsTotal: items.length });
+    } catch (err) { if (err.http === 400) return res.status(400).json({ error: err.message }); fail(res, err); }
+  });
+  router.get("/followup/items", async (req, res) => {
+    try {
+      const page = await followUpPage(req);
+      const q = req.query || {};
+      const rows = page.items.filter((x) => (!q.bucket || x.bucket === q.bucket) && (!q.group || x.group === q.group)
+        && (!q.mechanism || x.mech === q.mechanism) && (!q.state || x.state === q.state));
+      res.json({ ok: true, period: page.period, total: rows.length, items: rows.slice(0, FOLLOW_UP_ITEMS_MAX), truncated: rows.length > FOLLOW_UP_ITEMS_MAX });
+    } catch (err) { if (err.http === 400) return res.status(400).json({ error: err.message }); fail(res, err); }
   });
 
   router.get("/flow", async (req, res) => {

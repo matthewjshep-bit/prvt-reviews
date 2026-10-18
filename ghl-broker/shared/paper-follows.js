@@ -55,6 +55,25 @@ export function workingHoursBetween(fromMs, toMs, tz = WORK_TZ) {
 }
 
 /**
+ * addWorkingHours(fromMs, hours, tz) → ms
+ *
+ * workingHoursBetween the other way round: the moment `hours` weekday clock
+ * hours after `fromMs` (Reports → Follow-up, when the written offer follows
+ * a float). Capped like it, at the float's shelf life.
+ */
+export function addWorkingHours(fromMs, hours, tz = WORK_TZ) {
+  let left = Math.max(0, Number(hours) || 0) * HOUR;
+  let t = fromMs;
+  const end = fromMs + (PAPER_FLOAT_MAX_DAYS + 3) * 24 * HOUR;
+  while (left > 0 && t < end) {
+    const next = Math.min(t + HOUR, t + left);
+    if (isWeekday(t, tz)) left -= next - t;
+    t = isWeekday(t, tz) ? next : t + HOUR;
+  }
+  return t;
+}
+
+/**
  * paperWent(offer) → boolean
  *
  * The written offer reached them on at least one channel. A send attempt that

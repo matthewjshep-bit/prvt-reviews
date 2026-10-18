@@ -692,6 +692,19 @@ export const getDashboardFlowStage = (stage, days = 7, end = "") =>
 // The line, measured (shared/line.js). Cached a minute on the broker; fresh skips it.
 export const getDashboardLine = ({ fresh = false } = {}) =>
   fetch(`${API_BASE}/api/dashboard/line?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
+// Every follow-up the app sends, went and coming (shared/follow-up-engine.js).
+// period: today | week | month | ytd. Cached a minute on the broker.
+export const getDashboardFollowUp = ({ period = "week", fresh = false } = {}) =>
+  fetch(`${API_BASE}/api/dashboard/followup?${locq()}&period=${encodeURIComponent(period)}${fresh ? "&fresh=1" : ""}`).then(j);
+// The rows behind a bar or a mechanism. Fetched on click.
+export const getDashboardFollowUpItems = ({ period = "week", bucket = "", group = "", mechanism = "", state = "" } = {}) => {
+  const p = new URLSearchParams({ period });
+  if (bucket) p.set("bucket", bucket);
+  if (group) p.set("group", group);
+  if (mechanism) p.set("mechanism", mechanism);
+  if (state) p.set("state", state);
+  return fetch(`${API_BASE}/api/dashboard/followup/items?${locq()}&${p}`).then(j);
+};
 export const getDashboardFunnel = (days = 30, end = "") =>
   fetch(`${API_BASE}/api/dashboard/funnel?${locq()}&days=${days}${tzq()}${endq(end)}`).then(j);
 export const getDashboardTagCounts = (tags) =>

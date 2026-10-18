@@ -23,6 +23,18 @@ const videoRow = (r) => ({
 const nowIso = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
 
+// listReplyDraftLedger's trim, both backends: the outbound fields that name
+// the mechanism and its subject. Change the SQL and this together.
+const DRAFT_LEDGER_OUTBOUND = ["kind", "offerId", "address", "forMatt", "step", "label", "segment", "reason"];
+export function draftLedgerRow(d = {}) {
+  const keep = (o, keys) => Object.fromEntries(keys.filter((k) => o?.[k] !== undefined && o[k] !== null).map((k) => [k, o[k]]));
+  return {
+    ...keep(d, ["id", "locationId", "contactId", "status", "createdAt", "contactName", "sendAt", "sentAt", "autoSent", "intent", "party", "channel"]),
+    hasInbound: Boolean(String(d.inbound || "").trim()),
+    ...(d.outbound && typeof d.outbound === "object" ? { outbound: keep(d.outbound, DRAFT_LEDGER_OUTBOUND) } : {}),
+  };
+}
+
 /* ============================================================= *
  * Offer list query
  * ============================================================= */
@@ -558,6 +570,32 @@ const pgStore = {
     const { rows } = await query(
       `select doc from reply_drafts where location_id = $1${where}
        order by ${dueBy ? "(doc->>'sendAt') asc" : "created_at desc"} limit $${params.length}`,
+      params
+    );
+    return rows.map((r) => r.doc);
+  },
+  // The send ledger: each row trimmed in SQL to what says what went, when, to
+  // whom and by which mechanism (draftLedgerRow is the file backend's twin).
+  // Reports → Follow-up reads a year of these; whole drafts carry the prompt
+  // context and run ~10KB each. Newest first, by creation.
+  async listReplyDraftLedger(locationId, { status = null, since = null, limit = 20000 } = {}) {
+    const params = [locationId];
+    let where = "";
+    if (Array.isArray(status) && status.length) { params.push(status); where += ` and status = any($${params.length}::text[])`; }
+    else if (status && !Array.isArray(status)) { params.push(status); where += ` and status = $${params.length}`; }
+    if (since) { params.push(since); where += ` and created_at >= $${params.length}`; }
+    params.push(limit);
+    const out = (k) => `'${k}', doc #> '{outbound,${k}}'`;
+    const { rows } = await query(
+      `select jsonb_strip_nulls(jsonb_build_object(
+         'id', id, 'locationId', location_id, 'contactId', contact_id, 'status', status,
+         'createdAt', doc->'createdAt', 'contactName', doc->'contactName', 'sendAt', doc->'sendAt', 'sentAt', doc->'sentAt',
+         'autoSent', doc->'autoSent', 'intent', doc->'intent', 'party', doc->'party', 'channel', doc->'channel',
+         'hasInbound', coalesce(length(btrim(doc->>'inbound')), 0) > 0,
+         'outbound', case when jsonb_typeof(doc->'outbound') = 'object' then jsonb_build_object(${DRAFT_LEDGER_OUTBOUND.map(out).join(", ")}) end
+       )) as doc
+       from reply_drafts where location_id = $1${where}
+       order by created_at desc limit $${params.length}`,
       params
     );
     return rows.map((r) => r.doc);
@@ -1799,6 +1837,16 @@ const fileStore = (() => {
         .filter((d) => !dueBy || (d.sendAt && String(d.sendAt) <= dueBy))
         .sort(dueBy ? (a, b) => String(a.sendAt).localeCompare(String(b.sendAt)) : (a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
+    },
+    async listReplyDraftLedger(locationId, { status = null, since = null, limit = 20000 } = {}) {
+      ensure();
+      return Object.values(data.replyDrafts)
+        .filter((d) => d.locationId === locationId)
+        .filter((d) => !status || (Array.isArray(status) ? status.includes(d.status) : d.status === status))
+        .filter((d) => !since || (d.createdAt || "") >= since)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, limit)
+        .map(draftLedgerRow);
     },
     async getReplyDraft(id) {
       ensure();

@@ -316,7 +316,11 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     events: feed.length,
     messages: { autoSent, personSent },
   };
-  return { stages, feed, totals, items: capped, itemsTotal, itemsTruncated: itemsTotal > capped.length };
+  // The Replied sub-line's two numbers, for pages that show them as tiles
+  // (Reports → Follow-up): agents first texted in the window, and how many
+  // of them answered after it.
+  const cohort = { firstTexted: outreachOpen.size, replied: cohortReplied };
+  return { stages, feed, totals, cohort, items: capped, itemsTotal, itemsTruncated: itemsTotal > capped.length };
 }
 
 // A reply that says something: not an opt-out, small talk or a reply the bot

@@ -29,6 +29,7 @@ import PipelineView from "./PipelineView.jsx";
 import Tier1View from "./Tier1View.jsx";
 import FlowView from "./FlowView.jsx";
 import LineView from "./LineView.jsx";
+import FollowUpView from "./FollowUpView.jsx";
 import AutopilotView from "./AutopilotView.jsx";
 import LessonsTab from "./LessonsTab.jsx";
 import ContactDrawer from "./ContactDrawer.jsx";
@@ -98,6 +99,7 @@ const NAV =
     ? [
         { view: "flow", label: "Flow" },
         { view: "line", label: "Line" },
+        { view: "followup", label: "Follow-up" },
         { view: "activity", label: "Activity" },
         { view: "lessons", label: "Lessons" },
       ]
@@ -374,6 +376,7 @@ export default function OfferApp() {
         {view === "lessons" && <LessonsTab onSettingsSaved={(s) => setSettings(s)} />}
         {view === "flow" && <FlowView />}
         {view === "line" && <LineView />}
+        {view === "followup" && <FollowUpView />}
         {view === "outreach" && <AgentOutreach settings={settings} />}
         {view === "dispo" && <Dispositions />}
         {view === "import" && <DispoImport />}
