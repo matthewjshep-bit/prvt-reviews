@@ -30,6 +30,7 @@ import { offerStage, offerStageAt } from "./offer-stage.js";
 import { LIVE_DEAL_STAGES } from "./offer-status.js";
 import { saysRealWork, saysTurnkey, saysCosmeticOnly } from "./flip-read.js";
 import { parseUsAddress, normalizeUsAddress, sameStreetLoose } from "./us-address.js";
+import { connectedCall } from "./talked-to.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = typeof v === "number" ? v : Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -456,6 +457,46 @@ function repliedCard({ k, mine, nameOf, contactId, name, replied, cardMade, nurt
     }
   } else if (cardMade) return { skip: "the card the app made for them is gone; a deleted card stays deleted" };
   return { create: { contactId, why, name: name || "", to: CARD_STAGE_LABEL.tier2, toKey: "tier2", toStageId: k.tier2, replier: true, ...blocked } };
+}
+
+// What GHL's thread says, for an agent the bot never summarised (Matt,
+// 2026-10-19: "all agents who HAVE responded (not negatively like stop, etc)").
+// The app's own record of a reply is the bot's summary, and 153 agents who
+// wrote back had none: the July and August lists the bot never answered,
+// threads it was stopped on, texts it held as a workflow's.
+const TALKING_TYPES = /SMS|EMAIL|WHATSAPP|FB|IG|GMB|LIVE_CHAT/;
+// A tapback ("Liked “…”", "👍 to “…”") is a phone's, not a word.
+const REACTION_RE = /^(?:liked|loved|laughed at|emphasized|disliked|questioned|reacted \S+ to|\S{1,4} to)\s+[“"]/i;
+// An office line answering for them (eXp's care desk, Redfin, a bank).
+const AUTO_REPLY_RE = /thank you for contacting|not a monitored|couldn'?t understand your response|you'?ve reached|this is an automated|auto-?reply|out of (?:the )?office|use a different number for text/i;
+const OPT_OUT_RE = /^\s*(?:stop|unsubscribe|end|quit|cancel)\b[\s.!]*$|\b(?:unsubscribe|remove me|remove (?:me )?from (?:your |the )?list|take me off|do not (?:text|contact)|don'?t (?:text|contact|message)|stop texting|wrong (?:number|person)|lose (?:this|my) number|no more texts)\b/i;
+
+/**
+ * theirWordInGhl(messages) → { at } | { optedOut: true } | null
+ *
+ * An agent's newest real word in a GHL thread: a text or email from them, or
+ * a call that connected. A tapback, an office's auto-reply and an empty body
+ * aren't one. Anything that asks us to stop, or GHL turning DND on, is an
+ * opt-out however warm a later text is.
+ */
+export function theirWordInGhl(messages = []) {
+  let at = null;
+  for (const m of messages || []) {
+    const body = String(m?.body || "").trim();
+    if (/DnD enabled/i.test(body)) return { optedOut: true };
+    if (String(m?.direction || "").toLowerCase() !== "inbound") continue;
+    const type = String(m?.messageType || m?.type || "").toUpperCase();
+    let real = false;
+    if (type.includes("CALL")) {
+      real = connectedCall({ durationSec: m?.meta?.call?.duration, status: m?.meta?.call?.status || m?.status || "" });
+    } else if (TALKING_TYPES.test(type) && body) {
+      if (OPT_OUT_RE.test(body)) return { optedOut: true };
+      real = !REACTION_RE.test(body) && !AUTO_REPLY_RE.test(body);
+    }
+    const t = Date.parse(m?.dateAdded || "");
+    if (real && Number.isFinite(t) && (at == null || t > at)) at = t;
+  }
+  return at == null ? null : { at: new Date(at).toISOString() };
 }
 
 /**

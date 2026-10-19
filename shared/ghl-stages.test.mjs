@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planStageMoves, planCard, planHandMove, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy, raisedHouses, sameRaisedHouse, validAddress } from "./ghl-stages.js";
+import { planStageMoves, planCard, planHandMove, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy, raisedHouses, sameRaisedHouse, validAddress, theirWordInGhl } from "./ghl-stages.js";
 
 const NOW = Date.parse("2026-10-13T20:00:00Z");
 const ago = (d) => new Date(NOW - d * 86400000).toISOString();
@@ -515,4 +515,35 @@ test("Pass on the Tier 1 list closes the house they raised; a pass that named no
   const unnamed = raisedHouses({ events: [ev("property_details", EDMONDS, { condition: "needs a lot of work" }, raisedAt), ev("tier1_kicked", "", { by: "you" }, ago(1))], now: NOW });
   assert.deepEqual(unnamed.map((h) => h.open), [false]);
   assert.equal(targetStage({ raised: unnamed, now: NOW }).to, "tier2");
+});
+
+// Matt, 2026-10-19 (Nikki C., Brian B.): "all agents who HAVE responded (not
+// negatively like stop, etc)" in Tier 2. 153 agents who wrote back had no
+// card: the bot never summarised their reply, and the summary was the only
+// record of one. GHL's thread is read instead.
+test("an agent who texted back counts as having replied even when the bot never answered; a tapback or an office's auto-reply doesn't", () => {
+  const sms = (direction, body, dateAdded, over = {}) => ({ direction, body, dateAdded, messageType: "TYPE_SMS", ...over });
+  const ours = sms("outbound", "Hey Brian, saw 29th Dr come off the market. Is the seller still hoping to sell?", "2026-10-19T19:39:00Z");
+  assert.deepEqual(theirWordInGhl([ours, sms("inbound", "It's pending, closes Thursday", "2026-10-19T19:57:00Z")]), { at: "2026-10-19T19:57:00.000Z" });
+  assert.deepEqual(theirWordInGhl([ours, sms("inbound", "No thanks. It is in very good condition", "2026-07-22T18:00:00Z")]), { at: "2026-07-22T18:00:00.000Z" }, "a no about the house is still a word");
+  assert.equal(theirWordInGhl([ours]), null);
+  assert.equal(theirWordInGhl([ours, sms("inbound", "Liked “Hey Brian, saw 29th Dr come off the market.”", "2026-10-19T19:40:00Z")]), null);
+  assert.equal(theirWordInGhl([ours, sms("inbound", "👍 to “ Matt Shepherd matt@shepflips.com ShepFlips ”", "2026-10-19T19:40:00Z")]), null);
+  assert.equal(theirWordInGhl([ours, sms("inbound", "Hello, and thank you for contacting the eXpert Care Desk at eXp Realty. Press 1", "2026-10-15T21:35:00Z")]), null);
+  assert.equal(theirWordInGhl([ours, sms("inbound", "", "2026-10-15T21:35:00Z")]), null);
+  // A call that connected is a word; one that rang out isn't.
+  const call = (status, duration) => ({ direction: "inbound", messageType: "TYPE_CALL", dateAdded: "2026-10-18T17:00:00Z", meta: { call: { status, duration } } });
+  assert.deepEqual(theirWordInGhl([call("completed", 140)]), { at: "2026-10-18T17:00:00.000Z" });
+  assert.equal(theirWordInGhl([call("no-answer", 0)]), null);
+});
+
+test("an agent who asked us to stop, said wrong number, or turned on DND never counts as having replied, whatever else they said", () => {
+  const sms = (body, dateAdded) => ({ direction: "inbound", body, dateAdded, messageType: "TYPE_SMS" });
+  for (const no of ["Stop", "STOP.", "Remove from list please", "Please take me off your list", "Wrong number", "Don't text me again", "unsubscribe"]) {
+    assert.deepEqual(theirWordInGhl([sms("Brand new", "2026-10-16T20:00:00Z"), sms(no, "2026-10-16T20:01:00Z")]), { optedOut: true }, no);
+  }
+  assert.deepEqual(theirWordInGhl([sms("Sure, call me", "2026-10-16T20:00:00Z"), { direction: "outbound", body: "DnD enabled by customer", dateAdded: "2026-10-16T20:02:00Z", messageType: "TYPE_ACTIVITY_CONTACT" }]), { optedOut: true });
+  // Words that merely contain one aren't one.
+  assert.deepEqual(theirWordInGhl([sms("Stop by any time, lockbox on the door", "2026-10-16T20:00:00Z")]), { at: "2026-10-16T20:00:00.000Z" });
+  assert.deepEqual(theirWordInGhl([sms("It ends up needing a roof", "2026-10-16T20:00:00Z")]), { at: "2026-10-16T20:00:00.000Z" });
 });

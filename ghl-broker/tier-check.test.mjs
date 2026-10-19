@@ -407,3 +407,67 @@ test("every 15 minutes, a house an agent raised since the last run puts their ca
   assert.equal(back.moved, 1);
   assert.deepEqual(moved.map((m) => [m.id, m.stageId]), [["op-dw", "t2"]]);
 });
+
+// Matt, 2026-10-19 (Nikki C., Brian B.): "all agents who HAVE responded (not
+// negatively like stop, etc)" in Tier 2. The app knew a reply only from the
+// bot's summary of it, and 153 agents who wrote back had none — the July and
+// August lists the bot never answered, threads it was stopped on. The
+// morning sweep reads GHL's threads for them.
+const thread = (contactId, lastMessageDate, tags = ["agent-list-1"]) => ({ id: `cv-${contactId}`, contactId, lastMessageDate, tags, sort: [lastMessageDate] });
+const textIn = (body, dateAdded) => ({ direction: "inbound", messageType: "TYPE_SMS", body, dateAdded });
+const textOut = (dateAdded) => ({ direction: "outbound", messageType: "TYPE_SMS", body: "Hey, saw your listing. Is it a bit of a project?", dateAdded });
+const ghlThreads = (threads, messages) => ({
+  searchConversations: async (_c, _l, { startAfterDate } = {}) => ({
+    conversations: threads.filter((t) => startAfterDate == null || t.lastMessageDate < startAfterDate).sort((a, b) => b.lastMessageDate - a.lastMessageDate).slice(0, 100),
+  }),
+  listConversationMessages: async (_c, id) => ({ messages: messages[id.slice(3)] || [] }),
+});
+const JUL22 = Date.parse("2026-07-22T18:00:00Z");
+
+test("an agent who wrote back that the bot never answered gets a Tier 2 card at the morning sweep; one who said stop, a buyer, and one who never answered don't", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const store = replierStore({ last: [] });
+  const saved = await store.getOfferSettings();
+  const threads = [thread("july", JUL22), thread("stopped", JUL22 + 1000), thread("quiet", JUL22 + 2000),
+    thread("buyer2", JUL22 + 3000, ["agent-list-1", "investor"]), thread("dnc", JUL22 + 4000, ["agent-outreach", "dnc"])];
+  const messages = {
+    july: [textOut("2026-07-22T17:00:00Z"), textIn("It just needs updating, but it's in really good condition", "2026-07-22T18:00:00Z")],
+    stopped: [textOut("2026-07-22T17:00:00Z"), textIn("Brand new", "2026-07-22T18:00:00Z"), textIn("Remove from list please", "2026-07-22T18:01:00Z")],
+    quiet: [textOut("2026-07-22T17:00:00Z")],
+    buyer2: [textIn("Send it over", "2026-07-22T18:00:00Z")],
+    dnc: [textIn("Sure", "2026-07-22T18:00:00Z")],
+  };
+  const ghl = { ...replierGhl({ made }), ...ghlThreads(threads, messages), getContact: async (_c, id) => ({ id, firstName: "Ann", lastName: "J", tags: ["agent-list-1"] }) };
+  const r = await runStagePlan({ client: {}, locationId: "L-gw1", store, ghl, saved, dryRun: false, readGhlWords: true, now: NOW13 });
+  assert.deepEqual(made.map((m) => [m.contactId, m.stageId]), [["july", "t2"]]);
+  assert.equal(r.fromGhl, 1);
+  // The next morning reads only the threads that moved since.
+  const reads = [];
+  const ghl2 = { ...ghl, listConversationMessages: async (_c, id) => { reads.push(id); return { messages: messages[id.slice(3)] || [] }; } };
+  threads.push(thread("today", NOW13 + 3600000, ["agent-outreach-autopilot-king-wa"]));
+  messages.today = [textOut("2026-10-13T20:30:00Z"), textIn("It's pending, closes Thursday", "2026-10-13T20:50:00Z")];
+  await runStagePlan({ client: {}, locationId: "L-gw1", store, ghl: ghl2, saved, dryRun: false, readGhlWords: true, now: NOW13 + 86400000 });
+  assert.deepEqual(reads, ["cv-today"]);
+  assert.deepEqual(made.map((m) => m.contactId), ["july", "today"]);
+  // A dry run (the Settings preview) reads no thread.
+  reads.length = 0;
+  await runStagePlan({ client: {}, locationId: "L-gw1", store, ghl: ghl2, saved, dryRun: true, readGhlWords: true, now: NOW13 + 2 * 86400000 });
+  assert.equal(reads.length, 0);
+});
+
+test("an agent found in GHL's thread whose card waited behind the run's cap gets it the next morning, though their thread hasn't moved", async () => {
+  _resetWorkflowCache();
+  const made = [];
+  const store = replierStore({ last: [], offers: [sentOffer("zz-live")], saved: { ghlStages: { mode: "on", tier2Repliers: true, maxMovesPerRun: 1 } } });
+  const saved = await store.getOfferSettings();
+  const threads = [thread("july", JUL22)];
+  const messages = { july: [textIn("Not really a good candidate", "2026-07-22T18:00:00Z")] };
+  const ghl = { ...replierGhl({ made }), ...ghlThreads(threads, messages), getContact: async (_c, id) => ({ id, firstName: "Ann", lastName: "J", tags: ["agent-list-1"] }) };
+  await runStagePlan({ client: {}, locationId: "L-gw2", store, ghl, saved, dryRun: false, readGhlWords: true, now: NOW13 });
+  assert.deepEqual(made.map((m) => m.contactId), ["zz-live"]);
+  const ghl2 = { ...ghl, searchOpportunities: async () => [], listAcquisitionOpportunities: async () => [{ id: "op-zz", contactId: "zz-live", pipelineId: "pA", pipelineStageId: "out", status: "open", lastStageChangeAt: "2026-10-13T20:00:00Z" }] };
+  await runStagePlan({ client: {}, locationId: "L-gw2", store, ghl: ghl2, saved, dryRun: false, readGhlWords: true, now: NOW13 + 86400000 });
+  assert.deepEqual(made.map((m) => m.contactId), ["zz-live", "july"]);
+  assert.deepEqual(Object.keys(store.cursors.get("L-gw2|ghlWords").doc.pending), [], "carded, so no longer waiting");
+});
