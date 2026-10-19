@@ -47,7 +47,7 @@ import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, 
 import { paperWent, paperWorthy, floatSentAt, isRoughNumber } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, PROMISE_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, soundsLikeSecondThoughts, soundsCrossedUp } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, PROMISE_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, soundsLikeSecondThoughts, soundsCrossedUp, doesntKnowUs } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound, supersededBy } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
@@ -4905,20 +4905,29 @@ async function runReply(job, ctx) {
   // A deal text that went without its link said "want the details?"
   // (dispoAutopilot.blastLink "on_reply"): when they answer it with interest
   // or a question, the link goes — for the deal that text was about, named or
-  // not — whatever the buy-box guard above would say. A pass gets nothing.
+  // not — whatever the buy-box guard above would say. A pass gets nothing,
+  // and neither does "why are you sending this to us?" (3831 Bagley,
+  // 2026-10-17): a question about who we are isn't one about the house.
   if (party === "investor" && !isCall && LINK_ON_REPLY_INTENTS.has(draft.intent)
       && !plan.auto.some((x) => x.type === "send_dataroom_invite")) {
-    const owed = await linkOwed({ store, locationId, contactId: job.contactId, now, prefer: draft.propertyAddress || "" });
+    const strangers = doesntKnowUs(theirLatestWords(a.transcript, job.message));
+    const owed = strangers ? null : await linkOwed({ store, locationId, contactId: job.contactId, now, prefer: draft.propertyAddress || "" });
     // You stopped outreach on that deal (the deal pane's Stop outreach): its
     // link doesn't go by itself either. This runs while the reply is drafted,
     // before sendReplyDraft's guard ever sees the reply, so it asks here.
     const owedDeal = owed?.offerId && store.getOffer ? await store.getOffer(owed.offerId).catch(() => null) : null;
-    if (owed && dealOutreachStopped(owedDeal?.deal)) {
-      warnings.push(`no package link: you stopped outreach on ${String(owed.address || "the deal").split(",")[0]}`);
+    const where = String(owed?.address || "the deal").split(",")[0];
+    if (strangers) {
+      warnings.push("no package link: they asked who we are or why we texted them");
+    } else if (owed && dealOutreachStopped(owedDeal?.deal)) {
+      warnings.push(`no package link: you stopped outreach on ${where}`);
     } else if (owed) {
       plan.suggested = plan.suggested.filter((x) => x.type !== "suggest_dataroom_invite");
-      plan.auto.push({ id: `a-link-${job.id}`, type: "send_dataroom_invite", mode: "auto", status: "pending", party, addressHint: owed.address,
-        why: `they answered the deal text on ${String(owed.address).split(",")[0]} that offered the details` });
+      const action = { id: `a-link-${job.id}`, type: "send_dataroom_invite", status: "pending", party, addressHint: owed.address };
+      // The link goes with the answer. A reply that waits for you keeps the
+      // link waiting too — a bare link with nothing said is what Bagley got.
+      if (auto.send) plan.auto.push({ ...action, mode: "auto", why: `they answered the deal text on ${where} that offered the details` });
+      else plan.suggested.push({ ...action, mode: "ask", why: `they answered the deal text on ${where} — send it with your reply` });
     }
   }
   if (a.stampTag) {

@@ -6136,6 +6136,55 @@ test("a buyer who passes on it gets no link", async () => {
   assert.ok(!(d.actions || []).some((a) => a.type === "send_dataroom_invite"));
 });
 
+// 3831 Bagley (2026-10-17): a county-records buyer answered the deal text with
+// "What? Why are you sending this to us?". It read as a question, a question
+// was enough for the link, and the package went out on its own with nothing
+// answering him. He texted Stop three hours later.
+const answerTheLinkLessText = async ({ message, intent, autoIntents = [intent] }) => {
+  _resetJobs();
+  const { client } = ghlStub();
+  client.call = ((orig) => async (path, opts) => {
+    if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Alex", lastName: "Buyer", tags: ["investor"] } };
+    return orig(path, opts);
+  })(client.call);
+  const store = fakeStore([sentWithoutLink()]);
+  const saved = { ...SAVED, conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: autoIntents } } } } };
+  const invites = [];
+  const deps = {
+    draft: async () => ({ ...DRAFT, intent, confidence: "high", reply: "It's Matt, I fix up and sell houses around Seattle.", propertyAddress: "", counterAmount: 0 }),
+    dataroomInviteGuard: async () => ({ ok: false, reason: "" }),
+    issueDataroomInvite: async (a) => { invites.push(a); return { sent: true, address: "7034 South K Street" }; },
+  };
+  const { job } = await startReply({ client, locationId: "LOC", saved, store, contactId: "c1", message, channel: "sms", sendsEnabled: true, deps });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return { d: await store.getReplyDraft(job.draftId), invites };
+};
+
+test("a buyer who asks why we're texting them doesn't get the package link", async () => {
+  for (const message of ["What? Why are you sending this to us?", "who is this", "How did you get my number?", "Wrong number", "Do I know you?"]) {
+    const { d, invites } = await answerTheLinkLessText({ message, intent: "question" });
+    assert.equal(invites.length, 0, `no link for "${message}"`);
+    assert.ok(!(d.actions || []).some((a) => a.type === "send_dataroom_invite"), `${message}: ${(d.actions || []).map((a) => a.type)}`);
+  }
+});
+
+test("a buyer who asks about the house itself still gets the package link", async () => {
+  const { d, invites } = await answerTheLinkLessText({ message: "What's the ARV based on? Who did the rehab number?", intent: "question" });
+  assert.equal(invites.length, 1);
+  assert.equal(d.actions.find((a) => a.type === "send_dataroom_invite")?.status, "done");
+});
+
+test("the package link waits with a reply that waits for you", async () => {
+  const { d, invites } = await answerTheLinkLessText({ message: "Is it vacant?", intent: "question", autoIntents: [] });
+  assert.equal(invites.length, 0, "nothing went by itself while the answer sits with you");
+  const link = d.actions.find((a) => a.type === "send_dataroom_invite");
+  assert.ok(link, "the link is there for you to send");
+  assert.equal(link.mode, "ask");
+  assert.equal(link.status, "pending");
+  assert.equal(link.addressHint, "7034 South K Street, Tacoma, Washington 98408");
+});
+
 // Stop outreach on a deal (2026-10-01) promised no package link goes to a
 // buyer about it by itself. The link owed for a deal text that went without
 // it is sent as an automatic action while the reply is still being drafted,

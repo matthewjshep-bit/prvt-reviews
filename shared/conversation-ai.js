@@ -541,6 +541,16 @@ export function soundsCrossedUp(message = "") {
   return CROSSED_UP_RX.test(String(message || ""));
 }
 
+// They don't know who we are or why we wrote: "What? Why are you sending this
+// to us?" (3831 Bagley, 2026-10-17, a county-records buyer), "who is this",
+// "how did you get my number". A question, but not about the house — it
+// never earns the package link.
+const DOESNT_KNOW_US_RX = /\bwhy\s+(?:are|r|would|do|did)\s+(?:you|u|ya)\s+(?:be\s+)?(?:send|sending|text|texting|messag(?:e|ing)|contact(?:ing)?|reach(?:ing)? out)\b|\bwho\s*(?:is|'s|s)\s+(?:this|that)\b(?!\s+(?:deal|house|property|place|one|listing)\b)|\bwho\s+(?:are|r)\s+(?:you|u)\b|\bwho\s+dis\b|\b(?:how|where)\s+(?:did|do)\s+(?:you|u)\s+get\s+(?:my|our|this|his|her)\s+(?:number|#|info|contact|name)|\bwrong\s+(?:number|person|guy)\b|\b(?:do|did)\s+(?:I|we)\s+know\s+(?:you|u)\b|\b(?:I|we)\s+(?:don'?t|do not)\s+know\s+(?:you|u|who)\b|\bnever\s+(?:heard of|signed up|asked)\b|\bwhat\s+(?:is|'s)\s+this\s+(?:about|regarding|for)\b|^\s*what\s*\?+\s*$/i;
+/** doesntKnowUs(message) → true when they're asking who we are or why we texted them. */
+export function doesntKnowUs(message = "") {
+  return DOESNT_KNOW_US_RX.test(String(message || "").replace(/[’‘]/g, "'"));
+}
+
 export const OFFER_DOC_KEYS = ["image", "pdf", "psa", "scope", "comps", "netsheet"];
 export const OFFER_DOC_LABEL = {
   image: "offer letter (image)", pdf: "offer letter (PDF)", psa: "purchase & sale agreement",
