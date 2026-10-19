@@ -143,6 +143,21 @@ curl -sI "$DEALS/d/deals.json?location_id=$LOC" | grep -i 'access-control\|cache
 curl -s  "$DEALS/d/deals.json?location_id=$LOC" | grep -ci 'notes\|comps\|assignmentFee'
 ```
 
+**Closed deals** come from the same endpoint with `&status=closed`, for a
+"deals we've done" section. Same two gates, same cache and CORS. A deal is on
+it when its room is listed and its deal stage is `closed` (fell-through deals
+never are), newest close first. Each card carries only `id, address, beds,
+baths, sqft, yearBuilt, kind, photo, closedAt, status` — **no price, ARV,
+rehab, spread or headline, and no link**, because on a sold house those publish
+what we made. The photo is served from `/d/sold/<roomId>/photo/<id>/thumb`
+(the teaser photo path dies with the deal) and only while the room's public
+photos are on. Unlisting the room takes a closed deal off the site. Only deals
+that had a buyer package built can appear; any other `status` is a 400.
+
+```bash
+curl -s "$DEALS/d/deals.json?location_id=$LOC&status=closed" | jq '.count, .deals[0]'
+```
+
 The feed's cards link to each deal's **public teaser** (`/d/deal/<roomId>`), a
 tokenless page showing only the room's `publicSections` (toggled in the deal's
 Dataroom modal; documents and the fee breakdown are locked off server-side).
