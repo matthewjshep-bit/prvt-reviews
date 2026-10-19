@@ -248,6 +248,10 @@ export function agentRepliers(lastRows = [], optOuts = [], isAgent = null) {
   return out;
 }
 const YEAR_MS = 365 * 86400000;
+// How far back the house events go: a raise is live for staleTier1Days, but a
+// house the conversation closed stays closed under a row we priced later
+// (raisedHouses; Tyler E., 2026-10-19), so the close has to be in the read.
+const HOUSE_LOOKBACK_MS = 60 * 86400000;
 
 /** raisedByContact({ events, offers, now, staleDays }) → Map contactId → raisedHouses(…) for agents' events, the non-empty ones only. */
 export function raisedByContact({ events = [], offers = [], now = Date.now(), staleDays = 10 } = {}) {
@@ -300,7 +304,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
   const routing = routingOf(saved);
   // Houses the conversation raised (shared/ghl-stages.js raisedHouses): Tier 1
   // with no row behind them, for a contact we know is an agent.
-  const houseEvents = await store.listContactEventsSince?.(locationId, iso(now - (cfg.staleTier1Days + 1) * 86400000), { types: HOUSE_EVENT_TYPES, limit: 20000 }).catch(() => []) || [];
+  const houseEvents = await store.listContactEventsSince?.(locationId, iso(now - Math.max(HOUSE_LOOKBACK_MS, (cfg.staleTier1Days + 1) * 86400000)), { types: HOUSE_EVENT_TYPES, limit: 20000 }).catch(() => []) || [];
   const raisedBy = raisedByContact({ events: houseEvents, offers, now, staleDays: cfg.staleTier1Days });
   const needAgents = cfg.tier2Repliers || raisedBy.size > 0;
   const [agentProfiles, agentSigns] = cfg.tier2Repliers || !needAgents ? [profiles, signs] : await Promise.all([
@@ -436,7 +440,7 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
       }).catch(() => []) || [],
     ]);
     const mine = (events || []).map((e) => ({ ...e, contactId }));
-    const since = now - (cfg.staleTier1Days + 1) * 86400000;
+    const since = now - Math.max(HOUSE_LOOKBACK_MS, (cfg.staleTier1Days + 1) * 86400000);
     const raised = raisedHouses({ events: mine.filter((e) => HOUSE_EVENT_TYPES.includes(e.type) && (Date.parse(e.at || "") || 0) >= since), offers, now, staleDays: cfg.staleTier1Days });
     const lastWord = mine.filter(isTheirWord).sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
     const plan = planCard({

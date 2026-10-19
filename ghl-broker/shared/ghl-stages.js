@@ -59,6 +59,16 @@ export function validAddress(raw) {
 // name one.
 const DIRECTIONS = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw", "north", "south", "east", "west"]);
 const streetWords = (p) => normalizeUsAddress(`${p.houseNo} ${p.street}`).toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/).filter((w) => w && !DIRECTIONS.has(w));
+// The same street, another number: the agent correcting a house number
+// ("20525 Ne 68th St" → "20526 NE 68th St, Redmond"; Loren K., 2026-10-19).
+function renumbered(from, to) {
+  const pa = parseUsAddress(from), pb = parseUsAddress(to);
+  if (!pa.houseNo || !pb.houseNo || pa.houseNo === pb.houseNo) return false;
+  const ca = String(pa.city || "").trim().toLowerCase(), cb = String(pb.city || "").trim().toLowerCase();
+  if (ca && cb && ca !== cb) return false;
+  const wa = streetWords(pa).slice(1), wb = streetWords(pb).slice(1);
+  return wa.length > 0 && wa.join(" ") === wb.join(" ");
+}
 export function sameRaisedHouse(a, b) {
   const pa = parseUsAddress(a), pb = parseUsAddress(b);
   if (!pa.houseNo || pa.houseNo !== pb.houseNo) return false;
@@ -82,16 +92,25 @@ export function sameRaisedHouse(a, b) {
  *     saysRealWork), or their own rehab budget of 50K or more.
  * It is closed by a later house_closed (we passed, they passed, it's gone,
  * not our kind), a later read of their words as turnkey or cosmetic, a
- * subject_property_set marked notOurKind, Pass or Kick on the Tier 1 list
+ * subject_property_set marked notOurKind, a subject_property_set that moves the
+ * thread to another number on the same street (a corrected typo closes the old
+ * number), Pass or Kick on the Tier 1 list
  * (that house, or every house before it when the pass named none), or an
  * opt-out. A house with an
  * offer row of ours is the row's to say (targetStage), and a raise is live
- * for `staleDays` (ghlStages.staleTier1Days) like an unsent row.
+ * for `staleDays` (ghlStages.staleTier1Days) like an unsent row. One
+ * exception (Matt, 2026-10-19, Tyler E. and Loren K.): a house with a row
+ * that the conversation closed is kept, closed, however old, raised or not —
+ * our row made it a candidate — so a row we priced and never sent can't hold
+ * Tier 1 on a house they turned down (targetStage). Only their own word
+ * reopens it; our re-pricing doesn't.
  */
 export function raisedHouses({ events = [], offers = [], now = Date.now(), staleDays = GHL_STAGES_DEFAULTS.staleTier1Days } = {}) {
   const evs = (events || []).filter((e) => e?.type && ms(e.at) != null).sort((x, y) => ms(x.at) - ms(y.at));
   const optOut = evs.filter((e) => e.type === "unsubscribed").map((e) => ms(e.at)).pop() ?? null;
   const houses = [];
+  const rows = (offers || []).filter((o) => o?.address);
+  const hasRow = (a) => rows.some((o) => sameRaisedHouse(o.address, a));
   const find = (a) => houses.find((h) => sameRaisedHouse(h.address, a));
   const raise = (a, at, why) => {
     const h = find(a);
@@ -100,7 +119,12 @@ export function raisedHouses({ events = [], offers = [], now = Date.now(), stale
   };
   // Only a house it raised is closed: a pass on the house we texted about,
   // which they never called a candidate, says nothing about the card.
-  const close = (a, at, why) => { const h = find(a); if (h && h.open) { h.open = false; h.at = at; h.why = why; } };
+  // A house with a row of ours was a candidate whether or not they raised it.
+  const close = (a, at, why) => {
+    const h = find(a);
+    if (h && h.open) { h.open = false; h.at = at; h.why = why; }
+    else if (!h && parseUsAddress(a).houseNo && hasRow(a)) houses.push({ address: a, at, why, open: false });
+  };
   for (const e of evs) {
     const a = String(e.address || "").trim();
     // Pass or Kick on the Tier 1 list: you looked at their card.
@@ -115,6 +139,11 @@ export function raisedHouses({ events = [], offers = [], now = Date.now(), stale
     const at = ms(e.at);
     const street = a.split(",")[0].trim();
     if (e.type === "house_closed") { close(a, at, `${street}: ${d.why || "closed in the conversation"}`); continue; }
+    // The thread moved from one number to another on the same street: the
+    // old number was a typo, and whatever we made on it is that house's leftover.
+    if (e.type === "subject_property_set" && d.from && renumbered(d.from, a)) {
+      close(String(d.from), at, `${String(d.from).split(",")[0].trim()}: they corrected it to ${street}`);
+    }
     if (e.type === "subject_property_set" && d.notOurKind) { close(a, at, `${street}: they said it's turnkey`); continue; }
     const words = e.type === "property_details" ? [d.condition, d.workNeeded].filter(Boolean).join(". ")
       : e.type === "house_mentioned" ? String(d.note || "") : "";
@@ -124,10 +153,9 @@ export function raisedHouses({ events = [], offers = [], now = Date.now(), stale
     if (e.type === "house_mentioned" && !d.needsAddress && validAddress(a)) raise(a, at, `they gave us ${street}`);
   }
   for (const h of houses) if (h.open && optOut != null && optOut >= h.at) { h.open = false; h.at = optOut; h.why = "they opted out"; }
-  const rows = (offers || []).filter((o) => o?.address);
   return houses
-    .filter((h) => now - h.at <= staleDays * DAY_MS)
-    .filter((h) => !rows.some((o) => sameRaisedHouse(o.address, h.address)))
+    // The row speaks for its house, except that a close stays (above).
+    .filter((h) => (hasRow(h.address) ? !h.open : now - h.at <= staleDays * DAY_MS))
     .sort((x, y) => y.at - x.at)
     .map(({ address, at, why, open }) => ({ address, at: new Date(at).toISOString(), why, open }));
 }
@@ -230,13 +258,21 @@ export function targetStage({ offers = [], now = Date.now(), lastIn = null, stal
     if (!best || RANK[key] > RANK[best.key]) best = { key, offerId: o.id || null, why };
   };
   const live = (t) => t != null && now - t <= staleDays * DAY_MS;
+  // A house the conversation closed (raisedHouses): an unsent row on it is
+  // not Tier 1, however fresh our pricing.
+  const closedOn = (o) => (raised || []).find((h) => !h.open && sameRaisedHouse(o.address, h.address)) || null;
+  const unsent = (o, tier1Why) => {
+    const shut = closedOn(o);
+    if (shut) consider("tier2", o, shut.why);
+    else consider("tier1", o, tier1Why);
+  };
   for (const o of rows) {
     const t = offerStageAt(o);
     if (o.status === "draft") {
       const age = now - (ms(o.createdAt) ?? now);
       if (!o.contactId || age > HELD_DAYS * DAY_MS) continue;
       if (t != null) at = Math.max(at ?? t, t);
-      if (live(t)) consider("tier1", o, "a house being priced");
+      if (live(t)) unsent(o, "a house being priced");
       else consider("tier2", o, `held, and nothing on it in ${staleDays}+ days`);
       continue;
     }
@@ -247,7 +283,7 @@ export function targetStage({ offers = [], now = Date.now(), lastIn = null, stal
       else consider("contract", o, "under contract");
     } else if (s.stage === "sent" || s.sub === "countered" || s.sub === "hot") consider("offerOut", o, s.sub ? `responded: ${s.sub}` : s.why);
     else if (s.stage === "draft") {
-      if (live(t)) consider("tier1", o, "priced, our number not out yet");
+      if (live(t)) unsent(o, "priced, our number not out yet");
       else consider("tier2", o, `priced but never sent, and nothing on it in ${staleDays}+ days`);
     }
     else consider("tier2", o, `every house passed (${s.why})`);
