@@ -972,6 +972,37 @@ export function dealCard(room) {
   };
 }
 
+// When a deal closed: the last time its stage history moved to "closed". A deal
+// marked closed before the history existed falls back to its own timestamps,
+// and one with none at all reads as undated rather than as 1970.
+export function closedAtOf(deal) {
+  const hit = (deal?.stageHistory || [])
+    .filter((h) => h?.stage === "closed" && (h.ts || h.at))
+    .map((h) => h.ts || h.at)
+    .sort()
+    .at(-1);
+  return hit || deal?.closedAt || deal?.updatedAt || null;
+}
+
+// A closed deal, reduced to what a "deals we've done" section may show. A
+// narrower projection than dealCard on purpose: no price, ARV, rehab, spread or
+// headline, because on a sold house those publish what we made on it. No link
+// either — the teaser dies with the deal, and there's nothing left to sell.
+export function soldCard(room, offer) {
+  const d = dealCard(room);
+  return {
+    id: d.id,
+    address: d.address,
+    beds: d.beds,
+    baths: d.baths,
+    sqft: d.sqft,
+    yearBuilt: d.yearBuilt,
+    kind: d.kind,
+    photo: d.photo,
+    closedAt: closedAtOf(offer?.deal),
+  };
+}
+
 // One link for the whole buyer list. Each card is a deal, linking through to
 // its full package; the package pages link back here. `rooms` arrive already
 // filtered to what should be public and in the order they should appear.

@@ -19,7 +19,8 @@
 //
 // The one exception to "the token is the credential" is the public deals feed,
 // which an external marketing site renders in its own brand:
-//   GET    /d/deals.json?location_id=
+//   GET    /d/deals.json?location_id=[&status=closed]
+//   GET    /d/sold/:roomId/photo/:photoId/:variant?   a closed deal's photo
 // It carries no token, so it is gated instead by an explicit env allowlist of
 // locations that have chosen to publish. See FEED_LOCATIONS below.
 //
@@ -36,6 +37,7 @@ import {
   DEFAULT_EXPIRY_DAYS, OVERRIDABLE, applyNumberOverrides, brandFrom, buildSnapshot, dealCard, dealMoves, feedHeaders, hashToken,
   newToken, normalizeLinks, normalizePublicSections, normalizeSections, photoHeaders,
   renderNotice, renderPortfolio, renderRoom, secureHeaders, syncDealNumbers, teaserSections, GALLERY_JS,
+  closedAtOf, soldCard,
   issueDataroomInvite, textInvite as textInviteShared,
 } from "../dataroom.js";
 import { streamVideo } from "../video.js";
@@ -81,6 +83,22 @@ async function boardRooms(locationId) {
     out.push(r);
   }
   return out;
+}
+
+// The other half of the board: rooms the operator listed whose deal CLOSED.
+// Fell-through deals never show here — that house isn't ours to claim. Each
+// room comes back with its offer, since the close date lives on the deal.
+// Newest close first, which is the order a "recently closed" section wants.
+async function soldRooms(locationId) {
+  const listed = (await store.listDatarooms(locationId, { limit: 500 }))
+    .filter((r) => listedInPortfolio(r) && r.snapshot && r.offerId);
+  const out = [];
+  for (const r of listed) {
+    const offer = await store.getOffer(r.offerId);
+    if (offer?.deal?.stage === "closed") out.push({ room: r, offer });
+  }
+  const at = ({ offer }) => String(closedAtOf(offer.deal) || "");
+  return out.sort((a, b) => at(b).localeCompare(at(a)));
 }
 
 // The shareable marketing link — one per room, no expiry, no recipient.
@@ -792,14 +810,25 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
   // homepage visitor and every crawler hitting this would bury the access log
   // the operator actually reads, and a cache hit isn't a person. The signal
   // that matters survives — clicking into a deal still logs a real view below.
+  //
+  // ?status=closed answers the same way with the deals we've CLOSED instead —
+  // for a "deals we've done" section. Same gates, same cache, its own cards
+  // (soldCard: no numbers, no link). Anything else in status is a 400, so a
+  // typo on the site fails loudly rather than quietly showing the live board.
   router.get("/deals.json", async (req, res) => {
     const locationId = String(req.query.location_id || "").slice(0, 64);
     if (!locationId) {
       feedHeaders(res, 0);
       return res.status(400).json({ error: "location_id required" });
     }
+    const status = String(req.query.status || "active");
+    if (status !== "active" && status !== "closed") {
+      feedHeaders(res, 0);
+      return res.status(400).json({ error: "status must be active or closed" });
+    }
+    const cacheKey = status === "closed" ? `${locationId}|closed` : locationId;
 
-    const cached = feedCacheGet(locationId);
+    const cached = feedCacheGet(cacheKey);
     if (cached) {
       feedHeaders(res, FEED_MAX_AGE);
       return res.status(cached.status).type("json").send(cached.body);
@@ -819,9 +848,48 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
         // Negative-cached too, or probing location ids walks straight past the
         // cache into the database.
         const body = JSON.stringify({ error: "not found" });
-        feedCacheSet(locationId, 404, body);
+        feedCacheSet(cacheKey, 404, body);
         feedHeaders(res, FEED_MAX_AGE);
         return res.status(404).type("json").send(body);
+      }
+
+      if (status === "closed") {
+        const sold = await soldRooms(locationId);
+        const company = await companyFor(locationId, sold.map((s) => s.room));
+        const deals = [];
+        for (const { room: r, offer } of sold) {
+          const d = soldCard(r, offer);
+          // Same rule as the live board: the photo is public only when the
+          // operator left photos on in the room's public sections.
+          const photos = teaserSections(r).photos ? await store.listOfferPhotos(r.offerId) : [];
+          const photo = photos[0] || null;
+          deals.push({
+            ...d,
+            status: "closed",
+            photo: photo
+              ? {
+                  url: `${feedBase}/d/sold/${encodeURIComponent(d.id)}/photo/${encodeURIComponent(photo.id)}/thumb`,
+                  width: photo.width || null,
+                  height: photo.height || null,
+                }
+              : null,
+          });
+        }
+        const body = JSON.stringify({
+          generatedAt: new Date().toISOString(),
+          company: {
+            name: company.name || "",
+            tagline: company.tagline || "",
+            signer: company.signer || "",
+            phone: company.phone || "",
+            email: company.email || "",
+          },
+          count: deals.length,
+          deals,
+        });
+        feedCacheSet(cacheKey, 200, body);
+        feedHeaders(res, FEED_MAX_AGE);
+        return res.type("json").send(body);
       }
 
       const listed = await loadBoardDeals(locationId);
@@ -876,7 +944,7 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
           };
         }),
       });
-      feedCacheSet(locationId, 200, body);
+      feedCacheSet(cacheKey, 200, body);
       feedHeaders(res, FEED_MAX_AGE);
       res.type("json").send(body);
     } catch (err) {
@@ -968,6 +1036,42 @@ export function createDataroomPublicRouter({ publicBaseUrl = "" } = {}) {
       res.send(stored.bytes);
     } catch (err) {
       console.error("dataroom teaser photo failed:", err.message);
+      gone(res);
+    }
+  });
+
+  // A closed deal's photo, for the closed feed's cards. The teaser photo route
+  // above dies with the deal on purpose, so the sold cards need their own —
+  // gated the mirror-image way: the deal must be CLOSED (not just dead), and
+  // listed, photos-public, allowlisted and under an active portfolio, exactly
+  // as the feed that advertised it. Photos only: no page, no video.
+  router.get("/sold/:roomId/photo/:photoId/:variant?", async (req, res) => {
+    try {
+      const id = String(req.params.roomId || "");
+      if (!/^[A-Za-z0-9_-]{4,80}$/.test(id)) return gone(res);
+      const room = await store.getDataroom(id).catch(() => null);
+      if (!room || !FEED_LOCATIONS.has(room.locationId) || !listedInPortfolio(room) || !room.offerId) return gone(res);
+      if (!teaserSections(room).photos) return gone(res);
+      const offer = await store.getOffer(room.offerId);
+      if (offer?.deal?.stage !== "closed") return gone(res);
+      const rooms = await store.listDatarooms(room.locationId, { limit: 500 });
+      if (!rooms.some((r) => isPortfolio(r) && r.status === "active")) return gone(res);
+      const variant = req.params.variant || "full";
+      if (!PHOTO_VARIANTS.has(variant)) return gone(res);
+      const photos = await store.listOfferPhotos(room.offerId);
+      if (!photos.some((p) => p.id === req.params.photoId)) return gone(res);
+      const etag = `"${req.params.photoId}-${variant}"`;
+      if (req.headers["if-none-match"] === etag) {
+        photoHeaders(res, etag);
+        return res.status(304).end();
+      }
+      const stored = await store.readPhotoBytes(req.params.photoId, variant);
+      if (!stored?.bytes) return gone(res);
+      photoHeaders(res, etag);
+      res.set("Content-Type", stored.contentType || "image/jpeg");
+      res.send(stored.bytes);
+    } catch (err) {
+      console.error("dataroom sold photo failed:", err.message);
       gone(res);
     }
   });

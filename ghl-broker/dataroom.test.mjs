@@ -619,6 +619,97 @@ ok("the deal's own share link survives a dead stage",
   (await fetch(r.body.dataroom.shareLink, { redirect: "manual" })).status === 200);
 await setStage("under_contract");
 
+console.log("\n== the closed feed: deals we've done ==");
+// The website's "closed deals" section reads the same endpoint with
+// status=closed. It shows what we closed, never what we made on it.
+const SOLD_FEED = `${FEED}&status=closed`;
+await jget(`${B}/api/datarooms/${room2.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, publicSections: { photos: true } }),
+});
+let sold = await (await fetch(SOLD_FEED)).json();
+ok("the closed feed is empty while nothing has closed", sold.count === 0 && sold.deals.length === 0, sold.count);
+
+{
+  const o = await store.getOffer(offer2.id);
+  o.deal.stage = "closed";
+  o.deal.stageHistory = [...(o.deal.stageHistory || []), { stage: "closed", ts: "2026-10-01T18:00:00.000Z" }];
+  await store.updateOffer(o.id, o);
+}
+fv = await fetch(SOLD_FEED, { redirect: "manual" });
+fraw = await fv.text();
+sold = JSON.parse(fraw);
+ok("a closed deal shows up on the closed feed",
+  fv.status === 200 && sold.count === 1 && sold.deals[0].address.includes("Vashon"), fraw.slice(0, 160));
+ok("the closed feed is open to any origin and cacheable",
+  fv.headers.get("access-control-allow-origin") === "*" && /max-age=[1-9]/.test(fv.headers.get("cache-control") || ""));
+ok("a closed deal says when it closed", sold.deals[0].closedAt === "2026-10-01T18:00:00.000Z", sold.deals[0].closedAt);
+ok("a closed deal is marked closed", sold.deals[0].status === "closed");
+ok("a closed deal publishes none of our numbers",
+  !/"price"|"arv"|"rehab"|"spread"|"headline"|contractPrice|assignmentFee|investorPrice/.test(fraw), fraw.slice(0, 200));
+ok("a closed deal links nowhere and carries no token",
+  !("url" in sold.deals[0]) && !fraw.includes(dealShare.split("/d/")[1]) && !fraw.includes(portfolioLink.split("/d/")[1]));
+ok("the live feed still leaves the closed deal out",
+  !(await (await fetch(FEED)).json()).deals.some((d) => d.address.includes("Vashon")));
+
+const soldPhoto = sold.deals[0].photo?.url || "";
+ok("a closed deal's photo is served from the sold path",
+  soldPhoto === `${B}/d/sold/${room2.id}/photo/${photoB1}/thumb`, soldPhoto);
+ok("a closed deal's photo still loads after the teaser is gone",
+  (await fetch(soldPhoto, { redirect: "manual" })).status === 200
+  && (await fetch(VASHON_TEASER, { redirect: "manual" })).status === 404);
+ok("a live deal's photo can't be pulled through the sold path",
+  (await fetch(`${B}/d/sold/${room.id}/photo/${photoA2}/thumb`, { redirect: "manual" })).status === 404);
+ok("another deal's photo can't be pulled through a closed deal",
+  (await fetch(`${B}/d/sold/${room2.id}/photo/${photoA2}/thumb`, { redirect: "manual" })).status === 404);
+
+await jget(`${B}/api/datarooms/${room2.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, publicSections: { photos: false } }),
+});
+sold = await (await fetch(SOLD_FEED)).json();
+ok("turning a closed deal's public photos off hides its photo",
+  sold.deals[0].photo === null && (await fetch(soldPhoto, { redirect: "manual" })).status === 404);
+await jget(`${B}/api/datarooms/${room2.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, publicSections: { photos: true } }),
+});
+
+await jget(`${B}/api/datarooms/${room2.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, unlisted: true }),
+});
+ok("unlisting a closed deal takes it off the closed feed",
+  (await (await fetch(SOLD_FEED)).json()).count === 0);
+ok("and kills its sold photo", (await fetch(soldPhoto, { redirect: "manual" })).status === 404);
+await jget(`${B}/api/datarooms/${room2.id}`, {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, unlisted: false }),
+});
+
+await jget(`${B}/api/datarooms/${portfolioRoom.id}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, revoked: true }),
+});
+ok("revoking the portfolio unpublishes the closed feed too",
+  (await fetch(SOLD_FEED, { redirect: "manual" })).status === 404);
+ok("and its sold photos", (await fetch(soldPhoto, { redirect: "manual" })).status === 404);
+await jget(`${B}/api/datarooms/${portfolioRoom.id}/revoke`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ location_id: LOC, revoked: false }),
+});
+
+await setStage("fell_through");
+ok("a deal that fell through never shows as closed",
+  (await (await fetch(SOLD_FEED)).json()).count === 0
+  && (await fetch(soldPhoto, { redirect: "manual" })).status === 404);
+
+fv = await fetch(`${B}/d/deals.json?location_id=${otherLoc}&status=closed`, { redirect: "manual" });
+ok("another tenant's closed deals stay unpublished", fv.status === 404, fv.status);
+fv = await fetch(`${FEED}&status=sold`, { redirect: "manual" });
+ok("a status the feed doesn't know is a 400, not the live board", fv.status === 400, fv.status);
+await setStage("under_contract");
+
 console.log("\n== operator: wrong location is refused ==");
 r = await jget(`${B}/api/datarooms/${room.id}?location_id=someone-else`);
 ok("403 on a foreign location", r.status === 403, r.status);
