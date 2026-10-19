@@ -59,7 +59,9 @@ const STEPS = [
     note: "kept only the comps — the rest of the form was too large to store",
     apply: (s) => {
       if (!s.comps || Object.keys(s).length === 1) return null;
-      return { comps: s.comps };
+      // An income or land workspace is a few kilobytes and is the whole
+      // underwrite — it rides along with the comps.
+      return { comps: s.comps, ...(s.underwrite ? { model: s.model, underwrite: s.underwrite } : {}) };
     },
   },
 ];

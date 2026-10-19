@@ -13,6 +13,7 @@
 
 import { addressKey, sameStreetLoose, parseUsAddress } from "./us-address.js";
 import { RURAL_HOLD, isRuralLot, acresText } from "./asset-type.js";
+import { pricedByHand } from "./underwrite-model.js";
 
 // A pass or a kick-out from the Tier 1 list, written as a contact event with
 // the house's address — so a house we never priced still counts as passed.
@@ -200,8 +201,11 @@ export function screenTierOne({ house = null, offers = [], events = [], focusKin
   else if (saysTurnkey) add("turnkey", "their last text says it's finished or turnkey", false);
 
   // The kind of house: we buy single-family (settings.focusKinds).
+  // A multi-family, commercial building or land Matt priced by hand
+  // (shared/underwrite-model.js) is in play on purpose, whatever the focus.
   const kindHeld = (offer?.autoUnderwrite?.held || []).some((h) => /^not our kind of house\b/i.test(String(h)));
-  if (kindHeld || (assetType && !focusKinds.includes(assetType))) add("not_sfr", kindHeld ? "the underwrite held it: not our kind of house" : `it's ${assetType.replace(/_/g, "-")}`, true);
+  const handPriced = pricedByHand(offer) && Number(offer?.cashAmount) > 0;
+  if (!handPriced && (kindHeld || (assetType && !focusKinds.includes(assetType)))) add("not_sfr", kindHeld ? "the underwrite held it: not our kind of house" : `it's ${assetType.replace(/_/g, "-")}`, true);
 
   // Rural: two acres or more (Matt, 2026-10-08) — the underwrite held it, or
   // the lot on the offer says so.

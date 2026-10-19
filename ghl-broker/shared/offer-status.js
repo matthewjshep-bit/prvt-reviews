@@ -711,6 +711,9 @@ export const OFFER_LIST_FIELDS = [
   // The kind of house (shared/asset-type.js): {type, land, by, at}, so the
   // Offers and Deals rows can say "Manufactured · in a park".
   "asset",
+  // How it was priced (shared/underwrite-model.js): "income" | "land", absent
+  // for comps — so the re-pricing machines can leave a hand-priced one alone.
+  "underwriteModel",
   // What the buyer-view checks did (shared/underwrite-checks.js
   // summarizeChecks): an ARV cut, a listings cap, an allowance total, flag
   // keys and a few short lines — so a row can say "street −5%, capped".

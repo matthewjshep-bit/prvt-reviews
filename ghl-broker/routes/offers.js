@@ -139,6 +139,7 @@ import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
 import { normalizeAsset, assetFromSnapshot, assetOf } from "../shared/asset-type.js";
+import { buildUnderwriteCalc, underwriteModel } from "../shared/underwrite-model.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType, propertyDossier } from "../shared/contact-record.js";
 import { issueDataroomInvite } from "../dataroom.js";
@@ -944,7 +945,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const { locationId } = resolveLocation(req);
       const saved = await store.getOfferSettings(locationId);
-      const calc = calculateOffers(req.body?.inputs || {}, { ...(saved || {}), ...(req.body?.settings || {}) });
+      const settings = { ...(saved || {}), ...(req.body?.settings || {}) };
+      const model = underwriteModel({ model: req.body?.underwrite?.model });
+      const calc = model === "comps"
+        ? calculateOffers(req.body?.inputs || {}, settings)
+        : buildUnderwriteCalc({ model, deal: req.body?.underwrite?.deal, inputs: req.body?.inputs || {}, settings });
       const validUntil = offerExpiryDate(calc.settings);
       const { jpeg } = await renderDocument(calc, {
         contactName: titleCaseName(req.body?.contactName || ""),
@@ -2116,6 +2121,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         address: draft.inputs?.address || "",
         cashAmount: Number(draft.cashPreview) || null,
         draft,
+        // Income or land (shared/underwrite-model.js) on the lean row; absent is comps.
+        underwriteModel: underwriteModel({ draft }) === "comps" ? undefined : underwriteModel({ draft }),
         updatedAt: new Date().toISOString(),
       };
       if (id) {
@@ -2170,7 +2177,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // a fresh one (same PDFs, same fields) or History stops telling the truth.
   // What a revision moved besides the price, for calibration: [from, to] of the
   // ARV and the rehab, and the house's size and year built off its snapshot.
+  // An income or land offer on either side has no ARV to calibrate on: its
+  // calc carries 0 by design, and "ARV 410k → 0" is not a lesson.
   const revisionInputs = (was, now) => {
+    if (underwriteModel(was) !== "comps" || underwriteModel(now) !== "comps") return {};
     const a = was?.calc?.inputs || {}, b = now?.calc?.inputs || {};
     const info = now?.snapshot?.subjectInfo || was?.snapshot?.subjectInfo || {};
     const pair = (k) => (Number(a[k]) > 0 || Number(b[k]) > 0 ? { [k]: [Math.round(Number(a[k]) || 0), Math.round(Number(b[k]) || 0)] } : {});
@@ -2230,7 +2240,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
     // 2. Calculate.
     const saved = await store.getOfferSettings(locationId);
-    const calc = calculateOffers(inputs || {}, { ...(saved || {}), ...(settingsOverride || {}) });
+    // An income or land offer (shared/underwrite-model.js) is priced by its
+    // own engine from the deal the editor sent; a house by comps, as always.
+    // A revision that names no model — "Re-quote at N", a counter applied
+    // from the row — keeps the one the offer was priced by: re-running an
+    // income offer through calculateOffers would price it off the asking price.
+    const kept = !body.underwrite && revising && underwriteModel(existing) !== "comps"
+      ? { model: underwriteModel(existing), deal: existing.calc?.underwrite?.deal }
+      : null;
+    const uw = body.underwrite || kept;
+    const model = underwriteModel({ model: uw?.model });
+    const calc = model === "comps"
+      ? calculateOffers(inputs || {}, { ...(saved || {}), ...(settingsOverride || {}) })
+      : buildUnderwriteCalc({ model, deal: uw?.deal, inputs: inputs || {}, settings: { ...(saved || {}), ...(settingsOverride || {}) } });
 
     // 3. Render the document, wrap as PDF, store both.
     const created = new Date();
@@ -2352,6 +2374,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       scope,
       snapshot,
       calc,
+      // How it was priced: "income" or "land", absent for comps. On the lean
+      // row so the machines that re-price houses can see to leave it alone.
+      underwriteModel: model === "comps" ? undefined : model,
       // What the buyer-view checks did to this offer, compact for lean rows
       // (shared/underwrite-checks.js). Read off the raw snapshot so trimming
       // can't erase it; null when the checks didn't run.
@@ -3765,7 +3790,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const type = String(req.body?.type || "").trim();
       if (type) {
         const picked = normalizeAsset({ type, land: req.body?.land, by: "you", at: ts });
-        if (!picked) return res.status(400).json({ error: "type must be sfr, multi_family or manufactured" });
+        if (!picked) return res.status(400).json({ error: "type must be sfr, multi_family, manufactured, commercial or land" });
         offer.asset = picked;
       } else {
         const fromZillow = assetFromSnapshot(offer);

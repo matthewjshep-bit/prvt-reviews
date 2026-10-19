@@ -6,7 +6,10 @@ import { AlertTriangle, Check, ChevronDown, ChevronUp, ExternalLink, FileSignatu
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import { buyerCeiling } from "@shared/post-mortem.js";
 import { checksFor, combineChecks, checksLines } from "@shared/underwrite-checks.js";
-import { ASSET_TYPES, ASSET_TYPE_LABELS, MH_LAND, MH_LAND_LABELS, assetFromHomeType } from "@shared/asset-type.js";
+import { ASSET_TYPE_LABELS, MH_LAND, MH_LAND_LABELS, assetFromHomeType } from "@shared/asset-type.js";
+import { buildUnderwriteCalc, modelForAsset, runUnderwrite as runAnalyzer } from "@shared/underwrite-model.js";
+import { blankIncomeDeal } from "@shared/income-underwrite.js";
+import { blankLandDeal } from "@shared/land-underwrite.js";
 import {
   addContactNote, cancelUnderwrite, createOffer, getContactDetail, getContactNotes, getUnderwrite,
   ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, runUnderwrite, saveDraft,
@@ -17,6 +20,8 @@ import {
 import { LIVE as UW_LIVE, PHASE as UW_PHASE } from "./UnderwriteStrip.jsx";
 import CompsPane from "./CompsPane.jsx";
 import RehabPane from "./RehabPane.jsx";
+import IncomeUnderwriter from "./IncomeUnderwriter.jsx";
+import LandUnderwriter from "./LandUnderwriter.jsx";
 import NotesPanel from "./NotesPanel.jsx";
 import SendModal, { CHANNEL_LABELS } from "./SendModal.jsx";
 import ContractModal from "./ContractModal.jsx";
@@ -99,6 +104,18 @@ function AddressInput({ value, onChange, placeholder }) {
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
+
+// The property-type control, in the order they're reached for. A house is
+// priced by comps; multi-family and commercial by income; land by the acre
+// (shared/underwrite-model.js). Mobile stays pickable for the ones we hold.
+const TYPE_CHOICES = [
+  { type: "sfr", label: "Single family" },
+  { type: "multi_family", label: "Multi-family" },
+  { type: "commercial", label: "Commercial" },
+  { type: "land", label: "Land" },
+  { type: "manufactured", label: "Mobile" },
+];
+const MODEL_WORDS = { comps: "comps & rehab", income: "income", land: "land value" };
 const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500";
 
 // The Auto-underwrite button: the same robot the GHL workflow fires, pointed
@@ -794,8 +811,30 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     || (fromOffer?.asset?.by === "you" ? { type: fromOffer.asset.type, land: fromOffer.asset.land || "" } : null));
   const zillowAsset = assetFromHomeType(subjectInfo?.homeType);
   const assetType = assetPick?.type || zillowAsset || "";
-  const pickAssetType = (type) => setAssetPick(type ? { type, land: type === "manufactured" ? (assetPick?.land || "") : "" } : null);
+  // Which way it's priced (shared/underwrite-model.js): comps for a house,
+  // income for multi-family and commercial, land by the acre. A saved offer
+  // reopens on the way it was priced — an older multi-family priced by comps
+  // stays on comps until you switch it.
+  const [uwModel, setUwModel] = useState(() => {
+    const m = snap?.model || fromOffer?.calc?.model;
+    return m === "income" || m === "land" ? m : "comps";
+  });
+  // One deal per kind, so trying Commercial and coming back keeps the rent roll.
+  const [uwDeals, setUwDeals] = useState(() => {
+    const d = snap?.underwrite?.deal || fromOffer?.calc?.underwrite?.deal || null;
+    return d?.kind ? { [d.kind]: d } : {};
+  });
+  const pickAssetType = (type) => {
+    setAssetPick(type ? { type, land: type === "manufactured" ? (assetPick?.land || "") : "" } : null);
+    setUwModel(modelForAsset(type));
+  };
   const pickLand = (land) => setAssetPick({ type: "manufactured", land });
+  const incomeKind = assetType === "commercial" ? "commercial" : "multi_family";
+  const dealKey = uwModel === "land" ? "land" : incomeKind;
+  const uwDeal = uwModel === "comps" ? null
+    : uwDeals[dealKey] || (uwModel === "land" ? blankLandDeal() : blankIncomeDeal(incomeKind));
+  const setUwDeal = (d) => setUwDeals((m) => ({ ...m, [dealKey]: d }));
+  const uwBody = uwModel === "comps" ? undefined : { model: uwModel, deal: uwDeal };
   // Comps for a mobile home are mobile homes (the pull keeps to houses otherwise).
   const compsHomeType = assetType === "manufactured" ? "MANUFACTURED" : assetType === "multi_family" ? "MULTI_FAMILY" : undefined;
   const [scope, setScope] = useState(snap?.scope || fromOffer?.scope || []); // applied rehab line items
@@ -1102,18 +1141,24 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
 
   const calc = useMemo(() => {
     try {
+      if (uwModel !== "comps") return buildUnderwriteCalc({ model: uwModel, deal: uwDeal, inputs, settings: effSettings });
       return calculateOffers(inputs, effSettings);
     } catch {
       return null;
     }
-  }, [inputs, effSettings]);
+  }, [inputs, effSettings, uwModel, uwDeal]);
+  // The analyzer's full answer (tests, metrics, flags) for the income and land panes.
+  const uwRun = useMemo(
+    () => (uwModel === "comps" ? null : runAnalyzer(uwModel, { ...uwDeal, askingPrice: moneyNum(inputs.askingPrice) })),
+    [uwModel, uwDeal, inputs.askingPrice],
+  );
 
   // The buyer ceiling beside the offer: what a flipper's rule says they will
   // pay in total, so an offer that leaves no room for our fee reads as one
   // before it is sent. A readout only — the three deals that fell through
   // were all written above this line, and both that sold were written at it.
   const ceiling = useMemo(() => {
-    if (!calc) return null;
+    if (!calc || calc.model) return null;
     const c = buyerCeiling({ offer: { arv: calc.inputs.arv, repairs: calc.inputs.repairs }, settings: effSettings, fee: effSettings.wholesaleFee });
     if (!c.computable) return null;
     const ask = Math.round(calc.offers.cash.amount) + Math.round(Number(effSettings.wholesaleFee) || 0);
@@ -1126,7 +1171,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   async function doPreview() {
     setError(""); setPreviewing(true);
     try {
-      const r = await previewDocument(inputs, effSettings, contactName);
+      const r = await previewDocument(inputs, effSettings, contactName, uwBody);
       setPreview(r.image);
     } catch (e) { setError(e.message); }
     setPreviewing(false);
@@ -1136,6 +1181,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   // second copy of the field list is how the three quietly drift apart.
   const formSnapshot = () => ({
     mode, contact, newContact, inputs, subjectSqft, subjectInfo, assetPick, scope, underwriteMode, feeOverride, uwOverrides, letterTerms, offerExpires,
+    // How it's priced, and the income or land deal when it isn't comps.
+    model: uwModel, underwrite: uwBody || null,
     rehab: rehabStateRef.current,
     comps: compsStateRef.current,
     // The buyer-view checks' record: the Comps pane's ARV half and the Rehab
@@ -1158,6 +1205,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         snapshot: formSnapshot(),
         // The kind of house, when you picked one (otherwise Zillow's word).
         ...(assetPick ? { asset: assetPick } : {}),
+        // An income or land offer is priced on the server from this deal.
+        ...(uwBody ? { underwrite: uwBody } : {}),
       });
       setResult(r);
       setPreview(null);
@@ -1193,7 +1242,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     )) return;
     setError(""); setSaving(true);
     try {
-      const r = await updateOffer(id, { inputs, settings: effSettings, scope, snapshot: formSnapshot(), ...(assetPick ? { asset: assetPick } : {}) });
+      const r = await updateOffer(id, { inputs, settings: effSettings, scope, snapshot: formSnapshot(), ...(assetPick ? { asset: assetPick } : {}), ...(uwBody ? { underwrite: uwBody } : {}) });
       // The offer of record just moved; the "not saved" notices read from here.
       setSavedInputs(r.offer?.calc?.inputs || {});
       setSaveWarnings(r.warnings || []);
@@ -1207,7 +1256,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
 
   // The "Saved" strip describes the numbers as they stood when it was pressed,
   // so it has to go the moment they move again.
-  useEffect(() => { setSavedAt(null); }, [inputs, scope, effSettings]);
+  useEffect(() => { setSavedAt(null); }, [inputs, scope, effSettings, uwModel, uwDeals]);
 
   // Is the document behind this offer's link still the offer on screen?
   //
@@ -1260,9 +1309,12 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   // Comps that can't be re-fetched, or a rehab scope built by hand.
   const hasWorkToLose = (body) => {
     const c = body.comps || {};
+    const d = body.underwrite?.deal || {};
     return Boolean(
       (c.captured || []).length || (c.manual || []).length ||
-      (c.selected || []).length || (body.scope || []).length
+      (c.selected || []).length || (body.scope || []).length ||
+      // A rent roll or land comps typed by hand are work too.
+      (d.units || []).length || (d.tenants || []).length || (d.comps || []).length
     );
   };
 
@@ -1310,6 +1362,14 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     if (firstReport.current[which]) { firstReport.current[which] = false; return; }
     scheduleDraftSave();
   };
+  // A rent roll or land comps typed by hand autosave the same way, after
+  // the first render (which is only the restored deal).
+  const firstDeals = useRef(true);
+  useEffect(() => {
+    if (firstDeals.current) { firstDeals.current = false; return; }
+    scheduleDraftSave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uwDeals, uwModel]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1573,6 +1633,37 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
 
       <div className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 flex items-center gap-2 text-sm font-bold"><StepBadge n={2} /> Property</h2>
+        <div className="mb-4">
+          <span className={LABEL_CLS}>Property type</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex flex-wrap rounded-lg border border-slate-300 bg-white p-0.5 text-xs font-semibold" role="group" aria-label="Property type">
+              {TYPE_CHOICES.map((c) => {
+                const on = (assetType || "sfr") === c.type;
+                return (
+                  <button key={c.type} type="button" onClick={() => pickAssetType(c.type)} aria-pressed={on}
+                    className={`rounded-md px-3 py-1.5 ${on ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
+                    {c.label}
+                  </button>
+                );
+              })}
+            </div>
+            <span className="text-xs text-slate-500">
+              Priced by {MODEL_WORDS[uwModel]}
+              {!assetPick && zillowAsset ? ` · Zillow: ${ASSET_TYPE_LABELS[zillowAsset]}` : ""}
+              {assetPick && zillowAsset && zillowAsset !== assetPick.type && (
+                <> · <button type="button" onClick={() => pickAssetType("")} className="underline hover:text-slate-800">use Zillow's ({ASSET_TYPE_LABELS[zillowAsset]})</button></>
+              )}
+            </span>
+          </div>
+          {uwModel === "comps" && (assetType === "multi_family" || assetType === "commercial" || assetType === "land") && (
+            <p className="mt-2 text-xs text-slate-600">
+              {ASSET_TYPE_LABELS[assetType]} — this one is priced with comps.{" "}
+              <button type="button" onClick={() => setUwModel(modelForAsset(assetType))} className="font-semibold text-blue-700 underline hover:text-blue-900">
+                Underwrite by {assetType === "land" ? "land value" : "income"}
+              </button>
+            </p>
+          )}
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <Field label="Property address">
@@ -1588,42 +1679,36 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
                 View on Zillow ↗
               </a>
             )}
-            <AutoUnderwrite
+            {uwModel === "comps" && <AutoUnderwrite
               contactId={mode === "existing" ? contact?.id || null : null}
               address={inputs.address}
               askingPrice={moneyNum(inputs.askingPrice)}
               onApply={applyUnderwrite}
               declined={() => combineChecks(compsStateRef.current?.checks || null, rehabStateRef.current?.checks || null)?.declined || null}
-            />
+            />}
           </div>
-          <div>
+          {uwModel === "comps" && <div>
             <Field label="After-repair value / ARV ($)">
               <input className={INPUT_CLS} inputMode="numeric" value={inputs.arv} onChange={setMoney("arv")} placeholder="from comps below" />
             </Field>
             <FigureNotice field="arv" typed={moneyNum(inputs.arv)} saved={moneyNum(savedInputs.arv)}
               rooms={pinnedRooms} saving={saving} onSave={doSave}
               unpinning={unpinning === "arv"} onFollow={() => followOffer("arv")} />
-          </div>
-          <div>
+          </div>}
+          {uwModel === "comps" && <div>
             <Field label="Estimated repairs ($)">
               <input className={INPUT_CLS} inputMode="numeric" value={inputs.repairs} onChange={setMoney("repairs")} placeholder="from scope below" />
             </Field>
             <FigureNotice field="repairs" typed={moneyNum(inputs.repairs)} saved={moneyNum(savedInputs.repairs)}
               rooms={pinnedRooms} saving={saving} onSave={doSave}
               unpinning={unpinning === "repairs"} onFollow={() => followOffer("repairs")} />
-          </div>
-          <Field label="Asking price ($, optional)">
-            <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder="for %-of-asking context" />
+          </div>}
+          <Field label={uwModel === "comps" ? "Asking price ($, optional)" : "Asking price ($)"}>
+            <input className={INPUT_CLS} inputMode="numeric" value={inputs.askingPrice} onChange={setMoney("askingPrice")} placeholder={uwModel === "comps" ? "for %-of-asking context" : "what the seller wants"} />
           </Field>
           <div>
-            <Field label="Property type">
-              <select className={INPUT_CLS} value={assetPick?.type || ""} onChange={(e) => pickAssetType(e.target.value)}>
-                <option value="">{zillowAsset ? `${ASSET_TYPE_LABELS[zillowAsset]} (from Zillow)` : "Not set"}</option>
-                {ASSET_TYPES.map((t) => <option key={t} value={t}>{ASSET_TYPE_LABELS[t]}</option>)}
-              </select>
-            </Field>
             {assetType === "manufactured" && (
-              <div className="mt-2">
+              <div>
                 <Field label="Land">
                   <select className={INPUT_CLS} value={assetPick?.land || ""} onChange={(e) => pickLand(e.target.value)}>
                     <option value="">Not sure yet</option>
@@ -1639,6 +1724,21 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         </div>
       </div>
 
+      {uwModel === "income" && (
+        <IncomeUnderwriter kind={incomeKind} deal={uwDeal} setDeal={setUwDeal} run={uwRun}
+          asking={moneyNum(inputs.askingPrice)}
+          priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
+          fmtTyped={fmtTyped}
+          onUseComps={incomeKind === "multi_family" && (uwRun?.result?.inPlace?.size || 0) <= 4 ? () => setUwModel("comps") : null} />
+      )}
+      {uwModel === "land" && (
+        <LandUnderwriter deal={uwDeal} setDeal={setUwDeal} run={uwRun}
+          asking={moneyNum(inputs.askingPrice)}
+          priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
+          fmtTyped={fmtTyped} />
+      )}
+
+      {uwModel === "comps" && <>
       <CompsPane
         key={`comps-${paneInit.nonce}`}
         address={inputs.address}
@@ -1680,6 +1780,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
         feeOverride={feeOverride} setFeeOverride={setFeeOverride}
         uwOverrides={uwOverrides} setUw={setUw} settings={settings} fmtTyped={fmtTyped} />
+      </>}
 
       <div className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-1 flex flex-wrap items-center justify-between gap-2">

@@ -173,3 +173,20 @@ test("a re-quote never lowers a number already out; below-ours is only allowed b
   const unsent = planRequote({ offer: base, take, band, ceiling: 900000 });
   assert.notEqual(unsent.reason, sent.reason, "before a send, moving on their numbers is what a re-quote is for");
 });
+
+// 2026-10-18: a fourplex or a strip center is priced by its income, by hand.
+// Its calc carries no ARV — the agent's ARV must not become one.
+test("an income-priced fourplex is never re-quoted on the agent's ARV", () => {
+  const fourplex = { id: "o9", address: "40 Oak St, Kent, WA", cashAmount: 900000, underwriteModel: "income", arv: 0, repairs: 0,
+    createdAt: "2026-09-01T00:00:00.000Z", calc: { model: "income", inputs: { arv: 0, repairs: 0 } } };
+  const r = planRequote({ offer: fourplex, take: { arv: 1200000, rehab: 50000, at: later() }, band: BAND });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /income/);
+});
+
+test("a counter on an income-priced offer goes to Matt, not the band", () => {
+  const strip = { id: "o10", cashAmount: 780000, underwriteModel: "income", arv: 600000, repairs: 40000, calc: { model: "income", inputs: { arv: 600000, repairs: 40000 } } };
+  const c = autoAcceptCeiling({ offer: strip });
+  assert.equal(c.computable, false);
+  assert.match(c.reason, /income/);
+});

@@ -29,6 +29,7 @@ import { housesAwaitingAddress } from "./shared/mentioned-houses.js";
 import { showingContextLines } from "./shared/showing.js";
 import { accessFor, accessLines } from "./shared/deal-access.js";
 import { assetOf, assetPhrase, isRuralLot, kindHold, normalizeAsset } from "./shared/asset-type.js";
+import { pricedByHand } from "./shared/underwrite-model.js";
 import { buyerFacts } from "./shared/underwrite-checks.js";
 import { blastNote, pickedRehabLevel } from "./shared/blast-text.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
@@ -481,7 +482,7 @@ export async function loadAgentContext({ store, locationId, contactId, custom = 
 
 // Zillow's word for the house: the kind a person set on the offer first, then
 // what the underwrite read (a lean row carries it as subjectHomeType).
-const RAW_HOME_TYPE = { sfr: "SINGLE_FAMILY", multi_family: "MULTI_FAMILY", manufactured: "MANUFACTURED" };
+const RAW_HOME_TYPE = { sfr: "SINGLE_FAMILY", multi_family: "MULTI_FAMILY", manufactured: "MANUFACTURED", commercial: "COMMERCIAL", land: "LOT" };
 const homeTypeOf = (o = {}) => {
   const set = normalizeAsset(o.asset);
   if (set?.by === "you") return RAW_HOME_TYPE[set.type];
@@ -507,7 +508,7 @@ export function pricedOutsideFocus(offers = [], focusKinds = undefined) {
   for (const list of groupHouses((offers || []).filter((o) => o && o.address)).values()) {
     const { current } = resolveHouse(list);
     if (!current || !(Number(current.cashAmount) > 0) || CLOSED_HOUSE.has(effectiveStatus(current))) continue;
-    if (kindHold(homeTypeOf(current), focusKinds) || isRuralLot(lotOf(current))) out.push(current.address);
+    if (kindHold(homeTypeOf(current), focusKinds) || isRuralLot(lotOf(current)) || pricedByHand(current)) out.push(current.address);
   }
   return out;
 }

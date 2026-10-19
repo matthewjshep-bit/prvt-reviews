@@ -156,3 +156,12 @@ test("an agent who asks whether we buy mobile homes is told no, whatever Setting
     assert.match(rule, /asks whether we buy them/);
   }
 });
+
+test("commercial and land are kinds a person picks, never what Zillow says", () => {
+  assert.deepEqual(normalizeAsset({ type: "commercial" }), { type: "commercial", land: "", by: "you" });
+  assert.deepEqual(normalizeAsset({ type: "land", land: "park" }), { type: "land", land: "", by: "you" });
+  assert.equal(assetFromHomeType("LOT"), "");
+  assert.equal(assetFromHomeType("COMMERCIAL"), "");
+  assert.equal(assetLabel({ type: "commercial" }), "Commercial");
+  assert.equal(assetPhrase({ type: "land" }), "land");
+});

@@ -449,3 +449,10 @@ test("a house they said yes on is yours, never retired by the sweep", () => {
   const quiet = triage({ offer: old, drafts: [inbound("ok thanks", { createdAt: ago(STALE_DAYS + 3) })], now: NOW });
   assert.equal(quiet.action, "retire");
 });
+
+test("the sweep never retires a held draft Matt is pricing by income", () => {
+  const kind = "not our kind of house — a multi-family (single-family only right now)";
+  const t = triageHeldUnderwrite({ offer: held({ createdAt: ago(3), draft: { model: "income" }, autoUnderwrite: { jobId: "j1", held: [kind], finishedAt: ago(3) } }, [kind]), now: NOW });
+  assert.equal(t.action, "yours");
+  assert.match(t.reason, /income/);
+});
