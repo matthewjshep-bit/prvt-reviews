@@ -71,7 +71,7 @@ import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction,
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
 import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey } from "./shared/mentioned-houses.js";
-import { currentOffers, currentOfferFor, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
+import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
@@ -2874,6 +2874,19 @@ async function fellThroughFor({ store, locationId, addresses = [] }) {
 }
 const fellThroughLine = (o) => `the deal on ${String(o?.address || "the house").split(",")[0].trim()} fell through`;
 
+// The house we walked away from (passed, or it's gone), found by the
+// contact's own offers on that address: a check-in carries the address and
+// often no offer id (3037 Massey Rd, 2026-10-19). A store that can't list
+// offers, or fails to, holds nothing back.
+async function walkedAwayFor({ store, locationId, contactId, addresses = [] }) {
+  const wanted = addresses.map((a) => String(a || "").trim()).filter(Boolean);
+  if (!wanted.length || !contactId || typeof store?.listOffers !== "function") return null;
+  const offers = await store.listOffers(locationId, { contactId, limit: 100, lean: true }).catch(() => []);
+  for (const a of wanted) { const hit = walkedAwayFrom(offers || [], { contactId, address: a }); if (hit) return hit; }
+  return null;
+}
+const walkedAwayLine = (o) => (o?.status === "unavailable" ? `${o.address || "that house"} is no longer available` : `we passed on ${o?.address || "that house"}`);
+
 // machineMayStart (shared/thread-health.js) on this contact's book, drafts
 // and timeline. A read that fails holds nothing back: the other doors still
 // ask their own questions.
@@ -2942,6 +2955,13 @@ export async function startProactive({
     // listing agent, their TC, a buyer (5232 S Yakima, 2026-10-03).
     const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
     if (gone) return { skipped: fellThroughLine(gone), job: null };
+    // A house we passed on, or that's gone, is not reached out about (3037
+    // Massey Rd, 2026-10-19). The second look is the one text about our pass,
+    // and its picker read it.
+    if (kind !== "second_look") {
+      const left = await walkedAwayFor({ store, locationId, contactId, addresses: [offer?.address, subject?.address] });
+      if (left) return { skipped: walkedAwayLine(left), job: null };
+    }
     // A live thread, or a yes we'd be walking away from (shared/thread-health.js).
     const live = await machineMayStartFor({ store, locationId, contactId, kind, why: subject?.why || "", address: offer?.address || subject?.address || "",
       now: typeof deps.now === "function" ? deps.now() : Date.now() });
@@ -6239,7 +6259,10 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // passed" check-in is the point of that ladder. Only the auto path: a
   // person pressing Send is a person deciding.
   if (auto && d.party !== "investor" && d.outbound?.kind && !String(d.inbound || "").trim()) {
-    const offer = d.outbound?.offerId && store.getOffer ? await store.getOffer(d.outbound.offerId).catch(() => null) : null;
+    // No offer id (a promise check-in carries only the address): the house
+    // is found by their offers on it (3037 Massey Rd, 2026-10-19).
+    const offer = (d.outbound?.offerId && store.getOffer ? await store.getOffer(d.outbound.offerId).catch(() => null) : null)
+      || (d.outbound?.offerId ? null : await walkedAwayFor({ store, locationId, contactId: d.contactId, addresses: [d.outbound.address || d.propertyAddress] }));
     // The second look at a pass of ours over the numbers (shared/second-look.js
     // numbersPass) is the one text about a house we passed on: its picker read
     // that pass. A status marked since it was drafted still stops it.
@@ -6247,7 +6270,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       && d.outbound.offerStatus === "we_passed" && Boolean(d.outbound.statusAt) && d.outbound.statusAt === offer.statusAt;
     if (offer && ["we_passed", "unavailable"].includes(offerStatus(offer)) && !lookAtOurPass) {
       const ts = new Date(now).toISOString();
-      const why = offerStatus(offer) === "unavailable" ? `${offer.address || "that house"} is no longer available` : `we passed on ${offer.address || "that house"}`;
+      const why = walkedAwayLine({ ...offer, status: offerStatus(offer) });
       await store.updateReplyDraft(d.id, {
         ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
         flags: [...(d.flags || []), `${why} — not sent`],

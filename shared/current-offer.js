@@ -158,6 +158,20 @@ export function currentOfferFor(offers = [], { contactId = "", address = "" } = 
 }
 
 /**
+ * walkedAwayFrom(offers, { contactId, address }) → that house's current offer
+ * when we passed on it ("we_passed") or it's gone ("unavailable"), else null.
+ * Nothing the machine starts about such a house goes to the agent (Matt,
+ * 2026-10-19, 3037 Massey Rd: "we need to make sure we are not reaching out
+ * on an offer we passed"). A text with no address names no house: null.
+ */
+export function walkedAwayFrom(offers = [], { contactId = "", address = "" } = {}) {
+  if (!String(address || "").trim()) return null;
+  const o = currentOfferFor(offers || [], { contactId, address });
+  return o && !o.deal && WALKED_AWAY.has(o.status) ? o : null;
+}
+const WALKED_AWAY = new Set(["we_passed", "unavailable"]);
+
+/**
  * annotateCurrent(offers) → offers, each with
  *   isCurrent      true on the one live row per contact and house
  *   supersededBy   { id, cashAmount, at } on the others (drafts get neither)
