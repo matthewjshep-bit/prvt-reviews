@@ -304,11 +304,28 @@ test("the listing check-in names the street, never the price", () => {
   assert.match(t, /whether it's a bit of a project/, "asks about the house, not for an as-is cash offer the carriers block");
   assert.match(t, /Phone carriers block texts/);
   assert.match(t, /never its price or any number/);
-  assert.match(t, /One clause on who you are/, "a cold agent gets a one-clause intro");
   const known = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", dealsWithUs: 1 });
   assert.match(known, /anything distressed/);
   assert.match(known, /text to a friend/);
   assert.match(known, /do NOT reintroduce yourself/i);
+});
+
+// 2026-10-19: "Hey, saw the listing on 126th come off the market. Still hoping
+// to sell? I'm local and always looking for the next project house." Matt: the
+// last line is filler, take it out of every check-in.
+test("a check-in never tacks on 'I'm local and always looking for the next project house'", () => {
+  for (const o of [
+    { reason: "off_market_listing", segment: "cold", listing: { street: "126th Ave SE", city: "Kent" } },
+    { reason: "fresh_listing", segment: "cold", listing: { street: "123 Main St", city: "Kent" } },
+    { reason: "general", segment: "cold", offersWithUs: 2 },
+    { reason: "general", segment: "cold" },
+    { reason: "general", segment: "engaged" },
+  ]) {
+    const t = outboundOpening({ kind: "agent_pulse", ...o });
+    assert.doesNotMatch(t, /One clause on who you are/, o.reason);
+    assert.doesNotMatch(t, /(someone local who's|buyer who .*) always (looking for|after) the next project house/, o.reason);
+    assert.match(t, /never "I'm local", never that we're always looking for the next project house/, o.reason);
+  }
 });
 
 test("the walkthrough reminder names the street and window, says only what the access lines say, and names no price", () => {

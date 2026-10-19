@@ -1082,9 +1082,10 @@ function openingFor(outbound) {
           : `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
             // No calendar is connected (2026-10-15): a call is offered, never a time.
             `If it fits, offer a quick call in a few words, as an easier way to talk ("happy to jump on a quick call if that's easier") — never a day or a time, and still only one question. `) +
-        // A quiet agent we made an offer to (shared/agent-pulse.js, 2026-10-09)
-        // has heard of us: the clause says so, never which house or number.
-        `${cold ? (o.offersWithUs ? "One clause on who you are: the local buyer who looked at one of their listings a while back and is always after the next project house. " : "One clause on who you are: someone local who's always looking for the next project house. ") : "Do NOT reintroduce yourself. "}` +
+        // No who-we-are line, cold or not (2026-10-19, Matt): "I'm local and
+        // always looking for the next project house" read as filler. The phone
+        // system signs it "Thanks, Matt".
+        `Do NOT reintroduce yourself: never "I'm local", never that we're always looking for the next project house. ` +
         `${shapes[(Number(o.variant) || 0) % shapes.length]} ` +
         `${o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}" ` : ""}` +
         `Do NOT name a price, a number, a percentage, an ARV or a link${listingText ? " — the listing's street is fine, but never a dollar figure" : ""}, and never a count of days, a time of day or a date ("sitting a while", not "84 days"). Do NOT promise an offer or say what we'd pay. ` +

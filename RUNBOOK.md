@@ -5407,8 +5407,9 @@ runs it) owns an agent when nothing else does:
   sounding annoyed stops it altogether.
 - **The text** (prompt case `agent_pulse`) names a listing by street, city and
   days on market, never its price. It never says a number or a link, and
-  `onlyFloats` holds any draft that does. A cold agent gets a one-clause intro;
-  a known one gets a continuation of the thread.
+  `onlyFloats` holds any draft that does. No agent, cold or known, gets a
+  who-we-are line (2026-10-19: "I'm local and always looking for the next
+  project house" was filler); the "Thanks, Matt" footer says who it is.
 
 **Running it.** Once a workday from `hour` (noon Pacific), with the daily gate
 (cursor `agentPulse`, retries if a deploy kills it), capped at `dailyCap` (20)
