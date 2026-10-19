@@ -90,3 +90,30 @@ test("the stage menu by their name lists GHL's four stages in the board's order,
   expect(cardNote({ stage: "Negotiations", name: "Negotiations", key: null, status: "open", open: 1 })).toMatch(/an old stage/);
   expect(cardNote({ stage: "Tier 1", key: "tier1", status: "open", open: 1 })).toBe("");
 });
+
+// Matt, 2026-10-19: "it would also be nice to see active deals associated with
+// the person on the companion" — every deal they're on, closed included.
+test("the companion lists the deals a person is on with how they're on it, its stage and a link to the deal", async () => {
+  const { default: CompanionDeals } = await import("../CompanionDeals.jsx");
+  const own = { id: "dealA", contactId: CONTACT, address: "5232 S Yakima Ave, Tacoma, WA", deal: { stage: "under_contract", createdAt: "2026-10-01T00:00:00Z" } };
+  const theirs = { id: "dealB", contactId: "someAgent", address: "9 Closed Ct, Kent, WA", deal: { stage: "closed", createdAt: "2026-09-01T00:00:00Z" } };
+  const html = renderToStaticMarkup(<CompanionDeals rec={{
+    offers: [own, { id: "plain", contactId: CONTACT, address: "1 No Deal St" }],
+    deals: [{ offer: theirs, roles: ["buyer"], standing: { status: "committed" }, feedback: [] }],
+  }} />);
+  expect(html).toContain("5232 S Yakima Ave");
+  expect(html).toContain("Listing agent");
+  expect(html).toContain("9 Closed Ct");
+  expect(html).toContain("Buyer");
+  expect(html).toContain("committed");
+  expect(html).toContain("deal_id=dealA");
+  expect(html).toContain("deal_id=dealB");
+  expect(html).not.toContain("1 No Deal St");
+  expect(html.indexOf("5232 S Yakima")).toBeLessThan(html.indexOf("9 Closed Ct"));
+});
+
+test("someone on no deal shows no deals in the companion", async () => {
+  const { default: CompanionDeals } = await import("../CompanionDeals.jsx");
+  expect(renderToStaticMarkup(<CompanionDeals rec={{ offers: [{ id: "plain", address: "1 No Deal St" }], deals: [] }} />)).toBe("");
+  expect(renderToStaticMarkup(<CompanionDeals rec={null} />)).toBe("");
+});

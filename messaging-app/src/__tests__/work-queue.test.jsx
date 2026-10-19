@@ -116,8 +116,18 @@ test("a row with no offer shows the one on the house it names, else their liveli
   expect(defaultOfferFor(book, "2002 1st Ave N").id).toBe("old");
   expect(defaultOfferFor(book, "").id).toBe("live");
   expect(defaultOfferFor([book[0]], "").id).toBe("old");
-  expect(defaultOfferFor([book[2]], "")).toBe(null);
   expect(defaultOfferFor([], "")).toBe(null);
+});
+
+// Matt, 2026-10-19: "ALSO show Offer DRAFTS in the companion". The draft-only
+// underwriter leaves a draft for him to price; the pane said "No offer yet".
+test("someone whose only offer is a draft opens on the draft, not 'No offer yet'", () => {
+  const draft = offerRow("draft", "1317 California Ave SW, Seattle, WA", "draft", "2026-10-19T16:00:00Z");
+  const olderDraft = offerRow("draft0", "2 Pine St, Kent, WA", "draft", "2026-10-01T16:00:00Z");
+  const sent = offerRow("sent", "9 Oak St, Kent, WA", "sent", "2026-09-20T17:00:00Z");
+  expect(defaultOfferFor([olderDraft, draft], "").id).toBe("draft");
+  expect(defaultOfferFor([sent, draft], "").id).toBe("sent", "a real offer still comes first");
+  expect(defaultOfferFor([sent, draft], "1317 California Ave SW").id).toBe("draft", "the house the row names, even as a draft");
 });
 
 test("while their offers load, the pane doesn't say there are none", () => {
