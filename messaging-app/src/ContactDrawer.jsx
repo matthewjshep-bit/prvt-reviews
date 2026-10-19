@@ -24,7 +24,7 @@ import { INVESTOR_STATUS_LABEL } from "@shared/offer-status.js";
 import { getContactProfile, saveContactFacts, addContactEvent, checkContactGmail, ghlContactUrl, setContactEmail, setContactDealsBy } from "./api.js";
 import { dealsByOf } from "@shared/contact-email.js";
 import { BTN, BTN_PRIMARY, CurrentPill, Pill, StatusPill, StagePill } from "./ui.jsx";
-import { PartyPill, DraftRow } from "./ConversationOutbox.jsx";
+import { PartyPill } from "./ConversationOutbox.jsx";
 
 const INPUT = "rounded-lg border border-slate-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none";
 const money = (v) => (Number(v) > 0 ? fmtMoney(Number(v)) : String(v));
@@ -98,14 +98,12 @@ function FactsSection({ title, keys, record, busy, onRemove, onAdd }) {
 
 
 /**
- * <ContactRecordBody contactId party onClose inline />
- * The record itself, without the slide-over: the drawer wraps it, and the
- * companion window (/contact, CompanionView.jsx) shows it in the page.
+ * <ContactRecordBody contactId party onClose />
+ * The record itself, inside the slide-over (every page's, the companion
+ * window's too).
  *   onClose  the header's ✕; none, no ✕
- *   inline   in a page, not a panel: the header doesn't stick
- *   onLoaded(rec)  each time the record is read (the companion's name and party)
  */
-export function ContactRecordBody({ contactId, party: hint = null, onClose = null, inline = false, onLoaded = null }) {
+export function ContactRecordBody({ contactId, party: hint = null, onClose = null }) {
   const [rec, setRec] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -121,7 +119,6 @@ export function ContactRecordBody({ contactId, party: hint = null, onClose = nul
     catch (e) { setError(e.message); }
   };
   useEffect(() => { setRec(null); if (contactId) load(false); }, [contactId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (rec) onLoaded?.(rec); }, [rec]); // eslint-disable-line react-hooks/exhaustive-deps
   const party = rec?.party || hint || null;
   const groups = useMemo(() => groupByDay(rec?.events || []), [rec]);
   const shown = showAll ? groups : groups.slice(0, 8);
@@ -147,7 +144,7 @@ export function ContactRecordBody({ contactId, party: hint = null, onClose = nul
 
   return (
     <>
-        <header className={`${inline ? "" : "sticky top-0 z-10 "}flex items-start gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur`}>
+        <header className={`sticky top-0 z-10 flex items-start gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur`}>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="truncate text-base font-bold text-slate-900">{p?.name || rec?.drafts?.[0]?.contactName || rec?.investor?.name || "Contact"}</span>
@@ -230,13 +227,9 @@ export function ContactRecordBody({ contactId, party: hint = null, onClose = nul
               {groups.length > 8 && !showAll && <button type="button" className={`${BTN} mt-2`} onClick={() => setShowAll(true)}>Show all {groups.length} days</button>}
             </Section>
 
-            {rec.drafts.length > 0 && (
-              <Section title="Recent conversation AI drafts">
-                <ul className="space-y-2">
-                  {rec.drafts.slice(0, 5).map((d) => <DraftRow key={d.id} draft={d} sendsEnabled={false} onDone={() => load(false)} />)}
-                </ul>
-              </Section>
-            )}
+            {/* No drafts here (Matt, 2026-10-18: "I never use them"). The list
+                showed every draft ever made — sent, replaced, dismissed — and
+                the one still waiting is on Today and the Conversation AI tab. */}
 
             {rec.invites.length > 0 && (
               <Section title="Dataroom links">

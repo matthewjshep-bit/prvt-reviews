@@ -62,7 +62,7 @@ test("an offer opened from the list gets the same reply box a Today row would: t
   expect(t.party).toBe("agent");
 });
 
-test("the offer pane has the person, the house, Details, Send, the Bot menu and the way back to the table", () => {
+test("the offer pane has the person, the house, Send and the way back to the table, and no timeline strip or Bot menu", () => {
   const o = offer();
   const bodies = {
     offer: { ...o, arv: 560000, repairs: 60000 }, siblings: [o], thread: { messages: [], more: false }, coach: { proposals: [], taught: [] },
@@ -70,8 +70,12 @@ test("the offer pane has the person, the house, Details, Send, the Bot menu and 
     drafts: [], sendsEnabled: false,
   };
   const html = renderToStaticMarkup(<OfferPane offer={o} index={2} total={14} onPrev={() => {}} onNext={() => {}} onClose={() => {}} bodies={bodies} />);
-  for (const s of ["Dana Reyes", "· 12 Elm St", "3 of 14", "Details", "> Send</button>", 'aria-label="Bot: Bot on"', 'aria-label="Back to the table"', "offer sent", "Edit offer", "Change status"]) {
+  for (const s of ["Dana Reyes", "· 12 Elm St", "3 of 14", "> Send</button>", 'aria-label="Back to the table"', "Edit offer", "Change status", 'aria-label="More"']) {
     expect(html).toContain(s);
   }
+  // Details is in ⋯ now (Matt, 2026-10-18); the strip and the Bot menu are gone.
+  expect(html).not.toMatch(/>\s*Details\s*</);
+  expect(html).not.toContain("offer sent");
+  expect(html).not.toContain('aria-label="Bot:');
   expect(html).toContain("The bot has nothing drafted");   // the reply box, as on Today
 });

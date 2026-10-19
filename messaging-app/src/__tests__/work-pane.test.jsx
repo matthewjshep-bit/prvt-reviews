@@ -2,6 +2,7 @@ import { test, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import WorkView from "../WorkView.jsx";
+import { rowMoreOps } from "../WorkPane.jsx";
 import { ContactDrawerContext } from "../ContactLink.jsx";
 import { buildPipeline } from "@shared/pipeline.js";
 import { normalizeConversationAi } from "@shared/conversation-ai.js";
@@ -70,7 +71,9 @@ test("your calls come first on the rail; a machine row, opened, says what's next
   const html = render({ actions: r.actions, drafts, initialRowId: machine.id });
   expect(html.indexOf("Your call")).toBeLessThan(html.indexOf("The machine is on it"));
   expect(html).toContain("Next: sends the number on the next pass");
-  expect(html).toContain(">Stop<");
+  // Stop is the row's button or in ⋯ with its other ops.
+  const more = rowMoreOps(machine, { hasDraft: false, hasRecord: true }).map(({ op }) => op.label);
+  expect(html.includes(">Stop<") || more.includes("Stop")).toBe(true);
   expect(html).not.toContain(">Stuck<");   // nothing is stuck, so there is no Stuck heading
 });
 
@@ -124,18 +127,18 @@ test("the offer side shows our number against theirs and what a buyer would be i
   expect(html).toContain("76% of ARV");          // (310 + 85) / 520
   expect(html).toContain("over what buyers pay (70%)");
   expect(html).toContain("85.6% of ARV");        // at their counter
-  expect(html).toContain("seller wants 360");
+  expect(html).not.toContain("seller wants 360");   // "What happened" is gone (Matt, 2026-10-18)
+  expect(html).not.toContain("What happened");
   expect(html).toContain("Offers with Dana · 2");
   expect(html).toContain("9 Oak St");
   expect(html).not.toContain("Their other offers");
 });
 
-test("the header carries the offer's status menu, the Bot menu, Edit offer and Call, and names the person and the house", () => {
+test("the header carries the offer's status menu, Edit offer and Call, and names the person and the house", () => {
   const r = owedNumber();
   const offer = { id: "o1", contactId: "c1", contactName: "Dana", address: "12 Elm St, Renton, WA", cashAmount: 410000, status: "sent", sends: [{ ts: "2026-09-19T00:00:00Z" }] };
   const html = render({ actions: r.actions, bodies: { ...EMPTY, offer, siblings: [offer] } });
   expect(html).toContain("Change status (currently Sent)");
-  expect(html).toContain('aria-label="Bot: Bot"');   // no timeline yet: a plain Bot menu, Stop still works
   expect(html).toContain("Edit offer");
   expect(html).toMatch(/> Call<\/button>/);
   // The name, the house, then where the agent sits on GHL's board (loading here).
@@ -144,7 +147,8 @@ test("the header carries the offer's status menu, the Bot menu, Edit offer and C
   expect(html).not.toContain("Offers with");   // one offer: nothing to switch between
 });
 
-test("the header shows the last moments, what's next, and History", () => {
+// Matt, 2026-10-18: "way too overcrowded".
+test("the Desk pane shows no checklist, no timeline strip and no bot menu", () => {
   const r = owedNumber();
   const offer = { id: "o1", contactId: "c1", contactName: "Dana", address: "12 Elm St, Renton, WA", cashAmount: 410000, status: "countered", sends: [{ ts: "2026-09-19T00:00:00Z" }] };
   const timeline = {
@@ -159,20 +163,16 @@ test("the header shows the last moments, what's next, and History", () => {
     bot: { held: false, kind: null, pace: "less", conversationEnabled: true },
   };
   const html = render({ actions: r.actions, bodies: { ...EMPTY, offer, siblings: [offer], timeline } });
-  for (const s of ["priced 410K", "offer sent", "they wrote ×2", "countered 425K", "next: nudge", ">History<"]) expect(html).toContain(s);
-  expect(html.indexOf("priced 410K")).toBeLessThan(html.indexOf("countered 425K"));
-  expect(html).toContain('aria-label="Bot: Bot on · less often"');
+  for (const s of ["priced 410K", "offer sent", "they wrote ×2", "countered 425K", "next: nudge", ">History<", 'aria-label="Bot:', "Bot on", "Checked"]) expect(html).not.toContain(s);
 });
 
-test("a stopped person's draft says it waits for you, and the Bot menu says stopped", () => {
+test("a stopped person's draft says it waits for you", () => {
   const r = owedNumber();
   const open = { id: "d5", contactId: "c1", contactName: "Dana", status: "draft", intent: "question", party: "agent", inbound: "Any update?", reply: "Still running numbers, Dana.", createdAt: "2026-09-20T16:00:00Z",
     autoSend: { decided: false, reason: "you stopped the bot on them — it waits for you" } };
   const timeline = { moments: [], total: 0, next: { kind: "stopped", label: "Stopped by you", at: null }, bot: { held: true, kind: "stopped", pace: "normal", conversationEnabled: true } };
   const html = render({ actions: r.actions, drafts: [open], bodies: { ...EMPTY, timeline } });
   expect(html).toContain("The bot is stopped on them");
-  expect(html).toContain('aria-label="Bot: Bot stopped"');
-  expect(html).toContain("Stopped by you");
 });
 
 test("a row with no offer has no status menu to press", () => {
@@ -275,7 +275,7 @@ test("every row can be dismissed from its header, and a row with its own Dismiss
 
 /* ---------- the Desk (2026-10-02): one row per person ---------- */
 
-test("the Desk shows Call first and one row per person, with the rest of their business under 'Also on'", async () => {
+test("the Desk shows one row per person, with the rest of their business in one 'Also' line and its buttons in ⋯", async () => {
   const { foldDesk } = await import("@shared/desk.js");
   const { DESK_GROUPS } = await import("../work-queue.js");
   const r = owedNumber();
@@ -287,9 +287,11 @@ test("the Desk shows Call first and one row per person, with the rest of their b
   const desk = foldDesk([...r.actions, held, counter], { drafts });
   expect(desk.rows.length).toBe(2);
   const html = render({ actions: desk.rows, groups: DESK_GROUPS, drafts, initialRowId: desk.rows.find((x) => x.contactId === "c1").id });
-  expect(html.indexOf(">Call<")).toBeLessThan(html.indexOf(">Decide<"));
-  expect(html).toContain("Also on Dana");
-  expect(html).toContain("Open and fix");   // the held underwrite keeps its own buttons
+  expect(html).toContain("Also: Underwrites that need a look · Underwrite held on 12 Elm St");
+  expect(html).not.toContain("Also on Dana");   // no box
+  const dana = desk.rows.find((x) => x.contactId === "c1");
+  // The held underwrite keeps its own buttons, in ⋯.
+  expect(rowMoreOps(dana, { hasDraft: false, hasRecord: true }).map(({ op }) => op.label)).toEqual(expect.arrayContaining(["Open and fix", "Drop it"]));
   expect(html).toContain("+1");             // the rail says one more thing rides on Dana
 });
 
@@ -305,7 +307,7 @@ test("an old link to one of a person's reasons opens that person", () => {
 
 /* ---------- before you sign (shared/pre-contract.js, 2026-10-15) ---------- */
 
-test("an offer about to be signed opens with what nobody has checked, a Checked button on each, and the pre-sell", () => {
+test("an offer about to be signed is one line, before you sign, with the pre-sell button and the promote in ⋯ — no checklist", () => {
   const offers = [{ id: "o9", contactId: "c9", contactName: "Dana", address: "41 Alder Way, Kent, WA", cashAmount: 300000, status: "sent",
     createdAt: "2026-09-10T00:00:00Z", sends: [{ ts: "2026-09-11T00:00:00Z" }], realm: { answer: "yes", ts: "2026-09-19T00:00:00Z" },
     autoUnderwrite: { photosAnalyzed: 20 } }];
@@ -313,10 +315,11 @@ test("an offer about to be signed opens with what nobody has checked, a Checked 
   const row = r.actions.find((a) => a.kind === "pre_contract");
   expect(row).toBeTruthy();
   const html = render({ actions: [row], initialRowId: row.id });
-  expect(html).toContain("Before you sign");
-  expect(html).toContain("Eyes on the house");
-  expect(html).toContain("20 listing photos scanned");
-  expect(html).toContain("Checked");
+  expect(html).toContain("Before you sign · pre-sold to 0 of 3 buyers");
+  expect(html).not.toContain("41 Alder Way, Kent, WA: before you sign");   // the heading already says the house
+  expect(html).not.toContain("Eyes on the house");
+  expect(html).not.toContain("Checked");
   expect(html).toContain("Pre-sell to 3 buyers");
-  expect(html).toContain("It&#x27;s signed — promote");
+  expect(html).not.toContain("Open the offer");   // Edit offer is the pane's
+  expect(rowMoreOps(row, { hasDraft: false, hasRecord: true }).map(({ op }) => op.label)).toEqual(["It's signed — promote"]);
 });

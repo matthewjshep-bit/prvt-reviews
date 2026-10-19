@@ -45,9 +45,7 @@ import UnderwriteStrip from "./UnderwriteStrip.jsx";
 import OfferRail from "./OfferRail.jsx";
 import OfferPane from "./OfferPane.jsx";
 import { railStep, readOfferParam, splitKey, writeOfferParam } from "./offers-split.js";
-import { OPEN_OFFER_EVENT } from "./PaneParts.jsx";
-import { REPLY_BOX_ID } from "./ConversationPanel.jsx";
-import { TEACH_EVENT } from "./RowFeedback.jsx";
+import { runPaneKey } from "./PaneParts.jsx";
 import { offerKey, siblingsKey } from "./OfferPanel.jsx";
 import { forget, forgetPrefix } from "./work-data.js";
 import NextFollowUp, { groupNext, nextSortKey } from "./NextFollowUp.jsx";
@@ -238,9 +236,7 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
       if (intent === "next") nav.go(1);
       else if (intent === "prev") nav.go(-1);
       else if (intent === "close") nav.close();
-      else if (intent === "reply") document.getElementById(REPLY_BOX_ID)?.focus();
-      else if (intent === "teach") window.dispatchEvent(new Event(TEACH_EVENT));
-      else if (intent === "offer") window.dispatchEvent(new Event(OPEN_OFFER_EVENT));
+      else runPaneKey(intent);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

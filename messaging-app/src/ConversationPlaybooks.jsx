@@ -664,6 +664,9 @@ export function AutoSendCard({ config, patch }) {
         <Field label="If the model says a person is needed" hint="It usually means an action beside the reply — 'someone has to send the package' — not the reply itself. The note stays on the row either way.">
           <Select value={a.holdOnNeedsHuman ? "hold" : "send"} onChange={(v) => set("holdOnNeedsHuman")(v === "hold")} options={[["send", "send the reply anyway; show the note"], ["hold", "hold the reply for a person"]]} />
         </Field>
+        <Field label="Agent replies the bot couldn't place" hint="An agent's text that fits no intent — pitching their own buyer, a side question. With every check clean (no number, no link, the model sure enough, nothing for a person), the reply goes at once like any other. Otherwise it waits for the daytime pass or for you. Buyers' never do.">
+          <Select value={a.otherNow ? "now" : "wait"} onChange={(v) => set("otherNow")(v === "now")} options={[["wait", "hold for the daytime pass or a person"], ["now", "send right away when every check passes"]]} />
+        </Field>
         <Field label="Stand down after you reply (minutes)" hint="If you replied to them this recently, the bot writes nothing at all — no draft and no model call. The thread is yours. Never less than 30: once you've jumped in, the bot stays out for at least half an hour.">
           <Text type="number" value={a.humanActiveMin} onChange={(v) => set("humanActiveMin")(Number(v))} />
         </Field>

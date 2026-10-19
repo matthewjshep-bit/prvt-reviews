@@ -11,7 +11,7 @@
 import React, { useState } from "react";
 import { Check, ExternalLink, FileText, Pencil, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { OFFER_STATUS, WE_PASS_REASON, offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
+import { offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
 import { clearAgreedPrice, getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
 import { annotateCurrent } from "@shared/current-offer.js";
 import { BTN, ChecksLine, CurrentPill, HotPill, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
@@ -20,7 +20,6 @@ import { forget, useLoad } from "./work-data.js";
 import { allInPct, allInTone } from "./work-queue.js";
 
 const LABEL = "text-xs font-semibold uppercase tracking-wide text-slate-500";
-const day = (ts) => (ts ? new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" }) : "");
 const money = (n) => (Number(n) > 0 ? fmtMoney(n) : "—");
 
 const TONE = {
@@ -210,10 +209,6 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
   const repairs = Number(offer.repairs ?? offer.calc?.inputs?.repairs) || 0;
   const asking = Number(offer.askingPrice ?? offer.calc?.inputs?.askingPrice) || 0;
   const ours = Number(offer.cashAmount) || 0;
-  const history = [...(offer.statusHistory || [])].filter((h) => h?.ts).sort((a, b) => String(b.ts).localeCompare(String(a.ts))).slice(0, 4);
-  // The row of the pass the offer is in now (newest first): its reason is the offer's.
-  const lastPassAt = offer.status === "we_passed" ? history.findIndex((h) => h.status === "we_passed") : -1;
-  const lastSend = (offer.sends || []).at(-1);
   // Every offer with them, each told which row on its house is current
   // (shared/current-offer.js).
   const book = annotateCurrent(siblings.some((o) => o.id === offer.id) ? siblings.map((o) => (o.id === offer.id ? offer : o)) : [offer, ...siblings]);
@@ -272,24 +267,6 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
       )}
 
       {offer.checks && <ChecksLine checks={offer.checks} full />}
-
-      {(lastSend || history.length > 0) && (
-        <div>
-          <div className={LABEL}>What happened</div>
-          <ul className="mt-1 space-y-0.5 text-sm text-slate-700">
-            {lastSend && <li><span className="tabular-nums text-slate-500">{day(lastSend.ts)}</span> · sent{lastSend.channels?.length ? ` by ${lastSend.channels.join(" + ")}` : ""}</li>}
-            {history.map((h, i) => (
-              <li key={i}>
-                <span className="tabular-nums text-slate-500">{day(h.ts)}</span> · {OFFER_STATUS[h.status]?.label?.toLowerCase() || String(h.status || "").replace(/_/g, " ")}
-                {Number(h.amount) > 0 ? ` at ${fmtMoney(h.amount)}` : ""}
-                {/* Why we passed: the offer's own reason on its last pass (a correction lands there), the row's on older ones. */}
-                {(() => { const code = h.status === "we_passed" && i === lastPassAt ? offer.passReason?.code || h.reason : h.reason; return WE_PASS_REASON[code] ? `: ${WE_PASS_REASON[code].label.toLowerCase()}` : ""; })()}
-                {h.note ? <span className="text-slate-500"> — {h.note}</span> : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       {offer.autoUnderwrite && (
         <details className="group">

@@ -184,7 +184,7 @@ export default function WorkView({ actions = [], groups = TODAY_GROUPS, drafts =
         <WorkPane key={current.id} item={current} targets={targets} index={index} total={visible.length}
           onPrev={prevId ? () => go(prevId) : null} onNext={nextId ? () => go(nextId) : null} picker={picker}
           onDone={done} onDismiss={dismiss} sendsEnabled={sendsEnabled} serverOffsetMs={serverOffsetMs} feedback={feedback}
-          showKeys={showKeys} onToggleKeys={() => setShowKeys((v) => !v)} settings={settings} bodies={bodies} />
+          showKeys={showKeys} settings={settings} bodies={bodies} />
       ) : (
         <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
           {needle ? "Nothing matches that filter." : "Nothing is waiting on you. The machine has the rest."}

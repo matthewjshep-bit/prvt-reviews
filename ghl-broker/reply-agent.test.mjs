@@ -7854,3 +7854,41 @@ test("our pass after their answer closes the house they raised, so the card goes
   assert.equal(closed?.data?.why, "we passed on it");
   assert.deepEqual(raisedHouses({ events }).map((h) => h.open), [false]);
 });
+
+/* ---------- a reply the bot couldn't place goes at once (2026-10-18) ---------- */
+
+// Matt, 2026-10-18, on an agent pitching her own buyer and her son's loan:
+// the bot read it as `other`, held it as a person's call, and the daytime
+// pass only let it go two to four hours later. "I just want the app to be
+// responding in real time." With autoSend.otherNow on, a clean agent `other`
+// reply is scheduled like any other; every gate still holds it. (A confident
+// `other` already goes as a question; this is the medium read that sat.)
+const OTHER_NOW_SAVED = (otherNow) => ({ ...STARTER_SAVED, conversationAi: { ...STARTER_SAVED.conversationAi, autoSend: { ...STARTER_SAVED.conversationAi.autoSend, otherNow } } });
+async function otherReply({ otherNow = true, party = "agent", draft = {} } = {}) {
+  _resetJobs();
+  const { client } = ghlStubFor([party === "investor" ? "investor" : "agent"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: OTHER_NOW_SAVED(otherNow), store, contactId: "c1", sendsEnabled: true,
+    message: "I have a husband and wife who want to buy a 3/2 on a little land and fix it up",
+    deps: { draft: async () => ({ ...DRAFT, intent: "other", confidence: "medium", needsHuman: false, propertyAddress: "",
+      reply: "Ha, I just buy the fixers myself. If you run into a distressed one needing work, send it my way.", ...draft }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return store.getReplyDraft(job.draftId);
+}
+
+test("an agent's text the bot couldn't place is answered at once when every check is clean", async () => {
+  const d = await otherReply();
+  assert.equal(d.status, "scheduled", JSON.stringify(d.autoSend));
+  assert.match(d.autoSend?.reason || "", /couldn't place/);
+});
+
+test("a reply the bot couldn't place still waits when the switch is off, a gate trips, it needs a person, or it's a buyer's", async () => {
+  assert.equal((await otherReply({ otherNow: false })).status, "draft", "ships off");
+  assert.equal((await otherReply({ draft: { needsHuman: true } })).status, "draft", "the model asked for a person");
+  assert.equal((await otherReply({ draft: { confidence: "low" } })).status, "draft", "a gate tripped");
+  assert.equal((await otherReply({ draft: { reply: "Send it over, I'd pay $250,000 for it." } })).status, "draft", "a number is never sent by this");
+  assert.equal((await otherReply({ party: "investor" })).status, "draft", "never an investor's");
+});

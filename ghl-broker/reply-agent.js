@@ -1223,6 +1223,21 @@ export function releaseForAudit({ auto, gate, draft, deps }) {
   return { ...auto, send: true, code: "", reason: deps.releaseReason || "released by the nightly audit — a holding reply, nothing committed", released: true };
 }
 
+// An agent's reply the bot couldn't place, sent at once (Matt, 2026-10-18,
+// autoSend.otherNow) rather than after the daytime pass's two-hour wait. The
+// same release the daytime pass makes — releaseForAudit by day with
+// releaseOther — so the gates, the over-our-number check, needsHuman and
+// investors hold exactly as they do there. Only a refusal that was
+// never_auto and nothing else: the bot stopped, a person on the thread,
+// sends off and auto-send off all come first in decideAutoSend.
+export function releaseOtherNow({ auto, base, gate, draft, party = "agent", config, channel = "sms", isCall = false }) {
+  if (auto?.send || !config?.autoSend?.otherNow || isCall) return auto;
+  if (party !== "agent" || draft?.intent !== "other" || base?.code !== "never_auto") return auto;
+  if (!(config.autoSend?.channels || []).includes(channel)) return auto;
+  return releaseForAudit({ auto, gate, draft, deps: { releaseHeld: true, releaseByDay: true, releaseOther: true,
+    releaseReason: "sent at once — a reply the bot couldn't place, every gate clean" } });
+}
+
 // What reaches the person (or puts our name on paper) and so waits while you
 // have stopped the bot on them: the letter, a dataroom invite, a GHL drip, a
 // booking, a re-quote, a counter, an agreed investor price. Bookkeeping —
@@ -4626,6 +4641,7 @@ async function runReply(job, ctx) {
   // that picks a time) has nothing to release; the pass still books.
   let auto = releaseUnderGuard({ base, party, intent: draft.intent, config, guard });
   auto = releaseForAudit({ auto, gate, draft, deps });
+  auto = releaseOtherNow({ auto, base, gate, draft, party, config, channel: job.channel, isCall });
   // The hold is our number said once, and nothing more: the one counter
   // reply the machine sends. Only where every other check passed and the
   // counter's own lock is all that held it — never past a gate, a stop, a

@@ -155,22 +155,60 @@ export function AnswerBox({ item, onDone, textareaId }) {
 const PANE_HANDLES = new Set(["show_draft", "answer"]);
 
 /**
- * <RowOpsBar item onDone onOpenContact hasDraft hasRecord />
- * Every op the row names, in its order. open_outbox is the draft when the
- * conversation has it, the contact's record when it doesn't. With hasRecord
- * the pane's own Record button already opens the contact, so open_contact
- * isn't a second one.
+ * paneOps(item, { hasDraft, hasRecord }) → the row's ops the pane shows, in
+ * its order. open_outbox is the draft when the conversation has it, the
+ * contact's record when it doesn't. With hasRecord the name already opens
+ * the contact, so open_contact isn't a second way in.
  */
-export function RowOpsBar({ item, onDone, onOpenContact, hasDraft = false, hasRecord = false }) {
-  const ops = (item.ops || []).filter((op) => !PANE_HANDLES.has(op.key) && !(op.key === "open_outbox" && hasDraft) && !(op.key === "open_contact" && hasRecord));
-  if (!ops.length) return null;
-  return (
-    <div className="flex flex-wrap items-start gap-1.5">
-      {ops.map((op) => op.key === "open_contact" || op.key === "open_outbox"
-        ? <button key={op.key} type="button" className={op.intent === "primary" ? BTN_PRIMARY : BTN} onClick={onOpenContact}>{op.label}</button>
-        : op.key === "dismiss_promise"
-        ? <DismissPromise key={op.key} op={op} item={item} onDone={onDone} />
-        : <OpButton key={op.key} op={op} item={item} onDone={onDone} />)}
-    </div>
-  );
+export function paneOps(item, { hasDraft = false, hasRecord = false } = {}) {
+  return (item?.ops || []).filter((op) => !PANE_HANDLES.has(op.key) && !(op.key === "open_outbox" && hasDraft) && !(op.key === "open_contact" && hasRecord));
+}
+
+/**
+ * splitOps(ops) → { lead, dismiss, rest }
+ * The one op that gets a button (the row's primary, else its first), a
+ * promise's own Dismiss (it stands in for the pane's, and asks why), and the
+ * rest, which go in the pane's ⋯ (Matt, 2026-10-18: too many buttons).
+ */
+export function splitOps(ops = []) {
+  const dismiss = ops.find((op) => op.key === "dismiss_promise") || null;
+  const left = ops.filter((op) => op !== dismiss);
+  const i = Math.max(0, left.findIndex((op) => op.intent === "primary"));
+  return { lead: left[i] || null, dismiss, rest: left.filter((_, j) => j !== i) };
+}
+
+/** <OpControl op item onDone onOpenContact /> — one op as its button. */
+export function OpControl({ op, item, onDone, onOpenContact }) {
+  if (op.key === "open_contact" || op.key === "open_outbox") {
+    return <button type="button" className={op.intent === "primary" ? BTN_PRIMARY : BTN} onClick={onOpenContact}>{op.label}</button>;
+  }
+  if (op.key === "dismiss_promise") return <DismissPromise op={op} item={item} onDone={onDone} />;
+  return <OpButton op={op} item={item} onDone={onDone} />;
+}
+
+/**
+ * opMenuItem(op, item, { onDone, onOpenContact, onNote }) → a Menu item that
+ * does what the op's button does: the same confirm, link and call. A
+ * dismissed promise from the menu skips the "why" (the button's second press).
+ *   onNote(text)  what came of it, for the pane to say
+ */
+export function opMenuItem(op, item, { onDone, onOpenContact, onNote } = {}) {
+  const base = { key: `op:${item.id}:${op.key}`, label: op.label, danger: op.intent === "danger" };
+  if (op.key === "open_contact" || op.key === "open_outbox") return { ...base, disabled: !onOpenContact, onSelect: () => onOpenContact?.() };
+  const href = linkFor(op.key, item);
+  if (href) return { ...base, onSelect: () => window.open(href, "_blank", "noreferrer") };
+  return {
+    ...base,
+    onSelect: async () => {
+      if (CONFIRM[op.key] && !window.confirm(CONFIRM[op.key](item))) return;
+      onNote?.("…");
+      try {
+        const r = await runOp(op.key, item);
+        onNote?.(describeResult(op.key, r));
+        onDone?.();
+      } catch (e) {
+        onNote?.(e.message || "That didn't work.");
+      }
+    },
+  };
 }

@@ -31,6 +31,7 @@ import { appHref } from "./links.js";
 import { ActivityStamp, BTN, BTN_PRIMARY, ErrorBar, FilterChips, Pill, SearchInput, SkeletonRows } from "./ui.jsx";
 import OfferRail from "./OfferRail.jsx";
 import OfferPane from "./OfferPane.jsx";
+import { runPaneKey } from "./PaneParts.jsx";
 import SendModal from "./SendModal.jsx";
 import { railStep, splitKey } from "./offers-split.js";
 
@@ -246,6 +247,8 @@ export default function Tier1View({ settings = null }) {
       if (!k) return;
       if (k === "close") { e.preventDefault(); setOpenId(null); }
       else if (k === "next" || k === "prev") { e.preventDefault(); const id = railStep(rail, openId, k === "next" ? 1 : -1); if (id) setOpenId(id); }
+      // R, T and O: the same as the Offers split and the Desk.
+      else if (runPaneKey(k)) e.preventDefault();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
