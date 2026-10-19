@@ -24,6 +24,7 @@ import {
 import { investorStatus } from "./shared/offer-status.js";
 import { refreshInvestorRow } from "./investor-row.js";
 import { annotateCurrent } from "./shared/current-offer.js";
+import { dealRolesFor, isBuyerSideRole } from "./shared/contact-deals.js";
 
 const log = (what, e) => console.error(`contact-record: ${what}:`, e?.message || e);
 const nowIso = () => new Date().toISOString();
@@ -249,9 +250,11 @@ const LIVE_DEAL_STAGES = new Set(["under_contract", "buyer_found", "assigned"]);
  *   → { profile, facts, entries, events, offers, deals, feedback, drafts, invites, investor }
  *
  * Everything the app knows about one person, in one call. Offers are the
- * agent's own (lean rows); deals are the ones this contact is a buyer on,
- * with their standing and the feedback they gave. Never throws: a store
- * that lacks a table answers with an empty section.
+ * agent's own (lean rows); deals are every other deal they're on (a buyer, a
+ * party like title or the lender, a walkthrough, a blast they answered;
+ * shared/contact-deals.js), with their roles, their standing as a buyer and
+ * the feedback they gave. Never throws: a store that lacks a table answers
+ * with an empty section.
  */
 export async function getContactRecord({ store, locationId, contactId, party = null } = {}) {
   const safe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
@@ -265,9 +268,11 @@ export async function getContactRecord({ store, locationId, contactId, party = n
   for (const o of allDeals) {
     const link = (o?.deal?.investors || []).find((i) => i.contactId === contactId);
     const fb = (o?.deal?.feedback || []).filter((f) => f.contactId === contactId);
-    if (!link && !fb.length) continue;
+    // Their own listing's deal is already in `offers`.
+    const roles = dealRolesFor(o, contactId, { events }).filter((r) => r !== "listing");
+    if (!roles.length && !fb.length) continue;
     deals.push({
-      offer: toListOffer(o), live: LIVE_DEAL_STAGES.has(o.deal?.stage),
+      offer: toListOffer(o), live: LIVE_DEAL_STAGES.has(o.deal?.stage), roles,
       standing: link ? { status: investorStatus(link.status), reason: link.reason || null, addedAt: link.addedAt, updatedAt: link.updatedAt } : null,
       feedback: fb,
     });
@@ -276,7 +281,9 @@ export async function getContactRecord({ store, locationId, contactId, party = n
   const drafts = await safe(() => store.listReplyDrafts(locationId, { contactId, limit: 20 }), []);
   const invites = await safe(() => store.listDataroomInvitesByContact(locationId, contactId, { limit: 50 }), []);
   const investor = await safe(() => store.getInvestor(locationId, contactId), null);
-  const resolvedParty = party || profile?.party || (offers.length && !deals.length ? "agent" : deals.length || investor ? "investor" : null);
+  // Only a buyer's link to a deal says they're a buyer; title or a lender doesn't.
+  const asBuyer = deals.some((d) => d.feedback.length || d.roles.some(isBuyerSideRole));
+  const resolvedParty = party || profile?.party || (offers.length && !asBuyer ? "agent" : asBuyer || investor ? "investor" : null);
   return {
     profile, party: resolvedParty,
     facts: currentFacts(profile?.facts || {}), entries: profile?.facts || {}, factsEmpty: factsEmpty(profile?.facts || {}),

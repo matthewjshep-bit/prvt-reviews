@@ -9,8 +9,9 @@
 // the Offers split and Tier 1 (ContactPane.jsx; Matt, 2026-10-18). Their GHL
 // stage moves from the pill by their name; their name opens their record over
 // the window, as it does everywhere. It opens on their offer, since GHL's own
-// window already shows the conversation. ?contact= keeps the person across a
-// reload.
+// window already shows the conversation. The deals they're on sit under their
+// name (CompanionDeals.jsx; Matt, 2026-10-19). ?contact= keeps the person
+// across a reload.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, Loader2 } from "lucide-react";
@@ -19,6 +20,7 @@ import { ContactDrawerContext } from "./ContactLink.jsx";
 import ContactDrawer from "./ContactDrawer.jsx";
 import { usePane } from "./PaneParts.jsx";
 import ContactPane from "./ContactPane.jsx";
+import CompanionDeals from "./CompanionDeals.jsx";
 import { draftsKey, loadDrafts } from "./OfferPane.jsx";
 import { forget, useLoad } from "./work-data.js";
 import { rowTargets } from "./work-queue.js";
@@ -39,7 +41,7 @@ const writeContact = (id) => {
 
 // One person's pane. Keyed by contactId by its parent, so switching people
 // starts the pane clean (the offer it picked, the editor, the tab).
-function CompanionPane({ contactId, name, party, settings }) {
+function CompanionPane({ contactId, name, party, rec, settings }) {
   const item = useMemo(() => ({ ...companionPaneItem(contactId), contactName: name || "" }), [contactId, name]);
   const dl = useLoad(draftsKey(contactId), loadDrafts(contactId), { maxAgeMs: 30000 });
   const data = dl.data;
@@ -55,7 +57,7 @@ function CompanionPane({ contactId, name, party, settings }) {
   const convo = { item, targets, sendsEnabled: Boolean(data?.sendsEnabled), serverOffsetMs, onDone: done, fb: pane.fb, taught: pane.coach?.taught || [], bot: pane.timeline?.bot || null };
   return (
     <ContactPane pane={pane} item={item} targets={targets} convo={convo} settings={settings} onDone={done}
-      defaultTab="offer" className="h-[calc(100vh-3.5rem)] min-h-[28rem]" />
+      why={<CompanionDeals rec={rec} />} defaultTab="offer" className="h-[calc(100vh-3.5rem)] min-h-[28rem]" />
   );
 }
 
@@ -149,7 +151,7 @@ export default function CompanionView({ settings = null }) {
           </div>
         ) : (
           <div className="p-2">
-            <CompanionPane key={contactId} contactId={contactId} name={name} party={party} settings={settings} />
+            <CompanionPane key={contactId} contactId={contactId} name={name} party={party} rec={rec} settings={settings} />
           </div>
         )}
       </div>

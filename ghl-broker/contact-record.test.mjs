@@ -199,6 +199,24 @@ test("getContactRecord assembles every section and survives a contact nobody has
   assert.equal(agent.offers[0].listOnly, true, "lean rows, not documents");
 });
 
+// Matt, 2026-10-19: the companion shows every deal a person is on, so the
+// title rep and the lender see theirs too, closed ones included.
+test("the title rep on a closed deal gets that deal on their record, and isn't taken for a buyer", async () => {
+  await store.createOffer({ id: "o10", locationId: LOC, contactId: "agent10", address: "10 Ten St, Kent, WA", cashAmount: 250000, status: "sent",
+    deal: { stage: "closed", investors: [], parties: { title: { contactId: "title10", name: "Tia" }, lender: { contactId: "lender10" } } } });
+  const rec = await getContactRecord({ store, locationId: LOC, contactId: "title10" });
+  assert.equal(rec.deals.length, 1);
+  assert.equal(rec.deals[0].offer.id, "o10");
+  assert.deepEqual(rec.deals[0].roles, ["title"]);
+  assert.equal(rec.deals[0].live, false);
+  assert.equal(rec.deals[0].standing, null);
+  assert.equal(rec.party, null, "a title rep is neither an agent nor a buyer");
+  const lender = await getContactRecord({ store, locationId: LOC, contactId: "lender10" });
+  assert.deepEqual(lender.deals.map((d) => d.roles), [["lender"]]);
+  const agent = await getContactRecord({ store, locationId: LOC, contactId: "agent10" });
+  assert.equal(agent.deals.length, 0, "the listing agent's deal stays with their offers, not listed twice");
+});
+
 test("ensureProfile never blanks a known field with a null", async () => {
   await ensureProfile({ store, locationId: LOC, contactId: "c5", party: "agent", name: "Kim", email: "kim@x.com" });
   await ensureProfile({ store, locationId: LOC, contactId: "c5", name: null, email: null });
