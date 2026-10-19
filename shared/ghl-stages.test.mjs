@@ -412,6 +412,70 @@ test("a house we priced is the offer's to say, however the thread spelled it", (
   assert.equal(targetStage({ offers: [passed], raised: raisedHouses({ events, offers: [passed], now: NOW }), now: NOW }).to, "tier2");
 });
 
+/* ---------- a house the conversation closed, with a row on it (2026-10-19) ---------- */
+
+// Matt, 2026-10-19: "Why does the app keep moving people into tier 1 that
+// shouldn't be there? Tyler Eaton and Loren Kenkman for example."
+// Tyler's agent said 1823 Maple St was "great shape, just super dated" and
+// turned our number down; a held re-run priced it again five days later,
+// never sent, and the card went to Tier 1 ("priced, our number not out yet").
+// Loren's agent's house got a held draft the bot passed on as light work; when
+// we passed on her other house, that draft pulled the card up to Tier 1.
+const MAPLE = "1823 Maple St, Everett, WA 98201";
+const tyler = [
+  ev("property_details", MAPLE, { condition: "great shape", workNeeded: "just super dated" }, ago(10)),
+  ev("agent_estimate", MAPLE, { arv: 439000, rehab: 27000 }, ago(10)),
+];
+
+test("an unsent offer on a house the agent called light work doesn't put the card in Tier 1", () => {
+  const priced = offer("kw", { address: MAPLE, status: "new", sends: [], createdAt: ago(5) });
+  const raised = raisedHouses({ events: tyler, offers: [priced], now: NOW });
+  const t = targetStage({ offers: [priced], raised, now: NOW });
+  assert.equal(t.to, "tier2");
+  assert.match(t.why, /1823 Maple St: they said it's light work/);
+  const r = planCard({ acq: ACQ, contactId: "kw", cards: [card("kw", "s-t1", { lastStageChangeAt: ago(5) })], offers: [priced], raised, now: NOW });
+  assert.equal(r.move?.to, "Tier 2");
+});
+
+test("a held draft on a house the conversation passed doesn't pull the card up to Tier 1", () => {
+  const house = "20525 NE 68th St, Redmond, WA 98053";
+  const draft = offer("kw", { address: house, status: "draft", sends: [], createdAt: ago(6) });
+  const passed = offer("kw", { address: "9 Other Rd, Redmond, WA 98053", status: "we_passed", statusAt: ago(3), sends: [{ ts: ago(5) }] });
+  const raised = raisedHouses({ events: [ev("house_closed", house, { why: "we passed on it" }, ago(6))], offers: [draft, passed], now: NOW });
+  assert.equal(targetStage({ offers: [draft, passed], raised, now: NOW }).to, "tier2");
+});
+
+test("the agent's own word reopens a closed house; our re-pricing doesn't", () => {
+  const priced = offer("kw", { address: MAPLE, status: "new", sends: [], createdAt: ago(1) });
+  const reopened = raisedHouses({ events: [...tyler, ev("property_details", MAPLE, { condition: "needs a full gut" }, ago(2))], offers: [priced], now: NOW });
+  assert.equal(targetStage({ offers: [priced], raised: reopened, now: NOW }).to, "tier1");
+});
+
+test("a closed house with our number out is still Offer Out, and the close is kept past the 10 days", () => {
+  const out = offer("kw", { address: MAPLE, status: "sent", createdAt: ago(5), sends: [{ ts: ago(5) }] });
+  const raised = raisedHouses({ events: tyler, offers: [out], now: NOW });
+  assert.equal(targetStage({ offers: [out], raised, now: NOW }).to, "offerOut");
+  const old = raisedHouses({ events: [ev("house_closed", MAPLE, { why: "they passed" }, ago(30))], offers: [out], now: NOW });
+  assert.deepEqual(old.map((h) => h.open), [false], "a close on a house with a row isn't dropped as stale");
+});
+
+// Loren K.: the held draft was on "20525 Ne 68th St" (the map couldn't find
+// it); she corrected it to 20526 NE 68th St, Redmond, we priced and passed
+// that one, and the draft on the typo held the card in Tier 1.
+test("a house number the agent corrected is closed, so its leftover draft doesn't hold Tier 1", () => {
+  const typo = "20525 Ne 68th St";
+  const real = "20526 NE 68th St, Redmond, WA 98053";
+  const draft = offer("kw", { address: typo, status: "draft", sends: [], createdAt: ago(6) });
+  const passed = offer("kw", { address: real, status: "we_passed", statusAt: ago(3), sends: [{ ts: ago(5) }] });
+  const events = [ev("subject_property_set", real, { from: typo }, ago(6))];
+  const raised = raisedHouses({ events, offers: [draft, passed], now: NOW });
+  assert.match(raised.find((h) => !h.open)?.why || "", /20525 Ne 68th St: they corrected it to 20526 NE 68th St/);
+  assert.equal(targetStage({ offers: [draft, passed], raised, now: NOW }).to, "tier2");
+  // Moving on to a different street is a new house, not a correction.
+  const moved = raisedHouses({ events: [ev("subject_property_set", "9 Pine St, Redmond, WA 98053", { from: typo }, ago(6))], offers: [draft], now: NOW });
+  assert.equal(targetStage({ offers: [draft], raised: moved, now: NOW }).to, "tier1");
+});
+
 test("a raise goes quiet after the same 10 days an unsent offer does", () => {
   const raised = raisedHouses({ events: [ev("property_details", EDMONDS, { condition: "needs a lot of work" }, ago(11))], now: NOW });
   assert.equal(raised.length, 0);
