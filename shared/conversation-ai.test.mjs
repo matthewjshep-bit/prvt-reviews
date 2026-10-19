@@ -4,7 +4,7 @@ import {
   normalizeConversationAi, CONVERSATION_AI_DEFAULTS, INTENTS, NEVER_AUTO, autoEligible, OUTBOUND_INTENTS, SETUP_QUESTIONS, setupQuestionFor,
   draftStats, substituteTokens, actionAllowedFor, isValidTimeZone,
   normalizePassReason, summarizeFeedback, ASK_ONLY_ACTIONS, HUMAN_ACTIVE_MIN_FLOOR, writeUpTermsText,
-  recodePassReason,
+  recodePassReason, doesntKnowUs,
 } from "./conversation-ai.js";
 
 test("an empty doc is the defaults, and normalizing twice changes nothing", () => {
@@ -718,4 +718,16 @@ test("sending an agent's couldn't-place reply at once ships off and survives a s
   assert.equal(normalizeConversationAi({ version: 2 }).autoSend.otherNow, false, "ships off");
   assert.equal(normalizeConversationAi({ version: 2, autoSend: { otherNow: true } }).autoSend.otherNow, true, "kept on save");
   assert.equal(normalizeConversationAi({ version: 2, autoSend: { otherNow: "yes" } }).autoSend.otherNow, false, "only a real true");
+});
+
+test("a buyer asking who we are or why we texted reads as not knowing us; a question about the house doesn't", () => {
+  for (const t of ["What? Why are you sending this to us?", "who is this", "Who’s this?", "who are you", "How did you get my number?",
+    "where did you get my info", "wrong number", "Do I know you?", "I don't know who you are", "never signed up for this",
+    "What is this about?", "What?", "why r u texting me"]) {
+    assert.equal(doesntKnowUs(t), true, t);
+  }
+  for (const t of ["What's the ARV based on?", "Who did the rehab number?", "Why are you selling it so low?", "Who is the listing agent?",
+    "What is this one zoned?", "what's the lot size", "Is it vacant?", "Who is this deal for, flippers or landlords?", ""]) {
+    assert.equal(doesntKnowUs(t), false, t);
+  }
 });
