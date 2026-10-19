@@ -143,6 +143,8 @@ export function mechanismStatuses({ config, saved = {}, env = {} }) {
   out.address_chase = agentKind("address_chase");
   out.held_underwrite = ai(() => st(kindOn(pa, "take_ask") && config.nightlyAudit?.enabled !== false, env.sends && (listed(pa, "take_ask") || listed(pa, "kind_pass")),
     "follow-ups or the nightly audit are off", env.sends ? "not on the agent auto-send list — it waits for you" : SENDS_OFF));
+  // Its own switch is its place on the auto-send list (shared/pass-note.js).
+  out.pass_note = ai(() => st(Boolean(pa.passNote?.enabled), env.sends, "the pass note is off", SENDS_OFF));
   // Offers
   out.offer_nudge = agentKind("offer_nudge");
   out.hot_push = agentKind("hot_push");

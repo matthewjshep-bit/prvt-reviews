@@ -68,7 +68,7 @@ const WE_ARE_OUT = /\b(?:not|n't)\s+(?:going\s+to|gonna)\s+(?:be\s+able\s+to\s+)
 
 // Machine texts that are our number, or our pass, whatever their words.
 const NUMBER_TEXT_KINDS = new Set(["realm_check", "take_check"]);
-const PASS_TEXT_KINDS = new Set(["kind_pass"]);
+const PASS_TEXT_KINDS = new Set(["kind_pass", "pass_note"]);
 // The agent told us: they passed, or the house is gone. Nothing is owed.
 const THEIR_WORD_STATUSES = new Set(["passed", "unavailable"]);
 

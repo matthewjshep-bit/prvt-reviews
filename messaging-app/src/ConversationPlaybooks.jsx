@@ -985,6 +985,14 @@ export function PartyPlaybooks({ config, patch, workflows }) {
                 <p className={HINT}>The house our first text names is an icebreaker. "It's a project" or "cosmetic fixer" about it gets one short question (big repairs or a refresh, and why the seller's selling) instead of an underwrite. A vague answer gets a polite pass and an ask for anything distressed, on market or off. Specific trouble (foundation, hoarder, estate, two big repairs) underwrites right away, and so does any house they bring up themselves.</p>
               </div>
             )}
+            {party === "agent" && (
+              <div>
+                <Toggle checked={pb.passNote?.enabled} onChange={(v) => setPb({ passNote: { enabled: v } })}>
+                  <span className="font-semibold">Tell them when you pass on a house they sent</span>
+                </Toggle>
+                <p className={HINT}>Mark a draft "We passed: &lt;reason&gt;" and the bot thanks them, says we're passing and why, and asks for rougher ones. It sends 10 minutes after your last mark, so several of their houses go in one text, and a text of your own in those minutes stops it. Machine hours: marked after 5pm, it goes at 8am. Sends by itself; it needs no box on the auto-send list.</p>
+              </div>
+            )}
             <div>
               <Toggle checked={pb.takeCheck?.enabled} onChange={(v) => setPb({ takeCheck: { enabled: v } })}>
                 <span className="font-semibold">Float our read first</span>

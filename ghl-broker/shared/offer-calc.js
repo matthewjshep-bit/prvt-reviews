@@ -316,9 +316,17 @@ export function netComparison(cashAmount, s = {}) {
 }
 
 // Merge partial settings over the defaults (one level deep + company).
-/** underwriteMode(saved) → "draft" | "full" (anything but "draft" is full) */
+/**
+ * underwriteMode(saved) → "skeleton" | "draft" | "full" (anything else is full)
+ *
+ * skeleton (Matt, 2026-10-19: "just agent/address is fine, NO AUTOUNDERWRITE"):
+ * a house an agent names is a draft with the agent and the address, nothing
+ * bought — no Zillow facts, no comps, no photo scan. draft: the same with the
+ * listing's facts. full: the machine prices it.
+ */
 export function underwriteMode(saved = {}) {
-  return String(saved?.autoUnderwriteMode || "").trim().toLowerCase() === "draft" ? "draft" : "full";
+  const m = String(saved?.autoUnderwriteMode || "").trim().toLowerCase();
+  return m === "skeleton" || m === "draft" ? m : "full";
 }
 
 export function effectiveSettings(overrides = {}) {

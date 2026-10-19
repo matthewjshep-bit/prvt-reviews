@@ -30,6 +30,7 @@ import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation
 import { releaseMisreadHolds } from "./misread-holds.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunTierCheck, syncChangedCards } from "./tier-check.js";
+import { sweepPassNotes } from "./pass-note.js";
 import { maybeUnderwriteTierOne } from "./tier-one.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeRunBookSync } from "./investor-sync.js";
@@ -310,6 +311,14 @@ const TICK_JOBS = [
   { area: "card-sync", run: async ({ client, locationId, saved }) => {
     const synced = await syncChangedCards({ client, locationId, store, saved });
     if (synced?.moved || synced?.errors?.length) console.log(`cards follow offers for ${locationId}: ${synced.moved} moved of ${synced.contacts} changed${synced.errors.length ? `, errors: ${synced.errors[0]}` : ""}`);
+  } },
+  // The pass note on houses you marked "We passed" (pass-note.js): one that
+  // couldn't start when you marked is started, one you answered yourself is
+  // yours. Only with the agent playbook's passNote on.
+  { area: "pass-notes", run: async ({ client, locationId, saved }) => {
+    const r = await sweepPassNotes({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE, startProactive,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
+    if (r.started || r.settled) console.log(`pass notes loc=${locationId}: ${JSON.stringify(r)}`);
   } },
   // Tier 1 → Draft: a Tier 1 card with a house and nothing priced underwrites
   // itself, hourly in the day (tier-one.js). Off until tierOne.autoUnderwrite.

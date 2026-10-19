@@ -50,7 +50,7 @@ import { leadSourceOf, theirNumberCheck } from "./shared/lead-source.js";
 import { buyerCeiling } from "./shared/post-mortem.js";
 import { markSides, sameSideFirst, isAcross, acrossLabel } from "./shared/same-side.js";
 import { addressKey, completeAddress, sameStreet, sameHouse } from "./shared/us-address.js";
-import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed, DRAFT_ONLY_HOLD } from "./shared/offer-status.js";
+import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed, DRAFT_ONLY_HOLD, SKELETON_HOLD } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
 import { buildTranscript } from "./enrich.js";
 import {
@@ -340,13 +340,17 @@ const dayStartIso = (now = Date.now()) => {
 export async function countToday({ store, locationId, now = Date.now() }) {
   const since = dayStartIso(now);
   const ids = new Set();
+  // A skeleton bought nothing, so it isn't a run against the cap.
+  const skeletons = new Set();
   for (const j of jobs.values()) {
-    if (j.locationId === locationId && String(j.startedAt) >= since) ids.add(j.id);
+    if (j.locationId !== locationId || String(j.startedAt) < since) continue;
+    if (j.skeleton) skeletons.add(j.id); else ids.add(j.id);
   }
   const rows = await store.listOffers(locationId, { limit: 200, lean: true }).catch(() => []);
   for (const o of rows) {
     const uw = o?.autoUnderwrite;
-    if (uw?.jobId && String(uw.startedAt || o.createdAt || "") >= since) ids.add(uw.jobId);
+    if (uw?.skeleton && uw.jobId) skeletons.add(uw.jobId);
+    if (uw?.jobId && !uw.skeleton && !skeletons.has(uw.jobId) && String(uw.startedAt || o.createdAt || "") >= since) ids.add(uw.jobId);
   }
   return ids.size;
 }
@@ -1229,7 +1233,9 @@ export async function startUnderwrite({
     if (inFlight) return { deduped: true, job: inFlight };
   }
 
-  const cap = underwriteDailyCap(saved);
+  // A skeleton buys nothing (1b below), so the day's cap on runs is not spent on it.
+  const skeleton = underwriteMode(saved) === "skeleton" && !full && !fill && !anyKind && !quiet && origin !== "operator";
+  const cap = skeleton ? Infinity : underwriteDailyCap(saved);
   const usedToday = cap === Infinity ? 0 : await countToday({ store, locationId });
   if (usedToday >= cap) {
     // From the conversation, an address past the cap waits in line instead
@@ -1693,6 +1699,18 @@ async function runUnderwrite(job, ctx) {
   // The thread passed on it, or is still asking its one question: nothing to
   // price, and no comps bought for it.
   if (await stopForThread(job, ctx, extraction.address)) return;
+
+  /* --- 1b. skeleton: the agent and the address, nothing bought (2026-10-19) --- */
+  // Matt: "just agent/address is fine, NO AUTOUNDERWRITE". A house the
+  // conversation (or any sweep) names becomes a draft he eyeballs and marks;
+  // no Zillow facts, no comps, no photo scan, no kind or rural hold. A run a
+  // person starts goes on in full, as in draft mode.
+  if (underwriteMode(saved) === "skeleton" && !job.fill && !job.full && !job.anyKind && !job.quiet && job.origin !== "operator") {
+    job.draftOnly = true;
+    job.skeleton = true;
+    job.subjectLine = "";
+    return finishHeld(job, ctx, { extraction, held: [SKELETON_HOLD], partial: {} });
+  }
 
   /* --- 2. the subject --- */
   job.phase = "subject";
@@ -2799,6 +2817,7 @@ function auditTrail(job, extraction, gate) {
     // Draft only: the house in one line for the Today row, which reads the
     // lean offer row and never the draft itself.
     ...(job.draftOnly ? { draftOnly: true, subjectLine: job.subjectLine || "" } : {}),
+    ...(job.skeleton ? { skeleton: true } : {}),
   };
 }
 

@@ -21,7 +21,7 @@ import React, { useEffect, useState } from "react";
 import { ChevronDown, Ellipsis, ExternalLink, History, Loader2, MessageSquareWarning, Pencil } from "lucide-react";
 import { CARD_STAGES, CARD_STAGE_LABEL } from "@shared/ghl-stages.js";
 import { annotateCurrent } from "@shared/current-offer.js";
-import { Menu, StatusMenu } from "./ui.jsx";
+import { Menu, StatusMenu, passNoteLine } from "./ui.jsx";
 import { useOpenContact } from "./ContactLink.jsx";
 import ContactLink from "./ContactLink.jsx";
 import { getContactTimeline, getGhlCard, ghlContactUrl, setGhlCardStage, setOfferStatus } from "./api.js";
@@ -239,8 +239,9 @@ export function PaneActions({ pane, item, targets, rowOfferId = null, onStatusCh
     try {
       const r = await setOfferStatus(offer.id, key);
       if (r.promoted) setNote({ tone: "green", text: "It's a deal now — it's on the Deals board." });
-      // A pass that leaves the GHL card where it is says which house holds it.
-      else if (r.card?.text) setNote({ tone: "amber", text: r.card.text });
+      // A pass that leaves the GHL card where it is says which house holds it,
+      // and a pass on a house they sent says whether the bot tells them.
+      else if (r.card?.text || passNoteLine(r)) setNote({ tone: r.card?.text ? "amber" : "green", text: [r.card?.text, passNoteLine(r)].filter(Boolean).join(" ") });
       pane.side.reload();
       onStatusChanged?.(r);
     } catch (e) {
