@@ -188,17 +188,20 @@ export const ghlContactUrl = (contactId) =>
 export { zillowUrl } from "@shared/us-address.js";
 
 /* ---------- offers ---------- */
-export const previewDocument = (inputs, settings, contactName) =>
-  post(`/api/offers/preview`, { inputs, settings, contactName });
-export const createOffer = ({ contactId, newContact, inputs, settings, scope, draftId, snapshot }) =>
-  post(`/api/offers`, { contactId, newContact, inputs, settings, scope, draftId, snapshot });
+// `underwrite` ({ model, deal }) prices an income or land offer
+// (shared/underwrite-model.js); absent, it's priced by comps as always.
+export const previewDocument = (inputs, settings, contactName, underwrite) =>
+  post(`/api/offers/preview`, { inputs, settings, contactName, ...(underwrite ? { underwrite } : {}) });
+// `asset` is the kind you picked in the editor (shared/asset-type.js).
+export const createOffer = ({ contactId, newContact, inputs, settings, scope, draftId, snapshot, asset, underwrite }) =>
+  post(`/api/offers`, { contactId, newContact, inputs, settings, scope, draftId, snapshot, ...(asset ? { asset } : {}), ...(underwrite ? { underwrite } : {}) });
 export const saveDraft = (id, draft) => post(`/api/offers/draft`, { id, draft });
 // Save an offer that already exists — same id, re-rendered documents, refreshed
 // contact fields. Answers the create shape plus { revised, staleDocs,
 // revisedAfterSend }. This is the difference between revising your offer on a
 // property and ending up owning four offers on it.
-export const updateOffer = (id, { inputs, settings, scope, snapshot }) =>
-  post(`/api/offers/${encodeURIComponent(id)}`, { inputs, settings, scope, snapshot }, "PUT");
+export const updateOffer = (id, { inputs, settings, scope, snapshot, asset, underwrite }) =>
+  post(`/api/offers/${encodeURIComponent(id)}`, { inputs, settings, scope, snapshot, ...(asset ? { asset } : {}), ...(underwrite ? { underwrite } : {}) }, "PUT");
 // The editor's autosave for an offer that already exists: workspace only. It
 // never renders a document, never touches the CRM, and can't move the offer's
 // money — which is what makes it safe on a debounce and on unmount.

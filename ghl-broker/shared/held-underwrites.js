@@ -41,6 +41,7 @@ import { addressKey, sameStreet, parseUsAddress, completeAddress } from "./us-ad
 import { propertyDossier } from "./contact-record.js";
 import { aiHoldReasons, effectiveStatus, DEAD_STATUSES, saidYes } from "./offer-status.js";
 import { KIND_HOLD, MOBILE_HOLD, RURAL_HOLD } from "./asset-type.js";
+import { pricedByHand } from "./underwrite-model.js";
 import { WA_CITY_COORDS } from "./wa-city-coords.js";
 import { ourReplyPasses, threadPassed } from "./flip-read.js";
 import { owedOnHouse } from "./promise-owed.js";
@@ -299,6 +300,11 @@ function triageCore({
   if (priced) return { ...base, action: "drop", reason: `a priced offer (${effectiveStatus(priced)}) already exists on this house` };
   const newer = mine.find((s) => effectiveStatus(s) === "draft" && (ms(s.createdAt) ?? 0) > (ms(offer.createdAt) ?? 0));
   if (newer) return { ...base, action: "drop", reason: "a newer draft on the same house replaced it" };
+
+  // A held draft Matt reopened and is pricing by income or by the acre
+  // (shared/underwrite-model.js) is his: the sweep never retires it or texts
+  // the agent "single-family only" about it.
+  if (pricedByHand(offer)) return { ...base, action: "yours", reason: "you're pricing it by income or land value — the sweep leaves it to you" };
 
   /* --- 2. retire: the house is over for us --- */
   const tags = (contact?.tags || []).map((t) => String(t).toLowerCase());

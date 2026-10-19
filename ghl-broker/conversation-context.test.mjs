@@ -610,3 +610,12 @@ test("a house drafted for Matt to price tells the bot he's pricing it himself, w
   const heldRun = { ...drafted, id: "d2", autoUnderwrite: { held: ["only 1 listing photo to scan"] } };
   assert.match(summarizeOffers([heldRun]).text, /numbers held for our team's review/, "a held run reads as before");
 });
+
+test("a commercial building or land Matt priced is one the bot talks numbers on", async () => {
+  const { pricedOutsideFocus } = await import("./conversation-context.js");
+  const offers = [
+    { id: "a", address: "900 Main St, Kent, WA 98030", status: "new", cashAmount: 780000, asset: { type: "commercial", by: "you" }, underwriteModel: "income", createdAt: "2026-10-18T00:00:00Z" },
+    { id: "b", address: "0 Ridge Rd, Enumclaw, WA 98022", status: "new", cashAmount: 120000, asset: { type: "land", by: "you" }, underwriteModel: "land", createdAt: "2026-10-18T00:00:00Z" },
+  ];
+  assert.deepEqual(pricedOutsideFocus(offers, ["sfr"]).sort(), ["0 Ridge Rd, Enumclaw, WA 98022", "900 Main St, Kent, WA 98030"]);
+});

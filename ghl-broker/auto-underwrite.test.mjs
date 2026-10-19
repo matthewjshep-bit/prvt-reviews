@@ -961,3 +961,13 @@ test("a listing link that agrees with the workflow is not overruled by an older 
   assert.equal(addressSourceFor({ linked: null, suppliedAddress: "835 SW 355th Ct, Federal Way, WA 98023", refereed }), "thread");
   assert.equal(addressSourceFor({ linked: null, suppliedAddress: "835 SW 355th Ct, Federal Way, WA 98023", refereed: null }), "standing");
 });
+
+// 2026-10-18: a fourplex priced by income, by hand, not yet sent. An agent's
+// text about it must not start a flip-math run that puts a second number on it.
+test("an agent text about a priced fourplex does not start a flip underwrite", async () => {
+  const { findOfferOut } = await import("./auto-underwrite.js");
+  const addr = "40 Oak St, Kent, WA 98030";
+  const fourplex = { id: "o4", contactId: "c1", address: addr, status: "new", cashAmount: 900000, underwriteModel: "income", sends: [] };
+  assert.equal((await findOfferOut({ store: { listOffers: async () => [fourplex] }, locationId: "L", contactId: "c1", address: addr }))?.id, "o4");
+  assert.equal(await findOfferOut({ store: { listOffers: async () => [{ ...fourplex, underwriteModel: undefined }] }, locationId: "L", contactId: "c1", address: addr }), null, "an unsent comps offer is still re-priced as before");
+});

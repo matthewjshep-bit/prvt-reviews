@@ -6,19 +6,24 @@
 // buyers who had told us they buy mobile homes. Zillow had said MANUFACTURED
 // the whole time, on the underwrite's subject record, where nothing read it.
 //
-// One vocabulary, three kinds: single family, multi-family, manufactured. A
-// manufactured home also says whether the land comes with it, because that is
-// the first thing a mobile home buyer asks ("no park homes").
+// One vocabulary: single family, multi-family, manufactured, and (2026-10-18)
+// commercial and land — kinds Matt underwrites by hand, by income or by the
+// acre (shared/underwrite-model.js). A manufactured home also says whether the
+// land comes with it, because that is the first thing a mobile home buyer asks
+// ("no park homes"). Zillow's and RentCast's types never map to commercial or
+// land: those are only ever picked by a person.
 //
 // Pure. The offer editor, the Deals modal, the blast text, the ranking and the
 // reply bot all read the kind from here.
 
-export const ASSET_TYPES = ["sfr", "multi_family", "manufactured"];
+export const ASSET_TYPES = ["sfr", "multi_family", "manufactured", "commercial", "land"];
 
 export const ASSET_TYPE_LABELS = {
   sfr: "Single family",
   multi_family: "Multi-family",
   manufactured: "Manufactured / mobile",
+  commercial: "Commercial",
+  land: "Land",
 };
 
 export const MH_LAND = ["park", "own_lot"];
@@ -111,7 +116,7 @@ export function assetPhrase(asset) {
   if (a.type === "manufactured") {
     return a.land === "park" ? "mobile home in a park" : a.land === "own_lot" ? "mobile home on its own lot" : "mobile home";
   }
-  return a.type === "multi_family" ? "multi-family" : "";
+  return { multi_family: "multi-family", commercial: "commercial property", land: "land" }[a.type] || "";
 }
 
 /* ---------- which buyers want it ---------- */

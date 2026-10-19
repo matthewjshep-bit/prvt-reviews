@@ -200,3 +200,10 @@ test("a clean Tier 1 card with an address and nothing priced is underwritten by 
   assert.equal(normalizeTierOne({ autoUnderwrite: true }).autoUnderwrite, true);
 });
 
+
+test("a multi-family Matt priced by income stays in Tier 1 instead of being kicked as not single-family", () => {
+  const r = screenTierOne({ house: house({ underwriteModel: "income", cashAmount: 900000 }), assetType: "multi_family", lastInboundAt: ago(1), now: NOW });
+  assert.deepEqual(keysOf(r.flags), []);
+  // Unpriced, it is still flagged.
+  assert.deepEqual(keysOf(screenTierOne({ house: house({ underwriteModel: "income", cashAmount: 0 }), assetType: "multi_family", lastInboundAt: ago(1), now: NOW }).flags), ["not_sfr"]);
+});

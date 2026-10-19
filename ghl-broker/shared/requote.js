@@ -23,6 +23,7 @@ import { calculateOffers, effectiveSettings } from "./offer-calc.js";
 // import chain rather than a link in it. Re-exported for callers who only
 // want the planner.
 import { REQUOTE_DEFAULTS } from "./conversation-ai.js";
+import { pricedByHand } from "./underwrite-model.js";
 export { REQUOTE_DEFAULTS };
 
 const round = (v) => Math.round(Number(v) || 0);
@@ -75,6 +76,9 @@ export function clampToOurs({ theirArv = 0, theirRehab = 0, ourArv = 0, ourRehab
 export function planRequote({ offer, take = {}, band = REQUOTE_DEFAULTS, settings = {}, ceiling = 0, now = Date.now() } = {}) {
   if (!band?.enabled) return { ok: false, reason: "re-quoting is switched off" };
   if (!offer?.id) return { ok: false, reason: "no offer to re-quote" };
+  // Priced by income or by the acre, by hand (shared/underwrite-model.js):
+  // there is no flip stack to rerun on their ARV.
+  if (pricedByHand(offer)) return { ok: false, reason: "priced by income or land value — re-pricing it is yours" };
 
   const done = (offer.requotes || []).length;
   const max = Math.max(1, Number(band.maxPerOffer) || 1);

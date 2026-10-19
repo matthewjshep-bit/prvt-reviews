@@ -21,6 +21,7 @@
 // Pure.
 
 import { calculateOffers, effectiveSettings } from "./offer-calc.js";
+import { pricedByHand } from "./underwrite-model.js";
 
 // The fee we would drop to. Not a setting: it is the definition of "at our
 // most generous", and an operator who wants a different ceiling should change
@@ -53,6 +54,9 @@ const round = (v) => Math.round(Number(v) || 0);
 export function autoAcceptCeiling({ offer, settings = {} } = {}) {
   const no = (reason) => ({ ceiling: 0, computable: false, reason, mode: "", modes: [], arv: 0, repairs: 0, source: "", fee: AUTO_ACCEPT_FEE });
   if (!offer) return no("no offer");
+  // An income or land offer (shared/underwrite-model.js) has no flip-math
+  // walk-away: every counter on it is Matt's to answer.
+  if (pricedByHand(offer)) return no("priced by income or land value — yours to answer");
 
   // Read ARV explicitly. calculateOffers falls back to the ASKING PRICE when
   // arv is 0 — which would derive our walk-away from the agent's list price

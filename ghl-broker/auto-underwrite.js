@@ -66,6 +66,7 @@ import { mostRecentlyMentioned } from "./shared/us-address.js";
 import { otherStreetIn } from "./shared/mentioned-houses.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { meterAi } from "./ai-spend.js";
+import { pricedByHand, underwriteModel } from "./shared/underwrite-model.js";
 
 /* ---------- the dials ---------- */
 
@@ -371,7 +372,9 @@ export async function findOfferOut({ store, locationId, contactId, address, igno
     if (addressKey(o.address || "") !== key) continue;
     if (DEAD_STATUSES.has(offerStatusOf(o))) continue;
     const sent = (o.sends || []).some((s) => Object.values(s?.results || {}).some((r) => r?.ok));
-    if (sent || priceAgreed(o)) return o;
+    // Priced by income or by the acre, by hand (shared/underwrite-model.js):
+    // flip math has nothing to add, sent or not.
+    if (sent || priceAgreed(o) || pricedByHand(o)) return o;
   }
   return null;
 }
@@ -1662,7 +1665,9 @@ async function runUnderwrite(job, ctx) {
     job.finishedAt = new Date().toISOString();
     await setTag(client, job.contactId, UW_TAGS.done, warnings);
     await note(client, job.contactId,
-      `Our ${fmtMoney(out.cashAmount || 0)} on ${extraction.address} is already in front of this agent${priceAgreed(out) ? ` and agreed` : ""} — not re-priced. Replace the offer yourself if the number should change.`,
+      pricedByHand(out)
+        ? `${extraction.address} is priced by ${underwriteModel(out) === "land" ? "land value" : "income"} (${fmtMoney(out.cashAmount || 0)}) — not re-priced. Change it on the offer yourself.`
+        : `Our ${fmtMoney(out.cashAmount || 0)} on ${extraction.address} is already in front of this agent${priceAgreed(out) ? ` and agreed` : ""} — not re-priced. Replace the offer yourself if the number should change.`,
       warnings);
     return;
   }

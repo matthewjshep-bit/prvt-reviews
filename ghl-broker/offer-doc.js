@@ -6,6 +6,7 @@
 
 import { fmtMoney, writtenTerms } from "./shared/offer-calc.js";
 import { offerMath } from "./shared/offer-breakdown.js";
+import { incomeMath, underwriteModel } from "./shared/underwrite-model.js";
 
 const LETTER = { width: 1224, height: 1584 };
 
@@ -454,7 +455,11 @@ export function buildOfferDocument({ calc, meta = {}, locationId = "" }) {
   // the cent, so it ties to the price printed above. Matt, 2026-10-07: the
   // agent should see what our number is based on. When it's shown, the
   // closing paragraph and signature take the left column and the box the right.
-  const math = settings.showPricingMath !== false ? offerMath({ calc }, { exact: true }) : null;
+  // An income or land offer (shared/underwrite-model.js) shows its own short
+  // version instead: NOI and the cap rate at our price, or land value less
+  // site work. Never our return targets.
+  const math = settings.showPricingMath === false ? null
+    : underwriteModel({ calc }) === "comps" ? offerMath({ calc }, { exact: true }) : incomeMath(calc);
 
   /* ---- top accent bar + letterhead ---- */
   layers.push({ id: uid("bar"), type: "shape", shape: "rect", x: 0, y: 0, width: 100, height: 0.55, fill: GOLD, visible: true });
@@ -602,7 +607,9 @@ export function pricingBox(math, { top }) {
   for (const r of math.rows) {
     out.push(text(BOX.x + pad, ry, 26, 1.9, r.label, { size: 17, color: INK, autoFit: true, maxLines: 1 }));
     const sign = r.key === "arv" ? "" : r.sign === "+" ? "+" : "−";
-    out.push(text(BOX.x + 27.5, ry, 12, 1.9, `${sign}${fmtMoney(r.amount)}`, { size: 17, color: INK, align: "right", autoFit: true, maxLines: 1 }));
+    // A row with `text` (the cap rate on an income offer) prints it as is.
+    const shown = r.text != null ? String(r.text) : `${sign}${fmtMoney(r.amount)}`;
+    out.push(text(BOX.x + 27.5, ry, 12, 1.9, shown, { size: 17, color: INK, align: "right", autoFit: true, maxLines: 1 }));
     ry += BOX.rowH;
   }
   out.push(rule(ry + 0.2, BOX.x + pad, BOX.w - 2 * pad));

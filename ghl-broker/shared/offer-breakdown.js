@@ -73,6 +73,9 @@ export const BIG_RESIDUAL_PCT = 22;
  * otherwise everything is whole dollars.
  */
 export function offerMath(offer, { exact = false } = {}) {
+  // An income or land offer has no flip stack to show (shared/underwrite-model.js
+  // incomeMath has its own short version for the letter).
+  if (offer?.calc?.model === "income" || offer?.calc?.model === "land") return null;
   const calc = offer?.calc;
   const cash = calc?.offers?.cash;
   // A negative stack clamps the offer to 0, and a breakdown of a $0 offer
