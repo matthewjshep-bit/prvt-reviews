@@ -884,6 +884,11 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
     // Wait this long after a text before drafting, so three texts in a row
     // get one reply to all three. 0 = draft at once.
     debounceSec: 0,
+    // An agent's reply the bot couldn't place (intent `other`) goes out at
+    // once when every gate is clean, instead of waiting hours for the daytime
+    // pass (Matt, 2026-10-18: "I just want the app to be responding in real
+    // time"). Never an investor's; ships off.
+    otherNow: false,
     // Don't draft at all when a person replied to them this recently — they
     // have the thread. Until 2026-09-12 this only held the SEND, and the
     // default was 0, so it never fired: the bot kept writing replies into
@@ -1409,6 +1414,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       humanActiveMin: int(auto.humanActiveMin, D.autoSend.humanActiveMin, HUMAN_ACTIVE_MIN_FLOOR, 1440),
       minConfidence: oneOf(auto.minConfidence, ["high", "medium"], D.autoSend.minConfidence),
       holdOnNeedsHuman: bool(auto.holdOnNeedsHuman, D.autoSend.holdOnNeedsHuman),
+      otherNow: bool(auto.otherNow, D.autoSend.otherNow),
     },
   };
   // Version 1 → 2, once. A deploy never edits a saved setting — except this

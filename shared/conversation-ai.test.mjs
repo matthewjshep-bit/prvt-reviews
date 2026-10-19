@@ -713,3 +713,9 @@ test("the screen for houses the agent brings (qualifyFirst.brought) is kept on s
   // A round trip through the normaliser keeps it (a dropped key is a switch that turns itself off on save).
   assert.equal(normalizeConversationAi(on).parties.agent.qualifyFirst.brought, true);
 });
+
+test("sending an agent's couldn't-place reply at once ships off and survives a save", () => {
+  assert.equal(normalizeConversationAi({ version: 2 }).autoSend.otherNow, false, "ships off");
+  assert.equal(normalizeConversationAi({ version: 2, autoSend: { otherNow: true } }).autoSend.otherNow, true, "kept on save");
+  assert.equal(normalizeConversationAi({ version: 2, autoSend: { otherNow: "yes" } }).autoSend.otherNow, false, "only a real true");
+});

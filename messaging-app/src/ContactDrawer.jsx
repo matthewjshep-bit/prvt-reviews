@@ -24,7 +24,7 @@ import { INVESTOR_STATUS_LABEL } from "@shared/offer-status.js";
 import { getContactProfile, saveContactFacts, addContactEvent, checkContactGmail, ghlContactUrl, setContactEmail, setContactDealsBy } from "./api.js";
 import { dealsByOf } from "@shared/contact-email.js";
 import { BTN, BTN_PRIMARY, CurrentPill, Pill, StatusPill, StagePill } from "./ui.jsx";
-import { PartyPill, DraftRow } from "./ConversationOutbox.jsx";
+import { PartyPill } from "./ConversationOutbox.jsx";
 
 const INPUT = "rounded-lg border border-slate-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none";
 const money = (v) => (Number(v) > 0 ? fmtMoney(Number(v)) : String(v));
@@ -230,13 +230,9 @@ export function ContactRecordBody({ contactId, party: hint = null, onClose = nul
               {groups.length > 8 && !showAll && <button type="button" className={`${BTN} mt-2`} onClick={() => setShowAll(true)}>Show all {groups.length} days</button>}
             </Section>
 
-            {rec.drafts.length > 0 && (
-              <Section title="Recent conversation AI drafts">
-                <ul className="space-y-2">
-                  {rec.drafts.slice(0, 5).map((d) => <DraftRow key={d.id} draft={d} sendsEnabled={false} onDone={() => load(false)} />)}
-                </ul>
-              </Section>
-            )}
+            {/* No drafts here (Matt, 2026-10-18: "I never use them"). The list
+                showed every draft ever made — sent, replaced, dismissed — and
+                the one still waiting is on Today and the Conversation AI tab. */}
 
             {rec.invites.length > 0 && (
               <Section title="Dataroom links">
