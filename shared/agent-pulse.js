@@ -437,6 +437,9 @@ export function freshListingFor({ listings = [], pinged = new Set(), raised = []
   const ok = (listings || []).filter((l) => {
     if (!l?.listingKey || pinged.has(l.listingKey)) return false;
     if (!listingDistressed(l.doc, l.distressRule)) return false;
+    // A listing that came off the market is never a check-in's hook
+    // (2026-10-19, Matt: "saw the listing on 126th come off the market").
+    if (l.doc?.offMarket === true) return false;
     if (now - (ms(l.firstSeen) ?? 0) > s.freshDays * DAY_MS) return false;
     if (now - (ms(l.lastSeen) ?? 0) > s.listingSeenDays * DAY_MS) return false;
     const k = addressKey(l.doc?.address || "");
@@ -548,11 +551,10 @@ export function firstCheckInAt({ contactId = "", joinedAt = null, everyDays = 21
   return iso(t + workdays[checkInSlot(contactId, workdays.length)] * DAY_MS);
 }
 
-// A check-in about a listing of theirs: a fresh one, or one that came off the
-// market lately without selling (2026-10-15, "off_market_listing": the text
-// asks whether the seller still hopes to sell).
+// A check-in about a listing of theirs. "off_market_listing" (2026-10-15) is
+// no longer picked (2026-10-19, freshListingFor); kept here so older ledger
+// rows still read as listing check-ins.
 export const LISTING_REASONS = new Set(["fresh_listing", "off_market_listing"]);
-const listingReason = (listing) => (listing?.doc?.offMarket === true ? "off_market_listing" : "fresh_listing");
 
 /**
  * evaluateAgent(agent, ctx) → { status, reason, segment, pulseReason, listing, house, priority }
@@ -633,7 +635,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     const lastPing = latest(texted.map((e) => e.at));
     if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", waitWhy(coldEveryDays, `pinged within ${coldEveryDays} days`), { segment: coldSeg, dueAt: after(lastPing, coldEveryDays) });
     if (!quietFor(quietDays)) return out("not_due", waitWhy(quietDays, `touched within ${quietDays} days`), { segment: coldSeg, dueAt: after(since, quietDays) });
-    return out("due", "", { segment: coldSeg, pulseReason: listingReason(listing), listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
+    return out("due", "", { segment: coldSeg, pulseReason: "fresh_listing", listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
   }
 
   const tier = TOP_SEGMENTS.has(segment) ? 0 : 1;
@@ -642,7 +644,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const thanks = dealToThank({ offers: agent.offers || agent.current || [], events, ledger, now });
   if (thanks) return out("due", "", { segment, pulseReason: "deal_thanks", house: thanks, priority: [-1, -(ms(thanks.closedAt) ?? 0)] });
   if (listing && quietFor(quietDays)) {
-    return out("due", "", { segment, pulseReason: listingReason(listing), listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
+    return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
   }
   if (!quietFor(everyDays)) return out("not_due", waitWhy(everyDays, card && since === card.movedAt ? `moved to Tier ${card.tier.slice(1)} within ${everyDays} days` : `talked within ${everyDays} days`), { segment, dueAt: after(since, everyDays) });
   // Joined the check-in long after their last word (the repliers, 2026-10-14):

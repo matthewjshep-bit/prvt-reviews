@@ -6159,9 +6159,10 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   it first (the import's `createLimit` for that batch); the regular pull gets
   the rest, inside the same monthly budget. A new agent's first text says we
   saw it came off the market and asks whether the seller still hopes to sell,
-  never "expired". An agent already in GHL gets it from the check-in as
-  `off_market_listing` (`listingDistressed` reads `offMarket` as news), in
-  the same words. The cursor's `last.offMarket` says what the pull found.
+  never "expired". An agent already in GHL is never told about it: since
+  2026-10-19 (Matt didn't like "saw the listing on 126th come off the
+  market") `freshListingFor` skips off-market listings, so the check-in is
+  the ordinary one. The cursor's `last.offMarket` says what the pull found.
   Check: `GET /api/outreach/autopilot` → `last.offMarket`.
 - **Samples.** "Write 3 sample first texts" under the examples box
   (`POST /api/outreach/opener/preview`) drafts texts for agents waiting in the
