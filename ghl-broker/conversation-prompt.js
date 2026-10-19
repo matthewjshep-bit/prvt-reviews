@@ -1030,8 +1030,6 @@ function openingFor(outbound) {
         `${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.${extra}`;
       const offAsk = askFor(` If it fits naturally, ${situationLine}${what}`);
       const listingText = (o.reason === "fresh_listing" || o.reason === "off_market_listing") && l;
-      // Came off the market lately without selling (2026-10-15): the seller may still want out.
-      const offList = listingText && o.reason === "off_market_listing";
       // 2026-10-15 (the funnel review): Matt's own specific texts got 70%
       // replies, the generic check-ins 35%. So each names ONE real thing
       // (shared/agent-pulse.js checkInHook): their fresh listing, a house
@@ -1040,11 +1038,9 @@ function openingFor(outbound) {
       const hook = !listingText && o.reason !== "deal_thanks" ? o.hook || null : null;
       const mentioned = hook?.kind === "mentioned" && (hook.street || hook.label) ? hook : null;
       const closedNear = !mentioned && hook?.kind === "closed_nearby" && hook.town ? hook : null;
-      const why = offList
-        ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""} came off the market recently. Say you saw it came off the market and ask, ` +
-          `plainly, whether the seller is still hoping to sell — we'd be glad to take a look. Name the street; never its price or any number, never the word ` +
-          `"expired", nothing that sounds like the agent fell short, and never ask whether it sold.`
-        : listingText
+      // A listing that came off the market is never brought up in a check-in
+      // (2026-10-19, Matt); freshListingFor no longer picks one.
+      const why = listingText
         ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
           `Ask, plainly, whether it's a bit of a project — if it needs work it may be one we'd want to take a look at. Name the street; never its price or any number.`
         : o.reason === "deal_thanks"
@@ -1077,14 +1073,15 @@ function openingFor(outbound) {
         // the first text since 2026-10-16: no remark about the house, no joke.
         (cold && listingText
           ? `WHAT TO WRITE: the short first-text voice — two short sentences, under ${OPENER_MAX_CHARS} characters, plain, the way a person texts someone they haven't met; the PERSONALITY line above doesn't apply to this one. Open with their first name, once; ` +
-            `name the street (the street name, never the house number); ONE question, ${offList ? "whether the seller is still hoping to sell" : "whether it needs much work"}. Say nothing about the house itself (its age, lot, look, or how long it has been listed). Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
+            `name the street (the street name, never the house number); ONE question, whether it needs much work. Say nothing about the house itself (its age, lot, look, or how long it has been listed). Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
             (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the street and the question. ` : "")
           : `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
             // No calendar is connected (2026-10-15): a call is offered, never a time.
             `If it fits, offer a quick call in a few words, as an easier way to talk ("happy to jump on a quick call if that's easier") — never a day or a time, and still only one question. `) +
-        // A quiet agent we made an offer to (shared/agent-pulse.js, 2026-10-09)
-        // has heard of us: the clause says so, never which house or number.
-        `${cold ? (o.offersWithUs ? "One clause on who you are: the local buyer who looked at one of their listings a while back and is always after the next project house. " : "One clause on who you are: someone local who's always looking for the next project house. ") : "Do NOT reintroduce yourself. "}` +
+        // No who-we-are line, cold or not (2026-10-19, Matt): "I'm local and
+        // always looking for the next project house" read as filler. The phone
+        // system signs it "Thanks, Matt".
+        `Do NOT reintroduce yourself: never "I'm local", never that we're always looking for the next project house. ` +
         `${shapes[(Number(o.variant) || 0) % shapes.length]} ` +
         `${o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}" ` : ""}` +
         `Do NOT name a price, a number, a percentage, an ARV or a link${listingText ? " — the listing's street is fine, but never a dollar figure" : ""}, and never a count of days, a time of day or a date ("sitting a while", not "84 days"). Do NOT promise an offer or say what we'd pay. ` +

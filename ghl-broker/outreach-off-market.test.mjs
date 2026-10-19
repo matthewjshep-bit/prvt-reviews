@@ -3,8 +3,8 @@
 // listing that came off the market is a seller who may still want out. The
 // sweep reads one county's "Inactive" listings a run, keeps the ones that came
 // off in the last 30 days and didn't sell, and the first text asks whether
-// the seller is still hoping to sell. Agents already in GHL hear it from the
-// check-in. Drives the real pull against a local mock RentCast.
+// the seller is still hoping to sell. Agents already in GHL never hear it from
+// a check-in (2026-10-19). Drives the real pull against a local mock RentCast.
 
 import fs from "node:fs";
 import http from "node:http";
@@ -122,19 +122,21 @@ test("the first text about a listing that came off the market asks whether the s
   assert.match(t, /Phone carriers block texts/, "the carrier rule still rides on it");
 });
 
-test("an agent already in GHL hears about their listing that came off the market from the check-in, in its own words", () => {
+// 2026-10-19: "Hey, saw the listing on 126th come off the market. Still hoping
+// to sell?" Matt didn't like it: a check-in never brings up their listing
+// coming off the market. The agent gets the ordinary check-in instead.
+test("a check-in never says it saw their listing come off the market", () => {
   const now = NOW;
-  const agent = { contactId: "c-known", name: "Dana", tags: [], offers: [], current: [], drafts: [], events: [], ledger: [], facts: {}, lastInboundAt: day(40),
-    listings: [{ listingKey: "L-off", firstSeen: day(2), lastSeen: day(1), distressRule: "cut-or-old",
-      doc: { address: "6 Larch St, Auburn, WA 98001", city: "Auburn", qualifies: true, offMarket: true, removedDate: day(10), score: 30, distress: {} } }] };
-  const v = evaluateAgent(agent, { settings: normalizeAgentPulse({ enabled: true }), config: normalizeConversationAi({ enabled: true }), houses: { live: new Set(), walked: new Map() }, now });
-  assert.equal(v.status, "due", v.reason);
-  assert.equal(v.pulseReason, "off_market_listing");
-  const t = outboundOpening({ kind: "agent_pulse", reason: "off_market_listing", segment: "engaged", listing: { street: "6 Larch St", city: "Auburn", offMarket: true } });
-  assert.match(t, /listing at 6 Larch St in Auburn came off the market recently\. Say you saw it came off the market and ask, plainly, whether the seller is still hoping to sell/);
-  assert.match(t, /never the word "expired"/);
-  const cold = outboundOpening({ kind: "agent_pulse", reason: "off_market_listing", segment: "cold", listing: { street: "6 Larch St", city: "Auburn" } });
-  assert.match(cold, /ONE question, whether the seller is still hoping to sell/);
+  const offListing = { listingKey: "L-off", firstSeen: day(2), lastSeen: day(1), distressRule: "cut-or-old",
+    doc: { address: "6 Larch St, Auburn, WA 98001", city: "Auburn", qualifies: true, offMarket: true, removedDate: day(10), score: 30, distress: {} } };
+  const ctx = { settings: normalizeAgentPulse({ enabled: true }), config: normalizeConversationAi({ enabled: true }), houses: { live: new Set(), walked: new Map() }, now };
+  const known = evaluateAgent({ contactId: "c-known", name: "Dana", tags: [], offers: [], current: [], drafts: [], events: [], ledger: [], facts: {}, lastInboundAt: day(40), listings: [offListing] }, ctx);
+  assert.notEqual(known.pulseReason, "off_market_listing");
+  assert.equal(known.listing ?? null, null, "the off-market listing isn't the hook");
+  const cold = evaluateAgent({ contactId: "c-cold", name: "Dana", tags: [], offers: [], current: [], drafts: [], events: [], ledger: [], facts: {}, lastInboundAt: null, listings: [offListing] }, ctx);
+  assert.notEqual(cold.status, "due", "a cold agent whose only listing came off the market isn't texted");
+  const t = outboundOpening({ kind: "agent_pulse", reason: "off_market_listing", segment: "cold", listing: { street: "126th Ave SE", city: "Kent", offMarket: true } });
+  assert.doesNotMatch(t, /came off the market/);
 });
 
 test("with the off-market seats on, the sweep reads one county's Inactive listings into its own batch, first, and gives them only their share of the day", async () => {

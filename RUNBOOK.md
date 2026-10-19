@@ -5407,8 +5407,9 @@ runs it) owns an agent when nothing else does:
   sounding annoyed stops it altogether.
 - **The text** (prompt case `agent_pulse`) names a listing by street, city and
   days on market, never its price. It never says a number or a link, and
-  `onlyFloats` holds any draft that does. A cold agent gets a one-clause intro;
-  a known one gets a continuation of the thread.
+  `onlyFloats` holds any draft that does. No agent, cold or known, gets a
+  who-we-are line (2026-10-19: "I'm local and always looking for the next
+  project house" was filler); the "Thanks, Matt" footer says who it is.
 
 **Running it.** Once a workday from `hour` (noon Pacific), with the daily gate
 (cursor `agentPulse`, retries if a deploy kills it), capped at `dailyCap` (20)
@@ -6158,9 +6159,10 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   it first (the import's `createLimit` for that batch); the regular pull gets
   the rest, inside the same monthly budget. A new agent's first text says we
   saw it came off the market and asks whether the seller still hopes to sell,
-  never "expired". An agent already in GHL gets it from the check-in as
-  `off_market_listing` (`listingDistressed` reads `offMarket` as news), in
-  the same words. The cursor's `last.offMarket` says what the pull found.
+  never "expired". An agent already in GHL is never told about it: since
+  2026-10-19 (Matt didn't like "saw the listing on 126th come off the
+  market") `freshListingFor` skips off-market listings, so the check-in is
+  the ordinary one. The cursor's `last.offMarket` says what the pull found.
   Check: `GET /api/outreach/autopilot` → `last.offMarket`.
 - **Samples.** "Write 3 sample first texts" under the examples box
   (`POST /api/outreach/opener/preview`) drafts texts for agents waiting in the
