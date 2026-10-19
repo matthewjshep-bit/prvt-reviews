@@ -140,16 +140,21 @@ export function rowTargets(item, drafts = []) {
  * "No offer yet" beside a thread about one of theirs (Jeffrey Valcik,
  * 2026-09-29). Of their current offers: the one on the house the row names,
  * else the most recently active live one, else the most recent of any.
- * Drafts aren't offers.
+ * A draft comes after a real offer, but before "No offer yet": the draft-only
+ * underwriter leaves one for Matt to price (Matt, 2026-10-19: "ALSO show
+ * Offer DRAFTS in the companion").
  */
 export function defaultOfferFor(offers = [], address = "") {
-  const current = annotateCurrent((offers || []).filter((o) => o && o.status !== "draft")).filter((o) => !o.supersededBy);
-  if (!current.length) return null;
+  const rows = (offers || []).filter(Boolean);
+  const current = annotateCurrent(rows.filter((o) => o.status !== "draft")).filter((o) => !o.supersededBy);
+  const byRecent = (list) => [...list].sort((a, b) => String(b.statusAt || b.createdAt || "").localeCompare(String(a.statusAt || a.createdAt || "")));
+  const drafts = byRecent(rows.filter((o) => o.status === "draft"));
   const want = address ? houseKey(address) : "";
-  const named = want ? current.find((o) => houseKey(o.address || "") === want) : null;
+  const onHouse = (o) => houseKey(o.address || "") === want;
+  const named = want ? current.find(onHouse) || drafts.find(onHouse) : null;
   if (named) return named;
-  const recent = [...current].sort((a, b) => String(b.statusAt || b.createdAt || "").localeCompare(String(a.statusAt || a.createdAt || "")));
-  return recent.find((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o))) || recent[0];
+  const recent = byRecent(current);
+  return recent.find((o) => !o.deal && OPEN_STATUSES.has(effectiveStatus(o))) || recent[0] || drafts[0] || null;
 }
 
 // The Teach control's row id. A draft row is taught under its draft (the
