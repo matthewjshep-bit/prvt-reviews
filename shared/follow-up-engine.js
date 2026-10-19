@@ -217,6 +217,8 @@ export const FOLLOW_UP_MECHANISMS = [
   { key: "address_chase", group: "agent", label: "Address chase", kinds: ["address_chase"], sentFrom: "draft", ahead: "plan", followUp: true },
   { key: "held_underwrite", group: "agent", label: "Held underwrite ask / pass", kinds: ["take_ask", "kind_pass"], sentFrom: "draft", ahead: "event", followUp: true,
     fires: "when the nightly audit finds an underwrite held on missing facts" },
+  { key: "pass_note", group: "agent", label: "Pass note on a house you marked", kinds: ["pass_note"], sentFrom: "draft", ahead: "event", followUp: false,
+    fires: "when you mark a house they sent \"We passed\" (10 minutes after your last mark)" },
 
   { key: "offer_nudge", group: "offer_live", label: "Offer nudge", kinds: ["offer_nudge"], sentFrom: "draft", ahead: "plan", followUp: true },
   { key: "hot_push", group: "offer_live", label: "Push to paper", kinds: ["hot_push"], sentFrom: "draft", ahead: "plan", followUp: true },

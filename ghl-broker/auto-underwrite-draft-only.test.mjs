@@ -23,7 +23,7 @@ delete process.env.AUTO_UNDERWRITE_ENABLED;
 const { store } = await import("./store.js");
 const { startUnderwrite, cancelJob, _resetJobs } = await import("./auto-underwrite.js");
 const { KIND_HOLD } = await import("./shared/asset-type.js");
-const { isDraftOnly, DRAFT_ONLY_RX } = await import("./shared/offer-status.js");
+const { isDraftOnly, isSkeleton, DRAFT_ONLY_RX } = await import("./shared/offer-status.js");
 const { underwriteMode } = await import("./shared/offer-calc.js");
 // The comp search is cached a day by URL; every test here buys its own.
 const { _resetCompsCache } = await import("./comps-zillow.js");
@@ -187,4 +187,68 @@ test("a text that names the same street, or none, prices the house as before", a
       assert.equal(calls.detail, 1, message);
     } finally { restore(); }
   }
+});
+
+/* ---------- skeleton (2026-10-19) ---------- */
+// Matt: "when someone mentions a property can we make a draft for that (just
+// agent/address is fine, NO AUTOUNDERWRITE)". Not even the listing's facts.
+
+const skeleton = { ...draftOnly, autoUnderwriteMode: "skeleton", autoUnderwriteDailyCap: 1 };
+
+test("with skeleton on, a house an agent names becomes a draft with just the agent and the address — nothing looked up, nothing bought", async () => {
+  assert.equal(underwriteMode({ autoUnderwriteMode: "skeleton" }), "skeleton");
+  _resetJobs();
+  const { calls, restore } = stubFetch();
+  try {
+    const { job } = await startUnderwrite({ client, locationId: "LOC-skel", saved: skeleton, store, contactId: "agent-s1",
+      message: "Got another one, 4417 Somerset Ln, needs everything", address: ADDRESS, deps: noOffer });
+    assert.ok(await until(() => ["held", "done", "error"].includes(job.status)), `still ${job.status}/${job.phase}`);
+    assert.equal(job.status, "held", job.error || "");
+    assert.equal(calls.detail + calls.search + calls.anthropic, 0, "no Zillow facts, no comps, no photo scan");
+    const draft = await store.getOffer(job.offerId);
+    assert.equal(draft.status, "draft");
+    assert.equal(draft.contactId, "agent-s1");
+    assert.match(draft.address, /^4417 Somerset Ln/);
+    assert.equal(draft.cashAmount, null);
+    assert.ok(isSkeleton(draft));
+    assert.ok(isDraftOnly(draft), "the same Price it row as a draft");
+  } finally { restore(); }
+});
+
+test("a skeleton doesn't spend the day's cap on runs, and a mobile home isn't held as not our kind — nothing was looked up to say so", async () => {
+  _resetJobs();
+  const { calls, restore } = stubFetch("MANUFACTURED");
+  try {
+    for (const [i, address] of [[1, ADDRESS], [2, "88 Alder St, Everett, WA 98203"], [3, "1412 Pine St, Everett, WA 98203"]]) {
+      const { job, skipped } = await startUnderwrite({ client, locationId: "LOC-skel-cap", saved: skeleton, store, contactId: `agent-s${i + 1}`, address, deps: noOffer });
+      assert.equal(skipped || null, null, `#${i}: ${skipped}`);
+      assert.ok(await until(() => ["held", "done", "error"].includes(job.status)), `#${i} still ${job.status}/${job.phase}`);
+      assert.ok(isSkeleton(await store.getOffer(job.offerId)), `#${i} ${job.held?.[0]}`);
+    }
+    assert.equal(calls.detail, 0);
+  } finally { restore(); }
+});
+
+test("a run a person starts is still the full machine with skeleton on", async () => {
+  _resetJobs();
+  const { calls, restore } = stubFetch();
+  try {
+    const { job } = await startUnderwrite({ client, locationId: "LOC-skel-person", saved: { ...skeleton, autoUnderwriteDailyCap: 50 }, store, contactId: "agent-s9", address: ADDRESS,
+      full: true, deps: { createOffer: async () => { throw new Error("not reached in this test"); } } });
+    assert.ok(await until(() => ["held", "done", "error"].includes(job.status) || calls.search > 0), `still ${job.status}/${job.phase}`);
+    assert.ok(calls.search > 0, `${job.status}/${job.phase} ${JSON.stringify(job.held)}`);
+    cancelJob(job.id);
+    await until(() => job.status !== "running");
+  } finally { restore(); }
+});
+
+test("skeletons made today don't fill the cap a run you start yourself is held to", async () => {
+  const { countToday } = await import("./auto-underwrite.js");
+  _resetJobs();
+  const { restore } = stubFetch();
+  try {
+    const { job } = await startUnderwrite({ client, locationId: "LOC-skel-count", saved: skeleton, store, contactId: "agent-c1", address: ADDRESS, deps: noOffer });
+    assert.ok(await until(() => ["held", "done", "error"].includes(job.status)));
+    assert.equal(await countToday({ store, locationId: "LOC-skel-count" }), 0);
+  } finally { restore(); }
 });

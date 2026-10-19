@@ -1048,15 +1048,17 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         </div>
         <label className="mb-1 block">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">When an agent names a house</span>
-          <select value={form.autoUnderwriteMode === "draft" ? "draft" : "full"} onChange={(e) => set("autoUnderwriteMode")(e.target.value)}
+          <select value={["skeleton", "draft"].includes(form.autoUnderwriteMode) ? form.autoUnderwriteMode : "full"} onChange={(e) => set("autoUnderwriteMode")(e.target.value)}
             className={INPUT_CLS}>
+            <option value="skeleton">Make a skeleton — just the agent and the address, nothing looked up</option>
             <option value="draft">Make a draft — I price it (no comps, no photo scan)</option>
             <option value="full">Underwrite it — comps, photo scan and a priced offer</option>
           </select>
         </label>
         <p className="mb-3 text-xs text-slate-400">
-          A draft carries the agent, the address and the listing's facts, and waits on Today as "Price it". Nothing is
-          texted until you save a number. Re-run, Retry and the editor's Auto-underwrite still run the full machine.
+          A draft carries the agent, the address and the listing's facts, and waits on Today as "Price it"; a skeleton
+          carries only the agent and the address. Mark either one "We passed" from its row and the bot tells them why
+          (Conversation AI → agent playbook). Nothing else is texted until you save a number. Re-run, Retry and the editor's Auto-underwrite still run the full machine.
         </p>
         <div className="mb-3 grid gap-3 sm:grid-cols-2">
           <label className="block">

@@ -105,7 +105,7 @@ export function asksForContact(message = "") {
 export function passMoment(draft = {}) {
   if ((draft.party || "agent") !== "agent") return "";
   if (draft.intent === "rejection") return "they passed";
-  if (draft.outbound?.kind === "kind_pass") return "we passed";
+  if (draft.outbound?.kind === "kind_pass" || draft.outbound?.kind === "pass_note") return "we passed";
   if (draft.notOurKind) return "not our kind of house";
   if (draft.qualify?.stage === "pass") return "we passed";
   return "";
