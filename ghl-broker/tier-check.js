@@ -20,12 +20,12 @@
 // the bot added never moves a card.
 
 import { store as defaultStore } from "./store.js";
-import { listPipelines, addContactTags, removeContactTags, updateOpportunity, createOpportunity, searchOpportunities, listWorkflows, getContact, getOpportunity } from "./ghl.js";
+import { listPipelines, addContactTags, removeContactTags, updateOpportunity, createOpportunity, searchOpportunities, listWorkflows, getContact, getOpportunity, searchConversations, listConversationMessages } from "./ghl.js";
 import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { recordEvent } from "./contact-record.js";
 import { localHour } from "./promise-sweep.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
-import { planStageMoves, planCard, planHandMove, normalizeGhlStages, stageKeys, CARD_STAGE_LABEL, raisedHouses, HOUSE_EVENT_TYPES } from "./shared/ghl-stages.js";
+import { planStageMoves, planCard, planHandMove, normalizeGhlStages, stageKeys, CARD_STAGE_LABEL, raisedHouses, HOUSE_EVENT_TYPES, theirWordInGhl } from "./shared/ghl-stages.js";
 import { offerStageAt } from "./shared/offer-stage.js";
 import { openPromises } from "./shared/promise-resolver.js";
 import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
@@ -248,6 +248,99 @@ export function agentRepliers(lastRows = [], optOuts = [], isAgent = null) {
   return out;
 }
 const YEAR_MS = 365 * 86400000;
+
+// GHL's own threads, for the agents the bot never summarised (Matt,
+// 2026-10-19: "all agents who HAVE responded (not negatively like stop,
+// etc)"). The morning sweep reads every thread that moved since its last
+// read; an agent found there whose card isn't made yet (the run's cap, a
+// nurture guard) is kept and tried again the next morning, for a month.
+export const GHL_WORDS_CURSOR = "ghlWords";
+const GHL_WORDS_MAX_READS = 1000;
+const GHL_WORDS_KEEP_MS = 30 * 86400000;
+const DO_NOT_CONTACT_TAGS = new Set(["dnc", "dnd", "unsubscribed", "do-not-contact"]);
+const msOf = (v) => (typeof v === "number" ? v : Date.parse(v || ""));
+
+/**
+ * ghlRepliers({ client, locationId, api, since, routing, skip, maxReads }) → { repliers, read, through }
+ *
+ * Agents (by GHL's tags, the Conversation AI routing) whose thread moved
+ * since `since` and who wrote back (shared/ghl-stages.js theirWordInGhl),
+ * opt-outs left out. `skip`: contacts not to read (an open card, a word the
+ * app already has). Oldest thread first, so a capped run picks up where it
+ * stopped: `through` is how far it got.
+ */
+export async function ghlRepliers({ client, locationId, api, since = null, routing = {}, skip = new Set(), maxReads = GHL_WORDS_MAX_READS, startedAt = Date.now() }) {
+  const floor = since ? msOf(since) : 0;
+  const threads = new Map();
+  let after;
+  for (let page = 0; page < 200; page++) {
+    const { conversations = [] } = await api.searchConversations(client, locationId, { limit: 100, startAfterDate: after });
+    let done = !conversations.length;
+    for (const c of conversations) {
+      if (msOf(c.lastMessageDate) < floor) { done = true; break; }
+      if (!c.contactId) continue;
+      if (!threads.has(c.contactId)) threads.set(c.contactId, []);
+      threads.get(c.contactId).push(c);
+    }
+    const last = conversations.at(-1);
+    const next = last?.sort?.[0] ?? last?.lastMessageDate;
+    if (done || next == null || next === after) break;
+    after = next;
+    await sleep(150);
+  }
+  const candidates = [...threads.entries()].filter(([contactId, cs]) => {
+    const tags = cs[0].tags || [];
+    if (skip.has(contactId) || tags.some((t) => DO_NOT_CONTACT_TAGS.has(String(t).toLowerCase()))) return false;
+    // An agent by tags, and not also a buyer: their board is Dispositions.
+    const { party, matched } = resolveParty({ tags, routing });
+    return party === "agent" && !matched.investor.length;
+  }).sort(([, a], [, b]) => msOf(a[0].lastMessageDate) - msOf(b[0].lastMessageDate));
+  const repliers = new Map();
+  let read = 0;
+  let through = iso(startedAt);
+  for (const [contactId, cs] of candidates) {
+    if (read >= maxReads) { through = iso(msOf(cs[0].lastMessageDate) - 1); break; }
+    read++;
+    const messages = [];
+    for (const c of cs.slice(0, 2)) messages.push(...((await api.listConversationMessages(client, c.id, { limit: 100 }))?.messages || []));
+    const word = theirWordInGhl(messages);
+    if (word?.at) repliers.set(contactId, word.at);
+    await sleep(150);
+  }
+  return { repliers, read, through };
+}
+
+/**
+ * ghlWordsFor({ … }) → Map contactId → ISO of their last word, from GHL
+ *
+ * The sweep's side of ghlRepliers: the agents found before and not yet
+ * carded, plus (when `read`) a read since the cursor. A dry run reads
+ * nothing new and moves no cursor.
+ */
+async function ghlWordsFor({ client, locationId, store, api, routing, skip, read, dryRun, now }) {
+  const cur = await store.getJobCursor?.(locationId, GHL_WORDS_CURSOR).catch(() => null);
+  const doc = cur?.doc || {};
+  const found = new Map(Object.entries(doc.pending || {}).filter(([, v]) => now - (msOf(v?.foundAt) || 0) <= GHL_WORDS_KEEP_MS).map(([id, v]) => [id, v]));
+  if (read && !dryRun && api.searchConversations && api.listConversationMessages) {
+    // Noted before the read (as every job's cursor is), so a run a deploy
+    // kills reads the same window again.
+    await store.setJobCursor?.(locationId, GHL_WORDS_CURSOR, { at: iso(now), doc: { ...doc, startedAt: iso(now) } });
+    const r = await ghlRepliers({ client, locationId, api, since: doc.since || null, routing, skip: new Set([...skip, ...found.keys()]), startedAt: now });
+    for (const [id, at] of r.repliers) found.set(id, { at, foundAt: iso(now) });
+    await store.setJobCursor?.(locationId, GHL_WORDS_CURSOR, { at: iso(now), doc: { since: r.through, read: r.read, pending: Object.fromEntries(found) } });
+  }
+  return new Map([...found].map(([id, v]) => [id, v.at]));
+}
+
+// After the moves: an agent found in GHL who has a card now is done.
+async function settleGhlWords({ store, locationId, done }) {
+  if (!done.size) return;
+  const cur = await store.getJobCursor?.(locationId, GHL_WORDS_CURSOR).catch(() => null);
+  const pending = { ...(cur?.doc?.pending || {}) };
+  for (const id of done) delete pending[id];
+  await store.setJobCursor?.(locationId, GHL_WORDS_CURSOR, { at: cur?.at || iso(Date.now()), doc: { ...(cur?.doc || {}), pending } });
+}
+
 // How far back the house events go: a raise is live for staleTier1Days, but a
 // house the conversation closed stays closed under a row we priced later
 // (raisedHouses; Tyler E., 2026-10-19), so the close has to be in the read.
@@ -279,8 +372,8 @@ export function raisedByContact({ events = [], offers = [], now = Date.now(), st
  * run — the moves themselves, capped per run. The report keeps contact and
  * card ids and stage names, never a name or a message.
  */
-export async function runStagePlan({ client, locationId, store = defaultStore, saved = {}, ghl = null, read = null, dryRun = true, now = Date.now() }) {
-  const api = ghl || { listPipelines, updateOpportunity, createOpportunity, listAcquisitionOpportunities, listWorkflows, getContact };
+export async function runStagePlan({ client, locationId, store = defaultStore, saved = {}, ghl = null, read = null, dryRun = true, readGhlWords = false, now = Date.now() }) {
+  const api = ghl || { listPipelines, updateOpportunity, createOpportunity, listAcquisitionOpportunities, listWorkflows, getContact, searchConversations, listConversationMessages };
   const cfg = normalizeGhlStages(saved?.ghlStages);
   const out = { mode: cfg.mode, planned: 0, blocked: 0, applied: 0, moves: [], byMove: {}, errors: [] };
   const pipelines = read?.pipelines || await api.listPipelines(client, locationId);
@@ -313,13 +406,26 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
   ]);
   const agentIds = needAgents ? knownAgents({ profiles: agentProfiles, signs: agentSigns, offers, routing }) : new Set();
   for (const id of [...raisedBy.keys()]) if (!agentIds.has(id)) raisedBy.delete(id);
+  const repliers = cfg.tier2Repliers ? agentRepliers(lastRows, optOuts, (id) => agentIds.has(id)) : new Map();
+  // Agents whose reply only GHL's thread has (the bot never summarised it).
+  // Their GHL tags say agent; the card's own check reads them again.
+  let fromGhl = new Map();
+  if (cfg.tier2Repliers) {
+    const open = (opportunities || []).filter((o) => String(o?.status || "open") === "open").map((o) => o.contactId);
+    const stopped = new Set((optOuts || []).map((e) => e?.contactId));
+    const buyers = new Set((profiles || []).filter((p) => p?.party === "investor").map((p) => p.contactId));
+    fromGhl = await ghlWordsFor({ client, locationId, store, api, routing, skip: new Set([...open, ...repliers.keys()]), read: readGhlWords, dryRun, now })
+      .catch((e) => { out.errors.push(`GHL threads: ${String(e?.message || e).slice(0, 160)}`); return new Map(); });
+    for (const [id, at] of fromGhl) if (!repliers.has(id) && !stopped.has(id) && !buyers.has(id)) repliers.set(id, at);
+    out.fromGhl = fromGhl.size;
+  }
   const plan = planStageMoves({
     acq, opportunities, offers, now, settings: cfg,
     lastIn: new Map((lastRows || []).map((r) => [r.contactId, r.at])),
     openPromiseContacts: new Set(openPromises(promiseEvents || [], { now }).map((p) => p.contactId)),
     appMoves: appMovesByContact(moveEvents),
     handMoves: handMovesByContact(moveEvents),
-    repliers: cfg.tier2Repliers ? agentRepliers(lastRows, optOuts, (id) => agentIds.has(id)) : new Map(),
+    repliers,
     cardsMade: cardsMadeBy(moveEvents),
     raised: raisedBy,
     // Can't read the workflow list: assume the nurture is live, so nothing moves into Tier 2 blind.
@@ -335,6 +441,8 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
   let left = cfg.maxMovesPerRun;
   // The offers' own moves and cards first; a conversation's Tier 2 card waits behind them under the cap.
   const offersFirst = (list) => [...list.filter((x) => !x.replier), ...list.filter((x) => x.replier)];
+  // A card from GHL's thread that didn't happen this run (the cap, a guard, a GHL error) is tried again tomorrow.
+  const waiting = new Set();
   for (const m of offersFirst(plan.moves)) {
     const row = { contactId: m.contactId, opportunityId: m.opportunityId, from: m.from, to: m.to, why: m.why, ...(m.status ? { status: m.status } : {}), ...(m.blocked ? { blocked: m.blocked } : {}), ...(m.conversation ? { conversation: true } : {}) };
     if (go && !m.blocked && left > 0) {
@@ -345,6 +453,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
         await sleep(120);
       } catch (e) { out.errors.push(`${m.opportunityId}: ${String(e?.message || e).slice(0, 160)}`); }
     }
+    if (m.replier && !row.applied && !row.skipped) waiting.add(m.contactId);
     if (out.moves.length < 80) out.moves.push(row);
   }
   out.creates = [];
@@ -358,8 +467,10 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
         await sleep(120);
       } catch (e) { out.errors.push(`create ${c.contactId}: ${String(e?.message || e).slice(0, 160)}`); }
     }
+    if (c.replier && !row.applied && !row.skipped) waiting.add(c.contactId);
     if (out.creates.length < 40) out.creates.push(row);
   }
+  if (go && fromGhl.size) await settleGhlWords({ store, locationId, done: new Set([...fromGhl.keys()].filter((id) => !waiting.has(id))) }).catch(() => {});
   return out;
 }
 
@@ -578,7 +689,7 @@ export async function maybeRunTierCheck({ client, locationId, store = defaultSto
     const r = await runTierCheck({ client, locationId, store, ghl, saved, now });
     // Where the cards should sit (shared/ghl-stages.js): always planned and
     // kept as a report, moved only with ghlStages.mode "on".
-    const stageMoves = await runStagePlan({ client, locationId, store, saved, ghl, read: r.read, dryRun: false, now })
+    const stageMoves = await runStagePlan({ client, locationId, store, saved, ghl, read: r.read, dryRun: false, readGhlWords: true, now })
       .catch((e) => ({ errors: [String(e?.message || e).slice(0, 160)] }));
     // GHL's Tier 1 stage screened (ghl-broker/tier-one.js): sure misses are
     // planned every morning and taken off only with tierOne.autoKick on.

@@ -2904,6 +2904,21 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   - The nurture guard holds them too.
   - Preview before switching on: `GET /api/dashboard/ghl/pipeline?repliers=1`
     (`plan.counts.tier2Repliers`, `plan.creates`).
+  - **GHL's thread counts too (2026-10-19).** Matt: "all agents who HAVE
+    responded (not negatively like stop, etc)". The app's record of a reply
+    was the bot's summary, so 153 agents who wrote back had no card: the
+    July/August lists the bot never answered, threads it was stopped on,
+    texts it held. The 7am sweep now reads every GHL thread that moved since
+    its last read (cursor `ghlWords` in `job_cursors`, oldest first, 1,000
+    threads a run) for agents by GHL tag with no open card, and
+    `theirWordInGhl` (`shared/ghl-stages.js`) finds their newest real word:
+    a text, an email, or a call that connected. A tapback or an office's
+    auto-reply isn't one; any stop / remove / wrong number, or GHL's "DnD
+    enabled", is an opt-out. A buyer (investor tag), a `dnc` tag and an
+    `unsubscribed` event stay out. One found but not carded that run (the
+    cap, a guard) waits in the cursor's `pending` and is tried each morning
+    for 30 days. A dry run (the preview) reads no thread. The first run reads
+    every thread.
 - **A house the conversation raised is Tier 1, with nothing priced
   (2026-10-16).** An agent answered our first text with "It needs a lot of
   work". The bot rightly asked its one question first, so no underwrite ran,
