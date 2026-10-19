@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import ContactDrawer, { ContactRecordBody } from "../ContactDrawer.jsx";
+import ContactDrawer from "../ContactDrawer.jsx";
 import CompanionView from "../CompanionView.jsx";
 import { COMPANION_HELLO, COMPANION_MESSAGE, companionPaneItem, readCompanionMessage } from "../companion.js";
 import { rowTargets } from "../work-queue.js";
@@ -47,16 +47,14 @@ test("with no one open yet the companion says to open a contact in GHL", () => {
   expect(html).toContain("Not following GHL yet");
 });
 
-test("the drawer is still a slide-over with a close button; the companion's record has neither", () => {
+// Matt, 2026-10-18: one pane everywhere, and the record behind the name in
+// the companion too, not a second copy of the name under the pane.
+test("the record opens as the same slide-over everywhere, with a close button", () => {
   const drawer = renderToStaticMarkup(<ContactDrawer contactId={CONTACT} onClose={() => {}} />);
   expect(drawer).toContain('role="dialog"');
   expect(drawer).toContain('aria-label="Close"');
   expect(drawer).toContain("sticky top-0");
-  const inline = renderToStaticMarkup(<ContactRecordBody contactId={CONTACT} inline />);
-  expect(inline).not.toContain('role="dialog"');
-  expect(inline).not.toContain('aria-label="Close"');
-  expect(inline).not.toContain("sticky top-0");
-  expect(inline).toContain("Loading their record");
+  expect(drawer).toContain("Loading their record");
 });
 
 test("the companion's pane opens on the Offer tab; the Desk's still opens on Conversation", async () => {
@@ -72,12 +70,19 @@ test("the companion's pane opens on the Offer tab; the Desk's still opens on Con
   expect(selected(renderToStaticMarkup(<PaneBody pane={pane} item={item} targets={targets} convo={convo} bodies={bodies} />))).toBe("Conversation");
 });
 
-test("the stage picker shows GHL's four stages in the board's order, and says what a pick will do with their card", async () => {
-  const { default: GhlStagePicker, cardNote } = await import("../GhlStagePicker.jsx");
-  const html = renderToStaticMarkup(<GhlStagePicker contactId={CONTACT} party="agent" />);
-  const labels = [...html.matchAll(/role="radio"[^>]*>(?:<svg[\s\S]*?<\/svg>)?([^<]+)</g)].map((m) => m[1]);
-  expect(labels).toEqual(["Tier 2", "Tier 1", "Offer Out", "Contract"]);
-  expect(renderToStaticMarkup(<GhlStagePicker contactId={CONTACT} party="investor" />)).toBe("", "a buyer has no Acquisitions card");
+test("the stage menu by their name lists GHL's four stages in the board's order, ticks theirs, and says what a pick will do with their card", async () => {
+  const { GhlStageMenu, stageMenuItems, cardNote } = await import("../PaneParts.jsx");
+  expect(stageMenuItems(null).map((i) => i.label)).toEqual(["Tier 2", "Tier 1", "Offer Out", "Contract"]);
+  const open = { stage: "Offer Out", key: "offerOut", status: "open", open: 1, name: "Offer Out" };
+  expect(stageMenuItems(open).filter((i) => i.selected).map((i) => i.key)).toEqual(["offerOut"]);
+  expect(stageMenuItems({ ...open, status: "lost" }).some((i) => i.selected)).toBe(false);
+  const picked = [];
+  stageMenuItems(open, { onPick: (k) => picked.push(k) })[1].onSelect();
+  expect(picked).toEqual(["tier1"]);
+  const pill = renderToStaticMarkup(<GhlStageMenu contactId={CONTACT} party="agent" card={open} />);
+  expect(pill).toContain("GHL: Offer Out");
+  expect(pill).toContain('aria-haspopup="menu"');
+  expect(renderToStaticMarkup(<GhlStageMenu contactId={CONTACT} party="investor" card={open} />)).toBe("", "a buyer has no Acquisitions card");
   expect(cardNote({ stage: null })).toMatch(/No card in Acquisitions yet/);
   expect(cardNote({ stage: "Tier 2", key: "tier2", status: "lost", open: 0 })).toMatch(/lost \(was Tier 2\)\. Picking a stage reopens it\.$/);
   expect(cardNote({ stage: "Contract", key: "contract", status: "won", open: 0 })).toBe("Their card is won. Picking a stage makes a new one.");

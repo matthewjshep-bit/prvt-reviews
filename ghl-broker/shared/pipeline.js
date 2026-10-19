@@ -476,14 +476,17 @@ export function buildPipeline({
       const open = openChecks(checks);
       if (open.length) {
         const presold = new Set(o.presell?.contactIds || []).size;
+        const presell = !isOffMarket(o) && presold < PRESELL_MIN_BUYERS;
+        // One line on the Desk (Matt, 2026-10-18: he won't tick a checklist):
+        // the pre-sell is the item a button can do. `checks` stays on the row
+        // for the promote's confirm. The pane's Edit offer opens the offer.
         card.actionIds.push(push({ ...base, kind: "pre_contract", severity: o.hot?.signal === "writing_up" ? "now" : "soon",
-          title: `${card.address}: before you sign, ${open.length} of ${checks.length} not checked`,
-          detail: open.map((c) => c.label.toLowerCase()).join(" · "),
+          title: `${card.address}: before you sign`,
+          detail: presell ? `pre-sold to ${presold} of ${PRESELL_MIN_BUYERS} buyers` : "",
           checks,
           ops: [
-            ...(!isOffMarket(o) && presold < PRESELL_MIN_BUYERS ? [{ key: "presell", label: `Pre-sell to ${PRESELL_MIN_BUYERS} buyers`, intent: "primary" }] : []),
-            { key: "open_editor", label: "Open the offer", intent: isOffMarket(o) || presold >= PRESELL_MIN_BUYERS ? "primary" : "secondary" },
-            { key: "promote_deal", label: "It's signed — promote", intent: "secondary" },
+            ...(presell ? [{ key: "presell", label: `Pre-sell to ${PRESELL_MIN_BUYERS} buyers`, intent: "primary" }] : []),
+            { key: "promote_deal", label: "It's signed — promote", intent: presell ? "secondary" : "primary" },
           ] }));
       }
     }

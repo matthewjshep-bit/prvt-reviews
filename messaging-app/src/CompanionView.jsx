@@ -5,23 +5,24 @@
 // the person in (companion.js); a GHL conversation page is turned into its
 // person by the broker.
 //
-// Their GHL pipeline stage is on top, with buttons to move it
-// (GhlStagePicker.jsx). Under it, the person's Desk pane (their current
-// offer, the conversation and reply box, Status · Bot · Edit offer · Call, the
-// same as the Desk), and their whole record under that (ContactDrawer's
-// body). ?contact= keeps the person across a reload.
+// The window is one thing: the person's contact pane, the same as the Desk,
+// the Offers split and Tier 1 (ContactPane.jsx; Matt, 2026-10-18). Their GHL
+// stage moves from the pill by their name; their name opens their record over
+// the window, as it does everywhere. It opens on their offer, since GHL's own
+// window already shows the conversation. ?contact= keeps the person across a
+// reload.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, Loader2 } from "lucide-react";
-import { getContactByConversation, getLocationId, ghlContactUrl } from "./api.js";
+import { getContactByConversation, getContactProfile, getLocationId, ghlContactUrl } from "./api.js";
 import { ContactDrawerContext } from "./ContactLink.jsx";
-import { ContactRecordBody } from "./ContactDrawer.jsx";
-import { PaneActions, PaneBody, PaneHeading, usePane } from "./PaneParts.jsx";
+import ContactDrawer from "./ContactDrawer.jsx";
+import { usePane } from "./PaneParts.jsx";
+import ContactPane from "./ContactPane.jsx";
 import { draftsKey, loadDrafts } from "./OfferPane.jsx";
 import { forget, useLoad } from "./work-data.js";
 import { rowTargets } from "./work-queue.js";
-import { COMPANION_HELLO, companionPaneItem, readCompanionMessage } from "./companion.js";
-import GhlStagePicker from "./GhlStagePicker.jsx";
+import { companionPaneItem, readCompanionMessage } from "./companion.js";
 
 const PING = "shepflips:companion-ping";
 
@@ -53,35 +54,29 @@ function CompanionPane({ contactId, name, party, settings }) {
   const pane = usePane({ item, targets, onDone: done });
   const convo = { item, targets, sendsEnabled: Boolean(data?.sendsEnabled), serverOffsetMs, onDone: done, fb: pane.fb, taught: pane.coach?.taught || [], bot: pane.timeline?.bot || null };
   return (
-    <section aria-label="Their offer and conversation" className="flex h-[80vh] min-h-[28rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="shrink-0 space-y-2 border-b border-slate-200 px-4 py-3">
-        {/* The stage is the picker above, not a pill here. */}
-        <PaneHeading item={item} targets={targets} pane={pane} fallback={name || "Their offers"} stagePill={false} />
-        <div className="flex flex-wrap items-start gap-1.5">
-          <PaneActions pane={pane} item={item} targets={targets} />
-        </div>
-      </div>
-      {/* GHL's own window already shows the conversation; the offer is what he comes here for. */}
-      <PaneBody pane={pane} item={item} targets={targets} convo={convo} settings={settings} onDone={done} defaultTab="offer" />
-    </section>
+    <ContactPane pane={pane} item={item} targets={targets} convo={convo} settings={settings} onDone={done}
+      defaultTab="offer" className="h-[calc(100vh-3.5rem)] min-h-[28rem]" />
   );
 }
+
+export const profileKey = (contactId) => (contactId ? `profile:${contactId}` : null);
 
 export default function CompanionView({ settings = null }) {
   const [contactId, setContactId] = useState(readContact);
   const [linked, setLinked] = useState(false);     // the extension said hello
   const [finding, setFinding] = useState(false);   // a conversation id → its person
   const [error, setError] = useState("");
-  const [rec, setRec] = useState(null);            // the record body's load: name and party
+  const [record, setRecord] = useState(null);      // the record open over the window: { id, party }
   const current = useRef(contactId);
-  const recordRef = useRef(null);
+  // Their name and whether they're an agent or a buyer, for the pane and the title.
+  const { data: rec } = useLoad(profileKey(contactId), () => getContactProfile(contactId), { maxAgeMs: 120000 });
   const locationId = getLocationId();
 
   const show = (id) => {
     if (!id || id === current.current) return;
     current.current = id;
     setError("");
-    setRec(null);
+    setRecord(null);
     setContactId(id);
     writeContact(id);
     try { window.scrollTo({ top: 0 }); } catch { /* noop */ }
@@ -117,14 +112,12 @@ export default function CompanionView({ settings = null }) {
     try { document.title = rec?.profile?.name ? `${rec.profile.name} · Companion` : "Companion"; } catch { /* noop */ }
   }, [rec]);
 
-  // A name in the pane opens "their record": it's already on this page.
+  // A name opens their record over the window, the slide-over every page has.
+  // (Not in ?contact=, which here is who the window follows.)
   const drawer = useMemo(() => ({
-    open: (id) => {
-      if (id && id !== current.current) { show(id); return; }
-      recordRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    },
-    close: () => {},
-  }), []);   // eslint-disable-line react-hooks/exhaustive-deps
+    open: (id, { party: p = null } = {}) => { if (id) setRecord({ id, party: p }); },
+    close: () => setRecord(null),
+  }), []);
 
   const name = rec?.profile?.name || rec?.investor?.name || "";
   const party = rec?.party || null;
@@ -132,6 +125,7 @@ export default function CompanionView({ settings = null }) {
   return (
     <ContactDrawerContext.Provider value={drawer}>
       <div className="min-h-screen bg-slate-50 text-slate-900">
+        {record && <ContactDrawer contactId={record.id} party={record.party} onClose={drawer.close} />}
         <div className="sticky top-0 z-30 flex items-center gap-2 border-b border-slate-200 bg-white/95 px-4 py-2 text-xs backdrop-blur">
           <span className={`h-2 w-2 shrink-0 rounded-full ${linked ? "bg-emerald-500" : "bg-slate-300"}`} aria-hidden="true" />
           <span className="text-slate-500" title={linked ? "Opening a contact or a conversation in GHL shows them here" : "The Shep Flips Companion extension isn't talking to this window. See companion-extension/README.md"}>
@@ -154,12 +148,8 @@ export default function CompanionView({ settings = null }) {
             </div>
           </div>
         ) : (
-          <div className="space-y-4 p-3 sm:p-4">
-            <GhlStagePicker key={`stage:${contactId}`} contactId={contactId} party={party} />
+          <div className="p-2">
             <CompanionPane key={contactId} contactId={contactId} name={name} party={party} settings={settings} />
-            <section ref={recordRef} aria-label="Their record" className="scroll-mt-12 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-              <ContactRecordBody key={contactId} contactId={contactId} inline onLoaded={setRec} />
-            </section>
           </div>
         )}
       </div>

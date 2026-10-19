@@ -1,32 +1,26 @@
-// WorkPane.jsx — one Today row, worked in one place.
+// WorkPane.jsx — one Desk row, worked in the same pane as everywhere else
+// (ContactPane.jsx). What's the Desk's own:
 //
-//   ┌ group · kind                                        3 of 12  ‹ › ┐
-//   │ Dana Smith · 12 Elm St          ← the name opens their record     │
-//   │ priced 385K 9/12 · sent · nudge 9/15 · … → next: nudge Thu · History │
-//   │ why it's here · Next: …                                          │
-//   │ the row's buttons   Status ▾ · Bot ▾ · Edit offer · Call · Coach · ⋯ │
-//   ├ the offer(s)               │ the conversation + the reply box     ┤
-//   └                            │ (Feedback, tucked away: T or ⋯)      ┘
+//   - one line under the name: why the row is here, and what else is on
+//     the person ("Also: drafts waiting on you")
+//   - the row's one button (its primary op) and Dismiss; its other ops, and
+//     the ops of what else is on the person, in ⋯
+//   - a call row's call card
+//   - "3 of 12" ‹ ›, and the key help on ?
 //
-// Every row kind gets the same surfaces. What differs is only what the
-// header says and which buttons the row names (shared/pipeline.js). The
-// person, the strip, the app's own buttons and the body are PaneParts.jsx,
-// shared with the Offers split.
+// Gone (Matt, 2026-10-18, "way too overcrowded"): the section, kind, "now"
+// and intent pills (the rail's dot and the reply box say those), the
+// before-you-sign checklist, the "Also on" box, the keyboard button.
 
-import React from "react";
-import { ChevronLeft, ChevronRight, Keyboard } from "lucide-react";
-import { BTN, Pill } from "./ui.jsx";
-import { RowOpsBar, SEV, whenLabel } from "./RowOps.jsx";
-import { IntentPill } from "./ConversationOutbox.jsx";
-import { PaneActions, PaneBody, PaneHeading, usePane } from "./PaneParts.jsx";
+import React, { useState } from "react";
+import { BTN } from "./ui.jsx";
+import { OpControl, opMenuItem, paneOps, splitOps, whenLabel } from "./RowOps.jsx";
+import { usePane } from "./PaneParts.jsx";
+import ContactPane, { PaneNav } from "./ContactPane.jsx";
 import CallCard from "./CallCard.jsx";
-import PreContractList from "./PreContractList.jsx";
-import { KEYS_HELP, KIND_LABEL, SECTION_LABEL, canDismissRow, groupOf, railLabel } from "./work-queue.js";
+import { KEYS_HELP, KIND_LABEL, canDismissRow, railLabel } from "./work-queue.js";
 
 export { OPEN_OFFER_EVENT } from "./PaneParts.jsx";
-
-const GROUP_CLS = { call: "bg-emerald-50 text-emerald-800", decide: "bg-blue-50 text-blue-800", yours: "bg-blue-50 text-blue-800", stuck: "bg-amber-100 text-amber-800", machine: "bg-violet-100 text-violet-800" };
-const NAV = "rounded-lg border border-slate-300 bg-white p-1.5 text-slate-600 hover:bg-slate-50 disabled:cursor-default disabled:opacity-40";
 
 export function KeysHelp() {
   return (
@@ -40,9 +34,8 @@ export function KeysHelp() {
 }
 
 // "Shelley Michael · 3004 E Yesler Way" — who and which house, which is
-// what you need to know before reading anything else; the pipeline's title
-// (why the row is here) goes under it. Rows about no one person keep the
-// title as the heading.
+// what you need to know before reading anything else. Rows about no one
+// person keep the title as the heading.
 export function rowHeading(item, offer = null) {
   const street = String(item.address || offer?.address || "").split(",")[0].trim();
   if (item.contactName && street) return `${item.contactName} · ${street}`;
@@ -50,101 +43,101 @@ export function rowHeading(item, offer = null) {
   return item.title || railLabel(item);
 }
 
+// The pipeline's title without what the heading already says: "Sam Lee: we
+// owe them a number" and "5426 S Lawrence St, Tacoma: before you sign" lose
+// the name and the address.
+function bareTitle(r) {
+  let t = String(r.title || "");
+  for (const lead of [r.contactName, r.address]) if (lead && t.startsWith(`${lead}: `)) t = t.slice(lead.length + 2);
+  return t;
+}
+const capital = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : "");
+
 /**
- * The other things on this person (a Desk row folds them, shared/desk.js):
- * each says what it is and keeps its own buttons, so one pane clears them all.
+ * whyLine(item) → the one line under the name: why the row is here, and its
+ * detail when there is one. A draft row's title is only "name: intent",
+ * which the reply box already says.
  */
-export function FoldedReasons({ item, targets, pane, onDone }) {
-  const also = item.also || [];
-  if (!also.length) return null;
-  const who = item.contactName ? `${item.contactName}` : "this";
-  // "Sam Lee: we owe them a number" under Sam Lee's row: the name once is enough.
-  const said = (r) => (r.contactName && String(r.title || "").startsWith(`${r.contactName}: `) ? r.title.slice(r.contactName.length + 2) : r.title || "");
-  return (
-    <div className="mt-2 space-y-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" aria-label={`Also on ${who}`}>
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Also on {who}</div>
-      {also.map((r) => (
-        <div key={r.id} className="space-y-1">
-          <div className="text-sm text-slate-800"><span className="font-semibold">{KIND_LABEL[r.kind] || String(r.kind || "").replace(/_/g, " ")}</span>{said(r) ? ` · ${said(r)}` : ""}</div>
-          {r.detail && <div className="text-xs text-slate-600">{r.detail}</div>}
-          {r.next?.what && <div className="text-xs text-violet-700">Next: {r.next.what}{r.next.at ? ` · ${whenLabel(r.next.at)}` : ""}</div>}
-          <RowOpsBar item={{ ...r, ops: (r.ops || []).filter((op) => !(r.offerId && r.offerId === item.offerId && (item.ops || []).some((o) => o.key === op.key))) }}
-            onDone={onDone} onOpenContact={pane.openContact} hasDraft={Boolean(targets.draft)} hasRecord={Boolean(targets.contactId)} />
-        </div>
-      ))}
-    </div>
-  );
+export function whyLine(item) {
+  const title = String(item.kind || "").startsWith("draft_") ? "" : capital(bareTitle(item));
+  const detail = item.call ? "" : String(item.detail || "");
+  return [title, detail].filter(Boolean).join(" · ");
 }
 
-/** The row's own header: why it's here, the person and the house, and its buttons. */
-export function RowHeader({ item, targets, index, total, onPrev, onNext, picker, onDone, onDismiss = null, showKeys, onToggleKeys, pane, actions = null }) {
-  const sev = SEV[item.severity] || SEV.fyi;
-  // A Desk row says its section (Call / Decide / Machine); an old row its group.
-  const g = item.section || groupOf(item);
-  const intent = targets.draft?.intent;
-  const heading = rowHeading(item, pane.side.offer);
-  // The pipeline's title says why the row is here; a draft row's is only
-  // "name: intent", which the heading and the pills already say.
-  // "Sam Lee: we owe them a number" under "Sam Lee · 23706 Sample Dr" says
-  // the name twice, so the title loses it.
-  const titled = item.contactName && String(item.title || "").startsWith(`${item.contactName}: `) ? item.title.slice(item.contactName.length + 2) : item.title || "";
-  const why = titled && item.title !== heading && !String(item.kind || "").startsWith("draft_") ? titled.charAt(0).toUpperCase() + titled.slice(1) : "";
-  return (
-    <div className="shrink-0 space-y-2 border-b border-slate-200 px-4 py-3">
-      <div className="flex items-start gap-3">
-        <span className={`mt-2 h-2.5 w-2.5 shrink-0 rounded-full ${sev.dot}`} title={sev.label} />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Pill small label={SECTION_LABEL[g] || g} cls={GROUP_CLS[g]} />
-            <Pill small label={KIND_LABEL[item.kind] || item.kind} />
-            {item.severity === "now" && <Pill small label="now" cls={SEV.now.cls} />}
-            {intent && intent !== "other" && <IntentPill party={targets.party} intent={intent} />}
-          </div>
-          <PaneHeading item={item} targets={targets} pane={pane} fallback={heading} />
-          {why && <p className="mt-0.5 text-sm font-medium text-slate-800">{why}</p>}
-          {item.detail && !item.call && <p className="mt-0.5 text-sm text-slate-600">{item.detail}</p>}
-          <CallCard item={item} targets={targets} onDone={onDone} />
-          {item.kind === "pre_contract" && <PreContractList item={item} onDone={onDone} />}
-          {item.group === "stuck" && item.why && <p className="mt-0.5 text-sm text-amber-800">Stuck because: {item.why}</p>}
-          {item.next?.what && <p className="mt-0.5 text-sm text-violet-700">Next: {item.next.what}{item.next.at ? ` · ${whenLabel(item.next.at)}` : ""}</p>}
-          <FoldedReasons item={item} targets={targets} pane={pane} onDone={onDone} />
-        </div>
-        <div className="relative flex shrink-0 items-center gap-1.5">
-          {picker}
-          <span className="hidden text-xs tabular-nums text-slate-500 sm:inline">{index + 1} of {total}</span>
-          <button type="button" className={NAV} onClick={onPrev} disabled={!onPrev} title="Previous row (K)" aria-label="Previous row"><ChevronLeft size={16} /></button>
-          <button type="button" className={NAV} onClick={onNext} disabled={!onNext} title="Next row (J)" aria-label="Next row"><ChevronRight size={16} /></button>
-          <button type="button" className={`${NAV} hidden lg:inline-flex`} onClick={onToggleKeys} aria-expanded={showKeys} title="Keys (?)" aria-label="Keyboard keys"><Keyboard size={16} /></button>
-          {showKeys && <KeysHelp />}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-start gap-1.5">
-        <RowOpsBar item={item} onDone={onDone} onOpenContact={pane.openContact} hasDraft={Boolean(targets.draft)} hasRecord={Boolean(targets.contactId)} />
-        {onDismiss && canDismissRow(item) && (
-          <button type="button" className={BTN} onClick={() => onDismiss(item)} title="Take it off Today and go to the next row (D). It comes back if it changes.">Dismiss</button>
-        )}
-        {actions}
-      </div>
-    </div>
-  );
+/** "Also: Drafts waiting on you · Acceptance" — what else the Desk folded into this row. */
+export function alsoLine(item) {
+  const also = item.also || [];
+  if (!also.length) return "";
+  const said = (r) => {
+    const kind = KIND_LABEL[r.kind] || String(r.kind || "").replace(/_/g, " ");
+    const title = capital(bareTitle(r));
+    return title && title.toLowerCase() !== kind.toLowerCase() ? `${kind} · ${title}` : kind;
+  };
+  return `Also: ${also.map(said).join("; ")}`;
 }
 
 /**
- * <WorkPane … /> — the row's surfaces around one header.
+ * rowOps(item, { hasDraft, hasRecord }) → { lead, dismiss, more }
+ * The one button: the row's own primary, or — a row with none of its own,
+ * like a draft — the first primary of what's folded into it. Then the
+ * rest of the row's ops and each folded reason's (less the ones the row
+ * already has on the same offer), as ⋯ items. Each is { op, row }: an op
+ * runs against the reason it came from.
+ */
+export function rowOps(item, { hasDraft, hasRecord }) {
+  const own = splitOps(paneOps(item, { hasDraft, hasRecord }));
+  const folded = (item.also || []).flatMap((r) => paneOps(r, { hasDraft, hasRecord })
+    .filter((op) => !(r.offerId && r.offerId === item.offerId && (item.ops || []).some((o) => o.key === op.key)))
+    .map((op) => ({ op, row: r })));
+  let lead = own.lead ? { op: own.lead, row: item } : null;
+  if (!lead && folded.length) {
+    const i = Math.max(0, folded.findIndex(({ op }) => op.intent === "primary"));
+    [lead] = folded.splice(i, 1);
+  }
+  return { lead, dismiss: own.dismiss ? { op: own.dismiss, row: item } : null, more: [...own.rest.map((op) => ({ op, row: item })), ...folded] };
+}
+
+/** The ⋯ half of rowOps, for tests and the menu. */
+export const rowMoreOps = (item, has) => rowOps(item, has).more;
+
+/**
+ * <WorkPane … /> — the Desk row in the contact pane.
  * `bodies` (tests): { offer, siblings, thread, coach, timeline } — render the
  * presentational halves with this data instead of loading it.
  * `settings`: the app's saved settings, for the offer editor.
  */
-export default function WorkPane({ item, targets, index, total, onPrev, onNext, picker, onDone, onDismiss = null, sendsEnabled, serverOffsetMs, feedback, showKeys, onToggleKeys, settings = null, bodies = null }) {
+export default function WorkPane({ item, targets, index, total, onPrev, onNext, picker, onDone, onDismiss = null, sendsEnabled, serverOffsetMs, feedback, showKeys, settings = null, bodies = null }) {
   const pane = usePane({ item, targets, bodies, feedback, onDone });
+  const [note, setNote] = useState("");
   const rowOfferId = pane.side.replaced?.id === targets.offerId ? pane.side.offer?.id : targets.offerId;
   const convo = { item, targets, sendsEnabled, serverOffsetMs, onDone, fb: pane.fb, taught: pane.coach?.taught || [], bot: pane.timeline?.bot || null };
+  const has = { hasDraft: Boolean(targets.draft), hasRecord: Boolean(targets.contactId) };
+  const { lead, dismiss, more } = rowOps(item, has);
+  const moreItems = more.map(({ op, row }) => opMenuItem(op, row, { onDone, onOpenContact: pane.openContact, onNote: setNote }));
+  const why = whyLine(item);
+  const also = alsoLine(item);
+  const after = item.group === "stuck" && item.why ? `Stuck because: ${item.why}` : item.next?.what ? `Next: ${item.next.what}${item.next.at ? ` · ${whenLabel(item.next.at)}` : ""}` : "";
   return (
-    <section aria-label="The row you're working" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <RowHeader item={item} targets={targets} index={index} total={total} onPrev={onPrev} onNext={onNext} picker={picker}
-        onDone={onDone} onDismiss={onDismiss} showKeys={showKeys} onToggleKeys={onToggleKeys} pane={pane}
-        actions={<PaneActions pane={pane} item={item} targets={targets} rowOfferId={rowOfferId} />} />
-      <PaneBody pane={pane} item={item} targets={targets} convo={convo} settings={settings} bodies={bodies} onDone={onDone} />
-    </section>
+    <ContactPane pane={pane} item={item} targets={targets} convo={convo} label="The row you're working" rowOfferId={rowOfferId}
+      settings={settings} bodies={bodies} onDone={onDone} moreItems={moreItems}
+      nav={<PaneNav index={index} total={total} onPrev={onPrev} onNext={onNext} picker={picker}>{showKeys && <KeysHelp />}</PaneNav>}
+      why={(
+        <>
+          {why && <p className="mt-0.5 text-sm font-medium text-slate-800">{why}</p>}
+          {after && <p className={`mt-0.5 text-xs ${item.group === "stuck" ? "text-amber-800" : "text-violet-700"}`}>{after}</p>}
+          {also && <p className="mt-0.5 text-xs text-slate-500">{also}</p>}
+          <CallCard item={item} targets={targets} onDone={onDone} />
+        </>
+      )}
+      lead={(
+        <>
+          {lead && <OpControl op={lead.op} item={lead.row} onDone={onDone} onOpenContact={pane.openContact} />}
+          {dismiss && <OpControl op={dismiss.op} item={dismiss.row} onDone={onDone} onOpenContact={pane.openContact} />}
+          {onDismiss && canDismissRow(item) && (
+            <button type="button" className={BTN} onClick={() => onDismiss(item)} title="Take it off Today and go to the next row (D). It comes back if it changes.">Dismiss</button>
+          )}
+          {note && <span className="self-center text-xs text-slate-500" role="status">{note}</span>}
+        </>
+      )} />
   );
 }

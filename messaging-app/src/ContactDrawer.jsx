@@ -98,14 +98,12 @@ function FactsSection({ title, keys, record, busy, onRemove, onAdd }) {
 
 
 /**
- * <ContactRecordBody contactId party onClose inline />
- * The record itself, without the slide-over: the drawer wraps it, and the
- * companion window (/contact, CompanionView.jsx) shows it in the page.
+ * <ContactRecordBody contactId party onClose />
+ * The record itself, inside the slide-over (every page's, the companion
+ * window's too).
  *   onClose  the header's ✕; none, no ✕
- *   inline   in a page, not a panel: the header doesn't stick
- *   onLoaded(rec)  each time the record is read (the companion's name and party)
  */
-export function ContactRecordBody({ contactId, party: hint = null, onClose = null, inline = false, onLoaded = null }) {
+export function ContactRecordBody({ contactId, party: hint = null, onClose = null }) {
   const [rec, setRec] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -121,7 +119,6 @@ export function ContactRecordBody({ contactId, party: hint = null, onClose = nul
     catch (e) { setError(e.message); }
   };
   useEffect(() => { setRec(null); if (contactId) load(false); }, [contactId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (rec) onLoaded?.(rec); }, [rec]); // eslint-disable-line react-hooks/exhaustive-deps
   const party = rec?.party || hint || null;
   const groups = useMemo(() => groupByDay(rec?.events || []), [rec]);
   const shown = showAll ? groups : groups.slice(0, 8);
@@ -147,7 +144,7 @@ export function ContactRecordBody({ contactId, party: hint = null, onClose = nul
 
   return (
     <>
-        <header className={`${inline ? "" : "sticky top-0 z-10 "}flex items-start gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur`}>
+        <header className={`sticky top-0 z-10 flex items-start gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur`}>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="truncate text-base font-bold text-slate-900">{p?.name || rec?.drafts?.[0]?.contactName || rec?.investor?.name || "Contact"}</span>

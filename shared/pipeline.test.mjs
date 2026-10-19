@@ -718,14 +718,14 @@ test("a hot push that repeats weekly keeps its stalled offer with the machine, w
 
 // 2026-10-15: seven of eight listed-house contracts fell through on things
 // that were on the record before the signature.
-test("an offer about to be signed is on Today with what nobody has checked, and a listed one offers the pre-sell", () => {
+test("an offer about to be signed is one line on Today, before you sign, and a listed one offers the pre-sell", () => {
   const yes = offer({ status: "sent", realm: { answer: "yes", ts: D(1) } });
   const row = build({ offers: [yes] }).actions.find((a) => a.kind === "pre_contract");
   assert.ok(row, "there is a row");
   assert.equal(row.severity, "soon");
-  assert.match(row.title, /12 Elm St, Renton, WA: before you sign, \d of 8 not checked/);
-  assert.match(row.detail, /eyes on the house/);
-  assert.deepEqual(row.ops.map((o) => o.key), ["presell", "open_editor", "promote_deal"]);
+  assert.equal(row.title, "12 Elm St, Renton, WA: before you sign");
+  assert.equal(row.detail, "pre-sold to 0 of 3 buyers");
+  assert.deepEqual(row.ops.map((o) => o.key), ["presell", "promote_deal"]);
   assert.equal(row.checks.length, 8);
   // The agent is writing it up: now.
   const writing = build({ offers: [{ ...yes, hot: { at: D(0), by: "conversation", signal: "writing_up" } }] }).actions.find((a) => a.kind === "pre_contract");
@@ -733,8 +733,9 @@ test("an offer about to be signed is on Today with what nobody has checked, and 
   // Off-market: no pre-sell button, and the route's full read wins over the lean row.
   const off = build({ offers: [{ ...yes, offMarket: { value: true, by: "you" } }], preContractByOffer: { o1: [{ key: "eyes", label: "Eyes on the house", state: "unknown", detail: "" }, { key: "remarks", label: "Listing remarks read", state: "ok", detail: "" }] } })
     .actions.find((a) => a.kind === "pre_contract");
-  assert.deepEqual(off.ops.map((o) => o.key), ["open_editor", "promote_deal"]);
-  assert.match(off.title, /1 of 2 not checked/);
+  assert.deepEqual(off.ops.map((o) => [o.key, o.intent]), [["promote_deal", "primary"]]);
+  assert.equal(off.detail, "");
+  assert.equal(off.checks.length, 2);
   // Everything checked, or not close to paper: no row.
   assert.equal(build({ offers: [yes], preContractByOffer: { o1: [{ key: "eyes", label: "Eyes on the house", state: "ok", detail: "" }] } }).actions.some((a) => a.kind === "pre_contract"), false);
   assert.equal(build({ offers: [offer()] }).actions.some((a) => a.kind === "pre_contract"), false);

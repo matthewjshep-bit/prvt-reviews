@@ -1,35 +1,37 @@
-// PaneParts.jsx — the work pane's parts, shared by Today (WorkPane) and the
-// Offers split (OfferPane):
+// PaneParts.jsx — the contact pane's parts. ContactPane.jsx puts them
+// together, the same on the Desk, the Offers split, Tier 1 and the companion
+// window (Matt, 2026-10-18: "every single place you jump has a slightly
+// different sort of interface"):
 //
-//   PaneHeading   the person (their name opens their record) · the house,
-//                 and under it the timeline strip (MomentStrip)
-//   PaneActions   the app's own buttons: Status ▾ · Bot ▾ · Edit offer ·
-//                 Call · Coach · ⋯ (Feedback, History, GHL)
+//   PaneHeading   the person (their name opens their record) · the house ·
+//                 their GHL stage, which moves from here (GhlStageMenu)
+//   PaneActions   the app's own buttons: Status ▾ · Edit offer · Call ·
+//                 Coach · ⋯ (Feedback, their record, GHL, and the page's own)
 //   PaneBody      the offer on the left, the conversation and the reply box
 //                 on the right (two tabs below laptop width), and the full
 //                 editor over it when asked for
 //   usePane       what those read: the offer and their other offers, the
-//                 coach's ideas, the timeline, the Feedback control's state
+//                 coach's ideas, the bot's state, the Feedback control's state
 //
-// The Record button is gone (Matt, 2026-10-01: he didn't know what it was):
-// the name opens the record, and so do the strip's History and the ⋯ menu.
+// Gone (Matt, 2026-10-18, "way too overcrowded"): the timeline strip under
+// the name and the Bot menu. The Record button went 2026-10-01: the name
+// opens the record, and so does the ⋯ menu.
 
 import React, { useEffect, useState } from "react";
-import { Ellipsis, ExternalLink, History, MessageSquareWarning, Pencil } from "lucide-react";
+import { ChevronDown, Ellipsis, ExternalLink, History, Loader2, MessageSquareWarning, Pencil } from "lucide-react";
+import { CARD_STAGES, CARD_STAGE_LABEL } from "@shared/ghl-stages.js";
 import { annotateCurrent } from "@shared/current-offer.js";
 import { Menu, StatusMenu } from "./ui.jsx";
 import { useOpenContact } from "./ContactLink.jsx";
 import ContactLink from "./ContactLink.jsx";
-import { getContactTimeline, getGhlCard, ghlContactUrl, setOfferStatus } from "./api.js";
+import { getContactTimeline, getGhlCard, ghlContactUrl, setGhlCardStage, setOfferStatus } from "./api.js";
 import { OfferPanelBody, loadSiblings, siblingsKey, useOfferSide, useRequote } from "./OfferPanel.jsx";
-import ConversationPanel, { ConversationPanelBody } from "./ConversationPanel.jsx";
+import ConversationPanel, { ConversationPanelBody, REPLY_BOX_ID } from "./ConversationPanel.jsx";
 import CoachIdeas, { coachKey, loadCoach } from "./CoachIdeas.jsx";
 import CallButton from "./CallButton.jsx";
 import OfferEditorSheet from "./OfferEditorSheet.jsx";
-import MomentStrip from "./MomentStrip.jsx";
-import BotMenu from "./BotMenu.jsx";
 import { TEACH_EVENT, useRowFeedback } from "./RowFeedback.jsx";
-import { forgetPrefix, useLoad } from "./work-data.js";
+import { forget, useLoad } from "./work-data.js";
 import { defaultOfferFor, teachRowId } from "./work-queue.js";
 import { feedbackItemOf } from "./RowOps.jsx";
 
@@ -74,7 +76,7 @@ export function usePane({ item, targets, bodies = null, feedback = null, onDone 
   const { requote, requoting } = useRequote(() => { side.reload(); onDone?.(); });
   const coachLoad = useLoad(bodies ? null : coachKey(targets.contactId), loadCoach(targets.contactId), { maxAgeMs: 120000 });
   const coach = bodies ? bodies.coach : coachLoad.data;
-  // The strip and the Bot menu, for the offer on screen.
+  // The bot's state for the offer on screen: the reply box says when it's stopped.
   const shownId = side.offer?.id || offerId || null;
   const tl = useLoad(bodies ? null : timelineKey(targets.contactId, shownId), loadTimeline(targets.contactId, shownId, targets.party), { maxAgeMs: 60000 });
   const timeline = bodies ? (bodies.timeline ?? null) : tl.data;
@@ -96,62 +98,116 @@ export function usePane({ item, targets, bodies = null, feedback = null, onDone 
     window.addEventListener(OPEN_OFFER_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_OFFER_EVENT, onOpen);
   });
-  // A press on the Bot menu: the strip, the offer's next follow-up and the
-  // queue all read it.
-  const botChanged = () => {
-    forgetPrefix(`timeline:${targets.contactId}:`);
-    tl.reload();
-    side.reload();
-    onDone?.();
-  };
   return {
     offerId, setOfferId, editing, setEditing, edit, side, theirs, requote, requoting,
-    coach, coachReload: coachLoad.reload, timeline, botChanged, fb, name, openContact,
+    coach, coachReload: coachLoad.reload, timeline, fb, name, openContact,
   };
 }
 
-/** The person (their name opens their record) · the house, and the strip under it. */
 // Where the agent sits on GHL's Acquisitions board, beside their name
-// (Matt, 2026-10-13). Agents only; a buyer has no card there.
+// (Matt, 2026-10-13), and the menu that moves it (2026-10-17, the companion's
+// picker; 2026-10-18, the same menu everywhere). Agents only; a buyer has no
+// card there.
 export const GHL_STAGE_CLS = {
   tier2: "bg-slate-100 text-slate-700", tier1: "bg-amber-100 text-amber-800",
   offerOut: "bg-blue-100 text-blue-800", contract: "bg-emerald-100 text-emerald-800",
 };
 export const ghlCardKey = (contactId) => (contactId ? `ghlcard:${contactId}` : null);
-export function GhlStagePill({ contactId, party }) {
+
+/** What the stage menu says about their card before a pick. */
+export function cardNote(card) {
+  if (!card) return "";
+  if (!card.stage) return "No card in Acquisitions yet. Pick a stage to make one.";
+  if ((card.open || 0) > 1) return "They have two open cards in Acquisitions. Move the right one in GHL.";
+  if (card.status === "won") return "Their card is won. Picking a stage makes a new one.";
+  if (card.status && card.status !== "open") return `Their card is ${card.status} (was ${card.stage}). Picking a stage reopens it.`;
+  if (!card.key || !CARD_STAGES.includes(card.key)) return `In ${card.name || card.stage}, an old stage. Pick one of these to move it.`;
+  return "";
+}
+
+// The stage their card is in, when it's open in one of the four.
+const currentStage = (card) => (card?.status === "open" && CARD_STAGES.includes(card?.key) ? card.key : null);
+
+/** The menu's items: GHL's four stages in the board's order, theirs ticked. */
+export function stageMenuItems(card, { busy = false, onPick = () => {} } = {}) {
+  const current = currentStage(card);
+  return CARD_STAGES.map((k) => ({
+    key: k, label: CARD_STAGE_LABEL[k], selected: current === k, disabled: busy,
+    title: current === k ? `In ${CARD_STAGE_LABEL[k]} now` : `Move their card to ${CARD_STAGE_LABEL[k]}`,
+    onSelect: () => onPick(k),
+  }));
+}
+
+/**
+ * <GhlStageMenu contactId party card? />
+ * The stage pill; a press opens GHL's four stages in the board's order. A
+ * pick is Matt's move, the same as dragging the card in GHL: the broker
+ * records it as his, so the offers leave the card there until something new
+ * happens on one of their offers (POST /api/dashboard/ghl/card).
+ *   card  tests only: the card as GET /api/dashboard/ghl/card answers
+ */
+export function GhlStageMenu({ contactId, party, card = undefined }) {
   const on = Boolean(contactId) && party !== "investor";
-  const { data, loading } = useLoad(on ? ghlCardKey(contactId) : null, () => getGhlCard(contactId), { maxAgeMs: 120000 });
+  const loaded = useLoad(on && card === undefined ? ghlCardKey(contactId) : null, () => getGhlCard(contactId), { maxAgeMs: 120000 });
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);     // { tone, text }
   if (!on) return null;
-  if (loading) return <span className="ml-2 inline-block h-4 w-16 animate-pulse rounded-full bg-slate-100 align-middle" aria-hidden="true" />;
-  const stage = data?.stage;
+  const data = card !== undefined ? card : loaded.data;
+  if (card === undefined && loaded.loading && !data) return <span className="ml-2 inline-block h-4 w-16 animate-pulse rounded-full bg-slate-100 align-middle" aria-hidden="true" />;
+  const current = currentStage(data);
   const closed = data?.status && data.status !== "open";
-  const label = stage ? `GHL: ${stage}${closed ? ` (${data.status})` : ""}` : "GHL: no card";
+  const label = data?.stage ? `GHL: ${data.stage}${closed ? ` (${data.status})` : ""}` : "GHL: no card";
+  const pick = async (to) => {
+    if (busy || to === current) return;
+    setBusy(true); setNote(null);
+    try {
+      const r = await setGhlCardStage(contactId, to);
+      if (r.skip) setNote({ tone: "slate", text: r.skip });
+      else setNote(r.warning
+        ? { tone: "amber", text: r.warning }
+        : { tone: "green", text: `${r.created ? "Made a card in" : "Moved to"} ${r.to}. It stays there until something new happens on one of their offers.` });
+      forget(ghlCardKey(contactId));
+      loaded.reload();
+    } catch (e) {
+      setNote({ tone: "red", text: e.message || "It didn't move." });
+    } finally { setBusy(false); }
+  };
+  const before = cardNote(data);
+  const items = stageMenuItems(data, { busy: busy || (!data && !loaded.error), onPick: pick });
+  const tone = (t) => (t === "red" ? "text-red-700" : t === "amber" ? "text-amber-700" : t === "green" ? "text-emerald-700" : "text-slate-500");
   return (
-    <span className={`ml-2 inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 align-middle text-[11px] font-semibold ${stage ? GHL_STAGE_CLS[data.key] || "bg-slate-100 text-slate-700" : "bg-slate-50 text-slate-400"}`}
-      title={data?.name ? `GHL Acquisitions stage: ${data.name}${data.cards > 1 ? ` · ${data.cards} cards` : ""}` : "No card on GHL's Acquisitions board"}>
-      {label}
-    </span>
+    <>
+      <Menu label={`GHL stage: ${data?.stage || "no card"}. Move their card`} align="left" items={items} trigger={(
+        <span className={`ml-2 inline-flex items-center gap-0.5 whitespace-nowrap rounded-full px-2 py-0.5 align-middle text-[11px] font-semibold ${data?.stage ? GHL_STAGE_CLS[data.key] || "bg-slate-100 text-slate-700" : "bg-slate-50 text-slate-500"}`}
+          title={[data?.name ? `GHL Acquisitions stage: ${data.name}${data.cards > 1 ? ` · ${data.cards} cards` : ""}` : "No card on GHL's Acquisitions board", before].filter(Boolean).join(". ")}>
+          {busy && <Loader2 size={10} className="animate-spin" aria-hidden="true" />}
+          {label}
+          <ChevronDown size={11} aria-hidden="true" />
+        </span>
+      )} />
+      {note && <span className={`ml-2 align-middle text-xs font-normal ${tone(note.tone)}`} role="status">{note.text}</span>}
+      {!note && loaded.error && <span className="ml-2 align-middle text-xs font-normal text-red-700">Couldn't read their GHL card</span>}
+    </>
   );
 }
 
-export function PaneHeading({ item, targets, pane, fallback = "", stagePill = true }) {
+/** The person (their name opens their record) · the house · their GHL stage. */
+export function PaneHeading({ item, targets, pane, fallback = "" }) {
   const street = String(item.address || pane.side.offer?.address || "").split(",")[0].trim();
   const name = pane.name;
   return (
-    <div className="min-w-0">
-      <h2 className="mt-1 text-base font-bold leading-snug text-slate-900">
-        {targets.contactId && name
-          ? <><ContactLink contactId={targets.contactId} name={name} party={targets.party} className="font-bold">{name}</ContactLink>{street ? <span> · {street}</span> : null}{stagePill && <GhlStagePill contactId={targets.contactId} party={targets.party} />}</>
-          : (fallback || street || name || "Untitled")}
-      </h2>
-      {targets.contactId && <MomentStrip timeline={pane.timeline} onHistory={pane.openContact} />}
-    </div>
+    <h2 className="min-w-0 text-base font-bold leading-snug text-slate-900">
+      {targets.contactId && name
+        ? <><ContactLink contactId={targets.contactId} name={name} party={targets.party} className="font-bold">{name}</ContactLink>{street ? <span> · {street}</span> : null}<GhlStageMenu contactId={targets.contactId} party={targets.party} /></>
+        : (fallback || street || name || "Untitled")}
+    </h2>
   );
 }
 
-/** ⋯ — what the pane keeps out of the way: Feedback (T), their record, GHL. */
-function PaneMore({ pane, contactId }) {
+/** ⋯ — what the pane keeps out of the way: the page's own extras, then Feedback (T), their record, GHL. */
+function PaneMore({ pane, contactId, extra = [] }) {
   const items = [
+    ...(extra.length ? [...extra, { key: "extra-divider", divider: true }] : []),
     { key: "feedback", label: "Feedback for the bot (T)", icon: <MessageSquareWarning size={13} />, onSelect: () => window.dispatchEvent(new Event(TEACH_EVENT)) },
     ...(contactId && pane.openContact ? [{ key: "history", label: "Their record and history", icon: <History size={13} />, onSelect: pane.openContact }] : []),
     ...(contactId ? [{ key: "ghl", label: "Open in GHL", icon: <ExternalLink size={13} />, onSelect: () => window.open(ghlContactUrl(contactId), "_blank", "noreferrer") }] : []),
@@ -166,12 +222,13 @@ function PaneMore({ pane, contactId }) {
 }
 
 /**
- * <PaneActions pane item targets rowOfferId onStatusChanged onDealNav extra />
+ * <PaneActions pane item targets rowOfferId onStatusChanged onDealNav moreItems />
  * The app's own buttons on the person and the offer the left side shows.
  *   onStatusChanged(r)  after a status, Hot or Current change (r: the API's answer)
  *   onDealNav()         the Deals view, once a status made it a deal
+ *   moreItems           the page's own ⋯ items (Menu items), on top
  */
-export function PaneActions({ pane, item, targets, rowOfferId = null, onStatusChanged, onDealNav = null, extra = null }) {
+export function PaneActions({ pane, item, targets, rowOfferId = null, onStatusChanged, onDealNav = null, moreItems = [] }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);   // { tone, text }
   const offer = pane.side.offer;
@@ -185,7 +242,6 @@ export function PaneActions({ pane, item, targets, rowOfferId = null, onStatusCh
       // A pass that leaves the GHL card where it is says which house holds it.
       else if (r.card?.text) setNote({ tone: "amber", text: r.card.text });
       pane.side.reload();
-      pane.botChanged?.();
       onStatusChanged?.(r);
     } catch (e) {
       setNote({ tone: "red", text: e.message || "That didn't change." });
@@ -202,12 +258,10 @@ export function PaneActions({ pane, item, targets, rowOfferId = null, onStatusCh
           <StatusMenu offer={menuOffer} busy={busy} onSelect={onStatus} onDealNav={goDeals} />
         </span>
       )}
-      <BotMenu contactId={targets.contactId} party={targets.party} name={pane.name} bot={pane.timeline?.bot || null} onChanged={pane.botChanged} />
       {(offer || pane.offerId) && <button type="button" className={ACT} disabled={!offer} onClick={() => pane.edit(offer)} title="The full offer (O)"><Pencil size={12} /> Edit offer</button>}
       <CallButton contactId={targets.contactId} name={pane.name} party={targets.party} offerId={offer?.id || pane.offerId || null} address={offer?.address || item.address || ""} />
       <CoachIdeas coach={pane.coach} onChanged={pane.coachReload} />
-      {extra}
-      <PaneMore pane={pane} contactId={targets.contactId} />
+      <PaneMore pane={pane} contactId={targets.contactId} extra={moreItems} />
     </div>
   );
 }
@@ -260,4 +314,17 @@ export function PaneBody({ pane, item, targets, convo, settings = null, bodies =
       )}
     </>
   );
+}
+
+/**
+ * runPaneKey(intent) — what R, T and O do in any pane (work-queue.js
+ * keyIntent): the reply box, the Feedback control, the full offer.
+ * True when it was one of those.
+ */
+export function runPaneKey(intent) {
+  if (intent === "reply") document.getElementById(REPLY_BOX_ID)?.focus();
+  else if (intent === "teach") window.dispatchEvent(new Event(TEACH_EVENT));
+  else if (intent === "offer") window.dispatchEvent(new Event(OPEN_OFFER_EVENT));
+  else return false;
+  return true;
 }
