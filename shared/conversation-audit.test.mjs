@@ -125,6 +125,23 @@ test("an owed promise is not re-texted: under two days a row, past two days a mo
   assert.equal(audit({ drafts: [], events: kept, offers: [] }).findings.length, 0);
 });
 
+// 3037 Massey Rd (2026-10-19): we said on 10/06 we'd come back with where
+// we'd be, the nightly sweep passed the house on 10/13, and the audit still
+// booked a promise check-in twice. The agent got "circling back on 3037
+// Massey Rd" six days after we walked away. Matt: never reach out on a house
+// we passed.
+test("a promise on a house we passed on since is not chased", () => {
+  const owed = [{ contactId: "c1", type: "promise_owed", at: ago(300), address: "3037 Massey Rd, Everson, WA 98247", data: { what: "answer" } }];
+  const passed = offer({ address: "3037 Massey Rd, Everson, WA 98247", status: "we_passed", statusAt: ago(150) });
+  assert.equal(audit({ drafts: [], events: owed, offers: [passed] }).findings.length, 0);
+  const gone = offer({ address: "3037 Massey Rd, Everson, WA 98247", status: "unavailable", statusAt: ago(150) });
+  assert.equal(audit({ drafts: [], events: owed, offers: [gone] }).findings.length, 0, "a house that's gone is the same");
+  const live = offer({ address: "3037 Massey Rd, Everson, WA 98247", status: "sent" });
+  assert.equal(audit({ drafts: [], events: owed, offers: [live] }).findings[0].action?.type, "book_checkin", "a live house is still owed its answer");
+  const otherHouse = offer({ address: "9 Other Way, Everson, WA 98247", status: "we_passed" });
+  assert.equal(audit({ drafts: [], events: owed, offers: [otherHouse] }).findings[0].action?.type, "book_checkin", "a pass on another house doesn't settle this one");
+});
+
 test("a counter two days old with no re-quote, no band, no decline is stalled — their number, ours and the gap ride along", () => {
   const o = offer({ status: "countered", counter: { amount: 850000, at: ago(60), source: "conversation" } });
   const r = audit({ drafts: [], events: [], offers: [o] });

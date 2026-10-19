@@ -15,7 +15,7 @@
 // file to read to know what the nightly sweep would and wouldn't do.
 
 import { OPEN_STATUSES, DEAD_STATUSES, effectiveStatus, dealIsOver } from "./offer-status.js";
-import { currentOffers, currentOfferFor } from "./current-offer.js";
+import { currentOffers, currentOfferFor, walkedAwayFrom } from "./current-offer.js";
 import { unansweredCheckIn, nextMorning, leadIsTheNet } from "./follow-up.js";
 import { NEVER_AUTO } from "./conversation-ai.js";
 import { botHold, holdLine } from "./bot-hold.js";
@@ -341,6 +341,9 @@ export function auditConversations({
     const at = ms(owed.at) ?? 0;
     if (list.some((e) => e.type === "promise_kept" && (ms(e.at) ?? 0) > at)) continue;
     if ((lastInbound(c) ?? 0) > at || (lastSent(c) ?? 0) > at) continue;
+    // We passed on the house since, or it's gone: nothing is owed on it
+    // (3037 Massey Rd, 2026-10-19).
+    if (walkedAwayFrom(offers, { contactId: c, address: owed.address })) continue;
     const age = hoursAgo(owed.at);
     // The promise sweep already texted once; a second text is a nag. Past
     // two days with no word either way, the morning check-in picks it up.

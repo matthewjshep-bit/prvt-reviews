@@ -4055,6 +4055,41 @@ test("a queued check-in on a house we passed on since is dismissed, not sent", a
   assert.equal(typeof stopMachineTextsForOffer, "function");
 });
 
+// 3037 Massey Rd (2026-10-19): the promise check-in carried the address and
+// no offer id, so the pass above never saw it, and "circling back on 3037
+// Massey Rd" went to the agent six days after we passed on the house.
+const MASSEY = { id: "o7", locationId: "LOC", contactId: "c1", address: "3037 Massey Rd, Everson, WA 98247", status: "we_passed", createdAt: iso(9 * 86400000), statusAt: iso(6 * 86400000) };
+
+test("a queued check-in that names a house we passed on only by its address is dismissed, not sent", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const { client } = ghlStub();
+  const store = fakeStore([
+    { id: "d2", locationId: "LOC", contactId: "c1", status: "scheduled", channel: "sms", party: "agent", createdAt: iso(1000), flags: [],
+      reply: "Hey Kasi, circling back on 3037 Massey Rd.", inbound: "", outbound: { kind: "checkin_due", offerId: null, address: "3037 Massey Rd, Everson, WA 98247" } },
+  ]);
+  store.getOffer = async () => null;
+  store.listOffers = async (loc, { contactId } = {}) => (contactId === "c1" ? [MASSEY] : []);
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true, auto: true });
+  assert.equal(r.skipped, "we passed on 3037 Massey Rd, Everson, WA 98247");
+  const d = await store.getReplyDraft("d2");
+  assert.equal(d.status, "dismissed");
+});
+
+test("the machine never starts a check-in about a house we passed on, even with no offer row handed to it", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  store.listOffers = async (loc, { contactId } = {}) => (contactId === "c1" ? [MASSEY] : []);
+  let drafted = false;
+  const r = await startProactive({
+    client: deadClient, locationId: "LOC", saved: CHECKINS_ON, store, contactId: "c1", kind: "checkin_due", offer: null,
+    subject: { address: "3037 Massey Rd", phrase: "", sourceKind: "promise" }, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return DRAFT; } },
+  });
+  assert.equal(r.job, null);
+  assert.match(r.skipped || "", /we passed on 3037 Massey Rd/);
+  assert.equal(drafted, false);
+});
+
 /* ---------- you stopped outreach on the deal (2026-10-01) ---------- */
 
 // 5232 S Yakima: Matt stopped outreach on the deal. Anything already counting
