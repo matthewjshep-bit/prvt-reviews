@@ -6157,9 +6157,11 @@ agent-smsblast workflow to the app, so each one is written fresh in his voice:
   it. Each listing and hook carries `offMarket` and `removedDate`.
   `share` % of the run's RentCast requests and of the day's new agents go to
   it first (the import's `createLimit` for that batch); the regular pull gets
-  the rest, inside the same monthly budget. A new agent's first text says we
-  saw it came off the market and asks whether the seller still hopes to sell,
-  never "expired". An agent already in GHL is never told about it: since
+  the rest, inside the same monthly budget. A new agent's first text is the one
+  any listing gets (the standard text, or "does it need much work?"), and
+  never says it came off the market: since 2026-10-20 (Matt didn't like "saw
+  your listing on … came off the market … is the seller still hoping to
+  sell?"). An agent already in GHL is never told about it: since
   2026-10-19 (Matt didn't like "saw the listing on 126th come off the
   market") `freshListingFor` skips off-market listings, so the check-in is
   the ordinary one. The cursor's `last.offMarket` says what the pull found.

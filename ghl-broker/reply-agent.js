@@ -3472,7 +3472,7 @@ function outboundSummary({ kind, offer, outbound }) {
       ? `Saw ${where} is back on the market; asks if the seller would look at our offer now${rung}.`
       : `Checks in after ${where} — asks if any other houses that need work, on the market or off, have come across their desk${rung}.`;
     case "outreach_open": return outbound.offMarket
-      ? `First text: saw their listing at ${where} came off the market, asks whether the seller still hopes to sell.`
+      ? `First text: their listing at ${where} (off the market lately, not said), does it need much work?`
       : outbound.turnkey
         ? `First text: their listing at ${where} looks finished, asks whether they ever get ones that need work.`
         : `First text: saw their listing at ${where}, asks whether it needs much work.`;
