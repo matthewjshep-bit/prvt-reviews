@@ -10,7 +10,8 @@
 //               its voice, playbooks, routing, auto-send switches and outbox.
 //   Settings  — calculation defaults + company info printed on the document.
 // Plus sibling apps on their own paths: /deals, and the split-up Overview —
-// /dashboard (Today), /autopilot (Bot · Agents · Investors), /reports.
+// /dashboard (Today), /autopilot (Overview · Agents · Investors · Advanced
+// settings), /reports.
 // /agents and /dispo were their own apps until 2026-10-20; they redirect to
 // their Autopilot tabs.
 
@@ -34,6 +35,7 @@ import LineView from "./LineView.jsx";
 import FollowUpView from "./FollowUpView.jsx";
 import AutopilotView from "./AutopilotView.jsx";
 import AgentsTab from "./AgentsTab.jsx";
+import OverviewTab from "./OverviewTab.jsx";
 import InvestorsTab from "./InvestorsTab.jsx";
 import LessonsTab from "./LessonsTab.jsx";
 import ContactDrawer from "./ContactDrawer.jsx";
@@ -104,14 +106,16 @@ const NAV =
         { view: "pipeline", label: "Desk" },
         { view: "tier1", label: "Tier 1" },
       ]
-    // Everything the bot does, in one place (2026-10-20): how it's set and
-    // how it writes; what it sends agents; what it sends buyers. Agent
-    // Outreach and Dispositions are the lists under the last two.
+    // Everything the bot does, in one place (2026-10-20): what it's doing,
+    // in a few numbers; what it sends agents; what it sends buyers; and
+    // every setting, out of the way. Agent Outreach and Dispositions are the
+    // lists folded under Agents and Investors.
     : APP_MODE === "autopilot"
     ? [
-        { view: "bot", label: "Bot" },
+        { view: "overview", label: "Overview" },
         { view: "agents", label: "Agents" },
         { view: "investors", label: "Investors" },
+        { view: "advanced", label: "Advanced settings" },
       ]
     : APP_MODE === "reports"
     ? [
@@ -145,10 +149,10 @@ const APP_TITLE =
 // the target of the ?offer_id= deep link, so it still has to be a valid view.
 // "board" (Today's old tab) still opens: the lane board, by house.
 // "inplay" (2026-10-02 → 10-07) opens Tier 1, which replaced it.
-// On Autopilot, the tabs it had before 2026-10-20 (Controls, Conversation AI)
-// open Bot, where both now are.
+// On Autopilot, the tabs it had before (Controls, Conversation AI, Bot) open
+// Advanced settings, where all of them now are.
 const VIEWS = new Set([...NAV.map((n) => n.view), "new", ...(APP_MODE === "dashboard" ? ["board", "inplay"] : [])]);
-const RENAMED = APP_MODE === "autopilot" ? { controls: "bot", conversation: "bot" } : { inplay: "tier1" };
+const RENAMED = APP_MODE === "autopilot" ? { controls: "advanced", conversation: "advanced", bot: "advanced" } : { inplay: "tier1" };
 const viewOf = (v) => RENAMED[v] || v;
 
 function readParam(name) {
@@ -379,7 +383,8 @@ export default function OfferApp() {
         {view === "pipeline" && <PipelineView section="queue" settings={settings} />}
         {view === "tier1" && <Tier1View settings={settings} />}
         {view === "board" && <PipelineView section="board" settings={settings} />}
-        {view === "bot" && (
+        {view === "overview" && <OverviewTab onOpen={(side) => setView(side)} />}
+        {view === "advanced" && (
           <div className="space-y-6">
             <AutopilotView />
             <ConversationAi settings={settings} />

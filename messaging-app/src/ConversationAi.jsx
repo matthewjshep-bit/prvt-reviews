@@ -1,8 +1,9 @@
-// ConversationAi.jsx — the bot's half of Autopilot → Bot: where it is tuned.
+// ConversationAi.jsx — the bot's half of Autopilot → Advanced settings: where
+// it is tuned.
 //
 // Top to bottom: the switches that matter most (on/off, the daily cap, whether
 // the broker can send at all), what is waiting right now, who the bot is and
-// how it writes; then Advanced, folded: the rest of the editors, how it has
+// how it writes; then More settings, folded: the rest of the editors, how it has
 // been doing, and the history that says which intents are ready to send on
 // their own. Config edits are local until Save;
 // the page owns only its own blob, and Settings never writes it.
@@ -242,11 +243,11 @@ export default function ConversationAi({ settings }) {
       <ExamplesEditor config={form} patch={patch} />
       <AnswersEditor config={form} patch={patch} />
 
-      {/* Everything else, folded away. Same Save; nothing here changes by
-          being folded. */}
+      {/* Everything else, folded away again. Same Save; nothing here changes
+          by being folded. */}
       <details className="group rounded-xl border border-slate-200 bg-white">
         <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-          Advanced
+          More settings
           <span className="ml-2 font-normal text-slate-500">routing, playbooks, follow-up ladders, auto-send timing, bands, booking, coach, opt-outs and history</span>
         </summary>
         <div className="space-y-4 border-t border-slate-200 p-4">

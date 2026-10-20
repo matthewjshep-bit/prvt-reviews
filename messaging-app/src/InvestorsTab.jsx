@@ -1,7 +1,7 @@
 // InvestorsTab.jsx — Autopilot → Investors (2026-10-20): what goes out to
-// buyers when a deal goes under contract, and between deals, in order; then
-// the buyer list (what was Dispositions), its import and its setup folded
-// away.
+// buyers when a deal goes under contract, and between deals, in order; the
+// buyer list (what was Dispositions), its import and its setup folded away
+// below.
 //
 // The deal text is Matt's wording with blanks the deal fills in as each one
 // sends (shared/blast-text.js, dispoAutopilot.dealTexts; none saved is the
@@ -227,7 +227,13 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
         )}
       </section>
 
-      <Dispositions />
+      <details className="rounded-xl border border-slate-200 bg-white">
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          Buyer list
+          <span className="ml-2 font-normal text-slate-500">every buyer in the book, who we're talking to, ranking buyers for a deal</span>
+        </summary>
+        <div className="border-t border-slate-200 p-4"><Dispositions /></div>
+      </details>
 
       <details className="rounded-xl border border-slate-200 bg-white">
         <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">

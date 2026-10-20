@@ -1,6 +1,6 @@
 // AgentsTab.jsx — Autopilot → Agents (2026-10-20): what goes out to a
-// listing agent, in order, editable in place; then the agent list (what
-// was Agent Outreach), and its setup folded away.
+// listing agent, in order, editable in place; the agent list (what was
+// Agent Outreach) and its setup folded away below.
 //
 // The texts save through PATCH /settings (outreachAutopilot.opener and
 // .pulse only), the follow-up days through the Conversation AI config
@@ -235,7 +235,13 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
         )}
       </section>
 
-      <AgentOutreach settings={appSettings} />
+      <details className="rounded-xl border border-slate-200 bg-white">
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          Agent list
+          <span className="ml-2 font-normal text-slate-500">every agent we've found, the daily sweep, pulling listings</span>
+        </summary>
+        <div className="border-t border-slate-200 p-4"><AgentOutreach settings={appSettings} /></div>
+      </details>
 
       <details className="rounded-xl border border-slate-200 bg-white">
         <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">

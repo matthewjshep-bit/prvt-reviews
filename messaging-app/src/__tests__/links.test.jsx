@@ -9,8 +9,8 @@ test("the GHL menu links for Agent Outreach and Dispositions land on their Autop
 
 test("old Overview links still go where those tabs moved, and Today itself stays put", () => {
   expect(movedTo("/dashboard", "?view=flow")).toBe("/reports?view=flow");
-  expect(movedTo("/dashboard", "?view=conversation&location_id=L1")).toBe("/autopilot?view=bot&location_id=L1");
+  expect(movedTo("/dashboard", "?view=conversation&location_id=L1")).toBe("/autopilot?view=advanced&location_id=L1");
   expect(movedTo("/dashboard", "?view=pipeline")).toBe(null);
-  expect(movedTo("/autopilot", "?view=bot")).toBe(null);
+  expect(movedTo("/autopilot", "?view=overview")).toBe(null);
   expect(movedTo("/", "")).toBe(null);
 });

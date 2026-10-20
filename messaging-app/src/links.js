@@ -23,7 +23,7 @@ export function appHref(path, view) {
 const MOVED_PAGES = [
   [/^\/agents(\/|$)/, () => ["/autopilot", "agents"]],
   [/^\/dispo(\/|$)/, () => ["/autopilot", "investors"]],
-  [/^\/dashboard(\/|$)/, (view) => ({ flow: ["/reports", "flow"], dashboard: ["/reports", "activity"], conversation: ["/autopilot", "bot"] })[view] || null],
+  [/^\/dashboard(\/|$)/, (view) => ({ flow: ["/reports", "flow"], dashboard: ["/reports", "activity"], conversation: ["/autopilot", "advanced"] })[view] || null],
 ];
 
 /** movedTo(pathname, search) → the URL that page lives at now, or null. */
