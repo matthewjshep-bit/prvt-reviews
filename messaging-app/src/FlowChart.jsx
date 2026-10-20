@@ -36,7 +36,7 @@ export function textWarnings(t = "") {
   if (/\$/.test(t)) out.push("no dollar signs in a cold text");
   if (/https?:\/\/|www\.|\.com\b/i.test(t)) out.push("no links in a cold text");
   const filled = sampleOf(t);
-  if (filled.length > 220) out.push(`${filled.length} characters filled in; keep it under 220`);
+  if (filled.length > 230) out.push(`${filled.length} characters filled in. It saves, but first texts under about 230 got more replies`);
   return out;
 }
 

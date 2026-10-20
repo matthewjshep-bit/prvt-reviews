@@ -92,8 +92,10 @@ export const DEFAULT_FOLLOW_UP_TEXTS = [
 
 export const OPENER_MAX_EXAMPLES = 8;
 export const OPENER_EXAMPLE_MAX_CHARS = 400;
-// A saved example longer than this teaches the bot a long first text, so it
-// isn't used (2026-10-15).
+// A saved example longer than this teaches the bot a long first text, so the
+// model isn't shown it (2026-10-15). Matt's own text still goes as written:
+// until 2026-10-20 one this long was dropped on save without a word, and
+// the page came back with the defaults ("it won't let me save").
 export const OPENER_EXAMPLE_KEEP_CHARS = 220;
 // The first text the bot writes stays under this. 2026-10-15: under about 230
 // characters got 54% replies, longer 33–36%. GHL adds two lines to the first
@@ -111,10 +113,11 @@ const FOOTER_RX = /\bcan stop\b|\bstop to end\b|\breply stop\b/i;
 /**
  * normalizeOpener(v) → { examples: string[], followUps: string[], mode: "template" | "ai" }
  *
- * Unset (or emptied) → Matt's defaults. Each example trimmed and capped; one
- * that carries the stop footer is dropped, and a sign-off on the end is cut.
- * One of the pre-2026-10-15 defaults, or one over OPENER_EXAMPLE_KEEP_CHARS,
- * is dropped too; a list left empty is today's defaults.
+ * Unset (or emptied) → Matt's defaults. Each example trimmed and capped at
+ * OPENER_EXAMPLE_MAX_CHARS, GHL's {{…}} blanks made the app's; one that
+ * carries the stop footer is dropped, and a sign-off on the end is cut. One
+ * of the pre-2026-10-15 defaults is dropped too; a list left empty is
+ * today's defaults.
  */
 export function normalizeOpener(v = {}) {
   const o = v && typeof v === "object" ? v : {};
@@ -130,17 +133,37 @@ export function normalizeOpener(v = {}) {
 }
 
 // A list of texts as Settings or the Autopilot chart saves them (an array,
-// or one string with a blank line between texts): trimmed, without GHL's
-// stop footer or a sign-off, and none long enough to make a long cold text.
+// or one string with a blank line between texts): GHL's merge fields made
+// the app's blanks, trimmed, without GHL's stop footer or a sign-off.
 function cleanTexts(v, drop = new Set()) {
   const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(/\n\s*\n/) : [];
   return raw
-    .map((x) => String(x || "").replace(/\s+/g, " ").trim().slice(0, OPENER_EXAMPLE_MAX_CHARS))
+    .map((x) => fromMergeFields(String(x || "")).replace(/\s+/g, " ").trim().slice(0, OPENER_EXAMPLE_MAX_CHARS))
     .filter((x) => x && !FOOTER_RX.test(x))
     // "…I'm all ears. Thanks, Matt" would teach the bot to sign off.
     .map((x) => stripSignOff(x))
-    .filter((x) => x && !drop.has(x) && x.length <= OPENER_EXAMPLE_KEEP_CHARS)
+    .filter((x) => x && !drop.has(x))
     .slice(0, OPENER_MAX_EXAMPLES);
+}
+
+/**
+ * fromMergeFields(text) → the text with GHL's {{…}} blanks written the app's way
+ *
+ * Matt writes them as GHL does ({{contact.first_name}}, or a note to himself:
+ * "{{insert county}}"), and the app fills {first}, {address}, {street},
+ * {town} and {county}. Read by what the field names; one the app has no
+ * blank for is left as written.
+ */
+export function fromMergeFields(text = "") {
+  return String(text || "").replace(/\{\{\s*([^{}]*?)\s*\}\}(\s+county\b)?/gi, (all, field, county) => {
+    const f = field.toLowerCase();
+    if (/first/.test(f)) return `{first}${county || ""}`;
+    if (/county/.test(f)) return "{county} County";
+    if (/address/.test(f)) return `{address}${county || ""}`;
+    if (/street/.test(f)) return `{street}${county || ""}`;
+    if (/city|town/.test(f)) return `{town}${county || ""}`;
+    return all;
+  });
 }
 
 /**
@@ -154,7 +177,9 @@ function cleanTexts(v, drop = new Set()) {
 export function openerVoice(opener = {}) {
   const ex = Array.isArray(opener.examples) ? opener.examples : [];
   const mine = ex.length && !(ex.length === DEFAULT_OPENER_EXAMPLES.length && ex.every((x, i) => x === DEFAULT_OPENER_EXAMPLES[i]));
-  return mine ? ex : [...PLAIN_DEFAULT_OPENER_EXAMPLES];
+  // Only his short ones teach the model; a long one would teach a long text.
+  const short = mine ? ex.filter((x) => x.length <= OPENER_EXAMPLE_KEEP_CHARS) : [];
+  return short.length ? short : [...PLAIN_DEFAULT_OPENER_EXAMPLES];
 }
 
 // A sign-off at the very end: "Thanks, Matt", "- Matt", "Best, Matthew",

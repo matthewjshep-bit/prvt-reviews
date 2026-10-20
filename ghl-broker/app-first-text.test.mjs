@@ -18,7 +18,7 @@ process.env.OUTREACH_IMPORTS_ENABLED = "true";
 
 const { outboundOpening, OPENING_MOVES, WHO_WE_ARE, openerPlan } = await import("./conversation-prompt.js");
 const { outboundDescriptor, humanHasThread, previewProactive, writeShorterFirstText, writeWithoutOverused, startProactive, sendReplyDraft, lastLineIsOurFirstText } = await import("./reply-agent.js");
-const { normalizeOpener, countyName, openerVariant, stripSignOff, overusedPhrases, streetName, DEFAULT_OPENER_EXAMPLES, LEGACY_DEFAULT_OPENER_EXAMPLES, PREVIOUS_DEFAULT_OPENER_EXAMPLES, PLAIN_DEFAULT_OPENER_EXAMPLES, OPENER_MAX_CHARS } = await import("./shared/outreach-opener.js");
+const { normalizeOpener, openerVoice, countyName, openerVariant, stripSignOff, overusedPhrases, streetName, DEFAULT_OPENER_EXAMPLES, LEGACY_DEFAULT_OPENER_EXAMPLES, PREVIOUS_DEFAULT_OPENER_EXAMPLES, PLAIN_DEFAULT_OPENER_EXAMPLES, OPENER_MAX_CHARS } = await import("./shared/outreach-opener.js");
 const { normalizeOutreachAutopilot, startOutreachSweep, _resetJobs } = await import("./outreach-sweep.js");
 const { store } = await import("./store.js");
 const { default: createOutreachRouter } = await import("./routes/outreach.js");
@@ -133,15 +133,18 @@ test("an opener example carrying the stop line is dropped, so the agent never ge
   assert.deepEqual(normalizeOutreachAutopilot({}).opener.examples, DEFAULT_OPENER_EXAMPLES, "kept on the outreach settings");
 });
 
-test("the old long defaults Settings saved word for word become the new short ones, and a long example of Matt's own isn't used", () => {
+test("the old long defaults Settings saved word for word become the new short ones, and a long example of Matt's own goes as written but never teaches the model", () => {
   assert.deepEqual(normalizeOpener({ examples: LEGACY_DEFAULT_OPENER_EXAMPLES }).examples, DEFAULT_OPENER_EXAMPLES, "the live list is the old defaults, saved verbatim");
   assert.deepEqual(normalizeOpener({ examples: LEGACY_DEFAULT_OPENER_EXAMPLES.join("\n\n") }).examples, DEFAULT_OPENER_EXAMPLES, "or as the Settings box sends it");
   const mine = "Hey {first}, {street} looks like my kind of house. A bit of a project?";
   assert.deepEqual(normalizeOpener({ examples: [...LEGACY_DEFAULT_OPENER_EXAMPLES, mine] }).examples, [mine], "Matt's own stays, the old ones go");
   const long = `Hi {first}, ${"I really like old houses with character and good bones. ".repeat(4)}Is {street} one of them?`;
   assert.ok(long.length > 220);
-  assert.deepEqual(normalizeOpener({ examples: [long, mine] }).examples, [mine]);
-  assert.deepEqual(normalizeOpener({ examples: [long] }).examples, DEFAULT_OPENER_EXAMPLES, "nothing left is the defaults");
+  // 2026-10-20: dropping it made the page come back with the defaults
+  // ("it won't let me save"). His text goes as he wrote it; the model, which
+  // writes the turnkey seats, only learns from the short ones.
+  assert.deepEqual(normalizeOpener({ examples: [long, mine] }).examples, [long, mine]);
+  assert.deepEqual(openerVoice(normalizeOpener({ examples: [long, mine] })), [mine]);
 });
 
 test("the county reads the same from RentCast or from the sweep's county key", () => {
