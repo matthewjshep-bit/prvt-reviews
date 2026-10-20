@@ -908,7 +908,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     try {
       const { locationId } = resolveLocation(req);
       const body = req.body?.settings || req.body || {};
-      const unknown = Object.keys(body).filter((k) => k !== "location_id" && !PATCHABLE.includes(k));
+      const unknown = Object.keys(body).filter((k) => k !== "location_id" && k !== "location_key" && !PATCHABLE.includes(k));
       if (unknown.length) return res.status(400).json({ error: `only ${PATCHABLE.join(" and ")} can be patched (got ${unknown.join(", ")})` });
       const current = (await store.getOfferSettings(locationId)) || {};
       const next = { ...current };

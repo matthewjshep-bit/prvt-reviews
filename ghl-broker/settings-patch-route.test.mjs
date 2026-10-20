@@ -55,6 +55,12 @@ test("saving the follow-up texts changes only them: the first texts, the sweep a
   assert.notEqual(body.rentcastApiKey, "rc-secret", "the reply masks secrets like GET does");
 });
 
+test("the app's own request shape — the section under settings, the location beside it — is accepted", async () => {
+  const r = await patch({ location_id: LOC, location_key: "k", settings: { outreachAutopilot: { opener: { followUps: ["Hi {first}, wrapped?"] } } } });
+  assert.equal(r.status, 200);
+  assert.deepEqual((await store.getOfferSettings(LOC)).outreachAutopilot.opener.followUps, ["Hi {first}, wrapped?"]);
+});
+
 test("a list is replaced, not merged: deleting a follow-up deletes it", async () => {
   await patch({ outreachAutopilot: { opener: { followUps: ["Hi {first}, one?", "Hi {first}, two?", "Hi {first}, three?"] } } });
   await patch({ outreachAutopilot: { opener: { followUps: ["Hi {first}, one?"] } } });

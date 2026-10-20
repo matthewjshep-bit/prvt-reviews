@@ -74,6 +74,8 @@ test("the deal chart: promoted → wave 1 → reply → the one follow-up → wa
   assert.equal(investors.deal.find((s) => s.id === "wave-1").status, "on");
   assert.deepEqual(investors.deal.find((s) => s.id === "wave-1").texts, ["Hey Alex, got 1 Elm St under contract."]);
   assert.match(investors.deal.find((s) => s.id === "wave-1").detail, /Up to 25 VIP and Active buyers.*match 50\+/);
+  assert.equal(investors.deal.find((s) => s.id === "wave-2").texts, undefined, "wave 2 says it's the same text, not all three again");
+  assert.equal(investors.deal[0].status, "auto", "a trigger runs itself; it doesn't send");
   assert.deepEqual(investors.between.map((s) => s.id), ["pulse"]);
   assert.match(investors.note, /At most 1 text a week/);
 });

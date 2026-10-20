@@ -15,16 +15,18 @@
 import { normalizeOpener } from "./outreach-opener.js";
 import { normalizeAgentPulse } from "./agent-pulse.js";
 import { normalizeBuyerPulse } from "./buyer-pulse.js";
-import { NUDGE_TEXTS, CHECKIN_TEXTS, CHECKIN_COLD_TEXTS } from "./standard-texts.js";
+import { NUDGE_TEXTS, CHECKIN_TEXTS } from "./standard-texts.js";
 import { DEFAULT_LADDERS } from "./follow-up.js";
 
 // The words on a step's pill.
-export const FLOW_STATUS_LABEL = { on: "Sends itself", drafting: "Drafts for you", off: "Off", ghl: "Sent by GHL" };
+export const FLOW_STATUS_LABEL = { on: "Sends itself", drafting: "Drafts for you", off: "Off", ghl: "Sent by GHL", auto: "Runs itself", dry: "Dry run" };
 
 const stateOf = (switches, key, fallback = "off") => (switches || []).find((s) => s.key === key)?.state || fallback;
 // A switch the switchboard doesn't list (the two pulses): off, a draft, or
 // sending when the broker may send.
 const ownState = (enabled, autoSend, switches) => (!enabled ? "off" : autoSend && stateOf(switches, "sends") === "on" ? "on" : "drafting");
+// A trigger doesn't send anything: it runs, or it's a dry run, or it's off.
+const triggerState = (state) => (state === "on" ? "auto" : state === "drafting" ? "dry" : "off");
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
@@ -47,7 +49,7 @@ export function agentFlow({ settings = {}, config = {}, switches = [] } = {}) {
 
   steps.push({ id: "found", type: "trigger", title: "A new listing agent is found",
     detail: oa.enabled ? `Weekday sweep at 10am: listings that need work, up to ${oa.dailyCap || 12} new agents a day` : "The daily sweep is off: agents are pulled and imported by hand",
-    status: stateOf(switches, "outreach_pull") });
+    status: triggerState(stateOf(switches, "outreach_pull")) });
 
   if (firstTouch !== "app") {
     steps.push({ id: "first", type: "text", title: "First text",
@@ -60,11 +62,11 @@ export function agentFlow({ settings = {}, config = {}, switches = [] } = {}) {
 
   const ladderOn = stateOf(switches, "ladder:outreach_nudge");
   (ladder.steps || []).forEach((day, i) => {
-    steps.push({ id: `wait-${i}`, type: "wait", title: `Wait until day ${day}`, detail: "if they haven't replied", day, edit: { field: "day", index: i } });
+    steps.push({ id: `wait-${i}`, type: "wait", title: `Wait until day ${day}`, detail: "if they haven't replied", day });
     const own = opener.followUps[i];
     steps.push({ id: `follow-${i}`, type: "text", title: `Follow-up ${i + 1}`,
       detail: own ? "" : "No text of its own: one of the spare follow-ups", status: ladderOn,
-      texts: [own || NUDGE_TEXTS[i % NUDGE_TEXTS.length]], edit: { field: "followUp", index: i } });
+      texts: [own || NUDGE_TEXTS[i % NUDGE_TEXTS.length]], day, edit: { field: "followUp", index: i } });
   });
   if (oa.followUpEnabled) {
     steps.push({ id: "ghl-follow", type: "text", title: `GHL follow-up workflow, day ${oa.followUpDays || 14}`,
@@ -76,9 +78,9 @@ export function agentFlow({ settings = {}, config = {}, switches = [] } = {}) {
     status: stateOf(switches, "autosend:agent") });
 
   steps.push({ id: "checkin", type: "loop", title: `Check in every ${pulse.everyDays} days`,
-    detail: `Agents who've talked to us. One who never wrote back hears from us only about a fresh listing of theirs that needs work, every ${pulse.coldEveryDays} days at most.`,
+    detail: `Agents who've talked to us get one of these. One who never wrote back hears from us only about a fresh listing of theirs that needs work, every ${pulse.coldEveryDays} days at most, starting "it's Matt, I fix up houses locally".`,
     status: ownState(pulse.enabled, pulse.autoSend, switches),
-    texts: pulse.mode === "ai" ? [] : [...CHECKIN_TEXTS, ...CHECKIN_COLD_TEXTS], edit: { field: "pulse" } });
+    texts: pulse.mode === "ai" ? [] : [...CHECKIN_TEXTS], edit: { field: "pulse" } });
   return steps;
 }
 
@@ -103,7 +105,7 @@ export function investorFlow({ settings = {}, config = {}, switches = [], sample
 
   deal.push({ id: "promoted", type: "trigger", title: "A deal goes under contract",
     detail: auto ? "You promote the offer to a deal; the first wave picks itself" : "Waves don't start on their own: you pick the buyers from the deal",
-    status: stateOf(switches, "auto_blast") });
+    status: triggerState(stateOf(switches, "auto_blast")) });
   if (auto) deal.push({ id: "wait-promote", type: "wait", title: "Wait 10 minutes", detail: "time to stop it if it was a mistake" });
   deal.push({ id: "wave-1", type: "text", title: "Wave 1: the deal",
     detail: viaGhl ? "Tagged for your GHL workflow, which sends its own wording."
@@ -113,15 +115,15 @@ export function investorFlow({ settings = {}, config = {}, switches = [], sample
     detail: `The bot answers, sends the package${da.blastLink === "on_reply" ? " link when they're interested" : ""}, and invites them to the walkthrough. Confirming a time is yours.`,
     status: stateOf(switches, "autosend:investor") });
   const fuDays = (followUp.steps || [3])[0];
-  deal.push({ id: "wait-follow", type: "wait", title: `Wait ${plural(fuDays, "day")} after their last word`, detail: "only buyers who said something about the deal", day: fuDays, edit: { field: "dealFollowUpDay" } });
+  deal.push({ id: "wait-follow", type: "wait", title: `Wait ${plural(fuDays, "day")} after their last word`, detail: "only buyers who said something about the deal" });
   deal.push({ id: "follow", type: "text", title: "One follow-up about the deal",
     detail: "Written by the bot: picks up where they left off, never names a price. The only follow-up a buyer gets about a house.",
-    status: stateOf(switches, "ladder:deal_followup") });
+    status: stateOf(switches, "ladder:deal_followup"), day: fuDays, edit: { field: "dealFollowUp" } });
   for (let w = 2; w <= maxWaves; w++) {
     deal.push({ id: `wait-wave-${w}`, type: "wait", title: `Wait ${n("secondWaveHours", 48)} hours`, detail: "after the wave before, at the next morning run" });
     deal.push({ id: `wave-${w}`, type: "text", title: `Wave ${w}: the deal`,
-      detail: `Up to ${n("secondWaveCount", 25)} more buyers, any tier, match ${n("secondWaveMinScore", 35)}+, who haven't had it. Stops when a buyer commits or you stop the deal.`,
-      status: auto ? blast : "off", texts: samples, edit: { field: "waveN" } });
+      detail: `The same text as wave 1, to up to ${n("secondWaveCount", 25)} more buyers, any tier, match ${n("secondWaveMinScore", 35)}+, who haven't had it. Stops when a buyer commits or you stop the deal.`,
+      status: auto ? blast : "off", edit: { field: "waveN" } });
   }
   deal.push({ id: "walkthrough", type: "text", title: "Walkthrough reminder and follow-up",
     detail: "Written by the bot to buyers who said they're coming: the afternoon before, then how it looked, 2–48 hours after.",
