@@ -181,6 +181,43 @@ export function blastAsk(offer, saved = {}, now = Date.now()) {
 }
 
 /**
+ * blastFacts({ store, locationId, offer, saved, note }) → what the deal text says
+ *
+ * The deal's figures at the buyer price, and its one line: the operator's
+ * own for this blast, else the dataroom headline. That headline is already
+ * written for buyers — it is the one sentence they'd read at the top of the
+ * package — so it belongs in the text that offers them the deal.
+ * Best-effort: a missing room just means a shorter message.
+ */
+export async function blastFacts({ store = defaultStore, locationId, offer, saved = {}, note: noteOverride = "" }) {
+  const numbers = dealNumbers({ offer, settings: saved });
+  let note = blastNote(noteOverride);
+  if (!note) try {
+    const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 5 });
+    const room = rooms.find((r) => r.status === "active" && r.kind !== "portfolio" && r.kind !== "offer");
+    note = room?.snapshot?.headline || "";
+  } catch { /* the line is a courtesy, never the message */ }
+  return dealFacts(offer, { price: numbers.investorPrice, note });
+}
+
+/**
+ * sampleBlastTexts({ store, locationId, offer, saved, now, name }) → string[]
+ *
+ * The deal text in each of its three phrasings, as a buyer named `name`
+ * who has written back before would get it now (Autopilot → Investors,
+ * 2026-10-20). Nothing is drafted, claimed or sent. With blastLink
+ * "always" the real text carries the buyer's own package link, minted at
+ * send; the sample says where it goes.
+ */
+export async function sampleBlastTexts({ store = defaultStore, locationId, offer, saved = {}, now = Date.now(), name = "Alex" }) {
+  const da = normalizeDispoAutopilot(saved.dispoAutopilot);
+  const facts = await blastFacts({ store, locationId, offer, saved });
+  const ask = blastAsk(offer, saved, now);
+  const link = da.blastLink === "always" ? "[their package link]" : "";
+  return [0, 1, 2].map((variant) => blastMessage({ ...facts, firstName: name, variant, ask, link, linkOnReply: !link }));
+}
+
+/**
  * queueBlastDrafts({ store, locationId, offer, investors, saved, now, dryRun })
  *   → { queued, drafted, dryRun, rows: [{ contactId, name, status, sendAt, text }] }
  *
@@ -205,20 +242,10 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
   const reason = !live ? (dryRun ? "dry run" : !sendsEnabled ? "sends are off on the broker (CARD_SENDS_ENABLED)" : "blasts are off on the broker (DISPO_BLASTS_ENABLED)")
     : !config.enabled ? "Conversation AI is switched off" : !allowed ? "'sent them a deal' is not on the investor auto-send list" : "";
 
-  const numbers = dealNumbers({ offer, settings: saved });
-  // The operator's own line about the deal, off its dataroom headline. That
-  // headline is already written for buyers — it is the one sentence they'd
-  // read at the top of the package — so it belongs in the text that offers
-  // them the deal. Best-effort: a missing room just means a shorter message.
-  // A line the operator wrote for this blast wins over the headline.
+  // A line the operator wrote for this blast rides on each draft, so the
+  // text rewritten at send keeps it.
   const ownLine = blastNote(noteOverride);
-  let note = ownLine;
-  if (!note) try {
-    const rooms = await store.listDatarooms(locationId, { offerId: offer.id, limit: 5 });
-    const room = rooms.find((r) => r.status === "active" && r.kind !== "portfolio" && r.kind !== "offer");
-    note = room?.snapshot?.headline || "";
-  } catch { /* the line is a courtesy, never the message */ }
-  const facts = dealFacts(offer, { price: numbers.investorPrice, note });
+  const facts = await blastFacts({ store, locationId, offer, saved, note: noteOverride });
   const ask = presell ? "" : blastAsk(offer, saved, now);
   // Buyers you stopped the bot on (shared/bot-hold.js): their deal text is
   // drafted and waits for you. One read for the whole list; a read that

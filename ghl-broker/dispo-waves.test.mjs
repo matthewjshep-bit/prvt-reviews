@@ -59,6 +59,10 @@ test("the wave preview shows the next wave, and never offers a buyer whose wave-
   assert.deepEqual(r.waves.map((w) => [w.wave, w.count]), [[1, 2]]);
   assert.deepEqual(r.wouldGet.map((i) => i.contactId), ["b-new"], JSON.stringify(r.wouldGet));
   assert.equal(r.alreadySent, 2);
+  // The deal text in its three phrasings, for Autopilot → Investors: the street, a buyer's name, nothing sent.
+  assert.equal(r.samples.length, 3);
+  for (const t of r.samples) assert.match(t, new RegExp(`^Hey Alex.*${offer.address.split(",")[0]}`), t);
+  assert.equal(new Set(r.samples).size, 3);
 
   const missing = await fetch(`${base}/waves/preview?offerId=nope`);
   assert.equal(missing.status, 404);

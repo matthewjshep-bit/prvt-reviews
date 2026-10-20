@@ -890,6 +890,35 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (err) { fail(res, err); }
   });
 
+  // One part of a section, saved on its own (Autopilot → Agents and
+  // Investors, 2026-10-20): { outreachAutopilot: { opener: { followUps } } }
+  // changes those texts and nothing else. PUT writes the whole blob, so a
+  // chart saving one field would otherwise carry its copy of everything
+  // else over a Setup form saved in between — or the form over the chart.
+  // Arrays replace; objects merge. Only these sections, never conversationAi.
+  const PATCHABLE = ["outreachAutopilot", "dispoAutopilot"];
+  const isPlain = (v) => v && typeof v === "object" && !Array.isArray(v);
+  const mergeInto = (base, patch) => {
+    const out = isPlain(base) ? { ...base } : {};
+    for (const [k, v] of Object.entries(patch)) out[k] = isPlain(v) ? mergeInto(out[k], v) : v;
+    return out;
+  };
+
+  router.patch("/settings", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const body = req.body?.settings || req.body || {};
+      const unknown = Object.keys(body).filter((k) => k !== "location_id" && !PATCHABLE.includes(k));
+      if (unknown.length) return res.status(400).json({ error: `only ${PATCHABLE.join(" and ")} can be patched (got ${unknown.join(", ")})` });
+      const current = (await store.getOfferSettings(locationId)) || {};
+      const next = { ...current };
+      for (const k of PATCHABLE) if (isPlain(body[k])) next[k] = mergeInto(current[k], body[k]);
+      const settings = effectiveSettings(next);
+      await store.saveOfferSettings(locationId, settings);
+      res.json({ ok: true, ...maskSecrets(settings) });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- PSA exhibits (standing files, not per-offer) ---------- */
   // Body: { kind: "emdCheck" | "proofOfFunds", dataUri }. Stores one file and
   // returns its URL for the operator to save into settings.psa. These are
