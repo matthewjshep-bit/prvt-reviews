@@ -118,7 +118,7 @@ function pickFilled(list, variant, values) {
  *
  * The fixed text for a cold text to a listing agent, or null when the model
  * should write it: the mode is "ai", or it's a kind of text with something
- * real to say (a turnkey or off-market seat, a house they mentioned, a deal
+ * real to say (a turnkey seat, a house they mentioned, a deal
  * we closed together, Matt's 15).
  *
  *   outreach_open   outbound.mode "template"; one of outbound.templates
@@ -141,7 +141,7 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
   const v = o.variant != null ? Number(o.variant) || 0 : openerVariant(contactId, 997);
   const done = (set, r) => (r ? { text: r.text, set, index: r.index } : null);
   if (kind === "outreach_open") {
-    if (o.turnkey || o.offMarket) return null;
+    if (o.turnkey) return null;
     const ex = Array.isArray(o.templates) ? o.templates : [];
     return done("opener", pickFilled(ex, v, values));
   }

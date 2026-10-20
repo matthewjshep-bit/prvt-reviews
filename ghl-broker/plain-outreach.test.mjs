@@ -232,10 +232,8 @@ test("a first text with no first name still reads like a person wrote it", () =>
   assert.equal(streetLine("8221 S 121st St Unit 4, Seattle, WA"), "8221 S 121st St");
 });
 
-test("a turnkey or off-market seat is still written by the model, since Matt's texts ask whether it's a project", () => {
-  for (const extra of [{ turnkey: true }, { offMarket: true }]) {
-    assert.equal(standardText({ kind: "outreach_open", outbound: { mode: "template", address: "1 Elm St", templates: DEFAULT_OPENER_EXAMPLES, ...extra }, name: "Dana" }), null);
-  }
+test("a turnkey seat is still written by the model, since Matt's texts ask whether it's a project", () => {
+  assert.equal(standardText({ kind: "outreach_open", outbound: { mode: "template", address: "1 Elm St", templates: DEFAULT_OPENER_EXAMPLES, turnkey: true }, name: "Dana" }), null);
 });
 
 /* ---------- the follow-up and the check-in ---------- */

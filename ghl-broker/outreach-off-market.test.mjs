@@ -2,8 +2,8 @@
 // without selling (2026-10-15). New-agent supply had fallen to two a day; a
 // listing that came off the market is a seller who may still want out. The
 // sweep reads one county's "Inactive" listings a run, keeps the ones that came
-// off in the last 30 days and didn't sell, and the first text asks whether
-// the seller is still hoping to sell. Agents already in GHL never hear it from
+// off in the last 30 days and didn't sell, and the first text is the one any
+// listing gets, never saying it came off the market (2026-10-20). Agents already in GHL never hear it from
 // a check-in (2026-10-19). Drives the real pull against a local mock RentCast.
 
 import fs from "node:fs";
@@ -68,6 +68,7 @@ const { offMarketListings, soldInHistory } = await import("./outreach-score.js")
 const { outboundDescriptor } = await import("./reply-agent.js");
 const { outboundOpening } = await import("./conversation-prompt.js");
 const { firstTextHook } = await import("./shared/outreach-opener.js");
+const { standardText } = await import("./shared/standard-texts.js");
 const { evaluateAgent, normalizeAgentPulse, listingDistressed } = await import("./shared/agent-pulse.js");
 const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
 const { startOutreachSweep, normalizeOutreachAutopilot, _resetJobs } = await import("./outreach-sweep.js");
@@ -109,17 +110,24 @@ test("the off-market pull asks RentCast for Inactive listings and flags each age
   assert.equal(listingDistressed({ ...listingRows[0].doc, qualifies: true }, "cut-or-old"), true, "the check-in reads it as news too");
 });
 
-test("the first text about a listing that came off the market asks whether the seller still hopes to sell, never 'expired'", () => {
+// 2026-10-20, Matt didn't like a first text that said "saw your listing on …
+// came off the market … is the seller still hoping to sell?": it reads like
+// we're pointing at a listing that failed. The first text about one of
+// these is the same text any listing gets.
+test("the first text about a listing that came off the market never says it came off the market", () => {
   const doc = { brokerage: "Test Realty", listingCount: 1, hook: { address: "1 Larch St, Auburn, WA 98001", county: "King", city: "Auburn", offMarket: true, removedDate: day(10) } };
   const hook = firstTextHook(doc);
-  assert.equal(hook.offMarket, true);
+  assert.equal(hook.offMarket, true, "the seat is still recorded");
   const o = outboundDescriptor({ kind: "outreach_open", offer: null, saved: {}, subject: { address: hook.address, county: hook.county, city: hook.city, house: hook } });
-  assert.equal(o.offMarket, true);
   const t = outboundOpening(o);
-  assert.match(t, /THIS LISTING CAME OFF THE MARKET RECENTLY: say you saw it came off the market and ask whether the seller is still hoping to sell\. That is your one question/);
-  assert.match(t, /ask ONE plain question about whether the seller still hopes to sell/);
-  assert.match(t, /Never the word "expired"/);
+  assert.doesNotMatch(t, /say you saw it came off|still hop/i);
+  assert.match(t, /ask ONE plain question about whether it needs much work/);
+  assert.match(t, /Never say it came off the market/);
   assert.match(t, /Phone carriers block texts/, "the carrier rule still rides on it");
+  const plain = outboundOpening(outboundDescriptor({ kind: "outreach_open", offer: null, saved: {}, subject: { address: hook.address, county: hook.county, city: hook.city, house: { ...hook, offMarket: false } } }));
+  assert.equal(t.replace(/Never say it came off the market[^.]*\. /, ""), plain, "otherwise the same prompt as any listing");
+  const std = standardText({ kind: "outreach_open", outbound: { ...o, mode: "template", templates: ["Hi {first}, saw your listing on {street}. Does it need much work?"] }, name: "Dana Agent" });
+  assert.equal(std?.text, "Hi Dana, saw your listing on Larch St. Does it need much work?", "the standard first text goes out for it too");
 });
 
 // 2026-10-19: "Hey, saw the listing on 126th come off the market. Still hoping

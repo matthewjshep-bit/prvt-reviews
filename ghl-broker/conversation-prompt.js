@@ -754,7 +754,7 @@ function openingFor(outbound) {
         `${town ? ` in ${town}` : ""}. Write it the way a real person texts someone they haven't met: plain, polite and easy ` +
         `to answer. It must not read like marketing or a mass text. At most two short sentences that: mention their listing on ` +
         `${street} (the street name only, never the house number), say who you are in a few plain words, and ask ONE plain ` +
-        `question about ${o.offMarket ? "whether the seller still hopes to sell" : o.turnkey ? "whether they ever get ones that need work" : "whether it needs much work"}. ` +
+        `question about ${o.turnkey ? "whether they ever get ones that need work" : "whether it needs much work"}. ` +
         // 2026-10-15 (the funnel review): first texts under about 230
         // characters got 54% replies, longer ones a third, and the required
         // "other fixers" line cost about 12 points. That ask now follows
@@ -765,12 +765,12 @@ function openingFor(outbound) {
           ? `THIS LISTING LOOKS FINISHED: don't ask about it as if it were a fixer. Say it looks nicely done and ask whether they ` +
             `ever get ones that need work. That is your one question. `
           : "") +
-        // 2026-10-15: the off-market seats — a listing that came off the
-        // market lately without selling. The seller may still want out.
+        // A listing that came off the market lately (the off-market seats)
+        // gets the text any listing gets. 2026-10-20, Matt: "saw your listing
+        // on … came off the market … is the seller still hoping to sell?"
+        // points at a listing that didn't work.
         (o.offMarket
-          ? `THIS LISTING CAME OFF THE MARKET RECENTLY: say you saw it came off the market and ask whether the seller is still ` +
-            `hoping to sell. That is your one question. Never the word "expired", never "didn't sell" or anything that sounds like ` +
-            `the agent fell short, and never ask whether it sold. `
+          ? `Never say it came off the market, was taken down or didn't sell, and never ask whether the seller still wants to sell. `
           : "") +
         `OPENING MOVE for this one: ${move}. WHO YOU ARE, for this one: ${who}. Put it in your own words, and keep it to a few. ` +
         `Say nothing about the house itself: not its age, size, lot, look, kitchen, "character" or "bones", how long it has been ` +
