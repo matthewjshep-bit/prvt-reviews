@@ -54,7 +54,7 @@ function EditorBar({ busy, onSave, onCancel, children }) {
   );
 }
 
-const HELP = "{first} is their first name, {address} the listing's street address, {street} the street alone.";
+const HELP = "{first} is their first name, {address} the listing's street address, {street} the street alone, {county} the county. GHL's {{contact.first_name}} style works too.";
 
 export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
   const [settings, setSettings] = useState(null);

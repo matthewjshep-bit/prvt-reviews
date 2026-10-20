@@ -61,10 +61,10 @@ test("a step's text that needs the address falls back when there's no address", 
   assert.equal(s, null, "nothing fillable about a house we can't name: the model writes it");
 });
 
-test("follow-up texts are cleaned like first texts: no stop footer, no sign-off, nothing long", () => {
-  const long = `Hi {first}, ${"really ".repeat(40)}long text about {address}?`;
+test("follow-up texts are cleaned like first texts: no stop footer, no sign-off; a long one he wrote is kept", () => {
+  const long = `Hi {first}, ${"really ".repeat(30)}long text about {address}?`;
   const o = normalizeOpener({ followUps: ["Hi {first}, any fixers? Thanks, Matt", "Hi {first}, no worries if not can stop", long, "  "] });
-  assert.deepEqual(o.followUps, ["Hi {first}, any fixers?"]);
+  assert.deepEqual(o.followUps, ["Hi {first}, any fixers?", long]);
   assert.deepEqual(normalizeOpener({ followUps: "Hi {first}, one?\n\nHi {first}, two?" }).followUps, ["Hi {first}, one?", "Hi {first}, two?"]);
 });
 
