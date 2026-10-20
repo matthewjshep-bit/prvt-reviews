@@ -65,10 +65,15 @@ export const ON_EXHAUSTED = ["stop", "mark_no_response"];
 // Conservative on purpose, and off on purpose. Three touches over two weeks
 // is a follow-up; anything tighter is a campaign, and this ships to an
 // operator who has not watched it work yet.
+// The cold-agent ladder's default until 2026-10-20. Saved settings carry it
+// verbatim, so a stored copy reads as "never changed" and gets today's.
+export const PREVIOUS_OUTREACH_NUDGE_STEPS = [2, 5, 9, 14, 21, 30];
+
 export const DEFAULT_LADDERS = {
-  // Six touches over a month for a cold agent: the first two close together
-  // while the listing is still fresh in their mind, then it spaces out.
-  outreach_nudge: { enabled: false, steps: [2, 5, 9, 14, 21, 30], repeatEvery: 0, onExhausted: "stop" },
+  // Two follow-ups to a cold agent, each its own text (2026-10-20, Matt: a
+  // first text and a follow-up, charted like a GHL workflow). Until then six
+  // over a month, every one the same text.
+  outreach_nudge: { enabled: false, steps: [3, 10], repeatEvery: 0, onExhausted: "stop" },
   // An offer is asked about until the agent answers — yes, no, or a number.
   // The date printed on it is not a deadline: agents answer lapsed offers all
   // the time, so after day 14 the ladder keeps going, once a week.

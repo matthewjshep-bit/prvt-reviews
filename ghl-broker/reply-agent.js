@@ -3426,7 +3426,8 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
   return { ...base,
     ...(kind === "offer_nudge" || kind === "price_drop" ? { went: whatWentOut(offer) } : {}),
     ...(kind === "outreach_nudge" && countyName(subject?.county) ? { county: countyName(subject.county) } : {}),
-    ...(kind === "outreach_nudge" ? { mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode } : {}),
+    // Follow-up N's own text (Autopilot → Agents, 2026-10-20).
+    ...(kind === "outreach_nudge" ? { mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode, followUps: normalizeOpener(saved?.outreachAutopilot?.opener).followUps } : {}),
     // A passed house riding on this nudge as one line (follow-up-sweep.js).
     ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,

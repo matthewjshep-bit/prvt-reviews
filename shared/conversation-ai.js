@@ -10,7 +10,7 @@
 // own" set; what they share is the persona, the house rules, the examples and
 // the machinery underneath.
 
-import { DEFAULT_LADDERS, ON_EXHAUSTED, MAX_REPEAT_DAYS, kindsFor, normalizeSteps } from "./follow-up.js";
+import { DEFAULT_LADDERS, ON_EXHAUSTED, MAX_REPEAT_DAYS, PREVIOUS_OUTREACH_NUDGE_STEPS, kindsFor, normalizeSteps } from "./follow-up.js";
 import { BOOKING_DEFAULTS } from "./booking.js";
 import { CONTACT_CARD_DEFAULTS, normalizeContactCard } from "./contact-card.js";
 
@@ -1122,7 +1122,9 @@ function normalizeFollowUp(src = {}, party = "agent") {
   for (const kind of kindsFor(party)) {
     const d = DEFAULT_LADDERS[kind];
     const one = f.ladders?.[kind] || {};
-    const steps = normalizeSteps(one.steps ?? d.steps);
+    let steps = normalizeSteps(one.steps ?? d.steps);
+    // The old six-step cold-agent default, saved verbatim, is today's two.
+    if (kind === "outreach_nudge" && steps.join() === PREVIOUS_OUTREACH_NUDGE_STEPS.join()) steps = [...d.steps];
     ladders[kind] = {
       enabled: bool(one.enabled, false),
       // An empty ladder can never be due, so a saved blob with every day
