@@ -50,3 +50,14 @@ test("a text you type is checked for what carriers block, money, links and lengt
   expect(textWarnings("Hi {first}, we pay cash, $10k over, see www.x.com").length).toBe(3);
   expect(textWarnings(`Hi {first}, ${"word ".repeat(60)}`)[0]).toMatch(/characters/);
 });
+
+test("the deal text editor shows each version filled in with the picked deal, and says what's missing", async () => {
+  const { default: DealTextsEditor } = await import("../DealTextsEditor.jsx");
+  const input = { firstName: "Alex", address: "5232 S Yakima Ave, Tacoma, WA", city: "Tacoma", price: 261000, arv: 380000, repairs: 60000, ask: "", link: "", linkOnReply: true };
+  const html = renderToStaticMarkup(<DealTextsEditor texts={["Hi {first}, {place} is ours. {numbers}. {close}", "Hey {first}, {place}, cash only. {close}"]} onChange={() => {}} input={input} />);
+  expect(html).toContain("Hi Alex, 5232 S Yakima Ave in Tacoma is ours. Buyer price 261k, ARV around 380k, rehab about 60k. Want the details?");
+  expect(html).toContain("doesn&#x27;t say the price");
+  expect(html).toContain("carriers block texts to new buyers with: cash");
+  expect(html).toContain("Back to the built-in wording");
+  expect(html).toContain("{numbers}");
+});

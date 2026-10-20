@@ -109,7 +109,7 @@ export function investorFlow({ settings = {}, config = {}, switches = [], sample
   if (auto) deal.push({ id: "wait-promote", type: "wait", title: "Wait 10 minutes", detail: "time to stop it if it was a mistake" });
   deal.push({ id: "wave-1", type: "text", title: "Wave 1: the deal",
     detail: viaGhl ? "Tagged for your GHL workflow, which sends its own wording."
-      : `Up to ${n("autoBlastCount", 25)} VIP and Active buyers who buy in the area, match ${n("minMatchScore", 50)}+, one text every ${n("spreadSec", 60)} seconds, weekdays 8–5. Price, ARV and rehab are read again as each one sends.`,
+      : `${Array.isArray(da.dealTexts) && da.dealTexts.some((t) => String(t || "").trim()) ? "Your wording" : "The built-in wording"}, to up to ${n("autoBlastCount", 25)} VIP and Active buyers who buy in the area, match ${n("minMatchScore", 50)}+, one text every ${n("spreadSec", 60)} seconds, weekdays 8–5. Price, ARV and rehab are read again as each one sends.`,
     status: blast, texts: samples, edit: { field: "wave1" } });
   deal.push({ id: "reply", type: "branch", title: "A buyer replies",
     detail: `The bot answers, sends the package${da.blastLink === "on_reply" ? " link when they're interested" : ""}, and invites them to the walkthrough. Confirming a time is yours.`,

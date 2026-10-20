@@ -3,18 +3,22 @@
 // the buyer list (what was Dispositions), its import and its setup folded
 // away.
 //
-// The deal text is built from each deal's own figures (shared/blast-text.js),
-// so it isn't typed here: pick a deal and the chart shows it as a buyer
-// would get it now. The counts, days and the check-in's voice save through
-// PATCH /settings (dispoAutopilot only); the deal follow-up's day through
-// the Conversation AI config, re-read before it's written.
+// The deal text is Matt's wording with blanks the deal fills in as each one
+// sends (shared/blast-text.js, dispoAutopilot.dealTexts; none saved is the
+// built-in wording): pick a deal and the chart shows it as a buyer would get
+// it now, and the editor shows an edit the same way as you type. The
+// wording, counts, days and the check-in's voice save through PATCH
+// /settings (dispoAutopilot only); the deal follow-up's day through the
+// Conversation AI config, re-read before it's written.
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, X } from "lucide-react";
+import { DEFAULT_DEAL_TEXTS, normalizeDealTexts } from "@shared/blast-text.js";
 import { investorFlow } from "@shared/autopilot-flows.js";
 import { LIVE_DEAL_STAGES } from "@shared/offer-status.js";
 import { getConversationAi, getDashboardPipeline, getSettings, getWavesPreview, listDeals, patchSettings, saveConversationAi } from "./api.js";
 import { BTN, BTN_PRIMARY, ErrorBar, SkeletonRows } from "./ui.jsx";
+import DealTextsEditor, { sameTexts } from "./DealTextsEditor.jsx";
 import FlowChart from "./FlowChart.jsx";
 import Dispositions from "./Dispositions.jsx";
 import DispoImport from "./DispoImport.jsx";
@@ -93,6 +97,10 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
     const f = step?.edit?.field;
     if (f === "pulse") setDraft(Object.fromEntries(FIELDS.pulse.map((k) => [k, da.pulse?.[k] ?? PULSE_DEFAULTS[k]])));
     else if (f === "dealFollowUp") setDraft({ day: followDay });
+    else if (f === "wave1") {
+      const saved = normalizeDealTexts(da.dealTexts);
+      setDraft({ ...Object.fromEntries(FIELDS.wave1.map((k) => [k, da[k] ?? DEFAULTS[k]])), dealTexts: saved.length ? saved : [...DEFAULT_DEAL_TEXTS] });
+    }
     else if (FIELDS[f]) setDraft(Object.fromEntries(FIELDS[f].map((k) => [k, da[k] ?? DEFAULTS[k]])));
     setEditing(id);
   };
@@ -134,8 +142,15 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
         <Check label="Start the first wave when a deal goes under contract" hint="Off: you pick the buyers from the deal, and no later wave goes on its own." checked={draft.autoBlastOnPromote} onChange={set("autoBlastOnPromote")} />
         <NumRow label="Buyers on the first wave" value={draft.autoBlastCount} onChange={set("autoBlastCount")} min={1} max={200} />
         <NumRow label="Lowest match score" value={draft.minMatchScore} onChange={set("minMatchScore")} min={0} max={100} suffix="out of 100" />
-        {step.texts?.length === 0 && <p className="text-xs text-slate-500">Pick a deal above to see its text.</p>}
-        {bar(() => run(() => patchSettings({ dispoAutopilot: asNumbers(draft) })))}
+        <DealTextsEditor texts={draft.dealTexts} onChange={set("dealTexts")} input={preview?.input || null} />
+        {bar(() => {
+          const texts = normalizeDealTexts(draft.dealTexts);
+          if (!texts.length) { setError("Write at least one version of the deal text."); return; }
+          // The built-in three, untouched, are saved as "the built-in
+          // wording", so they keep reading exactly as they always have.
+          const { dealTexts: _t, ...rest } = draft;
+          run(() => patchSettings({ dispoAutopilot: { ...asNumbers(rest), dealTexts: sameTexts(texts, DEFAULT_DEAL_TEXTS) ? [] : texts } }));
+        })}
       </div>
     );
     if (f === "waveN") return (
@@ -180,7 +195,7 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
         <div className="mb-4 flex flex-wrap items-end gap-3">
           <div className="min-w-0 flex-1">
             <h2 className="text-base font-bold text-slate-900">What goes out to buyers</h2>
-            <p className="text-sm text-slate-500">The deal text is built from each deal's own numbers. Pick a deal to see it as a buyer named Alex would get it now.</p>
+            <p className="text-sm text-slate-500">The deal's numbers are filled in as each text sends. Pick a deal to see it as a buyer named Alex would get it now; Edit on Wave 1 changes the wording.</p>
           </div>
           <label className="text-sm text-slate-700">
             <span className="mr-2">Deal</span>

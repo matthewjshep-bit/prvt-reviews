@@ -9,7 +9,7 @@
 // carries the buyer's own tracked package link, issued at that moment so a
 // held or dismissed text never mints one.
 
-import { blastMessage, blastSubject, dealFacts, bundleMessage } from "./shared/blast-text.js";
+import { blastMessage, blastSubject, dealFacts, bundleMessage, normalizeDealTexts } from "./shared/blast-text.js";
 import { dealNumbers, applyNumberOverrides, issueDataroomInvite } from "./dataroom.js";
 import { walkthroughAsk } from "./shared/showing.js";
 
@@ -91,7 +91,10 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
   // (dispoAutopilot.showings.askInBlast, on unless switched off — read here
   // rather than through dispo-autopilot.js, which imports reply-agent.js.)
   const ask = settings?.dispoAutopilot?.showings?.askInBlast === false ? "" : walkthroughAsk({ showing: offer.deal?.showing || null });
-  const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link, ask, intro: draft.outbound?.intro || "", linkOnReply: linkLater });
+  // Matt's own wording when he's saved some (Autopilot → Investors), read now
+  // like everything else here.
+  const templates = normalizeDealTexts(settings?.dispoAutopilot?.dealTexts);
+  const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link, ask, intro: draft.outbound?.intro || "", linkOnReply: linkLater, templates });
   const subject = draft.channel === "email" ? blastSubject(facts) : "";
   return { text, subject, price, invite, room, withoutLink: linkLater };
 }

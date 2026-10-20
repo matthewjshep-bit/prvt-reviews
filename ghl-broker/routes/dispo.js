@@ -757,8 +757,9 @@ export default function createDispoRouter({ resolveLocation }) {
         ghlTags: offer.deal.blastTags || [],
         alreadySent: ranked.filter((i) => i.alreadyBlasted).length,
         next, wouldGet,
-        // The deal text as it would read now, each phrasing (Autopilot → Investors).
-        samples: await sampleBlastTexts({ store, locationId, offer, saved }).catch(() => []),
+        // The deal text as it would read now, each phrasing, and what it was
+        // built from (Autopilot → Investors).
+        ...(await sampleBlastTexts({ store, locationId, offer, saved }).catch(() => ({ samples: [], input: null }))),
       });
     } catch (err) { fail(res, err); }
   });

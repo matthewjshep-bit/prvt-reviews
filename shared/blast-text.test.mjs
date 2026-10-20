@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { blastMessage, blastNote, dealFacts, blastSubject, bundleMessage, presellMessage } from "./blast-text.js";
+import { blastMessage, blastNote, dealFacts, blastSubject, bundleMessage, presellMessage, fillDealText, normalizeDealTexts, DEFAULT_DEAL_TEXTS } from "./blast-text.js";
 import { carrierFlags } from "./carrier-words.js";
 
 test("a blast text names the street, the work, the buyer price in k, and no dollar sign or link", () => {
@@ -262,4 +262,57 @@ test("a pre-sell text never says under contract, carries no link and no word car
   }
   assert.equal(blastSubject(f, { presell: true }), "41 Alder Way, Kent — coming up, 383k");
   assert.equal(blastSubject(f), "41 Alder Way, Kent — under contract, 383k");
+});
+
+/* ---------- the deal text in Matt's own words (2026-10-20) ---------- */
+
+const YAKIMA = { firstName: "Alex", address: "5232 S Yakima Ave, Tacoma, WA 98408", city: "Tacoma", price: 261000, arv: 380000, repairs: 60000,
+  beds: 3, baths: 2, sqft: 1440, yearBuilt: 1978, rehab: "medium" };
+
+test("with no versions of his own saved, the deal text is the built-in wording, word for word", () => {
+  for (const variant of [0, 1, 2]) {
+    assert.equal(blastMessage({ ...YAKIMA, variant, templates: [] }), blastMessage({ ...YAKIMA, variant }));
+    assert.equal(blastMessage({ ...YAKIMA, variant, templates: ["  ", ""] }), blastMessage({ ...YAKIMA, variant }));
+  }
+});
+
+test("Matt's own deal text fills its blanks from the deal, rotated per buyer", () => {
+  const templates = ["Hi {first}, {place} is locked up. {numbers}. {close}", "{first}, new one: {street}, {house}. Price {price}, ARV {arv}. {close}"];
+  assert.equal(blastMessage({ ...YAKIMA, variant: 0, templates }),
+    "Hi Alex, 5232 S Yakima Ave in Tacoma is locked up. Buyer price 261k, ARV around 380k, rehab about 60k. Want the details?");
+  assert.equal(blastMessage({ ...YAKIMA, variant: 1, templates }),
+    "Alex, new one: 5232 S Yakima Ave, 3bd 2ba 1,440 sqft, built 1978. Price 261k, ARV 380k. Want the details?");
+  assert.equal(blastMessage({ ...YAKIMA, variant: 2, templates }), blastMessage({ ...YAKIMA, variant: 0, templates }), "two versions, three buyers: back to the first");
+});
+
+test("the ending always carries the walkthrough question and the link, added when a version leaves {close} out", () => {
+  const t = blastMessage({ ...YAKIMA, templates: ["Hey {first}, {place}, {numbers}."], ask: "Walkthrough is Thu 4pm. Can you make it?", link: "https://deals.shepflips.com/r/abc" });
+  assert.equal(t, "Hey Alex, 5232 S Yakima Ave in Tacoma, Buyer price 261k, ARV around 380k, rehab about 60k. Walkthrough is Thu 4pm. Can you make it? Photos and numbers: https://deals.shepflips.com/r/abc");
+  assert.match(blastMessage({ ...YAKIMA, templates: ["Hey {first}, {place}. {close}"], ask: "When could you get out to walk it?", linkOnReply: true }),
+    /walk it\? Happy to send photos and numbers\.$/);
+});
+
+test("a blank with nothing to say leaves no stray comma, dash or empty brackets", () => {
+  const bare = { firstName: "", address: "1 Elm St, Kent, WA", city: "", price: 200000 };
+  assert.equal(fillDealText(DEFAULT_DEAL_TEXTS[0], { first: "", place: "1 Elm St", house: "", work: "", numbers: "Buyer price 200k", note: "", close: "Want the details?" }),
+    "Hey, got 1 Elm St under contract. Buyer price 200k. Want the details?");
+  assert.equal(blastMessage({ ...bare, variant: 1, templates: DEFAULT_DEAL_TEXTS }), "Hey, new one: 1 Elm St. Buyer price 200k. Want the details?");
+  assert.equal(blastMessage({ ...bare, variant: 2, templates: DEFAULT_DEAL_TEXTS }), "Hey, 1 Elm St just went under contract. Buyer price 200k. Want the details?");
+});
+
+test("the built-in three, written with blanks, read like the built-in texts", () => {
+  assert.equal(blastMessage({ ...YAKIMA, variant: 0, templates: DEFAULT_DEAL_TEXTS }), blastMessage({ ...YAKIMA, variant: 0 }));
+  assert.equal(blastMessage({ ...YAKIMA, variant: 2, templates: DEFAULT_DEAL_TEXTS }),
+    "Hey Alex, 5232 S Yakima Ave in Tacoma just went under contract (3bd 2ba 1,440 sqft, built 1978). Medium rehab. Buyer price 261k, ARV around 380k, rehab about 60k. Want the details?");
+});
+
+test("how we found a new buyer still goes right after the greeting in his own wording", () => {
+  assert.equal(blastMessage({ ...YAKIMA, templates: ["Hi {first}, {place}. {close}"], intro: "found you through the WA real estate Facebook group" }),
+    "Hi Alex — found you through the WA real estate Facebook group. 5232 S Yakima Ave in Tacoma. Want the details?");
+});
+
+test("a dollar sign never goes out, and at most three versions are kept", () => {
+  assert.doesNotMatch(blastMessage({ ...YAKIMA, templates: ["Hey {first}, only $261k. {close}"] }), /\$/);
+  assert.equal(normalizeDealTexts(["a", "b", "c", "d"]).length, 3);
+  assert.deepEqual(normalizeDealTexts("one\n\ntwo"), ["one", "two"]);
 });

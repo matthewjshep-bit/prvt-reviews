@@ -73,7 +73,9 @@ test("the deal chart: promoted → wave 1 → reply → the one follow-up → wa
   assert.deepEqual(investors.deal.map((s) => s.id), ["promoted", "wait-promote", "wave-1", "reply", "wait-follow", "follow", "wait-wave-2", "wave-2", "walkthrough"]);
   assert.equal(investors.deal.find((s) => s.id === "wave-1").status, "on");
   assert.deepEqual(investors.deal.find((s) => s.id === "wave-1").texts, ["Hey Alex, got 1 Elm St under contract."]);
-  assert.match(investors.deal.find((s) => s.id === "wave-1").detail, /Up to 25 VIP and Active buyers.*match 50\+/);
+  assert.match(investors.deal.find((s) => s.id === "wave-1").detail, /^The built-in wording, to up to 25 VIP and Active buyers.*match 50\+/);
+  const own = flow({ settings: { dispoAutopilot: { dealTexts: ["Hi {first}, {place}. {numbers}."] } }, raw: LIVE }).investors.deal;
+  assert.match(own.find((s) => s.id === "wave-1").detail, /^Your wording/);
   assert.equal(investors.deal.find((s) => s.id === "wave-2").texts, undefined, "wave 2 says it's the same text, not all three again");
   assert.equal(investors.deal[0].status, "auto", "a trigger runs itself; it doesn't send");
   assert.deepEqual(investors.between.map((s) => s.id), ["pulse"]);

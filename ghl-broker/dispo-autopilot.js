@@ -22,7 +22,7 @@
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { store as defaultStore } from "./store.js";
-import { blastMessage, blastNote, dealFacts, blastSubject, presellMessage } from "./shared/blast-text.js";
+import { blastMessage, blastNote, dealFacts, blastSubject, presellMessage, normalizeDealTexts } from "./shared/blast-text.js";
 import { normalizeBookSync } from "./investor-sync.js";
 import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
 import { walkthroughAsk } from "./shared/showing.js";
@@ -63,6 +63,9 @@ export function normalizeDispoAutopilot(v = {}) {
     // link in a text is what the carriers block most: "on_reply" sends the
     // deal without it ("want the details?") and the link when they answer.
     blastLink: o.blastLink === "on_reply" ? "on_reply" : "always",
+    // The deal text in Matt's own words (Autopilot → Investors, 2026-10-20);
+    // [] is the built-in wording.
+    dealTexts: normalizeDealTexts(o.dealTexts),
     // Build the buyer package (the dataroom) the moment an offer becomes a
     // deal, before any wave, so the blast's link has somewhere to go. Off.
     dataroomOnPromote: o.dataroomOnPromote === true,
@@ -201,20 +204,23 @@ export async function blastFacts({ store = defaultStore, locationId, offer, save
 }
 
 /**
- * sampleBlastTexts({ store, locationId, offer, saved, now, name }) → string[]
+ * sampleBlastTexts({ store, locationId, offer, saved, now, name }) → { samples, input }
  *
- * The deal text in each of its three phrasings, as a buyer named `name`
- * who has written back before would get it now (Autopilot → Investors,
- * 2026-10-20). Nothing is drafted, claimed or sent. With blastLink
- * "always" the real text carries the buyer's own package link, minted at
- * send; the sample says where it goes.
+ * The deal text in each of its phrasings, as a buyer named `name` who has
+ * written back before would get it now (Autopilot → Investors,
+ * 2026-10-20), and `input`: what blastMessage was handed, so the page can
+ * show an edit to the wording as you type it. Nothing is drafted, claimed
+ * or sent. With blastLink "always" the real text carries the buyer's own
+ * package link, minted at send; the sample says where it goes.
  */
 export async function sampleBlastTexts({ store = defaultStore, locationId, offer, saved = {}, now = Date.now(), name = "Alex" }) {
   const da = normalizeDispoAutopilot(saved.dispoAutopilot);
   const facts = await blastFacts({ store, locationId, offer, saved });
   const ask = blastAsk(offer, saved, now);
   const link = da.blastLink === "always" ? "[their package link]" : "";
-  return [0, 1, 2].map((variant) => blastMessage({ ...facts, firstName: name, variant, ask, link, linkOnReply: !link }));
+  const input = { ...facts, firstName: name, ask, link, linkOnReply: !link };
+  const count = Math.max(1, Math.min(3, da.dealTexts.length || 3));
+  return { samples: Array.from({ length: count }, (_, variant) => blastMessage({ ...input, variant, templates: da.dealTexts })), input };
 }
 
 /**
@@ -269,7 +275,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const hold = holdOf(contactId);
     const intro = blastIntro(inv);
     const variant = i;
-    const text = presell ? presellMessage({ ...facts, firstName: name, variant, intro }) : blastMessage({ ...facts, firstName: name, variant, ask, intro });
+    const text = presell ? presellMessage({ ...facts, firstName: name, variant, intro }) : blastMessage({ ...facts, firstName: name, variant, ask, intro, templates: da.dealTexts });
     if (i > 0) cursor += da.spreadSec * 1000 + Math.round(Math.random() * 15000);
     let sendAt = nextSendTime({ now: cursor, delayMs: 0, quietHours: machineHours(config.autoSend) });
     cursor = Date.parse(sendAt);

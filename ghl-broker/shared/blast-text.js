@@ -77,15 +77,111 @@ export function blastNote(text = "", max = 90) {
 export function blastMessage({
   firstName = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0,
   yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", variant = 0, link = "", ask = "", kind = "", intro = "",
-  linkOnReply = false, septic = false, systems = false,
+  linkOnReply = false, septic = false, systems = false, templates = [],
 } = {}) {
   const first = String(firstName || "").trim().split(/\s+/)[0] || "";
   const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
+  const own = normalizeDealTexts(templates);
+  if (own.length) {
+    const values = dealTextValues({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, link, ask, kind, linkOnReply, septic, systems });
+    const text = fillDealText(own[Math.abs(Math.round(Number(variant) || 0)) % own.length], values);
+    if (!how) return text;
+    // How we found them goes right after the greeting, as it does below.
+    const m = /^((?:hey|hi|hello)\b[^,]{0,30}),\s*/i.exec(text);
+    const rest = m ? text.slice(m[0].length) : text;
+    return `${m ? m[1] : first ? `Hey ${first}` : "Hey"} — ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
+  }
   const text = blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply, septic, systems });
   if (!how) return text;
   const hi = first ? `Hey ${first}, ` : "Hey, ";
   const rest = text.slice(hi.length);
   return `${first ? `Hey ${first}` : "Hey"} — ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
+}
+
+/* ---------- the deal text in Matt's own words (2026-10-20) ---------- */
+
+// Matt: "Let's make the change where we can edit the text" — the deal text,
+// on Autopilot → Investors. Up to three versions, rotated per buyer like the
+// built-in three, each with blanks the deal fills in as it sends, so the
+// price is still the deal's price at the minute it leaves. None saved: the
+// built-in wording above, unchanged.
+export const DEAL_TEXT_MAX = 3;
+export const DEAL_TEXT_MAX_CHARS = 400;
+export const DEAL_TEXT_BLANKS = {
+  first: "their first name",
+  place: "the street and town: 5232 S Yakima Ave in Tacoma",
+  street: "the street: 5232 S Yakima Ave",
+  city: "the town: Tacoma",
+  house: "what it is: 3bd 2ba 1,440 sqft, built 1978",
+  work: "the rehab level you picked: medium rehab",
+  numbers: "Buyer price 261k, ARV around 380k, rehab about 60k",
+  price: "the buyer price: 261k",
+  arv: "the ARV: 380k",
+  repairs: "the rehab estimate: 60k",
+  note: "your one line from the package headline",
+  close: "the ending: the walkthrough question and the package link (added at the end when left out)",
+};
+// The built-in three, written with the blanks: where an edit starts.
+export const DEFAULT_DEAL_TEXTS = [
+  "Hey {first}, got {place} under contract — {house}, {work}. {numbers}. {note}. {close}",
+  "Hey {first}, new one: {place}, {house}, {work}. {numbers}. {note}. {close}",
+  "Hey {first}, {place} just went under contract ({house}). {work}. {numbers}. {note}. {close}",
+];
+
+/** normalizeDealTexts(v) → up to three trimmed texts; [] means the built-in wording. */
+export function normalizeDealTexts(v) {
+  const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(/\n\s*\n/) : [];
+  return raw.map((x) => String(x || "").replace(/\s+/g, " ").trim().slice(0, DEAL_TEXT_MAX_CHARS)).filter(Boolean).slice(0, DEAL_TEXT_MAX);
+}
+
+/** The blanks for one buyer, worked out the way the built-in text works them out. */
+export function dealTextValues({ first = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0, yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", link = "", ask = "", kind = "", linkOnReply = false, septic = false, systems = false } = {}) {
+  const street = String(address || "").split(",")[0].trim() || "a house";
+  const size = [beds ? `${beds}bd` : "", baths ? `${baths}ba` : "", sqft ? `${Math.round(sqft).toLocaleString("en-US")} sqft` : ""].filter(Boolean).join(" ");
+  const built = Number(yearBuilt) > 1500 ? `built ${Math.round(yearBuilt)}` : "";
+  const house = [String(kind || "").trim(), size, built, septic ? "septic" : ""].filter(Boolean).join(", ");
+  const numbers = [
+    kText(price) ? `Buyer price ${kText(price)}` : "",
+    kText(arv) ? `ARV around ${kText(arv)}` : "",
+    kText(repairs) ? `rehab about ${kText(repairs)}${systems ? " incl. systems" : ""}` : "",
+  ].filter(Boolean).join(", ");
+  const url = String(link || "").trim();
+  const q = String(ask || "").replace(/\$/g, "").replace(/\s+/g, " ").trim();
+  const close = q
+    ? `${q}${url ? ` Photos and numbers: ${url}` : linkOnReply ? " Happy to send photos and numbers." : ""}`
+    : url ? `Photos and numbers: ${url}` : "Want the details?";
+  return {
+    first, street, city: String(city || ""), place: city ? `${street} in ${city}` : street,
+    house, work: REHAB_WORDS[rehab] ? `${REHAB_WORDS[rehab]} rehab` : "", numbers,
+    price: kText(price), arv: kText(arv), repairs: kText(repairs), note: blastNote(note), close,
+  };
+}
+
+/**
+ * fillDealText(template, values) → the text
+ *
+ * Each blank filled; one with nothing to say leaves no stray comma, dash or
+ * empty brackets behind ("— , medium rehab" reads "— medium rehab"). A text
+ * without {close} gets it on the end: the link and the walkthrough question
+ * are how a buyer moves, so no version may drop them. No dollar signs.
+ */
+export function fillDealText(template = "", values = {}) {
+  let t = String(template || "");
+  if (!/\{close\}/.test(t)) t = `${t.replace(/\s+$/, "")} {close}`;
+  const out = t
+    .replace(/\{(\w+)\}/g, (_, k) => String(values[k] ?? "").trim())
+    .replace(/\$/g, "")
+    .replace(/\(\s*\)/g, "")
+    .replace(/—\s*,\s*/g, "— ")
+    .replace(/,\s*(?=[,.:;?!)]|—|$)/g, "")
+    .replace(/\s*—\s*(?=[.,:;?!]|$)/g, "")
+    .replace(/:\s*(?=[.,;?!]|$)/g, "")
+    .replace(/\s+([,.:;?!])/g, "$1")
+    .replace(/([.?!])(?:\s*\.)+/g, "$1")
+    .replace(/^[\s.,;:]+/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return out.replace(/([.?!]\s+)([a-z])/g, (_, p, c) => p + c.toUpperCase());
 }
 
 function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply = false, septic = false, systems = false }) {
