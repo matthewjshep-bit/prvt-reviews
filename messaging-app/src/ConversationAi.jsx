@@ -1,10 +1,10 @@
 // ConversationAi.jsx — the bot's half of Autopilot → Bot: where it is tuned.
 //
 // Top to bottom: the switches that matter most (on/off, the daily cap, whether
-// the broker can send at all), what is waiting right now, a place to try it,
-// who the bot is and how it writes; then Advanced, folded: the rest of the
-// editors, how it has been doing, and the history that says which intents
-// are ready to send on their own. Config edits are local until Save;
+// the broker can send at all), what is waiting right now, who the bot is and
+// how it writes; then Advanced, folded: the rest of the editors, how it has
+// been doing, and the history that says which intents are ready to send on
+// their own. Config edits are local until Save;
 // the page owns only its own blob, and Settings never writes it.
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -16,7 +16,6 @@ import { autoAcceptCeiling } from "@shared/auto-accept.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, Pill, SkeletonRows, TableCard } from "./ui.jsx";
 import { appHref } from "./links.js";
-import ConversationTryIt from "./ConversationTryIt.jsx";
 import {
   AnswersEditor, WriteUpTermsEditor, AutoSendCard, BookingCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, InvestorBandCard, MediaCard, ContactCardCard, OptOutCard, PartyPlaybooks,
   CoachSettingsCard, GmailCard, PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
@@ -233,8 +232,6 @@ export default function ConversationAi({ settings }) {
       {notice && <div className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">{notice}</div>}
 
       <DraftsWaiting refreshKey={refreshKey} />
-
-      <ConversationTryIt sendsEnabled={sendsEnabled} />
 
       {/* Who the bot is and how it writes: the cards Matt works in
           (2026-10-20). What it texts agents and buyers unprompted is on the

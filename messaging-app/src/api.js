@@ -357,10 +357,6 @@ export const runFollowUps = (dryRun = true) =>
   post(`/api/offers/automations/conversation/follow-ups/run`, { dryRun });
 export const applyDraftAction = (id, actionId) =>
   post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/actions/${encodeURIComponent(actionId)}/apply`, {});
-// Run the whole pipeline in preview on a real contact or a typed thread.
-// Nothing is saved, sent, tagged or scheduled.
-export const testConversation = ({ contactId, party, thread, message, channel }) =>
-  post(`/api/offers/automations/conversation/test`, { contactId, party, thread, message, channel });
 
 /* ---------- Zillow comp capture (bookmarklet inbox) ---------- */
 // Comps grabbed off Zillow land in a server-side inbox — the app runs in a GHL

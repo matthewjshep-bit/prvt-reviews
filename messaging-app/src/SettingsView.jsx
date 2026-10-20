@@ -21,7 +21,6 @@ import { tierDrips } from "@shared/agent-pulse.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
 import ContactBackfill from "./ContactBackfill.jsx";
-import ConversationTryIt from "./ConversationTryIt.jsx";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -1098,15 +1097,10 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-bold">Conversation AI</h2>
         <p className="text-xs text-slate-500">
-          The bot that answers inbound agent and investor texts lives on the <strong>Overview</strong> page, under its
-          own <strong>Conversation AI</strong> tab. Its voice, the rules for agents and for investors, who counts as
-          which, what it may send on its own and what it triggers in GHL all live there, along with a try-it panel,
-          the outbox and the off switch. The daily cap and standing instructions that used to sit here were carried
-          over the first time the tab opened. It still uses the Anthropic key above, saved here.
+          The bot that answers inbound agent and investor texts lives on <strong>Autopilot → Bot</strong>: its voice,
+          its rules, what it may send on its own and the off switch. What it texts agents and buyers unprompted is on
+          Autopilot → Agents and Investors. It still uses the Anthropic key above, saved here.
         </p>
-        <div className="mt-3">
-          <ConversationTryIt compact />
-        </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
