@@ -14,3 +14,27 @@ export function appHref(path, view) {
     return view ? `${path}?view=${view}` : path;
   }
 }
+
+// Pages that moved (2026-10-20: Agent Outreach and Dispositions became tabs
+// of Autopilot; 2026-09-13: Overview split into Today, Autopilot, Reports).
+// The GHL menu links and bookmarks still say /agents, /dispo and
+// /dashboard?view=flow; they land where that page lives now. Other params
+// (location_id, key, contact) ride along.
+const MOVED_PAGES = [
+  [/^\/agents(\/|$)/, () => ["/autopilot", "agents"]],
+  [/^\/dispo(\/|$)/, () => ["/autopilot", "investors"]],
+  [/^\/dashboard(\/|$)/, (view) => ({ flow: ["/reports", "flow"], dashboard: ["/reports", "activity"], conversation: ["/autopilot", "bot"] })[view] || null],
+];
+
+/** movedTo(pathname, search) → the URL that page lives at now, or null. */
+export function movedTo(pathname = "", search = "") {
+  const p = new URLSearchParams(search);
+  for (const [rx, to] of MOVED_PAGES) {
+    if (!rx.test(pathname)) continue;
+    const dest = to(p.get("view"));
+    if (!dest) return null;
+    p.set("view", dest[1]);
+    return `${dest[0]}?${p}`;
+  }
+  return null;
+}

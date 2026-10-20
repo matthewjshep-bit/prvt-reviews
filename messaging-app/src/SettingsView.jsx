@@ -16,7 +16,7 @@ import { workflowIdFrom } from "@shared/ghl-calls.js";
 import { UNDERWRITE_CHECKS_DEFAULTS, normalizeUnderwriteChecks } from "@shared/underwrite-checks.js";
 import { normalizeTierOne } from "@shared/tier-one.js";
 import { normalizeGhlStages } from "@shared/ghl-stages.js";
-import { DEFAULT_OPENER_EXAMPLES, normalizeOpener } from "@shared/outreach-opener.js";
+import { normalizeOpener } from "@shared/outreach-opener.js";
 import { tierDrips } from "@shared/agent-pulse.js";
 import FieldsManager from "./FieldsManager.jsx";
 import EnrichSweep from "./EnrichSweep.jsx";
@@ -1213,17 +1213,9 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                 </select>
               </label>
               {(form.outreachAutopilot?.firstTouch || "app") === "app" && (
-                <label className="col-span-2 block">
-                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">How you'd write the first text</span>
-                  <textarea className={INPUT_CLS} rows={8}
-                    value={Array.isArray(form.outreachAutopilot?.opener?.examples) ? form.outreachAutopilot.opener.examples.join("\n\n") : form.outreachAutopilot?.opener?.examples ?? DEFAULT_OPENER_EXAMPLES.join("\n\n")}
-                    onChange={(e) => setOutreachAuto("opener")({ ...(form.outreachAutopilot?.opener || {}), examples: e.target.value })} />
-                  <span className="mt-1 block text-xs text-slate-500">
-                    A few of your own first texts, with a blank line between them. The bot writes every agent a fresh one in this voice, with one real detail from their listing (the town, the decade it was built, a big lot, sitting a while), and fills in {"{first}"}, {"{street}"}, {"{town}"} and {"{county}"}. The county is the only area it says you're looking in. A little humour is fine; it's never at the house's expense.
-                    Keep each to one question and about 150 characters: short first texts get answered, so the bot stays under 200, and an example over 220 isn't used. The ask for their other fixers waits for their first answer.
-                    Leave off "Thanks, Matt" and "No worries if not can stop": GHL adds both to the end of the first text, so the bot never writes a sign-off and one in an example is cut.
-                  </span>
-                </label>
+                <p className="col-span-2 text-xs text-slate-500">
+                  The first texts and the follow-ups are written on the chart at the top of Autopilot → Agents.
+                </p>
               )}
               {(form.outreachAutopilot?.firstTouch || "app") === "app" && <div className="col-span-2"><FirstTextSamples /></div>}
               {form.outreachAutopilot?.firstTouch === "workflow" && (

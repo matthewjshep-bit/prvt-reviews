@@ -9,8 +9,10 @@
 //   Conversation AI — the bot that answers inbound agent and investor texts:
 //               its voice, playbooks, routing, auto-send switches and outbox.
 //   Settings  — calculation defaults + company info printed on the document.
-// Plus sibling apps on their own paths: /agents, /dispo, /deals, and the
-// split-up Overview — /dashboard (Today), /autopilot, /reports.
+// Plus sibling apps on their own paths: /deals, and the split-up Overview —
+// /dashboard (Today), /autopilot (Bot · Agents · Investors), /reports.
+// /agents and /dispo were their own apps until 2026-10-20; they redirect to
+// their Autopilot tabs.
 
 import { offerEditorUrl } from "./api.js";
 import React, { useEffect, useState } from "react";
@@ -31,16 +33,28 @@ import FlowView from "./FlowView.jsx";
 import LineView from "./LineView.jsx";
 import FollowUpView from "./FollowUpView.jsx";
 import AutopilotView from "./AutopilotView.jsx";
+import AgentsTab from "./AgentsTab.jsx";
+import InvestorsTab from "./InvestorsTab.jsx";
 import LessonsTab from "./LessonsTab.jsx";
 import ContactDrawer from "./ContactDrawer.jsx";
 import CompanionView from "./CompanionView.jsx";
 import { COMPANION_WINDOW } from "./companion.js";
-import { appHref } from "./links.js";
+import { appHref, movedTo } from "./links.js";
 import { ContactDrawerContext } from "./ContactLink.jsx";
 import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
 
 // The offer editor lives in the main app — from the standalone Deals page,
 // "Edit offer" opens it in a new tab deep-linked via the ?offer_id= flow.
+
+// A page that moved (links.js movedTo): the GHL menu links still say /agents
+// and /dispo. A forced mode is its own deploy and stays where it is.
+(() => {
+  if (import.meta.env.VITE_APP_MODE) return;
+  try {
+    const to = movedTo(window.location.pathname, window.location.search);
+    if (to) window.location.replace(to);
+  } catch { /* stay where we are */ }
+})();
 
 // Which product this page is. One deploy serves all five: /agents (any depth)
 // is the Agent Outreach app, /dispo is the investor book, /dashboard is the
@@ -90,10 +104,14 @@ const NAV =
         { view: "pipeline", label: "Desk" },
         { view: "tier1", label: "Tier 1" },
       ]
+    // Everything the bot does, in one place (2026-10-20): how it's set and
+    // how it writes; what it sends agents; what it sends buyers. Agent
+    // Outreach and Dispositions are the lists under the last two.
     : APP_MODE === "autopilot"
     ? [
-        { view: "controls", label: "Controls" },
-        { view: "conversation", label: "Conversation AI" },
+        { view: "bot", label: "Bot" },
+        { view: "agents", label: "Agents" },
+        { view: "investors", label: "Investors" },
       ]
     : APP_MODE === "reports"
     ? [
@@ -123,25 +141,15 @@ const APP_TITLE =
   : APP_MODE === "companion" ? "Companion"
   : "Offer Generator";
 
-// Links saved before the split (/dashboard?view=flow, a bookmark, the GHL
-// note) land on the page that tab moved to. Other params ride along.
-(() => {
-  if (APP_MODE !== "dashboard") return;
-  try {
-    const moved = { flow: ["/reports", "flow"], dashboard: ["/reports", "activity"], conversation: ["/autopilot", "conversation"] };
-    const p = new URLSearchParams(window.location.search);
-    const to = moved[p.get("view")];
-    if (!to) return;
-    p.set("view", to[1]);
-    window.location.replace(`${to[0]}?${p}`);
-  } catch { /* stay on Today */ }
-})();
-
 // "new" is reachable but not a tab — it's the primary button in the header and
 // the target of the ?offer_id= deep link, so it still has to be a valid view.
 // "board" (Today's old tab) still opens: the lane board, by house.
 // "inplay" (2026-10-02 → 10-07) opens Tier 1, which replaced it.
+// On Autopilot, the tabs it had before 2026-10-20 (Controls, Conversation AI)
+// open Bot, where both now are.
 const VIEWS = new Set([...NAV.map((n) => n.view), "new", ...(APP_MODE === "dashboard" ? ["board", "inplay"] : [])]);
+const RENAMED = APP_MODE === "autopilot" ? { controls: "bot", conversation: "bot" } : { inplay: "tier1" };
+const viewOf = (v) => RENAMED[v] || v;
 
 function readParam(name) {
   try {
@@ -192,8 +200,8 @@ function BrandLockup({ settings, fallback }) {
 
 export default function OfferApp() {
   const [view, setView] = useState(() => {
-    const v = readParam("view");
-    return VIEWS.has(v) ? (v === "inplay" ? "tier1" : v) : NAV[0].view;
+    const v = viewOf(readParam("view"));
+    return VIEWS.has(v) ? v : NAV[0].view;
   });
   const [initialContactId, setInitialContactId] = useState(() => readParam("contact_id"));
   const [editing, setEditing] = useState(null); // draft/offer being reopened in the form
@@ -244,8 +252,8 @@ export default function OfferApp() {
 
   useEffect(() => {
     const onPop = (e) => {
-      const v = e.state?.view || readParam("view");
-      if (VIEWS.has(v)) setView(v === "inplay" ? "tier1" : v);
+      const v = viewOf(e.state?.view || readParam("view"));
+      if (VIEWS.has(v)) setView(v);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -368,11 +376,17 @@ export default function OfferApp() {
               ? (o) => window.open(offerEditorUrl(o.id), "_blank")
               : (o) => { setEditing(o); setView("new"); }} />
         )}
-        {view === "conversation" && <ConversationAi settings={settings} />}
         {view === "pipeline" && <PipelineView section="queue" settings={settings} />}
         {view === "tier1" && <Tier1View settings={settings} />}
         {view === "board" && <PipelineView section="board" settings={settings} />}
-        {view === "controls" && <AutopilotView />}
+        {view === "bot" && (
+          <div className="space-y-6">
+            <AutopilotView />
+            <ConversationAi settings={settings} />
+          </div>
+        )}
+        {view === "agents" && <AgentsTab settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
+        {view === "investors" && <InvestorsTab settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
         {view === "lessons" && <LessonsTab onSettingsSaved={(s) => setSettings(s)} />}
         {view === "flow" && <FlowView />}
         {view === "line" && <LineView />}

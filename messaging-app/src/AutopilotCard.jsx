@@ -91,7 +91,7 @@ export default function AutopilotCard({ autopilot, onDone }) {
           <b>{counts.off || 0}</b> off
         </span>
         {readyToGraduate > 0 && (
-          <a href={appHref("/autopilot", "conversation")}className="ml-auto text-xs font-semibold text-blue-700 hover:underline">
+          <a href={appHref("/autopilot", "bot")}className="ml-auto text-xs font-semibold text-blue-700 hover:underline">
             {readyToGraduate} intent{readyToGraduate === 1 ? " is" : "s are"} ready to send on their own →
           </a>
         )}
