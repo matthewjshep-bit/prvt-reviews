@@ -1320,7 +1320,7 @@ test("a contact has their own daily cap when one is set; by default there is non
   assert.match(r.skipped, /this contact's daily cap reached \(12\/12\)/);
   const other = await startReply({ client: deadClient, locationId: "LOC", saved: capped, store, contactId: "c2", message: "hi" });
   assert.ok(other.job, "another contact is unaffected");
-  // Matt, 2026-09-22: Melissa Willet's eighth address filled the old default of 12 and six texts went unanswered.
+  // Matt, 2026-09-22: Melissa W.'s eighth address filled the old default of 12 and six texts went unanswered.
   const free = await startReply({ client: deadClient, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "hi again" });
   assert.ok(free.job, "no per-contact cap by default");
 });
@@ -2957,6 +2957,71 @@ test("a counter more than 10% over the most we'd pay is filed as their pass, wit
   assert.doesNotMatch(d.reply, /partner|get back/, "no promise to come back with a number");
   assert.doesNotMatch(d.reply, /\$|\d{3}/, "names no number of ours");
   assert.ok(!(d.flags || []).some((f) => /a counter is a person's call/.test(f)), (d.flags || []).join(" · "));
+});
+
+// Melissa W., 2026-10-20: 311 R St NE was already passed on 10/17, and
+// every text that repeated the seller's 600k drew the same goodbye — three in
+// 25 minutes, the last one to "What would you offer on the Auburn home?".
+const farCounter = async ({ offer = NEGOTIATION_OFFER, message }) => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent", "tier-1"]);
+  const store = negotiationStore(offer);
+  const statuses = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true, message,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: 450000, propertyAddress: "12 Elm St",
+        reply: "Thanks for checking. Let me look at it again and come back to you." }),
+      setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status }; },
+    },
+  });
+  await settle();
+  return { job, d: await store.getReplyDraft(job.draftId), statuses };
+};
+
+test("an agent who repeats the seller's number on a house we already passed doesn't get the same goodbye again", async () => {
+  const passed = { ...NEGOTIATION_OFFER, status: "passed", statusAt: new Date(Date.now() - 3 * 86400000).toISOString() };
+  const { job, d, statuses } = await farCounter({ offer: passed, message: "On 12 Elm he'd like north of $450k, but I'm pretty sure he'll take it." });
+  assert.equal(job.status, "done", job.error);
+  assert.doesNotMatch(d.reply, /didn't work out for us/);
+  assert.notEqual(d.status, "sent", "it waits for a person");
+  assert.equal(d.needsHuman, true);
+  assert.match(d.humanReason, /already passed/);
+  assert.ok(!statuses.length, `nothing re-filed: ${statuses}`);
+});
+
+test("an agent who asks what we'd offer gets a person, not the goodbye", async () => {
+  const { d, statuses } = await farCounter({ message: "What would you offer on 12 Elm, I know she will ask me? I understand $450k is too high for you." });
+  assert.doesNotMatch(d.reply, /didn't work out for us/);
+  assert.notEqual(d.status, "sent");
+  assert.match(d.humanReason, /asked what we'd offer/);
+  assert.ok(!statuses.includes("passed"));
+});
+
+test("a far counter in a text that's also about another house gets a person, not the goodbye", async () => {
+  const { d } = await farCounter({ message: "12 Elm seller wants $450k. Also 77 Oak Ave in Renton is a different seller asking 650k." });
+  assert.doesNotMatch(d.reply, /didn't work out for us/);
+  assert.notEqual(d.status, "sent");
+  assert.match(d.humanReason, /Oak Ave/);
+});
+
+test("a far counter about the one house, asking nothing, still gets the goodbye once", async () => {
+  const { d, statuses } = await farCounter({ message: "They can't take that offer. Their lowest at this time is $450k." });
+  assert.match(d.reply, /didn't work out for us/);
+  assert.ok(statuses.includes("passed"));
+});
+
+import { asksOurNumber } from "./shared/conversation-ai.js";
+
+test("asksOurNumber hears an agent asking what we'd pay, and nothing else", () => {
+  for (const s of ["What would you offer on the Auburn home, I know she will ask me?", "Is your ceiling 195k on it?",
+    "what's your best number", "How high could you go?", "Where would you be on it?", "what can u do on 715"]) {
+    assert.equal(asksOurNumber(s), true, s);
+  }
+  for (const s of ["Their lowest at this time is $700k.", "What do you think of this home?", "Would the seller take 450?",
+    "He would like to get 600k. You are welcome to tour it.", "What are you planning to do with the ADU?"]) {
+    assert.equal(asksOurNumber(s), false, s);
+  }
 });
 
 import { floorFirmness } from "./reply-agent.js";

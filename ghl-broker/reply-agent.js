@@ -47,7 +47,7 @@ import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, 
 import { paperWent, paperWorthy, floatSentAt, isRoughNumber } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, PROMISE_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, soundsLikeSecondThoughts, soundsCrossedUp, doesntKnowUs } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, PROMISE_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, asksOurNumber, soundsLikeSecondThoughts, soundsCrossedUp, doesntKnowUs } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound, supersededBy } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
@@ -648,6 +648,23 @@ export function floorFirmness(message = "") {
     // 2026-09-14): a number they can deliver is an opening, whatever follows.
     || /\b(?:could|can|might|should|would)\s+(?:probably\s+|likely\s+|maybe\s+)?(?:get|bring|push)\s+(?:them|him|her|the\s+sellers?)\s+(?:down\s+)?to\b/i.test(t)) return "soft";
   return "plain";
+}
+
+/**
+ * passHeldWhy({ offer, message }) → "" | why the far-counter goodbye waits
+ *
+ * The canned "too far apart" goodbye is for a text about one house that asks
+ * nothing of us. Already passed: we closed it out, and their number said
+ * again isn't news. Asked our number, or another house in the text: the
+ * goodbye answers neither, so a person does.
+ */
+export function passHeldWhy({ offer, message = "" } = {}) {
+  const street = String(offer?.address || "").split(",")[0].trim() || "the house";
+  if (offerStatus(offer) === "passed") return `we already passed on ${street} — their number again is for a person, not a second goodbye`;
+  if (asksOurNumber(message)) return `they asked what we'd offer on ${street} — a goodbye doesn't answer it`;
+  const other = housesInText({ message, except: [offer?.address || ""] })[0];
+  if (other) return `their text is also about ${other.address || other.label} — a goodbye on ${street} would answer the wrong house`;
+  return "";
 }
 
 export function normalizeAgentTake(p) {
@@ -4209,6 +4226,7 @@ async function runReply(job, ctx) {
         // Close to our number (2026-10-15): a call, never a pass or a soft
         // round by text — the hold below hands it to a person.
         const close = closeCounter({ ours: full.cashAmount, theirs, pct: config.parties?.agent?.counterHold?.callWithinPct ?? 10 });
+        const heldWhy = passHeldWhy({ offer: full, message: job.originalMessage || job.message });
         if (close) { /* a person's call: see the hold below */ }
         else if (reference > 0 && theirs > passLine && firmness === "soft" && !beyondReach && !(full.requotes || []).length) {
           // A soft floor is an opening. Keep it a live negotiation: file their
@@ -4223,6 +4241,14 @@ async function runReply(job, ctx) {
             needsHuman: false,
           };
           job.intent = draft.intent;
+        } else if (reference > 0 && theirs > passLine && heldWhy) {
+          // The goodbye goes once, to a text that asks nothing else. Melissa
+          // W. (2026-10-20): 311 R St NE was passed on 10/17, and each
+          // text repeating the 600k drew the same goodbye — three in 25
+          // minutes, the last to "What would you offer on the Auburn home?",
+          // and one to a text about a second house. The model's reply waits
+          // for a person instead.
+          draft = { ...draft, needsHuman: true, passHeld: { offerId: full.id, theirs, why: heldWhy, passed: offerStatus(full) === "passed" }, humanReason: heldWhy };
         } else if (reference > 0 && theirs > passLine) {
           draft = {
             ...draft, intent: "rejection", reclassifiedFrom: "counter",
@@ -4249,7 +4275,7 @@ async function runReply(job, ctx) {
   // ("we can't go higher") and he has just had the conversation. And only
   // with the follow-up clock on, which the check-ins after the hold ride.
   const holdOn = config.parties?.agent?.counterHold?.enabled && config.parties?.agent?.followUp?.enabled;
-  if (party === "agent" && !isCall && draft.intent === "counter" && holdOn) {
+  if (party === "agent" && !isCall && draft.intent === "counter" && holdOn && !draft.passHeld) {
     const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
     const open = currentOffers(book).filter(isNegotiable);
     const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
@@ -4695,6 +4721,11 @@ async function runReply(job, ctx) {
   if (filedAction) {
     plan.auto = plan.auto.filter((x) => x.type !== filedAction);
     plan.suggested = plan.suggested.filter((x) => x.type !== filedAction);
+  }
+  // A house we already passed stays passed while its repeat waits for a
+  // person: filed "countered", the next repeat would draw the goodbye again.
+  if (draft.passHeld?.passed) {
+    plan.auto = plan.auto.filter((x) => x.type !== "mark_offer_countered");
   }
   // Number first: the reply promises numbers, so the underwrite runs whatever
   // the tier's rule carries (Tier 2 carries none) — replacing a held draft

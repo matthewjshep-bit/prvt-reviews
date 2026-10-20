@@ -521,6 +521,19 @@ export function asksForTheirNumber(reply = "") {
   return questions.some((q) => THEIR_NUMBER_RX.test(q));
 }
 
+// They ask OUR number: "What would you offer on the Auburn home, I know she
+// will ask me?" (Melissa W., 2026-10-20), "Is your ceiling 195k on it?".
+// A question, or a line that opens like one when the "?" was left off. A
+// canned goodbye is no answer to it.
+const OUR_NUMBER_RX = /\bwhat\s+(?:would|will|could|can|do|did)\s+(?:you|u|y'?all)\s+(?:be\s+(?:able\s+to\s+)?)?(?:offer|pay|do|go|give|come in at)\b|\bwhat(?:'s|s| is| are)\s+(?:your|ur)\s+(?:best\s+)?(?:offer|number|price|ceiling|max|top)\b|\bhow\s+(?:high|much)\s+(?:would|could|can|will)\s+(?:you|u)\s+(?:go|pay|offer|do)\b|\bwhere\s+(?:would|could|are|do)\s+(?:you|u)\s+(?:be|land|come in)\b|\bis\s+(?:your|ur)\s+(?:ceiling|max|top|best)\b/i;
+/** asksOurNumber(message) → true when they're asking what we'd offer or pay. */
+export function asksOurNumber(message = "") {
+  const t = String(message || "");
+  const asked = t.match(/[^.!?\n]*\?/g) || [];
+  const opened = t.split(/[.!?\n]+/).filter((s) => /^\s*(?:what|how|where|is)\b/i.test(s));
+  return [...asked, ...opened].some((s) => OUR_NUMBER_RX.test(s));
+}
+
 // The seller wavering on a number they'd liked: "seller is having second
 // thoughts and may just want to hold tight. Too low a margin." Not a no, not
 // a counter — and not the moment to ask what's holding up the paperwork.
