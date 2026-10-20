@@ -65,7 +65,7 @@ function StatusStrip({ autopilot, working, liveDeals, daytime, leaks, refreshBtn
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
       {autopilot && (
-        <a href={appHref("/autopilot", "controls")} className="rounded-md hover:text-blue-700" title="Autopilot controls">
+        <a href={appHref("/autopilot", "overview")} className="rounded-md hover:text-blue-700" title="What the autopilot is doing">
           <span className="font-semibold text-slate-700">Autopilot</span> <b className="text-slate-900">{autopilot.modeLabel || autopilot.mode || "Custom"}</b>
           {" "}· <b className="text-emerald-700">{c.on || 0}</b> sending itself · <b className="text-amber-700">{c.drafting || 0}</b> drafting · <b className="text-slate-700">{c.off || 0}</b> off
           {autopilot.readyToGraduate > 0 && <span className="text-blue-700"> · {autopilot.readyToGraduate} ready to promote</span>}

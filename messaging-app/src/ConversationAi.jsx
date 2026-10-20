@@ -1,9 +1,11 @@
-// ConversationAi.jsx — the tab where the bot is tuned and watched.
+// ConversationAi.jsx — the bot's half of Autopilot → Advanced settings: where
+// it is tuned.
 //
 // Top to bottom: the switches that matter most (on/off, the daily cap, whether
-// the broker can send at all), how it has been doing, what is waiting right
-// now, a place to try it, the editors, and the history that says which
-// intents are ready to send on their own. Config edits are local until Save;
+// the broker can send at all), what is waiting right now, who the bot is and
+// how it writes; then More settings, folded: the rest of the editors, how it has
+// been doing, and the history that says which intents are ready to send on
+// their own. Config edits are local until Save;
 // the page owns only its own blob, and Settings never writes it.
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -15,7 +17,6 @@ import { autoAcceptCeiling } from "@shared/auto-accept.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, Pill, SkeletonRows, TableCard } from "./ui.jsx";
 import { appHref } from "./links.js";
-import ConversationTryIt from "./ConversationTryIt.jsx";
 import {
   AnswersEditor, WriteUpTermsEditor, AutoSendCard, BookingCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, InvestorBandCard, MediaCard, ContactCardCard, OptOutCard, PartyPlaybooks,
   CoachSettingsCard, GmailCard, PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
@@ -231,34 +232,44 @@ export default function ConversationAi({ settings }) {
       {error && <ErrorBar>{error}</ErrorBar>}
       {notice && <div className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">{notice}</div>}
 
-      <KpiRow cols="sm:grid-cols-5" items={kpis} />
-
       <DraftsWaiting refreshKey={refreshKey} />
 
-      <ConversationTryIt sendsEnabled={sendsEnabled} />
-
+      {/* Who the bot is and how it writes: the cards Matt works in
+          (2026-10-20). What it texts agents and buyers unprompted is on the
+          Agents and Investors tabs. */}
       <PersonaCard config={form} patch={patch} />
-      <RoutingCard config={form} patch={patch} version={version} />
-      <PartyPlaybooks config={form} patch={patch} workflows={workflows} />
-      <FollowUpCard config={form} patch={patch} />
-      <AutoSendCard config={form} patch={patch} />
-      <CounterBandCard config={form} patch={patch} example={bandExample} />
-      <InvestorBandCard config={form} patch={patch} />
-      <BookingCard config={form} patch={patch} calendars={calendars} />
-      <RequoteCard config={form} patch={patch} />
-      <ProfileCard config={form} patch={patch} />
-      <CoachSettingsCard config={form} patch={patch} />
-      <GmailCard config={form} patch={patch} />
       <StyleCard config={form} patch={patch} />
-      <OptOutCard config={form} patch={patch} version={version} workflows={workflows} />
-      <MediaCard config={form} patch={patch} />
-      <ContactCardCard config={form} patch={patch} />
       <RulesEditor config={form} patch={patch} />
       <ExamplesEditor config={form} patch={patch} />
-      <WriteUpTermsEditor config={form} patch={patch} />
       <AnswersEditor config={form} patch={patch} />
 
-      <HistorySection history={history} days={days} setDays={setDays} onRefresh={() => setRefreshKey((k) => k + 1)} onPromote={promote} saving={saving} />
+      {/* Everything else, folded away again. Same Save; nothing here changes
+          by being folded. */}
+      <details className="group rounded-xl border border-slate-200 bg-white">
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          More settings
+          <span className="ml-2 font-normal text-slate-500">routing, playbooks, follow-up ladders, auto-send timing, bands, booking, coach, opt-outs and history</span>
+        </summary>
+        <div className="space-y-4 border-t border-slate-200 p-4">
+          <KpiRow cols="sm:grid-cols-5" items={kpis} />
+          <RoutingCard config={form} patch={patch} version={version} />
+          <PartyPlaybooks config={form} patch={patch} workflows={workflows} />
+          <FollowUpCard config={form} patch={patch} />
+          <AutoSendCard config={form} patch={patch} />
+          <CounterBandCard config={form} patch={patch} example={bandExample} />
+          <InvestorBandCard config={form} patch={patch} />
+          <BookingCard config={form} patch={patch} calendars={calendars} />
+          <RequoteCard config={form} patch={patch} />
+          <ProfileCard config={form} patch={patch} />
+          <CoachSettingsCard config={form} patch={patch} />
+          <GmailCard config={form} patch={patch} />
+          <OptOutCard config={form} patch={patch} version={version} workflows={workflows} />
+          <MediaCard config={form} patch={patch} />
+          <ContactCardCard config={form} patch={patch} />
+          <WriteUpTermsEditor config={form} patch={patch} />
+          <HistorySection history={history} days={days} setDays={setDays} onRefresh={() => setRefreshKey((k) => k + 1)} onPromote={promote} saving={saving} />
+        </div>
+      </details>
     </div>
   );
 }

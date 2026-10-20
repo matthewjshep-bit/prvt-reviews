@@ -42,6 +42,19 @@ test("with the intent ticked and both gates on, a blast becomes staggered schedu
   assert.notEqual(drafts[0].reply, drafts[1].reply, "the phrasing rotates");
 });
 
+// Matt, 2026-10-20: "Let's make the change where we can edit the text."
+test("a wave goes out in the deal text Matt wrote on Autopilot → Investors, rotated per buyer, at the deal's price", async () => {
+  const store = fakeStore();
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } },
+    dispoAutopilot: { dealTexts: ["Hi {first}, {place} is ours. {numbers}. {close}", "{first}, fresh one: {street}, {price}. {close}"] } };
+  await queueBlastDrafts({ store, locationId: "L", offer, investors: buyers, saved, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  const drafts = [...store.rows.values()];
+  assert.match(drafts[0].reply, /^Hi Ravi, 22018 76th Ave W in Edmonds is ours\. Buyer price 495k, ARV around 640k, rehab about 60k\./);
+  assert.match(drafts[1].reply, /^Mei, fresh one: 22018 76th Ave W, 495k\./);
+  assert.match(drafts[2].reply, /^Hi Sam, /, "two versions, three buyers: back to the first");
+  assert.deepEqual(normalizeDispoAutopilot({}).dealTexts, [], "none saved: the built-in wording");
+});
+
 // Matt, 2026-10-01: a stop means nothing goes to them by itself — a deal
 // text to a buyer included.
 test("a blast to a buyer you stopped the bot on waits as a draft; the rest still go", async () => {

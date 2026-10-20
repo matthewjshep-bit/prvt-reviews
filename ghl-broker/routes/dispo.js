@@ -34,7 +34,7 @@ import { buyboxCustom, investorProfileText, refreshInvestorRow } from "../invest
 import { CURSOR_NAME as BOOK_SYNC_CURSOR } from "../investor-sync.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel, blastChannels, resumePulledBack } from "../dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel, blastChannels, resumePulledBack, sampleBlastTexts } from "../dispo-autopilot.js";
 import { planBuyerPulse, startBuyerPulse, previewBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
 import { runShowingSweep } from "../showing-sweep.js";
 import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
@@ -757,6 +757,9 @@ export default function createDispoRouter({ resolveLocation }) {
         ghlTags: offer.deal.blastTags || [],
         alreadySent: ranked.filter((i) => i.alreadyBlasted).length,
         next, wouldGet,
+        // The deal text as it would read now, each phrasing, and what it was
+        // built from (Autopilot → Investors).
+        ...(await sampleBlastTexts({ store, locationId, offer, saved }).catch(() => ({ samples: [], input: null }))),
       });
     } catch (err) { fail(res, err); }
   });

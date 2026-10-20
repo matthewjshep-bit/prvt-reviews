@@ -78,6 +78,18 @@ export const LEGACY_DEFAULT_OPENER_EXAMPLES = [
 ];
 const LEGACY = new Set([...LEGACY_DEFAULT_OPENER_EXAMPLES, ...PREVIOUS_DEFAULT_OPENER_EXAMPLES, ...PLAIN_DEFAULT_OPENER_EXAMPLES]);
 
+// The follow-ups to a first text nobody answered (outreach_nudge), one per
+// step of the ladder: follow-up 1 is the first text written here, follow-up
+// 2 the second (2026-10-20, Matt: "the first text … and then the second text
+// … as a follow-up", charted out like a GHL workflow). Until then every step
+// picked from one pool, so an agent got the same follow-up on every step.
+// These two are Rigo's two-week text and its "circling back" sister; a step
+// with no text of its own uses shared/standard-texts.js NUDGE_TEXTS.
+export const DEFAULT_FOLLOW_UP_TEXTS = [
+  "Hi {first}, following up on your listing at {address}. We're usually after houses that need real work, the uglier the better. Anything like that on your end?",
+  "Hey {first}, circling back on {address}. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?",
+];
+
 export const OPENER_MAX_EXAMPLES = 8;
 export const OPENER_EXAMPLE_MAX_CHARS = 400;
 // A saved example longer than this teaches the bot a long first text, so it
@@ -97,7 +109,7 @@ export const OPENER_MAX_CHARS = 160;
 const FOOTER_RX = /\bcan stop\b|\bstop to end\b|\breply stop\b/i;
 
 /**
- * normalizeOpener(v) → { examples: string[], mode: "template" | "ai" }
+ * normalizeOpener(v) → { examples: string[], followUps: string[], mode: "template" | "ai" }
  *
  * Unset (or emptied) → Matt's defaults. Each example trimmed and capped; one
  * that carries the stop footer is dropped, and a sign-off on the end is cut.
@@ -106,18 +118,29 @@ const FOOTER_RX = /\bcan stop\b|\bstop to end\b|\breply stop\b/i;
  */
 export function normalizeOpener(v = {}) {
   const o = v && typeof v === "object" ? v : {};
-  const raw = Array.isArray(o.examples) ? o.examples : typeof o.examples === "string" ? o.examples.split(/\n\s*\n/) : null;
-  const examples = (raw || [])
+  // The old defaults (each ends asking for other fixers) are left out of the
+  // first texts (2026-10-15).
+  const examples = cleanTexts(o.examples, LEGACY);
+  const followUps = cleanTexts(o.followUps);
+  return {
+    examples: examples.length ? examples : [...DEFAULT_OPENER_EXAMPLES],
+    followUps: followUps.length ? followUps : [...DEFAULT_FOLLOW_UP_TEXTS],
+    mode: o.mode === "ai" ? "ai" : "template",
+  };
+}
+
+// A list of texts as Settings or the Autopilot chart saves them (an array,
+// or one string with a blank line between texts): trimmed, without GHL's
+// stop footer or a sign-off, and none long enough to make a long cold text.
+function cleanTexts(v, drop = new Set()) {
+  const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(/\n\s*\n/) : [];
+  return raw
     .map((x) => String(x || "").replace(/\s+/g, " ").trim().slice(0, OPENER_EXAMPLE_MAX_CHARS))
     .filter((x) => x && !FOOTER_RX.test(x))
     // "…I'm all ears. Thanks, Matt" would teach the bot to sign off.
     .map((x) => stripSignOff(x))
-    .filter(Boolean)
-    // The old defaults (each ends asking for other fixers) and anything long
-    // enough to teach a long first text are left out (2026-10-15).
-    .filter((x) => !LEGACY.has(x) && x.length <= OPENER_EXAMPLE_KEEP_CHARS)
+    .filter((x) => x && !drop.has(x) && x.length <= OPENER_EXAMPLE_KEEP_CHARS)
     .slice(0, OPENER_MAX_EXAMPLES);
-  return { examples: examples.length ? examples : [...DEFAULT_OPENER_EXAMPLES], mode: o.mode === "ai" ? "ai" : "template" };
 }
 
 /**

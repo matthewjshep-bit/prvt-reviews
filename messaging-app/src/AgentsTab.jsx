@@ -1,0 +1,257 @@
+// AgentsTab.jsx — Autopilot → Agents (2026-10-20): what goes out to a
+// listing agent, in order, editable in place; the agent list (what was
+// Agent Outreach) and its setup folded away below.
+//
+// The texts save through PATCH /settings (outreachAutopilot.opener and
+// .pulse only), the follow-up days through the Conversation AI config
+// (parties.agent.followUp.ladders.outreach_nudge.steps), each re-read before
+// it's written, so neither carries an old copy of anything else.
+
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Loader2, Plus, Trash2, X } from "lucide-react";
+import { agentFlow } from "@shared/autopilot-flows.js";
+import { NUDGE_TEXTS } from "@shared/standard-texts.js";
+import { OPENER_MAX_EXAMPLES } from "@shared/outreach-opener.js";
+import { getConversationAi, getDashboardPipeline, getSettings, patchSettings, saveConversationAi } from "./api.js";
+import { BTN, BTN_DANGER, BTN_PRIMARY, ErrorBar, SkeletonRows } from "./ui.jsx";
+import FlowChart, { sampleOf, textWarnings } from "./FlowChart.jsx";
+import AgentOutreach from "./AgentOutreach.jsx";
+import SettingsView from "./SettingsView.jsx";
+
+const AREA = "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm leading-snug focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
+const NUM = "w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm";
+const MAX_FOLLOW_UPS = 6;
+
+/** A text box with what it reads like filled in, and what would stop it. */
+function TextBox({ value, onChange, onRemove, label }) {
+  const warn = textWarnings(value);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        {label && <span className="text-xs font-semibold text-slate-600">{label}</span>}
+        {onRemove && (
+          <button type="button" className={`${BTN_DANGER} ml-auto`} onClick={onRemove} title="Remove this one">
+            <Trash2 size={12} aria-hidden="true" /> Remove
+          </button>
+        )}
+      </div>
+      <textarea className={AREA} rows={3} value={value} onChange={(e) => onChange(e.target.value)} />
+      <p className="text-xs text-slate-500">Reads: {sampleOf(value) || "—"}</p>
+      {warn.map((w) => <p key={w} className="text-xs font-medium text-amber-700">{w}</p>)}
+    </div>
+  );
+}
+
+function EditorBar({ busy, onSave, onCancel, children }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 pt-2">
+      <button type="button" className={BTN_PRIMARY} disabled={busy} onClick={onSave}>
+        {busy && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} Save
+      </button>
+      <button type="button" className={BTN} disabled={busy} onClick={onCancel}><X size={12} aria-hidden="true" /> Cancel</button>
+      {children}
+    </div>
+  );
+}
+
+const HELP = "{first} is their first name, {address} the listing's street address, {street} the street alone.";
+
+export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
+  const [settings, setSettings] = useState(null);
+  const [config, setConfig] = useState(null);
+  const [switches, setSwitches] = useState([]);
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  // Setup's form is read once when it mounts; a chart save remounts it, so a
+  // Setup save after never carries the old texts back.
+  const [setupVersion, setSetupVersion] = useState(0);
+
+  const load = useCallback(() => Promise.all([getSettings(), getConversationAi(), getDashboardPipeline().catch(() => null)])
+    .then(([s, c, p]) => { setSettings(s); setConfig(c.config); setSwitches(p?.autopilot?.switches || []); setError(""); })
+    .catch((e) => setError(e.message || "Couldn't load the agent flow.")), []);
+  useEffect(() => { load(); }, [load]);
+
+  const steps = useMemo(() => (settings && config ? agentFlow({ settings, config, switches }) : []), [settings, config, switches]);
+  const ladder = config?.parties?.agent?.followUp?.ladders?.outreach_nudge?.steps || [];
+  // Each follow-up's text as the chart shows it: its own, or the spare it uses.
+  const shownFollowUps = steps.filter((s) => s.edit?.field === "followUp").map((s) => s.texts[0]);
+
+  const open = (id) => {
+    const step = steps.find((s) => s.id === id);
+    if (!step) { setEditing(id); setDraft({}); return; }
+    const f = step.edit.field;
+    if (f === "examples") setDraft({ texts: [...step.texts] });
+    else if (f === "followUp") setDraft({ text: step.texts[0], day: step.day });
+    else if (f === "pulse") setDraft({ enabled: settings?.outreachAutopilot?.pulse?.enabled === true, everyDays: Number(settings?.outreachAutopilot?.pulse?.everyDays) || 21 });
+    setEditing(id);
+  };
+  const close = () => { setEditing(null); setDraft(null); };
+
+  async function run(fn) {
+    setBusy(true); setError("");
+    try {
+      await fn();
+      const fresh = await getSettings();
+      onSettingsSaved?.(fresh);
+      setSetupVersion((v) => v + 1);
+      await load();
+      close();
+    } catch (e) { setError(e.message || "Couldn't save."); }
+    setBusy(false);
+  }
+
+  // The follow-up days live in the Conversation AI blob: read it fresh,
+  // change only this ladder's days, write it back.
+  async function saveDays(nextSteps) {
+    const fresh = (await getConversationAi()).config;
+    const fu = fresh.parties.agent.followUp;
+    const ld = fu.ladders.outreach_nudge;
+    await saveConversationAi({ ...fresh, parties: { ...fresh.parties, agent: { ...fresh.parties.agent,
+      followUp: { ...fu, ladders: { ...fu.ladders, outreach_nudge: { ...ld, steps: nextSteps } } } } } });
+  }
+  const saveTexts = (followUps) => patchSettings({ outreachAutopilot: { opener: { followUps } } });
+
+  // Between the follow-up before and the one after, so the order (and which
+  // text goes with which day) can't change by saving.
+  const dayBounds = (i) => [i > 0 ? ladder[i - 1] + 1 : 1, i < ladder.length - 1 ? ladder[i + 1] - 1 : 90];
+
+  function renderEditor(step) {
+    const f = step.edit.field;
+    if (f === "examples") {
+      const texts = draft?.texts || [];
+      const set = (i, v) => setDraft({ texts: texts.map((t, j) => (j === i ? v : t)) });
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500">Each new agent gets one of these, a different one per agent. {HELP}</p>
+          {texts.map((t, i) => (
+            <TextBox key={i} label={`Version ${i + 1}`} value={t} onChange={(v) => set(i, v)}
+              onRemove={texts.length > 1 ? () => setDraft({ texts: texts.filter((_, j) => j !== i) }) : null} />
+          ))}
+          <EditorBar busy={busy} onCancel={close}
+            onSave={() => run(() => patchSettings({ outreachAutopilot: { opener: { examples: texts.map((t) => t.trim()).filter(Boolean) } } }))}>
+            {texts.length < OPENER_MAX_EXAMPLES && (
+              <button type="button" className={BTN} onClick={() => setDraft({ texts: [...texts, ""] })}><Plus size={12} aria-hidden="true" /> Add a version</button>
+            )}
+          </EditorBar>
+        </div>
+      );
+    }
+    if (f === "followUp") {
+      const i = step.edit.index;
+      const [lo, hi] = dayBounds(i);
+      const day = Number(draft?.day);
+      const dayOk = Number.isInteger(day) && day >= lo && day <= hi;
+      return (
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            Send on day
+            <input type="number" className={NUM} min={lo} max={hi} value={draft?.day ?? ""} onChange={(e) => setDraft({ ...draft, day: e.target.value })} />
+            <span className="text-xs text-slate-500">after the first text, if they haven't replied ({lo}–{hi})</span>
+          </label>
+          <TextBox value={draft?.text || ""} onChange={(v) => setDraft({ ...draft, text: v })} />
+          <p className="text-xs text-slate-500">{HELP}</p>
+          <EditorBar busy={busy} onCancel={close}
+            onSave={() => {
+              if (!dayOk) { setError(`Follow-up ${i + 1} has to go out between day ${lo} and day ${hi}.`); return; }
+              const texts = shownFollowUps.map((t, j) => (j === i ? draft.text.trim() : t));
+              run(async () => { await saveTexts(texts); if (day !== ladder[i]) await saveDays(ladder.map((d, j) => (j === i ? day : d))); });
+            }}>
+            {ladder.length > 1 && (
+              <button type="button" className={`${BTN_DANGER} ml-auto`} disabled={busy}
+                onClick={() => {
+                  if (!window.confirm(`Remove follow-up ${i + 1}? Agents who haven't had it yet won't get it.`)) return;
+                  run(async () => { await saveTexts(shownFollowUps.filter((_, j) => j !== i)); await saveDays(ladder.filter((_, j) => j !== i)); });
+                }}>
+                <Trash2 size={12} aria-hidden="true" /> Remove this follow-up
+              </button>
+            )}
+          </EditorBar>
+        </div>
+      );
+    }
+    if (f === "pulse") {
+      return (
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={Boolean(draft?.enabled)} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
+            Write the day's check-ins
+            <span className="text-xs text-slate-500">whether they send themselves is under Setup → Check in with every agent</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            Every
+            <input type="number" className={NUM} min={7} max={90} value={draft?.everyDays ?? ""} onChange={(e) => setDraft({ ...draft, everyDays: e.target.value })} />
+            days to an agent who's talked to us
+          </label>
+          <EditorBar busy={busy} onCancel={close}
+            onSave={() => run(() => patchSettings({ outreachAutopilot: { pulse: { enabled: Boolean(draft.enabled), everyDays: Number(draft.everyDays) } } }))} />
+        </div>
+      );
+    }
+    return null;
+  }
+
+  // A new follow-up after the last: a week on, with the next spare text.
+  const last = ladder[ladder.length - 1] || 0;
+  const firstIsApp = (settings?.outreachAutopilot?.firstTouch || "app") === "app";
+
+  return (
+    <div className="space-y-6">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+        <div className="mb-4">
+          <h2 className="text-base font-bold text-slate-900">What goes out to agents</h2>
+          <p className="text-sm text-slate-500">Shown for an agent named Brenda with a listing at 14820 SE 172nd St. Press Edit on a text to change it.</p>
+        </div>
+        {error && <div className="mb-3"><ErrorBar>{error}</ErrorBar></div>}
+        {!settings || !config ? <SkeletonRows rows={4} cols={2} /> : (
+          <>
+            <FlowChart steps={steps} editing={editing} onEdit={open} renderEditor={renderEditor} />
+            {firstIsApp && ladder.length < MAX_FOLLOW_UPS && last < 89 && (
+              editing === "follow-new" ? (
+                <div className="ml-11 mt-2 space-y-3 rounded-xl border border-blue-300 bg-white p-3 ring-2 ring-blue-100">
+                  <div className="text-sm font-semibold text-slate-900">Follow-up {ladder.length + 1}</div>
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    Send on day
+                    <input type="number" className={NUM} min={last + 1} max={90} value={draft?.day ?? ""} onChange={(e) => setDraft({ ...draft, day: e.target.value })} />
+                  </label>
+                  <TextBox value={draft?.text || ""} onChange={(v) => setDraft({ ...draft, text: v })} />
+                  <EditorBar busy={busy} onCancel={close}
+                    onSave={() => {
+                      const day = Number(draft?.day);
+                      if (!Number.isInteger(day) || day <= last || day > 90) { setError(`The new follow-up has to go out after day ${last}, by day 90.`); return; }
+                      if (!draft.text.trim()) { setError("Write the follow-up's text first."); return; }
+                      run(async () => { await saveTexts([...shownFollowUps, draft.text.trim()]); await saveDays([...ladder, day]); });
+                    }} />
+                </div>
+              ) : (
+                <button type="button" className={`${BTN} ml-11 mt-1`}
+                  onClick={() => { setEditing("follow-new"); setDraft({ day: last + 7, text: NUDGE_TEXTS[ladder.length % NUDGE_TEXTS.length] }); }}>
+                  <Plus size={12} aria-hidden="true" /> Add a follow-up
+                </button>
+              )
+            )}
+          </>
+        )}
+      </section>
+
+      <details className="rounded-xl border border-slate-200 bg-white">
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          Agent list
+          <span className="ml-2 font-normal text-slate-500">every agent we've found, the daily sweep, pulling listings</span>
+        </summary>
+        <div className="border-t border-slate-200 p-4"><AgentOutreach settings={appSettings} /></div>
+      </details>
+
+      <details className="rounded-xl border border-slate-200 bg-white">
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          Setup
+          <span className="ml-2 font-normal text-slate-500">RentCast key, the daily sweep, who sends the first text, check-in settings</span>
+        </summary>
+        <div className="border-t border-slate-200 p-4">
+          <SettingsView key={setupVersion} settings={appSettings} onSaved={(s) => { onSettingsSaved?.(s); load(); }} mode="outreach" />
+        </div>
+      </details>
+    </div>
+  );
+}

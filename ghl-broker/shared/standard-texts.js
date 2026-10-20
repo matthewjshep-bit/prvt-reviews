@@ -34,14 +34,15 @@
 // Pure. ghl-broker/reply-agent.js uses standardText() in place of the model
 // for these kinds when the mode is "template".
 
-import { streetName, openerVariant } from "./outreach-opener.js";
+import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS } from "./outreach-opener.js";
 
-// The 14-day follow-up to a first text nobody answered (outreach_nudge):
-// Rigo's two-week text, without the dollar figure (carriers read money in a
-// cold text as an ad).
+// The follow-up to a first text nobody answered (outreach_nudge): Rigo's
+// two-week text, without the dollar figure (carriers read money in a cold
+// text as an ad). Each step of the ladder has its own text
+// (outreachAutopilot.opener.followUps, 2026-10-20); this pool is for a step
+// with none of its own.
 export const NUDGE_TEXTS = [
-  "Hi {first}, following up on your listing at {address}. We're usually after houses that need real work, the uglier the better. Anything like that on your end?",
-  "Hey {first}, circling back on {address}. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?",
+  ...DEFAULT_FOLLOW_UP_TEXTS,
   "Hi {first}, checking back on {address}. Not sure it needs enough work for us, but if you come across any fixers, listed or off market, I'm all ears.",
 ];
 
@@ -125,7 +126,8 @@ function pickFilled(list, variant, values) {
  * we closed together, Matt's 15).
  *
  *   outreach_open   outbound.mode "template"; one of outbound.templates
- *   outreach_nudge  outbound.mode "template"; NUDGE_TEXTS
+ *   outreach_nudge  outbound.mode "template"; outbound.followUps[step], else
+ *                   NUDGE_TEXTS from the contact's variant plus the step
  *   agent_pulse     outbound.mode "template"; CHECKIN_TEXTS, CHECKIN_COLD_TEXTS,
  *                   or LISTING_PING_TEXTS for a fresh listing of theirs
  */
@@ -148,7 +150,15 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
     const ex = Array.isArray(o.templates) ? o.templates : [];
     return done("opener", pickFilled(ex, v, values));
   }
-  if (kind === "outreach_nudge") return done("nudge", pickFilled(NUDGE_TEXTS, v, values));
+  if (kind === "outreach_nudge") {
+    // Follow-up N is the text written for step N; one with none of its own
+    // (or one we can't fill) takes the pool, a step along per step, so no
+    // agent gets the same follow-up twice running (2026-10-20).
+    const rung = Math.max(0, (Number(o.stepIndex) || 1) - 1);
+    const own = Array.isArray(o.followUps) ? fillTemplate(o.followUps[rung], values) : "";
+    if (own) return { text: own, set: "follow_up", index: rung };
+    return done("nudge", pickFilled(NUDGE_TEXTS, v + rung, values));
+  }
   if (kind === "agent_pulse") {
     if (o.forMatt || o.reason === "deal_thanks" || o.reason === "off_market_listing" || o.hook?.kind === "mentioned") return null;
     if (o.reason === "fresh_listing") {

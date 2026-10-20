@@ -72,6 +72,10 @@ export const getSettings = () =>
   fetch(`${API_BASE}/api/offers/settings?${locq()}`).then(j).then((r) => ({ ...r.settings, __secrets: r.secrets || {} }));
 export const saveSettings = ({ __secrets, ...settings }) =>
   post(`/api/offers/settings`, { settings }, "PUT").then((r) => ({ ...r, settings: { ...r.settings, __secrets: r.secrets || {} } }));
+// One part of outreachAutopilot or dispoAutopilot, merged in on the broker
+// (the Autopilot charts): never a stale copy of the rest of Settings.
+export const patchSettings = (part) =>
+  post(`/api/offers/settings`, { settings: part }, "PATCH").then((r) => ({ ...r, settings: { ...r.settings, __secrets: r.secrets || {} } }));
 // Store a standing PSA exhibit (earnest money check copy / proof of funds
 // letter) and get back the URL to save into settings.psa. `kind` is
 // "emdCheck" or "proofOfFunds".
@@ -353,10 +357,6 @@ export const runFollowUps = (dryRun = true) =>
   post(`/api/offers/automations/conversation/follow-ups/run`, { dryRun });
 export const applyDraftAction = (id, actionId) =>
   post(`/api/offers/automations/conversation/${encodeURIComponent(id)}/actions/${encodeURIComponent(actionId)}/apply`, {});
-// Run the whole pipeline in preview on a real contact or a typed thread.
-// Nothing is saved, sent, tagged or scheduled.
-export const testConversation = ({ contactId, party, thread, message, channel }) =>
-  post(`/api/offers/automations/conversation/test`, { contactId, party, thread, message, channel });
 
 /* ---------- Zillow comp capture (bookmarklet inbox) ---------- */
 // Comps grabbed off Zillow land in a server-side inbox — the app runs in a GHL
@@ -775,6 +775,9 @@ export const getInvestor = (contactId) =>
 
 export const syncInvestors = () => post(`/api/dispo/sync`, {});
 // The check-in between deals: status, and a run by hand (a dry run by default).
+// A deal's waves so far, the next one, and its text as a buyer would get it now.
+export const getWavesPreview = (offerId) =>
+  fetch(`${API_BASE}/api/dispo/waves/preview?${locq()}&offerId=${encodeURIComponent(offerId)}`).then(j);
 export const getBuyerPulse = () => fetch(`${API_BASE}/api/dispo/pulse?${locq()}`).then(j);
 export const runBuyerPulse = ({ dryRun = true, limit = null } = {}) => post(`/api/dispo/pulse/run`, { dryRun, ...(limit != null ? { limit } : {}) });
 // A few pulse checks as the drafter would write them now, from real threads. Nothing saved or sent.
