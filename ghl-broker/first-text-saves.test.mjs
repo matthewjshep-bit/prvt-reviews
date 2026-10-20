@@ -56,3 +56,13 @@ test("the model still learns only short first texts: a long saved one isn't its 
   assert.deepEqual(o.templates, [MATTS]);
   assert.equal(standardText({ kind: "outreach_open", outbound: { ...o, county: "" }, name: "Dana" }), null, "no county to name: the model writes that one");
 });
+
+test("around the city, not the county: {{contact.city}} or {town} is the listing's town", async () => {
+  const withCity = "Hi {{contact.first_name}}, came across your listing at {{contact.short_hand_property_address ie 123 Main St}}. I'm in Seattle and looking for my next flip project around {{contact.city}}. Is this one a bit of a project, or pretty turnkey? And if you've got other fixers on your radar, I'm all ears.";
+  assert.match(normalizeOpener({ examples: [withCity] }).examples[0], /project around \{town\}\. Is this/);
+  const saved = { aiApiKey: "k", conversationAi: { enabled: true }, outreachAutopilot: { opener: { examples: [withCity] } } };
+  const r = await previewProactive({ client: { call: async () => ({}) }, locationId: "loc-first-text-city", saved, store, contactId: "", kind: "outreach_open", name: "Brenda",
+    subject: { address: "14820 Se 172nd St, Renton, WA 98058", county: "King", city: "Renton", variant: 0 },
+    deps: { draft: async () => ({ reply: "x", summary: "s", confidence: "high" }) } });
+  assert.equal(r.reply, "Hi Brenda, came across your listing at 14820 SE 172nd St. I'm in Seattle and looking for my next flip project around Renton. Is this one a bit of a project, or pretty turnkey? And if you've got other fixers on your radar, I'm all ears.");
+});
