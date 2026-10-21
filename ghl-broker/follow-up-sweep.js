@@ -43,7 +43,7 @@ import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { runCounterHolds } from "./counter-hold.js";
-import { runIntroEmails } from "./outreach-email.js";
+import { runIntroEmails, runCheckInEmails } from "./outreach-email.js";
 import { normalizeOutreachAutopilot } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
 import { searchConversations, listConversationMessages, removeContactFromWorkflow } from "./ghl.js";
@@ -1164,6 +1164,12 @@ async function runSweep(job, ctx) {
       held: (contactId) => botHold({ events: stops.get(contactId) || [], now }).held });
     job.emailed = (r?.queued || 0) + (r?.drafted || 0);
     for (const row of r?.rows || []) push(row);
+    // The email with each 14-day check-in, to agents the intro email reached.
+    const checkIns = typeof deps.runCheckInEmails === "function" ? deps.runCheckInEmails : runCheckInEmails;
+    const c = await checkIns({ client, store, locationId, saved, sendsEnabled, now, dryRun: job.dryRun, deps,
+      held: (contactId) => botHold({ events: stops.get(contactId) || [], now }).held });
+    job.emailed += (c?.queued || 0) + (c?.drafted || 0);
+    for (const row of c?.rows || []) push(row);
   }
 
   job.status = job.cancelRequested ? "canceled" : "done";
@@ -1190,7 +1196,8 @@ export async function maybeStartFollowUpSweep({ client, locationId, saved, store
     return fu?.enabled && (Object.values(fu.ladders || {}).some((l) => l.enabled && l.steps?.length) || fu.secondLook?.enabled);
   });
   // The day-2 intro email runs on this sweep too, with or without a ladder.
-  if (!anyLadder && !normalizeOutreachAutopilot(saved?.outreachAutopilot).introEmail.enabled) return false;
+  const oaNow = normalizeOutreachAutopilot(saved?.outreachAutopilot);
+  if (!anyLadder && !oaNow.introEmail.enabled && !oaNow.checkInEmail.enabled) return false;
   // Once a day, and back again the same morning if a deploy killed it
   // (daily-gate.js). A finished day never runs twice.
   const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: h, startHour: utcHour,

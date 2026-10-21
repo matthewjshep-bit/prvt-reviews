@@ -2,8 +2,8 @@
 // listing agent, in order, editable in place; the agent list (what was
 // Agent Outreach) and its setup folded away below.
 //
-// The texts save through PATCH /settings (outreachAutopilot.opener, .pulse
-// and .introEmail only), the follow-up days and the check-in repeat through
+// The texts save through PATCH /settings (outreachAutopilot.opener, .pulse,
+// .introEmail and .checkInEmail only), the follow-up days and the check-in repeat through
 // the Conversation AI config (parties.agent.followUp.ladders.outreach_nudge
 // .steps and .repeatEvery), each re-read before it's written, so neither
 // carries an old copy of anything else.
@@ -13,7 +13,7 @@ import { Loader2, Plus, Trash2, X } from "lucide-react";
 import { agentFlow } from "@shared/autopilot-flows.js";
 import { NUDGE_TEXTS } from "@shared/standard-texts.js";
 import { OPENER_MAX_EXAMPLES } from "@shared/outreach-opener.js";
-import { normalizeIntroEmail } from "@shared/outreach-email.js";
+import { normalizeIntroEmail, normalizeCheckInEmail, CHECK_IN_EMAIL_MAX } from "@shared/outreach-email.js";
 import { MAX_REPEAT_DAYS } from "@shared/follow-up.js";
 import { getConversationAi, getDashboardPipeline, getSettings, patchSettings, saveConversationAi } from "./api.js";
 import { BTN, BTN_DANGER, BTN_PRIMARY, ErrorBar, SkeletonRows } from "./ui.jsx";
@@ -90,6 +90,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
     else if (f === "pulse") setDraft({ enabled: settings?.outreachAutopilot?.pulse?.enabled === true, everyDays: Number(settings?.outreachAutopilot?.pulse?.everyDays) || 21 });
     else if (f === "checkIns") setDraft({ texts: [...step.texts], every: step.every });
     else if (f === "introEmail") setDraft({ ...normalizeIntroEmail(settings?.outreachAutopilot?.introEmail) });
+    else if (f === "checkInEmail") setDraft({ ...normalizeCheckInEmail(settings?.outreachAutopilot?.checkInEmail) });
     setEditing(id);
   };
   const close = () => { setEditing(null); setDraft(null); };
@@ -249,6 +250,49 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
               run(() => patchSettings({ outreachAutopilot: { introEmail: { enabled: Boolean(draft.enabled), autoSend: Boolean(draft.autoSend), day,
                 subject: String(draft.subject || "").trim(), body: String(draft.body || "").trim() } } }));
             }} />
+        </div>
+      );
+    }
+    if (f === "checkInEmail") {
+      const emails = draft?.emails || [];
+      const set = (i, k, v) => setDraft({ ...draft, emails: emails.map((e, j) => (j === i ? { ...e, [k]: v } : e)) });
+      return (
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={Boolean(draft?.enabled)} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
+            Send an email with each check-in
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={Boolean(draft?.autoSend)} onChange={(e) => setDraft({ ...draft, autoSend: e.target.checked })} />
+            It sends itself
+            <span className="text-xs text-slate-500">otherwise each one waits in the outbox for your Send</span>
+          </label>
+          <p className="text-xs text-slate-500">Each check-in sends the next of these. {"{first}"} is their first name. A blank line starts a new paragraph.</p>
+          {emails.map((e, i) => (
+            <div key={i} className="space-y-1 rounded-lg border border-slate-200 p-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-600">Email {i + 1}</span>
+                {emails.length > 1 && (
+                  <button type="button" className={`${BTN_DANGER} ml-auto`} onClick={() => setDraft({ ...draft, emails: emails.filter((_, j) => j !== i) })}>
+                    <Trash2 size={12} aria-hidden="true" /> Remove
+                  </button>
+                )}
+              </div>
+              <input type="text" className={AREA} placeholder="Subject" value={e.subject} onChange={(ev) => set(i, "subject", ev.target.value)} />
+              <textarea className={AREA} rows={7} value={e.body} onChange={(ev) => set(i, "body", ev.target.value)} />
+              <p className="whitespace-pre-wrap text-xs text-slate-500">Reads: {emailSampleOf(e.body) || "—"}</p>
+            </div>
+          ))}
+          <EditorBar busy={busy} onCancel={close}
+            onSave={() => {
+              const clean = emails.map((e) => ({ subject: String(e.subject || "").trim(), body: String(e.body || "").trim() })).filter((e) => e.subject && e.body);
+              if (!clean.length) { setError("Write at least one email, with a subject."); return; }
+              run(() => patchSettings({ outreachAutopilot: { checkInEmail: { enabled: Boolean(draft.enabled), autoSend: Boolean(draft.autoSend), emails: clean } } }));
+            }}>
+            {emails.length < CHECK_IN_EMAIL_MAX && (
+              <button type="button" className={BTN} onClick={() => setDraft({ ...draft, emails: [...emails, { subject: "", body: "Hi {first},\n\n" }] })}><Plus size={12} aria-hidden="true" /> Add an email</button>
+            )}
+          </EditorBar>
         </div>
       );
     }

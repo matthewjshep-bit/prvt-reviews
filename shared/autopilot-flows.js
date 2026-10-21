@@ -17,7 +17,7 @@ import { normalizeAgentPulse } from "./agent-pulse.js";
 import { normalizeBuyerPulse } from "./buyer-pulse.js";
 import { NUDGE_TEXTS, CHECKIN_TEXTS } from "./standard-texts.js";
 import { DEFAULT_LADDERS, OUTREACH_NUDGE_WINDOW_DAYS } from "./follow-up.js";
-import { normalizeIntroEmail } from "./outreach-email.js";
+import { normalizeIntroEmail, normalizeCheckInEmail } from "./outreach-email.js";
 
 // The words on a step's pill.
 export const FLOW_STATUS_LABEL = { on: "Sends itself", drafting: "Drafts for you", off: "Off", ghl: "Sent by GHL", auto: "Runs itself", dry: "Dry run" };
@@ -89,6 +89,11 @@ export function agentFlow({ settings = {}, config = {}, switches = [] } = {}) {
     steps.push({ id: "repeat", type: "loop", title: `Then check in every ${every} days`,
       detail: `Until they reply, through day ${OUTREACH_NUDGE_WINDOW_DAYS} (the last one on day ${days[days.length - 1] + every * Math.floor((OUTREACH_NUDGE_WINDOW_DAYS - 1 - days[days.length - 1]) / every)}). One of these each time, the next one along.`,
       status: ladderOn, texts: opener.checkIns, every, edit: { field: "checkIns" } });
+    // An email with each of those check-ins, to agents the intro email reached.
+    const ce = normalizeCheckInEmail(oa.checkInEmail);
+    steps.push({ id: "checkin-email", type: "email", title: `Check-in email, every ${every} days`,
+      detail: `With each check-in text, to agents who had the intro email and haven't replied. The next one each time.${ce.enabled && !ce.autoSend ? " Each one waits in the outbox for you." : ""}`,
+      status: ownState(ce.enabled, ce.autoSend, switches), texts: ce.emails.map((e) => `Subject: ${e.subject}\n\n${e.body}`), edit: { field: "checkInEmail" } });
   }
   if (oa.followUpEnabled) {
     steps.push({ id: "ghl-follow", type: "text", title: `GHL follow-up workflow, day ${oa.followUpDays || 14}`,

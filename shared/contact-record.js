@@ -83,6 +83,9 @@ export const EVENT_TYPES = [
   // The day-2 introduction email was queued for an agent who hadn't answered
   // our first text (ghl-broker/outreach-email.js): the claim, one per agent, ever.
   "outreach_email_queued",
+  // An email went with a 14-day check-in to a cold agent (the same file):
+  // the claim, one per agent per check-in day.
+  "checkin_email_queued",
   // The check-in between deals was started for this buyer (buyer-pulse.js).
   // Written BEFORE the draft, so it is also the claim: one per buyer per day,
   // and the clock the next one counts from.
@@ -183,6 +186,7 @@ export const EVENT_LABEL = {
   outreach_open_skipped: "our first text didn't go — tried again next run",
   outreach_open_queued: "first text started (they'd never been texted)",
   outreach_email_queued: "introduction email queued",
+  checkin_email_queued: "check-in email queued",
   pulse_sent: "checked in between deals",
   pulse_voided: "a check-in drafted nothing",
   pulse_texted: "we checked in between deals",
@@ -224,6 +228,7 @@ export const EVENT_ICON = {
   outreach_open_skipped: "Clock",
   outreach_open_queued: "Send",
   outreach_email_queued: "Mail",
+  checkin_email_queued: "Mail",
   pulse_sent: "BellRing",
   pulse_voided: "Clock",
   pulse_texted: "BellRing",
