@@ -265,7 +265,9 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
     const said = [
       ...(gut?.source === "agent" ? [gut.why.replace(/^the agent said /, "")] : []),
       ...told.defects.map((d) => d.label),
-      ...told.legal.map((l) => l.label),
+      // What killed deals, not what a buyer asks about: a park or land lease
+      // (1510 Maple Ln), unpermitted work. Septic or an HOA isn't a warning.
+      ...told.legal.filter((l) => l.key === "land_lease" || l.key === "unpermitted").map((l) => l.label),
       ...(/\b(?:was |been |has been )?moved\b(?: (?:twice|two times|2x|once))?/i.test(theirs) && /\b(?:mobile|manufactured|home|house)\b/i.test(theirs) ? ["moved"] : []),
     ];
     if (said.length) add("agent_words", "warn", `the agent said ${[...new Set(said)].join(", ")} — is it in the price?`, `the agent said ${[...new Set(said)][0]}`);
