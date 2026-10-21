@@ -70,32 +70,37 @@ test("the agent check-in sends itself only with its own auto-send and the broker
   assert.equal(pulse({ enabled: true, autoSend: true }, false), "drafting");
 });
 
-test("the deal chart: promoted → wave 1 → reply → the one follow-up → wave 2 → walkthrough, and the check-in between deals", () => {
+// Matt, 2026-10-21: no waves — everyone who buys there, at once, then a
+// morning catch-up for anyone new.
+test("the deal chart: promoted → the deal to everyone who buys there → reply → the one follow-up → the catch-up → walkthrough", () => {
   const { investors } = flow({ settings: { dispoAutopilot: { autoBlastOnPromote: true } }, raw: LIVE, samples: ["Hey Alex, got 1 Elm St under contract."] });
-  assert.deepEqual(investors.deal.map((s) => s.id), ["promoted", "wait-promote", "wave-1", "reply", "wait-follow", "follow", "wait-wave-2", "wave-2", "walkthrough"]);
-  assert.equal(investors.deal.find((s) => s.id === "wave-1").status, "on");
-  assert.deepEqual(investors.deal.find((s) => s.id === "wave-1").texts, ["Hey Alex, got 1 Elm St under contract."]);
-  assert.match(investors.deal.find((s) => s.id === "wave-1").detail, /^The built-in wording, to up to 25 VIP and Active buyers.*match 50\+/);
+  assert.deepEqual(investors.deal.map((s) => s.id), ["promoted", "wait-promote", "deal-sent", "reply", "wait-follow", "follow", "catch-up", "walkthrough"]);
+  const sent = investors.deal.find((s) => s.id === "deal-sent");
+  assert.equal(sent.status, "on");
+  assert.deepEqual(sent.texts, ["Hey Alex, got 1 Elm St under contract."]);
+  assert.match(sent.detail, /^The built-in wording, to every buyer who bought in the city or told us they buy in its city, ZIP or region, any tier/);
+  assert.doesNotMatch(sent.detail, /VIP|match \d|up to \d/);
   const own = flow({ settings: { dispoAutopilot: { dealTexts: ["Hi {first}, {place}. {numbers}."] } }, raw: LIVE }).investors.deal;
-  assert.match(own.find((s) => s.id === "wave-1").detail, /^Your wording/);
-  assert.equal(investors.deal.find((s) => s.id === "wave-2").texts, undefined, "wave 2 says it's the same text, not all three again");
+  assert.match(own.find((s) => s.id === "deal-sent").detail, /^Your wording/);
+  assert.equal(investors.deal.find((s) => s.id === "catch-up").texts, undefined, "the catch-up says it's the same text, not all three again");
   assert.equal(investors.deal[0].status, "auto", "a trigger runs itself; it doesn't send");
   assert.deepEqual(investors.between.map((s) => s.id), ["pulse"]);
   assert.match(investors.note, /At most 1 text a week/);
+  assert.match(investors.note, /A deal text goes the day it's signed/);
 });
 
-test("with blast-on-promote off, later waves read off and nothing waits ten minutes", () => {
+test("with blast-on-promote off, the catch-up reads off and nothing waits ten minutes", () => {
   const { investors } = flow({ raw: LIVE });
   assert.ok(!investors.deal.some((s) => s.id === "wait-promote"));
-  assert.equal(investors.deal.find((s) => s.id === "wave-2").status, "off");
+  assert.equal(investors.deal.find((s) => s.id === "catch-up").status, "off");
   assert.match(investors.deal[0].detail, /you pick the buyers/);
 });
 
-test("three waves draw a third; deals blasted by GHL say so", () => {
-  const three = flow({ settings: { dispoAutopilot: { autoBlastOnPromote: true, maxWaves: 3 } }, raw: LIVE }).investors.deal;
-  assert.ok(three.some((s) => s.id === "wave-3"));
+test("an old maxWaves draws nothing extra; deals blasted by GHL say so", () => {
+  const old = flow({ settings: { dispoAutopilot: { autoBlastOnPromote: true, maxWaves: 3 } }, raw: LIVE }).investors.deal;
+  assert.ok(!old.some((s) => /^wave-/.test(s.id)));
   const ghl = flow({ settings: { dispoAutopilot: { sendWith: "ghl" } }, raw: LIVE }).investors.deal;
-  assert.equal(ghl.find((s) => s.id === "wave-1").status, "ghl");
+  assert.equal(ghl.find((s) => s.id === "deal-sent").status, "ghl");
 });
 
 test("the agent chart: first text → day 2 follow-up → intro email → check in every 14 days (2026-10-20)", () => {

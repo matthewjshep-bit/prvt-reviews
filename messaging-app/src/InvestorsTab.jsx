@@ -49,11 +49,10 @@ function Check({ label, hint, checked, onChange }) {
 // What each editor shows and saves, from the saved values (Settings' own
 // defaults when unset).
 const FIELDS = {
-  wave1: ["autoBlastOnPromote", "autoBlastCount", "minMatchScore"],
-  waveN: ["secondWaveHours", "secondWaveCount", "secondWaveMinScore", "maxWaves"],
+  deal: ["autoBlastOnPromote"],
   pulse: ["enabled", "everyDays", "dailyCap", "voice"],
 };
-const DEFAULTS = { autoBlastOnPromote: false, autoBlastCount: 25, minMatchScore: 50, secondWaveHours: 48, secondWaveCount: 25, secondWaveMinScore: 35, maxWaves: 2 };
+const DEFAULTS = { autoBlastOnPromote: false };
 const PULSE_DEFAULTS = { enabled: false, everyDays: 90, dailyCap: 10, voice: "" };
 const asNumbers = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === "string" && k !== "voice" && v !== "" ? Number(v) : v]));
 
@@ -97,9 +96,9 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
     const f = step?.edit?.field;
     if (f === "pulse") setDraft(Object.fromEntries(FIELDS.pulse.map((k) => [k, da.pulse?.[k] ?? PULSE_DEFAULTS[k]])));
     else if (f === "dealFollowUp") setDraft({ day: followDay });
-    else if (f === "wave1") {
+    else if (f === "deal") {
       const saved = normalizeDealTexts(da.dealTexts);
-      setDraft({ ...Object.fromEntries(FIELDS.wave1.map((k) => [k, da[k] ?? DEFAULTS[k]])), dealTexts: saved.length ? saved : [...DEFAULT_DEAL_TEXTS] });
+      setDraft({ ...Object.fromEntries(FIELDS.deal.map((k) => [k, da[k] ?? DEFAULTS[k]])), dealTexts: saved.length ? saved : [...DEFAULT_DEAL_TEXTS] });
     }
     else if (FIELDS[f]) setDraft(Object.fromEntries(FIELDS[f].map((k) => [k, da[k] ?? DEFAULTS[k]])));
     setEditing(id);
@@ -137,11 +136,9 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
 
   function renderEditor(step) {
     const f = step.edit.field;
-    if (f === "wave1") return (
+    if (f === "deal") return (
       <div className="space-y-2">
-        <Check label="Start the first wave when a deal goes under contract" hint="Off: you pick the buyers from the deal, and no later wave goes on its own." checked={draft.autoBlastOnPromote} onChange={set("autoBlastOnPromote")} />
-        <NumRow label="Buyers on the first wave" value={draft.autoBlastCount} onChange={set("autoBlastCount")} min={1} max={200} />
-        <NumRow label="Lowest match score" value={draft.minMatchScore} onChange={set("minMatchScore")} min={0} max={100} suffix="out of 100" />
+        <Check label="Send it when a deal goes under contract" hint="To everyone who buys in the area, then each morning to anyone new. Off: you pick the buyers from the deal." checked={draft.autoBlastOnPromote} onChange={set("autoBlastOnPromote")} />
         <DealTextsEditor texts={draft.dealTexts} onChange={set("dealTexts")} input={preview?.input || null} />
         {bar(() => {
           const texts = normalizeDealTexts(draft.dealTexts);
@@ -151,15 +148,6 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
           const { dealTexts: _t, ...rest } = draft;
           run(() => patchSettings({ dispoAutopilot: { ...asNumbers(rest), dealTexts: sameTexts(texts, DEFAULT_DEAL_TEXTS) ? [] : texts } }));
         })}
-      </div>
-    );
-    if (f === "waveN") return (
-      <div className="space-y-2">
-        <NumRow label="Hours after the wave before" value={draft.secondWaveHours} onChange={set("secondWaveHours")} min={6} max={720} />
-        <NumRow label="Buyers on each later wave" value={draft.secondWaveCount} onChange={set("secondWaveCount")} min={1} max={200} />
-        <NumRow label="Lowest match score" value={draft.secondWaveMinScore} onChange={set("secondWaveMinScore")} min={0} max={100} suffix="out of 100" />
-        <NumRow label="Waves in all" value={draft.maxWaves} onChange={set("maxWaves")} min={1} max={4} suffix="1 = the first wave only" />
-        {bar(() => run(() => patchSettings({ dispoAutopilot: asNumbers(draft) })))}
       </div>
     );
     if (f === "dealFollowUp") return (
@@ -188,14 +176,16 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
     return null;
   }
 
-  const next = preview?.next;
+  const catchUp = preview?.catchUp;
+  const sends = preview?.sends || [];
+  const fits = preview?.wouldGet?.length || 0;
   return (
     <div className="space-y-6">
       <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
         <div className="mb-4 flex flex-wrap items-end gap-3">
           <div className="min-w-0 flex-1">
             <h2 className="text-base font-bold text-slate-900">What goes out to buyers</h2>
-            <p className="text-sm text-slate-500">The deal's numbers are filled in as each text sends. Pick a deal to see it as a buyer named Alex would get it now; Edit on Wave 1 changes the wording.</p>
+            <p className="text-sm text-slate-500">The deal's numbers are filled in as each text sends. Pick a deal to see it as a buyer named Alex would get it now; Edit on the deal step changes the wording.</p>
           </div>
           <label className="text-sm text-slate-700">
             <span className="mr-2">Deal</span>
@@ -207,8 +197,9 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
         </div>
         {preview && (
           <p className="mb-3 text-xs text-slate-600">
-            {(preview.waves || []).length ? `${preview.waves.length} wave${preview.waves.length === 1 ? "" : "s"} sent on this deal. ` : "No wave sent on this deal yet. "}
-            {next?.wave ? `Wave ${next.wave}: ${preview.wouldGet?.length || 0} buyers would get it${next.due ? " at the next morning run" : next.dueAt ? ` from ${new Date(next.dueAt).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric" })}` : ""}.` : next?.why ? `No next wave: ${next.why}.` : ""}
+            {sends.length
+              ? `Sent to ${sends.reduce((n, s) => n + (s.count || 0), 0)} buyers so far. ${catchUp?.due ? `Catch-up: ${fits} new buyer${fits === 1 ? "" : "s"} who buy${fits === 1 ? "s" : ""} in the area would get it at the next morning run.` : catchUp?.why ? `No catch-up: ${catchUp.why}.` : ""}`
+              : `Not sent yet. ${fits} buyer${fits === 1 ? "" : "s"} who buy${fits === 1 ? "s" : ""} in the area would get it.`}
           </p>
         )}
         {error && <div className="mb-3"><ErrorBar>{error}</ErrorBar></div>}

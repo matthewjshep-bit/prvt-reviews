@@ -23,7 +23,7 @@ import { FERRY_ONLY_ZIPS } from "../shared/underwrite-checks.js";
 import express from "express";
 import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
 import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickWave, blastedTo, isManufacturedTarget, isLandTarget } from "../shared/buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickDealBuyers, blastedTo, isManufacturedTarget, isLandTarget } from "../shared/buyer-score.js";
 import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
 import { buyersInPlay } from "../shared/offer-status.js";
 import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
@@ -34,7 +34,7 @@ import { buyboxCustom, investorProfileText, refreshInvestorRow } from "../invest
 import { CURSOR_NAME as BOOK_SYNC_CURSOR } from "../investor-sync.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, blastChannel, blastChannels, resumePulledBack, sampleBlastTexts } from "../dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, catchUpDue, blastChannel, blastChannels, resumePulledBack, sampleBlastTexts } from "../dispo-autopilot.js";
 import { planBuyerPulse, startBuyerPulse, previewBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
 import { runShowingSweep } from "../showing-sweep.js";
 import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
@@ -250,7 +250,7 @@ export default function createDispoRouter({ resolveLocation }) {
         ...i,
         // On a live deal at all (the pulse leaves them to that conversation),
         // and spoken for — committed or soft-committed — which is the only
-        // thing that keeps a buyer out of ANOTHER deal's waves.
+        // thing that keeps a buyer out of ANOTHER deal's sends.
         onLiveDeal: Boolean(role), spokenFor: role === "committed",
         dnd: Boolean(i.dnd) || unsub.has(i.contactId),
         markets: marketsFromTags(i.tags),
@@ -269,8 +269,11 @@ export default function createDispoRouter({ resolveLocation }) {
     const out = new Map();
     for (const e of events) {
       if (!e?.contactId) continue;
-      const f = out.get(e.contactId) || { count: 0, lastAt: "", largest: 0, lastAddress: "", lenders: [] };
+      const f = out.get(e.contactId) || { count: 0, lastAt: "", largest: 0, lastAddress: "", lenders: [], cities: [] };
       f.count++;
+      // Where they bought: a deal there goes to them (buyer-score.js areaFit).
+      const city = citySlug(e.data?.city || "");
+      if (city && !f.cities.includes(city)) f.cities.push(city);
       const amount = Number(e.data?.amount) || 0;
       if (amount > f.largest) f.largest = amount;
       if (String(e.at) > f.lastAt) { f.lastAt = e.at; f.lastAddress = e.address || ""; }
@@ -522,7 +525,7 @@ export default function createDispoRouter({ resolveLocation }) {
         email: c.email || "",
         phone: c.phone || "",
         tags: Array.isArray(c.tags) ? c.tags : [],
-        // Unsubscribed in GHL (a STOP): the pulse and the waves skip them
+        // Unsubscribed in GHL (a STOP): the pulse and the deal sends skip them
         // rather than burn a seat on a text that can never go (2026-09-29).
         dnd: smsUnsubscribed(c),
         custom,
@@ -737,8 +740,9 @@ export default function createDispoRouter({ resolveLocation }) {
     } catch (err) { fail(res, err); }
   });
 
-  // GET /waves/preview?offerId= — the deal's waves so far, the next one
-  // (when, or why there is none), and who it would go to now. Reads only.
+  // GET /waves/preview?offerId= — who the deal has gone to, whether the
+  // morning catch-up still looks at it (or why not), and who it would go to
+  // now: everyone who fits and hasn't had it. Reads only.
   router.get("/waves/preview", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -746,17 +750,17 @@ export default function createDispoRouter({ resolveLocation }) {
       if (!offer?.deal || offer.locationId !== locationId) return res.status(404).json({ error: "deal not found" });
       const saved = await getSettings(locationId);
       const da = normalizeDispoAutopilot(saved.dispoAutopilot);
-      const next = nextWave(offer.deal, da);
+      const catchUp = catchUpDue(offer.deal);
       const { ranked, target } = await rankedForDeal(locationId, offer);
-      const wouldGet = pickWave(ranked, { wave: 2, floor: da.secondWaveMinScore, exclude: "blasted", ...waveOptions(target, da) }).slice(0, da.secondWaveCount)
-        .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons, channel: blastChannel(i, da), channels: blastChannels(i, da) }));
+      const wouldGet = pickDealBuyers(ranked, { exclude: "blasted", ...dealOptions(target, da) })
+        .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, areaFit: i.rankParts?.areaFit || null, reasons: i.rankReasons, channel: blastChannel(i, da), channels: blastChannels(i, da) }));
       res.json({
-        ok: true, offerId: offer.id, address: offer.address, stage: offer.deal.stage || null, asset: target.asset || null,
-        autoBlastOnPromote: da.autoBlastOnPromote, maxWaves: da.maxWaves, waveHours: da.secondWaveHours,
-        waves: (offer.deal.blasts || []).map((b, i) => ({ wave: b.wave || i + 1, at: b.at, ...(b.resumedAt ? { resumedAt: b.resumedAt } : {}), count: b.count ?? (b.contactIds || []).length, via: b.via || "app" })),
+        ok: true, offerId: offer.id, address: offer.address, city: target.city || "", stage: offer.deal.stage || null, asset: target.asset || null,
+        autoBlastOnPromote: da.autoBlastOnPromote,
+        sends: (offer.deal.blasts || []).map((b, i) => ({ send: b.wave || i + 1, at: b.at, ...(b.resumedAt ? { resumedAt: b.resumedAt } : {}), count: b.count ?? (b.contactIds || []).length, via: b.via || "app" })),
         ghlTags: offer.deal.blastTags || [],
         alreadySent: ranked.filter((i) => i.alreadyBlasted).length,
-        next, wouldGet,
+        catchUp, wouldGet,
         // The deal text as it would read now, each phrasing, and what it was
         // built from (Autopilot → Investors).
         ...(await sampleBlastTexts({ store, locationId, offer, saved }).catch(() => ({ samples: [], input: null }))),
@@ -1087,9 +1091,10 @@ export default function createDispoRouter({ resolveLocation }) {
           if (row) { const i = hydrate(row); investors.push({ contactId, name: i.name, ...reachOf(i) }); }
         }
         // `note`: the operator's one line about the deal for this blast, in
-        // place of the package headline. `wave`: which wave this is, for the record.
+        // place of the package headline. `wave`: which send of the deal this
+        // is, for the record — the next one unless the caller says.
         const note = String(req.body?.note || "").slice(0, 200);
-        const wave = Math.max(1, Math.min(9, Math.round(Number(req.body?.wave) || 1)));
+        const wave = Math.max(1, Math.round(Number(req.body?.wave) || (offer.deal?.blasts?.length || 0) + 1));
         const r = await blastFromApp({ locationId, client, offer, investors, saved, dryRun: req.body?.dryRun !== false, label: label || slugStreet(offer.address), wave, note });
         return res.json({ ok: true, sendWith: "app", blastTag: r.blastTag, ...r });
       }
@@ -1175,17 +1180,10 @@ export default function createDispoRouter({ resolveLocation }) {
       if (offer.deal) return res.status(409).json({ error: "already a deal — send it from the deal" });
       const count = Math.max(1, Math.min(10, Math.round(Number(req.body?.count) || PRESELL_MIN_BUYERS)));
       const dryRun = req.body?.dryRun === true;
-      // The wave-1 picks (VIP and Active, in its area), topped up from the
-      // wider second wave when that's fewer than asked. Never one it already went to.
+      // The best fits of everyone who buys where it is. Never one it already went to.
       const had = new Set(offer.presell?.contactIds || []);
-      const picks = [];
-      for (const wave of [1, 2]) {
-        if (picks.length >= count) break;
-        for (const r of (await matchForDeal(locationId, offer, { wave, exclude: "blasted" })).results) {
-          if (picks.length >= count) break;
-          if (!had.has(r.contactId) && !picks.some((p) => p.contactId === r.contactId)) picks.push(r);
-        }
-      }
+      const picks = (await matchForDeal(locationId, offer, { exclude: "blasted" })).results
+        .filter((r) => !had.has(r.contactId)).slice(0, count);
       if (!picks.length) return res.json({ ok: true, dryRun, drafted: 0, rows: [], reason: "no buyers fit this house yet" });
       // Not a deal yet, so the buyer price is our number plus the default fee.
       const saved = await getSettings(locationId);
@@ -1208,11 +1206,11 @@ export default function createDispoRouter({ resolveLocation }) {
    *
    * The deal as staggered outbound drafts (dispo-autopilot.js), plus the
    * deal's own blast tag on each contact and a `blasts` entry on the deal so
-   * the second wave and the feedback package know. Never the trigger tag.
+   * the morning catch-up and the feedback package know. Never the trigger tag.
    */
   async function blastFromApp({ locationId, client, offer, investors = [], saved = null, dryRun = false, label = "", wave = 1, now = Date.now(), startAfterMs = 0, note = "" }) {
     // Somebody is probably taking this one. Every app blast comes through
-    // here — the button, the blast on promote, the second wave — so this is
+    // here — the button, the blast on promote, the morning catch-up — so this is
     // the one place that has to ask.
     const paused = dealOutreachPaused(offer?.deal);
     if (paused) {
@@ -1232,7 +1230,7 @@ export default function createDispoRouter({ resolveLocation }) {
       const full = await store.getOffer(offer.id);
       if (full?.deal) {
         full.deal.blastTags = [...new Set([...(full.deal.blastTags || []), blastTag])];
-        // Who this wave went to, so the next never picks them again, sent
+        // Who this send went to, so the next never picks them again, sent
         // or not (shared/buyer-score.js blastedTo).
         const contactIds = [...new Set((r.rows || []).filter((x) => x.draftId).map((x) => x.contactId))];
         full.deal.blasts = [...(full.deal.blasts || []), { at: new Date(now).toISOString(), count: investors.length, queued: r.queued, drafted: r.drafted, via: "app", wave, tag: blastTag, contactIds }];
@@ -1248,15 +1246,14 @@ export default function createDispoRouter({ resolveLocation }) {
    *
    * Resume after Stop (the offers router's POST /:id/deal/outreach): the deal
    * texts Stop pulled back go again (dispo-autopilot.js resumePulledBack), to
-   * the buyers the wave rules still pick, and the wave's clock restarts so
-   * the next one is due the wave delay after the resume.
+   * the buyers who still fit it. The resume is stamped on the last send.
    */
   async function resumeWave({ locationId, offer, saved = null, now = Date.now(), startAfterMs = 0 }) {
     const paused = dealOutreachPaused(offer?.deal);
     if (paused) return { pulledBack: 0, dropped: 0, queued: 0, drafted: 0, rows: [], paused, reason: outreachPausedReason(paused, offer?.address) };
     const settings = saved || await getSettings(locationId);
     const r = await resumePulledBack({ store, locationId, offer, saved: settings, now, startAfterMs, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED,
-      deps: { eligible: async () => (await matchForDeal(locationId, offer, { wave: 2, exclude: "none" })).results } });
+      deps: { eligible: async () => (await matchForDeal(locationId, offer, { exclude: "none" })).results } });
     if (r.queued || r.drafted) {
       const full = await store.getOffer(offer.id);
       const last = full?.deal?.blasts?.at(-1);
@@ -1300,7 +1297,7 @@ export default function createDispoRouter({ resolveLocation }) {
    *
    * Every active buyer scored against this deal (buyer-score.js), highest
    * first, with their tier and whether they've already been sent it. The one
-   * ranking the page, the autopilot waves and the dataroom guard all read.
+   * ranking the page, the autopilot's deal sends and the dataroom guard all read.
    */
   async function rankedForDeal(locationId, offer) {
     const dq = dealToQuery(offer);
@@ -1333,33 +1330,31 @@ export default function createDispoRouter({ resolveLocation }) {
   }
 
   /**
-   * matchForDeal(locationId, offer, { wave, exclude }) → { results, target }
+   * matchForDeal(locationId, offer, { exclude }) → { results, target }
    *
-   * Who the autopilot sends a deal to. Wave 1 (on promote): VIP and Active
-   * buyers at or above the first-wave match score, VIPs first. Wave 2 (no
-   * commitment after the delay): anyone at or above the second-wave score who
-   * hasn't been sent it yet. Always: buys in the deal's city or region, a
-   * phone to text, not already on a live deal, not already blasted this deal
-   * (shared/buyer-score.js pickWave).
+   * Who the autopilot sends a deal to (Matt, 2026-10-21): everyone who
+   * bought in its city or told us they buy in its city, zip or region, best
+   * fit first, whatever their tier, with no cap. Not anyone whose own buy box
+   * or dealbreakers rule it out, on a live deal elsewhere, unreachable, or
+   * already sent it (shared/buyer-score.js pickDealBuyers).
    */
-  async function matchForDeal(locationId, offer, { wave = 1, exclude = "blasted" } = {}) {
+  async function matchForDeal(locationId, offer, { exclude = "blasted" } = {}) {
     const saved = await getSettings(locationId);
     const da = normalizeDispoAutopilot(saved.dispoAutopilot);
     const { target, ranked } = await rankedForDeal(locationId, offer);
-    const floor = wave === 1 ? da.minMatchScore : da.secondWaveMinScore;
-    const results = pickWave(ranked, { wave, floor, exclude, ...waveOptions(target, da) })
-      .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, reasons: i.rankReasons, ...reachOf(i) }));
+    const results = pickDealBuyers(ranked, { exclude, ...dealOptions(target, da) })
+      .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, areaFit: i.rankParts?.areaFit || null, reasons: i.rankReasons, ...reachOf(i) }));
     return { results, target };
   }
 
-  // What a wave needs to know beyond the floor: a mobile home goes by who
-  // buys them, land by who builds (shared/buyer-score.js pickWave), and a buyer with no phone may
-  // come in to be emailed when email drafting is on.
-  function waveOptions(target, da) {
+  // What the pick needs to know beyond the area: a mobile home goes by who
+  // buys them, land by who builds (shared/buyer-score.js pickDealBuyers), and
+  // a buyer with no phone may come in to be emailed when email drafting is on.
+  function dealOptions(target, da) {
     return { manufactured: isManufacturedTarget(target), land: isLandTarget(target), email: da.email.draft };
   }
 
-  // How to reach a buyer, carried onto a wave's shortlist so the queue can
+  // How to reach a buyer, carried onto a deal's send list so the queue can
   // pick the channel and the how-we-found-you line (dispo-autopilot.js).
   function reachOf(i = {}) {
     return { phone: i.phone || "", email: i.email || "", tags: i.tags || [], lastRepliedAt: i.lastRepliedAt || "", dealsBy: dealsByOf(i) };

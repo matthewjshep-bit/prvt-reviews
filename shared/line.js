@@ -165,7 +165,7 @@ export const CYCLE_HOPS = [
   { key: "answer", label: "In front of them → their first answer" },
   { key: "agree", label: "In front of them → a price agreed" },
   { key: "contract", label: "Price agreed → under contract" },
-  { key: "blast", label: "Under contract → first wave" },
+  { key: "blast", label: "Under contract → deal sent" },
   { key: "buyer", label: "Under contract → buyer committed" },
   { key: "close", label: "Under contract → assigned or closed" },
 ];

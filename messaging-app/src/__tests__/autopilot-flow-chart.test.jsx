@@ -40,10 +40,10 @@ test("the open step shows its editor in place of its texts", () => {
 test("the deal chart shows the picked deal's text and the check-in between deals", () => {
   const flow = investorFlow({ settings: { dispoAutopilot: { autoBlastOnPromote: true } }, config, switches, samples: ["Hey Alex, got 1 Elm St in Kent under contract. Buyer price 349k."] });
   const html = renderToStaticMarkup(<><FlowChart steps={flow.deal} /><FlowChart steps={flow.between} /></>);
-  expect(html).toContain("Wave 1: the deal");
+  expect(html).toContain("The deal, to everyone who buys there");
   expect(html).toContain("Hey Alex, got 1 Elm St in Kent under contract.");
   expect(html).toContain("One follow-up about the deal");
-  expect(html).toContain("Wave 2: the deal");
+  expect(html).toContain("Each morning: anyone new who buys there");
   expect(html).toContain("Check in every 90 days");
   expect(html).not.toContain("Edit", "read-only without onEdit");
 });

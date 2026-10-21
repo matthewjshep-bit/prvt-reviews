@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, pickWave, blastedTo, buyerDealbreakers } from "./buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, pickDealBuyers, blastedTo, buyerDealbreakers } from "./buyer-score.js";
 
 const NOW = Date.parse("2026-09-13T12:00:00Z");
 const monthsBack = (n) => new Date(NOW - n * 30.44 * 86400000).toISOString();
@@ -37,7 +37,7 @@ test("rank: same city beats same region beats elsewhere, and price range counts"
   const away = rankForDeal({ ...base, markets: { cities: ["tacoma"], regions: ["pierce"], types: ["flip"] } }, t, { now: NOW });
   assert.ok(city.score > region.score && region.score > away.score);
   assert.equal(city.parts.price, 20);
-  assert.ok(city.reasons.includes("buys in this city"));
+  assert.ok(city.reasons.includes("bought in this city"));
 });
 
 test("engagement counts fold per contact", () => {
@@ -77,10 +77,9 @@ test("a deal goes only to buyers who buy where it is: a VIP who works Snohomish 
     buyer("eastside-vip", "vip", ["redmond"], ["eastside"]),
   ];
   assert.ok(ranked[0].rank >= 50, "the Snohomish VIP clears the old floor on tier and price alone");
-  const w1 = pickWave(ranked, { wave: 1, floor: 50 }).map((i) => i.contactId);
-  assert.deepEqual(w1, ["pierce-vip", "tacoma-active"]);
-  const w2 = pickWave(ranked, { wave: 2, floor: 35 }).map((i) => i.contactId);
-  assert.ok(!w2.includes("snohomish-vip") && !w2.includes("eastside-vip"));
+  // Only the Tacoma buyer: a Pierce region tag off an Orting loan is not
+  // buying in Tacoma (Matt, 2026-10-21).
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId), ["tacoma-active"]);
 });
 
 /* ---------- ranking by the buy box, not only the city (2026-09-29) ---------- */
@@ -115,20 +114,20 @@ test("a buyer we're talking to ranks above a stranger with the same fit", () => 
   assert.equal(talking.score - stranger.score, 8);
 });
 
-test("a buyer weighing another deal still gets this deal's wave; one committed elsewhere does not; a DND buyer never does", () => {
-  const row = (id, over) => ({ contactId: id, phone: "+1", tier: "vip", rank: 80, rankParts: { location: 35 }, ...over });
-  const picked = pickWave([
+test("a buyer weighing another deal still gets this deal; one committed elsewhere does not; a DND buyer never does", () => {
+  const row = (id, over) => ({ contactId: id, phone: "+1", tier: "vip", rank: 80, rankParts: { location: 35, areaFit: "bought_city" }, ...over });
+  const picked = pickDealBuyers([
     row("weighing", { onLiveDeal: true, spokenFor: false }),
     row("committed", { onLiveDeal: true, spokenFor: true }),
     row("dnd", { dnd: true }),
     row("stop-tag", { tags: ["STOP"] }),
-  ], { wave: 1, floor: 50 });
+  ]);
   assert.deepEqual(picked.map((i) => i.contactId), ["weighing"]);
   // A row from before carries only onLiveDeal: read the old way.
-  assert.deepEqual(pickWave([row("old", { onLiveDeal: true })], { wave: 1, floor: 50 }), []);
+  assert.deepEqual(pickDealBuyers([row("old", { onLiveDeal: true })]), []);
 });
 
-test("wave 2 never re-texts a wave-1 buyer whose draft hasn't sent", () => {
+test("the catch-up never re-texts a buyer whose first deal text hasn't sent", () => {
   const deal = { id: "o1", address: "123 Main St, Kent, WA 98031",
     deal: { blastTags: ["dispo-123-main-st"], blasts: [{ at: "2026-09-20T18:00:00Z", via: "app", contactIds: ["onWave1"] }] } };
   const sent = blastedTo(deal, {
@@ -169,15 +168,15 @@ test("a mobile home goes to buyers who buy mobile homes, not to flippers in the 
     rankRow("kent-flipper-vip", { tier: "vip", markets: { cities: ["kent"], regions: ["south-king"], types: ["flip"] }, flips: { largest: 80000, lastAt: monthsBack(1) } }),
     rankRow("mobile-home-buyer", { markets: { cities: [], regions: [], types: ["mobile-home"] } }),
   ];
-  const picked = pickWave(ranked, { wave: 1, floor: 50, manufactured: true }).map((i) => i.contactId);
+  const picked = pickDealBuyers(ranked, { manufactured: true }).map((i) => i.contactId);
   assert.deepEqual(picked, ["mobile-home-buyer"]);
   assert.ok(ranked[1].rankReasons.includes("buys mobile homes"));
 });
 
-test("a mobile home buyer with no area on file still makes the wave, cold or not", () => {
+test("a mobile home buyer with no area on file still gets it, cold or not", () => {
   const ranked = [rankRow("cold-no-area", { tier: "cold", markets: { cities: [], regions: [], types: ["mobile-home"] } })];
   assert.equal(ranked[0].rankParts.location, 0);
-  assert.deepEqual(pickWave(ranked, { wave: 1, floor: 50, manufactured: true }).map((i) => i.contactId), ["cold-no-area"]);
+  assert.deepEqual(pickDealBuyers(ranked, { manufactured: true }).map((i) => i.contactId), ["cold-no-area"]);
 });
 
 test("a mobile home buyer whose areas are all elsewhere is left off", () => {
@@ -185,20 +184,20 @@ test("a mobile home buyer whose areas are all elsewhere is left off", () => {
     rankRow("north", { markets: { cities: ["arlington"], regions: ["snohomish"], types: ["mobile-home"] } }),
     rankRow("south-king", { markets: { cities: ["auburn"], regions: ["south-king"], types: ["mobile-home"] } }),
   ];
-  assert.deepEqual(pickWave(ranked, { wave: 1, floor: 50, manufactured: true }).map((i) => i.contactId), ["south-king"]);
+  assert.deepEqual(pickDealBuyers(ranked, { manufactured: true }).map((i) => i.contactId), ["south-king"]);
 });
 
 test("a buyer who said no park homes never gets a park deal, even tagged mobile-home", () => {
   const ranked = [rankRow("mark", { markets: { cities: [], regions: [], types: ["mobile-home"] },
     buybox: { propertyTypes: ["sfr", "multi_family"], exclusions: "no manufactured homes in parks" } })];
   assert.equal(ranked[0].rankParts.typeRefused, true);
-  assert.deepEqual(pickWave(ranked, { wave: 1, floor: 0, manufactured: true }), []);
+  assert.deepEqual(pickDealBuyers(ranked, { manufactured: true }), []);
 });
 
-test("a buyer with only an email makes the wave when email is allowed, and not otherwise", () => {
+test("a buyer with only an email gets it when email is allowed, and not otherwise", () => {
   const ranked = [rankRow("email-only", { phone: "", email: "buyer@example.com", markets: { cities: [], regions: [], types: ["mobile-home"] } })];
-  assert.deepEqual(pickWave(ranked, { wave: 1, manufactured: true }), []);
-  assert.deepEqual(pickWave(ranked, { wave: 1, manufactured: true, email: true }).map((i) => i.contactId), ["email-only"]);
+  assert.deepEqual(pickDealBuyers(ranked, { manufactured: true }), []);
+  assert.deepEqual(pickDealBuyers(ranked, { manufactured: true, email: true }).map((i) => i.contactId), ["email-only"]);
 });
 
 test("a mobile-homes-only buyer is never sent a house", () => {
@@ -206,7 +205,7 @@ test("a mobile-homes-only buyer is never sent a house", () => {
   const ranked = [rankRow("mh-only", { tier: "vip", markets: { cities: ["kent"], regions: ["south-king"], types: ["mobile-home"] },
     buybox: { exclusions: "manufactured homes only, no site-built homes" } }, house)];
   assert.equal(ranked[0].rankParts.typeRefused, true);
-  assert.deepEqual(pickWave(ranked, { wave: 1, floor: 0 }), []);
+  assert.deepEqual(pickDealBuyers(ranked), []);
 });
 
 test("a deal with no kind ranks exactly as before", () => {
@@ -230,23 +229,23 @@ test("a buyer's saved dealbreakers are read off their own words", () => {
 const tacoma = (over = {}) => ({ contactId: "x", phone: "+12065550100", tier: "vip", markets: { cities: ["tacoma"], regions: [], types: ["flip"] }, buybox: {}, ...over });
 const rankAll = (buyers, target) => buyers.map((i) => { const r = rankForDeal(i, target, { now: NOW }); return { ...i, rank: r.score, rankParts: r.parts, rankReasons: r.reasons }; });
 
-test("a buyer who said no busy streets is left off a busy-road wave and still gets a quiet-street deal", () => {
+test("a buyer who said no busy streets is left off a busy-road deal and still gets a quiet-street deal", () => {
   const vlad = tacoma({ contactId: "vlad", buybox: { exclusions: "no busy streets or short basements" } });
   const other = tacoma({ contactId: "other" });
   const busy = dealTarget({ city: "Tacoma", site: ["busy_road"] });
   const ranked = rankAll([vlad, other], busy);
-  assert.deepEqual(pickWave(ranked, { wave: 1 }).map((i) => i.contactId), ["other"]);
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId), ["other"]);
   assert.match(ranked[0].rankReasons.join(" | "), /won't take it \(they said no busy streets\)/);
   const quiet = dealTarget({ city: "Tacoma", site: [] });
-  assert.deepEqual(pickWave(rankAll([vlad, other], quiet), { wave: 1 }).map((i) => i.contactId).sort(), ["other", "vlad"], "a dealbreaker only ever narrows");
+  assert.deepEqual(pickDealBuyers(rankAll([vlad, other], quiet)).map((i) => i.contactId).sort(), ["other", "vlad"], "a dealbreaker only ever narrows");
 });
 
 test("no islands keeps a buyer off Vashon; off-market only keeps one off a house on the MLS", () => {
   const vashon = (over) => tacoma({ markets: { cities: ["vashon"], regions: [], types: ["flip"] }, ...over });
   const island = dealTarget({ city: "Vashon", island: true });
-  assert.deepEqual(pickWave(rankAll([vashon({ contactId: "a", buybox: { exclusions: "no islands" } }), vashon({ contactId: "b" })], island), { wave: 1 }).map((i) => i.contactId), ["b"]);
+  assert.deepEqual(pickDealBuyers(rankAll([vashon({ contactId: "a", buybox: { exclusions: "no islands" } }), vashon({ contactId: "b" })], island)).map((i) => i.contactId), ["b"]);
   const listed = dealTarget({ city: "Tacoma", onMarket: true });
-  assert.deepEqual(pickWave(rankAll([tacoma({ contactId: "c", buybox: { exclusions: "off-market only" } }), tacoma({ contactId: "d" })], listed), { wave: 1 }).map((i) => i.contactId), ["d"]);
+  assert.deepEqual(pickDealBuyers(rankAll([tacoma({ contactId: "c", buybox: { exclusions: "off-market only" } }), tacoma({ contactId: "d" })], listed)).map((i) => i.contactId), ["d"]);
 });
 
 /* ---------- land goes to the buyers who build (2026-10-21) ---------- */
@@ -263,7 +262,51 @@ test("a land deal goes to buyers who build, not to flippers in the same city", (
     rankRow("ballard-builder", { tier: "cold", markets: { cities: ["seattle"], regions: ["seattle"], types: ["new-construction"] } }, ballard),
     rankRow("tacoma-builder", { tier: "cold", markets: { cities: ["tacoma"], regions: ["pierce"], types: ["new-construction"] } }, ballard),
   ];
-  assert.deepEqual(pickWave(ranked, { wave: 1, floor: 50, land: true }).map((i) => i.contactId), ["ballard-builder"]);
+  assert.deepEqual(pickDealBuyers(ranked, { land: true }).map((i) => i.contactId), ["ballard-builder"]);
   assert.ok(ranked[1].rankReasons.includes("builds"));
 });
 
+
+/* ---------- everyone who buys there, at once (2026-10-21) ---------- */
+
+// Matt, 2026-10-21: a deal under contract went to twenty-five VIP and Active
+// buyers first, VIPs ahead, and the rest two days later. VIPs got bad deals
+// and the buyers who buy on that street waited or never heard. Now: everyone
+// who bought there or told us they buy there, all at once, whatever their tier.
+
+test("a deal goes to every buyer who buys in its city, not twenty-five VIPs first", () => {
+  const tiers = ["cold", "active", "vip"];
+  const buyers = Array.from({ length: 40 }, (_, n) => bare({ contactId: `b${n}`, tier: tiers[n % 3],
+    ...(n % 2 ? { markets: { cities: ["kent"], regions: ["south-king"], types: ["flip"] } } : { buybox: { areas: ["Kent"] } }) }));
+  const picked = pickDealBuyers(rankAll(buyers, kent));
+  assert.equal(picked.length, 40);
+  for (let k = 1; k < picked.length; k++) assert.ok(picked[k - 1].rank >= picked[k].rank, "best fit first, not VIPs first");
+});
+
+test("a borrower-list region tag alone doesn't get a Kent deal, but saying South King does", () => {
+  const ranked = rankAll([
+    bare({ contactId: "auburn-loan", markets: { cities: ["auburn"], regions: ["south-king"], types: ["flip"] } }),
+    bare({ contactId: "said-south-king", buybox: { areas: ["South King"] } }),
+    bare({ contactId: "said-zip", buybox: { areas: ["98031"] } }),
+  ], kent);
+  assert.equal(ranked[0].rankParts.areaFit, null);
+  assert.deepEqual(ranked.slice(1).map((i) => i.rankParts.areaFit), ["said_region", "said_zip"]);
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId).sort(), ["said-south-king", "said-zip"]);
+});
+
+test("a buyer who bought in Kent through a financed purchase gets the Kent deal with no tag", () => {
+  const ranked = rankAll([bare({ contactId: "kent-loan", flips: { cities: ["kent"], lastAt: monthsBack(4), largest: 320000 } })], kent);
+  assert.equal(ranked[0].rankParts.areaFit, "bought_city");
+  assert.ok(ranked[0].rankReasons.includes("bought in this city"));
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId), ["kent-loan"]);
+});
+
+test("a VIP whose saved buy box tops out under the price isn't sent it", () => {
+  const ranked = rankAll([
+    bare({ contactId: "under-200k", tier: "vip", buybox: { areas: ["Kent"], priceMax: 200000 } }),
+    bare({ contactId: "condo-only", tier: "vip", buybox: { areas: ["Kent"], propertyTypes: ["condo"] } }),
+    bare({ contactId: "fits", tier: "cold", buybox: { areas: ["Kent"], priceMax: 350000 } }),
+  ], kent);
+  assert.equal(ranked[0].rankParts.priceOut, true);
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId), ["fits"]);
+});

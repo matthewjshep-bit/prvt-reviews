@@ -37,7 +37,7 @@ test("saving the follow-up texts changes only them: the first texts, the sweep a
   await store.saveOfferSettings(LOC, {
     rentcastApiKey: "rc-secret",
     outreachAutopilot: { enabled: true, dailyCap: 40, opener: { examples: ["Hi {first}, my own first text about {address}?"] } },
-    dispoAutopilot: { autoBlastCount: 12 },
+    dispoAutopilot: { spreadSec: 120 },
     conversationAi: { enabled: true, persona: { name: "Matt" } },
   });
   const r = await patch({ outreachAutopilot: { opener: { followUps: ["Hi {first}, step one?", "Hi {first}, step two?"] } } });
@@ -47,7 +47,7 @@ test("saving the follow-up texts changes only them: the first texts, the sweep a
   assert.deepEqual(saved.outreachAutopilot.opener.examples, ["Hi {first}, my own first text about {address}?"]);
   assert.equal(saved.outreachAutopilot.enabled, true);
   assert.equal(saved.outreachAutopilot.dailyCap, 40);
-  assert.equal(saved.dispoAutopilot.autoBlastCount, 12);
+  assert.equal(saved.dispoAutopilot.spreadSec, 120);
   assert.equal(saved.rentcastApiKey, "rc-secret");
   assert.equal(saved.conversationAi.enabled, true);
   assert.equal(saved.conversationAi.persona.name, "Matt");
@@ -71,7 +71,7 @@ test("a buyer-pulse setting saves on its own, beside the waves", async () => {
   await patch({ dispoAutopilot: { pulse: { voice: "short and friendly" } } });
   const saved = await store.getOfferSettings(LOC);
   assert.equal(saved.dispoAutopilot.pulse.voice, "short and friendly");
-  assert.equal(saved.dispoAutopilot.autoBlastCount, 12);
+  assert.equal(saved.dispoAutopilot.spreadSec, 120);
 });
 
 test("anything outside the two Autopilot sections is refused, the Conversation AI blob above all", async () => {

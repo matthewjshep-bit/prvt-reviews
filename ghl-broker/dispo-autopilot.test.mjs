@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { queueBlastDrafts, normalizeDispoAutopilot, nextWave, secondWaveCandidates, startDispoSweep, _resetJobs, resumePulledBack } from "./dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, catchUpDue, catchUpCandidates, startDispoSweep, _resetJobs, resumePulledBack } from "./dispo-autopilot.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
 const fakeStore = (deals = []) => {
@@ -223,92 +223,68 @@ test("a second click on the same deal supersedes the buyer's open blast draft", 
   assert.deepEqual(all.map((d) => d.status), ["superseded", "draft"]);
 });
 
-test("match score floors default to 50 (first wave) and 35 (second) and clamp to 0–100", () => {
-  const d = normalizeDispoAutopilot({});
-  assert.equal(d.minMatchScore, 50);
-  assert.equal(d.secondWaveMinScore, 35);
-  assert.equal(normalizeDispoAutopilot({ minMatchScore: 140 }).minMatchScore, 100);
+// Matt, 2026-10-21: no waves. The counts, floors and delays are gone; an old
+// saved value is dropped on the next save.
+test("the wave settings are gone: no count, no score floor, no delay, no waves in all", () => {
+  const d = normalizeDispoAutopilot({ autoBlastCount: 25, minMatchScore: 50, secondWaveHours: 48, secondWaveCount: 25, secondWaveMinScore: 35, maxWaves: 3, autoBlastOnPromote: true });
+  for (const k of ["autoBlastCount", "minMatchScore", "secondWaveHours", "secondWaveCount", "secondWaveMinScore", "maxWaves"]) assert.equal(k in d, false, k);
+  assert.equal(d.autoBlastOnPromote, true);
+  assert.equal(normalizeDispoAutopilot({}).autoBlastOnPromote, false, "sending on promote still ships off");
 });
 
-test("the second wave finds a deal blasted once with nobody committed, after the delay, and blasts the possible fits", async () => {
-  _resetJobs();
-  const stale = { ...offer, id: "o2", deal: { ...offer.deal, blasts: [{ at: new Date(NOW - 50 * 3600000).toISOString(), count: 10, via: "app" }] } };
-  const fresh = { ...offer, id: "o3", deal: { ...offer.deal, blasts: [{ at: new Date(NOW - 3600000).toISOString() }] } };
-  const done = { ...offer, id: "o4", deal: { ...offer.deal, blasts: [{ at: new Date(NOW - 90 * 3600000).toISOString() }], investors: [{ contactId: "x", status: "committed" }] } };
-  const twice = { ...offer, id: "o5", deal: { ...offer.deal, blasts: [{ at: "2026-09-01T00:00:00Z" }, { at: "2026-09-03T00:00:00Z" }] } };
-  const store = fakeStore([stale, fresh, done, twice]);
-  const c = await secondWaveCandidates({ store, locationId: "L", saved: {}, now: NOW });
-  assert.deepEqual(c.map((x) => x.offer.id), ["o2"]);
-  const seen = [];
-  const job = startDispoSweep({ locationId: "L", client: {}, saved: { dispoAutopilot: { autoBlastOnPromote: true, secondWaveCount: 2 } }, store, now: NOW, deps: {
-    matchForDeal: async (_l, o, opts) => { seen.push(["match", o.id, opts]); return { results: [{ contactId: "p1" }, { contactId: "p2" }, { contactId: "p3" }] }; },
-    blastFromApp: async (args) => { seen.push(["blast", args.offer.id, args.investors.length, args.wave]); return { queued: 0, drafted: 2, scheduled: false, reason: "drafts" }; },
-  } });
-  await settle();
-  assert.equal(job.status, "done", job.error);
-  assert.deepEqual(seen[0], ["match", "o2", { wave: 2, exclude: "blasted" }]);
-  assert.deepEqual(seen[1], ["blast", "o2", 2, 2]);
-  assert.equal(job.blasted, 2);
-});
-
-test("a third wave runs only when the setting allows three, to the next-ranked buyers, as wave 3", async () => {
+test("the morning catch-up sends only to buyers who fit since the first send, and nothing when nobody new does", async () => {
   _resetJobs();
   const at = (h) => new Date(NOW - h * 3600000).toISOString();
-  const two = { ...offer, id: "o6", deal: { ...offer.deal, blasts: [{ at: at(120), via: "app", wave: 1 }, { at: at(50), via: "app", wave: 2 }] } };
+  const yesterday = { ...offer, id: "o2", deal: { ...offer.deal, blasts: [{ at: at(20), count: 40, via: "app", wave: 1 }] } };
+  const quiet = { ...offer, id: "o3", deal: { ...offer.deal, blasts: [{ at: at(1), via: "app", wave: 1 }] } };
+  const done = { ...offer, id: "o4", deal: { ...offer.deal, blasts: [{ at: at(90) }], investors: [{ contactId: "x", status: "committed" }] } };
   const ghlOnly = { ...offer, id: "o7", deal: { ...offer.deal, blastTags: ["dispo-22018-76th-ave-w"], blasts: [] } };
-  const store = fakeStore([two, ghlOnly]);
-  assert.deepEqual(await secondWaveCandidates({ store, locationId: "L", saved: {}, now: NOW }), [], "two waves is the default, and all it does");
-  const three = await secondWaveCandidates({ store, locationId: "L", saved: { dispoAutopilot: { maxWaves: 3 } }, now: NOW });
-  assert.deepEqual(three.map((c) => [c.offer.id, c.wave]), [["o6", 3]], "a deal blasted only through a GHL workflow gets no automatic wave");
-  const early = await secondWaveCandidates({ store: fakeStore([{ ...two, deal: { ...two.deal, blasts: [two.deal.blasts[0], { at: at(10), via: "app", wave: 2 }] } }]), locationId: "L", saved: { dispoAutopilot: { maxWaves: 3 } }, now: NOW });
-  assert.deepEqual(early, [], "the delay runs from the last wave, not the first");
-
+  const closed = { ...offer, id: "o8", deal: { ...offer.deal, stage: "closed", blasts: [{ at: at(200) }] } };
+  const store = fakeStore([yesterday, quiet, done, ghlOnly, closed]);
+  const c = await catchUpCandidates({ store, locationId: "L" });
+  assert.deepEqual(c.map((x) => [x.offer.id, x.send]), [["o2", 2], ["o3", 2]], "no delay: any live deal sent from the app, nobody committed");
   const seen = [];
-  const job = startDispoSweep({ locationId: "L", client: {}, saved: { dispoAutopilot: { autoBlastOnPromote: true, maxWaves: 3, secondWaveCount: 5 } }, store, now: NOW, deps: {
-    matchForDeal: async (_l, o, opts) => { seen.push(["match", o.id, opts]); return { results: [{ contactId: "p9" }] }; },
-    blastFromApp: async (args) => { seen.push(["blast", args.offer.id, args.wave]); return { queued: 0, drafted: 1 }; },
+  const job = startDispoSweep({ locationId: "L", client: {}, saved: { dispoAutopilot: { autoBlastOnPromote: true } }, store, now: NOW, deps: {
+    matchForDeal: async (_l, o, opts) => { seen.push(["match", o.id, opts]); return { results: o.id === "o2" ? Array.from({ length: 30 }, (_, k) => ({ contactId: `new${k}` })) : [] }; },
+    blastFromApp: async (args) => { seen.push(["blast", args.offer.id, args.investors.length, args.wave]); return { queued: args.investors.length, drafted: 0, scheduled: true }; },
   } });
   await settle();
   assert.equal(job.status, "done", job.error);
-  assert.deepEqual(seen, [["match", "o6", { wave: 2, exclude: "blasted" }], ["blast", "o6", 3]]);
-});
-
-test("waves-in-all defaults to two and clamps to one through four", () => {
-  assert.equal(normalizeDispoAutopilot({}).maxWaves, 2);
-  assert.equal(normalizeDispoAutopilot({ maxWaves: 9 }).maxWaves, 4);
-  assert.equal(normalizeDispoAutopilot({ maxWaves: 0 }).maxWaves, 1);
+  assert.deepEqual(seen, [["match", "o2", { exclude: "blasted" }], ["blast", "o2", 30, 2], ["match", "o3", { exclude: "blasted" }]], "all thirty new fits, no cap; nothing for the deal nobody new fits");
+  assert.equal(job.blasted, 30);
+  assert.equal(job.results.find((r) => r.offerId === "o3").reason, "nobody new fits it");
 });
 
 /* ---------- the soft commit ---------- */
 
 // "I think I have a buyer for this one." Nothing is signed, so the deal stays
 // live and priced — but we stop putting it in front of anyone new.
-test("a soft-committed deal is not picked up by the second wave, and clearing it lets the wave run", async () => {
+test("a soft-committed deal is not picked up by the catch-up, and clearing it lets it run", async () => {
   const blastedAt = new Date(NOW - 50 * 3600000).toISOString();
   const withStatus = (status) => ({
     ...offer, id: "o9",
     deal: { ...offer.deal, blasts: [{ at: blastedAt, count: 10, via: "app" }], investors: [{ contactId: "i1", name: "Dmitriy", status }] },
   });
 
-  const soft = await secondWaveCandidates({ store: fakeStore([withStatus("soft_commit")]), locationId: "L", saved: {}, now: NOW });
-  assert.deepEqual(soft, [], "the wave is new outreach — it waits");
+  const soft = await catchUpCandidates({ store: fakeStore([withStatus("soft_commit")]), locationId: "L", saved: {}, now: NOW });
+  assert.deepEqual(soft, [], "the catch-up is new outreach — it waits");
 
-  const back = await secondWaveCandidates({ store: fakeStore([withStatus("evaluating")]), locationId: "L", saved: {}, now: NOW });
+  const back = await catchUpCandidates({ store: fakeStore([withStatus("evaluating")]), locationId: "L", saved: {}, now: NOW });
   assert.deepEqual(back.map((x) => x.offer.id), ["o9"], "nothing was stored, so putting them back resumes it");
 
-  const gone = await secondWaveCandidates({ store: fakeStore([withStatus("passed")]), locationId: "L", saved: {}, now: NOW });
+  const gone = await catchUpCandidates({ store: fakeStore([withStatus("passed")]), locationId: "L", saved: {}, now: NOW });
   assert.deepEqual(gone.map((x) => x.offer.id), ["o9"], "and so does their passing");
 });
 
 // 5232 S Yakima, 2026-10-01: the second wave was due two days after the first
 // and nothing but a committed buyer would have held it.
-test("a deal you stopped outreach on gets no next wave, and says why", async () => {
+test("a deal you stopped outreach on gets no catch-up, and says why", async () => {
   const blastedAt = new Date(NOW - 50 * 3600000).toISOString();
   const stopped = { ...offer, id: "o11", deal: { ...offer.deal, blasts: [{ at: blastedAt, count: 25, via: "app" }], investors: [], outreachStopped: { at: new Date(NOW - 3600000).toISOString(), by: "you" } } };
-  assert.deepEqual(await secondWaveCandidates({ store: fakeStore([stopped]), locationId: "L", saved: {}, now: NOW }), []);
-  assert.equal(nextWave(stopped.deal, normalizeDispoAutopilot({}), NOW).why, "you stopped outreach");
+  assert.deepEqual(await catchUpCandidates({ store: fakeStore([stopped]), locationId: "L", saved: {}, now: NOW }), []);
+  assert.equal(catchUpDue(stopped.deal).why, "you stopped outreach");
   const resumed = { ...stopped, deal: { ...stopped.deal, outreachStopped: undefined } };
-  assert.deepEqual((await secondWaveCandidates({ store: fakeStore([resumed]), locationId: "L", saved: {}, now: NOW })).map((x) => x.offer.id), ["o11"], "resumed, the overdue wave is picked up");
+  assert.deepEqual((await catchUpCandidates({ store: fakeStore([resumed]), locationId: "L", saved: {}, now: NOW })).map((x) => x.offer.id), ["o11"], "resumed, the catch-up picks it up again");
 });
 
 test("the buyer price, the ARV and the rehab go out with the blast; what we paid never does", async () => {
@@ -388,36 +364,30 @@ test("resuming a deal you stopped sends the deal texts Stop pulled back", async 
   assert.equal(mei.status, "draft", "an email waits for you, as it did the first time");
 });
 
-test("a wave you resumed counts its delay from the resume, not from when it was first picked", () => {
-  const first = new Date(NOW - 50 * 3600000).toISOString();
-  const resumedAt = new Date(NOW - 2 * 3600000).toISOString();
-  const deal = { ...offer.deal, blasts: [{ at: first, resumedAt, count: 25, via: "app" }] };
-  const n = nextWave(deal, normalizeDispoAutopilot({}), NOW);
-  assert.equal(n.due, false);
-  assert.equal(n.dueAt, new Date(Date.parse(resumedAt) + 48 * 3600000).toISOString());
-});
-
-// Matt, 2026-10-05: a buyer can get several deals in a few days; space them
-// and send them together. A buyer who has never written back hears from us
-// once a week.
-test("a second deal to a buyer blasted two days ago waits for their week, then goes with the next", async () => {
-  const store = fakeStore();
+// Matt, 2026-10-21: send it all, right away. A deal text no longer waits for
+// the buyer's week (2026-10-05) unless holdDealTexts is ticked; it still
+// counts as their text, so a check-in after it waits.
+test("a deal text isn't held for the weekly limit unless holdDealTexts is on", async () => {
   const twoDaysAgo = new Date(NOW - 2 * 86400000).toISOString();
-  store.rows.set("old", { id: "old", contactId: "i1", status: "sent", party: "investor", intent: "blast_open", outbound: { kind: "blast_open", offerId: "o0" }, sentAt: twoDaysAgo, createdAt: twoDaysAgo });
+  const old = { id: "old", contactId: "i1", status: "sent", party: "investor", intent: "blast_open", outbound: { kind: "blast_open", offerId: "o0" }, sentAt: twoDaysAgo, createdAt: twoDaysAgo };
   const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } }, dispoAutopilot: { spreadSec: 60 } };
-  const r = await queueBlastDrafts({ store, locationId: "L", offer, investors: buyers, saved, now: NOW, sendsEnabled: true, blastsEnabled: true });
-  assert.equal(r.queued, 3, "they keep their seat on the wave");
-  assert.equal(r.waiting, 1);
-  const ravi = [...store.rows.values()].find((d) => d.contactId === "i1" && d.status === "scheduled");
-  assert.ok(Date.parse(ravi.sendAt) >= Date.parse(twoDaysAgo) + 7 * 86400000, ravi.sendAt);
-  assert.match(ravi.flags.join(" "), /waits for this buyer's weekly limit/);
-  const mei = [...store.rows.values()].find((d) => d.contactId === "i2");
-  assert.ok(Date.parse(mei.sendAt) - NOW < 3600000, "everyone else goes today");
 
-  // Switched off, nobody waits.
-  const off = fakeStore();
-  off.rows.set("old", store.rows.get("old"));
-  const r2 = await queueBlastDrafts({ store: off, locationId: "L", offer, investors: buyers, saved: { ...saved, dispoAutopilot: { spreadSec: 60, touchBudget: { enabled: false } } }, now: NOW, sendsEnabled: true, blastsEnabled: true });
-  assert.equal(r2.waiting, 0);
-  assert.equal(normalizeDispoAutopilot({}).touchBudget.enabled, true);
+  const store = fakeStore();
+  store.rows.set("old", old);
+  const r = await queueBlastDrafts({ store, locationId: "L", offer, investors: buyers, saved, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(r.queued, 3);
+  assert.equal(r.waiting, 0, "nobody waits");
+  const ravi = [...store.rows.values()].find((d) => d.contactId === "i1" && d.status === "scheduled");
+  assert.ok(Date.parse(ravi.sendAt) - NOW < 3600000, "goes today, blasted two days ago or not");
+  assert.equal(normalizeDispoAutopilot({}).touchBudget.holdDealTexts, false);
+
+  // Ticked, the deal waits for their week and goes with the next.
+  const held = fakeStore();
+  held.rows.set("old", old);
+  const r2 = await queueBlastDrafts({ store: held, locationId: "L", offer, investors: buyers, saved: { ...saved, dispoAutopilot: { spreadSec: 60, touchBudget: { holdDealTexts: true } } }, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(r2.queued, 3, "they keep their seat");
+  assert.equal(r2.waiting, 1);
+  const waiting = [...held.rows.values()].find((d) => d.contactId === "i1" && d.status === "scheduled");
+  assert.ok(Date.parse(waiting.sendAt) >= Date.parse(twoDaysAgo) + 7 * 86400000, waiting.sendAt);
+  assert.match(waiting.flags.join(" "), /waits for this buyer's weekly limit/);
 });

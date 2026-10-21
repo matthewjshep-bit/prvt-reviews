@@ -189,7 +189,7 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
       out.push(sw("blast", "Deal blasts", !viaApp ? "off" : allow.includes("blast_open") && canSend && blastsEnabled ? "on" : "drafting",
         !viaApp ? "a GHL workflow sends them — the app only tags" : !blastsEnabled ? "DISPO_BLASTS_ENABLED is not set" : allow.includes("blast_open") ? "staggered texts from the app" : "queued as drafts until 'sent them a deal' is ticked", party));
       out.push(sw("auto_blast", "Blast on promote", da.autoBlastOnPromote ? "on" : "off",
-        da.autoBlastOnPromote ? `top ${da.autoBlastCount || 25} fits, second wave after ${da.secondWaveHours || 48}h` : "you pick the shortlist", party));
+        da.autoBlastOnPromote ? "everyone who buys in the area, at once; new fits each morning" : "you pick the shortlist", party));
       out.push(sw("auto_invite", "Dataroom invite", da.autoInvite ? "on" : "off",
         da.autoInvite ? "sent itself to an evaluating buyer whose buy box fits" : "always a click", party));
       out.push(sw("paperwork", "Assignment on commit", da.paperworkOnCommit ? "on" : "off",

@@ -636,7 +636,7 @@ All the logic lives in `shared/underwrite-checks.js` (`buyerView`), which calls 
   - The package and the blast say "septic" and "incl. systems".
   - The package has a "Worth knowing" line.
   - The bot's deal line carries "about the house".
-- **Blasts.** A buyer whose saved dealbreakers ("busy streets", "Vashon Island (too far)", "off-market only") the house hits is never picked for a wave (`buyerDealbreakers`, `pickWave`). This only ever narrows who gets a blast.
+- **Blasts.** A buyer whose saved dealbreakers ("busy streets", "Vashon Island (too far)", "off-market only") the house hits is never sent the deal (`buyerDealbreakers`, `pickDealBuyers`). This only ever narrows who gets a blast.
 - **Lessons** shows *Why buyers passed — last 30 days*, and adds recommendations: `buyer_view_on`, `site_cut_deeper`, `site_cut_lighter` and `rehab_floor_higher`. Each one can be applied.
 
 **Pass reasons.** A buyer's no is now filed under `arv`, `layout`, `location`, `legal` or `exposure` when that's what their words say. `area` still means the buyer's own territory. Older reasons are recoded when they're read and are never rewritten.
@@ -3158,15 +3158,15 @@ Where it shows, all advisory (nothing blocks, no switch):
   signing, not checked: …") and the whole list is kept at
   `deal.preContractAtPromote { at, open, checks }` for the post-mortem.
 - **Pre-sell** (`POST /api/dispo/presell { offerId, count = 3, dryRun }`):
-  the top `count` from `matchForDeal` (wave 1, topped up from wave 2), never
+  the top `count` from `matchForDeal` (everyone who buys where it is, best fit first), never
   one it already went to, as **drafts only** — never scheduled, `needsHuman`,
   reason `needs a person: a pre-sell waits for your Send…`, so no audit or
   sweep releases them. `presellMessage` (shared/blast-text.js) never says
   "under contract" and carries no link; the price is our number plus the
   default fee. Saves `offer.presell { at, contactIds }`. At promote, buyers
   whose pre-sell text was sent join the deal as `evaluating`
-  (`source: "presell"`); an unsent pre-sell draft is superseded so wave 1 can
-  send them the deal itself. A buyer who answers a pre-sell text before the
+  (`source: "presell"`); an unsent pre-sell draft is superseded so the first send can
+  give them the deal itself. A buyer who answers a pre-sell text before the
   promote is answered by the investor bot, which has no deal to read yet —
   work those by hand.
 
@@ -4850,7 +4850,7 @@ The past part of a period counts what went; the rest counts what's coming.
 | Agent follow-up | Agent check-in (`agent_pulse`), Matt's 15, Cold-agent follow-up (`outreach_nudge`), GHL follow-up workflow, Check-in they asked for (`checkin_due`), Promise we made (`promise_due`), Address chase, Held underwrite ask / pass (`take_ask`, `kind_pass`) |
 | Offer follow-up · sent | Offer nudge, Push to paper (`hot_push`), Counter hold check-in (`counter_nudge`), Written offer after a float, Float our number (`take_check`/`realm_check`) |
 | Offer follow-up · passed | Relisted house check-in (`passed_checkin`), Second look, Price drop |
-| Buyers | Buyer check-in (`buyer_pulse`), Deal blast first wave / next waves (`blast_open`), Deal follow-up, Walkthrough reminder / follow-up (`showing_*`) |
+| Buyers | Buyer check-in (`buyer_pulse`), Deal sent / catch-up (`blast_open`), Deal follow-up, Walkthrough reminder / follow-up (`showing_*`) |
 
 Each row shows:
 - what starts it, in words built from the live settings;
@@ -4902,7 +4902,7 @@ Hover the pill for the job's last run.
   | Counter hold check-in | `holdState` |
   | Written offer after a float | `paperAfterSilenceDue` plus `addWorkingHours` |
   | Address chase | `addressChaseRungs` |
-  | Next wave | `nextWave` |
+  | Deal catch-up | `catchUpDue`, at the next morning run |
   | Walkthrough texts | `showingTouches` |
   | Check-in they asked for, promise we made | their `dueAt` |
 
@@ -6402,7 +6402,7 @@ the deal. Now (`resumeDealOutreach` in `routes/offers.js`, `resumeWave` in
   outreach on … — not sent" flag and none was ever sent. A text you dismissed
   yourself, or one queued again since, stays as it is.
 - **Who gets them:** only buyers the wave rules still pick right now
-  (`matchForDeal` at wave-2 floors, without the already-sent exclusion). A buyer
+  (`matchForDeal` without the already-sent exclusion). A buyer
   who is on the deal (passed included), unsubscribed, committed to another
   deal, or who refuses the kind is left out. The response counts them as
   `dropped`.
@@ -6410,9 +6410,8 @@ the deal. Now (`resumeDealOutreach` in `routes/offers.js`, `resumeWave` in
   go out staggered, with the same 10-minute head start as promote, priced as
   each sends, and held for anyone you stopped the bot on. Emails wait in the
   outbox as before.
-- **No new wave:** it's still the same wave. The wave gets `resumedAt`, and
-  `nextWave` counts the delay from there, so wave 2 comes two days after the
-  resume.
+- **No new send:** it's still the same send. It gets `resumedAt`. The morning
+  catch-up looks at the deal again as soon as it's no longer stopped.
 - **Stopped before wave 1 existed:** a deal with no wave and no blast tag
   (stopped before the blast on promote ran) gets its first wave on Resume
   (`autoBlastOnPromote`).
@@ -6574,14 +6573,42 @@ feedback package and the second wave need no scan. The deal's own blast tag
 is still applied for GHL filtering; `deal.blasts` records each wave.
 `POST /api/dispo/blast` with `sendWith: "app"` and `offerId`.
 
-**Blast on promote.** When an offer becomes a deal, the top-ranked buyers
-for it (`rankForDeal` + `pickWave` in `shared/buyer-score.js`: where they buy,
-price, recency, tier, the kind of house) are blasted, VIP and Active first, up
-to the first-wave cap, ten minutes after promote. A buyer must buy where the
-deal is — except on a mobile home, which goes by who buys them (see "House
-type and mobile home buyers" below). With nobody committed after the wave
-delay, the daily dispo sweep (`DISPO_SWEEP_UTC_HOUR`, default 17,
-`job_cursors` row `dispo`) sends the next wave. Off by default.
+**Blast on promote — everyone who buys there, at once (2026-10-21).** There
+are no waves. Matt: VIPs were getting bad deals first, the buyers who buy on
+that street waited days or never heard, and the cap of 25 left fitting buyers
+out. Now, ten minutes after promote, the deal goes to every buyer who fits its
+area (`pickDealBuyers` in `shared/buyer-score.js`), best fit first, one text
+every `spreadSec`, inside machine hours. A long list rolls into the next
+morning on its own. A buyer fits (`rankParts.areaFit`) when they:
+- bought in the deal's city (`bought_city`): a `dispo-city-*` tag, or a
+  `property_financed` event in that city (`flips.cities`);
+- told us its city or ZIP in their buy box (`said_city`, `said_zip`);
+- told us a region that holds it, like "South King" (`said_region`).
+
+A `dispo-region-*` tag with nothing else no longer sends. It is a loan
+somewhere in a region of up to 28 cities, so it ranks the buyer but doesn't
+send them the deal.
+- **No tiers, no cap, no score floor.** VIPs are buyers like the rest. Tier,
+  price, recency and engagement only set the order.
+- **Still left off:** a buyer whose own buy box rules the deal out (their
+  price band, with 10% either side, or a kind of house, rehab level or lot
+  they said no to), their dealbreakers, a refused kind, STOP / DND, committed
+  to another live deal. A mobile home or land deal still goes by who buys that
+  kind (see "House type and mobile home buyers" below).
+- **The morning catch-up.** The daily dispo sweep (`DISPO_SWEEP_UTC_HOUR`,
+  default 17, `job_cursors` row `dispo`) looks at every deal under contract
+  that the app has sent at least once, with nobody committed or soft-committed
+  and outreach not stopped (`catchUpDue`). It sends to anyone who fits now and
+  hasn't had it: a new import, a buy box they just told us. A deal nobody new
+  fits sends nothing. Each send is a `deal.blasts[]` entry, with `wave` as its
+  running number, so `blastedTo` never sends anyone the same deal twice.
+- **The weekly limit.** A deal text no longer waits for the buyer's week
+  (`touchBudget.holdDealTexts`, off; Settings → Dispositions). It still counts
+  as their machine text that week, so a check-in after it waits.
+- **Gone:** `autoBlastCount`, `minMatchScore`, `secondWaveHours`,
+  `secondWaveCount`, `secondWaveMinScore`, `maxWaves`. Saved values are
+  dropped on the next save. `autoBlastOnPromote` still turns all of it on, and
+  ships off.
 
 **Dataroom link on its own.** `suggest_dataroom_invite` stays ask-only. A
 separate `send_dataroom_invite` action — which no rule can carry — is
@@ -6769,7 +6796,7 @@ The selling side, reviewed as one line: every live deal reaches every buyer who 
 - Optional `quietEveryDays` (30–365) sets the cadence for buyers who never wrote back. It defaults to `everyDays`, so the live setting is unchanged.
 - Buyers who have committed on a deal with us get the first seats (`friends`).
 
-**Waves read the whole buy box** (`shared/buyer-score.js`):
+**The ranking reads the whole buy box** (`shared/buyer-score.js`; since 2026-10-21 it only sets the order, and `areaFit` decides who gets the deal):
 - *Location* matches the deal's city (35), its ZIP (35), or a region the buy box names (22): "South King" buys in Kent, and "King County" spans the county's regions (`regionsForArea`).
 - A *box* part adds +10 when type, rehab appetite and lot fit, and −20 when the box rules the deal out.
 - A buyer we're talking to gets +8.
@@ -6783,8 +6810,8 @@ The selling side, reviewed as one line: every live deal reaches every buyer who 
 
 Before this, wave 2 re-drafted every wave-1 buyer whose text was still sitting in the outbox.
 
-**A third wave.** `dispoAutopilot.maxWaves` (1–4, default 2, which is how it has always run) caps the app waves per deal. Each next wave goes `secondWaveHours` after the *last* one, to the next-ranked buyers at the second-wave score. A deal blasted only through a GHL workflow gets no automatic wave.
-- `GET /api/dispo/waves/preview?offerId=` shows a deal's waves so far, the next one (when it's due, or why there is none), how many buyers already have it, and who the next wave would go to. It reads only.
+**A third wave** (`maxWaves`) is gone with the rest of the waves (2026-10-21, see "Blast on promote" above). A deal blasted only through a GHL workflow still gets no automatic send.
+- `GET /api/dispo/waves/preview?offerId=` shows the deal's sends so far (`sends`), whether the morning catch-up still looks at it or why not (`catchUp`), how many buyers already have it, and who it would go to now (`wouldGet`, each with its `areaFit`). It reads only.
 
 **Buyers looked, nobody's committing.** A Today row, `deal_interest_stalled`, shows when a deal under contract has package opens or a buyer evaluating, nobody soft-committed or committed, and 4 days since the last wave (`INTEREST_STALL_DAYS`). Its op is **Find more buyers**.
 

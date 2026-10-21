@@ -19,7 +19,7 @@ const PAGE = {
     { key: "offer_live", mechanisms: [mech("offer_nudge", "Offer nudge", { queued: 1, next: { at: "2026-10-20T22:00:00Z", state: "queued", count: 1 } })] },
     { key: "offer_passed", mechanisms: [] },
     { key: "buyer", mechanisms: [
-      mech("blast_first", "Deal blast · first wave", { sent: 25, replied: 4 }),
+      mech("blast_first", "Deal sent", { sent: 25, replied: 4 }),
       mech("buyer_pulse", "Buyer check-in", { planned: 10 }),
       mech("deal_followup", "Deal follow-up"),
     ] },
@@ -37,7 +37,7 @@ test("only the lines with something on them show, busiest first, and the soonest
   const { sides } = autopilotOverview(PAGE);
   assert.deepEqual(sides[0].lines.map((l) => l.label), ["First text", "Follow-ups", "Check-ins", "Offer nudge"]);
   assert.deepEqual([sides[0].next.at, sides[0].next.label], ["2026-10-20T22:00:00Z", "Offer nudge"]);
-  assert.deepEqual(sides[1].lines.map((l) => [l.label, l.sent, l.coming]), [["Deal text · wave 1", 25, 0], ["Check-ins", 0, 10]]);
+  assert.deepEqual(sides[1].lines.map((l) => [l.label, l.sent, l.coming]), [["Deal text · sent", 25, 0], ["Check-ins", 0, 10]]);
 });
 
 test("past five lines, the rest fold into one", () => {

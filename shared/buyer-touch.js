@@ -30,7 +30,10 @@ export const TOUCH_KINDS = new Set([
 // Deals sent within this long of each other went out as one text.
 const SAME_TEXT_MS = 10 * 60000;
 
-export const DEFAULT_TOUCH_BUDGET = { enabled: true, quietPerWeek: 1, talkingPerWeek: 2, talkingDays: 30, bundleMax: 3 };
+// holdDealTexts: whether a deal text waits for the buyer's week too. Off
+// (Matt, 2026-10-21): a deal goes to everyone who fits the day it's signed.
+// It still counts as their touch, so a check-in after it waits.
+export const DEFAULT_TOUCH_BUDGET = { enabled: true, quietPerWeek: 1, talkingPerWeek: 2, talkingDays: 30, bundleMax: 3, holdDealTexts: false };
 
 const int = (v, d, lo, hi) => {
   const n = Math.round(Number(v));
@@ -46,6 +49,7 @@ export function normalizeTouchBudget(src = {}) {
     talkingPerWeek: int(s.talkingPerWeek, d.talkingPerWeek, 1, 7),
     talkingDays: int(s.talkingDays, d.talkingDays, 1, 365),
     bundleMax: int(s.bundleMax, d.bundleMax, 1, 3),
+    holdDealTexts: s.holdDealTexts === true,
   };
 }
 
