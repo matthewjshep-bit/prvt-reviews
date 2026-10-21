@@ -112,7 +112,7 @@ export async function runIntroEmails({ client, store, locationId, saved = {}, se
   return queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact,
     kind: INTRO_EMAIL_KIND, autoSend: ie.autoSend, label: "intro emails",
     due: (contactId, list) => introEmailDue({ events: list, day: ie.day, now }),
-    write: (name, contactId, due) => introEmailFor({ introEmail: ie, name, address: due.address }),
+    write: (name, contactId, due) => introEmailFor({ introEmail: ie, name, address: due.address, county: due.county }),
     claim: (contactId, due) => ({ type: "outreach_email_queued", ref: `${INTRO_EMAIL_KIND}:${contactId}`,
       dedupeKey: `${INTRO_EMAIL_KIND}:${contactId}`, data: { day: ie.day, firstTextAt: due.openedAt } }),
     summary: () => `Introduces us by email, ${ie.day} days after the first text, and asks for distressed properties.` });
@@ -136,7 +136,7 @@ export async function runCheckInEmails({ client, store, locationId, saved = {}, 
   return queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact,
     kind: CHECK_IN_EMAIL_KIND, autoSend: ce.autoSend, label: "check-in emails",
     due: (contactId, list) => checkInEmailDue({ events: list, steps: ladder.steps, repeatEvery: ladder.repeatEvery, now, windowDays: OUTREACH_NUDGE_WINDOW_DAYS }),
-    write: (name, contactId, due) => checkInEmailFor({ checkInEmail: ce, name, contactId, n: due.n }),
+    write: (name, contactId, due) => checkInEmailFor({ checkInEmail: ce, name, contactId, n: due.n, address: due.address, county: due.county }),
     claim: (contactId, due) => ({ type: "checkin_email_queued", ref: `${CHECK_IN_EMAIL_KIND}:${contactId}:${due.step}`,
       dedupeKey: `${CHECK_IN_EMAIL_KIND}:${contactId}:${due.step}`, data: { step: due.step, n: due.n } }),
     summary: (due) => `The day-${due.step} check-in by email: anything distressed on their desk?` });

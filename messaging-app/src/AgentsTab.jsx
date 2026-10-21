@@ -243,7 +243,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
             <textarea className={AREA} rows={12} value={draft?.body || ""} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
           </label>
           <p className="whitespace-pre-wrap text-xs text-slate-500">Reads: {emailSampleOf(draft?.body || "") || "—"}</p>
-          <p className="text-xs text-slate-500">{"{first}"} is their first name. A blank line starts a new paragraph.</p>
+          <p className="text-xs text-slate-500">{"{first}"} is their first name, {"{area}"} the town of their listing (or its county). A blank line starts a new paragraph.</p>
           <EditorBar busy={busy} onCancel={close}
             onSave={() => {
               if (!dayOk) { setError("The intro email goes out between day 1 and day 30."); return; }
@@ -267,7 +267,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
             It sends itself
             <span className="text-xs text-slate-500">otherwise each one waits in the outbox for your Send</span>
           </label>
-          <p className="text-xs text-slate-500">Each check-in sends the next of these. {"{first}"} is their first name. A blank line starts a new paragraph.</p>
+          <p className="text-xs text-slate-500">Each check-in sends the next of these. {"{first}"} is their first name, {"{area}"} the town of their listing (or its county). A blank line starts a new paragraph.</p>
           {emails.map((e, i) => (
             <div key={i} className="space-y-1 rounded-lg border border-slate-200 p-2">
               <div className="flex items-center gap-2">
