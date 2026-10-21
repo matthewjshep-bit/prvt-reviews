@@ -83,11 +83,31 @@ const LEGACY = new Set([...LEGACY_DEFAULT_OPENER_EXAMPLES, ...PREVIOUS_DEFAULT_O
 // 2 the second (2026-10-20, Matt: "the first text … and then the second text
 // … as a follow-up", charted out like a GHL workflow). Until then every step
 // picked from one pool, so an agent got the same follow-up on every step.
-// These two are Rigo's two-week text and its "circling back" sister; a step
-// with no text of its own uses shared/standard-texts.js NUDGE_TEXTS.
+// Follow-up 1 is Matt's day-2 text (2026-10-20: "Hey Brenda, following up on
+// my earlier message. Not sure if that listing was distressed, needed work …
+// the uglier the better, anything like that on your end?"); the second is
+// the "circling back" text, for a ladder given a second step. A step with no
+// text of its own uses shared/standard-texts.js NUDGE_TEXTS.
 export const DEFAULT_FOLLOW_UP_TEXTS = [
+  "Hey {first}, following up on my earlier message. Not sure if that listing needs work, but I'm after distressed or value-add properties, the uglier the better. Anything like that on your end?",
+  "Hey {first}, circling back on {address}. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?",
+];
+// The two follow-ups until 2026-10-20 (day 3 and day 10). The chart saves
+// both texts with any edit, so a stored pair of exactly these is read as
+// never changed and gets today's.
+export const PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS = [
   "Hi {first}, following up on your listing at {address}. We're usually after houses that need real work, the uglier the better. Anything like that on your end?",
   "Hey {first}, circling back on {address}. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?",
+];
+
+// The check-ins after the follow-ups, every `repeatEvery` days until they
+// answer (2026-10-20, Matt: "check in every 14 days after that"). Until
+// then a repeat rung sent follow-up 1 again, word for word. One per rung, in
+// turn, so no two in a row are the same.
+export const DEFAULT_CHECK_IN_TEXTS = [
+  "Hi {first}, circling back. Any fixers or distressed properties come across your desk lately, listed or off market?",
+  "Hey {first}, checking in. Anything on your radar that needs work? The uglier the better.",
+  "Hi {first}, any distressed or value-add properties come up lately, on or off market? Always happy to take a look.",
 ];
 
 export const OPENER_MAX_EXAMPLES = 8;
@@ -111,7 +131,7 @@ export const OPENER_MAX_CHARS = 160;
 const FOOTER_RX = /\bcan stop\b|\bstop to end\b|\breply stop\b/i;
 
 /**
- * normalizeOpener(v) → { examples: string[], followUps: string[], mode: "template" | "ai" }
+ * normalizeOpener(v) → { examples: string[], followUps: string[], checkIns: string[], mode: "template" | "ai" }
  *
  * Unset (or emptied) → Matt's defaults. Each example trimmed and capped at
  * OPENER_EXAMPLE_MAX_CHARS, GHL's {{…}} blanks made the app's; one that
@@ -124,10 +144,13 @@ export function normalizeOpener(v = {}) {
   // The old defaults (each ends asking for other fixers) are left out of the
   // first texts (2026-10-15).
   const examples = cleanTexts(o.examples, LEGACY);
-  const followUps = cleanTexts(o.followUps);
+  let followUps = cleanTexts(o.followUps);
+  if (followUps.join("\n") === PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS.join("\n")) followUps = [];
+  const checkIns = cleanTexts(o.checkIns);
   return {
     examples: examples.length ? examples : [...DEFAULT_OPENER_EXAMPLES],
     followUps: followUps.length ? followUps : [...DEFAULT_FOLLOW_UP_TEXTS],
+    checkIns: checkIns.length ? checkIns : [...DEFAULT_CHECK_IN_TEXTS],
     mode: o.mode === "ai" ? "ai" : "template",
   };
 }

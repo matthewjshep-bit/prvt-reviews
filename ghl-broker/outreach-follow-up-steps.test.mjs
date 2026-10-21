@@ -58,7 +58,8 @@ test("a step's text that needs the address falls back when there's no address", 
   const saved = { outreachAutopilot: { opener: { followUps: ["Hi {first}, about {address}?", "Hi {first}, any fixers lately?"] } } };
   const o = outboundDescriptor({ kind: "outreach_nudge", offer: null, saved, subject: { step: 3, steps: [3, 10] } });
   const s = standardText({ kind: "outreach_nudge", outbound: o, name: "Rigo", contactId: "c-rigo" });
-  assert.equal(s, null, "nothing fillable about a house we can't name: the model writes it");
+  // Since 2026-10-20 the pool holds Matt's day-2 text, which names no house.
+  assert.equal(s.text, fillTemplate(DEFAULT_FOLLOW_UP_TEXTS[0], { first: "Rigo" }), "the spare that needs no address");
 });
 
 test("follow-up texts are cleaned like first texts: no stop footer, no sign-off; a long one he wrote is kept", () => {
@@ -68,14 +69,14 @@ test("follow-up texts are cleaned like first texts: no stop footer, no sign-off;
   assert.deepEqual(normalizeOpener({ followUps: "Hi {first}, one?\n\nHi {first}, two?" }).followUps, ["Hi {first}, one?", "Hi {first}, two?"]);
 });
 
-test("the follow-up ladder defaults to two steps, day 3 and day 10", () => {
-  assert.deepEqual(DEFAULT_LADDERS.outreach_nudge.steps, [3, 10]);
-  assert.deepEqual(normalizeConversationAi({}).parties.agent.followUp.ladders.outreach_nudge.steps, [3, 10]);
+test("the follow-up ladder defaults to day 2, then every 14 days (2026-10-20)", () => {
+  assert.deepEqual(DEFAULT_LADDERS.outreach_nudge.steps, [2]);
+  assert.deepEqual(normalizeConversationAi({}).parties.agent.followUp.ladders.outreach_nudge.steps, [2]);
 });
 
-test("a saved copy of the old six-step default reads as day 3 and day 10; steps Matt set himself are kept", () => {
+test("a saved copy of the old six-step default reads as today's; steps Matt set himself are kept", () => {
   const old = normalizeConversationAi({ parties: { agent: { followUp: { enabled: true, ladders: { outreach_nudge: { enabled: true, steps: [2, 5, 9, 14, 21, 30] } } } } } });
-  assert.deepEqual(old.parties.agent.followUp.ladders.outreach_nudge.steps, [3, 10]);
+  assert.deepEqual(old.parties.agent.followUp.ladders.outreach_nudge.steps, [2]);
   assert.equal(old.parties.agent.followUp.ladders.outreach_nudge.enabled, true, "the switch is left as it was");
   const mine = normalizeConversationAi({ parties: { agent: { followUp: { ladders: { outreach_nudge: { steps: [4, 12, 25] } } } } } });
   assert.deepEqual(mine.parties.agent.followUp.ladders.outreach_nudge.steps, [4, 12, 25]);

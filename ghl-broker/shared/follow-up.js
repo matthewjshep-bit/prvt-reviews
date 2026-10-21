@@ -69,11 +69,17 @@ export const ON_EXHAUSTED = ["stop", "mark_no_response"];
 // verbatim, so a stored copy reads as "never changed" and gets today's.
 export const PREVIOUS_OUTREACH_NUDGE_STEPS = [2, 5, 9, 14, 21, 30];
 
+// The days the cold-agent ladder runs from the first text: a repeat rung
+// past this is never reached (ghl-broker/follow-up-sweep.js reads
+// outreach_sent this far back), so "every 14 days" ends on day 58.
+export const OUTREACH_NUDGE_WINDOW_DAYS = 60;
+
 export const DEFAULT_LADDERS = {
-  // Two follow-ups to a cold agent, each its own text (2026-10-20, Matt: a
-  // first text and a follow-up, charted like a GHL workflow). Until then six
-  // over a month, every one the same text.
-  outreach_nudge: { enabled: false, steps: [3, 10], repeatEvery: 0, onExhausted: "stop" },
+  // A cold agent hears from us on day 2, then a check-in every 14 days until
+  // they answer (2026-10-20, Matt: "2 days later … and then check in every 14
+  // days after that"). Earlier that day: day 3 and day 10, each its own text;
+  // before that six over a month, every one the same text.
+  outreach_nudge: { enabled: false, steps: [2], repeatEvery: 14, onExhausted: "stop" },
   // An offer is asked about until the agent answers — yes, no, or a number.
   // The date printed on it is not a deadline: agents answer lapsed offers all
   // the time, so after day 14 the ladder keeps going, once a week.
@@ -892,7 +898,7 @@ export function threadTimes(drafts = []) {
 // couldn't field, your hand-written check-in, the walkthrough ask, a queued
 // deal text.
 export const MACHINE_STARTED_KINDS = new Set([
-  "outreach_open", "outreach_nudge", "take_check", "realm_check", "offer_nudge", "counter_nudge", "take_ask", "kind_pass",
+  "outreach_open", "outreach_nudge", "outreach_email", "take_check", "realm_check", "offer_nudge", "counter_nudge", "take_ask", "kind_pass",
   "hot_push", "passed_checkin", "promise_due", "price_drop", "checkin_due", "address_chase",
   "blast_nudge", "dataroom_nudge", "deal_followup", "buyer_pulse", "agent_pulse", "showing_reminder", "showing_followup", "second_look"]);
 

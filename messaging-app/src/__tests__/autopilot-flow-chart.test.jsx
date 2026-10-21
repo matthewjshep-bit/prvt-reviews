@@ -17,10 +17,13 @@ const { switches } = autopilotSummary({ config, sendsEnabled: true, outreach: { 
 
 test("the agent chart shows the first text and each follow-up as an agent would read them, with what sends itself", () => {
   const html = renderToStaticMarkup(<FlowChart steps={agentFlow({ settings: { outreachAutopilot: { enabled: true } }, config, switches })} onEdit={() => {}} />);
-  for (const t of ["A new listing agent is found", "First text", "Wait until day 3", "Follow-up 1", "Wait until day 10", "Follow-up 2", "They reply", "Check in every 21 days"]) expect(html).toContain(t);
+  for (const t of ["A new listing agent is found", "First text", "Wait until day 2", "Follow-up 1", "Intro email, day 2", "Then check in every 14 days", "They reply", "Check in every 21 days"]) expect(html).toContain(t);
   expect(html).toContain("Hi Brenda, saw your listing at 14820 SE 172nd St.");
-  expect(html).toContain("Hi Brenda, following up on your listing at 14820 SE 172nd St.");
-  expect(html).toContain("Hey Brenda, circling back on 14820 SE 172nd St.");
+  expect(html).toContain("Hey Brenda, following up on my earlier message.");
+  expect(html).toContain("Hi Brenda, circling back. Any fixers or distressed properties");
+  // The email keeps its paragraphs and shows the website.
+  expect(html).toContain("Hi Brenda,\n\nThis is Matt Shepherd with Shep Flips.");
+  expect(html).toContain("https://shepflips.com");
   expect(html).toContain("Sends itself");
   expect(html).toContain("Drafts for you");
   expect(html).not.toContain("{first}");

@@ -3294,6 +3294,17 @@ export function floatExtras({ offer, saved, dossier = null, requote = false, the
   return out;
 }
 
+// Which repeat a rung past the last configured step is (day 30 on [2] every
+// 14 is the 2nd), so each one picks the next check-in text. {} for a
+// configured step.
+function repeatOf(subject) {
+  const every = Math.round(Number(subject?.repeatEvery) || 0);
+  const steps = normalizeSteps(subject?.steps || []);
+  const step = Math.round(Number(subject?.step));
+  if (!(every > 0) || !steps.length || !Number.isFinite(step) || steps.includes(step)) return {};
+  return { repeatN: Math.max(1, Math.round((step - steps[steps.length - 1]) / every)) };
+}
+
 export function outboundDescriptor({ kind, offer, subject, saved, dossier, stance = null }) {
   const address = offer?.address || subject?.address || "the property";
   const step = subject?.step ?? null;
@@ -3444,7 +3455,8 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
     ...(kind === "offer_nudge" || kind === "price_drop" ? { went: whatWentOut(offer) } : {}),
     ...(kind === "outreach_nudge" && countyName(subject?.county) ? { county: countyName(subject.county) } : {}),
     // Follow-up N's own text (Autopilot → Agents, 2026-10-20).
-    ...(kind === "outreach_nudge" ? { mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode, followUps: normalizeOpener(saved?.outreachAutopilot?.opener).followUps } : {}),
+    ...(kind === "outreach_nudge" ? { mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode, followUps: normalizeOpener(saved?.outreachAutopilot?.opener).followUps,
+      checkIns: normalizeOpener(saved?.outreachAutopilot?.opener).checkIns, ...repeatOf(subject) } : {}),
     // A passed house riding on this nudge as one line (follow-up-sweep.js).
     ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,

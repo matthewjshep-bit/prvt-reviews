@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { agentFlow, investorFlow, FLOW_STATUS_LABEL } from "./autopilot-flows.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 import { autopilotSummary } from "./graduation.js";
-import { DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS } from "./outreach-opener.js";
+import { DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS } from "./outreach-opener.js";
 
 const flow = ({ settings = {}, raw = {}, sends = true, blasts = true, samples } = {}) => {
   const config = normalizeConversationAi(raw);
@@ -24,11 +24,13 @@ const LIVE = {
 };
 
 test("the agent chart runs found → first text → wait → follow-up 1 → wait → follow-up 2 → they reply → check-in", () => {
-  const { agents } = flow({ settings: { outreachAutopilot: { enabled: true } }, raw: LIVE });
-  assert.deepEqual(agents.map((s) => s.id), ["found", "first", "wait-0", "follow-0", "wait-1", "follow-1", "reply", "checkin"]);
-  assert.deepEqual(agents.map((s) => s.title).slice(2, 6), ["Wait until day 3", "Follow-up 1", "Wait until day 10", "Follow-up 2"]);
+  const raw = { ...LIVE, parties: { ...LIVE.parties, agent: { ...LIVE.parties.agent, followUp: { enabled: true, ladders: { outreach_nudge: { enabled: true, steps: [3, 10], repeatEvery: 0 } } } } } };
+  const { agents } = flow({ settings: { outreachAutopilot: { enabled: true } }, raw });
+  assert.deepEqual(agents.map((s) => s.id), ["found", "first", "wait-email", "email", "wait-0", "follow-0", "wait-1", "follow-1", "reply", "checkin"]);
+  assert.deepEqual(agents.map((s) => s.title).slice(4, 8), ["Wait until day 3", "Follow-up 1", "Wait until day 10", "Follow-up 2"]);
   assert.deepEqual(agents[1].texts, DEFAULT_OPENER_EXAMPLES);
-  assert.deepEqual([agents[3].texts[0], agents[5].texts[0]], DEFAULT_FOLLOW_UP_TEXTS);
+  assert.deepEqual([agents[5].texts[0], agents[7].texts[0]], DEFAULT_FOLLOW_UP_TEXTS);
+  assert.equal(agents.find((s) => s.id === "email").status, "off", "the intro email is drawn, off, until it's switched on");
 });
 
 test("a follow-up's own text is what the chart shows, and a step without one says it uses a spare", () => {
@@ -94,4 +96,18 @@ test("three waves draw a third; deals blasted by GHL say so", () => {
   assert.ok(three.some((s) => s.id === "wave-3"));
   const ghl = flow({ settings: { dispoAutopilot: { sendWith: "ghl" } }, raw: LIVE }).investors.deal;
   assert.equal(ghl.find((s) => s.id === "wave-1").status, "ghl");
+});
+
+test("the agent chart: first text → day 2 follow-up → intro email → check in every 14 days (2026-10-20)", () => {
+  const settings = { outreachAutopilot: { enabled: true, introEmail: { enabled: true } } };
+  const { agents } = flow({ settings, raw: LIVE });
+  assert.deepEqual(agents.map((s) => s.id), ["found", "first", "wait-0", "follow-0", "email", "repeat", "reply", "checkin"]);
+  assert.equal(agents.find((s) => s.id === "wait-0").title, "Wait until day 2");
+  assert.equal(agents.find((s) => s.id === "email").status, "drafting", "on, but each waits for you until it may send itself");
+  assert.match(agents.find((s) => s.id === "repeat").title, /every 14 days/);
+  assert.match(agents.find((s) => s.id === "repeat").detail, /day 58/);
+  assert.deepEqual(agents.find((s) => s.id === "repeat").texts, DEFAULT_CHECK_IN_TEXTS);
+  const later = flow({ settings: { outreachAutopilot: { introEmail: { day: 5 } } }, raw: LIVE }).agents;
+  assert.deepEqual(later.map((s) => s.id).slice(2, 6), ["wait-0", "follow-0", "wait-email", "email"]);
+  assert.equal(later.find((s) => s.id === "email").status, "off");
 });
