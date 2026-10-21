@@ -12,7 +12,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Trash2, X } from "lucide-react";
 import { agentFlow } from "@shared/autopilot-flows.js";
 import { NUDGE_TEXTS } from "@shared/standard-texts.js";
-import { OPENER_MAX_EXAMPLES } from "@shared/outreach-opener.js";
+import { OPENER_MAX_EXAMPLES, homesFrom, homesText, normalizeOpener } from "@shared/outreach-opener.js";
 import { normalizeIntroEmail, normalizeCheckInEmail, CHECK_IN_EMAIL_MAX } from "@shared/outreach-email.js";
 import { MAX_REPEAT_DAYS } from "@shared/follow-up.js";
 import { getConversationAi, getDashboardPipeline, getSettings, patchSettings, saveConversationAi } from "./api.js";
@@ -57,7 +57,7 @@ function EditorBar({ busy, onSave, onCancel, children }) {
   );
 }
 
-const HELP = "{first} is their first name, {address} the listing's street address, {street} the street alone, {county} the county. GHL's {{contact.first_name}} style works too.";
+const HELP = "{first} is their first name, {address} the listing's street address, {street} the street alone, {county} the county, {home} the city we say we're in. GHL's {{contact.first_name}} style works too.";
 
 export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
   const [settings, setSettings] = useState(null);
@@ -85,7 +85,10 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
     const step = steps.find((s) => s.id === id);
     if (!step) { setEditing(id); setDraft({}); return; }
     const f = step.edit.field;
-    if (f === "examples") setDraft({ texts: [...step.texts] });
+    if (f === "examples") {
+      const o = normalizeOpener(settings?.outreachAutopilot?.opener);
+      setDraft({ texts: [...step.texts], home: o.home, homes: homesText(o.homes) });
+    }
     else if (f === "followUp") setDraft({ text: step.texts[0], day: step.day });
     else if (f === "pulse") setDraft({ enabled: settings?.outreachAutopilot?.pulse?.enabled === true, everyDays: Number(settings?.outreachAutopilot?.pulse?.everyDays) || 21 });
     else if (f === "checkIns") setDraft({ texts: [...step.texts], every: step.every });
@@ -134,18 +137,32 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
     const f = step.edit.field;
     if (f === "examples") {
       const texts = draft?.texts || [];
-      const set = (i, v) => setDraft({ texts: texts.map((t, j) => (j === i ? v : t)) });
+      const set = (i, v) => setDraft({ ...draft, texts: texts.map((t, j) => (j === i ? v : t)) });
       return (
         <div className="space-y-3">
           <p className="text-xs text-slate-500">Each new agent gets one of these, a different one per agent. {HELP}</p>
           {texts.map((t, i) => (
             <TextBox key={i} label={`Version ${i + 1}`} value={t} onChange={(v) => set(i, v)}
-              onRemove={texts.length > 1 ? () => setDraft({ texts: texts.filter((_, j) => j !== i) }) : null} />
+              onRemove={texts.length > 1 ? () => setDraft({ ...draft, texts: texts.filter((_, j) => j !== i) }) : null} />
           ))}
+          <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+            <p className="text-xs font-semibold text-slate-600">Where we say we are ({"{home}"})</p>
+            <p className="text-xs text-slate-500">
+              One line per market: a county and its state, or a whole state, then the city. The listing's county decides; anywhere not listed gets the default.
+            </p>
+            <textarea className={AREA} rows={4} value={draft?.homes ?? ""} placeholder={"Deschutes, OR = Bend\nOR = Portland"}
+              onChange={(e) => setDraft({ ...draft, homes: e.target.value })} />
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              Everywhere else
+              <input className="w-40 rounded-lg border border-slate-300 px-2 py-1 text-sm" value={draft?.home ?? ""} placeholder="Seattle"
+                onChange={(e) => setDraft({ ...draft, home: e.target.value })} />
+            </label>
+          </div>
           <EditorBar busy={busy} onCancel={close}
-            onSave={() => run(() => patchSettings({ outreachAutopilot: { opener: { examples: texts.map((t) => t.trim()).filter(Boolean) } } }))}>
+            onSave={() => run(() => patchSettings({ outreachAutopilot: { opener: { examples: texts.map((t) => t.trim()).filter(Boolean),
+              home: String(draft?.home || "").trim(), homes: homesFrom(draft?.homes || "") } } }))}>
             {texts.length < OPENER_MAX_EXAMPLES && (
-              <button type="button" className={BTN} onClick={() => setDraft({ texts: [...texts, ""] })}><Plus size={12} aria-hidden="true" /> Add a version</button>
+              <button type="button" className={BTN} onClick={() => setDraft({ ...draft, texts: [...texts, ""] })}><Plus size={12} aria-hidden="true" /> Add a version</button>
             )}
           </EditorBar>
         </div>

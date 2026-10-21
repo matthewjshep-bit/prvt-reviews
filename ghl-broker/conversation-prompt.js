@@ -773,6 +773,9 @@ function openingFor(outbound) {
           ? `Never say it came off the market, was taken down or didn't sell, and never ask whether the seller still wants to sell. `
           : "") +
         `OPENING MOVE for this one: ${move}. WHO YOU ARE, for this one: ${who}. Put it in your own words, and keep it to a few. ` +
+        // The city we say we're in follows the listing's market (2026-10-21):
+        // a Bend agent hears Bend, never Seattle.
+        (o.home ? `If you say where you're based, it's ${o.home}, nowhere else. ` : "") +
         `Say nothing about the house itself: not its age, size, lot, look, kitchen, "character" or "bones", how long it has been ` +
         `listed, or its price. No compliments, no jokes, no clever lines. Name no county and no region ("greater Seattle", ` +
         `"Puget Sound"); the listing's own town is fine. Say "fix up" or "renovate" rather than "flip". ` +

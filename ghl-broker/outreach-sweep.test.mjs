@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS } from "./shared/outreach-opener.js";
+import { DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME, DEFAULT_HOMES } from "./shared/outreach-opener.js";
 import { DEFAULT_INTRO_EMAIL_SUBJECT, DEFAULT_INTRO_EMAIL_BODY, DEFAULT_CHECK_IN_EMAILS } from "./shared/outreach-email.js";
 import {
   pickAgentsToImport, normalizeOutreachAutopilot, isWorkday, workHour, runsLeftInMonth, pullQuery, startOutreachSweep, maybeStartOutreachSweep, getOutreachJob, _resetJobs, CURSOR_NAME, PAGES_CURSOR, STALE_RUN_MS, RETRY_GAP_MS, RETRY_WINDOW_HOURS, MAX_DAILY_TRIES,
@@ -13,7 +13,7 @@ const row = (k, doc = {}, extra = {}) => ({ agentKey: k, status: "new", contactI
 
 test("settings coerce to safe defaults", () => {
   assert.deepEqual(normalizeOutreachAutopilot(undefined), {
-    enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", opener: { examples: DEFAULT_OPENER_EXAMPLES, followUps: DEFAULT_FOLLOW_UP_TEXTS, checkIns: DEFAULT_CHECK_IN_TEXTS, mode: "template" },
+    enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", opener: { examples: DEFAULT_OPENER_EXAMPLES, followUps: DEFAULT_FOLLOW_UP_TEXTS, checkIns: DEFAULT_CHECK_IN_TEXTS, mode: "template", home: DEFAULT_HOME, homes: DEFAULT_HOMES },
     introEmail: { enabled: false, autoSend: false, day: 2, subject: DEFAULT_INTRO_EMAIL_SUBJECT, body: DEFAULT_INTRO_EMAIL_BODY },
     checkInEmail: { enabled: false, autoSend: false, emails: DEFAULT_CHECK_IN_EMAILS }, requireDistress: true, turnkeyShare: 0,
     workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14, nudgeGhlCohort: false,

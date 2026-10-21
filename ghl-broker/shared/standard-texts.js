@@ -34,7 +34,7 @@
 // Pure. ghl-broker/reply-agent.js uses standardText() in place of the model
 // for these kinds when the mode is "template".
 
-import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS } from "./outreach-opener.js";
+import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME } from "./outreach-opener.js";
 
 // The follow-up to a first text nobody answered (outreach_nudge): Rigo's
 // two-week text, without the dollar figure (carriers read money in a cold
@@ -142,6 +142,8 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
     street: /^the property$/i.test(String(o.address || "")) ? "" : streetName(o.address),
     town: String(o.city || "").trim(),
     county: String(o.county || "").trim(),
+    // The city we say we're in, by the listing's market (outreach-opener.js homeFor).
+    home: String(o.home || "").trim() || DEFAULT_HOME,
   };
   // The first text carries its variant; the others follow the contact id.
   const v = o.variant != null ? Number(o.variant) || 0 : openerVariant(contactId, 997);

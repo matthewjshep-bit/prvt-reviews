@@ -12,6 +12,8 @@
 // Pure. Stored at settings.outreachAutopilot.opener; the reply agent reads it
 // when it drafts outreach_open.
 
+import { parseUsAddress, stateAbbr } from "./us-address.js";
+
 // Matt's workflow template with the footer taken off, then three more in the
 // same voice. {first}, {street}, {town} and {county} are what the bot fills in.
 // 2026-10-05: Matt wanted more personality ("personable, concise, friendly,
@@ -32,12 +34,32 @@
 // (mode "template", shared/standard-texts.js), not a fresh one from the
 // model: the listing by its address, who we are in a few words, is it a
 // project, and their other fixers. {address} is the street address (number
-// and street), {street} the street alone.
+// and street), {street} the street alone. 2026-10-21: {home} is the city we
+// say we're in, by the listing's market (homeFor below), not always Seattle.
 export const DEFAULT_OPENER_EXAMPLES = [
   "Hi {first}, saw your listing at {address}. I'm local and fix up houses. Is it a bit of a project, or pretty turnkey? If you've got other fixers on your radar, I'm all ears.",
-  "Hi {first}, came across your listing at {address}. I'm Seattle based and fix up places that need some TLC. Is this one a bit of a project? Or any other fixers you've seen?",
-  "Hey {first}, saw your listing at {address}. I'm local here in Seattle and fix up houses. Does this one need much work? And if you've got other fixers on your radar, I'm all ears.",
+  "Hi {first}, came across your listing at {address}. I'm {home} based and fix up places that need some TLC. Is this one a bit of a project? Or any other fixers you've seen?",
+  "Hey {first}, saw your listing at {address}. I'm local here in {home} and fix up houses. Does this one need much work? And if you've got other fixers on your radar, I'm all ears.",
 ];
+// The two defaults as they read until 2026-10-21, with Seattle written in. A
+// stored copy is read as today's, so a Bend agent never hears "Seattle based".
+const SEATTLE_DEFAULTS = new Map([
+  ["Hi {first}, came across your listing at {address}. I'm Seattle based and fix up places that need some TLC. Is this one a bit of a project? Or any other fixers you've seen?", DEFAULT_OPENER_EXAMPLES[1]],
+  ["Hey {first}, saw your listing at {address}. I'm local here in Seattle and fix up houses. Does this one need much work? And if you've got other fixers on your radar, I'm all ears.", DEFAULT_OPENER_EXAMPLES[2]],
+]);
+
+// Where we say we are, by where the listing is (2026-10-21, Matt: "as we
+// expand into different areas … say 'im in bend' or 'im in portland' etc to
+// let them know we are there and local"). A county in its state wins, then
+// a whole state; anywhere else is `home`. Settings → Agents edits both.
+export const DEFAULT_HOME = "Seattle";
+export const DEFAULT_HOMES = [
+  { county: "Deschutes", state: "OR", home: "Bend" },
+  { county: "Crook", state: "OR", home: "Bend" },
+  { county: "Jefferson", state: "OR", home: "Bend" },
+  { county: "", state: "OR", home: "Portland" },
+];
+export const HOMES_MAX = 40;
 
 // The defaults from 2026-10-16 to 2026-10-17, written by the model in a
 // "plain" voice: the street without its number, one question, no fixers ask.
@@ -128,19 +150,19 @@ export const OPENER_MAX_CHARS = 160;
 const FOOTER_RX = /\bcan stop\b|\bstop to end\b|\breply stop\b/i;
 
 /**
- * normalizeOpener(v) → { examples: string[], followUps: string[], checkIns: string[], mode: "template" | "ai" }
+ * normalizeOpener(v) → { examples: string[], followUps: string[], checkIns: string[], mode: "template" | "ai", home: string, homes: [{ county, state, home }] }
  *
  * Unset (or emptied) → Matt's defaults. Each example trimmed and capped at
  * OPENER_EXAMPLE_MAX_CHARS, GHL's {{…}} blanks made the app's; one that
  * carries the stop footer is dropped, and a sign-off on the end is cut. One
  * of the pre-2026-10-15 defaults is dropped too; a list left empty is
- * today's defaults.
+ * today's defaults. `homes` unset is DEFAULT_HOMES; saved empty stays empty.
  */
 export function normalizeOpener(v = {}) {
   const o = v && typeof v === "object" ? v : {};
   // The old defaults (each ends asking for other fixers) are left out of the
   // first texts (2026-10-15).
-  const examples = cleanTexts(o.examples, LEGACY);
+  const examples = cleanTexts(o.examples, LEGACY).map((x) => SEATTLE_DEFAULTS.get(x) || x);
   let followUps = cleanTexts(o.followUps);
   if (followUps.join("\n") === PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS.join("\n")) followUps = [];
   const checkIns = cleanTexts(o.checkIns);
@@ -149,7 +171,73 @@ export function normalizeOpener(v = {}) {
     followUps: followUps.length ? followUps : [...DEFAULT_FOLLOW_UP_TEXTS],
     checkIns: checkIns.length ? checkIns : [...DEFAULT_CHECK_IN_TEXTS],
     mode: o.mode === "ai" ? "ai" : "template",
+    home: cleanPlace(o.home) || DEFAULT_HOME,
+    homes: o.homes == null ? DEFAULT_HOMES.map((h) => ({ ...h })) : homesFrom(o.homes),
   };
+}
+
+// "bend" → "Bend": a place name as it reads in a text, nothing else in it.
+function cleanPlace(v) {
+  const s = String(v || "").replace(/[{}<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 40);
+  return s && s === s.toLowerCase() ? s.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : s;
+}
+
+/**
+ * homesFrom(v) → [{ county, state, home }]
+ *
+ * The places we say we're in, from an array or the Settings box's lines:
+ * "Deschutes, OR = Bend" (a county in its state) or "OR = Portland" (the
+ * rest of a state). A county with no state is a Washington one, where the
+ * business is. A line that isn't one of these is dropped.
+ */
+export function homesFrom(v) {
+  const raw = Array.isArray(v) ? v : String(v || "").split(/[\n;]+/);
+  const out = [];
+  for (const x of raw) {
+    let county, state, home;
+    if (x && typeof x === "object") ({ county = "", state = "", home = "" } = x);
+    else {
+      const m = String(x || "").match(/^\s*([^=:]+?)\s*[=:]\s*(.+?)\s*$/);
+      if (!m) continue;
+      const where = m[1].split(",").map((p) => p.trim());
+      home = m[2];
+      // Two letters that aren't a state are a typo, not a county.
+      if (where.length === 1 && /^[a-z]{2}$/i.test(where[0]) && !stateAbbr(where[0])) continue;
+      if (where.length === 1 && stateAbbr(where[0]) && !/\s/.test(where[0])) [county, state] = ["", where[0]];
+      else [county, state] = [where[0], where[1] || "WA"];
+    }
+    const c = String(county || "").replace(/\s+county$/i, "").trim();
+    const st = stateAbbr(state);
+    const h = cleanPlace(home);
+    if (st && h) out.push({ county: c, state: st, home: h });
+  }
+  return out.slice(0, HOMES_MAX);
+}
+
+/** homesText(homes) → the Settings box's lines, one place per line. */
+export function homesText(homes = []) {
+  return (homes || []).map((h) => `${h.county ? `${h.county}, ` : ""}${h.state} = ${h.home}`).join("\n");
+}
+
+/**
+ * homeFor({ county, state, address }, opener) → "Bend"
+ *
+ * The city the text says we're in, for a listing in this county and state
+ * (the state off the address when it isn't given; Washington when neither
+ * says). The opener's own county line, then its state line, then `home`.
+ */
+export function homeFor({ county = "", state = "", address = "" } = {}, opener = {}) {
+  const homes = Array.isArray(opener.homes) ? opener.homes : DEFAULT_HOMES;
+  const st = stateAbbr(state) || parseUsAddress(address).state || stateFromCounty(county) || "WA";
+  const c = countyName(county).toLowerCase();
+  const byCounty = c && homes.find((h) => h.county && h.county.toLowerCase() === c && h.state === st);
+  const byState = homes.find((h) => !h.county && h.state === st);
+  return (byCounty || byState)?.home || cleanPlace(opener.home) || DEFAULT_HOME;
+}
+
+// The sweep's county key carries its state ("Deschutes, OR").
+function stateFromCounty(county) {
+  return stateAbbr(String(county || "").split(",")[1] || "");
 }
 
 // A list of texts as Settings or the Autopilot chart saves them (an array,
@@ -346,6 +434,8 @@ export function firstTextHook(doc = {}, { county = "", base = {} } = {}) {
     price: (own ? h.price : b.price) || null,
     dom: (own ? h.dom : b.dom) || null,
     county: countyName(h.county, b.county, county),
+    // Which state the county is in, for the city we say we're in (homeFor).
+    state: stateAbbr(h.state) || stateAbbr(b.state) || parseUsAddress((own ? h.address : b.address) || "").state || stateFromCounty(county),
     city: h.city || b.city || "",
     brokerage: d.brokerage || b.brokerage || "",
     yearBuilt: h.yearBuilt || b.yearBuilt || null, beds: h.beds || b.beds || null,

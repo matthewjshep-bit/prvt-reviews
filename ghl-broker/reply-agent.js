@@ -53,7 +53,7 @@ import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blocki
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_STATUSES } from "./shared/second-look.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
-import { normalizeOpener, openerVoice, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
+import { normalizeOpener, openerVoice, countyName, homeFor, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { standardText } from "./shared/standard-texts.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
@@ -3451,7 +3451,10 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
     // What we know about the listing, for the introduction. Price and days
     // on market are colour ("been sitting a while"), never a number to quote.
     const price = Math.round(Number(subject?.hookPrice) || 0);
-    return { ...base,
+    const opener = normalizeOpener(saved?.outreachAutopilot?.opener);
+    // The city we say we're in, by the listing's market (2026-10-21).
+    const home = homeFor({ county: subject?.county, state: subject?.house?.state, address }, opener);
+    return { ...base, home,
       hookPrice: price, hookPriceK: price ? kText(price) : "", hookDom: Number(subject?.hookDom) || 0,
       brokerage: String(subject?.brokerage || ""),
       // The county the listing is in, the only place the text names, and
@@ -3460,9 +3463,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       // Matt's fixed first texts (mode "template", 2026-10-17), and the voice
       // the model writes one in when it does (mode "ai", the turnkey and
       // off-market seats).
-      templates: normalizeOpener(saved?.outreachAutopilot?.opener).examples,
-      examples: openerVoice(normalizeOpener(saved?.outreachAutopilot?.opener)), variant: Number(subject?.variant) || 0,
-      mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode,
+      templates: opener.examples,
+      examples: openerVoice(opener).map((x) => x.replace(/\{home\}/g, home)), variant: Number(subject?.variant) || 0,
+      mode: opener.mode,
       // One real thing about the house for the text to notice.
       details: houseDetails({ ...(subject?.house || {}), city: subject?.city || subject?.house?.city || "", dom: Number(subject?.hookDom) || subject?.house?.dom || 0 }),
       // A finished listing, texted for the agent rather than the house (the turnkey seats).
@@ -3475,7 +3478,8 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
     ...(kind === "offer_nudge" || kind === "price_drop" ? { went: whatWentOut(offer) } : {}),
     ...(kind === "outreach_nudge" && countyName(subject?.county) ? { county: countyName(subject.county) } : {}),
     // Follow-up N's own text (Autopilot → Agents, 2026-10-20).
-    ...(kind === "outreach_nudge" ? { mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode, followUps: normalizeOpener(saved?.outreachAutopilot?.opener).followUps,
+    ...(kind === "outreach_nudge" ? { home: homeFor({ county: subject?.county, address }, normalizeOpener(saved?.outreachAutopilot?.opener)),
+      mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode, followUps: normalizeOpener(saved?.outreachAutopilot?.opener).followUps,
       checkIns: normalizeOpener(saved?.outreachAutopilot?.opener).checkIns, ...repeatOf(subject) } : {}),
     // A passed house riding on this nudge as one line (follow-up-sweep.js).
     ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
