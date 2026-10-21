@@ -21,7 +21,7 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "plain-outreach-tes
 
 const { listingDistress } = await import("./shared/listing-distress.js");
 const { standardText, streetLine, firstNameOf, fillTemplate, NUDGE_TEXTS, CHECKIN_TEXTS, CHECKIN_COLD_TEXTS, LISTING_PING_TEXTS } = await import("./shared/standard-texts.js");
-const { normalizeOpener, DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS, PLAIN_DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
+const { normalizeOpener, DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, PLAIN_DEFAULT_OPENER_EXAMPLES } = await import("./shared/outreach-opener.js");
 const { normalizeAgentPulse } = await import("./shared/agent-pulse.js");
 const { QUALIFY_PASSES, ourReplyPasses, qualifyStep } = await import("./shared/flip-read.js");
 const { carrierFlags } = await import("./shared/carrier-words.js");
@@ -205,7 +205,7 @@ test("the first text is one of Matt's own, filled in: the listing's street addre
 
 test("every first text, follow-up and check-in is short, plain, and has none of the words the carriers block", () => {
   const values = { first: "Christopher", address: "14820 SE 172nd St", street: "SE 172nd St", town: "Renton", county: "King" };
-  for (const t of [...DEFAULT_OPENER_EXAMPLES, ...NUDGE_TEXTS, ...CHECKIN_TEXTS, ...CHECKIN_COLD_TEXTS, ...LISTING_PING_TEXTS]) {
+  for (const t of [...DEFAULT_OPENER_EXAMPLES, ...NUDGE_TEXTS, ...DEFAULT_CHECK_IN_TEXTS, ...CHECKIN_TEXTS, ...CHECKIN_COLD_TEXTS, ...LISTING_PING_TEXTS]) {
     const text = fillTemplate(t, values);
     assert.ok(text.length <= 200, `${text.length}: ${text}`);
     assert.deepEqual(carrierFlags(text), [], text);
@@ -216,7 +216,7 @@ test("every first text, follow-up and check-in is short, plain, and has none of 
 });
 
 test("Settings' saved copy of the 10/16 model examples becomes Matt's texts, and 'ai' still has the model write them", () => {
-  assert.deepEqual(normalizeOpener({ examples: PLAIN_DEFAULT_OPENER_EXAMPLES }), { examples: DEFAULT_OPENER_EXAMPLES, followUps: DEFAULT_FOLLOW_UP_TEXTS, mode: "template" });
+  assert.deepEqual(normalizeOpener({ examples: PLAIN_DEFAULT_OPENER_EXAMPLES }), { examples: DEFAULT_OPENER_EXAMPLES, followUps: DEFAULT_FOLLOW_UP_TEXTS, checkIns: DEFAULT_CHECK_IN_TEXTS, mode: "template" });
   assert.equal(normalizeOpener({ mode: "ai" }).mode, "ai");
   const o = outboundDescriptor({ kind: "outreach_open", offer: null, saved: { outreachAutopilot: { opener: { mode: "ai" } } }, subject: { address: "1 Elm St, Kent, WA" } });
   assert.equal(standardText({ kind: "outreach_open", outbound: o, name: "Dana" }), null);

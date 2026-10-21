@@ -16,7 +16,8 @@ import { normalizeOpener } from "./outreach-opener.js";
 import { normalizeAgentPulse } from "./agent-pulse.js";
 import { normalizeBuyerPulse } from "./buyer-pulse.js";
 import { NUDGE_TEXTS, CHECKIN_TEXTS } from "./standard-texts.js";
-import { DEFAULT_LADDERS } from "./follow-up.js";
+import { DEFAULT_LADDERS, OUTREACH_NUDGE_WINDOW_DAYS } from "./follow-up.js";
+import { normalizeIntroEmail } from "./outreach-email.js";
 
 // The words on a step's pill.
 export const FLOW_STATUS_LABEL = { on: "Sends itself", drafting: "Drafts for you", off: "Off", ghl: "Sent by GHL", auto: "Runs itself", dry: "Dry run" };
@@ -61,13 +62,34 @@ export function agentFlow({ settings = {}, config = {}, switches = [] } = {}) {
   }
 
   const ladderOn = stateOf(switches, "ladder:outreach_nudge");
-  (ladder.steps || []).forEach((day, i) => {
+  // The intro email goes the morning its day comes round, so it sits after
+  // the follow-up on that day or before (shared/outreach-email.js).
+  const ie = normalizeIntroEmail(oa.introEmail);
+  const email = firstTouch === "app" ? { id: "email", type: "email", title: `Intro email, day ${ie.day}`,
+    detail: `Once, to agents with an email in GHL who haven't replied: who we are, what we buy, the website, and the ask.${ie.enabled && !ie.autoSend ? " Each one waits in the outbox for you." : ""}`,
+    status: ownState(ie.enabled, ie.autoSend, switches), texts: [`Subject: ${ie.subject}\n\n${ie.body}`], day: ie.day, edit: { field: "introEmail" } } : null;
+  const pushEmail = (wait) => {
+    if (wait) steps.push({ id: "wait-email", type: "wait", title: `Wait until day ${email.day}`, detail: "if they haven't replied", day: email.day });
+    steps.push(email);
+  };
+  const days = ladder.steps || [];
+  if (email && !days.some((d) => d <= email.day)) pushEmail(true);
+  days.forEach((day, i) => {
     steps.push({ id: `wait-${i}`, type: "wait", title: `Wait until day ${day}`, detail: "if they haven't replied", day });
     const own = opener.followUps[i];
     steps.push({ id: `follow-${i}`, type: "text", title: `Follow-up ${i + 1}`,
       detail: own ? "" : "No text of its own: one of the spare follow-ups", status: ladderOn,
       texts: [own || NUDGE_TEXTS[i % NUDGE_TEXTS.length]], day, edit: { field: "followUp", index: i } });
+    if (email && day <= email.day && !(days[i + 1] <= email.day)) pushEmail(day !== email.day);
   });
+  // Past the last follow-up: a check-in every `repeatEvery` days until they
+  // answer, through the ladder's window.
+  const every = Math.round(Number(ladder.repeatEvery) || 0);
+  if (firstTouch === "app" && every > 0 && days.length) {
+    steps.push({ id: "repeat", type: "loop", title: `Then check in every ${every} days`,
+      detail: `Until they reply, through day ${OUTREACH_NUDGE_WINDOW_DAYS} (the last one on day ${days[days.length - 1] + every * Math.floor((OUTREACH_NUDGE_WINDOW_DAYS - 1 - days[days.length - 1]) / every)}). One of these each time, the next one along.`,
+      status: ladderOn, texts: opener.checkIns, every, edit: { field: "checkIns" } });
+  }
   if (oa.followUpEnabled) {
     steps.push({ id: "ghl-follow", type: "text", title: `GHL follow-up workflow, day ${oa.followUpDays || 14}`,
       detail: "Agents GHL texted first get your GHL follow-up workflow. Its wording lives in GHL.", status: "ghl" });

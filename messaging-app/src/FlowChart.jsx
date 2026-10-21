@@ -4,15 +4,16 @@
 // in place when the tab passes one.
 
 import React from "react";
-import { Clock, GitBranch, MessageSquare, Pencil, Repeat, Zap } from "lucide-react";
+import { Clock, GitBranch, Mail, MessageSquare, Pencil, Repeat, Zap } from "lucide-react";
 import { FLOW_STATUS_LABEL } from "@shared/autopilot-flows.js";
 import { carrierFlags } from "@shared/carrier-words.js";
 import { fillTemplate } from "@shared/standard-texts.js";
+import { fillParagraphs } from "@shared/outreach-email.js";
 import { BTN, Pill } from "./ui.jsx";
 
-const ICON = { trigger: Zap, text: MessageSquare, wait: Clock, branch: GitBranch, loop: Repeat };
+const ICON = { trigger: Zap, text: MessageSquare, email: Mail, wait: Clock, branch: GitBranch, loop: Repeat };
 const DOT = {
-  trigger: "bg-blue-600 text-white", text: "bg-white text-blue-700 ring-1 ring-blue-200",
+  trigger: "bg-blue-600 text-white", text: "bg-white text-blue-700 ring-1 ring-blue-200", email: "bg-white text-blue-700 ring-1 ring-blue-200",
   wait: "bg-slate-100 text-slate-600", branch: "bg-amber-100 text-amber-800", loop: "bg-emerald-100 text-emerald-800",
 };
 export const STATUS_CLS = {
@@ -27,6 +28,8 @@ export const SAMPLE_AGENT = { first: "Brenda", address: "14820 SE 172nd St", str
 
 /** The text as it reads to one agent; a template it can't fill shows as written. */
 export const sampleOf = (t) => fillTemplate(t, SAMPLE_AGENT) || t;
+/** The same for an email, its paragraphs and line breaks kept. */
+export const emailSampleOf = (t) => fillParagraphs(t, SAMPLE_AGENT) || t;
 
 /** What would stop a cold text getting through, as you type it. */
 export function textWarnings(t = "") {
@@ -87,7 +90,7 @@ function Step({ step, last, editing, onEdit, renderEditor }) {
               <>
                 {(step.texts || []).length > 0 && (
                   <div className="mt-2 space-y-1.5">
-                    {step.texts.map((t, i) => <Bubble key={i}>{sampleOf(t)}</Bubble>)}
+                    {step.texts.map((t, i) => <Bubble key={i}>{step.type === "email" ? emailSampleOf(t) : sampleOf(t)}</Bubble>)}
                   </div>
                 )}
                 {step.voice && <p className="mt-2 text-xs text-slate-600"><span className="font-semibold">How it should sound:</span> {step.voice}</p>}

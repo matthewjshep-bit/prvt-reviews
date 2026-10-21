@@ -15,6 +15,7 @@
 
 import { store as defaultStore } from "./store.js";
 import { normalizeOpener } from "./shared/outreach-opener.js";
+import { normalizeIntroEmail } from "./shared/outreach-email.js";
 import { isRuralLot } from "./shared/asset-type.js";
 import { isOldHouse } from "./outreach-score.js";
 import { workflowIdFrom } from "./shared/ghl-calls.js";
@@ -194,6 +195,8 @@ export function normalizeOutreachAutopilot(v = {}) {
     firstTouch: o.firstTouch === "ghl" || o.firstTouch === "workflow" ? o.firstTouch : "app",
     // Matt's own first texts, the voice the bot writes them in.
     opener: normalizeOpener(o.opener),
+    // The introduction email on day 2 (outreach-email.js). Off by default.
+    introEmail: normalizeIntroEmail(o.introEmail),
     requireDistress: o.requireDistress !== false,
     // The share of the day's first texts (0–100) that go to agents whose
     // listings are all finished (Matt, 2026-10-09: 25). The three

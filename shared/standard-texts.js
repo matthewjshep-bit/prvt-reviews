@@ -31,7 +31,7 @@
 // Pure. ghl-broker/reply-agent.js uses standardText() in place of the model
 // for these kinds when the mode is "template".
 
-import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS } from "./outreach-opener.js";
+import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS } from "./outreach-opener.js";
 
 // The follow-up to a first text nobody answered (outreach_nudge): Rigo's
 // two-week text, without the dollar figure (carriers read money in a cold
@@ -124,7 +124,8 @@ function pickFilled(list, variant, values) {
  *
  *   outreach_open   outbound.mode "template"; one of outbound.templates
  *   outreach_nudge  outbound.mode "template"; outbound.followUps[step], else
- *                   NUDGE_TEXTS from the contact's variant plus the step
+ *                   NUDGE_TEXTS from the contact's variant plus the step; a
+ *                   repeat rung past the last step, outbound.checkIns in turn
  *   agent_pulse     outbound.mode "template"; CHECKIN_TEXTS, CHECKIN_COLD_TEXTS,
  *                   or LISTING_PING_TEXTS for a fresh listing of theirs
  */
@@ -148,6 +149,13 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
     return done("opener", pickFilled(ex, v, values));
   }
   if (kind === "outreach_nudge") {
+    // A repeat rung (every 14 days after the last step) is a check-in, the
+    // next one along each time. Until 2026-10-20 its step read as step 1, so
+    // it sent follow-up 1 again.
+    if (o.repeats && !Number(o.stepIndex)) {
+      const list = Array.isArray(o.checkIns) && o.checkIns.length ? o.checkIns : DEFAULT_CHECK_IN_TEXTS;
+      return done("check_in", pickFilled(list, v + Math.max(0, (Number(o.repeatN) || 1) - 1), values));
+    }
     // Follow-up N is the text written for step N; one with none of its own
     // (or one we can't fill) takes the pool, a step along per step, so no
     // agent gets the same follow-up twice running (2026-10-20).

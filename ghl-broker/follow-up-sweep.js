@@ -29,6 +29,7 @@ import { supersededIds } from "./shared/current-offer.js";
 import {
   dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor, HOT_MIN_HOURS,
   offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, CHECKIN_STATUSES, rungsCovered, nudgeTimes,
+  OUTREACH_NUDGE_WINDOW_DAYS,
 } from "./shared/follow-up.js";
 import { focusOf, focusHolds, machineTexts, spacingHolds, lightTouchDue, pickAside } from "./shared/agent-focus.js";
 import { threadHealth } from "./shared/thread-health.js";
@@ -42,6 +43,7 @@ import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { runCounterHolds } from "./counter-hold.js";
+import { runIntroEmails } from "./outreach-email.js";
 import { normalizeOutreachAutopilot } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
 import { searchConversations, listConversationMessages, removeContactFromWorkflow } from "./ghl.js";
@@ -397,7 +399,7 @@ const CHECKIN_QUIET_HOURS = 72;
  * `ghlCohort` (outreachAutopilot.nudgeGhlCohort): the agents the GHL
  * workflow texted first join the same ladder (ghlCohortCandidates).
  */
-export const OUTREACH_WINDOW_DAYS = 60;
+export const OUTREACH_WINDOW_DAYS = OUTREACH_NUDGE_WINDOW_DAYS;
 export async function outreachCandidates({ store, locationId, config, now = Date.now(), ghlCohort = false }) {
   const pb = config?.parties?.agent;
   const ladder = pb?.followUp?.ladders?.outreach_nudge;
@@ -691,7 +693,7 @@ export function startFollowUpSweep({ client, locationId, saved, store, sendsEnab
     id: `fu-${Date.now().toString(36)}`, locationId, trigger, dryRun,
     status: "running", phase: "collecting", ...(scope?.offerId ? { scope: { offerId: scope.offerId } } : {}),
     startedAt: iso(now), finishedAt: null,
-    considered: 0, due: 0, started: 0, skipped: 0, exhaustedCount: 0, errors: 0,
+    considered: 0, due: 0, started: 0, skipped: 0, exhaustedCount: 0, errors: 0, emailed: 0,
     results: [], error: null, cancelRequested: false,
   };
   jobs.set(locationId, job);
@@ -1153,6 +1155,17 @@ async function runSweep(job, ctx) {
     }
   }
 
+  // The day-2 introduction email (outreach-email.js), the same morning as
+  // the day-2 follow-up text. Its own switch; nothing when it's off.
+  if (!job.cancelRequested && !scope?.offerId) {
+    job.phase = "intro emails";
+    const intro = typeof deps.runIntroEmails === "function" ? deps.runIntroEmails : runIntroEmails;
+    const r = await intro({ client, store, locationId, saved, sendsEnabled, now, dryRun: job.dryRun, deps,
+      held: (contactId) => botHold({ events: stops.get(contactId) || [], now }).held });
+    job.emailed = (r?.queued || 0) + (r?.drafted || 0);
+    for (const row of r?.rows || []) push(row);
+  }
+
   job.status = job.cancelRequested ? "canceled" : "done";
   job.phase = "";
   job.finishedAt = new Date().toISOString();
@@ -1176,7 +1189,8 @@ export async function maybeStartFollowUpSweep({ client, locationId, saved, store
     const fu = config.parties[p]?.followUp;
     return fu?.enabled && (Object.values(fu.ladders || {}).some((l) => l.enabled && l.steps?.length) || fu.secondLook?.enabled);
   });
-  if (!anyLadder) return false;
+  // The day-2 intro email runs on this sweep too, with or without a ladder.
+  if (!anyLadder && !normalizeOutreachAutopilot(saved?.outreachAutopilot).introEmail.enabled) return false;
   // Once a day, and back again the same morning if a deploy killed it
   // (daily-gate.js). A finished day never runs twice.
   const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: h, startHour: utcHour,
@@ -1184,7 +1198,7 @@ export async function maybeStartFollowUpSweep({ client, locationId, saved, store
   if (!gate.go) return false;
   startFollowUpSweep({ client, locationId, saved, store, sendsEnabled, now, deps, trigger: "daily",
     onDone: (job) => closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, failed: job.status === "error", error: job.error,
-      last: { id: job.id, status: job.status, considered: job.considered, due: job.due, started: job.started, skipped: job.skipped, errors: job.errors, finishedAt: job.finishedAt } }) });
+      last: { id: job.id, status: job.status, considered: job.considered, due: job.due, started: job.started, skipped: job.skipped, errors: job.errors, emailed: job.emailed, finishedAt: job.finishedAt } }) });
   return true;
 }
 // The morning's window for the sweep, from its hour.

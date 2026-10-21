@@ -5864,6 +5864,26 @@ failed lookup texts nobody it would have checked. `last.screen` has the
 counts (`checked`, `remembered`, `kept`, `dropped` by reason, `waiting`).
 The off-market seats keep their own Zillow status check.
 
+**Day 2, then every 14 days, and an intro email (2026-10-20).** The
+cold-agent ladder (`outreach_nudge`) defaults to `steps [2]`, `repeatEvery
+14`: follow-up 1 on day 2 is Matt's "following up on my earlier message …
+the uglier the better" text (`opener.followUps[0]`), and each repeat after
+it is a check-in from `outreachAutopilot.opener.checkIns`, the next one
+along each time (`repeatN` on the descriptor). Before this a repeat rung
+read as step 1 and resent follow-up 1. Repeats end with the sweep's 60-day
+window (`OUTREACH_NUDGE_WINDOW_DAYS`), so the last is day 58. A saved ladder
+is kept as saved: the live one is set on Autopilot → Agents. The intro
+email (`outreachAutopilot.introEmail`: `enabled`, `autoSend`, `day` 2,
+`subject`, `body`; off by default) runs at the end of the morning follow-up
+sweep (`ghl-broker/outreach-email.js`): an agent the app first-texted
+`day` to `day + 5` days ago, with no reply, offer or deal since and an email
+in GHL that hasn't opted out, gets one email draft (`outbound.kind
+"outreach_email"`, channel email), claimed by an `outreach_email_queued`
+event (dedupe `outreach_email:<contactId>`, once ever). It's scheduled
+across the machine hours when `autoSend` is on and the broker may send,
+otherwise it waits in the outbox. The send goes through `sendReplyDraft`
+with every guard a text has. `job.emailed` and the job's rows say what it did.
+
 **The texts are Matt's own (2026-10-17).** The first text, its 14-day
 follow-up (`outreach_nudge`) and the plain agent check-in are fixed texts in
 his voice, filled in (`shared/standard-texts.js`), not written by the model:

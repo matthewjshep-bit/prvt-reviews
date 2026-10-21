@@ -2,19 +2,22 @@
 // listing agent, in order, editable in place; the agent list (what was
 // Agent Outreach) and its setup folded away below.
 //
-// The texts save through PATCH /settings (outreachAutopilot.opener and
-// .pulse only), the follow-up days through the Conversation AI config
-// (parties.agent.followUp.ladders.outreach_nudge.steps), each re-read before
-// it's written, so neither carries an old copy of anything else.
+// The texts save through PATCH /settings (outreachAutopilot.opener, .pulse
+// and .introEmail only), the follow-up days and the check-in repeat through
+// the Conversation AI config (parties.agent.followUp.ladders.outreach_nudge
+// .steps and .repeatEvery), each re-read before it's written, so neither
+// carries an old copy of anything else.
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Trash2, X } from "lucide-react";
 import { agentFlow } from "@shared/autopilot-flows.js";
 import { NUDGE_TEXTS } from "@shared/standard-texts.js";
 import { OPENER_MAX_EXAMPLES } from "@shared/outreach-opener.js";
+import { normalizeIntroEmail } from "@shared/outreach-email.js";
+import { MAX_REPEAT_DAYS } from "@shared/follow-up.js";
 import { getConversationAi, getDashboardPipeline, getSettings, patchSettings, saveConversationAi } from "./api.js";
 import { BTN, BTN_DANGER, BTN_PRIMARY, ErrorBar, SkeletonRows } from "./ui.jsx";
-import FlowChart, { sampleOf, textWarnings } from "./FlowChart.jsx";
+import FlowChart, { emailSampleOf, sampleOf, textWarnings } from "./FlowChart.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
 import SettingsView from "./SettingsView.jsx";
 
@@ -85,6 +88,8 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
     if (f === "examples") setDraft({ texts: [...step.texts] });
     else if (f === "followUp") setDraft({ text: step.texts[0], day: step.day });
     else if (f === "pulse") setDraft({ enabled: settings?.outreachAutopilot?.pulse?.enabled === true, everyDays: Number(settings?.outreachAutopilot?.pulse?.everyDays) || 21 });
+    else if (f === "checkIns") setDraft({ texts: [...step.texts], every: step.every });
+    else if (f === "introEmail") setDraft({ ...normalizeIntroEmail(settings?.outreachAutopilot?.introEmail) });
     setEditing(id);
   };
   const close = () => { setEditing(null); setDraft(null); };
@@ -112,6 +117,13 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
       followUp: { ...fu, ladders: { ...fu.ladders, outreach_nudge: { ...ld, steps: nextSteps } } } } } });
   }
   const saveTexts = (followUps) => patchSettings({ outreachAutopilot: { opener: { followUps } } });
+  // The check-in repeat after the last follow-up, the same way as the days.
+  async function saveRepeat(repeatEvery) {
+    const fresh = (await getConversationAi()).config;
+    const fu = fresh.parties.agent.followUp;
+    await saveConversationAi({ ...fresh, parties: { ...fresh.parties, agent: { ...fresh.parties.agent,
+      followUp: { ...fu, ladders: { ...fu.ladders, outreach_nudge: { ...fu.ladders.outreach_nudge, repeatEvery } } } } } });
+  }
 
   // Between the follow-up before and the one after, so the order (and which
   // text goes with which day) can't change by saving.
@@ -168,6 +180,75 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
               </button>
             )}
           </EditorBar>
+        </div>
+      );
+    }
+    if (f === "checkIns") {
+      const texts = draft?.texts || [];
+      const set = (i, v) => setDraft({ ...draft, texts: texts.map((t, j) => (j === i ? v : t)) });
+      const every = Number(draft?.every);
+      const everyOk = Number.isInteger(every) && every >= 1 && every <= MAX_REPEAT_DAYS;
+      return (
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            Every
+            <input type="number" className={NUM} min={1} max={MAX_REPEAT_DAYS} value={draft?.every ?? ""} onChange={(e) => setDraft({ ...draft, every: e.target.value })} />
+            <span className="text-xs text-slate-500">days after the last follow-up, until they reply</span>
+          </label>
+          <p className="text-xs text-slate-500">Each check-in is the next of these, in turn. {HELP}</p>
+          {texts.map((t, i) => (
+            <TextBox key={i} label={`Check-in ${i + 1}`} value={t} onChange={(v) => set(i, v)}
+              onRemove={texts.length > 1 ? () => setDraft({ ...draft, texts: texts.filter((_, j) => j !== i) }) : null} />
+          ))}
+          <EditorBar busy={busy} onCancel={close}
+            onSave={() => {
+              if (!everyOk) { setError(`Check in every 1 to ${MAX_REPEAT_DAYS} days.`); return; }
+              const clean = texts.map((t) => t.trim()).filter(Boolean);
+              if (!clean.length) { setError("Write at least one check-in."); return; }
+              run(async () => { await patchSettings({ outreachAutopilot: { opener: { checkIns: clean } } }); if (every !== step.every) await saveRepeat(every); });
+            }}>
+            {texts.length < OPENER_MAX_EXAMPLES && (
+              <button type="button" className={BTN} onClick={() => setDraft({ ...draft, texts: [...texts, ""] })}><Plus size={12} aria-hidden="true" /> Add a check-in</button>
+            )}
+          </EditorBar>
+        </div>
+      );
+    }
+    if (f === "introEmail") {
+      const day = Number(draft?.day);
+      const dayOk = Number.isInteger(day) && day >= 1 && day <= 30;
+      return (
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={Boolean(draft?.enabled)} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
+            Send the intro email
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={Boolean(draft?.autoSend)} onChange={(e) => setDraft({ ...draft, autoSend: e.target.checked })} />
+            It sends itself
+            <span className="text-xs text-slate-500">otherwise each one waits in the outbox for your Send</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            Send on day
+            <input type="number" className={NUM} min={1} max={30} value={draft?.day ?? ""} onChange={(e) => setDraft({ ...draft, day: e.target.value })} />
+            <span className="text-xs text-slate-500">after the first text, if they haven't replied</span>
+          </label>
+          <label className="block space-y-1 text-sm text-slate-700">
+            <span className="text-xs font-semibold text-slate-600">Subject</span>
+            <input type="text" className={AREA} value={draft?.subject || ""} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} />
+          </label>
+          <label className="block space-y-1 text-sm text-slate-700">
+            <span className="text-xs font-semibold text-slate-600">Email</span>
+            <textarea className={AREA} rows={12} value={draft?.body || ""} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
+          </label>
+          <p className="whitespace-pre-wrap text-xs text-slate-500">Reads: {emailSampleOf(draft?.body || "") || "—"}</p>
+          <p className="text-xs text-slate-500">{"{first}"} is their first name. A blank line starts a new paragraph.</p>
+          <EditorBar busy={busy} onCancel={close}
+            onSave={() => {
+              if (!dayOk) { setError("The intro email goes out between day 1 and day 30."); return; }
+              run(() => patchSettings({ outreachAutopilot: { introEmail: { enabled: Boolean(draft.enabled), autoSend: Boolean(draft.autoSend), day,
+                subject: String(draft.subject || "").trim(), body: String(draft.body || "").trim() } } }));
+            }} />
         </div>
       );
     }

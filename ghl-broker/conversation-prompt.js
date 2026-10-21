@@ -795,6 +795,13 @@ function openingFor(outbound) {
     }
 
     case "outreach_nudge":
+      // Past the follow-ups: the every-14-days check-in, not about the listing.
+      if (o.repeats && !Number(o.stepIndex)) {
+        return `${START} We texted this agent about their listing at ${o.address} weeks ago and they never answered. ` +
+          `${nudgePressure(o)} One short line checking in: has anything that needs work, distressed or value-add, come ` +
+          `across their desk, listed or off market? Don't mention the old listing and don't name a number. ` +
+          `No sign-off and no opt-out line. No dashes (— or –) and no exclamation marks. Set intent to outreach_nudge.`;
+      }
       return `${START} We texted this agent about their listing at ${o.address} and they never answered. ` +
         `${nudgePressure(o)} One or two short lines in the same plain voice as the first text. You may mention the listing ` +
         `again; do NOT name a number, and do NOT repeat the first text's wording. A different angle each time: the kind of ` +
