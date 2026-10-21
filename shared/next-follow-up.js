@@ -232,8 +232,11 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
     const floated = floatedAt(offer) || (offer.sends || []).length;
     const timers = config?.driver?.timers;
     if (status === "new" && !floated && !isAiGenerated(offer)) {
-      // Made by hand: the machine never floats it (pipeline.js timerMoves).
-      candidates.push(out("float", { at: (ms(offer.createdAt) ?? now) + DAY_MS, label: "Our number never went out — send it, or mark it sent", who: "you" }));
+      // Made by hand: a day on, the timer floats it (pipeline.js timerMoves,
+      // 2026-10-20); with the timers off it is yours.
+      candidates.push(timers?.enabled
+        ? out("float", { at: (ms(offer.createdAt) ?? now) + DAY_MS, label: "Float your number", who: "machine" })
+        : out("float", { at: (ms(offer.createdAt) ?? now) + DAY_MS, label: "Our number never went out — send it, or mark it sent", who: "you" }));
     } else if (status === "new" && !floated && timers?.enabled) {
       const t = (ms(offer.createdAt) ?? now) + (Number(timers.floatAfterHours) || 4) * HOUR_MS;
       // The timer tries once (today-timers.js claims per offer) and not at all

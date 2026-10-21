@@ -36,7 +36,7 @@
 
 import { addressKey, sameStreet, parseUsAddress, completeAddress } from "./us-address.js";
 import { propertyDossier } from "./contact-record.js";
-import { aiHoldReasons, effectiveStatus, DEAD_STATUSES, saidYes } from "./offer-status.js";
+import { aiHoldReasons, effectiveStatus, DEAD_STATUSES, saidYes, DRAFT_ONLY_HOLD } from "./offer-status.js";
 import { KIND_HOLD, MOBILE_HOLD, RURAL_HOLD } from "./asset-type.js";
 import { pricedByHand } from "./underwrite-model.js";
 import { WA_CITY_COORDS } from "./wa-city-coords.js";
@@ -67,6 +67,7 @@ export const ERROR_HOLD = /^stopped early/i;
  */
 export function heldInPlainWords(reason = "") {
   const s = String(reason || "");
+  if (s === DRAFT_ONLY_HOLD.split(" — ")[0] || s === DRAFT_ONLY_HOLD) return "Matt is running the numbers himself";
   if (/square footage is unknown/i.test(s)) return "we couldn't pull the square footage on it";
   if (WORK_HOLD.test(s)) return /photo/i.test(s) ? "there aren't enough listing photos to see what it needs" : "the work looks heavy and you want to pin it down";
   if (VALUE_HOLD.test(s)) return "the comps came back thin";
@@ -366,8 +367,11 @@ function triageCore({
   if (now - silentSince >= STALE_DAYS * DAY_MS) {
     return { ...base, action: "retire", status: "we_passed", reason: `held ${heldDays} days and nothing since` };
   }
+  // Draft only (2026-10-16): the house is Matt's to price, so it waits for
+  // him, not for them. Asked once for their read (step 3c), then his.
+  const draftOnly = held.includes(DRAFT_ONLY_HOLD);
   // A hold their numbers could clear has its own week, with a note (step 5).
-  if (!cls.rescuable && asked != null && (lastIn == null || lastIn < asked) && now - asked >= ASK_WAIT_DAYS * DAY_MS) {
+  if (!cls.rescuable && !draftOnly && asked != null && (lastIn == null || lastIn < asked) && now - asked >= ASK_WAIT_DAYS * DAY_MS) {
     return { ...base, action: "retire", status: "we_passed", reason: "we asked for their read a week ago and heard nothing" };
   }
 
@@ -412,6 +416,19 @@ function triageCore({
     if (asked != null && (lastText == null || lastText < asked)) return { ...base, action: "wait", needs: ["address"], reason: "asked them to confirm the address, waiting" };
     const alive = (lastText != null && now - lastText <= ALIVE_DAYS * DAY_MS) || heldDays <= 3;
     if (alive) return { ...base, action: "ask", needs: ["address"], reason: `${clip(miss)} — ask them to confirm the street address` };
+  }
+
+  /* --- 3c. draft only: ask their read once, then it's Matt's (2026-10-20) --- */
+  // No Today: until he prices it, nothing texted the agent at all. Their read
+  // (what it's worth done, what it needs, what the seller would take) is for
+  // him to price with; the machine never prices from it.
+  if (draftOnly) {
+    if (asked != null) return { ...base, action: "yours", needs: [], reason: "asked for their read — waiting on your number" };
+    const live = (lastIn != null && now - lastIn <= ALIVE_DAYS * DAY_MS) || heldDays <= 3;
+    if (!live) return { ...base, action: "yours", needs: [], reason: `they haven't written in ${Math.floor((now - (lastIn ?? heldAt)) / DAY_MS)} days — waiting on your number` };
+    const promised = drafts.some((d) => d?.outbound?.kind === "promise_due" && aboutThisHouse(d.propertyAddress) && now - (ms(d.createdAt) ?? 0) <= PROMISE_ASK_DAYS * DAY_MS && d.status !== "dismissed");
+    if (promised) return { ...base, action: "wait", needs: [], reason: "the promise sweep just told them" };
+    return { ...base, action: "ask", needs: ["value", "work", "take"], reason: "ready for your comps — ask the agent's read so you have it" };
   }
 
   /* --- 4. re-run on their numbers --- */

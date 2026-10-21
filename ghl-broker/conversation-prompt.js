@@ -868,7 +868,15 @@ function openingFor(outbound) {
           `ask them to confirm the full street address (street name and city) so we can pull it up. Ask for nothing else. Do NOT name ` +
           `any number, and do NOT apologise. ${CONTINUE} Set intent to take_ask.`;
       }
-      const asks = [o.needValue ? "what they figure it's worth once it's fixed up" : "", o.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ");
+      const asks = [o.needValue ? "what they figure it's worth once it's fixed up" : "", o.needWork ? "what the work would run" : "",
+        o.needTake ? "what the seller would take" : ""].filter(Boolean).join(o.needTake ? ", " : " and ");
+      // Draft only (2026-10-20): nothing is stuck — Matt prices it himself,
+      // and their read is what he prices with.
+      if (o.needTake) {
+        return `${START} ${heldInPlainWords(o.heldReason).replace(/^./, (c) => c.toUpperCase())} on ${o.address}. In one or two lines say so, ` +
+          `then ask ${asks} — their read helps him get it right. Ask for nothing else. Do NOT name any number, range or percentage of ours, ` +
+          `do NOT promise a time, and do NOT apologise. ${CONTINUE} Set intent to take_ask.`;
+      }
       return `${START} We're running numbers on ${o.address} for this agent and they're stuck${o.heldReason ? ` (${o.heldReason})` : ""}. ` +
         `In one or two lines say ${heldInPlainWords(o.heldReason)} and you want to get it right, then ask ${asks || "what they figure it's worth fixed up and what the work would run"} ` +
         `— their read lets us finish it. Ask for nothing else. Do NOT name any number, range or percentage of ours, ` +

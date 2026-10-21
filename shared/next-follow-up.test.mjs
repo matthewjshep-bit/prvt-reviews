@@ -181,13 +181,15 @@ test("a priced offer nobody floated is the timer's for a day, then it's yours", 
   assert.equal(stuck.overdue, true);
 });
 
-// The timer only ever floats what the machine priced (pipeline.js
-// timerMoves): a hand-made offer was shown as the machine's and never moved.
-test("a hand-made offer nobody sent is yours from the start, timers or not", () => {
+// 2026-10-20 (no Today): the timer floats a hand-made number a day after it's
+// priced. With the timers off it is still yours.
+test("a hand-made offer nobody sent is floated by the machine a day on, and yours with the timers off", () => {
   const timers = normalizeConversationAi({ ...CONFIG, driver: { timers: { enabled: true, floatAfterHours: 4 } } });
   const n = nextFollowUp({ offer: offer({ status: "new", sends: [] }), config: timers, now: T0 + 0.1 * DAY });
   assert.equal(n.kind, "float");
-  assert.equal(n.who, "you");
+  assert.equal(n.who, "machine");
+  const off = nextFollowUp({ offer: offer({ status: "new", sends: [] }), config: CONFIG, now: T0 + 0.1 * DAY });
+  assert.equal(off.who, "you");
 });
 
 test("an offer the agent is presenting shows a nudge, not a push to paper", () => {

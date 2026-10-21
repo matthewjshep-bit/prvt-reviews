@@ -35,6 +35,7 @@ import { accessFor } from "./deal-access.js";
 import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
 import { needsPreContract, preContractChecks, openChecks, PRESELL_MIN_BUYERS } from "./pre-contract.js";
 import { isOffMarket } from "./off-market.js";
+import { callEventConnected } from "./talked-to.js";
 
 const DAY_MS = 86400000;
 // How long a hand-made offer nobody sent stays a decision on the Desk.
@@ -433,13 +434,18 @@ export function buildPipeline({
     // A hand-made offer, priced a day ago, and nothing of ours has gone out
     // on it — no send, no float, no nudge (2026-10-02: seven sat in Not sent
     // with no row anywhere). Yours: send it, or say you texted it yourself.
-    // The machine never floats a hand-made offer (timerMoves skips it).
+    // A day on, the timer floats it (timerMoves, 2026-10-20).
     if (lane === "ready" && !card.ai.made && !(o.sends || []).length && !o.proactive?.takeCheckAt && !o.proactive?.realmCheckAt && !o.floatSentAt && !(o.followUps || []).length) {
       const pricedMs = ms(o.statusAt) ?? ms(o.createdAt);
       // A week, then it is history, not a decision (2026-10-04: five rows
       // priced 40–69 days ago sat on the Desk).
       if (pricedMs != null && now - pricedMs >= DAY_MS && now - pricedMs <= OFFER_READY_DAYS * DAY_MS) {
+        // Matt texted them himself since, or a call connected: he may have
+        // said the number already, and the timer won't say it twice.
+        const spoke = (events || []).some((e) => e?.contactId === o.contactId && (ms(e.at) ?? 0) > pricedMs
+          && (e.type === "hand_reply" || callEventConnected(e)));
         card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon", handMade: true, readyAt: new Date(pricedMs).toISOString(),
+          ...(spoke ? { why: "you texted them yourself or talked since you priced it" } : {}),
           title: `${card.address}: priced ${Math.floor((now - pricedMs) / DAY_MS)}d ago and nothing has gone out`,
           detail: `cash ${money(o.cashAmount)} · made by hand`,
           ops: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "mark_sent", label: "I sent it myself", intent: "secondary" },
@@ -923,8 +929,10 @@ export function timerMoves(actions = [], { config = null, now = Date.now() } = {
   const out = [];
   for (const a of actions) {
     const base = { actionId: a.id, kind: a.kind, offerId: a.offerId || null, jobId: a.jobId || null, contactId: a.contactId || null, address: a.address || "" };
-    // A hand-made offer is never floated by the machine: it's yours.
-    if (a.kind === "offer_ready" && !a.why && a.offerId && !a.handMade) {
+    // A hand-made offer floats too (Matt, 2026-10-20: "I price it, the bot
+    // does the rest"); its row only exists a day after pricing, with nothing
+    // of ours gone out and no word from him to them since (`why`).
+    if (a.kind === "offer_ready" && !a.why && a.offerId) {
       const dueMs = (ms(a.readyAt) ?? now) + t.floatAfterHours * 3600000;
       out.push({ ...base, move: "float", what: "floats the number", dueAt: new Date(dueMs).toISOString(), due: dueMs <= now });
     } else if (a.kind === "gone_quiet" && a.offerId) {
