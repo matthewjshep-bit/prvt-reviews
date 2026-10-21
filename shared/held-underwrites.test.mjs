@@ -456,3 +456,26 @@ test("the sweep never retires a held draft Matt is pricing by income", () => {
   assert.equal(t.action, "yours");
   assert.match(t.reason, /income/);
 });
+
+/* ---------- draft only: Matt prices it (2026-10-20, no Today) ---------- */
+
+// Matt prices the houses agents name; until he does, nothing texted the agent
+// at all. The sweep asks the agent's read once — what it's worth done, what
+// it needs, what the seller would take — so he has it when he prices, and
+// then leaves the house to him. It never passes a house he hasn't priced
+// because the agent went quiet after the ask.
+const DRAFT_ONLY = "ready for your comps — the app made the draft, you price it";
+test("a house waiting on Matt's number asks the agent's read once, then waits for him", () => {
+  const t = triage({ offer: held({}, [DRAFT_ONLY]), drafts: [inbound("It needs a full gut")] });
+  assert.equal(t.action, "ask");
+  assert.deepEqual(t.needs, ["value", "work", "take"]);
+  const older = held({ createdAt: ago(10), updatedAt: ago(10), autoUnderwrite: { jobId: "j1", held: [DRAFT_ONLY], finishedAt: ago(10) } }, [DRAFT_ONLY]);
+  const after = triage({ offer: older, drafts: [inbound("It needs a full gut", { createdAt: ago(9) }), takeAsk(8)], events: [claimed(8)] });
+  assert.equal(after.action, "yours", after.reason);
+  assert.match(after.reason, /your number/);
+});
+
+test("the ask for their read says Matt is pricing it himself, not that our numbers are stuck", async () => {
+  const { heldInPlainWords } = await import("./held-underwrites.js");
+  assert.match(heldInPlainWords(DRAFT_ONLY), /Matt is running the numbers himself/);
+});

@@ -109,22 +109,32 @@ test("a hand-made unsent offer is ready but is not nagged to be floated", () => 
 });
 
 // 2026-10-02: seven hand-made offers sat in "Not sent" for days with no row
-// anywhere, while the Next follow-up column promised the machine would float
-// them — and nothing does for a hand-made offer. A day on, it is yours: send
-// it, or say you texted it yourself. The machine still never floats it.
-test("a hand-made offer priced a day ago with nothing sent asks to be sent, and no timer floats it", async () => {
+// anywhere. 2026-10-20, no Today (Matt: "I price it, the bot does the rest"):
+// a day on, with nothing of ours gone out and no word from Matt to them since,
+// the timer floats his number the way it floats the machine's.
+test("a number Matt priced by hand goes to the agent a day on, without a second press", async () => {
   const { timerMoves } = await import("./pipeline.js");
   const TIMED = normalizeConversationAi({ enabled: true, driver: { timers: { enabled: true } } });
   const r = build({ config: TIMED, offers: [offer({ status: "new", sends: [] })] });
   const a = r.actions.find((x) => x.kind === "offer_ready");
   assert.ok(a, "a row");
   assert.equal(a.handMade, true);
-  assert.ok(a.ops.some((o) => o.key === "mark_sent"), "I sent it myself");
-  assert.equal(a.group, "yours");
-  assert.equal(timerMoves(r.actions, { config: TIMED, now: NOW }).length, 0, "no timer floats a hand-made offer");
+  const moves = timerMoves(r.actions, { config: TIMED, now: NOW });
+  assert.deepEqual(moves.map((m) => [m.move, m.offerId, m.due]), [["float", "o1", true]]);
   // Our number already went out some other way: not a row.
   assert.equal(kinds(build({ offers: [offer({ status: "new", sends: [], followUps: [{ kind: "offer_nudge", step: 3, at: D(2) }] })] })).includes("offer_ready"), false);
   assert.equal(kinds(build({ offers: [offer({ status: "new", sends: [], proactive: { realmCheckAt: D(2) } })] })).includes("offer_ready"), false);
+});
+
+test("a hand-priced number Matt texted or talked through himself since is not floated a second time", async () => {
+  const { timerMoves } = await import("./pipeline.js");
+  const TIMED = normalizeConversationAi({ enabled: true, driver: { timers: { enabled: true } } });
+  const o = offer({ status: "new", sends: [] });
+  const texted = build({ config: TIMED, offers: [o], events: [{ type: "hand_reply", contactId: o.contactId, at: D(0.5), data: { via: "ghl" } }] });
+  assert.match(texted.actions.find((x) => x.kind === "offer_ready")?.why || "", /you texted them yourself/);
+  assert.equal(timerMoves(texted.actions, { config: TIMED, now: NOW }).length, 0);
+  const called = build({ config: TIMED, offers: [o], events: [{ type: "call_summary", contactId: o.contactId, at: D(0.5), data: { durationSec: 240, transcribed: true } }] });
+  assert.equal(timerMoves(called.actions, { config: TIMED, now: NOW }).length, 0, "a call that connected");
 });
 
 test("a sent offer with two rungs fired shows step 2 of 3", () => {

@@ -3329,7 +3329,7 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
   if (kind === "take_ask") {
     const needs = Array.isArray(subject?.needs) && subject.needs.length ? subject.needs : ["value", "work"];
     return { ...base, heldReason: String(subject?.heldReason || ""), needs,
-      needValue: needs.includes("value"), needWork: needs.includes("work"), needAddress: needs.includes("address") };
+      needValue: needs.includes("value"), needWork: needs.includes("work"), needAddress: needs.includes("address"), needTake: needs.includes("take") };
   }
   if (kind === "partner_answer") {
     return { ...base, address: offer?.address || subject?.address || "", question: String(subject?.question || "").slice(0, 300), answer: String(subject?.answer || "").slice(0, 600) };

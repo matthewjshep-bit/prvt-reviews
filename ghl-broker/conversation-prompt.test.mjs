@@ -270,6 +270,16 @@ test("an underwrite held on something other than comps doesn't tell the agent th
   assert.match(thin, /comps came back thin/);
 });
 
+// 2026-10-20: a house waiting on Matt's own number. The ask isn't "our
+// numbers are stuck": Matt is pricing it himself and wants their read,
+// including what the seller would take.
+test("the ask on a house Matt is pricing himself says so, and asks what the seller would take", () => {
+  const p = outboundOpening({ kind: "take_ask", address: "8811 NE 15th Pl", heldReason: "ready for your comps", needValue: true, needWork: true, needTake: true });
+  assert.match(p, /Matt is running the numbers himself/);
+  assert.match(p, /what the seller would take/);
+  assert.doesNotMatch(p, /stuck|ready for your comps/);
+});
+
 // The thread is read keeping its newest 16K characters, and the prompt then
 // kept its FIRST 14K — so on a long thread the newest messages, the ones the
 // reply is about, were the part cut (found 2026-09-25).
