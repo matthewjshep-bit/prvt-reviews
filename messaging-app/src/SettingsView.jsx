@@ -1297,7 +1297,14 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                   })}
                 </div>
               </div>
-              <label className="col-span-2 block">
+              <label className="block">
+                <span className="text-xs font-medium text-slate-600">Daily pull starts at (Pacific)</span>
+                <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                  value={form.outreachAutopilot?.hour ?? 10} onChange={(e) => setOutreachAuto("hour")(Number(e.target.value))}>
+                  {[7, 8, 9, 10, 11, 12, 13, 14, 15].map((h) => <option key={h} value={h}>{h === 12 ? "12pm" : h > 12 ? `${h - 12}pm` : `${h}am`}</option>)}
+                </select>
+              </label>
+              <label className="block">
                 <span className="text-xs font-medium text-slate-600">Days it runs (Pacific) — the pull, the import, and the follow-ups</span>
                 <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
                   value={form.outreachAutopilot?.days || (form.outreachAutopilot?.weekdaysOnly === false ? "all" : "mon_fri")}

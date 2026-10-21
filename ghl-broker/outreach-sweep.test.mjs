@@ -13,7 +13,7 @@ const row = (k, doc = {}, extra = {}) => ({ agentKey: k, status: "new", contactI
 
 test("settings coerce to safe defaults", () => {
   assert.deepEqual(normalizeOutreachAutopilot(undefined), {
-    enabled: false, dailyCap: 12, days: "mon_fri", weekdaysOnly: true, markets: DEFAULT_MARKETS, firstTouch: "app", opener: { examples: DEFAULT_OPENER_EXAMPLES, followUps: DEFAULT_FOLLOW_UP_TEXTS, checkIns: DEFAULT_CHECK_IN_TEXTS, mode: "template", home: DEFAULT_HOME, homes: DEFAULT_HOMES },
+    enabled: false, dailyCap: 12, hour: 10, days: "mon_fri", weekdaysOnly: true, markets: DEFAULT_MARKETS, firstTouch: "app", opener: { examples: DEFAULT_OPENER_EXAMPLES, followUps: DEFAULT_FOLLOW_UP_TEXTS, checkIns: DEFAULT_CHECK_IN_TEXTS, mode: "template", home: DEFAULT_HOME, homes: DEFAULT_HOMES },
     introEmail: { enabled: false, autoSend: false, day: 2, subject: DEFAULT_INTRO_EMAIL_SUBJECT, body: DEFAULT_INTRO_EMAIL_BODY },
     checkInEmail: { enabled: false, autoSend: false, emails: DEFAULT_CHECK_IN_EMAILS }, requireDistress: true, turnkeyShare: 0,
     workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14, nudgeGhlCohort: false,
@@ -267,6 +267,23 @@ test("nothing to pick means no import call at all", async () => {
   await settle();
   assert.equal(job.status, "done");
   assert.equal(called, false);
+});
+
+// 2026-10-21, Matt: "can we move all agent polls to 9 am instead of 10 am?"
+test("the daily pull starts at the hour in Settings: 9am, not 10", async () => {
+  _resetJobs();
+  const deps = { runPull: async () => ({ batchId: "b1", warnings: [] }), importAgents: async () => ({}) };
+  const nine = Date.parse("2026-09-10T16:05:00Z"); // 9:05am Pacific (PDT)
+  const saved = { rentcastApiKey: "k", outreachAutopilot: { enabled: true, hour: 9 } };
+  assert.equal(normalizeOutreachAutopilot(saved.outreachAutopilot).hour, 9);
+  assert.equal(normalizeOutreachAutopilot({}).hour, 10, "10am until someone sets it");
+  assert.equal(normalizeOutreachAutopilot({ hour: 3 }).hour, 10, "not before the workday");
+  assert.equal(await maybeStartOutreachSweep({ locationId: "loc-9", client: {}, store: fakeStore([]), deps, saved, now: nine - 3600000 }), false, "8:05 is too early");
+  assert.equal(await maybeStartOutreachSweep({ locationId: "loc-9", client: {}, store: fakeStore([]), deps, saved, now: nine }), true);
+  await settle();
+  _resetJobs();
+  assert.equal(await maybeStartOutreachSweep({ locationId: "loc-10", client: {}, store: fakeStore([]), deps, saved: { rentcastApiKey: "k", outreachAutopilot: { enabled: true } }, now: nine }), false, "the default still waits for 10");
+  await settle();
 });
 
 test("the tick fires once a day, in its hour, only when switched on with a key", async () => {
