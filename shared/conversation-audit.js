@@ -49,6 +49,7 @@ export const AUDIT_KINDS = [
   { key: "offer_no_followup",    label: "Offers with no follow-up clock",               severity: "soon" },
   { key: "held_aging",           label: "Held over a day",                              severity: "soon" },
   { key: "chase_exhausted",      label: "Ran out of asks",                              severity: "fyi" },
+  { key: "quiet_hold",           label: "Held replies with nothing to say, closed",     severity: "fyi" },
   // Held underwrites (shared/held-underwrites.js) — ridden by the same run.
   { key: "held_rerun",           label: "Held underwrites re-run on the agent's numbers", severity: "soon" },
   { key: "held_ask",             label: "Held underwrites — asked the agent for their read", severity: "soon" },
@@ -530,6 +531,33 @@ export function auditActions(last, { now = Date.now(), names = {} } = {}) {
 }
 
 /**
+ * quietHolds(drafts, { now }) → findings
+ *
+ * A held reply with nothing in it worth a person's minute: a thanks, a
+ * thumbs up, a photo, a stop — or a text from a number we don't know. A day
+ * on, it is closed, not left in the outbox (2026-10-20, no Today: nobody
+ * would ever press Dismiss on it). Fyi, never a row; the runner dismisses.
+ */
+export const QUIET_CLOSE_HOURS = 24;
+const UNKNOWN_CONTACT_RX = /unknown contact never auto-sends/;
+export function quietHolds(drafts = [], { now = Date.now() } = {}) {
+  const out = [];
+  for (const d of drafts || []) {
+    if (!d?.id || d.status !== "draft" || d.outbound?.kind) continue;
+    const t = ms(d.createdAt);
+    if (t == null || now - t < QUIET_CLOSE_HOURS * 3600000) continue;
+    const reason = d.autoSend?.reason || (d.flags || [])[0] || "";
+    const quiet = QUIET_INTENTS.has(d.intent);
+    if (!quiet && !UNKNOWN_CONTACT_RX.test(reason)) continue;
+    out.push({ id: `quiet_hold:${d.id}`, kind: "quiet_hold", severity: "fyi", contactId: d.contactId || null, contactName: d.contactName || "",
+      party: d.party || "agent", address: d.propertyAddress || "", draftId: d.id, anchorAt: d.createdAt, dueAt: iso(now),
+      action: { type: "close", draftId: d.id },
+      why: quiet ? `${String(d.intent).replace(/_/g, " ")} — nothing to answer` : "a number we don't know — nothing to answer", evidence: {} });
+  }
+  return out;
+}
+
+/**
  * releasableHeld(draft, { loose, mode, releaseMinAgeMin, releaseOther, now }) → boolean
  *
  * Whether the audit releases this held reply as "a holding reply the guard
@@ -571,9 +599,12 @@ const TEXTING_KINDS = new Set(["audit_owed", "draft_waiting", "draft_scheduled",
  * after it; a row that would text someone who unsubscribed steps aside for
  * good. Pure; `drafts` are the location's recent drafts, any status,
  * `unsubscribed` the contact ids with an unsubscribed event, and `events` the
- * timeline (hand_reply, call_summary).
+ * timeline (hand_reply, call_summary). A row about a text of theirs more
+ * than AUDIT_ROW_DAYS old steps aside too (2026-10-20: rows from Sep 14 still
+ * asked for Matt).
  */
-export function stillOwed(rows = [], { drafts = [], unsubscribed = new Set(), events = [] } = {}) {
+export const AUDIT_ROW_DAYS = 3;
+export function stillOwed(rows = [], { drafts = [], unsubscribed = new Set(), events = [], now = Date.now() } = {}) {
   const repliedAfter = (contactId, at) => {
     const t = ms(at);
     if (t == null || !contactId) return false;
@@ -592,6 +623,7 @@ export function stillOwed(rows = [], { drafts = [], unsubscribed = new Set(), ev
     // superseded) has nothing left to hold.
     if (r.kind === "audit_owed" && r.draftId && byId.has(r.draftId) && !["draft", "scheduled", "handled"].includes(byId.get(r.draftId).status)) return false;
     if (r.kind === "audit_owed" && ANSWERED_BY_A_REPLY.has(r.findingKind) && repliedAfter(r.contactId, r.anchorAt)) return false;
+    if (r.kind === "audit_owed" && ANSWERED_BY_A_REPLY.has(r.findingKind) && ms(r.anchorAt) != null && now - ms(r.anchorAt) > AUDIT_ROW_DAYS * 86400000) return false;
     return true;
   });
 }
