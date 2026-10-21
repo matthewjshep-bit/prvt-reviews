@@ -62,6 +62,7 @@ import { lineFor, dealRoomIds } from "../line.js";
 import { followUpEngineFor } from "../follow-up-engine.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize as summarizeAudit } from "../shared/conversation-audit.js";
+import { handOffs } from "../shared/hand-off.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
 import { ghlCallsOn, liveGhlQueues, GHL_CALL_EVENT_TYPES, ghlCallWindow } from "../shared/ghl-calls.js";
 import { runGhlCalls, startGhlCalls, getGhlCallsJob, summarizeRun, patchCursor as patchGhlCallsCursor, pacificDay, CURSOR_NAME as GHL_CALLS_CURSOR } from "../ghl-calls.js";
@@ -770,6 +771,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       drafts,
       ...out,
       actions: shownActions.map(withFeedback),
+      // Who has what used to wait on Today (shared/hand-off.js, 2026-10-20).
+      handOffs: handOffs(reasons, { drafts }),
       desk: { sections, rows: desk.rows, counts: desk.counts, kpis,
         ...(ghlOn ? { ghlCalls: { on: true, inGhlToday: [...ghlQueued.values()].filter((q) => Date.parse(q.at) >= dayStart).length } } : {}) },
     };

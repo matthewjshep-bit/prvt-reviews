@@ -230,6 +230,8 @@ export function ghlCallKind(a, { draftsById = new Map() } = {}) {
   if (!a?.contactId) return null;
   const kind = String(a.kind || "");
   if (kind === "draft_waiting") return CALL_INTENTS.has(draftsById.get(a.draftId)?.intent) ? "urgent" : null;
+  // Last night's audit: they asked to talk, or for a time (2026-10-20).
+  if (kind === "audit_owed") return CALL_INTENTS.has(a.intent) ? "urgent" : null;
   if (kind === "call_missed" && !a.offerId) return null;
   if (GHL_URGENT_CALLS.has(kind)) return "urgent";
   return kind.startsWith("call_") && a.section === "call" ? "daily" : null;

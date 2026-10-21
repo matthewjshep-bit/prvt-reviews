@@ -805,7 +805,7 @@ export function buildPipeline({
       ...(stopped ? [{ key: "resume_drive", label: "Resume", intent: "secondary" }] : []),
       ...(group === "machine" && driving ? [{ key: "stop_drive", label: "Stop", intent: "secondary" }] : [])];
     push({ id: `promise_owed:${p.contactId}:${p.owedAt}`, kind: "promise_owed", severity: "now", contactId: p.contactId, contactName: named,
-      address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0,
+      address: p.address || "", offerId: v.offerId || null, move: v.move, why: v.reason || "", askingPrice: v.askingPrice || 0, what: p.what || "",
       draftId: null, fromDraftId: p.draftId || null, ...(question ? { question } : {}), group, ...(next ? { next } : {}),
       title: `${who}: we owe them ${p.what === "number" ? "a number" : p.what === "paper" ? "the written offer" : "an answer"}${p.address ? ` on ${String(p.address).split(",")[0]}` : ""}`,
       detail: [stopped ? (hold.kind === "paused" ? holdLine(hold) : `you stopped it${hold.reason ? `: ${hold.reason.slice(0, 80)}` : ""}`) : "", PROMISE_MOVE_LABEL[v.move] || "", heldReason ? `underwrite held: ${heldReason}` : "", p.text ? `we said "${String(p.text).slice(0, 90)}"` : ""].filter(Boolean).join(" · "),
