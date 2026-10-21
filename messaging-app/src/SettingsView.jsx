@@ -606,6 +606,9 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   // kept as typed and read down to the workflow id on save (normalizeDesk).
   const ghlCalls = { ...normalizeDesk(form.desk).ghlCalls, workflowId: form.desk?.ghlCalls?.workflowId ?? "" };
   const setGhlCalls = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, desk: { ...(f.desk || {}), ghlCalls: { ...(f.desk?.ghlCalls || {}), [k]: v } } })); };
+  // The few things only Matt can do, pinged through GHL (saved.desk.ghlPings, 2026-10-20).
+  const ghlPings = { ...normalizeDesk(form.desk).ghlPings, workflowId: form.desk?.ghlPings?.workflowId ?? "" };
+  const setGhlPings = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, desk: { ...(f.desk || {}), ghlPings: { ...(f.desk?.ghlPings || {}), [k]: v } } })); };
   const setTouch = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), touchBudget: { ...(f.dispoAutopilot?.touchBudget || {}), [k]: v } } })); };
   const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
@@ -763,6 +766,29 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           ? <p className="mt-1 text-xs text-red-600">That doesn't look like a GHL workflow link.</p>
           : ghlCalls.enabled && !ghlCalls.workflowId
           ? <p className="mt-1 text-xs text-amber-700">Nothing goes to GHL until the workflow link is here.</p>
+          : null}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="ghl-pings-settings">
+        <h2 className="mb-1 text-sm font-bold">Ping me in GHL</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          The few things only you can do — paperwork to sign, an agreed number to approve, a closing task, a buyer's agreed
+          price, a question only you can answer — ping you once each through a GHL workflow, between {ghlPings.from}:00 and {ghlPings.until}:00 Pacific.
+          Each lives on its own page (Offers → Hot, Deals). Nothing is texted to anyone else.
+        </p>
+        <label className="mb-3 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={ghlPings.enabled} onChange={(e) => setGhlPings("enabled")(e.target.checked)} />
+          <span className="font-semibold">Ping me in GHL</span>
+        </label>
+        <Txt label="GHL workflow link" value={ghlPings.workflowId} onChange={setGhlPings("workflowId")}
+          placeholder="https://app.gohighlevel.com/location/…/workflow/…" />
+        <p className="mt-1 text-xs text-slate-500">
+          Build a GHL workflow with one Internal notification step to you (re-entry on), publish it, and paste its link here. The why is on the contact as App ping why, and on a note.
+        </p>
+        {ghlPings.workflowId && !workflowIdFrom(ghlPings.workflowId)
+          ? <p className="mt-1 text-xs text-red-600">That doesn't look like a GHL workflow link.</p>
+          : ghlPings.enabled && !ghlPings.workflowId
+          ? <p className="mt-1 text-xs text-amber-700">Nothing pings until the workflow link is here.</p>
           : null}
       </section>
 

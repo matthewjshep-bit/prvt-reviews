@@ -31,6 +31,7 @@ import { buyerCeiling } from "./post-mortem.js";
 import { ASSIGNMENT_RX } from "./lead-source.js";
 import { PARTNER_TERMS_LABEL } from "./partner-terms.js";
 import { GHL_CALLS_DEFAULTS, normalizeGhlCalls } from "./ghl-calls.js";
+import { GHL_PINGS_DEFAULTS, normalizeGhlPings } from "./ghl-pings.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -65,6 +66,9 @@ export const DESK_DEFAULTS = Object.freeze({
   // Today's calls in GHL's Manual Actions (shared/ghl-calls.js): off until
   // the GHL workflow is built and its link pasted.
   ghlCalls: GHL_CALLS_DEFAULTS,
+  // The few things only Matt can do, pinged through GHL (shared/ghl-pings.js,
+  // 2026-10-20): off until the workflow is built and its link pasted.
+  ghlPings: GHL_PINGS_DEFAULTS,
 });
 
 /** normalizeDesk(v) → every setting, a whole number in its range (and the GHL calls block, normalised). */
@@ -82,6 +86,7 @@ export function normalizeDesk(v = {}) {
     revisitDays: n(o.revisitDays, d.revisitDays, 0, 180),
     dailyCalls: n(o.dailyCalls, d.dailyCalls, 0, 30),
     ghlCalls: normalizeGhlCalls(o.ghlCalls),
+    ghlPings: normalizeGhlPings(o.ghlPings),
   };
 }
 

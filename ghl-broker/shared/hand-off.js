@@ -98,3 +98,25 @@ export function handOffs(reasons = [], { drafts = [] } = {}) {
   }
   return { counts, byKind: Object.values(byKind).sort((x, y) => y.n - x.n) };
 }
+
+/**
+ * pingReasons(rows, { drafts }) → [{ ...reason, contactId }] — the reasons
+ * that ping Matt (owner "ping"), one per reason, from Today's folded rows
+ * (each row and what's folded under it). A reason with nobody to hang it on
+ * in GHL is left out.
+ */
+export function pingReasons(rows = [], { drafts = [] } = {}) {
+  const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
+  const out = [];
+  const seen = new Set();
+  for (const row of rows || []) {
+    for (const r of [row, ...(row?.also || [])]) {
+      const contactId = r?.contactId || row?.contactId;
+      if (!r?.id || !contactId || seen.has(r.id)) continue;
+      if (ownerOf(r, { draftsById }) !== "ping") continue;
+      seen.add(r.id);
+      out.push({ ...r, contactId, contactName: r.contactName || row.contactName || "" });
+    }
+  }
+  return out;
+}
