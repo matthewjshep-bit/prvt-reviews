@@ -24,7 +24,7 @@ export const STATUS_CLS = {
 
 // The agent a text is shown filled in for. A real-looking name and street,
 // so the length on screen is the length that goes out.
-export const SAMPLE_AGENT = { first: "Brenda", address: "14820 SE 172nd St", street: "SE 172nd St", town: "Renton", county: "King", area: "Renton" };
+export const SAMPLE_AGENT = { first: "Brenda", address: "14820 SE 172nd St", street: "SE 172nd St", town: "Renton", county: "King", area: "Renton or the surrounding areas" };
 
 /** The text as it reads to one agent; a template it can't fill shows as written. */
 export const sampleOf = (t) => fillTemplate(t, SAMPLE_AGENT) || t;

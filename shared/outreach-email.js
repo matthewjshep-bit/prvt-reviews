@@ -54,18 +54,19 @@ export function normalizeIntroEmail(v = {}) {
 }
 
 /**
- * areaOf({ address, county }) → "Renton" | "King County" | "your area"
+ * areaOf({ address, county }) → "Renton or the surrounding areas" | "King County or the surrounding areas" | "your area"
  *
  * Where the agent works, as the emails name it (2026-10-20, Matt: "looking
- * in the specific city or county where they work"): the town of the listing
- * we texted them about, else its county, else "your area", so {area} always
- * fills.
+ * in the specific city or county where they work … or surrounding areas
+ * too … we want to open up the area as much as possible"): the town of the
+ * listing we texted them about, else its county, with the towns around it,
+ * else "your area", so {area} always fills.
  */
 export function areaOf({ address = "", county = "" } = {}) {
   const town = parseUsAddress(address).city.trim();
-  if (town) return town;
   const c = countyName(county);
-  return c ? `${c} County` : "your area";
+  const place = town || (c ? `${c} County` : "");
+  return place ? `${place} or the surrounding areas` : "your area";
 }
 
 /**

@@ -71,15 +71,15 @@ test("a check-in email is due on each check-in day, only after the intro email, 
 });
 
 test("the emails name where the agent works: the listing's town, else its county", () => {
-  assert.equal(areaOf({ address: "14820 SE 172nd St, Renton, WA 98058", county: "King" }), "Renton");
-  assert.equal(areaOf({ address: "1 Elm St", county: "Pierce County" }), "Pierce County");
+  assert.equal(areaOf({ address: "14820 SE 172nd St, Renton, WA 98058", county: "King" }), "Renton or the surrounding areas");
+  assert.equal(areaOf({ address: "1 Elm St", county: "Pierce County" }), "Pierce County or the surrounding areas");
   assert.equal(areaOf({}), "your area");
   for (const n of [1, 2, 3, 4]) {
     const e = checkInEmailFor({ checkInEmail: {}, name: "Brenda", contactId: "c-1", n, address: "5232 S Yakima Ave, Tacoma, WA", county: "Pierce" });
-    assert.match(e.body, /Tacoma/, e.subject);
+    assert.match(e.body, /Tacoma or the surrounding areas/, e.subject);
     assert.doesNotMatch(e.body, /\{area\}/);
   }
-  assert.match(introEmailFor({ introEmail: {}, name: "Brenda", address: "1 Elm St", county: "Snohomish" }).body, /houses that need work around Snohomish County\./);
+  assert.match(introEmailFor({ introEmail: {}, name: "Brenda", address: "1 Elm St", county: "Snohomish" }).body, /houses that need work around Snohomish County or the surrounding areas\./);
 });
 
 const AI = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: { outreach_nudge: { enabled: true, ...LADDER } } } } } });
