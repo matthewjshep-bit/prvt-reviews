@@ -33,7 +33,6 @@ import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
 import { CurrentPill, PaperHeldBanner, StatusMenu, StatusPill } from "./ui.jsx";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
-import { confirmSigned } from "./BeforeYouSign.jsx";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -974,7 +973,6 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   // modal simply doesn't render it (the handler is what turns it on).
   async function promoteFromPeek(o) {
     try {
-      if (!(await confirmSigned(o.id))) return;
       const r = await promoteDeal(o.id);
       patchPeek(r.offer);
       setPeek(null);

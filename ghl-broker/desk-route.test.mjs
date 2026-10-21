@@ -98,7 +98,7 @@ test("a hot offer the machine isn't pushing is one of Today's calls", async () =
   assert.equal(mary.kind, "call_hot");
   assert.equal(mary.section, "call");
   assert.ok(mary.call.boosts.some((b) => b.key === "partner"), "their yes makes them someone we've done business with");
-  // What to check before signing it rides on the same row (shared/pre-contract.js, 2026-10-15).
+  // No before-you-sign checklist rides on it (Matt, 2026-10-21: he doesn't use it).
   const kinds = [...(mary.also || []), ...(mary.quiet || [])].map((x) => x.kind);
-  assert.ok(kinds.includes("pre_contract"), `the house they said yes to needs its checks before signing (${kinds.join(", ")})`);
+  assert.ok(!kinds.includes("pre_contract"), kinds.join(", "));
 });

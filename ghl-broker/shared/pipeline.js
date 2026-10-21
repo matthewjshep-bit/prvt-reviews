@@ -36,8 +36,6 @@ import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
 import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
 import { accessFor } from "./deal-access.js";
 import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
-import { needsPreContract, preContractChecks, preContractVerdict, openChecks, PRESELL_MIN_BUYERS } from "./pre-contract.js";
-import { isOffMarket } from "./off-market.js";
 import { callEventConnected } from "./talked-to.js";
 
 const DAY_MS = 86400000;
@@ -85,7 +83,6 @@ export const ACTION_KINDS = [
   { key: "closing_soon",      label: "Closing" },
   { key: "closing_task_due",  label: "Closing checklist" },
   { key: "hot_stalled",       label: "Price agreed, gone quiet" },
-  { key: "pre_contract",      label: "Before you sign" },
   { key: "price_it",          label: "Houses to price" },
   { key: "underwrite_held",   label: "Underwrites that need a look" },
   { key: "offer_ready",       label: "Priced, not floated" },
@@ -192,13 +189,10 @@ const PROMISE_MOVE_LABEL = {
  *   dealRooms     offer ids with a live buyer package (dataroom). Only when
  *                 given does a deal without one get a row: a caller that
  *                 didn't look never guesses.
- *   preContractByOffer  { offerId: preContractChecks() } read off the full
- *                 record for the offers about to be signed; without it the
- *                 row reads the lean one (shared/pre-contract.js)
  */
 export function buildPipeline({
   offers = [], drafts = [], events = [], jobs = [], config = null, contactNames = {},
-  sentDrafts = [], heldTriageByOffer = {}, preContractByOffer = {},
+  sentDrafts = [], heldTriageByOffer = {},
   now = Date.now(), eventsLimit = 0, dealRooms = null,
 } = {}) {
   const rooms = dealRooms ? new Set(dealRooms) : null;
@@ -471,33 +465,6 @@ export function buildPipeline({
           why: every ? `checking in every ${every} days` : "the machine has stopped texting; the next move is a call",
           ...(every ? { group: "machine", next: { what: "a status check", at: new Date((ms(lastPush) ?? now) + every * DAY_MS).toISOString() } } : {}),
           ops: [{ key: "open_contact", label: "Open their record", intent: "primary" }, { key: "mark_no_response", label: "Mark no response", intent: "secondary" }] }));
-      }
-    }
-    // About to be signed (2026-10-15): what nobody has looked at yet — the
-    // listing remarks, the title, a look inside, the rehab floor, the ARV
-    // against today's listings, our number, the deadline, a pre-sell. Seven
-    // of eight listed-house contracts fell through on things on this list.
-    if (needsPreContract(o, { now })) {
-      const checks = preContractByOffer?.[o.id] || preContractChecks({ offer: o });
-      const open = openChecks(checks);
-      if (open.length) {
-        const presold = new Set(o.presell?.contactIds || []).size;
-        const presell = !isOffMarket(o) && presold < PRESELL_MIN_BUYERS;
-        // One line on the Desk (Matt, 2026-10-18: he won't tick a checklist):
-        // the pre-sell is the item a button can do. `checks` stays on the row
-        // for the promote's confirm. The pane's Edit offer opens the offer.
-        // The paper's here (shared/pre-contract.js houseWordsUpdate): now.
-        const paperNow = o.hot?.signal === "writing_up" || Boolean(o.paperAt?.at);
-        card.actionIds.push(push({ ...base, kind: "pre_contract", severity: paperNow ? "now" : "soon",
-          title: `${card.address}: before you sign`,
-          detail: presell ? `pre-sold to ${presold} of ${PRESELL_MIN_BUYERS} buyers` : "",
-          checks,
-          // The line the GHL ping carries (shared/ghl-pings.js pingWhy).
-          verdict: preContractVerdict(checks, { address: card.address, price: priceAgreed(o)?.amount || o.cashAmount }),
-          ops: [
-            ...(presell ? [{ key: "presell", label: `Pre-sell to ${PRESELL_MIN_BUYERS} buyers`, intent: "primary" }] : []),
-            { key: "promote_deal", label: "It's signed — promote", intent: presell ? "secondary" : "primary" },
-          ] }));
       }
     }
     if (ladderDone && !replied) {
