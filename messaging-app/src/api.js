@@ -510,6 +510,10 @@ export const askAgentForWindow = (id, text) =>
 // { id, done?, due?, owner?, label?, note?, remove? } or { add: { gate, label, owner, due } }.
 export const updateDealChecklist = (id, edit) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/checklist`, edit);
+// Before we sign (shared/pre-contract.js): what nobody has checked, the
+// agent's texts read in (agent_words, their_number, competing).
+export const getPreContract = (id) =>
+  fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/precontract?${locq()}`).then(j);
 // Before we sign (shared/pre-contract.js): tick one item by hand, or take it back.
 export const tickPreContract = (id, key, { done = true, note = "" } = {}) =>
   post(`/api/offers/${encodeURIComponent(id)}/precontract`, { key, done, ...(note ? { note } : {}) });
