@@ -100,6 +100,21 @@ test("a hold with a promise open asks the agent for their numbers right then, an
   assert.ok(store.events.some((e) => e.type === "audit_action" && e.data?.kind === "held_ask"), "the same claim the nightly sweep makes, so it won't ask again either");
 });
 
+// 2026-10-20: the driver's ask for their numbers sat on Today for five days
+// as "take ask is not on the agent auto-send list". It commits to nothing; the
+// nightly sweep's identical ask already sends itself.
+test("the ask for their numbers sends itself, not waiting on the auto-send list", async () => {
+  const store = fakeStore({ events: [made(5)], offers: [heldDraft()], drafts: [inbound("any update?")] });
+  const s = spies();
+  await drive(store, s.deps);
+  assert.equal(s.calls.proactive[0].kind, "take_ask");
+  assert.equal(s.calls.proactive[0].deps.releaseHeld, true);
+  // A caller that says no (the audit with loose off) is still heard.
+  const s2 = spies();
+  await drive(fakeStore({ events: [made(5)], offers: [heldDraft()], drafts: [inbound("any update?")] }), { ...s2.deps, releaseHeld: false });
+  assert.equal(s2.calls.proactive[0].deps.releaseHeld, false);
+});
+
 test("they gave us their value after the hold: it re-runs on their numbers, replacing the held draft", async () => {
   const est = { type: "agent_estimate", contactId: "c1", address: HOUSE, at: at(0.5), data: { arv: 850000 } };
   const store = fakeStore({ events: [made(5), est], offers: [heldDraft()], drafts: [inbound("I'd say 850 fixed up")] });

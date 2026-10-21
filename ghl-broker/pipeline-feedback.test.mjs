@@ -29,8 +29,9 @@ const req = async (method, p, body) => {
 
 test("the pipeline carries what you said about each row, newest first, for drafts and audit rows alike", async () => {
   // An audit row from last night, on the cursor the pipeline reads.
-  const anchor = "2026-09-21T19:09:53.000Z";
-  await store.setJobCursor(LOC, "conversationAudit", { doc: { last: { finishedAt: "2026-09-22T02:10:00Z", counts: {}, findings: [
+  // An hour ago: a text older than three days steps aside (stillOwed).
+  const anchor = new Date(Math.floor((Date.now() - 3600000) / 1000) * 1000).toISOString();
+  await store.setJobCursor(LOC, "conversationAudit", { doc: { last: { finishedAt: new Date(Date.now() - 600000).toISOString(), counts: {}, findings: [
     { kind: "unanswered_inbound", severity: "now", contactId: "c1", contactName: "Melissa W", anchorAt: anchor, dueAt: anchor, why: "not drafted: this contact's daily cap reached (12/12)", action: null, id: `audit:unanswered_inbound:c1:${anchor.slice(0, 19)}` },
   ], acted: [] } } });
   // A draft waiting on you.

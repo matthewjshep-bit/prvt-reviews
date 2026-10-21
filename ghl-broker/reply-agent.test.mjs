@@ -4178,6 +4178,30 @@ test("a queued blast on a deal you stopped outreach on is dismissed, not sent", 
   assert.ok(tags.some(([m]) => m === "DELETE"), "the draft tag comes off");
 });
 
+// 1538 NW 61st, 2026-10-20: ten builders texted "pass" after Matt stopped
+// outreach on the deal, and every reply sat on Today. A buyer passing on a deal
+// nobody is selling to any more needs no answer at all.
+test("a buyer who passes on a deal you stopped outreach on gets no reply, and nothing waits for you", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const { client } = ghlStub();
+  const store = fakeStore([{ id: "d3", locationId: "LOC", contactId: "c1", status: "sending", channel: "sms", party: "investor", createdAt: iso(1000), flags: [],
+    reply: "No problem, thanks for letting me know.", inbound: "We'll pass on this one", intent: "passing", propertyAddress: "5232 South Yakima Avenue, Tacoma" }]);
+  store.getOffer = async () => null;
+  store.listDeals = async () => [STOPPED_DEAL];
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d3", live: true, auto: true });
+  assert.equal(r.skipped, "you stopped outreach on 5232 South Yakima Avenue");
+  const d = await store.getReplyDraft("d3");
+  assert.equal(d.status, "dismissed");
+});
+
+test("stopping outreach closes a buyer's pass, thanks or photo, and keeps a real question for you", async () => {
+  const { stoppedDealAction } = await import("./reply-agent.js");
+  for (const intent of ["passing", "small_talk", "media", "opt_out"]) {
+    assert.equal(stoppedDealAction({ party: "investor", inbound: "x", intent }), "dismiss", intent);
+  }
+  assert.equal(stoppedDealAction({ party: "investor", inbound: "What's the number?", intent: "question" }), "hold");
+});
+
 test("the bot's reply to a buyer about a deal you stopped outreach on waits for you instead of sending itself", async () => {
   const { sendReplyDraft } = await import("./reply-agent.js");
   const { client } = ghlStub();

@@ -521,3 +521,22 @@ test("'you have the thread' holds only while you're texting them: the next night
   assert.equal(d.calls.length, 2, "tried again");
   assert.notEqual(next.acted[0].status, "yours");
 });
+
+// 2026-10-20 (no Today): a thanks held for days is closed by the audit, the
+// way Matt would have pressed Dismiss; a question held for him is left alone.
+test("the audit closes a day-old held thanks and leaves a held question", async () => {
+  const drafts = [
+    { id: "q1", contactId: "c1", party: "agent", status: "draft", intent: "small_talk", inbound: "Thanks!", reply: "", createdAt: ago(30), flags: [] },
+    { id: "q2", contactId: "c2", party: "agent", status: "draft", intent: "question", inbound: "What's your number?", reply: "Matt's on it.", createdAt: ago(30),
+      autoSend: { decided: false, reason: "needs a person: no number read" }, flags: [] },
+  ];
+  const store = fakeStore({ drafts });
+  const updated = new Map();
+  store.getReplyDraft = async (id) => updated.get(id) || drafts.find((d) => d.id === id) || null;
+  store.updateReplyDraft = async (id, d) => { updated.set(id, d); return d; };
+  const { acted } = await runConversationAudit({ client: null, locationId: "L", saved: SAVED, store, sendsEnabled: true, deps: deps({ ghlLastMessages: async () => new Map() }), now: NOW, pace: 0 });
+  assert.equal(updated.get("q1")?.status, "dismissed");
+  assert.match(updated.get("q1").flags.join(" "), /closed by the nightly audit: small talk — nothing to answer/);
+  assert.equal(updated.has("q2") && updated.get("q2").status === "dismissed", false, "the question stays");
+  assert.ok(acted.some((r) => r.kind === "quiet_hold" && r.status === "closed"));
+});

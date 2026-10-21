@@ -6760,9 +6760,13 @@ export async function standDownForHold({ client, store, locationId, contactId, w
  *
  * What stopping outreach on a deal does to an open text about it: one the
  * machine started (a blast, a nudge, a walkthrough text — an outbound kind
- * and nothing they said) is dismissed; a reply to a buyer goes back to you.
+ * and nothing they said) is dismissed; a reply to a buyer goes back to you —
+ * unless there is nothing to answer: a pass, a thanks, a photo or a stop
+ * (2026-10-20, 1538 NW 61st: ten builders' passes sat on Today).
  */
-export const stoppedDealAction = (d) => (d?.outbound?.kind && !String(d.inbound || "").trim() ? "dismiss" : "hold");
+const NOTHING_TO_ANSWER_ON_A_STOPPED_DEAL = new Set(["passing", "small_talk", "media", "opt_out"]);
+export const stoppedDealAction = (d) => ((d?.outbound?.kind && !String(d.inbound || "").trim())
+  || NOTHING_TO_ANSWER_ON_A_STOPPED_DEAL.has(d?.intent) ? "dismiss" : "hold");
 
 /**
  * stopDealOutreach({ client, store, locationId, offer }) → { dismissed: [id], held: [id] }

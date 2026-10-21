@@ -10,13 +10,14 @@
 // lands next morning. Matt, 2026-09-16.
 
 import { store as defaultStore } from "./store.js";
-import { auditConversations, auditDedupeKey, isCloser, isPlainNo, AUDIT_EVENT_TYPES, HELD_SWEEP_KINDS, MAX_REDRAFT_TRIES, REDRAFT_RETRY_AFTER_MS } from "./shared/conversation-audit.js";
+import { auditConversations, auditDedupeKey, quietHolds, isCloser, isPlainNo, AUDIT_EVENT_TYPES, HELD_SWEEP_KINDS, MAX_REDRAFT_TRIES, REDRAFT_RETRY_AFTER_MS } from "./shared/conversation-audit.js";
 import { isAutoReply } from "./shared/brush-offs.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { mergeEvents } from "./shared/bot-hold.js";
 import { effectiveStatus, OPEN_STATUSES, dealIsOver } from "./shared/offer-status.js";
 import { buildPipeline } from "./shared/pipeline.js";
-import { conversationConfig, startReply as defaultStartReply } from "./reply-agent.js";
+import { conversationConfig, startReply as defaultStartReply, RA_TAGS } from "./reply-agent.js";
+import { removeContactTags } from "./ghl.js";
 import { startFollowUpSweep as defaultStartFollowUpSweep } from "./follow-up-sweep.js";
 import { recordEvent } from "./contact-record.js";
 import { workHour } from "./outreach-sweep.js";
@@ -109,6 +110,10 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
   phase("auditing");
   const result = auditConversations({ drafts, events, offers, ghlLast, pipelineActions, followUpCursorAt: fuCursor?.at || null, config, now,
     mode, releaseMinAgeMin: day ? Number(daytime.releaseMinAgeMin) || 120 : 0 });
+  // Held replies with nothing to answer, a day old: closed (shared/conversation-audit.js quietHolds).
+  const quiet = quietHolds(open, { now });
+  result.findings.push(...quiet);
+  if (quiet.length) result.counts.byKind.quiet_hold = quiet.length;
 
   const acted = [];
   const may = !dryRun && config.enabled;
@@ -223,6 +228,16 @@ export async function runConversationAudit({ client, locationId, saved = {}, sto
           autoSend: { decided: true, reason: `released by the ${day ? "daytime pass" : "nightly audit"} — a holding reply, nothing committed` },
           flags: [...(d.flags || []), `released by the ${day ? "daytime pass" : "nightly audit"}`] });
         row.status = "queued"; row.reason = `sends ${sendAt.slice(11, 16)}Z`;
+        continue;
+      }
+      if (a.type === "close") {
+        const d = await store.getReplyDraft(a.draftId).catch(() => null);
+        if (!d || d.status !== "draft") { row.status = "skipped"; row.reason = d ? `the draft is ${d.status}` : "draft gone"; continue; }
+        const ts = iso(now);
+        await store.updateReplyDraft(d.id, { ...d, status: "dismissed", sendAt: null, dismissedAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), `closed by the ${day ? "daytime pass" : "nightly audit"}: ${f.why}`] });
+        if (client && d.contactId) await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+        row.status = "closed";
         continue;
       }
       if (a.type === "close_chase") {

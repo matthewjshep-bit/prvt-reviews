@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { auditConversations, auditActions, auditDedupeKey, summarize, stillOwed, AUDIT_KINDS, MAX_REDRAFTS } from "./conversation-audit.js";
+import { auditConversations, auditActions, auditDedupeKey, summarize, stillOwed, quietHolds, AUDIT_KINDS, MAX_REDRAFTS } from "./conversation-audit.js";
 import { normalizeConversationAi } from "./conversation-ai.js";
 
 // 7:30pm Pacific on the day of the three quiet threads.
@@ -365,11 +365,26 @@ test("last night's rows step aside once a reply went or is queued, and nobody un
       { contactId: "c4", status: "sent", sentAt: "2026-09-28T16:04:00Z" },
     ],
     unsubscribed: new Set(["c5"]),
+    now: Date.parse("2026-09-30T18:00:00Z"),
   });
   assert.deepEqual(kept.map((r) => r.id), ["owed a number", "still open", "dnd deal"]);
   const [row] = auditActions({ findings: [{ id: "f1", kind: "unanswered_inbound", severity: "now", contactId: "c1", anchorAt: "2026-09-29T17:48:00Z", why: "x" }] });
   assert.equal(row.findingKind, "unanswered_inbound");
   assert.equal(row.anchorAt, "2026-09-29T17:48:00Z");
+});
+
+// 2026-10-20: ten "texts we never answered" rows from Sep 14 to Oct 2 still
+// asked for Matt three weeks on. A text nobody answered in three days has
+// been answered some other way or isn't going to be; it goes no further.
+test("a text we never answered stops asking for a person after three days", () => {
+  const now = Date.parse("2026-10-20T16:00:00Z");
+  const rows = [
+    { id: "old", kind: "audit_owed", findingKind: "unanswered_inbound", contactId: "c1", anchorAt: "2026-10-02T17:00:00Z" },
+    { id: "fresh", kind: "audit_owed", findingKind: "unanswered_inbound", contactId: "c2", anchorAt: "2026-10-19T17:00:00Z" },
+    { id: "held", kind: "audit_owed", findingKind: "held_aging", contactId: "c3", anchorAt: "2026-10-10T17:00:00Z" },
+    { id: "owed a number", kind: "audit_owed", findingKind: "promise_open_overdue", contactId: "c4", anchorAt: "2026-10-02T17:00:00Z" },
+  ];
+  assert.deepEqual(stillOwed(rows, { now }).map((r) => r.id), ["fresh", "owed a number"]);
 });
 
 test("a row about their text shows the text", () => {
@@ -405,7 +420,7 @@ test("a reply you typed yourself answers their text, and last night's row steps 
     { type: "hand_reply", contactId: "c1", at: "2026-10-04T18:58:00Z", data: { via: "ghl" } },
     { type: "call_summary", contactId: "c2", at: "2026-10-01T22:40:00Z", data: { durationSec: 300, transcribed: true } },
     { type: "call_attempt", contactId: "c3", at: "2026-10-01T22:40:00Z", data: { outcome: "voicemail" } },
-  ] });
+  ], now: Date.parse("2026-10-04T20:00:00Z") });
   assert.deepEqual(kept.map((r) => r.id), ["open"]);
 });
 
@@ -427,7 +442,7 @@ test("a row about a held draft steps aside once that draft is closed", () => {
     { id: "gone", kind: "audit_owed", findingKind: "held_aging", contactId: "c1", draftId: "d1", anchorAt: "2026-10-03T00:00:00Z" },
     { id: "open", kind: "audit_owed", findingKind: "held_aging", contactId: "c2", draftId: "d2", anchorAt: "2026-10-03T00:00:00Z" },
   ];
-  const kept = stillOwed(rows, { drafts: [{ id: "d1", contactId: "c1", status: "dismissed" }, { id: "d2", contactId: "c2", status: "draft" }] });
+  const kept = stillOwed(rows, { drafts: [{ id: "d1", contactId: "c1", status: "dismissed" }, { id: "d2", contactId: "c2", status: "draft" }], now: Date.parse("2026-10-04T00:00:00Z") });
   assert.deepEqual(kept.map((r) => r.id), ["open"]);
 });
 
@@ -463,4 +478,22 @@ test("a number we still owe someone who unsubscribed is not a row: nothing may t
   const row = { id: "number_owed:c9:x", kind: "number_owed", contactId: "c9" };
   assert.deepEqual(stillOwed([row], { unsubscribed: new Set(["c9"]) }), []);
   assert.deepEqual(stillOwed([row], { unsubscribed: new Set() }), [row]);
+});
+
+// 2026-10-20: a thanks held since Oct 6 and two texts from numbers we don't
+// know sat on Today for days. With no Today, nobody would ever close them.
+test("a held thanks, photo or text from a stranger closes itself after a day; a real question never does", () => {
+  const held = (over) => draft({ status: "draft", sentAt: null, createdAt: ago(30), ...over });
+  const found = quietHolds([
+    held({ id: "thanks", intent: "small_talk", inbound: "Thanks!" }),
+    held({ id: "photo", intent: "media" }),
+    held({ id: "stranger", intent: "other", autoSend: { decided: false, reason: "an unknown contact never auto-sends" } }),
+    held({ id: "question", intent: "question", autoSend: { decided: false, reason: "needs a person: no number read" } }),
+    held({ id: "fresh", intent: "small_talk", createdAt: ago(2) }),
+    held({ id: "ours", intent: "small_talk", outbound: { kind: "agent_pulse" } }),
+    draft({ id: "sent", intent: "small_talk", createdAt: ago(30) }),
+  ], { now: NOW });
+  assert.deepEqual(found.map((f) => f.draftId), ["thanks", "photo", "stranger"]);
+  assert.ok(found.every((f) => f.action.type === "close" && f.severity === "fyi"));
+  assert.deepEqual(auditActions({ findings: found }), [], "never a row for a person");
 });

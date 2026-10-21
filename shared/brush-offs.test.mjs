@@ -173,3 +173,12 @@ test("their texts going to another number is a row for you, until they write bac
   const old = buildPipeline({ events: [{ ...ev, at: ago(31) }], now: NOW });
   assert.equal(old.actions.filter((a) => a.kind === "texts_elsewhere").length, 0, "a month on, it goes");
 });
+
+// 2026-10-20: two agents' auto-replies both said to text the same (206)
+// office line. That number is the brokerage's front desk, not either agent's
+// cell, so changing their number to it is wrong for both.
+test("an office number two agents' auto-replies both name is nobody's number to switch to", () => {
+  const ev = (contactId) => ({ contactId, type: "texts_elsewhere", at: ago(1), data: { otherNumber: "(206) 555-0100" } });
+  const { actions } = buildPipeline({ events: [ev("a1"), ev("a2"), { ...ev("a3"), data: { otherNumber: "(425) 555-0199" } }], now: NOW });
+  assert.deepEqual(actions.filter((a) => a.kind === "texts_elsewhere").map((a) => a.contactId), ["a3"]);
+});

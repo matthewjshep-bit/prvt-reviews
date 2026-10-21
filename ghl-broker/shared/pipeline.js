@@ -666,7 +666,13 @@ export function buildPipeline({
     if (e?.type !== "texts_elsewhere" || !e.contactId) continue;
     if (String(e.at) > String(elsewhere.get(e.contactId)?.at || "")) elsewhere.set(e.contactId, e);
   }
+  // A number two people's auto-replies name is an office line (2026-10-20),
+  // not a cell to switch either of them to.
+  const digitsOf = (e) => String(e.data?.otherNumber || "").replace(/\D/g, "").slice(-10);
+  const named = new Map();
+  for (const e of elsewhere.values()) if (digitsOf(e)) named.set(digitsOf(e), (named.get(digitsOf(e)) || 0) + 1);
   for (const [contactId, e] of elsewhere) {
+    if ((named.get(digitsOf(e)) || 0) > 1) continue;
     const at = ms(e.at);
     if (at == null || now - at > 30 * DAY_MS) continue;
     if (events.some((x) => x?.contactId === contactId && x.type === "text_summary" && String(x.at) > String(e.at))) continue;

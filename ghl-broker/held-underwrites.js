@@ -87,9 +87,13 @@ export async function carryOutHeldVerdict({ client, locationId, saved = {}, stor
   }
   const start = typeof deps.startProactive === "function" ? deps.startProactive : defaultStartProactive;
   const full = (await store.getOffer?.(o.id).catch(() => null)) || o;
+  // The ask commits to nothing, so it releases itself under the gates
+  // whoever starts it (2026-10-20: the promise driver's sat on Today as "not
+  // on the agent auto-send list"). A caller that says false is heard.
   const r = await start({
     client, locationId, saved, store, contactId, kind: "take_ask", offer: full,
-    subject: { address: o.address, heldReason: t.heldReason, needs: t.needs || ["value", "work"] }, sendsEnabled, deps,
+    subject: { address: o.address, heldReason: t.heldReason, needs: t.needs || ["value", "work"] }, sendsEnabled,
+    deps: { ...deps, releaseHeld: deps.releaseHeld ?? true, ...(deps.releaseHeld == null ? { releaseReason: "the ask for their numbers: commits to nothing" } : {}) },
   });
   if (r?.skipped) return { status: "skipped", reason: r.skipped, jobId: null };
   return { status: "started", reason: "", jobId: r?.job?.id || null };
