@@ -403,14 +403,17 @@ export async function findRecent({ store, locationId, contactId, address, ignore
  * Paper beats a first pass. Once a written offer on a house has gone to the
  * agent, a "rough number, not underwritten yet" text undercuts it — Lisa
  * Shilling got 473k floated an hour after the written 425,750 (2026-09-15).
- * `offerId` is the new offer, excluded from the search.
+ * `offerId` is the new offer, excluded from the search — unless it is itself
+ * a signed deal (1538 NW 61st St, 2026-10-20: the deal's own row was floated).
  */
 const LIVE_PAPER = new Set(["sent", "countered", "accepted", "realm_yes", "under_contract"]);
 export function paperAlreadyOut(offers = [], { address = "", offerId = null } = {}) {
   const key = addressKey(address);
   if (!key) return null;
-  return (offers || []).find((o) => o && o.id !== offerId && addressKey(o.address || "") === key
-    && (LIVE_PAPER.has(offerStatusOf(o)) || (Array.isArray(o.sends) && o.sends.length > 0))) || null;
+  return (offers || []).find((o) => o && addressKey(o.address || "") === key
+    && (o.id === offerId
+      ? Boolean(o.deal && o.deal.stage !== "fell_through")
+      : (LIVE_PAPER.has(offerStatusOf(o)) || (Array.isArray(o.sends) && o.sends.length > 0)))) || null;
 }
 
 /* ---------- the waiting line (past the daily cap) ---------- */

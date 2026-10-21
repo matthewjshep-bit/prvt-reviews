@@ -29,6 +29,7 @@ import { handsWriteUpBack } from "./conversation-ai.js";
 import { holdState, callsInstead, closeCounter } from "./counter-hold.js";
 import { flipRead, saysTurnkey } from "./flip-read.js";
 import { offMarketCue } from "./off-market.js";
+import { SENT_TO_SIGN_RX } from "./contract-signed.js";
 import { sameStreet } from "./us-address.js";
 import { buyerCeiling } from "./post-mortem.js";
 import { ASSIGNMENT_RX } from "./lead-source.js";
@@ -170,7 +171,6 @@ export function firstReplyLead({ ins = [], iceAddress = "" } = {}) {
 // A phone number in their text: "(360) 555-0161 here!"
 const PHONE_RX = /\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/;
 // The paperwork is on its way to us to sign.
-const SENT_TO_SIGN_RX = /\b(?:docusign|authentisign|dotloop|e-?sign(?:ature)?)\b|\bsent (?:it|you|the (?:offer|paperwork|forms?|contract|psa))(?: over)? (?:for|to) (?:your )?sign(?:ature|ing)?\b|\bready (?:for you )?to sign\b|\bfor your signature\b/i;
 const LIVE_LANES = new Set(["floated", "sent", "countered", "hot"]);
 const NOT_OUR_HOUSE_RX = /outside the area|rural|acres|manufactured|mobile home|condo|townho|multi-family|duplex|not our kind|wholesaler/i;
 // A house an agent brought stays a call this long after it landed.

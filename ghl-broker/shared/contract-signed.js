@@ -86,3 +86,24 @@ export function signedContractIn(text = "", { now = Date.now() } = {}) {
   const closingDate = closingDateIn(t, now);
   return { signed: true, ours: OURS_RX.test(t), ...(closingDate ? { closingDate } : {}) };
 }
+
+// The paperwork is on its way to us to sign: "Just sent you the offer for
+// your signature", a DocuSign or dotloop. Moved here from call-list.js.
+export const SENT_TO_SIGN_RX = /\b(?:docusign|authentisign|dotloop|e-?sign(?:ature)?)\b|\bsent (?:it|you|the (?:offer|paperwork|forms?|contract|psa))(?: over)? (?:for|to) (?:your )?sign(?:ature|ing)?\b|\bready (?:for you )?to sign\b|\bfor your signature\b/i;
+
+/**
+ * paperworkSignal(text) → "signed" | "sent_to_sign" | ""
+ *
+ * The signing moment, read off the agent's text. 1538 NW 61st St
+ * (2026-10-19): "Just sent you the offer for your signature" at 11:43pm,
+ * signed at 11:51pm, "she accepted and we have mutual agreement" at 1am —
+ * and the app first heard of the house the next morning. What nobody had
+ * checked has to reach Matt at this moment, not at the promote after it.
+ */
+export function paperworkSignal(text = "", { now = Date.now() } = {}) {
+  const t = String(text || "");
+  if (!t.trim()) return "";
+  if (signedContractIn(t, { now }).signed) return "signed";
+  if (SENT_TO_SIGN_RX.test(t)) return "sent_to_sign";
+  return "";
+}

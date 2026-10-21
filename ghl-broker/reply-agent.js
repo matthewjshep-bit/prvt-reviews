@@ -55,7 +55,7 @@ import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
 import { normalizeOpener, openerVoice, countyName, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { standardText } from "./shared/standard-texts.js";
-import { OFF_MARKET_ASK_RX, offMarketCue } from "./shared/off-market.js";
+import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
@@ -76,8 +76,8 @@ import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./share
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, isNegotiable, pushesToPaper, asksForWriteUp, numberApproved, saysYes, saidYes, YES_WINDOW_DAYS } from "./shared/offer-status.js";
-import { signedContractIn, themLines } from "./shared/contract-signed.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, underContractOn, isNegotiable, pushesToPaper, asksForWriteUp, numberApproved, saysYes, saidYes, YES_WINDOW_DAYS } from "./shared/offer-status.js";
+import { signedContractIn, themLines, paperworkSignal } from "./shared/contract-signed.js";
 import { sameStreet, sameHouse } from "./shared/us-address.js";
 import { releasableHeld } from "./shared/conversation-audit.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
@@ -2612,6 +2612,7 @@ export const OUTBOUND_KINDS = {
     enabled: (pb) => pb?.realmCheck?.enabled,
     ready: ({ offer, config, dossier, stance = null }) => {
       if (!offer?.cashAmount) return "the offer has no number to float";
+      if (offer?.deal && offer.deal.stage !== "fell_through") return "the house is under contract";
       // Their read before our price. A number that arrives with nothing
       // anchoring it reads as a lowball and ends the thread — so unless the
       // operator has deliberately switched the first step off, the take check
@@ -2891,6 +2892,21 @@ async function fellThroughFor({ store, locationId, addresses = [] }) {
 }
 const fellThroughLine = (o) => `the deal on ${String(o?.address || "the house").split(",")[0].trim()} fell through`;
 
+// The live deal on any of these addresses, or null (shared/offer-status.js
+// underContractOn): the offer row itself when it is the deal, else the book.
+async function underContractFor({ store, locationId, offer = null, addresses = [] }) {
+  if (offer?.deal && offer.deal.stage !== "fell_through") return offer;
+  const wanted = addresses.map((a) => String(a || "").trim()).filter(Boolean);
+  if (!wanted.length || typeof store?.listDeals !== "function") return null;
+  const deals = await store.listDeals(locationId, { limit: 200 }).catch(() => []);
+  for (const a of wanted) { const hit = underContractOn(deals, a); if (hit) return hit; }
+  return null;
+}
+const underContractLine = (o) => `${String(o?.address || "the house").split(",")[0].trim()} is under contract — no number goes to the listing side`;
+// What quotes, nudges or re-asks our number on the listing side. None of it
+// goes about a house we signed.
+const LISTING_NUMBER_KINDS = new Set(["take_check", "realm_check", "offer_nudge", "counter_nudge", "take_ask", "hot_push", "price_drop"]);
+
 // The house we walked away from (passed, or it's gone), found by the
 // contact's own offers on that address: a check-in carries the address and
 // often no offer id (3037 Massey Rd, 2026-10-19). A store that can't list
@@ -2972,6 +2988,10 @@ export async function startProactive({
     // listing agent, their TC, a buyer (5232 S Yakima, 2026-10-03).
     const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
     if (gone) return { skipped: fellThroughLine(gone), job: null };
+    if (LISTING_NUMBER_KINDS.has(kind)) {
+      const signed = await underContractFor({ store, locationId, offer, addresses: [offer?.address, subject?.address] });
+      if (signed) return { skipped: underContractLine(signed), job: null };
+    }
     // A house we passed on, or that's gone, is not reached out about (3037
     // Massey Rd, 2026-10-19). The second look is the one text about our pass,
     // and its picker read it.
@@ -5392,6 +5412,25 @@ async function runReply(job, ctx) {
       const r = await deps.coolOfferHeat({ contactId: job.contactId, addressHint: draft.propertyAddress || "", why: draft.intent === "rejection" ? "they said no" : asksUsToComeUp(theirWords) ? "they asked us to come up" : soundsLikeSecondThoughts(theirWords) ? "the seller is having second thoughts" : "they pushed back on the price" });
       if (r?.ok && r.cooled) job.warnings.push(`no longer hot: ${r.address}`);
     } catch (e) { warnings.push(`cool: ${String(e?.message || e).slice(0, 120)}`); }
+  }
+
+  /* --- 4c‴′. how the house is being sold, and the paper to sign --- */
+  // "One other offer", "a back up at 750k": a machine's off-market mark comes
+  // off (3831 Bagley Ave N). "Sent you the offer for your signature", "we
+  // have mutual", "I'll write it up": the signing moment is stamped on the
+  // house's row, a held draft too, so what nobody checked reaches Matt
+  // before he signs (1538 NW 61st St). Nothing is sent from here.
+  if (party === "agent" && !isCall && typeof deps.noteHouseWords === "function") {
+    const onMarket = onMarketCue(theirWords);
+    const paper = paperworkSignal(theirWords)
+      || ((draft.dealSignal || dealSignalFromText(theirWords)) === "writing_up" && !notWarm ? "writing_up" : "");
+    if (onMarket || paper) {
+      try {
+        const r = await deps.noteHouseWords({ contactId: job.contactId, addressHint: draft.propertyAddress || "", onMarket, paper, draftId: record.id });
+        if (r?.ok && r.offMarketCleared) job.warnings.push(`no longer off-market: ${r.address} — they said "${onMarket}"`);
+        if (r?.ok && r.paper) job.warnings.push(`paper to sign: ${r.address} — before-you-sign check is up`);
+      } catch (e) { warnings.push(`house words: ${String(e?.message || e).slice(0, 120)}`); }
+    }
   }
 
   /* --- 4c″. a property is coming, and they didn't give the address --- */

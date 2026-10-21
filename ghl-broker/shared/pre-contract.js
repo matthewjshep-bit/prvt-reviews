@@ -77,6 +77,36 @@ export function tickPreContract(pc, { key, done = true, note = "" } = {}, now = 
 }
 
 /**
+ * houseWordsUpdate(offer, { onMarket, paper, draftId }, now) → { offMarket?, paperAt? } | null
+ *
+ * What the listing agent just said about how the house is being sold, as
+ * fields to write on its row:
+ *   onMarket  their words say someone else is bidding or it's listed
+ *             (shared/off-market.js onMarketCue) — a machine's off-market
+ *             mark comes off; yours stays (3831 Bagley Ave N, 2026-10-13).
+ *   paper     the paperwork is coming or signed (contract-signed.js
+ *             paperworkSignal, or their "I'll write it up") — the signing
+ *             moment, which needsPreContract reads (1538 NW 61st St).
+ * Null when there's nothing to change.
+ */
+export function houseWordsUpdate(offer, { onMarket = "", paper = "", draftId = null } = {}, now = Date.now()) {
+  if (!offer || offer.deal) return null;
+  const at = new Date(now).toISOString();
+  const out = {};
+  const mark = offer.offMarket;
+  if (onMarket && mark?.value === true && mark.by !== "you") {
+    out.offMarket = { value: false, by: "machine", why: `they said "${str(onMarket, 60).toLowerCase()}"`, at };
+  }
+  const rank = { writing_up: 1, sent_to_sign: 2, signed: 3 };
+  const had = offer.paperAt;
+  const fresh = had?.at && now - (Date.parse(had.at) || 0) <= PRE_CONTRACT_FRESH_DAYS * 86400000;
+  if (paper && rank[paper] && (!fresh || (rank[paper] || 0) > (rank[had.kind] || 0))) {
+    out.paperAt = { at: fresh ? had.at : at, kind: paper, signalAt: at, ...(draftId ? { draftId } : {}) };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
  * needsPreContract(offer) → boolean
  *
  * The offer is close to paper: the price is agreed, you flagged it, or the
@@ -90,8 +120,12 @@ export const PRE_CONTRACT_FRESH_DAYS = 14;
 export function needsPreContract(offer, { now = Date.now(), freshDays = PRE_CONTRACT_FRESH_DAYS } = {}) {
   if (!offer || offer.deal) return false;
   const status = effectiveStatus(offer);
-  if (DEAD_STATUSES.has(status) || status === "draft") return false;
   const fresh = (at) => { const t = Date.parse(at || ""); return Number.isFinite(t) && now - t <= freshDays * 86400000; };
+  if (DEAD_STATUSES.has(status)) return false;
+  // The agent sent the paper, or said it's signed: the signing moment, on a
+  // held draft too — the app may never have priced it (1538 NW 61st St).
+  if (fresh(offer.paperAt?.at)) return true;
+  if (status === "draft") return false;
   if (offer.hot?.signal === "writing_up" && fresh(offer.hot.at)) return true;
   if (!pushesToPaper(offer)) return false;
   // A fresh yes, or a house you flagged hot yourself lately.

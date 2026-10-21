@@ -73,7 +73,7 @@ import {
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
   numberApproved, termsOnLetter, WE_PASS_REASONS, WE_PASS_REASON, normalizeWePassReason,
 } from "../shared/offer-status.js";
-import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
+import { currentOffers, houseRowFor, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperAfterAnswerDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS, sendsItselfOnClear, isRoughNumber } from "../shared/paper-follows.js";
 import { noFitLine, stanceWaitingFor } from "../shared/number-stance.js";
 import { planRequote } from "../shared/requote.js";
@@ -129,7 +129,7 @@ import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STAT
 import { mergeParties } from "../shared/deal-parties.js";
 import { mergeAccess, accessFor } from "../shared/deal-access.js";
 import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, tickById, GATES } from "../shared/deal-checklist.js";
-import { preContractChecks, preContractRecord, openChecks, tickPreContract, normalizePreContract, PRE_CONTRACT_KEYS } from "../shared/pre-contract.js";
+import { preContractChecks, preContractRecord, openChecks, tickPreContract, normalizePreContract, houseWordsUpdate, PRE_CONTRACT_KEYS } from "../shared/pre-contract.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
 import { normalizeTierOne } from "../shared/tier-one.js";
@@ -5470,6 +5470,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         historyLine(ts, full.address, "no longer hot", dealStr(why, 120)),
         { offerId: full.id, source: "conversation", at: ts }).catch(() => {});
       return { ok: true, cooled: true, address: full.address };
+    },
+    // What the listing agent said about how the house is being sold, and the
+    // paper (shared/pre-contract.js houseWordsUpdate). Lands on the house's
+    // current row, or its held draft when the app hasn't priced it yet.
+    noteHouseWords: async ({ contactId, addressHint = "", onMarket = "", paper = "", draftId = null }) => {
+      const book = await store.listOffers(locationId, { contactId, limit: 50 }).catch(() => []);
+      const row = houseRowFor(book, { contactId, address: addressHint });
+      if (!row?.id) return { ok: false, reason: "no house to note it on" };
+      const full = await store.getOffer(row.id).catch(() => null);
+      if (!full || full.locationId !== locationId) return { ok: false, reason: "offer vanished" };
+      const patch = houseWordsUpdate(full, { onMarket, paper, draftId });
+      if (!patch) return { ok: true, address: full.address };
+      Object.assign(full, patch, { updatedAt: new Date().toISOString() });
+      await store.updateOffer(full.id, full);
+      return { ok: true, address: full.address, offMarketCleared: Boolean(patch.offMarket), paper: patch.paperAt?.kind || "" };
     },
     // Hold, then pass (counter-hold.js). The hold went: its clock starts on
     // the offer. A lower number from them is a new hold; the same ask again

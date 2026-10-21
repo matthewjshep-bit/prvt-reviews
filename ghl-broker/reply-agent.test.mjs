@@ -4426,6 +4426,38 @@ test("an agent warming to our number raises the offer's heat; a rejection never 
   }
 });
 
+// 3831 Bagley Ave N (2026-10-13): "I have to respond to that one other
+// offer" and "a signed back up at 750k" never touched the machine's
+// off-market mark. 1538 NW 61st St (2026-10-19): "Just sent you the offer for
+// your signature" on a house the app had only as a held draft; Matt signed
+// eight minutes later and the app heard of it the next morning.
+test("an agent who mentions a backup offer takes off the machine's off-market mark, and paper to sign is noted", async () => {
+  for (const [message, want] of [
+    ["Try to get in today -- because I have to respond to that one other offer", { onMarket: "have to respond to", paper: "" }],
+    ["No, we have a back up at $750k. Please just cancel on inspection", { onMarket: "back up at", paper: "" }],
+    ["Just sent you the offer for your signature. Please let me know if you have any questions.", { onMarket: "", paper: "sent_to_sign" }],
+    ["She accepted and we have mutual agreement. I just emailed it to you.", { onMarket: "", paper: "signed" }],
+    ["It's a teardown.", null],
+  ]) {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const calls = [];
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: STARTER_NOW, store: fakeStore(), contactId: "c1", message,
+      deps: {
+        draft: async () => ({ ...DRAFT, propertyAddress: "", reply: "Thanks.", intent: "other", dealSignal: "" }),
+        noteHouseWords: async (args) => { calls.push(args); return { ok: true, address: "12 Elm St" }; },
+      },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    if (!want) { assert.equal(calls.length, 0, message); continue; }
+    assert.equal(calls.length, 1, message);
+    assert.equal(calls[0].onMarket, want.onMarket, message);
+    assert.equal(calls[0].paper, want.paper, message);
+  }
+});
+
 // 1010 Bellevue (2026-10-04): "If you would like to make an offer closer to
 // where they are at, that may get them to move on it" — the model read
 // "warm" and the Desk called the house hot. And 831 NW 52nd's "seller is
@@ -6447,6 +6479,39 @@ test("the same check-in is not stopped once the house is back under contract", a
   });
   assert.ok(r.blocked, r.skipped);
   assert.doesNotMatch(r.skipped || "", /fell through/);
+});
+
+// 1538 NW 61st St (2026-10-20): a minute after the house was promoted to a
+// deal, the bot texted the listing agent "around the 840s to 890, just a
+// first pass, not underwritten yet" — on a house we had signed the night
+// before. No number goes to the listing side about a signed house.
+test("a house we signed never gets a first-pass number", async () => {
+  _resetJobs();
+  const store = withTheirTake(fakeStore());
+  const signed = { ...LANDED, status: "accepted", deal: { stage: "under_contract", investors: [] } };
+  store.listOffers = async () => [signed];
+  let drafted = false;
+  const r = await startProactive({
+    client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: signed, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return DRAFT; } },
+  });
+  assert.equal(r.job, null);
+  assert.match(r.skipped || "", /under contract/);
+  assert.equal(drafted, false);
+});
+
+test("a re-underwritten row on a signed house gets no first-pass number either", async () => {
+  _resetJobs();
+  const store = withTheirTake(fakeStore());
+  store.listOffers = async () => [LANDED];
+  store.listDeals = async () => [{ id: "deal1", locationId: "LOC", address: LANDED.address, createdAt: iso(3600000), deal: { stage: "under_contract", investors: [] } }];
+  let drafted = false;
+  const r = await startProactive({
+    client: deadClient, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: LANDED, sendsEnabled: true,
+    deps: { draft: async () => { drafted = true; return DRAFT; } },
+  });
+  assert.match(r.skipped || "", /under contract/);
+  assert.equal(drafted, false);
 });
 
 test("a queued check-in to an agent about a deal that fell through since is dismissed, not sent", async () => {

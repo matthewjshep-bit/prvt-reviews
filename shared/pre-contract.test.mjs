@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  preContractChecks, needsPreContract, tickPreContract, normalizePreContract, openChecks, preContractRecord,
+  preContractChecks, needsPreContract, tickPreContract, normalizePreContract, openChecks, preContractRecord, houseWordsUpdate,
   PRE_CONTRACT_KEYS, PRESELL_MIN_BUYERS,
 } from "./pre-contract.js";
 import { buyerCeiling } from "./post-mortem.js";
@@ -138,3 +138,34 @@ test("what a deal keeps at promote: the open keys and each item's state", () => 
   assert.ok(rec.open.includes("presell"));
   assert.equal(rec.checks.length, checks.length);
 });
+
+/* ---------- what the agent said: off-market mark and the paper ---------- */
+
+test("an agent's backup offer takes off the machine's off-market mark, never yours", () => {
+  const now = Date.parse("2026-10-15T12:00:00Z");
+  const machine = { id: "o1", status: "sent", offMarket: { value: true, by: "machine", why: "an agent brought it and Zillow doesn't show it for sale" } };
+  const r = houseWordsUpdate(machine, { onMarket: "back up at" }, now);
+  assert.equal(r.offMarket.value, false);
+  assert.match(r.offMarket.why, /back up at/);
+  assert.equal(houseWordsUpdate({ ...machine, offMarket: { value: true, by: "you" } }, { onMarket: "back up at" }, now), null);
+  assert.equal(houseWordsUpdate({ id: "o2", status: "sent" }, { onMarket: "back up at" }, now), null, "nothing to take off");
+  assert.equal(houseWordsUpdate({ ...machine, deal: { stage: "under_contract" } }, { onMarket: "back up at" }, now), null, "a deal is its own record");
+});
+
+test("paper to sign on a held draft the app never priced is the signing moment", () => {
+  const now = Date.parse("2026-10-19T23:45:00Z");
+  const draft = { id: "d1", status: "draft", address: "1538 NW 61st St, Seattle, WA 98107" };
+  assert.equal(needsPreContract(draft, { now }), false);
+  const patch = houseWordsUpdate(draft, { paper: "sent_to_sign", draftId: "r1" }, now);
+  assert.equal(patch.paperAt.kind, "sent_to_sign");
+  const marked = { ...draft, ...patch };
+  assert.equal(needsPreContract(marked, { now: now + 3600000 }), true);
+  // A stronger word moves the kind up and keeps the first moment; a weaker one changes nothing.
+  const signed = houseWordsUpdate(marked, { paper: "signed" }, now + 7200000);
+  assert.equal(signed.paperAt.kind, "signed");
+  assert.equal(signed.paperAt.at, patch.paperAt.at);
+  assert.equal(houseWordsUpdate({ ...marked, ...signed }, { paper: "writing_up" }, now + 9000000), null);
+  // Two weeks on it's history.
+  assert.equal(needsPreContract(marked, { now: now + 15 * 86400000 }), false);
+});
+

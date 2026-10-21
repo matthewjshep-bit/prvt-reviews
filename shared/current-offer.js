@@ -158,6 +158,33 @@ export function currentOfferFor(offers = [], { contactId = "", address = "" } = 
 }
 
 /**
+ * houseRowFor(offers, { contactId, address }) → offer | null
+ *
+ * currentOfferFor, and when the house has no live row, its newest held
+ * draft: what an agent says about a house the app hasn't priced yet still
+ * lands on it (1538 NW 61st St, 2026-10-19: the only row was a draft waiting
+ * for comps when the agent sent the paperwork to sign).
+ */
+export function houseRowFor(offers = [], { contactId = "", address = "" } = {}) {
+  const live = currentOfferFor(offers, { contactId, address });
+  if (live) return live;
+  const held = (offers || []).filter((o) => o && isDraftOffer(o) && (!contactId || o.contactId === contactId));
+  const houses = groupHouses(held);
+  const hint = String(address || "").trim();
+  let rows = null;
+  if (hint) {
+    const key = houseKey(hint);
+    const exact = [...houses.entries()].filter(([k]) => k.endsWith(`|${key}`));
+    if (exact.length === 1) rows = exact[0][1];
+  } else if (houses.size === 1) {
+    rows = [...houses.values()][0];
+  }
+  // A house with a live row elsewhere in the book is that row's, not a draft's.
+  if (!rows || (!hint && (offers || []).some((o) => o && !isDraftOffer(o) && (!contactId || o.contactId === contactId)))) return null;
+  return [...rows].sort((a, b) => ms(b.createdAt) - ms(a.createdAt))[0] || null;
+}
+
+/**
  * walkedAwayFrom(offers, { contactId, address }) → that house's current offer
  * when we passed on it ("we_passed") or it's gone ("unavailable"), else null.
  * Nothing the machine starts about such a house goes to the agent (Matt,
