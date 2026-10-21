@@ -357,6 +357,15 @@ on a house they sent", `parties.agent.passNote.enabled`, off by default):
   mark a day old with nothing sent is `off`.
 - Reports → Follow-up has a "Pass note on a house you marked" row.
 
+**A reply about a house we passed on** (1921 Lopez Way, 2026-10-20). When the
+contact's `subject_property` is a house we walked away from (`walkedAwayFrom`,
+and not one reopened on their numbers), `buildAgentContext` drops that house's
+STILL MISSING checklist, our underwrite lead and the "next step we had
+planned" field. In their place goes one line: WE PASSED ON <house> (why), ask
+nothing more about it, and if the thread hasn't told them yet, tell them in
+this reply. Before this, the checklist had the bot asking what a passed house
+was worth fixed up. This works with the pass note switched off.
+
 ### A shorthand address, and a run a redeploy killed (2026-09-16)
 
 **Short addresses.** Agents write "34418 54th Ave S" — no city. A geocoder

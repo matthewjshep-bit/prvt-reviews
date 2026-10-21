@@ -22,7 +22,7 @@ import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
-import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor, liveRange, rangeWords } from "./shared/current-offer.js";
+import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor, walkedAwayFrom, liveRange, rangeWords } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { emailContextText } from "./shared/gmail.js";
 import { housesAwaitingAddress } from "./shared/mentioned-houses.js";
@@ -331,7 +331,6 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
   const stanceOf = highStakes?.enabled ? (o) => numberStance({ offer: o, dossier: propertyDossier(events, o.address), highStakes }) : null;
   const book = summarizeOffers(offers, { now, showMath, transcript, stanceOf });
   const amounts = new Set(book.amounts);
-  const fields = fieldLines(custom, AGENT_FIELD_KEYS);
 
   // The listing that made us reach out in the first place. Its list price
   // is a number the reply may say; its days on market is the opener.
@@ -363,9 +362,25 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
   // next thing to ask. The subject property is the one the underwriter
   // will read, so it is the one the checklist is for.
   const subject = String(custom.subject_property || "").trim();
-  const dossier = subject ? propertyDossier(events, subject) : null;
+  // A subject we walked away from (1921 Lopez Way, 2026-10-20): its
+  // checklist and the step planned before the pass had the bot asking the
+  // agent what a house we'd passed on was worth fixed up, twice. Not one
+  // the sweep passed on unpriced: that one is open to their numbers.
+  const left = subject ? walkedAwayFrom(offers || [], { address: subject }) : null;
+  const passedSubject = left && !reopensOnTheirNumbers(left) ? left : null;
+  const fields = fieldLines(custom, passedSubject ? AGENT_FIELD_KEYS.filter((k) => k !== "suggested_next_action") : AGENT_FIELD_KEYS);
+  const dossier = subject && !passedSubject ? propertyDossier(events, subject) : null;
   let dossierText = "";
-  if (dossier && (Object.keys(dossier.have).length || dossier.missing.length < PROPERTY_DETAIL_FIELDS.length)) {
+  if (passedSubject) {
+    const why = wePassReasonOf(passedSubject);
+    dossierText = passedSubject.status === "unavailable"
+      ? `${subject} IS GONE (sold or off the market, per the agent): ask nothing more about it, and ask whether they have anything else that needs work.`
+      : `WE PASSED ON ${subject}${why ? ` (why: ${why.words})` : ""} — the house they're on about is closed on our side. ` +
+        "Ask nothing more about it (what it's worth, the work, the seller, the timing) and never say you'll run numbers on it. " +
+        "If we haven't told them since we passed — nothing in the thread after the pass says so — tell them in this reply: thank them for " +
+        `sending it, say plainly we're going to pass${why ? " and why, in those few words" : ""}, and ask whether they have anything else that needs work. ` +
+        "Once they've been told, don't say it again: answer what they write and turn to the next house. A yes to a number we gave or a new price on it follows WE PASSED.";
+  } else if (dossier && (Object.keys(dossier.have).length || dossier.missing.length < PROPERTY_DETAIL_FIELDS.length)) {
     const haveLines = PROPERTY_DETAIL_FIELDS.filter((f) => dossier.have[f.key]).map((f) => {
       const v = dossier.have[f.key].value;
       if (f.number) amounts.add(Math.round(Number(v)));

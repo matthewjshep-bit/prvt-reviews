@@ -619,3 +619,28 @@ test("a commercial building or land Matt priced is one the bot talks numbers on"
   ];
   assert.deepEqual(pricedOutsideFocus(offers, ["sfr"]).sort(), ["0 Ridge Rd, Enumclaw, WA 98022", "900 Main St, Kent, WA 98030"]);
 });
+
+test("a house we passed on stops being asked about: the bot is told to say we passed, not what it's worth fixed up", () => {
+  // 1921 Lopez Way, 2026-10-20: Matt marked it "We passed: rural", and the
+  // next two replies asked the agent what it's worth fixed up and what the
+  // work would run — the subject's checklist and the next step planned
+  // before the pass were still in the prompt, and they won.
+  const A = "1921 Lopez Way, Point Roberts, WA 98281";
+  const passed = { id: "o1", address: A, status: "we_passed", createdAt: "2026-10-19T22:28:47Z", statusAt: "2026-10-20T19:13:23Z",
+    passReason: { code: "rural", at: "2026-10-20T19:13:23Z", by: "operator" } };
+  const events = [{ type: "property_details", at: "2026-10-20T02:53:49Z", address: A, data: { condition: "dated, rustic, decent shape" } }];
+  const custom = { subject_property: A, suggested_next_action: "get agent's read on arv and rehab budget for 1921 lopez way" };
+  const ctx = buildAgentContext({ offers: [passed], custom, now: Date.parse("2026-10-20T23:35:00Z"), events, facts: null });
+  assert.doesNotMatch(ctx.text, /STILL MISSING/, "nothing about a passed house is ours to ask");
+  assert.doesNotMatch(ctx.text, /the next step we had planned/, "the step planned before the pass is stale");
+  assert.match(ctx.text, /WE PASSED ON 1921 Lopez Way, Point Roberts, WA 98281/);
+  assert.match(ctx.text, /it's too rural for our buyers/, "the reason Matt picked is the one to give");
+  assert.match(ctx.text, /haven't told them/i, "the reply tells them, if the thread hasn't yet");
+
+  // A house the nightly sweep passed on unpriced is open to their numbers
+  // (2026-10-11): asking for their read on it is still right.
+  const reopened = { ...passed, passReason: null, retired: { by: "held-sweep", reason: "held 9 days and nothing since" } };
+  const open = buildAgentContext({ offers: [reopened], custom, now: Date.parse("2026-10-20T23:35:00Z"), events, facts: null });
+  assert.match(open.text, /STILL MISSING/);
+  assert.doesNotMatch(open.text, /WE PASSED ON 1921/);
+});
