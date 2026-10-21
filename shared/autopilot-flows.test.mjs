@@ -101,7 +101,10 @@ test("three waves draw a third; deals blasted by GHL say so", () => {
 test("the agent chart: first text → day 2 follow-up → intro email → check in every 14 days (2026-10-20)", () => {
   const settings = { outreachAutopilot: { enabled: true, introEmail: { enabled: true } } };
   const { agents } = flow({ settings, raw: LIVE });
-  assert.deepEqual(agents.map((s) => s.id), ["found", "first", "wait-0", "follow-0", "email", "repeat", "reply", "checkin"]);
+  assert.deepEqual(agents.map((s) => s.id), ["found", "first", "wait-0", "follow-0", "email", "repeat", "checkin-email", "reply", "checkin"]);
+  const ce = agents.find((s) => s.id === "checkin-email");
+  assert.equal(ce.status, "off", "the check-in email is drawn, off, until it's switched on");
+  assert.match(ce.texts[0], /^Subject: [a-z]/);
   assert.equal(agents.find((s) => s.id === "wait-0").title, "Wait until day 2");
   assert.equal(agents.find((s) => s.id === "email").status, "drafting", "on, but each waits for you until it may send itself");
   assert.match(agents.find((s) => s.id === "repeat").title, /every 14 days/);

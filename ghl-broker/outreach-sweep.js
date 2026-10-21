@@ -15,7 +15,7 @@
 
 import { store as defaultStore } from "./store.js";
 import { normalizeOpener } from "./shared/outreach-opener.js";
-import { normalizeIntroEmail } from "./shared/outreach-email.js";
+import { normalizeIntroEmail, normalizeCheckInEmail } from "./shared/outreach-email.js";
 import { isRuralLot } from "./shared/asset-type.js";
 import { isOldHouse } from "./outreach-score.js";
 import { workflowIdFrom } from "./shared/ghl-calls.js";
@@ -197,6 +197,8 @@ export function normalizeOutreachAutopilot(v = {}) {
     opener: normalizeOpener(o.opener),
     // The introduction email on day 2 (outreach-email.js). Off by default.
     introEmail: normalizeIntroEmail(o.introEmail),
+    // An email with each 14-day check-in after it (outreach-email.js). Off by default.
+    checkInEmail: normalizeCheckInEmail(o.checkInEmail),
     requireDistress: o.requireDistress !== false,
     // The share of the day's first texts (0–100) that go to agents whose
     // listings are all finished (Matt, 2026-10-09: 25). The three

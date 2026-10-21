@@ -5883,6 +5883,14 @@ event (dedupe `outreach_email:<contactId>`, once ever). It's scheduled
 across the machine hours when `autoSend` is on and the broker may send,
 otherwise it waits in the outbox. The send goes through `sendReplyDraft`
 with every guard a text has. `job.emailed` and the job's rows say what it did.
+An email also goes with each 14-day check-in (`outreachAutopilot.checkInEmail`:
+`enabled`, `autoSend`, `emails` [{subject, body}]; off by default; four short
+lowercase-subject defaults). Same sweep, after the intro emails
+(`runCheckInEmails`): only to agents with an `outreach_email_queued` since
+their first text, no reply since, on a repeat rung's day (up to 3 days late,
+never past the 60-day window), claimed by `checkin_email_queued` (dedupe
+`checkin_email:<contactId>:<step>`). Kind `checkin_email`; the next email
+in the list each time, starting from the contact's variant.
 
 **The texts are Matt's own (2026-10-17).** The first text, its 14-day
 follow-up (`outreach_nudge`) and the plain agent check-in are fixed texts in

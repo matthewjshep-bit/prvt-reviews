@@ -210,7 +210,7 @@ export const FOLLOW_UP_MECHANISMS = [
 
   { key: "agent_pulse", group: "agent", label: "Agent check-in", kinds: ["agent_pulse"], sentFrom: "event", ahead: "plan", followUp: true },
   { key: "matts_fifteen", group: "agent", label: "Matt's 15", kinds: [], sentFrom: "event", ahead: "plan", followUp: true },
-  { key: "outreach_nudge", group: "agent", label: "Cold-agent follow-up", kinds: ["outreach_nudge", "outreach_email"], sentFrom: "draft", ahead: "plan", followUp: true },
+  { key: "outreach_nudge", group: "agent", label: "Cold-agent follow-up", kinds: ["outreach_nudge", "outreach_email", "checkin_email"], sentFrom: "draft", ahead: "plan", followUp: true },
   { key: "ghl_followup", group: "agent", label: "GHL follow-up workflow", kinds: [], sentFrom: "event", ahead: "plan", followUp: true, ghl: true },
   { key: "checkin_due", group: "agent", label: "Check-in they asked for", kinds: ["checkin_due"], sentFrom: "draft", ahead: "plan", followUp: true },
   { key: "promise_due", group: "agent", label: "Promise we made", kinds: ["promise_due"], sentFrom: "draft", ahead: "plan", followUp: true },
