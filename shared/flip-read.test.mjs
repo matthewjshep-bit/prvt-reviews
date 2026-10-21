@@ -234,3 +234,14 @@ test("'not a fixer', new construction, a remodel already done, or a list of room
     assert.equal(saysRealWork(t), false, t);
   }
 });
+
+// Rachel T., 2026-10-20: "basically completed, wouldn't need work if bought
+// today" read as the agent saying the house needs work, which held her card
+// in Tier 1 after we passed on it.
+test("'wouldn't need work' and paint touch-ups are light work, not their word that it needs work", () => {
+  const said = "basically completed, wouldn't need work if bought today. paint touch ups in certain lighting after spraying";
+  assert.equal(saysRealWork(said), false);
+  assert.equal(saysCosmeticOnly(said), true);
+  for (const t of ["it doesn't need work", "won't need any repairs, just touch-ups", "does not need work"]) assert.equal(saysRealWork(t), false, t);
+  assert.equal(saysRealWork("it needs work"), true, "the plain word still counts");
+});

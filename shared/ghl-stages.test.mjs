@@ -476,6 +476,41 @@ test("a house number the agent corrected is closed, so its leftover draft doesn'
   assert.equal(targetStage({ offers: [draft], raised: moved, now: NOW }).to, "tier1");
 });
 
+// Rachel T., 2026-10-20: the agent called 1471 SE Binns Swiger Lp "mostly
+// finished, only cosmetics" and the card went to Tier 2. Her next text was
+// saved as "1471 se binns swiger lp Shelton" and then "1471 SE Binns-Swiger
+// Loop, Shelton, WA 98584"; a held draft on that spelling read as a new house
+// being priced and the card went back up to Tier 1. After Matt passed it, the
+// no-comma spelling still held the card there as a house "needing real work"
+// on the strength of "wouldn't need work if bought today".
+const BINNS = "1471 SE Binns Swiger Lp, Shelton, WA";
+const BINNS_TYPED = "1471 se binns swiger lp Shelton";
+const BINNS_MAPPED = "1471 SE Binns-Swiger Loop, Shelton, WA 98584";
+
+test("the same house spelled with a hyphen, Lp for Loop, or the town typed on with no comma is one house", () => {
+  assert.equal(sameRaisedHouse(BINNS, BINNS_MAPPED), true);
+  assert.equal(sameRaisedHouse(BINNS_TYPED, BINNS), true);
+  assert.equal(sameRaisedHouse(BINNS_TYPED, BINNS_MAPPED), true);
+  assert.equal(sameRaisedHouse(BINNS_TYPED, "1471 SE Binns Rd, Shelton, WA"), false, "another street");
+  assert.equal(sameRaisedHouse("1471 se binns swiger lp Olympia", BINNS), false, "another town");
+  assert.equal(sameRaisedHouse("1472 SE Binns-Swiger Loop, Shelton, WA", BINNS), false, "another number");
+});
+
+test("a house the agent called finished stays out of Tier 1 when its next draft spells the street another way", () => {
+  const events = [
+    ev("property_details", BINNS, { condition: "mostly finished, only a few cosmetics left", workNeeded: "a few cosmetics" }, ago(1.7)),
+    ev("property_details", BINNS_TYPED, { condition: "basically completed, wouldn't need work if bought today", workNeeded: "paint touch ups in certain lighting after spraying" }, ago(1.2)),
+  ];
+  const first = offer("kw", { address: BINNS, status: "draft", sends: [], createdAt: ago(1.5) });
+  const second = offer("kw", { address: BINNS_MAPPED, status: "draft", sends: [], createdAt: ago(1.2) });
+  const raised = raisedHouses({ events, offers: [first, second], now: NOW });
+  assert.equal(raised.filter((h) => h.open).length, 0, JSON.stringify(raised));
+  assert.equal(targetStage({ offers: [first, second], raised, now: NOW }).to, "tier2", "while the second draft is held");
+  const passed = { ...second, status: "we_passed", statusAt: ago(1) };
+  const after = raisedHouses({ events, offers: [first, passed], now: NOW });
+  assert.equal(targetStage({ offers: [first, passed], raised: after, now: NOW }).to, "tier2", "after Matt passed it");
+});
+
 test("a raise goes quiet after the same 10 days an unsent offer does", () => {
   const raised = raisedHouses({ events: [ev("property_details", EDMONDS, { condition: "needs a lot of work" }, ago(11))], now: NOW });
   assert.equal(raised.length, 0);

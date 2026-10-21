@@ -122,7 +122,10 @@ const TURNKEY = [
 ];
 // "…but it needs a roof", "a light fixer": any talk of work left means it's
 // not the plain "it's done" this reads for.
-const WORK_LEFT_RX = /\bneed(?:s|ing|ed)?\b|\bfixer\b|(?<!\bnot\s(?:really\s)?a\s|\bisn'?t\sa\s)\bproject\b|\brepairs?\b|\bTLC\b|\bwork\s+(?:to\s+do|left)\b/i;
+// A "need" after wouldn't, doesn't or not is the opposite ("wouldn't need
+// work if bought today", 1471 SE Binns Swiger Lp, 2026-10-20), here and in
+// MORE_THAN_LIGHT_RX and CANDIDATE_RX.
+const WORK_LEFT_RX = /(?<!\b(?:wouldn|won|doesn|don|didn|shouldn)['’]?t\s|\b(?:not|never)\s)\bneed(?:s|ing|ed)?\b|\bfixer\b|(?<!\bnot\s(?:really\s)?a\s|\bisn'?t\sa\s)\bproject\b|\brepairs?\b|\bTLC\b|\bwork\s+(?:to\s+do|left)\b/i;
 
 /** saysTurnkey(text) → true when their words say plainly the house is done. */
 export function saysTurnkey(text = "") {
@@ -134,11 +137,11 @@ export function saysTurnkey(text = "") {
 // agent telling us it's light work. Read only when nothing in flipRead makes
 // it a flip — "cosmetic, but the foundation's settling" is a flip.
 const COSMETIC = [
-  ["cosmetic", /\bcosmetic(?:s|ally)?\b|\blipstick\b|\bface[\s-]?lift\b|\brefresh\b|\bspruce\b|\bfreshen(?:\s+up|ing)?\b|\bupdat(?:e|es|ing)\b|\bdated\b|\bpaint\b|\bcarpet\b|\bflooring\b|\blight\s+(?:fixer|rehab|work|lift)\b|\bgood\s+(?:shape|condition|bones)\b|\blivable\b|\bTLC\b/i],
+  ["cosmetic", /\bcosmetic(?:s|ally)?\b|\blipstick\b|\bface[\s-]?lift\b|\brefresh\b|\bspruce\b|\bfreshen(?:\s+up|ing)?\b|\bupdat(?:e|es|ing)\b|\bdated\b|\bpaint\b|\btouch[\s-]?ups?\b|\bcarpet\b|\bflooring\b|\blight\s+(?:fixer|rehab|work|lift)\b|\bgood\s+(?:shape|condition|bones)\b|\blivable\b|\bTLC\b/i],
 ];
 // "More than cosmetic", "not just paint": the opposite of light. "Needs some
 // work", "a project": not light either, just unclear — that gets the question.
-const MORE_THAN_LIGHT_RX = /\bmore\s+than\s+(?:just\s+|a\s+)?(?:cosmetic|a\s+refresh|refresh|paint|lipstick|updat)|\bnot\s+just\s+(?:cosmetic|paint|a\s+refresh|updat)|\bneeds?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+|real\s+)?work\b|(?<!\bnot\s(?:really\s)?a\s|\bisn'?t\sa\s)\bproject\b/i;
+const MORE_THAN_LIGHT_RX = /\bmore\s+than\s+(?:just\s+|a\s+)?(?:cosmetic|a\s+refresh|refresh|paint|lipstick|updat)|\bnot\s+just\s+(?:cosmetic|paint|a\s+refresh|updat)|(?<!\b(?:wouldn|won|doesn|don|didn|shouldn)['’]?t\s|\b(?:not|never)\s)\bneeds?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+|real\s+)?work\b|(?<!\bnot\s(?:really\s)?a\s|\bisn'?t\sa\s)\bproject\b/i;
 
 /**
  * saysCosmeticOnly(text, { agentRehab }) → true when their words call it light work and nothing more.
@@ -157,7 +160,7 @@ export function saysCosmeticOnly(text = "", { agentRehab = 0 } = {}) {
 // Their own framing of a candidate: "needs a lot of work", "a bit of a
 // project", "a fixer", "flip potential". Not a list of rooms: "kitchen and
 // baths original" is a scope for the question, not their word that it's a flip.
-const CANDIDATE_RX = /\bneeds?\s+(?:a\s+(?:lot|bunch|ton|fair\s+amount)\s+of\s+|lots\s+of\s+|some\s+|real\s+|major\s+|significant\s+)?(?:work|rehab|repairs|TLC|love)\b|\bproject\b|\bfixer(?:[\s-]upper)?\b|\bflip\s+(?:potential|opportunity|candidate)\b|\bgood\s+flip\b/i;
+const CANDIDATE_RX = /(?<!\b(?:wouldn|won|doesn|don|didn|shouldn)['’]?t\s|\b(?:not|never)\s)\bneeds?\s+(?:a\s+(?:lot|bunch|ton|fair\s+amount)\s+of\s+|lots\s+of\s+|some\s+|real\s+|major\s+|significant\s+)?(?:work|rehab|repairs|TLC|love)\b|\bproject\b|\bfixer(?:[\s-]upper)?\b|\bflip\s+(?:potential|opportunity|candidate)\b|\bgood\s+flip\b/i;
 // "Not a fixer", "new construction", "full remodel done in 2002": the opposite.
 const NOT_A_CANDIDATE_RX = /\b(?:not|isn'?t|never|no)\s+(?:really\s+)?(?:a\s+|an\s+)?(?:fixer|project|flip)\b|\bnew(?:er)?\s+(?:construction|build|home)\b|\b(?:remodel|renovation|rehab|update)s?\s+(?:was\s+|were\s+)?(?:done|completed|finished)\b/i;
 

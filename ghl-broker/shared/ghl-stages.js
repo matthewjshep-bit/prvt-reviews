@@ -60,6 +60,18 @@ export function validAddress(raw) {
 // name one.
 const DIRECTIONS = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw", "north", "south", "east", "west"]);
 const streetWords = (p) => normalizeUsAddress(`${p.houseNo} ${p.street}`).toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/).filter((w) => w && !DIRECTIONS.has(w));
+// The street as words to compare with another spelling of it: a hyphen is a
+// space ("Binns-Swiger"), a suffix the USPS table leaves alone is spelled one
+// way ("Lp" is "Loop"), and a town typed on with no comma ("1471 se binns
+// swiger lp Shelton") comes off when the other spelling names that town.
+// Rachel T., 2026-10-20: three spellings of one house read as three houses.
+const SUFFIX_ALIAS = { lp: "loop", wy: "way" };
+function houseWords(p, town) {
+  const w = streetWords({ ...p, street: String(p.street || "").replace(/-/g, " ") }).map((x) => SUFFIX_ALIAS[x] || x);
+  const t = String(town || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/).filter(Boolean);
+  if (p.city || !t.length || w.length <= t.length + 1) return w;
+  return t.every((x, i) => w[w.length - t.length + i] === x) ? w.slice(0, -t.length) : w;
+}
 // The same street, another number: the agent correcting a house number
 // ("20525 Ne 68th St" → "20526 NE 68th St, Redmond"; Loren K., 2026-10-19).
 function renumbered(from, to) {
@@ -67,7 +79,7 @@ function renumbered(from, to) {
   if (!pa.houseNo || !pb.houseNo || pa.houseNo === pb.houseNo) return false;
   const ca = String(pa.city || "").trim().toLowerCase(), cb = String(pb.city || "").trim().toLowerCase();
   if (ca && cb && ca !== cb) return false;
-  const wa = streetWords(pa).slice(1), wb = streetWords(pb).slice(1);
+  const wa = houseWords(pa, pb.city).slice(1), wb = houseWords(pb, pa.city).slice(1);
   return wa.length > 0 && wa.join(" ") === wb.join(" ");
 }
 export function sameRaisedHouse(a, b) {
@@ -76,7 +88,7 @@ export function sameRaisedHouse(a, b) {
   const ca = String(pa.city || "").trim().toLowerCase(), cb = String(pb.city || "").trim().toLowerCase();
   if (ca && cb && ca !== cb) return false;
   if (sameStreetLoose(a, b)) return true;
-  const wa = streetWords(pa), wb = streetWords(pb);
+  const wa = houseWords(pa, pb.city), wb = houseWords(pb, pa.city);
   return wa.length > 1 && wa.join(" ") === wb.join(" ");
 }
 
