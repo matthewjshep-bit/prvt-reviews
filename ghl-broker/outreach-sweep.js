@@ -249,6 +249,9 @@ export function normalizeOutreachAutopilot(v = {}) {
     enabled: o.enabled === true,
     // 0 = no cap: everyone the day's pull finds.
     dailyCap: o.dailyCap === 0 || o.dailyCap === "0" ? 0 : Number.isFinite(cap) ? Math.min(MAX_DAILY_CAP, Math.max(1, cap)) : DEFAULT_DAILY_CAP,
+    // The hour the daily pull starts, Pacific (2026-10-21, Matt: "move all
+    // agent polls to 9 am instead of 10 am"). 7am–3pm; the env's otherwise.
+    hour: Number.isInteger(Number(o.hour)) && Number(o.hour) >= 7 && Number(o.hour) <= 15 && o.hour !== "" && o.hour !== null ? Number(o.hour) : OUTREACH_SWEEP_HOUR,
     // The days it runs: "mon_fri", "sun_fri" or "all" (`weekdaysOnly` was the switch before).
     days: runDaysFrom(o),
     weekdaysOnly: runDaysFrom(o) !== "all",
@@ -1085,13 +1088,18 @@ export async function autopilotBatchId({ store, locationId, market }) {
 /**
  * maybeStartOutreachSweep({ locationId, client, saved, store, deps, hour, now }) → boolean
  *
+ * `hour` defaults to the saved one (outreachAutopilot.hour, 9am since
+ * 2026-10-21 by Matt's ask; the env default 10 until it is set).
+ *
  * The tick's decision. Gates: the hour, the toggle, a RentCast key, no run
  * in progress, and the durable cursor at least MIN_GAP_MS old.
  */
-export async function maybeStartOutreachSweep({ locationId, client, saved = {}, store = defaultStore, deps = {}, hour = OUTREACH_SWEEP_HOUR, now = Date.now() }) {
+export async function maybeStartOutreachSweep({ locationId, client, saved = {}, store = defaultStore, deps = {}, hour = null, now = Date.now() }) {
+  const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
+  // The hour in Settings (outreachAutopilot.hour), unless the caller names one.
+  hour = hour ?? oa.hour;
   const h = workHour(now);
   if (h < hour || h >= hour + RETRY_WINDOW_HOURS) return false;
-  const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
   if (!oa.enabled) return false;
   if (!isWorkday(now, WORK_TZ, oa.days)) return false;
   if (!String(saved.rentcastApiKey || "").trim()) return false;

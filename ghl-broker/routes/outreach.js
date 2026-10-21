@@ -1581,7 +1581,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         firstTouchOn: Boolean(saved.conversationAi?.parties?.agent?.outreach?.enabled),
         // This billing month's RentCast requests: used, the plan, what a run may spend.
         budget: await rentcastBudget({ store, locationId, saved }).catch(() => null),
-        hour: OUTREACH_SWEEP_HOUR, tz: WORK_TZ,
+        hour: normalizeOutreachAutopilot(saved.outreachAutopilot).hour ?? OUTREACH_SWEEP_HOUR, tz: WORK_TZ,
         lastRunAt: cursor?.at || null,
         job: publicOutreachJob(getOutreachJob(locationId)),
         // What the cursor remembers when the job in memory is gone: the run
