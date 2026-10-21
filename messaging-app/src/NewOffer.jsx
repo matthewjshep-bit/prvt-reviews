@@ -1214,6 +1214,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       // The form is now editing a real offer, even without a remount — so
       // autosave must write to THAT offer instead of minting a draft beside it.
       offerIdRef.current = r.offer.id;
+      // A draft it came from is gone now: the pane behind moves to this one.
+      onOfferSaved?.(r.offer);
     } catch (e) { setError(e.message); }
     setCreating(false);
   }

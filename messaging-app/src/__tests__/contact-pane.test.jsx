@@ -38,3 +38,11 @@ test("the Offers split and the companion show one pane: the same name line, the 
   expect(panes.offers).toContain('aria-label="Back to the table"');
   expect(panes.companion).not.toContain('aria-label="Next');
 });
+
+// Matt, 2026-10-21: "Start one" only showed when they had no offer; with one
+// or more there was no way to start another from the companion.
+test("a person who already has offers can start a new one from the offer side", () => {
+  const html = renderToStaticMarkup(<Companion />);
+  expect(html).toContain("New offer");
+  expect(html).toContain("Edit offer");
+});
