@@ -6409,6 +6409,23 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       await markUnsubscribed({ client, store, locationId, contactId: d.contactId, party: d.party || "agent", now });
       return { ok: true, skipped: "they unsubscribed" };
     }
+    // A bot-off tag ("stop bot") put on them since their deal text was
+    // queued (2026-10-21): it waits for your Send, as it would have if the
+    // tag had been there when it was queued (dispo-autopilot.js).
+    if (d.outbound?.kind === "blast_open") {
+      const saved = (await store.getOfferSettings?.(locationId).catch(() => null)) || {};
+      const tag = matchTagPatterns(contact?.tags || [], conversationConfig(saved).routing?.botOffTags || [])[0];
+      if (tag) {
+        const ts = new Date(now).toISOString();
+        const line = `bot is off for this contact (tag: ${tag})`;
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), `held: ${line}`],
+          autoSend: { ...(d.autoSend || {}), decided: false, reason: `${line} — it waits for you` },
+        });
+        return { ok: true, skipped: line };
+      }
+    }
   }
 
   // Pick back up, don't pile on. If a person answered this thread after the

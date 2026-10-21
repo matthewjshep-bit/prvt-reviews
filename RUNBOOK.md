@@ -6593,7 +6593,13 @@ send them the deal.
 - **Still left off:** a buyer whose own buy box rules the deal out (their
   price band, with 10% either side, or a kind of house, rehab level or lot
   they said no to), their dealbreakers, a refused kind, STOP / DND, committed
-  to another live deal. A mobile home or land deal still goes by who buys that
+  to another live deal.
+- **Bot-off tags hold a deal text.** A buyer carrying one of the routing
+  `botOffTags` ("stop bot", "bot-off") gets their deal text as a draft that
+  waits for your Send, the same as Stop on the Bot menu. It's checked when the
+  text is queued (`queueBlastDrafts`) and again right before it sends
+  (`sendReplyDraft`), so a tag added in between still holds it. Before
+  2026-10-21 the tags held only the bot's replies. A mobile home or land deal still goes by who buys that
   kind (see "House type and mobile home buyers" below).
 - **The morning catch-up.** The daily dispo sweep (`DISPO_SWEEP_UTC_HOUR`,
   default 17, `job_cursors` row `dispo`) looks at every deal under contract

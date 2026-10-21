@@ -6633,6 +6633,28 @@ test("a deal text to a buyer we texted two days ago goes now, and waits for thei
   assert.equal(three.calls.filter(([p]) => p === "/conversations/messages").length, 1);
 });
 
+// Matt, 2026-10-21: a "stop bot" tag put on a buyer after their deal text
+// was queued still let it go by itself.
+test("a queued deal text to a buyer tagged stop bot since waits for you instead of sending", async () => {
+  const store = limitStore([dealText("d1", "o1")]);
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1", contact: { id: "c1", tags: ["investor", "Stop Bot"] } }; } };
+  const out = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  assert.match(out.skipped || "", /bot is off for this contact \(tag: stop bot\)/);
+  assert.equal(calls.filter(([p]) => p === "/conversations/messages").length, 0, "nothing went");
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "draft");
+  assert.equal(d.sendAt, null);
+  assert.equal(d.autoSend.reason, "bot is off for this contact (tag: stop bot) — it waits for you");
+
+  // A person pressing Send is a person deciding.
+  const store2 = limitStore([dealText("d1", "o1", { status: "draft" })]);
+  const two = [];
+  const client2 = { call: async (path, opts) => { two.push([path, opts]); return { messageId: "m1", contact: { id: "c1", tags: ["stop bot"] } }; } };
+  await sendReplyDraft({ client: client2, store: store2, locationId: "LOC", draftId: "d1", live: true, readThread: async () => "" });
+  assert.equal(two.filter(([p]) => p === "/conversations/messages").length, 1);
+});
+
 test("two queued deal texts to one buyer leave as one text and both deals count as sent", async () => {
   const later = new Date(Date.now() + 3 * 86400000).toISOString();
   const store = limitStore([dealText("d1", "o1"), dealText("d2", "o2", { sendAt: later, createdAt: iso(500) })]);
