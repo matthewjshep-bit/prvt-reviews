@@ -56,3 +56,17 @@ test("switching between their offers happens in the pane, with the one shown mar
   expect(html).toContain("Offers with Rae · 2");
   expect(html).toMatch(/aria-current="true"[^>]*>[\s\S]*?13041 SE 208th St/);
 });
+
+// 2026-10-20, no Today: "approve the agreed number" was a Today row and
+// nowhere else. It is on the offer now, wherever the offer shows.
+test("an agreed number Matt hasn't approved is approved from the offer itself", () => {
+  // The machine's number (a hand-made one is approved by being made).
+  const agreed = { ...july, cashAmount: 416500, autoUnderwrite: { finishedAt: "2026-10-19T18:00:00Z" }, agreed: { amount: 416500, at: "2026-10-20T18:05:31Z", via: "realm_yes" } };
+  const html = renderToStaticMarkup(<OfferPanelBody offer={agreed} siblings={[agreed]} item={{ offerId: "july" }} />);
+  expect(html).toContain("Approve 416.5K");
+  expect(html).toContain("no write-up ask until you approve");
+  const done = renderToStaticMarkup(<OfferPanelBody offer={{ ...agreed, approved: { amount: 416500, at: "2026-10-20T19:00:00Z", by: "you" } }} siblings={[]} item={{ offerId: "july" }} />);
+  expect(done).not.toContain("Approve 416.5K");
+  const over = renderToStaticMarkup(<OfferPanelBody offer={{ ...agreed, agreed: { amount: 430000, at: "2026-10-20T18:05:31Z", via: "counter" } }} siblings={[]} item={{ offerId: "july" }} />);
+  expect(over).not.toContain("Approve");
+});

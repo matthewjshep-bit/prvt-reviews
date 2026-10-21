@@ -9,11 +9,10 @@
 //   Conversation AI — the bot that answers inbound agent and investor texts:
 //               its voice, playbooks, routing, auto-send switches and outbox.
 //   Settings  — calculation defaults + company info printed on the document.
-// Plus sibling apps on their own paths: /deals, and the split-up Overview —
-// /dashboard (Today), /autopilot (Overview · Agents · Investors · Advanced
-// settings), /reports.
+// Plus sibling apps on their own paths: /deals, /autopilot (Overview ·
+// Agents · Investors · Advanced settings), /reports.
 // /agents and /dispo were their own apps until 2026-10-20; they redirect to
-// their Autopilot tabs.
+// their Autopilot tabs. /dashboard (Today) is gone (2026-10-20) and opens Offers.
 
 import { offerEditorUrl } from "./api.js";
 import React, { useEffect, useState } from "react";
@@ -28,8 +27,6 @@ import DispoImport from "./DispoImport.jsx";
 import Dashboard from "./Dashboard.jsx";
 import SettingsView from "./SettingsView.jsx";
 import ConversationAi from "./ConversationAi.jsx";
-import PipelineView from "./PipelineView.jsx";
-import Tier1View from "./Tier1View.jsx";
 import FlowView from "./FlowView.jsx";
 import LineView from "./LineView.jsx";
 import FollowUpView from "./FollowUpView.jsx";
@@ -58,19 +55,17 @@ import { getLocationId, getLocationKey, getOffer, getSettings } from "./api.js";
   } catch { /* stay where we are */ }
 })();
 
-// Which product this page is. One deploy serves all five: /agents (any depth)
-// is the Agent Outreach app, /dispo is the investor book, /dashboard is the
-// analytics Dashboard, /deals is the standalone Deals board, everything else is
-// the offer generator. The Netlify SPA redirect sends every path to this same
+// Which product this page is. One deploy serves them all: /autopilot,
+// /reports, /deals, /contact (the companion), everything else the offer
+// generator. /agents, /dispo and /dashboard (Today, gone 2026-10-20) are
+// redirected by movedTo before this matters. The Netlify SPA redirect sends every path to this same
 // bundle; VITE_APP_MODE still forces a mode for a dedicated-domain deploy.
 const APP_MODE = (() => {
   try {
     if (import.meta.env.VITE_APP_MODE === "outreach") return "outreach";
-    if (import.meta.env.VITE_APP_MODE === "dashboard") return "dashboard";
     if (import.meta.env.VITE_APP_MODE === "dispo") return "dispo";
     if (import.meta.env.VITE_APP_MODE === "autopilot") return "autopilot";
     if (import.meta.env.VITE_APP_MODE === "reports") return "reports";
-    if (/^\/dashboard(\/|$)/.test(window.location.pathname)) return "dashboard";
     if (/^\/autopilot(\/|$)/.test(window.location.pathname)) return "autopilot";
     if (/^\/reports(\/|$)/.test(window.location.pathname)) return "reports";
     if (/^\/deals(\/|$)/.test(window.location.pathname)) return "deals";
@@ -94,17 +89,6 @@ const NAV =
         { view: "dispo", label: "Investors" },
         { view: "import", label: "Import buyers" },
         { view: "settings", label: "Settings" },
-      ]
-    // The old four-tab Overview (2026-09-13) split by job: Today is the work,
-    // Autopilot is the controls, Reports is the numbers. Each component shows
-    // in exactly one place.
-    : APP_MODE === "dashboard"
-    ? [
-        // The Desk (2026-10-02): one row per person — Call · Decide · Machine.
-        // Tier 1 (2026-10-07): GHL's Tier 1 stage, screened, worked with
-        // Pass / Offer. It replaced "In play", which counted any open offer.
-        { view: "pipeline", label: "Desk" },
-        { view: "tier1", label: "Tier 1" },
       ]
     // Everything the bot does, in one place (2026-10-20): what it's doing,
     // in a few numbers; what it sends agents; what it sends buyers; and
@@ -137,7 +121,6 @@ const NAV =
 
 const APP_TITLE =
   APP_MODE === "outreach" ? "Agent Outreach"
-  : APP_MODE === "dashboard" ? "Today"
   : APP_MODE === "autopilot" ? "Autopilot"
   : APP_MODE === "reports" ? "Reports"
   : APP_MODE === "deals" ? "Deals"
@@ -147,12 +130,10 @@ const APP_TITLE =
 
 // "new" is reachable but not a tab — it's the primary button in the header and
 // the target of the ?offer_id= deep link, so it still has to be a valid view.
-// "board" (Today's old tab) still opens: the lane board, by house.
-// "inplay" (2026-10-02 → 10-07) opens Tier 1, which replaced it.
 // On Autopilot, the tabs it had before (Controls, Conversation AI, Bot) open
 // Advanced settings, where all of them now are.
-const VIEWS = new Set([...NAV.map((n) => n.view), "new", ...(APP_MODE === "dashboard" ? ["board", "inplay"] : [])]);
-const RENAMED = APP_MODE === "autopilot" ? { controls: "advanced", conversation: "advanced", bot: "advanced" } : { inplay: "tier1" };
+const VIEWS = new Set([...NAV.map((n) => n.view), "new"]);
+const RENAMED = APP_MODE === "autopilot" ? { controls: "advanced", conversation: "advanced", bot: "advanced" } : {};
 const viewOf = (v) => RENAMED[v] || v;
 
 function readParam(name) {
@@ -380,9 +361,6 @@ export default function OfferApp() {
               ? (o) => window.open(offerEditorUrl(o.id), "_blank")
               : (o) => { setEditing(o); setView("new"); }} />
         )}
-        {view === "pipeline" && <PipelineView section="queue" settings={settings} />}
-        {view === "tier1" && <Tier1View settings={settings} />}
-        {view === "board" && <PipelineView section="board" settings={settings} />}
         {view === "overview" && <OverviewTab onOpen={(side) => setView(side)} />}
         {view === "advanced" && (
           <div className="space-y-6">

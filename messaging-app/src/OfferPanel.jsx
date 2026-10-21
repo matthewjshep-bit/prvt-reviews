@@ -11,8 +11,8 @@
 import React, { useState } from "react";
 import { Check, ExternalLink, FileText, Pencil, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
-import { clearAgreedPrice, getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
+import { agreedAboveOurNumber, numberApproved, offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
+import { approveNumber, clearAgreedPrice, getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
 import { annotateCurrent } from "@shared/current-offer.js";
 import { BTN, ChecksLine, CurrentPill, HotPill, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
 import { AiProvenance, RehabScope } from "./OfferDetailModal.jsx";
@@ -167,6 +167,36 @@ function OfferSwitcher({ book, selectedId, rowOfferId, name, onSelect }) {
   );
 }
 
+// "416.5K": never rounded up, so it never reads above the number (kText).
+const kNever = (n) => `${Math.floor((Number(n) || 0) / 100) / 10}K`;
+
+/**
+ * <ApproveAgreed offer /> — they agreed at our number and Matt hasn't stood
+ * behind it yet: the machine asks for no write-up until he does. It was a
+ * Today row (approve_number); since 2026-10-20 it's on the offer, wherever
+ * the offer shows (Offers, the Companion).
+ */
+function ApproveAgreed({ offer }) {
+  const [state, setState] = useState({ busy: false, done: false, error: "" });
+  const agreed = !offer?.deal ? priceAgreed(offer) : null;
+  if (!agreed || agreedAboveOurNumber(offer) || numberApproved(offer) || state.done) return null;
+  const amount = Math.round(Number(offer.cashAmount) || 0);
+  const approve = async () => {
+    setState({ busy: true, done: false, error: "" });
+    try { await approveNumber(offer.id, amount); setState({ busy: false, done: true, error: "" }); }
+    catch (e) { setState({ busy: false, done: false, error: e.message || "That didn't save." }); }
+  };
+  return (
+    <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+      <div>They agreed at {money(amount)} — no write-up ask until you approve it.</div>
+      <button type="button" disabled={state.busy} onClick={approve} className={`${BTN} mt-1.5`}>
+        <Check size={12} /> Approve {kNever(amount)}
+      </button>
+      {state.error && <div className="mt-1 text-red-700">{state.error}</div>}
+    </div>
+  );
+}
+
 /**
  * <OfferPanelBody offer siblings item … /> — what the tests render; WorkPane
  * loads it with useOfferSide below.
@@ -247,6 +277,7 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
         </div>
       )}
       <PaperHeldBanner offer={offer} busy={requoting} onRequote={onRequote ? (amount) => onRequote(offer, amount) : null} />
+      <ApproveAgreed offer={offer} />
       {error && <div className="text-xs text-red-700">{error}</div>}
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-3">
