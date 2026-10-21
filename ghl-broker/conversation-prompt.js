@@ -844,6 +844,18 @@ function openingFor(outbound) {
         `Say exactly that, in our voice, in one or two short lines. Add no fact, number, term or promise that is not in ` +
         `the answer, leave nothing in it out, and do NOT say you'll check on anything else. ${CONTINUE} Set intent to partner_answer.`;
 
+    // Houses the agent sent us that Matt looked at and marked "We passed"
+    // (shared/pass-note.js, 2026-10-19). One text for all of them.
+    case "pass_note": {
+      const hs = o.houses || [];
+      const list = hs.map((h) => `- ${h.address}: ${h.words || "it isn't one for us"}`).join("\n");
+      return `${START} This agent sent us ${hs.length > 1 ? `${hs.length} houses` : "a house"} and Matt looked ${hs.length > 1 ? "at each one" : "at it"}. We're passing:\n${list}\n` +
+        `In two or three short lines: thank them for sending ${hs.length > 1 ? "these" : "it"}, say plainly we're going to pass on ` +
+        `${hs.length > 1 ? "each one, naming it by its street and giving its one reason in plain words (not a list)" : "it, naming it by its street, and give that one reason in plain words"}, ` +
+        `and ask them to keep sending fixers, on or off market — the rougher the better. ` +
+        `Give no reason that isn't above. Do NOT name any number, do NOT apologise at length, and do NOT promise to look again. ${CONTINUE} Set intent to pass_note.`;
+    }
+
     // We're passing on a house the underwriter held (held-underwrites.js):
     // not single-family, a mobile home, rural (two acres or more), outside the towns we buy
     // in, or no number we could stand behind after we asked them for theirs.

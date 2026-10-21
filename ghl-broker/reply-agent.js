@@ -52,6 +52,7 @@ import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound, supersededBy } from "./shared/follow-up.js";
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_STATUSES } from "./shared/second-look.js";
+import { passNoteStale } from "./shared/pass-note.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
 import { normalizeOpener, openerVoice, countyName, homeFor, withHomeBlank, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { standardText } from "./shared/standard-texts.js";
@@ -70,7 +71,7 @@ import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-und
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
 import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
-import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey } from "./shared/mentioned-houses.js";
+import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
@@ -1192,7 +1193,9 @@ export function decideAutoSend({ gate, party = "agent", intent = "other", channe
   // code is what releaseUnderGuard keys on, so a draft held for any other
   // reason can never be released by a guard passing.
   if ((NEVER_AUTO[party] || []).includes(intent)) return { send: false, code: "never_auto", reason: personsCall(intent) };
-  if (!(playbook.autoSend.intents || []).includes(intent)) return { send: false, code: "not_allowlisted", reason: `${intent.replace(/_/g, " ")} is not on the ${party} auto-send list` };
+  // The pass note's own switch is its place on the list (pass-note.js).
+  const listed = (playbook.autoSend.intents || []).includes(intent) || (intent === "pass_note" && playbook.passNote?.enabled);
+  if (!listed) return { send: false, code: "not_allowlisted", reason: `${intent.replace(/_/g, " ")} is not on the ${party} auto-send list` };
   if (!(config.autoSend?.channels || []).includes(channel)) return { send: false, code: "channel", reason: `${channel} replies don't auto-send` };
   return { send: true, code: "", reason: "" };
 }
@@ -2674,6 +2677,17 @@ export const OUTBOUND_KINDS = {
   // single-family, or outside the towns we buy in. One line so they aren't
   // left waiting on a number. Started by the sweep, released by the audit;
   // not on the playbook grid. Names no number.
+  // Houses you marked "We passed: <reason>" that nothing went out on
+  // (shared/pass-note.js, Matt 2026-10-19): one text for all of them —
+  // thanks for sending, we're passing, and why. It needs no place on the
+  // auto-send list: its own switch (passNote) says it sends.
+  pass_note: {
+    party: "agent",
+    enabled: (pb) => Boolean(pb?.passNote?.enabled),
+    ready: ({ subject }) => ((subject?.houses || []).length ? true : "no house you marked is waiting on a note"),
+    floats: () => [],
+    forbids: () => [],
+  },
   kind_pass: {
     party: "agent",
     enabled: (pb) => Boolean(pb?.followUp?.enabled),
@@ -3000,7 +3014,8 @@ export async function startProactive({
     // A house we passed on, or that's gone, is not reached out about (3037
     // Massey Rd, 2026-10-19). The second look is the one text about our pass,
     // and its picker read it.
-    if (kind !== "second_look") {
+    // The pass note is the text about our pass, by definition (pass-note.js).
+    if (kind !== "second_look" && kind !== "pass_note") {
       const left = await walkedAwayFor({ store, locationId, contactId, addresses: [offer?.address, subject?.address] });
       if (left) return { skipped: walkedAwayLine(left), job: null };
     }
@@ -3015,7 +3030,8 @@ export async function startProactive({
     else if (waiting) return { skipped: blockingReason(waiting), blocked: { draftId: waiting.id }, job: null };
     // One house at a time, three days apart, two a week (shared/agent-focus.js).
     // The sweep asks before it claims; this is every other door asking too.
-    if (spec.party === "agent") {
+    // The pass note answers houses they sent us; it isn't a turn of ours.
+    if (spec.party === "agent" && kind !== "pass_note") {
       const turn = await agentTurnReason({ store, locationId, contactId, kind, address: offer?.address || subject?.address || "", config,
         now: typeof deps.now === "function" ? deps.now() : Date.now() });
       if (turn) return { skipped: turn, spaced: true, job: null };
@@ -3353,6 +3369,10 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "",
       askSeller: true, sellerQuestion: dossier?.have?.sellerAsk ? "what's the seller's timeline looking like?" : SELLER_NUMBER_QUESTION };
   }
+  if (kind === "pass_note") {
+    const houses = (subject?.houses || []).slice(0, 6).map((h) => ({ offerId: h.offerId, address: String(h.address || ""), code: h.code, label: h.label || "", words: h.words || "", statusAt: h.statusAt || null }));
+    return { ...base, address: houses.map((h) => h.address).join("; ") || address, houses, notBefore: subject?.notBefore || null };
+  }
   if (kind === "kind_pass") {
     const why = ["area", "numbers", "rural", "promised", "manufactured", "too_far"].includes(subject?.why) ? subject.why : "kind";
     return { ...base, address: offer?.address || subject?.address || "", why, heldReason: String(subject?.heldReason || "").slice(0, 160),
@@ -3538,6 +3558,7 @@ function outboundSummary({ kind, offer, outbound }) {
       : outbound.why === "too_far"
         ? `Tells them ${where} doesn't fit: ours would be too far under the seller's number to send. Names no number; asks for other fixers, on or off market.`
         : `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : outbound.why === "numbers" ? "we couldn't get to a number on it" : outbound.why === "rural" ? "it's rural, and we buy houses on under 2 acres" : outbound.why === "manufactured" ? "it's a mobile home, and we don't buy those" : "we only buy single-family right now"}.`;
+    case "pass_note": return `Thanks them for sending ${(outbound.houses || []).length > 1 ? "these" : "it"} and says we're passing — ${(outbound.houses || []).map((h) => `${h.address} (${String(h.label || "").toLowerCase()})`).join(", ")}.`;
     case "take_ask": return outbound.needAddress
       ? `Asks them to confirm the street address of ${where} — the map couldn't place it.`
       : `Asks what the seller would take on ${where}${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
@@ -3935,6 +3956,9 @@ async function runProactive(job, ctx) {
       ...((kind === "outreach_open" || kind === "outreach_nudge") && outbound.county ? { county: outbound.county } : {}),
       // Why we passed: the send-time live-thread check lets a no-fit ("too_far") through.
       ...(kind === "kind_pass" && outbound.why ? { why: outbound.why } : {}),
+      // The houses it passes on, and each one's status stamp: a house you
+      // priced or marked again since stops it at send (pass-note.js passNoteStale).
+      ...(kind === "pass_note" ? { houses: outbound.houses, notBefore: outbound.notBefore } : {}),
       // The number it restates, and where the offer stood when it was
       // drafted: a status marked after this stops it at send.
       ...(kind === "second_look" ? { amount: outbound.ours, offerStatus: outbound.offerStatus, statusAt: offer?.statusAt || null, step: outbound.step } : {}),
@@ -3959,7 +3983,11 @@ async function runProactive(job, ctx) {
   if (auto.send && draft.reply) {
     job.phase = "scheduling";
     const random = typeof deps.random === "function" ? deps.random : Math.random;
-    const sendAt = scheduleFor({ config, now, kind, intent: kind, replyLength: String(draft.reply || "").length, random });
+    let sendAt = scheduleFor({ config, now, kind, intent: kind, replyLength: String(draft.reply || "").length, random });
+    // The pass note waits out your minutes to text them yourself, inside its hours.
+    if (kind === "pass_note" && Date.parse(outbound.notBefore || "") > Date.parse(sendAt)) {
+      sendAt = nextSendTime({ now: Date.parse(outbound.notBefore), delayMs: 0, quietHours: machineHours(config.autoSend || {}) });
+    }
     record = { ...record, status: "scheduled", sendAt, scheduledAt: new Date(now).toISOString(), updatedAt: new Date().toISOString() };
     await store.updateReplyDraft(record.id, record);
     job.scheduledFor = sendAt;
@@ -4412,6 +4440,15 @@ async function runReply(job, ctx) {
       message: heard.words, except: [...(iceHouse ? [iceHouse.address] : []), ...callBook] })
     : [];
   const housesWithoutNumber = namedHouses.filter((h) => h.needsAddress);
+  // The houses they named with a full address, in their own words, that
+  // aren't in the book yet: each a skeleton in skeleton mode (2026-10-19).
+  const skeletonHouses = async () => {
+    if (party !== "agent" || (isCall && !heard.labelled) || draft.intent === "opt_out") return [];
+    const fresh = namedHouses.filter((h) => h.address && !h.needsAddress && hasHouseNumber(h.address) && lastMention(heard.words, h.address) >= 0);
+    if (!fresh.length) return [];
+    const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    return fresh.filter((x) => !knownOfferFor(rows, x.address, now)).slice(0, 5);
+  };
 
   let qualify = null;
   if (party === "agent" && !isCall && !notOurKind && config.parties.agent.qualifyFirst?.enabled
@@ -4508,7 +4545,7 @@ async function runReply(job, ctx) {
           reply: "Appreciate it, but that one sounds more finished than what we buy. We go after houses that need real work, so if something rough crosses your desk, I'd love a first look.",
         };
         if (!ruledBefore) holdForShowing(street);
-      } else if (underwriteMode(saved) === "draft") {
+      } else if (underwriteMode(saved) !== "full") {
         // Draft only (2026-10-16): Matt prices it, so a showing is his to
         // book — not "let me run the numbers first", which put off 42
         // walkthroughs in the review. The draft is still made, so the house
@@ -4639,6 +4676,16 @@ async function runReply(job, ctx) {
   const bookingCouldAnswer = Boolean(booking) && (BOOKING_INTENTS[party] || []).includes(draft.intent);
   const walkthroughDraft = Boolean(walkDeal) && draft.intent === "wants_walkthrough";
   if ((config.notifyOnly || []).includes(draft.intent) && !bookingCouldAnswer && !walkthroughDraft) {
+    // "Call me about 1412 Pine and 88 Alder": the call is yours, and each
+    // house is still a skeleton for you to look at before you dial
+    // (skeleton mode, 2026-10-19). Nothing else of the plan runs here.
+    if (party === "agent" && underwriteMode(saved) === "skeleton" && !notOurKind && typeof deps.startUnderwrite === "function") {
+      for (const h of await skeletonHouses()) {
+        const r = await deps.startUnderwrite({ contactId: job.contactId, message: job.message, address: h.address, askingPrice: h.sellerAsk || 0 })
+          .catch((e) => ({ skipped: String(e?.message || e).slice(0, 120) }));
+        if (r?.skipped) warnings.push(`skeleton for ${h.address}: ${r.skipped}`);
+      }
+    }
     await handleNotifyOnly(job, { ...ctx, config, party, partySource: a.partySource, matchedTags: a.matchedTags, draft });
     return;
   }
@@ -4852,6 +4899,19 @@ async function runReply(job, ctx) {
         plan.auto.push({ id: `a-uw-${job.id}-${addressKey(h.address).slice(0, 24)}`, type: "start_underwrite", mode: "auto", status: "pending", party,
           address: h.address, askingPrice: h.sellerAsk || 0, why: `they named ${h.address} too` });
       }
+    }
+  }
+  // Skeleton mode (Matt, 2026-10-19: "when someone mentions a property can
+  // we make a draft for that"): every house they name with a full address is
+  // a skeleton for him to eyeball and mark, not only the one the rule would
+  // underwrite. Not one this reply already answered — passed on, called
+  // turnkey, or still asking its one question about — and never a house
+  // already in the book. Their own words only, as above.
+  if (party === "agent" && underwriteMode(saved) === "skeleton" && !notOurKind && !replyPassed && !qualifyHeld) {
+    const planned = new Set(plan.auto.filter((x) => x.type === "start_underwrite").map((x) => addressKey(x.address || draft.propertyAddress || "")).filter(Boolean));
+    for (const h of (await skeletonHouses()).filter((x) => !planned.has(addressKey(x.address)))) {
+      plan.auto.push({ id: `a-sk-${job.id}-${addressKey(h.address).slice(0, 24)}`, type: "start_underwrite", mode: "auto", status: "pending", party,
+        address: h.address, askingPrice: h.sellerAsk || 0, why: `they named ${h.address} — a skeleton for you to look at` });
     }
   }
   if (numberFirst) {
@@ -6376,7 +6436,9 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     // that pass. A status marked since it was drafted still stops it.
     const lookAtOurPass = d.outbound.kind === "second_look" && offer && offerStatus(offer) === "we_passed"
       && d.outbound.offerStatus === "we_passed" && Boolean(d.outbound.statusAt) && d.outbound.statusAt === offer.statusAt;
-    if (offer && ["we_passed", "unavailable"].includes(offerStatus(offer)) && !lookAtOurPass) {
+    // The pass note is the text about our pass on these very houses; it is
+    // checked against what you marked just below.
+    if (offer && ["we_passed", "unavailable"].includes(offerStatus(offer)) && !lookAtOurPass && d.outbound.kind !== "pass_note") {
       const ts = new Date(now).toISOString();
       const why = walkedAwayLine({ ...offer, status: offerStatus(offer) });
       await store.updateReplyDraft(d.id, {
@@ -6385,6 +6447,28 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       });
       await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
       return { ok: true, skipped: why };
+    }
+  }
+
+  // The pass note (shared/pass-note.js): every house it names must still be
+  // the pass you marked. A house you priced, un-passed or marked again since
+  // stops it — a new mark has drafted a new note. Only the auto path.
+  if (auto && d.outbound?.kind === "pass_note") {
+    const houses = d.outbound.houses || [];
+    const offers = new Map();
+    for (const h of houses) {
+      const o = h.offerId && store.getOffer ? await store.getOffer(h.offerId).catch(() => null) : null;
+      if (o) offers.set(h.offerId, o);
+    }
+    const stale = passNoteStale(houses, offers);
+    if (stale) {
+      const ts = new Date(now).toISOString();
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `${stale} — not sent`],
+      });
+      await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      return { ok: true, skipped: stale };
     }
   }
 
@@ -6681,6 +6765,14 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         ...(d.outbound.hook ? { hook: d.outbound.hook } : {}) },
     }).catch(() => {});
   }
+  // The pass note went: each house it named is done (shared/pass-note.js).
+  if (d.outbound?.kind === "pass_note") {
+    for (const h of d.outbound.houses || []) {
+      const o = h.offerId && store.getOffer ? await store.getOffer(h.offerId).catch(() => null) : null;
+      if (!o || o.passNote?.status === "sent") continue;
+      await store.updateOffer(o.id, { ...o, passNote: { ...(o.passNote || {}), status: "sent", sentAt: ts, draftId: d.id } }).catch(() => {});
+    }
+  }
   // The second look at a past offer actually went (shared/second-look.js):
   // how many a house has had, and when the last one was, read this.
   if (d.outbound?.kind === "second_look") {
@@ -6739,7 +6831,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // the sweep chase a number that already went. A millisecond ahead of a
   // promise the same text makes ("we'd be at 598k … I'll get the offer
   // over"), which stays open.
-  const keeps = d.party === "agent" ? (["realm_check", "take_check", "kind_pass"].includes(d.outbound?.kind) ? "sent" : keepsOurWord(body)) : null;
+  const keeps = d.party === "agent" ? (["realm_check", "take_check", "kind_pass", "pass_note"].includes(d.outbound?.kind) ? "sent" : keepsOurWord(body)) : null;
   if (keeps) {
     await recordEvent({
       store, locationId, contactId: d.contactId, party: "agent", type: "promise_kept", at: new Date(Date.parse(ts) - 1).toISOString(),

@@ -302,6 +302,70 @@ appended. It is a worthwhile change on its own schedule — it also closes the
 cleartext-keys hole on `GET /api/offers/settings` — but it is not a prerequisite
 for this feature and should not be done in the same sitting.
 
+### Skeleton drafts and the pass note (2026-10-19)
+
+Matt: "When someone mentions a property can we make a draft for that (just
+agent/address is fine, NO AUTOUNDERWRITE) … we can then quickly eyeball it and
+mark it on the offer — the app/bot will then respond to them (if we don't
+ourselves) with thanks for sending but gonna pass on X property because of Y
+reason."
+
+**Skeleton** (Settings → Auto-underwrite → "When an agent names a house" →
+"Make a skeleton", `autoUnderwriteMode: "skeleton"`):
+- A run the machine starts (the conversation, the promise driver, Tier 1, the
+  timers, the held retries) stops right after the address is placed and the
+  duplicate checks: a draft with the agent and the address, held as
+  `SKELETON_HOLD` (matches `DRAFT_ONLY_RX`, so it is the same "Price it" row),
+  stamped `autoUnderwrite.skeleton`. No Zillow facts, no comps, no photo scan,
+  no kind or rural hold. It doesn't spend the day's cap on runs and isn't
+  counted against it. A run a person starts is the full machine.
+- The conversation starts one for every house the agent names with a full
+  address in their own words and that isn't in the book (`skeletonHouses` in
+  `runReply`): not only the house the rule would underwrite, and also on a
+  "call me about these" text that otherwise only notifies you. Not a house
+  the reply already answered: passed on, called turnkey, or the first-text
+  house it is still asking its one question about. Houses are read only on a
+  lead-type text (`HOUSE_LEAD_INTENTS`), as before.
+
+**The status menu on drafts.** Offers and the work pane show the status menu
+on a draft row too ("accepted" is left off a draft).
+
+**The pass note** (Conversation AI → agent playbook → "Tell them when you pass
+on a house they sent", `parties.agent.passNote.enabled`, off by default):
+- A house nothing went out on (a draft, or a priced row never sent or floated)
+  marked "We passed: <reason>" gets `offer.passNote = { status: "due",
+  markedAt }`, and the status route starts the note (`ghl-broker/pass-note.js`
+  startPassNote). The menu says "The bot tells them in 10 minutes unless you
+  text them first", or why not.
+- One note for every one of their houses waiting on one (`passNoteHouses`,
+  shared/pass-note.js). The bot writes it (outbound kind `pass_note`): thanks,
+  each house by its street with its reason's `words`, an ask for rougher ones,
+  no number. It is scheduled 10 minutes after the LAST mark, inside machine
+  hours (marked after 5pm, it goes at 8am). Marking another of their houses
+  in those minutes redrafts it with both; correcting the reason redrafts it.
+- Its switch is its place on the auto-send list (`decideAutoSend`). It is a
+  machine-started kind: Stop on the contact holds it, a reply of theirs
+  waiting on you holds it (the tick retries), and your own text dismisses it
+  (the hand reply dismisses every open draft) — the tick then marks the
+  houses `yours`. The "one house at a time" spacing and the "we walked away"
+  check don't apply to it.
+- At send, every house must still be the pass you marked (same status, same
+  `statusAt`, `passNoteStale`); a house you priced or re-marked since stops
+  it. Sent, the houses are `passNote.status: "sent"`.
+- The 15-minute tick (`pass-notes`, sweepPassNotes): `due` ones are started,
+  a superseded or lost draft is written again, a dismissed one is `yours`, a
+  mark a day old with nothing sent is `off`.
+- Reports → Follow-up has a "Pass note on a house you marked" row.
+
+**A reply about a house we passed on** (1921 Lopez Way, 2026-10-20). When the
+contact's `subject_property` is a house we walked away from (`walkedAwayFrom`,
+and not one reopened on their numbers), `buildAgentContext` drops that house's
+STILL MISSING checklist, our underwrite lead and the "next step we had
+planned" field. In their place goes one line: WE PASSED ON <house> (why), ask
+nothing more about it, and if the thread hasn't told them yet, tell them in
+this reply. Before this, the checklist had the bot asking what a passed house
+was worth fixed up. This works with the pass note switched off.
+
 ### A shorthand address, and a run a redeploy killed (2026-09-16)
 
 **Short addresses.** Agents write "34418 54th Ave S" — no city. A geocoder

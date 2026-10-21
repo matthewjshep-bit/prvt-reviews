@@ -17,6 +17,7 @@ import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, Flame, Loader2, Pi
 import { HOT_ON, HOT_OFF, MAKE_CURRENT, UNPIN_CURRENT, OFF_MARKET_ON, OFF_MARKET_OFF } from "./api.js";
 import { offMarketOf } from "@shared/off-market.js";
 import { paperHeldNow } from "@shared/current-offer.js";
+import { PASS_NOTE_WAIT_MIN } from "@shared/pass-note.js";
 import {
   OFFER_STATUS, OFFER_STATUS_KEYS, SETTABLE_STATUSES, DEAD_STATUSES, effectiveStatus, offerHeat,
   WE_PASS_REASONS, wePassedKey, wePassReasonOf,
@@ -259,6 +260,14 @@ export function statusItems(offer, onSelect) {
       selected: key === current,
       onSelect: () => onSelect?.(key),
     }]));
+}
+
+// What a "We passed" mark on a house nothing went out on set going: the
+// bot's note to them (shared/pass-note.js), or why there isn't one.
+export function passNoteLine(r) {
+  if (r?.passNote?.started) return `The bot tells them in ${PASS_NOTE_WAIT_MIN} minutes unless you text them first.`;
+  if (r?.passNote?.skipped) return `No note to them: ${r.passNote.skipped}.`;
+  return "";
 }
 
 export function StatusMenu({ offer, onSelect, busy, onDealNav }) {

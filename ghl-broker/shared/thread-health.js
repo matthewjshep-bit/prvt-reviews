@@ -153,7 +153,7 @@ export const LIVE_THREAD_KINDS = new Set([
 ]);
 // The yes rule: a text that walks away from the house never goes out after
 // they said yes to our number (shared/offer-status.js saidYes).
-export const PASS_SHAPED_KINDS = new Set(["kind_pass", "passed_checkin"]);
+export const PASS_SHAPED_KINDS = new Set(["kind_pass", "passed_checkin", "pass_note"]);
 // A house they named this recently is live even with no offer on it yet.
 const NAMED_HOUSE_DAYS = 14;
 const HOUSE_TALK = new Set(["deal_available", "new_property", "counter", "acceptance", "realm_yes"]);

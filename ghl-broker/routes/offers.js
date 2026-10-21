@@ -176,6 +176,8 @@ import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enri
 import { OFF_MARKET_TAG } from "../shared/off-market.js";
 import { sentDeal, pickDealForReply } from "../shared/deal-reply-match.js";
 import { agentRuledOut } from "../shared/held-underwrites.js";
+import { startPassNote } from "../pass-note.js";
+import { wantsPassNote } from "../shared/pass-note.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
 const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
@@ -3560,7 +3562,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // pass — no ledger row, no texts stopped again, no history line.
       if (passReason && offer.status === "we_passed" && !offer.deal) {
         offer.passReason = { code: passReason, at: new Date().toISOString(), by: "operator" };
+        // A pass note not sent yet is written again with the new reason.
+        const rewrite = ["due", "drafted"].includes(offer.passNote?.status);
+        if (rewrite) offer.passNote = { ...offer.passNote, status: "due", markedAt: offer.passReason.at };
         await store.updateOffer(offer.id, offer);
+        if (rewrite) await kickPassNote(req, locationId, client, offer.contactId);
         return res.json({ ok: true, offer, stoppedDrafts: 0 });
       }
 
@@ -3586,11 +3592,35 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       // Their number, when the status is their counter: the band reads it.
       const amount = status === "countered" ? Math.max(0, Math.round(Number(req.body?.amount) || 0)) : 0;
+      // A house nothing went out on, marked "We passed: <reason>": the bot
+      // tells them (shared/pass-note.js). Read before the status changes.
+      const notePass = wantsPassNote({ before: { ...offer }, status, reason: passReason });
       const stopped = await applyOperatorStatus({ locationId, client, offer, status, note, ts, amount, passReason });
+      if (notePass) {
+        offer.passNote = { status: "due", markedAt: new Date().toISOString() };
+        await store.updateOffer(offer.id, offer);
+      }
       const card = PASSING_STATUSES.has(status) ? await cardHeldAfterPass(locationId, offer.contactId) : null;
-      res.json({ ok: true, offer, stoppedDrafts: stopped.length, ...(card ? { card } : {}) });
+      const passNote = notePass ? await kickPassNote(req, locationId, client, offer.contactId) : null;
+      res.json({ ok: true, offer, stoppedDrafts: stopped.length, ...(card ? { card } : {}), ...(passNote ? { passNote } : {}) });
     } catch (err) { fail(res, err); }
   });
+
+  // The pass note for this agent's marked houses (pass-note.js): started now,
+  // sent ten minutes from the last mark unless a person texts first. What it
+  // did comes back to the menu: "the bot tells them at 3:42", or why not.
+  async function kickPassNote(req, locationId, client, contactId) {
+    try {
+      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      const r = await startPassNote({ client, locationId, saved, store, contactId, sendsEnabled: CARD_SENDS_ENABLED,
+        startProactive, deps: conversationDeps({ client, locationId, saved }) });
+      if (r.skipped) console.log(`pass note not started loc=${locationId} contact=${contactId}: ${r.skipped}`);
+      return r.started ? { started: true, houses: r.houses } : { skipped: r.skipped };
+    } catch (e) {
+      console.error(`pass note failed loc=${locationId} contact=${contactId}: ${String(e?.message || e).slice(0, 160)}`);
+      return { skipped: "couldn't start the note" };
+    }
+  }
 
   // A pass that leaves the agent's GHL card where it is: which house holds
   // it (shared/ghl-stages.js cardHeldBy), so the pass doesn't look broken.

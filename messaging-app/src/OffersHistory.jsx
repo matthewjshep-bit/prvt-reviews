@@ -53,7 +53,7 @@ import { TABS, SUBS, OTHER, viewFor, defaultTab, tabOf, notSentAge, waitingSince
 import PipelineStrip from "./PipelineStrip.jsx";
 import {
   ActivityStamp, AiPill, AttachWarning, BTN, BTN_ICON, BTN_PRIMARY, EmptyState, ErrorBar, FilterChips, KpiRow, Menu,
-  SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, StatusPill, TableCard,
+  SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, TableCard, passNoteLine,
   compareBy, rowActivation, useSort,
 } from "./ui.jsx";
 
@@ -343,7 +343,7 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
     setCardNote("");
     try {
       const r = await setOfferStatus(o.id, status);
-      setCardNote(r.card?.text || "");
+      setCardNote([r.card?.text, passNoteLine(r)].filter(Boolean).join(" "));
       // A pin moves: the server cleared it on this row's siblings, so do the
       // same to our copies before the row itself lands.
       if (status === MAKE_CURRENT && r.offer) {
@@ -849,12 +849,10 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
                   {o.cashAmount != null ? fmtMoney(o.cashAmount) : "—"}
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
-                  {draft ? (
-                    <StatusPill offer={o} small />
-                  ) : (
-                    <StatusMenu offer={o} busy={statusBusy === o.id}
-                      onSelect={(s) => changeStatus(o, s)} onDealNav={onDeal} />
-                  )}
+                  {/* A draft is marked from here too (2026-10-19): "We passed"
+                      on a house an agent sent, and the bot tells them why. */}
+                  <StatusMenu offer={o} busy={statusBusy === o.id}
+                    onSelect={(s) => changeStatus(o, s)} onDealNav={onDeal} />
                   <AttachWarning offer={o} />
                   <SentBadge offer={o} />
                   {!draft && !o.deal && !old && effectiveStatus(o) === "new" && (

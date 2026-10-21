@@ -135,6 +135,11 @@ export const aiHoldReasons = (offer) => offer?.autoUnderwrite?.held || [];
 // scan — held on this one reason, and Matt prices it by hand.
 export const DRAFT_ONLY_HOLD = "ready for your comps — the app made the draft, you price it";
 export const DRAFT_ONLY_RX = /^ready for your comps\b/i;
+// Skeleton (2026-10-19): the agent and the address only, nothing looked up.
+// Read as draft-only everywhere (the same "Price it" row); you can mark it
+// "We passed" from the row and the bot tells them (pass-note.js).
+export const SKELETON_HOLD = "ready for your comps — the app made a skeleton from the address, nothing looked up";
+export const isSkeleton = (offer) => Boolean(offer?.autoUnderwrite?.skeleton);
 export const isDraftOnly = (offer) => Boolean(offer?.autoUnderwrite?.draftOnly)
   || DRAFT_ONLY_RX.test(String(aiHoldReasons(offer)[0] || ""));
 
@@ -694,6 +699,8 @@ export const OFFER_LIST_FIELDS = [
   "status", "statusAt", "statusNote", "deal", "sends", "ghl", "warnings",
   // Why we passed ({code, at, by}, WE_PASS_REASONS): the bot says it, the pill shows it.
   "passReason",
+  // The bot's note about that pass (shared/pass-note.js): due, drafted, sent.
+  "passNote",
   // Small on purpose (scalars only — see auditTrail in auto-underwrite.js).
   // It rides on the lean row so the auto-underwrite daily cap and the 24h
   // dedupe can be answered without reading every offer document in full.

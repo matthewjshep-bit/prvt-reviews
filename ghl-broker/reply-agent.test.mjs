@@ -8198,3 +8198,41 @@ test("a float that was queued but never sent is not a number we mentioned", () =
   assert.notEqual(whatWentOut(queued), "number", "the stamp goes on when it's queued; a reply superseded it");
   assert.equal(whatWentOut({ ...queued, floatSentAt: "2026-10-14T15:40:00.000Z" }), "number", "once it left, it's the number we floated");
 });
+
+/* ---------- skeleton: every house they name is a draft for Matt (2026-10-19) ---------- */
+
+// Matt: "When someone mentions a property can we make a draft for that (just
+// agent/address is fine, NO AUTOUNDERWRITE)". With autoUnderwriteMode
+// "skeleton" the conversation starts one for every house they name with a
+// full address — not only the one the rule would have underwritten — and
+// the underwriter makes it a skeleton (auto-underwrite-draft-only.test.mjs).
+const SKELETON_SAVED = { ...QUALIFY_SAVED, autoUnderwriteMode: "skeleton" };
+const ASKED = "Give me a call about 1412 Pine St in Kent and 88 Alder St over there too, both rentals the owner is tired of";
+const KENT = [{ address: "1412 Pine St, Kent, WA 98031" }, { address: "88 Alder St, Kent, WA 98031" }];
+
+test("with skeleton on, every house they name is started as a skeleton for you to look at, even on a text the rule doesn't underwrite", async () => {
+  const { uw } = await replyTo(ASKED, { saved: SKELETON_SAVED, intent: "wants_call", address: "", houses: KENT,
+    lines: [["outbound", OPENER], ["inbound", "Sold already, sorry"], ["outbound", "No worries, anything else that needs work?"]],
+    sent: [{ id: "p1", locationId: "LOC", contactId: "c1", status: "sent", createdAt: iso(3600000), reply: "…", qualify: { stage: "pass", address: ICE } }],
+    reply: "We do buy in Kent. Let me take a look at both." });
+  assert.deepEqual(uw.map((u) => u.address).sort(), ["1412 Pine St, Kent, WA 98031", "88 Alder St, Kent, WA 98031"], "the call is yours; the houses are still skeletons");
+  // Without skeleton on, a call ask starts nothing (the rule underwrites a house only on a lead).
+  const off = await replyTo(ASKED, { intent: "wants_call", address: "", houses: KENT,
+    lines: [["outbound", OPENER], ["inbound", "Sold already, sorry"], ["outbound", "No worries, anything else that needs work?"]],
+    sent: [{ id: "p1", locationId: "LOC", contactId: "c1", status: "sent", createdAt: iso(3600000), reply: "…", qualify: { stage: "pass", address: ICE } }],
+    reply: "We do buy in Kent. Let me take a look at both." });
+  assert.equal(off.uw.length, 0);
+});
+
+test("with skeleton on, the first-text house we're still asking our one question about gets no skeleton", async () => {
+  const { uw } = await replyTo("Cosmetic fixer", { saved: SKELETON_SAVED });
+  assert.equal(uw.length, 0);
+});
+
+test("with skeleton on, houses named on a lead the rule underwrites one of are all started, each once", async () => {
+  const { uw } = await replyTo(ASKED.replace("Give me a call about", "I have"), { saved: SKELETON_SAVED, intent: "investor_open", address: "", houses: KENT,
+    lines: [["outbound", OPENER], ["inbound", "Sold already, sorry"], ["outbound", "No worries, anything else that needs work?"]],
+    sent: [{ id: "p1", locationId: "LOC", contactId: "c1", status: "sent", createdAt: iso(3600000), reply: "…", qualify: { stage: "pass", address: ICE } }],
+    reply: "We do buy in Kent. Let me take a look at both." });
+  assert.deepEqual(uw.map((u) => u.address).sort(), ["1412 Pine St, Kent, WA 98031", "88 Alder St, Kent, WA 98031"]);
+});

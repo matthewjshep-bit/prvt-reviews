@@ -111,7 +111,7 @@ export const INTENT_LABEL = {
   agent: {
     deal_available: "has a deal (tier 1)", new_property: "new property (tier 1)", investor_open: "open to investors (tier 2)",
     realm_yes: "number is in the realm", realm_check: "floated our number", take_check: "floated our read",
-    offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", kind_pass: "told them we're passing (not our kind of house, or out of area)", partner_answer: "your answer to a question the bot couldn't", passed_checkin: "checked back in on a passed offer", hot_push: "pushed an agreed price toward paper",
+    offer_nudge: "followed up on our offer", counter_nudge: "asked for room on a counter", take_ask: "asked for their read to finish our numbers", kind_pass: "told them we're passing (not our kind of house, or out of area)", pass_note: "told them we're passing on a house you marked", partner_answer: "your answer to a question the bot couldn't", passed_checkin: "checked back in on a passed offer", hot_push: "pushed an agreed price toward paper",
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text", outreach_email: "introduced us by email", checkin_email: "checked in by email",
     call_followup: "text after a call", showing_ask: "asked for a buyer walkthrough window", promise_due: "kept our word on a number we owed", price_drop: "saw the list price come down", checkin_due: "the check-in they asked for", address_chase: "asked again for the address of a property they said was coming",
     agent_pulse: "checked in on the relationship",
@@ -731,6 +731,12 @@ const PLAYBOOK = () => ({
   // what time works (no times offered; no calendar is connected). See
   // shared/flip-read.js FIXERS_CALL_ASKS. Off.
   callAsk: { enabled: false },
+  // Agent only (2026-10-19, shared/pass-note.js). A house nothing went out on
+  // that you mark "We passed: <reason>" gets one text from the bot, ten
+  // minutes later, unless you text them first: thanks for sending, we're
+  // passing, why. On, it sends itself (it needs no place on the auto-send
+  // list). Off.
+  passNote: { enabled: false },
   // The one door through NEVER_AUTO. When the agent counters at or under what
   // our own calculator would have produced at its most generous, the bot may
   // say yes in words — and then hand off. It never mints a deal and never
@@ -1122,6 +1128,9 @@ function normalizePlaybook(p, party, seed = {}) {
     },
     callAsk: {
       enabled: party === "agent" && bool(src.callAsk?.enabled, false),
+    },
+    passNote: {
+      enabled: party === "agent" && bool(src.passNote?.enabled, false),
     },
     requote: {
       enabled: bool(src.requote?.enabled, false),
