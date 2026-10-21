@@ -37,6 +37,7 @@ import { maybeRunBuyerPulse } from "./buyer-pulse.js";
 import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
 import { maybeRunGhlCalls } from "./ghl-calls.js";
+import { maybeRunGhlPings } from "./ghl-pings.js";
 import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
 import { runLocationTick } from "./tick.js";
@@ -388,6 +389,12 @@ const TICK_JOBS = [
   { area: "ghl-calls", run: async ({ client, locationId, saved }) => {
     const r = await maybeRunGhlCalls({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
     if (r?.mode === "morning") console.log(`GHL calls: the day's list started for ${locationId}`);
+  } },
+  // The few things only Matt can do (paper to sign, an agreed number, a
+  // closing task) ping him through his GHL workflow, once each (ghl-pings.js,
+  // 2026-10-20). Off until desk.ghlPings is on with a workflow; never texts anyone.
+  { area: "ghl-pings", run: async ({ client, locationId, saved }) => {
+    await maybeRunGhlPings({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
   } },
 ];
 

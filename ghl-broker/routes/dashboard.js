@@ -63,6 +63,8 @@ import { followUpEngineFor } from "../follow-up-engine.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize as summarizeAudit } from "../shared/conversation-audit.js";
 import { handOffs } from "../shared/hand-off.js";
+import { ghlPingsOn } from "../shared/ghl-pings.js";
+import { runGhlPings, CURSOR_NAME as GHL_PINGS_CURSOR } from "../ghl-pings.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
 import { ghlCallsOn, liveGhlQueues, GHL_CALL_EVENT_TYPES, ghlCallWindow } from "../shared/ghl-calls.js";
 import { runGhlCalls, startGhlCalls, getGhlCallsJob, summarizeRun, patchCursor as patchGhlCallsCursor, pacificDay, CURSOR_NAME as GHL_CALLS_CURSOR } from "../ghl-calls.js";
@@ -843,6 +845,31 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const job = startGhlCalls({ store, locationId, client, saved, deps: { pipelineFor }, mode, trigger: "manual",
         onDone: (j) => patchGhlCallsCursor(store, locationId, { hand: { at: j.finishedAt, last: summarizeRun(j) } }) });
       res.status(202).json({ ok: true, started: true, job: summarizeRun(job) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The pings (ghl-pings.js, 2026-10-20), by hand: { dryRun } (the default)
+  // lists who would be pinged and why and writes nothing. GET shows the
+  // setting and the last runs.
+  router.get("/ghl-pings", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const settings = normalizeDesk(saved.desk).ghlPings;
+      const cursor = await store.getJobCursor?.(locationId, GHL_PINGS_CURSOR).catch(() => null);
+      const { fieldId, ...doc } = cursor?.doc || {};
+      res.json({ ok: true, settings, on: ghlPingsOn(settings), cursor: cursor ? { at: cursor.at, ...doc, fieldSet: Boolean(fieldId) } : null });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/ghl-pings/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const dryRun = req.body?.dryRun !== false;
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      if (!dryRun && !ghlPingsOn(normalizeDesk(saved.desk).ghlPings)) {
+        return res.status(400).json({ error: "Pings are off: switch on \"Ping me in GHL\" and paste the workflow link in Settings first." });
+      }
+      res.json({ ok: true, ...(await runGhlPings({ store, locationId, client, saved, deps: { pipelineFor }, dryRun, trigger: "manual" })) });
     } catch (err) { fail(res, err); }
   });
 
