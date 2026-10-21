@@ -176,9 +176,11 @@ export function buyerTypeFit(buyer = {}, asset = null) {
     if (!wants && types.length) return { wants, refuses: true, reason: "buys other kinds of houses" };
     return { wants, refuses: false, reason: wants ? "buys mobile homes" : "" };
   }
-  const wants = types.includes(a.type);
+  // Land goes to whoever builds (1538 NW 61st St, 2026-10-20: wave 1 went to
+  // twenty-five flippers — "I'm not a land guy").
+  const wants = types.includes(a.type) || (a.type === "land" && (buyer?.markets?.types || []).includes("new-construction"));
   if (said.mobileOnly) return { wants: false, refuses: true, reason: "buys mobile homes only" };
-  return { wants, refuses: false, reason: "" };
+  return { wants, refuses: false, reason: wants && a.type === "land" ? "builds" : "" };
 }
 
 /* ---------- what we're buying right now ---------- */

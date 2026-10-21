@@ -107,3 +107,22 @@ test("the ARV's add-a-bath cure is priced as a buyer allowance", () => {
   const r = rehabChecks({ state: blankRehabState(), sqft: 1056, yearBuilt: 1990, arv: 825000, cures: [{ key: "add_bath", label: "Add a bath — the ARV comps have 2, this has 1", cost: 25000 }], t: T });
   assert.deepEqual(r.rows.map((x) => [x.key, x.cost]), [["add_bath", 25000]]);
 });
+
+// 3831 Bagley Ave N (2026-10-13): $102K on 1,780 sqft for a house the agent
+// called a possible teardown; the walkthrough said $400K. The heavy band was
+// the ceiling the checks filled to and stopped.
+test("a house the agent calls a teardown is scoped at the gut tier, and the heavy band doesn't trim it", () => {
+  const gut = { why: 'the agent said "tear down"', source: "agent" };
+  const r = rehabChecks({ state: on(blankRehabState(), "paint-int", "lvp"), sqft: 1780, yearBuilt: 1924, arv: 1161000, t: T, gut });
+  assert.ok(keys(r).includes("gut_floor"));
+  assert.ok(r.after >= 267000, `after ${r.after}`);
+  assert.ok(r.after > heavyCeiling(1780));
+  assert.equal(r.floor.gut, true);
+  // A person who takes the line off keeps it off.
+  const declined = rehabChecks({ state: on(blankRehabState(), "paint-int", "lvp"), sqft: 1780, yearBuilt: 1924, arv: 1161000, t: T, gut, declined: ["gut_floor"] });
+  assert.ok(!keys(declined).includes("gut_floor"));
+  // No gut word: the heavy band still caps it.
+  const plain = rehabChecks({ state: on(blankRehabState(), "paint-int", "lvp"), sqft: 1780, yearBuilt: 1924, arv: 1161000, t: T });
+  assert.ok(plain.after <= heavyCeiling(1780));
+});
+

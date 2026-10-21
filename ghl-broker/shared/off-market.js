@@ -57,6 +57,32 @@ export function offMarketCue(text = "") {
   return m ? m[0].trim() : "";
 }
 
+// The opposite: someone else is bidding, or it's on the market — "one other
+// offer", "a signed back up at 750k", "highest and best", "it's on the MLS".
+// 3831 Bagley Ave N (2026-10-13): the machine marked it off-market because
+// Zillow didn't show it for sale; the agent said "I have to respond to that
+// one other offer" and later "a signed back up at 750k", and the deal was
+// still pitched to buyers as off-market. A buyer who knew the listing said so.
+export const ON_MARKET_CUE_RX = new RegExp([
+  "(?:other|multiple|competing|second|cash|backup|back-up) (?:offers?|buyers?|bids?)",
+  "another (?:offer|buyer|bid) (?:in|on|came|coming|that|we)",
+  "back[\\s-]?up (?:offer|buyer|at|of|contract|position)",
+  "highest (?:and|&) best", "bidding war",
+  "(?:have|need|got) to respond to",
+  "(?:on|hit|hits|hitting|going on|goes on|went on|is on) (?:the )?mls",
+  "(?:it'?s|it is|is|was|now|currently|just) (?:been )?(?:listed|active on)",
+  "going live", "goes live", "open house",
+].map((p) => `\\b${p}`).join("|"), "i");
+
+/** onMarketCue(text) → the phrase that says it's on the market or bid on, or "". Their words only. */
+export function onMarketCue(text = "") {
+  const t = String(text || "");
+  // "not on the MLS yet" is the off-market cue, not this one.
+  if (offMarketCue(t)) return "";
+  const m = t.match(ON_MARKET_CUE_RX);
+  return m ? m[0].trim() : "";
+}
+
 // Their lines in a transcript (buildTranscript marks them THEM), newest last:
 // what we said about a house isn't evidence of how it's being sold.
 const theirLines = (transcript = "", max = 12) => String(transcript || "").split("\n").filter((l) => /\bTHEM\b/.test(l)).slice(-max);

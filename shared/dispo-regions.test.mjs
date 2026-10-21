@@ -53,3 +53,9 @@ test("a mobile home buyer shows as mobile / manufactured, not dropped as an unkn
   const m = marketsFromTags(["investor", "dispo-type-mobile-home", "dispo-source-fb-warei"]);
   assert.deepEqual(m.types, ["mobile-home"]);
 });
+
+test("a builder found off permits reads as new construction", () => {
+  assert.deepEqual(marketsFromTags(["builder", "dispo-source-permits", "dispo-city-seattle"]).types, ["new-construction"]);
+  assert.deepEqual(marketsFromTags(["dispo-type-new-construction", "builder"]).types, ["new-construction"]);
+});
+

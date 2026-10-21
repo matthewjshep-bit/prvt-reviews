@@ -37,3 +37,12 @@ test("the ping says what it is and where to do it, and a new closing task is a n
   assert.notEqual(a, b);
   assert.equal(a, pingClaimKey({ id: "closing_task_due:o2", title: "3831 Bagley: Purchase & sale signed" }));
 });
+
+// 1538 NW 61st St and 3831 Bagley Ave N (2026-10-21): signed with every
+// warning open, and the warnings were on a screen nobody had open.
+test("the before-you-sign ping says what's wrong, not only that something is", () => {
+  const verdict = "1538 NW 61st St at 890k: we never priced it · the agent said \"teardown\" · not pre-sold — ask for feasibility with the earnest money after it, or don't sign.";
+  assert.equal(pingWhy({ kind: "pre_contract", title: "1538 NW 61st St: before you sign", verdict }), verdict);
+  assert.equal(pingWhy({ kind: "pre_contract", title: "1538 NW 61st St: before you sign" }), "1538 NW 61st St: before you sign — in the offer's Before you sign");
+});
+

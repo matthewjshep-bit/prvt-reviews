@@ -301,6 +301,20 @@ export function fellThroughOn(deals = [], address = "") {
   return mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
 }
 
+/**
+ * underContractOn(deals, address) → the live deal on that house, or null
+ *
+ * We signed it: under contract, a buyer found, assigned or closed — anything
+ * but fell through. No first-pass number, nudge or re-quote goes to the
+ * listing side about a house we already signed (1538 NW 61st St, 2026-10-20:
+ * "840s to 890, just a first pass" a minute after the promote). Matched
+ * loosely, as fellThroughOn is.
+ */
+export function underContractOn(deals = [], address = "") {
+  if (!String(address || "").trim()) return null;
+  return (deals || []).find((o) => o?.deal && o.deal.stage !== "fell_through" && sameStreetLoose(o.address, address)) || null;
+}
+
 export const dealSpokenFor = (deal) =>
   Boolean(deal) && (deal.stage === "buyer_found" || (deal.investors || []).some((i) => i?.status === "committed"));
 
@@ -690,6 +704,8 @@ export const OFFER_LIST_FIELDS = [
   // Heat (offerHeat): the hand-set flag and the agreed price it is derived from,
   // and the take-back that cancels every agreed marker before it (priceAgreed).
   "hot", "agreed", "agreedCleared", "pin", "paperHeld",
+  // The agent sent the paper to sign ({at, kind}, pre-contract.js houseWordsUpdate).
+  "paperAt",
   // Matt's approval of the number ({amount, at, by}, numberApproved).
   "approved",
   // When our number went out by text (a sent realm check): the offer is Sent

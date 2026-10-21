@@ -23,7 +23,7 @@ import { FERRY_ONLY_ZIPS } from "../shared/underwrite-checks.js";
 import express from "express";
 import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
 import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickWave, blastedTo, isManufacturedTarget } from "../shared/buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickWave, blastedTo, isManufacturedTarget, isLandTarget } from "../shared/buyer-score.js";
 import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
 import { buyersInPlay } from "../shared/offer-status.js";
 import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
@@ -1353,10 +1353,10 @@ export default function createDispoRouter({ resolveLocation }) {
   }
 
   // What a wave needs to know beyond the floor: a mobile home goes by who
-  // buys them (shared/buyer-score.js pickWave), and a buyer with no phone may
+  // buys them, land by who builds (shared/buyer-score.js pickWave), and a buyer with no phone may
   // come in to be emailed when email drafting is on.
   function waveOptions(target, da) {
-    return { manufactured: isManufacturedTarget(target), email: da.email.draft };
+    return { manufactured: isManufacturedTarget(target), land: isLandTarget(target), email: da.email.draft };
   }
 
   // How to reach a buyer, carried onto a wave's shortlist so the queue can

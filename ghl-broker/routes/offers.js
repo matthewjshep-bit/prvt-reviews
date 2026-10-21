@@ -73,7 +73,7 @@ import {
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
   numberApproved, termsOnLetter, WE_PASS_REASONS, WE_PASS_REASON, normalizeWePassReason,
 } from "../shared/offer-status.js";
-import { currentOffers, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
+import { currentOffers, houseRowFor, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperAfterAnswerDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS, sendsItselfOnClear, isRoughNumber } from "../shared/paper-follows.js";
 import { noFitLine, stanceWaitingFor } from "../shared/number-stance.js";
 import { planRequote } from "../shared/requote.js";
@@ -129,7 +129,7 @@ import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STAT
 import { mergeParties } from "../shared/deal-parties.js";
 import { mergeAccess, accessFor } from "../shared/deal-access.js";
 import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, tickById, GATES } from "../shared/deal-checklist.js";
-import { preContractChecks, preContractRecord, openChecks, tickPreContract, normalizePreContract, PRE_CONTRACT_KEYS } from "../shared/pre-contract.js";
+import { preContractChecks, preContractRecord, openChecks, tickPreContract, normalizePreContract, houseWordsUpdate, PRE_CONTRACT_KEYS } from "../shared/pre-contract.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
 import { normalizeTierOne } from "../shared/tier-one.js";
@@ -174,6 +174,7 @@ import { normalizeAgentPulse } from "../shared/agent-pulse.js";
 import { ensureOfferPage, refreshOfferPages } from "../offer-page.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
 import { OFF_MARKET_TAG } from "../shared/off-market.js";
+import { sentDeal, pickDealForReply } from "../shared/deal-reply-match.js";
 import { agentRuledOut } from "../shared/held-underwrites.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
@@ -3449,7 +3450,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // kept on the deal and said as a warning — never a block.
     try {
       const videos = (await store.listOfferVideos?.(offer.id).catch(() => [])) || [];
-      const checks = preContractChecks({ offer, settings, videos, price: contractPrice, fee: assignmentFee });
+      const thread = await agentThreadFor(locationId, offer, client);
+      const checks = preContractChecks({ offer, settings, videos, price: contractPrice, fee: assignmentFee, thread });
       offer.deal.preContractAtPromote = preContractRecord(checks);
       const open = openChecks(checks);
       if (open.length) warnings.push(`before signing, not checked: ${open.map((c) => `${c.label.toLowerCase()} (${c.detail})`).join("; ")}`);
@@ -4372,18 +4374,26 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // What nobody has looked at yet on an offer about to be signed, read off
   // the full record and its videos. GET for the pane; POST ticks one by hand
   // ({ key, done = true, note }) or takes a tick back (done: false).
-  async function preContractFor(locationId, offer) {
-    const [settings, videos] = await Promise.all([
+  async function preContractFor(locationId, offer, client = null) {
+    const [settings, videos, thread] = await Promise.all([
       store.getOfferSettings(locationId).catch(() => null),
       store.listOfferVideos ? store.listOfferVideos(offer.id).catch(() => []) : [],
+      agentThreadFor(locationId, offer, client),
     ]);
-    return preContractChecks({ offer, settings: effectiveSettings(settings || {}), videos });
+    return preContractChecks({ offer, settings: effectiveSettings(settings || {}), videos, thread });
+  }
+  // The listing agent's thread for the checks that read it (agent_words,
+  // their_number, competing). Null when it can't be read: those say "not read".
+  async function agentThreadFor(locationId, offer, client) {
+    if (!client || !offer?.contactId) return null;
+    try { return (await buildTranscript(client, locationId, offer.contactId, { maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 80, maxChars: 20000, maxCallTranscripts: 0 })).text || ""; }
+    catch { return null; }
   }
   router.get("/:id/precontract", async (req, res) => {
     try {
       const ctx = await loadDealOffer(req, res, { requireDeal: false });
       if (!ctx) return;
-      res.json({ ok: true, checks: await preContractFor(ctx.locationId, ctx.offer), preContract: normalizePreContract(ctx.offer.preContract), presell: ctx.offer.presell || null });
+      res.json({ ok: true, checks: await preContractFor(ctx.locationId, ctx.offer, ctx.client), preContract: normalizePreContract(ctx.offer.preContract), presell: ctx.offer.presell || null });
     } catch (err) { fail(res, err); }
   });
   router.post("/:id/precontract", async (req, res) => {
@@ -4395,7 +4405,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!PRE_CONTRACT_KEYS.includes(key)) return res.status(400).json({ error: `key must be one of: ${PRE_CONTRACT_KEYS.join(", ")}` });
       offer.preContract = tickPreContract(offer.preContract, { key, done: req.body?.done !== false, note: req.body?.note || "" });
       await store.updateOffer(offer.id, offer);
-      res.json({ ok: true, checks: await preContractFor(locationId, offer), preContract: offer.preContract });
+      res.json({ ok: true, checks: await preContractFor(locationId, offer, ctx.client), preContract: offer.preContract });
     } catch (err) { fail(res, err); }
   });
 
@@ -5471,6 +5481,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         { offerId: full.id, source: "conversation", at: ts }).catch(() => {});
       return { ok: true, cooled: true, address: full.address };
     },
+    // What the listing agent said about how the house is being sold, and the
+    // paper (shared/pre-contract.js houseWordsUpdate). Lands on the house's
+    // current row, or its held draft when the app hasn't priced it yet.
+    noteHouseWords: async ({ contactId, addressHint = "", onMarket = "", paper = "", draftId = null }) => {
+      const book = await store.listOffers(locationId, { contactId, limit: 50 }).catch(() => []);
+      const row = houseRowFor(book, { contactId, address: addressHint });
+      if (!row?.id) return { ok: false, reason: "no house to note it on" };
+      const full = await store.getOffer(row.id).catch(() => null);
+      if (!full || full.locationId !== locationId) return { ok: false, reason: "offer vanished" };
+      const patch = houseWordsUpdate(full, { onMarket, paper, draftId });
+      if (!patch) return { ok: true, address: full.address };
+      Object.assign(full, patch, { updatedAt: new Date().toISOString() });
+      await store.updateOffer(full.id, full);
+      return { ok: true, address: full.address, offMarketCleared: Boolean(patch.offMarket), paper: patch.paperAt?.kind || "" };
+    },
     // Hold, then pass (counter-hold.js). The hold went: its clock starts on
     // the offer. A lower number from them is a new hold; the same ask again
     // is one more time they didn't move.
@@ -5578,8 +5603,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         { type: "offer_accepted", offerId: full.id, source: "conversation", at: ts, data: { amount, via: "acceptance" } });
       return { ok: true, address: full.address, amount, revived };
     },
-    linkDealInterest: ({ contactId, addressHint, status, reason, revive, addOnly, withinDays, note }) =>
-      linkInvestorInterest({ locationId, client, contactId, addressHint, status, reason, revive, addOnly, withinDays, note }),
+    linkDealInterest: ({ contactId, addressHint, status, reason, revive, addOnly, withinDays, note, said }) =>
+      linkInvestorInterest({ locationId, client, contactId, addressHint, status, reason, revive, addOnly, withinDays, note, said }),
     // A buyer asked for a deal by email (reply-agent.js): that deal, as an
     // email draft to them (routes/dispo.js emailDealToBuyer). Live deals only.
     emailDealTo: async ({ contactId, offerId }) => {
@@ -5876,14 +5901,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // The investor's standing on a deal: passed, or the committed buyer
     // (which advances an under-contract deal to buyer_found, as the Deals
     // page does). Links them first if they weren't.
-    setInvestorStatus: async ({ contactId, addressHint, status, reason = null }) => {
+    setInvestorStatus: async ({ contactId, addressHint, status, reason = null, said: words = "" }) => {
       if (!INVESTOR_STATUSES.includes(status)) return { ok: false, reason: `not an investor status: ${status}` };
       // "soft_commit" pauses outreach on a live deal, which is an operator's
       // judgement about whether a buyer is real — not something a warm text
       // should decide. The bot may mark evaluating, committed (it already
       // needs a person to confirm) or passed; holding the deal back is ours.
       if (status === "soft_commit") return { ok: false, reason: "a soft commit is yours to set on the deal, not the bot's" };
-      const found = await findLiveDealFor({ locationId, contactId, addressHint });
+      const found = await findLiveDealFor({ locationId, contactId, addressHint, said: [words, reason?.note].filter(Boolean).join(" ") });
       if (!found.ok) return found;
       const offer = found.offer;
       offer.deal.investors = offer.deal.investors || [];
@@ -5939,10 +5964,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // Feedback without a status change: a price gripe, a "wrong side of the
     // freeway for me". They stay where they are on the deal; we keep what
     // they said.
-    recordDealFeedback: async ({ contactId, addressHint, reason }) => {
+    recordDealFeedback: async ({ contactId, addressHint, reason, said: words = "" }) => {
       const said = normalizePassReason(reason);
       if (!said) return { ok: false, reason: "nothing to file" };
-      const found = await findLiveDealFor({ locationId, contactId, addressHint });
+      const found = await findLiveDealFor({ locationId, contactId, addressHint, said: [words, said.note].filter(Boolean).join(" ") });
       if (!found.ok) return found;
       const offer = found.offer;
       const ts = new Date().toISOString();
@@ -6699,8 +6724,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // locationId is a REQUEST value, not a router one — it has to be passed in.
   // Reading it as a free variable here threw ReferenceError on every call and
   // reported it as "mark investor passed failed".
-  async function findLiveDealFor({ locationId, contactId, addressHint = "" }) {
+  async function findLiveDealFor({ locationId, contactId, addressHint = "", said = "" }) {
     const live = (await store.listDeals(locationId)).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage));
+    // Sent two or more of them: what they said picks the deal, not the
+    // newest mention (shared/deal-reply-match.js, 3831 Bagley / 1538 NW 61st).
+    const theirs = live.filter((o) => sentDeal(o, contactId));
+    if (theirs.length >= 2) {
+      const pick = pickDealForReply(theirs, { hint: addressHint, said });
+      return pick.offer ? { ok: true, offer: pick.offer } : { ok: false, reason: "they're on two or more deals and the reply doesn't say which — yours to file" };
+    }
     let offer = pickDealByAddress(live, addressHint);
     if (!offer) {
       const mine = live.filter((o) => (o.deal.investors || []).some((i) => i.contactId === contactId));
@@ -6752,12 +6784,20 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   //             deal needs no mention at all)
   // A committed or soft-committed buyer is never moved from here.
   async function linkInvestorInterest({ locationId, client, contactId, addressHint = "", status = "evaluating", reason = null,
-    revive = true, addOnly = false, withinDays = 0, note = "" }) {
+    revive = true, addOnly = false, withinDays = 0, note = "", said: words = "" }) {
     const OPEN_STAGES = new Set(["under_contract", "buyer_found"]);
     const open = (await store.listDeals(locationId)).filter((o) => OPEN_STAGES.has(o.deal?.stage));
     if (!open.length) return { ok: true, linked: false, reason: "no open deals" };
 
-    let match = pickDealByAddress(open, addressHint);
+    // Sent two or more: their words pick the deal; unclear files nothing
+    // (shared/deal-reply-match.js).
+    const theirs = open.filter((o) => sentDeal(o, contactId));
+    let match = null;
+    if (theirs.length >= 2) {
+      const pick = pickDealForReply(theirs, { hint: addressHint, said: [words, reason?.note].filter(Boolean).join(" ") });
+      if (!pick.offer) return { ok: true, linked: false, reason: "on two or more deals and the reply doesn't say which" };
+      match = pick.offer;
+    } else match = pickDealByAddress(open, addressHint);
     if (!match) {
       let text = "";
       try {

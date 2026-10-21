@@ -210,7 +210,9 @@ test("the rehab level Matt picked is the one the blast prints", () => {
   assert.match(blastMessage({ ...picked("heavy"), variant: 0 }), /under contract, heavy rehab\. Buyer price 421k/);
   assert.match(blastMessage({ ...picked("light"), variant: 2 }), /just went under contract\. Light rehab\. Buyer price/);
   assert.equal(picked(null).rehab, "");
-  assert.equal(picked("gut").rehab, "", "only a level the pane offers");
+  assert.equal(picked("extreme").rehab, "", "only a level the pane offers");
+  // The Gut bucket (2026-10-21) reads as what it is.
+  assert.match(blastMessage({ ...picked("gut"), variant: 0 }), /under contract, full gut rehab\./);
 });
 
 /* ---------- two deals, one text (2026-10-05) ---------- */
@@ -316,3 +318,29 @@ test("a dollar sign never goes out, and at most three versions are kept", () => 
   assert.equal(normalizeDealTexts(["a", "b", "c", "d"]).length, 3);
   assert.deepEqual(normalizeDealTexts("one\n\ntwo"), ["one", "two"]);
 });
+
+// 1538 NW 61st St (2026-10-20): "Buyer price 911k, ARV around 925k" on a
+// teardown lot, the ARV being the asking price; "How much land is it? I
+// didn't see that in your initial blurb."
+test("a land deal tells buyers the lot, not an ARV", () => {
+  const offer = {
+    address: "1538 NW 61st St, Seattle, WA 98107", asset: { type: "land", by: "you" },
+    calc: { inputs: { arv: 925000, repairs: 0 } },
+    snapshot: { subjectInfo: { beds: 3, baths: 1, sqft: 2090, yearBuilt: 1919, lotSqft: 4748, zoning: "LR1 (M)" } },
+  };
+  const facts = dealFacts(offer, { price: 911000 });
+  assert.equal(facts.arv, 0);
+  assert.equal(facts.repairs, 0);
+  assert.equal(facts.lotSqft, 4748);
+  for (const variant of [0, 1, 2]) {
+    const text = blastMessage({ ...facts, firstName: "Sam", variant });
+    assert.match(text, /4,748 sqft lot/, text);
+    assert.match(text, /zoned LR1 \(M\)/, text);
+    assert.doesNotMatch(text, /ARV|rehab|2,090|built 1919/, text);
+    assert.match(text, /Buyer price 911k/, text);
+  }
+  const own = blastMessage({ ...facts, firstName: "Sam", templates: [DEFAULT_DEAL_TEXTS[0]] });
+  assert.match(own, /4,748 sqft lot/);
+  assert.doesNotMatch(own, /ARV/);
+});
+

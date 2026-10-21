@@ -33,7 +33,7 @@ import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
 import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
 import { accessFor } from "./deal-access.js";
 import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
-import { needsPreContract, preContractChecks, openChecks, PRESELL_MIN_BUYERS } from "./pre-contract.js";
+import { needsPreContract, preContractChecks, preContractVerdict, openChecks, PRESELL_MIN_BUYERS } from "./pre-contract.js";
 import { isOffMarket } from "./off-market.js";
 import { callEventConnected } from "./talked-to.js";
 
@@ -483,10 +483,14 @@ export function buildPipeline({
         // One line on the Desk (Matt, 2026-10-18: he won't tick a checklist):
         // the pre-sell is the item a button can do. `checks` stays on the row
         // for the promote's confirm. The pane's Edit offer opens the offer.
-        card.actionIds.push(push({ ...base, kind: "pre_contract", severity: o.hot?.signal === "writing_up" ? "now" : "soon",
+        // The paper's here (shared/pre-contract.js houseWordsUpdate): now.
+        const paperNow = o.hot?.signal === "writing_up" || Boolean(o.paperAt?.at);
+        card.actionIds.push(push({ ...base, kind: "pre_contract", severity: paperNow ? "now" : "soon",
           title: `${card.address}: before you sign`,
           detail: presell ? `pre-sold to ${presold} of ${PRESELL_MIN_BUYERS} buyers` : "",
           checks,
+          // The line the GHL ping carries (shared/ghl-pings.js pingWhy).
+          verdict: preContractVerdict(checks, { address: card.address, price: priceAgreed(o)?.amount || o.cashAmount }),
           ops: [
             ...(presell ? [{ key: "presell", label: `Pre-sell to ${PRESELL_MIN_BUYERS} buyers`, intent: "primary" }] : []),
             { key: "promote_deal", label: "It's signed — promote", intent: presell ? "secondary" : "primary" },

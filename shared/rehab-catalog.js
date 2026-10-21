@@ -101,14 +101,61 @@ export const REHAB_LEVELS = [
   { id: "light", label: "Light" },
   { id: "medium", label: "Medium" },
   { id: "heavy", label: "Heavy" },
+  { id: "gut", label: "Gut" },
 ];
+
+// A full gut, and the structure under it (2026-10-21). The heavy band tops
+// out near $60/sqft, and every single-family deal that died had its rehab low
+// by 1.3–3×, never high. The worst were the houses the agent called a
+// teardown: 3831 Bagley Ave N went out at $102K on 1,780 sqft ("perhaps a
+// tear down", the agent said in August); the buyer who walked it said "all
+// lath and plaster, you gotta go down to the studs, that's 400k not 110k".
+// Matt: a gut tier at about $150/sqft when the agent, the listing or the
+// photos say so.
+export const GUT_PER_SQFT = 150;
+export const GUT_TOP_PER_SQFT = 175;
+export const gutRehab = (sqft) => (Number(sqft) > 0 ? Math.round((Number(sqft) * GUT_PER_SQFT) / 500) * 500 : 0);
+
+// The words that say the whole house comes apart. Their negation ("no
+// foundation issues") is not one.
+export const GUT_RX = /\btear[\s-]?down\b|\bfull[\s-]+gut\b|\bgut(?:ted)?\s+(?:job|it|rehab|remodel|renovation|the (?:house|inside|interior))\b|\bneeds? (?:a )?(?:complete|total|full) (?:gut|rebuild|remodel)\b|\bdown to the studs\b|\blath (?:and|&) plaster\b|\b(?:major|serious|significant)\s+(?:structural|foundation)\b|\bstructural (?:issues|problems|damage|repairs?|work)\b|\bfoundation (?:issues|problems|failure|failing|is failing|needs (?:work|repair|replac))|\bvalue (?:is )?in the land\b/i;
+const NEGATED_RX = /\b(?:no|not|never|without|zero)\b[^.!?\n]{0,12}$|n't\b[^.!?\n]{0,12}$/i;
+
+function gutWords(text = "") {
+  const t = String(text || "");
+  const re = new RegExp(GUT_RX.source, "gi");
+  for (let m = re.exec(t); m; m = re.exec(t)) {
+    if (!NEGATED_RX.test(t.slice(Math.max(0, m.index - 20), m.index))) return m[0];
+  }
+  return "";
+}
+
+/**
+ * gutSignal({ said, remarks, areas }) → { why, source } | null
+ *
+ *   said     the listing agent's own words about the house
+ *   remarks  the listing remarks
+ *   areas    the photo scan's grades ([{ area, grade }])
+ */
+export function gutSignal({ said = "", remarks = "", areas = [] } = {}) {
+  const fromAgent = gutWords(said);
+  if (fromAgent) return { why: `the agent said "${fromAgent.toLowerCase()}"`, source: "agent" };
+  const fromListing = gutWords(remarks);
+  if (fromListing) return { why: `the listing says "${fromListing.toLowerCase()}"`, source: "listing" };
+  if ((Array.isArray(areas) ? areas : []).some((a) => a?.area === "foundation_structure" && a.grade === "poor")) {
+    return { why: "the photos grade the foundation or structure poor", source: "photos" };
+  }
+  return null;
+}
 
 // The band for a given size. Null when the size is unknown — a guess here would
 // anchor the whole repair number on nothing.
 export function rehabBand(sqft) {
   const s = Number(sqft) || 0;
   if (s <= 0) return null;
-  return REHAB_BANDS.find((b) => s <= b.max) || REHAB_BANDS[REHAB_BANDS.length - 1];
+  const band = REHAB_BANDS.find((b) => s <= b.max) || REHAB_BANDS[REHAB_BANDS.length - 1];
+  // The gut range is per sqft, not per bucket.
+  return { ...band, gut: [gutRehab(s), Math.round((s * GUT_TOP_PER_SQFT) / 500) * 500] };
 }
 
 // The top of the heavy band, scaled for a big house. The cheat sheet's last
@@ -129,6 +176,8 @@ export function heavyCeiling(sqft) {
 // Midpoint of a band level — what a bucket button seeds, rounded to $500 the
 // same way the itemized total is.
 export function bandMidpoint(sqft, level) {
+  // A gut is priced at its rate, not the middle of its range.
+  if (level === "gut") return gutRehab(sqft);
   const band = rehabBand(sqft);
   const range = band && band[level];
   if (!range) return 0;

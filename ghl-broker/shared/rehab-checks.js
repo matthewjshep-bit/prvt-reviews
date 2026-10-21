@@ -23,7 +23,7 @@
 // scope past the heavy band (so a check can never create a hold), and a line
 // a person removes stays removed.
 
-import { ALL_REHAB_ITEMS, lineCost, sizeFactor, rehabBand, heavyCeiling } from "./rehab-catalog.js";
+import { ALL_REHAB_ITEMS, lineCost, sizeFactor, rehabBand, heavyCeiling, gutRehab, GUT_PER_SQFT } from "./rehab-catalog.js";
 import { hydrateRehabState, priceScope } from "./rehab-scope.js";
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -84,10 +84,13 @@ const windowCount = (sqft) => Math.max(6, Math.round((num(sqft) || 1200) / 120))
  *   t         settings.underwriteChecks.rehab
  *   declined  keys a person removed (kept on the snapshot)
  *   cures     ARV-side cures that belong in the scope (arv-checks compParity)
+ *   gut       rehab-catalog.js gutSignal: the agent, the listing or the photos
+ *             say the house comes apart — the scope is held to the gut tier
+ *             (GUT_PER_SQFT), and the heavy band stops being its ceiling
  */
 export function rehabChecks({
   state, sqft = 0, yearBuilt = 0, arv = 0, areas = [], contents = "none", remarks = null,
-  t = {}, declined = [], cures = [],
+  t = {}, declined = [], cures = [], gut = null,
 } = {}) {
   // Priced without any allowance a previous run left on the state — the
   // checks recompute those, they don't stack on them.
@@ -160,7 +163,16 @@ export function rehabChecks({
   const poorish = (Array.isArray(areas) ? areas : []).filter((a) => a?.grade === "poor" || a?.grade === "dated").length;
   const distressed = !r.turnkey && (r.distressed || poorish >= 3);
   let floor = null;
-  if (distressed && num(arv) > 0 && !off.has("distress_floor")) {
+  // R6 — a gut is priced as one (2026-10-21, 3831 Bagley Ave N).
+  const gutAt = gut && !off.has("gut_floor") ? gutRehab(sqft) : 0;
+  if (gutAt > 0) {
+    floor = { amount: gutAt, gut: true, why: gut.why };
+    const withRows = Math.round((priceScope(s, sqft).subtotal + allowanceSum()) * contingency);
+    if (withRows < gutAt) {
+      add("gut_floor", null, `full gut at $${GUT_PER_SQFT}/sqft`,
+        Math.ceil((gutAt / contingency - priceScope(s, sqft).subtotal - allowanceSum()) / 100) * 100, gut.why);
+    }
+  } else if (distressed && num(arv) > 0 && !off.has("distress_floor")) {
     const band = rehabBand(sqft);
     const amount = Math.max(num(arv) * num(t.distressedMinPctOfArv || 8) / 100, band ? band.light[0] : 0);
     const withRows = Math.round((priceScope(s, sqft).subtotal + allowanceSum()) * contingency);
@@ -174,7 +186,7 @@ export function rehabChecks({
   // The heavy band is a ceiling, never a target: allowances fill up to it and
   // stop, so a check can't hold a run. The distress floor goes first, then the
   // cleanout, then photo lines; the systems lines are the last to give.
-  const ceiling = Math.max(heavyCeiling(sqft) || Infinity, before);
+  const ceiling = Math.max(heavyCeiling(sqft) || Infinity, before, gutAt);
   let trimmed = false;
   const order = ["distress_floor", "cleanout", "remarks_", "photos_", "add_bath", "systems_"];
   const total = () => Math.round((priceScope(s, sqft).subtotal + allowanceSum()) * contingency / 500) * 500;

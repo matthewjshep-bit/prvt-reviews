@@ -165,7 +165,11 @@ export function marketsFromTags(tags = []) {
     else if ((m = t.match(/^dispo-region-(.+)$/)) && REGIONS[m[1]]) out.regions.push(m[1]);
     else if ((m = t.match(/^dispo-type-(.+)$/)) && STRATEGIES[m[1]]) out.types.push(m[1]);
     else if ((m = t.match(/^dispo-oos-(.+)$/))) out.states.push(m[1].toUpperCase());
+    // Builders found off permits (1538 NW 61st St, 2026-10-20) carry these,
+    // not a type tag: they build.
+    else if (t === "builder" || t === "dispo-source-permits") out.types.push("new-construction");
   }
+  out.types = [...new Set(out.types)];
   return out;
 }
 

@@ -4,8 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   offMarketOf, isOffMarket, offMarketCue, offMarketSignals, offMarketStats,
-  OFF_MARKET_ASK_RX, offMarketAskDaysAgo, offMarketAskDue,
-} from "./off-market.js";
+  OFF_MARKET_ASK_RX, offMarketAskDaysAgo, offMarketAskDue, onMarketCue } from "./off-market.js";
 
 const NOW = Date.parse("2026-09-30T20:00:00Z");
 const DAY = 86400000;
@@ -85,3 +84,17 @@ test("a house an agent brought that Zillow found with no for-sale status at all 
   assert.equal(offMarketSignals({ listing: null, agentBrought: true }), null);
   assert.equal(offMarketSignals({ listing: { status: null } }), null, "our own listing is never guessed");
 });
+
+test("someone else bidding, or the house on the MLS, reads as on the market", () => {
+  for (const [text, want] of [
+    ["Try to get in today -- because I have to respond to that one other offer", "have to respond to"],
+    ["we have a signed around back up at 750k with an end-user developer", "back up at"],
+    ["we got another offer in this morning", "another offer in"],
+    ["Highest and best by Monday 5pm", "Highest and best"],
+    ["It hit the MLS this morning", "hit the MLS"],
+  ]) assert.equal(onMarketCue(text), want, text);
+  for (const text of ["It is not on the MLS yet", "pocket listing, not listed", "I will make another offer", "back up the truck", "It's a teardown."]) {
+    assert.equal(onMarketCue(text), "", text);
+  }
+});
+

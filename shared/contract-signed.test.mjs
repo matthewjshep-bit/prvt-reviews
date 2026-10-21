@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { signedContractIn, closingDateIn, themLines } from "./contract-signed.js";
+import { signedContractIn, closingDateIn, themLines, paperworkSignal } from "./contract-signed.js";
 
 const NOW = Date.parse("2026-10-02T20:00:00Z");
 const yes = (t) => assert.equal(signedContractIn(t, { now: NOW }).signed, true, t);
@@ -75,3 +75,11 @@ test("'we are signed — the fully executed contract should have reached you' is
   assert.equal(signedContractIn("Once it's signed I'll send it over").signed, false);
   assert.equal(signedContractIn("The seller should sign it tonight").signed, false);
 });
+
+test("the paperwork coming to us to sign, or signed, is read off their text", () => {
+  assert.equal(paperworkSignal("Just sent you the offer for your signature. Please let me know if you have any questions."), "sent_to_sign");
+  assert.equal(paperworkSignal("Sent it over in DocuSign"), "sent_to_sign");
+  assert.equal(paperworkSignal("She accepted and we have mutual agreement. I just emailed it to you."), "signed");
+  for (const t of ["Confirmed received ! Now just waiting on Gabe", "It's a teardown.", "the seller signed another offer", ""]) assert.equal(paperworkSignal(t), "", t);
+});
+

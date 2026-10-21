@@ -206,7 +206,7 @@ const EXECUTORS = {
   async mark_investor_passed({ deps, contactId, draft }) {
     if (typeof deps?.setInvestorStatus !== "function") throw new Error("investor status is not wired on this broker");
     const r = await deps.setInvestorStatus({
-      contactId, addressHint: draft?.propertyAddress || "", status: "passed", reason: draft?.passReason || null,
+      contactId, addressHint: draft?.propertyAddress || "", status: "passed", reason: draft?.passReason || null, said: draft?.inbound || "",
     });
     if (!r?.ok) return r?.reason || "no deal to mark";
     return `passed on ${r.address}${r.reasonLabel ? ` — ${r.reasonLabel}` : ""}${r.warning ? ` (${r.warning})` : ""}`;
@@ -217,20 +217,20 @@ const EXECUTORS = {
     if (typeof deps?.recordDealFeedback !== "function") throw new Error("deal feedback is not wired on this broker");
     if (!draft?.passReason) return "nothing they said reads as a reason";
     const r = await deps.recordDealFeedback({
-      contactId, addressHint: draft?.propertyAddress || "", reason: draft.passReason,
+      contactId, addressHint: draft?.propertyAddress || "", reason: draft.passReason, said: draft?.inbound || "",
     });
     if (!r?.ok) return r?.reason || "no deal to file it against";
     return `filed on ${r.address} — ${r.reasonLabel}`;
   },
   async mark_investor_committed({ deps, contactId, draft }) {
     if (typeof deps?.setInvestorStatus !== "function") throw new Error("investor status is not wired on this broker");
-    const r = await deps.setInvestorStatus({ contactId, addressHint: draft?.propertyAddress || "", status: "committed" });
+    const r = await deps.setInvestorStatus({ contactId, addressHint: draft?.propertyAddress || "", status: "committed", said: draft?.inbound || "" });
     if (!r?.ok) throw new Error(r?.reason || "no deal to mark");
     return `committed buyer on ${r.address}`;
   },
   async link_deal_evaluating({ deps, contactId, draft }) {
     if (typeof deps?.linkDealInterest !== "function") throw new Error("deal linking is not wired on this broker");
-    const r = await deps.linkDealInterest({ contactId, addressHint: draft?.propertyAddress || "" });
+    const r = await deps.linkDealInterest({ contactId, addressHint: draft?.propertyAddress || "", said: draft?.inbound || "" });
     if (!r?.linked) throw new Error(r?.reason || "no deal to link");
     return r.unchanged ? `already ${r.status} on ${r.address}` : `evaluating ${r.address}`;
   },

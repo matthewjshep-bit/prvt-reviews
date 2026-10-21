@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import {
   houseKey, pricedAt, resolveHouse, currentOffers, currentOfferFor, annotateCurrent,
   isSuperseded, ourComeDown, ourMoveUp, paperCheck, lastQuoteOnHouse, machineRaise, machineCut, holdNumber,
-  floatRange, rangeWords, namedInRange,
-} from "./current-offer.js";
+  floatRange, rangeWords, namedInRange, houseRowFor } from "./current-offer.js";
 
 // 13041 SE 208th St, Kent (2026-09-25): five rows on one house, the thread at
 // ~400K since August, and the letter of intent went out at 416,500 off a July
@@ -303,3 +302,14 @@ test("a number we floated is never cut without you — a re-run under what the a
   assert.equal(machineCut({ ...lower, cashAmount: 185500 }, CH_THREAD), null, "the same number said the way people text it");
   assert.equal(machineCut({ ...lower, cashAmount: 192250 }, CH_THREAD), null, "going up is machineRaise's");
 });
+
+test("a house the app only has as a held draft is still the house the agent's words land on", () => {
+  const draft = { id: "d1", contactId: "c1", status: "draft", address: "1538 NW 61st St, Seattle, WA 98107", createdAt: "2026-10-19T20:08:00Z" };
+  assert.equal(houseRowFor([draft], { contactId: "c1" })?.id, "d1");
+  assert.equal(houseRowFor([draft], { contactId: "c1", address: "1538 NW 61st St" })?.id, "d1");
+  const live = { id: "o2", contactId: "c1", status: "sent", address: "12 Elm St, Renton, WA 98056", createdAt: "2026-10-18T20:08:00Z" };
+  // Two houses and no house named: no guess.
+  assert.equal(houseRowFor([draft, live], { contactId: "c1" }), null);
+  assert.equal(houseRowFor([draft, live], { contactId: "c1", address: "12 Elm Street" })?.id, "o2");
+});
+

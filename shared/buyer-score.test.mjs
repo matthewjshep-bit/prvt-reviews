@@ -248,3 +248,22 @@ test("no islands keeps a buyer off Vashon; off-market only keeps one off a house
   const listed = dealTarget({ city: "Tacoma", onMarket: true });
   assert.deepEqual(pickWave(rankAll([tacoma({ contactId: "c", buybox: { exclusions: "off-market only" } }), tacoma({ contactId: "d" })], listed), { wave: 1 }).map((i) => i.contactId), ["d"]);
 });
+
+/* ---------- land goes to the buyers who build (2026-10-21) ---------- */
+
+// 1538 NW 61st St, Seattle: a teardown lot. Wave 1 went to twenty-five
+// flippers ("I'm not a land guy"); the builders on the same block were found
+// by hand the next day.
+const ballard = dealTarget({ city: "Seattle", zip: "98107", priceMin: 860000, priceMax: 960000, asset: { type: "land" } });
+
+test("a land deal goes to buyers who build, not to flippers in the same city", () => {
+  assert.equal(ballard.strategy, "new-construction");
+  const ranked = [
+    rankRow("seattle-flipper-vip", { tier: "vip", markets: { cities: ["seattle"], regions: ["seattle"], types: ["flip"] }, flips: { largest: 900000, lastAt: monthsBack(1) } }, ballard),
+    rankRow("ballard-builder", { tier: "cold", markets: { cities: ["seattle"], regions: ["seattle"], types: ["new-construction"] } }, ballard),
+    rankRow("tacoma-builder", { tier: "cold", markets: { cities: ["tacoma"], regions: ["pierce"], types: ["new-construction"] } }, ballard),
+  ];
+  assert.deepEqual(pickWave(ranked, { wave: 1, floor: 50, land: true }).map((i) => i.contactId), ["ballard-builder"]);
+  assert.ok(ranked[1].rankReasons.includes("builds"));
+});
+

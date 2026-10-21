@@ -140,3 +140,23 @@ test("past 2,500 sqft the heavy ceiling grows at the top row's $52/sqft (8025 W 
   assert.equal(heavyCeiling(2600), 135200);
   assert.equal(heavyCeiling(5100), 265200);
 });
+
+/* ---------- the gut tier (2026-10-21) ---------- */
+
+test("a house the agent calls a teardown gets the gut tier at $150/sqft", async () => {
+  const { gutSignal, gutRehab, rehabBand, bandMidpoint, REHAB_LEVELS, GUT_PER_SQFT } = await import("./rehab-catalog.js");
+  assert.equal(GUT_PER_SQFT, 150);
+  // 3831 Bagley Ave N: 1,780 sqft, sent at $102K.
+  assert.equal(gutRehab(1780), 267000);
+  assert.deepEqual(rehabBand(1780).gut, [267000, 311500]);
+  assert.equal(bandMidpoint(1780, "gut"), 267000);
+  assert.ok(REHAB_LEVELS.some((l) => l.id === "gut"));
+  for (const said of ["It could use a lot of work. Perhaps a tear down.", "It's a teardown.",
+    "It's all lath and plaster, you gotta go down to the studs", "Your budget is not even close to major structural and foundation issues"]) {
+    assert.equal(gutSignal({ said })?.source, "agent", said);
+  }
+  assert.equal(gutSignal({ remarks: "Builder alert! Value is in the land." })?.source, "listing");
+  assert.equal(gutSignal({ areas: [{ area: "foundation_structure", grade: "poor" }] })?.source, "photos");
+  for (const said of ["no foundation issues", "updated kitchen, new roof", "There are no structural issues", ""]) assert.equal(gutSignal({ said }), null, said);
+});
+
