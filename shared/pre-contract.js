@@ -15,20 +15,32 @@
 // route reads the full documents for the few hot offers.
 
 import { remarkSignals } from "./house-facts.js";
-import { rehabBand } from "./rehab-catalog.js";
+import { rehabBand, gutSignal, gutRehab, GUT_PER_SQFT } from "./rehab-catalog.js";
 import { assetOf, assetPhrase } from "./asset-type.js";
-import { isOffMarket } from "./off-market.js";
-import { buyerCeiling } from "./post-mortem.js";
+import { isOffMarket, onMarketCue } from "./off-market.js";
+import { buyerCeiling, amountsIn } from "./post-mortem.js";
+import { parseThread } from "./deal-feedback.js";
+import { underwriteModel } from "./underwrite-model.js";
 import { priceAgreed, pushesToPaper, offerHeat, effectiveStatus, DEAD_STATUSES } from "./offer-status.js";
 
 // The order they're read in, and what each is called on the row.
+// 2026-10-21: the agent's own texts joined the list. In 8 of the 10 deals that
+// fell through, what killed it was in the listing agent's thread before we
+// signed — "it's a teardown", "one other offer", "a back up at 750k", the
+// park and its lot rent — and the price we signed at was the number they
+// named first (1538 NW 61st St, 3831 Bagley Ave N, 5232 S Yakima, Bellevue).
 export const PRE_CONTRACT_ITEMS = [
   { key: "remarks", label: "Listing remarks read" },
+  { key: "agent_words", label: "What the agent said about it" },
   { key: "title", label: "Kind of house and title" },
   { key: "eyes", label: "Eyes on the house" },
-  { key: "rehab_floor", label: "Rehab at or above the light floor" },
+  { key: "rehab_floor", label: "Rehab at or above the floor" },
   { key: "arv_actives", label: "ARV under today's listings" },
+  { key: "land_value", label: "Land priced off land sales" },
   { key: "our_number", label: "At or under our number and the buyer ceiling" },
+  { key: "their_number", label: "Our number, not theirs" },
+  { key: "competing", label: "Nobody else bidding" },
+  { key: "fast_yes", label: "Not a same-day yes" },
   { key: "extension", label: "An extension, not their deadline" },
   { key: "presell", label: "Pre-sold to 3 buyers" },
 ];
@@ -160,6 +172,43 @@ function repairsOf(offer) {
   return round((offer?.scope || []).reduce((t, s) => t + (Number(s?.cost) || 0), 0));
 }
 
+const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
+
+// A yes inside this many hours of our first number on the house is a same-day yes.
+export const FAST_YES_HOURS = 24;
+
+// When our first number on the house went out: a send, a float, the
+// status history's first "sent".
+function firstNumberMs(offer) {
+  const at = [
+    ...(Array.isArray(offer?.sends) ? offer.sends.map((x) => ms(x?.ts)) : []),
+    ms(offer?.proactive?.realmCheckAt), ms(offer?.floatSentAt),
+    ...(offer?.statusHistory || []).filter((h) => h?.status === "sent").map((h) => ms(h.ts)),
+  ].filter((v) => v != null);
+  return at.length ? Math.min(...at) : null;
+}
+
+// The photo scan's graded areas, where the snapshot keeps them.
+function scanAreas(offer) {
+  const s = snapOf(offer) || {};
+  return s.rehab?.aiResult?.areas || s.rehabState?.aiResult?.areas || [];
+}
+
+// The thread as [{ dir: "US" | "THEM", text, at }], from the transcript text
+// (enrich.js buildTranscript) or lines already split.
+function threadLines(thread) {
+  if (Array.isArray(thread)) {
+    return thread.map((l) => ({ dir: String(l?.dir || "").toUpperCase() === "IN" || l?.dir === "THEM" ? "THEM" : "US", text: String(l?.body ?? l?.text ?? ""), at: l?.at || null }))
+      .filter((l) => l.text.trim());
+  }
+  if (!thread) return [];
+  return parseThread(String(thread)).map((l) => ({
+    dir: l.dir === "THEM" ? "THEM" : "US",
+    text: [l.body, ...(l.transcript || []).map((t) => t.text)].filter(Boolean).join(" "),
+    at: l.at,
+  })).filter((l) => l.text.trim());
+}
+
 // Title and use words a listing can carry (shared/house-facts.js LEGAL).
 const TITLE_KEYS = ["land_lease", "hoa", "easement", "right_of_way", "unpermitted"];
 const TITLE_WORDS = { land_lease: "leased land, park rules or 55+", hoa: "an HOA", easement: "an easement", right_of_way: "a right-of-way", unpermitted: "unpermitted work" };
@@ -176,18 +225,23 @@ const TITLE_WORDS = { land_lease: "leased land, park rules or 55+", hoa: "an HOA
  * "warn" is something the record says is wrong; "unknown" is something
  * nobody has looked at. Both are open; only "ok" is done.
  */
-export function preContractChecks({ offer = {}, settings = {}, videos = [], price = null, fee } = {}) {
+export function preContractChecks({ offer = {}, settings = {}, videos = [], price = null, fee, thread = null, now = Date.now() } = {}) {
   const ticks = normalizePreContract(offer?.preContract).ticks;
   const out = [];
-  const add = (key, state, detail) => {
+  // `short` is the warn in a few words, for the one-line verdict a ping carries.
+  const add = (key, state, detail, short = "") => {
     const t = ticks[key];
     if (t && state !== "ok") out.push({ key, label: LABEL[key], state: "ok", detail: `you checked it${t.note ? `: ${t.note}` : ""}`, ticked: true });
-    else out.push({ key, label: LABEL[key], state, detail });
+    else out.push({ key, label: LABEL[key], state, detail, ...(state === "warn" && short ? { short } : {}) });
   };
 
   const remarks = remarksOf(offer);
   const signals = remarks ? remarkSignals(remarks) : null;
   const flags = checkFlagKeys(offer);
+  // The listing agent's thread (enrich.js buildTranscript text), when read.
+  const lines = threadLines(thread);
+  const theirs = lines.filter((l) => l.dir === "THEM").map((l) => l.text).join("\n");
+  const land = assetOf(offer)?.type === "land";
 
   /* --- the listing remarks --- */
   if (signals) {
@@ -202,6 +256,22 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
     add("remarks", "warn", "the listing names a defect — open the offer and check it's priced");
   } else {
     add("remarks", "unknown", "no listing remarks on file — ask the agent what the remarks and agent remarks say");
+  }
+
+  /* --- what the agent said about it --- */
+  const gut = gutSignal({ said: theirs, remarks, areas: scanAreas(offer) });
+  if (lines.length) {
+    const told = remarkSignals(theirs);
+    const said = [
+      ...(gut?.source === "agent" ? [gut.why.replace(/^the agent said /, "")] : []),
+      ...told.defects.map((d) => d.label),
+      ...told.legal.map((l) => l.label),
+      ...(/\b(?:was |been |has been )?moved\b(?: (?:twice|two times|2x|once))?/i.test(theirs) && /\b(?:mobile|manufactured|home|house)\b/i.test(theirs) ? ["moved"] : []),
+    ];
+    if (said.length) add("agent_words", "warn", `the agent said ${[...new Set(said)].join(", ")} — is it in the price?`, `the agent said ${[...new Set(said)][0]}`);
+    else add("agent_words", "ok", "nothing in the agent's texts the price doesn't cover");
+  } else {
+    add("agent_words", "unknown", "the agent's texts weren't read — what did they say about its condition?");
   }
 
   /* --- the kind of house and its title --- */
@@ -232,10 +302,16 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
   const sqft = sqftOf(offer);
   const repairs = repairsOf(offer);
   const band = rehabBand(sqft);
-  if (!band || !repairs) {
+  if (land) {
+    // Land is priced off land sales (land_value), not a rehab.
+  } else if (gut && sqft > 0 && repairs < gutRehab(sqft)) {
+    add("rehab_floor", "warn", `rehab ${kText(repairs)} is under the gut tier (${kText(gutRehab(sqft))} at $${GUT_PER_SQFT}/sqft) — ${gut.why}`,
+      `rehab ${kText(repairs)} vs ${kText(gutRehab(sqft))} for a gut`);
+  } else if (!band || !repairs) {
     add("rehab_floor", "unknown", !repairs ? "no rehab figure on file" : "no size on file to measure the rehab against");
   } else if (repairs < band.light[0]) {
-    add("rehab_floor", "warn", `rehab ${kText(repairs)} is under the light floor (${kText(band.light[0])}) for ${sqft.toLocaleString("en-US")} sqft — the deals that died had rehab low`);
+    add("rehab_floor", "warn", `rehab ${kText(repairs)} is under the light floor (${kText(band.light[0])}) for ${sqft.toLocaleString("en-US")} sqft — the deals that died had rehab low`,
+      `rehab ${kText(repairs)} under the floor`);
   } else {
     add("rehab_floor", "ok", `rehab ${kText(repairs)} for ${sqft.toLocaleString("en-US")} sqft (light floor ${kText(band.light[0])})`);
   }
@@ -245,7 +321,10 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
   const full = snapOf(offer)?.checks;
   const cap = full?.cap;
   const capped = full?.arv?.capped || null;
-  if (!arv) add("arv_actives", "unknown", "no ARV on file");
+  if (land) {
+    // An "ARV" on land is whatever the form held — the asking price, on
+    // 1538 NW 61st St. What land sells for is the question (land_value).
+  } else if (!arv) add("arv_actives", "unknown", "no ARV on file");
   else if (capped?.to > 0) {
     add("arv_actives", arv > round(capped.to) * 1.01 ? "warn" : "ok",
       arv > round(capped.to) * 1.01 ? `ARV ${kText(arv)} is above the listings cap (${kText(capped.to)}) it was held to` : `held to today's listings (${kText(capped.to)})`);
@@ -253,7 +332,8 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
     add("arv_actives", arv > round(cap.amount) ? "warn" : "ok",
       arv > round(cap.amount)
         ? `ARV ${kText(arv)} is above what ${cap.n || "similar"} similar houses list for (${kText(cap.amount)}) — the deals that died had ARV high`
-        : `ARV ${kText(arv)} vs ${kText(cap.amount)} listed`);
+        : `ARV ${kText(arv)} vs ${kText(cap.amount)} listed`,
+      `ARV ${kText(arv)} over listings at ${kText(cap.amount)}`);
   } else if (!full && offer?.checks?.capped) {
     add("arv_actives", "ok", "held to today's listings");
   } else if (cap?.status === "thin") {
@@ -266,14 +346,68 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
   const ours = round(offer?.cashAmount);
   const agreed = priceAgreed(offer);
   const at = round(price) || round(agreed?.amount) || round(offer?.contract?.fields?.price) || ours;
-  const ceiling = (() => { try { return buyerCeiling({ offer, settings, ...(fee != null ? { fee } : {}) }); } catch { return { computable: false }; } })();
+  // A land "ARV" is no value at all, so there is no buyer ceiling on land.
+  const ceiling = land ? { computable: false } : (() => { try { return buyerCeiling({ offer, settings, ...(fee != null ? { fee } : {}) }); } catch { return { computable: false }; } })();
   const over = [];
-  if (ours && at > ours + Math.max(1000, ours * 0.005)) over.push(`${kText(at)} is above our number (${kText(ours)})`);
-  if (ceiling.computable && at > ceiling.withFee) over.push(`${kText(at)} is over the buyer ceiling (${kText(ceiling.withFee)}: ${ceiling.pct}% of ARV less rehab and our fee)`);
-  if (!at) add("our_number", "unknown", "no price on file");
-  else if (over.length) add("our_number", "warn", over.join("; "));
-  else if (!ceiling.computable) add("our_number", "unknown", `${kText(at)} — no ARV for the buyer ceiling`);
+  const shorts = [];
+  const unpriced = !ours || effectiveStatus(offer) === "draft";
+  if (unpriced) { over.push(`we never priced this house${at ? ` — ${kText(at)} is a number nobody here underwrote` : ""}`); shorts.push("we never priced it"); }
+  if (!unpriced && at > ours + Math.max(1000, ours * 0.005)) { over.push(`${kText(at)} is above our number (${kText(ours)})`); shorts.push(`${kText(at - ours)} over our ${kText(ours)}`); }
+  if (ceiling.computable && at > ceiling.withFee) { over.push(`${kText(at)} is over the buyer ceiling (${kText(ceiling.withFee)}: ${ceiling.pct}% of ARV less rehab and our fee)`); shorts.push(`over the ${kText(ceiling.withFee)} ceiling`); }
+  if (over.length) add("our_number", "warn", over.join("; "), shorts.join(", "));
+  else if (!at) add("our_number", "unknown", "no price on file");
+  else if (!ceiling.computable) add("our_number", "unknown", `${kText(at)} — ${land ? "land has no buyer ceiling; see the land value" : "no ARV for the buyer ceiling"}`);
   else add("our_number", "ok", `${kText(at)}: at or under our ${kText(ours || at)} and the buyer ceiling ${kText(ceiling.withFee)}`);
+
+  /* --- land, priced off land sales --- */
+  if (land) {
+    const uw = underwriteModel(offer) === "land" ? offer?.calc?.underwrite : null;
+    const value = round(uw?.value);
+    const sales = Array.isArray(uw?.comps) ? uw.comps.length : 0;
+    if (value > 0 && sales > 0) {
+      add("land_value", at > value ? "warn" : "ok",
+        at > value ? `${kText(at)} is above the land value (${kText(value)} off ${sales} land sale${sales === 1 ? "" : "s"})` : `land valued at ${kText(value)} off ${sales} land sale${sales === 1 ? "" : "s"}`,
+        `over the ${kText(value)} land value`);
+    } else {
+      add("land_value", "warn", "nobody valued the land — price it off land sales (per lot or per buildable unit), not the asking price or the agent's word",
+        "the land was never valued");
+    }
+  }
+
+  /* --- their number, or ours --- */
+  // The first line on the thread that names the price we'd sign at: theirs
+  // means their number became the contract (1538 NW 61st St: "that dirt lot
+  // is worth about $900,000" → signed at 890k; 3831 Bagley: "you might need
+  // to be more like 740k" → 740k).
+  if (at && lines.length) {
+    const first = lines.find((l) => amountsIn(l.text).some((a) => Math.abs(a - at) <= Math.max(2000, at * 0.015)));
+    if (first?.dir === "THEM") add("their_number", "warn", `${kText(at)} is the number the agent named first ("${str(first.text, 90)}")`, `${kText(at)} is the agent's number`);
+    else if (first) add("their_number", "ok", `${kText(at)} came from us`);
+    else add("their_number", "ok", `nobody named ${kText(at)} on the thread before`);
+  } else if (at) {
+    add("their_number", "unknown", "the agent's texts weren't read — whose number is this?");
+  }
+
+  /* --- someone else bidding --- */
+  if (lines.length) {
+    const cue = lines.filter((l) => l.dir === "THEM").map((l) => onMarketCue(l.text)).find(Boolean) || "";
+    if (cue) add("competing", "warn", `the agent said "${cue}" — someone else is bidding; an end-user's price leaves no wholesale spread`, `someone else is bidding ("${cue}")`);
+    else add("competing", "ok", "no other offer or backup mentioned");
+  } else {
+    add("competing", "unknown", "ask whether there are other offers or a backup");
+  }
+
+  /* --- a same-day yes --- */
+  // Every deal signed inside about a day of our first number died; the
+  // ones that closed took 5–11 days of back and forth.
+  const firstNumberAt = firstNumberMs(offer);
+  const yesAt = ms(agreed?.at) ?? ms(offer?.paperAt?.at) ?? now;
+  // Unpriced is our_number's warning; there's no first number to time.
+  if (unpriced) add("fast_yes", "unknown", "we never priced it, so there's no first number to time");
+  else if (firstNumberAt != null && yesAt - firstNumberAt < FAST_YES_HOURS * 3600000) {
+    add("fast_yes", "warn", `a yes ${Math.max(1, Math.round((yesAt - firstNumberAt) / 3600000))}h after our first number — every deal signed that fast fell through; ask for feasibility and the earnest money after it`, "a same-day yes");
+  } else if (firstNumberAt != null) add("fast_yes", "ok", `${Math.round((yesAt - firstNumberAt) / 86400000)} days from our first number`);
+  else add("fast_yes", "unknown", "when our first number went isn't on file");
 
   /* --- an extension, not a signature on their deadline --- */
   add("extension", "unknown", "if they want it signed by a date, ask for more time instead of signing to it");
@@ -282,9 +416,35 @@ export function preContractChecks({ offer = {}, settings = {}, videos = [], pric
   if (!isOffMarket(offer)) {
     const n = new Set((offer?.presell?.contactIds || []).filter(Boolean)).size;
     if (n >= PRESELL_MIN_BUYERS) add("presell", "ok", `${n} buyers have it${offer.presell?.at ? ` (${String(offer.presell.at).slice(0, 10)})` : ""}`);
-    else add("presell", "warn", n ? `only ${n} buyer${n === 1 ? "" : "s"} so far — pre-sell to ${PRESELL_MIN_BUYERS}` : `no buyer has seen it — pre-sell to ${PRESELL_MIN_BUYERS} before you sign`);
+    else add("presell", "warn", n ? `only ${n} buyer${n === 1 ? "" : "s"} so far — pre-sell to ${PRESELL_MIN_BUYERS}` : `no buyer has seen it — pre-sell to ${PRESELL_MIN_BUYERS} before you sign`,
+      n ? `pre-sold to ${n}` : "not pre-sold");
   }
   return out;
+}
+
+/**
+ * preContractVerdict(checks, { address, price }) → one line, at most 300 characters
+ *
+ * What a GHL ping to Matt carries at the signing moment: the warns in a few
+ * words each, and the move. "1538 NW 61st St at 890k: we never priced it ·
+ * the agent said "teardown" · 890k is the agent's number · not pre-sold —
+ * ask for feasibility with the earnest money after it, or don't sign."
+ */
+export function preContractVerdict(checks = [], { address = "", price = 0 } = {}) {
+  const street = String(address || "").split(",")[0].trim();
+  const head = `${street || "This house"}${round(price) ? ` at ${kText(price)}` : ""}`;
+  const warns = (checks || []).filter((c) => c?.state === "warn");
+  const unknown = (checks || []).filter((c) => c?.state === "unknown").length;
+  const tail = warns.length ? " — ask for feasibility with the earnest money after it, or don't sign." : " — ask for feasibility with the earnest money after it.";
+  if (!warns.length) return `${head}: nothing flagged${unknown ? `, ${unknown} not checked` : ""}${tail}`.slice(0, 300);
+  const bits = warns.map((c) => c.short || c.label.toLowerCase());
+  // Fit 300: drop from the end, and say how many more.
+  for (let n = bits.length; n > 0; n--) {
+    const more = bits.length - n;
+    const line = `${head}: ${bits.slice(0, n).join(" · ")}${more ? ` · ${more} more` : ""}${tail}`;
+    if (line.length <= 300) return line;
+  }
+  return `${head}: ${warns.length} warnings${tail}`.slice(0, 300);
 }
 
 /** openChecks(checks) → the ones not done ("warn" first, then "unknown"). */

@@ -701,6 +701,8 @@ export const OFFER_LIST_FIELDS = [
   // Heat (offerHeat): the hand-set flag and the agreed price it is derived from,
   // and the take-back that cancels every agreed marker before it (priceAgreed).
   "hot", "agreed", "agreedCleared", "pin", "paperHeld",
+  // The agent sent the paper to sign ({at, kind}, pre-contract.js houseWordsUpdate).
+  "paperAt",
   // Matt's approval of the number ({amount, at, by}, numberApproved).
   "approved",
   // When our number went out by text (a sent realm check): the offer is Sent

@@ -42,7 +42,7 @@ export const GHL_PING_EVENT_TYPES = ["ghl_ping_sent", "ghl_ping_failed"];
 // Where each one lives now that Today is gone.
 const WHERE = {
   paper_to_sign: "Offers → Hot", approve_number: "Offers → Hot", handoff: "the contact's offer",
-  investor_price_agreed: "Deals", pre_contract: "Deals", closing_soon: "Deals", closing_task_due: "Deals",
+  investor_price_agreed: "Deals", pre_contract: "the offer's Before you sign", closing_soon: "Deals", closing_task_due: "Deals",
   showing_no_window: "Deals", deal_no_dataroom: "Deals", referral: "their contact record", email_check: "their contact record",
   promise_owed: "their thread in GHL",
 };
@@ -52,6 +52,10 @@ const clip = (s, n) => { const t = String(s || "").replace(/\s+/g, " ").trim(); 
 /** pingWhy(reason) → one line for the field and the note: what it is, and where to do it. */
 export function pingWhy(r = {}) {
   const where = WHERE[r.kind] || "the app";
+  // Before you sign says what's wrong, not only that something is (1538 NW
+  // 61st St and 3831 Bagley Ave N, 2026-10-21: both signed with every warning
+  // open, and the warnings were only ever on a screen nobody had open).
+  if (r.kind === "pre_contract" && r.verdict) return clip(r.verdict, 300);
   return clip(`${r.title || String(r.kind || "").replace(/_/g, " ")} — in ${where}`, 300);
 }
 

@@ -5,7 +5,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sentDeal, pickDealForReply, amountsIn } from "./deal-reply-match.js";
+import { sentDeal, pickDealForReply, buyerAmounts } from "./deal-reply-match.js";
 
 const bagley = { id: "bagley", address: "3831 Bagley Ave N, Seattle, WA 98103", calc: { inputs: { arv: 1161000, repairs: 102000 } },
   deal: { stage: "under_contract", contractPrice: 740000, assignmentFee: 8000, investors: [], blasts: [{ contactIds: ["b1"] }] } };
@@ -20,10 +20,10 @@ test("a buyer was sent a deal when a wave reached them or they're on it", () => 
 });
 
 test("buyers' figures read the way they write them", () => {
-  assert.deepEqual(amountsIn("that's 400k not 110k"), [400000, 110000]);
-  assert.deepEqual(amountsIn("$911. Arv $925?"), [911000, 925000]);
-  assert.deepEqual(amountsIn("show me comps that support 1.15"), [1150000]);
-  assert.deepEqual(amountsIn("I'd pay $550K for that. 9 month close"), [550000]);
+  assert.deepEqual(buyerAmounts("that's 400k not 110k"), [400000, 110000]);
+  assert.deepEqual(buyerAmounts("$911. Arv $925?"), [911000, 925000]);
+  assert.deepEqual(buyerAmounts("show me comps that support 1.15"), [1150000]);
+  assert.deepEqual(buyerAmounts("I'd pay $550K for that. 9 month close"), [550000]);
 });
 
 test("the street they name, then their numbers, then what kind of property, then the model's read", () => {

@@ -736,7 +736,9 @@ test("an offer about to be signed is one line on Today, before you sign, and a l
   assert.equal(row.title, "12 Elm St, Renton, WA: before you sign");
   assert.equal(row.detail, "pre-sold to 0 of 3 buyers");
   assert.deepEqual(row.ops.map((o) => o.key), ["presell", "promote_deal"]);
-  assert.equal(row.checks.length, 8);
+  // Thirteen items less land's own (2026-10-21: the agent's texts joined).
+  assert.equal(row.checks.length, 12);
+  assert.equal(row.verdict, "12 Elm St at 265k: not pre-sold — ask for feasibility with the earnest money after it, or don't sign.");
   // The agent is writing it up: now.
   const writing = build({ offers: [{ ...yes, hot: { at: D(0), by: "conversation", signal: "writing_up" } }] }).actions.find((a) => a.kind === "pre_contract");
   assert.equal(writing.severity, "now");
@@ -750,6 +752,17 @@ test("an offer about to be signed is one line on Today, before you sign, and a l
   assert.equal(build({ offers: [yes], preContractByOffer: { o1: [{ key: "eyes", label: "Eyes on the house", state: "ok", detail: "" }] } }).actions.some((a) => a.kind === "pre_contract"), false);
   assert.equal(build({ offers: [offer()] }).actions.some((a) => a.kind === "pre_contract"), false);
   assert.ok(ACTION_KINDS.some((k) => k.key === "pre_contract"));
+});
+
+// 1538 NW 61st St (2026-10-19): the only row was a held draft waiting for
+// comps when the agent sent the paper to sign; nothing on the board knew.
+test("paper to sign on a held draft the app never priced is a before-you-sign row, now, with the verdict", () => {
+  const held = offer({ status: "draft", cashAmount: 0, autoUnderwrite: { held: ["ready for your comps — the app made the draft, you price it"], draftOnly: true },
+    paperAt: { at: D(0), kind: "sent_to_sign" } });
+  const row = build({ offers: [held] }).actions.find((a) => a.kind === "pre_contract");
+  assert.ok(row, "there is a row");
+  assert.equal(row.severity, "now");
+  assert.match(row.verdict, /never priced/);
 });
 
 /* ---------- a price the investor band agreed ---------- */

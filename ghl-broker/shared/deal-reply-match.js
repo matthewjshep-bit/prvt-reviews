@@ -43,7 +43,7 @@ const says = (text, word) => new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g
 // Dollar figures in a text: "400k", "$750k", "1.15", "$911", "110,000".
 // A bare 100–2,500 reads as thousands (how buyers write prices); a bare
 // 1–5 with a decimal reads as millions ("comps that support 1.15").
-export function amountsIn(text = "") {
+export function buyerAmounts(text = "") {
   const out = [];
   const re = /\$?\s?(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(k|m|mil|million)?\b/gi;
   for (let m = re.exec(String(text || "")); m; m = re.exec(String(text || ""))) {
@@ -94,7 +94,7 @@ export function pickDealForReply(deals = [], { hint = "", said = "" } = {}) {
   if (named.length === 1) return { offer: named[0], why: "named" };
 
   // 2. Their numbers against each deal's, then what kind of property they mean.
-  const amounts = amountsIn(text);
+  const amounts = buyerAmounts(text);
   const score = (o) => {
     const figs = dealFigures(o);
     return amounts.filter((a) => figs.some((f) => near(a, f))).length;

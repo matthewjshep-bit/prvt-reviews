@@ -29,6 +29,7 @@ import { addDismissal, removeDismissal, applyDismissals, TODAY_DISMISS_CURSOR } 
 import { answerPartnerQuestion, forgetAnswer } from "../partner-answer.js";
 import express from "express";
 import { store } from "../store.js";
+import { buildTranscript } from "../enrich.js";
 import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
 } from "../ghl.js";
@@ -536,14 +537,23 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
 
   // { offerId: preContractChecks } for the offers about to be signed (a
   // handful; this route polls, so it stops at twenty).
-  async function preContractForHot({ offers = [], saved = null }) {
+  // The agent's thread is read only for the few with the paper out (a
+  // `paperAt`, or "I'll write it up"): what they said is most of the warning.
+  async function preContractForHot({ offers = [], saved = null, client = null, locationId = "" }) {
     const settings = effectiveSettings(saved || {});
     const out = {};
-    await Promise.all(offers.filter(needsPreContract).slice(0, 20).map(async (o) => {
+    const due = offers.filter((o) => needsPreContract(o)).slice(0, 20);
+    const paperOut = new Set(due.filter((o) => o.paperAt?.at || o.hot?.signal === "writing_up").slice(0, 5).map((o) => o.id));
+    await Promise.all(due.map(async (o) => {
       const full = await store.getOffer(o.id).catch(() => null);
       if (!full) return;
       const videos = store.listOfferVideos ? await store.listOfferVideos(o.id).catch(() => []) : [];
-      out[o.id] = preContractChecks({ offer: full, settings, videos });
+      let thread = null;
+      if (client && paperOut.has(o.id) && full.contactId) {
+        try { thread = (await buildTranscript(client, locationId, full.contactId, { maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 80, maxChars: 20000, maxCallTranscripts: 0 })).text || ""; }
+        catch { thread = null; }
+      }
+      out[o.id] = preContractChecks({ offer: full, settings, videos, thread });
     }));
     return out;
   }
@@ -599,7 +609,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     const dealRooms = await dealRoomIds({ store, locationId, offers });
     // The few offers about to be signed, read in full: the lean row has no
     // listing remarks, size or videos (shared/pre-contract.js).
-    const preContractByOffer = await preContractForHot({ offers, saved }).catch(() => ({}));
+    const preContractByOffer = await preContractForHot({ offers, saved, client, locationId }).catch(() => ({}));
     // The limit is the windowed read's: the stop events merged in on top
     // must not read as "the read filled up".
     const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, preContractByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT + (events.length - windowed.length), dealRooms });

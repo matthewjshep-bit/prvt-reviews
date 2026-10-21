@@ -3450,7 +3450,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // kept on the deal and said as a warning — never a block.
     try {
       const videos = (await store.listOfferVideos?.(offer.id).catch(() => [])) || [];
-      const checks = preContractChecks({ offer, settings, videos, price: contractPrice, fee: assignmentFee });
+      const thread = await agentThreadFor(locationId, offer, client);
+      const checks = preContractChecks({ offer, settings, videos, price: contractPrice, fee: assignmentFee, thread });
       offer.deal.preContractAtPromote = preContractRecord(checks);
       const open = openChecks(checks);
       if (open.length) warnings.push(`before signing, not checked: ${open.map((c) => `${c.label.toLowerCase()} (${c.detail})`).join("; ")}`);
@@ -4373,18 +4374,26 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // What nobody has looked at yet on an offer about to be signed, read off
   // the full record and its videos. GET for the pane; POST ticks one by hand
   // ({ key, done = true, note }) or takes a tick back (done: false).
-  async function preContractFor(locationId, offer) {
-    const [settings, videos] = await Promise.all([
+  async function preContractFor(locationId, offer, client = null) {
+    const [settings, videos, thread] = await Promise.all([
       store.getOfferSettings(locationId).catch(() => null),
       store.listOfferVideos ? store.listOfferVideos(offer.id).catch(() => []) : [],
+      agentThreadFor(locationId, offer, client),
     ]);
-    return preContractChecks({ offer, settings: effectiveSettings(settings || {}), videos });
+    return preContractChecks({ offer, settings: effectiveSettings(settings || {}), videos, thread });
+  }
+  // The listing agent's thread for the checks that read it (agent_words,
+  // their_number, competing). Null when it can't be read: those say "not read".
+  async function agentThreadFor(locationId, offer, client) {
+    if (!client || !offer?.contactId) return null;
+    try { return (await buildTranscript(client, locationId, offer.contactId, { maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 80, maxChars: 20000, maxCallTranscripts: 0 })).text || ""; }
+    catch { return null; }
   }
   router.get("/:id/precontract", async (req, res) => {
     try {
       const ctx = await loadDealOffer(req, res, { requireDeal: false });
       if (!ctx) return;
-      res.json({ ok: true, checks: await preContractFor(ctx.locationId, ctx.offer), preContract: normalizePreContract(ctx.offer.preContract), presell: ctx.offer.presell || null });
+      res.json({ ok: true, checks: await preContractFor(ctx.locationId, ctx.offer, ctx.client), preContract: normalizePreContract(ctx.offer.preContract), presell: ctx.offer.presell || null });
     } catch (err) { fail(res, err); }
   });
   router.post("/:id/precontract", async (req, res) => {
@@ -4396,7 +4405,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!PRE_CONTRACT_KEYS.includes(key)) return res.status(400).json({ error: `key must be one of: ${PRE_CONTRACT_KEYS.join(", ")}` });
       offer.preContract = tickPreContract(offer.preContract, { key, done: req.body?.done !== false, note: req.body?.note || "" });
       await store.updateOffer(offer.id, offer);
-      res.json({ ok: true, checks: await preContractFor(locationId, offer), preContract: offer.preContract });
+      res.json({ ok: true, checks: await preContractFor(locationId, offer, ctx.client), preContract: offer.preContract });
     } catch (err) { fail(res, err); }
   });
 

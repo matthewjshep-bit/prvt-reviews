@@ -58,7 +58,7 @@ test("a promote with things nobody checked says so and keeps them on the deal â€
   assert.ok(rec.open.includes("rehab_floor"), "20k of rehab on 1,300 sqft is under the light floor");
   assert.ok(rec.open.includes("presell"));
   assert.ok(!rec.open.includes("extension"), "your tick stands");
-  assert.ok((after.warnings || []).some((w) => /^before signing, not checked: .*rehab at or above the light floor/.test(w)), (after.warnings || []).join(" | "));
+  assert.ok((after.warnings || []).some((w) => /^before signing, not checked: .*rehab at or above the floor/.test(w)), (after.warnings || []).join(" | "));
 });
 
 test("the buyers a house was pre-sold to join the deal; a pre-sell text nobody sent stands down for the first wave", async () => {
