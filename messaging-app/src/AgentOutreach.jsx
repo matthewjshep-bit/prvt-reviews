@@ -451,7 +451,7 @@ export default function AgentOutreach({ settings }) {
           <span className="font-semibold">{autopilot.settings?.enabled ? "Runs itself every morning" : "Runs by hand"}</span>
           <span className="text-xs text-slate-500">
             {autopilot.settings?.enabled
-              ? `${autopilot.settings.weekdaysOnly ? "Mon–Fri" : "every day"} · up to ${autopilot.settings.dailyCap} new agents a run ·${autopilot.settings.firstTouch === "app" ? "the bot says hello" : autopilot.settings.firstTouch === "workflow" ? (autopilot.settings.workflowId ? "enrolled in your GHL workflow" : "no GHL workflow picked!") : "GHL trigger tag says hello"}${autopilot.settings.counties?.length ? ` · one county a day (${autopilot.settings.counties.map((c) => c.county).join(" → ")})` : ""}${autopilot.settings.followUpEnabled ? ` · follow-up after ${autopilot.settings.followUpDays} days` : ""}${autopilot.importsEnabled ? "" : " · imports are dry runs until OUTREACH_IMPORTS_ENABLED is set"}`
+              ? `${{ mon_fri: "Mon–Fri", sun_fri: "Sun–Fri", all: "every day" }[autopilot.settings.days] || (autopilot.settings.weekdaysOnly ? "Mon–Fri" : "every day")} · ${autopilot.settings.dailyCap > 0 ? `up to ${autopilot.settings.dailyCap}` : "every"} new agents a run ·${autopilot.settings.firstTouch === "app" ? "the bot says hello" : autopilot.settings.firstTouch === "workflow" ? (autopilot.settings.workflowId ? "enrolled in your GHL workflow" : "no GHL workflow picked!") : "GHL trigger tag says hello"}${autopilot.settings.counties?.length ? ` · one county a day (${autopilot.settings.counties.map((c) => c.county).join(" → ")})` : ""}${autopilot.settings.followUpEnabled ? ` · follow-up after ${autopilot.settings.followUpDays} days` : ""}${autopilot.importsEnabled ? "" : " · imports are dry runs until OUTREACH_IMPORTS_ENABLED is set"}`
               : "turn on the daily sweep in Settings → Agent Outreach"}
             {autopilot.lastRunAt ? ` · last ran ${new Date(autopilot.lastRunAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}
           </span>
@@ -494,7 +494,7 @@ export default function AgentOutreach({ settings }) {
             <button type="button" disabled={autoBusy || autopilot.job?.status === "running" || !autopilot.hasKey}
               className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
               onClick={async () => {
-                if (!window.confirm(`Run the outreach sweep now? It pulls, imports up to ${autopilot.settings?.dailyCap ?? 12} new agents${autopilot.importsEnabled ? "" : " (dry run — imports are off on the broker)"}, and ${autopilot.settings?.firstTouch === "workflow" ? "enrolls them in your GHL workflow" : "drafts their first texts"}.`)) return;
+                if (!window.confirm(`Run the outreach sweep now? It pulls, imports ${autopilot.settings?.dailyCap === 0 ? "every" : `up to ${autopilot.settings?.dailyCap ?? 12}`} new agents${autopilot.importsEnabled ? "" : " (dry run — imports are off on the broker)"}, and ${autopilot.settings?.firstTouch === "workflow" ? "enrolls them in your GHL workflow" : "drafts their first texts"}.`)) return;
                 setAutoBusy(true); try { await runOutreachAutopilot(false); await refreshAutopilot(); } catch (e) { setError(e.message); } setAutoBusy(false);
               }}>
               Run it now

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME, DEFAULT_HOMES } from "./shared/outreach-opener.js";
 import { DEFAULT_INTRO_EMAIL_SUBJECT, DEFAULT_INTRO_EMAIL_BODY, DEFAULT_CHECK_IN_EMAILS } from "./shared/outreach-email.js";
 import {
-  pickAgentsToImport, normalizeOutreachAutopilot, isWorkday, workHour, runsLeftInMonth, pullQuery, startOutreachSweep, maybeStartOutreachSweep, getOutreachJob, _resetJobs, CURSOR_NAME, PAGES_CURSOR, STALE_RUN_MS, RETRY_GAP_MS, RETRY_WINDOW_HOURS, MAX_DAILY_TRIES,
+  pickAgentsToImport, normalizeOutreachAutopilot, isWorkday, workHour, runsLeftInMonth, pullQuery, startOutreachSweep, maybeStartOutreachSweep, getOutreachJob, _resetJobs, CURSOR_NAME, PAGES_CURSOR, STALE_RUN_MS, RETRY_GAP_MS, RETRY_WINDOW_HOURS, MAX_DAILY_TRIES, DEFAULT_MARKETS,
 } from "./outreach-sweep.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
@@ -13,7 +13,7 @@ const row = (k, doc = {}, extra = {}) => ({ agentKey: k, status: "new", contactI
 
 test("settings coerce to safe defaults", () => {
   assert.deepEqual(normalizeOutreachAutopilot(undefined), {
-    enabled: false, dailyCap: 12, weekdaysOnly: true, firstTouch: "app", opener: { examples: DEFAULT_OPENER_EXAMPLES, followUps: DEFAULT_FOLLOW_UP_TEXTS, checkIns: DEFAULT_CHECK_IN_TEXTS, mode: "template", home: DEFAULT_HOME, homes: DEFAULT_HOMES },
+    enabled: false, dailyCap: 12, days: "mon_fri", weekdaysOnly: true, markets: DEFAULT_MARKETS, firstTouch: "app", opener: { examples: DEFAULT_OPENER_EXAMPLES, followUps: DEFAULT_FOLLOW_UP_TEXTS, checkIns: DEFAULT_CHECK_IN_TEXTS, mode: "template", home: DEFAULT_HOME, homes: DEFAULT_HOMES },
     introEmail: { enabled: false, autoSend: false, day: 2, subject: DEFAULT_INTRO_EMAIL_SUBJECT, body: DEFAULT_INTRO_EMAIL_BODY },
     checkInEmail: { enabled: false, autoSend: false, emails: DEFAULT_CHECK_IN_EMAILS }, requireDistress: true, turnkeyShare: 0,
     workflowId: "", counties: [], followUpEnabled: false, followUpWorkflowId: "", followUpDays: 14, nudgeGhlCohort: false,
@@ -25,7 +25,10 @@ test("settings coerce to safe defaults", () => {
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: 0 }).maxListPrice, 0, "0 = no cap");
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: "900000" }).maxListPrice, 900000);
   assert.equal(normalizeOutreachAutopilot({ enabled: true, dailyCap: "250" }).dailyCap, 250);
-  assert.equal(normalizeOutreachAutopilot({ enabled: true, dailyCap: "5000" }).dailyCap, 500);
+  // 2026-10-21 (Matt: "Why is the cap 500? Let's get rid of that limit"): 0 is no cap.
+  assert.equal(normalizeOutreachAutopilot({ enabled: true, dailyCap: "5000" }).dailyCap, 5000);
+  assert.equal(normalizeOutreachAutopilot({ enabled: true, dailyCap: 99999 }).dailyCap, 5000);
+  assert.equal(normalizeOutreachAutopilot({ enabled: true, dailyCap: 0 }).dailyCap, 0);
   assert.equal(normalizeOutreachAutopilot({ firstTouch: "ghl" }).firstTouch, "ghl");
 });
 

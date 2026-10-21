@@ -648,9 +648,9 @@ export function AutoSendCard({ config, patch }) {
             <Text type="number" value={a.slow?.maxSec ?? 2400} onChange={(v) => set("slow")({ ...(a.slow || {}), maxSec: Number(v) })} />
           </div>
         </Field>
-        <Field label="Weekends" hint="What the machine starts (nudges, cold opens, blasts) waits for Monday unless you allow it.">
+        <Field label="Weekends" hint="What the machine starts (nudges, cold opens, blasts) waits for Monday unless you allow it — or for Sunday, on Sunday to Friday.">
           <Select value={a.weekends || "replies_only"} onChange={set("weekends")}
-            options={[["replies_only", "answer what comes in, start nothing"], ["all", "like a weekday"], ["none", "send nothing until Monday"]]} />
+            options={[["replies_only", "answer what comes in, start nothing"], ["sun_to_fri", "Sunday like a weekday, Saturday answers only"], ["all", "like a weekday"], ["none", "send nothing until Monday"]]} />
         </Field>
         <Field label="Spread nudges over (hours)" hint="Follow-ups, cold opens and blasts land somewhere in the first N hours of the day, not all at the opening bell.">
           <Text type="number" value={a.nudgeSpreadHours ?? 8} onChange={(v) => set("nudgeSpreadHours")(Number(v))} />

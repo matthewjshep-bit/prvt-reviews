@@ -21,6 +21,7 @@ import { isOldHouse } from "./outreach-score.js";
 import { workflowIdFrom } from "./shared/ghl-calls.js";
 import { listingDistress } from "./shared/listing-distress.js";
 import { streetKey } from "./comps-zillow.js";
+import { worksOn, runDaysFrom } from "./shared/follow-up-engine.js";
 
 export const CURSOR_NAME = "outreach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -42,9 +43,10 @@ export const STALE_RUN_MS = 45 * 60 * 1000;
 // The hour it runs, in Pacific time (so daylight saving doesn't move it).
 export const OUTREACH_SWEEP_HOUR = Number(process.env.OUTREACH_SWEEP_HOUR || 10); // 10–11am Pacific
 export const DEFAULT_DAILY_CAP = 12;
-// A sanity ceiling, not a business rule: one RentCast page is 500 listings,
-// and the import paces GHL at two contacts at a time.
-export const MAX_DAILY_CAP = 500;
+// A sanity ceiling on a hand-run import, not a business rule. The sweep's own
+// day has no cap when `dailyCap` is 0 (2026-10-21, Matt: "Why is the cap 500?
+// Let's get rid of that limit") — what RentCast finds is the limit.
+export const MAX_DAILY_CAP = 5000;
 // The hard stop when no plan is set in Settings: 48 of the free tier's 50.
 // Past a plan's requests RentCast does not refuse — it bills each one — so the
 // budget is the only thing that stops it. A paid plan's number goes in
@@ -93,9 +95,12 @@ export function workHour(now = Date.now(), tz = WORK_TZ) {
   return Number(new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone: tz }).format(new Date(now)));
 }
 
-export function isWorkday(now = Date.now(), tz = WORK_TZ) {
+// A day the job runs on, by its `days` (shared/follow-up-engine.js RUN_DAYS):
+// Monday to Friday unless it says Sunday to Friday or every day.
+const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+export function isWorkday(now = Date.now(), tz = WORK_TZ, days = "mon_fri") {
   const wd = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: tz }).format(new Date(now));
-  return wd !== "Sat" && wd !== "Sun";
+  return worksOn(WEEKDAY_INDEX[wd], days);
 }
 
 // The calendar date in the work time zone.
@@ -130,15 +135,15 @@ export function rentcastCycle(now = Date.now(), cycleDay = 1, tz = WORK_TZ) {
 
 // Runs left in the billing month, today included, in Pacific dates — what the
 // month's remaining RentCast requests get divided by.
-export function runsLeftInCycle(now = Date.now(), { weekdaysOnly = true, cycleDay = 1, tz = WORK_TZ } = {}) {
+export function runsLeftInCycle(now = Date.now(), { weekdaysOnly = true, days = runDaysFrom({ weekdaysOnly }), cycleDay = 1, tz = WORK_TZ } = {}) {
   const { end } = rentcastCycle(now, cycleDay, tz);
   let n = 0;
-  for (let t = now; t < end; t += DAY_MS) if (!weekdaysOnly || isWorkday(t, tz)) n++;
+  for (let t = now; t < end; t += DAY_MS) if (isWorkday(t, tz, days)) n++;
   return Math.max(1, n);
 }
 
-export function runsLeftInMonth(now = Date.now(), { weekdaysOnly = true, tz = WORK_TZ } = {}) {
-  return runsLeftInCycle(now, { weekdaysOnly, cycleDay: 1, tz });
+export function runsLeftInMonth(now = Date.now(), { weekdaysOnly = true, days = runDaysFrom({ weekdaysOnly }), tz = WORK_TZ } = {}) {
+  return runsLeftInCycle(now, { days, cycleDay: 1, tz });
 }
 
 // RentCast's property types, spelled its way.
@@ -157,6 +162,58 @@ export const DEFAULT_MAX_LIST_PRICE = 1500000;
 // it takes a price cut or an older house. A price under the market's $/sqft
 // ("cut-or-cheap", until 2026-10) found finished houses in slow towns.
 export const SWEEP_DISTRESS_RULE = "cut-or-old";
+// Rules for one market over the ones above, keyed like the county list
+// ("Deschutes, OR"). Bend (2026-10-21, Matt: "at least for Bend, targeting
+// just primarily distressed property signals. Those are properties that are
+// at least 16 years old. Look for days on market, properties that have been
+// sitting"): built 2010 or before, asked of RentCast, then sitting 60 days,
+// a price cut, or priced under the area — "old" can't be the signal there,
+// where most houses are newer than 1980 — and no turnkey seats.
+export const MARKET_RULES = ["maxYearBuilt", "minDaysOnMarket", "staleDom", "distressRule", "turnkeyShare"];
+export const DEFAULT_MARKETS = {
+  "Deschutes, OR": { maxYearBuilt: 2010, minDaysOnMarket: 21, staleDom: 60, distressRule: "any", turnkeyShare: 0 },
+};
+const DISTRESS_RULES = ["any", "cut-or-old", "cut-or-cheap"];
+
+/** marketsFrom(v) → { "County, ST": { …only the rules it sets } } */
+export function marketsFrom(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return structuredClone(DEFAULT_MARKETS);
+  const out = {};
+  for (const [rawKey, r] of Object.entries(v).slice(0, 20)) {
+    const [c] = countiesFrom([rawKey]);
+    if (!c || !r || typeof r !== "object") continue;
+    const m = {};
+    const year = Math.round(Number(r.maxYearBuilt));
+    if (year >= 1800 && year <= 2100) m.maxYearBuilt = year;
+    const dom = Math.round(Number(r.minDaysOnMarket));
+    if (Number.isFinite(dom) && dom >= 0 && r.minDaysOnMarket !== "" && r.minDaysOnMarket != null) m.minDaysOnMarket = Math.min(365, dom);
+    const stale = Math.round(Number(r.staleDom));
+    if (stale >= 1) m.staleDom = Math.min(365, stale);
+    if (DISTRESS_RULES.includes(r.distressRule)) m.distressRule = r.distressRule;
+    const share = Math.round(Number(r.turnkeyShare));
+    if (Number.isFinite(share) && r.turnkeyShare !== "" && r.turnkeyShare != null) m.turnkeyShare = Math.min(100, Math.max(0, share));
+    out[`${c.county}, ${c.state}`] = m;
+  }
+  return out;
+}
+
+/**
+ * marketRules(oa, key) → { maxYearBuilt, minDaysOnMarket, staleDom, distressRule, turnkeyShare }
+ *
+ * The rules a county's pull and pick go by: its own (oa.markets[key]) over
+ * the sweep's. `distressRule` is null when the sweep doesn't require distress.
+ */
+export function marketRules(oa, key = null) {
+  const m = (key && oa.markets?.[key]) || {};
+  return {
+    maxYearBuilt: m.maxYearBuilt ?? oa.maxYearBuilt,
+    minDaysOnMarket: m.minDaysOnMarket ?? oa.minDaysOnMarket,
+    staleDom: m.staleDom ?? null,
+    distressRule: oa.requireDistress ? m.distressRule ?? SWEEP_DISTRESS_RULE : null,
+    turnkeyShare: m.turnkeyShare ?? oa.turnkeyShare,
+  };
+}
+
 // Requests left for the Pull button, on top of what the sweep spends.
 export const DEFAULT_RESERVE_REQUESTS = 2;
 // The most one run may spend, however far behind the month is. Ten was the
@@ -190,8 +247,11 @@ export function normalizeOutreachAutopilot(v = {}) {
     .map((t) => PROPERTY_TYPES.find((p) => p.toLowerCase() === String(t).trim().toLowerCase())).filter((t) => t && t !== "Manufactured");
   return {
     enabled: o.enabled === true,
-    dailyCap: Number.isFinite(cap) ? Math.min(MAX_DAILY_CAP, Math.max(1, cap)) : DEFAULT_DAILY_CAP,
-    weekdaysOnly: o.weekdaysOnly !== false,
+    // 0 = no cap: everyone the day's pull finds.
+    dailyCap: o.dailyCap === 0 || o.dailyCap === "0" ? 0 : Number.isFinite(cap) ? Math.min(MAX_DAILY_CAP, Math.max(1, cap)) : DEFAULT_DAILY_CAP,
+    // The days it runs: "mon_fri", "sun_fri" or "all" (`weekdaysOnly` was the switch before).
+    days: runDaysFrom(o),
+    weekdaysOnly: runDaysFrom(o) !== "all",
     firstTouch: o.firstTouch === "ghl" || o.firstTouch === "workflow" ? o.firstTouch : "app",
     // Matt's own first texts, the voice the bot writes them in.
     opener: normalizeOpener(o.opener),
@@ -222,6 +282,8 @@ export function normalizeOutreachAutopilot(v = {}) {
       : Number.isFinite(minDom) && minDom > 0 ? Math.min(365, minDom) : DEFAULT_MIN_DAYS_ON_MARKET,
     propertyTypes: o.propertyTypes === undefined ? [...DEFAULT_PROPERTY_TYPES] : [...new Set(types)],
     maxYearBuilt: year >= 1800 && year <= 2100 ? year : 0,
+    // Rules for a market of its own (Bend), over these.
+    markets: marketsFrom(o.markets),
     reserveRequests: Number.isFinite(reserve) && reserve >= 0 ? Math.min(100, reserve) : DEFAULT_RESERVE_REQUESTS,
     // The RentCast plan: requests a month (0 = not set, the old budget
     // applies) and the day of the month it renews.
@@ -361,15 +423,20 @@ async function screenPicked({ groups, oa, job, locationId, store, deps, now, bea
 }
 
 /**
- * pullQuery(oa) → the RentCast filters the sweep sends with every pull.
+ * pullQuery(oa, key) → the RentCast filters the sweep sends with every pull,
+ * by the market's own rules when it has them (marketRules).
  */
-export function pullQuery(oa) {
+export function pullQuery(oa, key = null) {
+  const r = marketRules(oa, key);
   return {
-    daysOld: `${Math.max(1, oa.minDaysOnMarket || 1)}:*`,
+    daysOld: `${Math.max(1, r.minDaysOnMarket || 1)}:*`,
     ...(oa.propertyTypes.length ? { propertyType: oa.propertyTypes.join("|") } : {}),
-    ...(oa.maxYearBuilt ? { yearBuilt: `*:${oa.maxYearBuilt}` } : {}),
+    ...(r.maxYearBuilt ? { yearBuilt: `*:${r.maxYearBuilt}` } : {}),
+    // A market's own year is checked again after the pull, as the hand-made Pull does.
+    ...(key && oa.markets?.[key]?.maxYearBuilt ? { maxYearBuilt: r.maxYearBuilt } : {}),
     ...(oa.maxListPrice ? { maxPrice: oa.maxListPrice } : {}),
-    ...(oa.requireDistress ? { distressRule: SWEEP_DISTRESS_RULE } : {}),
+    ...(r.distressRule ? { distressRule: r.distressRule } : {}),
+    ...(r.staleDom ? { staleDom: r.staleDom } : {}),
     // The county's population centre, not the whole-county circle (see
     // METRO_CIRCLES in routes/outreach.js). Part of the query signature, so
     // the saved page offsets from the old circles start over.
@@ -377,9 +444,14 @@ export function pullQuery(oa) {
   };
 }
 
+// A market with rules of its own reads its pages by its own query: new rules
+// start its place over without touching anyone else's. Null for the rest,
+// whose place belongs to the sweep's query (`pages.query`).
+const marketSig = (oa, key) => (key && oa.markets?.[key] ? JSON.stringify(pullQuery(oa, key)) : null);
+
 // Ask the pull to keep turnkey-only agents (flagged) when there are seats for
 // them. Not part of pullQuery: the saved page places don't start over for it.
-export const keepTurnkeyFor = (oa) => (oa.requireDistress && oa.turnkeyShare > 0 ? { keepTurnkey: true } : {});
+export const keepTurnkeyFor = (oa, key = null) => (oa.requireDistress && marketRules(oa, key).turnkeyShare > 0 ? { keepTurnkey: true } : {});
 
 /**
  * pickAgentsToImport(rows, { cap, requireDistress, turnkeyShare }) → [row]
@@ -495,7 +567,7 @@ export async function rentcastBudget({ store = defaultStore, locationId, saved =
   const used = await requestsSince(store, locationId, iso(start));
   const budget = monthlyBudget(saved, oa);
   const spendable = budget - used - oa.reserveRequests;
-  const runsLeft = runsLeftInCycle(now, { weekdaysOnly: oa.weekdaysOnly, cycleDay: oa.cycleDay });
+  const runsLeft = runsLeftInCycle(now, { days: oa.days, cycleDay: oa.cycleDay });
   const perRun = spendable > 0 ? Math.min(MAX_REQUESTS_PER_RUN, Math.max(1, Math.floor(spendable / runsLeft))) : 0;
   return { used, budget, reserve: oa.reserveRequests, runsLeft, perRun, since: iso(start) };
 }
@@ -573,6 +645,8 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
   if (typeof deps.runPull !== "function" || typeof deps.importAgents !== "function") {
     throw new Error("outreach sweep needs runPull and importAgents");
   }
+  // No cap (0): everyone the day's pull finds.
+  if (!(oa.dailyCap > 0)) oa.dailyCap = Infinity;
 
   // 0. The RentCast meter. A plan's requests are billed past its number, not
   // refused. Spend them evenly: what's left this billing month (less a
@@ -623,7 +697,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     }
     if (room < oa.dailyCap) {
       const fit = Math.max(0, Math.floor(room));
-      job.warnings.push(`the Conversation AI's daily cap leaves room for ${fit} first text${fit === 1 ? "" : "s"} today (the rest is kept for people who text us) — importing ${fit}, not ${oa.dailyCap}`);
+      job.warnings.push(`the Conversation AI's daily cap leaves room for ${fit} first text${fit === 1 ? "" : "s"} today (the rest is kept for people who text us) — importing ${fit}, not ${Number.isFinite(oa.dailyCap) ? oa.dailyCap : "everyone found"}`);
       oa.dailyCap = fit;
     }
     if (oa.dailyCap <= 0) {
@@ -688,14 +762,14 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     job.phase = "pulling off-market";
     try {
       const batchId = await autopilotBatchId({ store, locationId, market: `Off-market · ${key}` });
-      const query = { ...pullQuery(oa), county: county.county, state: county.state, status: "Inactive", maxRequests: reqs, ...(batchId ? { batchId } : {}) };
+      const query = { ...pullQuery(oa, key), county: county.county, state: county.state, status: "Inactive", maxRequests: reqs, ...(batchId ? { batchId } : {}) };
       const pull = await deps.runPull(locationId, client, query, { maxRequestsCap: MAX_REQUESTS_PER_RUN });
       const used = Number(pull.requestsUsed) || 0;
       left -= used;
       const rows = typeof store.listOutreachPickable === "function"
         ? await store.listOutreachPickable(locationId, { batchId: pull.batchId, limit: 1000 })
         : await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
-      const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: false, maxPrice: oa.maxListPrice, propertyTypes: oa.propertyTypes, maxYearBuilt: oa.maxYearBuilt })
+      const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: false, maxPrice: oa.maxListPrice, propertyTypes: oa.propertyTypes, maxYearBuilt: marketRules(oa, key).maxYearBuilt })
         .filter((r) => r.doc?.hook?.offMarket && !seenAgents.has(r.agentKey) && !seenPhones.has(String(r.doc?.phone)));
       for (const r of fresh) { seenAgents.add(r.agentKey); seenPhones.add(String(r.doc?.phone)); }
       if (fresh.length) groups.push({ key, batchId: pull.batchId, picked: fresh, limit: seats, offMarket: true });
@@ -730,9 +804,11 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
       ? await store.listOutreachPickable(locationId, { batchId, limit: 1000 })
       : await store.listOutreachAgents(locationId, { batchId, status: "new", limit: 1000 });
     job.candidates = (job.candidates || 0) + rows.length;
+    // By the market's own rules where it has them (Bend).
+    const rules = marketRules(oa, key);
     const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
-      maxPrice: oa.maxListPrice, distressRule: oa.requireDistress ? SWEEP_DISTRESS_RULE : null, propertyTypes: oa.propertyTypes,
-      maxYearBuilt: oa.maxYearBuilt, turnkeyShare: oa.turnkeyShare })
+      maxPrice: oa.maxListPrice, distressRule: rules.distressRule, propertyTypes: oa.propertyTypes,
+      maxYearBuilt: rules.maxYearBuilt, turnkeyShare: rules.turnkeyShare })
       .filter((r) => !seenAgents.has(r.agentKey) && !seenPhones.has(String(r.doc?.phone)));
     for (const r of fresh) { seenAgents.add(r.agentKey); seenPhones.add(String(r.doc?.phone)); }
     if (fresh.length) groups.push({ key, batchId, picked: fresh });
@@ -764,8 +840,9 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
       const key = `${county.county}, ${county.state}`;
       job.phase = "pulling";
       job.county = key;
-      const query = { ...pullQuery(oa), ...keepTurnkeyFor(oa), county: county.county, state: county.state,
-        offset: Number(pages.offsets?.[key]) || 0, maxRequests: Math.max(1, left) };
+      const sig = marketSig(oa, key);
+      const query = { ...pullQuery(oa, key), ...keepTurnkeyFor(oa, key), county: county.county, state: county.state,
+        offset: sig === (pages.sigs?.[key] ?? sig) ? Number(pages.offsets?.[key]) || 0 : 0, maxRequests: Math.max(1, left) };
       const batchId = await autopilotBatchId({ store, locationId, market: key }).catch(() => undefined);
       if (batchId) query.batchId = batchId;
       let pull;
@@ -789,21 +866,25 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
         ...pages,
         offsets: { ...(pages.offsets || {}), [key]: Number(pull.nextOffset) || 0 },
         totals: { ...(pages.totals || {}), [key]: pull.totalCount ?? null },
+        sigs: { ...(pages.sigs || {}), [key]: sig },
       });
     }
   } else for (let attempt = 0; attempt < n; attempt++) {
     // Stop before a pull, not after it: a run with nothing left spends nothing.
     if (attempt > 0 && (left <= 0 || pickedTotal >= wanted)) break;
     job.phase = "pulling";
-    const query = { ...pullQuery(oa), ...keepTurnkeyFor(oa), maxRequests: Math.max(1, left) };
     let county = null;
     let key = null;
     const turn = (startTurn + attempt) % n;
     if (oa.counties.length) {
       county = oa.counties[turn];
       key = `${county.county}, ${county.state}`;
+    }
+    const sig = marketSig(oa, key);
+    const query = { ...pullQuery(oa, key), ...keepTurnkeyFor(oa, key), maxRequests: Math.max(1, left) };
+    if (county) {
       query.county = county.county; query.state = county.state;
-      query.offset = Number(pages.offsets?.[key]) || 0;
+      query.offset = sig === (pages.sigs?.[key] ?? sig) ? Number(pages.offsets?.[key]) || 0 : 0;
     }
     job.county = key;
     // Its own batch per market. Without a batchId the pull lands in the most
@@ -857,6 +938,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
         turn: keepTurn ?? (turn + 1) % n,
         offsets: { ...(pages.offsets || {}), [key]: next },
         totals: { ...(pages.totals || {}), [key]: pull.totalCount ?? null },
+        sigs: { ...(pages.sigs || {}), [key]: sig },
         lastCounty: key,
       });
     }
@@ -1011,7 +1093,7 @@ export async function maybeStartOutreachSweep({ locationId, client, saved = {}, 
   if (h < hour || h >= hour + RETRY_WINDOW_HOURS) return false;
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
   if (!oa.enabled) return false;
-  if (oa.weekdaysOnly && !isWorkday(now)) return false;
+  if (!isWorkday(now, WORK_TZ, oa.days)) return false;
   if (!String(saved.rentcastApiKey || "").trim()) return false;
   if (jobs.get(locationId)?.status === "running") return false;
   const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);

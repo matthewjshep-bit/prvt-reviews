@@ -42,6 +42,30 @@ export function pacificParts(t) {
   return { y: +p.year, m: +p.month, d: +p.day, h: +p.hour % 24, mi: +p.minute, s: +p.second, wd: WEEKDAYS[p.weekday] ?? 0 };
 }
 
+// Which days the machine works (2026-10-21, Matt: "Sunday through Friday,
+// essentially, is going to be it. 8:00 am to 6:00 pm are the hours that our
+// outreach goes out"). A once-a-day job's `days`: Monday to Friday, Sunday to
+// Friday, or every day. Saturday is only worked on "all".
+export const RUN_DAYS = ["mon_fri", "sun_fri", "all"];
+
+/** runDaysFrom({ days, weekdaysOnly }) → "mon_fri" | "sun_fri" | "all" — `weekdaysOnly` is the older switch. */
+export function runDaysFrom(o = {}) {
+  if (RUN_DAYS.includes(o?.days)) return o.days;
+  return o?.weekdaysOnly === false ? "all" : "mon_fri";
+}
+
+/** worksOn(wd, days) — wd 0 = Sunday … 6 = Saturday. */
+export function worksOn(wd, days = "mon_fri") {
+  if (days === "all") return true;
+  if (wd === 6) return false;
+  return wd !== 0 || days === "sun_fri";
+}
+
+// The machine-texts setting (conversationAi autoSend.weekends) as days:
+// "sun_to_fri" starts things on a Sunday but not a Saturday; "replies_only"
+// and "none" start nothing on either.
+export const machineDays = (weekends) => (weekends === "all" ? "all" : weekends === "sun_to_fri" ? "sun_fri" : "mon_fri");
+
 const offsetAt = (t) => {
   const p = pacificParts(t);
   return Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi, p.s) - Math.floor(t / 1000) * 1000;
@@ -135,18 +159,19 @@ export function pacificWallTime(y, m0, d, hour = 0) {
 }
 
 /**
- * runsBetween({ hour, weekdaysOnly, from, until }) → [ms]
+ * runsBetween({ hour, days, weekdaysOnly, from, until }) → [ms]
  *
- * Each day's run of a once-a-day job at `hour` Pacific, in [from, until).
+ * Each day's run of a once-a-day job at `hour` Pacific, in [from, until),
+ * on its `days` (runDaysFrom; `weekdaysOnly` when none is given).
  */
-export function runsBetween({ hour = 12, weekdaysOnly = true, from, until } = {}) {
+export function runsBetween({ hour = 12, weekdaysOnly = true, days = runDaysFrom({ weekdaysOnly }), from, until } = {}) {
   const out = [];
   const p = pacificParts(from);
   for (let i = 0; i < 800; i++) {
     const day = pacificMidnight(p.y, p.m - 1, p.d + i);
     if (day >= until) break;
     const q = pacificParts(day + 12 * HOUR_MS);
-    if (weekdaysOnly && (q.wd === 0 || q.wd === 6)) continue;
+    if (!worksOn(q.wd, days)) continue;
     const t = pacificWallTime(q.y, q.m - 1, q.d, hour);
     if (t >= from && t < until) out.push(t);
   }
@@ -154,7 +179,7 @@ export function runsBetween({ hour = 12, weekdaysOnly = true, from, until } = {}
 }
 
 /**
- * rollOntoRuns(items, { hour, weekdaysOnly, cap, firstCap, now, until, ranToday, windowHours })
+ * rollOntoRuns(items, { hour, days, weekdaysOnly, cap, firstCap, now, until, ranToday, windowHours })
  *   → items with `at` = the run that takes them
  *
  * A once-a-day job (the agent check-in, the buyer check-in, the GHL
@@ -164,10 +189,10 @@ export function runsBetween({ hour = 12, weekdaysOnly = true, from, until } = {}
  * window closes, unless it already ran (`ranToday`). Items with no run
  * before `until` are left out — beyond the page.
  */
-export function rollOntoRuns(items = [], { hour = 12, weekdaysOnly = true, cap = Infinity, firstCap = null, now = Date.now(), until, ranToday = false, windowHours = 5 } = {}) {
+export function rollOntoRuns(items = [], { hour = 12, weekdaysOnly = true, days = runDaysFrom({ weekdaysOnly }), cap = Infinity, firstCap = null, now = Date.now(), until, ranToday = false, windowHours = 5 } = {}) {
   const p = pacificParts(now);
   const from = ranToday ? pacificMidnight(p.y, p.m - 1, p.d + 1) : pacificMidnight(p.y, p.m - 1, p.d);
-  const runs = runsBetween({ hour, weekdaysOnly, from, until }).filter((r) => now <= r + windowHours * HOUR_MS);
+  const runs = runsBetween({ hour, days, from, until }).filter((r) => now <= r + windowHours * HOUR_MS);
   const limit = (x) => (x > 0 && Number.isFinite(x) ? x : Infinity);
   const sorted = [...items].filter((x) => ms(x.due) != null).sort((a, b) => ms(a.due) - ms(b.due));
   const out = [];

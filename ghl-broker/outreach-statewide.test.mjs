@@ -201,6 +201,8 @@ test("a resumed lap steps back a little, and a finished lap starts over", async 
 /* ---------- a county in another state (2026-10-21, Matt: "start going into the Bend market") ---------- */
 
 const withBend = [...corridor, { county: "Deschutes", state: "OR" }];
+// A Bend agent as Bend's pull files them: distress by Bend's rule ("any": sitting, cut or cheap).
+const bendRow = (k, hook = {}) => { const r = agentRow(k); return { ...r, doc: { ...r.doc, distressRule: "any", hook: { ...r.doc.hook, yearBuilt: 1998, ...hook } } }; };
 // Washington answers the state read; Bend answers its own circle.
 const twoStateDeps = (bodies, calls, { stateNext = 1500, bendNext = 0 } = {}) => ({
   runPull: async (_l, _c, b) => {
@@ -216,7 +218,7 @@ const twoStateDeps = (bodies, calls, { stateNext = 1500, bendNext = 0 } = {}) =>
 
 test("Bend agents get texted: a Deschutes, OR county is read by its own circle, not left out of the Washington read", async () => {
   _resetJobs();
-  const store2 = fakeStore({ "b-Autopilot · King, WA": [agentRow("k1")], "b-Autopilot · Deschutes, OR": [agentRow("bend1"), agentRow("bend2")] });
+  const store2 = fakeStore({ "b-Autopilot · King, WA": [agentRow("k1")], "b-Autopilot · Deschutes, OR": [bendRow("bend1"), bendRow("bend2")] });
   const bodies = [];
   const calls = [];
   const saved = { outreachAutopilot: { enabled: true, coverage: "statewide", counties: withBend, monthlyRequests: 1000, dailyCap: 50 } };
@@ -295,4 +297,56 @@ test("a dry run of the statewide sweep doesn't move the place", async () => {
   startOutreachSweep({ locationId: "loc-dry", client: {}, saved, store: store2, deps, now: oct2, dryRun: true });
   await settle();
   assert.equal(store2.cursors.get(`loc-dry|${PAGES_CURSOR}`), undefined);
+});
+
+/* ---------- Bend's own rules (2026-10-21, Matt: "at least for Bend, targeting just primarily distressed property signals … at least 16 years old … properties that have been sitting") ---------- */
+
+test("Bend's pull asks RentCast for houses built 2010 or before, and counts sitting 60 days, a cut or a cheap price as distress", async () => {
+  _resetJobs();
+  const bodies = [];
+  const saved = { outreachAutopilot: { enabled: true, coverage: "statewide", counties: withBend, monthlyRequests: 1000, minDaysOnMarket: 21, turnkeyShare: 25 } };
+  startOutreachSweep({ locationId: "loc-bend-rules", client: {}, saved, store: fakeStore({}), deps: twoStateDeps(bodies, []), now: oct2 });
+  await settle();
+  const [wa, bend] = bodies;
+  assert.equal(bend.yearBuilt, "*:2010");
+  assert.equal(bend.maxYearBuilt, 2010, "checked again after the pull");
+  assert.equal(bend.staleDom, 60);
+  assert.equal(bend.distressRule, "any");
+  assert.equal(bend.daysOld, "21:*");
+  assert.equal(bend.keepTurnkey, undefined, "no turnkey seats in Bend");
+  // Washington's read is the sweep's, as before.
+  assert.equal(wa.yearBuilt, undefined);
+  assert.equal(wa.distressRule, "cut-or-old");
+  assert.equal(wa.staleDom, undefined);
+  assert.equal(wa.keepTurnkey, true);
+});
+
+test("a Bend agent whose listing was built after 2010 isn't texted", async () => {
+  _resetJobs();
+  const calls = [];
+  const store2 = fakeStore({ "b-Autopilot · Deschutes, OR": [bendRow("old"), bendRow("new", { yearBuilt: 2018 })] });
+  const saved = { outreachAutopilot: { enabled: true, coverage: "statewide", counties: withBend, monthlyRequests: 1000 } };
+  startOutreachSweep({ locationId: "loc-bend-new", client: {}, saved, store: store2, deps: twoStateDeps([], calls), now: oct2 });
+  await settle();
+  assert.deepEqual(calls.map((c) => c.agentKeys), [["old"]]);
+});
+
+test("Settings can set a market's rules, and new rules start its pages over", async () => {
+  const { normalizeOutreachAutopilot, marketRules } = await import("./outreach-sweep.js");
+  const oa = normalizeOutreachAutopilot({ requireDistress: true, maxYearBuilt: 0, markets: { "Deschutes, OR": { maxYearBuilt: "2008", staleDom: 90, distressRule: "bogus" }, "Nowhere": { maxYearBuilt: 2000 } } });
+  assert.deepEqual(oa.markets, { "Deschutes, OR": { maxYearBuilt: 2008, staleDom: 90 } });
+  assert.deepEqual(marketRules(oa, "Deschutes, OR"), { maxYearBuilt: 2008, minDaysOnMarket: oa.minDaysOnMarket, staleDom: 90, distressRule: "cut-or-old", turnkeyShare: 0 });
+  assert.deepEqual(marketRules(oa, "King, WA").maxYearBuilt, 0);
+
+  _resetJobs();
+  const store2 = fakeStore({});
+  const bodies = [];
+  const base = { enabled: true, coverage: "statewide", counties: withBend, monthlyRequests: 1000 };
+  startOutreachSweep({ locationId: "loc-bend-sig", client: {}, saved: { outreachAutopilot: base }, store: store2, deps: twoStateDeps(bodies, [], { bendNext: 500 }), now: oct2 });
+  await settle();
+  _resetJobs();
+  startOutreachSweep({ locationId: "loc-bend-sig", client: {}, saved: { outreachAutopilot: { ...base, markets: { "Deschutes, OR": { maxYearBuilt: 2000 } } } }, store: store2, deps: twoStateDeps(bodies, []), now: oct2 });
+  await settle();
+  assert.equal(bodies[3].offset, 0, "Bend under new rules reads from the top");
+  assert.equal(bodies[2].offset, 1450, "Washington's place is kept");
 });

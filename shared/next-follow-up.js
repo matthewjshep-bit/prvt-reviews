@@ -25,6 +25,7 @@ import { streetOf } from "./agent-focus.js";
 import { threadHealth } from "./thread-health.js";
 import { botHold, pauseDay, paceOf, paceScale } from "./bot-hold.js";
 import { addressKey } from "./us-address.js";
+import { worksOn, machineDays } from "./follow-up-engine.js";
 
 const HOUR_MS = 3600000;
 const DAY_MS = 24 * HOUR_MS;
@@ -66,7 +67,7 @@ export const NEXT_KINDS = {
  *
  * The daily sweep drafts at `sweepHour` UTC; a rung due at `t` goes on the
  * first sweep at or after it. Nudges don't go on a weekend unless the location
- * allows it, so a Saturday rung lands on Monday.
+ * allows it, so a Saturday rung lands on Monday ("sun_to_fri": on Sunday).
  */
 export function sweepTime(t, sweepHour = SWEEP_UTC_HOUR, weekends = "replies_only") {
   const d = new Date(t);
@@ -75,7 +76,8 @@ export function sweepTime(t, sweepHour = SWEEP_UTC_HOUR, weekends = "replies_onl
   if (weekends !== "all") {
     // Pacific weekday of the sweep: 16:00 UTC is morning the same day there.
     const wd = () => new Date(out - 8 * HOUR_MS).getUTCDay();
-    while (wd() === 0 || wd() === 6) out += DAY_MS;
+    const days = machineDays(weekends);
+    for (let guard = 0; !worksOn(wd(), days) && guard < 4; guard++) out += DAY_MS;
   }
   return out;
 }

@@ -14,7 +14,7 @@
 // and never a log line.
 
 import {
-  buildFollowUpEngine, mechanismOf, periodWindow, rollOntoRuns, runsBetween, pacificParts, pacificWallTime,
+  buildFollowUpEngine, mechanismOf, periodWindow, rollOntoRuns, runsBetween, runDaysFrom, pacificParts, pacificWallTime,
   FOLLOW_UP_PERIODS, MECHANISM_BY_KEY,
 } from "./shared/follow-up-engine.js";
 import { annotateCurrent, currentOffers } from "./shared/current-offer.js";
@@ -475,7 +475,7 @@ export async function followUpEngineFor({ store, locationId, saved = {}, period 
       .map((v) => ({ contactId: v.contactId, due: v.status === "due" ? iso(now) : v.dueAt,
         note: [v.segment, v.status === "due" ? PULSE_ABOUT[v.reason] : ""].filter(Boolean).join(" · ") }));
     const seats = ctx.agentPlan.seats;
-    for (const x of rollOntoRuns(due, { hour: s.hour ?? 12, weekdaysOnly: s.weekdaysOnly !== false, cap: s.dailyCap > 0 ? s.dailyCap : Infinity,
+    for (const x of rollOntoRuns(due, { hour: s.hour ?? 12, days: runDaysFrom(s), cap: s.dailyCap > 0 ? s.dailyCap : Infinity,
       firstCap: Number.isFinite(seats) ? seats : null, now, until, ranToday: ranToday(cursorOf(AGENT_PULSE_CURSOR), now) })) {
       plan("agent_pulse", { at: x.at, contactId: x.contactId, note: x.note });
     }
@@ -496,7 +496,7 @@ export async function followUpEngineFor({ store, locationId, saved = {}, period 
     const due = followUpCandidates(ctx.events, { days: oa.followUpDays, now: until })
       .filter((c) => !nudged.has(c.contactId))
       .map((c) => ({ contactId: c.contactId, address: c.address, due: iso(ms(c.enrolledAt) + oa.followUpDays * DAY_MS) }));
-    for (const x of rollOntoRuns(due, { hour: OUTREACH_FOLLOWUP_HOUR, weekdaysOnly: oa.weekdaysOnly !== false, cap: GHL_FOLLOW_UP_PER_RUN, now, until,
+    for (const x of rollOntoRuns(due, { hour: OUTREACH_FOLLOWUP_HOUR, days: runDaysFrom(oa), cap: GHL_FOLLOW_UP_PER_RUN, now, until,
       ranToday: ranToday(cursorOf(OUTREACH_FOLLOW_UP_CURSOR), now) })) {
       planned.push({ mech: "ghl_followup", who: "machine", at: x.at, contactId: x.contactId, name: nameOf(x.contactId), address: x.address || "" });
     }

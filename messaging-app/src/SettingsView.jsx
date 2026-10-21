@@ -649,7 +649,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       clean.psa = coerce(form.psa || {}, DEFAULT_OFFER_SETTINGS.psa);
       if (form.outreachAutopilot) {
         const pulse = form.outreachAutopilot.pulse;
-        clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: Number(form.outreachAutopilot.dailyCap) || 12, followUpDays: Number(form.outreachAutopilot.followUpDays) || 14,
+        clean.outreachAutopilot = { ...form.outreachAutopilot, dailyCap: String(form.outreachAutopilot.dailyCap).trim() === "0" ? 0 : Number(form.outreachAutopilot.dailyCap) || 12, followUpDays: Number(form.outreachAutopilot.followUpDays) || 14,
           turnkeyShare: Math.min(100, Math.max(0, Number(form.outreachAutopilot.turnkeyShare) || 0)),
           ...(form.outreachAutopilot.opener ? { opener: normalizeOpener(form.outreachAutopilot.opener) } : {}),
           ...(pulse ? { pulse: { ...pulse, dailyCap: pulse.dailyCap === "" || pulse.dailyCap == null || !Number.isFinite(Number(pulse.dailyCap)) ? 20 : Number(pulse.dailyCap), everyDays: Number(pulse.everyDays) || 21, coldEveryDays: Number(pulse.coldEveryDays) || 60,
@@ -1222,7 +1222,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           </label>
           {form.outreachAutopilot?.enabled && (
             <div className="mt-3 grid grid-cols-2 gap-3">
-              <Num label="New agents a day" value={form.outreachAutopilot?.dailyCap ?? 12} onChange={setOutreachAuto("dailyCap")} />
+              <Num label="New agents a day" suffix="0 = no cap" value={form.outreachAutopilot?.dailyCap ?? 12} onChange={setOutreachAuto("dailyCap")} />
               <label className="block">
                 <span className="text-xs font-medium text-slate-600">Who says hello</span>
                 <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
@@ -1297,10 +1297,15 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                   })}
                 </div>
               </div>
-              <label className="col-span-2 flex items-center gap-2 text-sm text-slate-700">
-                <input type="checkbox" checked={form.outreachAutopilot?.weekdaysOnly !== false}
-                  onChange={(e) => setOutreachAuto("weekdaysOnly")(e.target.checked)} />
-                Weekdays only (Mon–Fri, Pacific) — the pull, the import, and the follow-ups
+              <label className="col-span-2 block">
+                <span className="text-xs font-medium text-slate-600">Days it runs (Pacific) — the pull, the import, and the follow-ups</span>
+                <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                  value={form.outreachAutopilot?.days || (form.outreachAutopilot?.weekdaysOnly === false ? "all" : "mon_fri")}
+                  onChange={(e) => { setOutreachAuto("days")(e.target.value); setOutreachAuto("weekdaysOnly")(e.target.value !== "all"); }}>
+                  <option value="mon_fri">Monday to Friday</option>
+                  <option value="sun_fri">Sunday to Friday</option>
+                  <option value="all">Every day</option>
+                </select>
               </label>
               <label className="col-span-2 flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" checked={form.outreachAutopilot?.requireDistress !== false}
