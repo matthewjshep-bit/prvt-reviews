@@ -4693,20 +4693,46 @@ Private Integration. Pure plan: `shared/ghl-mirror.js`; writer:
 `ghl-broker/ghl-mirror.js`; `GET /api/dashboard/ghl/pipelines`,
 `POST /api/dashboard/ghl/mirror/run`.
 
-## Today / Autopilot / Reports (the old Overview, split 2026-09-13)
+## No Today: who owns what (2026-10-20)
 
-The Overview menu link used to hold four crowded tabs. It is now three GHL
-Custom Menu Links, each one job, each component in exactly one place:
+Matt, 2026-10-20: "Today really shouldn't just exist. These things should be
+automatically handled by the app." The Desk and the app's Tier 1 tab are gone.
+`/dashboard` (any view) opens Offers (`messaging-app/src/links.js` movedTo);
+old `?view=flow|dashboard|conversation` links still go to Reports / Autopilot.
+**In GHL, remove the "Today" Custom Menu Link** (or point it at Offers).
+
+Matt prices; the machine does the rest. GHL's Acquisitions pipeline is the
+board: a house waiting on his number sits in Tier 1, a sent number in Offer Out
+(the app moves the cards, `ghlStages.mode`).
+
+Every reason the pipeline, the call list or last night's audit makes has one
+owner (`shared/hand-off.js` ownerOf; a test fails on a kind with none). The
+pipeline response carries the counts as `handOffs`:
+
+| Owner | What happens | Kinds (examples) |
+|---|---|---|
+| machine | the bot sends it, or it closes itself | held replies (released under the gates; `autoSend.otherNow`), counters (the counter hold), hand-made numbers (the timer floats them a day on), the ask for their read |
+| price | Matt sets the number — the GHL Tier 1 card | price_it, number owed, underwrite held, no_fit |
+| call | booked on the calendar (`conversationAi.booking`), else GHL Manual Actions (`desk.ghlCalls`) | wants_call / scheduling (held or from the audit), call_* |
+| ping | GHL workflow "App: needs Matt" (`desk.ghlPings`), and its own page | paper_to_sign, approve_number (Approve on the offer), closing tasks, pre_contract, partner questions |
+| drop | closed quietly | a held thanks/photo/stop or a stranger's text a day on (the audit's `quietHolds`), a pass on a deal with outreach stopped, an office line two agents share |
+
+A house waiting on Matt's number (draft only) gets one `take_ask` for the
+agent's read — worth done, the work, what the seller would take — then waits
+for him (`shared/held-underwrites.js` 3c). The machine never prices from it.
+
+**Pings.** Build a GHL workflow with one Internal notification step to Matt,
+re-entry on, publish it, paste its link in Settings → Ping me in GHL. Each
+thing pings once (`ghl_ping_sent` claim). `POST /api/dashboard/ghl-pings/run`
+(dry run by default) lists who would be pinged; `GET /api/dashboard/ghl-pings`
+shows the last runs.
 
 | Menu link | URL | Tabs |
 |---|---|---|
-| Today (the old Overview link — rename it) | `https://<site>/dashboard?location_id={{location.id}}` | Desk (2026-10-02: one row per person down the left in Call · Decide · The machine is on it, today's numbers on top, and one person at a time as offer · conversation · call card; `&row=<id>` opens the person a row folds into) · Tier 1 (2026-10-07: GHL's Tier 1 stage screened, Pass / Offer →, Belongs, Tier 2; `?view=inplay` opens it; `?view=board` is the lane board) |
-| Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Controls (the dial + every switch) · Conversation AI |
-| Reports | `https://<site>/reports?location_id={{location.id}}` | Flow · Activity (charts) · Lessons (outcomes + fell-through lessons) |
+| Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Overview · Agents · Investors · Advanced settings |
+| Reports | `https://<site>/reports?location_id={{location.id}}` | Flow · Line · Follow-up · Activity · Lessons |
 
-Old links redirect: `/dashboard?view=flow|dashboard|conversation` →
-`/reports?view=flow`, `/reports?view=activity`, `/autopilot?view=conversation`
-(other params kept). Cross-app links go through `messaging-app/src/links.js`.
+Cross-app links go through `messaging-app/src/links.js`.
 
 ## Flow (the Reports landing tab)
 

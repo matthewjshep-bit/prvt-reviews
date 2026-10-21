@@ -7870,7 +7870,7 @@ import { writeUpOkFor, asksWriteUp } from "./reply-agent.js";
 test("a reply asking them to write it up at a number Matt hasn't approved waits for him", () => {
   const ask = "Great, glad that works. If the seller's good at 410k, could you write it up on NWMLS forms for us to sign?";
   const g = gate({ intent: "realm_yes", reply: ask }, { writeUpOk: false });
-  assert.ok(g.flags.some((f) => /write it up .* at a number you haven't approved — approve it on Today first/.test(f)), g.flags.join(" · "));
+  assert.ok(g.flags.some((f) => /write it up .* at a number you haven't approved — approve it on the offer first/.test(f)), g.flags.join(" · "));
   assert.ok(!gate({ intent: "realm_yes", reply: ask }, { writeUpOk: true }).flags.some((f) => /haven't approved/.test(f)), "approved: as before");
   // Wanting them on our side in general is not a write-up ask.
   assert.equal(asksWriteUp("If anything else comes up, we'd love to have you represent us on the buy side."), false);

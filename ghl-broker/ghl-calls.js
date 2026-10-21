@@ -135,11 +135,11 @@ export async function runGhlCalls({ store = defaultStore, locationId, client, sa
     const r = p.reason;
     const row = { contactId: p.contactId, kind: r.kind, urgent: p.urgent, offerId: r.offerId || null, address: r.address || "" };
     const skip = (why) => out.skipped.push({ ...row, why });
-    if (claimedToday.has(p.contactId)) { skip(live.has(p.contactId) ? "already in GHL today" : "tried earlier today (it failed, or was taken back) — on Today until tomorrow"); continue; }
-    if (noPhone.has(`${locationId}|${p.contactId}`)) { skip("no phone in GHL — stays on Today"); continue; }
+    if (claimedToday.has(p.contactId)) { skip(live.has(p.contactId) ? "already in GHL today" : "tried earlier today (it failed, or was taken back) — tried again tomorrow"); continue; }
+    if (noPhone.has(`${locationId}|${p.contactId}`)) { skip("no phone in GHL"); continue; }
     let contact = null;
     try { contact = await getContact(client, p.contactId); } catch (e) { skip(`couldn't read the contact (${scrubMessage(e).slice(0, 80)})`); continue; }
-    if (!String(contact?.phone || "").trim()) { noPhone.add(`${locationId}|${p.contactId}`); skip("no phone in GHL — stays on Today"); continue; }
+    if (!String(contact?.phone || "").trim()) { noPhone.add(`${locationId}|${p.contactId}`); skip("no phone in GHL"); continue; }
     const draft = r.kind === "draft_waiting" ? draftsById.get(r.draftId) : null;
     const { why, say } = callFields(r, { draft });
     if (dryRun) { out.queued.push({ ...row, why, say, status: "would go to GHL" }); continue; }

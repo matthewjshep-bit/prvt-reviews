@@ -263,8 +263,8 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
     // time; Today still carries the row, where it reads as waiting.
     if (mine && promiseClaimed(list, mine)) { out.results.push({ contactId, address, status: "owed", reason: "the driver is on it" }); continue; }
     // The written offer is kept by sending it, not by a text saying we're
-    // still on it: Today carries the row, and the driver (when it's on) sends it.
-    if (what === "paper") { out.results.push({ contactId, address, status: "owed", reason: "the written offer is owed — on Today" }); continue; }
+    // still on it: the driver (when it's on) sends it.
+    if (what === "paper") { out.results.push({ contactId, address, status: "owed", reason: "the written offer is owed — the driver sends it" }); continue; }
 
     const r = await start({
       client, locationId, saved, store, contactId, kind: "promise_due", offer: null,

@@ -16,15 +16,15 @@ import { getConversationAi, getConversationHistory, getReplyDrafts, getSettings,
 import { autoAcceptCeiling } from "@shared/auto-accept.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, Pill, SkeletonRows, TableCard } from "./ui.jsx";
-import { appHref } from "./links.js";
 import {
   AnswersEditor, WriteUpTermsEditor, AutoSendCard, BookingCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, InvestorBandCard, MediaCard, ContactCardCard, OptOutCard, PartyPlaybooks,
   CoachSettingsCard, GmailCard, PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
 } from "./ConversationPlaybooks.jsx";
 import { IntentPill, PartyPill, ago } from "./ConversationOutbox.jsx";
 
-// The outbox itself lives in Today's Needs-you queue; this page only says how
-// much is there, so the drafts have one home.
+// How many replies are held. There is no Today to open (2026-10-20): the
+// nightly check sends a clean one, closes one with nothing to say, and puts
+// a call in GHL; the rest wait for their own clocks.
 function DraftsWaiting({ refreshKey }) {
   const [n, setN] = useState(null);
   useEffect(() => {
@@ -34,12 +34,10 @@ function DraftsWaiting({ refreshKey }) {
   }, [refreshKey]);
   if (n == null) return null;
   return (
-    <a href={appHref("/dashboard", "pipeline")}
-      className="flex items-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm hover:border-blue-300">
-      {n ? <span><b>{n}</b> repl{n === 1 ? "y" : "ies"} waiting on you</span>
-        : <span className="text-slate-500">Nothing waiting — every inbound text has been answered or is being drafted.</span>}
-      <span className="ml-auto text-xs text-blue-700">Open Today →</span>
-    </a>
+    <div className="flex items-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm">
+      {n ? <span><b>{n}</b> repl{n === 1 ? "y" : "ies"} held — the nightly check sends, closes or hands each one to GHL</span>
+        : <span className="text-slate-500">Nothing held — every inbound text has been answered or is being drafted.</span>}
+    </div>
   );
 }
 

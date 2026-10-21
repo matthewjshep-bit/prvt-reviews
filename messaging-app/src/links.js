@@ -16,14 +16,16 @@ export function appHref(path, view) {
 }
 
 // Pages that moved (2026-10-20: Agent Outreach and Dispositions became tabs
-// of Autopilot; 2026-09-13: Overview split into Today, Autopilot, Reports).
-// The GHL menu links and bookmarks still say /agents, /dispo and
-// /dashboard?view=flow; they land where that page lives now. Other params
+// of Autopilot, and Today is gone; 2026-09-13: Overview split into Today,
+// Autopilot, Reports). The GHL menu links and bookmarks still say /agents,
+// /dispo and /dashboard; they land where that page lives now. Other params
 // (location_id, key, contact) ride along.
 const MOVED_PAGES = [
   [/^\/agents(\/|$)/, () => ["/autopilot", "agents"]],
   [/^\/dispo(\/|$)/, () => ["/autopilot", "investors"]],
-  [/^\/dashboard(\/|$)/, (view) => ({ flow: ["/reports", "flow"], dashboard: ["/reports", "activity"], conversation: ["/autopilot", "advanced"] })[view] || null],
+  // Today (the Desk and Tier 1) is gone (Matt, 2026-10-20): the machine works
+  // it, Tier 1 is GHL's pipeline. Anything else under /dashboard opens Offers.
+  [/^\/dashboard(\/|$)/, (view) => ({ flow: ["/reports", "flow"], dashboard: ["/reports", "activity"], conversation: ["/autopilot", "advanced"] })[view] || ["/", "history"]],
 ];
 
 /** movedTo(pathname, search) → the URL that page lives at now, or null. */

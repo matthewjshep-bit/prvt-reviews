@@ -1009,7 +1009,7 @@ export function evaluateReplyGates({
     // get there". Not the clarification the rule above asks for when they
     // handed the write-up back to us.
     if (!writeUpOk && asksWriteUp(draft.reply) && !(handsWriteUpBack(inboundMessage) && NOT_AGENTS_RX.test(draft.reply))) {
-      flags.push("the draft asks them to write it up (NWMLS, represent us) at a number you haven't approved — approve it on Today first");
+      flags.push("the draft asks them to write it up (NWMLS, represent us) at a number you haven't approved — approve it on the offer first (Offers → Hot)");
     }
     // 10917 48th St E, 2026-09-27: "cash means no lender". We use hard money.
     const cash = claimsAllCash(draft.reply);
