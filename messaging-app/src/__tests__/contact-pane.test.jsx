@@ -38,3 +38,27 @@ test("the Offers split and the companion show one pane: the same name line, the 
   expect(panes.offers).toContain('aria-label="Back to the table"');
   expect(panes.companion).not.toContain('aria-label="Next');
 });
+
+// Matt, 2026-10-21: "Start one" only showed when they had no offer; with one
+// or more there was no way to start another from the companion.
+test("a person who already has offers can start a new one from the offer side", () => {
+  const html = renderToStaticMarkup(<Companion />);
+  expect(html).toContain("New offer");
+  expect(html).toContain("Edit offer");
+});
+
+test("with several offers, + New offer sits on their list's header, once", () => {
+  const other = { ...offer, id: "o2", address: "9 Oak St, Kent, WA", cashAmount: 300000, status: "we_passed" };
+  const many = { ...bodies, siblings: [offer, other] };
+  function Several() {
+    const item = { ...companionPaneItem("c1"), contactName: "Dana Reyes" };
+    const targets = rowTargets(item, []);
+    const pane = usePane({ item, targets, bodies: many });
+    const convo = { item, targets, sendsEnabled: false, serverOffsetMs: 0, onDone: () => {}, fb: pane.fb, taught: [], bot: null };
+    return <ContactPane pane={pane} item={item} targets={targets} convo={convo} bodies={many} defaultTab="offer" />;
+  }
+  const html = renderToStaticMarkup(<Several />);
+  expect(html).toContain("Offers with Dana · 2");
+  expect(html.match(/New offer/g)).toHaveLength(1);
+  expect(html.indexOf("New offer")).toBeLessThan(html.indexOf("9 Oak St"));
+});

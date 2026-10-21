@@ -9,7 +9,7 @@
 // Status, Hot and Current are the header's menu, not repeated here.
 
 import React, { useState } from "react";
-import { Check, ExternalLink, FileText, Pencil, X } from "lucide-react";
+import { Check, ExternalLink, FileText, Pencil, Plus, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { agreedAboveOurNumber, numberApproved, offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
 import { approveNumber, clearAgreedPrice, getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
@@ -133,13 +133,16 @@ function OurOffer({ offer, onRequote }) {
 
 // Every offer with this person, newest first: which house, our number, where
 // it stands. Picking one shows it here.
-function OfferSwitcher({ book, selectedId, rowOfferId, name, onSelect }) {
+function OfferSwitcher({ book, selectedId, rowOfferId, name, onSelect, newBtn = null }) {
   const [all, setAll] = useState(false);
   if (book.length < 2) return null;
   const shown = all ? book : book.slice(0, 6);
   return (
     <div>
-      <div className={LABEL}>Offers with {name || "them"} · {book.length}</div>
+      <div className="flex items-center justify-between gap-2">
+        <span className={LABEL}>Offers with {name || "them"} · {book.length}</span>
+        {newBtn}
+      </div>
       <ul className="mt-1 divide-y divide-slate-100 rounded-xl border border-slate-200">
         {shown.map((o) => {
           const on = o.id === selectedId;
@@ -205,9 +208,9 @@ function ApproveAgreed({ offer }) {
  *   onRequote(offer, amount) → { error? }
  */
 export function OfferPanelBody({ offer, siblings = [], item = {}, loading = false, error = "", replaced = null, onRequote = null, requoting = false, onSelectOffer = null, onEdit = null }) {
+  const startHref = item.contactId ? `${offerEditorUrl(null, { view: "new" })}&contact_id=${encodeURIComponent(item.contactId)}` : offerEditorUrl(null, { view: "new" });
   // Still looking for their offers (a row that names none): not "none" yet.
   if (!item.offerId && !offer && !loading) {
-    const startHref = item.contactId ? `${offerEditorUrl(null, { view: "new" })}&contact_id=${encodeURIComponent(item.contactId)}` : offerEditorUrl(null, { view: "new" });
     const cls = "mt-3 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700";
     return (
       <div className="space-y-3 p-4">
@@ -247,15 +250,21 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
   const editBtn = onEdit
     ? <button type="button" onClick={() => onEdit(offer)} title="Open the full offer (O)" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"><Pencil size={12} /> Edit offer</button>
     : <a href={offerEditorUrl(offer.id)} target="_blank" rel="noreferrer" title="Open it in the editor (O)" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"><Pencil size={12} /> Open</a>;
+  // Another house with them, whatever they already have (Matt, 2026-10-21).
+  const newCls = "inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline";
+  const newBtn = onEdit
+    ? <button type="button" onClick={() => onEdit(null)} title="Start another offer for them" className={newCls}><Plus size={12} /> New offer</button>
+    : <a href={startHref} target="_blank" rel="noreferrer" title="Start another offer for them" className={newCls}><Plus size={12} /> New offer</a>;
 
   return (
     <div className="space-y-4 p-4">
-      <OfferSwitcher book={book} selectedId={offer.id} rowOfferId={replaced ? replaced.id : item.offerId} name={first} onSelect={onSelectOffer} />
+      <OfferSwitcher book={book} selectedId={offer.id} rowOfferId={replaced ? replaced.id : item.offerId} name={first} onSelect={onSelectOffer} newBtn={newBtn} />
 
       <div>
         <div className="flex items-center justify-between gap-2">
           <span className={LABEL}>Offer</span>
-          {editBtn}
+          {/* With their list showing, + New offer sits on its header instead. */}
+          <span className="flex items-center gap-3">{book.length < 2 && newBtn}{editBtn}</span>
         </div>
         <div className="mt-1 text-base font-bold leading-snug text-slate-900">{offer.address || "Untitled"}</div>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -340,7 +349,7 @@ export function useOfferSide(offerId) {
   };
   return {
     offer, siblings: rest.data || [], replaced: replacedBy ? one.data : null,
-    loading: one.loading || (Boolean(replacedBy) && cur.loading), error: one.error || cur.error || "", reload,
+    loading: one.loading || (Boolean(replacedBy) && cur.loading), error: one.error || cur.error || "", gone: one.missing, reload,
   };
 }
 

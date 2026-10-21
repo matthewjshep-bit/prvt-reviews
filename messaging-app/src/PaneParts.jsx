@@ -63,12 +63,21 @@ export function usePane({ item, targets, bodies = null, feedback = null, onDone 
   const loaded = useOfferSide(bodies ? null : offerId);
   // A row that names no offer (a reply to a text about nothing in
   // particular) still has a person: show their offer, not "No offer yet".
-  const theirs = useLoad(bodies || targets.offerId || !targets.contactId ? null : siblingsKey(targets.contactId), loadSiblings(targets.contactId));
+  // The offer on screen is gone (a draft that Create or a re-run turned into
+  // an offer, Matt 2026-10-21): show what's left of theirs instead.
+  const gone = !bodies && loaded.gone;
+  const theirs = useLoad(bodies || (targets.offerId && !gone) || !targets.contactId ? null : siblingsKey(targets.contactId), loadSiblings(targets.contactId));
   useEffect(() => {
-    if (offerId || !theirs.data) return;
-    const pick = defaultOfferFor(theirs.data, item.address || targets.draft?.propertyAddress || "");
+    // Re-read their list: one cached before Create doesn't have the new offer.
+    if (gone) { forget(siblingsKey(targets.contactId)); theirs.reload(); }
+  }, [gone]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if ((offerId && !gone) || !theirs.data) return;
+    const left = gone ? theirs.data.filter((o) => o.id !== offerId) : theirs.data;
+    const pick = defaultOfferFor(left, item.address || targets.draft?.propertyAddress || "");
     if (pick) setOfferId(pick.id);
-  }, [theirs.data]);   // eslint-disable-line react-hooks/exhaustive-deps
+    else if (gone) setOfferId(null);
+  }, [theirs.data, gone]);   // eslint-disable-line react-hooks/exhaustive-deps
   const fromBodies = bodies && (offerId === targets.offerId || !offerId ? bodies.offer : (bodies.siblings || []).find((o) => o.id === offerId) || null);
   const side = bodies
     ? { offer: fromBodies, siblings: bodies.siblings || [], replaced: null, loading: false, error: "", reload: () => {} }
@@ -309,7 +318,7 @@ export function PaneBody({ pane, item, targets, convo, settings = null, bodies =
       {pane.editing && (
         <OfferEditorSheet offer={pane.editing.offer} settings={settings} contactId={targets.contactId} onDeal={onDeal}
           onClose={() => pane.setEditing(null)}
-          onSaved={(o) => { side.reload(); onDone?.(); if (o?.id && !pane.editing.offer) pane.setOfferId(o.id); }}
+          onSaved={(o) => { side.reload(); onDone?.(); if (o?.id && o.id !== pane.editing?.offer?.id) pane.setOfferId(o.id); }}
           onOpenOffer={(o) => { pane.setEditing({ offer: o }); if (o?.id) pane.setOfferId(o.id); }} />
       )}
     </>

@@ -19,7 +19,7 @@
 // means, only how it looks and how you change it.
 
 import React, { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Pencil, Send, Sparkles, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Pencil, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
 import { annotateCurrent, houseKey } from "@shared/current-offer.js";
@@ -140,7 +140,7 @@ function byHouse(list) {
   return [...houses.values()].flatMap((rows) => rows.map((o, i) => [o, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([o]) => o));
 }
 
-export default function OffersHistory({ onEdit, onDeal, settings: appSettings = null }) {
+export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: appSettings = null }) {
   const [offers, setOffers] = useState(null);
   // The split: the offer open beside the rail, and the rail's rows — the
   // table's order, frozen when it opened (re-frozen when the filter, search or
@@ -786,6 +786,15 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
                     <td className="px-4 py-2.5" />
                     <td className="sticky right-0 whitespace-nowrap bg-slate-50/60 px-4 py-2.5 text-right group-hover:bg-slate-100"
                       onClick={(e) => e.stopPropagation()}>
+                      {/* Another house for this agent, whatever they already have. */}
+                      {g.contactId && onNew && (
+                        <button type="button" onClick={() => onNew(g.contactId)}
+                          className={`${BTN_ICON} text-blue-600 hover:bg-blue-50 hover:text-blue-700`}
+                          aria-label={`New offer for ${g.contactName || "this contact"}`}
+                          title="New offer for this agent">
+                          <Plus size={15} />
+                        </button>
+                      )}
                       {g.contactId && (
                         <button type="button"
                           onClick={() => setEnriching({ contactId: g.contactId, contactName: g.contactName })}

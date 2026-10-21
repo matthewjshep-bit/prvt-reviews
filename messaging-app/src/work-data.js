@@ -16,7 +16,13 @@ export function load(key, fn) {
   const p = Promise.resolve()
     .then(fn)
     .then((data) => { cache.set(key, { at: Date.now(), data, error: "" }); return data; })
-    .catch((e) => { cache.set(key, { at: Date.now(), data: cache.get(key)?.data ?? null, error: e?.message || "couldn't load it" }); return null; })
+    // A blip keeps what's on screen; a 404 means it's gone (a draft that
+    // became an offer), and showing the old copy only invites "not found".
+    .catch((e) => {
+      const missing = e?.status === 404;
+      cache.set(key, { at: Date.now(), data: missing ? null : cache.get(key)?.data ?? null, error: e?.message || "couldn't load it", missing });
+      return null;
+    })
     .finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
@@ -35,7 +41,8 @@ export function forget(...keys) { for (const k of keys) if (k) cache.delete(k); 
 export function forgetPrefix(prefix) { if (!prefix) return; for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k); }
 
 /**
- * useLoad(key, fn, { maxAgeMs, pollMs }) → { data, error, loading, reload }
+ * useLoad(key, fn, { maxAgeMs, pollMs }) → { data, error, missing, loading, reload }
+ *   missing  the last read was a 404: the thing is gone, not just unreachable
  * A null key loads nothing (a row with no offer, no contact).
  */
 export function useLoad(key, fn, { maxAgeMs = 60000, pollMs = 0 } = {}) {
@@ -58,5 +65,5 @@ export function useLoad(key, fn, { maxAgeMs = 60000, pollMs = 0 } = {}) {
     return () => { live = false; if (timer) clearInterval(timer); };
   }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { data: hit?.data ?? null, error: hit?.error || "", loading: Boolean(key) && !hit, reload };
+  return { data: hit?.data ?? null, error: hit?.error || "", missing: Boolean(hit?.missing), loading: Boolean(key) && !hit, reload };
 }

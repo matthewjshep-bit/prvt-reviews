@@ -353,6 +353,7 @@ export default function OfferApp() {
         )}
         {view === "history" && (
           <OffersHistory onEdit={(o) => { setEditing(o); setView("new"); }}
+            onNew={(contactId) => { setEditing(null); setInitialContactId(contactId); setFormNonce((n) => n + 1); setView("new"); }}
             onDeal={() => setView("deals")} settings={settings} />
         )}
         {view === "deals" && (
