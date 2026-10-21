@@ -198,6 +198,88 @@ test("a resumed lap steps back a little, and a finished lap starts over", async 
   assert.ok(place.lapAt);
 });
 
+/* ---------- a county in another state (2026-10-21, Matt: "start going into the Bend market") ---------- */
+
+const withBend = [...corridor, { county: "Deschutes", state: "OR" }];
+// Washington answers the state read; Bend answers its own circle.
+const twoStateDeps = (bodies, calls, { stateNext = 1500, bendNext = 0 } = {}) => ({
+  runPull: async (_l, _c, b) => {
+    bodies.push(b);
+    if (b.statewide) {
+      return { ok: true, requestsUsed: 4, nextOffset: stateNext, totalCount: 5600, warnings: [],
+        counties: b.counties.map((c) => ({ key: `${c.county}, ${c.state}`, batchId: b.batchIds[`${c.county}, ${c.state}`], listingsKept: 10, agentsTotal: 5, agentsNew: 1 })) };
+    }
+    return { ok: true, requestsUsed: 1, batchId: b.batchId, nextOffset: bendNext, totalCount: 180, listingsFetched: 180, listingsKept: 40, agentsTotal: 30, agentsNew: 12, warnings: [] };
+  },
+  importAgents: async (a) => { calls.push(a); return { imported: a.agentKeys.length, results: [] }; },
+});
+
+test("Bend agents get texted: a Deschutes, OR county is read by its own circle, not left out of the Washington read", async () => {
+  _resetJobs();
+  const store2 = fakeStore({ "b-Autopilot · King, WA": [agentRow("k1")], "b-Autopilot · Deschutes, OR": [agentRow("bend1"), agentRow("bend2")] });
+  const bodies = [];
+  const calls = [];
+  const saved = { outreachAutopilot: { enabled: true, coverage: "statewide", counties: withBend, monthlyRequests: 1000, dailyCap: 50 } };
+  const job = startOutreachSweep({ locationId: "loc-bend", client: {}, saved, store: store2, deps: twoStateDeps(bodies, calls), now: oct2 });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(bodies.length, 2, "Washington once, Bend once");
+  assert.equal(bodies[0].state, "WA");
+  assert.deepEqual(bodies[0].counties, corridor, "Oregon isn't asked of the Washington read");
+  assert.equal(bodies[1].statewide, undefined);
+  assert.equal(bodies[1].county, "Deschutes");
+  assert.equal(bodies[1].state, "OR");
+  assert.equal(bodies[1].metro, true, "Bend's own circle, not the whole county's");
+  assert.equal(bodies[1].batchId, "b-Autopilot · Deschutes, OR");
+  assert.deepEqual(calls.map((c) => [c.batchId, c.agentKeys, c.county]), [
+    ["b-Autopilot · King, WA", ["k1"], "King, WA"],
+    ["b-Autopilot · Deschutes, OR", ["bend1", "bend2"], "Deschutes, OR"],
+  ]);
+  assert.ok(job.tried.some((t) => t.county === "Deschutes, OR" && t.picked === 2));
+  assert.ok(!job.warnings.some((w) => /left out/.test(w)), job.warnings.join(" | "));
+});
+
+test("Bend's place and Washington's place are both kept", async () => {
+  _resetJobs();
+  const store2 = fakeStore({});
+  const bodies = [];
+  const saved = { outreachAutopilot: { enabled: true, coverage: "statewide", counties: withBend, monthlyRequests: 1000 } };
+  startOutreachSweep({ locationId: "loc-bend2", client: {}, saved, store: store2, deps: twoStateDeps(bodies, [], { stateNext: 1500, bendNext: 500 }), now: oct2 });
+  await settle();
+  const doc = store2.cursors.get(`loc-bend2|${PAGES_CURSOR}`).doc;
+  assert.equal(doc.statewide.offset, 1500, "saving Bend's page didn't wipe the state's");
+  assert.equal(doc.offsets["Deschutes, OR"], 500);
+  _resetJobs();
+  startOutreachSweep({ locationId: "loc-bend2", client: {}, saved, store: store2, deps: twoStateDeps(bodies, [], { stateNext: 1500, bendNext: 0 }), now: oct2 });
+  await settle();
+  assert.equal(bodies[3].offset, 500, "tomorrow's Bend read carries on from today's");
+});
+
+test("the Washington read leaves a request for Bend", async () => {
+  _resetJobs();
+  const store2 = fakeStore({});
+  const bodies = [];
+  const saved = { outreachAutopilot: { enabled: true, coverage: "statewide", counties: withBend, monthlyRequests: 1000 } };
+  const job = startOutreachSweep({ locationId: "loc-bend3", client: {}, saved, store: store2, deps: twoStateDeps(bodies, []), now: oct2 });
+  await settle();
+  assert.equal(bodies[0].maxRequests, job.budget.perRun - 1);
+  assert.ok(bodies[1].maxRequests >= 1);
+});
+
+test("Bend's circle covers Bend, Redmond, Sisters and Sunriver", async () => {
+  const { METRO_CIRCLES } = await import("./routes/outreach.js");
+  const c = METRO_CIRCLES["41017"];
+  assert.ok(c, "Deschutes County has a population circle");
+  const miles = (lat, lng) => {
+    const r = (d) => (d * Math.PI) / 180;
+    const a = Math.sin(r(lat - c.lat) / 2) ** 2 + Math.cos(r(c.lat)) * Math.cos(r(lat)) * Math.sin(r(lng - c.lng) / 2) ** 2;
+    return 3958.8 * 2 * Math.asin(Math.sqrt(a));
+  };
+  for (const [town, lat, lng] of [["Bend", 44.058, -121.315], ["Redmond", 44.272, -121.174], ["Sisters", 44.291, -121.549], ["Sunriver", 43.884, -121.438]]) {
+    assert.ok(miles(lat, lng) < c.radiusMi, `${town} is ${miles(lat, lng).toFixed(1)} mi out`);
+  }
+});
+
 test("a dry run of the statewide sweep doesn't move the place", async () => {
   _resetJobs();
   const store2 = fakeStore({});
