@@ -90,7 +90,7 @@ export function dealTarget({ city = "", zip = "", priceMin = null, priceMax = nu
   const slug = citySlug(city);
   const mid = priceMin != null && priceMax != null ? (priceMin + priceMax) / 2 : priceMax ?? priceMin ?? null;
   const kind = normalizeAsset(asset);
-  const strategy = kind?.type === "manufactured" ? "mobile-home" : rehabAppetite === "full_gut" ? "new-construction" : "flip";
+  const strategy = kind?.type === "manufactured" ? "mobile-home" : kind?.type === "land" || rehabAppetite === "full_gut" ? "new-construction" : "flip";
   return { city: slug, zip: /^\d{5}$/.test(String(zip || "")) ? String(zip) : "", region: slug ? regionFor(city) : null, price: mid, strategy, asset: kind,
     // What the buy box can rule in or out beyond place and price.
     box: { propertyTypes: propertyTypes || [], rehabAppetite: rehabAppetite || null, lotMin: lotMin ?? null },
@@ -126,6 +126,8 @@ const SITE_NO = { busy_road: "busy streets", backs_commercial: "commercial next 
 
 /** isManufacturedTarget(target) → true for a mobile home deal, whose waves go by who buys them, not by city. */
 export const isManufacturedTarget = (t) => t?.asset?.type === "manufactured";
+/** isLandTarget(target) → true for land, whose waves go to the buyers who build. */
+export const isLandTarget = (t) => t?.asset?.type === "land";
 
 // A buyer spoken for elsewhere (committed or soft-committed on another live
 // deal). A buyer only weighing another deal is NOT: the hottest buyers are
@@ -188,7 +190,7 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   const fit = buyerTypeFit(i, t.asset);
   let type = 0;
   if (fit.refuses) { type = -30; reasons.push(`won't take it (${fit.reason})`); }
-  else if (fit.wants && t.asset?.type === "manufactured") { type = 30; reasons.push(fit.reason); }
+  else if (fit.wants && (t.asset?.type === "manufactured" || t.asset?.type === "land")) { type = 30; reasons.push(fit.reason); }
   // Whether we know where they buy at all — a mobile home buyer with no area
   // on file is still a buyer; one whose areas are all elsewhere is not.
   const areaKnown = Boolean(mk.cities?.length || mk.regions?.length || rawAreas.length);
@@ -242,20 +244,23 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
  * who said they do, in any area unless every area they gave is elsewhere,
  * whatever their tier or score — the twenty who told us are mostly cold and
  * mostly have no area on file. A buyer who refuses the kind is never picked.
+ * Land (`land`) goes the same way, to the buyers who build: builders found
+ * off permits, buyers tagged new construction or land.
  * `email` lets a buyer with no phone in, to be emailed rather than texted.
  */
-export function pickWave(ranked = [], { wave = 1, floor = 0, exclude = "blasted", manufactured = false, email = false } = {}) {
+export function pickWave(ranked = [], { wave = 1, floor = 0, exclude = "blasted", manufactured = false, land = false, email = false } = {}) {
   const tierOrder = { vip: 0, active: 1, cold: 2 };
   const reachable = (i) => Boolean(i.phone || (email && i.email));
-  const fits = manufactured
+  const byKind = manufactured || land;
+  const fits = byKind
     ? (i) => (i.rankParts?.type || 0) > 0 && !(i.rankParts?.areaKnown && !(i.rankParts?.location > 0))
     : (i) => i.rank >= floor && (i.rankParts?.location || 0) > 0;
   return ranked
     .filter((i) => reachable(i) && !isBlockedBuyer(i) && !spokenFor(i) && !i.rankParts?.typeRefused && !i.rankParts?.dealbreaker)
     .filter(fits)
     .filter((i) => exclude !== "blasted" || !i.alreadyBlasted)
-    .filter((i) => manufactured || wave !== 1 || i.tier === "vip" || i.tier === "active")
-    .sort((a, b) => wave === 1 && !manufactured ? ((tierOrder[a.tier] ?? 3) - (tierOrder[b.tier] ?? 3)) || (b.rank - a.rank) : b.rank - a.rank);
+    .filter((i) => byKind || wave !== 1 || i.tier === "vip" || i.tier === "active")
+    .sort((a, b) => wave === 1 && !byKind ? ((tierOrder[a.tier] ?? 3) - (tierOrder[b.tier] ?? 3)) || (b.rank - a.rank) : b.rank - a.rank);
 }
 
 // A blast draft that is going out, or about to.

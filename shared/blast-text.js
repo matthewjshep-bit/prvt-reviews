@@ -29,7 +29,16 @@ const kText = (n) => {
 // one worked out from repairs ÷ ARV: 3511 NE 153rd St went to buyers as
 // "heavy rehab" on 2026-09-29 and nobody had called it that. With no level
 // picked the text says nothing about the work — "rehab about 200k" does.
-export const REHAB_WORDS = { light: "light", medium: "medium", heavy: "heavy" };
+export const REHAB_WORDS = { light: "light", medium: "medium", heavy: "heavy", gut: "full gut" };
+
+// A lot, for land: "4,748 sqft lot, zoned LR1". What a builder asks first
+// (1538 NW 61st St, 2026-10-20: "How much land is it? I didn't see that in
+// your initial blurb. I think a land buyer would want to see that off the
+// bat").
+const lotPhrase = (lotSqft = 0, zoning = "") => [
+  Number(lotSqft) > 0 ? `${Math.round(lotSqft).toLocaleString("en-US")} sqft lot` : "",
+  String(zoning || "").trim() ? `zoned ${String(zoning).trim()}` : "",
+].filter(Boolean).join(", ");
 
 // The level the operator picked, or "".
 export function pickedRehabLevel(offer = {}) {
@@ -74,13 +83,13 @@ export function blastNote(text = "", max = 90) {
 export function blastMessage({
   firstName = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0,
   yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", variant = 0, link = "", ask = "", kind = "", intro = "",
-  linkOnReply = false, septic = false, systems = false, templates = [],
+  linkOnReply = false, septic = false, systems = false, templates = [], lotSqft = 0, zoning = "",
 } = {}) {
   const first = String(firstName || "").trim().split(/\s+/)[0] || "";
   const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
   const own = normalizeDealTexts(templates);
   if (own.length) {
-    const values = dealTextValues({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, link, ask, kind, linkOnReply, septic, systems });
+    const values = dealTextValues({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, link, ask, kind, linkOnReply, septic, systems, lotSqft, zoning });
     const text = fillDealText(own[Math.abs(Math.round(Number(variant) || 0)) % own.length], values);
     if (!how) return text;
     // How we found them goes right after the greeting, as it does below.
@@ -88,7 +97,7 @@ export function blastMessage({
     const rest = m ? text.slice(m[0].length) : text;
     return `${m ? m[1] : first ? `Hey ${first}` : "Hey"} — ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
   }
-  const text = blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply, septic, systems });
+  const text = blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply, septic, systems, lotSqft, zoning });
   if (!how) return text;
   const hi = first ? `Hey ${first}, ` : "Hey, ";
   const rest = text.slice(hi.length);
@@ -132,11 +141,11 @@ export function normalizeDealTexts(v) {
 }
 
 /** The blanks for one buyer, worked out the way the built-in text works them out. */
-export function dealTextValues({ first = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0, yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", link = "", ask = "", kind = "", linkOnReply = false, septic = false, systems = false } = {}) {
+export function dealTextValues({ first = "", address = "", city = "", price = 0, beds = 0, baths = 0, sqft = 0, yearBuilt = 0, rehab = "", arv = 0, repairs = 0, note = "", link = "", ask = "", kind = "", linkOnReply = false, septic = false, systems = false, lotSqft = 0, zoning = "" } = {}) {
   const street = String(address || "").split(",")[0].trim() || "a house";
   const size = [beds ? `${beds}bd` : "", baths ? `${baths}ba` : "", sqft ? `${Math.round(sqft).toLocaleString("en-US")} sqft` : ""].filter(Boolean).join(" ");
   const built = Number(yearBuilt) > 1500 ? `built ${Math.round(yearBuilt)}` : "";
-  const house = [String(kind || "").trim(), size, built, septic ? "septic" : ""].filter(Boolean).join(", ");
+  const house = [String(kind || "").trim(), size, built, lotPhrase(lotSqft, zoning), septic ? "septic" : ""].filter(Boolean).join(", ");
   const numbers = [
     kText(price) ? `Buyer price ${kText(price)}` : "",
     kText(arv) ? `ARV around ${kText(arv)}` : "",
@@ -181,7 +190,7 @@ export function fillDealText(template = "", values = {}) {
   return out.replace(/([.?!]\s+)([a-z])/g, (_, p, c) => p + c.toUpperCase());
 }
 
-function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply = false, septic = false, systems = false }) {
+function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply = false, septic = false, systems = false, lotSqft = 0, zoning = "" }) {
   const hi = first ? `Hey ${first}, ` : "Hey, ";
   const street = String(address || "").split(",")[0].trim() || "a house";
   const where = city ? ` in ${city}` : "";
@@ -192,7 +201,7 @@ function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, 
   // Septic is the question buyers asked most before deciding (nine times in
   // the 2026-10-02 read of every thread) — answered up front when the record
   // says so.
-  const spec = [String(kind || "").trim(), size, built, septic ? "septic" : ""].filter(Boolean).join(", ");
+  const spec = [String(kind || "").trim(), size, built, lotPhrase(lotSqft, zoning), septic ? "septic" : ""].filter(Boolean).join(", ");
   const work = REHAB_WORDS[rehab] ? `${REHAB_WORDS[rehab]} rehab` : "";
   const workAfter = work ? `, ${work}` : "";
   const workLine = work ? `${work[0].toUpperCase()}${work.slice(1)}. ` : "";
@@ -331,6 +340,21 @@ export function dealFacts(offer = {}, { price = 0, note = "" } = {}) {
   const repairs = named || Math.round(scoped);
   // The level Matt picked, never one read off repairs ÷ ARV (see REHAB_WORDS).
   const rehab = pickedRehabLevel(offer);
+  // Land is sold as a lot: no ARV, no rehab, no house (1538 NW 61st St,
+  // 2026-10-20, went out as "Buyer price 911k, ARV around 925k" — the ARV was
+  // the asking price, and two builders read it back as a joke).
+  if (assetOf(offer)?.type === "land") {
+    return {
+      address: offer.address || "", city,
+      price: Math.round(Number(price) || 0),
+      beds: 0, baths: 0, sqft: 0, yearBuilt: 0, arv: 0, repairs: 0, rehab: "",
+      note: String(note || ""),
+      kind: assetPhrase(assetOf(offer)),
+      lotSqft: Number(subject.lotSqft || subject.lotSize || snap?.subjectInfo?.lotSqft) || 0,
+      zoning: String(subject.zoning || snap?.subjectInfo?.zoning || offer.zoning || "").trim().slice(0, 24),
+      septic: false, systems: false,
+    };
+  }
   return {
     address: offer.address || "", city,
     price: Math.round(Number(price) || 0),
