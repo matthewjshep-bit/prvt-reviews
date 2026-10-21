@@ -266,7 +266,7 @@ test("the Washington read leaves a request for Bend", async () => {
   assert.ok(bodies[1].maxRequests >= 1);
 });
 
-test("Bend's circle covers Bend, Redmond, Sisters and Sunriver", async () => {
+test("Bend's circle is ten miles round Bend: Tumalo in, Redmond and Sisters out", async () => {
   const { METRO_CIRCLES } = await import("./routes/outreach.js");
   const c = METRO_CIRCLES["41017"];
   assert.ok(c, "Deschutes County has a population circle");
@@ -275,8 +275,12 @@ test("Bend's circle covers Bend, Redmond, Sisters and Sunriver", async () => {
     const a = Math.sin(r(lat - c.lat) / 2) ** 2 + Math.cos(r(c.lat)) * Math.cos(r(lat)) * Math.sin(r(lng - c.lng) / 2) ** 2;
     return 3958.8 * 2 * Math.asin(Math.sqrt(a));
   };
-  for (const [town, lat, lng] of [["Bend", 44.058, -121.315], ["Redmond", 44.272, -121.174], ["Sisters", 44.291, -121.549], ["Sunriver", 43.884, -121.438]]) {
+  assert.equal(c.radiusMi, 10);
+  for (const [town, lat, lng] of [["Bend", 44.058, -121.315], ["Tumalo", 44.149, -121.329], ["Deschutes River Woods", 43.993, -121.364]]) {
     assert.ok(miles(lat, lng) < c.radiusMi, `${town} is ${miles(lat, lng).toFixed(1)} mi out`);
+  }
+  for (const [town, lat, lng] of [["Redmond", 44.272, -121.174], ["Sisters", 44.291, -121.549]]) {
+    assert.ok(miles(lat, lng) > c.radiusMi, `${town} is only ${miles(lat, lng).toFixed(1)} mi out`);
   }
 });
 
