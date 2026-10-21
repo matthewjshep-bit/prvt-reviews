@@ -122,16 +122,39 @@ export function machineTexts(drafts = []) {
   return out.sort((a, b) => a.at - b.at);
 }
 
+// The check-ins: a text that asks what else they have, not about a live
+// offer. Matt, 2026-10-21: "if we checked in the day before and then we
+// double-text them the day after, it just comes off as too needy and
+// aggressive." Each clock spaced itself and nothing spaced them against each
+// other, so the outreach follow-up's check-in and the agent check-in could
+// land days apart.
+export const CHECK_IN_KINDS = new Set(["agent_pulse", "outreach_nudge", "passed_checkin"]);
+export const CHECK_IN_GAP_DAYS = 14;
+// A ladder's next rung keeps its own steps (the follow-up on day 3, then day
+// 10); only the agent check-in has no ladder, so it is spaced against itself too.
+const ownLadder = (kind, other) => kind === other && kind !== "agent_pulse";
+
 /**
  * spacingHolds({ kind, sent, now, minHours, perWeek, floor, startedToday })
  *   → reason | null
  *
  * `sent` is machineTexts(drafts). `startedToday` counts drafts this run
  * started that aren't rows yet. `floor` is the person's pace (check in less
- * stretches the gap; more never shrinks it below the setting).
+ * stretches the gap; more never shrinks it below the setting). A check-in
+ * also waits CHECK_IN_GAP_DAYS after any other check-in, sent or queued.
  */
 export function spacingHolds({ kind = "", sent = [], now = Date.now(), minHours = 0, perWeek = 0, floor = 1, startedToday = 0 } = {}) {
   if (!UNPROMPTED_AGENT_KINDS.has(kind)) return null;
+  if (CHECK_IN_KINDS.has(kind)) {
+    const checkIns = sent.filter((x) => CHECK_IN_KINDS.has(x.kind) && !ownLadder(kind, x.kind)).map((x) => x.at);
+    const lastCheckIn = checkIns.length ? Math.max(...checkIns) : null;
+    const gapDays = CHECK_IN_GAP_DAYS * Math.max(1, Number(floor) || 1);
+    if (lastCheckIn != null && now - lastCheckIn < gapDays * DAY_MS) {
+      if (lastCheckIn > now) return "a check-in to them is already queued";
+      const days = Math.floor((now - lastCheckIn) / DAY_MS);
+      return `we checked in with them ${days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`} — check-ins are ${gapDays} days apart`;
+    }
+  }
   const last = sent.length ? Math.max(...sent.map((x) => x.at)) : null;
   const gap = (Number(minHours) || 0) * Math.max(1, Number(floor) || 1) * HOUR_MS;
   if (gap > 0 && last != null && now - last < gap) {

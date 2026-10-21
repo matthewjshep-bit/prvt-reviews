@@ -101,16 +101,35 @@ test("a text waiting in the outbox, a promise, a check-in they asked for and the
   assert.notEqual(evaluateAgent(gone, ctx()).status, "owned", "the workflows are done with them");
 });
 
-test("a fresh distressed listing is raised once, before 21 days, never within a week of a touch", () => {
-  const a = agent({ lastInboundAt: ago(60), events: [{ type: "follow_up_sent", at: ago(10) }], listings: [listing()] });
+// 2026-10-21: an agent who'd answered a check-in got another on 10/14, then
+// on 10/21 "saw your listing on … Is it a bit of a project?" because a
+// listing of theirs showed up, and opted out. Matt: "we just
+// need to check in with her and not flag that specific address", and never
+// two check-ins close together.
+test("an agent we checked in with a week ago isn't texted again because a listing of theirs showed up", () => {
+  const checkedIn = (d) => [{ type: "agent_pulse_sent", at: ago(d), dedupeKey: `k${d}` }, { type: "agent_pulse_texted", at: ago(d) }];
+  const a = agent({ lastInboundAt: ago(23), ledger: checkedIn(7), listings: [listing()] });
   const v = evaluateAgent(a, ctx());
-  assert.equal(v.status, "due");
-  assert.equal(v.pulseReason, "fresh_listing", "ten days in: the listing is the reason, and it won't wait");
-  assert.equal(evaluateAgent({ ...a, events: [{ type: "follow_up_sent", at: ago(3) }] }, ctx()).status, "not_due", "never within a week");
-  const pinged = { ...a, ledger: [{ type: "listing_pinged", at: ago(20), data: { listingKey: "L1" } }] };
-  assert.notEqual(evaluateAgent(pinged, ctx()).pulseReason, "fresh_listing", "a listing is raised once");
-  const voided = { ...a, ledger: [{ type: "listing_pinged", at: ago(20), data: { listingKey: "L1" } }, { type: "listing_ping_voided", at: ago(20), data: { listingKey: "L1" } }] };
+  assert.equal(v.status, "not_due", "a week after the last check-in");
+  assert.match(v.reason, /within 21 days/);
+  const later = evaluateAgent({ ...a, ledger: checkedIn(22) }, ctx());
+  assert.equal(later.status, "due", "three weeks on, the regular check-in");
+  assert.equal(later.pulseReason, "fresh_listing", "and it names the listing in passing");
+  assert.equal(later.listing.listingKey, "L1");
+  const pinged = { ...a, ledger: [...checkedIn(22), { type: "listing_pinged", at: ago(22), data: { listingKey: "L1" } }] };
+  assert.equal(evaluateAgent(pinged, ctx()).pulseReason, "general", "a listing is named once");
+  const voided = { ...a, ledger: [...checkedIn(22), { type: "listing_pinged", at: ago(22), data: { listingKey: "L1" } }, { type: "listing_ping_voided", at: ago(22), data: { listingKey: "L1" } }] };
   assert.equal(evaluateAgent(voided, ctx()).pulseReason, "fresh_listing", "a ping that never went gives the listing back");
+});
+
+test("a cold agent's new listing waits two weeks after any text of ours", () => {
+  const cold = (d) => agent({ events: [{ type: "outreach_sent", at: ago(d), address: "9 Oak St, Kent, WA 98031" }], listings: [listing()] });
+  const soon = evaluateAgent(cold(10), ctx());
+  assert.equal(soon.status, "not_due", "ten days after our first text");
+  assert.match(soon.reason, /touched within 14 days/);
+  const v = evaluateAgent(cold(15), ctx());
+  assert.equal(v.status, "due");
+  assert.equal(v.pulseReason, "fresh_listing");
 });
 
 test("a listing counts only when the pull found it distressed, still up, and new to us", () => {
@@ -174,10 +193,11 @@ test("partners come first, then engaged agents, then cold listings — and the d
     agent({ contactId: "eng1", lastInboundAt: ago(40) }),
     agent({ contactId: "eng2", lastInboundAt: ago(90) }),
     agent({ contactId: "p", lastInboundAt: ago(50), offers: [partnerOffer], current: [partnerOffer] }),
-    agent({ contactId: "eng3", lastInboundAt: ago(60), listings: [listing({ listingKey: "E" })], events: [{ type: "follow_up_sent", at: ago(12) }] }),
+    agent({ contactId: "eng3", lastInboundAt: ago(60), listings: [listing({ listingKey: "E" })], events: [{ type: "follow_up_sent", at: ago(25) }] }),
   ];
   const { picks, counts } = pickPulseAgents({ agents, settings: S, config: CONFIG, houses: { live: new Set(), walked: new Map() }, seats: 4, now: NOW });
-  assert.deepEqual(picks.map((p) => p.contactId), ["eng3", "p", "eng2", "eng1"]);
+  assert.deepEqual(picks.map((p) => p.contactId), ["p", "eng2", "eng1", "eng3"], "a listing doesn't jump the line: most overdue first");
+  assert.equal(picks.find((p) => p.contactId === "eng3").reason, "fresh_listing");
   assert.equal(counts.dueNoSeat, 1, "the cold listing waits for a seat");
   assert.equal(counts.bySegment.partner, 1);
   assert.equal(picks.find((p) => p.contactId === "p").subject.house.how, "closed");
@@ -191,7 +211,7 @@ test("with the day's cap at 0 there is no cap: every agent due a check-in gets o
     agent({ contactId: "cold1", events: [{ type: "outreach_enrolled", at: ago(90), data: { kind: "first" } }, { type: "outreach_enrolled", at: ago(70), data: { kind: "followup" } }], listings: [listing({ listingKey: "C" })] }),
     agent({ contactId: "eng1", lastInboundAt: ago(40) }),
     agent({ contactId: "eng2", lastInboundAt: ago(90) }),
-    agent({ contactId: "eng3", lastInboundAt: ago(60), listings: [listing({ listingKey: "E" })], events: [{ type: "follow_up_sent", at: ago(12) }] }),
+    agent({ contactId: "eng3", lastInboundAt: ago(60), listings: [listing({ listingKey: "E" })], events: [{ type: "follow_up_sent", at: ago(25) }] }),
   ];
   const open = normalizeAgentPulse({ enabled: true, dailyCap: 0 });
   const houses = { live: new Set(), walked: new Map() };
@@ -703,7 +723,7 @@ test("the spread only holds back a replier's first check-in, never one who has t
   const checked = agent({ contactId: id, lastInboundAt: ago(60), joinedAt, ledger: [{ type: "agent_pulse_sent", at: ago(20), dedupeKey: "k" }] });
   assert.equal(evaluateAgent(checked, ctx({ settings: S14 })).status, "due", "already on the clock: the clock decides");
   assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60) }), ctx({ settings: S14 })).status, "due", "no join date: nothing to spread");
-  assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60), joinedAt, listings: [listing()] }), ctx({ settings: S14 })).pulseReason, "fresh_listing", "a fresh listing of theirs is news now");
+  assert.equal(evaluateAgent(agent({ contactId: id, lastInboundAt: ago(60), joinedAt, listings: [listing()] }), ctx({ settings: S14 })).status, "not_due", "a fresh listing of theirs waits for their day too");
 });
 
 test("a cold agent's old listing ping doesn't make a found replier due the morning they join", () => {

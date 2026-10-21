@@ -87,7 +87,8 @@ test("a fresh listing of theirs waits for their cadence too", () => {
     doc: { address: "123 Main St, Kent, WA 98031", city: "Kent", qualifies: true, score: 60, distress: { cut: true } } };
   const v = evaluateAgent(agent({ lastInboundAt: ago(20), facts: withCadence(90, ago(20)), listings: [listing] }), ctx);
   assert.equal(v.status, "not_due", v.reason);
-  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(20), listings: [listing] }), ctx).pulseReason, "fresh_listing", "without one it goes");
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(22), facts: withCadence(90, ago(22)), listings: [listing] }), ctx).status, "not_due", v.reason);
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(22), listings: [listing] }), ctx).pulseReason, "fresh_listing", "without one it goes on the regular three weeks");
 });
 
 test("a 'check back in a couple months' request still owns the agent at day 50, and lets go two weeks after it was due", () => {

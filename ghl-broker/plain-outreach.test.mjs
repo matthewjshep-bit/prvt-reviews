@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "plain-outreach-test-"));
 
 const { listingDistress } = await import("./shared/listing-distress.js");
-const { standardText, streetLine, firstNameOf, fillTemplate, NUDGE_TEXTS, CHECKIN_TEXTS, CHECKIN_COLD_TEXTS, LISTING_PING_TEXTS } = await import("./shared/standard-texts.js");
+const { standardText, streetLine, firstNameOf, fillTemplate, NUDGE_TEXTS, CHECKIN_TEXTS, CHECKIN_COLD_TEXTS, LISTING_PING_TEXTS, LISTING_PING_COLD_TEXTS } = await import("./shared/standard-texts.js");
 const { normalizeOpener, DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, PLAIN_DEFAULT_OPENER_EXAMPLES, DEFAULT_HOME, DEFAULT_HOMES } = await import("./shared/outreach-opener.js");
 const { normalizeAgentPulse } = await import("./shared/agent-pulse.js");
 const { QUALIFY_PASSES, ourReplyPasses, qualifyStep } = await import("./shared/flip-read.js");
@@ -205,7 +205,7 @@ test("the first text is one of Matt's own, filled in: the listing's street addre
 
 test("every first text, follow-up and check-in is short, plain, and has none of the words the carriers block", () => {
   const values = { first: "Christopher", address: "14820 SE 172nd St", street: "SE 172nd St", town: "Renton", county: "King" };
-  for (const t of [...DEFAULT_OPENER_EXAMPLES, ...NUDGE_TEXTS, ...DEFAULT_CHECK_IN_TEXTS, ...CHECKIN_TEXTS, ...CHECKIN_COLD_TEXTS, ...LISTING_PING_TEXTS]) {
+  for (const t of [...DEFAULT_OPENER_EXAMPLES, ...NUDGE_TEXTS, ...DEFAULT_CHECK_IN_TEXTS, ...CHECKIN_TEXTS, ...CHECKIN_COLD_TEXTS, ...LISTING_PING_TEXTS, ...LISTING_PING_COLD_TEXTS]) {
     const text = fillTemplate(t, values);
     assert.ok(text.length <= 200, `${text.length}: ${text}`);
     assert.deepEqual(carrierFlags(text), [], text);
@@ -252,8 +252,27 @@ test("the plain check-in asks for their fixers in a line, and one who never wrot
   assert.equal(standardText({ kind: "agent_pulse", outbound: pulse({ segment: "engaged" }), name: "Rigo" }).text,
     "Hi Rigo, circling back. Any fixers or distressed properties come across your desk lately?");
   assert.match(standardText({ kind: "agent_pulse", outbound: pulse({ segment: "cold" }), name: "Rigo" }).text, /^Hi Rigo, it's Matt, I fix up houses locally\./);
-  assert.match(standardText({ kind: "agent_pulse", outbound: pulse({ reason: "fresh_listing", listing: { street: "6th Ave S" } }), name: "Pete" }).text,
-    /^Hi Pete, saw your listing on 6th Ave S\. Is it a bit of a project\?/);
+});
+
+// 2026-10-21: "saw your listing on <number> <street>. Is it a bit of a
+// project?" went to an agent we'd checked in with a week before, who said
+// Stop. Matt: a general check-in that names the listing in passing.
+test("a check-in when their listing comes up asks about their other distressed properties, not that house, and drops the house number", () => {
+  const pulse = (subject) => outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { reason: "fresh_listing", listing: { street: "4521 18th Ave Ct NW" }, ...subject } });
+  for (let variant = 0; variant < LISTING_PING_TEXTS.length; variant++) {
+    for (const segment of ["engaged", "cold"]) {
+      const t = standardText({ kind: "agent_pulse", outbound: pulse({ segment, variant }), name: "Pete" }).text;
+      assert.match(t, /^(Hi|Hey) Pete, /, t);
+      assert.match(t, /listing on 18th Ave Ct NW/, t);
+      assert.doesNotMatch(t, /4521/, t);
+      assert.match(t, /(doesn't look like|not sure it needs enough work|probably not one for us)/i, t);
+      assert.match(t, /(other distressed|anything distressed|other fixers|anything on your plate that needs work)/i, t);
+      assert.doesNotMatch(t, /bit of a project|turnkey|does it need much work/i, t);
+    }
+  }
+  assert.match(standardText({ kind: "agent_pulse", outbound: pulse({ segment: "cold", variant: 0 }), name: "Pete" }).text, /it's Matt, I fix up houses locally/, "one who never wrote back hears who we are");
+  assert.equal(standardText({ kind: "agent_pulse", outbound: pulse({ segment: "engaged", variant: 0 }), name: "Pete" }).text,
+    "Hey Pete, saw your listing on 18th Ave Ct NW, doesn't look like a fixer. Just wanted to check in, any other distressed properties on your plate?");
 });
 
 test("a check-in with something real to say — a house they mentioned, a deal we closed, Matt's 15 — is still written for them", () => {

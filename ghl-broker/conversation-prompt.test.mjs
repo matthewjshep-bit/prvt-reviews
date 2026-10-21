@@ -310,8 +310,11 @@ test("a nudge on a number we only floated never says we sent an offer", () => {
 
 test("the listing check-in names the street, never the price", () => {
   const t = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing: { street: "123 Main St", city: "Kent", dom: 64, cut: true } });
-  assert.match(t, /123 Main St in Kent/);
-  assert.match(t, /whether it's a bit of a project/, "asks about the house, not for an as-is cash offer the carriers block");
+  assert.match(t, /listing on Main St in Kent/);
+  assert.doesNotMatch(t, /123 Main/, "the street name, never the house number");
+  // 2026-10-21, Matt: a check-in that names the listing in passing, not a question about it.
+  assert.match(t, /Mention it in passing, in a clause: it doesn't look like a fixer for us\. Don't ask about that house/);
+  assert.match(t, /any other distressed properties on their plate/);
   assert.match(t, /Phone carriers block texts/);
   assert.match(t, /never its price or any number/);
   const known = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", dealsWithUs: 1 });
@@ -417,7 +420,7 @@ test("a cold agent's fresh listing gets the plain first-text voice: their name, 
   assert.match(t, /the short first-text voice — two short sentences, under 160 characters, plain/);
   assert.match(t, /the PERSONALITY line above doesn't apply to this one/);
   assert.match(t, /never the house number/);
-  assert.match(t, /ONE question, whether it needs much work\. Say nothing about the house itself/);
+  assert.match(t, /as one that doesn't look like a fixer for us; ONE question, whether they have any other distressed properties on their plate\. Say nothing else about the house/);
   assert.match(t, /Nothing else: no other ask, no call offer/);
   assert.doesNotMatch(t, /offer a quick call in a few words/);
   assert.match(t, /the listing above is the only house in this text/, "no past house");
@@ -440,7 +443,7 @@ test("the listing check-in and the thank-you keep their own one thing, whatever 
 test("a check-in about a fresh listing names only that listing, never a house from before", () => {
   const t = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged",
     listing: { street: "4706 64th St E", city: "Tacoma", dom: 70, cut: true }, lastHouse: { street: "9 Oak St", how: "passed" }, aboutThem: [{ what: "redoing their backyard", daysAgo: 12 }] });
-  assert.match(t, /4706 64th St E in Tacoma/);
+  assert.match(t, /64th St E in Tacoma/);
   assert.match(t, /the listing above is the only house in this text/);
   assert.doesNotMatch(t, /9 Oak St|backyard/);
 });
@@ -450,7 +453,8 @@ test("a check-in about a fresh listing names only that listing, never a house fr
 // with no name. Days on market is handed over as "a while", never a count.
 test("a check-in never gets the days-on-market count, never names a time or date, and opens with their first name", () => {
   const t = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing: { street: "19712 207th Street Ct E", city: "Bonney Lake", dom: 84, cut: false } });
-  assert.match(t, /listing at 19712 207th Street Ct E in Bonney Lake, on the market a while\./);
+  assert.match(t, /listing on 207th Street Ct E in Bonney Lake\./);
+  assert.doesNotMatch(t, /on the market a while/, "nothing about the house: it's named in passing");
   assert.doesNotMatch(t, /about 84 days/, "no count to repeat");
   assert.match(t, /Open with their first name/);
   assert.match(t, /never a count of days, a time of day or a date/i);

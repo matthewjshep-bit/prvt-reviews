@@ -1741,6 +1741,16 @@ sweep asked the same thing again two days later.
   (realm/take check, take ask), a promise (promise due, call follow-up), a
   check-in they asked for, an address chase, a price drop, or the push to
   paper (which keeps its 20-hour floor).
+- **Check-ins 14 days apart, whichever clock (2026-10-21).** Matt: "if we
+  checked in the day before and then we double-text them the day after, it
+  just comes off as too needy and aggressive." The check-ins are the agent
+  check-in (`agent_pulse`), the outreach follow-up (`outreach_nudge`) and
+  the passed-house check-in (`passed_checkin`). Each waits
+  `CHECK_IN_GAP_DAYS` (14, stretched by "check in less") after any other
+  check-in, sent or queued (`spacingHolds` in shared/agent-focus.js). A
+  ladder's own next rung keeps its steps (the outreach follow-ups on day 3
+  and day 10); the agent check-in has no ladder, so it is spaced against
+  itself too. A held check-in is voided and tried on the next run.
 - **A nudge another path sent is that day's rung** (`rungsCovered` and
   `nudgeTimes` in shared/follow-up.js). That covers the audit's nudge and a
   Float pressed by hand. The Offers column reads it the same way.
@@ -5399,18 +5409,25 @@ runs it) owns an agent when nothing else does:
   - **engaged**: they have written back (a text summary counts only when it
     summarises THEIR text);
   - **cold**: never answered.
-- **How often.** Partners and engaged agents every `everyDays` (21). Cold
-  agents only about a fresh listing of theirs, `coldEveryDays` (60) apart,
-  and never after `coldMaxUnanswered` (3) check-ins with nothing back. An
+- **How often.** Partners and engaged agents every `everyDays` (21), and a
+  fresh listing of theirs never brings that forward. Cold agents only when a
+  fresh listing of theirs comes up, `coldEveryDays` (60) apart, never within
+  14 days of any text of ours (`CHECK_IN_GAP_DAYS`), and never after `coldMaxUnanswered` (3) check-ins with nothing back. An
   engaged agent `engagedMaxUnanswered` (6) check-ins into silence is treated
   as cold (0 turns that off). These are Matt's cadence decisions (2026-09-29).
 - **What about**, in this order:
-  1. a fresh distressed listing of theirs. It must be one the pull first saw
-     within `freshDays` (14) and still saw within `listingSeenDays` (30);
-     distressed by the pull's own rule; not a house we have a live offer on;
-     not one we walked away from in the last 180 days. It goes once per
-     listing ever (`listing_pinged`), and may go before the 21 days are up,
-     but never within `quietDays` (7) of a touch.
+  1. a fresh distressed listing of theirs, named in passing in a general
+     check-in (2026-10-21, Matt): "saw your listing on 18th Ave Ct NW,
+     doesn't look like a fixer. Just wanted to check in, any other
+     distressed properties on your plate?" The street name only, never the
+     house number, and never a question about that house. It must be one the
+     pull first saw within `freshDays` (14) and still saw within
+     `listingSeenDays` (30); distressed by the pull's own rule; not a house
+     we have a live offer on; not one we walked away from in the last 180
+     days. It is named once per listing ever (`listing_pinged`). Until
+     2026-10-21 it was the whole text ("Is it a bit of a project?") and went
+     as soon as `quietDays` (7) after our last text: an agent we'd checked in
+     with a week earlier got it and opted out.
   2. the house they had with us, once its follow-ups have ended (passed and the
      check-ins are done or it went off the market, or the deal closed or fell
      through), but never one we walked away from.
@@ -5440,8 +5457,8 @@ runs it) owns an agent when nothing else does:
 **Running it.** Once a workday from `hour` (noon Pacific), with the daily gate
 (cursor `agentPulse`, retries if a deploy kills it), capped at `dailyCap` (20)
 a day, or uncapped at 0 (live since 2026-10-05: every agent due gets one that
-day; per-agent spacing still holds): partners' and engaged agents' fresh listings first, then the most
-overdue, then cold listings. Each agent is checked in GHL first (unsubscribed
+day; per-agent spacing still holds): thank-yous first, then partners and
+engaged agents, most overdue first, then cold listings. Each agent is checked in GHL first (unsubscribed
 is marked and skipped, tagged off or no phone is skipped), then claimed
 (`agent_pulse_sent`) before anything is drafted. A claim that drafted nothing
 is voided (`agent_pulse_voided`, and `listing_ping_voided`): the seat and the
@@ -5783,7 +5800,7 @@ Matt: all of them go into the check-in.
   (`firstCheckInAt`, picked from their contact id). Weekends are skipped
   because the run is weekdays only. This applies only to the first check-in.
   Once they've been checked in on, or anyone has talked since, the normal
-  clock takes over. A fresh listing of theirs is still raised at once.
+  clock takes over. A fresh listing of theirs waits for their day too.
 - **The day they joined.** A replier who joins by their reply counts from
   today in every plan and preview until a real run writes it down. The first
   real run (`startAgentPulse`, not a dry run) records `agent_pulse_joined`

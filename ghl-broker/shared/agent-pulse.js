@@ -19,13 +19,15 @@
 //   engaged   they have written back at least once
 //   cold      never answered
 //
-// Engaged and partner agents hear from us every `everyDays` (21): about a
-// fresh distressed listing of theirs when there is one (the moment for it is
-// now, so that one may come sooner — never within `quietDays` of a touch),
-// else the house they had with us once its clocks have ended, else "anything
-// coming up that needs work?". A cold agent hears ONLY about a fresh listing
-// of theirs, `coldEveryDays` apart, and never after `coldMaxUnanswered` pings
-// with nothing back. An engaged agent `engagedMaxUnanswered` pulses into
+// Engaged and partner agents hear from us every `everyDays` (21): "anything
+// coming up that needs work?", naming in passing a fresh listing of theirs
+// when there is one (2026-10-21, Matt: "switch to a general check-in and
+// maybe we can reference it" — until then the listing was the whole text and
+// came as soon as `quietDays` after our last one), else the house they had
+// with us once its clocks have ended. A cold agent hears ONLY when a fresh
+// listing of theirs comes up, `coldEveryDays` apart and never within
+// CHECK_IN_GAP_DAYS of a text of ours, and never after `coldMaxUnanswered`
+// pings with nothing back. An engaged agent `engagedMaxUnanswered` pulses into
 // silence is treated as cold (0 = never). Matt's decisions, 2026-09-29.
 // A cold agent we made an offer to, sent or drafted, is checked in on like an
 // engaged one until `coldMaxUnanswered` check-ins go unanswered (2026-10-09).
@@ -50,6 +52,7 @@ import { offMarketAskDue } from "./off-market.js";
 import { botHold, paceOf, paceScale } from "./bot-hold.js";
 import { cadenceDays, requestStands, isAutoReply } from "./brush-offs.js";
 import { optOutInTranscript, CONVERSATION_AI_DEFAULTS } from "./conversation-ai.js";
+import { CHECK_IN_GAP_DAYS } from "./agent-focus.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -608,7 +611,9 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const asked = cadenceDays(agent.facts);
   const everyDays = Math.max(Math.round(s.everyDays * rung), asked);
   const coldEveryDays = Math.max(Math.round(s.coldEveryDays * rung), asked);
-  const quietDays = Math.max(Math.round(s.quietDays * floor), asked);
+  // Never two check-ins close together, whichever clock sent the last text
+  // (shared/agent-focus.js CHECK_IN_GAP_DAYS).
+  const quietDays = Math.max(Math.round(s.quietDays * floor), Math.round(CHECK_IN_GAP_DAYS * floor), asked);
   const waitWhy = (days, plain) => (asked && days === asked ? `they asked for a check-in every ${asked} days` : plain);
   const quietFor = (days) => !since || now - (ms(since) ?? 0) >= days * DAY_MS;
   // When a wait ends, for the plan's per-agent list.
@@ -646,9 +651,6 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   // of everything else today.
   const thanks = dealToThank({ offers: agent.offers || agent.current || [], events, ledger, now });
   if (thanks) return out("due", "", { segment, pulseReason: "deal_thanks", house: thanks, priority: [-1, -(ms(thanks.closedAt) ?? 0)] });
-  if (listing && quietFor(quietDays)) {
-    return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [tier, -(Number(listing.doc?.score) || 0)] });
-  }
   if (!quietFor(everyDays)) return out("not_due", waitWhy(everyDays, card && since === card.movedAt ? `moved to Tier ${card.tier.slice(1)} within ${everyDays} days` : `talked within ${everyDays} days`), { segment, dueAt: after(since, everyDays) });
   // Joined the check-in long after their last word (the repliers, 2026-10-14):
   // the first one lands on their own day in the next `everyDays`, not all on
@@ -667,17 +669,19 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   if (firstAt && !clockPulse && !texted.some(onClock) && !(since && String(since) > String(joinedAt)) && now < ms(firstAt)) {
     return out("not_due", `joined the check-in; first one spread over ${everyDays} days`, { segment, dueAt: firstAt });
   }
-  const house = ourHouseFor({ offers: agent.current || [], drafts, events, config, now });
   const overdue = since ? now - (ms(since) ?? 0) : Infinity;
+  // A fresh listing of theirs is a line in the check-in that was due anyway.
+  if (listing) return out("due", "", { segment, pulseReason: "fresh_listing", listing, priority: [2 + tier, -overdue] });
+  const house = ourHouseFor({ offers: agent.current || [], drafts, events, config, now });
   return out("due", "", { segment, pulseReason: house ? "our_house" : "general", house, priority: [2 + tier, -overdue] });
 }
 
 /**
  * pickPulseAgents({ agents, settings, config, houses, outreachFollowUpDays, seats, now }) → { picks, counts }
  *
- * The day's check-ins, best first: fresh listings of partners and engaged
- * agents, then partners and engaged agents who are due (most overdue first),
- * then cold agents' fresh listings (best listing first). `seats` is what is
+ * The day's check-ins, best first: thank-yous, then partners and engaged
+ * agents who are due (most overdue first), then cold agents' fresh listings
+ * (best listing first). `seats` is what is
  * left of the day's cap.
  */
 export function pickPulseAgents({ agents = [], settings = {}, config = {}, houses = {}, outreachFollowUpDays = 14, outreachFollowUpOn = true, seats = null, now = Date.now() } = {}) {
@@ -882,7 +886,7 @@ function agentTowns(agent = {}) {
  *
  * The ONE real thing a check-in names (2026-10-15, the funnel review: Matt's
  * own specific texts got 70% replies, the generic check-ins 35%). In order:
- *   listing        their fresh listing (the check-in is about it)
+ *   listing        their fresh listing (named in passing in the check-in)
  *   mentioned      a house they named in the last 60 days that we never
  *                  priced or passed on
  *   closed_nearby  one of our deals closed in the last 60 days in a town they
