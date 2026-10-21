@@ -20,7 +20,7 @@ import { EventDayGroups, when, dayLabel } from "./EventFeed.jsx";
 import { PASS_REASON_LABEL } from "@shared/conversation-ai.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { getContactProfile, saveContactFacts, addContactEvent, checkContactGmail, ghlContactUrl, setContactEmail, setContactDealsBy } from "./api.js";
+import { getContactProfile, saveContactFacts, addContactEvent, checkContactGmail, ghlContactUrl, setContactEmail, setContactDealsBy, offerEditorUrl } from "./api.js";
 import { dealsByOf } from "@shared/contact-email.js";
 import { BTN, BTN_PRIMARY, CurrentPill, Pill, StatusPill, StagePill } from "./ui.jsx";
 import { PartyPill } from "./ConversationOutbox.jsx";
@@ -184,8 +184,15 @@ export function ContactRecordBody({ contactId, party: hint = null, onClose = nul
             {party === "investor" && <FactsSection title="What they buy" keys={buyKeys} record={rec} busy={busy} onRemove={removeFact} onAdd={addFact} />}
             <FactsSection title={party === "investor" ? "About them" : "About them and where they work"} keys={aboutKeys} record={rec} busy={busy} onRemove={removeFact} onAdd={addFact} />
 
-            {(rec.offers.length > 0 || rec.deals.length > 0) && (
-              <Section title={party === "investor" ? "Deals they've been on" : "Offers and deals"}>
+            {(rec.offers.length > 0 || rec.deals.length > 0 || party !== "investor") && (
+              <Section title={party === "investor" ? "Deals they've been on" : "Offers and deals"}
+                aside={party !== "investor" && (
+                  <a href={`${offerEditorUrl(null, { view: "new" })}&contact_id=${encodeURIComponent(contactId)}`} target="_blank" rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline" title="Start another offer for them">
+                    <Plus size={12} /> New offer
+                  </a>
+                )}>
+                {rec.offers.length === 0 && rec.deals.length === 0 && <div className="text-sm text-slate-500">No offers yet.</div>}
                 <ul className="space-y-1">
                   {rec.offers.map((o) => (
                     <li key={o.id} className={`flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm ${o.supersededBy ? "opacity-60" : ""}`}>

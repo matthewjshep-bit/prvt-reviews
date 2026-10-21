@@ -133,13 +133,16 @@ function OurOffer({ offer, onRequote }) {
 
 // Every offer with this person, newest first: which house, our number, where
 // it stands. Picking one shows it here.
-function OfferSwitcher({ book, selectedId, rowOfferId, name, onSelect }) {
+function OfferSwitcher({ book, selectedId, rowOfferId, name, onSelect, newBtn = null }) {
   const [all, setAll] = useState(false);
   if (book.length < 2) return null;
   const shown = all ? book : book.slice(0, 6);
   return (
     <div>
-      <div className={LABEL}>Offers with {name || "them"} · {book.length}</div>
+      <div className="flex items-center justify-between gap-2">
+        <span className={LABEL}>Offers with {name || "them"} · {book.length}</span>
+        {newBtn}
+      </div>
       <ul className="mt-1 divide-y divide-slate-100 rounded-xl border border-slate-200">
         {shown.map((o) => {
           const on = o.id === selectedId;
@@ -255,12 +258,13 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
 
   return (
     <div className="space-y-4 p-4">
-      <OfferSwitcher book={book} selectedId={offer.id} rowOfferId={replaced ? replaced.id : item.offerId} name={first} onSelect={onSelectOffer} />
+      <OfferSwitcher book={book} selectedId={offer.id} rowOfferId={replaced ? replaced.id : item.offerId} name={first} onSelect={onSelectOffer} newBtn={newBtn} />
 
       <div>
         <div className="flex items-center justify-between gap-2">
           <span className={LABEL}>Offer</span>
-          <span className="flex items-center gap-3">{newBtn}{editBtn}</span>
+          {/* With their list showing, + New offer sits on its header instead. */}
+          <span className="flex items-center gap-3">{book.length < 2 && newBtn}{editBtn}</span>
         </div>
         <div className="mt-1 text-base font-bold leading-snug text-slate-900">{offer.address || "Untitled"}</div>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
