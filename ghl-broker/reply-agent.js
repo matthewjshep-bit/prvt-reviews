@@ -53,7 +53,7 @@ import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blocki
 import { normalizeAgentPulse } from "./shared/agent-pulse.js";
 import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_STATUSES } from "./shared/second-look.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
-import { normalizeOpener, openerVoice, countyName, homeFor, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
+import { normalizeOpener, openerVoice, countyName, homeFor, withHomeBlank, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { standardText } from "./shared/standard-texts.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
@@ -86,7 +86,7 @@ import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { expandListingLinks } from "./listing-links.js";
 import { fmtMoney, underwriteMode } from "./shared/offer-calc.js";
-import { parseUsAddress, addressKey, lastMention } from "./shared/us-address.js";
+import { parseUsAddress, addressKey, lastMention, offerForms } from "./shared/us-address.js";
 import {
   normalizeConversationAi, shadowModelFor, INTENTS, NEVER_AUTO, GUARDED_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
   SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutInTranscript, optOutActions, normalizePassReason, normalizeDraftFeedback,
@@ -3464,7 +3464,7 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       // the model writes one in when it does (mode "ai", the turnkey and
       // off-market seats).
       templates: opener.examples,
-      examples: openerVoice(opener).map((x) => x.replace(/\{home\}/g, home)), variant: Number(subject?.variant) || 0,
+      examples: openerVoice(opener).map((x) => withHomeBlank(x).replace(/\{home\}/g, home)), variant: Number(subject?.variant) || 0,
       mode: opener.mode,
       // One real thing about the house for the text to notice.
       details: houseDetails({ ...(subject?.house || {}), city: subject?.city || subject?.house?.city || "", dom: Number(subject?.hookDom) || subject?.house?.dom || 0 }),
@@ -4912,7 +4912,7 @@ async function runReply(job, ctx) {
     const writeUp = writeUpOkFor(context.offers?.numbers, draft.propertyAddress);
     draft = { ...draft, replyBeforeSend: draft.reply,
       reply: `Sounds good${first ? ` ${first}` : ""}, no rush. Sent our letter of intent over by text and email so you have it to share with them.` +
-        (writeUp ? " If they're open to it, could you write it up on NWMLS forms for us to sign?" : " Let me know what they think.") };
+        (writeUp ? ` If they're open to it, could you write it up on ${offerForms(draft.propertyAddress)} forms for us to sign?` : " Let me know what they think.") };
   }
   // They gave us an address to email it to ("my email is …, please cc …"), or
   // ask where the email is. The documents go to THAT address, by email, and

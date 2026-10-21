@@ -34,7 +34,7 @@
 // Pure. ghl-broker/reply-agent.js uses standardText() in place of the model
 // for these kinds when the mode is "template".
 
-import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME } from "./outreach-opener.js";
+import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME, withHomeBlank } from "./outreach-opener.js";
 
 // The follow-up to a first text nobody answered (outreach_nudge): Rigo's
 // two-week text, without the dollar figure (carriers read money in a cold
@@ -106,7 +106,8 @@ export function firstNameOf(name = "") {
  * have nothing for. No first name: "Hi {first}," reads "Hi,".
  */
 export function fillTemplate(template = "", values = {}) {
-  const t = String(template || "").replace(/\s*\{first\}/g, values.first ? ` ${values.first}` : "");
+  // With a city to say we're in, a "Seattle" typed into the text is that city.
+  const t = (values.home ? withHomeBlank(template) : String(template || "")).replace(/\s*\{first\}/g, values.first ? ` ${values.first}` : "");
   let missing = false;
   const out = t.replace(/\{(\w+)\}/g, (_, k) => {
     const v = String(values[k] ?? "").trim();

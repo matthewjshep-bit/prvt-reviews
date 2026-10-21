@@ -352,3 +352,14 @@ export function completeAddress(raw, { candidates = [], city = "", state = "", c
   return out;
 }
 const segs0 = (line) => String(line).split(",")[0].trim();
+
+/**
+ * offerForms("61 NW Wall St, Bend, OR 97703") → "OREF"
+ *
+ * Whose forms the listing agent writes the official offer on: Oregon's (OREF)
+ * for an Oregon house (2026-10-21, the Bend market), NWMLS for everything
+ * else, Washington being where the business is.
+ */
+export function offerForms(address = "") {
+  return parseUsAddress(address).state === "OR" ? "OREF" : "NWMLS";
+}

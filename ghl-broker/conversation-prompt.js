@@ -12,6 +12,7 @@ import { RSVP_SIGNALS } from "./shared/showing.js";
 import { CARRIER_RULE } from "./shared/carrier-words.js";
 import { OPENER_MAX_CHARS, streetName } from "./shared/outreach-opener.js";
 import { OUR_BOX_WORDS } from "./shared/asset-type.js";
+import { offerForms } from "./shared/us-address.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -710,7 +711,7 @@ function openingFor(outbound) {
           (o.math ? "" : `As-is and a quick close if the terms are listed. `) +
           // The write-up ask only at a number Matt approved (2026-10-15).
           (ask || (o.approved
-            ? `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on NWMLS forms. `
+            ? `Ask whether that works for the seller; if it does, our letter of intent comes next and we ask them to write it up on ${offerForms(o.address)} forms. `
             : `Ask whether that works for the seller; if it does, our letter of intent comes next. Don't ask them to write it up yet. `)) +
           (o.math ? "" : `Don't volunteer the math (ARV, repairs) in this first text. `) +
           `Don't call it final. ${room}Write it like a text: no dollar signs. ${CONTINUE} Set intent to realm_check.`;
@@ -803,6 +804,7 @@ function openingFor(outbound) {
         return `${START} We texted this agent about their listing at ${o.address} weeks ago and they never answered. ` +
           `${nudgePressure(o)} One short line checking in: has anything that needs work, distressed or value-add, come ` +
           `across their desk, listed or off market? Don't mention the old listing and don't name a number. ` +
+          (o.home ? `If you say where you're based, it's ${o.home}, nowhere else. ` : "") +
           `No sign-off and no opt-out line. No dashes (— or –) and no exclamation marks. Set intent to outreach_nudge.`;
       }
       return `${START} We texted this agent about their listing at ${o.address} and they never answered. ` +
@@ -810,6 +812,8 @@ function openingFor(outbound) {
         `again; do NOT name a number, and do NOT repeat the first text's wording. A different angle each time: the kind of ` +
         `house we're after (ones that need work), that we're easy to work with, that we can move quickly. ` +
         (o.county ? `If you say where we're looking, it's ${o.county} County and nowhere else. ` : "") +
+        // The first text's city, by the listing's market: a Bend agent hears Bend.
+        (o.home ? `If you say where you're based, it's ${o.home}, nowhere else. ` : "") +
         `No sign-off and no opt-out line. No dashes (— or –) and no exclamation marks. Set intent to outreach_nudge.`;
 
     // They countered, we went quiet. Keep it alive without moving: ask for
@@ -920,14 +924,14 @@ function openingFor(outbound) {
           `the last message. Easy to ignore. ${CONTINUE} Set intent to hot_push.`;
       }
       const asks = [
-        "ask if they can write it up on NWMLS forms at the agreed number and send it over for us to sign",
+        `ask if they can write it up on ${offerForms(o.address)} forms at the agreed number and send it over for us to sign`,
         "give them what they need to write it up (the WRITE-UP TERMS: buyer name, earnest money, inspection window) and ask what else they need",
         "ask whether the seller is still good at that number, and whether anything is holding up getting it in writing",
         "say you want to keep this moving for their seller and ask for a quick call today to get it written",
       ];
       return `${START} We and this agent have agreed a price on ${o.address} and nothing is in writing yet. ` +
         `In one or two lines, ${asks[Math.min(asks.length, Math.max(1, o.stepIndex || 1)) - 1]}. ` +
-        `The goal is THEIR offer, drafted by them on NWMLS forms, for us to sign: do NOT say PSA, contract, or that we'll send ` +
+        `The goal is THEIR offer, drafted by them on ${offerForms(o.address)} forms, for us to sign: do NOT say PSA, contract, or that we'll send ` +
         `paperwork. You may say the agreed number (it is in the offer book); do NOT name any other number or reopen the price. ` +
         `${o.stepIndex > 1 ? "Don't repeat the wording of the last message. " : ""}Warm and brisk, never pushy. ${CONTINUE} Set intent to hot_push.`;
     }

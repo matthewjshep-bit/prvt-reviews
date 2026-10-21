@@ -21,7 +21,7 @@ import { dealNumbers } from "./dataroom.js";
 import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
-import { addressKey as propertyKey } from "./shared/us-address.js";
+import { addressKey as propertyKey, offerForms } from "./shared/us-address.js";
 import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor, liveRange, rangeWords } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { emailContextText } from "./shared/gmail.js";
@@ -273,10 +273,10 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       // he'd already given.
       heat && !up ? (priceAgreed(o)
         ? (numberApproved(o)
-          ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on NWMLS forms for us to sign`
+          ? `HOT (${heat.reason}) — the price conversation is done; the next step is asking them to write it up on ${offerForms(o.address)} forms for us to sign`
           // Agreed, but not a number Matt has approved (2026-10-15).
           : `AGREED (${heat.reason}) at ${fmtMoney(amount)}, but the number is NOT APPROVED on our side yet — don't ask them to write it up, ` +
-            `use NWMLS forms or represent us on it yet; say you'll confirm the number on our side today and come right back`)
+            `use ${offerForms(o.address)} forms or represent us on it yet; say you'll confirm the number on our side today and come right back`)
         : `warm (${heat.reason}) — they're weighing our number, nothing is agreed; answer what they last said before asking anything new`) : "",
       o.statusNote ? `note: ${theirs(String(o.statusNote).slice(0, 120))}` : "",
       superseded.length ? `(${superseded.length} older offer${superseded.length === 1 ? "" : "s"} on this house superseded — this is the only number on it; never quote an older one)` : "",
@@ -425,7 +425,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
         "An offer WITH a number that hasn't been sent yet is our underwritten number: when they ask what we can do, " +
         "give it as a rough figure — \"based on our analysis we can likely do around 450ish\" — rounded to the " +
         "nearest thousand or down to a round number (never up), with no dollar sign, and ask whether that works " +
-        "for the seller. A yes means our letter of intent goes over and we ask them to write the official offer on NWMLS forms for us to sign. " +
+        "for the seller. A yes means our letter of intent goes over and we ask them to write the official offer on NWMLS forms (OREF for an Oregon house) for us to sign. " +
         (showMath
           ? "If they ask how we got there or push on the number, follow the MATH rule: walk them through the [our math] line beside it (never a figure on profit and risk, never how we exit). "
           : "Don't explain how we got there (ARV, repairs, fees). ") +
