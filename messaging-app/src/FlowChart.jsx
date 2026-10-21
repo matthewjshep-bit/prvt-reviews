@@ -24,7 +24,7 @@ export const STATUS_CLS = {
 
 // The agent a text is shown filled in for. A real-looking name and street,
 // so the length on screen is the length that goes out.
-export const SAMPLE_AGENT = { first: "Brenda", address: "14820 SE 172nd St", street: "SE 172nd St", town: "Renton", county: "King", area: "Renton or the surrounding areas" };
+export const SAMPLE_AGENT = { first: "Brenda", address: "14820 SE 172nd St", street: "SE 172nd St", town: "Renton", county: "King", home: "Seattle", area: "Renton or the surrounding areas" };
 
 /** The text as it reads to one agent; a template it can't fill shows as written. */
 export const sampleOf = (t) => fillTemplate(t, SAMPLE_AGENT) || t;
@@ -38,6 +38,8 @@ export function textWarnings(t = "") {
   if (flags.length) out.push(`carriers block cold texts with: ${flags.join(", ")}`);
   if (/\$/.test(t)) out.push("no dollar signs in a cold text");
   if (/https?:\/\/|www\.|\.com\b/i.test(t)) out.push("no links in a cold text");
+  // 2026-10-21: we text Bend and Portland agents too.
+  if (/\bseattle\b/i.test(t)) out.push("says Seattle to every agent. Write {home} and each one reads the city for their market");
   const filled = sampleOf(t);
   if (filled.length > 230) out.push(`${filled.length} characters filled in. It saves, but first texts under about 230 got more replies`);
   return out;

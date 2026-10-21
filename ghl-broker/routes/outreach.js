@@ -561,7 +561,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           hook: {
             listingKey: hook.listingKey, address: hook.address, price: hook.price,
             // The county is what the first text names (shared/outreach-opener.js).
-            county: hook.county || "", city: hook.city || "",
+            county: hook.county || "", state: hook.state || "", city: hook.city || "",
             // What the first text may notice about the house (shared/outreach-opener.js houseDetails).
             sqft: hook.sqft ?? null, beds: hook.beds ?? null, lotSize: hook.lotSize ?? null, priceCut: Boolean(hook.distress?.cut),
             dom: hook.daysOnMarket, propertyType: hook.propertyType, yearBuilt: hook.yearBuilt,
