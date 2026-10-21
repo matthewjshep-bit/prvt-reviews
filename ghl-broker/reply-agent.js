@@ -3190,7 +3190,10 @@ export async function floatStanceFor({ store, offer, config, dossier = null }) {
 export function whatWentOut(offer) {
   // A send that failed on every channel is in the ledger but isn't paper.
   if (paperWent(offer)) return "paper";
-  if (offer?.proactive?.realmCheckAt) return "number";
+  // Only a float that left (floatSentAt). The realm check's own stamp is put
+  // on when it's queued: one that a reply superseded never went, and a week
+  // on the nudge asked about "that number I mentioned" (2026-10-21).
+  if (offer?.floatSentAt) return "number";
   if (offer?.proactive?.takeCheckAt) return "read";
   // Marked sent by hand (it went outside the app): the letter.
   return offer && offerStatus(offer) !== "new" ? "paper" : "";

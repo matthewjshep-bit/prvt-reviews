@@ -36,8 +36,8 @@ const iso = (t) => new Date(t).toISOString();
 const latest = (xs) => xs.filter(Boolean).sort().at(-1) || null;
 // When our number (or our read) reached them by text: the sweep's own read
 // (follow-up-sweep.js agentCandidates). floatSentAt is a number texted in any
-// reply, not only a realm check.
-const floatedAt = (o) => o?.floatSentAt || o?.proactive?.realmCheckAt || o?.proactive?.takeCheckAt || null;
+// reply, not only a realm check; a realm check's own stamp is only queued.
+const floatedAt = (o) => o?.floatSentAt || o?.proactive?.takeCheckAt || null;
 
 export const SWEEP_UTC_HOUR = 16;
 // The promise sweep's clock: a promise we made is owed four hours on.
