@@ -333,3 +333,12 @@ test("a call that went to GHL before its reason began, on an earlier day, is bac
   assert.deepEqual(kept.map((r) => r.contactId), ["eli"], "Jo's call is still in GHL from yesterday; Eli's is a new reason");
 });
 
+
+// 2026-10-20: thirteen "they asked for a call" rows from last night's audit
+// sat on Today and never reached GHL's Manual Actions, where Matt dials.
+test("last night's 'they want a call' or 'let's set a time' goes to GHL's calls", () => {
+  const row = (intent) => ({ id: `audit:${intent}`, kind: "audit_owed", findingKind: "unanswered_inbound", contactId: "c1", intent });
+  assert.equal(ghlCallKind(row("wants_call")), "urgent");
+  assert.equal(ghlCallKind(row("scheduling")), "urgent");
+  assert.equal(ghlCallKind(row("question")), null);
+});

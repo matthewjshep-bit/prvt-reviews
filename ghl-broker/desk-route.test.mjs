@@ -79,6 +79,10 @@ test("one person's owed number and last night's 'still owed' are one row on Toda
   assert.equal(r.desk.kpis.contracts.target, 2);
   // The board still gets every row as it was.
   assert.ok(r.actions.length >= r.desk.rows.length);
+  // 2026-10-20, no Today: every one of those has an owner, and Hanna's owed
+  // number is Matt's to price (shared/hand-off.js).
+  assert.equal(r.handOffs.counts.unowned, 0, JSON.stringify(r.handOffs.byKind));
+  assert.ok(r.handOffs.counts.price >= 1, JSON.stringify(r.handOffs.byKind));
 });
 
 // Matt, 2026-10-13: "get rid of the call section". 2026-10-15: the call
