@@ -69,7 +69,7 @@ import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcce
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
-import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX } from "./shared/flip-read.js";
+import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
@@ -988,6 +988,11 @@ export function evaluateReplyGates({
     // word about how we exit.
     const slip = draft.reply.replace(/\band\/or assigns\b/gi, "").match(/\b(assign(?:ment|ing|ed|s)?|wholesal(?:e|er|ing)|end buyer|our fee|my fee|spread)\b/i);
     if (slip) flags.push(`the draft says "${slip[0]}" — how we exit and what we make never goes to an agent`);
+    // We run our own numbers (Matt, 2026-10-21): the one gut check says
+    // whether it's flip material, and nothing after it asks them for theirs.
+    if (asksTheirRehab(draft.reply)) {
+      flags.push("the draft asks them what the work would run or what it's worth fixed up — we run our own numbers; ask what the seller's hoping to get or their timeline instead");
+    }
     // The hot push has one ask: the listing agent writes it up on NWMLS
     // forms for us to sign. Offering our own paper is a different move, and
     // a person's.
@@ -3136,19 +3141,17 @@ const NUMBER_FLOATS = new Set(["realm_check", "hot_push"]);
 const kText = (n) => `${Math.round(n / 1000)}K`;
 
 /**
- * chooseProactiveKind({ events, address }) → "take_check" | "realm_check"
+ * chooseProactiveKind() → "realm_check"
  *
- * Their read before our price. If the agent has already told us what they
- * think the property is worth and costs, there is nothing to draw out and
- * the cash number can go; otherwise float the ARV/rehab read first.
+ * Our number goes. Until 2026-10-21 it was "their read before our price": a
+ * take check floated our ARV and rehab and asked what they thought, and the
+ * number waited for their answer. Matt: agents push back, "you're the
+ * flipper, do the analysis yourself" — and he prices every house himself.
+ * A listed house still asks the seller's number first (startProactive's
+ * listedFirst turns this into a take check that asks just that).
  */
-// A rough first pass (shared/paper-follows.js isRoughNumber) floats as a
-// realm check too: the agent was promised a number, and the float itself
-// asks for their read.
-export function chooseProactiveKind({ events = [], address = "", leadWithNumber = false, rough = false } = {}) {
-  if (leadWithNumber || rough) return "realm_check";
-  const d = address ? propertyDossier(events, address) : null;
-  return d && (d.have.arv || d.have.rehab) ? "realm_check" : "take_check";
+export function chooseProactiveKind() {
+  return "realm_check";
 }
 
 /**
@@ -3257,29 +3260,34 @@ export function realmFloats({ offer, outbound }) {
 // answering it. The float goes without the math.
 export const FLOAT_MATH_MIN_PCT = 60;
 
+// What the seller is hoping to get, as a float's one question — unless they
+// already said.
+function sellerNumberQuestion(dossier) {
+  return dossier?.have?.sellerAsk ? null : { key: "seller_number", text: SELLER_NUMBER_QUESTION };
+}
+
 export function floatExtras({ offer, saved, dossier = null, requote = false, theirs = false, stance = null }) {
   if (requote || !offer?.cashAmount) return {};
   const rc = conversationConfig(saved || {}).parties?.agent?.realmCheck || {};
   const out = {};
   // A rough first pass (2026-10-08): always a range, never the math (the
-  // math reads as a number we stand behind), and the question is their read
-  // — that is what re-runs it.
+  // math reads as a number we stand behind). The question was their read
+  // until 2026-10-21; now it's what the seller is hoping to get — we run
+  // our own numbers (Matt), and a read they volunteer still re-runs it.
   if (isRoughNumber(offer)) {
     const r = floatRange(offer.cashAmount, rc.range?.pct);
     if (r) out.range = { ...r, words: rangeWords(r) };
-    const q = setupQuestionFor({ offerId: offer.id || offer.address || "", dossier, ask: ["their_read"] })
+    const q = sellerNumberQuestion(dossier)
       || (rc.setupQuestion?.enabled ? setupQuestionFor({ offerId: offer.id || offer.address || "", dossier, ask: rc.setupQuestion.ask }) : null);
     if (q) out.question = q;
     return out;
   }
   // A high-stakes house still in range mode (2026-10-15): the same shape —
-  // a range, no math, and the question is what's missing: their read first,
-  // then eyes on it.
+  // a range, no math, and one question: eyes on it, else the seller's number.
   if (stance?.mode === "range") {
     const r = floatRange(offer.cashAmount, rc.range?.pct);
     if (r) out.range = { ...r, words: rangeWords(r) };
-    const q = stance.missing.includes("their_read") ? setupQuestionFor({ offerId: offer.id || offer.address || "", dossier, ask: ["their_read"] }) : null;
-    out.question = q || (stance.missing.includes("eyes") ? { ...EYES_QUESTION } : null);
+    out.question = stance.missing.includes("eyes") ? { ...EYES_QUESTION } : sellerNumberQuestion(dossier);
     if (!out.question) delete out.question;
     return out;
   }
@@ -3333,12 +3341,14 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
     ...(Number(subject?.repeatEvery) > 0 ? { repeats: true } : {}), ...(subject?.wavering ? { wavering: true } : {}) };
   if (kind === "take_check") {
     const n = offerNumbers(offer);
+    // The one question is the seller's number (listedFirst), and since
+    // 2026-10-21 that's every take check: it never asks for their read.
+    // When they've already said it, their timeline instead.
     return { ...base,
       arv: n.arv, rehab: n.rehab,
       arvText: n.arv ? fmtMoney(n.arv) : "", rehabText: n.rehab ? fmtMoney(n.rehab) : "",
       arvK: n.arv ? kText(n.arv) : "", rehabK: n.rehab ? kText(n.rehab) : "",
-      // A listed house (listedFirst): the one question is the seller's number.
-      ...(subject?.askSeller ? { askSeller: true, sellerQuestion: SELLER_NUMBER_QUESTION } : {}) };
+      askSeller: true, sellerQuestion: dossier?.have?.sellerAsk ? "what's the seller's timeline looking like?" : SELLER_NUMBER_QUESTION };
   }
   if (kind === "kind_pass") {
     const why = ["area", "numbers", "rural", "promised", "manufactured", "too_far"].includes(subject?.why) ? subject.why : "kind";
@@ -3347,7 +3357,11 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       ...(why === "promised" ? { owed: ["number", "paper", "answer"].includes(subject?.owed) ? subject.owed : "number", passReason: String(subject?.reason || "").slice(0, 160) } : {}) };
   }
   if (kind === "take_ask") {
-    const needs = Array.isArray(subject?.needs) && subject.needs.length ? subject.needs : ["value", "work"];
+    // What the seller would take, and the address when the map missed it.
+    // Their value and the work were asks too until 2026-10-21 (Matt: we run
+    // our own numbers); a sweep queued before then still asks only these.
+    const asked = (Array.isArray(subject?.needs) ? subject.needs : []).filter((n) => n === "address" || n === "take");
+    const needs = asked.length ? asked : ["take"];
     return { ...base, heldReason: String(subject?.heldReason || ""), needs,
       needValue: needs.includes("value"), needWork: needs.includes("work"), needAddress: needs.includes("address"), needTake: needs.includes("take") };
   }
@@ -3506,7 +3520,7 @@ function outboundSummary({ kind, offer, outbound }) {
   switch (kind) {
     case "take_check": {
       const parts = [outbound.arv ? `${outbound.arvK} ARV` : "", outbound.rehab ? `${outbound.rehabK} rehab` : ""].filter(Boolean);
-      return `Floats our ${parts.join(" / ")} read on ${where} and asks ${outbound.askSeller ? "what the seller is hoping to get" : "what they think"}.`;
+      return `Floats our ${parts.join(" / ")} read on ${where} and asks ${outbound.sellerQuestion && !/hoping/.test(outbound.sellerQuestion) ? "the seller's timeline" : "what the seller is hoping to get"}.`;
     }
     case "realm_check":
       return outbound.requote
@@ -3521,7 +3535,9 @@ function outboundSummary({ kind, offer, outbound }) {
       : outbound.why === "too_far"
         ? `Tells them ${where} doesn't fit: ours would be too far under the seller's number to send. Names no number; asks for other fixers, on or off market.`
         : `Lets them know we're passing on ${where} — ${outbound.why === "area" ? "outside the area we buy in" : outbound.why === "numbers" ? "we couldn't get to a number on it" : outbound.why === "rural" ? "it's rural, and we buy houses on under 2 acres" : outbound.why === "manufactured" ? "it's a mobile home, and we don't buy those" : "we only buy single-family right now"}.`;
-    case "take_ask": return `Asks for their read on ${where} — ${[outbound.needValue ? "what it's worth fixed up" : "", outbound.needWork ? "what the work would run" : ""].filter(Boolean).join(" and ")} — because our underwrite held${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
+    case "take_ask": return outbound.needAddress
+      ? `Asks them to confirm the street address of ${where} — the map couldn't place it.`
+      : `Asks what the seller would take on ${where}${outbound.heldReason ? ` (${outbound.heldReason})` : ""}.`;
     case "passed_checkin": return outbound.relisted
       ? `Saw ${where} is back on the market; asks if the seller would look at our offer now${rung}.`
       : `Checks in after ${where} — asks if any other houses that need work, on the market or off, have come across their desk${rung}.`;
@@ -4266,14 +4282,15 @@ async function runReply(job, ctx) {
         if (close) { /* a person's call: see the hold below */ }
         else if (reference > 0 && theirs > passLine && firmness === "soft" && !beyondReach && !(full.requotes || []).length) {
           // A soft floor is an opening. Keep it a live negotiation: file their
-          // number on the offer, and ask for the value and the work so the
-          // re-quote has something to run on. No number of ours, no goodbye.
+          // number on the offer and say we'll take another look. No number of
+          // ours, no goodbye — and since 2026-10-21 no "what would you budget
+          // for the work?": we run our own numbers (Matt).
           softFloor = true;
           const street = String(draft.propertyAddress || full.address || "").split(",")[0].trim();
           draft = {
             ...draft, intent: "question", reclassifiedFrom: "counter",
-            summary: `Their number (${fmtMoney(theirs)}) is well over ours (${fmtMoney(reference)}), but they sound open — asked for their value and repairs to re-quote.`,
-            reply: `Appreciate you giving me a number to work with${street ? ` on ${street}` : ""}. Help me close the gap: what do you figure it's worth once it's done, and what would you budget for the work? I'll re-run it on your numbers.`,
+            summary: `Their number (${fmtMoney(theirs)}) is well over ours (${fmtMoney(reference)}), but they sound open — told them we'd take another look.`,
+            reply: `Appreciate you giving me a number to work with${street ? ` on ${street}` : ""}. Let me take another look at it with that in mind and I'll come back to you.`,
             needsHuman: false,
           };
           job.intent = draft.intent;
@@ -5663,7 +5680,8 @@ async function runReply(job, ctx) {
     // A listed house where we asked what the seller is hoping to get
     // (listedFirst): their answer is what the number waited for, the way
     // their read is (4c).
-    if (propertyDetails.sellerAsk && !agentTake && config.parties.agent?.listedFirst?.enabled && typeof deps.afterAgentTake === "function") {
+    // Every take check asks it since 2026-10-21, so not only under listedFirst.
+    if (propertyDetails.sellerAsk && !agentTake && typeof deps.afterAgentTake === "function") {
       try { await deps.afterAgentTake({ contactId: job.contactId, address: draft.propertyAddress, draftId: record.id }); }
       catch (e) { warnings.push(`realm follow-up: ${String(e?.message || e).slice(0, 120)}`); }
     }

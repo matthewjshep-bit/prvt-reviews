@@ -633,7 +633,7 @@ test("the float's new switches default off and survive a save", () => {
   assert.equal(d.withMath, false);
   assert.deepEqual(d.range, { enabled: false, pct: 5 });
   assert.equal(d.setupQuestion.enabled, false);
-  assert.deepEqual(d.setupQuestion.ask, ["other_offers", "hidden_issues", "their_read"]);
+  assert.deepEqual(d.setupQuestion.ask, ["other_offers", "hidden_issues"]);
   const on = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: true, withMath: true, range: { enabled: true, pct: 40 }, setupQuestion: { enabled: true, ask: ["hidden_issues", "bogus"] } } } } }).parties.agent.realmCheck;
   assert.equal(on.withMath, true);
   assert.deepEqual(on.range, { enabled: true, pct: 15 }, "a range is never wider than 15%");
@@ -646,8 +646,17 @@ test("one setup question per float, never one they've answered", () => {
   assert.equal(setupQuestionFor({ offerId: "o1" }).key, q.key, "the same offer always asks the same one");
   const askedAll = new Set(["o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8"].map((id) => setupQuestionFor({ offerId: id }).key));
   assert.ok(askedAll.size > 1, "different houses get different questions");
-  assert.equal(setupQuestionFor({ offerId: "o1", dossier: { have: { arv: { value: 1 } } }, ask: ["their_read"] }), null);
-  assert.equal(setupQuestionFor({ offerId: "o1", dossier: { have: { condition: { value: "rough" }, timeline: { value: "asap" } } }, ask: ["hidden_issues", "other_offers", "their_read"] }).key, "their_read");
+  assert.equal(setupQuestionFor({ offerId: "o1", dossier: { have: { condition: { value: "rough" } } }, ask: ["hidden_issues", "other_offers"] }).key, "other_offers");
+  assert.equal(setupQuestionFor({ offerId: "o1", dossier: { have: { condition: { value: "rough" }, timeline: { value: "asap" } } }, ask: ["hidden_issues", "other_offers"] }), null);
+});
+
+// Matt, 2026-10-21: "we keep asking the agents how much rehab it needs" —
+// agents push back, "you're the flipper, do the analysis yourself".
+test("a float never asks the agent for their read on the work, even from a saved list that names it", () => {
+  assert.equal(Object.values(SETUP_QUESTIONS).some((q) => /work it needs|where it sells/.test(q)), false);
+  const saved = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: true, setupQuestion: { enabled: true, ask: ["other_offers", "hidden_issues", "their_read"] } } } } });
+  assert.deepEqual(saved.parties.agent.realmCheck.setupQuestion.ask, ["other_offers", "hidden_issues"]);
+  for (const id of ["o1", "o2", "o3", "o4", "o5"]) assert.notEqual(setupQuestionFor({ offerId: id, ask: ["their_read", "other_offers"] })?.key, "their_read");
 });
 
 // 2026-10-14: the pass on a house we promised a number on ships off.

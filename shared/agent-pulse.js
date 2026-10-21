@@ -50,6 +50,7 @@ import { botHold, paceOf, paceScale } from "./bot-hold.js";
 import { cadenceDays, requestStands, isAutoReply } from "./brush-offs.js";
 import { optOutInTranscript, CONVERSATION_AI_DEFAULTS } from "./conversation-ai.js";
 import { CHECK_IN_GAP_DAYS } from "./agent-focus.js";
+import { worksOn, runDaysFrom, pacificParts } from "./follow-up-engine.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -109,7 +110,9 @@ export function normalizeAgentPulse(v = {}) {
     coldMaxUnanswered: clamp(o.coldMaxUnanswered, D.coldMaxUnanswered, 1, 6),
     engagedMaxUnanswered: clamp(o.engagedMaxUnanswered, D.engagedMaxUnanswered, 0, 20),
     hour: clamp(o.hour, D.hour, 8, 17),
-    weekdaysOnly: o.weekdaysOnly !== false,
+    // The days the check-in runs (2026-10-21): "mon_fri", "sun_fri" or "all".
+    days: runDaysFrom(o),
+    weekdaysOnly: runDaysFrom(o) !== "all",
     ghlWorkflowDays: clamp(o.ghlWorkflowDays, D.ghlWorkflowDays, 0, 90),
     quietWorkflowIds: ids,
     replacesWorkflowIds: idList(o.replacesWorkflowIds),
@@ -533,23 +536,21 @@ export function checkInSlot(contactId = "", days = 21) {
   return h % n;
 }
 
-const pacificWeekday = (t) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short" }).format(new Date(t));
-const isWeekend = (t) => { const d = pacificWeekday(t); return d === "Sat" || d === "Sun"; };
 
 /**
  * firstCheckInAt({ contactId, joinedAt, everyDays }) → ISO | null
  *
  * When an agent who joined the check-in on `joinedAt` gets their first one:
- * their own weekday (Pacific) within the `everyDays` from it. The run is
- * weekdays only, so a weekend slot would only pile onto Monday. Null without
- * a join date.
+ * their own day (Pacific) within the `everyDays` from it, on a day the run
+ * works (`days`): a slot on a day off would only pile onto the next. Null
+ * without a join date.
  */
-export function firstCheckInAt({ contactId = "", joinedAt = null, everyDays = 21 } = {}) {
+export function firstCheckInAt({ contactId = "", joinedAt = null, everyDays = 21, days = "mon_fri" } = {}) {
   const t = ms(joinedAt);
   if (t == null) return null;
   const n = Math.max(1, Math.round(Number(everyDays)) || 1);
   const workdays = [];
-  for (let d = 0; d < n; d++) if (!isWeekend(t + d * DAY_MS)) workdays.push(d);
+  for (let d = 0; d < n; d++) if (worksOn(pacificParts(t + d * DAY_MS).wd, days)) workdays.push(d);
   if (!workdays.length) return iso(t);
   return iso(t + workdays[checkInSlot(contactId, workdays.length)] * DAY_MS);
 }
@@ -662,7 +663,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const joinedAt = agent.joinedAt || (agent.joinedByReply ? iso(now) : null);
   const onClock = (e) => !(e.data?.segment === "cold" && String(e.at) <= String(joinedAt));
   const clockPulse = ledger.some((e) => e.type === "agent_pulse_sent" && !voided.has(e.dedupeKey) && onClock(e));
-  const firstAt = firstCheckInAt({ contactId: agent.contactId, joinedAt, everyDays });
+  const firstAt = firstCheckInAt({ contactId: agent.contactId, joinedAt, everyDays, days: s.days });
   if (firstAt && !clockPulse && !texted.some(onClock) && !(since && String(since) > String(joinedAt)) && now < ms(firstAt)) {
     return out("not_due", `joined the check-in; first one spread over ${everyDays} days`, { segment, dueAt: firstAt });
   }

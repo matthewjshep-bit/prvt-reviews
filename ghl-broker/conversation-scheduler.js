@@ -9,6 +9,7 @@
 // scheduled before a restart still goes out on time.
 
 import { answersInbound } from "./shared/follow-up.js";
+import { worksOn, machineDays } from "./shared/follow-up-engine.js";
 
 const DAY_MS = 86400000;
 export const STUCK_SENDING_MS = 5 * 60 * 1000;
@@ -34,6 +35,9 @@ export function pickDelayMs(config, random = Math.random, { intent = "", replyLe
 }
 
 // Saturday or Sunday, on the wall clock of the zone.
+const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+export const weekdayIn = (ms, timeZone = "UTC") => WEEKDAY_INDEX[new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(new Date(ms))];
+
 export function isWeekend(ms, timeZone = "UTC") {
   const day = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(new Date(ms));
   return day === "Sat" || day === "Sun";
@@ -52,9 +56,10 @@ export function spreadAcrossDay({ now = Date.now(), quietHours = {}, hours = 8, 
   let open = Date.parse(nextSendTime({ now, delayMs: 0, quietHours }));
   if (weekends !== "all") {
     // Roll to the NEXT day's opening (not the same wall time tomorrow)
-    // until it is a weekday.
+    // until it is a day the machine works ("sun_to_fri": Saturday is off).
+    const days = machineDays(weekends);
     let guard = 0;
-    while (isWeekend(open, tz) && guard++ < 4) {
+    while (!worksOn(weekdayIn(open, tz), days) && guard++ < 4) {
       const p = zonedParts(open, tz);
       const nextMidnight = zonedToUtc({ y: p.y, m: p.m, d: p.d, hh: 0, mm: 0 }, tz) + DAY_MS + 60000;
       open = Date.parse(nextSendTime({ now: nextMidnight, delayMs: 0, quietHours }));

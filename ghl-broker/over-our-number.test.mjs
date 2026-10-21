@@ -99,9 +99,12 @@ test("a number above our offer holds even when the agent typed it first", () => 
 
 test("saying our own number, or our ARV and rehab as an opinion, still goes", () => {
   assert.equal(gate({ reply: "We're at 550k as-is, cash. Could the sellers live with that?" }).ok, true);
-  const g = gate({ reply: "I'm thinking 778K After Repair Value and 54K+ of rehab. What do you think?" },
+  const g = gate({ reply: "I'm thinking 778K After Repair Value and 54K+ of rehab. What's the seller hoping to get?" },
     { allowedAmounts: [...BOOK, 778000, 54000] });
   assert.equal(g.ok, true, g.flags.join(" | "));
+  // Asking them to weigh in on it is asking for their read (2026-10-21).
+  const asks = gate({ reply: "I'm thinking 778K After Repair Value and 54K+ of rehab. What do you think?" }, { allowedAmounts: [...BOOK, 778000, 54000] });
+  assert.ok(asks.flags.some((f) => /our own numbers/.test(f)), asks.flags.join(" | "));
 });
 
 test("with no offer on the book the old rules stand — the shorthand is a made-up number", () => {

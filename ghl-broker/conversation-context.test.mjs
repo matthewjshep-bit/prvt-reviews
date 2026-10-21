@@ -310,9 +310,8 @@ test("the prompt carries the subject property's dossier and the next thing to as
   ];
   const ctx = buildAgentContext({ offers: [], custom: { subject_property: A }, now: NOW, events, facts: null });
   assert.match(ctx.text, /WHAT WE HAVE ON 12703 Vernon Ave SW, Lakewood, WA 98498:\n- Condition: dated, solid bones\n- Their ARV: \$715,000\n- Their rehab: \$40,000\n- Seller wants: \$480,000/);
-  assert.match(ctx.text, /STILL MISSING \(ask for ONE of these, the most useful next\): what work it needs\n/, "only the core gap is asked for");
-  assert.doesNotMatch(ctx.text, /OUR UNDERWRITE ON IT/, "we already have their take — nothing to draw out");
-  assert.match(ctx.text, /DON'T ASK, BUT FILE IF THEY SAY IT: the seller's timeline; whether it's vacant or occupied/);
+  assert.match(ctx.text, /STILL MISSING \(ask for ONE of these, the most useful next\): the seller's timeline\n/, "only the core gap is asked for");
+  assert.match(ctx.text, /DON'T ASK, BUT FILE IF THEY SAY IT: what work it needs; whether it's vacant or occupied/);
   assert.ok(ctx.amounts.includes(480000), "the seller's number may be echoed");
   // A subject with nothing on it yet lists the whole checklist; no subject, no block.
   assert.match(buildAgentContext({ offers: [], custom: { subject_property: "1 Elm St" }, now: NOW, events: [], facts: null }).text, /WHAT WE HAVE ON 1 Elm St: nothing yet\.\nSTILL MISSING/);
@@ -320,21 +319,24 @@ test("the prompt carries the subject property's dossier and the next thing to as
 });
 
 
-test("with our underwrite in the book and no take from them, the bot leads with ours to get theirs", () => {
+// Matt, 2026-10-21: "we keep asking the agents how much rehab it needs" —
+// they push back, "you're the flipper, do the analysis yourself". The
+// checklist asked "what it's worth fixed up AND what they'd budget for the
+// work" on nearly every reply, and handed the bot our ARV and rehab to float
+// to draw theirs out.
+test("the bot is never told to ask the agent for their rehab or what it's worth fixed up, and asks about the seller instead", () => {
   const A = "12703 Vernon Ave SW, Lakewood, WA 98498";
   const offers = [{ id: "o1", address: "12703 Vernon Avenue SW, Lakewood, WA 98498", cashAmount: 520000, arv: 850000, repairs: 200000, status: "draft", createdAt: "2026-09-07T00:00:00Z" }];
   const ctx = buildAgentContext({ offers, custom: { subject_property: A }, now: NOW, events: [], facts: null });
-  assert.match(ctx.text, /OUR UNDERWRITE ON IT: ARV \$850,000, rehab about \$200,000\./);
-  assert.match(ctx.text, /"I'm thinking 850K After Repair Value and 200K\+ of rehab\. What do you think\?"/, "written like a text: no dollar signs");
-  assert.match(ctx.text, /not an offer/);
-  assert.ok(ctx.amounts.includes(850000) && ctx.amounts.includes(200000), "the two figures may be said, for this");
-  // The take is ONE ask, not two: the checklist names it once.
-  assert.equal((ctx.text.match(/their take — what it's worth fixed up AND what they'd budget/g) || []).length, 1);
-  // Once they've given either half, it isn't asked again.
-  const half = buildAgentContext({ offers, custom: { subject_property: A }, now: NOW, facts: null,
-    events: [{ type: "agent_estimate", at: "2026-09-08T00:00:00Z", address: A, data: { arv: 800000 } }] });
-  assert.doesNotMatch(half.text, /their take — what it's worth/);
-  assert.doesNotMatch(half.text, /OUR UNDERWRITE ON IT/);
+  assert.doesNotMatch(ctx.text, /OUR UNDERWRITE ON IT|What do you think\?/);
+  assert.ok(!ctx.amounts.includes(200000), "our rehab figure isn't handed over to float");
+  assert.match(ctx.text, /STILL MISSING \(ask for ONE of these, the most useful next\): what the seller is hoping to get; the seller's timeline\n/);
+  assert.match(ctx.text, /DON'T ASK, BUT FILE IF THEY SAY IT: the overall condition; what work it needs; what they think it's worth fixed up; what they'd budget for the work/);
+  assert.match(ctx.text, /NEVER ASK THEM what it's worth fixed up, what the work would run, or what work it needs/);
+  // What they volunteer is still kept.
+  const told = buildAgentContext({ offers, custom: { subject_property: A }, now: NOW, facts: null,
+    events: [{ type: "agent_estimate", at: "2026-09-08T00:00:00Z", address: A, data: { arv: 800000, rehab: 60000 } }] });
+  assert.match(told.text, /- Their ARV: \$800,000\n- Their rehab: \$60,000/);
 });
 
 test("a deal committed to another buyer is never pitched, and to a buyer who knows it, it's spoken for with no numbers", () => {

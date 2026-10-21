@@ -29,29 +29,30 @@ export const REQUOTE_DEFAULTS = {
 };
 
 // One setup question on a float (Matt, 2026-10-07, from the No Fluff "setup
-// call"): where the seller is, what the photos don't show, and what the agent
-// thinks it needs and sells for. One per float, rotated per offer, and never
-// one they've already answered (setupQuestionFor).
+// call"): where the seller is, and what the photos don't show. One per
+// float, rotated per offer, and never one they've already answered
+// (setupQuestionFor). "What's your read on the work it needs, and where it
+// sells once it's done?" was the third until 2026-10-21: we run our own
+// numbers (Matt), so a float never asks for theirs. A stored list that still
+// names it is cleaned by the normaliser.
 export const SETUP_QUESTIONS = {
   other_offers: "any other offers in on it yet, and what's the seller's timeline?",
   hidden_issues: "anything I won't see in the photos, like roof, foundation, water or septic?",
-  their_read: "what's your read on the work it needs, and where it sells once it's done?",
 };
 export const SETUP_QUESTION_KEYS = Object.keys(SETUP_QUESTIONS);
-// Not in the rotation above: the high-stakes range asks for eyes on the house
-// once their read is in, and a listed house asks the seller's number before
-// any of ours (shared/number-stance.js, 2026-10-15).
+// Not in the rotation above: the high-stakes range asks for eyes on the house,
+// and a listed house asks the seller's number before any of ours
+// (shared/number-stance.js, 2026-10-15).
 export const EYES_QUESTION = { key: "eyes", text: "any chance of a few more photos or a quick walkthrough video?" };
 export const SELLER_NUMBER_QUESTION = "what's the seller hoping to get?";
 
-// Floats a question the dossier hasn't answered: their read (arv / rehab),
-// the condition, the timeline. Starts at a hash of the offer so an agent with
-// several houses doesn't get the same question on each. null when every one
-// is answered or none is switched on.
+// Floats a question the dossier hasn't answered: the condition, the
+// timeline. Starts at a hash of the offer so an agent with several houses
+// doesn't get the same question on each. null when every one is answered or
+// none is switched on.
 export function setupQuestionFor({ offerId = "", dossier = null, ask = SETUP_QUESTION_KEYS } = {}) {
   const have = dossier?.have || {};
   const answered = {
-    their_read: Boolean(have.arv || have.rehab),
     hidden_issues: Boolean(have.condition || have.workNeeded),
     other_offers: Boolean(have.timeline),
   };
@@ -89,8 +90,10 @@ export const SILENT_INTENTS = new Set(["opt_out"]);
 // Messages the bot STARTS rather than answers. Not in the classifier's
 // vocabulary — the model never reads an inbound text as one of these — but
 // they need labels, gates and an allowlist slot like any other.
-// take_check floats our ARV/rehab read to draw out theirs; realm_check floats
-// the cash number. In that order when both apply: their read before our price.
+// take_check floats our ARV/rehab read and asks what the seller is hoping to
+// get (a listed house, before any number of ours); realm_check floats the
+// cash number. Until 2026-10-21 take_check asked for the agent's own read
+// first ("their read before our price"); we run our own numbers now.
 // offer_nudge / blast_nudge / dataroom_nudge are the follow-up clock's voice
 // (shared/follow-up.js). They are ordinary auto-sendable intents: not in
 // NEVER_AUTO, so autoEligible() offers them as checkboxes and an operator
@@ -674,8 +677,9 @@ const PLAYBOOK = () => ({
   // `setupQuestion` ends it with one of SETUP_QUESTIONS.
   // `highStakes` (2026-10-15, shared/number-stance.js): an off-market house,
   // one the agent brought us, or one over `overAmount` floats a range and
-  // asks for their read (or photos), and no letter goes out by machine,
-  // until we have their read and eyes on it, or Matt approved the number.
+  // asks for photos (never their read, since 2026-10-21), and no letter goes
+  // out by machine until we have their read and eyes on it, or Matt approved
+  // the number.
   realmCheck: {
     enabled: false, leadWhenConfident: true, withMath: false,
     range: { enabled: false, pct: 5 },
@@ -1432,7 +1436,9 @@ export function normalizeConversationAi(doc, seed = {}) {
       quick: (() => { const q = auto.quick && typeof auto.quick === "object" ? auto.quick : {}; const lo = int(q.minSec, D.autoSend.quick.minSec, 0, 3600); return { minSec: lo, maxSec: Math.max(lo, int(q.maxSec, D.autoSend.quick.maxSec, 0, 3600)) }; })(),
       slow: (() => { const q = auto.slow && typeof auto.slow === "object" ? auto.slow : {}; const lo = int(q.minSec, D.autoSend.slow.minSec, 0, 14400); return { minSec: lo, maxSec: Math.max(lo, int(q.maxSec, D.autoSend.slow.maxSec, 0, 14400)) }; })(),
       nudgeSpreadHours: int(auto.nudgeSpreadHours, D.autoSend.nudgeSpreadHours, 0, 12),
-      weekends: oneOf(auto.weekends, ["all", "replies_only", "none"], D.autoSend.weekends),
+      // "sun_to_fri" (2026-10-21, Matt: "Sunday through Friday"): what the
+      // machine starts goes on a Sunday, never a Saturday.
+      weekends: oneOf(auto.weekends, ["all", "replies_only", "sun_to_fri", "none"], D.autoSend.weekends),
       quietHours: {
         start: hhmm(qh.start, D.autoSend.quietHours.start),
         end: hhmm(qh.end, D.autoSend.quietHours.end),
@@ -1660,7 +1666,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
       { id: "st-1", party: "agent", theySaid: "It's pretty turnkey honestly", weSay: "Probably not one for us then. Anything else you've got sitting that needs some work?" },
       { id: "st-9", party: "agent", theySaid: "480k", weSay: "Got it, 480. Let me give you a quick call on that." },
       { id: "st-10", party: "investor", theySaid: "Manufactured homes aren't really that expensive. My max is probably under 450k", weSay: "That helps. Nothing under 450 open right now, I'll send the next one that is." },
-      { id: "st-11", party: "agent", theySaid: "Bath rooms ok need kitchen updated. Appliances are good except needs a hood vent and insulation under floors.", weSay: "Sounds manageable. What do you think it's worth fixed up?" },
+      { id: "st-11", party: "agent", theySaid: "Bath rooms ok need kitchen updated. Appliances are good except needs a hood vent and insulation under floors.", weSay: "Got it, kitchen plus a few fixes. I'll run the numbers. What's the seller hoping to get?" },
       { id: "st-2", party: "agent", theySaid: "What would you guys pay for it?", weSay: "Let me run the numbers on this one and text you where we'd land." },
       { id: "st-3", party: "agent", theySaid: "Not interested, thanks", weSay: "Understood, thanks for your time!" },
       { id: "st-7", party: "agent", theySaid: "Hey, been a minute", weSay: "It has! Saw the 123 Main offer didn't work out. Anything else sitting right now that needs some work?" },
@@ -1719,17 +1725,11 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           "quiet — say so plainly once, without relitigating it, and use it as the reason for the ask: " +
           "\"sorry that one didn't work out, anything else you've got that needs work?\". Never argue about " +
           "the number that lost.\n" +
-          "QUALIFY: once there's an address, learn — one question at a time, across the conversation, never as a " +
-          "form — the condition and what work it needs. That is what our underwriting reads. The seller's number, " +
-          "their timeline and whether it's occupied are worth filing if the agent volunteers them, but don't ask; " +
-          "they come out when the offer goes over.\n" +
-          "THEIR TAKE: get the agent's OWN read — what they think it's worth fixed up and what the work runs — as ONE " +
-          "question, the way a colleague would: 'what do you think it's worth done, and what would you budget for " +
-          "the work?'. If the context gives you OUR underwrite on that property, lead with ours as an opinion to " +
-          "draw theirs out: 'I'm thinking 850K After Repair Value and 200K+ of rehab. What do you think?' — that " +
-          "is a read, not an offer, and must not sound like one. One ask; if they don't know, move on. Their " +
-          "numbers are theirs — never adopt them, never argue with them. They tell us whether their expectations " +
-          "and ours are in the same zip code.\n" +
+          "QUALIFY: the one gut check is whether it's flip material: big-ticket work or a refresh. Once they've " +
+          "said, we run our own numbers. Never ask them what it's worth fixed up, what the work would run or what " +
+          "work it needs — agents push back, 'you're the flipper' — and if they volunteer it, take it and file it. " +
+          "Keep the deal moving instead: say you'll run the numbers, and ask one thing at a time across the " +
+          "conversation: what the seller is hoping to get, then their timeline.\n" +
           "REALM CHECK: when our number comes back you may float it as a soft number ('we'd likely land around " +
           "410k as-is, quick close') and ask whether that's in the realm for the seller before our letter of intent " +
           "goes over. If they say it works, say you'll send our terms over today and ask if they can write it up on NWMLS forms for us to sign. If they push back with a number, " +
@@ -1737,8 +1737,7 @@ export function starterConfig({ signer = "", company = "Shep Flips", workflows =
           `IF ASKED IF YOU'RE A BOT: give the standard line, then ask if they have any stale or pocket listings right now.`,
         mayCommit:
           "Confirm we buy as-is, funded with a hard money loan, and close in roughly 10 to 21 days from mutual acceptance, inspection included, depending on the lender. Say we'll run the numbers on an address " +
-          "and text them where we land. Ask for an address, price expectations and seller timeline. Ask what they think it's worth fixed " +
-          "up and what they'd budget for the work. Ask if it's cool to stay in touch.",
+          "and text them where we land. Ask for an address, price expectations and seller timeline. Ask if it's cool to stay in touch.",
         mayNotCommit:
           "Quote or estimate any number other than our underwritten offer in the context. Agree to terms or a price. Book a showing, inspection or call time on your own. " +
           "Claim we have off-market deals. Promise proof of funds. Send a link.",

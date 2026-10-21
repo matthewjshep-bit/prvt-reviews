@@ -1767,14 +1767,16 @@ test("an agent's own ARV and rehab are kept as theirs, recorded on the property,
   assert.equal(ev.ref, job.draftId);
 });
 
-/* ---------- their read before our price ---------- */
+/* ---------- our number goes; their read is never waited for ---------- */
 
-test("which float goes first depends on whether we already have their take", async () => {
+// Until 2026-10-21 the number waited for their read: a take check floated our
+// ARV and rehab and asked "what do you think?". Matt: agents push back,
+// "you're the flipper, do the analysis yourself", and he prices every house.
+test("a priced house floats our number without first asking the agent for their read", async () => {
   const { chooseProactiveKind } = await import("./reply-agent.js");
   const A = "12 Elm St, Renton, WA 98056";
-  assert.equal(chooseProactiveKind({ events: [], address: A }), "take_check", "nothing from them yet: draw their read out first");
-  assert.equal(chooseProactiveKind({ events: [{ type: "agent_estimate", at: iso(1), address: "12 Elm Street, Renton, WA 98056", data: { arv: 500000 } }], address: A }), "realm_check", "their read is in: the price can go");
-  assert.equal(chooseProactiveKind({ events: [{ type: "agent_estimate", at: iso(1), address: "9 Other St", data: { arv: 1 } }], address: A }), "take_check", "a take on a different house doesn't count");
+  assert.equal(chooseProactiveKind({ events: [], address: A }), "realm_check", "nothing from them yet: the number still goes");
+  assert.equal(chooseProactiveKind({ events: [{ type: "agent_estimate", at: iso(1), address: "12 Elm Street, Renton, WA 98056", data: { arv: 500000 } }], address: A }), "realm_check");
 });
 
 test("when numbers land with no take from them, the bot floats our ARV and rehab — and may not say the price", async () => {
@@ -1786,7 +1788,7 @@ test("when numbers land with no take from them, the bot floats our ARV and rehab
   let seen;
   const { job, skipped } = await startProactive({
     client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "take_check", offer: landed, sendsEnabled: true,
-    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "take_check", reply: "Just did a quick underwrite on 12 Elm. I'm thinking 850K After Repair Value and 200K+ of rehab. What do you think?", summary: "Floats our read on 12 Elm." }; } },
+    deps: { draft: async (args) => { seen = args; return { ...DRAFT, intent: "take_check", reply: "Just did a quick underwrite on 12 Elm. I'm seeing it around 850K fixed up with 200K+ of work. What's the seller hoping to get?", summary: "Floats our read on 12 Elm." }; } },
   });
   assert.equal(skipped, null, skipped);
   await settle();
@@ -1900,7 +1902,7 @@ test("a listed house far under the seller's number gets no number at all, and is
   await settle();
 });
 
-test("a big house floats a range and asks for their read, then for eyes on it, before it's a number we'd stand behind", async () => {
+test("a big house floats a range and asks for eyes on it, never their read, before it's a number we'd stand behind", async () => {
   const { conversationConfig, leadsWithNumber, floatStance } = await import("./reply-agent.js");
   const BIG = { ...LANDED, cashAmount: 610000, autoUnderwrite: { passed: true, compsUsedCount: 6, photosAnalyzed: 3 } };
   const rc = { ...STARTER_SAVED.conversationAi.parties.agent.realmCheck, enabled: true, leadWhenConfident: true, range: { enabled: false, pct: 5 } };
@@ -1913,10 +1915,12 @@ test("a big house floats a range and asks for their read, then for eyes on it, b
   const d = outboundDescriptor({ kind: "realm_check", offer: BIG, saved, dossier: null });
   assert.equal(d.confident, false, "the rough wording");
   assert.ok(d.range && d.range.high <= 610000 && d.range.low < d.range.high, "a range topped by our number");
-  assert.equal(d.question?.key, "their_read");
+  assert.equal(d.question?.key, "eyes");
   assert.ok(!d.math);
   const read = { have: { arv: { value: 800000 }, rehab: { value: 90000 } } };
-  assert.equal(outboundDescriptor({ kind: "realm_check", offer: BIG, saved, dossier: read }).question?.key, "eyes", "their read is in: ask for photos or a video");
+  assert.equal(outboundDescriptor({ kind: "realm_check", offer: BIG, saved, dossier: read }).question?.key, "eyes", "a read they volunteered: still photos or a video");
+  const seenNoRead = outboundDescriptor({ kind: "realm_check", offer: { ...BIG, seen: { at: iso(10), by: "you" } }, saved, dossier: null });
+  assert.equal(seenNoRead.question?.key, "seller_number", "eyes are in: what the seller is hoping to get, never their read");
   const seen = outboundDescriptor({ kind: "realm_check", offer: { ...BIG, seen: { at: iso(10), by: "you" } }, saved, dossier: read });
   assert.equal(seen.stance, undefined, "their read and someone's been: firm");
   assert.equal(seen.range, undefined);
@@ -3040,7 +3044,7 @@ test("floorFirmness tells a wall from an opening", () => {
   assert.equal(floorFirmness("He won’t go any lower"), "firm");
 });
 
-test("a soft floor far over ours keeps the negotiation open: their number filed, their value and repairs asked for", async () => {
+test("a soft floor far over ours keeps the negotiation open: their number filed, another look promised, no rehab asked for", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent", "tier-1"]);
   const offer = { ...NEGOTIATION_OFFER };
@@ -3059,7 +3063,8 @@ test("a soft floor far over ours keeps the negotiation open: their number filed,
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
   assert.equal(d.intent, "question");
-  assert.match(d.reply, /what do you figure it's worth once it's done/);
+  assert.match(d.reply, /take another look/);
+  assert.doesNotMatch(d.reply, /worth|budget|the work/, "we run our own numbers");
   assert.doesNotMatch(d.reply, /\$|\d{3}/, "names no number of ours");
   assert.ok(statuses.includes("countered"), `their number filed: ${statuses}`);
   assert.ok(!statuses.includes("passed"));
@@ -7018,7 +7023,7 @@ test("with all three on, the float's math line is short and the prompt leaves ou
 // k on the figures, "rehab work", "lender holding costs", "profit and risk
 // margin". That runs past 300 characters, so a float carrying the math may
 // run to 340 (three segments); every other text keeps the configured limit.
-const QUEEN = "Underwriting's back on Queen: we base it on 72% of the 1.1M it's worth fixed up, less 90k of rehab work; the rest is 85k to buy and resell, 55k of lender holding costs, and our profit and risk margin. Landing in the 670s to 706. If that's in the ballpark, what's your read on the work it needs, and where it sells once it's done?";
+const QUEEN = "Underwriting's back on Queen: we base it on 72% of the 1.1M it's worth fixed up, less 90k of rehab work; the rest is 85k to buy and resell, 55k of lender holding costs, and our profit and risk margin. Landing in the 670s to 706. If that's in the ballpark, any other offers in on it yet, and what's the seller's timeline?";
 
 test("the float's math reads the way Matt wrote it, with k on the figures", () => {
   const on = savedWith({ withMath: true, range: { enabled: true, pct: 5 }, setupQuestion: { enabled: true } });
@@ -8161,4 +8166,25 @@ test("a reply the bot couldn't place still waits when the switch is off, a gate 
   assert.equal((await otherReply({ draft: { confidence: "low" } })).status, "draft", "a gate tripped");
   assert.equal((await otherReply({ draft: { reply: "Send it over, I'd pay $250,000 for it." } })).status, "draft", "a number is never sent by this");
   assert.equal((await otherReply({ party: "investor" })).status, "draft", "never an investor's");
+});
+
+// Matt, 2026-10-21: agents told us the work ("Foundation and it needs floors
+// door cabinets etc") and the bot came back with "what would the work run?".
+// They push back: you're the flipper, do the analysis yourself.
+test("a reply that asks the agent what the work would run is caught and written again", async () => {
+  const asks = gate({ intent: "deal_available", reply: "Got it. What do you think it's worth fixed up, and roughly what would the work run?" },
+    { inboundMessage: "Foundation and it needs floors door cabinets etc" });
+  assert.equal(asks.ok, false);
+  assert.match(asks.flags.join(";"), /we run our own numbers/);
+  const forward = gate({ intent: "deal_available", reply: "Foundation plus the interior, got it. I'll run the numbers. What's the seller hoping to get?" },
+    { inboundMessage: "Foundation and it needs floors door cabinets etc" });
+  assert.equal(forward.ok, true, forward.flags.join(";"));
+  // The investor side is not this rule: buyers ask us, and we ask them their rehab appetite.
+  assert.equal(gate({ intent: "question", reply: "What would you budget for the rehab?" }, { party: "investor" }).flags.some((f) => /our own numbers/.test(f)), false);
+  const { redraftOnGate } = await import("./reply-agent.js");
+  const draft = { ...DRAFT, intent: "deal_available", reply: "Got it. What do you think it's worth fixed up, and roughly what would the work run?" };
+  const gateFor = (d) => evaluateReplyGates({ draft: d, allowedAmounts: [410000], inboundMessage: "Foundation and floors" });
+  const r = await redraftOnGate({ draft, gate: gateFor(draft), gateFor, redraft: async () => ({ reply: "Got it, I'll run the numbers. What's the seller hoping to get?" }) });
+  assert.equal(r.gate.ok, true);
+  assert.match(r.draft.reply, /seller hoping/);
 });

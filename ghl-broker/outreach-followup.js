@@ -21,7 +21,7 @@
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
 import { addContactToWorkflow, getLastMessageDate, removeContactFromWorkflow } from "./ghl.js";
-import { normalizeOutreachAutopilot, isWorkday, workHour } from "./outreach-sweep.js";
+import { normalizeOutreachAutopilot, isWorkday, workHour, WORK_TZ } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { botEventsByContact } from "./bot-hold.js";
@@ -206,7 +206,7 @@ export async function maybeStartOutreachFollowUp({ locationId, client, saved = {
   if (h < hour || h >= hour + DAILY_WINDOW_HOURS) return false;
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
   if (!oa.enabled || !oa.followUpEnabled || !oa.followUpWorkflowId) return false;
-  if (oa.weekdaysOnly && !isWorkday(now)) return false;
+  if (!isWorkday(now, WORK_TZ, oa.days)) return false;
   const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: h, startHour: hour,
     windowHours: DAILY_WINDOW_HOURS, running: jobs.get(locationId)?.status === "running" });
   if (!gate.go) return false;

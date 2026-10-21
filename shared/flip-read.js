@@ -364,6 +364,38 @@ export function broughtStep({ words = "", asked = false, passed = false, offMark
   return { move: "ask", read, reply: pick(callAsk ? QUALIFY_ASKS_CALL : QUALIFY_ASKS, variant) };
 }
 
+// Asking the agent for their rehab (Matt, 2026-10-21): "we keep asking the
+// agents how much rehab it needs" — and they push back, "you're the flipper,
+// do the analysis yourself". The one gut check (QUALIFY_ASKS: big repairs or
+// a refresh?) is how we learn it's flip material; past that we run our own
+// numbers. Of 675 texts to agents on 10-19 to 10-21, 30 asked what it's worth
+// fixed up or what the work would run, most of them to an agent who had just
+// told us the work.
+const GUT_CHECK_RX = /\bbig[\s-]ticket\b|\bthe\s+big\s+stuff\b|\breal\s+repairs\s+like\b|\bor\s+(?:more\s+(?:of\s+)?|mostly\s+|just\s+)?(?:a\s+)?(?:refresh|cosmetic|paint)\b/i;
+const ASKING_RX = /\b(?:what|what'?s|how|any|roughly|ballpark|your\s+(?:read|gut|take|sense)|you\s+(?:think|figure)|you'?d)\b/i;
+const THEIR_VALUE_RX = /\b(?:worth|sells?|sell\s+for|value)\b[^?]{0,35}?\b(?:fixed\s+up|done|finished|after\s+repairs?)\b|\bARV\b|\bafter\s+repair\s+value\b/i;
+const WORK_COST_RX = /\bbudget\b|\b(?:run|cost)\b|\bballpark\b|\brough\s+number\b|\bhow\s+much\b/i;
+const WORK_WORD_RX = /\b(?:work|rehab|repairs?|reno(?:vation)?s?|remodel|roof|siding|deck|kitchen|bath(?:room)?s?|electrical|plumbing|cosmetics)\b/i;
+const WORK_NEEDED_RX = /\bwork\s+(?:does\s+)?it(?:'d|\s+would)?\s+needs?\b|\bwhat(?:'?s|\s+is)?\s+(?:the\s+)?work\b|\bcondition\b|\bwhat\s+(?:kind\s+of\s+)?shape\b|\bwhat'?s\s+left\s+to\s+(?:finish|do)\b|\bwhat(?:'?s|\s+does)\s+it\s+(?:actually\s+)?need\b/i;
+
+/**
+ * asksTheirRehab(reply) → true when a question in it asks the agent what the
+ * house is worth fixed up, what the work would run, or what work it needs.
+ * The gut check and our own read said as a statement are not that.
+ */
+// "I'm thinking 850K ARV and 200K+ of rehab. What do you think?" asks for
+// their read too, with the figures in the sentence before.
+const WHAT_DO_YOU_THINK_RX = /^\s*(?:what\s+do\s+you\s+think|thoughts|your\s+thoughts|sound\s+(?:about\s+)?right|does\s+that\s+(?:sound|seem|look)\s+(?:about\s+)?right|(?:do\s+you\s+)?agree)\b/i;
+const OUR_READ_RX = /\bARV\b|\bafter\s+repair\s+value\b|\bfixed\s+up\b|\brehab\b|\bof\s+(?:work|repairs)\b/i;
+
+export function asksTheirRehab(reply = "") {
+  const sentences = String(reply || "").split(/(?<=[.?!])\s+/);
+  return sentences.some((q, i) => /\?\s*$/.test(q) && !GUT_CHECK_RX.test(q) && (
+    (WHAT_DO_YOU_THINK_RX.test(q) && OUR_READ_RX.test(sentences[i - 1] || ""))
+    || q.split(/[,;]|\s[—–]\s/).some((c) => ASKING_RX.test(c)
+      && (THEIR_VALUE_RX.test(c) || WORK_NEEDED_RX.test(c) || (WORK_COST_RX.test(c) && WORK_WORD_RX.test(c))))));
+}
+
 /**
  * stillQualifying({ address, contactId, events, drafts }) → boolean
  *

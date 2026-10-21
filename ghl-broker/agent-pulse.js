@@ -22,7 +22,7 @@ import { conversationConfig, startProactive, previewProactive, markUnsubscribed,
 import { getContact, smsUnsubscribed, removeContactFromWorkflow, searchAllContactsByTags, listWorkflows, listPipelines } from "./ghl.js";
 import { acquisitionsPipeline } from "./ghl-mirror.js";
 import { listAcquisitionOpportunities } from "./tier-check.js";
-import { workHour, isWorkday, normalizeOutreachAutopilot } from "./outreach-sweep.js";
+import { workHour, isWorkday, normalizeOutreachAutopilot, WORK_TZ } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { mergeEvents } from "./shared/bot-hold.js";
@@ -560,7 +560,7 @@ export function startAgentPulse({
 export async function maybeRunAgentPulse({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now() }) {
   const s = agentPulseSettings(saved);
   if (!s.enabled || !conversationConfig(saved).enabled) return false;
-  if (s.weekdaysOnly && !isWorkday(now)) return false;
+  if (!isWorkday(now, WORK_TZ, s.days)) return false;
   const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: workHour(now), startHour: s.hour,
     windowHours: WINDOW_HOURS, running: jobs.get(locationId)?.status === "running" });
   if (!gate.go) return false;

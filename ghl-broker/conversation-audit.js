@@ -28,6 +28,7 @@ import { liveDealHold } from "./conversation-context.js";
 import { threadHealth, STOP_LABEL } from "./shared/thread-health.js";
 import { runTodayTimers } from "./today-timers.js";
 import { waitingReason } from "./outbox-guard.js";
+import { worksOn, machineDays, pacificParts } from "./shared/follow-up-engine.js";
 
 // The remedies that end in a text the machine writes itself (not a reply to
 // their text): each waits while a reply or a person's draft is in the outbox.
@@ -499,8 +500,7 @@ export async function maybeRunDaytimeDriver({ client, locationId, saved = {}, st
   if (!config.enabled || !dt?.enabled) return false;
   const h = workHour(now);
   if (h < dt.startHour || h >= dt.endHour) return false;
-  const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/Los_Angeles" }).format(new Date(now));
-  if ((weekday === "Sat" || weekday === "Sun") && config.autoSend?.weekends !== "all") return false;
+  if (!worksOn(pacificParts(now).wd, machineDays(config.autoSend?.weekends))) return false;
   if (jobs.get(jobKey(locationId, "day"))?.status === "running" || jobs.get(jobKey(locationId, "night"))?.status === "running") return false;
 
   const cursor = await store.getJobCursor?.(locationId, DAY_CURSOR_NAME).catch(() => null);
