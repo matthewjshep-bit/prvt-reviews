@@ -54,7 +54,7 @@ const ASK_DAYS = 200;
 const LEDGER_SLACK_DAYS = 14;
 const PROMISE_WINDOW_HOURS = 72;
 // What a due check-in is about (shared/agent-pulse.js evaluateAgent pulseReason).
-const PULSE_ABOUT = { fresh_listing: "their fresh listing", off_market_listing: "an off-market listing", our_house: "the house they had with us", deal_thanks: "thanks after a deal", general: "anything coming up" };
+const PULSE_ABOUT = { fresh_listing: "anything coming up (naming their fresh listing)", off_market_listing: "an off-market listing", our_house: "the house they had with us", deal_thanks: "thanks after a deal", general: "anything coming up" };
 
 // Sends written when the text actually leaves (reply-agent.js sendReplyDraft,
 // offers.js sendPaperAfterSilence, the import's workflow enrolment).

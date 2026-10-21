@@ -526,8 +526,8 @@ const AGENT_PULSE_SHAPES = [
   "SHAPE FOR THIS ONE: one wry, friendly line, then the question.",
 ];
 const AGENT_PULSE_LISTING_SHAPES = [
-  "SHAPE FOR THIS ONE: open with the listing, then the question.",
-  "SHAPE FOR THIS ONE: open with the question; the listing in a clause.",
+  "SHAPE FOR THIS ONE: open with the listing in a clause, then the question.",
+  "SHAPE FOR THIS ONE: open with the question; the listing in a clause after it.",
   "SHAPE FOR THIS ONE: shortest version that still has their first name, the street and the question — one sentence if you can.",
 ];
 
@@ -1058,9 +1058,15 @@ function openingFor(outbound) {
       const closedNear = !mentioned && hook?.kind === "closed_nearby" && hook.town ? hook : null;
       // A listing that came off the market is never brought up in a check-in
       // (2026-10-19, Matt); freshListingFor no longer picks one.
+      // A fresh listing of theirs is named in passing in a check-in, never
+      // asked about (2026-10-21, Matt: "saw your listing at whatever address
+      // but it doesn't look like a fixer. Just wanted to check in and see if
+      // you have any other distressed properties on the plate").
+      const listingStreet = listingText ? streetName(l.street) || String(l.street || "").trim() : "";
       const why = listingText
-        ? `We noticed their listing at ${l.street}${l.city ? ` in ${l.city}` : ""}${l.dom >= 30 ? ", on the market a while" : ""}${l.cut ? `, with a price cut` : ""}. ` +
-          `Ask, plainly, whether it's a bit of a project — if it needs work it may be one we'd want to take a look at. Name the street; never its price or any number.`
+        ? `We saw their listing on ${listingStreet}${l.city ? ` in ${l.city}` : ""}. Mention it in passing, in a clause: it doesn't look like a fixer for us. ` +
+          `Don't ask about that house. The one question is whether they have any other distressed properties on their plate, listed or off market. ` +
+          `Name the street (the street name, never the house number); never its price or any number.`
         : o.reason === "deal_thanks"
         ? `A deal we worked with them just closed. Thank them for working it with us, in a few plain words — never name the house or its street — then ${offAsk}`
         : mentioned
@@ -1091,7 +1097,7 @@ function openingFor(outbound) {
         // the first text since 2026-10-16: no remark about the house, no joke.
         (cold && listingText
           ? `WHAT TO WRITE: the short first-text voice — two short sentences, under ${OPENER_MAX_CHARS} characters, plain, the way a person texts someone they haven't met; the PERSONALITY line above doesn't apply to this one. Open with their first name, once; ` +
-            `name the street (the street name, never the house number); ONE question, whether it needs much work. Say nothing about the house itself (its age, lot, look, or how long it has been listed). Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
+            `name the street in a clause (the street name, never the house number), as one that doesn't look like a fixer for us; ONE question, whether they have any other distressed properties on their plate. Say nothing else about the house (its age, lot, look, or how long it has been listed). Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
             (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the street and the question. ` : "")
           : `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
             // No calendar is connected (2026-10-15): a call is offered, never a time.

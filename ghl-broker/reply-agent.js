@@ -3533,7 +3533,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "outreach_nudge": return `Follows up on our first text about ${where}${rung}.`;
     case "buyer_pulse":   return `Checks in between deals: are they buying right now, and ${outbound.buyBox ? "is their buy box still right" : "what is their buy box"}.`;
     case "agent_pulse":
-      if (outbound.reason === "fresh_listing") return `Checks in about their listing at ${outbound.listing?.street || where}: would the seller look at an as-is cash offer?`;
+      if (outbound.reason === "fresh_listing") return `Checks in, naming their listing at ${outbound.listing?.street || where} in passing: anything else distressed on their plate?`;
       if (outbound.reason === "off_market_listing") return `Checks in about their listing at ${outbound.listing?.street || where}, off the market lately: is the seller still hoping to sell?`;
       if (outbound.reason === "deal_thanks") return "Thanks them for the deal that just closed and asks whether anything distressed or off-market has come across their desk.";
       return "Checks in: anything distressed or off-market come across their desk lately?";

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   focusOf, focusHolds, isLiveOffer, machineTexts, spacingHolds, lightTouchDue, pickAside,
-  streetOf, UNPROMPTED_AGENT_KINDS, LIGHT_TOUCH_DAYS,
+  streetOf, UNPROMPTED_AGENT_KINDS, LIGHT_TOUCH_DAYS, CHECK_IN_GAP_DAYS,
 } from "./agent-focus.js";
 import { rungsCovered, nudgeTimes } from "./follow-up.js";
 
@@ -82,6 +82,22 @@ test("unprompted texts to one agent are three days apart and two a week", () => 
     assert.equal(UNPROMPTED_AGENT_KINDS.has(kind), false, kind);
     assert.equal(spacingHolds({ ...base, kind, sent: [at(0.1), at(0.2), at(0.3)] }), null, `${kind} is never held`);
   }
+});
+
+// Matt, 2026-10-21: "if we checked in the day before and then we double-text
+// them the day after, it just comes off as too needy and aggressive."
+test("a check-in never lands within two weeks of another check-in, whichever clock sent it", () => {
+  const at = (d, kind) => ({ at: NOW - d * DAY, kind });
+  const base = { now: NOW, minHours: 72, perWeek: 2 };
+  assert.equal(CHECK_IN_GAP_DAYS, 14);
+  assert.match(spacingHolds({ ...base, kind: "agent_pulse", sent: [at(5, "outreach_nudge")] }), /we checked in with them 5 days ago — check-ins are 14 days apart/);
+  assert.match(spacingHolds({ ...base, kind: "outreach_nudge", sent: [at(8, "agent_pulse")] }), /8 days ago/, "the follow-up waits on the check-in too");
+  assert.match(spacingHolds({ ...base, kind: "agent_pulse", sent: [at(7, "agent_pulse")] }), /7 days ago/, "and the check-in on itself");
+  assert.match(spacingHolds({ ...base, kind: "agent_pulse", sent: [at(-2, "outreach_nudge")] }), /already queued/);
+  assert.equal(spacingHolds({ ...base, kind: "agent_pulse", sent: [at(15, "outreach_nudge")] }), null, "two weeks on");
+  assert.equal(spacingHolds({ ...base, kind: "outreach_nudge", sent: [at(7, "outreach_nudge")] }), null, "a ladder's own next rung keeps its steps");
+  assert.equal(spacingHolds({ ...base, kind: "offer_nudge", sent: [at(5, "agent_pulse")] }), null, "the live offer's nudge isn't a check-in");
+  assert.match(spacingHolds({ ...base, kind: "agent_pulse", sent: [at(20, "outreach_nudge")], floor: 2 }), /28 days apart/, "check in less stretches it");
 });
 
 test("a passed house comes up at most once a month, and the freshest pass is the one mentioned", () => {

@@ -58,11 +58,23 @@ export const CHECKIN_COLD_TEXTS = [
   "Hey {first}, Matt here, local guy who fixes up houses. Anything come across your desk lately that needs work, on or off market?",
   "Hi {first}, it's Matt. I'm always after houses that need some TLC. Any fixers on your radar lately, listed or off market?",
 ];
-// …about a fresh listing of theirs that reads distressed.
+// …when a fresh listing of theirs came up: still a check-in, naming the
+// listing in passing. Matt, 2026-10-21, after an agent we'd checked in with a
+// week before got "saw your listing on … Is it a bit of a project?" and opted
+// out: "switch to a general check-in and maybe we can reference it: 'Hey I
+// saw your listing at whatever address but it doesn't look like a fixer. Just
+// wanted to check in and see if you have any other distressed properties on
+// the plate.'"
 export const LISTING_PING_TEXTS = [
-  "Hi {first}, saw your listing on {street}. Is it a bit of a project? If it needs work I'd love to take a look.",
-  "Hey {first}, noticed your listing on {street}. Does it need much work? That's the kind I'm after.",
-  "Hi {first}, saw your listing on {street}. Is it a bit of a project, or pretty turnkey?",
+  "Hey {first}, saw your listing on {street}, doesn't look like a fixer. Just wanted to check in, any other distressed properties on your plate?",
+  "Hi {first}, saw your listing on {street}. Not sure it needs enough work for us, but wanted to check in. Anything distressed on your plate, listed or off market?",
+  "Hey {first}, noticed your listing on {street}, doesn't look like it needs much work. Just checking in, any other fixers on your plate lately?",
+];
+// …the same to an agent who has never written back: one clause on who we are.
+export const LISTING_PING_COLD_TEXTS = [
+  "Hi {first}, it's Matt, I fix up houses locally. Saw your listing on {street}, doesn't look like a fixer, but any other distressed properties on your plate?",
+  "Hey {first}, Matt here, I fix up houses locally. Saw your listing on {street}, probably not one for us, but anything on your plate that needs work?",
+  "Hi {first}, it's Matt. Saw your listing on {street}, doesn't look like a fixer, but any other distressed properties on your plate, listed or off market?",
 ];
 
 // "SE", "NW" as people write them; listing feeds send "Se".
@@ -130,7 +142,8 @@ function pickFilled(list, variant, values) {
  *                   NUDGE_TEXTS from the contact's variant plus the step; a
  *                   repeat rung past the last step, outbound.checkIns in turn
  *   agent_pulse     outbound.mode "template"; CHECKIN_TEXTS, CHECKIN_COLD_TEXTS,
- *                   or LISTING_PING_TEXTS for a fresh listing of theirs
+ *                   or LISTING_PING_TEXTS / LISTING_PING_COLD_TEXTS when a
+ *                   fresh listing of theirs came up
  */
 export function standardText({ kind, outbound = {}, name = "", contactId = "" } = {}) {
   const o = outbound || {};
@@ -171,11 +184,12 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
   }
   if (kind === "agent_pulse") {
     if (o.forMatt || o.reason === "deal_thanks" || o.reason === "off_market_listing" || o.hook?.kind === "mentioned") return null;
-    if (o.reason === "fresh_listing") {
-      const street = String(o.listing?.street || "").trim() || values.street;
-      return done("listing", pickFilled(LISTING_PING_TEXTS, v, { ...values, street }));
-    }
     const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
+    if (o.reason === "fresh_listing") {
+      // The street name, never the house number, like the first text.
+      const street = streetName(o.listing?.street || "") || values.street;
+      return done(cold ? "listing_cold" : "listing", pickFilled(cold ? LISTING_PING_COLD_TEXTS : LISTING_PING_TEXTS, v, { ...values, street }));
+    }
     return done(cold ? "checkin_cold" : "checkin", pickFilled(cold ? CHECKIN_COLD_TEXTS : CHECKIN_TEXTS, v, values));
   }
   return null;

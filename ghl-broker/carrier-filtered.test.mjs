@@ -18,7 +18,7 @@ const PITCH = /cash offer|as-is cash|buy(s|ing)? houses|no repairs|quick close|l
 
 test("the listing check-in no longer asks for an as-is cash offer — Jeff's 1515 Lombard Ave text was blocked by the carrier", () => {
   const cold = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "cold", listing: { street: "1515 Lombard Ave", city: "Everett", dom: 80 } });
-  assert.match(cold, /1515 Lombard Ave in Everett/);
+  assert.match(cold, /Lombard Ave in Everett/);
   assert.doesNotMatch(cold.replace(/never write[^.]*\./i, ""), PITCH, "no pitch in what the bot is asked to say");
   assert.match(cold, /phone carriers block/i);
   const known = outboundOpening({ kind: "agent_pulse", reason: "fresh_listing", segment: "engaged", listing: { street: "1515 Lombard Ave" } });
