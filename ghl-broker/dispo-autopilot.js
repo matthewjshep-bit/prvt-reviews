@@ -36,6 +36,7 @@ import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { botHold, holdLine } from "./shared/bot-hold.js";
 import { dealsByOf } from "./shared/contact-email.js";
+import { matchTagPatterns } from "./conversation-party.js";
 
 export const CURSOR_NAME = "dispo";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -253,7 +254,16 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
   // drafted and waits for you. One read for the whole list; a read that
   // fails holds every text rather than guess.
   const stops = dryRun ? new Map() : await botEventsByContact({ store, locationId }).catch(() => null);
-  const holdOf = (cid) => (stops ? botHold({ events: stops.get(cid) || [], now }) : { held: true, kind: "unread" });
+  // A bot-off tag in GHL ("stop bot", Conversation AI → routing) holds the
+  // deal text the same way (2026-10-21): it held only the bot's replies, and
+  // tagged buyers in the area were sent the deal by themselves.
+  const botOffTags = config.routing?.botOffTags || [];
+  const holdOf = (inv) => {
+    const tag = matchTagPatterns(inv.tags || inv.doc?.tags || [], botOffTags)[0];
+    if (tag) return { held: true, kind: "bot_off", tag };
+    return stops ? botHold({ events: stops.get(inv.contactId) || [], now }) : { held: true, kind: "unread" };
+  };
+  const holdText = (hold) => (hold.kind === "bot_off" ? `bot is off for this contact (tag: ${hold.tag})` : holdLine(hold));
   const rows = [];
   let queued = 0, drafted = 0, waiting = 0, i = 0;
   // Cumulative: each text lands at least `spreadSec` after the one before,
@@ -268,7 +278,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const name = inv.name || inv.doc?.name || "";
     const channels = blastChannels(inv, da);
     if (!channels.length) { rows.push({ contactId, name, status: "skipped", reason: "no phone, and email drafting is off", text: "" }); continue; }
-    const hold = holdOf(contactId);
+    const hold = holdOf(inv);
     const intro = blastIntro(inv);
     const variant = i;
     const text = presell ? presellMessage({ ...facts, firstName: name, variant, intro }) : blastMessage({ ...facts, firstName: name, variant, ask, intro, templates: da.dealTexts });
@@ -320,7 +330,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
           : `Puts ${offer.address} in front of ${name || "a buyer"} at ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}.`,
         propertyAddress: offer.address || "", counterAmount: null, autoSendable: !presell, flags, party: "investor", partySource: "deal",
         matchedTags: { agent: [], investor: [] }, contextSummary: { deal: offer.id }, offersInContext: 0,
-        autoSend: { decided: schedule, reason: schedule ? "" : presell ? `needs a person: ${PRESELL_WAITS}` : hold.held ? `${holdLine(hold)} — it waits for you` : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
+        autoSend: { decided: schedule, reason: schedule ? "" : presell ? `needs a person: ${PRESELL_WAITS}` : hold.held ? `${holdText(hold)} — it waits for you` : (willSchedule ? "emailed deals wait for you (Settings → Dispositions)" : reason) }, humanActive: null, actions: [],
         supersededIds: replaced.filter((o) => (o.channel === "email" ? "email" : "sms") === channel).map((o) => o.id), warnings: [], noteOnAutoSend: config.notes?.onAutoSend !== false, promptVersion: 3,
         ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
       });

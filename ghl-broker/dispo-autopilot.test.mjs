@@ -74,6 +74,25 @@ test("a blast to a buyer you stopped the bot on waits as a draft; the rest still
   assert.equal(b.queued, 0);
 });
 
+// Matt, 2026-10-21: a buyer tagged "stop bot" in GHL was still sent the deal
+// by itself — the bot-off tags held only the bot's replies, and the deal
+// now goes to everyone who buys in the area.
+test("a deal text to a buyer tagged stop bot waits as a draft for you; the rest still go", async () => {
+  const store = fakeStore();
+  store.listContactEventsSince = async () => [];
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } }, dispoAutopilot: { spreadSec: 60 } };
+  const tagged = [{ ...buyers[0], tags: ["investor", "Stop Bot"] }, { ...buyers[1], tags: ["bot-off"] }, { ...buyers[2], tags: ["investor"] }];
+  const r = await queueBlastDrafts({ store, locationId: "L", offer, investors: tagged, saved, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(r.queued, 1);
+  assert.equal(r.drafted, 2);
+  for (const id of ["i1", "i2"]) {
+    const d = [...store.rows.values()].find((x) => x.contactId === id);
+    assert.equal(d.status, "draft", id);
+    assert.match(d.autoSend.reason, /^bot is off for this contact \(tag: (stop bot|bot-off)\) — it waits for you$/);
+  }
+  assert.equal([...store.rows.values()].find((x) => x.contactId === "i3").status, "scheduled");
+});
+
 test("the blast on promote waits before its first text, so the fee can be set; each draft keeps its phrasing", async () => {
   const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } }, dispoAutopilot: { spreadSec: 60 } };
   const now0 = await queueBlastDrafts({ store: fakeStore(), locationId: "L", offer, investors: buyers, saved, now: NOW, sendsEnabled: true, blastsEnabled: true });
