@@ -41,7 +41,7 @@ import { kindHold, ruralHold } from "./shared/asset-type.js";
 import { deriveArv, timeTrend, SIZE_TOLERANCE_PCT } from "./shared/arv.js";
 import { scoreComp, similarity, inPool, compareByMatch, milesBetween, markRenovatedByPrice, PRICE_PROXY_MIN_POOL } from "./shared/comp-match.js";
 import { seedRoomCounts, applyScanSuggestion, priceScope } from "./shared/rehab-scope.js";
-import { rehabBand, heavyCeiling } from "./shared/rehab-catalog.js";
+import { rehabBand, heavyCeiling, gutRehab, gutSignal, GUT_PER_SQFT } from "./shared/rehab-catalog.js";
 import { fmtMoney, calculateOffers, underwriteMode } from "./shared/offer-calc.js";
 import { offMarketSignals, OFF_MARKET_TAG } from "./shared/off-market.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
@@ -731,7 +731,7 @@ export function knowsTheHouse(subject) {
  */
 export function evaluateGates({
   extraction, subject, rehabbedComps = [], arv, photosAnalyzed = 0, scan, repairs = 0, proxy = null,
-  geocode = null, compsPool = null, compsRadiusMiles = UW_RADIUS_MILES, describedWork = false,
+  geocode = null, compsPool = null, compsRadiusMiles = UW_RADIUS_MILES, describedWork = false, gut = null,
 }) {
   const held = [];
 
@@ -822,7 +822,8 @@ export function evaluateGates({
   // Scaled for size past 2,500 sqft (heavyCeiling), so a big house isn't held
   // to a small one's ceiling. The slack still applies on top.
   const band = rehabBand(subject?.sqft || 0);
-  const heavyTop = heavyCeiling(subject?.sqft || 0);
+  // A gut (shared/rehab-catalog.js gutSignal) is held to the gut tier instead.
+  const heavyTop = Math.max(heavyCeiling(subject?.sqft || 0), gut ? gutRehab(subject?.sqft || 0) : 0);
   if (band && repairs > heavyTop * UW_REPAIRS_BAND_SLACK) {
     const sized = heavyTop !== band.heavy[1] ? ` scaled to ${Number(subject.sqft).toLocaleString("en-US")} sqft` : "";
     held.push(`the scope totals ${fmtMoney(repairs)}, past the heavy band for ${band.label}${sized} (${fmtMoney(heavyTop)})`);
@@ -962,6 +963,7 @@ const HEAVY_WORDS = /\bgut\b|full (remodel|rehab|renovation)|down to the studs|t
 const LIGHT_WORDS = /cosmetic|paint|carpet|light (work|rehab|updates?)|minor|just (needs|dated)|lipstick|refresh/i;
 export function roughTier({ said = "", listPrice = 0, arv = 0 } = {}) {
   const t = String(said || "");
+  if (gutSignal({ said: t })) return "gut";
   if (HEAVY_WORDS.test(t)) return "heavy";
   if (LIGHT_WORDS.test(t)) return "light";
   const list = Number(listPrice) || 0;
@@ -980,6 +982,7 @@ export function roughTier({ said = "", listPrice = 0, arv = 0 } = {}) {
 export function tierRepairs(sqft, tier = "medium") {
   const band = rehabBand(sqft);
   if (!band) return 0;
+  if (tier === "gut") return gutRehab(sqft);
   if (tier === "heavy") return heavyCeiling(sqft);
   return (band[tier] || band.medium)[1];
 }
@@ -1009,6 +1012,11 @@ export function roughNumber({ held = [], arv = 0, sqft = 0, repairs = 0, said = 
   if (held.some((h) => PHOTO_HOLD.test(String(h))) || !(fix > 0)) {
     tier = roughTier({ said, listPrice, arv });
     fix = Math.max(fix, tierRepairs(sqft, tier));
+    repairsSource = "tier";
+  } else if (gutSignal({ said }) && fix < gutRehab(sqft)) {
+    // A scope off the photos, on a house they call a teardown: the gut tier.
+    tier = "gut";
+    fix = gutRehab(sqft);
     repairsSource = "tier";
   }
   if (!(fix > 0)) return null;
@@ -1478,6 +1486,8 @@ async function runUnderwrite(job, ctx) {
   }
 
   let extraction;
+  // The thread, when a step below read it (the gut tier listens to it).
+  let threadText = null;
   const from = addressSourceFor({ linked, suppliedAddress: job.suppliedAddress || "", refereed });
   if (from === "link") {
     extraction = {
@@ -1539,6 +1549,7 @@ async function runUnderwrite(job, ctx) {
       });
       transcript = t.text || "";
     } catch { /* missing conversations.readonly — the message alone usually carries the address */ }
+    threadText = transcript;
     // Their words about how it's being sold ("pocket listing", "not listed
     // yet"), for the off-market mark on the offer this run lands.
     job.offMarketCue = offMarketSignals({ message: job.message, transcript });
@@ -2167,6 +2178,20 @@ async function runUnderwrite(job, ctx) {
     }
   }
 
+  /* --- what the agent said the work is (shared/rehab-catalog.js gutSignal) --- */
+  // "Perhaps a tear down", "it's all lath and plaster": the scope is held to
+  // the gut tier, not trimmed to the heavy band (3831 Bagley Ave N went out
+  // at $102K on a house its agent called a possible teardown, 2026-10-13).
+  if (threadText == null && job.contactId) {
+    try {
+      threadText = (await buildTranscript(client, locationId, job.contactId, {
+        maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 60, maxChars: 16000, maxCallTranscripts: 0,
+      })).text || "";
+    } catch { threadText = ""; }
+  }
+  const agentSaid = [job.message || "", String(threadText || "").split("\n").filter((l) => /\bTHEM\b/.test(l)).join("\n")].filter(Boolean).join("\n");
+  const gut = gutSignal({ said: agentSaid, remarks: listing?.remarks || "", areas: scan ? rehabState?.aiResult?.areas || [] : [] });
+
   /* --- the buyer's view (shared/underwrite-checks.js) --- */
   // The same house a buyer will price: its street, its size on the record,
   // what the comps have that it doesn't, what similar houses list for today,
@@ -2185,7 +2210,7 @@ async function runUnderwrite(job, ctx) {
       house: facts?.house || null, remarks: listing?.remarks || "",
       comps: arvComps, sqft: subjectSqft, trend: ringTrend,
       site, actives, areas: scan ? rehabState.aiResult?.areas || [] : [], contents: scan ? rehabState.aiResult?.contents || "none" : "none",
-      rehabState: scan ? rehabState : null, declined,
+      rehabState: scan ? rehabState : null, declined, said: agentSaid,
     });
     if (view) {
       job.checksBefore = { arv: arv?.arv ?? null, repairs };
@@ -2242,9 +2267,25 @@ async function runUnderwrite(job, ctx) {
     job.calibration = { arvCutPct: cal.arvCutPct, floorPsf: cal.floorPsf, repairsAdded: cal.repairsAdd > 0 && scan ? cal.repairsAdd : 0 };
   }
 
+  /* --- the gut tier, whether or not the buyer-view checks ran --- */
+  if (gut && scan && sqft > 0) {
+    const floorAt = gutRehab(sqft);
+    if (repairs < floorAt) {
+      const contingency = 1 + (Number(rehabState?.contingency) || 0) / 100;
+      const row = { id: "gut_floor", key: "gut_floor", label: `Full gut at $${GUT_PER_SQFT}/sqft`, cost: Math.ceil((floorAt - repairs) / contingency / 100) * 100 };
+      rehabState = withAllowance(rehabState, [...(rehabState.allowance || []).filter((r) => r.key !== "gut_floor"), row]);
+      const priced = priceScope(rehabState, sqft);
+      scope = priced.lines;
+      repairs = priced.total;
+      Object.assign(got, { rehabState, scope, repairs });
+    }
+    warnings.push(`rehab at the gut tier (${fmtMoney(gutRehab(sqft))}, $${GUT_PER_SQFT}/sqft): ${gut.why}`);
+    job.gut = { why: gut.why, source: gut.source, floor: floorAt };
+  }
+
   /* --- the gates --- */
   const gate = evaluateGates({
-    extraction, subject, rehabbedComps: rehabbed, arv, describedWork,
+    extraction, subject, rehabbedComps: rehabbed, arv, describedWork, gut,
     photosAnalyzed: scan ? photos.length : 0, scan, repairs, proxy, geocode, compsRadiusMiles,
     compsPool: { rows: compsData?.rows ?? null, pulled: compsData?.pulled ?? null, kept: nearby.length, radiusMiles: compsRadiusMiles },
   });
@@ -2300,7 +2341,7 @@ async function runUnderwrite(job, ctx) {
   // what we have, when every hold is one it may go past (roughNumber). A size
   // taken from the comps makes the number rough even when nothing else held.
   const sqftHeld = "the subject's square footage is unknown — comps can't be size-matched and the ARV can't be size-adjusted";
-  const said = [dossier?.have?.condition?.value, dossier?.have?.workNeeded?.value, listing?.remarks].filter(Boolean).join(" ");
+  const said = [dossier?.have?.condition?.value, dossier?.have?.workNeeded?.value, listing?.remarks, gut ? agentSaid : ""].filter(Boolean).join(" ");
   let rough = null;
   if (roughOn && !rescued) {
     if (!gate.ok) rough = roughNumber({ held: gate.held, arv: arvForOffer, sqft, repairs, said, listPrice: rescueCap });

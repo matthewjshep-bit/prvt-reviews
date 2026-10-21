@@ -8,6 +8,7 @@ import {
   UW_RADIUS_MILES, UW_MIN_REHABBED_COMPS, UW_MIN_SUBJECT_PHOTOS, UW_DEFAULT_DAILY_CAP,
   UW_MAX_ARV_COMPS, UW_RADIUS_LADDER, gradeByPriceProxy, UW_GUT_CHECK_MIN_COMPS, capToList, moneyFromListing, UW_MAX_PCT_OF_LIST,
   UW_SIMILAR_CANDIDATES, UW_PROXY_SHARE, UW_ENRICH_CANDIDATES, UW_POOL_YEAR_TOLERANCE,
+  roughTier, tierRepairs, roughNumber,
 } from "./auto-underwrite.js";
 import { markRenovatedByPrice } from "./shared/comp-match.js";
 
@@ -971,3 +972,23 @@ test("an agent text about a priced fourplex does not start a flip underwrite", a
   assert.equal((await findOfferOut({ store: { listOffers: async () => [fourplex] }, locationId: "L", contactId: "c1", address: addr }))?.id, "o4");
   assert.equal(await findOfferOut({ store: { listOffers: async () => [{ ...fourplex, underwriteModel: undefined }] }, locationId: "L", contactId: "c1", address: addr }), null, "an unsent comps offer is still re-priced as before");
 });
+
+/* ---------- the gut tier (2026-10-21) ---------- */
+
+test("a gut scope on a house the agent calls a teardown isn't held as past the heavy band", () => {
+  const big = gate({ subject: { ...SUBJECT, sqft: 1780 }, repairs: 267000 });
+  assert.ok(big.held.some((h) => /past the heavy band/.test(h)));
+  const gut = gate({ subject: { ...SUBJECT, sqft: 1780 }, repairs: 267000, gut: { why: 'the agent said "teardown"', source: "agent" } });
+  assert.ok(!gut.held.some((h) => /past the heavy band/.test(h)), gut.held.join("; "));
+});
+
+test("a rough number on a house the agent calls a teardown budgets the gut tier", () => {
+  assert.equal(roughTier({ said: "It's a teardown." }), "gut");
+  assert.equal(tierRepairs(1780, "gut"), 267000);
+  const held = ["only 3 listing photos to scan — 8 required for a scope of work"];
+  assert.equal(roughNumber({ held, arv: 1161000, sqft: 1780, repairs: 0, said: "Perhaps a tear down." }).fix, 267000);
+  // Scanned at $102K, and they call it a teardown: still the gut tier.
+  const scanned = roughNumber({ held: ["the ARV fell back to ungraded comps"], arv: 1161000, sqft: 1780, repairs: 102000, said: "Perhaps a tear down." });
+  if (scanned) assert.equal(scanned.fix, 267000);
+});
+

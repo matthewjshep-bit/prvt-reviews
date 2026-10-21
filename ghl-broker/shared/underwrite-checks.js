@@ -27,6 +27,7 @@ import { deriveArv, arvPool } from "./arv.js";
 import { siteAdjustments, mergeSiteAdjustments, siteFlagsOf, siteLine } from "./site-check.js";
 import { sizeCheck, compParity, sameBathComps, activeCeiling, limitAuto } from "./arv-checks.js";
 import { rehabChecks } from "./rehab-checks.js";
+import { gutSignal } from "./rehab-catalog.js";
 import { remarkSignals, normalizeHouse, garageOf } from "./house-facts.js";
 import { monthsSince } from "./comp-match.js";
 import { parseUsAddress } from "./us-address.js";
@@ -191,7 +192,7 @@ export function normalizeDeclined(d) {
 export function buyerView({
   checks, address = "", subject = {}, house = null, remarks = "", comps = [], sqft = 0, trend = null,
   operatorAdjustments = [], site = null, actives, areas = [], contents = "none", rehabState = null,
-  declined = null, now = Date.now(),
+  declined = null, said = "", now = Date.now(),
 } = {}) {
   if (!checks) return null;
   const d = normalizeDeclined(declined);
@@ -260,6 +261,7 @@ export function buyerView({
       state: rehabState, sqft: n0(subject.sqft) || sqftForArv, yearBuilt: subject.yearBuilt, arv: arv?.arv || pre?.arv || 0,
       areas, contents, remarks: signals, t: checks.rehab, declined: d.rehab,
       cures: parity.cures.filter((c) => !d.rehab.includes(c.key)),
+      gut: gutSignal({ said, remarks, areas }),
     });
     for (const f of rehab.flags) flags.push(f);
   }
