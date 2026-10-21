@@ -4071,7 +4071,7 @@ async function runReply(job, ctx) {
     if (party === "investor" && deps.linkDealInterest) {
       const filing = heldDealReplyFiling(job.originalMessage || job.message, context?.deals?.linked);
       if (filing) {
-        const r = await deps.linkDealInterest({ contactId: job.contactId, addressHint: "", ...filing })
+        const r = await deps.linkDealInterest({ contactId: job.contactId, addressHint: "", said: job.originalMessage || job.message || "", ...filing })
           .catch((e) => { warnings.push(`not put on the deal: ${e.message}`); return null; });
         if (r?.linked && !r.unchanged) job.filedOnDeal = { status: r.status, address: r.address };
       }
@@ -4584,7 +4584,7 @@ async function runReply(job, ctx) {
     ? dealReplyFiling({ intent: draft.intent, propertyAddress: draft.propertyAddress, passReason: draft.passReason, linkedDeals: context?.deals?.linked })
     : null;
   if (filing && deps.linkDealInterest) {
-    const r = await deps.linkDealInterest({ contactId: job.contactId, addressHint: draft.propertyAddress || walkDeal?.address || "", ...filing })
+    const r = await deps.linkDealInterest({ contactId: job.contactId, addressHint: draft.propertyAddress || walkDeal?.address || "", said: job.originalMessage || job.message || "", ...filing })
       .catch((e) => { warnings.push(`not put on the deal: ${e.message}`); return null; });
     if (r?.ok) filedOnDeal = filing.status;
   }

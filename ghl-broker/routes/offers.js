@@ -174,6 +174,7 @@ import { normalizeAgentPulse } from "../shared/agent-pulse.js";
 import { ensureOfferPage, refreshOfferPages } from "../offer-page.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
 import { OFF_MARKET_TAG } from "../shared/off-market.js";
+import { sentDeal, pickDealForReply } from "../shared/deal-reply-match.js";
 import { agentRuledOut } from "../shared/held-underwrites.js";
 
 const CARD_SERVICE_URL = (process.env.CARD_SERVICE_URL || "").replace(/\/$/, "");
@@ -5593,8 +5594,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         { type: "offer_accepted", offerId: full.id, source: "conversation", at: ts, data: { amount, via: "acceptance" } });
       return { ok: true, address: full.address, amount, revived };
     },
-    linkDealInterest: ({ contactId, addressHint, status, reason, revive, addOnly, withinDays, note }) =>
-      linkInvestorInterest({ locationId, client, contactId, addressHint, status, reason, revive, addOnly, withinDays, note }),
+    linkDealInterest: ({ contactId, addressHint, status, reason, revive, addOnly, withinDays, note, said }) =>
+      linkInvestorInterest({ locationId, client, contactId, addressHint, status, reason, revive, addOnly, withinDays, note, said }),
     // A buyer asked for a deal by email (reply-agent.js): that deal, as an
     // email draft to them (routes/dispo.js emailDealToBuyer). Live deals only.
     emailDealTo: async ({ contactId, offerId }) => {
@@ -5891,14 +5892,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // The investor's standing on a deal: passed, or the committed buyer
     // (which advances an under-contract deal to buyer_found, as the Deals
     // page does). Links them first if they weren't.
-    setInvestorStatus: async ({ contactId, addressHint, status, reason = null }) => {
+    setInvestorStatus: async ({ contactId, addressHint, status, reason = null, said: words = "" }) => {
       if (!INVESTOR_STATUSES.includes(status)) return { ok: false, reason: `not an investor status: ${status}` };
       // "soft_commit" pauses outreach on a live deal, which is an operator's
       // judgement about whether a buyer is real — not something a warm text
       // should decide. The bot may mark evaluating, committed (it already
       // needs a person to confirm) or passed; holding the deal back is ours.
       if (status === "soft_commit") return { ok: false, reason: "a soft commit is yours to set on the deal, not the bot's" };
-      const found = await findLiveDealFor({ locationId, contactId, addressHint });
+      const found = await findLiveDealFor({ locationId, contactId, addressHint, said: [words, reason?.note].filter(Boolean).join(" ") });
       if (!found.ok) return found;
       const offer = found.offer;
       offer.deal.investors = offer.deal.investors || [];
@@ -5954,10 +5955,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // Feedback without a status change: a price gripe, a "wrong side of the
     // freeway for me". They stay where they are on the deal; we keep what
     // they said.
-    recordDealFeedback: async ({ contactId, addressHint, reason }) => {
+    recordDealFeedback: async ({ contactId, addressHint, reason, said: words = "" }) => {
       const said = normalizePassReason(reason);
       if (!said) return { ok: false, reason: "nothing to file" };
-      const found = await findLiveDealFor({ locationId, contactId, addressHint });
+      const found = await findLiveDealFor({ locationId, contactId, addressHint, said: [words, said.note].filter(Boolean).join(" ") });
       if (!found.ok) return found;
       const offer = found.offer;
       const ts = new Date().toISOString();
@@ -6714,8 +6715,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // locationId is a REQUEST value, not a router one — it has to be passed in.
   // Reading it as a free variable here threw ReferenceError on every call and
   // reported it as "mark investor passed failed".
-  async function findLiveDealFor({ locationId, contactId, addressHint = "" }) {
+  async function findLiveDealFor({ locationId, contactId, addressHint = "", said = "" }) {
     const live = (await store.listDeals(locationId)).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage));
+    // Sent two or more of them: what they said picks the deal, not the
+    // newest mention (shared/deal-reply-match.js, 3831 Bagley / 1538 NW 61st).
+    const theirs = live.filter((o) => sentDeal(o, contactId));
+    if (theirs.length >= 2) {
+      const pick = pickDealForReply(theirs, { hint: addressHint, said });
+      return pick.offer ? { ok: true, offer: pick.offer } : { ok: false, reason: "they're on two or more deals and the reply doesn't say which — yours to file" };
+    }
     let offer = pickDealByAddress(live, addressHint);
     if (!offer) {
       const mine = live.filter((o) => (o.deal.investors || []).some((i) => i.contactId === contactId));
@@ -6767,12 +6775,20 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   //             deal needs no mention at all)
   // A committed or soft-committed buyer is never moved from here.
   async function linkInvestorInterest({ locationId, client, contactId, addressHint = "", status = "evaluating", reason = null,
-    revive = true, addOnly = false, withinDays = 0, note = "" }) {
+    revive = true, addOnly = false, withinDays = 0, note = "", said: words = "" }) {
     const OPEN_STAGES = new Set(["under_contract", "buyer_found"]);
     const open = (await store.listDeals(locationId)).filter((o) => OPEN_STAGES.has(o.deal?.stage));
     if (!open.length) return { ok: true, linked: false, reason: "no open deals" };
 
-    let match = pickDealByAddress(open, addressHint);
+    // Sent two or more: their words pick the deal; unclear files nothing
+    // (shared/deal-reply-match.js).
+    const theirs = open.filter((o) => sentDeal(o, contactId));
+    let match = null;
+    if (theirs.length >= 2) {
+      const pick = pickDealForReply(theirs, { hint: addressHint, said: [words, reason?.note].filter(Boolean).join(" ") });
+      if (!pick.offer) return { ok: true, linked: false, reason: "on two or more deals and the reply doesn't say which" };
+      match = pick.offer;
+    } else match = pickDealByAddress(open, addressHint);
     if (!match) {
       let text = "";
       try {

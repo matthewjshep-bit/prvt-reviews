@@ -96,3 +96,36 @@ test("a reply that doesn't name the house needs it to have come up lately", asyn
   const warm = await link({ contactId: "stale" });
   assert.equal(warm.linked, true);
 });
+
+// 3831 Bagley Ave N and 1538 NW 61st St (2026-10-20): the same buyers had
+// both. A buyer who walked Bagley texted "that's 400k not 110k" — Bagley's
+// rehab — after 61st had gone to them, and it was filed on 61st.
+test("a buyer's walkthrough verdict lands on the deal they walked", async () => {
+  const bagley = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "agent3", address: "3831 Bagley Ave N, Seattle, WA 98103",
+    cashAmount: 697500, status: "accepted", statusHistory: [], calc: { inputs: { arv: 1161000, repairs: 102000 } },
+    deal: { stage: "under_contract", contractPrice: 740000, assignmentFee: 8000, stageHistory: [], investors: [{ contactId: "walker", name: "W", status: "evaluating" }],
+      blasts: [{ at: day(6), wave: 1, contactIds: ["walker", "builder"] }] } });
+  const ballard = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "agent4", address: "1538 Nw 61st St, Seattle, WA 98107",
+    cashAmount: 890000, status: "accepted", statusHistory: [], asset: { type: "land", by: "you" }, calc: { inputs: { arv: 925000, repairs: 0 } },
+    deal: { stage: "under_contract", contractPrice: 890000, assignmentFee: 21000, stageHistory: [], investors: [],
+      blasts: [{ at: day(0), wave: 1, contactIds: ["walker", "builder"] }] } });
+  // The newest pitch in the thread is 61st, and the model named it too.
+  threads.set("walker", [
+    { id: "m1", dateAdded: day(6), direction: "outbound", messageType: "TYPE_SMS", body: "Hey, 3831 Bagley Ave N in Seattle just went under contract." },
+    { id: "m2", dateAdded: day(0), direction: "outbound", messageType: "TYPE_SMS", body: "Hey, got 1538 NW 61st St in Seattle under contract." },
+  ]);
+  const said = "It's all lath and plaster, you gotta go down to the studs, that's 400k not 110k";
+  const r = await link({ contactId: "walker", addressHint: "1538 NW 61st St, Seattle, WA 98107", status: "passed", reason: { code: "rehab_scope", note: "down to the studs, 400k not 110k" }, said });
+  assert.equal(r.offerId, bagley.id, r.reason);
+  assert.equal((await store.getOffer(bagley.id)).deal.investors.find((i) => i.contactId === "walker").status, "passed");
+  assert.ok(!(await store.getOffer(ballard.id)).deal.investors.some((i) => i.contactId === "walker"));
+
+  // A builder's "not a land guy… how much land is it?" is about the lot.
+  const b = await link({ contactId: "builder", status: "passed", reason: { code: "property_type", note: "not a land guy" }, said: "I'm not a land guy, how much land is it?" });
+  assert.equal(b.offerId, ballard.id, b.reason);
+
+  // Nothing that tells them apart: filed on neither.
+  const unsure = await link({ contactId: "builder", status: "passed", reason: { code: "timing", note: "not right now" }, said: "Not right now, thanks" });
+  assert.equal(unsure.linked, false);
+});
+

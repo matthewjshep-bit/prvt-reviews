@@ -5332,7 +5332,8 @@ test("a buyer who asks to walk a house is put on the deal even when the reply is
   });
   await settle();
   assert.equal(job.status, "done", job.error);
-  assert.deepEqual(linked, [{ contactId: "c1", addressHint: "2010 NE 54th St", status: "evaluating", reason: null, revive: true, withinDays: 0 }]);
+  assert.deepEqual(linked, [{ contactId: "c1", addressHint: "2010 NE 54th St", status: "evaluating", reason: null, revive: true, withinDays: 0,
+    said: "Looks like a fun one... possible to pop by after 5 one night this week?" }]);
   assert.equal((await store.getReplyDraft(job.draftId)).status, "handled");
 });
 
