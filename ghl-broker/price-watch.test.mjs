@@ -145,7 +145,7 @@ test("the drop text waits while their reply is held and goes on a later run, fro
 });
 
 test("a number we floated but never sent is watched only with the switch on", async () => {
-  const floated = lisa({ status: "new", sends: [], proactive: { realmCheckAt: new Date(NOW - 5 * DAY).toISOString() } });
+  const floated = lisa({ status: "new", sends: [], floatSentAt: new Date(NOW - 5 * DAY).toISOString(), proactive: { realmCheckAt: new Date(NOW - 5 * DAY).toISOString() } });
   const fetch = listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 715000, status: "FOR_SALE" }]]);
   const off = await runPriceWatch({ locationId: "LOC", saved: SAVED, store: fakeStore([floated]), now: NOW, deps: { ...starter(), fetchListings: fetch } });
   assert.equal(off.watched, 0);

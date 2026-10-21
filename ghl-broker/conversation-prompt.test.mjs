@@ -661,3 +661,23 @@ test("a check-in names one kind of seller that becomes a deal, and tells a new a
   assert.match(known, /a parent moving into care/);
   assert.doesNotMatch(known, /what we buy:/, "an agent we've worked houses with already knows");
 });
+
+// 2026-10-21: a close ended "keep me in mind for the next one that
+// needs work, and if anything changes with the seller I'm here" — a statement
+// that asks nothing. Matt: always end on "have anything else that needs work
+// or would be a good flip?"
+test("a text that closes a house ends on asking for the next one, not keep me in mind", async () => {
+  const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
+  assert.match(sys, /NEXT ONE: when your text closes out a house/);
+  assert.match(sys, /Have anything else that needs work or would be a good flip\?/);
+  assert.match(sys, /end on the NEXT ONE question, and stop/);
+  assert.doesNotMatch(sys, /ask them to keep us in mind/);
+  assert.doesNotMatch(buildSystemPrompt({ config: null, party: "investor", channel: "sms" }), /good flip/, "buyers don't get the agent ask");
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  for (const subject of [{ address: "12 Elm St, Renton, WA", why: "area" }, { address: "12 Elm St, Renton, WA", why: "promised", owed: "number" }]) {
+    const t = outboundOpening(outboundDescriptor({ kind: "kind_pass", offer: null, saved: {}, subject }));
+    assert.match(t, /end on one question/, subject.why);
+    assert.match(t, /good flip\?/, subject.why);
+    assert.doesNotMatch(t, /keep us in mind/, subject.why);
+  }
+});

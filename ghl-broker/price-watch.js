@@ -124,8 +124,9 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
     if (!o?.id || !o.address || !o.contactId || o.deal || replaced.has(o.id)) continue;
     if (!statuses.includes(effectiveStatus(o))) continue;
     // Nothing of ours in front of them yet. A number texted in a plain reply
-    // carries only floatSentAt, not a realm check's own stamp (2026-10-16).
-    if (effectiveStatus(o) === "new" && !o.proactive?.realmCheckAt && !o.floatSentAt) continue;
+    // carries only floatSentAt, not a realm check's own stamp (2026-10-16),
+    // and that stamp alone is a float queued, not one sent (2026-10-21).
+    if (effectiveStatus(o) === "new" && !o.floatSentAt) continue;
     const t = Date.parse(o.statusAt || o.createdAt || "");
     if (!(t >= now - WATCH_DAYS * DAY_MS)) continue;
     const k = addressKey(o.address);

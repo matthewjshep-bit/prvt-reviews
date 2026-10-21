@@ -8188,3 +8188,13 @@ test("a reply that asks the agent what the work would run is caught and written 
   assert.equal(r.gate.ok, true);
   assert.match(r.draft.reply, /seller hoping/);
 });
+
+/* ---------- a float that never left is not "the number I mentioned" (2026-10-21) ---------- */
+
+import { whatWentOut } from "./reply-agent.js";
+
+test("a float that was queued but never sent is not a number we mentioned", () => {
+  const queued = { id: "o1", status: "new", sends: [], proactive: { realmCheckAt: "2026-10-14T15:34:46.083Z" } };
+  assert.notEqual(whatWentOut(queued), "number", "the stamp goes on when it's queued; a reply superseded it");
+  assert.equal(whatWentOut({ ...queued, floatSentAt: "2026-10-14T15:40:00.000Z" }), "number", "once it left, it's the number we floated");
+});

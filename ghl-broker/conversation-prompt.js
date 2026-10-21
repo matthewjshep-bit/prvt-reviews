@@ -61,7 +61,7 @@ const HUMAN =
   // question.
   "- Never reuse a line. The thread so far is above you: if you have already asked this person whether anything " +
   "else needs work — in any wording — do not ask it again. A stock closing ask repeated down a thread is the " +
-  "clearest tell of a bot.\n" +
+  "clearest tell of a bot. The one exception is the NEXT ONE question when a house closes (below).\n" +
   "- No warm-up clause before the substance. \"Ha, fair.\", \"Great news, thanks Rigo.\", \"Makes sense, that's a " +
   "real hurdle.\" — cut them and start at the point.\n" +
   "- ONE question, and only if you need the answer. When you have just acknowledged something real, do not staple " +
@@ -121,7 +121,7 @@ const COMMITMENTS = {
     "on ours is a person's call. Keep it short and unbothered — \"understood. Any chance they'd counter? Happy " +
     "to look at what works for them\" is the whole message. Only when they have already turned down that ask, " +
     "or say plainly there is no number, do you close it: say sorry this one didn't work out, that you appreciate them " +
-    "working it with you, ask them to keep us in mind for the next one that needs work, and stop. No second ask, no new number.",
+    "working it with you, end on the NEXT ONE question, and stop. No second ask about this house, no new number.",
   investor:
     "COMMITMENTS: you may NOT lower a price, agree to terms, promise a deal to them, confirm a walkthrough time, " +
     "or send documents. When the investor wants to buy, walk the property, or pushes on price, write a holding " +
@@ -178,6 +178,17 @@ const SELLER_SITUATIONS = [
   "a seller who has to move by a certain date",
   "a client who'd rather not put it on the market",
 ];
+
+// Matt, 2026-10-21: "always end our response with a question as the
+// followup — have anything else that needs work or would be a good flip?"
+// A close used to end on "keep me in mind for the next one", which asks
+// nothing and gets nothing back.
+const NEXT_ONE_QUESTION = "Have anything else that needs work or would be a good flip?";
+const NEXT_ONE_AGENT =
+  "NEXT ONE: when your text closes out a house — we pass on it, they pass or the seller went another way, or it just " +
+  `didn't work out — its last sentence is one question asking for the next one, in about these words: "${NEXT_ONE_QUESTION}" ` +
+  "Never end a close on \"keep me in mind\", \"send it my way\" or \"I'm here if anything changes\" — a statement asks " +
+  "nothing. Skip it only when that question already went to them earlier today.";
 
 const OFF_MARKET_AGENT =
   "OFF-MARKET: our best deals are off-market houses agents bring us — pocket listings, or a seller who hasn't listed. " +
@@ -286,7 +297,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     "if it were yesterday, and never anything that would read as surveillance or as a script."
   );
   if (CONTINUITY[party]) parts.push(CONTINUITY[party]);
-  if (party === "agent") parts.push(OFF_MARKET_AGENT, AGENT_BROUGHT);
+  if (party === "agent") parts.push(OFF_MARKET_AGENT, AGENT_BROUGHT, NEXT_ONE_AGENT);
   parts.push(COMMITMENTS[party] || COMMITMENTS.unknown);
   // The one commitment the calendar lets it keep. The times it may name are
   // handed to it per message under TIMES YOU MAY PROPOSE; the guard checks
@@ -842,7 +853,8 @@ function openingFor(outbound) {
       if (o.why === "promised") {
         return `${START} We told this agent we'd come back to them with ${o.owed === "paper" ? "our written offer" : o.owed === "answer" ? "an answer" : "a number"} on ${o.address}, and we haven't. ` +
           `We're passing on it: ${o.passReason || "we couldn't get to a number we'd stand behind"}. In two short lines: own that we owe them an answer, ` +
-          `say plainly we're out on this one and give that one reason, and ask them to send the next fixer they come across, on or off market. ` +
+          `say plainly we're out on this one and give that one reason, and end on one question asking them to send the next fixer they come across, ` +
+          `on or off market — about these words: "${NEXT_ONE_QUESTION}" ` +
           `Do NOT name any number, do NOT apologise at length, and do NOT promise to look again. ${CONTINUE} Set intent to kind_pass.`;
       }
       return `${START} We looked at ${o.address} for this agent and we're passing on it: ` +
@@ -854,9 +866,10 @@ function openingFor(outbound) {
           // (listedFirst, 2026-10-15): no lowball, and no number at all.
           : o.why === "too_far" ? "where we'd need to be on it is too far under where the seller is to be worth sending a number, and we'd rather say so than send a lowball."
           : `it isn't a single-family house${o.heldReason ? ` (${o.heldReason})` : ""}, and right now we only buy single-family.`) +
-        ` In one or two lines, say so plainly and thank them, and ask them to keep us in mind for ` +
-        (o.why === "area" ? "fixers closer in. " : o.why === "rural" ? "fixers in town on a normal-size lot. " : o.why === "numbers" ? "the next fixer, especially one with photos or a seller price in mind. "
-          : o.why === "too_far" ? "other fixers, on or off market, especially ones that need real work. " : "single-family fixers. ") +
+        ` In one or two lines, say so plainly and thank them, then end on one question asking for the next one — ` +
+        (o.why === "area" ? "fixers closer in" : o.why === "rural" ? "fixers in town on a normal-size lot" : o.why === "numbers" ? "the next fixer, especially one with photos or a seller price in mind"
+          : o.why === "too_far" ? "other fixers, on or off market, especially ones that need real work" : "single-family fixers") +
+        `, in about these words: "${NEXT_ONE_QUESTION}" ` +
         `Do NOT name any number, do NOT apologise at length, and do NOT promise to look again. ${CONTINUE} Set intent to kind_pass.`;
 
     // Our numbers are stuck on something they can answer. Ask for exactly

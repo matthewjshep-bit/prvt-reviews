@@ -13,7 +13,7 @@ const NOW = Date.now();
 const ago = (d) => new Date(NOW - d * DAY).toISOString();
 
 const LIVE = { id: "live", locationId: "LOC", contactId: "c1", address: "10625 SE 304th Way, Auburn, WA 98092", cashAmount: 258250,
-  status: "sent", statusAt: ago(6), createdAt: ago(6), proactive: { realmCheckAt: ago(6) } };
+  status: "sent", statusAt: ago(6), createdAt: ago(6), floatSentAt: ago(6), proactive: { realmCheckAt: ago(6) } };
 const PASSED = { id: "mil", locationId: "LOC", contactId: "c1", address: "28422 Military Rd S, Federal Way, WA 98003", cashAmount: 165150,
   status: "passed", statusAt: ago(40), createdAt: ago(55), sends: [{ ts: ago(55) }], statusHistory: [{ status: "passed", ts: ago(40) }] };
 const sentText = (day, kind = "offer_nudge") => ({ id: `t${day}`, locationId: "LOC", contactId: "c1", status: "sent", inbound: "", reply: "…",

@@ -861,11 +861,21 @@ test("an older machine nudge nobody sent doesn't hold the next one", async () =>
 
 test("an offer nothing went out on is not nudged; a number floated by text is, from when it was floated", async () => {
   const unsent = anOffer({ id: "u1", status: "new", sends: [], statusAt: at(0), createdAt: at(0) });
-  const floated = anOffer({ id: "f1", contactId: "c2", address: "40 Oak Ave, Kent, WA", status: "new", sends: [], statusAt: at(0), createdAt: at(0), proactive: { realmCheckAt: at(1) } });
+  const floated = anOffer({ id: "f1", contactId: "c2", address: "40 Oak Ave, Kent, WA", status: "new", sends: [], statusAt: at(0), createdAt: at(0), floatSentAt: at(1), proactive: { realmCheckAt: at(1) } });
   const cfg = configWith();
   const list = await agentCandidates({ store: fakeStore({ offers: [unsent, floated] }), locationId: "LOC", config: cfg, now: T0 + 6 * DAY });
   assert.deepEqual(list.map((c) => c.offerId), ["f1"], "the unsent one is the float timer's");
   assert.equal(list[0].startedAt, at(1), "counted from the float, not from when it was priced");
+});
+
+// 2642 Olympic Dr (2026-10-21): we passed on the house by text, an underwrite
+// that had already started landed two minutes later and queued a float, and
+// her next reply superseded it. The queued float stamped realmCheckAt, so a
+// week on the nudge asked whether "that number I mentioned" was in the realm.
+test("a float a reply superseded is not followed up as a number we mentioned", async () => {
+  const queuedOnly = anOffer({ id: "q1", status: "new", sends: [], statusAt: at(0), createdAt: at(0), proactive: { realmCheckAt: at(0) } });
+  const list = await agentCandidates({ store: fakeStore({ offers: [queuedOnly] }), locationId: "LOC", config: configWith(), now: T0 + 8 * DAY });
+  assert.deepEqual(list, [], "nothing reached them, so there is nothing to nudge");
 });
 
 /* ---------- the whole book, a page at a time (2026-09-29) ---------- */

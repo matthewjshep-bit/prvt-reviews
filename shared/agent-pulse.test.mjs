@@ -293,7 +293,7 @@ test("an agent who said no to an open offer and never gave a number gets the che
   // They never answered; the nudges stand down on a no. Before 2026-10-09
   // "an open offer" held the agent for good with nothing coming.
   const floated = { id: "o-no", contactId: "a1", address: "2553 Mackenzie Rd, Bellingham, WA 98226", cashAmount: 338000, status: "new",
-    createdAt: ago(25), statusHistory: [], proactive: { realmCheckAt: ago(25) }, declinedOnce: { at: ago(24) } };
+    createdAt: ago(25), statusHistory: [], floatSentAt: ago(25), proactive: { realmCheckAt: ago(25) }, declinedOnce: { at: ago(24) } };
   const drafts = [
     { id: "d-float", status: "sent", outbound: { kind: "realm_check", offerId: "o-no" }, reply: "float", createdAt: ago(25), sentAt: ago(25) },
     { id: "d-no", status: "sent", inbound: "Seller won't go that low, thanks", intent: "rejection", reply: "What would they take?", createdAt: ago(24), sentAt: ago(24) },

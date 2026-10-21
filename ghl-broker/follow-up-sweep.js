@@ -144,8 +144,10 @@ export async function agentCandidates({ store, locationId, config, now = Date.no
     // check's own stamp, or floatSentAt, which a number texted in a plain
     // reply also carries (2026-10-16: an agent texted 377K that way went two
     // weeks with no nudge while the Offers column promised one).
+    // Not the realm check's stamp alone: that goes on when the float is
+    // queued, and a float a reply superseded never reached them (2026-10-21).
     const onPaper = paperWent(o);
-    const floatedAt = o.floatSentAt || o.proactive?.realmCheckAt || o.proactive?.takeCheckAt || null;
+    const floatedAt = o.floatSentAt || o.proactive?.takeCheckAt || null;
     if (!onPaper && !floatedAt && effectiveStatus(o) === "new") continue;
     // Count from the last time we actually put it in front of them.
     const startedAt = onPaper ? offerNudgeStart(o) : (floatedAt || offerNudgeStart(o));
