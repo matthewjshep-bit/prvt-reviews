@@ -1258,7 +1258,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                 <select className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
                   value={form.outreachAutopilot?.coverage || "counties"} onChange={(e) => setOutreachAuto("coverage")(e.target.value)}>
                   <option value="counties">One county at a time (a circle around each)</option>
-                  <option value="statewide">The whole state in one read, kept to these counties (best on a paid plan)</option>
+                  <option value="statewide">The whole state in one read, kept to these counties (best on a paid plan); a county in another state is read on its own</option>
                 </select>
                 <span className="mt-1 block text-xs text-slate-500">
                   The whole-state read asks RentCast for every listing in the state and files each one under its county, so neighbouring counties don't overlap and rural edges aren't missed. Each county's agents still land in their own batch.

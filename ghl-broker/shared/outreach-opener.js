@@ -231,12 +231,26 @@ export function homesText(homes = []) {
  */
 export function homeFor({ county = "", state = "", address = "" } = {}, opener = {}) {
   const homes = Array.isArray(opener.homes) ? opener.homes : DEFAULT_HOMES;
-  const st = stateAbbr(state) || parseUsAddress(address).state || stateFromCounty(county) || "WA";
+  const parsed = parseUsAddress(address);
   const c = countyName(county).toLowerCase();
+  // No state anywhere (a GHL follow-up carries RentCast's bare "Deschutes"
+  // and maybe a street-only address): a county line of ours that names it.
+  const st = stateAbbr(state) || parsed.state || stateFromCounty(county)
+    || (c && homes.find((h) => h.county && h.county.toLowerCase() === c && h.state !== "WA")?.state) || "WA";
   const byCounty = c && homes.find((h) => h.county && h.county.toLowerCase() === c && h.state === st);
+  // No county: a house in the town we say we're in is there (a Bend address
+  // is Bend, not "the rest of Oregon").
+  const town = String(parsed.city || "").toLowerCase();
+  const byTown = !c && town && homes.find((h) => h.state === st && h.home.toLowerCase() === town);
   const byState = homes.find((h) => !h.county && h.state === st);
-  return (byCounty || byState)?.home || cleanPlace(opener.home) || DEFAULT_HOME;
+  return (byCounty || byTown || byState)?.home || cleanPlace(opener.home) || DEFAULT_HOME;
 }
+
+// A "Seattle" Matt typed into his own text means where we are (2026-10-21):
+// his saved first text said "I'm in Seattle", so a Bend agent would have read
+// it. As {home}, a Seattle agent still reads Seattle and a Bend one Bend.
+const HOME_WORD_RX = new RegExp(`\\b${DEFAULT_HOME}\\b`, "g");
+export const withHomeBlank = (text) => String(text || "").replace(HOME_WORD_RX, "{home}");
 
 // The sweep's county key carries its state ("Deschutes, OR").
 function stateFromCounty(county) {

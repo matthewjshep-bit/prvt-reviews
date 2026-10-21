@@ -744,7 +744,53 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
 
   if (oa.coverage === "statewide" && oa.counties.length) {
     // One read of the state, filed county by county into each county's batch.
-    await readState({ oa, job, locationId, client, store, deps, now, left, querySig, pickFrom, beat });
+    // A county in another state (Deschutes, OR for Bend, 2026-10-21) is read
+    // after it by its own circle, as the "counties" coverage reads one — a
+    // whole second state for one county would be most of a lap's requests —
+    // and the state's read leaves a request for each.
+    const others = oa.counties.filter((c) => c.state !== oa.counties[0].state);
+    left -= await readState({ oa, job, locationId, client, store, deps, now, left: Math.max(1, left - others.length), querySig, pickFrom, beat });
+    if (others.length) {
+      // readState moved the state's place on the cursor: read it again, or
+      // saving a county's place below would put the old one back.
+      pages = (await store.getJobCursor?.(locationId, PAGES_CURSOR).catch(() => null))?.doc || pages || {};
+      if (pages.query !== querySig) pages = { ...pages, offsets: {}, totals: {} };
+    }
+    for (const county of others) {
+      if (left <= 0) {
+        job.warnings.push(`${county.county}, ${county.state}: no requests left this run — next run`);
+        continue;
+      }
+      const key = `${county.county}, ${county.state}`;
+      job.phase = "pulling";
+      job.county = key;
+      const query = { ...pullQuery(oa), ...keepTurnkeyFor(oa), county: county.county, state: county.state,
+        offset: Number(pages.offsets?.[key]) || 0, maxRequests: Math.max(1, left) };
+      const batchId = await autopilotBatchId({ store, locationId, market: key }).catch(() => undefined);
+      if (batchId) query.batchId = batchId;
+      let pull;
+      try {
+        pull = await deps.runPull(locationId, client, query, { maxRequestsCap: MAX_REQUESTS_PER_RUN });
+      } catch (e) {
+        const why = String(e?.message || e).slice(0, 120);
+        job.tried.push({ county: key, error: why });
+        job.warnings.push(`${key}: the pull failed (${why}) — moving on`);
+        continue;
+      }
+      const used = Number(pull.requestsUsed) || 0;
+      left -= used;
+      if (job.pull) job.pull.requestsUsed += used;
+      job.warnings.push(...(pull.warnings || []).filter((w) => !/^county filter kept [1-9]/.test(w)).slice(0, 6));
+      await beat();
+      const { rows, fresh } = await pickFrom(key, pull.batchId);
+      job.tried.push({ county: key, candidates: rows.length, picked: fresh.length, requestsUsed: used,
+        listings: Number(pull.listingsFetched) || 0, agentsNew: Number(pull.agentsNew) || 0 });
+      await savePages({
+        ...pages,
+        offsets: { ...(pages.offsets || {}), [key]: Number(pull.nextOffset) || 0 },
+        totals: { ...(pages.totals || {}), [key]: pull.totalCount ?? null },
+      });
+    }
   } else for (let attempt = 0; attempt < n; attempt++) {
     // Stop before a pull, not after it: a run with nothing left spends nothing.
     if (attempt > 0 && (left <= 0 || pickedTotal >= wanted)) break;
@@ -896,11 +942,9 @@ export const STATEWIDE_STEP_BACK = 50;
  * the end starts over the next run.
  */
 async function readState({ oa, job, locationId, client, store, deps, now, left, querySig, pickFrom, beat }) {
+  // The first county's state. Counties in other states are the caller's.
   const state = oa.counties[0].state;
   const counties = oa.counties.filter((c) => c.state === state);
-  if (counties.length < oa.counties.length) {
-    job.warnings.push(`statewide reads one state (${state}); ${oa.counties.length - counties.length} county(ies) in other states were left out`);
-  }
   const cursor = (await store.getJobCursor?.(locationId, PAGES_CURSOR).catch(() => null))?.doc || {};
   const place = cursor.statewide?.query === querySig ? cursor.statewide : {};
   const saved = Number(place.offset) || 0;

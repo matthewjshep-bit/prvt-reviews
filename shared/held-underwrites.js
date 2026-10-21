@@ -535,12 +535,20 @@ export function cityOf(address = "") {
   return city;
 }
 
-/** outsideArea(address, knownCities) → true only when the parser is sure: another state, or a WA town we don't know. */
+// The towns we buy in outside Washington, by state (2026-10-21, Matt: "start
+// going into the Bend market"): Bend and the Central Oregon towns around it
+// that the first text calls Bend (Deschutes, Crook and Jefferson counties).
+export const TOWNS_OUTSIDE_WA = {
+  OR: ["bend", "redmond", "sisters", "sunriver", "la-pine", "tumalo", "terrebonne", "deschutes-river-woods", "three-rivers",
+    "prineville", "powell-butte", "madras", "culver", "metolius", "crooked-river-ranch"],
+};
+
+/** outsideArea(address, knownCities) → true only when the parser is sure: another state's town we don't buy in, or a WA town we don't know. */
 export function outsideArea(address = "", knownCities = null) {
   if (!knownCities) return false;
   const p = parseUsAddress(address);
   const state = String(p.state || "").toUpperCase();
-  if (state && state !== "WA") return true;
+  if (state && state !== "WA") return !(TOWNS_OUTSIDE_WA[state] || []).includes(cityOf(address));
   const city = cityOf(address);
   return Boolean(city) && !knownCities.has(city);
 }

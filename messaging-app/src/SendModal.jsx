@@ -7,6 +7,7 @@ import React, { useEffect, useState } from "react";
 import { ArrowLeft, Check, FileText, Link2, Loader2, Mail, MessageSquare, Send, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { offerMath, mathSentence } from "@shared/offer-breakdown.js";
+import { offerForms } from "@shared/us-address.js";
 import { createOfferPage, getContactDetail, listOfferPages, sendOffer } from "./api.js";
 import { defaultAgentNote } from "./OfferPageModal.jsx";
 import { BTN } from "./ui.jsx";
@@ -39,7 +40,7 @@ export const defaultSendMessage = (offer) => {
   const pricing = pricingLine(offer);
   return `Hi ${(offer.contactName || "").split(" ")[0] || "there"}, here's our letter of intent on ` +
     `${offer.address || "your property"} — ${fmtMoney(offer.cashAmount)} cash, as-is, close on your timeline ` +
-    `(attached).${pricing ? ` ${pricing}` : ""} If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?`;
+    `(attached).${pricing ? ` ${pricing}` : ""} If the seller's open to it, could you represent us and write it up on ${offerForms(offer.address)} forms for us to sign?`;
 };
 
 // The offer-page link rides at the end of the message rather than as a

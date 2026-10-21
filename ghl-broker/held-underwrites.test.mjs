@@ -145,6 +145,22 @@ test("a house that isn't single-family, or outside the towns we buy in, is passe
   assert.ok(r.acted.every((a) => /told them/.test(a.reason)), r.acted.map((a) => a.reason).join(" | "));
 });
 
+// 2026-10-21 (Matt: "start going into the Bend market"): any address outside
+// Washington read as outside the area, so the first held Bend house would
+// have been passed that night and the agent told "outside the area we buy in".
+test("a held Bend house isn't passed as outside the area, and a town elsewhere in Oregon still is", async () => {
+  const bend = held({ id: "bend", contactId: "c2", address: "61 NW Wall St, Bend, OR 97703", createdAt: ago(1), updatedAt: ago(1),
+    autoUnderwrite: { jobId: "j4", held: ["\"61 NW Wall St, Bend, OR 97703\" could only be placed at the centre of its city — the comp search is centred on a guess"], finishedAt: ago(1) } });
+  const medford = held({ id: "med", contactId: "c3", address: "10 Main St, Medford, OR 97501", createdAt: ago(1), updatedAt: ago(1),
+    autoUnderwrite: { jobId: "j5", held: ["\"10 Main St, Medford, OR 97501\" could only be placed at the centre of its city — the comp search is centred on a guess"], finishedAt: ago(1) } });
+  const store = fakeStore({ offers: [bend, medford] });
+  const d = deps();
+  await run(store, fakeClient(), d);
+  assert.notEqual(store.book.get("bend").status, "we_passed");
+  assert.ok(!d.calls.some((c) => c[0] === "proactive" && c[1] === "c2"), "the Bend agent isn't told it's outside our area");
+  assert.equal(store.book.get("med").status, "we_passed");
+});
+
 test("an ask already made isn't claimed again every night: an answer without a number is a call, silence a dated wait", async () => {
   // 3228 S 164th St (2026-10-05): "claimed" night after night, nothing sent,
   // and the Desk said the machine was on it.

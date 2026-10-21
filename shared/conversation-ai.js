@@ -404,7 +404,9 @@ export const AGENT_PAPER_RULE =
   "Never just say 'sounds good' or ask for a phone number as if the write-up were sorted. " +
   // 2026-10-15: only a number Matt approved goes to a write-up.
   "A house the offer book marks NOT APPROVED: don't ask them to write it up, use NWMLS forms or represent us on it yet — " +
-  "say you'll confirm the number on our side today and come right back.";
+  "say you'll confirm the number on our side today and come right back. " +
+  // 2026-10-21: the Bend market. Oregon agents write offers on OREF forms.
+  "A house in Oregon is written up on OREF forms, not NWMLS: wherever these rules say NWMLS, an Oregon house's are OREF.";
 
 // The bot only writes words; the app sends things. A text that says a thing
 // was done when it wasn't is the worst text it can write (Lee Dedinsky,

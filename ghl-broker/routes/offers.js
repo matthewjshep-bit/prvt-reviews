@@ -100,7 +100,7 @@ import {
   DEFAULT_CONTRACT_CLAUSES, DEFAULT_ASSIGNMENT_CLAUSES, ASSIGNMENT_TOKENS, ASSIGNMENT_PREAMBLE,
 } from "../shared/contract-template.js";
 import { fetchListingPhotos, fetchZillowPhotos, fetchZillowFacts, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
-import { addressKey, addressQueryVariants, zillowUrl, zillowLookupForms, sameStreet } from "../shared/us-address.js";
+import { addressKey, addressQueryVariants, zillowUrl, zillowLookupForms, sameStreet, offerForms } from "../shared/us-address.js";
 import { pullComps } from "../comps-pull.js";
 import { geocodeAddress } from "../geocode.js";
 import { pullZillowComps, pullZillowActives, mergeFacts, streetKey } from "../comps-zillow.js";
@@ -7235,10 +7235,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const text = message || (template === "for_record"
         ? `Hi ${firstName}, sending our written offer on ${offer.address || "your property"} over so you have it on file — ` +
           `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          (askWriteUp ? ` If the seller's open to it, we'd be glad to have you represent us and write it up on NWMLS forms.` : ` Happy to answer any questions.`)
+          (askWriteUp ? ` If the seller's open to it, we'd be glad to have you represent us and write it up on ${offerForms(offer.address)} forms.` : ` Happy to answer any questions.`)
         : `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
           `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          (askWriteUp ? ` If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign?` : ` Let me know what the seller thinks.`));
+          (askWriteUp ? ` If the seller's open to it, could you represent us and write it up on ${offerForms(offer.address)} forms for us to sign?` : ` Let me know what the seller thinks.`));
 
       // The agent page — our arithmetic, the comps, the scope and what the
       // seller nets, at one link. An operator's message already carries it
@@ -7277,7 +7277,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ...(message ? [] : [
           `<p>Please find our letter of intent on <strong>${esc(offer.address || "your property")}</strong> attached — ` +
           `<strong>${esc(fmtMoney(offer.cashAmount))}</strong>, as-is, close on your timeline. ` +
-          `${askWriteUp ? "If the seller's open to it, could you represent us and write it up on NWMLS forms for us to sign? " : ""}Happy to answer any questions.</p>`,
+          `${askWriteUp ? `If the seller's open to it, could you represent us and write it up on ${offerForms(offer.address)} forms for us to sign? ` : ""}Happy to answer any questions.</p>`,
           // One set of terms (2026-10-15): what the bot tells an agent who
           // writes it up — earnest, inspection, funding, close, the buyer's
           // name — in the email too. Never in the text: "hard money" and

@@ -150,6 +150,7 @@ export const METRO_CIRCLES = {
   "53035": { lat: 47.60, lng: -122.65, radiusMi: 12 },   // Kitsap: Bremerton, Silverdale, Port Orchard, Poulsbo
   "53067": { lat: 47.02, lng: -122.87, radiusMi: 12 },   // Thurston: Olympia, Lacey, Tumwater
   "53063": { lat: 47.66, lng: -117.35, radiusMi: 14 },   // Spokane: Spokane, Spokane Valley, Liberty Lake
+  "41017": { lat: 44.058, lng: -121.315, radiusMi: 10 }, // Deschutes, OR: Bend and its edges (Tumalo, Deschutes River Woods) — Matt, 2026-10-21: 10 miles from Bend
 };
 
 const RENTCAST_BASE = process.env.RENTCAST_BASE_URL || "https://api.rentcast.io/v1";
