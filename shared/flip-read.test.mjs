@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { flipRead, qualifyStep, QUALIFY_ASKS, QUALIFY_ASK_RX, QUALIFY_PASSES, broughtStep, saysCosmeticOnly, workBudgetIn, saysRealWork } from "./flip-read.js";
+import { flipRead, qualifyStep, QUALIFY_ASKS, QUALIFY_ASK_RX, QUALIFY_PASSES, broughtStep, saysCosmeticOnly, workBudgetIn, saysRealWork, asksTheirRehab } from "./flip-read.js";
 
 // The kinds of answer to our first text that, on 2026-10-08, each started an
 // underwrite (paraphrased); the vague ones should have bought one question.
@@ -244,4 +244,45 @@ test("'wouldn't need work' and paint touch-ups are light work, not their word th
   assert.equal(saysCosmeticOnly(said), true);
   for (const t of ["it doesn't need work", "won't need any repairs, just touch-ups", "does not need work"]) assert.equal(saysRealWork(t), false, t);
   assert.equal(saysRealWork("it needs work"), true, "the plain word still counts");
+});
+
+// Matt, 2026-10-21: "we keep asking the agents how much rehab it needs" — and
+// they push back, "you're the flipper, do the analysis yourself". These went
+// out to agents on 10-19 to 10-21 after they had already told us the work.
+test("asking an agent what the work would run or what it's worth fixed up is caught", () => {
+  for (const said of [
+    "What's your read on what it's worth fixed up, and roughly what the kitchen and bath work would run?",
+    "While you're checking, any rough number on what you'd budget for that work list?",
+    "What do you think it's worth fixed up, and what would you budget for that work?",
+    "What's your read on value fixed up and the work it'd need?",
+    "I'd rather run the numbers first before touring so we don't waste your time, what's the condition and work it needs, and what's the seller's situation?",
+    "Whenever you land on a number, what do you think it's worth fixed up and what you'd budget for the work?",
+    "What specific work does it need, and what's your read on value fixed up versus repair budget?",
+    "Got it. What do you think it's worth fixed up, and roughly what would the roof/siding/deck run?",
+    "Still want your take on it though, what do you think it's worth fixed up and what would you budget for the rehab?",
+    "Thanks. What's your read on what the work would run on Windy Beach?",
+    "What kind of shape is it in, and what's your read on value fixed up versus what the work would run?",
+    "I'm thinking 531K ARV and 98K+ of rehab on it, what's your read on the work it needs?",
+    "What's the work it needs, and what's the seller's timeline looking like?",
+    "What's your read on where it sells once those cosmetics are done, and roughly what they'd run?",
+    "What's your read on what's left to finish and what it'll sell for once it's done?",
+    "Just your gut sense, what's it worth fixed up and ballpark for roof and electrical?",
+    "What's your ARV on it?",
+    "Just did a quick underwrite on 12 Elm. I'm thinking 850K After Repair Value and 200K+ of rehab. What do you think?",
+  ]) assert.equal(asksTheirRehab(said), true, said);
+});
+
+test("the one gut-check question, our own read, and seller questions are not asking for their rehab", () => {
+  for (const said of [
+    ...QUALIFY_ASKS, ...QUALIFY_ASKS_CALL,
+    "Just ran a quick underwrite, I'm seeing it around 520K fixed up with 90K+ of work. What's the seller hoping to get?",
+    "Thanks, I'll run the numbers on it. What's the seller hoping to get?",
+    "Got it. What's the seller's timeline looking like?",
+    "Any chance of a few more photos or a quick walkthrough video?",
+    "Anything I won't see in the photos, like roof, foundation, water or septic?",
+    "We base it on 69% of the 500k it's worth fixed up, less 50k of rehab work. If that's in the ballpark, any other offers in on it yet?",
+    "If you've got other fixers on your radar, on or off-market, I'm all ears.",
+    "Roof and siding, got it. I'll run the numbers and get back to you.",
+    "Landing around 410 as-is. What do you think, is that in the realm for the seller?",
+  ]) assert.equal(asksTheirRehab(said), false, said);
 });

@@ -418,17 +418,18 @@ function triageCore({
     if (alive) return { ...base, action: "ask", needs: ["address"], reason: `${clip(miss)} — ask them to confirm the street address` };
   }
 
-  /* --- 3c. draft only: ask their read once, then it's Matt's (2026-10-20) --- */
-  // No Today: until he prices it, nothing texted the agent at all. Their read
-  // (what it's worth done, what it needs, what the seller would take) is for
-  // him to price with; the machine never prices from it.
+  /* --- 3c. draft only: ask the seller's number once, then it's Matt's (2026-10-20) --- */
+  // No Today: until he prices it, nothing texted the agent at all. What the
+  // seller would take is for him to price with; the machine never prices
+  // from it. Their value and the work were asked too until 2026-10-21 — we
+  // run our own numbers (Matt).
   if (draftOnly) {
-    if (asked != null) return { ...base, action: "yours", needs: [], reason: "asked for their read — waiting on your number" };
+    if (asked != null) return { ...base, action: "yours", needs: [], reason: "asked what the seller would take — waiting on your number" };
     const live = (lastIn != null && now - lastIn <= ALIVE_DAYS * DAY_MS) || heldDays <= 3;
     if (!live) return { ...base, action: "yours", needs: [], reason: `they haven't written in ${Math.floor((now - (lastIn ?? heldAt)) / DAY_MS)} days — waiting on your number` };
     const promised = drafts.some((d) => d?.outbound?.kind === "promise_due" && aboutThisHouse(d.propertyAddress) && now - (ms(d.createdAt) ?? 0) <= PROMISE_ASK_DAYS * DAY_MS && d.status !== "dismissed");
     if (promised) return { ...base, action: "wait", needs: [], reason: "the promise sweep just told them" };
-    return { ...base, action: "ask", needs: ["value", "work", "take"], reason: "ready for your comps — ask the agent's read so you have it" };
+    return { ...base, action: "ask", needs: ["take"], reason: "ready for your comps — ask what the seller would take so you have it" };
   }
 
   /* --- 4. re-run on their numbers --- */

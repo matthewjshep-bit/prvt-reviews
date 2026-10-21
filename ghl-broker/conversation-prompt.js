@@ -192,10 +192,11 @@ const OFF_MARKET_AGENT =
 // visitors, an estate, a POA. We asked for the address and
 // promised not to approach the seller, asked what they thought it was worth
 // fixed up and what it needed, and asked the seller's situation and timing.
+// Since 2026-10-21 (Matt: we run our own numbers) only the seller's side.
 const AGENT_BROUGHT =
   "A HOUSE THEY BRING US (not the one our first text named): that is the lead. Get the address if they haven't given it, and " +
   "say plainly we won't approach, drive by or bother the seller without their say-so — sellers behind these houses often want " +
-  "it quiet. Ask what they think it's worth fixed up and what it needs, and the seller's situation and timing. Keep it to one " +
+  "it quiet. Say we'll run the numbers, and ask the seller's situation and timing; never what it's worth fixed up or what the work would run. Keep it to one " +
   "or two short texts; Matt calls them next. SEVERAL HOUSES IN ONE TEXT: every one is a lead. Ask for the exact address of " +
   "each one they gave without a house number, in the same text (\"what are the addresses on the Pine St one and the Alder St " +
   "triplex?\"), and list every one in houses. Never answer them as if they were still talking about the house our first " +
@@ -500,8 +501,9 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
 /* ---------- messages the bot STARTS ---------- */
 
 // The instruction block for a message with no inbound to answer. Two families:
-// the anchor pair (take_check draws out their read, realm_check gives a price
-// once we have it) and the follow-up nudges from the clock.
+// the anchor pair (take_check floats our read and asks the seller's number on
+// a listed house, realm_check gives a price) and the follow-up nudges from
+// the clock.
 //
 // Every one of them says "reference the thread so it reads as a continuation",
 // because the failure mode of an unprompted text is sounding like a broadcast.
@@ -651,23 +653,14 @@ function openingFor(outbound) {
   const o = outbound;
   switch (o.kind) {
     case "take_check":
-      // A listed house (listedFirst, 2026-10-15): our read, then the one
-      // question is what the seller is hoping to get — never their read too.
-      if (o.askSeller) {
-        return `${START} We just ran a quick underwrite on ${o.address}: ` +
-          `${[o.arvText ? `ARV ${o.arvText}` : "", o.rehabText ? `rehab about ${o.rehabText}` : ""].filter(Boolean).join(", ")}. ` +
-          `Say so lightly and float those two as YOUR read, the way a colleague would (e.g. "I'm seeing it around ${o.arvK || "…"} fixed up with ${o.rehabK || "…"}+ of work"), ` +
-          `then ask exactly one question: "${o.sellerQuestion || "what's the seller hoping to get?"}" — one question mark in the whole text, written like a text, no dollar signs. ` +
-          `Do NOT mention an offer, a purchase price, or what we'd pay, and do NOT ask what they think it's worth. ${CONTINUE} ` +
-          `Set intent to take_check.`;
-      }
+      // Our read, then the one question is what the seller is hoping to get
+      // (listedFirst, 2026-10-15). Until 2026-10-21 it could instead ask
+      // "what do you think?" of our ARV and rehab; we run our own numbers.
       return `${START} We just ran a quick underwrite on ${o.address}: ` +
         `${[o.arvText ? `ARV ${o.arvText}` : "", o.rehabText ? `rehab about ${o.rehabText}` : ""].filter(Boolean).join(", ")}. ` +
-        `Say so lightly ("just did a quick underwrite") and float those two as YOUR read, in one question, the way a ` +
-        `colleague would — either "I'm thinking ${o.arvK || "…"} After Repair Value and ${o.rehabK || "…"}+ of rehab. What do you think?" ` +
-        `or "we'd likely have to do ${o.rehabK || "…"} in rehab and I'm seeing the ARV in the area around ${o.arvK || "…"}, what do you think?" ` +
-        `(written like a text — no dollar signs). ` +
-        `Do NOT mention an offer, a purchase price, or what we'd pay — this is a read, not a number. ${CONTINUE} ` +
+        `Say so lightly and float those two as YOUR read, the way a colleague would (e.g. "I'm seeing it around ${o.arvK || "…"} fixed up with ${o.rehabK || "…"}+ of work"), ` +
+        `then ask exactly one question: "${o.sellerQuestion || "what's the seller hoping to get?"}" — one question mark in the whole text, written like a text, no dollar signs. ` +
+        `Do NOT mention an offer, a purchase price, or what we'd pay, and do NOT ask what they think it's worth or what the work would run. ${CONTINUE} ` +
         `Set intent to take_check.`;
 
     // The price, at last — and the whole job of this block is to stop it
@@ -854,7 +847,7 @@ function openingFor(outbound) {
       }
       return `${START} We looked at ${o.address} for this agent and we're passing on it: ` +
         (o.why === "area" ? "it's outside the area we buy in."
-          : o.why === "numbers" ? "we couldn't get to a number we'd stand behind — not enough to go on to price it (we asked them for their read and didn't get a number)."
+          : o.why === "numbers" ? "we couldn't get to a number we'd stand behind — not enough to go on to price it."
           : o.why === "rural" ? `it's a rural property${/sits on [\d.]+ acres/.test(o.heldReason || "") ? ` — it ${o.heldReason.match(/sits on [\d.]+ acres/)[0]}` : ""}, and we can't do rural — our buyers want houses on under 2 acres, where there are sales nearby to compare them to.`
           : o.why === "manufactured" ? "it's a mobile or manufactured home, and we don't buy those."
           // A listed house where ours would be far under the seller's number
@@ -875,19 +868,12 @@ function openingFor(outbound) {
           `ask them to confirm the full street address (street name and city) so we can pull it up. Ask for nothing else. Do NOT name ` +
           `any number, and do NOT apologise. ${CONTINUE} Set intent to take_ask.`;
       }
-      const asks = [o.needValue ? "what they figure it's worth once it's fixed up" : "", o.needWork ? "what the work would run" : "",
-        o.needTake ? "what the seller would take" : ""].filter(Boolean).join(o.needTake ? ", " : " and ");
-      // Draft only (2026-10-20): nothing is stuck — Matt prices it himself,
-      // and their read is what he prices with.
-      if (o.needTake) {
-        return `${START} ${heldInPlainWords(o.heldReason).replace(/^./, (c) => c.toUpperCase())} on ${o.address}. In one or two lines say so, ` +
-          `then ask ${asks} — their read helps him get it right. Ask for nothing else. Do NOT name any number, range or percentage of ours, ` +
-          `do NOT promise a time, and do NOT apologise. ${CONTINUE} Set intent to take_ask.`;
-      }
-      return `${START} We're running numbers on ${o.address} for this agent and they're stuck${o.heldReason ? ` (${o.heldReason})` : ""}. ` +
-        `In one or two lines say ${heldInPlainWords(o.heldReason)} and you want to get it right, then ask ${asks || "what they figure it's worth fixed up and what the work would run"} ` +
-        `— their read lets us finish it. Ask for nothing else. Do NOT name any number, range or percentage of ours, ` +
-        `do NOT promise a time, and do NOT apologise. ${CONTINUE} Set intent to take_ask.`;
+      // Draft only (2026-10-20): Matt prices it himself, and what the seller
+      // would take is what he prices against. Until 2026-10-21 this asked
+      // their value and the work too; we run our own numbers.
+      return `${START} ${heldInPlainWords(o.heldReason).replace(/^./, (c) => c.toUpperCase())} on ${o.address}. In one or two lines say so, ` +
+        `then ask what the seller would take. Ask for nothing else: never what it's worth fixed up or what the work would run. ` +
+        `Do NOT name any number, range or percentage of ours, do NOT promise a time, and do NOT apologise. ${CONTINUE} Set intent to take_ask.`;
     }
 
     // The nudges. They introduce NO number — the money guard would flag one
@@ -897,11 +883,11 @@ function openingFor(outbound) {
     // "the offer we sent".
     case "offer_nudge": {
       const what = o.went === "number" ? `We floated a rough number on ${o.address} by text (nothing in writing yet)`
-        : o.went === "read" ? `We shared our read on ${o.address} (what it's worth fixed up and what the work runs) and asked for theirs`
+        : o.went === "read" ? `We shared our read on ${o.address} (what it's worth fixed up and what the work runs)`
         : `We sent this agent an offer on ${o.address}`;
       const it = o.went === "number" ? "the number we floated" : o.went === "read" ? "what we shared" : "the offer we sent";
       const asks = o.went === "number" ? "whether it's in the realm for the seller, or where it stands"
-        : o.went === "read" ? "what they think it's worth and what the work would run"
+        : o.went === "read" ? "what the seller is hoping to get, or where it stands"
         : "whether they got it, whether the seller has seen it, or where it stands";
       return `${START} ${what} and they haven't answered. ` +
         `${nudgePressure(o)} Check in on it in one or two lines. You may refer to ${it}, but do NOT ` +
@@ -1169,8 +1155,8 @@ function openingFor(outbound) {
         `on ${o.address}${o.promisedText ? ` ("${o.promisedText}")` : ""}, and nothing has gone out yet. Keep our word in one or two ` +
         `lines, owning the delay plainly without making excuses. ` +
         (o.heldReason
-          ? `Our numbers are stuck (${o.heldReason}), so say ${heldInPlainWords(o.heldReason)} and you want to get it right, and ask what they ` +
-            `figure it's worth once it's done and what the work would run — their read lets us finish it. `
+          ? `Our numbers are stuck (${o.heldReason}), so say ${heldInPlainWords(o.heldReason)} and you want to get it right, and ask what the ` +
+            `seller would take. Never ask what it's worth fixed up or what the work would run: we run our own numbers. `
           : o.running
             ? `The numbers are still running; say you'll have them shortly. `
             : `Say you're still on it and ask the one question that would help most. `) +

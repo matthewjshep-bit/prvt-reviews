@@ -21,8 +21,8 @@ import { dealNumbers } from "./dataroom.js";
 import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
-import { addressKey as propertyKey, offerForms } from "./shared/us-address.js";
-import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor, liveRange, rangeWords } from "./shared/current-offer.js";
+import { offerForms } from "./shared/us-address.js";
+import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, liveRange, rangeWords } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { emailContextText } from "./shared/gmail.js";
 import { housesAwaitingAddress } from "./shared/mentioned-houses.js";
@@ -374,7 +374,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     const core = dossier.asks.filter((f) => f.priority === "core");
     const nice = dossier.missing.filter((f) => f.priority !== "core");
     dossierText = `WHAT WE HAVE ON ${subject}:\n${haveLines.join("\n")}` +
-      (core.length ? `\nSTILL MISSING (ask for ONE of these, the most useful next): ${core.map((f) => f.ask).join("; ")}` : "\nNothing we need is missing — it's ready for underwriting.") +
+      (core.length ? `\nSTILL MISSING (ask for ONE of these, the most useful next): ${core.map((f) => f.ask).join("; ")}` : "\nNothing we need is missing — it's ready for our numbers.") +
       (nice.length ? `\nDON'T ASK, BUT FILE IF THEY SAY IT: ${nice.map((f) => f.ask).join("; ")}` : "");
   } else if (subject) {
     const seen = new Set();
@@ -382,27 +382,12 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     dossierText = `WHAT WE HAVE ON ${subject}: nothing yet.\nSTILL MISSING (ask for ONE of these, the most useful next): ${coreAsks.map((f) => f.ask).join("; ")}` +
       `\nDON'T ASK, BUT FILE IF THEY SAY IT: ${PROPERTY_DETAIL_FIELDS.filter((f) => f.priority !== "core").map((f) => f.ask).join("; ")}`;
   }
-  // Our own underwrite on the subject, when there is one and we don't yet
-  // have their take: the bot leads with ours to get theirs, the way Matt
-  // does — "I'm thinking $850K ARV and $200K+ of rehab. What do you think?"
-  // The two figures are allowed in the reply for exactly this; they are
-  // never an offer.
-  if (subject && dossier && !dossier.have.arv && !dossier.have.rehab) {
-    // The current offer's figures when it carries them; a draft (a held
-    // underwrite) on the same house otherwise.
-    const figures = (o) => Number(o?.arv) > 0 || Number(o?.repairs) > 0;
-    const cur = currentOfferFor(offers || [], { address: subject });
-    const mine = (figures(cur) ? cur : null) ||
-      (offers || []).find((o) => o?.address && propertyKey(o.address) === propertyKey(subject) && figures(o));
-    if (mine) {
-      const arv = Math.round(Number(mine.arv) || 0);
-      const rehab = Math.round(Number(mine.repairs) || 0);
-      if (arv) amounts.add(arv);
-      if (rehab) amounts.add(rehab);
-      const k = (n) => `${Math.round(n / 1000)}K`;   // no dollar sign in a text
-      dossierText += `\nOUR UNDERWRITE ON IT: ${[arv ? `ARV ${fmtMoney(arv)}` : "", rehab ? `rehab about ${fmtMoney(rehab)}` : ""].filter(Boolean).join(", ")}. ` +
-        `To get their take, lead with ours as an opinion, in one question: "I'm thinking ${arv ? `${k(arv)} After Repair Value` : "…"}${arv && rehab ? " and " : ""}${rehab ? `${k(rehab)}+ of rehab` : ""}. What do you think?" — this is not an offer and must not read as one.`;
-    }
+  // We run our own numbers (Matt, 2026-10-21). Until then this block also
+  // handed the model our ARV and rehab to float — "I'm thinking 850K ARV and
+  // 200K+ of rehab. What do you think?" — to draw out theirs.
+  if (subject) {
+    dossierText += `\nNEVER ASK THEM what it's worth fixed up, what the work would run, or what work it needs: we run our own numbers ` +
+      `(agents push back, "you're the flipper"). The one gut check, big-ticket work or a refresh, is all we ask about the work.`;
   }
 
   // Houses they named with no number yet (2026-10-13: a street name and a
@@ -429,7 +414,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
         (showMath
           ? "If they ask how we got there or push on the number, follow the MATH rule: walk them through the [our math] line beside it (never a figure on profit and risk, never how we exit). "
           : "Don't explain how we got there (ARV, repairs, fees). ") +
-        "Don't volunteer it before you have their own read unless they ask. " +
+        "Don't volunteer it unless they ask: the float brings it up on its own. " +
         "An offer marked SENT is on paper: if they ask for the number or the terms, restate it " +
         "from this list. It stands until they answer: never say it expired or lapsed, and if they ask whether it's " +
         "still good, it is. Rules against quoting numbers are about numbers we don't have; these we do. Never promise " +

@@ -144,8 +144,9 @@ test("a promised number on a house with no square footage still goes out as a ro
   assert.ok(!(o.autoUnderwrite.held || []).length, "a priced offer, not a held draft");
   assert.equal(floated.length, 1, "the float hook ran");
 
-  // It floats as a rough range with their read asked for — even with the
-  // take check switched on, which would otherwise go first.
+  // It floats as a rough range asking what the seller is hoping to get — even
+  // with the take check switched on. Never their read (Matt, 2026-10-21: we
+  // run our own numbers).
   const cfg = starterConfig();
   cfg.parties.agent.takeCheck = { enabled: true };
   cfg.parties.agent.realmCheck = { ...cfg.parties.agent.realmCheck, enabled: true, range: { enabled: false, pct: 5 }, setupQuestion: { enabled: false, ask: ["other_offers"] } };
@@ -156,7 +157,7 @@ test("a promised number on a house with no square footage still goes out as a ro
   const d = outboundDescriptor({ kind: "realm_check", offer: o, saved, dossier: null });
   assert.equal(d.confident, false, "the ROUGH wording, not the confident one");
   assert.ok(d.range && d.range.high <= o.cashAmount, "a range topped by our number");
-  assert.equal(d.question?.key, "their_read");
+  assert.equal(d.question?.key, "seller_number");
   assert.ok(!d.math, "no math on a rough number");
 });
 

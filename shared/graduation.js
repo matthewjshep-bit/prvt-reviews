@@ -160,7 +160,7 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
         fo ? "" : "the first text is a GHL workflow template, not the bot", party));
       const rc = pb.realmCheck?.enabled, tc = pb.takeCheck?.enabled;
       out.push(sw("take_check", "Float our read", !tc ? "off" : allow.includes("take_check") && canSend ? "on" : "drafting",
-        tc ? "" : "asks the agent for their ARV and rehab before our price", party));
+        tc ? "" : "floats our read and asks what the seller is hoping to get", party));
       out.push(sw("realm_check", "Realm check", !rc ? "off" : allow.includes("realm_check") && canSend ? "on" : "drafting",
         rc ? "" : "floats the cash number before the formal offer", party));
       const band = pb.counterBand || {};

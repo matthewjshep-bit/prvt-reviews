@@ -635,16 +635,21 @@ test("the first text on a listed house floats our read and asks only what the se
   assert.equal(o.askSeller, true);
   const t = outboundOpening(o);
   assert.match(t, /"what's the seller hoping to get\?"/);
-  assert.match(t, /do NOT ask what they think it's worth/);
+  assert.match(t, /do NOT ask what they think it's worth or what the work would run/);
   assert.match(t, /Do NOT mention an offer, a purchase price/);
+  // Since 2026-10-21 every take check asks this, never "what do you think?" of our read.
   const plain = outboundOpening(outboundDescriptor({ kind: "take_check", offer, saved: {}, subject: { address: offer.address } }));
-  assert.doesNotMatch(plain, /seller hoping/, "without the ask, the take check is as before");
+  assert.match(plain, /"what's the seller hoping to get\?"/);
+  assert.doesNotMatch(plain, /What do you think\?/);
+  const said = outboundDescriptor({ kind: "take_check", offer, saved: {}, subject: { address: offer.address }, dossier: { have: { sellerAsk: { value: 450000 } } } });
+  assert.match(outboundOpening(said), /"what's the seller's timeline looking like\?"/, "a seller's number they gave isn't asked again");
 });
 
-test("when an agent brings us a house, the bot gets the address with a promise not to bother the seller, and their read on value and work", () => {
+test("when an agent brings us a house, the bot gets the address with a promise not to bother the seller, and asks the seller's side, never their rehab", () => {
   const sys = buildSystemPrompt({ config: null, party: "agent", channel: "sms" });
   assert.match(sys, /A HOUSE THEY BRING US[^]*won't approach, drive by or bother the seller/);
-  assert.match(sys, /worth fixed up and what it needs, and the seller's situation and timing/);
+  assert.match(sys, /Say we'll run the numbers, and ask the seller's situation and timing; never what it's worth fixed up or what the work would run/);
+  assert.doesNotMatch(sys, /THEIR TAKE: get the agent's OWN read/, "the default playbook doesn't ask for it either");
   assert.doesNotMatch(buildSystemPrompt({ config: null, party: "investor", channel: "sms" }), /A HOUSE THEY BRING US/);
 });
 
