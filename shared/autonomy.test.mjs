@@ -9,7 +9,7 @@ import { kindsFor } from "./follow-up.js";
 const starter = () => ({
   conversationAi: starterConfig({ signer: "Matt", workflows: [] }),
   outreachAutopilot: { enabled: false, dailyCap: 7, firstTouch: "app" },
-  dispoAutopilot: { sendWith: "app", spreadSec: 90, autoBlastCount: 10 },
+  dispoAutopilot: { sendWith: "app", spreadSec: 90, blastLink: "on_reply" },
   apifyToken: "keep-me",
 });
 
@@ -26,7 +26,7 @@ test("applying a mode keeps everything that is not a switch", () => {
   assert.equal(out.apifyToken, "keep-me");
   assert.equal(out.outreachAutopilot.dailyCap, 7);
   assert.equal(out.dispoAutopilot.spreadSec, 90);
-  assert.equal(out.dispoAutopilot.autoBlastCount, 10);
+  assert.equal(out.dispoAutopilot.blastLink, "on_reply");
   const a = out.conversationAi.parties.agent;
   assert.equal(a.instructions, before.conversationAi.parties.agent.instructions);
   assert.deepEqual(Object.keys(a.intentRules), Object.keys(before.conversationAi.parties.agent.intentRules));

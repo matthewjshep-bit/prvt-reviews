@@ -28,6 +28,10 @@ import DispoCharts from "./DispoCharts.jsx";
 
 const TIER_CLS = { vip: "bg-violet-100 text-violet-800", active: "bg-emerald-100 text-emerald-800", cold: "bg-slate-100 text-slate-500" };
 const LIVE_DEAL = new Set(["under_contract", "buyer_found", "assigned"]);
+// Who a deal goes to on its own (shared/buyer-score.js pickDealBuyers, Matt
+// 2026-10-21): buys in its area, nothing they said rules it out, not sent it yet.
+const buysThere = (r) => Boolean(r.rankParts?.areaFit) && !r.rankParts.priceOut && !((r.rankParts.box || 0) < 0)
+  && !r.rankParts.typeRefused && !r.rankParts.dealbreaker && !r.alreadyBlasted;
 
 function TierBadge({ inv }) {
   if (!inv?.tier) return null;
@@ -774,9 +778,9 @@ export default function Dispositions() {
               </span>
               <div className="ml-auto flex gap-1.5">
                 <button type="button" className={BTN}
-                  onClick={() => setSelected(new Set(rows.filter((r) => r.tier === "vip" && r.rank >= 50 && !r.alreadyBlasted).map((r) => r.contactId)))}
-                  title="VIP buyers with a match score of 50+ who haven't been sent this deal — the first wave">
-                  Select VIP wave
+                  onClick={() => setSelected(new Set(rows.filter(buysThere).map((r) => r.contactId)))}
+                  title="Everyone who bought in this city or told us they buy in its city, ZIP or region, whose buy box doesn't rule it out, and who hasn't been sent it — who the deal goes to on its own">
+                  Select buyers in the area
                 </button>
                 <button type="button" className={BTN}
                   onClick={() => setSelected(new Set(rows.filter((r) => !r.alreadyBlasted).slice(0, 25).map((r) => r.contactId)))}>

@@ -11,11 +11,13 @@
 //   and sent by the same 30-second scheduler that sends replies. Hold works,
 //   quiet hours work, and every send is a blast_sent event.
 //
-//   Blast on promote: a deal is minted → the top-ranked VIP/Active buyers for
-//   it (buyer-score.js rankForDeal: where they buy, price, recency, tier,
-//   strategy) are blasted, VIPs first.
-//   Second wave: no committed buyer after N hours → the next-ranked buyers
-//   who haven't been sent it.
+//   Blast on promote: a deal is minted → everyone who buys where it is
+//   (buyer-score.js pickDealBuyers: bought in its city, or told us its city,
+//   zip or region) gets it, all at once, best fit first. No tiers, no cap,
+//   no days between rounds (Matt, 2026-10-21).
+//   The catch-up: each morning, while nobody has committed, the buyers who
+//   have come to fit since (a new import, a buy box they just told us) and
+//   haven't had it.
 //   The guarded dataroom invite and the assignment on commit live in the
 //   offers router's deps; this file holds the settings and the queue.
 
@@ -47,17 +49,11 @@ export function normalizeDispoAutopilot(v = {}) {
   return {
     sendWith: o.sendWith === "ghl" ? "ghl" : "app",
     spreadSec: n(o.spreadSec, 60, 5, 900),        // seconds between two blast texts
+    // Send a deal to everyone who buys where it is the moment it's minted,
+    // and catch up each morning on anyone who has come to fit since. The
+    // counts, score floors and wave delays that used to sit here are gone
+    // (2026-10-21): who gets a deal is where they buy, and they get it now.
     autoBlastOnPromote: o.autoBlastOnPromote === true,
-    autoBlastCount: n(o.autoBlastCount, 25, 1, 200),
-    secondWaveHours: n(o.secondWaveHours, 48, 6, 720),
-    secondWaveCount: n(o.secondWaveCount, 25, 1, 200),
-    // Match score (rankForDeal, 0–100) a buyer needs to make each wave.
-    minMatchScore: n(o.minMatchScore, 50, 0, 100),
-    secondWaveMinScore: n(o.secondWaveMinScore, 35, 0, 100),
-    // How many app waves a deal gets in all. 2 = the first plus one more,
-    // which is how it has always run; 3 adds a third to the next ranked
-    // buyers `secondWaveHours` after the second.
-    maxWaves: n(o.maxWaves, 2, 1, 4),
     autoInvite: o.autoInvite === true,
     // Whether a deal text carries the buyer's package link (2026-10-02). A
     // link in a text is what the carriers block most: "on_reply" sends the
@@ -285,7 +281,9 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     // them in the same text (reply-agent.js sendReplyDraft). The email that
     // goes with it, when they asked for one, goes then too.
     let waits = "";
-    if (channels.includes("sms") && !hold.held && willSchedule && da.touchBudget.enabled) {
+    // A deal text waits only when Matt asks it to (holdDealTexts, off since
+    // 2026-10-21: everyone who fits gets the deal the day it's signed).
+    if (channels.includes("sms") && !hold.held && willSchedule && da.touchBudget.enabled && da.touchBudget.holdDealTexts) {
       const limit = await buyerTouchLimit({ store, locationId, contactId, budget: da.touchBudget, now });
       if (!limit.open) {
         const opens = spreadAcrossDay({ now: limit.at, quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all" });
@@ -370,7 +368,7 @@ export function pulledBackBlasts(drafts = [], offer = {}) {
  *
  * Resume after Stop (Matt, 2026-10-04, 9311 12th Pl SE: stopped right after
  * the deal was made, resumed, and nobody heard about it). The deal texts Stop
- * pulled back are queued again, for the buyers the wave rules still pick
+ * pulled back are queued again, for the buyers who still fit the deal
  * right now (`deps.eligible()`: the dispo router's own match, nobody left out
  * for having been sent it). A buyer who has since passed, unsubscribed or
  * committed to another deal stays out. Queued the way a wave is: staggered,
@@ -391,62 +389,55 @@ export async function resumePulledBack({ store = defaultStore, locationId, offer
   return { ...r, pulledBack: pulled.length, dropped: pulled.length - investors.length };
 }
 
-/* ---------- the second wave ---------- */
+/* ---------- the morning catch-up ---------- */
 
 const jobs = new Map();
 export const getDispoJob = (locationId) => jobs.get(locationId) || null;
 export function _resetJobs() { jobs.clear(); }
 
 /**
- * nextWave(deal, da, now) → { wave, dueAt, due, why }
+ * catchUpDue(deal) → { due, why, sends }
  *
- * The deal's next automatic wave: its number, when it's due (the wave delay
- * after the last one), and, when there is none, why. Pure.
+ * Whether the morning catch-up looks at this deal: under contract, sent from
+ * the app at least once, and nobody committed or probably taking it. No
+ * count and no delay — a buyer who fits and hasn't had it is owed it now.
+ * `sends` is how many times the app has sent it. Pure.
  */
-export function nextWave(d = {}, da = normalizeDispoAutopilot({}), now = Date.now()) {
-  const none = (why) => ({ wave: null, dueAt: null, due: false, why });
-  if (d.stage !== "under_contract") return none(`the deal is ${String(d.stage || "not live").replace(/_/g, " ")}`);
-  // Waves sent from the app. A deal only ever blasted through a GHL
-  // workflow is left alone: an automatic wave on an old deal would surprise.
+export function catchUpDue(d = {}) {
   const blasts = Array.isArray(d.blasts) ? d.blasts : [];
-  if (!blasts.length) return none("no wave from the app yet");
-  if (blasts.length >= da.maxWaves) return none(`all ${da.maxWaves} wave${da.maxWaves === 1 ? "" : "s"} sent`);
-  // Committed, or somebody probably taking it: the wave is new outreach.
+  const none = (why) => ({ due: false, why, sends: blasts.length });
+  if (d.stage !== "under_contract") return none(`the deal is ${String(d.stage || "not live").replace(/_/g, " ")}`);
+  // A deal only ever blasted through a GHL workflow is left alone: an
+  // automatic send on an old deal would surprise.
+  if (!blasts.length) return none("not sent from the app yet");
+  // Committed, or somebody probably taking it: the catch-up is new outreach.
   const paused = dealOutreachPaused(d);
   if (paused) return none(paused.status === "stopped" ? "you stopped outreach" : paused.status === "committed" ? "a buyer committed" : "a buyer is probably taking it");
-  // A wave Stop pulled back and Resume sent again counts from the resume.
-  const last = blasts[blasts.length - 1];
-  const at = Math.max(Date.parse(last.at || ""), Date.parse(last.resumedAt || "") || -Infinity);
-  if (!Number.isFinite(at)) return none("the last wave has no time on it");
-  const dueMs = at + da.secondWaveHours * 3600000;
-  return { wave: blasts.length + 1, dueAt: new Date(dueMs).toISOString(), due: dueMs <= now, why: "" };
+  return { due: true, why: "", sends: blasts.length };
 }
 
 /**
- * secondWaveCandidates({ store, locationId, saved, now }) → [{ offer, blastedAt, wave }]
+ * catchUpCandidates({ store, locationId }) → [{ offer, send }]
  *
- * Live deals with an app wave behind them and waves left (maxWaves), with
- * nobody committed, whose last wave is older than the wave delay. Pure read.
+ * Live deals the catch-up looks at, and the number its next send would be.
+ * Pure read.
  */
-export async function secondWaveCandidates({ store = defaultStore, locationId, saved = {}, now = Date.now() }) {
-  const da = normalizeDispoAutopilot(saved.dispoAutopilot);
+export async function catchUpCandidates({ store = defaultStore, locationId }) {
   const deals = await store.listDeals(locationId).catch(() => []);
   const out = [];
   for (const o of deals) {
-    const n = nextWave(o.deal || {}, da, now);
-    if (!n.due) continue;
-    out.push({ offer: o, blastedAt: o.deal.blasts.at(-1).at, wave: n.wave });
+    const c = catchUpDue(o.deal || {});
+    if (c.due) out.push({ offer: o, send: c.sends + 1 });
   }
   return out;
 }
-// Every wave after the first is the "next" wave: the same rules, one more.
-export const waveCandidates = secondWaveCandidates;
 
 /**
  * startDispoSweep({ locationId, client, saved, store, deps, now }) → job
  *
- * `deps.matchForDeal(locationId, offer, { fit })` and `deps.blastFromApp(...)`
- * are the dispo router's own functions.
+ * `deps.matchForDeal(locationId, offer, { exclude })` and `deps.blastFromApp(...)`
+ * are the dispo router's own functions. Everyone new who fits, no cap; a
+ * deal nobody new fits sends nothing.
  */
 export function startDispoSweep({ locationId, client, saved = {}, store = defaultStore, deps = {}, trigger = "manual", now = Date.now(), onDone = null }) {
   const existing = jobs.get(locationId);
@@ -454,15 +445,14 @@ export function startDispoSweep({ locationId, client, saved = {}, store = defaul
   const job = { id: `ds-${Date.now().toString(36)}`, locationId, trigger, status: "running", startedAt: iso(now), finishedAt: null, deals: 0, blasted: 0, results: [], error: null };
   jobs.set(locationId, job);
   (async () => {
-    const da = normalizeDispoAutopilot(saved.dispoAutopilot);
-    const cands = await secondWaveCandidates({ store, locationId, saved, now });
+    const cands = await catchUpCandidates({ store, locationId });
     job.deals = cands.length;
-    for (const { offer, wave = 2 } of cands) {
+    for (const { offer, send } of cands) {
       try {
-        const m = await deps.matchForDeal(locationId, offer, { wave: 2, exclude: "blasted" });
-        const picked = (m.results || []).slice(0, da.secondWaveCount);
-        if (!picked.length) { job.results.push({ offerId: offer.id, address: offer.address, wave, blasted: 0, reason: "no ranked buyers left to send it to" }); continue; }
-        const r = await deps.blastFromApp({ locationId, client, offer, investors: picked, saved, now, wave });
+        const m = await deps.matchForDeal(locationId, offer, { exclude: "blasted" });
+        const picked = m.results || [];
+        if (!picked.length) { job.results.push({ offerId: offer.id, address: offer.address, blasted: 0, reason: "nobody new fits it" }); continue; }
+        const r = await deps.blastFromApp({ locationId, client, offer, investors: picked, saved, now, wave: send });
         job.blasted += r.queued + r.drafted;
         job.results.push({ offerId: offer.id, address: offer.address, blasted: r.queued + r.drafted, scheduled: r.scheduled, reason: r.reason });
       } catch (e) {

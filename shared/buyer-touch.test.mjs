@@ -62,7 +62,7 @@ test("every machine-started buyer text counts, walkthrough texts included", () =
 });
 
 test("the limits are settings with sane floors", () => {
-  assert.deepEqual(normalizeTouchBudget(), { enabled: true, quietPerWeek: 1, talkingPerWeek: 2, talkingDays: 30, bundleMax: 3 });
+  assert.deepEqual(normalizeTouchBudget(), { enabled: true, quietPerWeek: 1, talkingPerWeek: 2, talkingDays: 30, bundleMax: 3, holdDealTexts: false });
   const n = normalizeTouchBudget({ quietPerWeek: 0, talkingPerWeek: 99, bundleMax: 9, enabled: false });
   assert.equal(n.quietPerWeek, 1);
   assert.equal(n.talkingPerWeek, 7);

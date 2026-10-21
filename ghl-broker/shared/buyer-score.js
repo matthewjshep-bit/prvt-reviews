@@ -14,6 +14,8 @@
 //
 //   rankForDeal  — against one deal: do they buy where it is, at its price,
 //                  recently, the kind of project it is — weighted by tier.
+//                  Only where they buy decides who gets it (pickDealBuyers);
+//                  the rest is the order they're texted in.
 //
 // Pure. The broker feeds it the timeline; the page only reads the result.
 
@@ -148,24 +150,31 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   const b = i.buybox || {};
   const reasons = [];
 
-  // Location — do they buy where this is: the city (their loans or their buy
-  // box), the zip in their buy box, or the region either way ("South King").
-  let location = 0;
+  // Location — do they buy where this is. `areaFit` is whether the deal goes
+  // to them (pickDealBuyers, Matt 2026-10-21): they bought in this city (a
+  // city tag, or a financed purchase there), or told us they buy in its city,
+  // zip or region ("South King"). A region tag off a borrower list is a loan
+  // somewhere in eighteen cities: it ranks, it doesn't send.
+  let location = 0, areaFit = null;
   const rawAreas = (b.areas || []).map((a) => String(a || "").trim()).filter(Boolean);
   const areas = rawAreas.map((a) => citySlug(a));
   const zips = rawAreas.filter((a) => /^\d{5}$/.test(a));
   const areaRegions = new Set(rawAreas.flatMap(regionsForArea));
-  if (t.city && (mk.cities.includes(t.city) || areas.includes(t.city))) { location = 35; reasons.push("buys in this city"); }
-  else if (t.zip && zips.includes(t.zip)) { location = 35; reasons.push("buys in this zip"); }
-  else if (t.region && (mk.regions.includes(t.region) || areaRegions.has(t.region))) { location = 22; reasons.push("buys in this region"); }
+  const boughtCities = [...(mk.cities || []), ...(i.flips?.cities || [])];
+  if (t.city && boughtCities.includes(t.city)) { location = 35; areaFit = "bought_city"; reasons.push("bought in this city"); }
+  else if (t.city && areas.includes(t.city)) { location = 35; areaFit = "said_city"; reasons.push("buys in this city"); }
+  else if (t.zip && zips.includes(t.zip)) { location = 35; areaFit = "said_zip"; reasons.push("buys in this zip"); }
+  else if (t.region && areaRegions.has(t.region)) { location = 22; areaFit = "said_region"; reasons.push("buys in this region"); }
+  else if (t.region && mk.regions.includes(t.region)) { location = 22; reasons.push("bought in this region"); }
 
   // Price — does the deal sit where they spend. A buy box band wins; failing
   // that, their largest loan (loans run below price, so the band is generous).
-  let price = 0;
+  let price = 0, priceOut = false;
   if (t.price) {
     if (b.priceMin != null || b.priceMax != null) {
       const lo = b.priceMin ?? 0, hi = b.priceMax ?? Infinity;
       if (t.price >= lo * 0.9 && t.price <= hi * 1.1) { price = 20; reasons.push("inside their price band"); }
+      else { priceOut = true; reasons.push("outside their price band"); }
     } else if (i.flips?.largest) {
       const r = t.price / i.flips.largest;
       if (r >= 0.4 && r <= 1.6) { price = 20; reasons.push("in their price range"); }
@@ -189,7 +198,7 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   // The kind of house (shared/asset-type.js). A mobile home goes to the
   // buyers who told us they buy them — 1510 Maple Lane went to twenty-five
   // Kent flippers instead (2026-10-01). A stated no ("no park homes",
-  // "mobile homes only") keeps them off it altogether (pickWave).
+  // "mobile homes only") keeps them off it altogether (pickDealBuyers).
   const fit = buyerTypeFit(i, t.asset);
   let type = 0;
   if (fit.refuses) { type = -30; reasons.push(`won't take it (${fit.reason})`); }
@@ -229,41 +238,43 @@ export function rankForDeal(i = {}, t = {}, { now = Date.now() } = {}) {
   if (spokenFor(i)) { score -= 10; reasons.push("committed to another live deal"); }
   return {
     score: Math.max(0, Math.min(100, Math.round(score))),
-    parts: { location, price, recency, tier: tierPts, strategy, box, talking, type, typeRefused: fit.refuses, areaKnown, dealbreaker },
+    parts: { location, areaFit, price, priceOut, recency, tier: tierPts, strategy, box, talking, type, typeRefused: fit.refuses, areaKnown, dealbreaker },
     reasons,
   };
 }
 
 /**
- * pickWave(ranked, { wave, floor, exclude, manufactured, email }) → the buyers an automatic wave reaches
+ * pickDealBuyers(ranked, { exclude, manufactured, land, email }) → everyone a deal goes to, best fit first
  *
  * `ranked` rows carry rank, rankParts, tier, phone, email, onLiveDeal, alreadyBlasted.
- * A buyer must buy where the deal is (city or region): tier and price alone
- * clear the floor, and 7034 S K St, Tacoma went to fifteen Snohomish and
- * Eastside VIPs that way (2026-09-28). Wave 1 is VIP and Active, VIPs first;
- * later waves take anyone at the floor, best fit first.
+ * Matt, 2026-10-21: no waves, no tiers, no cap. A deal under contract goes,
+ * all at once, to every buyer who fits its area (rankParts.areaFit: bought
+ * in this city, or told us this city, zip or region). VIPs are buyers like
+ * the rest. 7034 S K St, Tacoma (2026-09-28) went to fifteen Snohomish and
+ * Eastside VIPs on tier and price alone; tier and score never send a deal.
+ * A buyer whose own buy box rules it out (its price band, a kind of house,
+ * rehab or lot they said no to) is left off: it only ever narrows on their
+ * own words.
  *
  * A mobile home (`manufactured`) goes by who buys them instead: only buyers
- * who said they do, in any area unless every area they gave is elsewhere,
- * whatever their tier or score — the twenty who told us are mostly cold and
- * mostly have no area on file. A buyer who refuses the kind is never picked.
- * Land (`land`) goes the same way, to the buyers who build: builders found
- * off permits, buyers tagged new construction or land.
+ * who said they do, in any area unless every area they gave is elsewhere —
+ * the twenty who told us are mostly cold and mostly have no area on file.
+ * A buyer who refuses the kind is never picked. Land (`land`) goes the same
+ * way, to the buyers who build: builders found off permits, buyers tagged
+ * new construction or land.
  * `email` lets a buyer with no phone in, to be emailed rather than texted.
  */
-export function pickWave(ranked = [], { wave = 1, floor = 0, exclude = "blasted", manufactured = false, land = false, email = false } = {}) {
-  const tierOrder = { vip: 0, active: 1, cold: 2 };
+export function pickDealBuyers(ranked = [], { exclude = "blasted", manufactured = false, land = false, email = false } = {}) {
   const reachable = (i) => Boolean(i.phone || (email && i.email));
   const byKind = manufactured || land;
   const fits = byKind
     ? (i) => (i.rankParts?.type || 0) > 0 && !(i.rankParts?.areaKnown && !(i.rankParts?.location > 0))
-    : (i) => i.rank >= floor && (i.rankParts?.location || 0) > 0;
+    : (i) => Boolean(i.rankParts?.areaFit) && !((i.rankParts?.box || 0) < 0) && !i.rankParts?.priceOut;
   return ranked
     .filter((i) => reachable(i) && !isBlockedBuyer(i) && !spokenFor(i) && !i.rankParts?.typeRefused && !i.rankParts?.dealbreaker)
     .filter(fits)
     .filter((i) => exclude !== "blasted" || !i.alreadyBlasted)
-    .filter((i) => byKind || wave !== 1 || i.tier === "vip" || i.tier === "active")
-    .sort((a, b) => wave === 1 && !byKind ? ((tierOrder[a.tier] ?? 3) - (tierOrder[b.tier] ?? 3)) || (b.rank - a.rank) : b.rank - a.rank);
+    .sort((a, b) => b.rank - a.rank);
 }
 
 // A blast draft that is going out, or about to.

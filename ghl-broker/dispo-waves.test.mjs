@@ -1,4 +1,4 @@
-// dispo-waves.test.mjs — a deal's buyer waves: who has it, who's next.
+// dispo-waves.test.mjs — who a deal has gone to, and who it goes to next.
 //
 // What went wrong (2026-09-29): "already blasted" read only the blast_sent
 // events, which are written when a text actually leaves. With the investor
@@ -37,8 +37,8 @@ const buyer = (contactId) => ({
   buyboxText: "",
 });
 
-test("the wave preview shows the next wave, and never offers a buyer whose wave-1 text is still waiting", async () => {
-  await store.saveOfferSettings(LOC, { dispoAutopilot: { autoBlastOnPromote: true, secondWaveMinScore: 0, minMatchScore: 0 } });
+test("the preview shows the catch-up, and never offers a buyer whose first deal text is still waiting", async () => {
+  await store.saveOfferSettings(LOC, { dispoAutopilot: { autoBlastOnPromote: true } });
   await store.upsertInvestors(LOC, ["b-waiting", "b-sent", "b-new"].map(buyer));
   const offer = await store.createOffer({
     id: crypto.randomUUID(), locationId: LOC, contactId: "agent-1", address: "123 Main St, Kent, WA 98031", cashAmount: 300000, status: "accepted",
@@ -54,10 +54,10 @@ test("the wave preview shows the next wave, and never offers a buyer whose wave-
 
   const r = await (await fetch(`${base}/waves/preview?offerId=${offer.id}`)).json();
   assert.equal(r.ok, true, r.error);
-  assert.equal(r.next.wave, 2);
-  assert.equal(r.next.due, true);
-  assert.deepEqual(r.waves.map((w) => [w.wave, w.count]), [[1, 2]]);
-  assert.deepEqual(r.wouldGet.map((i) => i.contactId), ["b-new"], JSON.stringify(r.wouldGet));
+  assert.equal(r.catchUp.due, true);
+  assert.equal(r.city, "kent");
+  assert.deepEqual(r.sends.map((w) => [w.send, w.count]), [[1, 2]]);
+  assert.deepEqual(r.wouldGet.map((i) => [i.contactId, i.areaFit]), [["b-new", "said_city"]], JSON.stringify(r.wouldGet));
   assert.equal(r.alreadySent, 2);
   // The deal text in its three phrasings, for Autopilot → Investors: the street, a buyer's name, nothing sent.
   assert.equal(r.samples.length, 3);
@@ -68,7 +68,7 @@ test("the wave preview shows the next wave, and never offers a buyer whose wave-
   assert.equal(missing.status, 404);
 });
 
-test("a mobile home's wave goes to the buyers who buy them, by email when there's no phone, and skips anyone it already went to", async () => {
+test("a mobile home goes to the buyers who buy them, by email when there's no phone, and skips anyone it already went to", async () => {
   // 1510 Maple Lane, Kent (2026-10-01): promoted, and the wave went to Kent
   // flippers; the mobile home buyers — mostly email only, mostly no area on
   // file, eighteen already emailed by a script that left only the deal's tag —
@@ -80,7 +80,7 @@ test("a mobile home's wave goes to the buyers who buy them, by email when there'
   const srv = app2.listen(0);
   const base2 = `http://127.0.0.1:${srv.address().port}/api/dispo`;
   try {
-    await store.saveOfferSettings(loc, { dispoAutopilot: { autoBlastOnPromote: true, secondWaveMinScore: 35, minMatchScore: 50 } });
+    await store.saveOfferSettings(loc, { dispoAutopilot: { autoBlastOnPromote: true } });
     const row = (contactId, doc) => ({ contactId, name: contactId, doc: { name: contactId, tags: ["investor"], custom: {}, ...doc }, buyboxText: "" });
     await store.upsertInvestors(loc, [
       row("kent-flipper", { phone: "+12065550101", tags: ["investor", "dispo-city-kent", "dispo-region-south-king", "dispo-type-flip"] }),
@@ -119,7 +119,7 @@ test("a pre-sell drafts the house to the top three buyers, never schedules one, 
   const srv = app3.listen(0);
   const base3 = `http://127.0.0.1:${srv.address().port}/api/dispo`;
   try {
-    await store.saveOfferSettings(loc, { wholesaleFee: 20000, dispoAutopilot: { secondWaveMinScore: 0, minMatchScore: 0 },
+    await store.saveOfferSettings(loc, { wholesaleFee: 20000, dispoAutopilot: {},
       conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } } });
     await store.upsertInvestors(loc, ["p1", "p2", "p3", "p4"].map(buyer));
     const offer = await store.createOffer({

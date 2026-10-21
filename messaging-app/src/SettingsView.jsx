@@ -655,7 +655,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           ...(pulse ? { pulse: { ...pulse, dailyCap: pulse.dailyCap === "" || pulse.dailyCap == null || !Number.isFinite(Number(pulse.dailyCap)) ? 20 : Number(pulse.dailyCap), everyDays: Number(pulse.everyDays) || 21, coldEveryDays: Number(pulse.coldEveryDays) || 60,
             coldMaxUnanswered: Number(pulse.coldMaxUnanswered) || 3, engagedMaxUnanswered: pulse.engagedMaxUnanswered === "" || pulse.engagedMaxUnanswered == null ? 6 : Number(pulse.engagedMaxUnanswered) } } : {}) };
       }
-      if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec", "autoBlastCount", "secondWaveHours", "secondWaveCount", "minMatchScore", "secondWaveMinScore", "maxWaves"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
+      if (form.dispoAutopilot) clean.dispoAutopilot = { ...form.dispoAutopilot, ...Object.fromEntries(["spreadSec"].filter((k) => form.dispoAutopilot[k] != null).map((k) => [k, Number(form.dispoAutopilot[k])])) };
       if (form.underwriteChecks) clean.underwriteChecks = normalizeUnderwriteChecks(form.underwriteChecks);
       if (form.lineTargets) clean.lineTargets = normalizeLineTargets(Object.fromEntries(Object.entries(form.lineTargets).map(([k, v]) => [k, typeof v === "string" ? Number(v.replace(/[$,\s]/g, "")) : v])));
       if (form.desk) clean.desk = normalizeDesk(form.desk);
@@ -1538,7 +1538,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                 <span className="font-medium">A buyer hears from the machine at most so often</span>
                 <span className="mt-1 block text-xs text-slate-500">
                   Deal texts, follow-ups, pulse checks and walkthrough texts all count; answers to their texts and anything you send don't.
-                  A deal over the limit keeps its place on the wave and goes when their week opens, in one text with anything else new for them.
+                  A deal text goes the day the deal is signed and counts as their text that week, unless you tick the box below.
                   Walkthrough reminders still go to buyers who booked a time.
                 </span>
               </span>
@@ -1549,6 +1549,10 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
                 <Num label="A week, to a buyer we're talking to" value={form.dispoAutopilot?.touchBudget?.talkingPerWeek ?? 2} onChange={setTouch("talkingPerWeek")} />
                 <Num label="Talking = wrote back within" suffix="days" value={form.dispoAutopilot?.touchBudget?.talkingDays ?? 30} onChange={setTouch("talkingDays")} />
                 <Num label="Most deals in one text" value={form.dispoAutopilot?.touchBudget?.bundleMax ?? 3} onChange={setTouch("bundleMax")} />
+                <label className="flex items-start gap-2 text-sm sm:col-span-2">
+                  <input type="checkbox" className="mt-1" checked={form.dispoAutopilot?.touchBudget?.holdDealTexts === true} onChange={(e) => setTouch("holdDealTexts")(e.target.checked)} />
+                  <span>Deal texts wait for the weekly limit too<span className="block text-xs text-slate-500">Off: everyone who fits gets the deal the day it's signed. On: a buyer over their week gets it when their week opens, in one text with anything else new for them.</span></span>
+                </label>
               </div>
             )}
           </div>
@@ -1573,16 +1577,10 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
               </span>
             </label>
             <Num label="Seconds between texts" value={form.dispoAutopilot?.spreadSec ?? 60} onChange={setDispoAuto("spreadSec")} />
-            <Num label="Buyers on the first wave" value={form.dispoAutopilot?.autoBlastCount ?? 25} onChange={setDispoAuto("autoBlastCount")} />
-            <Num label="Second wave after" suffix="hours" value={form.dispoAutopilot?.secondWaveHours ?? 48} onChange={setDispoAuto("secondWaveHours")} />
-            <Num label="Buyers on the second wave" value={form.dispoAutopilot?.secondWaveCount ?? 25} onChange={setDispoAuto("secondWaveCount")} />
-            <Num label="First wave: minimum match score" suffix="/100" value={form.dispoAutopilot?.minMatchScore ?? 50} onChange={setDispoAuto("minMatchScore")} />
-            <Num label="Second wave: minimum match score" suffix="/100" value={form.dispoAutopilot?.secondWaveMinScore ?? 35} onChange={setDispoAuto("secondWaveMinScore")} />
-            <Num label="Waves in all (2 = first + second; 3 adds a third)" value={form.dispoAutopilot?.maxWaves ?? 2} onChange={setDispoAuto("maxWaves")} />
           </div>
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.autoBlastOnPromote)} onChange={(e) => setDispoAuto("autoBlastOnPromote")(e.target.checked)} />
-            <span><span className="font-semibold">Blast on promote</span><span className="block text-xs text-slate-500">When an offer becomes a deal, blast the top-ranked VIP and Active buyers for it (where they buy, price, recency, engagement), VIPs first. With nobody committed after the delay, the next-ranked buyers who haven't been sent it. Never to a buyer on another live deal. A mobile home goes only to buyers who said they buy them, wherever they are on file, whatever their tier.</span></span>
+            <span><span className="font-semibold">Blast on promote</span><span className="block text-xs text-slate-500">When an offer becomes a deal, send it to everyone who bought in its city or told us they buy in its city, ZIP or region, whatever their tier, best fit first. Each morning after, anyone new who fits and hasn't had it, until a buyer commits. A borrower-list region tag alone isn't enough. Never to a buyer whose own buy box rules it out, or who is on another live deal. A mobile home goes only to buyers who said they buy them, wherever they are on file.</span></span>
           </label>
           {/* A buyer with no phone (2026-10-01: fourteen of the twenty mobile
               home buyers had only an email). Drafting is on; sending is yours. */}

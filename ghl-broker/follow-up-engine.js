@@ -36,7 +36,7 @@ import {
 import { conversationConfig, OUTBOUND_KINDS } from "./reply-agent.js";
 import { machineHours, nextSendTime } from "./conversation-scheduler.js";
 import { allEventsSince } from "./contact-events.js";
-import { normalizeDispoAutopilot, nextWave, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
+import { normalizeDispoAutopilot, catchUpDue, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { normalizeOutreachAutopilot } from "./outreach-sweep.js";
 import { followUpCandidates, OUTREACH_FOLLOWUP_HOUR, MAX_PER_RUN as GHL_FOLLOW_UP_PER_RUN, CURSOR_NAME as OUTREACH_FOLLOW_UP_CURSOR } from "./outreach-followup.js";
 import { addressChaseRungs, ADDRESS_CHASE_WINDOW_DAYS } from "./promise-sweep.js";
@@ -519,13 +519,10 @@ export async function followUpEngineFor({ store, locationId, saved = {}, period 
     for (const [at, count] of bundles) plan("buyer_pulse", { at, count, note: `${count} buyer${count === 1 ? "" : "s"} due, picked that morning` });
   }
   if (live("blast_wave")) {
-    const da = normalizeDispoAutopilot(saved.dispoAutopilot);
     for (const o of ctx.deals) {
-      if (!o?.deal) continue;
-      const w = nextWave(o.deal, da, now);
-      if (!w.wave) continue;
-      plan("blast_wave", { at: iso(sweepTime(Math.max(ms(w.dueAt), now), DISPO_SWEEP_UTC_HOUR, "all")), offerId: o.id, address: o.address || "",
-        count: da.secondWaveCount, note: `wave ${w.wave}, up to ${da.secondWaveCount} buyers` });
+      if (!o?.deal || !catchUpDue(o.deal).due) continue;
+      plan("blast_wave", { at: iso(sweepTime(now, DISPO_SWEEP_UTC_HOUR, "all")), offerId: o.id, address: o.address || "",
+        note: "anyone new who buys in the area" });
     }
   }
   if (live("showing")) {

@@ -21,7 +21,7 @@ export const OVERVIEW_SIDES = [
 // charts say the same thing; anything else keeps Reports' name.
 export const OVERVIEW_LABELS = {
   outreach_open: "First text", outreach_nudge: "Follow-ups", agent_pulse: "Check-ins",
-  blast_first: "Deal text · wave 1", blast_wave: "Deal text · later waves", deal_followup: "Deal follow-up",
+  blast_first: "Deal text · sent", blast_wave: "Deal text · catch-up", deal_followup: "Deal follow-up",
   buyer_pulse: "Check-ins", showing: "Walkthrough reminders",
 };
 // The lines a side shows before the rest fold into "Everything else".

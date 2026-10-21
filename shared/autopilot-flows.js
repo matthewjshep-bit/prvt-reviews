@@ -127,17 +127,17 @@ export function investorFlow({ settings = {}, config = {}, switches = [], sample
   const viaGhl = da.sendWith === "ghl";
   const auto = Boolean(da.autoBlastOnPromote);
   const blast = viaGhl ? "ghl" : stateOf(switches, "blast");
-  const maxWaves = n("maxWaves", 2);
   const deal = [];
 
   deal.push({ id: "promoted", type: "trigger", title: "A deal goes under contract",
-    detail: auto ? "You promote the offer to a deal; the first wave picks itself" : "Waves don't start on their own: you pick the buyers from the deal",
+    detail: auto ? "You promote the offer to a deal; who gets it picks itself" : "Nothing goes on its own: you pick the buyers from the deal",
     status: triggerState(stateOf(switches, "auto_blast")) });
   if (auto) deal.push({ id: "wait-promote", type: "wait", title: "Wait 10 minutes", detail: "time to stop it if it was a mistake" });
-  deal.push({ id: "wave-1", type: "text", title: "Wave 1: the deal",
+  // Matt, 2026-10-21: no waves. Everyone who buys in the area, at once.
+  deal.push({ id: "deal-sent", type: "text", title: "The deal, to everyone who buys there",
     detail: viaGhl ? "Tagged for your GHL workflow, which sends its own wording."
-      : `${Array.isArray(da.dealTexts) && da.dealTexts.some((t) => String(t || "").trim()) ? "Your wording" : "The built-in wording"}, to up to ${n("autoBlastCount", 25)} VIP and Active buyers who buy in the area, match ${n("minMatchScore", 50)}+, one text every ${n("spreadSec", 60)} seconds, weekdays 8–5. Price, ARV and rehab are read again as each one sends.`,
-    status: blast, texts: samples, edit: { field: "wave1" } });
+      : `${Array.isArray(da.dealTexts) && da.dealTexts.some((t) => String(t || "").trim()) ? "Your wording" : "The built-in wording"}, to every buyer who bought in the city or told us they buy in its city, ZIP or region, any tier, best fit first, one text every ${n("spreadSec", 60)} seconds, weekdays 8–5. Not to anyone whose own buy box rules it out. Price, ARV and rehab are read again as each one sends.`,
+    status: blast, texts: samples, edit: { field: "deal" } });
   deal.push({ id: "reply", type: "branch", title: "A buyer replies",
     detail: `The bot answers, sends the package${da.blastLink === "on_reply" ? " link when they're interested" : ""}, and invites them to the walkthrough. Confirming a time is yours.`,
     status: stateOf(switches, "autosend:investor") });
@@ -146,12 +146,9 @@ export function investorFlow({ settings = {}, config = {}, switches = [], sample
   deal.push({ id: "follow", type: "text", title: "One follow-up about the deal",
     detail: "Written by the bot: picks up where they left off, never names a price. The only follow-up a buyer gets about a house.",
     status: stateOf(switches, "ladder:deal_followup"), day: fuDays, edit: { field: "dealFollowUp" } });
-  for (let w = 2; w <= maxWaves; w++) {
-    deal.push({ id: `wait-wave-${w}`, type: "wait", title: `Wait ${n("secondWaveHours", 48)} hours`, detail: "after the wave before, at the next morning run" });
-    deal.push({ id: `wave-${w}`, type: "text", title: `Wave ${w}: the deal`,
-      detail: `The same text as wave 1, to up to ${n("secondWaveCount", 25)} more buyers, any tier, match ${n("secondWaveMinScore", 35)}+, who haven't had it. Stops when a buyer commits or you stop the deal.`,
-      status: auto ? blast : "off", edit: { field: "waveN" } });
-  }
+  deal.push({ id: "catch-up", type: "loop", title: "Each morning: anyone new who buys there",
+    detail: "The same text to buyers who have come to fit since (a new import, an area they just told us) and haven't had it. Stops when a buyer commits or you stop the deal.",
+    status: auto ? blast : "off" });
   deal.push({ id: "walkthrough", type: "text", title: "Walkthrough reminder and follow-up",
     detail: "Written by the bot to buyers who said they're coming: the afternoon before, then how it looked, 2–48 hours after.",
     status: ownState(showings.remindDayBefore || showings.followUpAfter, showings.autoSend, switches) });
@@ -161,6 +158,6 @@ export function investorFlow({ settings = {}, config = {}, switches = [], sample
     status: ownState(pulse.enabled, pulse.autoSend, switches), voice: pulse.voice, edit: { field: "pulse" } }];
 
   const tb = da.touchBudget || {};
-  const note = tb.enabled === false ? "" : `At most ${plural(Number(tb.quietPerWeek ?? 1), "text")} a week to a buyer who never wrote back, ${Number(tb.talkingPerWeek ?? 2)} to one we're talking to. Two deals waiting go in one text.`;
+  const note = tb.enabled === false ? "" : `At most ${plural(Number(tb.quietPerWeek ?? 1), "text")} a week to a buyer who never wrote back, ${Number(tb.talkingPerWeek ?? 2)} to one we're talking to. ${tb.holdDealTexts ? "A deal text waits for their week too; two deals waiting go in one text." : "A deal text goes the day it's signed and counts as their text that week."}`;
   return { deal, between, note };
 }

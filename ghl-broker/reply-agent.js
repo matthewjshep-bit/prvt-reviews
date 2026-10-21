@@ -6452,7 +6452,9 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     const saved = (await store.getOfferSettings?.(locationId).catch(() => null)) || {};
     const budget = normalizeTouchBudget(saved.dispoAutopilot?.touchBudget);
     if (budget.enabled) {
-      const limit = await buyerTouchLimit({ store, locationId, contactId: d.contactId, budget, now });
+      // A deal text waits for their week only when Matt asks (holdDealTexts,
+      // off since 2026-10-21); a deal queued for them alongside still bundles.
+      const limit = budget.holdDealTexts ? await buyerTouchLimit({ store, locationId, contactId: d.contactId, budget, now }) : { open: true };
       if (!limit.open) {
         const config = conversationConfig(saved);
         const sendAt = spreadAcrossDay({ now: limit.at, quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all" });

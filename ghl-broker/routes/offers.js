@@ -3353,10 +3353,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.setDispoDeps = (d) => { dispoDeps = d; };
 
   const PROMOTE_BLAST_GRACE_MS = 10 * 60 * 1000;
-  // Blast on promote. Fire-and-forget after the deal is minted: the top-ranked
-  // VIP/Active buyers for this deal (where they buy, price, recency, tier),
-  // VIPs first, up to the cap, as staggered drafts. Any failure is a warning
-  // on the deal, never a failed promote.
+  // Blast on promote. Fire-and-forget after the deal is minted: everyone who
+  // buys where it is (bought in its city, or told us its city, zip or region),
+  // best fit first, whatever their tier and with no cap, as staggered drafts
+  // (Matt, 2026-10-21: no waves). Any failure is a warning on the deal, never
+  // a failed promote.
   async function autoBlastOnPromote({ locationId, client, offer }) {
     try {
       const saved = (await store.getOfferSettings(locationId)) || {};
@@ -3378,17 +3379,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         }
       }
       if (!da.autoBlastOnPromote || !dispoDeps) return;
-      const m = await dispoDeps.matchForDeal(locationId, offer, { wave: 1, exclude: "blasted" });
+      const m = await dispoDeps.matchForDeal(locationId, offer, { exclude: "blasted" });
       // Each pick carries how to reach them (a text, or an email with no phone).
-      const picked = (m.results || []).slice(0, da.autoBlastCount);
-      if (!picked.length) { console.log(`auto-blast: no buyers fit ${offer.address} (${m.target?.asset?.type === "manufactured" ? "nobody who buys mobile homes is left" : `no VIP/Active buyers score ${da.minMatchScore}+`})`); return; }
-      const vips = (m.results || []).slice(0, da.autoBlastCount).filter((r) => r.tier === "vip").length;
+      const picked = m.results || [];
+      const where = m.target?.asset?.type === "manufactured" ? "who buy mobile homes" : m.target?.asset?.type === "land" ? "who build" : "who buy in the area";
+      if (!picked.length) { console.log(`auto-blast: no buyers fit ${offer.address} (nobody ${where} is left)`); return; }
       // The deal is minted before its fee is typed in (7034 S K St went out
       // at the default 30k fee four seconds after promote). The first text
       // waits a few minutes; each is priced off the deal as it sends.
       const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors: picked, saved, wave: 1, startAfterMs: PROMOTE_BLAST_GRACE_MS });
-      console.log(`auto-blast on promote: ${offer.address} → ${picked.length} buyers, ${vips} VIP (${r.scheduled ? "scheduled" : `drafts: ${r.reason}`})`);
-      await createContactNote(client, offer.contactId, { body: `Blasted ${offer.address} to the ${picked.length} top-ranked buyer${picked.length === 1 ? "" : "s"} for it (${vips} VIP)${r.scheduled ? "" : " (queued as drafts)"}.` }).catch(() => {});
+      console.log(`auto-blast on promote: ${offer.address} → ${picked.length} buyers ${where} (${r.scheduled ? "scheduled" : `drafts: ${r.reason}`})`);
+      await createContactNote(client, offer.contactId, { body: `Sent ${offer.address} to the ${picked.length} buyer${picked.length === 1 ? "" : "s"} ${where}${r.scheduled ? "" : " (queued as drafts)"}.` }).catch(() => {});
     } catch (e) { console.error(`auto-blast on promote failed for ${offer.id}: ${e?.message}`); }
   }
 
@@ -3458,7 +3459,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch { /* the readout is a courtesy */ }
     // The buyers it was pre-sold to (POST /api/dispo/presell): the ones you
     // sent it to are on the deal as evaluating; a pre-sell text nobody sent
-    // stands down so the first wave can send them the deal itself.
+    // stands down so the first send can give them the deal itself.
     if (offer.presell?.contactIds?.length) {
       try {
         for (const contactId of [...new Set(offer.presell.contactIds)].slice(0, 20)) {
@@ -4321,10 +4322,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   });
 
   // Resume after Stop. The deal texts the stop pulled back go again, to the
-  // buyers the wave rules still pick, after the same head start as a new
-  // deal's first wave; the next wave counts from the resume (dispo router
-  // resumeWave). A deal stopped before its first wave was picked gets that
-  // wave now. A reply the stop handed back to you stays with you, and nudges
+  // buyers who still fit it, after the same head start as a new deal's first
+  // send (dispo router resumeWave). A deal stopped before its first send was
+  // picked gets that send now. A reply the stop handed back to you stays with you, and nudges
   // come back on their own once the deal text has gone (follow-up-sweep.js
   // starts the ladder off the send).
   async function resumeDealOutreach({ locationId, client, offer }) {

@@ -72,7 +72,7 @@ export function normalizeBuyerPulse(v = {}) {
 // Tags that mean "do not text", however they were spelled.
 const BLOCK_TAG_RX = /^(?:dnc|dnd|do[-\s]?not[-\s]?(?:contact|text|call)|opt(?:ed)?[-\s]?out|unsubscribed?|stop|wrong[-\s]?number)$/i;
 // Unsubscribed in GHL (synced onto the row as `dnd`) or tagged off. The pulse
-// and the blast waves both ask (shared/buyer-score.js pickWave).
+// and the deal sends both ask (shared/buyer-score.js pickDealBuyers).
 export const isBlockedBuyer = (inv = {}) => Boolean(inv?.dnd) || (inv?.tags || []).some((t) => BLOCK_TAG_RX.test(String(t).trim()));
 
 // Market tags are slugs: "federal-way" → "Federal Way".

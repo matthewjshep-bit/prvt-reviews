@@ -95,8 +95,8 @@ const buyer = (contactId) => ({
 });
 const KENT = (n) => `${n} Main St, Kent, WA 98031`;
 
-test("resuming a deal you stopped sends the deal texts Stop pulled back, and the next wave counts from the resume", async () => {
-  await store.saveOfferSettings(LOC, { dispoAutopilot: { autoBlastOnPromote: true, minMatchScore: 0, secondWaveMinScore: 0 } });
+test("resuming a deal you stopped sends the deal texts Stop pulled back, and the catch-up still looks at the deal", async () => {
+  await store.saveOfferSettings(LOC, { dispoAutopilot: { autoBlastOnPromote: true } });
   await store.upsertInvestors(LOC, ["k1", "k2", "k-passed"].map(buyer));
   const firstAt = new Date(Date.now() - 60000).toISOString();
   const o = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "agent-k", address: KENT(123), cashAmount: 300000, status: "accepted", statusHistory: [],
@@ -126,17 +126,18 @@ test("resuming a deal you stopped sends the deal texts Stop pulled back, and the
   assert.ok(back.every((d) => d.outbound.label === "dispo-123-main-st"));
 
   const wave = r.offer.deal.blasts.at(-1);
-  assert.equal(r.offer.deal.blasts.length, 1, "it's still the first wave, not a new one");
+  assert.equal(r.offer.deal.blasts.length, 1, "it's still the first send, not a new one");
   assert.ok(Date.parse(wave.resumedAt) > Date.parse(firstAt));
   const preview = await (await fetch(`${B}/api/dispo/waves/preview?offerId=${o.id}`)).json();
-  assert.equal(preview.next.dueAt, new Date(Date.parse(wave.resumedAt) + 48 * 3600000).toISOString(), "wave 2 is two days after the resume");
+  assert.equal(preview.catchUp.due, true, "the morning catch-up looks at it again");
+  assert.deepEqual(preview.wouldGet, [], "everyone who fits has had it or passed");
 
   // Pressing Resume on a deal that isn't stopped does nothing.
   const twice = await setStopped(o.id, { stopped: false });
   assert.equal(twice.resumed, undefined);
 });
 
-test("a deal stopped before its first wave was picked gets that wave when you resume", async () => {
+test("a deal stopped before its first send was picked gets it when you resume", async () => {
   // A mobile home, like 9311: its wave goes to the buyers who buy them, whatever their tier.
   const mh = buyer("k3");
   await store.upsertInvestors(LOC, [{ ...mh, doc: { ...mh.doc, tags: ["investor", "dispo-type-mobile-home"] } }]);

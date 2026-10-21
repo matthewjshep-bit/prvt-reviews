@@ -6598,10 +6598,19 @@ const smsClient = () => {
   return { calls, client: { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1", contact: { id: "c1", tags: [] } }; } } };
 };
 
-test("a deal text to a buyer we texted two days ago waits for their week", async () => {
+// Matt, 2026-10-21: send the deal to everyone who fits right away. It no
+// longer waits for the buyer's week unless holdDealTexts is ticked.
+test("a deal text to a buyer we texted two days ago goes now, and waits for their week only when deal texts are held", async () => {
   const pulse = { id: "p1", locationId: "LOC", contactId: "c1", status: "sent", party: "investor", intent: "buyer_pulse", inbound: "",
     outbound: { kind: "buyer_pulse" }, reply: "Hey Buck…", sentAt: new Date(Date.now() - 2 * 86400000).toISOString(), createdAt: new Date(Date.now() - 2 * 86400000).toISOString() };
-  const store = limitStore([dealText("d1", "o1"), pulse]);
+  const now = limitStore([dealText("d1", "o1"), pulse]);
+  const zero = smsClient();
+  const went = await sendReplyDraft({ client: zero.client, store: now, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  assert.doesNotMatch(went.skipped || "", /weekly limit/);
+  assert.equal(zero.calls.filter(([p]) => p === "/conversations/messages").length, 1, "the deal goes today");
+
+  const held = { touchBudget: { holdDealTexts: true } };
+  const store = limitStore([dealText("d1", "o1"), pulse], held);
   const { calls, client } = smsClient();
   const out = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
   assert.match(out.skipped || "", /weekly limit/);
@@ -6612,13 +6621,13 @@ test("a deal text to a buyer we texted two days ago waits for their week", async
   assert.match(d.flags.join(" · "), /waits for this buyer's weekly limit/);
 
   // A person pressing Send is a person deciding.
-  const store2 = limitStore([dealText("d1", "o1", { status: "draft" }), pulse]);
+  const store2 = limitStore([dealText("d1", "o1", { status: "draft" }), pulse], held);
   const two = smsClient();
   await sendReplyDraft({ client: two.client, store: store2, locationId: "LOC", draftId: "d1", live: true, readThread: async () => "" });
   assert.equal(two.calls.filter(([p]) => p === "/conversations/messages").length, 1);
 
-  // Switched off, nothing is held.
-  const store3 = limitStore([dealText("d1", "o1"), pulse], { touchBudget: { enabled: false } });
+  // The limit switched off, nothing is held either.
+  const store3 = limitStore([dealText("d1", "o1"), pulse], { touchBudget: { enabled: false, holdDealTexts: true } });
   const three = smsClient();
   await sendReplyDraft({ client: three.client, store: store3, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
   assert.equal(three.calls.filter(([p]) => p === "/conversations/messages").length, 1);
