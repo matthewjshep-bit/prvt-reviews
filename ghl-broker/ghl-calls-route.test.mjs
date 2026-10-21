@@ -79,7 +79,7 @@ test("on, a call in GHL leaves Today; the counter stays, marked as in GHL; the c
   const before = await pipeline();
   const dana = before.desk.rows.filter((x) => x.contactId === "dana");
   assert.ok(!dana.some((x) => x.kind === "call_hot" || x.also.some((a) => a.kind === "call_hot")), "Dana's call is in GHL");
-  assert.deepEqual(dana.map((x) => x.kind), ["pre_contract"], "her hot offer's check before signing is still a decision");
+  assert.deepEqual(dana.map((x) => x.kind), [], "with her call in GHL, Dana has nothing left on the Desk");
   const gus = before.desk.rows.find((x) => x.contactId === "gus");
   assert.equal(gus.ghlQueued, undefined, "Gus's counter isn't in GHL yet");
   await queue("gus", "call_counter");

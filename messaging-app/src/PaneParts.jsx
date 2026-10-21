@@ -30,7 +30,6 @@ import ConversationPanel, { ConversationPanelBody, REPLY_BOX_ID } from "./Conver
 import CoachIdeas, { coachKey, loadCoach } from "./CoachIdeas.jsx";
 import CallButton from "./CallButton.jsx";
 import OfferEditorSheet from "./OfferEditorSheet.jsx";
-import BeforeYouSign from "./BeforeYouSign.jsx";
 import { TEACH_EVENT, useRowFeedback } from "./RowFeedback.jsx";
 import { forget, useLoad } from "./work-data.js";
 import { defaultOfferFor, teachRowId } from "./work-queue.js";
@@ -297,7 +296,6 @@ export function PaneBody({ pane, item, targets, convo, settings = null, bodies =
       </div>
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <div className={`${tab === "offer" ? "block" : "hidden"} min-h-0 overflow-y-auto lg:block lg:border-r lg:border-slate-200`}>
-          {!bodies && side.offer && <BeforeYouSign offer={side.offer} />}
           <OfferPanelBody offer={side.offer} siblings={side.siblings} item={{ ...item, offerId: pane.offerId }} loading={side.loading || pane.theirs.loading} error={side.error}
             replaced={side.replaced} onRequote={pane.requote} requoting={pane.requoting} onSelectOffer={pane.setOfferId} onEdit={pane.edit} />
         </div>

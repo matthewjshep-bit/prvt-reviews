@@ -56,7 +56,6 @@ import {
   SearchInput, SkeletonRows, SortHeader, StatusDots, StatusMenu, StatusPill, TableCard,
   compareBy, rowActivation, useSort,
 } from "./ui.jsx";
-import { confirmSigned } from "./BeforeYouSign.jsx";
 
 // The agent's last communication, across all their offers. Per-agent is the
 // honest grain — a text or a call is with a person, not about a house — so
@@ -325,7 +324,6 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
     if (promoting) return;
     setPromoting(o.id);
     try {
-      if (!(await confirmSigned(o.id))) { setPromoting(null); return; }
       const r = await promoteDeal(o.id);
       patchOffer(r.offer);
       onDeal?.();
@@ -344,8 +342,6 @@ export default function OffersHistory({ onEdit, onDeal, settings: appSettings = 
     setError("");
     setCardNote("");
     try {
-      // "Accepted" promotes server-side: the same look before it does.
-      if (status === "accepted" && !o.deal && !(await confirmSigned(o.id))) { setStatusBusy(null); return; }
       const r = await setOfferStatus(o.id, status);
       setCardNote(r.card?.text || "");
       // A pin moves: the server cleared it on this row's siblings, so do the
