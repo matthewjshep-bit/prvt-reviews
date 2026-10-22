@@ -9,8 +9,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  attachmentUrls, bodyImageUrls, inboundPhotoUrls, readPhotoAddresses, expandPhotoAddresses, photoMarkers, _resetPhotoCache,
+  attachmentUrls, bodyImageUrls, inboundPhotoUrls, readPhotoAddresses, expandPhotoAddresses, photoMarkers, _resetPhotoCache, firstPages,
 } from "./photo-addresses.js";
+import { PDFDocument } from "pdf-lib";
 
 const SOUNDVIEW = "7413 Soundview Dr, Edmonds, WA 98026";
 const BURIEN = "13645 3rd Ave S, Burien, WA 98168";
@@ -73,4 +74,36 @@ test("the addresses lead the message, once each", () => {
   assert.equal(once, `[photo → ${SOUNDVIEW}]\n[photo → ${BURIEN}]`);
   assert.equal(expandPhotoAddresses(once, [BURIEN]), once);
   assert.deepEqual(photoMarkers(`${expandPhotoAddresses("Two more for you", [SOUNDVIEW])}`), [SOUNDVIEW]);
+});
+
+/* ---------- an email's PDFs (2026-10-22) ---------- */
+// A listing agent answered our outreach email with the inspection report and
+// the appraisal attached. GHL's message list holds an email as a stub (no
+// body, no attachments, no direction) with the real emails in
+// meta.email.messageIds, our outreach and their reply in one stub, so the
+// read-back stopped at the stub and found nothing.
+
+test("an agent's emailed PDFs are found, though GHL's message list shows the email as an empty stub", async () => {
+  const now = Date.parse("2026-10-22T14:20:00Z");
+  const pdfs = ["https://static-assets.internal.usercontent.site/c/inspection.pdf", "https://static-assets.internal.usercontent.site/c/appraisal.pdf"];
+  const emails = {
+    out1: { id: "out1", direction: "outbound", dateAdded: "2026-10-22T02:23:25Z", body: "Hi, any fixers on your radar?", attachments: [] },
+    in1: { id: "in1", direction: "inbound", dateAdded: "2026-10-22T14:10:00Z", body: "<p>Attached the inspection and appraisal.</p>", attachments: pdfs },
+  };
+  const client = { call: async (p) => {
+    if (p.includes("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+    const m = /messages\/email\/(\w+)/.exec(p);
+    if (m) return { emailMessage: emails[m[1]] };
+    return { messages: { messages: [
+      { id: "s1", messageType: "TYPE_EMAIL", dateAdded: "2026-10-22T02:23:25Z", meta: { email: { messageIds: ["out1", "in1"], direction: "inbound" } } },
+    ] } };
+  } };
+  assert.deepEqual(await inboundPhotoUrls(client, "LOC", "c1", { now }), pdfs);
+});
+
+test("an 81-page inspection report is read by its cover pages only", async () => {
+  const doc = await PDFDocument.create();
+  for (let i = 0; i < 81; i++) doc.addPage();
+  const cut = await PDFDocument.load(await firstPages(Buffer.from(await doc.save())));
+  assert.equal(cut.getPageCount(), 2);
 });

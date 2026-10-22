@@ -27,7 +27,8 @@ import { VISION_MODEL, anthropicErrorToHttp } from "./rehab-scan.js";
 import { meterAi } from "./ai-spend.js";
 import { hasHouseNumber } from "./shared/mentioned-houses.js";
 import { addressKey } from "./shared/us-address.js";
-import { searchConversations, listConversationMessages } from "./ghl.js";
+import { searchConversations, listConversationMessages, getEmailMessage } from "./ghl.js";
+import { PDFDocument } from "pdf-lib";
 
 // A burst of flyers is two or three texts of one or two pictures each.
 export const MAX_PHOTOS = 8;
@@ -36,7 +37,7 @@ export const MAX_ADDRESSES = 4;
 // Only the texts since our last one, and only this recent.
 const WINDOW_MS = 30 * 60 * 1000;
 const NOT_A_PICTURE = /\.(3gpp?|mp4|mov|m4a|amr|wav|mp3|vcf|docx?|xlsx?|zip|ics)(\?|$)/i;
-const MAX_PDF_BYTES = 5 * 1024 * 1024;
+const MAX_PDF_BYTES = 25 * 1024 * 1024;
 
 const MARKER_RE = /\[photo → ([^\]\n]{5,200})\]/g;
 
@@ -101,10 +102,19 @@ export async function inboundPhotoUrls(client, locationId, contactId, { now = Da
   const out = [];
   for (const m of messages) {
     if (/ACTIVITY/i.test(String(m.messageType || m.type || ""))) continue;
-    if (String(m.direction || "").toLowerCase() !== "inbound") break;
-    const ts = Date.parse(m.dateAdded || "");
-    if (Number.isFinite(ts) && now - ts > WINDOW_MS) break;
-    out.unshift(...attachmentUrls(m.attachments), ...(/EMAIL/i.test(String(m.messageType || m.type || "")) ? bodyImageUrls(m.body) : []));
+    // An email is a stub here; its pictures and PDFs are on the email itself,
+    // and one stub can hold the whole back-and-forth, newest last.
+    const ids = m.meta?.email?.messageIds || [];
+    const items = ids.length
+      ? (await Promise.all(ids.map((id) => getEmailMessage(client, id).catch(() => null)))).filter(Boolean).reverse()
+        .map((e) => ({ direction: e.direction, dateAdded: e.dateAdded || m.dateAdded, urls: [...attachmentUrls(e.attachments), ...bodyImageUrls(e.body)] }))
+      : [{ direction: m.direction, dateAdded: m.dateAdded, urls: attachmentUrls(m.attachments) }];
+    for (const it of items) {
+      if (String(it.direction || "").toLowerCase() !== "inbound") return [...new Set(out)].slice(-MAX_PHOTOS);
+      const ts = Date.parse(it.dateAdded || "");
+      if (Number.isFinite(ts) && now - ts > WINDOW_MS) return [...new Set(out)].slice(-MAX_PHOTOS);
+      out.unshift(...it.urls);
+    }
   }
   return [...new Set(out)].slice(-MAX_PHOTOS);
 }
@@ -168,6 +178,24 @@ async function askModel(blocks, aiApiKey) {
   return Array.isArray(addresses) ? addresses : [];
 }
 
+// The address is on the cover. An inspection report runs 80 pages and an
+// appraisal lists its comps' addresses, so only the first pages are read:
+// cheaper, and no comps to mistake for houses sent to us.
+const PDF_PAGES = 2;
+export async function firstPages(buf, pages = PDF_PAGES) {
+  try {
+    const src = await PDFDocument.load(buf, { ignoreEncryption: true });
+    if (src.getPageCount() <= pages) return buf;
+    const out = await PDFDocument.create();
+    for (const p of await out.copyPages(src, [...Array(pages).keys()])) out.addPage(p);
+    return Buffer.from(await out.save());
+  } catch (e) {
+    // Unreadable to trim: a small one goes whole, a big one not at all.
+    if (buf.length > 5 * 1024 * 1024) throw e;
+    return buf;
+  }
+}
+
 // One attachment as a content block: a picture, or a PDF as a document,
 // by what the server says it is (GHL's file links often carry no extension).
 // Null when it can't be fetched or is neither.
@@ -183,7 +211,7 @@ async function loadBlock(url) {
     const buf = Buffer.from(await r.arrayBuffer());
     if (!buf.length || buf.length > (pdf ? MAX_PDF_BYTES : MAX_IMAGE_BYTES)) return null;
     return pdf
-      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: buf.toString("base64") } }
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: (await firstPages(buf)).toString("base64") } }
       : { type: "image", source: { type: "base64", media_type: type, data: buf.toString("base64") } };
   } catch { return null; }
 }

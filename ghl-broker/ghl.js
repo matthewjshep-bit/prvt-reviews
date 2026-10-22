@@ -595,6 +595,24 @@ export async function getConversation(client, conversationId) {
   return c?.contactId ? { id: c.id || conversationId, contactId: String(c.contactId) } : null;
 }
 
+// One email, in full. The conversation's message list carries an email as a
+// stub (no body, no attachments, often no direction) with its ids in
+// meta.email.messageIds; the email itself is read here. Returns { id,
+// direction, dateAdded, subject, body, attachments } or null.
+export async function getEmailMessage(client, emailMessageId) {
+  const data = await client.call(`/conversations/messages/email/${encodeURIComponent(emailMessageId)}`, { version: V_CONVERSATIONS });
+  const e = data?.emailMessage && typeof data.emailMessage === "object" ? data.emailMessage : data;
+  if (!e || typeof e !== "object") return null;
+  return {
+    id: e.id || emailMessageId,
+    direction: String(e.direction || "").toLowerCase(),
+    dateAdded: e.dateAdded || "",
+    subject: String(e.subject || ""),
+    body: String(e.body || ""),
+    attachments: Array.isArray(e.attachments) ? e.attachments : [],
+  };
+}
+
 // The newest inbound message with words in it, across the contact's most
 // recently active conversations. Returns { body, at, id, type, attachments }
 // or null. For re-running a reply the webhook never delivered — the text is

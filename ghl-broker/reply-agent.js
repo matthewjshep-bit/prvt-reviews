@@ -4051,7 +4051,8 @@ async function runReply(job, ctx) {
   // does: "[photo → 7413 Soundview Dr, Edmonds, WA 98026]". The reply model
   // reads that line, never the picture. Off unless media.readAddresses is on.
   if (job.inboundKind !== "call" && !job.photoAddresses && conversationConfig(saved).media?.readAddresses
-      && (job.attachments > 0 || job.attachmentUrls?.length || (job.channel === "email" && /<img\b/i.test(job.message)))) {
+      // Every email: GHL's email webhook doesn't say what's attached.
+      && (job.attachments > 0 || job.attachmentUrls?.length || job.channel === "email")) {
     job.photoAddresses = [];
     try {
       const fromGhl = await (deps.photoUrls || ((id) => inboundPhotoUrls(client, locationId, id, { now })))(job.contactId).catch(() => []);
