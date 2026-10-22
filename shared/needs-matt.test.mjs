@@ -166,3 +166,16 @@ test("a house with no house number is the bot's to chase, not his to price", () 
   // gave us the number, so there's nothing to chase. It's his to price.
   assert.equal(botTakesHouse({ id: "o4", address: "Briarwood Ct", status: "draft", autoUnderwrite: { message: "No problem. 796 SE Briarwood Ct" } }), null);
 });
+
+// 2026-10-22, the stage's first hour: Jeff D. (an answer we owe on 10863
+// Roseberg) stayed in Tier 2 because his card had been dragged there days
+// after the promise began. A drag before the need landed is not a drag away
+// from it; one after it landed is his call.
+test("an old drag doesn't keep a card out of Needs Matt; a drag after it landed does", () => {
+  const owed = { kind: "paper", why: "we owe them an answer on 10863 Roseberg", at: hoursAgo(24 * 5), key: "k-jeff" };
+  const before = card("jeff", "s-t2", { lastStageChangeAt: hoursAgo(24 * 2) });
+  const r = planCard({ acq: ACQ, cards: [before], offers: [], contactId: "jeff", needsMatt: { ...owed, landedAt: hoursAgo(1) }, now: NOW });
+  assert.equal(r.move?.to, "Needs Matt", JSON.stringify(r));
+  const after = card("jeff", "s-t2", { lastStageChangeAt: hoursAgo(0.5) });
+  assert.ok(planCard({ acq: ACQ, cards: [after], offers: [], contactId: "jeff", needsMatt: { ...owed, landedAt: hoursAgo(1) }, now: NOW }).youMoved);
+});

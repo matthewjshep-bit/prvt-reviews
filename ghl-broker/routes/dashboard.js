@@ -865,7 +865,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     try {
       const { locationId } = resolveLocation(req);
       const cursor = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
-      const needs = Object.entries(cursor?.doc?.needs || {}).map(([contactId, v]) => ({ contactId, kind: v.kind, rowKind: v.rowKind, at: v.at, placed: v.placed }));
+      const needs = Object.entries(cursor?.doc?.needs || {}).map(([contactId, v]) => ({ contactId, kind: v.kind, rowKind: v.rowKind, at: v.at, landedAt: v.landedAt || null, placed: v.placed }));
       res.json({ ok: true, at: cursor?.at || null, readAt: cursor?.doc?.readAt || null, last: cursor?.doc?.last || null, needs });
     } catch (err) { fail(res, err); }
   });
@@ -1016,6 +1016,22 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         ...(preview ? { preview: "tier2Repliers" } : {}) };
       if (!preview) pipelineCache.set(locationId, { at: Date.now(), body });
       res.json(body);
+    } catch (err) { fail(res, err); }
+  });
+
+  // The 7am stage plan, now (2026-10-22: a rule change moves cards only at
+  // the next 7am sweep, and the 15-minute sync only reads agents with news).
+  // A dry run unless the body says { apply: true }; maxMovesPerRun applies.
+  router.post("/ghl/pipeline/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      if (normalizeGhlStages(saved.ghlStages).mode !== "on") return res.status(409).json({ error: "ghlStages is off" });
+      const plan = await runStagePlan({ client, locationId, store, saved, dryRun: req.body?.apply !== true });
+      pipelineCache.delete(locationId);
+      res.json({ ok: true, dryRun: req.body?.apply !== true, counts: plan.counts || {}, applied: plan.applied || 0, created: plan.created || 0,
+        moves: (plan.moves || []).map((m) => ({ contactId: m.contactId, from: m.from, to: m.to, why: m.why, applied: m.applied })),
+        creates: (plan.creates || []).map((c) => ({ contactId: c.contactId, to: c.to, why: c.why, applied: c.applied })), errors: plan.errors || [] });
     } catch (err) { fail(res, err); }
   });
 
