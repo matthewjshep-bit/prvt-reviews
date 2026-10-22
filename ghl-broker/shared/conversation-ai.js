@@ -1184,6 +1184,10 @@ function normalizeFollowUp(src = {}, party = "agent") {
     // Outside the dial's fingerprint, which reads the ladders only.
     relist: bool(f.relist, false),
     watchFloated: bool(f.watchFloated, false),
+    // A house we priced that comes off the market without selling (expired,
+    // withdrawn): one second look to its agent, our same number (2026-10-22
+    // audit — an off-market seller is the deal that closes). Off.
+    lostHouse: bool(f.lostHouse, false),
     // A second look at a strong past offer (shared/second-look.js), agent
     // only and off. Outside the dial's fingerprint, like the two above.
     // And a number we priced and never sent, closed out quietly after this

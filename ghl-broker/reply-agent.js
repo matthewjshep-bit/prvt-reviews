@@ -3464,7 +3464,8 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
     // Our same number, said in thousands rounded down, and nothing else.
     const ours = Math.round(Number(subject?.ours) || 0);
     return { ...base, street: streetOf(address), ours, oursK: ours ? `${Math.floor(ours / 1000)}K` : "",
-      offerStatus: offerStatus(offer), went: whatWentOut(offer), step: Number(subject?.step) || 1, maxChars: SECOND_LOOK_MAX_CHARS };
+      offerStatus: offerStatus(offer), went: whatWentOut(offer), step: Number(subject?.step) || 1, maxChars: SECOND_LOOK_MAX_CHARS,
+      ...(subject?.offMarket ? { offMarket: true } : {}) };
   }
   if (kind === "showing_reminder" || kind === "showing_followup") {
     // The walkthrough: the street and the window as a buyer reads it

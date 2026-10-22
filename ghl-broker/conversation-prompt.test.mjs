@@ -681,3 +681,13 @@ test("a text that closes a house ends on asking for the next one, not keep me in
     assert.doesNotMatch(t, /keep us in mind/, subject.why);
   }
 });
+
+// 2026-10-22: a house we priced came off the market unsold (followUp.lostHouse).
+test("the second look on a house that came off the market says so, and still never asks if it sold", () => {
+  const base = { kind: "second_look", street: "12 Oak St", oursK: "410K", offerStatus: "passed", step: 1, maxChars: 240 };
+  const off = outboundOpening({ ...base, offMarket: true });
+  assert.match(off, /came off the market without selling/);
+  assert.match(off, /Do NOT ask whether it sold/);
+  assert.doesNotMatch(off, /wasn't far from ours/);
+  assert.match(outboundOpening(base), /wasn't far from ours/);
+});

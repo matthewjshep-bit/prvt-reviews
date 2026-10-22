@@ -4781,6 +4781,19 @@ Private Integration. Pure plan: `shared/ghl-mirror.js`; writer:
 `ghl-broker/ghl-mirror.js`; `GET /api/dashboard/ghl/pipelines`,
 `POST /api/dashboard/ghl/mirror/run`.
 
+## A house we priced comes off the market unsold (2026-10-22)
+
+`conversationAi.parties.agent.followUp.lostHouse` (off). With it on, the price
+watch (`ghl-broker/price-watch.js`) looks back 180 days instead of 90, and
+also watches houses we passed on over the numbers (`numbersPass`: a counter
+we held). When the listing first reads off the market without selling
+(Zillow OFF_MARKET: expired, withdrawn; never sold, pending or for rent) on a
+house our number was in front of, the agent gets one second look: the street,
+"saw it came off the market", our same number, worth a quick call
+(`reopenLostHouse`, claimed once per offer by `lost_house_reopened`). It sends
+itself like the second look does, under the money guard. A house we passed on
+is watched for this only, never for a price-drop text.
+
 ## No Today: who owns what (2026-10-20)
 
 Matt, 2026-10-20: "Today really shouldn't just exist. These things should be

@@ -253,3 +253,49 @@ test("a number we texted in a plain reply is watched like a floated one", async 
   const off = await runPriceWatch({ locationId: "LOC", saved: SAVED, store: fakeStore([texted]), now: NOW, deps: { ...starter(), fetchListings: fetch } });
   assert.equal(off.watched, 0);
 });
+
+// 2026-10-22 audit: a house we priced whose listing expires or is withdrawn
+// is the best off-market lead we have, and nothing texted its agent — the
+// watch read "off the market" as sold. With followUp.lostHouse on: one second
+// look, our same number.
+const LOST_SAVED = { aiApiKey: "k", apifyToken: "tok", conversationAi: normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, lostHouse: true } } } }) };
+const withDrafts = (store) => Object.assign(store, { async listReplyDrafts() { return []; } });
+test("a listing that comes off the market unsold gets one second look at our same number, with the switch on", async () => {
+  const store = withDrafts(fakeStore([lisa({ floatSentAt: new Date(NOW - 21 * DAY).toISOString(), priceWatch: { listPrice: 715000, status: "FOR_SALE" } })]));
+  const s = starter();
+  const fetchListings = listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 715000, status: "OFF_MARKET" }]]);
+  const r = await runPriceWatch({ locationId: "LOC", saved: LOST_SAVED, store, now: NOW, deps: { ...s, fetchListings } });
+  assert.equal(r.reopened, 1, JSON.stringify(r.results));
+  assert.equal(s.calls.length, 1);
+  assert.equal(s.calls[0].kind, "second_look");
+  assert.equal(s.calls[0].subject.offMarket, true);
+  assert.equal(s.calls[0].deps.releaseHeld, true);
+  // Seen again tomorrow: nothing more.
+  const again = await runPriceWatch({ locationId: "LOC", saved: LOST_SAVED, store, now: NOW + DAY, deps: { ...s, fetchListings } });
+  assert.equal(s.calls.length, 1, JSON.stringify(again.results));
+});
+
+test("a sold or pending house, or the switch off, gets no second look", async () => {
+  for (const [status, saved] of [["RECENTLY_SOLD", LOST_SAVED], ["PENDING", LOST_SAVED], ["OFF_MARKET", SAVED]]) {
+    const store = withDrafts(fakeStore([lisa({ floatSentAt: new Date(NOW - 21 * DAY).toISOString(), priceWatch: { listPrice: 715000, status: "FOR_SALE" } })]));
+    const s = starter();
+    await runPriceWatch({ locationId: "LOC", saved, store, now: NOW, deps: { ...s, fetchListings: listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 715000, status }]]) } });
+    assert.equal(s.calls.length, 0, status);
+  }
+});
+
+test("a house we passed on over the numbers is watched for coming off the market, never for a price-drop text", async () => {
+  const held = lisa({ status: "we_passed", counterHold: { at: new Date(NOW - 25 * DAY).toISOString() }, floatSentAt: new Date(NOW - 30 * DAY).toISOString(),
+    priceWatch: { listPrice: 715000, status: "FOR_SALE" } });
+  const s = starter();
+  const drop = withDrafts(fakeStore([held]));
+  await runPriceWatch({ locationId: "LOC", saved: LOST_SAVED, store: drop, now: NOW, deps: { ...s, fetchListings: listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 650000, status: "FOR_SALE" }]]) } });
+  assert.equal(s.calls.length, 0, "no price-drop text on our pass");
+  const off = withDrafts(fakeStore([{ ...held }]));
+  await runPriceWatch({ locationId: "LOC", saved: LOST_SAVED, store: off, now: NOW, deps: { ...s, fetchListings: listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 715000, status: "OFF_MARKET" }]]) } });
+  assert.deepEqual(s.calls.map((c) => c.kind), ["second_look"]);
+  // A pass for the kind of house is never watched.
+  const turnkey = withDrafts(fakeStore([lisa({ status: "we_passed", statusNote: "turnkey per the agent", floatSentAt: new Date(NOW - 30 * DAY).toISOString(), priceWatch: { listPrice: 715000, status: "FOR_SALE" } })]));
+  const t = await runPriceWatch({ locationId: "LOC", saved: LOST_SAVED, store: turnkey, now: NOW, deps: { ...s, fetchListings: listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 715000, status: "OFF_MARKET" }]]) } });
+  assert.equal(t.watched, 0);
+});
