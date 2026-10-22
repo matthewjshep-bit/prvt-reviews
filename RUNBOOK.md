@@ -4815,6 +4815,41 @@ thing pings once (`ghl_ping_sent` claim). `POST /api/dashboard/ghl-pings/run`
 (dry run by default) lists who would be pinged; `GET /api/dashboard/ghl-pings`
 shows the last runs.
 
+### The "Needs Matt" stage (2026-10-22)
+
+Matt, 2026-10-22 (after the follow-up audit found an acceptance held 15
+hours, three counters up to 46, and an agreed number a week with nothing
+telling him): "another stage in GHL opp pipeline as a catch all … minimize
+what those things are and have the app handle most things … instead of ping
+to me they land there." It replaces the pings: `desk.ghlPings` stays off.
+
+**Setup:** add a stage named **Needs Matt** to the Acquisitions pipeline.
+That's the switch. With `ghlStages.mode` "on" and the stage there, an agent's
+card goes in while one of these is open and comes back out (to where the
+offers put it) once it's done or dismissed:
+
+| Kind | What | Do it in |
+|---|---|---|
+| yes | an agreed number to approve; an acceptance (or a yes after we passed) the bot held | Offers → Hot / the held reply |
+| counter | a counter the counter hold hasn't taken in 12 hours | the held reply |
+| paper | paper to sign, a pre-contract warning, a hand-off, an answer only he has | the offer |
+| price | a house an agent surfaced, waiting 24 hours for his number | the offer editor |
+
+Nothing else lands there: booked calls, calls (Manual Actions), passes,
+promises, check-ins, closing tasks (the card stays in Contract) and buyers
+stay the machine's or their own page's. The why is written once per thing to
+the contact's "App ping why" field and a note (`needs_matt_noted`). A card
+Matt drags out stays where he put it. Rules: `shared/needs-matt.js`; runner:
+`ghl-broker/needs-matt.js` (every tick, 7am–9pm PT, cursor `needsMatt`);
+the move: `shared/ghl-stages.js` planCard `needsMatt`.
+`GET /api/dashboard/needs-matt` lists who's in it (ids and kinds);
+`POST /api/dashboard/needs-matt/run` is a dry run by default.
+
+A text GHL turns away without taking it (429 or 503) goes again after 10,
+30 and 60 minutes before it comes back to a person
+(`conversation-scheduler.js` SEND_RETRY_MINUTES). Any other failure may have
+sent it, so it still comes back at once.
+
 | Menu link | URL | Tabs |
 |---|---|---|
 | Autopilot | `https://<site>/autopilot?location_id={{location.id}}` | Overview · Agents · Investors · Advanced settings |

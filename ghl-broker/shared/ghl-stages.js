@@ -34,6 +34,7 @@ import { LIVE_DEAL_STAGES } from "./offer-status.js";
 import { saysRealWork, saysTurnkey, saysCosmeticOnly } from "./flip-read.js";
 import { parseUsAddress, normalizeUsAddress, sameStreetLoose } from "./us-address.js";
 import { connectedCall } from "./talked-to.js";
+import { NEEDS_MATT_STAGE_RX, NEEDS_MATT_STAGE_NAME } from "./needs-matt.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = typeof v === "number" ? v : Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -201,6 +202,8 @@ const STAGE_RX = {
   passed: /^passed on offer\b/i,
   notGood: /^not a good deal\b/i,
   contractSigned: /^contract signed\b/i,
+  // The catch-all for what only Matt can do (shared/needs-matt.js, 2026-10-22).
+  needsMatt: NEEDS_MATT_STAGE_RX,
   contractSent: /^contract sent\b/i,
   lost: /^lost\b/i,
 };
@@ -240,6 +243,7 @@ export function stageKeys(acq) {
 export function stageKeyOf(keys, stageId) {
   if (!stageId) return null;
   for (const k of CARD_STAGES) if (keys[k] === stageId) return k;
+  if (keys.needsMatt && keys.needsMatt === stageId) return "needsMatt";
   for (const k of OLD_STAGES) if (keys[k] === stageId) return k;
   return null;
 }
@@ -357,17 +361,25 @@ export function cardHeldBy({ offers = [], now = Date.now(), staleDays = GHL_STAG
  * made a card for them before. `handMoves`: when a person set the card's
  * stage in the app (ghl_stage_set, the companion window) — theirs, like a
  * drag in GHL, and it stands until an offer event comes after it.
+ * `needsMatt`: the one thing only Matt can do for this agent right now
+ * (shared/needs-matt.js, { kind, why, at }). The card goes to the "Needs
+ * Matt" stage while it's open — above every stage but Contract — and back to
+ * where the offers put it once it's gone. No stage by that name: no effect.
  */
-export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], handMoves = [], replied = null, cardMade = false, raised = [], settings = {}, now = Date.now() } = {}) {
+export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], handMoves = [], replied = null, cardMade = false, raised = [], needsMatt = null, settings = {}, now = Date.now() } = {}) {
   const cfg = normalizeGhlStages(settings);
   const k = keys || stageKeys(acq);
-  const label = (key) => CARD_STAGE_LABEL[key] || key;
+  const label = (key) => (key === "needsMatt" ? NEEDS_MATT_STAGE_NAME : CARD_STAGE_LABEL[key] || key);
   const nameOf = new Map((acq?.stages || []).map((s) => [s.id, String(s.name || "").trim()]));
   if (!acq?.id) return { skip: "no Acquisitions pipeline" };
   const mine = (cards || []).filter((c) => c && (!c.pipelineId || c.pipelineId === acq.id));
   const open = mine.filter((c) => String(c.status || "open") === "open");
   if (open.length > 1) return { skip: "two open cards — a person's call" };
-  const t = targetStage({ offers, now, lastIn, staleDays: cfg.staleTier1Days, raised });
+  const offersT = targetStage({ offers, now, lastIn, staleDays: cfg.staleTier1Days, raised });
+  // Something only Matt can do outranks the offers' stage, except a house
+  // under contract or a closed deal: those cards stay where he tracks them.
+  const need = needsMatt?.kind && k.needsMatt && offersT.to !== "contract" && !offersT.won ? needsMatt : null;
+  const t = need ? { ...offersT, to: "needsMatt", why: need.why || "needs you", at: ms(need.at) ?? offersT.at, need: true } : offersT;
   // A card the conversation put in Tier 1 (raisedHouses): the runner checks
   // GHL's tags first, as it does for a conversation's Tier 2 card, so a
   // homeowner telling us about their own house is never an agent's lead.
@@ -391,7 +403,7 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
   // Tier 3 is folded into Tier 2 (Matt, 2026-10-13): a card that still lands
   // there — a GHL workflow, a drag — is moved on, whoever put it there.
   const folded = at === "tier3";
-  if (!CARD_STAGES.includes(at) && !folded) return { skip: `in ${from} — the migration moves it`, old: true };
+  if (!CARD_STAGES.includes(at) && !folded && at !== "needsMatt") return { skip: `in ${from} — the migration moves it`, old: true };
 
   // The newest stage a person set in the app. GHL's per-contact search
   // doesn't say when the card last moved, so this time stands in for it.
@@ -400,6 +412,8 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
   let to = t.to;
   let why = t.why;
   if (!to && folded) { to = "tier2"; why = "Tier 3 joins Tier 2"; }
+  // Done with what needed him, and nothing else live: back to nurture.
+  if (!to && at === "needsMatt") { to = "tier2"; why = "nothing needs you on it any more"; }
   if (!to) {
     // No offers: a Tier 1 card nothing came of goes back to nurture after a while.
     if (at !== "tier1" || openPromise) return { skip: "no offers" };
@@ -567,7 +581,7 @@ export function planHandMove({ acq = null, keys = null, cards = [], to = "", con
  *   repliers             Map contactId → ISO of an agent's last word (opt-outs left out): Tier 2 cards, with tier2Repliers
  *   cardsMade            Set of contactIds the app has made a card for
  */
-export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), handMoves = new Map(), repliers = new Map(), cardsMade = new Set(), raised = new Map(), settings = {}, now = Date.now() } = {}) {
+export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), handMoves = new Map(), repliers = new Map(), cardsMade = new Set(), raised = new Map(), needsMatt = new Map(), settings = {}, now = Date.now() } = {}) {
   const counts = { considered: 0, planned: 0, blocked: 0, created: 0, youMoved: 0, old: 0, tier2Repliers: 0, conversation: 0, byMove: {} };
   const out = { moves: [], creates: [], youMoved: [], counts };
   if (!acq?.id) return out;
@@ -582,7 +596,7 @@ export function planStageMoves({ acq = null, opportunities = [], offers = [], la
     cardsBy.get(o.contactId).push(o);
   }
   const withRepliers = normalizeGhlStages(settings).tier2Repliers;
-  const contacts = new Set([...cardsBy.keys(), ...offersBy.keys(), ...(withRepliers ? repliers?.keys?.() || [] : []), ...(raised?.keys?.() || [])]);
+  const contacts = new Set([...cardsBy.keys(), ...offersBy.keys(), ...(withRepliers ? repliers?.keys?.() || [] : []), ...(raised?.keys?.() || []), ...(needsMatt?.keys?.() || [])]);
   for (const contactId of contacts) {
     counts.considered++;
     const mineOffers = offersBy.get(contactId) || [];
@@ -590,7 +604,7 @@ export function planStageMoves({ acq = null, opportunities = [], offers = [], la
     const r = planCard({ acq, keys, cards: cardsBy.get(contactId) || [], offers: mineOffers, contactId, name,
       lastIn: lastIn?.get?.(contactId) || null, openPromise: openPromiseContacts?.has?.(contactId) || false, nurtureLive,
       appMoves: appMoves?.get?.(contactId) || [], handMoves: handMoves?.get?.(contactId) || [], replied: repliers?.get?.(contactId) || null, cardMade: cardsMade?.has?.(contactId) || false,
-      raised: raised?.get?.(contactId) || [], settings, now });
+      raised: raised?.get?.(contactId) || [], needsMatt: needsMatt?.get?.(contactId) || null, settings, now });
     if (r.old) counts.old++;
     if (r.youMoved) { counts.youMoved++; out.youMoved.push(r.youMoved); continue; }
     if (r.create?.replier || r.move?.replier) counts.tier2Repliers++;
