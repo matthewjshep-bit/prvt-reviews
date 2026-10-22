@@ -185,10 +185,14 @@ const AUTO_RX = [
   /\bwill\s+be\s+with\s+you\s+(?:in\s+just\s+a\s+moment|in\s+a\s+moment|shortly)\b/i,
   /^\s*thank\s+you\s+for\s+your\s+message[,.!]?\s+we(?:'ll|\s+will)\s+(?:get\s+back|respond|be\s+in\s+touch|reply)\b/i,
   // A brokerage's SMS opt-in confirmation, a CRM's marketing text.
-  /\breply\s+stop\s+to\s+(?:unsubscribe|stop|opt[\s-]?out|end)\b|\bthank\s+you\s+for\s+opting\s+in\b|\bmsg\s*(?:&|and)\s*data\s+rates\b|\bmessage\s+(?:&|and)\s+data\s+rates\s+may\s+apply\b/i,
+  /\breply\s+["“”']?stop["“”']?\s+to\s+(?:unsubscribe|stop|opt[\s-]?out|end)\b|\bthank\s+you\s+for\s+opting\s+in\b|\bmsg\s*(?:&|and)\s*data\s+rates\b|\bmessage\s+(?:&|and)\s+data\s+rates\s+may\s+apply\b/i,
   // Out of office, the way a responder says it (not "was out of the office yesterday").
   /^\s*(?:auto[-\s]?reply:?\s*)?(?:hi[,!]?\s+)?(?:i\s+am|i'm)\s+(?:currently\s+)?(?:out\s+of\s+(?:the\s+)?office|away\s+from\s+(?:the\s+)?office|on\s+vacation)\b[^.?!]{0,80}\b(?:until|through|returning|return\s+on|back\s+on|limited\s+access)\b/i,
   /\bout\s+of\s+office\s*(?:reply|message|:)/i,
+  // An office's catch-all (2026-10-22, held as "couldn't place"): "One of our
+  // agents will get back with you soon", "You've reached the front desk of …".
+  /\bone\s+of\s+our\s+(?:agents|team\s+members|associates|staff)\s+will\s+(?:get\s+back|be\s+in\s+touch|reach\s+out|respond|follow\s+up)\b/i,
+  /\byou(?:'ve|\s+have)\s+reached\s+the\s+(?:front\s+desk|main\s+(?:line|office)|office)\s+(?:of|at|for)\b/i,
   // iPhone's Driving Focus.
   /\bdo\s+not\s+disturb\b[^.?!]{0,40}\b(?:driving|turned\s+on)\b|\bi'll\s+see\s+your\s+message\s+when\s+i\s+get\b/i,
 ];

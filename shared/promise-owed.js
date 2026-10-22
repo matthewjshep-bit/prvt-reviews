@@ -55,7 +55,7 @@ export function namesAPrice(text = "") {
 export function keepsOurWord(text = "") {
   const t = String(text || "");
   if (!t.trim()) return null;
-  if (ourReplyPasses(t) || weDecline(t) || WE_ARE_OUT.test(t)) return "pass";
+  if (saysWePass(t)) return "pass";
   const again = detectPromise(t);
   if (again && again !== "paper") return null;
   return namesAPrice(t) ? "number" : null;
@@ -64,6 +64,16 @@ export function keepsOurWord(text = "") {
 // Our pass in the words the replay found (2026-10-14) that the reply-side
 // readers don't: "I don't think we're going to get there", "we're out on
 // this one", "not doing condos at the moment", "it doesn't pencil for us".
+/** saysWePass(text) → our text turns the house down, in any of the ways we say it. */
+export function saysWePass(text = "") {
+  const t = String(text || "");
+  return Boolean(t.trim()) && (ourReplyPasses(t) || Boolean(weDecline(t)) || WE_ARE_OUT.test(t) || WE_DONT_BUY.test(t));
+}
+
+// More of how we say no, from the 2026-10-22 audit's stuck drafts: "we dont
+// do rural properties", "we are a no on manufactured homes", "we cant get
+// there unfortunately", "Lynnwood's too thin for us at that price".
+const WE_DONT_BUY = /\bwe\s+(?:don'?t|do\s+not|can'?t|cannot)\s+(?:do|buy|take\s+on)\s+(?:rural|manufactured|mobile|condos?|townho(?:mes|uses)|land|lots|multi|duplex)|\bwe(?:'re|\s+are)\s+a\s+no\s+on\b|\bwe\s+(?:can'?t|cannot)\s+get\s+there\b|\btoo\s+thin\s+for\s+us\b/i;
 const WE_ARE_OUT = /\b(?:not|n't)\s+(?:going\s+to|gonna)\s+(?:be\s+able\s+to\s+)?get\s+there\b|\bdon'?t\s+think\s+we(?:'?re|\s+are)\s+(?:going\s+to|gonna)\s+get\s+there\b|\bwe(?:'re|\s+are)\s+(?:going\s+to\s+)?(?:be\s+)?out\s+on\s+(?:this|that|it|\d)|\bnot\s+doing\s+(?:condos|townhomes|townhouses|mobile|manufactured|duplexes|multi)|\b(?:doesn'?t|does\s+not|won'?t|didn'?t)\s+pencil\b|\b(?:didn'?t|doesn'?t|won'?t|isn'?t\s+going\s+to)\s+work\s+(?:out\s+)?for\s+us\b|\btoo\s+far\s+apart\b|\btoo\s+(?:rural|far\s+out|finished|turnkey|nice)\s+for\s+us\b/i;
 
 // Machine texts that are our number, or our pass, whatever their words.

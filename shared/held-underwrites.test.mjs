@@ -480,3 +480,21 @@ test("the ask for the seller's number says Matt is pricing it himself, not that 
   const { heldInPlainWords } = await import("./held-underwrites.js");
   assert.match(heldInPlainWords(DRAFT_ONLY), /Matt is running the numbers himself/);
 });
+
+// 2026-10-22 audit: drafts sat open after we'd said no in words the reply-side
+// reader didn't know — "didn't work out for us, we're too far apart", "we dont
+// do rural", "we are a no on manufactured", "we cant get there".
+test("a draft on a house we said no to in any of our usual words retires", () => {
+  for (const no of [
+    "Sorry, this one didn't work out for us, we're too far apart on the number. Appreciate you working it with me.",
+    "Thanks for sending over! Unfortunatley we dont do rural properties bc they are too hard to comp",
+    "sorry i talked to my partner and we are a no on manfuactured homes right now. Keep me in mind",
+    "we cant get there unfortunately but lets stay in touch for any other distressed properties",
+  ]) {
+    const t = triageHeldUnderwrite({ offer: welfare(), drafts: [said(no)], now: NOW });
+    assert.equal(t.action, "retire", no);
+    assert.match(t.reason, /we told them we're passing/, no);
+  }
+  const asking = triageHeldUnderwrite({ offer: welfare(), drafts: [said("Good to know. What's the seller hoping to get for it?")], now: NOW });
+  assert.notEqual(asking.status, "we_passed");
+});

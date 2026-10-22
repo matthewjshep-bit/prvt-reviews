@@ -99,3 +99,21 @@ test("closed as we_passed with the reason on the row, the held sweep's shape —
   // A fresh one still holds them, as before.
   assert.equal(offerOwner({ offers: [unsent({ createdAt: ago(1) })], config, now: NOW }), "an open offer");
 });
+
+// 2026-10-22 audit: 35 of 42 drafts older than 20 days sat beside a decided
+// row on the same house, read as "waiting on you" in the book.
+test("an old draft beside a decided row on the same house is listed; a fresh one or a lone one isn't", async () => {
+  const { oldDuplicateDrafts } = await import("./stale-unsent.js");
+  const { sameRaisedHouse } = await import("./ghl-stages.js");
+  const now = Date.parse("2026-10-22T18:00:00Z");
+  const ago = (d) => new Date(now - d * 86400000).toISOString();
+  const rows = [
+    { id: "sent", contactId: "a", address: "12 Oak St, Kent, WA 98030", status: "passed", createdAt: ago(60) },
+    { id: "dup", contactId: "a", address: "12 Oak Street, Kent", status: "draft", createdAt: ago(55) },
+    { id: "fresh", contactId: "a", address: "12 Oak St, Kent, WA 98030", status: "draft", createdAt: ago(3) },
+    { id: "lone", contactId: "b", address: "9 Elm St, Auburn, WA", status: "draft", createdAt: ago(40) },
+    { id: "other", contactId: "c", address: "12 Oak St, Kent, WA 98030", status: "draft", createdAt: ago(40) },
+  ];
+  const r = oldDuplicateDrafts(rows, { now, sameHouse: sameRaisedHouse });
+  assert.deepEqual(r.map((x) => [x.offerId, x.decidedId, x.decidedStatus]), [["dup", "sent", "passed"]]);
+});

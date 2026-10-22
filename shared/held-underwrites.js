@@ -40,8 +40,8 @@ import { aiHoldReasons, effectiveStatus, DEAD_STATUSES, saidYes, DRAFT_ONLY_HOLD
 import { KIND_HOLD, MOBILE_HOLD, RURAL_HOLD } from "./asset-type.js";
 import { pricedByHand } from "./underwrite-model.js";
 import { WA_CITY_COORDS } from "./wa-city-coords.js";
-import { ourReplyPasses, threadPassed } from "./flip-read.js";
-import { owedOnHouse } from "./promise-owed.js";
+import { threadPassed } from "./flip-read.js";
+import { owedOnHouse, saysWePass } from "./promise-owed.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -338,7 +338,10 @@ function triageCore({
     .filter((d) => d && d.status === "sent" && d.propertyAddress && onThisHouse(d.propertyAddress))
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
   const qualified = threadPassed({ address, drafts });
-  if ((qualified && qualified.stage !== "ask") || (ourWord && ourReplyPasses(ourWord.sentText || ourWord.reply))) {
+  // Any way we say it (promise-owed.js saysWePass): the reply-side reader
+  // missed "didn't work out for us, we're too far apart" and "we dont do
+  // rural", and those drafts sat open after we'd said no (2026-10-22 audit).
+  if ((qualified && qualified.stage !== "ask") || (ourWord && saysWePass(ourWord.sentText || ourWord.reply))) {
     return { ...base, action: "retire", status: "we_passed", reason: "we told them we're passing on this house" };
   }
   const ruledOut = agentRuledOut(houseEvents, address);

@@ -497,3 +497,16 @@ test("a held thanks, photo or text from a stranger closes itself after a day; a 
   assert.ok(found.every((f) => f.action.type === "close" && f.severity === "fyi"));
   assert.deepEqual(auditActions({ findings: found }), [], "never a row for a person");
 });
+
+// 2026-10-22: two office auto-replies ("one of our agents will get back with
+// you", a front desk's greeting) were held as "couldn't place" for Matt.
+test("a held office auto-reply closes itself after a day like a thanks", () => {
+  const held = (over) => draft({ status: "draft", sentAt: null, createdAt: ago(30), ...over });
+  const found = quietHolds([
+    held({ id: "desk", intent: "other", inbound: "Hi! You've reached the front desk of Lakeside Realty Group. It looks like you are trying to reach an agent." }),
+    held({ id: "agents", intent: "other", inbound: "Thanks for reaching out! One of our agents will get back with you soon. Reply “STOP” to opt-out." }),
+    held({ id: "real", intent: "other", inbound: "I sure will; he's not countering anything but the allowance." }),
+  ], { now: NOW });
+  assert.deepEqual(found.map((f) => f.draftId), ["desk", "agents"]);
+  assert.match(found[0].why, /an auto-reply/);
+});

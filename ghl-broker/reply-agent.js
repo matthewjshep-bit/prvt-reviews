@@ -69,7 +69,7 @@ import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
-import { normalizeGhlStages } from "./shared/ghl-stages.js";
+import { normalizeGhlStages, sameRaisedHouse } from "./shared/ghl-stages.js";
 import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
@@ -77,7 +77,7 @@ import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./share
 import { usageOf } from "./shared/ai-cost.js";
 import { batcherFor } from "./draft-batch.js";
 // Aliased: this module already has its own OPEN_STATUSES for DRAFT rows.
-import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, underContractOn, isNegotiable, pushesToPaper, asksForWriteUp, numberApproved, saysYes, saidYes, YES_WINDOW_DAYS } from "./shared/offer-status.js";
+import { OPEN_STATUSES as OPEN_OFFER_STATUSES, effectiveStatus as offerStatus, dealIsOver, dealOutreachStopped, dealOutreachPaused, fellThroughOn, underContractOn, isNegotiable, pushesToPaper, asksForWriteUp, numberApproved, saysYes, saidYes, YES_WINDOW_DAYS, aiHoldReasons, DRAFT_ONLY_RX } from "./shared/offer-status.js";
 import { signedContractIn, themLines, paperworkSignal } from "./shared/contract-signed.js";
 import { sameStreet, sameHouse } from "./shared/us-address.js";
 import { releasableHeld } from "./shared/conversation-audit.js";
@@ -1577,15 +1577,20 @@ export function listPriceFloor(message = "") {
 }
 const KNOWN_OFFER_DAYS = 60;
 const KNOWN_DRAFT_DAYS = 7;
+// A draft waiting on Matt's number (draft only, a skeleton) is in hand as
+// long as an offer is: the same house named again a week on was a second
+// skeleton for him to price (2026-10-22 audit). Any spelling of it counts
+// (sameRaisedHouse: "12 SE Oak-Hill Lp" is "12 Se Oak Hill Loop").
 export function knownOfferFor(rows = [], address = "", now = Date.now()) {
   const key = addressKey(address);
   if (!key) return null;
   return rows.find((o) => {
-    if (!o?.address || addressKey(o.address) !== key) return false;
+    if (!o?.address || (addressKey(o.address) !== key && !sameRaisedHouse(o.address, address))) return false;
     const ts = Date.parse(o.updatedAt || o.createdAt || "");
     if (!Number.isFinite(ts)) return true;
     const days = (now - ts) / 86400000;
-    return o.status === "draft" ? days <= KNOWN_DRAFT_DAYS : days <= KNOWN_OFFER_DAYS;
+    const waitsOnMatt = o.status === "draft" && aiHoldReasons(o).some((h) => DRAFT_ONLY_RX.test(String(h || "")));
+    return o.status === "draft" && !waitsOnMatt ? days <= KNOWN_DRAFT_DAYS : days <= KNOWN_OFFER_DAYS;
   }) || null;
 }
 

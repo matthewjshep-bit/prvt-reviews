@@ -3544,6 +3544,18 @@ test("a house counts as known while its offer is recent or its held draft is fre
   assert.equal(knownOfferFor(rows, "", now), null);
 });
 
+// 2026-10-22 audit: a house the agent named again a week on became a second
+// skeleton for Matt to price; and a spelling change made a third.
+test("a draft waiting on Matt's number stays known for 60 days, under any spelling", () => {
+  const now = Date.parse("2026-10-22T18:00:00Z");
+  const day = 86400000;
+  const rows = [{ address: "12 SE Oak-Hill Lp, Shelton, WA 98584", status: "draft", createdAt: new Date(now - 20 * day).toISOString(),
+    autoUnderwrite: { held: ["ready for your comps — the app made a skeleton from the address, nothing looked up"] } }];
+  assert.ok(knownOfferFor(rows, "12 SE Oak-Hill Lp, Shelton, WA 98584", now), "twenty days on, still in hand");
+  assert.ok(knownOfferFor(rows, "12 se oak hill loop Shelton", now), "another spelling of it");
+  assert.equal(knownOfferFor(rows, "14 SE Oak-Hill Lp, Shelton, WA 98584", now), null, "the house next door is another house");
+});
+
 test("the offer book says a held draft is with the team, and a sent offer shows no expiry", () => {
   const now = Date.now();
   const book = summarizeOffers([

@@ -814,3 +814,20 @@ test("a replier who joined by their reply and isn't written down yet is spread f
   const later = ids.map((id) => evaluateAgent(agent({ contactId: id, lastInboundAt: ago(90), joinedByReply: true, joinedAt: ago(0) }), ctx({ settings: S14, now: NOW + 7 * DAY })));
   assert.deepEqual(later.map((v) => v.dueAt || null).filter(Boolean), fresh.map((v) => v.dueAt || null).filter((d) => d && Date.parse(d) > NOW + 7 * DAY));
 });
+
+// 2026-10-22 audit: 782 agents read "moved to Tier 2 within 14 days" — the
+// board moved under them (the 10/13 migration, the replier sweep, a pass
+// moving Offer Out to Tier 2) and each move pushed their check-in out two
+// more weeks. 21 offer agents had gone three weeks and more with no text.
+test("a card moved to Tier 2 doesn't push back an agent we haven't texted in three weeks", () => {
+  const S14 = normalizeAgentPulse({ enabled: true, everyDays: 14 });
+  const a = agent({ lastInboundAt: ago(30), events: [{ type: "follow_up_sent", at: ago(22) }], ghlTier: { tier: "t2", movedAt: ago(2) } });
+  const v = evaluateAgent(a, ctx({ settings: S14 }));
+  assert.equal(v.status, "due", v.reason);
+  // We did text five days ago: that's the clock, not the move.
+  const recent = agent({ lastInboundAt: ago(30), events: [{ type: "follow_up_sent", at: ago(5) }], ghlTier: { tier: "t2", movedAt: ago(1) } });
+  const w = evaluateAgent(recent, ctx({ settings: S14 }));
+  assert.equal(w.status, "not_due");
+  assert.equal(w.dueAt, ago(-9));
+  assert.match(w.reason, /talked within 14 days/);
+});
