@@ -252,3 +252,43 @@ test("skeletons made today don't fill the cap a run you start yourself is held t
     assert.equal(await countToday({ store, locationId: "LOC-skel-count" }), 0);
   } finally { restore(); }
 });
+
+/* ---------- a flyer's house, and one house per link (2026-10-22) ---------- */
+// The referee reads the thread for the house mentioned last. A house read off
+// a flyer is never in the thread's words, so any older house the agent typed
+// "wins" — and the draft for the flyer's house came out with the old one.
+
+const OLD = "22 Birch Ave, Everett, WA 98201";
+function threadAbout(text) {
+  return { call: async (p) => {
+    if (p.includes("/conversations/search")) return { conversations: [{ id: "cv1" }] };
+    if (p.includes("/messages")) return { messages: { messages: [
+      { id: "m1", direction: "inbound", messageType: "TYPE_SMS", body: text, dateAdded: new Date(Date.now() - 3600000).toISOString() },
+    ] } };
+    return {};
+  } };
+}
+
+test("a house read off a flyer they sent becomes the draft, not the older house the thread talks about", async () => {
+  _resetJobs();
+  const { restore } = stubFetch();
+  try {
+    await store.appendContactEvents("LOC-photo", "agent-p1", [{ type: "subject_property_set", party: "agent", at: new Date(Date.now() - 7200000).toISOString(), address: OLD, source: "conversation" }]);
+    const { job } = await startUnderwrite({ client: threadAbout("22 Birch Ave is still on, needs a roof"), locationId: "LOC-photo", saved: skeleton, store, contactId: "agent-p1",
+      message: `[photo → ${ADDRESS}]`, address: ADDRESS, deps: noOffer });
+    assert.ok(await until(() => ["held", "done", "error"].includes(job.status)), `still ${job.status}/${job.phase}`);
+    assert.match((await store.getOffer(job.offerId)).address, /^4417 Somerset Ln/, job.warnings?.join("; "));
+  } finally { restore(); }
+});
+
+test("two links in one text make two drafts, each its own house, not two of the last link", async () => {
+  _resetJobs();
+  const { restore } = stubFetch();
+  try {
+    const both = `[listing link → ${ADDRESS}]\n[listing link → 88 Alder St, Everett, WA 98203]`;
+    const { job } = await startUnderwrite({ client, locationId: "LOC-links", saved: skeleton, store, contactId: "agent-l1",
+      message: `https://redf.in/a https://redf.in/b\n${both}`, address: ADDRESS, deps: noOffer });
+    assert.ok(await until(() => ["held", "done", "error"].includes(job.status)), `still ${job.status}/${job.phase}`);
+    assert.match((await store.getOffer(job.offerId)).address, /^4417 Somerset Ln/, job.warnings?.join("; "));
+  } finally { restore(); }
+});

@@ -52,6 +52,7 @@ import { markSides, sameSideFirst, isAcross, acrossLabel } from "./shared/same-s
 import { addressKey, completeAddress, sameStreet, sameHouse } from "./shared/us-address.js";
 import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed, DRAFT_ONLY_HOLD, SKELETON_HOLD } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
+import { photoMarkers } from "./photo-addresses.js";
 import { buildTranscript } from "./enrich.js";
 import {
   getContact, createContactNote, addContactTags, removeContactTags,
@@ -1462,11 +1463,18 @@ async function runUnderwrite(job, ctx) {
   // 2026-10-02 the referee would have taken Karamveer Tiwana's 13348 32nd Ave
   // S row to 21902 29th Ave South, which the thread had moved on to, and
   // written that house over the row's held draft.
-  const pinned = job.origin === "operator" || job.anyKind;
+  // A house read off a flyer they sent ("[photo → …]", photo-addresses.js)
+  // is named outright too, and never in the thread's words, so the referee
+  // below would always find some older house mentioned later than it.
+  const fromPhoto = Boolean(job.suppliedAddress) && photoMarkers(job.message).some((x) => addressKey(x) === addressKey(job.suppliedAddress));
+  const pinned = job.origin === "operator" || job.anyKind || fromPhoto;
   let linked = null;
   if (!pinned && job.message) {
     const x = await expandListingLinks(job.message).catch(() => ({ links: [] }));
-    linked = x.links?.length ? x.links[x.links.length - 1] : null;
+    // Several links make several drafts, one house each (skeleton mode):
+    // the one this run was handed is its link, not the last in the text.
+    const mine = (x.links || []).find((l) => addressKey(l.address) === addressKey(job.suppliedAddress || ""));
+    linked = mine || (x.links?.length ? x.links[x.links.length - 1] : null);
   }
 
   let standing = job.suppliedAddress || fieldAddress || "";

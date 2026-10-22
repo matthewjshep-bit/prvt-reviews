@@ -45,6 +45,15 @@ export function findUrls(text) {
   return [...new Set(out)];
 }
 
+// An email carries a signature's worth of links (the brokerage, Facebook,
+// an unsubscribe) and only MAX_LINKS are read: the listing sites go first,
+// then everything else in the order written.
+const LISTING_HOST = /(^|\.)(redf\.in|redfin\.com|zillow\.com|realtor\.com|trulia\.com|homes\.com|hms\.pt|homespotter\.com|nwmls\.com|onehome\.com|compass\.com|coldwellbankerhomes\.com|windermere\.com|johnlscott\.com|weichert\.com)$/i;
+export function listingFirst(urls = []) {
+  const host = (u) => { try { return new URL(u).hostname; } catch { return ""; } };
+  return [...urls.filter((u) => LISTING_HOST.test(host(u))), ...urls.filter((u) => !LISTING_HOST.test(host(u)))];
+}
+
 /* ---------- reading an address out of a path ---------- */
 
 const DIRS = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw", "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest"]);
@@ -249,7 +258,7 @@ export async function expandListingLinks(text, { resolve = resolveListingLink, .
   const raw = String(text || "");
   const marked = [...raw.matchAll(MARKER_RE)].map((m) => ({ url: "", resolvedUrl: "", address: m[1].trim(), source: "link" }));
   if (marked.length) return { text: raw, links: marked };
-  const urls = findUrls(raw).slice(0, MAX_LINKS);
+  const urls = listingFirst(findUrls(raw)).slice(0, MAX_LINKS);
   if (!urls.length) return { text: raw, links: [] };
   const links = (await Promise.all(urls.map((u) => resolve(u, opts).catch(() => null)))).filter(Boolean);
   if (!links.length) return { text: raw, links: [] };

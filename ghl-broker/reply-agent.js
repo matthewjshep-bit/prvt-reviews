@@ -86,8 +86,9 @@ import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { expandListingLinks } from "./listing-links.js";
+import { inboundPhotoUrls, readPhotoAddresses, expandPhotoAddresses, bodyImageUrls } from "./photo-addresses.js";
 import { fmtMoney, underwriteMode } from "./shared/offer-calc.js";
-import { parseUsAddress, addressKey, lastMention, offerForms } from "./shared/us-address.js";
+import { parseUsAddress, addressKey, lastMention, offerForms, normalizeUsAddress } from "./shared/us-address.js";
 import {
   normalizeConversationAi, shadowModelFor, INTENTS, NEVER_AUTO, GUARDED_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
   SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutInTranscript, optOutActions, normalizePassReason, normalizeDraftFeedback,
@@ -2418,7 +2419,7 @@ export async function assembleConversation({
  */
 export async function startReply({
   client, locationId, saved, store, contactId, message, channel = "sms", party = "", sendsEnabled = false, deps = {},
-  attachments = 0, inboundKind = "text", call = null, fromCheckIn = false,
+  attachments = 0, inboundKind = "text", call = null, fromCheckIn = false, attachmentUrls = [],
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -2477,8 +2478,11 @@ export async function startReply({
   // one text. The same words from the same contact inside two minutes are
   // one message.
   const text = String(message || "").trim();
+  // Two picture texts with no words are two messages when their pictures differ.
+  const urls = (Array.isArray(attachmentUrls) ? attachmentUrls : []).map(String).slice(0, 8);
   for (const j of jobs.values()) {
     if (j.locationId === locationId && j.contactId === contactId && (j.originalMessage ?? j.message) === text.slice(0, 1000) &&
+        (j.attachmentUrls || []).join(" ") === urls.join(" ") &&
         j.status !== "superseded" && Date.now() - Date.parse(j.startedAt) < DEDUPE_MS) {
       return { skipped: `duplicate of ${j.id}`, job: null };
     }
@@ -2498,6 +2502,7 @@ export async function startReply({
     inboundKind: inboundKind === "call" ? "call" : "text",
     call: inboundKind === "call" && call ? { ...call, transcript: String(call.transcript || message || "").slice(0, 12000) } : null,
     attachments: nAttachments,
+    attachmentUrls: urls,
     party: party === "agent" || party === "investor" ? party : "",
     // Re-answering a text the "unanswered" clock found still owed
     // (promise-sweep.js): if this holds too, it is a person's — no new clock.
@@ -4038,6 +4043,30 @@ async function runReply(job, ctx) {
       job.listingLinks = expanded.links.map(({ url, address, source }) => ({ url, address, source }));
     }
   }
+  // A flyer is an address the model can't see either (Matt, 2026-10-22:
+  // "scrub images that people sent over and create the drafts from the
+  // address(es) that are in the image", texts and emails both). The pictures
+  // and PDFs they sent since our last text are read for the printed street
+  // address and nothing else, and it goes into the message the way a link's
+  // does: "[photo → 7413 Soundview Dr, Edmonds, WA 98026]". The reply model
+  // reads that line, never the picture. Off unless media.readAddresses is on.
+  if (job.inboundKind !== "call" && !job.photoAddresses && conversationConfig(saved).media?.readAddresses
+      && (job.attachments > 0 || job.attachmentUrls?.length || (job.channel === "email" && /<img\b/i.test(job.message)))) {
+    job.photoAddresses = [];
+    try {
+      const fromGhl = await (deps.photoUrls || ((id) => inboundPhotoUrls(client, locationId, id, { now })))(job.contactId).catch(() => []);
+      const urls = [...new Set([...(fromGhl || []), ...(job.attachmentUrls || []), ...(job.channel === "email" ? bodyImageUrls(job.message) : [])])];
+      job.photoAddresses = urls.length
+        ? await (deps.readPhotos || ((us) => readPhotoAddresses(us, { aiApiKey, now })))(urls)
+        : [];
+    } catch (e) {
+      warnings.push(`photo addresses: ${String(e?.message || e).slice(0, 120)}`);
+    }
+    if (job.photoAddresses.length) {
+      if (job.originalMessage == null) job.originalMessage = job.message;
+      job.message = expandPhotoAddresses(job.message, job.photoAddresses).slice(0, 1400);
+    }
+  }
 
   /* --- 0. an opt-out gets silence, before anything is spent --- */
   const cfg = conversationConfig(saved);
@@ -4444,7 +4473,13 @@ async function runReply(job, ctx) {
   // aren't in the book yet: each a skeleton in skeleton mode (2026-10-19).
   const skeletonHouses = async () => {
     if (party !== "agent" || (isCall && !heard.labelled) || draft.intent === "opt_out") return [];
-    const fresh = namedHouses.filter((h) => h.address && !h.needsAddress && hasHouseNumber(h.address) && lastMention(heard.words, h.address) >= 0);
+    // A flyer's address is theirs whatever the model made of the text, and
+    // it is the whole address: the text's shorter reading of the same line
+    // ("13645 3rd Ave" off "[photo → 13645 3rd Ave S, Burien, WA 98168]") gives way to it.
+    const photos = job.photoAddresses || [];
+    const line = (x) => normalizeUsAddress(String(x || "").split(",")[0]).toLowerCase();
+    const covered = (h) => photos.some((p) => sameHouse(h.address || "", p) || `${line(p)} `.startsWith(`${line(h.address)} `));
+    const fresh = [...namedHouses.filter((h) => !covered(h)), ...photos.map((address) => ({ address }))].filter((h) => h.address && !h.needsAddress && hasHouseNumber(h.address) && lastMention(heard.words, h.address) >= 0);
     if (!fresh.length) return [];
     const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
     return fresh.filter((x) => !knownOfferFor(rows, x.address, now)).slice(0, 5);
