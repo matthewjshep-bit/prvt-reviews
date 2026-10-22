@@ -36,7 +36,7 @@
 
 import { addressKey, sameStreet, parseUsAddress, completeAddress } from "./us-address.js";
 import { propertyDossier } from "./contact-record.js";
-import { aiHoldReasons, effectiveStatus, DEAD_STATUSES, saidYes, DRAFT_ONLY_HOLD } from "./offer-status.js";
+import { aiHoldReasons, effectiveStatus, DEAD_STATUSES, saidYes, DRAFT_ONLY_HOLD, DRAFT_ONLY_RX } from "./offer-status.js";
 import { KIND_HOLD, MOBILE_HOLD, RURAL_HOLD } from "./asset-type.js";
 import { pricedByHand } from "./underwrite-model.js";
 import { WA_CITY_COORDS } from "./wa-city-coords.js";
@@ -217,6 +217,8 @@ export function agentRuledOut(events = [], address = "") {
 
 // What the nightly sweep passes on when a held house was never priced and
 // went quiet, or was misread as turnkey: nothing about the house itself.
+// Another house of theirs still in play, for the per-house silence clock.
+const OPEN_ELSEWHERE = new Set(["draft", "new", "sent", "countered"]);
 const QUIET_PASS = /^(turnkey per the agent|held \d+ days and nothing since|we asked for their read a week ago|our ask for their numbers (never went out|didn't go out))/i;
 
 /**
@@ -268,7 +270,21 @@ export function triageHeldUnderwrite(args = {}) {
   // sends itself; otherwise it waits for you (ghl-broker/held-underwrites.js).
   if (t.action !== "retire" || t.status !== "we_passed" || t.passNote || !QUIET_PASS.test(t.reason)) return t;
   const owed = owedOnHouse({ events: args.events, drafts: args.drafts, offers: args.siblings, address: args.offer?.address, now: args.now ?? Date.now() });
-  return owed ? { ...t, passNote: "promised", promised: owed } : t;
+  // A house Matt prices himself, with their question or our promise as the
+  // last word on it (2026-10-22 audit: a third of the sweep's closes since
+  // 10/11 left an agent hanging on "I'll get this in front of Matt" or on a
+  // link they'd re-sent): not the sweep's to close. It stays his, and his
+  // agent's card sits in Needs Matt (shared/needs-matt.js) until he prices
+  // or passes it.
+  if (owed && aiHoldReasons(args.offer).some((h) => DRAFT_ONLY_RX.test(String(h || "")))) {
+    const { status: _closed, ...rest } = t;
+    const what = owed.what === "answer" ? "their last text on it is unanswered" : `we owe them ${owed.what === "number" ? "a number" : "an answer"} on it`;
+    return { ...rest, action: "yours", owed, reason: `${what} — yours to price or pass` };
+  }
+  if (owed) return { ...t, passNote: "promised", promised: owed };
+  // Nothing owed: the close still tells them, once, through the pass note
+  // (ghl-broker/held-underwrites.js stamps it; shared/pass-note.js).
+  return { ...t, passNoteDue: /^turnkey per the agent/i.test(t.reason) ? "turnkey" : "quiet" };
 }
 
 function triageCore({
@@ -360,10 +376,16 @@ function triageCore({
   if (turnkey) return { ...base, action: "retire", status: "we_passed", reason: `turnkey per the agent ("${clip(turnkey.inbound)}")` };
 
   const lastIn = latestInbound(drafts, events);
+  // Silence is this house's (2026-10-22): an agent texting about another
+  // house of theirs kept this one open 50–66 days. A text naming no house
+  // counts for it only while nothing else of theirs is open.
+  const openElsewhere = siblings.some((s) => s && s.id !== offer.id && !onThisHouse(s.address) && OPEN_ELSEWHERE.has(effectiveStatus(s)));
+  const forHouse = (a) => (a ? onThisHouse(a) : !openElsewhere);
+  const lastInHouse = latestInbound(drafts.filter((d) => d && forHouse(d.propertyAddress)), events.filter((e) => e && forHouse(e.address)));
   const asked = events
     .filter((e) => e?.type === "audit_action" && e.data?.kind === "held_ask" && (e.offerId === offer.id || onThisHouse(e.address)))
     .map((e) => ms(e.at)).filter((t) => t != null).sort((a, b) => b - a)[0] ?? null;
-  const silentSince = Math.max(heldAt, lastIn ?? 0, asked ?? 0);
+  const silentSince = Math.max(heldAt, lastInHouse ?? 0, asked ?? 0);
   if (now - silentSince >= STALE_DAYS * DAY_MS) {
     return { ...base, action: "retire", status: "we_passed", reason: `held ${heldDays} days and nothing since` };
   }

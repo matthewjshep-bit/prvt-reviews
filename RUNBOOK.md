@@ -327,7 +327,24 @@ reason."
   house it is still asking its one question about. Houses are read only on a
   lead-type text (`HOUSE_LEAD_INTENTS`), as before.
 
-**The status menu on drafts.** Offers and the work pane show the status menu
+**The sweep's closes tell the agent too (2026-10-22).** The audit found 44 of
+101 houses the nightly held sweep closed with no word to the agent. Now:
+- A quiet close (held 14 days and nothing since, asked a week ago with no
+  answer, our ask never went, turnkey per the agent) on a house nothing went
+  out on stamps `passNote: due` and `passReason {code, by: "held-sweep"}`
+  (code `quiet`, or `turnkey`), and the pass note sends it in machine hours.
+  `quiet` reads "we couldn't get it to a number that worked for us"; it's the
+  sweep's own reason and isn't on the status menu.
+- A house Matt prices (draft only or skeleton) whose last word is their
+  unanswered text or our open promise is not closed by the sweep: it stays
+  his (`action: "yours"`) and the agent's card sits in Needs Matt.
+- The silence clock is per house: a text about another open house of theirs
+  doesn't keep this one alive (a text naming no house counts only while
+  nothing else of theirs is open).
+- A sent pass note or kind pass records `pass_texted`, which the check-in
+  counts as our last word.
+
+**The status menu on drafts.** Offers and the work pane show the status menu**The status menu on drafts.** Offers and the work pane show the status menu
 on a draft row too ("accepted" is left off a draft).
 
 **The pass note** (Conversation AI → agent playbook → "Tell them when you pass

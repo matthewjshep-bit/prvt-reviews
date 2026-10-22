@@ -243,10 +243,15 @@ export async function sweepHeldUnderwrites({
           if (effectiveStatus(full) !== "draft") { row.status = "skipped"; row.reason = `the row is ${effectiveStatus(full)} now`; continue; }
           const ts = iso(now);
           const note = retireNote(o, t);
+          // A quiet close on a house nothing went out on (2026-10-22): the
+          // agent hears it once, through the pass note (pass-note.js sends a
+          // "due" note in machine hours), with the reason the pill shows.
+          const noteIt = Boolean(t.passNoteDue && contactId && !(full.sends || []).length && !full.floatSentAt);
           await store.updateOffer(o.id, {
             ...full, status: t.status, statusAt: ts, statusNote: note,
             statusHistory: [...(full.statusHistory || []), { status: t.status, ts, note }],
             retired: { at: ts, by: "held-sweep", reason: t.reason }, updatedAt: ts,
+            ...(noteIt ? { passReason: { code: t.passNoteDue, at: ts, by: "held-sweep" }, passNote: { status: "due", markedAt: ts } } : {}),
           });
           await recordEvent({
             store, locationId, contactId, party: "agent", type: `offer_${t.status}`, at: ts, address: o.address || "", offerId: o.id,
@@ -254,6 +259,7 @@ export async function sweepHeldUnderwrites({
           }).catch(() => {});
           if (contactId) await createContactNote(client, contactId, { body: note }).catch(() => {});
           row.status = "retired"; counts.retired++; closed++;
+          if (noteIt) { row.reason = `${t.reason} — the pass note tells them`; counts.passNotes = (counts.passNotes || 0) + 1; }
           // Not our kind of house, or not our area: they hear it from us,
           // once, so a "we'll come back with a number" isn't left hanging.
           // A house we promised a number on, or whose last word from them

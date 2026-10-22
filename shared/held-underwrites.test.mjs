@@ -480,3 +480,34 @@ test("the ask for the seller's number says Matt is pricing it himself, not that 
   const { heldInPlainWords } = await import("./held-underwrites.js");
   assert.match(heldInPlainWords(DRAFT_ONLY), /Matt is running the numbers himself/);
 });
+
+// 2026-10-22 audit: a third of the sweep's closes since 10/11 ended on our
+// "I'll get this in front of Matt" or on their unanswered text. On a house
+// Matt prices himself that isn't the sweep's to close: it stays his (the
+// card sits in Needs Matt).
+test("a retired house whose agent asked us something isn't retired: it's Matt's", () => {
+  const old = held({ createdAt: ago(20), updatedAt: ago(20), autoUnderwrite: { jobId: "j1", held: [DRAFT_ONLY], finishedAt: ago(20) } }, [DRAFT_ONLY]);
+  const t = triage({ offer: old, drafts: [inbound("Did you get the link I sent? Seller wants 499,950", { createdAt: ago(16), status: "draft" })] });
+  assert.equal(t.action, "yours", t.reason);
+  assert.match(t.reason, /unanswered — yours to price or pass/);
+  assert.equal(t.status, undefined);
+});
+
+test("a quiet close with nothing owed carries the pass note", () => {
+  const old = held({ createdAt: ago(20), updatedAt: ago(20), autoUnderwrite: { jobId: "j1", held: [THIN], finishedAt: ago(20) } });
+  const t = triage({ offer: old, drafts: [inbound("Sounds good", { createdAt: ago(18) }), { id: "r1", contactId: "c1", status: "sent", reply: "Thanks", createdAt: ago(17.9), sentAt: ago(17.9), propertyAddress: old.address }] });
+  assert.equal(t.action, "retire");
+  assert.equal(t.passNoteDue, "quiet");
+});
+
+test("an agent texting about another house of theirs doesn't keep this one open for good", () => {
+  const old = held({ createdAt: ago(20), updatedAt: ago(20), autoUnderwrite: { jobId: "j1", held: [THIN], finishedAt: ago(20) } });
+  const other = { id: "o2", contactId: "c1", address: "77 Birch Ln, Kent, WA 98030", status: "sent", cashAmount: 300000, createdAt: ago(5) };
+  const chat = inbound("Any update on Birch?", { propertyAddress: "77 Birch Ln, Kent, WA 98030", createdAt: ago(1) });
+  const t = triage({ offer: old, siblings: [old, other], drafts: [chat] });
+  assert.equal(t.action, "retire", t.reason);
+  assert.match(t.reason, /held 20 days and nothing since/);
+  // The same text with no house named, and nothing else of theirs open, is about this one.
+  const alone = triage({ offer: old, siblings: [old], drafts: [inbound("Any update?", { propertyAddress: "", createdAt: ago(1) })] });
+  assert.notEqual(alone.action, "retire");
+});

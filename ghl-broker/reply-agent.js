@@ -6789,6 +6789,15 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       }).catch(() => {});
     }
   }
+  // A pass about a house of theirs actually went (the pass note, a kind
+  // pass): the check-in counts it as our last word (2026-10-22).
+  if (d.outbound?.kind === "pass_note" || d.outbound?.kind === "kind_pass") {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "agent", type: "pass_texted", at: ts,
+      address: d.outbound.address || d.propertyAddress || "", source: "conversation", ref: d.id, dedupeKey: `pass_texted:${d.id}`,
+      data: { draftId: d.id, kind: d.outbound.kind, auto: Boolean(auto) },
+    }).catch(() => {});
+  }
   // The agent's check-in actually went: the cadence and the "unanswered"
   // counts (shared/agent-pulse.js) read this, never the claim.
   if (d.outbound?.kind === "agent_pulse") {

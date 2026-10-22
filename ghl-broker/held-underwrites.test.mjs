@@ -214,11 +214,29 @@ test("a house we retire after promising a number gets a pass text drafted for th
   assert.equal(proactive2[0].deps.holdForAPerson, undefined);
 });
 
-test("a house retired quietly with nothing promised still sends nothing", async () => {
+// 2026-10-22 audit: 44 of 101 houses the sweep closed left the agent with
+// no word at all. A quiet close now carries the pass note (pass-note.js sends
+// it in machine hours, once); the sweep itself still starts no text.
+test("a house the sweep retires gets one pass note", async () => {
   const stale = held({ createdAt: ago(16), updatedAt: ago(16), autoUnderwrite: { jobId: "j1", held: [THIN], finishedAt: ago(16) } });
   const d = deps();
   const store = fakeStore({ offers: [stale] });
-  await run(store, fakeClient(), d);
-  assert.equal(store.book.get("h1").status, "we_passed");
+  const r = await run(store, fakeClient(), d);
+  const after = store.book.get("h1");
+  assert.equal(after.status, "we_passed");
+  assert.equal(after.passNote?.status, "due");
+  assert.deepEqual({ code: after.passReason?.code, by: after.passReason?.by }, { code: "quiet", by: "held-sweep" });
   assert.equal(d.calls.filter((c) => c[0] === "proactive").length, 0);
+  assert.equal(r.counts.passNotes, 1);
+  // The next night it's closed: nothing stamped twice.
+  await run(store, fakeClient(), d, { now: NOW + 86400000 });
+  assert.equal(store.book.get("h1").passNote.markedAt, after.passNote.markedAt);
+});
+
+test("a house the sweep closes because they stopped the bot gets no note", async () => {
+  const stale = held({ createdAt: ago(16), updatedAt: ago(16), autoUnderwrite: { jobId: "j1", held: [THIN], finishedAt: ago(16) } });
+  const store = fakeStore({ offers: [stale] });
+  await run(store, fakeClient({ tags: { c1: ["stop bot"] } }), deps());
+  assert.equal(store.book.get("h1").status, "we_passed");
+  assert.equal(store.book.get("h1").passNote, undefined);
 });
