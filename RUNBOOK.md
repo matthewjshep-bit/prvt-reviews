@@ -3401,7 +3401,14 @@ do and i expect the app to do everything else". The live Desk had 15 Call and
     - nothing is agreed and the offer isn't hot;
     - the text names that house, or it is the only live counter.
   - A hold, a showing time or a hand-off doesn't count.
-  - Look back: `POST /api/offers/passes/our-no { dryRun }`.
+  - **A house nothing went out on (2026-10-22).** "A little too rural for
+    flips", "too nice for us", "not enough work in it", or "we'll pass"
+    (`weWalkAway`) passes the drafts, and the priced rows never sent or
+    floated, made in the last 30 days, with the reason given (rural,
+    turnkey). It applies to the house the text names by number or street
+    name, the only one, or all of them for "these", "both" or "them". No pass
+    note goes, because he told them. The card and Needs Matt follow.
+  - Look back: `POST /api/offers/passes/our-no { dryRun }` (both kinds).
 - **A check-in never goes over a reply we owe.** When the "unanswered" clock
   fires and the held reply never went out, their text goes back through
   `startReply(fromCheckIn: true)` instead. A second hold books no new clock.

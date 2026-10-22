@@ -547,6 +547,34 @@ const DECLINE_RXS = [
 const DECLINE_TAIL = /^\s*(?:$|[.!,;:)\-—–]|unf\w*|for now|this time|on (?:this|that|it|\d|the (?!(?:info|information|message|word|details|note|numbers?|news|contact)\b))|at (?:that|this|those) (?:price|number)|right now|with (?:that|this|the) number)/i;
 const WHEN_RX = /\b(?:today|tonight|tomorrow|till|until|before|in time|by (?:\d|mon|tue|wed|thu|fri|sat|sun|noon|the)|this (?:morning|afternoon|evening|week|weekend)|next (?:week|weekend|mon|tue|wed|thu|fri|sat|sun)|on (?:mon|tues|wednes|thurs|fri|satur|sun)day)\b/i;
 
+// Our own "not for us" on a house, in a person's words (2026-10-22: Matt's
+// "a little too rural for flips" and "too nice for us" left the drafts open,
+// and the houses came back to him to price). The reason is the one he gave.
+const WALK_RXS = [
+  { rx: /\btoo\s+(?:rural|remote|far\s+out)\b/i, reason: "rural" },
+  { rx: /\btoo\s+(?:nice|updated|turn[\s-]?key|finished|good(?:\s+of\s+a)?\s+(?:shape|condition))\b|\bnot\s+enough\s+(?:work|meat|upside|margin)\b/i, reason: "turnkey" },
+];
+
+/**
+ * weWalkAway(text) → { phrase, reason } | null
+ *
+ * A person's text that passes on a house: "too rural", "too nice for us",
+ * "not enough work in it" (with the WE_PASS_REASON it names), or a plain
+ * "we'll pass" (weDecline's words, no reason). Never a question.
+ */
+export function weWalkAway(text = "") {
+  const t = String(text || "");
+  for (const { rx, reason } of WALK_RXS) {
+    const m = rx.exec(t);
+    if (!m) continue;
+    const to = t.slice(m.index).search(/[.!?\n]/);
+    if (to >= 0 && t[m.index + to] === "?") continue;
+    return { phrase: m[0].replace(/\s+/g, " ").toLowerCase(), reason };
+  }
+  const plain = weDecline(t);
+  return plain && /\bpass/i.test(plain) ? { phrase: plain, reason: null } : null;
+}
+
 /** weDecline(text) → the phrase that says we won't meet their number, or null. */
 export function weDecline(text = "") {
   const t = String(text || "");

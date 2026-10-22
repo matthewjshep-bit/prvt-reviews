@@ -550,3 +550,19 @@ test("why we passed: a few buckets, carried on the status menu's key", () => {
   assert.equal(wePassReasonOf({ status: "sent", passReason: { code: "turnkey" } }), null);
   assert.equal(wePassReasonOf({ status: "we_passed" }), null);
 });
+
+// 2026-10-22: Matt texted "Dickson Loop property is a little too rural for
+// flips" and "Sorry, these are just a bit too rural for us", and both drafts
+// stayed open, so the houses came back as "price it". His words about a house
+// we never sent a number on are a pass, with the reason he gave.
+test("your own text passing on a house reads as a pass, with its reason", async () => {
+  const { weWalkAway } = await import("./offer-status.js");
+  assert.deepEqual(weWalkAway("Dickson Loop property is a little too rural for flips. It's just harder to sell"), { phrase: "too rural", reason: "rural" });
+  assert.equal(weWalkAway("Sorry, these are just a bit too rural for us.")?.reason, "rural");
+  assert.equal(weWalkAway("Thanks, sounds too nice for us. We buy single-family houses that need work")?.reason, "turnkey");
+  assert.equal(weWalkAway("Not enough work in it for us unfortunately")?.reason, "turnkey");
+  assert.deepEqual(weWalkAway("We'll pass on this one, thanks for sending"), { phrase: "we'll pass", reason: null });
+  assert.equal(weWalkAway("Is it too rural for your buyers?"), null, "a question isn't a pass");
+  assert.equal(weWalkAway("We'll pass it on to the seller"), null, "a hand-off isn't a pass");
+  assert.equal(weWalkAway("Love it, send me the address"), null);
+});
