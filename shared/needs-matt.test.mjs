@@ -71,9 +71,11 @@ test("their number on a house we never priced is a house to price, after the sam
 });
 
 test("a house still unpriced three days after it landed is the bot's to pass", () => {
-  const need = (h, over = {}) => ({ kind: "price", offerId: "o-kay", at: hoursAgo(h), ...over });
-  assert.equal(needsMattPassDue(need(PRICE_WAIT_HOURS + PASS_AFTER_HOURS - 1), NOW), false);
-  assert.equal(needsMattPassDue(need(PRICE_WAIT_HOURS + PASS_AFTER_HOURS + 1), NOW), true);
+  const need = (h, over = {}) => ({ kind: "price", offerId: "o-kay", at: hoursAgo(24 * 9), landedAt: hoursAgo(h), ...over });
+  assert.equal(needsMattPassDue(need(PASS_AFTER_HOURS - 1), NOW), false);
+  assert.equal(needsMattPassDue(need(PASS_AFTER_HOURS + 1), NOW), true);
+  // The stage's first day (2026-10-22): a week-old house had never been seen.
+  assert.equal(needsMattPassDue(need(0, { landedAt: null }), NOW), false, "never landed: never passed");
   assert.equal(needsMattPassDue(need(24 * 9, { kind: "yes" }), NOW), false, "a yes is never passed by the machine");
   assert.equal(needsMattPassDue(need(24 * 9, { offerId: null }), NOW), false, "nothing to mark without a row");
 });
