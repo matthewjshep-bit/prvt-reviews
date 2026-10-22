@@ -127,13 +127,19 @@ test("a house still unpriced three days after it landed is passed, and the agent
   const row = (who, h) => ({ id: `price_it:o-${who}`, kind: "price_it", contactId: who, offerId: `o-${who}`, address: "x", readyAt: hoursAgo(h) });
   // Priced since the read: Matt got to it first, nothing is passed.
   await store.updateOffer("o-flo", { ...(await store.getOffer("o-flo")), status: "new", cashAmount: 300000 });
+  const rows = [row("dee", old), row("eve", 30), row("flo", old)];
+  // First sight: a week-old row has never been on the stage, so nothing goes.
+  const first = await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: ON, now: NOW - 73 * 3600000,
+    deps: { pipelineFor: pipelineFor([row("dee", old), row("flo", old)].map((x) => ({ ...x, readyAt: new Date(Date.parse(x.readyAt) - 73 * 3600000).toISOString() }))), syncAgentCard: syncStub().fn } });
+  assert.deepEqual(first.passed, [], "not passed on the day it landed");
+  assert.equal((await store.getOffer("o-dee")).status, "draft");
   const r = await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: ON, now: NOW,
-    deps: { pipelineFor: pipelineFor([row("dee", old), row("eve", 30), row("flo", old)]), syncAgentCard: syncStub().fn } });
+    deps: { pipelineFor: pipelineFor(rows), syncAgentCard: syncStub().fn } });
   const dee = await store.getOffer("o-dee");
   assert.equal(dee.status, "we_passed");
   assert.equal(dee.passReason?.code, "quiet");
   assert.equal(dee.passNote?.status, "due");
-  assert.equal((await store.getOffer("o-eve")).status, "draft", "a day on the stage is still his");
+  assert.equal((await store.getOffer("o-eve")).status, "draft", "landed since: still his");
   assert.equal((await store.getOffer("o-flo")).status, "new", "priced since: not passed");
   assert.deepEqual(r.passed, [{ contactId: "dee", offerId: "o-dee" }]);
 

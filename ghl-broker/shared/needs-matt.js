@@ -188,14 +188,16 @@ export function botTakesHouse(offer) {
 /**
  * needsMattPassDue(need, now) → boolean
  *
- * A house still waiting on his price PASS_AFTER_HOURS after it landed: the
- * runner marks it we passed, and the pass note tells the agent. Only a row
- * the runner can mark; a yes or paper is never passed by the machine.
+ * A house still waiting on his price PASS_AFTER_HOURS after it landed in the
+ * stage (`landedAt`, the runner's first sight of it): the runner marks it we
+ * passed, and the pass note tells the agent. Not from the row's age: on the
+ * stage's first day, houses a week old would have been passed unseen. Only a
+ * row the runner can mark; a yes or paper is never passed by the machine.
  */
 export function needsMattPassDue(need, now = Date.now()) {
   if (need?.kind !== "price" || !need.offerId) return false;
-  const at = ms(need.at);
-  return at != null && now - at >= (PRICE_WAIT_HOURS + PASS_AFTER_HOURS) * HOUR_MS;
+  const landed = ms(need.landedAt);
+  return landed != null && now - landed >= PASS_AFTER_HOURS * HOUR_MS;
 }
 
 /** needsMattFromCursor(doc) → Map contactId → item, from the runner's last read. */

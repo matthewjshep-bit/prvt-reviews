@@ -55,7 +55,8 @@ async function patchCursor(store, locationId, patch) {
 // `placed`: the card was synced for this need (moved, already there, a
 // person's drag that stands, or a skip); one a GHL error stopped is tried
 // again next tick.
-const keep = (v, placed = false) => ({ kind: v.kind, rowKind: v.rowKind || "", why: v.why || "", at: v.at || null, key: v.key, offerId: v.offerId || null, placed });
+// `landedAt`: when the runner first saw this thing (the pass clock's start).
+const keep = (v, placed = false, landedAt = null) => ({ kind: v.kind, rowKind: v.rowKind || "", why: v.why || "", at: v.at || null, key: v.key, offerId: v.offerId || null, placed, landedAt });
 
 /**
  * runNeedsMatt({ store, locationId, client, saved, deps, now, dryRun, ghl })
@@ -85,11 +86,13 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
     if (v) out.screened.push({ contactId: r.contactId || o.contactId || null, offerId: r.offerId, ...(v.pass ? { pass: v.pass } : { chase: true }) });
   }
   const needs = needsMattByContact(rows, { drafts: read.drafts || [], now, screened });
+  const cur = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
+  const prev = needsMattFromCursor(cur?.doc);
+  // The pass clock starts when the thing first landed, kept across reads.
+  for (const [id, v] of needs) v.landedAt = prev.get(id)?.key === v.key && prev.get(id)?.landedAt ? prev.get(id).landedAt : iso(now);
   out.needs = needs.size;
   for (const v of needs.values()) out.byKind[v.kind] = (out.byKind[v.kind] || 0) + 1;
 
-  const cur = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
-  const prev = needsMattFromCursor(cur?.doc);
   const entered = [...needs.keys()].filter((id) => prev.get(id)?.key !== needs.get(id).key || prev.get(id)?.placed === false);
   const left = [...prev.keys()].filter((id) => !needs.has(id));
   out.entered = entered.map((id) => ({ contactId: id, kind: needs.get(id).kind }));
@@ -98,7 +101,7 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   if (dryRun) return done();
 
   // The list first: the 7am plan and every card sync read it from here.
-  const kept = Object.fromEntries([...needs].map(([id, v]) => [id, keep(v, prev.get(id)?.key === v.key ? prev.get(id)?.placed !== false : false)]));
+  const kept = Object.fromEntries([...needs].map(([id, v]) => [id, keep(v, prev.get(id)?.key === v.key ? prev.get(id)?.placed !== false : false, v.landedAt)]));
   await patchCursor(store, locationId, { needs: kept, readAt: iso(now) });
   if (!out.stage || cfg.mode !== "on") return done();
 
