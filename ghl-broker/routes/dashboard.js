@@ -1462,7 +1462,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       let pages = 0;
       while (pages < 3) {
         pages += 1;
-        const page = await ghlPage(() => listConversationMessages(client, convo.id, { lastMessageId, limit: 100 }));
+        // A count, not words: emails stay stubs here (one GHL read each otherwise, over every thread).
+        const page = await ghlPage(() => listConversationMessages(client, convo.id, { lastMessageId, limit: 100, emails: false }));
         // Pages run newest-first, but a single page may interleave the odd
         // out-of-order record — so tally the whole page and only stop paging
         // once it reached back past the horizon.

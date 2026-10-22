@@ -16,6 +16,7 @@
 // Same location gate as every other router. The record itself is written by
 // ghl-broker/contact-record.js; this is the thin HTTP layer over it.
 
+import { decodeEntities } from "../shared/gmail.js";
 import express from "express";
 import { store } from "../store.js";
 import { getContactRecord, learnFacts, forgetFact, recordEvent, projectToGhl, reconcileFromGhl } from "../contact-record.js";
@@ -37,8 +38,7 @@ const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 const str = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
 
 const stripHtml = (s) =>
-  String(s).replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/\s+/g, " ").trim();
+  decodeEntities(String(s).replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 const channelOf = (m) => {
   const t = String(m.messageType || m.type || "").toUpperCase();
   if (t.includes("CALL")) return "call";

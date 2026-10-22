@@ -984,6 +984,18 @@ never from the picture, and in skeleton mode every one becomes an agent +
 address draft. More than four addresses in one burst (a comps sheet) reads as
 none. Pictures are cached six hours by URL, so a burst is paid for once.
 
+**Emails in the thread (2026-10-22).** GHL lists an email thread as one stub
+whose body and direction can't be trusted: an agent's reply to our outreach
+email listed as OUR email's words, marked inbound, at the time of their reply,
+and with no attachments. Until this date the bot's transcript and the thread
+on a contact either skipped it or read our words as theirs. Now
+`listConversationMessages` (`ghl.js` `withEmails`) reads every email in a stub
+(`/conversations/messages/email/:id`, cached per process) and lists each one
+with its real direction, time and attachments, and with the quoted history cut
+(`cutQuotedHtml`). Readers that only count (the dashboard's daily tally, call
+intake) pass `emails: false` and keep the stubs, to spare GHL a read per
+thread.
+
 **The starter playbook.** "Load starter playbook" on the tab fills the
 persona, rules, examples, routing, texting rules, opt-outs and both playbooks
 with the Shep Flips setup consolidated from the three GHL bots it replaces

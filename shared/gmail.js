@@ -46,13 +46,36 @@ export function decodeBase64Url(data = "") {
   return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
 }
 
+// The entities an email's HTML really carries ("It&#39;s", "2 bd &bull; 2 ba",
+// "REALTOR &reg;"). &amp; last, so "&amp;lt;" stays the text "&lt;".
+const NAMED = { nbsp: " ", quot: '"', apos: "'", lt: "<", gt: ">", bull: "•", middot: "·", reg: "®", copy: "©", trade: "™",
+  rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“", mdash: "—", ndash: "–", hellip: "…", deg: "°", frac12: "½" };
+export function decodeEntities(text = "") {
+  return String(text || "")
+    .replace(/&#(\d{1,6});/g, (m, n) => { const c = Number(n); return c > 0 && c < 0x110000 ? String.fromCodePoint(c) : m; })
+    .replace(/&#x([0-9a-f]{1,6});/gi, (m, n) => { const c = parseInt(n, 16); return c > 0 && c < 0x110000 ? String.fromCodePoint(c) : m; })
+    .replace(/&([a-z]+\d*);/gi, (m, n) => NAMED[n.toLowerCase()] ?? m)
+    .replace(/&amp;/gi, "&");
+}
+
 export function stripHtml(html = "") {
   return String(html || "")
     .replace(/<(style|script|head)[^>]*>[\s\S]*?<\/\1>/gi, " ")
     .replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|h\d)>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&nbsp;/gi, " ").replace(/&[#a-z0-9]+;/gi, (e) => decodeEntities(e))
     .replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n").trim();
+}
+
+// The words an HTML reply added: everything from the quoted history down.
+// Gmail wraps it in div.gmail_quote, Outlook starts it at #divRplyFwdMsg,
+// Apple Mail and most others in a <blockquote>. The text-side cut
+// (stripQuoted) still runs after it for the clients that do none of these.
+const QUOTE_START = /<div[^>]*class=["'][^"']*\b(?:gmail_quote|yahoo_quoted)\b|<div[^>]*id=["'](?:divRplyFwdMsg|appendonsend)["']|<hr[^>]*id=["']stopSpelling["']|<blockquote\b/i;
+export function cutQuotedHtml(html = "") {
+  const s = String(html || "");
+  const m = QUOTE_START.exec(s);
+  return m && m.index > 0 ? s.slice(0, m.index) : s;
 }
 
 // The words this message added: the quoted history below "On … wrote:" and

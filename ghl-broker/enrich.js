@@ -5,6 +5,7 @@
 // This module only READS GHL and calls Anthropic — the preview/apply routes
 // in routes/offers.js own all writes.
 
+import { decodeEntities } from "./shared/gmail.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { searchConversations, listConversationMessages, getMessageTranscription } from "./ghl.js";
 import { meterAi } from "./ai-spend.js";
@@ -213,8 +214,7 @@ const MAX_CALL_CHARS = 4000;
 
 // Email bodies arrive as HTML; the model doesn't need the markup.
 const stripHtml = (s) =>
-  String(s).replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/\s+/g, " ").trim();
+  decodeEntities(String(s).replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 
 const channelOf = (m) => {
   const t = String(m.messageType || m.type || "").toUpperCase();
