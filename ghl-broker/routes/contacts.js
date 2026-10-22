@@ -18,7 +18,7 @@
 
 import express from "express";
 import { store } from "../store.js";
-import { getContactRecord, learnFacts, forgetFact, recordEvent, projectToGhl, reconcileFromGhl } from "../contact-record.js";
+import { getContactRecord, learnFacts, forgetFact, recordEvent, projectToGhl, reconcileFromGhl, needsGhlPull } from "../contact-record.js";
 import { startContactBackfill, getBackfillJob, publicBackfillJob, cancelBackfill } from "../contact-backfill.js";
 import { FACT_KEYS } from "../shared/contact-record.js";
 import { searchConversations, listConversationMessages, getContact, getConversation } from "../ghl.js";
@@ -91,10 +91,11 @@ export default function createContactsRouter({ resolveLocation, onHandText = nul
       const contactId = str(req.params.id, 64);
       const party = ["agent", "investor"].includes(req.query.party) ? req.query.party : null;
       // A pull reads the contact from GHL and lets it fill any gaps — on an
-      // explicit ask, or the first time anyone opens a record that is empty.
+      // explicit ask, or when the record has never been read from GHL (none
+      // yet, or one the bot started with no name).
       let pulled = null;
       const before = await store.getContactProfile(locationId, contactId).catch(() => null);
-      if (req.query.pull === "1" || !before) {
+      if (req.query.pull === "1" || needsGhlPull(before)) {
         pulled = await reconcileFromGhl({ store, locationId, contactId, party, client });
       }
       const record = await getContactRecord({ store, locationId, contactId, party });
