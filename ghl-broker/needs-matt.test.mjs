@@ -144,3 +144,23 @@ test("a house still unpriced three days after it landed is passed, and the agent
     deps: { pipelineFor: pipelineFor([row("gil", old)]), syncAgentCard: syncStub().fn } });
   assert.equal((await store.getOffer("o-gil")).status, "draft");
 });
+
+test("a house the agent called cosmetic is passed at once and never lands; one with no house number is left to the bot", async () => {
+  const loc = "loc-screen";
+  const ghl = ghlWith(STAGES);
+  await store.createOffer({ id: "o-hal", locationId: loc, contactId: "hal", address: "3 Cedar St, Kent, WA 98032", status: "draft", cashAmount: 0,
+    autoUnderwrite: { message: "Mostly cosmetic" } });
+  await store.createOffer({ id: "o-ida", locationId: loc, contactId: "ida", address: "125th Ave SE", status: "draft", cashAmount: 0,
+    autoUnderwrite: { message: "no it's selling" } });
+  const row = (who) => ({ id: `price_it:o-${who}`, kind: "price_it", contactId: who, offerId: `o-${who}`, address: "x", readyAt: hoursAgo(30) });
+  const sync = syncStub();
+  const r = await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: ON, now: NOW,
+    deps: { pipelineFor: pipelineFor([row("hal"), row("ida")]), syncAgentCard: sync.fn } });
+  assert.equal(sync.seen.length, 0, "neither card moves into Needs Matt");
+  assert.equal(r.needs, 0);
+  const hal = await store.getOffer("o-hal");
+  assert.equal(hal.status, "we_passed");
+  assert.equal(hal.passReason?.code, "turnkey");
+  assert.equal(hal.passNote?.status, "due");
+  assert.equal((await store.getOffer("o-ida")).status, "draft", "the address chase is the bot's, nothing marked");
+});

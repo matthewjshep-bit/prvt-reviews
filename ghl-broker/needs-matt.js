@@ -18,6 +18,10 @@
 //   - A house still unpriced PASS_AFTER_HOURS after it landed is marked we
 //     passed ("went quiet") with its pass note due (Matt, 2026-10-22: "Land,
 //     then bot passes"). Only with the stage there, like the moves.
+//   - A house the bot settles itself never lands (shared/needs-matt.js
+//     botTakesHouse): the agent called it cosmetic or done (passed at once,
+//     "too turnkey", pass note due), or it has no house number (the address
+//     chase's).
 //
 // Never sends a text itself: the pass note goes through pass-note.js. Ids and
 // kinds in the cursor and logs, no names.
@@ -30,7 +34,7 @@ import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { syncAgentCard } from "./tier-check.js";
 import { fieldId } from "./ghl-pings.js";
 import { normalizeGhlStages, stageKeys } from "./shared/ghl-stages.js";
-import { needsMattByContact, needsMattFromCursor, needsMattPassDue, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
+import { needsMattByContact, needsMattFromCursor, needsMattPassDue, botTakesHouse, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
 import { effectiveStatus } from "./shared/offer-status.js";
 import { ghlPingNote } from "./shared/ghl-pings.js";
 
@@ -61,7 +65,7 @@ const keep = (v, placed = false) => ({ kind: v.kind, rowKind: v.rowKind || "", w
  *   deps.syncAgentCard  tier-check.js syncAgentCard (tests stub it)
  */
 export async function runNeedsMatt({ store = defaultStore, locationId, client, saved = {}, deps = {}, now = Date.now(), dryRun = false, ghl = null } = {}) {
-  const out = { dryRun, stage: false, needs: 0, byKind: {}, entered: [], left: [], passDue: [], passed: [], synced: 0, moved: 0, noted: 0, errors: [], finishedAt: null };
+  const out = { dryRun, stage: false, needs: 0, byKind: {}, entered: [], left: [], passDue: [], passed: [], screened: [], synced: 0, moved: 0, noted: 0, errors: [], finishedAt: null };
   const done = () => { out.finishedAt = iso(Date.now()); return out; };
   if (typeof deps.pipelineFor !== "function") throw new Error("runNeedsMatt needs deps.pipelineFor");
   const cfg = normalizeGhlStages(saved?.ghlStages);
@@ -70,7 +74,17 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
 
   const read = await deps.pipelineFor({ locationId, client, now });
   const rows = [...(read.shownActions || []), ...(read.shownCalls || [])];
-  const needs = needsMattByContact(rows, { drafts: read.drafts || [], now });
+  // The houses waiting on his price, read first: one the bot settles itself
+  // (botTakesHouse) never lands.
+  const screened = new Map();
+  for (const r of rows.flatMap((x) => [x, ...(x?.also || [])])) {
+    if (!r?.offerId || screened.has(r.offerId) || !["price_it", "number_owed", "promise_owed"].includes(r.kind)) continue;
+    const o = await store.getOffer?.(r.offerId).catch(() => null);
+    const v = o && o.locationId === locationId ? botTakesHouse(o) : null;
+    screened.set(r.offerId, v);
+    if (v) out.screened.push({ contactId: r.contactId || o.contactId || null, offerId: r.offerId, ...(v.pass ? { pass: v.pass } : { chase: true }) });
+  }
+  const needs = needsMattByContact(rows, { drafts: read.drafts || [], now, screened });
   out.needs = needs.size;
   for (const v of needs.values()) out.byKind[v.kind] = (out.byKind[v.kind] || 0) + 1;
 
@@ -88,11 +102,13 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   await patchCursor(store, locationId, { needs: kept, readAt: iso(now) });
   if (!out.stage || cfg.mode !== "on") return done();
 
-  // Waited out: passed, and the pass note tells them. The card leaves on the
-  // next read, once the row is gone.
-  for (const { contactId, offerId } of out.passDue) {
+  // Waited out, or the agent's own words say it isn't a flip: passed, and the
+  // pass note tells them. A waited-out card leaves on the next read.
+  const toPass = [...out.passDue.map((x) => ({ ...x, reason: "quiet" })),
+    ...out.screened.filter((x) => x.pass && x.contactId).map((x) => ({ contactId: x.contactId, offerId: x.offerId, reason: x.pass }))];
+  for (const { contactId, offerId, reason } of toPass) {
     try {
-      if (await passUnpriced({ store, locationId, client, contactId, offerId, now })) out.passed.push({ contactId, offerId });
+      if (await passUnpriced({ store, locationId, client, contactId, offerId, reason, now })) out.passed.push({ contactId, offerId });
     } catch (e) {
       await recordError(store, { locationId, area: "needs-matt", err: e, context: { contactId, offerId, stage: "pass" } });
       out.errors.push(`${contactId}: ${scrubMessage(e).slice(0, 120)}`);
@@ -137,18 +153,23 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
 // One house: still a draft nothing went out on (re-read, so a price he put on
 // it since the pipeline read wins), marked we passed the way the held sweep
 // closes a quiet house. pass-note.js sends the note in machine hours.
-async function passUnpriced({ store, locationId, client, contactId, offerId, now }) {
+const PASS_WHY = {
+  quiet: { note: "it waited three days in Needs Matt with no price", retired: "no price three days after it landed in Needs Matt" },
+  turnkey: { note: "the agent called it cosmetic or done", retired: "the agent's own words: not a flip" },
+};
+async function passUnpriced({ store, locationId, client, contactId, offerId, reason = "quiet", now }) {
+  const why = PASS_WHY[reason] || PASS_WHY.quiet;
   const full = await store.getOffer?.(offerId).catch(() => null);
   if (!full || full.locationId !== locationId || full.deal || effectiveStatus(full) !== "draft") return false;
   if ((full.sends || []).length || full.floatSentAt) return false;
   const ts = iso(now);
   const street = String(full.address || "").split(",")[0].trim() || "the house";
-  const note = `We passed on ${street}: it waited three days in Needs Matt with no price. The bot's pass note tells the agent.`;
+  const note = `We passed on ${street}: ${why.note}. The bot's pass note tells the agent.`;
   await store.updateOffer(full.id, {
     ...full, status: "we_passed", statusAt: ts, statusNote: note,
     statusHistory: [...(full.statusHistory || []), { status: "we_passed", ts, note }],
-    retired: { at: ts, by: "needs-matt", reason: "no price three days after it landed in Needs Matt" },
-    passReason: { code: "quiet", at: ts, by: "needs-matt" }, passNote: { status: "due", markedAt: ts }, updatedAt: ts,
+    retired: { at: ts, by: "needs-matt", reason: why.retired },
+    passReason: { code: reason, at: ts, by: "needs-matt" }, passNote: { status: "due", markedAt: ts }, updatedAt: ts,
   });
   await recordEvent({ store, locationId, contactId, party: "agent", type: "offer_we_passed", at: ts, address: full.address || "", offerId: full.id,
     source: "sweep", dedupeKey: `needs_matt_passed:${full.id}`, data: { phrase: note, by: "needs-matt" } }).catch(() => {});
@@ -165,7 +186,7 @@ export function _resetNeedsMatt() { running.clear(); }
 // What a run did, for the cursor: ids and kinds, never what was said.
 export const summarizeNeedsMatt = (r) => ({
   finishedAt: r?.finishedAt || null, stage: Boolean(r?.stage), needs: r?.needs ?? 0, byKind: r?.byKind || {},
-  entered: (r?.entered || []).length, left: (r?.left || []).length, passed: (r?.passed || []).length, moved: r?.moved ?? 0, noted: r?.noted ?? 0,
+  entered: (r?.entered || []).length, left: (r?.left || []).length, passed: (r?.passed || []).length, screened: (r?.screened || []).length, moved: r?.moved ?? 0, noted: r?.noted ?? 0,
   errors: (r?.errors || []).slice(0, 5),
 });
 

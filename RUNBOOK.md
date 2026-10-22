@@ -4862,6 +4862,10 @@ Matt's answers the same day kept it shorter:
   still at N on <street>" once (`closedHold`), and nothing reopens. If our
   last word already said it, the draft waits quietly. A text that asks our
   number or names another house stays a person's.
+- **Houses the bot can settle never land** (`botTakesHouse`). If the agent
+  called it cosmetic or done (the brought-house screen's reading), it's
+  passed at once, reason "too turnkey", and the pass note goes. Off-market
+  is always Matt's. A house with no house number is the address chase's.
 - **Unpriced houses get passed.** A price row still unpriced 72 hours after
   it landed (`PASS_AFTER_HOURS`) is marked we passed, reason "went quiet",
   with its pass note due. `pass-note.js` texts the agent. This only happens

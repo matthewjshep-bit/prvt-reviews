@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { needsMattByContact, needsMattKind, needsMattPassDue, PRICE_WAIT_HOURS, PASS_AFTER_HOURS } from "./needs-matt.js";
+import { needsMattByContact, needsMattKind, needsMattPassDue, botTakesHouse, PRICE_WAIT_HOURS, PASS_AFTER_HOURS } from "./needs-matt.js";
 import { planCard, stageKeys, stageKeyOf } from "./ghl-stages.js";
 
 const NOW = Date.parse("2026-10-22T18:00:00Z");
@@ -141,4 +141,26 @@ test("Matt dragging the card out after it landed is his call", () => {
 test("an agent with no open card gets one in Needs Matt", () => {
   const r = planCard({ acq: ACQ, cards: [], offers: [offer("ann")], contactId: "ann", name: "Agent", needsMatt: yes, now: NOW });
   assert.equal(r.create?.to, "Needs Matt");
+});
+
+// Matt, 2026-10-22: "this stage should be used sparingly and only for the
+// things that the bot was not able to handle." Of the first 14 cards, the
+// agent had called three houses cosmetic, and two were rentals with no house
+// number: none of those is his to price.
+test("a house the agent called cosmetic or turnkey is the bot's to pass, not his to price", () => {
+  const draft = (message, over = {}) => ({ id: "o1", address: "3606 220th Pl SW, Mountlake Terrace, WA 98043", status: "draft", autoUnderwrite: { message }, ...over });
+  assert.deepEqual(botTakesHouse(draft("Mostly cosmetic"))?.pass, "turnkey");
+  assert.equal(botTakesHouse(draft("Not much. From what i saw.. it is some basic touch ups to paint."))?.pass, "turnkey");
+  assert.equal(botTakesHouse(draft("It's been fully remodeled, move-in ready"))?.pass, "turnkey");
+  assert.equal(botTakesHouse(draft("It is an estate. Condition is not great")), null, "real trouble is his to price");
+  assert.equal(botTakesHouse(draft("The roof, siding, paint, plumbing, deck, HVAC are newer. Most windows are older")), null, "big-ticket items named: his look");
+  assert.equal(botTakesHouse(draft("Mostly cosmetic", { offMarket: { value: true, at: hoursAgo(5), by: "you" } })), null, "off-market is always his");
+});
+
+test("a house with no house number is the bot's to chase, not his to price", () => {
+  assert.equal(botTakesHouse({ id: "o2", address: "125th Ave SE", status: "draft", autoUnderwrite: { message: "no it's selling" } })?.chase, true);
+  assert.equal(botTakesHouse({ id: "o3", address: "10863 Roseberg Ave S, Seattle, WA 98168", status: "draft", autoUnderwrite: { message: "" } }), null);
+  // "796 SE Briarwood Ct" in their text, "Briarwood Ct" on the draft: they
+  // gave us the number, so there's nothing to chase. It's his to price.
+  assert.equal(botTakesHouse({ id: "o4", address: "Briarwood Ct", status: "draft", autoUnderwrite: { message: "No problem. 796 SE Briarwood Ct" } }), null);
 });

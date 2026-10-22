@@ -30,6 +30,9 @@
 
 import { ownerOf } from "./hand-off.js";
 import { isCounterDraft } from "./desk.js";
+import { saysTurnkey, saysCosmeticOnly, workBudgetIn } from "./flip-read.js";
+import { hasHouseNumber } from "./mentioned-houses.js";
+import { isOffMarket } from "./off-market.js";
 
 export const NEEDS_MATT_STAGE_RX = /^needs\s+matt\b/i;
 export const NEEDS_MATT_STAGE_NAME = "Needs Matt";
@@ -113,14 +116,14 @@ export function needsMattWhy(x = {}) {
 }
 
 /**
- * needsMattByContact(rows, { drafts, now }) → Map contactId → { kind, why, at, key, rowKind, offerId, address }
+ * needsMattByContact(rows, { drafts, now, screened }) → Map contactId → { kind, why, at, key, rowKind, offerId, address }
  *
  * From the pipeline read's folded rows (each row and its `also`), the most
  * pressing open thing per agent. `at` is when it started (the stage move
  * reads it as "newest wins" against a person's drag); `key` is stable per
  * thing, so the card's note is written once.
  */
-export function needsMattByContact(rows = [], { drafts = [], now = Date.now() } = {}) {
+export function needsMattByContact(rows = [], { drafts = [], now = Date.now(), screened = null } = {}) {
   const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
   const out = new Map();
   for (const row of rows || []) {
@@ -129,6 +132,8 @@ export function needsMattByContact(rows = [], { drafts = [], now = Date.now() } 
       if (!contactId) continue;
       const kind = needsMattKind(r, { draftsById, now });
       if (!kind) continue;
+      // A house the bot settles itself (botTakesHouse) never lands.
+      if (kind === "price" && r.offerId && screened?.get?.(r.offerId)) continue;
       const d = r.draftId ? draftsById.get(r.draftId) : null;
       const since = r.owedAt || r.readyAt || r.promisedAt || d?.createdAt || r.at || null;
       const theirs = kind === "price" && d && isCounterDraft(d) ? Math.round(Number(d.counterAmount) || 0) || null : null;
@@ -141,6 +146,40 @@ export function needsMattByContact(rows = [], { drafts = [], now = Date.now() } 
     }
   }
   return out;
+}
+
+/**
+ * botTakesHouse(offer) → null | { pass: "turnkey", why } | { chase: true, why }
+ *
+ * A house waiting on his price that the bot settles without him (Matt,
+ * 2026-10-22: "only for the things that the bot was not able to handle"):
+ *
+ *   pass   the agent called it cosmetic or turnkey (shared/flip-read.js, the
+ *          brought-house screen's own reading): we pass, the pass note says why
+ *   chase  no house number ("125th Ave SE", a rental the lookup matched):
+ *          nothing to price yet; the address chase asks for it
+ *
+ * Off-market is always his: an off-market cosmetic fixer became a contract
+ * (7034 S K St). Anything else — real trouble, big-ticket items, nothing
+ * said — is his to price.
+ */
+// Their text gave the number the draft lost ("796 SE Briarwood Ct" against
+// "Briarwood Ct"): a number, then the street's own name within a few words.
+const numberInWords = (address = "", words = "") => {
+  const name = String(address || "").split(",")[0].split(/\s+/).find((w) => /^[a-z]{3,}$/i.test(w) && !/^(?:ave|avenue|st|street|rd|road|dr|drive|ct|court|ln|lane|pl|place|way|blvd|loop|lp|hwy|nw|ne|sw|se)$/i.test(w));
+  if (!name) return false;
+  return new RegExp(`\\b\\d{1,6}\\s+(?:\\S+\\s+){0,2}${name}\\b`, "i").test(String(words || ""));
+};
+export function botTakesHouse(offer) {
+  if (!offer) return null;
+  const words = String(offer.autoUnderwrite?.message || "");
+  if (!hasHouseNumber(offer.address) && !numberInWords(offer.address, words)) {
+    return { chase: true, why: "no house number: the bot asks the agent for the address" };
+  }
+  if (isOffMarket(offer)) return null;
+  const agentRehab = workBudgetIn(words);
+  if (saysTurnkey(words) || saysCosmeticOnly(words, { agentRehab })) return { pass: "turnkey", why: "the agent called it cosmetic or done" };
+  return null;
 }
 
 /**

@@ -141,6 +141,9 @@ const COSMETIC = [
 ];
 // "More than cosmetic", "not just paint": the opposite of light. "Needs some
 // work", "a project": not light either, just unclear — that gets the question.
+// Work done wrong or without permits (62710 Dixon Loop, 2026-10-22: "some
+// things weren't done right or with permits") is never light.
+const BAD_PAST_WORK_RX = /\b(?:not|n['’]?t)\s+(?:been\s+)?done\s+(?:right|properly|correctly|to\s+code)\b|\bunpermitted\b|\bwithout\s+(?:a\s+)?permits?\b|\bno\s+permits?\b|\b(?:weren|wasn)['’]?t\s+(?:done\s+)?(?:right\s+or\s+)?with\s+permits?\b/i;
 const MORE_THAN_LIGHT_RX = /\bmore\s+than\s+(?:just\s+|a\s+)?(?:cosmetic|a\s+refresh|refresh|paint|lipstick|updat)|\bnot\s+just\s+(?:cosmetic|paint|a\s+refresh|updat)|(?<!\b(?:wouldn|won|doesn|don|didn|shouldn)['’]?t\s|\b(?:not|never)\s)\bneeds?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+|real\s+)?work\b|(?<!\bnot\s(?:really\s)?a\s|\bisn'?t\sa\s)\bproject\b/i;
 
 /**
@@ -151,7 +154,7 @@ const MORE_THAN_LIGHT_RX = /\bmore\s+than\s+(?:just\s+|a\s+)?(?:cosmetic|a\s+ref
  */
 export function saysCosmeticOnly(text = "", { agentRehab = 0 } = {}) {
   const t = String(text || "");
-  if (!t.trim() || MORE_THAN_LIGHT_RX.test(t)) return false;
+  if (!t.trim() || MORE_THAN_LIGHT_RX.test(t) || BAD_PAST_WORK_RX.test(t)) return false;
   if (flipRead(t, { agentRehab }).qualifies) return false;
   if (hits(MAJOR, t).length) return false;
   return hits(COSMETIC, t).length > 0;

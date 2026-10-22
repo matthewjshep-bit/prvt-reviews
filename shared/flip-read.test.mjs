@@ -187,6 +187,16 @@ test("cosmetic only means light words and nothing big-ticket, nothing vague, not
   assert.equal(saysCosmeticOnly(""), false);
 });
 
+// 62710 Dixon Loop (2026-10-22): "needs updating throughout for sure and
+// some things weren't done right or with permits and it was added onto over
+// the years" read as cosmetic. Bad or unpermitted past work is a project.
+test("work that wasn't done right, or without permits, is never cosmetic", () => {
+  assert.equal(saysCosmeticOnly("It needs updating throughout for sure and some things weren't done right or with permits and it was added onto over the years"), false);
+  assert.equal(saysCosmeticOnly("Dated, and the addition is unpermitted"), false);
+  assert.equal(saysCosmeticOnly("Some updating, the deck was built without a permit"), false);
+  assert.equal(saysCosmeticOnly("Mainly paint and carpet, pretty dated"), true);
+});
+
 test("a house the agent brings: trouble drafts it, cosmetic passes, unclear asks once, and still unclear after that drafts it", () => {
   assert.equal(broughtStep({ words: "Hoarder house, needs everything" }).move, "underwrite");
   assert.equal(broughtStep({ words: "Probably 50-75K in updates" }).move, "underwrite", "their own budget");
