@@ -189,7 +189,7 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
     const hotOn = ladders.hot_push?.enabled && ladders.hot_push.steps?.length;
     // Agreed, at a number Matt hasn't approved (2026-10-15): neither ladder
     // texts; Today asks him first.
-    if (hotOn && pushesToPaper(offer) && !asksForWriteUp(offer)) ladderNote = "the price is agreed — waiting on your approval of the number (Today)";
+    if (hotOn && pushesToPaper(offer) && !asksForWriteUp(offer)) ladderNote = "the price is agreed — waiting on your approval of the number (Needs Matt)";
     else if (hotOn && asksForWriteUp(offer)) {
       const heat = offerHeat(offer);
       const hotAt = heat?.at || offer.counterBand?.acceptedAt || offer.realm?.ts || offer.statusAt || offer.createdAt;

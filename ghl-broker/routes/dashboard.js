@@ -64,6 +64,8 @@ import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize a
 import { handOffs } from "../shared/hand-off.js";
 import { ghlPingsOn } from "../shared/ghl-pings.js";
 import { runGhlPings, CURSOR_NAME as GHL_PINGS_CURSOR } from "../ghl-pings.js";
+import { runNeedsMatt } from "../needs-matt.js";
+import { NEEDS_MATT_CURSOR } from "../shared/needs-matt.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
 import { ghlCallsOn, liveGhlQueues, GHL_CALL_EVENT_TYPES, ghlCallWindow } from "../shared/ghl-calls.js";
 import { runGhlCalls, startGhlCalls, getGhlCallsJob, summarizeRun, patchCursor as patchGhlCallsCursor, pacificDay, CURSOR_NAME as GHL_CALLS_CURSOR } from "../ghl-calls.js";
@@ -852,6 +854,27 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         return res.status(400).json({ error: "Pings are off: switch on \"Ping me in GHL\" and paste the workflow link in Settings first." });
       }
       res.json({ ok: true, ...(await runGhlPings({ store, locationId, client, saved, deps: { pipelineFor }, dryRun, trigger: "manual" })) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The "Needs Matt" stage (needs-matt.js, 2026-10-22). GET: who's on the
+  // list and the last runs (ids and kinds). POST /run { dryRun } (the
+  // default): reads the list and says who would go in or come out, moving
+  // nothing; dryRun:false runs it now.
+  router.get("/needs-matt", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const cursor = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
+      const needs = Object.entries(cursor?.doc?.needs || {}).map(([contactId, v]) => ({ contactId, kind: v.kind, rowKind: v.rowKind, at: v.at, placed: v.placed }));
+      res.json({ ok: true, at: cursor?.at || null, readAt: cursor?.doc?.readAt || null, last: cursor?.doc?.last || null, needs });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/needs-matt/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const dryRun = req.body?.dryRun !== false;
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      res.json({ ok: true, ...(await runNeedsMatt({ store, locationId, client, saved, deps: { pipelineFor }, dryRun })) });
     } catch (err) { fail(res, err); }
   });
 

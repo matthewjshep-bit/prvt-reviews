@@ -183,6 +183,37 @@ test("the ticker paces its sends and stops at the per-tick cap", async () => {
   assert.equal([...store.rows.values()].filter((d) => d.status === "scheduled").length, 2);
 });
 
+// 2026-10-22 audit: three check-ins from 10/19 and a reply sat "held — waiting
+// on you" for days because GHL answered 429 at the 9am rush. Nothing went, so
+// it goes again; a 500 or a timeout may have sent it, so that still waits.
+test("a check-in GHL refused with 429 goes again, and comes back to a person after the last try", async () => {
+  const store = fakeStore([draft()]);
+  let calls = 0;
+  const send = async () => { calls++; throw Object.assign(new Error('GHL POST /conversations/messages -> 429 {"statusCode":429,"message":"Too Many Requests"}'), { status: 429 }); };
+  const tick = (t) => sendDueDrafts({ store, locations: [{ locationId: "LOC", client: {} }], live: true, now: t, send });
+  const r = await tick(now);
+  let d = store.rows.get("d1");
+  assert.equal(r.retried, 1);
+  assert.equal(r.failed, 0);
+  assert.equal(d.status, "scheduled");
+  assert.equal(d.sendAt, new Date(now + 10 * 60000).toISOString());
+  assert.doesNotMatch(d.flags.join(" · "), /auto-send failed/);
+  let t = now;
+  for (const wait of [10, 30, 60]) { t += wait * 60000 + 1000; await tick(t); }
+  d = store.rows.get("d1");
+  assert.equal(calls, 4);
+  assert.equal(d.status, "draft");
+  assert.match(d.flags.join(" · "), /auto-send failed: GHL POST \/conversations\/messages -> 429/);
+});
+
+test("a 500 from GHL may have sent it, so it comes back to a person and is never retried", async () => {
+  const store = fakeStore([draft()]);
+  const send = async () => { throw new Error("GHL POST /conversations/messages -> 500 upstream"); };
+  const r = await sendDueDrafts({ store, locations: [{ locationId: "LOC", client: {} }], live: true, now, send });
+  assert.equal(r.retried, undefined);
+  assert.equal(store.rows.get("d1").status, "draft");
+});
+
 // 2026-09-16: GHL's own refusal — "Cannot send message as +1… has
 // unsubscribed" — is not a chore for a person; nobody can send that text.
 test("a send GHL refuses as unsubscribed is dismissed, not handed back as 'Needs you'", async () => {

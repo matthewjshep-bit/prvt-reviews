@@ -814,3 +814,13 @@ test("a replier who joined by their reply and isn't written down yet is spread f
   const later = ids.map((id) => evaluateAgent(agent({ contactId: id, lastInboundAt: ago(90), joinedByReply: true, joinedAt: ago(0) }), ctx({ settings: S14, now: NOW + 7 * DAY })));
   assert.deepEqual(later.map((v) => v.dueAt || null).filter(Boolean), fresh.map((v) => v.dueAt || null).filter((d) => d && Date.parse(d) > NOW + 7 * DAY));
 });
+
+// 2026-10-22: a pass note (or a kind pass) about a house of theirs went, and
+// nothing told the check-in, so "anything else on your desk?" could land the
+// next morning on top of "thanks, we're passing on it".
+test("a check-in doesn't follow a pass note within the wait", () => {
+  const justPassed = agent({ lastInboundAt: ago(30), events: [{ type: "pass_texted", at: ago(1) }] });
+  assert.equal(evaluateAgent(justPassed, ctx()).status, "not_due");
+  const longAgo = agent({ lastInboundAt: ago(40), events: [{ type: "pass_texted", at: ago(30) }] });
+  assert.equal(evaluateAgent(longAgo, ctx()).status, "due");
+});

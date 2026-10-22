@@ -39,6 +39,7 @@ import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
 import { maybeRunGhlCalls } from "./ghl-calls.js";
 import { maybeRunGhlPings } from "./ghl-pings.js";
+import { maybeRunNeedsMatt } from "./needs-matt.js";
 import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
 import { runLocationTick } from "./tick.js";
@@ -404,6 +405,12 @@ const TICK_JOBS = [
   // 2026-10-20). Off until desk.ghlPings is on with a workflow; never texts anyone.
   { area: "ghl-pings", run: async ({ client, locationId, saved }) => {
     await maybeRunGhlPings({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
+  } },
+  // What only Matt can do moves the agent's card to GHL's "Needs Matt" stage
+  // and back when it's done (needs-matt.js, 2026-10-22: "instead of ping to
+  // me they land there"). Only with ghlStages on and a stage by that name.
+  { area: "needs-matt", run: async ({ client, locationId, saved }) => {
+    await maybeRunNeedsMatt({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
   } },
 ];
 

@@ -327,7 +327,24 @@ reason."
   house it is still asking its one question about. Houses are read only on a
   lead-type text (`HOUSE_LEAD_INTENTS`), as before.
 
-**The status menu on drafts.** Offers and the work pane show the status menu
+**The sweep's closes tell the agent too (2026-10-22).** The audit found 44 of
+101 houses the nightly held sweep closed with no word to the agent. Now:
+- A quiet close (held 14 days and nothing since, asked a week ago with no
+  answer, our ask never went, turnkey per the agent) on a house nothing went
+  out on stamps `passNote: due` and `passReason {code, by: "held-sweep"}`
+  (code `quiet`, or `turnkey`), and the pass note sends it in machine hours.
+  `quiet` reads "we couldn't get it to a number that worked for us"; it's the
+  sweep's own reason and isn't on the status menu.
+- A house Matt prices (draft only or skeleton) whose last word is their
+  unanswered text or our open promise is not closed by the sweep: it stays
+  his (`action: "yours"`) and the agent's card sits in Needs Matt.
+- The silence clock is per house: a text about another open house of theirs
+  doesn't keep this one alive (a text naming no house counts only while
+  nothing else of theirs is open).
+- A sent pass note or kind pass records `pass_texted`, which the check-in
+  counts as our last word.
+
+**The status menu on drafts.** Offers and the work pane show the status menu**The status menu on drafts.** Offers and the work pane show the status menu
 on a draft row too ("accepted" is left off a draft).
 
 **The pass note** (Conversation AI → agent playbook → "Tell them when you pass
@@ -3045,6 +3062,20 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   - **Check it:** `GET /api/dashboard/ghl/pipeline?fresh=1`. Look at
     `plan.counts.conversation`, and the rows with `conversation: true`. The
     work pane's pass note names a raised house that keeps the card in Tier 1.
+  - **Talked-to agents in Tier 2 (2026-10-22).** Matt: "people we've talked
+    to and had conversations with are getting put into the tier 2 category."
+    Three fixes:
+    - **A remodel still to do is real work.** "Needs a full kitchen and bath
+      remodel" reopens a house an earlier "cosmetic flip" closed
+      (`saysRealWork`, REMODEL_TO_DO_RX).
+    - **Their yes on a house is Tier 1, row or not.** The reply agent files
+      `house_agreed` on an acceptance with a full address (Matt quoted
+      1128 N Jackson by text, and the only row was a passed one elsewhere).
+    - **An unsent row stays live while they're writing about its house.**
+      `lastWordOnHouses` is their newest house event per house. A priced
+      row older than `staleTier1Days` stays Tier 1 while that house's last
+      word is fresh. Their words about another house still don't count
+      (Eric B.).
 - **Tier 2 is the agent nurture** (Matt): everyone with nothing live,
   former Tier 3s included, replied or not. The app's agent check-in is the
   nurture. A card that still lands in Tier 3 (a workflow, a drag) is moved on
@@ -4814,6 +4845,60 @@ re-entry on, publish it, paste its link in Settings → Ping me in GHL. Each
 thing pings once (`ghl_ping_sent` claim). `POST /api/dashboard/ghl-pings/run`
 (dry run by default) lists who would be pinged; `GET /api/dashboard/ghl-pings`
 shows the last runs.
+
+### The "Needs Matt" stage (2026-10-22)
+
+Matt, 2026-10-22 (after the follow-up audit found an acceptance held 15
+hours, three counters up to 46, and an agreed number a week with nothing
+telling him): "another stage in GHL opp pipeline as a catch all … minimize
+what those things are and have the app handle most things … instead of ping
+to me they land there." It replaces the pings: `desk.ghlPings` stays off.
+
+**Setup:** add a stage named **Needs Matt** to the Acquisitions pipeline.
+That's the switch. With `ghlStages.mode` "on" and the stage there, an agent's
+card goes in while one of these is open and comes back out (to where the
+offers put it) once it's done or dismissed:
+
+| Kind | What | Do it in |
+|---|---|---|
+| yes | an agreed number above any he approved; an acceptance (or a yes after we passed) the bot held | Offers → Hot / the held reply |
+| paper | paper to sign, a pre-contract warning, a hand-off, an answer only he has | the offer |
+| price | a house an agent surfaced, waiting 24 hours for his number; their number on a house we never priced | the offer editor |
+
+Matt's answers the same day kept it shorter:
+
+- **Their yes at or under a number he approved is the bot's.**
+  `numberApproved` holds for any agreed number at or under `offer.approved`,
+  so the machine asks for the write-up without an Approve.
+- **Counters never land.** On an open offer the counter hold answers (a
+  counter within `callWithinPct` is still a call). On a house that's done
+  (we passed, or they passed and repeat their number) the bot texts "We're
+  still at N on <street>" once (`closedHold`), and nothing reopens. If our
+  last word already said it, the draft waits quietly. A text that asks our
+  number or names another house stays a person's.
+- **Houses the bot can settle never land** (`botTakesHouse`). If the agent
+  called it cosmetic or done (the brought-house screen's reading), it's
+  passed at once, reason "too turnkey", and the pass note goes. Off-market
+  is always Matt's. A house with no house number is the address chase's.
+- **Unpriced houses get passed.** A price row still unpriced 72 hours after
+  it landed (`PASS_AFTER_HOURS`) is marked we passed, reason "went quiet",
+  with its pass note due. `pass-note.js` texts the agent. This only happens
+  with the stage there.
+
+Nothing else lands there: counters, booked calls, calls (Manual Actions), passes,
+promises, check-ins, closing tasks (the card stays in Contract) and buyers
+stay the machine's or their own page's. The why is written once per thing to
+the contact's "App ping why" field and a note (`needs_matt_noted`). A card
+Matt drags out stays where he put it. Rules: `shared/needs-matt.js`; runner:
+`ghl-broker/needs-matt.js` (every tick, 7am–9pm PT, cursor `needsMatt`);
+the move: `shared/ghl-stages.js` planCard `needsMatt`.
+`GET /api/dashboard/needs-matt` lists who's in it (ids and kinds);
+`POST /api/dashboard/needs-matt/run` is a dry run by default.
+
+A text GHL turns away without taking it (429 or 503) goes again after 10,
+30 and 60 minutes before it comes back to a person
+(`conversation-scheduler.js` SEND_RETRY_MINUTES). Any other failure may have
+sent it, so it still comes back at once.
 
 | Menu link | URL | Tabs |
 |---|---|---|

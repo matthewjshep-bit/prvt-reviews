@@ -187,6 +187,16 @@ test("cosmetic only means light words and nothing big-ticket, nothing vague, not
   assert.equal(saysCosmeticOnly(""), false);
 });
 
+// 62710 Dixon Loop (2026-10-22): "needs updating throughout for sure and
+// some things weren't done right or with permits and it was added onto over
+// the years" read as cosmetic. Bad or unpermitted past work is a project.
+test("work that wasn't done right, or without permits, is never cosmetic", () => {
+  assert.equal(saysCosmeticOnly("It needs updating throughout for sure and some things weren't done right or with permits and it was added onto over the years"), false);
+  assert.equal(saysCosmeticOnly("Dated, and the addition is unpermitted"), false);
+  assert.equal(saysCosmeticOnly("Some updating, the deck was built without a permit"), false);
+  assert.equal(saysCosmeticOnly("Mainly paint and carpet, pretty dated"), true);
+});
+
 test("a house the agent brings: trouble drafts it, cosmetic passes, unclear asks once, and still unclear after that drafts it", () => {
   assert.equal(broughtStep({ words: "Hoarder house, needs everything" }).move, "underwrite");
   assert.equal(broughtStep({ words: "Probably 50-75K in updates" }).move, "underwrite", "their own budget");
@@ -285,4 +295,15 @@ test("the one gut-check question, our own read, and seller questions are not ask
     "Roof and siding, got it. I'll run the numbers and get back to you.",
     "Landing around 410 as-is. What do you think, is that in the realm for the seller?",
   ]) assert.equal(asksTheirRehab(said), false, said);
+});
+
+// 60750 Breckenridge St (2026-10-22): "It need full kitchen and bathroom
+// remodel" didn't read as real work, so the card stayed on the earlier
+// "cosmetic flip". A remodel still to do is a project; one already done isn't.
+test("a full remodel still to do is real work; a remodel that's done isn't", () => {
+  assert.equal(saysRealWork("It need full kitchen and bathroom remodel"), true);
+  assert.equal(saysRealWork("complete remodel needed"), true);
+  assert.equal(saysRealWork("full remodel done in 2002"), false);
+  assert.equal(saysRealWork("Fully remodeled kitchen and bath"), false);
+  assert.equal(saysRealWork("kitchen and baths original"), false);
 });

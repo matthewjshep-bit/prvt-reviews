@@ -25,7 +25,7 @@ import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { recordEvent } from "./contact-record.js";
 import { localHour } from "./promise-sweep.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
-import { planStageMoves, planCard, planHandMove, normalizeGhlStages, stageKeys, CARD_STAGE_LABEL, raisedHouses, HOUSE_EVENT_TYPES, theirWordInGhl } from "./shared/ghl-stages.js";
+import { planStageMoves, planCard, planHandMove, normalizeGhlStages, stageKeys, CARD_STAGE_LABEL, raisedHouses, lastWordOnHouses, HOUSE_EVENT_TYPES, theirWordInGhl } from "./shared/ghl-stages.js";
 import { offerStageAt } from "./shared/offer-stage.js";
 import { openPromises } from "./shared/promise-resolver.js";
 import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
@@ -33,6 +33,15 @@ import { runTierOneScreen } from "./tier-one.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { resolveParty } from "./conversation-party.js";
 import { allEventsSince } from "./contact-events.js";
+import { needsMattFromCursor, NEEDS_MATT_CURSOR } from "./shared/needs-matt.js";
+
+// What only Matt can do, per agent, as the needs-matt runner last read it
+// (ghl-broker/needs-matt.js). The stage moves read it from the cursor, so
+// the 7am plan and every card sync agree on who sits in "Needs Matt".
+export async function readNeedsMatt(store, locationId) {
+  const cur = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
+  return needsMattFromCursor(cur?.doc);
+}
 
 export const CURSOR_NAME = "tierCheck";
 export const CHECK_HOUR = 7;             // PT
@@ -347,6 +356,19 @@ async function settleGhlWords({ store, locationId, done }) {
 const HOUSE_LOOKBACK_MS = 60 * 86400000;
 
 /** raisedByContact({ events, offers, now, staleDays }) → Map contactId → raisedHouses(…) for agents' events, the non-empty ones only. */
+/** heardOnByContact(events) → Map contactId → lastWordOnHouses: their newest word on each house. */
+export function heardOnByContact(events = []) {
+  const by = new Map();
+  for (const e of events || []) {
+    if (!e?.contactId || e.party !== "agent") continue;
+    if (!by.has(e.contactId)) by.set(e.contactId, []);
+    by.get(e.contactId).push(e);
+  }
+  const out = new Map();
+  for (const [id, list] of by) { const w = lastWordOnHouses(list); if (w.length) out.set(id, w); }
+  return out;
+}
+
 export function raisedByContact({ events = [], offers = [], now = Date.now(), staleDays = 10 } = {}) {
   const evs = new Map();
   for (const e of events || []) {
@@ -419,8 +441,9 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     for (const [id, at] of fromGhl) if (!repliers.has(id) && !stopped.has(id) && !buyers.has(id)) repliers.set(id, at);
     out.fromGhl = fromGhl.size;
   }
+  const needsMatt = await readNeedsMatt(store, locationId);
   const plan = planStageMoves({
-    acq, opportunities, offers, now, settings: cfg,
+    acq, opportunities, offers, now, settings: cfg, needsMatt,
     lastIn: new Map((lastRows || []).map((r) => [r.contactId, r.at])),
     openPromiseContacts: new Set(openPromises(promiseEvents || [], { now }).map((p) => p.contactId)),
     appMoves: appMovesByContact(moveEvents),
@@ -428,6 +451,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     repliers,
     cardsMade: cardsMadeBy(moveEvents),
     raised: raisedBy,
+    heardOn: heardOnByContact(houseEvents),
     // Can't read the workflow list: assume the nurture is live, so nothing moves into Tier 2 blind.
     nurtureLive: workflows == null ? [{ id: "?", name: "a nurture workflow (GHL's list couldn't be read)" }] : nurtureWorkflows(workflows),
   });
@@ -532,7 +556,7 @@ export function _resetWorkflowCache() { workflowCache.clear(); }
  * row (raisedHouses). `repliersOnly` applies only what the conversation
  * moves, for an agent who just wrote to us and whose offers didn't move.
  */
-export async function syncAgentCard({ client, locationId, contactId, store = defaultStore, saved = null, ghl = null, repliersOnly = false, now = Date.now() }) {
+export async function syncAgentCard({ client, locationId, contactId, store = defaultStore, saved = null, ghl = null, repliersOnly = false, needsMatt = undefined, now = Date.now() }) {
   const api = ghl || { listPipelines, searchOpportunities, updateOpportunity, createOpportunity, listWorkflows, getContact };
   try {
     if (!contactId) return { skip: "no contact" };
@@ -563,6 +587,8 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
       cardMade: cardsMadeBy(mine).has(contactId),
       handMoves: handMovesByContact(mine).get(contactId) || [],
       raised,
+      needsMatt: needsMatt !== undefined ? needsMatt : (await readNeedsMatt(store, locationId)).get(contactId) || null,
+      heardOn: lastWordOnHouses(mine.filter((e) => HOUSE_EVENT_TYPES.includes(e.type) && (Date.parse(e.at || "") || 0) >= since)),
     });
     const fromConversation = (p) => Boolean(p.create?.replier || p.move?.replier || p.create?.conversation || p.move?.conversation);
     if (repliersOnly && !fromConversation(plan)) return { skip: plan.skip || "not a card the conversation moves" };

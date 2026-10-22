@@ -69,7 +69,7 @@ import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
-import { normalizeGhlStages } from "./shared/ghl-stages.js";
+import { normalizeGhlStages, validAddress } from "./shared/ghl-stages.js";
 import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
@@ -4427,6 +4427,35 @@ async function runReply(job, ctx) {
       job.intent = draft.intent;
     }
   }
+  // A house that's done — we passed, or they did and say their number again —
+  // and their number still above the one we sent (Matt, 2026-10-22: "Bot
+  // holds our number"; two counters waited 46 hours on "the machine never
+  // goes above what we sent — your call"). Ours once more, short, and nothing
+  // reopens: no hold clock, no check-ins. Said once: when our last word on it
+  // already was "still at N", the draft waits quietly — never a second
+  // goodbye (Melissa W., 2026-10-20). A text that asks our number or names
+  // another house is still a person's.
+  if (party === "agent" && !isCall && draft.intent === "counter" && holdOn && !counterHold && !draft.callCounter) {
+    const msg = job.originalMessage || job.message;
+    const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const shut = (book || []).filter((o) => o && !o.deal && (["we_passed", "no_response"].includes(offerStatus(o))
+      || (offerStatus(o) === "passed" && draft.passHeld?.passed)));
+    const pick = pickOfferByAddress(shut, draft.propertyAddress) || (shut.length === 1 && !draft.propertyAddress ? shut[0] : null);
+    const closed = pick && typeof store.getOffer === "function" ? (await store.getOffer(pick.id).catch(() => null)) || pick : pick;
+    const hold = closed ? holdNumber({ offer: closed, transcript: a.transcript || "" }) : null;
+    const theirs = Math.round(Number(draft.counterAmount) || 0);
+    const aboutThisOnly = !asksOurNumber(msg) && !housesInText({ message: msg, except: [closed?.address || ""] }).length;
+    if (hold && aboutThisOnly && (theirs > hold.amount || (!theirs && asksUsToComeUp(msg)))) {
+      const n = hold.amount.toLocaleString("en-US");
+      const where = String(closed.address || "").split(",")[0].trim() || "the house";
+      const saidIt = new RegExp(`still at \\$?${n}\\b`, "i").test(a.transcript || "");
+      const closedHold = { offerId: closed.id, ours: hold.amount, theirs, ...(saidIt ? { quiet: true } : {}) };
+      draft = saidIt
+        ? { ...draft, needsHuman: false, closedHold, humanReason: `we already told them we're still at ${n} on ${where}; nothing more to say` }
+        : { ...draft, needsHuman: false, closedHold, humanReason: "",
+          reply: `Understood. We're still at ${n} on ${where}; if anything changes on the seller's side, I'm here.` };
+    }
+  }
 
   // Turnkey is not a deal. "This one is pretty turnkey with tenants in place"
   // answers our "project or turnkey?" and read as deal_available — the listing
@@ -4831,10 +4860,15 @@ async function runReply(job, ctx) {
   // reply the machine sends. Only where every other check passed and the
   // counter's own lock is all that held it — never past a gate, a stop, a
   // person having the thread, or sends off — and never naming more than ours.
-  if (draft.counterHold && !auto.send && base.code === "never_auto" && !gate?.overOffer?.length && !isCall
+  // The same door for ours said again on a house that's done (closedHold),
+  // except when it was already said: that one waits quietly.
+  const heldOurs = draft.counterHold || (draft.closedHold && !draft.closedHold.quiet ? draft.closedHold : null);
+  if (heldOurs && !auto.send && base.code === "never_auto" && !gate?.overOffer?.length && !isCall
       && (config.autoSend?.channels || []).includes(job.channel)
-      && moneyIn(draft.reply).every((n) => n <= draft.counterHold.ours)) {
-    auto = { ...auto, send: true, code: "", reason: "our number, held — hold, then pass", counterHold: true };
+      && moneyIn(draft.reply).every((n) => n <= heldOurs.ours)) {
+    auto = draft.counterHold
+      ? { ...auto, send: true, code: "", reason: "our number, held — hold, then pass", counterHold: true }
+      : { ...auto, send: true, code: "", reason: "our number again on a house that's done — nothing reopens" };
   }
   // Confused by us or repeating themselves (Kyle R., 2026-10-10): the
   // machine already lost the thread once, so it doesn't answer for you.
@@ -4862,7 +4896,7 @@ async function runReply(job, ctx) {
   }
   // A house we already passed stays passed while its repeat waits for a
   // person: filed "countered", the next repeat would draw the goodbye again.
-  if (draft.passHeld?.passed) {
+  if (draft.passHeld?.passed || draft.closedHold) {
     plan.auto = plan.auto.filter((x) => x.type !== "mark_offer_countered");
   }
   // Number first: the reply promises numbers, so the underwrite runs whatever
@@ -5607,6 +5641,16 @@ async function runReply(job, ctx) {
         address: closedHouse, source: isCall ? "call" : "conversation", ref: record.id,
         dedupeKey: `house_closed:${job.contactId}:${addressKey(closedHouse)}:${record.id}`,
         data: { why: closedWhy, intent: draft.intent },
+      }).catch(() => {});
+    }
+    // Their yes on a house (2026-10-22, 1128 N Jackson Ave: Matt quoted it by
+    // text and no row of ours was on it): Tier 1 by itself, row or not.
+    if (!closedWhy && draft.intent === "acceptance" && validAddress(draft.propertyAddress || "")) {
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: "house_agreed", at: new Date(now + 1).toISOString(),
+        address: draft.propertyAddress, source: isCall ? "call" : "conversation", ref: record.id,
+        dedupeKey: `house_agreed:${job.contactId}:${addressKey(draft.propertyAddress)}:${record.id}`,
+        data: { intent: draft.intent },
       }).catch(() => {});
     }
     // A house with no number starts the chase too, even when propertyAddress
@@ -6788,6 +6832,15 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         dedupeKey: `${type}:${d.contactId}:${ts.slice(0, 10)}`, data: { draftId: d.id, auto: Boolean(auto) },
       }).catch(() => {});
     }
+  }
+  // A pass about a house of theirs actually went (the pass note, a kind
+  // pass): the check-in counts it as our last word (2026-10-22).
+  if (d.outbound?.kind === "pass_note" || d.outbound?.kind === "kind_pass") {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "agent", type: "pass_texted", at: ts,
+      address: d.outbound.address || d.propertyAddress || "", source: "conversation", ref: d.id, dedupeKey: `pass_texted:${d.id}`,
+      data: { draftId: d.id, kind: d.outbound.kind, auto: Boolean(auto) },
+    }).catch(() => {});
   }
   // The agent's check-in actually went: the cadence and the "unanswered"
   // counts (shared/agent-pulse.js) read this, never the claim.

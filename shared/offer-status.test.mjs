@@ -521,6 +521,10 @@ test("a number is approved when a person owns it, and a machine move takes the a
   assert.equal(numberApproved({ ...machine, autoUnderwrite: null }), true, "built by hand");
   assert.equal(numberApproved({ ...machine, approved: { amount: 410000, at: at(10), by: "today" } }), true);
   assert.equal(numberApproved({ ...machine, approved: { amount: 395000, at: at(10), by: "today" } }), false, "approved at a number it isn't any more");
+  // Matt, 2026-10-22: "Bot runs it." Their yes at or under a number he stood
+  // behind (the band took their lower counter, a re-quote came down) is his.
+  assert.equal(numberApproved({ ...machine, approved: { amount: 420000, at: at(10), by: "send" }, requotes: [{ ts: at(11), from: 420000, to: 410000 }] }), true,
+    "a yes under the number he approved needs no approval");
   assert.equal(numberApproved({ ...machine, autoUnderwrite: { passed: false, publishedAt: at(10) } }), true, "published by a person");
   assert.equal(numberApproved({ ...machine, autoUnderwrite: { passed: false, publishedAt: at(10) }, requotes: [{ ts: at(11), from: 400000, to: 410000 }] }), false,
     "re-quoted on their figures after it was published");
@@ -536,7 +540,7 @@ test("a number is approved when a person owns it, and a machine move takes the a
 import { WE_PASS_REASONS, parseStatusKey, wePassedKey, wePassReasonOf, normalizeWePassReason } from "./offer-status.js";
 
 test("why we passed: a few buckets, carried on the status menu's key", () => {
-  assert.deepEqual(WE_PASS_REASONS.map((r) => r.code), ["turnkey", "neighborhood", "rural", "comps", "property_type"]);
+  assert.deepEqual(WE_PASS_REASONS.map((r) => r.code), ["turnkey", "neighborhood", "rural", "comps", "property_type", "quiet"]);
   assert.deepEqual(parseStatusKey(wePassedKey("rural")), { status: "we_passed", reason: "rural" });
   assert.deepEqual(parseStatusKey("we_passed"), { status: "we_passed", reason: null });
   assert.deepEqual(parseStatusKey("we_passed:vibes"), { status: "we_passed", reason: null });

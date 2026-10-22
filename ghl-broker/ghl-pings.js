@@ -40,7 +40,7 @@ async function patchCursor(store, locationId, patch) {
 }
 
 // The contact field's id: off the cursor, else found or made in GHL once.
-async function fieldId({ store, locationId, client }) {
+export async function fieldId({ store, locationId, client }) {
   const cur = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
   if (cur?.doc?.fieldId) return { id: cur.doc.fieldId, cached: true };
   const id = await findOrCreateCustomFieldByKey(client, locationId, GHL_PING_FIELD.key, GHL_PING_FIELD.name, "TEXT");

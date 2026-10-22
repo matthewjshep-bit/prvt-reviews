@@ -76,6 +76,11 @@ export const WE_PASS_REASONS = Object.freeze([
     words: "there weren't enough recent sales nearby to back a number" },
   { code: "property_type", label: "Property type", short: "Property type", hint: "a log cabin, say",
     words: "it isn't a type of property we buy" },
+  // The nightly sweep's close on a house nothing came of (2026-10-22): no
+  // number from us, nothing more from them. The pass note still tells them.
+  // The sweep's, not a choice on the status menu (`menu: false`).
+  { code: "quiet", label: "Went quiet", short: "Quiet", hint: "nothing came of it", menu: false,
+    words: "we couldn't get it to a number that worked for us" },
 ]);
 export const WE_PASS_REASON = Object.freeze(Object.fromEntries(WE_PASS_REASONS.map((r) => [r.code, r])));
 /** normalizeWePassReason(v) → a WE_PASS_REASONS code, or null. */
@@ -576,7 +581,8 @@ export function weDecline(text = "") {
  *     the number.
  *
  * The machine moving the number (a re-quote on their figures, the counter
- * band) is not approval, and a new number voids an old approval.
+ * band) is not approval, and a higher number voids an old approval; a lower
+ * one keeps it (2026-10-22).
  */
 export const MACHINE_REVISERS = new Set(["requote", "counter_band"]);
 const tsOf = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : 0; };
@@ -584,7 +590,9 @@ export function numberApproved(offer) {
   if (!offer) return false;
   const amount = Math.round(Number(offer.cashAmount) || 0);
   if (!amount) return false;
-  if (Number(offer.approved?.amount) > 0 && Math.round(Number(offer.approved.amount)) === amount) return true;
+  // At or under the number he approved (Matt, 2026-10-22: "Bot runs it"): the
+  // band taking their lower counter, or a re-quote coming down, is still his.
+  if (Number(offer.approved?.amount) > 0 && Math.round(Number(offer.approved.amount)) >= amount) return true;
   const machineAt = Math.max(0,
     ...(offer.requotes || []).map((r) => tsOf(r?.ts)),
     ...(offer.revisions || []).filter((r) => MACHINE_REVISERS.has(r?.by)).map((r) => tsOf(r?.ts)),

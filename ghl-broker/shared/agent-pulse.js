@@ -152,7 +152,7 @@ export const AGENT_PULSE_EVENT_TYPES = [
   "checkin_requested", "checkin_sent", "address_pending", "address_pending_closed", "subject_property_set", "address_chase_sent",
   "outreach_enrolled", "outreach_sent", "outreach_left", "workflow_enrolled", "workflow_left", "investor_minded",
   "drive_stopped", "drive_resumed", "listing_off_market", "listing_back_on_market", "offer_sent",
-  "offmarket_asked",
+  "offmarket_asked", "pass_texted",
   // Houses passed or kicked off the Tier 1 list: never raised again.
   "tier1_passed", "tier1_kicked", "tier1_added",
   // A house they named that we never priced: the one thing a check-in may
@@ -167,7 +167,9 @@ export const INBOUND_EVENT_TYPES = [
   "checkin_requested", "address_pending", "outreach_left", "email_received",
 ];
 // Every text of ours the timeline knows about.
-const OUR_TEXT_TYPES = new Set(["follow_up_sent", "agent_pulse_texted", "outreach_enrolled", "outreach_sent", "hand_reply", "checkin_sent", "address_chase_sent"]);
+// pass_texted (2026-10-22): a pass note or a kind pass went, so the check-in
+// waits its days after it instead of landing the next morning.
+const OUR_TEXT_TYPES = new Set(["follow_up_sent", "agent_pulse_texted", "outreach_enrolled", "outreach_sent", "hand_reply", "checkin_sent", "address_chase_sent", "pass_texted"]);
 
 // Tags that mean "do not text", however spelled, and the bot-off tags.
 const BLOCK_TAG_RX = /^(?:dnc|dnd|do[-\s]?not[-\s]?(?:contact|text|call)|opt(?:ed)?[-\s]?out|unsubscribed?|stop|wrong[-\s]?number)$/i;

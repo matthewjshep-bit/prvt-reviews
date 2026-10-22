@@ -11,6 +11,11 @@
 import { answersInbound } from "./shared/follow-up.js";
 import { worksOn, machineDays } from "./shared/follow-up-engine.js";
 
+// A send GHL refused without taking it goes again after these waits
+// (minutes), then comes back to a person like any other failure.
+export const SEND_RETRY_MINUTES = [10, 30, 60];
+const refusedUnsent = (e) => [429, 503].includes(Number(e?.status)) || /-> (429|503)\b/.test(String(e?.message || ""));
+
 const DAY_MS = 86400000;
 export const STUCK_SENDING_MS = 5 * 60 * 1000;
 
@@ -310,6 +315,22 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
             updatedAt: new Date().toISOString(),
           }).catch(() => {});
           log(`scheduler: ${d.id} not sent — the contact unsubscribed`);
+          continue;
+        }
+        // GHL turned it away before taking it (429 too many requests, 503):
+        // nothing went, so it goes again shortly instead of waiting on a
+        // person who isn't looking (2026-10-22: three check-ins from 10/19 and
+        // a reply sat "held" after the 9am rush hit GHL's limit). A timeout or
+        // any other error may have sent it, so those still come back to you.
+        const tries = Number(fresh.sendRetries) || 0;
+        if (refusedUnsent(e) && tries < SEND_RETRY_MINUTES.length) {
+          out.retried = (out.retried || 0) + 1;
+          await store.updateReplyDraft(d.id, {
+            ...fresh, status: "scheduled", sendingAt: null, sendRetries: tries + 1,
+            sendAt: new Date(now + SEND_RETRY_MINUTES[tries] * 60000).toISOString(),
+            updatedAt: new Date().toISOString(),
+          }).catch(() => {});
+          log(`scheduler: GHL refused ${d.id} (${e?.status || "busy"}), trying again in ${SEND_RETRY_MINUTES[tries]} min`);
           continue;
         }
         out.failed++;
