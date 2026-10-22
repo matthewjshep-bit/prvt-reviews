@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planStageMoves, planCard, planHandMove, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy, raisedHouses, sameRaisedHouse, validAddress, theirWordInGhl } from "./ghl-stages.js";
+import { planStageMoves, planCard, planHandMove, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy, raisedHouses, sameRaisedHouse, validAddress, theirWordInGhl, lastWordOnHouses } from "./ghl-stages.js";
 
 const NOW = Date.parse("2026-10-13T20:00:00Z");
 const ago = (d) => new Date(NOW - d * 86400000).toISOString();
@@ -581,4 +581,48 @@ test("an agent who asked us to stop, said wrong number, or turned on DND never c
   // Words that merely contain one aren't one.
   assert.deepEqual(theirWordInGhl([sms("Stop by any time, lockbox on the door", "2026-10-16T20:00:00Z")]), { at: "2026-10-16T20:00:00.000Z" });
   assert.deepEqual(theirWordInGhl([sms("It ends up needing a roof", "2026-10-16T20:00:00Z")]), { at: "2026-10-16T20:00:00.000Z" });
+});
+
+/* ---------- talked-to agents in Tier 2 (2026-10-22) ---------- */
+
+// Matt, 2026-10-22: "people we've talked to and had conversations with are
+// getting put into the tier 2 category." Three of the day's cards:
+// 60750 Breckenridge St: "Perfect cosmetic flip" (the bot passed), then three
+// minutes later "It need full kitchen and bathroom remodel", a draft, and
+// Matt texted a number. The card followed the first word.
+test("an agent who calls it cosmetic, then says it needs a full kitchen and bath remodel, is Tier 1", () => {
+  const A = "60750 Breckenridge St, Bend, OR 97702";
+  const raised = raisedHouses({ events: [
+    ev("property_details", A, { condition: "cosmetic, light work needed", workNeeded: "cosmetic flip" }, ago(0.3)),
+    ev("property_details", A, { workNeeded: "full kitchen and bathroom remodel" }, ago(0.29)),
+  ], now: NOW });
+  assert.deepEqual(raised.map((h) => [h.address, h.open]), [[A, true]]);
+});
+
+// 8420 155th Street Ct E: a short sale, priced 10/6 and texted along since,
+// the agent writing every few days. The row's own age sent it to Tier 2.
+test("a priced house they're still writing about stays Tier 1 past the stale days", () => {
+  const A = "8420 155th Street Ct E, Puyallup, WA 98375";
+  const row = offer("sp", { status: "new", sends: [], cashAmount: 398500, address: A, createdAt: ago(16) });
+  assert.equal(targetStage({ offers: [row], now: NOW }).to, "tier2");
+  const heardOn = lastWordOnHouses([
+    ev("property_details", "8420 155th St Ct E, Puyallup, WA", { timeline: "decision by end of month" }, ago(1)),
+    ev("property_details", A, { timeline: "end of this month" }, ago(9)),
+  ]);
+  assert.equal(heardOn.length, 1, "one house, however it was spelled");
+  assert.equal(targetStage({ offers: [row], now: NOW, heardOn }).to, "tier1");
+  assert.equal(targetStage({ offers: [row], now: NOW, heardOn: lastWordOnHouses([ev("property_details", A, {}, ago(12))]) }).to, "tier2", "nothing on it in 10+ days");
+  assert.equal(targetStage({ offers: [row], now: NOW, heardOn: lastWordOnHouses([ev("house_mentioned", "77 Oak St, Kent, WA 98032", {}, ago(1))]) }).to, "tier2",
+    "their words on another house don't keep this one alive");
+});
+
+// 1128 N Jackson Ave: Matt quoted 975K by text, the agent said "Ok ✅", and
+// the only row was a passed one on another house. Their yes is a live house.
+test("their yes on a house we have no row for puts the card in Tier 1", () => {
+  const A = "1128 N Jackson Ave, Tacoma, WA 98406";
+  const raised = raisedHouses({ events: [ev("house_agreed", A, { intent: "acceptance" })], now: NOW });
+  assert.deepEqual(raised.map((h) => [h.address, h.open]), [[A, true]]);
+  assert.match(raised[0].why, /they said yes on 1128 N Jackson Ave/);
+  const passedOther = offer("mj", { status: "we_passed", address: "24th Ave S", sends: [], createdAt: ago(6), statusAt: ago(6) });
+  assert.equal(targetStage({ offers: [passedOther], raised, now: NOW }).to, "tier1");
 });

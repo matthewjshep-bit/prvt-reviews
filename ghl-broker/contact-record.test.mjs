@@ -23,7 +23,7 @@ delete process.env.DATABASE_URL;
 const { store } = await import("./store.js");
 const { mergeHistory, mergeFacts, historyLine } = await import("./enrich.js");
 const { renderLedger, eventFromLedgerLine, currentFacts } = await import("./shared/contact-record.js");
-const { recordEvent, recordEvents, learnFacts, forgetFact, projectToGhl, reconcileFromGhl, getContactRecord, ensureProfile, RECORD_FIELD_DEFS } =
+const { recordEvent, recordEvents, learnFacts, forgetFact, projectToGhl, reconcileFromGhl, getContactRecord, ensureProfile, needsGhlPull, RECORD_FIELD_DEFS } =
   await import("./contact-record.js");
 
 const LOC = "LOC";
@@ -176,6 +176,25 @@ test("reconcile pulls what GHL has that the record lacks, and never the other wa
   // Idempotent.
   const r2 = await reconcileFromGhl({ store, locationId: LOC, contactId: cid, party: "investor", client });
   assert.deepEqual([r2.facts, r2.events], [0, 0]);
+});
+
+test("a record the bot started from a conversation still gets their name from GHL", async () => {
+  // 2026-10-22 Randy Facey: the conversation bot learned facts first, which
+  // made a profile with no name and no GHL read, and opening the record only
+  // pulled when there was no profile at all, so the Companion read "Untitled".
+  const cid = "c-unnamed";
+  await learnFacts({ store, locationId: LOC, contactId: cid, party: "agent", facts: [
+    { key: "personal_details", value: "gets listings emailed daily", source: "conversation", ref: "d1" },
+  ] });
+  const before = await store.getContactProfile(LOC, cid);
+  assert.equal(before.name, null);
+  assert.equal(needsGhlPull(before), true, "a profile GHL never filled is pulled when it's opened");
+  const { client } = ghlStub({}, { firstName: "Randy", lastName: "Facey" });
+  await reconcileFromGhl({ store, locationId: LOC, contactId: cid, client });
+  const after = await store.getContactProfile(LOC, cid);
+  assert.equal(after.name, "Randy Facey");
+  assert.equal(needsGhlPull(after), false, "once read from GHL, opening it doesn't pull again");
+  assert.equal(needsGhlPull(null), true, "nobody has recorded them yet");
 });
 
 test("getContactRecord assembles every section and survives a contact nobody has recorded", async () => {

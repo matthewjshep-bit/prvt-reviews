@@ -25,7 +25,7 @@ import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { recordEvent } from "./contact-record.js";
 import { localHour } from "./promise-sweep.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
-import { planStageMoves, planCard, planHandMove, normalizeGhlStages, stageKeys, CARD_STAGE_LABEL, raisedHouses, HOUSE_EVENT_TYPES, theirWordInGhl } from "./shared/ghl-stages.js";
+import { planStageMoves, planCard, planHandMove, normalizeGhlStages, stageKeys, CARD_STAGE_LABEL, raisedHouses, lastWordOnHouses, HOUSE_EVENT_TYPES, theirWordInGhl } from "./shared/ghl-stages.js";
 import { offerStageAt } from "./shared/offer-stage.js";
 import { openPromises } from "./shared/promise-resolver.js";
 import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
@@ -356,6 +356,19 @@ async function settleGhlWords({ store, locationId, done }) {
 const HOUSE_LOOKBACK_MS = 60 * 86400000;
 
 /** raisedByContact({ events, offers, now, staleDays }) → Map contactId → raisedHouses(…) for agents' events, the non-empty ones only. */
+/** heardOnByContact(events) → Map contactId → lastWordOnHouses: their newest word on each house. */
+export function heardOnByContact(events = []) {
+  const by = new Map();
+  for (const e of events || []) {
+    if (!e?.contactId || e.party !== "agent") continue;
+    if (!by.has(e.contactId)) by.set(e.contactId, []);
+    by.get(e.contactId).push(e);
+  }
+  const out = new Map();
+  for (const [id, list] of by) { const w = lastWordOnHouses(list); if (w.length) out.set(id, w); }
+  return out;
+}
+
 export function raisedByContact({ events = [], offers = [], now = Date.now(), staleDays = 10 } = {}) {
   const evs = new Map();
   for (const e of events || []) {
@@ -438,6 +451,7 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
     repliers,
     cardsMade: cardsMadeBy(moveEvents),
     raised: raisedBy,
+    heardOn: heardOnByContact(houseEvents),
     // Can't read the workflow list: assume the nurture is live, so nothing moves into Tier 2 blind.
     nurtureLive: workflows == null ? [{ id: "?", name: "a nurture workflow (GHL's list couldn't be read)" }] : nurtureWorkflows(workflows),
   });
@@ -574,6 +588,7 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
       handMoves: handMovesByContact(mine).get(contactId) || [],
       raised,
       needsMatt: needsMatt !== undefined ? needsMatt : (await readNeedsMatt(store, locationId)).get(contactId) || null,
+      heardOn: lastWordOnHouses(mine.filter((e) => HOUSE_EVENT_TYPES.includes(e.type) && (Date.parse(e.at || "") || 0) >= since)),
     });
     const fromConversation = (p) => Boolean(p.create?.replier || p.move?.replier || p.create?.conversation || p.move?.conversation);
     if (repliersOnly && !fromConversation(plan)) return { skip: plan.skip || "not a card the conversation moves" };

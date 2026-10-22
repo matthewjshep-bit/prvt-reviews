@@ -200,6 +200,13 @@ export async function projectToGhl({ client, store, locationId, contactId, party
 }
 
 /**
+ * needsGhlPull(profile) → true when opening the record should read GHL first:
+ * nobody has recorded them, or the record was started by the app (a
+ * conversation's facts) and GHL never filled in who they are.
+ */
+export const needsGhlPull = (profile) => !profile || !profile.ghlSeenAt;
+
+/**
  * reconcileFromGhl({ store, locationId, contactId, party, contact, custom, idKeyMap })
  *   → { facts: n, events: n }
  *

@@ -296,3 +296,14 @@ test("the one gut-check question, our own read, and seller questions are not ask
     "Landing around 410 as-is. What do you think, is that in the realm for the seller?",
   ]) assert.equal(asksTheirRehab(said), false, said);
 });
+
+// 60750 Breckenridge St (2026-10-22): "It need full kitchen and bathroom
+// remodel" didn't read as real work, so the card stayed on the earlier
+// "cosmetic flip". A remodel still to do is a project; one already done isn't.
+test("a full remodel still to do is real work; a remodel that's done isn't", () => {
+  assert.equal(saysRealWork("It need full kitchen and bathroom remodel"), true);
+  assert.equal(saysRealWork("complete remodel needed"), true);
+  assert.equal(saysRealWork("full remodel done in 2002"), false);
+  assert.equal(saysRealWork("Fully remodeled kitchen and bath"), false);
+  assert.equal(saysRealWork("kitchen and baths original"), false);
+});

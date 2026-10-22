@@ -163,6 +163,9 @@ export function saysCosmeticOnly(text = "", { agentRehab = 0 } = {}) {
 // Their own framing of a candidate: "needs a lot of work", "a bit of a
 // project", "a fixer", "flip potential". Not a list of rooms: "kitchen and
 // baths original" is a scope for the question, not their word that it's a flip.
+// A remodel still to do ("needs a full kitchen and bathroom remodel",
+// 60750 Breckenridge St, 2026-10-22). "Remodeled", or one that was done, isn't.
+const REMODEL_TO_DO_RX = /\b(?:full|complete|total|whole|major|gut)\s+(?:[\w-]+\s+){0,4}?(?:remodel|renovation|reno|rehab)\b(?!\s+(?:was\s+|were\s+)?(?:done|completed|finished))|\b(?:remodel|renovation|rehab)\s+(?:is\s+)?needed\b/i;
 const CANDIDATE_RX = /(?<!\b(?:wouldn|won|doesn|don|didn|shouldn)['’]?t\s|\b(?:not|never)\s)\bneeds?\s+(?:a\s+(?:lot|bunch|ton|fair\s+amount)\s+of\s+|lots\s+of\s+|some\s+|real\s+|major\s+|significant\s+)?(?:work|rehab|repairs|TLC|love)\b|\bproject\b|\bfixer(?:[\s-]upper)?\b|\bflip\s+(?:potential|opportunity|candidate)\b|\bgood\s+flip\b/i;
 // "Not a fixer", "new construction", "full remodel done in 2002": the opposite.
 const NOT_A_CANDIDATE_RX = /\b(?:not|isn'?t|never|no)\s+(?:really\s+)?(?:a\s+|an\s+)?(?:fixer|project|flip)\b|\bnew(?:er)?\s+(?:construction|build|home)\b|\b(?:remodel|renovation|rehab|update)s?\s+(?:was\s+|were\s+)?(?:done|completed|finished)\b/i;
@@ -184,7 +187,7 @@ export function saysRealWork(text = "", { agentRehab = 0 } = {}) {
   if ((Number(agentRehab) || 0) >= REAL_SCOPE_REHAB) return true;
   // An unfinished basement is a room to finish, not an unfinished house.
   const said = t.replace(/\bunfinished\s+basement\b|\bbasement\s+(?:is\s+)?(?:still\s+)?unfinished\b/gi, "basement");
-  return flipRead(said, { agentRehab }).strong.length > 0 || CANDIDATE_RX.test(said);
+  return flipRead(said, { agentRehab }).strong.length > 0 || CANDIDATE_RX.test(said) || REMODEL_TO_DO_RX.test(said);
 }
 
 // Our one question. A few wordings, so a day of them doesn't read as a form.
