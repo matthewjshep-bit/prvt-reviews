@@ -76,6 +76,11 @@ export const WE_PASS_REASONS = Object.freeze([
     words: "there weren't enough recent sales nearby to back a number" },
   { code: "property_type", label: "Property type", short: "Property type", hint: "a log cabin, say",
     words: "it isn't a type of property we buy" },
+  // The nightly sweep's close on a house nothing came of (2026-10-22): no
+  // number from us, nothing more from them. The pass note still tells them.
+  // The sweep's, not a choice on the status menu (`menu: false`).
+  { code: "quiet", label: "Went quiet", short: "Quiet", hint: "nothing came of it", menu: false,
+    words: "we couldn't get it to a number that worked for us" },
 ]);
 export const WE_PASS_REASON = Object.freeze(Object.fromEntries(WE_PASS_REASONS.map((r) => [r.code, r])));
 /** normalizeWePassReason(v) → a WE_PASS_REASONS code, or null. */

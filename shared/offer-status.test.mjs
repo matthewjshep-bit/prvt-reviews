@@ -536,7 +536,7 @@ test("a number is approved when a person owns it, and a machine move takes the a
 import { WE_PASS_REASONS, parseStatusKey, wePassedKey, wePassReasonOf, normalizeWePassReason } from "./offer-status.js";
 
 test("why we passed: a few buckets, carried on the status menu's key", () => {
-  assert.deepEqual(WE_PASS_REASONS.map((r) => r.code), ["turnkey", "neighborhood", "rural", "comps", "property_type"]);
+  assert.deepEqual(WE_PASS_REASONS.map((r) => r.code), ["turnkey", "neighborhood", "rural", "comps", "property_type", "quiet"]);
   assert.deepEqual(parseStatusKey(wePassedKey("rural")), { status: "we_passed", reason: "rural" });
   assert.deepEqual(parseStatusKey("we_passed"), { status: "we_passed", reason: null });
   assert.deepEqual(parseStatusKey("we_passed:vibes"), { status: "we_passed", reason: null });

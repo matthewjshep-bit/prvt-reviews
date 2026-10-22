@@ -248,7 +248,7 @@ export function statusItems(offer, onSelect) {
   const why = wePassReasonOf(offer);
   // A draft has no documents yet, so it can't become a deal from here.
   return SETTABLE_STATUSES.filter((key) => !(offer.status === "draft" && key === "accepted")).flatMap((key) => (key === "we_passed"
-    ? WE_PASS_REASONS.map((r) => ({
+    ? WE_PASS_REASONS.filter((r) => r.menu !== false).map((r) => ({
       key: wePassedKey(r.code),
       label: `We passed: ${r.label.toLowerCase()}${r.hint ? ` (${r.hint})` : ""}`,
       selected: current === "we_passed" && why?.code === r.code,
