@@ -67,7 +67,7 @@ export const ERROR_HOLD = /^stopped early/i;
  */
 export function heldInPlainWords(reason = "") {
   const s = String(reason || "");
-  if (s === DRAFT_ONLY_HOLD.split(" — ")[0] || s === DRAFT_ONLY_HOLD) return "Matt is running the numbers himself";
+  if (s === DRAFT_ONLY_HOLD.split(" — ")[0] || s === DRAFT_ONLY_HOLD) return "you're running the numbers yourself";
   if (/square footage is unknown/i.test(s)) return "we couldn't pull the square footage on it";
   if (WORK_HOLD.test(s)) return /photo/i.test(s) ? "there aren't enough listing photos to see what it needs" : "the work looks heavy and you want to pin it down";
   if (VALUE_HOLD.test(s)) return "the comps came back thin";
