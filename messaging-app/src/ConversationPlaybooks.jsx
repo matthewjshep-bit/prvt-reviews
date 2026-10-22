@@ -799,7 +799,14 @@ export function OptOutCard({ config, patch, version, workflows }) {
 export function MediaCard({ config, patch }) {
   return (
     <Section title="Photos and attachments"
-      intro="A message that is only a photo gets this line back and nothing else. The image is never looked at, which is the surest way never to describe it.">
+      intro="A message that is only a photo gets this line back and nothing else. The reply never describes what's in a picture.">
+      <Toggle checked={Boolean(config.media.readAddresses)} onChange={(v) => patch({ media: { ...config.media, readAddresses: v } })}>
+        Read the address off flyers and screenshots they send
+      </Toggle>
+      <p className="mb-3 mt-1 text-xs text-slate-500">
+        Texts and emails. Pictures and PDFs they send are read for the printed street address only, a few cents a message.
+        An address found counts as if they had typed it, so each house becomes a draft for that contact.
+      </p>
       <Field label="Reply to a bare photo">
         <Text value={config.media.reply} onChange={(v) => patch({ media: { ...config.media, reply: v } })} placeholder="Thanks for the images, taking a look!" />
       </Field>

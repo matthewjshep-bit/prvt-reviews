@@ -120,6 +120,7 @@ import {
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
   stopMachineTextsForOffer, stopDealOutreach,
 } from "../reply-agent.js";
+import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
 import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
@@ -6324,7 +6325,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // A photo with no words arrives as an empty body plus attachments —
       // GHL exposes them as a list, a URL string, or a count depending on
       // the trigger. Any of those is enough to know there was one.
-      const attachments = countAttachments(b.attachments ?? b.attachment ?? b.customData?.attachments ?? b.message?.attachments);
+      const rawAttachments = b.attachments ?? b.attachment ?? b.customData?.attachments ?? b.message?.attachments;
+      const attachments = countAttachments(rawAttachments);
       if (!message.trim() && !attachments) {
         // Say exactly what arrived. This line lands in the GHL workflow's
         // execution log, which is the only place the real payload shape is
@@ -6350,7 +6352,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
 
       const saved = await store.getOfferSettings(locationId);
       const { skipped, job } = await startReply({
-        client, locationId, saved, store, contactId, message, channel, party, attachments,
+        client, locationId, saved, store, contactId, message, channel, party, attachments, attachmentUrls: attachmentUrls(rawAttachments),
         sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved }),
       });
       // A cap hit (or the bot being switched off) answers 200, not 4xx — a

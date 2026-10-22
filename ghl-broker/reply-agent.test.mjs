@@ -8236,3 +8236,67 @@ test("with skeleton on, houses named on a lead the rule underwrites one of are a
     reply: "We do buy in Kent. Let me take a look at both." });
   assert.deepEqual(uw.map((u) => u.address).sort(), ["1412 Pine St, Kent, WA 98031", "88 Alder St, Kent, WA 98031"]);
 });
+
+/* ---------- a flyer they send is a house (2026-10-22) ---------- */
+// Matt: "Are we able to scrub images that people sent over and create the
+// drafts from the address(es) that are in the image?" An agent answered "send
+// over the addresses" with two flyers and no words; the bot sent the canned
+// photo line and Matt typed both drafts by hand.
+
+const FLYERS = ["7413 Soundview Dr, Edmonds, WA 98026", "13645 3rd Ave S, Burien, WA 98168"];
+const withPhotos = (saved, on) => ({ ...saved, conversationAi: { ...saved.conversationAi, media: { ...(saved.conversationAi.media || {}), readAddresses: on } } });
+async function photoReply({ on = true, intent = "media" } = {}) {
+  _resetJobs();
+  const store = await iceStore();
+  const uw = [];
+  const seen = { read: 0, message: null };
+  const { job } = await startReply({
+    client: threadClient([["outbound", OPENER], ["inbound", "I have a couple"], ["outbound", "Nice, send over the addresses and I'll start running numbers on them."]]),
+    locationId: "LOC", saved: withPhotos(SKELETON_SAVED, on), store, contactId: "c1", sendsEnabled: true, message: "", attachments: 4,
+    deps: {
+      photoUrls: async () => ["https://x.site/1.jpg", "https://x.site/2.jpg"],
+      readPhotos: async () => { seen.read++; return FLYERS; },
+      draft: async ({ message }) => { seen.message = message; return { ...DRAFT, intent, confidence: "high", needsHuman: false, propertyAddress: "", reply: "Got them, thanks. I'll run both." }; },
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-q" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return { uw, seen, d: await store.getReplyDraft(job.draftId) };
+}
+
+test("an agent who sends flyers with no words gets a draft for each address printed on them", async () => {
+  const { uw, seen } = await photoReply();
+  assert.equal(seen.read, 1);
+  assert.match(seen.message, /\[photo → 7413 Soundview Dr, Edmonds, WA 98026\]/, "the model reads the address, not the picture");
+  assert.deepEqual(uw.map((u) => u.address).sort(), [...FLYERS].sort());
+});
+
+test("with reading photos off, a bare photo gets the canned line and nothing is read", async () => {
+  const { uw, seen, d } = await photoReply({ on: false });
+  assert.equal(seen.read, 0);
+  assert.equal(seen.message, null, "no model call on a bare photo");
+  assert.equal(uw.length, 0);
+  assert.equal(d.intent, "media");
+});
+
+test("a flyer placed in an email's body is read too, and makes its draft", async () => {
+  _resetJobs();
+  const store = await iceStore();
+  const uw = [];
+  let urls = null;
+  const { job } = await startReply({
+    client: threadClient([["outbound", OPENER]]), locationId: "LOC", saved: withPhotos(SKELETON_SAVED, true), store, contactId: "c1", sendsEnabled: true,
+    channel: "email", message: `<p>Here's one that just came up</p><img src="https://x.site/flyer.png">`,
+    deps: {
+      photoUrls: async () => [],
+      readPhotos: async (us) => { urls = us; return [FLYERS[0]]; },
+      draft: async () => ({ ...DRAFT, intent: "new_property", confidence: "high", needsHuman: false, propertyAddress: FLYERS[0], reply: "Thanks, I'll take a look." }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-q" } }; },
+    },
+  });
+  for (let i = 0; i < 100 && job.status !== "done" && job.status !== "error"; i++) await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(urls, ["https://x.site/flyer.png"]);
+  assert.deepEqual(uw.map((u) => u.address), [FLYERS[0]]);
+});

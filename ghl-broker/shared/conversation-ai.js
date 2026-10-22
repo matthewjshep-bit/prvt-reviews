@@ -153,7 +153,7 @@ export const INTENT_GLOSS = {
     deal_available: "the listing we asked about (or one they've got) is available and needs work — condition, price expectations, seller timeline. NOT when they say it's turnkey, renovated or move-in ready: that is investor_open",
     investor_open: "no deal right now, but open to working with investors or happy for us to stay in touch",
     realm_yes: "says the number we floated works, is in the realm, or to go ahead and send the formal offer — including \"send it over\", \"email me the offer\", \"can I see it in writing\"",
-    media: "the message is only a photo or attachment",
+    media: "the message is only a photo or attachment. A \"[photo → address]\" line is an address printed on a picture they sent (a flyer, a listing screenshot): read it as if they typed it, the house they're bringing us, and never describe the picture",
     opt_out: "asks us to stop texting, says wrong number, or is plainly angry — reply with nothing at all",
     question: "asks something answerable from the thread or the offer book",
     counter: "names a different number, or asks if we'd go higher",
@@ -170,7 +170,7 @@ export const INTENT_GLOSS = {
   investor: {
     blast_open: "the text that puts a deal in front of them: street, size, the work, the buyer price — sent to a shortlist, staggered",
     call_followup: "the text sent right after a phone call, drafted from the transcript: what we took from it and the next step",
-    media: "the message is only a photo or attachment",
+    media: "the message is only a photo or attachment. A \"[photo → address]\" line is an address printed on a picture they sent (a flyer, a listing screenshot): read it as if they typed it, the house they're bringing us, and never describe the picture",
     opt_out: "asks us to stop texting, says wrong number, or is plainly angry — reply with nothing at all",
     question: "asks something answerable from the thread or the deals in context",
     interested: "wants details, photos, numbers or the address on a deal we mentioned",
@@ -885,7 +885,10 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // GMAIL_* env on the broker. Off until switched on.
   gmail: { enabled: false, lookbackDays: 60 },
   optOut: { enabled: true, keywords: DEFAULT_OPT_OUT_KEYWORDS, tags: ["dnc"], removeTags: [], workflowId: "" },
-  media: { reply: "Thanks for the images, taking a look!" },
+  // readAddresses: the street address printed on a texted flyer or listing
+  // screenshot is read into the message (ghl-broker/photo-addresses.js), so
+  // it makes a draft like a typed address. Off until switched on (2026-10-22).
+  media: { reply: "Thanks for the images, taking a look!", readAddresses: false },
   // Matt's contact card (shared/contact-card.js): its own text right after a
   // reply to someone who asked who we are, or to an agent whose house didn't
   // work. Off until he switches it on.
@@ -1430,7 +1433,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       removeTags: list(optOut.removeTags, { max: 10, each: 80, lower: true }),
       workflowId: str(optOut.workflowId, 80),
     },
-    media: { reply: str(media.reply, 300) || D.media.reply },
+    media: { reply: str(media.reply, 300) || D.media.reply, readAddresses: media.readAddresses === true },
     contactCard: normalizeContactCard(d.contactCard),
     notifyOnly: "notifyOnly" in d
       ? list(d.notifyOnly, { max: 20, each: 40, lower: true })

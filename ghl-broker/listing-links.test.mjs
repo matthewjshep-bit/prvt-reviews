@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  findUrls, addressFromListingUrl, addressFromRunOnSlug, addressFromHtml, resolveListingLink, expandListingLinks,
+  findUrls, listingFirst, addressFromListingUrl, addressFromRunOnSlug, addressFromHtml, resolveListingLink, expandListingLinks,
 } from "./listing-links.js";
 
 /* ---------- finding links ---------- */
@@ -172,4 +172,9 @@ test("an agent's l.hms.pt link is followed through all six redirects to the addr
 
 test("an address block that isn't an address is not turned into one", () => {
   assert.equal(addressFromHtml(`<div class="summary_address">Address withheld<br />Auburn, WA</div>`), "");
+});
+
+test("an email's listing link is read before its signature's links, which would fill the three it reads", () => {
+  const sig = ["https://www.facebook.com/agent", "https://brokerage.com", "https://calendly.com/agent"];
+  assert.deepEqual(listingFirst([...sig, "https://redf.in/3ckOYn"]), ["https://redf.in/3ckOYn", ...sig]);
 });
