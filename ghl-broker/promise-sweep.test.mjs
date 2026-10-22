@@ -201,6 +201,28 @@ test("the owed text goes once — a second sweep leaves it to Today", async () =
   assert.equal(s.calls.length, 1);
 });
 
+// 2026-10-22 audit: the claim was written, the text was refused because the
+// agent texted in the last 48h (the live-thread rule), and every sweep after
+// read the spent claim as "already told them". Most promises on houses agents
+// surfaced went unkept that way. Now the live thread is asked first, and
+// nothing is claimed until the text can go.
+test("a promise blocked by a live thread is kept on a later sweep, not dropped", async () => {
+  const store = fakeStore({ events: [promise(5)] });
+  const s = starter();
+  let live = true;
+  const deps = { ...s, listUnderwriteJobs: () => [],
+    machineMayStart: async () => (live ? { ok: false, rule: "live_thread", reason: "they texted 1h ago and a house is live" } : { ok: true }) };
+  const first = await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps });
+  assert.equal(first.waiting, 1);
+  assert.equal(s.calls.length, 0);
+  assert.equal(store.events.some((e) => e.type === "promise_owed"), false);
+  live = false;
+  const later = await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW + 2 * HOUR, deps });
+  assert.equal(later.owed, 1);
+  assert.equal(s.calls.length, 1);
+  assert.equal(s.calls[0].kind, "promise_due");
+});
+
 test("a held underwrite on that house rides into the text, so it asks for their numbers", async () => {
   const store = fakeStore({
     events: [promise(5)],

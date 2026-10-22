@@ -480,3 +480,28 @@ test("the ask for the seller's number says Matt is pricing it himself, not that 
   const { heldInPlainWords } = await import("./held-underwrites.js");
   assert.match(heldInPlainWords(DRAFT_ONLY), /Matt is running the numbers himself/);
 });
+
+// 2026-10-22 audit: a skeleton draft (agent + address, nothing looked up)
+// reads "…the app made a skeleton…", and the draft-only step matched the
+// draft's words exactly. So no skeleton ever got the one ask for the seller's
+// number, and one in a town off our map was passed before Matt saw it.
+const SKELETON = "ready for your comps — the app made a skeleton from the address, nothing looked up";
+test("a skeleton gets the seller-number ask, like any house waiting on Matt's number", () => {
+  const t = triage({ offer: held({}, [SKELETON]), drafts: [inbound("It needs a full gut")] });
+  assert.equal(t.action, "ask");
+  assert.deepEqual(t.needs, ["take"]);
+});
+
+test("a skeleton in a town off our map waits for Matt instead of being passed", async () => {
+  const { knownCitiesFrom } = await import("./held-underwrites.js");
+  const known = knownCitiesFrom([{ address: "336 SW 15th St, Chehalis, WA 98532", cashAmount: 192250, status: "sent" }]);
+  const far = held({ address: "102 W Pearl St, Oakesdale, WA 99158" }, [SKELETON]);
+  const t = triageHeldUnderwrite({ offer: far, now: NOW, knownCities: known, drafts: [inbound("Needs everything", { propertyAddress: far.address })] });
+  assert.notEqual(t.status, "we_passed");
+  assert.ok(["ask", "yours"].includes(t.action), t.action);
+});
+
+test("a skeleton's ask says Matt is running the numbers himself", async () => {
+  const { heldInPlainWords } = await import("./held-underwrites.js");
+  assert.match(heldInPlainWords(SKELETON), /Matt is running the numbers himself/);
+});

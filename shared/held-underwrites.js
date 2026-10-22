@@ -36,7 +36,7 @@
 
 import { addressKey, sameStreet, parseUsAddress, completeAddress } from "./us-address.js";
 import { propertyDossier } from "./contact-record.js";
-import { aiHoldReasons, effectiveStatus, DEAD_STATUSES, saidYes, DRAFT_ONLY_HOLD } from "./offer-status.js";
+import { aiHoldReasons, effectiveStatus, DEAD_STATUSES, saidYes, DRAFT_ONLY_RX } from "./offer-status.js";
 import { KIND_HOLD, MOBILE_HOLD, RURAL_HOLD } from "./asset-type.js";
 import { pricedByHand } from "./underwrite-model.js";
 import { WA_CITY_COORDS } from "./wa-city-coords.js";
@@ -67,7 +67,7 @@ export const ERROR_HOLD = /^stopped early/i;
  */
 export function heldInPlainWords(reason = "") {
   const s = String(reason || "");
-  if (s === DRAFT_ONLY_HOLD.split(" — ")[0] || s === DRAFT_ONLY_HOLD) return "Matt is running the numbers himself";
+  if (DRAFT_ONLY_RX.test(s)) return "Matt is running the numbers himself";
   if (/square footage is unknown/i.test(s)) return "we couldn't pull the square footage on it";
   if (WORK_HOLD.test(s)) return /photo/i.test(s) ? "there aren't enough listing photos to see what it needs" : "the work looks heavy and you want to pin it down";
   if (VALUE_HOLD.test(s)) return "the comps came back thin";
@@ -368,8 +368,11 @@ function triageCore({
     return { ...base, action: "retire", status: "we_passed", reason: `held ${heldDays} days and nothing since` };
   }
   // Draft only (2026-10-16): the house is Matt's to price, so it waits for
-  // him, not for them. Asked once for their read (step 3c), then his.
-  const draftOnly = held.includes(DRAFT_ONLY_HOLD);
+  // him, not for them. Asked once for their read (step 3c), then his. A
+  // skeleton (2026-10-19) is one too: its hold reads differently, and an
+  // exact match on the draft's words skipped every skeleton's ask and let a
+  // town off our map pass it before he'd seen it (2026-10-22 audit).
+  const draftOnly = held.some((h) => DRAFT_ONLY_RX.test(String(h || "")));
   // A hold their numbers could clear has its own week, with a note (step 5).
   if (!cls.rescuable && !draftOnly && asked != null && (lastIn == null || lastIn < asked) && now - asked >= ASK_WAIT_DAYS * DAY_MS) {
     return { ...base, action: "retire", status: "we_passed", reason: "we asked for their read a week ago and heard nothing" };

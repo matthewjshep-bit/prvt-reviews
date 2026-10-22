@@ -22,7 +22,7 @@
 // second broker or a second tick can never send it twice.
 
 import { recordEvent } from "./contact-record.js";
-import { conversationConfig, startProactive, startReply } from "./reply-agent.js";
+import { conversationConfig, startProactive, startReply, machineMayStartFor } from "./reply-agent.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { addressKey } from "./shared/us-address.js";
 import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
@@ -249,6 +249,18 @@ export async function runPromiseSweep({ client, locationId, saved = {}, store, s
     // Today, and the text after it is refused at startProactive.
     const waitingOn = await waitingReason({ store, locationId, contactId, hold: false });
     if (waitingOn) { out.waiting++; out.results.push({ contactId, address, status: "waiting", reason: waitingOn }); continue; }
+    // A live thread (they texted in the last 48h about a house): the text
+    // would be refused at startProactive, and a claim spent on a refusal was
+    // never tried again (2026-10-22 audit: most "back to you with a number"
+    // promises on houses agents surfaced went unkept this way). Asked first,
+    // unclaimed; the next tick asks again.
+    const mayStart = typeof deps.machineMayStart === "function" ? deps.machineMayStart : machineMayStartFor;
+    const gate = await mayStart({ store, locationId, contactId, kind: "promise_due", address, now }).catch(() => ({ ok: true }));
+    if (gate && gate.ok === false && gate.rule === "live_thread") {
+      out.waiting++;
+      out.results.push({ contactId, address, status: "waiting", reason: gate.reason });
+      continue;
+    }
 
     const claim = await recordEvent({
       store, locationId, contactId, party: "agent", type: "promise_owed", at: iso(now), address,

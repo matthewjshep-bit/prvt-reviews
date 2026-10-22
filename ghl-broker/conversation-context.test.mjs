@@ -646,3 +646,16 @@ test("a house we passed on stops being asked about: the bot is told to say we pa
   assert.match(open.text, /STILL MISSING/);
   assert.doesNotMatch(open.text, /WE PASSED ON 1921/);
 });
+
+// 2026-10-22 audit: the first reply to a house an agent names was written
+// before its draft existed, so "Matt is pricing this one himself" never
+// reached it, and it promised "I'll text you where we'd land" — 27 of 100
+// such promises went unkept. With Matt pricing every house, every reply says so.
+test("the bot doesn't promise a number on a house Matt prices", async () => {
+  const { MATT_PRICES_LINE } = await import("./conversation-context.js");
+  const on = buildAgentContext({ offers: [], custom: {}, now: NOW, mattPrices: true });
+  assert.ok(on.text.includes(MATT_PRICES_LINE));
+  assert.match(MATT_PRICES_LINE, /never say you'll run the numbers or text them where we'd land/);
+  const off = buildAgentContext({ offers: [], custom: {}, now: NOW });
+  assert.ok(!off.text.includes("PRICING A NEW HOUSE"));
+});

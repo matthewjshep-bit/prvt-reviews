@@ -22,7 +22,7 @@ import { store as defaultStore } from "./store.js";
 import { triageHeldUnderwrite, retireNote, knownCitiesFrom, passReasonInWords } from "./shared/held-underwrites.js";
 import { aiHoldReasons, isAiGenerated, effectiveStatus } from "./shared/offer-status.js";
 import { auditDedupeKey } from "./shared/conversation-audit.js";
-import { conversationConfig, startProactive as defaultStartProactive, stopMachineTextsForOffer } from "./reply-agent.js";
+import { conversationConfig, startProactive as defaultStartProactive, stopMachineTextsForOffer, machineMayStartFor } from "./reply-agent.js";
 import { recordEvent } from "./contact-record.js";
 import { getContact, searchOpportunities, listPipelines, createContactNote, removeContactTags, smsUnsubscribed } from "./ghl.js";
 import { UW_TAGS, knownAddressesFor } from "./auto-underwrite.js";
@@ -72,6 +72,11 @@ export async function carryOutHeldVerdict({ client, locationId, saved = {}, stor
   if (t.action === "ask") {
     const waiting = await waitingReason({ store, locationId, contactId });
     if (waiting) return { status: "skipped", reason: waiting, jobId: null };
+    // A live thread refuses it at startProactive, and the claim below would
+    // be spent on the refusal for good: asked first, unclaimed (2026-10-22).
+    const mayStart = typeof deps.machineMayStart === "function" ? deps.machineMayStart : machineMayStartFor;
+    const gate = await mayStart({ store, locationId, contactId, kind: "take_ask", address: o.address || "", now }).catch(() => ({ ok: true }));
+    if (gate && gate.ok === false && gate.rule === "live_thread") return { status: "skipped", reason: gate.reason, jobId: null };
   }
   const c = await recordEvent({
     store, locationId, contactId, party: "agent", type: "audit_action", at: iso(now), address: o.address || "", offerId: o.id,

@@ -2366,7 +2366,7 @@ export async function assembleConversation({
     /* an opt-out needs the party and nothing else */
   } else if (party === "agent") {
     context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath), transcript: real, focusKinds: saved?.focusKinds,
-      highStakes: config.parties.agent?.realmCheck?.highStakes });
+      highStakes: config.parties.agent?.realmCheck?.highStakes, mattPrices: underwriteMode(saved) !== "full" });
     // The write-up terms' earnest money is a number the bot may say.
     if (config.writeUp?.earnestMoney) context = { ...context, amounts: [...new Set([...context.amounts, Math.round(config.writeUp.earnestMoney)])] };
     // The post-mortem digest rides along only when the switch is on AND a
@@ -2947,7 +2947,7 @@ const walkedAwayLine = (o) => (o?.status === "unavailable" ? `${o.address || "th
 // machineMayStart (shared/thread-health.js) on this contact's book, drafts
 // and timeline. A read that fails holds nothing back: the other doors still
 // ask their own questions.
-async function machineMayStartFor({ store, locationId, contactId, kind, why = "", address = "", passes = false, now = Date.now() }) {
+export async function machineMayStartFor({ store, locationId, contactId, kind, why = "", address = "", passes = false, now = Date.now() }) {
   if (!LIVE_THREAD_KINDS.has(kind) && !PASS_SHAPED_KINDS.has(kind) && !passes) return { ok: true };
   const [drafts, events, offers] = await Promise.all([
     typeof store?.listReplyDrafts === "function" ? store.listReplyDrafts(locationId, { contactId, limit: 50 }).catch(() => []) : [],
