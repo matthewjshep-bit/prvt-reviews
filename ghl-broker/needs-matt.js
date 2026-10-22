@@ -122,7 +122,7 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   const work = [...entered.map((id) => ({ id, need: needs.get(id) })), ...left.map((id) => ({ id, need: null }))].slice(0, MAX_SYNCS_PER_RUN);
   let field = null;
   for (const { id, need } of work) {
-    const r = await sync({ client, locationId, contactId: id, store, saved, ghl, needsMatt: need ? keep(need) : null, now });
+    const r = await sync({ client, locationId, contactId: id, store, saved, ghl, needsMatt: need ? keep(need, false, need.landedAt) : null, now });
     out.synced++;
     if (r?.applied) out.moved++;
     if (r?.error) out.errors.push(`${id}: ${r.error}`);

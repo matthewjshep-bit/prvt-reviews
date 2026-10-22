@@ -407,7 +407,9 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
   // Something only Matt can do outranks the offers' stage, except a house
   // under contract or a closed deal: those cards stay where he tracks them.
   const need = needsMatt?.kind && k.needsMatt && offersT.to !== "contract" && !offersT.won ? needsMatt : null;
-  const t = need ? { ...offersT, to: "needsMatt", why: need.why || "needs you", at: ms(need.at) ?? offersT.at, need: true } : offersT;
+  // Its time is when it landed (the runner's landedAt), so a drag from before
+  // it doesn't read as a person moving the card away from it (2026-10-22).
+  const t = need ? { ...offersT, to: "needsMatt", why: need.why || "needs you", at: ms(need.landedAt) ?? ms(need.at) ?? offersT.at, need: true } : offersT;
   // A card the conversation put in Tier 1 (raisedHouses): the runner checks
   // GHL's tags first, as it does for a conversation's Tier 2 card, so a
   // homeowner telling us about their own house is never an agent's lead.
