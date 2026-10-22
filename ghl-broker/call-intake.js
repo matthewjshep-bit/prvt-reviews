@@ -37,7 +37,7 @@ export async function findRecentCall({ client, locationId, contactId, messageId 
   for (const convo of conversations) {
     let lastMessageId = null;
     for (let page = 0; page < 2; page++) {
-      const r = await listConversationMessages(client, convo.id, { lastMessageId, limit: 50 });
+      const r = await listConversationMessages(client, convo.id, { lastMessageId, limit: 50, emails: false });
       for (const m of r.messages) {
         if (!isCall(m)) continue;
         const id = m.id || m.messageId;
@@ -223,7 +223,7 @@ export async function findNewCalls({ client, locationId, sinceMs, now = Date.now
     const lastType = String(convo.lastMessageType || "");
     // A conversation whose newest message is a text may still hold a call
     // behind it; only skip when GHL says nothing moved.
-    const r = await listConversationMessages(client, convo.id, { limit: 30 }).catch(() => ({ messages: [] }));
+    const r = await listConversationMessages(client, convo.id, { limit: 30, emails: false }).catch(() => ({ messages: [] }));
     for (const m of r.messages) {
       if (!isCall(m)) continue;
       const at = Date.parse(m.dateAdded || "") || 0;

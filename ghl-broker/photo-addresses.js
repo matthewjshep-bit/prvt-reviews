@@ -27,7 +27,7 @@ import { VISION_MODEL, anthropicErrorToHttp } from "./rehab-scan.js";
 import { meterAi } from "./ai-spend.js";
 import { hasHouseNumber } from "./shared/mentioned-houses.js";
 import { addressKey } from "./shared/us-address.js";
-import { searchConversations, listConversationMessages, getEmailMessage } from "./ghl.js";
+import { searchConversations, listConversationMessages } from "./ghl.js";
 import { PDFDocument } from "pdf-lib";
 
 // A burst of flyers is two or three texts of one or two pictures each.
@@ -98,23 +98,16 @@ export async function inboundPhotoUrls(client, locationId, contactId, { now = Da
   const { conversations } = await searchConversations(client, locationId, { contactId, limit: 1 });
   const c = conversations[0];
   if (!c) return [];
+  // Emails come back whole (ghl.js withEmails): their attachments, and the
+  // pictures in the reply's own words.
   const { messages } = await listConversationMessages(client, c.id, { limit: 25 });
   const out = [];
   for (const m of messages) {
     if (/ACTIVITY/i.test(String(m.messageType || m.type || ""))) continue;
-    // An email is a stub here; its pictures and PDFs are on the email itself,
-    // and one stub can hold the whole back-and-forth, newest last.
-    const ids = m.meta?.email?.messageIds || [];
-    const items = ids.length
-      ? (await Promise.all(ids.map((id) => getEmailMessage(client, id).catch(() => null)))).filter(Boolean).reverse()
-        .map((e) => ({ direction: e.direction, dateAdded: e.dateAdded || m.dateAdded, urls: [...attachmentUrls(e.attachments), ...bodyImageUrls(e.body)] }))
-      : [{ direction: m.direction, dateAdded: m.dateAdded, urls: attachmentUrls(m.attachments) }];
-    for (const it of items) {
-      if (String(it.direction || "").toLowerCase() !== "inbound") return [...new Set(out)].slice(-MAX_PHOTOS);
-      const ts = Date.parse(it.dateAdded || "");
-      if (Number.isFinite(ts) && now - ts > WINDOW_MS) return [...new Set(out)].slice(-MAX_PHOTOS);
-      out.unshift(...it.urls);
-    }
+    if (String(m.direction || "").toLowerCase() !== "inbound") break;
+    const ts = Date.parse(m.dateAdded || "");
+    if (Number.isFinite(ts) && now - ts > WINDOW_MS) break;
+    out.unshift(...attachmentUrls(m.attachments), ...(/EMAIL/i.test(String(m.messageType || m.type || "")) ? bodyImageUrls(m.body) : []));
   }
   return [...new Set(out)].slice(-MAX_PHOTOS);
 }

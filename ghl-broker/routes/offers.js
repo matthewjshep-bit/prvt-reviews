@@ -3752,7 +3752,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const { conversations } = await searchConversations(client, locationId, { contactId, limit: 2 }).catch(() => ({ conversations: [] }));
         let hit = null;
         for (const c of conversations.slice(0, 1)) {
-          const { messages } = await listConversationMessages(client, c.id, { limit: 50 }).catch(() => ({ messages: [] }));
+          const { messages } = await listConversationMessages(client, c.id, { limit: 50, emails: false }).catch(() => ({ messages: [] }));
           for (const m of [...messages].reverse()) {
             const at = Date.parse(m.dateAdded || "") || 0;
             if (at < since || String(m.direction || "").toLowerCase() !== "outbound" || String(m.source || "").toLowerCase() === "workflow") continue;

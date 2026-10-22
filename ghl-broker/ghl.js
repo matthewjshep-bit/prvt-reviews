@@ -6,6 +6,7 @@
 //   version Version: 2021-07-28  (v2 default; conversations uses 2021-04-15)
 
 import { tallyMessages } from "./shared/talked-to.js";
+import { cutQuotedHtml } from "./shared/gmail.js";
 
 const BASE = "https://services.leadconnectorhq.com";
 const V2 = "2021-07-28";
@@ -566,10 +567,12 @@ export async function searchConversations(client, locationId, { limit = 100, sta
   return { conversations: data.conversations || [], total: Number(data.total) || 0 };
 }
 
-// One page of a conversation's messages, newest first. Returns { messages:
+// One page of a conversation's messages, newest first. Emails come back
+// whole (withEmails, below); `emails: false` leaves them as GHL's stubs for a
+// reader that only counts, or only wants texts and calls. Returns { messages:
 // [{ type, direction, dateAdded, ... }], lastMessageId, nextPage }. Tolerates
 // both response shapes (data.messages.messages vs data.messages).
-export async function listConversationMessages(client, conversationId, { lastMessageId, limit = 100 } = {}) {
+export async function listConversationMessages(client, conversationId, { lastMessageId, limit = 100, emails = true } = {}) {
   const p = new URLSearchParams({ limit: String(limit) });
   if (lastMessageId) p.set("lastMessageId", lastMessageId);
   const data = await client.call(
@@ -577,7 +580,8 @@ export async function listConversationMessages(client, conversationId, { lastMes
     { version: V_CONVERSATIONS }
   );
   const box = data.messages && !Array.isArray(data.messages) ? data.messages : data;
-  const messages = Array.isArray(box.messages) ? box.messages : Array.isArray(data.messages) ? data.messages : [];
+  const listed = Array.isArray(box.messages) ? box.messages : Array.isArray(data.messages) ? data.messages : [];
+  const messages = emails ? await withEmails(client, listed) : listed;
   return {
     messages,
     lastMessageId: box.lastMessageId || null,
@@ -593,6 +597,55 @@ export async function getConversation(client, conversationId) {
   const data = await client.call(`/conversations/${encodeURIComponent(conversationId)}`, { version: V_CONVERSATIONS });
   const c = data.conversation && typeof data.conversation === "object" ? data.conversation : data;
   return c?.contactId ? { id: c.id || conversationId, contactId: String(c.contactId) } : null;
+}
+
+// GHL lists an email thread as one stub: no attachments, a direction and a
+// body that can't be trusted (the stub over our outreach and an agent's reply
+// carried OUR email's words, marked inbound, at the time of their reply), and
+// the real emails' ids in meta.email.messageIds. Every reader of the list (the bot's
+// transcript, the thread on the contact, the sweeps) skips a message with no
+// words, so an agent who answered by email was never seen (2026-10-22, an
+// agent's reply with the inspection report attached). Each stub becomes one
+// message per email, newest first like the list, with the reply's own words
+// (the quoted history cut) and its attachments. An email never changes, so
+// each is read once per process.
+const EMAIL_CACHE_MAX = 3000;
+const emailCache = new Map();
+async function cachedEmail(client, id) {
+  if (emailCache.has(id)) return emailCache.get(id);
+  const e = await getEmailMessage(client, id).catch(() => null);
+  if (e) {
+    if (emailCache.size >= EMAIL_CACHE_MAX) emailCache.delete(emailCache.keys().next().value);
+    emailCache.set(id, e);
+  }
+  return e;
+}
+export function _resetEmailCache() { emailCache.clear(); }
+
+export async function withEmails(client, messages = []) {
+  const out = [];
+  for (const m of messages) {
+    const ids = Array.isArray(m?.meta?.email?.messageIds) ? m.meta.email.messageIds.filter(Boolean) : [];
+    if (!ids.length) { out.push(m); continue; }
+    const found = (await Promise.all(ids.slice(0, 20).map((id) => cachedEmail(client, id)))).filter(Boolean);
+    if (!found.length) { out.push(m); continue; }
+    found.sort((a, b) => (Date.parse(b.dateAdded) || 0) - (Date.parse(a.dateAdded) || 0));
+    for (const e of found) {
+      out.push({
+        ...m,
+        // A stub of one email keeps its own id; several get the email's.
+        id: found.length === 1 ? m.id : e.id,
+        emailMessageId: e.id,
+        messageType: m.messageType || "TYPE_EMAIL",
+        direction: e.direction || m.direction || m.meta.email.direction || "",
+        dateAdded: e.dateAdded || m.dateAdded,
+        subject: e.subject,
+        body: cutQuotedHtml(e.body),
+        attachments: e.attachments,
+      });
+    }
+  }
+  return out;
 }
 
 // One email, in full. The conversation's message list carries an email as a
