@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { needsMattByContact, needsMattKind, PRICE_WAIT_HOURS, COUNTER_WAIT_HOURS } from "./needs-matt.js";
+import { needsMattByContact, needsMattKind, needsMattPassDue, PRICE_WAIT_HOURS, PASS_AFTER_HOURS } from "./needs-matt.js";
 import { planCard, stageKeys, stageKeyOf } from "./ghl-stages.js";
 
 const NOW = Date.parse("2026-10-22T18:00:00Z");
@@ -38,17 +38,44 @@ test("an agent's yes puts their card in Needs Matt", () => {
   assert.equal(r.move?.toStageId, "s-nm");
 });
 
-test("an acceptance the bot held for him lands there; a fresh counter waits for the machine first", () => {
+test("an acceptance the bot held for him lands there; a counter never does, the bot answers it", () => {
+  // Matt, 2026-10-22: "Bot holds our number" — a counter is the machine's,
+  // however long it has waited.
   const drafts = [
     { id: "d-ok", contactId: "bo", party: "agent", intent: "acceptance", createdAt: hoursAgo(15) },
     { id: "d-c1", contactId: "cy", party: "agent", intent: "counter", createdAt: hoursAgo(2) },
-    { id: "d-c2", contactId: "di", party: "agent", intent: "counter", createdAt: hoursAgo(COUNTER_WAIT_HOURS + 1) },
+    { id: "d-c2", contactId: "di", party: "agent", intent: "counter", createdAt: hoursAgo(46) },
   ];
   const rows = drafts.map((d) => ({ id: `draft:${d.id}`, kind: "draft_waiting", draftId: d.id, contactId: d.contactId }));
   const m = needsMattByContact(rows, { drafts, now: NOW });
   assert.equal(m.get("bo")?.kind, "yes");
   assert.equal(m.has("cy"), false);
-  assert.equal(m.get("di")?.kind, "counter");
+  assert.equal(m.has("di"), false);
+});
+
+test("their number on a house we never priced is a house to price, after the same day's wait", () => {
+  // 2026-10-20: the seller "won't take less than 540k" on a house with no
+  // offer of ours. Nothing for the bot to hold: it needs his number.
+  const noOffer = { ok: false, name: "offer_live", detail: "no open offer" };
+  const drafts = [
+    { id: "d-n", contactId: "ed", party: "agent", intent: "counter", counterAmount: 540000, propertyAddress: "122 Oak St, Seattle, WA",
+      createdAt: hoursAgo(PRICE_WAIT_HOURS + 2), exception: { kind: "counter_band", passed: false, checks: [noOffer] } },
+    { id: "d-f", contactId: "fay", party: "agent", intent: "counter", counterAmount: 540000,
+      createdAt: hoursAgo(3), exception: { kind: "counter_band", passed: false, checks: [noOffer] } },
+  ];
+  const rows = drafts.map((d) => ({ id: `draft:${d.id}`, kind: "draft_waiting", draftId: d.id, contactId: d.contactId }));
+  const m = needsMattByContact(rows, { drafts, now: NOW });
+  assert.equal(m.get("ed")?.kind, "price");
+  assert.match(m.get("ed").why, /They named 540K on 122 Oak St: price it or pass/);
+  assert.equal(m.has("fay"), false);
+});
+
+test("a house still unpriced three days after it landed is the bot's to pass", () => {
+  const need = (h, over = {}) => ({ kind: "price", offerId: "o-kay", at: hoursAgo(h), ...over });
+  assert.equal(needsMattPassDue(need(PRICE_WAIT_HOURS + PASS_AFTER_HOURS - 1), NOW), false);
+  assert.equal(needsMattPassDue(need(PRICE_WAIT_HOURS + PASS_AFTER_HOURS + 1), NOW), true);
+  assert.equal(needsMattPassDue(need(24 * 9, { kind: "yes" }), NOW), false, "a yes is never passed by the machine");
+  assert.equal(needsMattPassDue(need(24 * 9, { offerId: null }), NOW), false, "nothing to mark without a row");
 });
 
 test("a booked call, a call they asked for, a check-in and a closing task never land in Needs Matt", () => {

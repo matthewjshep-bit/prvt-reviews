@@ -4847,12 +4847,27 @@ offers put it) once it's done or dismissed:
 
 | Kind | What | Do it in |
 |---|---|---|
-| yes | an agreed number to approve; an acceptance (or a yes after we passed) the bot held | Offers → Hot / the held reply |
-| counter | a counter the counter hold hasn't taken in 12 hours | the held reply |
+| yes | an agreed number above any he approved; an acceptance (or a yes after we passed) the bot held | Offers → Hot / the held reply |
 | paper | paper to sign, a pre-contract warning, a hand-off, an answer only he has | the offer |
-| price | a house an agent surfaced, waiting 24 hours for his number | the offer editor |
+| price | a house an agent surfaced, waiting 24 hours for his number; their number on a house we never priced | the offer editor |
 
-Nothing else lands there: booked calls, calls (Manual Actions), passes,
+Matt's answers the same day kept it shorter:
+
+- **Their yes at or under a number he approved is the bot's.**
+  `numberApproved` holds for any agreed number at or under `offer.approved`,
+  so the machine asks for the write-up without an Approve.
+- **Counters never land.** On an open offer the counter hold answers (a
+  counter within `callWithinPct` is still a call). On a house that's done
+  (we passed, or they passed and repeat their number) the bot texts "We're
+  still at N on <street>" once (`closedHold`), and nothing reopens. If our
+  last word already said it, the draft waits quietly. A text that asks our
+  number or names another house stays a person's.
+- **Unpriced houses get passed.** A price row still unpriced 72 hours after
+  it landed (`PASS_AFTER_HOURS`) is marked we passed, reason "went quiet",
+  with its pass note due. `pass-note.js` texts the agent. This only happens
+  with the stage there.
+
+Nothing else lands there: counters, booked calls, calls (Manual Actions), passes,
 promises, check-ins, closing tasks (the card stays in Contract) and buyers
 stay the machine's or their own page's. The why is written once per thing to
 the contact's "App ping why" field and a note (`needs_matt_noted`). A card

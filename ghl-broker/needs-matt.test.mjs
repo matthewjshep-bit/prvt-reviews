@@ -113,3 +113,34 @@ test("the tick runs only with the GHL stages on and in the day's hours", async (
   assert.equal(await maybeRunNeedsMatt({ client: ghl, locationId: "loc-tick", saved: {}, store, deps, now: NOW }), null);
   assert.equal(await maybeRunNeedsMatt({ client: ghl, locationId: "loc-tick", saved: ON, store, deps, now: Date.parse("2026-10-22T11:00:00Z") }), null);
 });
+
+// Matt, 2026-10-22: "Land, then bot passes." Three days on the stage with no
+// price, and the bot passes: the house is marked we passed (went quiet), and
+// the pass note tells the agent.
+test("a house still unpriced three days after it landed is passed, and the agent gets the pass note", async () => {
+  const loc = "loc-pass";
+  const ghl = ghlWith(STAGES);
+  const old = 24 + 72 + 1;
+  await store.createOffer({ id: "o-dee", locationId: loc, contactId: "dee", address: "5 Pine St, Kent, WA", status: "draft", cashAmount: 0 });
+  await store.createOffer({ id: "o-eve", locationId: loc, contactId: "eve", address: "6 Fir St, Kent, WA", status: "draft", cashAmount: 0 });
+  await store.createOffer({ id: "o-flo", locationId: loc, contactId: "flo", address: "7 Ash St, Kent, WA", status: "draft", cashAmount: 0 });
+  const row = (who, h) => ({ id: `price_it:o-${who}`, kind: "price_it", contactId: who, offerId: `o-${who}`, address: "x", readyAt: hoursAgo(h) });
+  // Priced since the read: Matt got to it first, nothing is passed.
+  await store.updateOffer("o-flo", { ...(await store.getOffer("o-flo")), status: "new", cashAmount: 300000 });
+  const r = await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: ON, now: NOW,
+    deps: { pipelineFor: pipelineFor([row("dee", old), row("eve", 30), row("flo", old)]), syncAgentCard: syncStub().fn } });
+  const dee = await store.getOffer("o-dee");
+  assert.equal(dee.status, "we_passed");
+  assert.equal(dee.passReason?.code, "quiet");
+  assert.equal(dee.passNote?.status, "due");
+  assert.equal((await store.getOffer("o-eve")).status, "draft", "a day on the stage is still his");
+  assert.equal((await store.getOffer("o-flo")).status, "new", "priced since: not passed");
+  assert.deepEqual(r.passed, [{ contactId: "dee", offerId: "o-dee" }]);
+
+  // No stage in GHL: nothing is passed either.
+  const loc2 = "loc-pass-off";
+  await store.createOffer({ id: "o-gil", locationId: loc2, contactId: "gil", address: "8 Elm St, Kent, WA", status: "draft", cashAmount: 0 });
+  await runNeedsMatt({ store, locationId: loc2, client: ghlWith(STAGES.slice(1)), ghl: ghlWith(STAGES.slice(1)), saved: ON, now: NOW,
+    deps: { pipelineFor: pipelineFor([row("gil", old)]), syncAgentCard: syncStub().fn } });
+  assert.equal((await store.getOffer("o-gil")).status, "draft");
+});

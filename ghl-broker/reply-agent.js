@@ -4427,6 +4427,35 @@ async function runReply(job, ctx) {
       job.intent = draft.intent;
     }
   }
+  // A house that's done — we passed, or they did and say their number again —
+  // and their number still above the one we sent (Matt, 2026-10-22: "Bot
+  // holds our number"; two counters waited 46 hours on "the machine never
+  // goes above what we sent — your call"). Ours once more, short, and nothing
+  // reopens: no hold clock, no check-ins. Said once: when our last word on it
+  // already was "still at N", the draft waits quietly — never a second
+  // goodbye (Melissa W., 2026-10-20). A text that asks our number or names
+  // another house is still a person's.
+  if (party === "agent" && !isCall && draft.intent === "counter" && holdOn && !counterHold && !draft.callCounter) {
+    const msg = job.originalMessage || job.message;
+    const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const shut = (book || []).filter((o) => o && !o.deal && (["we_passed", "no_response"].includes(offerStatus(o))
+      || (offerStatus(o) === "passed" && draft.passHeld?.passed)));
+    const pick = pickOfferByAddress(shut, draft.propertyAddress) || (shut.length === 1 && !draft.propertyAddress ? shut[0] : null);
+    const closed = pick && typeof store.getOffer === "function" ? (await store.getOffer(pick.id).catch(() => null)) || pick : pick;
+    const hold = closed ? holdNumber({ offer: closed, transcript: a.transcript || "" }) : null;
+    const theirs = Math.round(Number(draft.counterAmount) || 0);
+    const aboutThisOnly = !asksOurNumber(msg) && !housesInText({ message: msg, except: [closed?.address || ""] }).length;
+    if (hold && aboutThisOnly && (theirs > hold.amount || (!theirs && asksUsToComeUp(msg)))) {
+      const n = hold.amount.toLocaleString("en-US");
+      const where = String(closed.address || "").split(",")[0].trim() || "the house";
+      const saidIt = new RegExp(`still at \\$?${n}\\b`, "i").test(a.transcript || "");
+      const closedHold = { offerId: closed.id, ours: hold.amount, theirs, ...(saidIt ? { quiet: true } : {}) };
+      draft = saidIt
+        ? { ...draft, needsHuman: false, closedHold, humanReason: `we already told them we're still at ${n} on ${where}; nothing more to say` }
+        : { ...draft, needsHuman: false, closedHold, humanReason: "",
+          reply: `Understood. We're still at ${n} on ${where}; if anything changes on the seller's side, I'm here.` };
+    }
+  }
 
   // Turnkey is not a deal. "This one is pretty turnkey with tenants in place"
   // answers our "project or turnkey?" and read as deal_available — the listing
@@ -4831,10 +4860,15 @@ async function runReply(job, ctx) {
   // reply the machine sends. Only where every other check passed and the
   // counter's own lock is all that held it — never past a gate, a stop, a
   // person having the thread, or sends off — and never naming more than ours.
-  if (draft.counterHold && !auto.send && base.code === "never_auto" && !gate?.overOffer?.length && !isCall
+  // The same door for ours said again on a house that's done (closedHold),
+  // except when it was already said: that one waits quietly.
+  const heldOurs = draft.counterHold || (draft.closedHold && !draft.closedHold.quiet ? draft.closedHold : null);
+  if (heldOurs && !auto.send && base.code === "never_auto" && !gate?.overOffer?.length && !isCall
       && (config.autoSend?.channels || []).includes(job.channel)
-      && moneyIn(draft.reply).every((n) => n <= draft.counterHold.ours)) {
-    auto = { ...auto, send: true, code: "", reason: "our number, held — hold, then pass", counterHold: true };
+      && moneyIn(draft.reply).every((n) => n <= heldOurs.ours)) {
+    auto = draft.counterHold
+      ? { ...auto, send: true, code: "", reason: "our number, held — hold, then pass", counterHold: true }
+      : { ...auto, send: true, code: "", reason: "our number again on a house that's done — nothing reopens" };
   }
   // Confused by us or repeating themselves (Kyle R., 2026-10-10): the
   // machine already lost the thread once, so it doesn't answer for you.
@@ -4862,7 +4896,7 @@ async function runReply(job, ctx) {
   }
   // A house we already passed stays passed while its repeat waits for a
   // person: filed "countered", the next repeat would draw the goodbye again.
-  if (draft.passHeld?.passed) {
+  if (draft.passHeld?.passed || draft.closedHold) {
     plan.auto = plan.auto.filter((x) => x.type !== "mark_offer_countered");
   }
   // Number first: the reply promises numbers, so the underwrite runs whatever

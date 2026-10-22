@@ -15,8 +15,12 @@
 //     retried once it's stale (conversation-audit.js gating).
 //   - The why goes on the card once per thing: the App ping why field and a
 //     contact note, claimed by a `needs_matt_noted` event first.
+//   - A house still unpriced PASS_AFTER_HOURS after it landed is marked we
+//     passed ("went quiet") with its pass note due (Matt, 2026-10-22: "Land,
+//     then bot passes"). Only with the stage there, like the moves.
 //
-// Never sends a text to anyone. Ids and kinds in the cursor and logs, no names.
+// Never sends a text itself: the pass note goes through pass-note.js. Ids and
+// kinds in the cursor and logs, no names.
 
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
@@ -26,7 +30,8 @@ import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { syncAgentCard } from "./tier-check.js";
 import { fieldId } from "./ghl-pings.js";
 import { normalizeGhlStages, stageKeys } from "./shared/ghl-stages.js";
-import { needsMattByContact, needsMattFromCursor, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
+import { needsMattByContact, needsMattFromCursor, needsMattPassDue, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
+import { effectiveStatus } from "./shared/offer-status.js";
 import { ghlPingNote } from "./shared/ghl-pings.js";
 
 export const STALE_RUN_MS = 30 * 60 * 1000;
@@ -56,7 +61,7 @@ const keep = (v, placed = false) => ({ kind: v.kind, rowKind: v.rowKind || "", w
  *   deps.syncAgentCard  tier-check.js syncAgentCard (tests stub it)
  */
 export async function runNeedsMatt({ store = defaultStore, locationId, client, saved = {}, deps = {}, now = Date.now(), dryRun = false, ghl = null } = {}) {
-  const out = { dryRun, stage: false, needs: 0, byKind: {}, entered: [], left: [], synced: 0, moved: 0, noted: 0, errors: [], finishedAt: null };
+  const out = { dryRun, stage: false, needs: 0, byKind: {}, entered: [], left: [], passDue: [], passed: [], synced: 0, moved: 0, noted: 0, errors: [], finishedAt: null };
   const done = () => { out.finishedAt = iso(Date.now()); return out; };
   if (typeof deps.pipelineFor !== "function") throw new Error("runNeedsMatt needs deps.pipelineFor");
   const cfg = normalizeGhlStages(saved?.ghlStages);
@@ -75,12 +80,24 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   const left = [...prev.keys()].filter((id) => !needs.has(id));
   out.entered = entered.map((id) => ({ contactId: id, kind: needs.get(id).kind }));
   out.left = left.map((id) => ({ contactId: id }));
+  out.passDue = [...needs].filter(([, v]) => needsMattPassDue(v, now)).map(([id, v]) => ({ contactId: id, offerId: v.offerId }));
   if (dryRun) return done();
 
   // The list first: the 7am plan and every card sync read it from here.
   const kept = Object.fromEntries([...needs].map(([id, v]) => [id, keep(v, prev.get(id)?.key === v.key ? prev.get(id)?.placed !== false : false)]));
   await patchCursor(store, locationId, { needs: kept, readAt: iso(now) });
   if (!out.stage || cfg.mode !== "on") return done();
+
+  // Waited out: passed, and the pass note tells them. The card leaves on the
+  // next read, once the row is gone.
+  for (const { contactId, offerId } of out.passDue) {
+    try {
+      if (await passUnpriced({ store, locationId, client, contactId, offerId, now })) out.passed.push({ contactId, offerId });
+    } catch (e) {
+      await recordError(store, { locationId, area: "needs-matt", err: e, context: { contactId, offerId, stage: "pass" } });
+      out.errors.push(`${contactId}: ${scrubMessage(e).slice(0, 120)}`);
+    }
+  }
 
   const sync = deps.syncAgentCard || syncAgentCard;
   const work = [...entered.map((id) => ({ id, need: needs.get(id) })), ...left.map((id) => ({ id, need: null }))].slice(0, MAX_SYNCS_PER_RUN);
@@ -117,6 +134,28 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   return done();
 }
 
+// One house: still a draft nothing went out on (re-read, so a price he put on
+// it since the pipeline read wins), marked we passed the way the held sweep
+// closes a quiet house. pass-note.js sends the note in machine hours.
+async function passUnpriced({ store, locationId, client, contactId, offerId, now }) {
+  const full = await store.getOffer?.(offerId).catch(() => null);
+  if (!full || full.locationId !== locationId || full.deal || effectiveStatus(full) !== "draft") return false;
+  if ((full.sends || []).length || full.floatSentAt) return false;
+  const ts = iso(now);
+  const street = String(full.address || "").split(",")[0].trim() || "the house";
+  const note = `We passed on ${street}: it waited three days in Needs Matt with no price. The bot's pass note tells the agent.`;
+  await store.updateOffer(full.id, {
+    ...full, status: "we_passed", statusAt: ts, statusNote: note,
+    statusHistory: [...(full.statusHistory || []), { status: "we_passed", ts, note }],
+    retired: { at: ts, by: "needs-matt", reason: "no price three days after it landed in Needs Matt" },
+    passReason: { code: "quiet", at: ts, by: "needs-matt" }, passNote: { status: "due", markedAt: ts }, updatedAt: ts,
+  });
+  await recordEvent({ store, locationId, contactId, party: "agent", type: "offer_we_passed", at: ts, address: full.address || "", offerId: full.id,
+    source: "sweep", dedupeKey: `needs_matt_passed:${full.id}`, data: { phrase: note, by: "needs-matt" } }).catch(() => {});
+  await createContactNote(client, contactId, { body: note }).catch(() => {});
+  return true;
+}
+
 /* ---------- the tick: every 15 minutes, 7am–9pm Pacific ---------- */
 
 const pacificHour = (t) => Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", hourCycle: "h23" }).format(new Date(t))) % 24;
@@ -126,7 +165,7 @@ export function _resetNeedsMatt() { running.clear(); }
 // What a run did, for the cursor: ids and kinds, never what was said.
 export const summarizeNeedsMatt = (r) => ({
   finishedAt: r?.finishedAt || null, stage: Boolean(r?.stage), needs: r?.needs ?? 0, byKind: r?.byKind || {},
-  entered: (r?.entered || []).length, left: (r?.left || []).length, moved: r?.moved ?? 0, noted: r?.noted ?? 0,
+  entered: (r?.entered || []).length, left: (r?.left || []).length, passed: (r?.passed || []).length, moved: r?.moved ?? 0, noted: r?.noted ?? 0,
   errors: (r?.errors || []).slice(0, 5),
 });
 

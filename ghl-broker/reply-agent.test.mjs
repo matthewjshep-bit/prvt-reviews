@@ -3214,6 +3214,42 @@ test("a counter within 10% of our number is a call for you, not the hold text, a
   }
 });
 
+// Matt, 2026-10-22: "Bot holds our number." Two counters sat 46 hours on
+// houses we had already closed — the band could only say "the machine never
+// goes above what we sent, your call". The bot says our number again, once.
+test("a counter on a house we already passed on gets our number again, once, and nothing reopens", async () => {
+  const run = async (message = "Seller still needs 400 to cover the payoff") => {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const offer = { ...HELD_OFFER, status: "we_passed" };
+    const store = negotiationStore(offer);
+    const marks = [], statuses = [];
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: HOLD_SAVED(), store, contactId: "c1", sendsEnabled: true,
+      message,
+      deps: {
+        draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: 400000, propertyAddress: "12 Elm St",
+          reply: "Got it, let me check whether there's any room and get back to you." }),
+        setOfferStatus: async ({ status }) => { statuses.push(status); return { ok: true, address: offer.address, status }; },
+        markCounterHold: async (a) => { marks.push(a); return { ok: true }; },
+      },
+    });
+    await settle();
+    return { job, d: await store.getReplyDraft(job.draftId), marks, statuses };
+  };
+  const { job, d, marks, statuses } = await run();
+  assert.equal(job.status, "done", job.error);
+  assert.match(d.reply, /still at 300,000 on 12 Elm St/, d.reply);
+  assert.doesNotMatch(d.reply, /\$|check|get back/);
+  assert.equal(d.status, "scheduled", `${d.autoSend?.reason} | ${(d.flags || []).join(" · ")}`);
+  assert.equal(marks.length, 0, "a closed house gets no hold clock");
+  assert.ok(!statuses.some((x) => x !== "we_passed" && x !== "passed"), `nothing reopened: ${statuses}`);
+  // A text that also asks about another house is still a person's.
+  const other = await run("Seller still needs 400. What would you offer on 40 Oak Ave?");
+  assert.notEqual(other.d.status, "scheduled");
+  assert.doesNotMatch(other.d.reply, /still at 300,000/);
+});
+
 test("'make an offer closer to where they are' with no number is held at ours too", async () => {
   const { d, marks } = await holdRun({ message: "If you would like to make an offer closer to where they are at, that may get them to move on it.",
     draft: { intent: "counter", counterAmount: 0, reply: "What number would get them to move?" } });

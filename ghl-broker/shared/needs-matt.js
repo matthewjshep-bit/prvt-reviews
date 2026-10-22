@@ -15,17 +15,18 @@
 //
 //   yes        they said yes (an acceptance held for him, a yes after we
 //              passed) or agreed a number he hasn't approved
-//   counter    a counter the machine hasn't taken in COUNTER_WAIT_HOURS
 //   paper      paper to sign, a pre-contract warning, a hand-off only he
 //              can do, an answer only he has
 //   price      a house an agent surfaced that has waited PRICE_WAIT_HOURS
-//              for his number
+//              for his number, or their number on a house we never priced.
+//              PASS_AFTER_HOURS after it landed, still unpriced, the runner
+//              passes it and the pass note tells the agent
 //
-// Everything else stays the machine's: booked calls (booking), calls (the
-// GHL dialer, desk.ghlCalls), passes (the pass note), promises (the promise
-// sweep), held check-ins (the gates), closing tasks (the card sits in
-// Contract), buyers (Deals). Keep this list short: a stage that fills up is
-// one nobody reads.
+// Everything else stays the machine's: counters (the bot holds our number,
+// Matt 2026-10-22), booked calls (booking), calls (the GHL dialer,
+// desk.ghlCalls), passes (the pass note), promises (the promise sweep), held
+// check-ins (the gates), closing tasks (the card sits in Contract), buyers
+// (Deals). Keep this list short: a stage that fills up is one nobody reads.
 //
 // Pure. The runner is ghl-broker/needs-matt.js; the stage move is
 // shared/ghl-stages.js planCard's `needsMatt`.
@@ -36,12 +37,13 @@ import { isCounterDraft } from "./desk.js";
 export const NEEDS_MATT_STAGE_RX = /^needs\s+matt\b/i;
 export const NEEDS_MATT_STAGE_NAME = "Needs Matt";
 export const PRICE_WAIT_HOURS = 24;
-export const COUNTER_WAIT_HOURS = 12;
+// Matt, 2026-10-22: "Land, then bot passes." Three days on the stage.
+export const PASS_AFTER_HOURS = 72;
 export const NEEDS_MATT_CURSOR = "needsMatt";
 export const NEEDS_MATT_EVENT = "needs_matt_noted";
 
 // Most pressing first: one per agent, the top one names the card's note.
-export const NEEDS_MATT_KINDS = Object.freeze(["yes", "counter", "paper", "price"]);
+export const NEEDS_MATT_KINDS = Object.freeze(["yes", "paper", "price"]);
 const RANK = Object.fromEntries(NEEDS_MATT_KINDS.map((k, i) => [k, i]));
 
 // Pipeline row kinds that are his on sight (hand-off.js says "ping" for
@@ -51,13 +53,16 @@ const PAPER_KINDS = new Set(["paper_to_sign", "pre_contract", "handoff"]);
 const PRICE_KINDS = new Set(["price_it", "number_owed"]);
 
 const HOUR_MS = 3600000;
+// The counter band found no offer to answer: nothing of ours went out on it.
+const noNumberOfOurs = (d) => d?.exception?.kind === "counter_band"
+  && (d.exception.checks || []).some((c) => c?.name === "offer_live" && c.ok === false);
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const street = (a) => String(a || "").split(",")[0].trim();
 const clip = (s, n) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const k$ = (n) => { const v = Math.round(Number(n) || 0); return v ? `${Math.round(v / 1000)}K` : ""; };
 
 /**
- * needsMattKind(row, { draftsById, now }) → "yes" | "counter" | "paper" | "price" | null
+ * needsMattKind(row, { draftsById, now }) → "yes" | "paper" | "price" | null
  *
  * `row` is one action from the pipeline read (shared/pipeline.js) or a call
  * list row; `draftsById` the open drafts the read came with.
@@ -69,9 +74,11 @@ export function needsMattKind(row, { draftsById = new Map(), now = Date.now() } 
     const d = draftsById.get(row.draftId) || null;
     if (!d || d.party === "investor") return null;
     if (row.yesAfterPass || d.yesAfterPass?.offerId || d.intent === "acceptance") return "yes";
-    if (isCounterDraft(d)) {
+    // A counter is the bot's: it holds our number (reply-agent.js). Only
+    // their number on a house with no offer of ours to hold is his to price.
+    if (isCounterDraft(d) && noNumberOfOurs(d)) {
       const at = ms(d.createdAt);
-      return at != null && now - at >= COUNTER_WAIT_HOURS * HOUR_MS ? "counter" : null;
+      return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? "price" : null;
     }
     return null;
   }
@@ -98,8 +105,8 @@ export function needsMattWhy(x = {}) {
     if (x.rowKind === "approve_number") return clip(`They agreed${at}${x.amount ? ` at ${k$(x.amount)}` : ""}: approve the number in Offers → Hot, then the machine asks for the write-up`, 300);
     return clip(`They said yes${at}: the bot's reply is held for you`, 300);
   }
-  if (x.kind === "counter") return clip(`A counter${at} is waiting on you${x.title ? `: ${x.title}` : ""}`, 300);
   if (x.kind === "paper") return clip(`${x.title || "Something only you can do"}${x.title && on && !String(x.title).includes(on) ? ` (${on})` : ""}`, 300);
+  if (x.kind === "price" && x.theirs) return clip(`They named ${k$(x.theirs)}${at}: price it or pass`, 300);
   if (x.kind === "price") {
     const hours = Math.max(1, Math.round(((x.now ?? Date.now()) - (ms(x.since) ?? Date.now())) / HOUR_MS));
     const waited = hours >= 48 ? `${Math.round(hours / 24)} days` : `${hours} hours`;
@@ -127,8 +134,9 @@ export function needsMattByContact(rows = [], { drafts = [], now = Date.now() } 
       if (!kind) continue;
       const d = r.draftId ? draftsById.get(r.draftId) : null;
       const since = r.owedAt || r.readyAt || r.promisedAt || d?.createdAt || r.at || null;
+      const theirs = kind === "price" && d && isCounterDraft(d) ? Math.round(Number(d.counterAmount) || 0) || null : null;
       const item = { kind, rowKind: r.kind, offerId: r.offerId || null, address: r.address || d?.propertyAddress || "",
-        amount: r.amount || null, title: r.title || "", since, now };
+        amount: r.amount || null, title: r.title || "", since, now, theirs };
       const prev = out.get(contactId);
       if (prev && RANK[prev.kind] <= RANK[kind]) continue;
       out.set(contactId, { kind, rowKind: r.kind, offerId: item.offerId, address: item.address, at: since,
@@ -136,6 +144,19 @@ export function needsMattByContact(rows = [], { drafts = [], now = Date.now() } 
     }
   }
   return out;
+}
+
+/**
+ * needsMattPassDue(need, now) → boolean
+ *
+ * A house still waiting on his price PASS_AFTER_HOURS after it landed: the
+ * runner marks it we passed, and the pass note tells the agent. Only a row
+ * the runner can mark; a yes or paper is never passed by the machine.
+ */
+export function needsMattPassDue(need, now = Date.now()) {
+  if (need?.kind !== "price" || !need.offerId) return false;
+  const at = ms(need.at);
+  return at != null && now - at >= (PRICE_WAIT_HOURS + PASS_AFTER_HOURS) * HOUR_MS;
 }
 
 /** needsMattFromCursor(doc) → Map contactId → item, from the runner's last read. */

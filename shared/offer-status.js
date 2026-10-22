@@ -578,7 +578,8 @@ export function weDecline(text = "") {
  *     the number.
  *
  * The machine moving the number (a re-quote on their figures, the counter
- * band) is not approval, and a new number voids an old approval.
+ * band) is not approval, and a higher number voids an old approval; a lower
+ * one keeps it (2026-10-22).
  */
 export const MACHINE_REVISERS = new Set(["requote", "counter_band"]);
 const tsOf = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : 0; };
@@ -586,7 +587,9 @@ export function numberApproved(offer) {
   if (!offer) return false;
   const amount = Math.round(Number(offer.cashAmount) || 0);
   if (!amount) return false;
-  if (Number(offer.approved?.amount) > 0 && Math.round(Number(offer.approved.amount)) === amount) return true;
+  // At or under the number he approved (Matt, 2026-10-22: "Bot runs it"): the
+  // band taking their lower counter, or a re-quote coming down, is still his.
+  if (Number(offer.approved?.amount) > 0 && Math.round(Number(offer.approved.amount)) >= amount) return true;
   const machineAt = Math.max(0,
     ...(offer.requotes || []).map((r) => tsOf(r?.ts)),
     ...(offer.revisions || []).filter((r) => MACHINE_REVISERS.has(r?.by)).map((r) => tsOf(r?.ts)),
