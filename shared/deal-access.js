@@ -70,10 +70,10 @@ export function accessLines(access) {
   else if (a.occupancy === "tenant_occupied") out.push("occupancy: a tenant lives there. Never suggest they drive by, knock, or disturb the tenant; they see it only at a set walkthrough time");
   else out.push("occupancy: not recorded. Never say the house is vacant, empty, or open");
   const notice = a.noticeHours ? ` with ${a.noticeHours} hours' notice` : "";
-  if (a.method === "lockbox") out.push(`access: lockbox${notice}. Matt sends access details once their time is confirmed; never give or promise a code yourself`);
+  if (a.method === "lockbox") out.push(`access: lockbox${notice}. You send access details once their time is confirmed; never give or promise a code in a text`);
   else if (a.method === "agent") out.push(`access: the listing agent lets buyers in at a set time${notice}`);
   else if (a.method === "appointment") out.push(`access: by appointment only${notice}; say you'll set a time with the agent`);
-  else if (a.method === "matt") out.push(`access: Matt meets buyers at the house at a set time${notice}`);
+  else if (a.method === "matt") out.push(`access: you meet buyers at the house yourself at a set time${notice}`);
   else if (a.method === "none") out.push("access: no interior access before closing; offer the photos, the numbers and a drive-by of the outside only if the house is vacant");
   else out.push("access: not recorded. If they ask how to see it, say you'll confirm access with the agent and get back to them");
   return out;

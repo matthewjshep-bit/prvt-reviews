@@ -451,7 +451,7 @@ export const AGENT_HONESTY_RULE =
 export const PROMISE_RULE =
   "PROMISES: promise only what will actually happen, and say when (\"I'll text you the number by 3\"). Never invent " +
   "someone to check with: no underwriting team, no partner, no 'my team'. Never \"I'll get back to you today\" with " +
-  "nothing behind it. Terms, a price we don't have, a time, anything only Matt settles: say you'll go over it on a " +
+  "nothing behind it. Terms, a price we don't have, a time, anything you'd settle by phone: say you'll go over it on a " +
   "quick call, and set needsHuman.";
 
 // Agents work for us (2026-10-15). In the funnel review the agents we let
@@ -471,7 +471,7 @@ export const AGENT_REPRESENT_RULE =
 export const AGENT_GOAL_RULE =
   "THE GOAL, IN ORDER: (1) get an address and enough on condition to price it, so we can generate an offer; " +
   "(2) find out what price would actually work for the seller — their number, what they'd take, how firm; " +
-  "(3) make sure that price works for us — our underwritten number and Matt decide that, never you: " +
+  "(3) make sure that price works for us — our underwritten number decides that, on a call, never in a text: " +
   "never say a number above our offer works, is workable or doable, or that we can do it — not after their scope, not after 'can you make it work' — " +
   "say you'll go over it on a quick call; " +
   "(4) get to a number both sides can live with — any sign the agent thinks it could work ('might work', 'that's closer', " +
