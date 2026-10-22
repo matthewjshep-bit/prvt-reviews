@@ -70,7 +70,7 @@ import { offerMath, mathSentence } from "../shared/offer-breakdown.js";
 import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
-  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, dealIsOver,
+  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, weWalkAway, dealIsOver,
   numberApproved, termsOnLetter, WE_PASS_REASONS, WE_PASS_REASON, normalizeWePassReason,
 } from "../shared/offer-status.js";
 import { currentOffers, houseRowFor, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
@@ -3702,15 +3702,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // A text only: an email carries the thread quoted under it.
     if (channel !== "sms") return null;
     const phrase = weDecline(text);
-    if (!phrase || !contactId) return null;
+    const walk = weWalkAway(text);
+    if ((!phrase && !walk) || !contactId) return null;
     const offers = await store.listOffers(locationId, { contactId, limit: 50 }).catch(() => []);
+    if (!phrase) return passUnsent({ locationId, client, offers, text, walk, at, via });
     const live = counteredAboveUs(offers, (Date.parse(at) || Date.now()) + 60000);
     // The house it's about: the one it names, or the only counter on the table.
     const named = housesNamed(text);
     const offer = named.length
       ? live.find((o) => named.includes(String(o.address || "").trim().split(/\s+/)[0])) || null
       : live.length === 1 ? live[0] : null;
-    if (!offer) return null;
+    if (!offer) return walk ? passUnsent({ locationId, client, offers, text, walk, at, via }) : null;
     const full = await store.getOffer(offer.id).catch(() => null);
     if (!full) return null;
     await applyOperatorStatus({ locationId, client, offer: full, status: "we_passed", ts: at,
@@ -3718,6 +3720,52 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return { offerId: full.id, address: full.address, phrase };
   }
   router.passOnOurNo = passOnOurNo;
+
+  // A house nothing went out on (a draft, or a priced row never sent or
+  // floated), made in the last month: what a person's "not for us" passes.
+  const WALK_DAYS = 30;
+  const STREET_SUFFIX = /^(?:st|street|ave|avenue|rd|road|dr|drive|ct|court|ln|lane|pl|place|way|blvd|loop|lp|hwy|cir|circle|ter|terrace|pkwy|[nsew]{1,2})$/i;
+  function unsentHouses(offers, atMs) {
+    return (offers || []).filter((o) => {
+      if (!o?.address || o.deal || o.supersededBy) return false;
+      const s = effectiveStatus(o);
+      if (!(s === "draft" || (s === "new" && !(o.sends || []).length && !o.floatSentAt))) return false;
+      const made = Date.parse(o.createdAt || "") || 0;
+      return made <= atMs + 60000 && atMs - made <= WALK_DAYS * 86400000;
+    });
+  }
+  // Which of them the text means: the ones it names (number or street name),
+  // the only one, or all of them when it says "these", "both" or "them".
+  function walkTargets(unsent, text) {
+    const named = housesNamed(text);
+    if (named.length) return unsent.filter((o) => named.includes(String(o.address || "").trim().split(/\s+/)[0]));
+    const words = (o) => String(o.address || "").split(",")[0].split(/\s+/).filter((w) => /^[a-z]{3,}$/i.test(w) && !STREET_SUFFIX.test(w));
+    const byStreet = unsent.filter((o) => words(o).some((w) => new RegExp(`\\b${w}\\b`, "i").test(text)));
+    if (byStreet.length) return byStreet;
+    if (unsent.length === 1) return unsent;
+    return /\b(?:these|those|both|them|all of them)\b/i.test(text) ? unsent : [];
+  }
+  /**
+   * passUnsent({ ..., walk }) → { offerId, address, phrase, passed } | null
+   *
+   * 2026-10-22: Matt's "a little too rural for flips" and "too nice for us"
+   * left the drafts open, and the houses came back to him to price. His no
+   * passes them with his reason. No pass note: he told them himself.
+   */
+  async function passUnsent({ locationId, client, offers, text, walk, at, via }) {
+    const said = walk || { phrase: weDecline(text), reason: null };
+    const targets = walkTargets(unsentHouses(offers, Date.parse(at) || Date.now()), text);
+    const passed = [];
+    for (const o of targets) {
+      const full = await store.getOffer(o.id).catch(() => null);
+      // The full row, checked again: a lean read leaves out what was sent.
+      if (!full || !unsentHouses([full], Date.parse(at) || Date.now()).length) continue;
+      await applyOperatorStatus({ locationId, client, offer: full, status: "we_passed", ts: at, passReason: said.reason,
+        note: `you texted "${said.phrase}"${via ? ` (${via})` : ""}` });
+      passed.push({ offerId: full.id, address: full.address });
+    }
+    return passed.length ? { ...passed[0], phrase: said.phrase, passed } : null;
+  }
   // Everything a text you typed yourself can move: a promise of a number
   // opened or kept (promise-sweep.js notePromiseInHandText), then our no.
   async function onHandText({ locationId, contactId, text, at, channel = "sms", ...rest }) {
@@ -3730,7 +3778,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   router.applyOperatorStatus = applyOperatorStatus;
 
   // The one-time look back: houses still countered above our number where a
-  // person's text since the counter already said no. Body: { dryRun = true }.
+  // person's text since the counter already said no, and houses nothing went
+  // out on that a person's text already passed on ("too rural for us",
+  // 2026-10-22). Body: { dryRun = true }.
   // Reads each thread once; the bot's own auto-sent texts and workflows are
   // never taken as a person's no.
   router.post("/passes/our-no", async (req, res) => {
@@ -3744,9 +3794,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const found = [];
       for (const [contactId, list] of byContact) {
         const onTable = counteredAboveUs(list);
-        if (onTable.length !== 1) continue;   // one counter on the table, or it's not clear which house
-        const offer = onTable[0];
-        const since = Date.parse(offer.counter?.at || offer.statusAt || "") || 0;
+        const unsent = unsentHouses(list, Date.now());
+        // One counter on the table (or it's not clear which house), or a house nothing went out on.
+        if (onTable.length !== 1 && !unsent.length) continue;
+        const offer = onTable.length === 1 ? onTable[0] : null;
+        const since = offer ? Date.parse(offer.counter?.at || offer.statusAt || "") || 0
+          : Math.min(...unsent.map((o) => Date.parse(o.createdAt || "") || 0));
         const bot = (await store.listReplyDrafts(locationId, { contactId, status: "sent", limit: 50 }).catch(() => []))
           .filter((d) => d.autoSent).map((d) => String(d.sentText || d.reply || "").trim().toLowerCase().slice(0, 60)).filter(Boolean);
         const { conversations } = await searchConversations(client, locationId, { contactId, limit: 2 }).catch(() => ({ conversations: [] }));
@@ -3759,14 +3812,26 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
             const body = String(m.body || "");
             if (bot.some((b) => body.trim().toLowerCase().startsWith(b))) continue;
             if (!/SMS/i.test(String(m.messageType || m.type || ""))) continue;   // texts only
+            const via = m.userId ? "typed in GHL" : "sent from the app";
+            if (!offer) {
+              const walk = weWalkAway(body);
+              const targets = walk ? walkTargets(unsentHouses(list, at), body) : [];
+              if (targets.length) { hit = { at: new Date(at).toISOString(), phrase: walk.phrase, via, walk, body, targets }; break; }
+              continue;
+            }
             const named = housesNamed(body);
             if (named.length && !named.includes(String(offer.address || "").trim().split(/\s+/)[0])) continue;
             if (at - since > OUR_NO_COUNTER_DAYS * 86400000) continue;
             const phrase = weDecline(body);
-            if (phrase) { hit = { at: new Date(at).toISOString(), phrase, via: m.userId ? "typed in GHL" : "sent from the app" }; break; }
+            if (phrase) { hit = { at: new Date(at).toISOString(), phrase, via }; break; }
           }
         }
         if (!hit) continue;
+        if (hit.walk) {
+          for (const t of hit.targets) found.push({ contactId, offerId: t.id, address: t.address, at: hit.at, phrase: hit.phrase, via: hit.via });
+          if (!dryRun) await passUnsent({ locationId, client, offers: list, text: hit.body, walk: hit.walk, at: hit.at, via: hit.via });
+          continue;
+        }
         found.push({ contactId, offerId: offer.id, address: offer.address, ...hit });
         if (!dryRun) {
           const full = await store.getOffer(offer.id).catch(() => null);

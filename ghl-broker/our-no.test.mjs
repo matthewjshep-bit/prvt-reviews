@@ -25,6 +25,11 @@ const { weDecline } = await import("./shared/offer-status.js");
 const LOC = "loc-our-no";
 // The thread for the look back: their counter, then Matt's no typed in GHL.
 const client = { call: async (p) => {
+  if (String(p).startsWith("/conversations/search") && /contactId=ash\b/.test(String(p))) return { conversations: [{ id: "cv2", contactId: "ash" }] };
+  if (String(p).includes("/conversations/cv2/messages")) return { messages: { messages: [
+    { id: "w2", direction: "outbound", messageType: "TYPE_SMS", source: "app", userId: "u1", body: "Sorry, these are just a bit too rural for us. If you find anything in town let me know", dateAdded: new Date(Date.now() + 1000).toISOString() },
+    { id: "w1", direction: "inbound", messageType: "TYPE_SMS", body: "Here's the listing", dateAdded: new Date(Date.now() - 2 * 3600000).toISOString() },
+  ], nextPage: false } };
   if (String(p).startsWith("/conversations/search")) return { conversations: [{ id: "cv1", contactId: "gabe" }] };
   if (String(p).includes("/conversations/cv1/messages")) return { messages: { messages: [
     { id: "m2", direction: "outbound", messageType: "TYPE_SMS", source: "app", userId: "u1", body: "We cant get there unfortunately let me know if it falls through", dateAdded: "2026-10-02T16:32:00Z" },
@@ -106,4 +111,54 @@ test("we decline in a person's words, not in a hold or a showing time", () => {
   assert.equal(weDecline("We'll pass on the Port Orchard home"), "we'll pass");
   assert.equal(weDecline("Best we can do is 450"), null);
   assert.equal(weDecline("Can't get there today, tomorrow at noon?"), null);
+});
+
+// 2026-10-22: Matt texted "Dickson Loop property is a little too rural for
+// flips" (one draft) and "Sorry, these are just a bit too rural for us" (an
+// agent with drafts), and the drafts stayed open, so the houses came back to
+// him as "price it". A person's "not for us" on a house nothing went out on
+// passes it, with his reason, and the bot sends no pass note: he told them.
+const draftRow = (contactId, address, over = {}) => store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId, contactName: "Agent", address,
+  status: "draft", cashAmount: 0, statusHistory: [], createdAt: new Date(Date.now() - 2 * 86400000).toISOString(), ...over });
+
+test("your 'too rural for us' on a house we never priced passes it, with the reason", async () => {
+  const o = await draftRow("jen", "62710 Dixon Loop, Bend, OR 97701");
+  const r = await router.passOnOurNo({ locationId: LOC, client, contactId: "jen", text: "Dickson Loop property is a little too rural for flips. It's just harder to sell" });
+  assert.equal(r?.offerId, o.id);
+  const after = await store.getOffer(o.id);
+  assert.equal(after.status, "we_passed");
+  assert.equal(after.passReason?.code, "rural");
+  assert.ok(!after.passNote || after.passNote.status !== "due", "no pass note: you already told them");
+});
+
+test("'these' passes every house of theirs nothing went out on; one of several unnamed passes nothing; a sent offer is never touched", async () => {
+  const a = await draftRow("kar", "22520 State Route 706 E, Ashford, WA 98304");
+  const b = await draftRow("kar", "100 Elbe Hwy, Ashford, WA 98304");
+  const sent = await draftRow("kar", "5 Sent Rd, Eatonville, WA 98328", { status: "sent", cashAmount: 300000, sends: [{ ts: new Date().toISOString() }] });
+  const r = await router.passOnOurNo({ locationId: LOC, client, contactId: "kar", text: "Sorry, these are just a bit too rural for us. If you find anything in town let me know" });
+  assert.deepEqual((r?.passed || []).map((x) => x.offerId).sort(), [a.id, b.id].sort());
+  assert.equal((await store.getOffer(sent.id)).status, "sent");
+  // Two drafts and a singular "it": not clear which, so nothing.
+  const c = await draftRow("lou", "1 Oak St, Kent, WA 98030");
+  const d = await draftRow("lou", "2 Elm St, Kent, WA 98030");
+  assert.equal(await router.passOnOurNo({ locationId: LOC, client, contactId: "lou", text: "Sounds too nice for us" }), null);
+  assert.equal((await store.getOffer(c.id)).status, "draft");
+  // Naming one by its street passes that one.
+  const named = await router.passOnOurNo({ locationId: LOC, client, contactId: "lou", text: "Elm sounds too nice for us, thanks" });
+  assert.equal(named?.offerId, d.id);
+  assert.equal((await store.getOffer(d.id)).passReason?.code, "turnkey");
+  assert.equal((await store.getOffer(c.id)).status, "draft");
+});
+
+test("the look back passes a house you already texted 'too rural' on, and a dry run changes nothing", async () => {
+  const o = await draftRow("ash", "22520 State Route 706 E, Ashford, WA 98304", { createdAt: new Date(Date.now() - 3 * 86400000).toISOString() });
+  const post = async (body) => (await fetch(`${B}/api/offers/passes/our-no`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+  const dry = await post({});
+  const hit = dry.found.find((f) => f.offerId === o.id);
+  assert.equal(hit?.phrase, "too rural", JSON.stringify(dry.found));
+  assert.equal((await store.getOffer(o.id)).status, "draft");
+  await post({ dryRun: false });
+  const after = await store.getOffer(o.id);
+  assert.equal(after.status, "we_passed");
+  assert.equal(after.passReason?.code, "rural");
 });
