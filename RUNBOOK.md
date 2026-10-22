@@ -3045,6 +3045,20 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   - **Check it:** `GET /api/dashboard/ghl/pipeline?fresh=1`. Look at
     `plan.counts.conversation`, and the rows with `conversation: true`. The
     work pane's pass note names a raised house that keeps the card in Tier 1.
+  - **Talked-to agents in Tier 2 (2026-10-22).** Matt: "people we've talked
+    to and had conversations with are getting put into the tier 2 category."
+    Three fixes:
+    - **A remodel still to do is real work.** "Needs a full kitchen and bath
+      remodel" reopens a house an earlier "cosmetic flip" closed
+      (`saysRealWork`, REMODEL_TO_DO_RX).
+    - **Their yes on a house is Tier 1, row or not.** The reply agent files
+      `house_agreed` on an acceptance with a full address (Matt quoted
+      1128 N Jackson by text, and the only row was a passed one elsewhere).
+    - **An unsent row stays live while they're writing about its house.**
+      `lastWordOnHouses` is their newest house event per house. A priced
+      row older than `staleTier1Days` stays Tier 1 while that house's last
+      word is fresh. Their words about another house still don't count
+      (Eric B.).
 - **Tier 2 is the agent nurture** (Matt): everyone with nothing live,
   former Tier 3s included, replied or not. The app's agent check-in is the
   nurture. A card that still lands in Tier 3 (a workflow, a drag) is moved on

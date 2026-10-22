@@ -69,7 +69,7 @@ import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
-import { normalizeGhlStages } from "./shared/ghl-stages.js";
+import { normalizeGhlStages, validAddress } from "./shared/ghl-stages.js";
 import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
@@ -5607,6 +5607,16 @@ async function runReply(job, ctx) {
         address: closedHouse, source: isCall ? "call" : "conversation", ref: record.id,
         dedupeKey: `house_closed:${job.contactId}:${addressKey(closedHouse)}:${record.id}`,
         data: { why: closedWhy, intent: draft.intent },
+      }).catch(() => {});
+    }
+    // Their yes on a house (2026-10-22, 1128 N Jackson Ave: Matt quoted it by
+    // text and no row of ours was on it): Tier 1 by itself, row or not.
+    if (!closedWhy && draft.intent === "acceptance" && validAddress(draft.propertyAddress || "")) {
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: "house_agreed", at: new Date(now + 1).toISOString(),
+        address: draft.propertyAddress, source: isCall ? "call" : "conversation", ref: record.id,
+        dedupeKey: `house_agreed:${job.contactId}:${addressKey(draft.propertyAddress)}:${record.id}`,
+        data: { intent: draft.intent },
       }).catch(() => {});
     }
     // A house with no number starts the chase too, even when propertyAddress

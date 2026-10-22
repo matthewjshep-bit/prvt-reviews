@@ -8130,6 +8130,16 @@ test("our pass after their answer closes the house they raised, so the card goes
   assert.deepEqual(raisedHouses({ events }).map((h) => h.open), [false]);
 });
 
+// 1128 N Jackson Ave (2026-10-22): Matt quoted 975K by text, the agent said
+// "Ok ✅", and with no row of ours on the house the card sat in Tier 2.
+test("their yes on a house is filed for Tier 1, even with no row of ours on it", async () => {
+  const jackson = "1128 N Jackson Ave, Tacoma, WA 98406";
+  const { store } = await replyTo("Ok ✅", { intent: "acceptance", address: jackson, reply: "Great, I'll get the paperwork moving." });
+  const agreed = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "house_agreed");
+  assert.deepEqual(agreed.map((e) => e.address), [jackson]);
+  assert.deepEqual(raisedHouses({ events: agreed }).map((h) => [h.address, h.open]), [[jackson, true]]);
+});
+
 /* ---------- a reply the bot couldn't place goes at once (2026-10-18) ---------- */
 
 // Matt, 2026-10-18, on an agent pitching her own buyer and her son's loan:
