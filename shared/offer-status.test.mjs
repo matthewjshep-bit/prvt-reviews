@@ -565,4 +565,6 @@ test("your own text passing on a house reads as a pass, with its reason", async 
   assert.equal(weWalkAway("Is it too rural for your buyers?"), null, "a question isn't a pass");
   assert.equal(weWalkAway("We'll pass it on to the seller"), null, "a hand-off isn't a pass");
   assert.equal(weWalkAway("Love it, send me the address"), null);
+  // Lindsey O., 2026-10-22: the phone's spelling of turnkey.
+  assert.equal(weWalkAway("Yeah, this one's too turkey for us to do a flip")?.reason, "turnkey");
 });

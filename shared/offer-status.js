@@ -552,7 +552,8 @@ const WHEN_RX = /\b(?:today|tonight|tomorrow|till|until|before|in time|by (?:\d|
 // and the houses came back to him to price). The reason is the one he gave.
 const WALK_RXS = [
   { rx: /\btoo\s+(?:rural|remote|far\s+out)\b/i, reason: "rural" },
-  { rx: /\btoo\s+(?:nice|updated|turn[\s-]?key|finished|good(?:\s+of\s+a)?\s+(?:shape|condition))\b|\bnot\s+enough\s+(?:work|meat|upside|margin)\b/i, reason: "turnkey" },
+  // "Turkey" is the phone's spelling of turnkey (Lindsey O., 2026-10-22).
+  { rx: /\btoo\s+(?:nice|updated|turn[\s-]?key|turkey|finished|good(?:\s+of\s+a)?\s+(?:shape|condition))\b|\bnot\s+enough\s+(?:work|meat|upside|margin)\b/i, reason: "turnkey" },
 ];
 
 /**

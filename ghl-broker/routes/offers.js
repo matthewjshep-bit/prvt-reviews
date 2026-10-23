@@ -135,6 +135,7 @@ import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
 import { normalizeTierOne } from "../shared/tier-one.js";
 import { normalizeGhlStages, cardHeldBy, HELD_DAYS, raisedHouses, HOUSE_EVENT_TYPES } from "../shared/ghl-stages.js";
+import { ourReplyPasses } from "../shared/flip-read.js";
 import { syncAgentCard } from "../tier-check.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
@@ -3703,16 +3704,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     if (channel !== "sms") return null;
     const phrase = weDecline(text);
     const walk = weWalkAway(text);
-    if ((!phrase && !walk) || !contactId) return null;
+    // "It's probably not our lane": the bot's pass words, typed by a person.
+    const ours = ourReplyPasses(text);
+    if ((!phrase && !walk && !ours) || !contactId) return null;
     const offers = await store.listOffers(locationId, { contactId, limit: 50 }).catch(() => []);
-    if (!phrase) return passUnsent({ locationId, client, offers, text, walk, at, via });
+    const said = walk?.phrase || phrase || "not for us";
+    // No row to pass: the house they raised is closed instead.
+    const orRaised = async (r) => r || closeRaised({ locationId, contactId, offers, text, at, phrase: said, via });
+    if (!phrase) return orRaised(walk ? await passUnsent({ locationId, client, offers, text, walk, at, via }) : null);
     const live = counteredAboveUs(offers, (Date.parse(at) || Date.now()) + 60000);
     // The house it's about: the one it names, or the only counter on the table.
     const named = housesNamed(text);
     const offer = named.length
       ? live.find((o) => named.includes(String(o.address || "").trim().split(/\s+/)[0])) || null
       : live.length === 1 ? live[0] : null;
-    if (!offer) return walk ? passUnsent({ locationId, client, offers, text, walk, at, via }) : null;
+    if (!offer) return orRaised(walk ? await passUnsent({ locationId, client, offers, text, walk, at, via }) : null);
     const full = await store.getOffer(offer.id).catch(() => null);
     if (!full) return null;
     await applyOperatorStatus({ locationId, client, offer: full, status: "we_passed", ts: at,
@@ -3765,6 +3771,31 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       passed.push({ offerId: full.id, address: full.address });
     }
     return passed.length ? { ...passed[0], phrase: said.phrase, passed } : null;
+  }
+  /**
+   * closeRaised({ ..., phrase }) → { address, phrase, closed } | null
+   *
+   * Lindsey O., 2026-10-22: she gave the address of a house she'd called
+   * mostly turnkey, Matt texted "this one's too turkey for us", and with no
+   * row of ours to pass, the house she raised (shared/ghl-stages.js
+   * raisedHouses) held her card in Tier 1. His no closes it, the way the
+   * bot's pass does. Which house: the one the text names, the only one open,
+   * or all of them for "these"/"both" (walkTargets). Never one raised after
+   * the text.
+   */
+  async function closeRaised({ locationId, contactId, offers, text, at, phrase, via }) {
+    const atMs = Date.parse(at) || Date.now();
+    const events = (await store.listContactEvents?.(locationId, contactId, { types: HOUSE_EVENT_TYPES, limit: 300 }).catch(() => [])) || [];
+    const open = raisedHouses({ events, offers, now: atMs }).filter((h) => h.open && Date.parse(h.at) <= atMs + 60000);
+    const targets = walkTargets(open, text);
+    if (!targets.length) return null;
+    for (const h of targets) {
+      // A millisecond after the raise at the least: the bot can file it after the text went.
+      await recordEvent({ store, locationId, contactId, party: "agent", type: "house_closed", at: new Date(Math.max(atMs, Date.parse(h.at) + 1)).toISOString(),
+        address: h.address, source: "operator", dedupeKey: `house_closed:${contactId}:${addressKey(h.address)}:you:${atMs}`,
+        data: { why: "you passed on it", phrase, ...(via ? { via } : {}) } });
+    }
+    return { address: targets[0].address, phrase, closed: targets.map((h) => h.address) };
   }
   // Everything a text you typed yourself can move: a promise of a number
   // opened or kept (promise-sweep.js notePromiseInHandText), then our no.
