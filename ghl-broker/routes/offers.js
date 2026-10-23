@@ -73,7 +73,7 @@ import {
   INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, weWalkAway, dealIsOver,
   numberApproved, termsOnLetter, WE_PASS_REASONS, WE_PASS_REASON, normalizeWePassReason,
 } from "../shared/offer-status.js";
-import { currentOffers, houseRowFor, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber } from "../shared/current-offer.js";
+import { currentOffers, houseRowFor, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber, rowOnHouse } from "../shared/current-offer.js";
 import { paperAfterSilenceDue, paperAfterAnswerDue, paperWent, floatSentIndex, PAPER_FLOAT_MAX_DAYS, sendsItselfOnClear, isRoughNumber } from "../shared/paper-follows.js";
 import { noFitLine, stanceWaitingFor } from "../shared/number-stance.js";
 import { planRequote } from "../shared/requote.js";
@@ -112,7 +112,7 @@ import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
   startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs, drainUnderwriteQueue, restartVanishedUnderwrites,
   cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob, retryArgs as retryUnderwriteArgs,
-  AUTO_UNDERWRITE_ENABLED,
+  AUTO_UNDERWRITE_ENABLED, fullAddressFor,
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, UW_ENRICH_CANDIDATES, paperAlreadyOut,
 } from "../auto-underwrite.js";
 import {
@@ -1027,13 +1027,27 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           .slice(0, 5)
           .map((n) => ({ body: String(n.body || "").slice(0, 500), dateAdded: n.dateAdded || null }));
       } catch { /* notes are optional */ }
+      const custom = contactCustomRecord(contact, map);
+      // The house a new offer opens on, written out in full: the shorthand
+      // field finished from what the record knows (auto-underwrite.js
+      // fullAddressFor). Best-effort — the form still has `custom` to fall to.
+      // The geocoder gets four seconds; the form is waiting on this.
+      let address = "";
+      try {
+        const raw = bestContactAddress(custom);
+        address = await Promise.race([
+          fullAddressFor({ client, store, locationId, contact: { ...contact, id: contact.id || req.params.id }, raw }),
+          new Promise((r) => setTimeout(() => r(raw), 4000).unref?.()),
+        ]);
+      } catch { /* the prefill falls back to the custom field */ }
       res.json({
         contact: {
           id: contact.id || req.params.id,
           name: contactName(contact),
           phone: contact.phone || "",
           email: contact.email || "",
-          custom: contactCustomRecord(contact, map),
+          custom,
+          address,
           notes,
         },
       });
@@ -2142,6 +2156,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // POST { id?, draft } — creates or updates a draft offer row. The draft
   // holds the full form state; no document is generated and nothing touches
   // GHL until the draft is turned into a real offer.
+  //
+  // houseRow → the row already on this house for this agent
+  // (shared/current-offer.js rowOnHouse). An agent's row is never another
+  // agent's, and a draft with no contact only meets other contactless drafts.
+  async function houseRow({ locationId, contactId, address, exceptId = null }) {
+    if (!/^\s*\d/.test(String(address || ""))) return null;   // no house number, no house
+    const rows = contactId
+      ? await store.listOffers(locationId, { contactId, limit: 200 })
+      : (await store.listOffers(locationId, { limit: 500 })).filter((o) => !o.contactId && o.status === "draft");
+    return rowOnHouse(rows, { address, exceptId });
+  }
+
   router.post("/draft", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -2159,16 +2185,29 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         underwriteModel: underwriteModel({ draft }) === "comps" ? undefined : underwriteModel({ draft }),
         updatedAt: new Date().toISOString(),
       };
-      if (id) {
-        const prev = await store.getOffer(id);
-        // A draft given an outcome by hand (sent, passed, we passed) is still
-        // this form's row: keep the outcome, don't fork a second draft.
-        const wasDraft = prev?.status === "draft" || (prev?.draft && !prev.deal && (prev.statusHistory || []).length > 0 && !prev.documents && !prev.pdfUrl);
-        if (prev && prev.locationId === locationId && wasDraft) {
-          const full = { ...prev, ...record, status: prev.status, id, createdAt: prev.createdAt };
-          await store.updateOffer(id, full);
-          return res.json({ ok: true, offer: full });
-        }
+      const prev = id ? await store.getOffer(id) : null;
+      const mine = prev && prev.locationId === locationId ? prev : null;
+      // A draft given an outcome by hand (sent, passed, we passed) is still
+      // this form's row: keep the outcome, don't fork a second draft.
+      const wasDraft = Boolean(mine) && (mine.status === "draft" || (mine.draft && !mine.deal && (mine.statusHistory || []).length > 0 && !mine.documents && !mine.pdfUrl));
+      // One row per house (2026-10-23). The editor saves as you type, so a
+      // blank "New offer" on a house that already has a row — a draft, an
+      // offer that went out, a held auto-underwrite — opens that row instead
+      // of minting a second one. Nothing is written over it: its comps may be
+      // the only copy. A draft this form just made for a half-typed address
+      // goes away once the address lands on the real one.
+      // This form's row already has paper (Send made it the offer, here or in
+      // another window): it's no longer a draft to save over. Hand it back.
+      if (mine && !wasDraft) return res.json({ ok: true, offer: mine, stale: true });
+      const there = await houseRow({ locationId, contactId: record.contactId, address: record.address, exceptId: wasDraft ? id : null });
+      if (there) {
+        if (wasDraft && mine.status === "draft" && !mine.autoUnderwrite) await store.deleteOffer(id).catch(() => {});
+        return res.json({ ok: true, offer: there, reused: true });
+      }
+      if (wasDraft) {
+        const full = { ...mine, ...record, status: mine.status, id, createdAt: mine.createdAt };
+        await store.updateOffer(id, full);
+        return res.json({ ok: true, offer: full });
       }
       const offer = await store.createOffer(record);
       res.json({ ok: true, offer });
@@ -2221,11 +2260,30 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const sqft = Math.round(Number(info.sqft) || 0), yearBuilt = Math.round(Number(info.yearBuilt) || 0);
     return { ...pair("arv"), ...pair("repairs"), ...(sqft > 0 ? { sqft } : {}), ...(yearBuilt > 0 ? { yearBuilt } : {}) };
   };
+  // The editor saves as you type (2026-10-23), so one sitting at an offer is
+  // many saves. A live save by you within LIVE_SITTING_MS of your last live
+  // one is the same revision: it keeps where you started and moves where you
+  // stopped, so Lessons sees one ARV 520k → 570k, not five steps of it.
+  const LIVE_SITTING_MS = 15 * 60 * 1000;
+  const reviseLedger = (existing, fresh, { ts, by, live }) => {
+    const list = existing.revisions || [];
+    const last = list.at(-1);
+    const entry = { ts, from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount, by, ...revisionInputs(existing, fresh), ...(live ? { live: true } : {}) };
+    if (live && last?.live && last.by === by && Date.parse(ts) - (Date.parse(last.ts) || 0) < LIVE_SITTING_MS) {
+      const kept = Object.fromEntries(["arv", "repairs"].filter((k) => last[k] && entry[k]).map((k) => [k, [last[k][0], entry[k][1]]]));
+      return [...list.slice(0, -1), { ...entry, ...kept, from: last.from, startedAt: last.startedAt || last.ts }].slice(-20);
+    }
+    return [...list, entry].slice(-20);
+  };
   // `revisedBy`: who moved the number on a revision — "you" (the editor, the
   // held-paper banner), or the machine ("requote", "counter_band"). Only a
   // person's revision approves the number (shared/offer-status.js numberApproved).
-  async function createOfferFromRequest({ locationId, client, body = {}, existing = null, revisedBy = "you" }) {
-    const revising = Boolean(existing);
+  // `promote`: `existing` is a draft becoming its own offer (POST
+  // /:id/publish). It is a create in every way the CRM sees — note, tag,
+  // "we offered" — that keeps the draft's id, so the house never holds two
+  // rows. Otherwise `existing` is a revision of an offer.
+  async function createOfferFromRequest({ locationId, client, body = {}, existing = null, revisedBy = "you", promote = false }) {
+    const revising = Boolean(existing) && !promote;
     const { contactId: bodyContactId, newContact, inputs, settings: settingsOverride } = body || {};
     // Rehab scope of work (internal — saved + noted, never on the letter).
     const scope = Array.isArray(body.scope)
@@ -2263,7 +2321,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     //    keeps the contact it was written for — the route refuses a swap, so
     //    the old agent's fields and tag can't end up pointing at someone
     //    else's offer.
-    let contactId = revising ? existing.contactId || "" : bodyContactId || "";
+    let contactId = revising ? existing.contactId || "" : bodyContactId || (promote ? existing.contactId || "" : "");
     if (!contactId && newContact?.phone) {
       contactId = await findOrCreateContactByPhone(client, locationId, newContact.phone, newContact.name || "");
     }
@@ -2300,7 +2358,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const pdf = jpegToPdf(jpeg, width, height);
     // The id IS the document key (offers/<location>/<id>.pdf), so reusing it is
     // what makes a save overwrite in place rather than mint a parallel file.
-    const offerId = revising ? existing.id : crypto.randomUUID();
+    const offerId = existing ? existing.id : crypto.randomUUID();
     // ...but those routes serve `immutable, max-age=31536000`, so a viewer who
     // already opened the old one would keep it for a year. Version every URL a
     // revision regenerates, exactly as the PSA and net sheet already do. One
@@ -2440,12 +2498,26 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // The ARV and the rehab from → to, the size and the year built: what
         // Lessons calibrates the underwriter on when a person moved them
         // (shared/calibration.js, 2026-10-15).
-        revisions: [
-          ...(existing.revisions || []),
-          { ts: created.toISOString(), from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount, by: revisedBy,
-            ...revisionInputs(existing, fresh) },
-        ].slice(-20),
+        revisions: reviseLedger(existing, fresh, { ts: created.toISOString(), by: revisedBy, live: Boolean(body.live) }),
         ...(revisedBy === "you" ? { approved: { amount: Math.round(Number(fresh.cashAmount) || 0), at: created.toISOString(), by: "revise" } } : {}),
+      };
+      await store.updateOffer(offer.id, offer);
+    } else if (promote) {
+      // The draft's own row, now with paper. Its form copy goes: from here
+      // the snapshot is what reopening restores. A draft you already gave an
+      // outcome by hand keeps it; otherwise it starts at "not sent".
+      const { draft: _form, ...rest } = existing;
+      const status = existing.status && existing.status !== "draft" ? existing.status : "new";
+      offer = {
+        ...rest,
+        ...fresh,
+        id: existing.id,
+        locationId,
+        createdAt: existing.createdAt,
+        updatedAt: created.toISOString(),
+        status,
+        statusAt: created.toISOString(),
+        statusHistory: [...(existing.statusHistory || []), { status, ts: created.toISOString() }],
       };
       await store.updateOffer(offer.id, offer);
     } else {
@@ -2520,8 +2592,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // The ledger is what AI enrichment reads to know what we've offered, so a
     // new number belongs in it — but only a new one. Re-saving after moving a
     // comp shouldn't write a line at all.
-    const amountMoved = !revising || calc.offers.cash.amount !== Math.round(Number(existing.cashAmount) || 0);
-    if (calc.offers.cash.amount > 0 && amountMoved) {
+    //
+    // Typing on an offer saves every pause (body.live). The ledger is the
+    // agent's history in GHL and the contact timeline, so a sitting writes its
+    // first move and then stays quiet; leaving the editor (body.final) writes
+    // where you stopped if that isn't the last number written.
+    const lastLedgered = Math.round(Number(existing?.historyAmount ?? existing?.cashAmount) || 0);
+    const amountMoved = !revising || calc.offers.cash.amount !== (body.live ? lastLedgered : Math.round(Number(existing.cashAmount) || 0));
+    const midSitting = revising && body.live && !body.final
+      && Date.now() - (Date.parse(existing.liveHistoryAt || "") || 0) < LIVE_SITTING_MS;
+    if (calc.offers.cash.amount > 0 && amountMoved && !midSitting) {
+      offer.historyAmount = calc.offers.cash.amount;
+      if (body.live) offer.liveHistoryAt = created.toISOString();
       await appendDealHistory(client, locationId, contactId, "agent_deal_history",
         historyLine(created.toISOString(), calc.inputs.address,
           revising
@@ -2571,19 +2653,40 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         // conversation picks up exactly where a clean run would have — send
         // on a clean underwrite, or float our read / our number. The stamp
         // travels so the 24h address dedupe still recognises the house.
-        if (d.autoUnderwrite && !revising && offer.contactId) {
-          offer.autoUnderwrite = { ...d.autoUnderwrite, publishedAt: new Date().toISOString() };
-          // Publishing a held run is Matt standing behind its number.
-          offer.approved = { amount: Math.round(Number(offer.cashAmount) || 0), at: offer.autoUnderwrite.publishedAt, by: "publish" };
-          await store.updateOffer(offer.id, offer).catch(() => {});
-          const fresh = (await store.getOfferSettings(locationId)) || {};
-          Promise.resolve(underwriteDeps({ client, locationId, saved: fresh }).onOfferCreated({ offer }))
-            .catch((e) => console.error(`published draft ${offer.id} → conversation: ${e.message}`));
-        }
+        if (d.autoUnderwrite && !revising && offer.contactId) await publishHeld({ locationId, client, offer, held: d, handToBot: true });
       }
     }
+    // A draft promoted in place: its run's provenance is already on the row.
+    if (promote && existing.autoUnderwrite && offer.contactId) {
+      await publishHeld({ locationId, client, offer, held: existing, handToBot: Boolean(body.handToBot) });
+    }
 
-    return { ok: true, offer, ghl, warnings, ...(revising ? { revised: true, staleDocs: stale } : {}) };
+    return {
+      ok: true, offer, ghl, warnings,
+      ...(revising ? { revised: true, staleDocs: stale } : {}),
+      // A live save that left the ledger a number behind: the editor sends
+      // final on leave to write where you stopped.
+      ...(revising && body.live ? { historyBehind: calc.offers.cash.amount > 0 && amountMoved && midSitting } : {}),
+    };
+  }
+
+  // A held auto-underwrite a person reviewed and published. The stamp travels
+  // so the 24h address dedupe still recognises the house, and publishing is
+  // Matt standing behind its number. Handed to the bot, the conversation picks
+  // up exactly where a clean run would have — send on a clean underwrite, or
+  // float our read / our number. Sent by Matt himself (Send on the draft,
+  // 2026-10-23), the bot stays out of it: it would float the number he's
+  // about to send.
+  async function publishHeld({ locationId, client, offer, held, handToBot }) {
+    const at = new Date().toISOString();
+    offer.autoUnderwrite = { ...held.autoUnderwrite, publishedAt: at };
+    offer.approved = { amount: Math.round(Number(offer.cashAmount) || 0), at, by: "publish" };
+    if (handToBot) offer.handedToBotAt = at;
+    await store.updateOffer(offer.id, offer).catch(() => {});
+    if (!handToBot) return;
+    const fresh = (await store.getOfferSettings(locationId)) || {};
+    Promise.resolve(underwriteDeps({ client, locationId, saved: fresh }).onOfferCreated({ offer }))
+      .catch((e) => console.error(`published draft ${offer.id} → conversation: ${e.message}`));
   }
 
   router.post("/", async (req, res) => {
@@ -2629,6 +2732,32 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // it needs to know there was one.
       out.revisedAfterSend = (existing.sends || []).length > 0;
       res.json(out);
+    } catch (err) { fail(res, err); }
+  });
+
+  // A draft becomes its own offer: paper, the contact's fields, note and tag,
+  // status "not sent" — on the same row, so the house still has one. The
+  // editor calls this when you press Send on a draft (then sends), or "Let
+  // the bot take it" on a held auto-underwrite ({ handToBot: true }).
+  // POST /:id/publish { form, handToBot? } — `form` is the create body.
+  router.post("/:id/publish", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const existing = await store.getOffer(req.params.id);
+      if (!existing || existing.locationId !== locationId) return res.status(404).json({ error: "offer not found" });
+      if (existing.pdfUrl || existing.documents) {
+        return res.status(409).json({ error: "this is already an offer", offer: existing });
+      }
+      const form = req.body?.form || {};
+      if (!form.inputs || typeof form.inputs !== "object") return res.status(400).json({ error: "form.inputs required" });
+      const wanted = String(form.contactId || "").trim();
+      if (wanted && existing.contactId && wanted !== existing.contactId) {
+        return res.status(400).json({ error: `this draft is for ${existing.contactName || "another contact"}` });
+      }
+      res.json(await createOfferFromRequest({
+        locationId, client, existing, promote: true,
+        body: { ...form, handToBot: Boolean(req.body?.handToBot) },
+      }));
     } catch (err) { fail(res, err); }
   });
 

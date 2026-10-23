@@ -8,7 +8,7 @@
 // re-quoted in place; the full editor opens over Today (OfferEditorSheet).
 // Status, Hot and Current are the header's menu, not repeated here.
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Check, ExternalLink, FileText, Pencil, Plus, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { agreedAboveOurNumber, numberApproved, offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
@@ -17,6 +17,7 @@ import { annotateCurrent } from "@shared/current-offer.js";
 import { BTN, ChecksLine, CurrentPill, HotPill, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
 import { AiProvenance, RehabScope } from "./OfferDetailModal.jsx";
 import { forget, useLoad } from "./work-data.js";
+import { concerns, onOfferChanged } from "./offer-sync.js";
 import { allInPct, allInTone } from "./work-queue.js";
 
 const LABEL = "text-xs font-semibold uppercase tracking-wide text-slate-500";
@@ -336,7 +337,9 @@ export const loadSiblings = (contactId) => () => listOffers({ contactId, lean: t
  * paper work from. Shared by the pane's header (status menu) and its left side.
  */
 export function useOfferSide(offerId) {
-  const one = useLoad(offerKey(offerId), loadOffer(offerId));
+  // Re-read every 20s while the window shows: the editor in another window
+  // saves as you type, and a channel can't reach a window on the other host.
+  const one = useLoad(offerKey(offerId), loadOffer(offerId), { pollMs: 20000 });
   // An investor row's contact is the buyer; the other offers are the agent's.
   const agent = one.data?.contactId || null;
   const rest = useLoad(siblingsKey(agent), loadSiblings(agent));
@@ -347,6 +350,13 @@ export function useOfferSide(offerId) {
     forget(offerKey(offerId), siblingsKey(agent), replacedBy ? offerKey(replacedBy.id) : null);
     one.reload(); rest.reload(); cur.reload();
   };
+  // A save anywhere — this window's editor sheet, the Offers page beside the
+  // companion — re-reads the row and its agent's list (offer-sync.js).
+  const reloadRef = useRef(reload);
+  reloadRef.current = reload;
+  const watching = useRef({});
+  watching.current = { offerIds: [offerId, replacedBy?.id], contactId: agent };
+  useEffect(() => onOfferChanged((msg) => { if (concerns(msg, watching.current)) reloadRef.current(); }), []);
   return {
     offer, siblings: rest.data || [], replaced: replacedBy ? one.data : null,
     loading: one.loading || (Boolean(replacedBy) && cur.loading), error: one.error || cur.error || "", gone: one.missing, reload,

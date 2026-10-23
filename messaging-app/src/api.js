@@ -3,6 +3,7 @@
 // inside a GHL Custom Menu Link iframe that supplies ?location_id=.
 
 import { parseStatusKey } from "@shared/offer-status.js";
+import { announceOffer } from "./offer-sync.js";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "https://offers.shepflips.com";
 
@@ -197,20 +198,32 @@ export { zillowUrl } from "@shared/us-address.js";
 export const previewDocument = (inputs, settings, contactName, underwrite) =>
   post(`/api/offers/preview`, { inputs, settings, contactName, ...(underwrite ? { underwrite } : {}) });
 // `asset` is the kind you picked in the editor (shared/asset-type.js).
+// Every write that moves an offer tells the other windows (offer-sync.js).
+const announced = (p) => p.then((r) => { if (r?.offer) announceOffer(r.offer); return r; });
 export const createOffer = ({ contactId, newContact, inputs, settings, scope, draftId, snapshot, asset, underwrite }) =>
-  post(`/api/offers`, { contactId, newContact, inputs, settings, scope, draftId, snapshot, ...(asset ? { asset } : {}), ...(underwrite ? { underwrite } : {}) });
-export const saveDraft = (id, draft) => post(`/api/offers/draft`, { id, draft });
+  announced(post(`/api/offers`, { contactId, newContact, inputs, settings, scope, draftId, snapshot, ...(asset ? { asset } : {}), ...(underwrite ? { underwrite } : {}) }));
+// The editor's save as you type, before the house has paper. Answers
+// { offer, reused }: reused is the row the house already had — open that one.
+export const saveDraft = (id, draft) => announced(post(`/api/offers/draft`, { id, draft }));
+// A draft becomes its own offer on the same row: paper, the contact's fields,
+// note and tag. Send on a draft calls this first; "Let the bot take it" passes
+// handToBot. `form` is the create body (contactId/newContact, inputs, …).
+export const publishOffer = (id, form, { handToBot = false } = {}) =>
+  announced(post(`/api/offers/${encodeURIComponent(id)}/publish`, { form, ...(handToBot ? { handToBot: true } : {}) }));
 // Save an offer that already exists — same id, re-rendered documents, refreshed
 // contact fields. Answers the create shape plus { revised, staleDocs,
 // revisedAfterSend }. This is the difference between revising your offer on a
 // property and ending up owning four offers on it.
-export const updateOffer = (id, { inputs, settings, scope, snapshot, asset, underwrite }) =>
-  post(`/api/offers/${encodeURIComponent(id)}`, { inputs, settings, scope, snapshot, ...(asset ? { asset } : {}), ...(underwrite ? { underwrite } : {}) }, "PUT");
+// `live`: a save as you type — one revision and one history line per sitting;
+// `final` with it: you're leaving, write where you stopped.
+export const updateOffer = (id, { inputs, settings, scope, snapshot, asset, underwrite, live, final }) =>
+  announced(post(`/api/offers/${encodeURIComponent(id)}`, { inputs, settings, scope, snapshot, ...(asset ? { asset } : {}), ...(underwrite ? { underwrite } : {}), ...(live ? { live: true } : {}), ...(final ? { final: true } : {}) }, "PUT"));
 // The editor's autosave for an offer that already exists: workspace only. It
 // never renders a document, never touches the CRM, and can't move the offer's
 // money — which is what makes it safe on a debounce and on unmount.
 export const saveOfferWorkspace = (id, snapshot) =>
-  post(`/api/offers/${encodeURIComponent(id)}/workspace`, { snapshot }, "PATCH");
+  post(`/api/offers/${encodeURIComponent(id)}/workspace`, { snapshot }, "PATCH")
+    .then((r) => { announceOffer(r?.offer || { id }); return r; });
 // Property photos hang off the offer, so they outlive any one dataroom. Upload
 // is one photo per call: a whole batch in a single JSON body would be several
 // MB of base64 for the broker to parse in one blocking go.
@@ -448,7 +461,7 @@ export const UNPIN_CURRENT = "__unpin_current";
 // same menu, same { offer } back.
 export const OFF_MARKET_ON = "__off_market_on";
 export const OFF_MARKET_OFF = "__off_market_off";
-export const setOfferStatus = (id, status, note = "") =>
+export const setOfferStatus = (id, status, note = "") => announced(
   status === OFF_MARKET_ON || status === OFF_MARKET_OFF
     ? post(`/api/offers/${encodeURIComponent(id)}/off-market`, { offMarket: status === OFF_MARKET_ON, note }, "PATCH")
   : status === HOT_ON || status === HOT_OFF
@@ -456,11 +469,11 @@ export const setOfferStatus = (id, status, note = "") =>
     : status === MAKE_CURRENT || status === UNPIN_CURRENT
       ? post(`/api/offers/${encodeURIComponent(id)}/current`, { pin: status === MAKE_CURRENT, note }, "PATCH")
       // "we_passed:rural": we passed, and why (WE_PASS_REASONS).
-      : (({ status: key, reason }) => post(`/api/offers/${encodeURIComponent(id)}/status`, { status: key, note, ...(reason ? { reason } : {}) }, "PATCH"))(parseStatusKey(status));
+      : (({ status: key, reason }) => post(`/api/offers/${encodeURIComponent(id)}/status`, { status: key, note, ...(reason ? { reason } : {}) }, "PATCH"))(parseStatusKey(status)));
 // Re-price an offer in place at `amount` — the held-paper banner's one tap.
 // Sends nothing. Returns { offer }.
 export const requoteOffer = (id, amount) =>
-  post(`/api/offers/${encodeURIComponent(id)}/requote`, { amount });
+  announced(post(`/api/offers/${encodeURIComponent(id)}/requote`, { amount }));
 // Take back an agreed price so the offer can be re-quoted. Keeps the record of
 // what was agreed; sends nothing. Returns { offer, cleared }.
 export const clearAgreedPrice = (id) =>
@@ -727,7 +740,7 @@ export const sendOffer = (id, { message = "", dryRun = true, channels, docs, ema
     ...(channels ? { channels } : {}),
     ...(docs ? { docs } : {}),
     ...(emailSubject ? { emailSubject } : {}),
-  });
+  }).then((r) => { if (!dryRun) announceOffer(r?.offer || { id }); return r; });
 
 /* ---------- agent outreach ---------- */
 // Agents/listings are scoped to a batch (a saved pull cohort). batchId is

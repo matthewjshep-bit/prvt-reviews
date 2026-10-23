@@ -49,7 +49,7 @@ import { threadPassed } from "./shared/flip-read.js";
 import { leadSourceOf, theirNumberCheck } from "./shared/lead-source.js";
 import { buyerCeiling } from "./shared/post-mortem.js";
 import { markSides, sameSideFirst, isAcross, acrossLabel } from "./shared/same-side.js";
-import { addressKey, completeAddress, sameStreet, sameHouse } from "./shared/us-address.js";
+import { addressKey, completeAddress, sameStreet, sameStreetLoose, sameHouse, parseUsAddress } from "./shared/us-address.js";
 import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed, DRAFT_ONLY_HOLD, SKELETON_HOLD } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
 import { photoMarkers } from "./photo-addresses.js";
@@ -1634,10 +1634,7 @@ async function runUnderwrite(job, ctx) {
   // shorthand from agents who write like people). The bare line is tried last.
   let resolved = null;
   {
-    const variants = completeAddress(extraction.address, {
-      candidates: [fieldAddress, ...(await knownAddressesFor({ store, locationId, contactId: job.contactId }))],
-      city: contact?.city || "", state: contact?.state || "", county: countyFromTags(contact?.tags),
-    });
+    const variants = await addressVariantsFor({ store, locationId, contactId: job.contactId, contact, raw: extraction.address, fieldAddress });
     for (const v of variants) {
       resolved = await geocodeAddress(v);
       if (resolved) {
@@ -2557,6 +2554,43 @@ export async function knownAddressesFor({ store, locationId, contactId }) {
     ...(offers || []).map((o) => full(o?.address)),
     ...(hooks || []).map((h) => full(h?.address)),
   ].filter(Boolean))];
+}
+
+// The ways to finish a shorthand line from what the contact record already
+// knows, best first (completeAddress): a full address we hold on the same
+// street, then the contact's city, then their outreach county, then the line.
+export async function addressVariantsFor({ store, locationId, contactId, contact, raw, fieldAddress = "" }) {
+  return completeAddress(raw, {
+    candidates: [fieldAddress, ...(await knownAddressesFor({ store, locationId, contactId }))],
+    city: contact?.city || "", state: contact?.state || "", county: countyFromTags(contact?.tags),
+  });
+}
+
+/**
+ * fullAddressFor({ client, store, locationId, contact, raw }) → "street, City, ST zip" | raw
+ *
+ * A new offer from a contact used to open on the shorthand street the GHL
+ * field holds ("4410 N Mullen"), and the city, state and ZIP were typed by
+ * hand every time (Matt, 2026-10-23). The same completion auto-underwrite
+ * runs, confirmed by the geocoder at street-address precision, whose match
+ * carries the ZIP. Nothing geocodes: the best completion that names a city.
+ * No line: the contact's Subject Property.
+ */
+export async function fullAddressFor({ client, store, locationId, contact, raw = "", geocode = geocodeAddress }) {
+  const contactId = contact?.id || "";
+  const fieldAddress = await readSubjectProperty(client, locationId, contact, { store, contactId });
+  const line = String(raw || "").trim() || fieldAddress;
+  if (!line) return "";
+  // The shorthand field rarely carries the suffix ("4410 N Mullen"), and
+  // completeAddress pairs exact streets only, so a held full address that
+  // differs by just its "St" goes first here.
+  const known = (await knownAddressesFor({ store, locationId, contactId })).filter((a) => sameStreetLoose(a, line) && parseUsAddress(a).city);
+  const variants = [...new Set([...known, ...(await addressVariantsFor({ store, locationId, contactId, contact, raw: line, fieldAddress }))])];
+  for (const v of variants) {
+    const hit = await geocode(v, { minPrecision: "address" }).catch(() => null);
+    if (hit?.matched && sameStreetLoose(hit.matched, line)) return hit.matched;
+  }
+  return variants.find((v) => v !== line && /,/.test(v) && !/ county,/i.test(v)) || line;
 }
 
 // "agent-outreach-autopilot-king-wa" / "agent-outreach-pierce-county-wa-aug-18" → "King" / "Pierce".

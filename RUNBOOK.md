@@ -182,39 +182,112 @@ Three things to know once it's live:
   wait for **Refresh from the offer** — so a room can honestly show last
   week's comps at this morning's price, and never the reverse.
 
-## Saving an offer vs. creating one
+## Saving an offer: it saves as you type (2026-10-23)
 
-The editor has two save buttons once an offer exists, and they do different
-things on purpose:
+The editor has no save buttons. Matt found five of them confusing (Save
+draft, Update draft, Create offer, Save changes, Save as new offer), and one
+address kept collecting rows. Now whatever you type saves itself, Send is
+the way out, and the Status menu is for triage. Timing and decisions live in
+`messaging-app/src/offer-autosave.js`; the editor is `NewOffer.jsx`.
 
-- **Save changes** (`PUT /api/offers/:id`) revises the offer that's open. Same
-  id, so the letter and the companion PDFs are re-rendered over the same
-  storage keys and the link an agent already has resolves to the new document.
-  The URLs pick up a `?v=` stamp because those routes serve `immutable` for a
-  year — without it a revision is invisible to anyone who already opened the
-  old one.
-- **Save as new offer** (`POST /api/offers`) is the original create path: a
-  second offer on the same property, the first left untouched.
+**One row per house.** `shared/current-offer.js` `rowOnHouse` finds the row
+a house already has for that agent (its current offer, else its newest
+draft; house number + street, give or take the suffix, so the shorthand
+"4410 N Mullen" is "4410 N Mullen St"). A New offer on that house opens the
+row instead of starting a second. It does this straight away when the form
+holds only a contact and an address, and with an "Open it" button once you've
+typed numbers of your own. `POST /api/offers/draft` checks the same thing
+server-side and answers `{ offer, reused: true }` without writing. A
+half-typed draft the form made for a near-miss address is deleted when the
+address lands on the real house.
 
-What a save deliberately does **not** touch: the offer's status and history,
-its send ledger, its deal, and any PSA / purchase contract / assignment already
-generated — those are signable paperwork and are never rewritten behind you.
-The response lists any that now quote the old price so they can be regenerated
-on purpose. On the CRM side a save refreshes the contact's `last_offer_*`
-fields (unless a *newer* offer for that agent owns them) and writes one
-`agent_deal_history` line, only when the number actually moved. It never adds a
-second contact note — GHL notes are append-only.
+**What a save is:**
 
-Two derived surfaces follow a save automatically: the agent-facing offer page
-(it publishes the very PDFs that were just re-rendered) and the investor
-dataroom's price. A dataroom's comps and scope stay frozen until the operator
-refreshes them, and the save response says how many rooms are behind.
+- **A blank form** becomes a draft once it names a house and holds a figure,
+  comps or a scope. A contact and an address alone are a look, not work.
+- **A draft** saves onto itself (`POST /draft` with its id).
+- **An offer with paper** saves live (`PUT /api/offers/:id` with
+  `live: true`): the letter, the agent's link and the bot's number follow
+  what you type, as Save changes used to. Matt chose this over holding them
+  until Send. Typing must not spam the CRM, so:
+  - a sitting (15 minutes) is one `revisions[]` entry, from where you
+    started to where you stopped;
+  - the `agent_deal_history` line is written once per sitting;
+  - leaving the editor sends `final: true`, which writes the last number if
+    the ledger is behind (`historyBehind` in the response).
+- **Comps and rehab work that doesn't change the letter** is
+  `PATCH /:id/workspace`, as before.
 
-Editing comps or rehab on an open offer autosaves to `PATCH
-/api/offers/:id/workspace`, which writes the form workspace and nothing else —
-no calculation, no documents, no CRM. Before this existed that autosave minted
-a *draft* row beside the offer, which is how one property ended up with three
-rows in History.
+Nothing saves until you touch the form. These are not edits:
+
+- settings arriving and the letter terms reseeding,
+- a prefilled address,
+- the panes echoing their restored state.
+
+So opening an offer to look at it never re-renders its letter. The one
+exception: comps captured off Zillow save untouched, because they exist
+nowhere else.
+
+**Send** on a draft calls `POST /api/offers/:id/publish { form }` first. It
+turns the draft into the offer **on the same row**, a create in every way
+the CRM sees:
+
+- paper rendered,
+- `last_offer_*` fields, note, tag, "we offered",
+- status "not sent".
+
+Then the send window opens. On a held auto-underwrite, **Let the bot take
+it** does the same with `handToBot: true` and runs the `onOfferCreated`
+handoff, which floats the number or sends on a clean run. Plain Send never
+hands it to the bot, which would float the number you're about to send. A
+second publish of the same row answers 409.
+
+`PUT /:id` still revises an offer in place, with the same id and document
+keys and the `?v=` stamp on every URL. What a save deliberately does **not**
+touch:
+
+- the status and its history,
+- the send ledger,
+- the deal,
+- any PSA, purchase contract or assignment already generated.
+
+The response lists paperwork that now quotes the old price, so it can be
+regenerated on purpose. GHL notes are append-only, so a revision never adds
+one.
+
+**Every window shows the same offer** (`messaging-app/src/offer-sync.js`).
+Each write in `api.js` announces `{ id, contactId, updatedAt }`, both to its
+own window and over `BroadcastChannel("shepflips-offers")`. These listen:
+
+- the pane's offer side (`useOfferSide`),
+- the pane's list of the contact's offers,
+- the Offers table,
+- the editor.
+
+An editor on the same row reopens on what the other window saved when
+nothing here is waiting to save; otherwise it shows "Load it". The console
+is served from two hosts, and a channel can't cross origins, so views also
+re-read on window focus and every 20s while visible.
+
+Two windows reloaded each other in a loop on the first build: each mount's
+pane echo saved. That's why pane reports save only when their content moved.
+
+**New offer from a contact opens on the whole address.** The GHL
+shorthand field holds the street only ("4410 N Mullen"). `GET
+/api/offers/contacts/:id` returns `address`, finished by
+`auto-underwrite.js` `fullAddressFor`:
+
+1. a full address we already hold on that street (prior offers, listings,
+   events, outreach),
+2. else the contact's city, or their outreach county,
+3. confirmed by the geocoder at street-address precision, whose match
+   carries the ZIP.
+
+The geocoder gets 4 seconds. The editor falls back to the custom field.
+
+Old duplicates aren't merged automatically. `node
+scripts/report-house-duplicates.mjs` (Render Shell) lists houses with more
+than one row per agent and changes nothing.
 
 DB note: the schema (`ghl-broker/schema.pg.sql`) is applied idempotently on
 boot. Tables from the pre-overhaul card-studio era are left untouched; the file
@@ -1576,6 +1649,10 @@ its `createdAt`, so a re-priced row sorted *below* the stale one it replaced.
 
 Status never disqualifies. A passed current offer is still our number on that
 house. Every other row on the house is **superseded**.
+
+Since 2026-10-23 the editor never adds a row to a house that has one (see
+"Saving an offer: it saves as you type"). Superseded rows are older
+history, or what auto-underwrite and the machines still write.
 
 **Every machine path acts on current offers only:**
 - the conversational deps in `routes/offers.js` (via `currentOffersFor`):

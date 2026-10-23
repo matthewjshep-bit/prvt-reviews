@@ -1,8 +1,12 @@
 // NewOffer.jsx — the core flow: contact → property numbers → three live
 // offers → generate the document and attach everything to the GHL contact.
+//
+// It saves as you type (offer-autosave.js, 2026-10-23): one row per house, a
+// draft until Send turns it into the offer on the same row, and from then on
+// the letter follows what you type. Send and the Status menu are the verbs.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, Bot, Check, ChevronDown, ChevronUp, ExternalLink, FileSignature, FileText, Layers, Link2, Loader2, Maximize2, Plus, RotateCcw, Save, Search, Send, Sparkles, Trash2, X } from "lucide-react";
 import { calculateOffers, DEFAULT_OFFER_SETTINGS, fmtMoney, UNDERWRITE_MODES } from "@shared/offer-calc.js";
 import { buyerCeiling } from "@shared/post-mortem.js";
 import { checksFor, combineChecks, checksLines } from "@shared/underwrite-checks.js";
@@ -11,8 +15,8 @@ import { buildUnderwriteCalc, modelForAsset, runUnderwrite as runAnalyzer } from
 import { blankIncomeDeal } from "@shared/income-underwrite.js";
 import { blankLandDeal } from "@shared/land-underwrite.js";
 import {
-  addContactNote, cancelUnderwrite, createOffer, getContactDetail, getContactNotes, getUnderwrite,
-  ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, runUnderwrite, saveDraft,
+  addContactNote, cancelUnderwrite, getContactDetail, getContactNotes, getOffer, getUnderwrite,
+  ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, publishOffer, runUnderwrite, saveDraft,
   saveOfferWorkspace, saveSettings, searchContacts, setOfferStatus, suggestAddresses, updateDataroom,
   updateOffer, zillowUrl,
   requoteOffer, MAKE_CURRENT,
@@ -32,7 +36,9 @@ import EnrichModal from "./EnrichModal.jsx";
 import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
 import { CurrentPill, PaperHeldBanner, StatusMenu, StatusPill } from "./ui.jsx";
-import { annotateCurrent, houseKey } from "@shared/current-offer.js";
+import { annotateCurrent, houseKey, rowOnHouse } from "@shared/current-offer.js";
+import { DRAFT_DELAY_MS, createAutosaver, hasPaper, namesAHouse, saveKindFor } from "./offer-autosave.js";
+import { onOfferChanged } from "./offer-sync.js";
 
 // Pick the best address from a contact's custom fields: prefer a
 // "…address…short…" key (the Property Address Short Hand field), then any
@@ -666,7 +672,19 @@ const moneyNum = (v) => Number(String(v ?? "").replace(/[^\d]/g, "")) || 0;
 //      numbers"), which deliberately outranks the offer.
 //
 // Said beside the field being typed in, with the one button that fixes it.
-function FigureNotice({ field, typed, saved, rooms, saving, onSave, unpinning, onFollow }) {
+// Where the save as you type stands (offer-autosave.js). Quiet on purpose:
+// it's there to be glanced at, not read.
+export function SaveStatus({ state, row }) {
+  const at = state?.at ? new Date(state.at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "";
+  const text = state?.phase === "pending" || state?.phase === "saving" ? "Saving…"
+    : state?.phase === "error" ? `Couldn't save${state.error?.message ? ` (${state.error.message})` : ""} — trying again`
+    : state?.phase === "saved" ? `Saved ${at}`
+    : row ? "Saved" : "Saves as you type";
+  const tone = state?.phase === "error" ? "text-red-700" : "text-slate-400";
+  return <p role="status" aria-live="polite" className={`mt-0.5 text-xs ${tone}`}>{text}</p>;
+}
+
+function FigureNotice({ field, typed, saved, rooms, unpinning, onFollow }) {
   const pinned = rooms.filter((r) => Number(r.pins?.[field]) > 0);
   const unsaved = saved > 0 && typed !== saved;
   if (!unsaved && !pinned.length) return null;
@@ -675,10 +693,7 @@ function FigureNotice({ field, typed, saved, rooms, saving, onSave, unpinning, o
     <p className="mt-1 text-xs text-amber-700">
       {unsaved && (
         <>
-          Not saved — the offer, its documents and the deal page still say {fmtMoney(saved)}.{" "}
-          <button type="button" disabled={saving} onClick={onSave} className={BTN}>
-            {saving ? "Saving…" : "Save changes"}
-          </button>{" "}
+          Saving — the offer, its documents and the deal page say {fmtMoney(saved)} until it lands.{" "}
         </>
       )}
       {pinned.length > 0 && (
@@ -694,13 +709,43 @@ function FigureNotice({ field, typed, saved, rooms, saving, onSave, unpinning, o
   );
 }
 
-export default function NewOffer({ settings, initialContactId, restore, onReset, onSettingsSaved, onOpenOffer, onOfferSaved, onDeal }) {
+/**
+ * <NewOffer settings restore? initialContactId? initialAddress? onOfferSaved onOpenOffer onDeal />
+ *   restore          the draft or offer to edit; absent starts a new one
+ *   initialAddress   a full address to start a new one on (a pane row's house)
+ *
+ * The form moves itself onto another row — the one a house already has, or
+ * the same row as another window last saved it — by remounting on that row
+ * here. The host hears about it through onOfferSaved.
+ */
+export default function NewOffer(props) {
+  const [swap, setSwap] = useState(null);   // { row, note, n }
+  const onSwap = (row, note = "") => {
+    setSwap((s) => ({ row, note, n: (s?.n || 0) + 1 }));
+    props.onOfferSaved?.(row);
+  };
+  return (
+    <OfferEditor key={swap ? `${swap.row.id}:${swap.n}` : "own"} {...props}
+      restore={swap ? swap.row : props.restore}
+      initialContactId={swap ? undefined : props.initialContactId}
+      initialAddress={swap ? undefined : props.initialAddress}
+      openedNote={swap?.note || ""} onSwap={onSwap} />
+  );
+}
+
+function OfferEditor({ settings, initialContactId, initialAddress = "", restore, onSettingsSaved, onOpenOffer, onOfferSaved, onDeal, openedNote = "", onSwap }) {
   // `restore` reopens a saved draft or an existing offer. Both carry a full
   // form snapshot (drafts in .draft, created offers in .snapshot) so the
   // comps workspace and rehab scope come back exactly as they were; very old
   // offers without a snapshot fall back to deriving inputs from the calc.
   const snap = restore?.status === "draft" ? restore.draft : restore?.snapshot || null;
-  const fromOffer = restore && restore.status !== "draft" ? restore : null;
+  // The row this form is on. It starts as `restore` and moves with every save:
+  // the first one makes the row, Send turns the draft into the offer on it.
+  const [row, setRow] = useState(restore || null);
+  const rowRef = useRef(row);
+  rowRef.current = row;
+  useEffect(() => { if (restore?.id && restore.id === rowRef.current?.id) setRow(restore); }, [restore]);
+  const fromOffer = row && row.status !== "draft" ? row : null;
   const fmtN = (n) => (Number(n) ? Number(n).toLocaleString("en-US") : "");
 
   const [mode, setMode] = useState(snap?.mode || "existing");
@@ -719,6 +764,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   const BLANK_INPUTS = { address: "", askingPrice: "", arv: "", repairs: "", priceOverride: "" };
   const [inputs, setInputs] = useState(
     snap?.inputs ? { ...BLANK_INPUTS, ...snap.inputs } :
+    !restore && /,/.test(initialAddress) ? { ...BLANK_INPUTS, address: initialAddress } :
     (fromOffer?.calc
       ? {
           ...BLANK_INPUTS,
@@ -743,8 +789,13 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   // Settings load async on a fresh form — reseed the default rows once they
   // arrive, unless the rows came from a snapshot or were already edited.
   const termsTouchedRef = useRef(Boolean(snap?.letterTerms || snap?.terms));
+  // Not an edit: the save-as-you-type signature takes the reseeded rows as
+  // its starting point (rebaseline), so opening an older offer never
+  // re-renders its letter.
+  const rebaseline = useRef(false);
   useEffect(() => {
     if (termsTouchedRef.current || !settings) return;
+    rebaseline.current = true;
     setLetterTerms(defaultTermRows(settings));
   }, [settings]);
   const touchTerms = () => { termsTouchedRef.current = true; };
@@ -838,12 +889,6 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   // Comps for a mobile home are mobile homes (the pull keeps to houses otherwise).
   const compsHomeType = assetType === "manufactured" ? "MANUFACTURED" : assetType === "multi_family" ? "MULTI_FAMILY" : undefined;
   const [scope, setScope] = useState(snap?.scope || fromOffer?.scope || []); // applied rehab line items
-  const [draftId, setDraftId] = useState(restore?.status === "draft" ? restore.id : null);
-  const [savingDraft, setSavingDraft] = useState(false);
-  const [draftSaved, setDraftSaved] = useState(false);
-  // Saving an offer that already exists, as opposed to creating one.
-  const [saving, setSaving] = useState(false);
-  const [savedAt, setSavedAt] = useState(null);      // drives the "Saved" strip
   const [saveWarnings, setSaveWarnings] = useState([]);
   const rehabStateRef = useRef(snap?.rehab || null);
   const compsStateRef = useRef(snap?.comps || null);
@@ -893,8 +938,6 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   }, []);
   const [preview, setPreview] = useState(null);   // data-url image
   const [previewing, setPreviewing] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [result, setResult] = useState(null);     // { offer, ghl, warnings }
   const [error, setError] = useState("");
   const [sendOpen, setSendOpen] = useState(false); // SendModal (text and/or email via GHL)
   const [contractOpen, setContractOpen] = useState(false); // ContractModal (generic contract PDF)
@@ -909,7 +952,9 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   // editor is where you underwrite ONE property, but the question "what else
   // is open with this agent" arrives mid-underwrite — so their offers sit in a
   // strip above the form and open the same detail window the Offers tab uses.
-  const [agentOffers, setAgentOffers] = useState([]);
+  // Drafts included: the house a new offer names may already have one.
+  const [agentRows, setAgentOffers] = useState([]);
+  const agentOffers = useMemo(() => agentRows.filter((o) => o.status !== "draft"), [agentRows]);
   const [peek, setPeek] = useState(null);        // offer whose popout is open
   const [peekSub, setPeekSub] = useState(null);  // { kind, offer } layered over it
   const [statusBusy, setStatusBusy] = useState(false); // an outcome is in flight
@@ -918,10 +963,9 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     const id = contact?.id;
     if (!id) { setAgentOffers([]); return; }
     let live = true;
-    // Drafts are excluded: they have no document to look at, and the strip is
-    // for what actually went out.
+    // The strip shows what went out (agentOffers); drafts stay in agentRows.
     listOffers({ contactId: id, limit: 50 })
-      .then((list) => { if (live) setAgentOffers((list || []).filter((o) => o.status !== "draft")); })
+      .then((list) => { if (live) setAgentOffers(list || []); })
       .catch(() => { /* the strip is a convenience — never block the form */ });
     return () => { live = false; };
   }, [contact?.id]);
@@ -1002,6 +1046,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         setAgentOffers((list) => list.map((x) => (x.id !== r.offer.id && x.pin && houseKey(x.address || "") === k ? { ...x, pin: undefined } : x)));
       }
       patchPeek(r.offer);
+      if (r.offer?.id && r.offer.id === rowRef.current?.id) adopt(r.offer);
       onOfferSaved?.(r.offer); // the shell holds the offer being edited
       if (r.promoted) { setPeek(null); onDeal?.(); }
     } catch (e) { setError(e.message); }
@@ -1032,7 +1077,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     : null;
   // The status control also shows on a draft: a held underwrite you answered
   // yourself, or a house you're walking from, is closed out right here.
-  const statusOffer = liveOffer || (restore?.id ? verdictOf(agentOffers.find((o) => o.id === restore.id) || restore) : null);
+  const statusOffer = liveOffer || (row?.id ? verdictOf(agentOffers.find((o) => o.id === row.id) || row) : null);
   const currentOfHouse = liveOffer?.supersededBy ? agentBook.find((o) => o.id === liveOffer.supersededBy.id) : null;
 
   // "Re-quote at 400K" from the held-paper banner: re-priced in place, sent
@@ -1045,6 +1090,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     try {
       const r = await requoteOffer(o.id, amount);
       patchPeek(r.offer);
+      if (r.offer?.id && r.offer.id === rowRef.current?.id) { adopt(r.offer); setSavedInputs(r.offer.calc?.inputs || {}); }
       onOfferSaved?.(r.offer);
     } catch (e) { setError(e.message); }
     setRequoting(false);
@@ -1062,7 +1108,9 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     getContactDetail(initialContactId)
       .then((d) => {
         setContact({ id: d.id, name: d.name, phone: d.phone, email: d.email });
-        const addr = pickContactAddress(d.custom);
+        // The whole address (street, city, state, ZIP) when the record can
+        // finish the shorthand field; the field itself otherwise.
+        const addr = d.address || pickContactAddress(d.custom);
         if (addr) setInputs((s) => (s.address.trim() ? s : { ...s, address: addr }));
       })
       .catch(() => {});
@@ -1099,7 +1147,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
     if (!c?.id) return;
     getContactDetail(c.id)
       .then((d) => {
-        const addr = pickContactAddress(d.custom);
+        const addr = d.address || pickContactAddress(d.custom);
         if (addr) setInputs((s) => (s.address.trim() ? s : { ...s, address: addr }));
       })
       .catch(() => {});
@@ -1166,7 +1214,8 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   }, [calc, effSettings]);
 
   const contactName = mode === "existing" ? contact?.name || "" : newContact.name;
-  const canCreate = Boolean(calc && (mode === "existing" ? contact?.id : newContact.phone.trim()));
+  // Send needs a house, a number and someone to send it to.
+  const canSend = Boolean(calc && namesAHouse(inputs.address) && (mode === "existing" ? contact?.id : newContact.phone.trim()));
 
   async function doPreview() {
     setError(""); setPreviewing(true);
@@ -1191,122 +1240,72 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
   });
   const draftBody = () => ({ ...formSnapshot(), cashPreview: calc?.offers?.cash?.amount ?? null });
 
-  async function doCreate() {
-    setError(""); setCreating(true); setLastSend(null);
-    try {
-      const r = await createOffer({
-        contactId: mode === "existing" ? contact?.id : undefined,
-        newContact: mode === "new" ? newContact : undefined,
-        inputs,
-        settings: effSettings,
-        scope,
-        draftId,
-        // Full form snapshot so History → Edit restores comps + rehab intact.
-        snapshot: formSnapshot(),
-        // The kind of house, when you picked one (otherwise Zillow's word).
-        ...(assetPick ? { asset: assetPick } : {}),
-        // An income or land offer is priced on the server from this deal.
-        ...(uwBody ? { underwrite: uwBody } : {}),
-      });
-      setResult(r);
-      setPreview(null);
-      setDraftId(null);
-      // The form is now editing a real offer, even without a remount — so
-      // autosave must write to THAT offer instead of minting a draft beside it.
-      offerIdRef.current = r.offer.id;
-      // A draft it came from is gone now: the pane behind moves to this one.
-      onOfferSaved?.(r.offer);
-    } catch (e) { setError(e.message); }
-    setCreating(false);
-  }
+  // What the offer is made from — Send on a draft and every live save send it.
+  const offerBody = () => ({
+    contactId: mode === "existing" ? contact?.id : undefined,
+    newContact: mode === "new" ? newContact : undefined,
+    inputs,
+    settings: effSettings,
+    scope,
+    // Full form snapshot so reopening restores comps + rehab intact.
+    snapshot: formSnapshot(),
+    // The kind of house, when you picked one (otherwise Zillow's word).
+    ...(assetPick ? { asset: assetPick } : {}),
+    // An income or land offer is priced on the server from this deal.
+    ...(uwBody ? { underwrite: uwBody } : {}),
+  });
 
-  async function doSaveDraft() {
-    setError(""); setSavingDraft(true);
-    try {
-      const r = await saveDraft(draftId, draftBody());
-      setDraftId(r.offer.id);
-      setDraftSaved(true);
-      setTimeout(() => setDraftSaved(false), 2500);
-    } catch (e) { setError(e.message); }
-    setSavingDraft(false);
-  }
-
-  // Save this offer — the one that's open — rather than making another one.
-  // Same id, so the documents are re-rendered in place and the link the agent
-  // already has becomes the revised letter. Deliberately does NOT set `result`:
-  // that swaps the form for the create success screen, and the whole point here
-  // is that you can keep working.
-  async function doSave() {
-    const id = fromOffer?.id;
-    if (!id) return;
-    if ((fromOffer.sends || []).length && !window.confirm(
-      `This offer was already sent to ${fromOffer.contactName || "the agent"}. Saving replaces the document behind the link they have. Continue?`
-    )) return;
-    setError(""); setSaving(true);
-    try {
-      const r = await updateOffer(id, { inputs, settings: effSettings, scope, snapshot: formSnapshot(), ...(assetPick ? { asset: assetPick } : {}), ...(uwBody ? { underwrite: uwBody } : {}) });
-      // The offer of record just moved; the "not saved" notices read from here.
-      setSavedInputs(r.offer?.calc?.inputs || {});
-      setSaveWarnings(r.warnings || []);
-      setSavedAt(new Date());
-      setPreview(null);
-      onOfferSaved?.(r.offer);
-      setAgentOffers((list) => list.map((o) => (o.id === r.offer.id ? r.offer : o)));
-    } catch (e) { setError(e.message); }
-    setSaving(false);
-  }
-
-  // The "Saved" strip describes the numbers as they stood when it was pressed,
-  // so it has to go the moment they move again.
-  useEffect(() => { setSavedAt(null); }, [inputs, scope, effSettings, uwModel, uwDeals]);
-
-  // Is the document behind this offer's link still the offer on screen?
+  /* ---------- saving as you type ---------- */
+  // Matt, 2026-10-23: the five save buttons were too confusing and one house
+  // kept collecting rows. Now every change saves itself (offer-autosave.js):
   //
-  // Sending sends the STORED documents, so this is what stands between "the
-  // agent gets the number I'm looking at" and "the agent gets the last one".
-  // It compares the CONTENT rather than watching for edits: the form re-seeds
-  // its letter terms from settings just after mount, which isn't an edit and
-  // must not read as one. It also catches the other way an offer goes stale —
-  // reopening one built under a wholesale fee that has since changed.
-  const storedCash = fromOffer?.cashAmount ?? fromOffer?.calc?.offers?.cash?.amount ?? null;
-  const liveCash = calc?.offers?.cash?.amount ?? null;
-  const storedAddress = fromOffer?.calc?.inputs?.address ?? fromOffer?.address ?? "";
-  const docBehind = Boolean(fromOffer) && (
-    (storedCash != null && liveCash != null && Math.round(storedCash) !== Math.round(liveCash)) ||
-    (storedAddress.trim() && inputs.address.trim() !== storedAddress.trim())
-  );
-
-  /* ---------- draft autosave ---------- */
-  // Comps claimed off Zillow are read-and-delete on the server: the instant the
-  // comps pane claims them they exist nowhere but this component's state. So
-  // switching to History — which unmounts this form — used to destroy them for
-  // good, and the only defense was remembering to press "Save draft". Now any
-  // work that couldn't be reconstructed schedules a draft write on its own.
+  //   a blank form   becomes a draft once it names a house and holds a figure,
+  //                  comps or a scope — a contact and an address alone are a
+  //                  look, not work. A house that already has a row opens it.
+  //   a draft        saves onto itself.
+  //   an offer       saves live: the letter behind the agent's link and the
+  //                  bot's number follow what you type (Matt chose this over
+  //                  holding them until Send). Comps and rehab work that
+  //                  doesn't change the letter is a workspace write.
   //
-  // Deliberately not a save-everything-on-every-keystroke autosave: a draft
-  // holding nothing but a half-typed address is clutter in the History tab, so
-  // hasWorkToLose() gates it on something that would actually hurt to lose.
-  const autosaveTimer = useRef(null);
-  const autosaveInFlight = useRef(false);
-  const autosaveQueued = useRef(false);
+  // Nothing saves until you touch the form: settings arriving, a prefilled
+  // address and the panes echoing their restored state aren't edits, and
+  // opening an offer to look at it must not re-render its letter.
+  const [saveState, setSaveState] = useState({ phase: "idle" });
+  const [publishing, setPublishing] = useState(false);
+  const [handed, setHanded] = useState(false);
+  const [otherWindow, setOtherWindow] = useState(false);
+  const [houseHasRow, setHouseHasRow] = useState(null);   // the row this house has, while the form holds work of its own
+  const touchedRef = useRef(false);
   const mountedRef = useRef(true);
-  // Everything the flush reads goes through a ref: the unmount handler runs
-  // from a `[]`-deps effect, so a plain closure there would see first-render
-  // values and happily write a draft for an offer that has since been created.
-  const draftIdRef = useRef(draftId);
+  const leavingRef = useRef(false);   // moving to another row: this form saves nothing more
+  const historyBehindRef = useRef(false);
+  const publishingRef = useRef(false);
+  const skippedRef = useRef(false);
   const draftBodyRef = useRef(draftBody);
-  const blockAutosave = useRef(false);
-  // The offer this form is editing, when there is one. Fixed for the
-  // component's life — the parent keys NewOffer on the offer id — except after
-  // doCreate, which turns a blank form into an open offer without remounting.
-  const offerIdRef = useRef(fromOffer?.id || null);
   const snapshotRef = useRef(formSnapshot);
+  const offerBodyRef = useRef(offerBody);
   draftBodyRef.current = draftBody;
   snapshotRef.current = formSnapshot;
-  // `saving` too: a debounced workspace write must not race an explicit save
-  // and land the same snapshot on top of it out of order.
-  blockAutosave.current = Boolean(result) || creating || saving;
-  useEffect(() => { draftIdRef.current = draftId; }, [draftId]);
+  offerBodyRef.current = offerBody;
+  const touch = () => { touchedRef.current = true; };
+
+  // The row moved under us (a save, Send, a status): keep the newest copy.
+  function adopt(offer) {
+    if (!offer?.id) return;
+    const next = { ...(rowRef.current?.id === offer.id ? rowRef.current : {}), ...offer };
+    rowRef.current = next;
+    if (!mountedRef.current) return;
+    setRow(next);
+    setAgentOffers((list) => (list.some((o) => o.id === next.id) ? list.map((o) => (o.id === next.id ? { ...o, ...next } : o)) : [next, ...list]));
+  }
+
+  // This house already has a row: work there instead.
+  function openRow(other, note) {
+    leavingRef.current = true;
+    saver.current?.cancel();
+    onSwap?.(other, note);
+  }
 
   // Comps that can't be re-fetched, or a rehab scope built by hand.
   const hasWorkToLose = (body) => {
@@ -1319,260 +1318,192 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
       (d.units || []).length || (d.tenants || []).length || (d.comps || []).length
     );
   };
+  const worthARow = (body) => namesAHouse(body.inputs?.address) && (hasWorkToLose(body)
+    || ["arv", "repairs", "askingPrice", "priceOverride"].some((k) => String(body.inputs?.[k] || "").trim()));
 
-  async function flushDraft() {
-    if (blockAutosave.current) return;
-    const body = draftBodyRef.current();
-    if (!String(body.inputs?.address || "").trim() || !hasWorkToLose(body)) return;
-    // One write at a time. Two in flight would each create a draft row, and
-    // doCreate only ever consumes the one id it holds.
-    if (autosaveInFlight.current) { autosaveQueued.current = true; return; }
-    autosaveInFlight.current = true;
-    try {
-      if (offerIdRef.current) {
-        // The workspace belongs to the offer that's open. Writing a draft here
-        // is what used to leave three rows on one property.
-        await saveOfferWorkspace(offerIdRef.current, snapshotRef.current());
-      } else {
-        const r = await saveDraft(draftIdRef.current, body);
-        if (r?.offer?.id && r.offer.id !== draftIdRef.current) {
-          draftIdRef.current = r.offer.id;
-          if (mountedRef.current) setDraftId(r.offer.id);
-        }
+  async function runSave(kind, { final = false } = {}) {
+    if (leavingRef.current) return;
+    // Send is turning the draft into the offer: a save now would race it. The
+    // work is in what Send sends; anything later is saved once it's done.
+    if (publishingRef.current) { skippedRef.current = true; return; }
+    const cur = rowRef.current;
+    if (!hasPaper(cur)) {
+      const body = draftBodyRef.current();
+      if (!cur && !worthARow(body)) return;
+      if (!kind && cur) return;   // leaving a draft with nothing pending
+      const r = await saveDraft(cur?.id || null, body);
+      if (r?.reused) { if (mountedRef.current) openRow(r.offer, "Opened the offer you already have on this house."); return; }
+      adopt(r?.offer);   // `stale`: it became the offer elsewhere — this is that row now
+      return;
+    }
+    if (kind === "live" || (final && historyBehindRef.current)) {
+      const r = await updateOffer(cur.id, { ...offerBodyRef.current(), live: true, final });
+      historyBehindRef.current = Boolean(r?.historyBehind);
+      adopt(r?.offer);
+      if (mountedRef.current && r?.offer) {
+        setSavedInputs(r.offer.calc?.inputs || {});
+        setSaveWarnings(r.warnings || []);
       }
-      if (mountedRef.current) {
-        setDraftSaved(true);
-        setTimeout(() => { if (mountedRef.current) setDraftSaved(false); }, 2500);
-      }
-    } catch { /* a safety net, not a user action — never interrupt with an error */ }
-    autosaveInFlight.current = false;
-    if (autosaveQueued.current) { autosaveQueued.current = false; flushDraft(); }
+      return;
+    }
+    if (kind === "workspace") await saveOfferWorkspace(cur.id, snapshotRef.current());
   }
-
-  function scheduleDraftSave() {
-    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
-    autosaveTimer.current = setTimeout(() => { autosaveTimer.current = null; flushDraft(); }, 1500);
+  const runSaveRef = useRef(runSave);
+  runSaveRef.current = runSave;
+  const saver = useRef(null);
+  if (!saver.current) {
+    saver.current = createAutosaver({
+      run: (kind, opts) => runSaveRef.current(kind, opts),
+      onState: (st) => { if (mountedRef.current) setSaveState(st); },
+    });
   }
+  const scheduleSave = (letterChanged) => saver.current.schedule(saveKindFor({ row: rowRef.current, letterChanged }));
 
-  // Both panes report their state once on mount — that first emission is the
-  // restored workspace echoing back, not work anybody did. Autosaving it would
-  // mint a draft row every time you opened an existing offer just to look at
-  // it, so the first report from each pane only updates the ref.
-  const firstReport = useRef({ comps: true, rehab: true });
-  const reportPaneState = (which, ref) => (s) => {
-    ref.current = s;
-    if (firstReport.current[which]) { firstReport.current[which] = false; return; }
-    scheduleDraftSave();
-  };
-  // A rent roll or land comps typed by hand autosave the same way, after
-  // the first render (which is only the restored deal).
-  const firstDeals = useRef(true);
+  // Everything the letter prints, as one string: when it moves after you've
+  // touched the form, that's an edit.
+  const letterSig = JSON.stringify([mode, contact?.id || "", newContact, inputs, effSettings, scope, uwBody || null, assetPick || null]);
+  const lastSig = useRef(letterSig);
   useEffect(() => {
-    if (firstDeals.current) { firstDeals.current = false; return; }
-    scheduleDraftSave();
+    if (letterSig === lastSig.current) return;
+    lastSig.current = letterSig;
+    if (rebaseline.current) { rebaseline.current = false; return; }
+    if (touchedRef.current) scheduleSave(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uwDeals, uwModel]);
+  }, [letterSig]);
+
+  // Both panes report their state on mount and again as they settle — the
+  // restored workspace echoing back, not work anybody did. A report saves
+  // when its content moved and you've touched the form, or when comps were
+  // captured off Zillow (they exist nowhere else; you captured them in
+  // another tab). Without the content check, two windows on one offer
+  // reloaded each other forever: each mount's echo saved, which reloaded the
+  // other window, whose mount echoed…
+  const paneSeen = useRef({});
+  const reportPaneState = (which, ref) => (st) => {
+    ref.current = st;
+    const sig = JSON.stringify(st ?? null);
+    const captured = (st?.captured || []).length;
+    const seen = paneSeen.current[which];
+    paneSeen.current[which] = { sig, captured };
+    if (!seen || seen.sig === sig) return;
+    if (touchedRef.current || captured > seen.captured) scheduleSave(false);
+  };
+  // A rent roll or land comps typed by hand save the same way — when they
+  // actually moved, and you moved them (a mount, even twice over in
+  // StrictMode, is only the restored deal).
+  const dealsSig = JSON.stringify([uwModel, uwDeals]);
+  const lastDeals = useRef(dealsSig);
+  useEffect(() => {
+    if (dealsSig === lastDeals.current) return;
+    lastDeals.current = dealsSig;
+    if (touchedRef.current) scheduleSave(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dealsSig]);
+
+  // A new offer on a house this agent already has a row on opens that row —
+  // straight away while the form is only a contact and an address, with a
+  // button once you've started on numbers of your own.
+  useEffect(() => {
+    if (rowRef.current || !contact?.id || !namesAHouse(inputs.address)) { setHouseHasRow(null); return undefined; }
+    const t = setTimeout(() => {
+      if (rowRef.current || leavingRef.current) return;
+      const there = rowOnHouse(agentRows.filter((o) => o.contactId === contact.id), { address: inputs.address });
+      if (!there) { setHouseHasRow(null); return; }
+      if (worthARow(draftBodyRef.current())) setHouseHasRow(there);
+      else openRow(there, "Opened the offer you already have on this house.");
+    }, DRAFT_DELAY_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentRows, inputs.address, contact?.id]);
+
+  // The same row saved in another window: reopen on it when nothing here is
+  // waiting to save; otherwise say so and let you choose.
+  useEffect(() => onOfferChanged((msg) => {
+    const cur = rowRef.current;
+    if (!cur?.id || msg.local || msg.focus || msg.id !== cur.id) return;
+    if (msg.updatedAt && cur.updatedAt && msg.updatedAt <= cur.updatedAt) return;
+    if (!saver.current.idle()) { setOtherWindow(true); return; }
+    getOffer(cur.id)
+      .then((fresh) => { if (fresh && mountedRef.current && saver.current.idle()) openRow(fresh, "Updated from your other window."); })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), []);
+  const loadOtherWindow = () => getOffer(row.id).then((fresh) => fresh && openRow(fresh, "Loaded what your other window saved.")).catch((e) => setError(e.message));
 
   useEffect(() => {
     mountedRef.current = true;
-    // Backgrounding the tab is the other moment a pending timer would be lost.
-    const onHide = () => { if (document.visibilityState === "hidden") flushDraft(); };
+    // Backgrounding the tab is the other moment a pending save would be lost.
+    const onHide = () => { if (document.visibilityState === "hidden") saver.current.flush(); };
     document.addEventListener("visibilitychange", onHide);
     return () => {
       document.removeEventListener("visibilitychange", onHide);
       mountedRef.current = false;
-      // Leaving the form is exactly when the debounce would otherwise be
-      // thrown away — fire the pending write instead of clearing it.
-      if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); flushDraft(); }
+      // Leaving the form: fire what's pending, and tell a live offer where
+      // you stopped so the agent's history line carries the last number.
+      if (!leavingRef.current) saver.current.flush({ final: true });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (result) {
-    const { offer, ghl, warnings } = result;
-    const Badge = ({ ok, label }) => (
-      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
-        ok ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
-      }`}>
-        {ok ? <Check size={12} /> : <X size={12} />} {label}
-      </span>
-    );
-    return (
-      <div className="space-y-4">
-        <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-4">
-          <div className="text-sm font-bold text-emerald-900">
-            Offer created for{" "}
-            {offer.contactId ? (
-              <a href={ghlContactUrl(offer.contactId)} target="_blank" rel="noreferrer" title="Open contact in GHL"
-                className="inline-flex items-center gap-1 underline hover:text-emerald-700">
-                {offer.contactName || "contact"} <ExternalLink size={12} />
-              </a>
-            ) : (
-              offer.contactName || "contact"
-            )}{" "}
-            — {offer.address || "property"}
-          </div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Badge ok={ghl.fields} label="Custom fields" />
-            <Badge ok={ghl.note} label="Contact note" />
-            <Badge ok={ghl.tag} label="Tag" />
-          </div>
-          {warnings?.length > 0 && (
-            <ul className="mt-2 list-inside list-disc text-xs text-amber-800">
-              {warnings.map((w, i) => <li key={i}>{w}</li>)}
-            </ul>
-          )}
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <img src={offer.imageUrl} alt="Offer document" className="w-full rounded-xl border border-slate-200 shadow-sm" />
-          <div className="space-y-3">
-            <button type="button" onClick={() => setOfferPageOpen(true)}
-              className="flex w-full items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
-              title="One shareable web page for the agent: the offer, the comps, the scope and the seller's net">
-              <Link2 size={16} /> Share an offer page with the agent
-            </button>
-            <a href={offer.pdfUrl} target="_blank" rel="noreferrer"
-              className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-              <FileText size={16} /> Open PDF document
-            </a>
-            {offer.scopePdfUrl && (
-              <a href={offer.scopePdfUrl} target="_blank" rel="noreferrer"
-                className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-                <FileText size={16} /> Open Rehab Scope of Work (PDF)
-              </a>
-            )}
-            {offer.compsPdfUrl && (
-              <a href={offer.compsPdfUrl} target="_blank" rel="noreferrer"
-                className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-                <FileText size={16} /> Open Comps / ARV Analysis (PDF)
-              </a>
-            )}
-            <a href={offer.imageUrl} target="_blank" rel="noreferrer"
-              className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-              <FileText size={16} /> Open image version
-            </a>
-            {offer.psaPdfUrl && (
-              <a href={offer.psaPdfUrl} target="_blank" rel="noreferrer"
-                className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-                <FileSignature size={16} /> Open Offer PSA (PDF)
-              </a>
-            )}
-            {offer.contractPdfUrl && (
-              <a href={offer.contractPdfUrl} target="_blank" rel="noreferrer"
-                className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-                <FileText size={16} /> Open Purchase Contract (PDF)
-              </a>
-            )}
-            <button type="button" onClick={() => setNetSheetOpen(true)}
-              className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50"
-              title="One-pager: our offer with no buyer's commission vs. the list price needed to net the same">
-              <FileText size={16} /> {offer.netSheetPdfUrl ? "Seller net comparison" : "Generate seller net comparison"}
-            </button>
-            <button type="button" onClick={() => setPsaOpen(true)}
-              className="flex w-full items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
-              title="The signable Washington purchase & sale agreement — an official offer the listing broker can take to the seller, not a letter of intent">
-              <FileSignature size={16} /> {offer.psaPdfUrl ? "Update Offer PSA" : "Generate Offer PSA"}
-            </button>
-            <button type="button" onClick={() => setContractOpen(true)}
-              className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-              <FileText size={16} /> {offer.contractPdfUrl ? "Update purchase contract" : "Generate purchase contract"}
-            </button>
-            <button type="button" onClick={() => setSendOpen(true)}
-              className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-              <Send size={16} /> Send to the contact — text or email
-            </button>
-            <div className="pt-1">
-              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                Dispositions — for the end buyer, not the seller
-              </div>
-              {offer.assignmentPdfUrl && (
-                <a href={offer.assignmentPdfUrl} target="_blank" rel="noreferrer"
-                  className="mb-3 flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-                  <FileText size={16} /> Open Assignment Contract (PDF)
-                </a>
-              )}
-              <button type="button" onClick={() => setAssignmentOpen(true)}
-                className="flex w-full items-center gap-2 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-                <FileText size={16} /> {offer.assignmentPdfUrl ? "Update assignment contract" : "Generate assignment contract"}
-              </button>
-            </div>
-            {lastSend && (
-              <div className="rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800">
-                Sent via {(lastSend.channels || []).map((c) => CHANNEL_LABELS[c] || c).join(" + ")} ✓
-              </div>
-            )}
-            {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-            <div className="flex flex-wrap gap-4">
-              <button type="button" onClick={() => (onReset ? onReset() : (setResult(null), setLastSend(null), setError("")))}
-                className="text-sm font-medium text-slate-500 underline hover:text-slate-800">
-                Start another offer
-              </button>
-              <button type="button" onClick={() => { setResult(null); setLastSend(null); setError(""); }}
-                className="text-sm font-medium text-slate-500 underline hover:text-slate-800">
-                Back to this offer's form
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {sendOpen && (
-          <SendModal
-            offer={offer}
-            onClose={() => setSendOpen(false)}
-            onSent={(id, sends) => setLastSend(sends?.[sends.length - 1] || { channels: [] })}
-          />
-        )}
-        {psaOpen && (
-          <PsaModal
-            offer={offer}
-            settings={effSettings}
-            onClose={() => setPsaOpen(false)}
-            onGenerated={(o) => setResult((r) => ({ ...r, offer: o }))}
-          />
-        )}
-        {contractOpen && (
-          <ContractModal
-            offer={offer}
-            settings={effSettings}
-            onClose={() => setContractOpen(false)}
-            onGenerated={(o) => setResult((r) => ({ ...r, offer: o }))}
-          />
-        )}
-        {assignmentOpen && (
-          <AssignmentModal
-            offer={offer}
-            settings={effSettings}
-            onClose={() => setAssignmentOpen(false)}
-            onGenerated={(o) => setResult((r) => ({ ...r, offer: o }))}
-          />
-        )}
-        {netSheetOpen && (
-          <NetSheetModal
-            offer={offer}
-            settings={effSettings}
-            onClose={() => setNetSheetOpen(false)}
-            onGenerated={(o) => setResult((r) => ({ ...r, offer: o }))}
-          />
-        )}
-        {offerPageOpen && <OfferPageModal offer={offer} onClose={() => setOfferPageOpen(false)} />}
-      </div>
-    );
+  // Send on a draft makes it the offer first (the same row: paper, the
+  // contact's fields, note and tag), then opens the send window. On a held
+  // auto-underwrite, "Let the bot take it" does the first half and hands the
+  // conversation to the bot instead.
+  async function publish({ handToBot = false } = {}) {
+    setError("");
+    setPublishing(true);
+    try {
+      await saver.current.flush();
+      publishingRef.current = true;
+      let cur = rowRef.current;
+      if (!cur) {
+        const r = await saveDraft(null, draftBodyRef.current());
+        if (r?.reused) { openRow(r.offer, "Opened the offer you already have on this house — press Send there."); return; }
+        adopt(r.offer);
+        cur = r.offer;
+      }
+      let offer;
+      try {
+        offer = (await publishOffer(cur.id, offerBodyRef.current(), { handToBot })).offer;
+      } catch (e) {
+        if (e.status !== 409) throw e;
+        offer = await getOffer(cur.id);   // made into an offer already (another window)
+      }
+      adopt(offer);
+      setSavedInputs(offer?.calc?.inputs || {});
+      onOfferSaved?.(offer);
+      if (handToBot) setHanded(true);
+      else setSendOpen(true);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      publishingRef.current = false;
+      if (skippedRef.current) { skippedRef.current = false; scheduleSave(true); }
+      if (mountedRef.current) setPublishing(false);
+    }
+  }
+  async function sendNow() {
+    if (!hasPaper(rowRef.current)) return publish();
+    setError("");
+    await saver.current.flush();   // the agent gets the number on screen
+    setSendOpen(true);
   }
 
   return (
-    <div className="flex items-start gap-5">
+    // Any change, click or keystroke inside the form is you working on it —
+    // the moment saving starts (the letter signature above decides what).
+    <div className="flex items-start gap-5" onChangeCapture={touch} onInputCapture={touch} onClickCapture={touch} onKeyDownCapture={touch}>
     <div className="min-w-0 flex-1 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-lg font-bold tracking-tight">
-            {restore ? (restore.status === "draft" ? "Editing draft" : "Editing offer") : "New cash offer"}
+            {row ? (hasPaper(row) ? "Editing offer" : "Editing draft") : "New cash offer"}
           </h1>
           <p className="text-xs text-slate-500">
-            {restore
-              ? `${restore.address || "restored from History"} — clearing starts a fresh offer`
-              : "Work top to bottom: contact → property → comps → rehab → offer."}
+            {row
+              ? `${row.address || inputs.address || "this house"} — saves as you type`
+              : "Work top to bottom: contact → property → comps → rehab → offer. It saves as you type."}
           </p>
+          <SaveStatus state={saveState} row={row} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* Where this offer stands, settable in place. An agent's "we're
@@ -1596,13 +1527,24 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               <Maximize2 size={14} /> Offer details
             </button>
           )}
-          <button type="button"
-            onClick={() => { if (window.confirm("Clear the whole form and start a fresh offer?")) onReset?.(); }}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900">
-            <RotateCcw size={14} /> Clear form
-          </button>
         </div>
       </div>
+
+      {openedNote && (
+        <div role="status" className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">{openedNote}</div>
+      )}
+      {houseHasRow && (
+        <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span className="min-w-0 flex-1">You already have {hasPaper(houseHasRow) ? "an offer" : "a draft"} on this house. One house keeps one row.</span>
+          <button type="button" onClick={() => openRow(houseHasRow, "Opened the offer you already have on this house.")} className="font-semibold underline">Open it</button>
+        </div>
+      )}
+      {otherWindow && (
+        <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span className="min-w-0 flex-1">This offer changed in your other window. What you type here still saves over it.</span>
+          <button type="button" onClick={loadOtherWindow} className="font-semibold underline">Load it</button>
+        </div>
+      )}
 
       <AgentOfferTabs offers={agentBook} currentId={fromOffer?.id}
         contactName={contact?.name} onOpen={setPeek} />
@@ -1694,7 +1636,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               <input className={INPUT_CLS} inputMode="numeric" value={inputs.arv} onChange={setMoney("arv")} placeholder="from comps below" />
             </Field>
             <FigureNotice field="arv" typed={moneyNum(inputs.arv)} saved={moneyNum(savedInputs.arv)}
-              rooms={pinnedRooms} saving={saving} onSave={doSave}
+              rooms={pinnedRooms}
               unpinning={unpinning === "arv"} onFollow={() => followOffer("arv")} />
           </div>}
           {uwModel === "comps" && <div>
@@ -1702,7 +1644,7 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
               <input className={INPUT_CLS} inputMode="numeric" value={inputs.repairs} onChange={setMoney("repairs")} placeholder="from scope below" />
             </Field>
             <FigureNotice field="repairs" typed={moneyNum(inputs.repairs)} saved={moneyNum(savedInputs.repairs)}
-              rooms={pinnedRooms} saving={saving} onSave={doSave}
+              rooms={pinnedRooms}
               unpinning={unpinning === "repairs"} onFollow={() => followOffer("repairs")} />
           </div>}
           <Field label={uwModel === "comps" ? "Asking price ($, optional)" : "Asking price ($)"}>
@@ -1886,83 +1828,42 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
             {previewing ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
             Preview document
           </button>
-          {/* Sending is what the offer is FOR, so it belongs next to the save
-              rather than only on the create-success screen — which a revision
-              never reaches, since saving in place deliberately keeps you in
-              the form. It sends the stored documents, so it waits for the save
-              that produces them. */}
-          {fromOffer && (fromOffer.contactId || contact?.id) && (
-            <button type="button" onClick={() => setSendOpen(true)} disabled={docBehind}
-              title={docBehind
-                ? `Press Save changes first — the document behind this offer's link still reads ${
-                    storedCash != null ? fmtMoney(storedCash) : "the previous offer"}`
-                : "Text or email this offer to the agent"}
+          {/* A held auto-underwrite you've priced: the bot can take it from
+              here — float the number, or send the letter on a clean run. */}
+          {row && !hasPaper(row) && row.autoUnderwrite && (
+            <button type="button" disabled={!canSend || publishing} onClick={() => publish({ handToBot: true })}
+              title="Make this the offer and let the bot float the number or send the letter, as it would after a clean underwrite"
               className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">
-              <Send size={16} /> Send
+              <Bot size={16} /> Let the bot take it
             </button>
           )}
-          {/* An offer that already exists saves back onto itself; creating a
-              second one is still possible, but it has to be asked for. */}
-          {fromOffer ? (
-            <>
-              <button type="button" disabled={!canCreate || creating} onClick={doCreate}
-                title="Leave this offer as it is and write a second one on the same property"
-                className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">
-                {creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-                Save as new offer
-              </button>
-              <button type="button" disabled={!calc || saving} onClick={doSave}
-                title="Update this offer — same link, revised numbers"
-                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
-                {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-                {savedAt ? "Saved ✓" : "Save changes"}
-              </button>
-            </>
-          ) : (
-            <>
-              <button type="button" disabled={savingDraft} onClick={doSaveDraft}
-                className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-slate-50">
-                {savingDraft ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                {draftSaved ? "Draft saved ✓" : draftId ? "Update draft" : "Save draft"}
-              </button>
-              <button type="button" disabled={!canCreate || creating} onClick={doCreate}
-                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
-                {creating ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-                Create offer & attach to contact
-              </button>
-            </>
-          )}
+          {/* The one way out. On a draft it makes the offer first — the same
+              row, now with its letter — then opens the send window. */}
+          <button type="button" disabled={!canSend || publishing} onClick={sendNow}
+            title={hasPaper(row) ? "Text or email this offer to the agent" : "Make the offer and send it to the agent"}
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-blue-700">
+            {publishing ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Send
+          </button>
         </div>
-        {!canCreate && calc && !fromOffer && (
-          <div className="mt-1 text-right text-xs text-slate-400">Pick a contact in step 1 (or enter a phone) to create the offer.</div>
-        )}
-        {fromOffer && draftSaved && !savedAt && (
+        {!canSend && calc && (
           <div className="mt-1 text-right text-xs text-slate-400">
-            Comps and scope saved to this offer — press Save changes to update the documents and the agent's record.
+            {!namesAHouse(inputs.address) ? "Add the house number and street to send." : "Pick the agent in step 1 (or enter a phone) to send."}
           </div>
+        )}
+        {hasPaper(row) && (row.sends || []).length > 0 && (
+          <div className="mt-1 text-right text-xs text-slate-400">Live: the agent's link and the bot's number update as you type.</div>
         )}
       </div>
 
-      {savedAt && (
-        <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-          Saved{calc ? ` — the letter behind this offer's link now reads ${fmtMoney(calc.offers.cash.amount)}` : ""}.
-          {fromOffer?.pdfUrl && (
-            <a href={fromOffer.pdfUrl} target="_blank" rel="noreferrer" className="ml-2 font-semibold underline">
-              Open the revised PDF
-            </a>
-          )}
-          {(fromOffer?.contactId || contact?.id) && (
-            <button type="button" onClick={() => setSendOpen(true)}
-              className="ml-2 font-semibold underline hover:text-emerald-700">
-              Send it to {fromOffer?.contactName || contact?.name || "the agent"}
-            </button>
-          )}
-          {saveWarnings.length > 0 && (
-            <ul className="mt-1 list-inside list-disc text-xs text-amber-800">
-              {saveWarnings.map((w, i) => <li key={i}>{w}</li>)}
-            </ul>
-          )}
+      {handed && (
+        <div role="status" className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+          Handed to the bot — it floats the number or sends the letter, as after a clean underwrite.
         </div>
+      )}
+      {saveWarnings.length > 0 && (
+        <ul className="list-inside list-disc rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {saveWarnings.map((w, i) => <li key={i}>{w}</li>)}
+        </ul>
       )}
 
       {lastSend && (
@@ -2030,17 +1931,17 @@ export default function NewOffer({ settings, initialContactId, restore, onReset,
         statusBusy={statusBusy}
         onDealNav={onDeal} />
     )}
-    {/* Sending the offer that's open in the form. The one on the create-success
-        screen is a different mount — that branch returns before this one. */}
+    {/* Sending the offer that's open in the form (Send makes a draft the
+        offer first, so by the time this opens there's paper to send). */}
     {sendOpen && fromOffer && (
       <SendModal offer={fromOffer} onClose={() => setSendOpen(false)}
         onSent={(id, sends, fields) => {
           setLastSend(sends?.[sends.length - 1] || { channels: [] });
           // The send lands on the record, so the copies the app is holding —
           // the agent's strip, the popout, History via onOfferSaved — have to
-          // learn about it. Without this, saving again wouldn't warn that the
-          // agent already has the document.
+          // learn about it, and the row here moves to "sent".
           const updated = { ...fromOffer, sends, ...(fields || {}) };
+          adopt(updated);
           setAgentOffers((list) => list.map((o) => (o.id === id ? { ...o, sends, ...(fields || {}) } : o)));
           onOfferSaved?.(updated);
         }} />
