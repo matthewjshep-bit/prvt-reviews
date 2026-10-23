@@ -326,7 +326,14 @@ function offMarketLines({ offers = [], events = [], now = Date.now() }) {
   return [ask, theirs ? `They have brought us an off-market house before (${String(theirs.address || "").split(",")[0]}) — a proven source; thank them like one.` : ""].filter(Boolean).join("\n");
 }
 
-export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "", highStakes = null }) {
+// Matt prices every house himself (autoUnderwriteMode draft or skeleton):
+// said on every reply, the first one too. The house's own "MATT IS PRICING"
+// line only reaches the model once its draft exists, and the first reply was
+// written before that — "let me run the numbers and text you where we'd
+// land", a promise nobody kept (2026-10-22 audit: 27 of 100 unkept).
+export const MATT_PRICES_LINE = "PRICING A NEW HOUSE: every house is priced by hand, not by the machine. When they name one, never say you'll run the numbers or text them where we'd land, and never give a figure, a range or a time for it. Say you'll take a look at it, and ask what the seller would take and how soon they need to move.";
+
+export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "", highStakes = null, mattPrices = false }) {
   const custom = recordOverCustom(rawCustom, facts);
   const stanceOf = highStakes?.enabled ? (o) => numberStance({ offer: o, dossier: propertyDossier(events, o.address), highStakes }) : null;
   const book = summarizeOffers(offers, { now, showMath, transcript, stanceOf });
@@ -446,6 +453,7 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
     emailContextText(events),
     fields.length ? `WHAT WE KNOW ABOUT THEM:\n${fields.join("\n")}` : "",
     offMarketLines({ offers, events, now }),
+    mattPrices ? MATT_PRICES_LINE : "",
   ].filter(Boolean).join("\n\n");
   return {
     text, amounts: [...amounts].filter((n) => !book.stale.includes(n)), forbiddenAmounts: [], staleAmounts: book.stale, hiddenAmounts: book.hidden, ranges: book.ranges, offers: book,
@@ -474,10 +482,10 @@ export function lessonsContextText(digest = "") {
     d.split(/(?<=[.!?])\s+/).filter(Boolean).map((l) => `- ${l.trim()}`).join("\n");
 }
 
-export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined, highStakes = null }) {
+export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined, highStakes = null, mattPrices = false }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const { facts, events } = await loadRecord(store, locationId, contactId);
-  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript, highStakes }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds) };
+  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript, highStakes, mattPrices }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds) };
 }
 
 // Zillow's word for the house: the kind a person set on the offer first, then

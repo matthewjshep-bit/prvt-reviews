@@ -108,6 +108,24 @@ test("their numbers after the hold re-run it through startUnderwrite with replac
   assert.equal(again.counts.waiting, 1, "the ask on the timeline is what makes the next night wait on them");
 });
 
+// 2026-10-22 audit: the ask was claimed, then refused because the agent had
+// texted in the last 48h, and the spent claim kept it from ever going.
+test("an ask held back by a live thread isn't claimed, and goes on a later night", async () => {
+  const mk = () => fakeStore({
+    offers: [held({ id: "h2", contactId: "c2", address: "13025 Ambaum Blvd SW, Burien, WA", autoUnderwrite: { held: [THIN, PHOTOS], finishedAt: ago(1) }, createdAt: ago(1) })],
+    drafts: [{ id: "d2", contactId: "c2", status: "sent", inbound: "It has a lot of potential", intent: "small_talk", propertyAddress: "13025 Ambaum Blvd SW, Burien, WA", createdAt: ago(0.5) }],
+  });
+  const store = mk();
+  let live = true;
+  const d = deps({ machineMayStart: async () => (live ? { ok: false, rule: "live_thread", reason: "they texted 12h ago and a house is live" } : { ok: true }) });
+  await run(store, fakeClient(), d);
+  assert.equal(d.calls.length, 0);
+  assert.equal(store.events.filter((e) => e.type === "audit_action").length, 0);
+  live = false;
+  await run(store, fakeClient(), d, { now: NOW + 86400000 });
+  assert.deepEqual(d.calls.map((c) => c[2]), ["take_ask"]);
+});
+
 test("a dry run reads and reports but deletes, writes and starts nothing; a structural hold is yours", async () => {
   const store = fakeStore({ offers: [held({ id: "h1", autoUnderwrite: { held: ["the photo scan flagged a possible foundation or structural problem"], finishedAt: ago(1) } }), held({ id: "j", contactId: "", address: "" })] });
   const d = deps();
