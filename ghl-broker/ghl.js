@@ -595,6 +595,34 @@ export async function getConversation(client, conversationId) {
   return c?.contactId ? { id: c.id || conversationId, contactId: String(c.contactId) } : null;
 }
 
+// An email thread is ONE message in GHL's list, and its body is the FIRST
+// email in it: ours, when they answered an email we sent (2026-10-21, the
+// 10/19 agent email: "remove" and "927 Jersey is still available." were read
+// as our own email, and the reply went to matt@shepflips.com). Their words
+// are the newest email in the thread from them, above the quoted thread.
+// "" when the thread holds no email of theirs. Anything else: its body.
+const QUOTE_START_RX = /\bOn\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s[^\n]{0,120}?\bwrote:|^\s*From:\s|-{3,}\s*Original Message|^_{8,}|^>/im;
+export function emailReplyText(html = "") {
+  const text = String(html || "")
+    .replace(/<blockquote[\s\S]*$/i, " ")
+    .replace(/<(?:br|\/p|\/div|\/li)\s*\/?>/gi, "\n").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&amp;/gi, "&").replace(/&#39;/g, "'").replace(/&quot;/gi, '"');
+  const cut = text.search(QUOTE_START_RX);
+  return (cut >= 0 ? text.slice(0, cut) : text).replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim();
+}
+export async function messageWords(client, m) {
+  const ids = m?.meta?.email?.messageIds;
+  if (!/EMAIL/i.test(String(m?.messageType || m?.type || "")) || !Array.isArray(ids) || !ids.length) return String(m?.body || "").trim();
+  const emails = [];
+  for (const id of ids) {
+    const data = await client.call(`/conversations/messages/email/${encodeURIComponent(id)}`, { version: V_CONVERSATIONS }).catch(() => null);
+    const em = data?.emailMessage || data;
+    if (em && String(em.direction || "").toLowerCase() === "inbound") emails.push(em);
+  }
+  const newest = emails.sort((a, b) => String(b.dateAdded || "").localeCompare(String(a.dateAdded || "")))[0];
+  return newest ? emailReplyText(newest.body) : "";
+}
+
 // The newest inbound message with words in it, across the contact's most
 // recently active conversations. Returns { body, at, id, type, attachments }
 // or null. For re-running a reply the webhook never delivered — the text is
@@ -606,11 +634,12 @@ export async function getLatestInboundMessage(client, locationId, contactId, { c
     const { messages } = await listConversationMessages(client, c.id, { limit: perConversation });
     for (const m of messages) {
       if (String(m.direction || "").toLowerCase() !== "inbound") continue;
-      const body = String(m.body || "").trim();
-      if (!body) continue;
       const ts = Date.parse(m.dateAdded || "");
       if (!Number.isFinite(ts)) continue;
-      if (!best || ts > best.ts) {
+      if (best && ts <= best.ts) continue;
+      const body = await messageWords(client, m);
+      if (!body) continue;
+      {
         best = {
           ts, body, at: new Date(ts).toISOString(), id: m.id || m.messageId || null,
           type: String(m.messageType || m.type || ""), attachments: Array.isArray(m.attachments) ? m.attachments.length : 0,
@@ -637,7 +666,7 @@ export async function getUnansweredInbound(client, locationId, contactId, { perC
     if (/ACTIVITY/i.test(String(m.messageType || m.type || ""))) continue;
     const inbound = String(m.direction || "").toLowerCase() === "inbound";
     if (!inbound) break;
-    const body = String(m.body || "").trim();
+    const body = await messageWords(client, m);
     if (body) out.push(body);
   }
   return out.reverse();
