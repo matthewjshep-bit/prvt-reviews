@@ -8166,6 +8166,27 @@ test("our pass after their answer closes the house they raised, so the card goes
   assert.deepEqual(raisedHouses({ events }).map((h) => h.open), [false]);
 });
 
+// Bend, 2026-10-22 (Jamanna G., Allison K. R., Megan N., Ashley N.): the
+// agent's words raised the house, the bot passed on it in its next reply,
+// and the model filed that reply as investor_open. Only a deal_available
+// reply's pass closed the house, so all four cards sat in Tier 1.
+test("the bot's pass closes the house it raised whatever the reply was filed as, so the card goes back to Tier 2", async () => {
+  const { store } = await replyTo("More of a remodel to Refresh. Everything else is in working order. Seller situation is good.", {
+    intent: "investor_open",
+    reply: "Sounds like a refresh more than a true fixer, probably not the right fit for us on this one. Got anything else stale or distressed on your radar, on market or off?",
+    lines: [["outbound", OPENER], ["inbound", "It's a fixer."]],
+  });
+  await store.appendContactEvents("LOC", "c1", [{ type: "property_details", party: "agent", at: iso(3 * 3600000), address: ICE, data: { condition: "fixer, can be completely remodeled" } }]);
+  const events = await houseRecord(store);
+  assert.equal(events.find((e) => e.type === "house_closed")?.data?.why, "we passed on it");
+  assert.deepEqual(raisedHouses({ events }).map((h) => h.open), [false]);
+});
+
+test("a reply that asks about the house closes nothing", async () => {
+  const { store } = await replyTo("It's a fixer.", { intent: "investor_open", reply: "Good to know. What's the seller's situation?" });
+  assert.equal((await houseRecord(store)).filter((e) => e.type === "house_closed").length, 0);
+});
+
 // 1128 N Jackson Ave (2026-10-22): Matt quoted 975K by text, the agent said
 // "Ok ✅", and with no row of ours on the house the card sat in Tier 2.
 test("their yes on a house is filed for Tier 1, even with no row of ours on it", async () => {

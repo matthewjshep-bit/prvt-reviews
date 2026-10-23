@@ -123,6 +123,20 @@ test("our reply passing on the house reads as a pass; a reply still chasing one 
   ]) assert.equal(ourReplyPasses(said), false, said);
 });
 
+// Bend, 2026-10-22: four of the bot's passes on agents' houses read as
+// nothing, so the houses they'd raised held their cards in Tier 1.
+test("the bot's Bend passes read as passes: not the right fit, light for what I'm after, sounds turnkey", () => {
+  for (const said of [
+    "Sounds like a refresh more than a true fixer, probably not the right fit for us on this one. Got anything else stale or distressed on your radar, on market or off?",
+    "Sounds like this one's mostly done, just the kitchen left. That's a bit light for what I'm after. Got anything else distressed on your radar, on or off-market?",
+    "Sounds pretty turnkey then. If you've got other fixers on your radar, on or off-market, I'm all ears.",
+    "Yeah, this one's too turkey for us to do a flip, but let's keep in touch in case you have any others that are more distressed.",
+  ]) assert.equal(ourReplyPasses(said), true, said);
+  assert.equal(ourReplyPasses("Sounds like the right fit for us. What's the seller's situation?"), false);
+  assert.equal(ourReplyPasses("Sounds turnkey from the outside, but what's it actually need inside? What's the address?"), false, "still chasing");
+  assert.equal(ourReplyPasses("Thanks Lindsey, since it's mostly turnkey it's probably not our lane. Got anything else? What's the exact address on the Briarwood Ct one? I'll take a look."), false, "still chasing");
+});
+
 /* ---------- the call ask (2026-10-15) ---------- */
 
 import { FIXERS_CALL_ASKS, QUALIFY_ASKS_CALL, QUALIFY_PASSES_CALL, CALL_ASK_RX, FIXERS_ASK_RX, withCallAsk } from "./flip-read.js";
@@ -241,6 +255,14 @@ test("'not a fixer', new construction, a remodel already done, or a list of room
   for (const t of ["not a fixer", "not a fixer / turnkey", "new construction, not a fixer", "newer home", "Full remodel done in 2002 by owners",
     "kitchen and baths original", "very well kept. kitchen remodel to modernize, upstairs bath update", "fully updated. roof and siding needed in the next 2-3 years",
     "basement is unfinished with no planned floor plan, possible ADU potential", "mostly cosmetic, paint and flooring", "turnkey"]) {
+    assert.equal(saysRealWork(t), false, t);
+  }
+});
+
+// Allison K. R., 2026-10-22: "I wouldn't call it a fixer though" read as
+// her word that it was one, and held her card in Tier 1.
+test("'I wouldn't call it a fixer' is not their word that it's a flip", () => {
+  for (const t of ["I wouldn't call it a fixer though", "I would not call it a project", "Wouldn't really call it a flip"]) {
     assert.equal(saysRealWork(t), false, t);
   }
 });

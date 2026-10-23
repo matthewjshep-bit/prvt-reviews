@@ -5629,9 +5629,15 @@ async function runReply(job, ctx) {
     // (Matt, 2026-10-16). A millisecond after the mentions above, so the
     // close is the later word on a house named and passed in one text.
     const closedHouse = draft.qualify && ["pass", "closed"].includes(draft.qualify.stage) && draft.qualify.address ? draft.qualify.address : draft.propertyAddress;
+    // Our words pass on it whatever the reply was filed as (Bend, 2026-10-22:
+    // four passes filed investor_open closed nothing, and the houses the
+    // agents raised held their cards in Tier 1). Never on their yes to a
+    // number of ours; saysYes alone is too loose here ("Seller situation is
+    // good" reads as one), and a sent offer's row keeps its own stage anyway.
+    const ourWordsPass = !yesAfterPass && ourReplyPasses(draft.reply);
     const closedWhy = !closedHouse ? ""
       : gone ? "it sold or came off the market"
-      : replyPassed || (draft.qualify && ["pass", "closed"].includes(draft.qualify.stage)) ? "we passed on it"
+      : replyPassed || ourWordsPass || (draft.qualify && ["pass", "closed"].includes(draft.qualify.stage)) ? "we passed on it"
       : notOurKind ? "they said it's turnkey"
       : draft.intent === "rejection" ? "they passed"
       : "";

@@ -150,6 +150,26 @@ test("'these' passes every house of theirs nothing went out on; one of several u
   assert.equal((await store.getOffer(c.id)).status, "draft");
 });
 
+// Lindsey O., 2026-10-22: she gave the address of a house she'd called
+// "turnkey for the most part", Matt texted "this one's too turkey for us",
+// and with no row of ours on it the house she raised held her card in Tier 1.
+test("your 'too turnkey for us' on a house they raised with no row of ours closes it, so the card goes back to Tier 2", async () => {
+  const { raisedHouses, HOUSE_EVENT_TYPES } = await import("./shared/ghl-stages.js");
+  const house = "796 SE Briarwood Ct, Bend, OR 97702";
+  const raisedAt = new Date(Date.now() - 60000).toISOString();
+  await store.appendContactEvents(LOC, "lin", [{ type: "house_mentioned", party: "agent", at: raisedAt, address: house, data: { note: "" }, dedupeKey: "hm-lin" }]);
+  const events = () => store.listContactEvents(LOC, "lin", { types: HOUSE_EVENT_TYPES });
+  assert.deepEqual(raisedHouses({ events: await events() }).map((h) => h.open), [true]);
+  const r = await router.passOnOurNo({ locationId: LOC, client, contactId: "lin", at: new Date().toISOString(), via: "typed in GHL",
+    text: "Yeah, this one's too turkey for us to do a flip, but let's keep in touch in case you have any others that are more distressed." });
+  assert.deepEqual(r?.closed, [house]);
+  assert.deepEqual(raisedHouses({ events: await events() }).map((h) => h.open), [false]);
+  // A text about something else closes nothing.
+  await store.appendContactEvents(LOC, "kim", [{ type: "house_mentioned", party: "agent", at: raisedAt, address: house, data: { note: "" }, dedupeKey: "hm-kim" }]);
+  assert.equal(await router.passOnOurNo({ locationId: LOC, client, contactId: "kim", text: "Sounds good, send me the photos" }), null);
+  assert.deepEqual(raisedHouses({ events: await store.listContactEvents(LOC, "kim", { types: HOUSE_EVENT_TYPES }) }).map((h) => h.open), [true]);
+});
+
 test("the look back passes a house you already texted 'too rural' on, and a dry run changes nothing", async () => {
   const o = await draftRow("ash", "22520 State Route 706 E, Ashford, WA 98304", { createdAt: new Date(Date.now() - 3 * 86400000).toISOString() });
   const post = async (body) => (await fetch(`${B}/api/offers/passes/our-no`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();

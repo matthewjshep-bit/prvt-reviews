@@ -167,8 +167,9 @@ export function saysCosmeticOnly(text = "", { agentRehab = 0 } = {}) {
 // 60750 Breckenridge St, 2026-10-22). "Remodeled", or one that was done, isn't.
 const REMODEL_TO_DO_RX = /\b(?:full|complete|total|whole|major|gut)\s+(?:[\w-]+\s+){0,4}?(?:remodel|renovation|reno|rehab)\b(?!\s+(?:was\s+|were\s+)?(?:done|completed|finished))|\b(?:remodel|renovation|rehab)\s+(?:is\s+)?needed\b/i;
 const CANDIDATE_RX = /(?<!\b(?:wouldn|won|doesn|don|didn|shouldn)['’]?t\s|\b(?:not|never)\s)\bneeds?\s+(?:a\s+(?:lot|bunch|ton|fair\s+amount)\s+of\s+|lots\s+of\s+|some\s+|real\s+|major\s+|significant\s+)?(?:work|rehab|repairs|TLC|love)\b|\bproject\b|\bfixer(?:[\s-]upper)?\b|\bflip\s+(?:potential|opportunity|candidate)\b|\bgood\s+flip\b/i;
-// "Not a fixer", "new construction", "full remodel done in 2002": the opposite.
-const NOT_A_CANDIDATE_RX = /\b(?:not|isn'?t|never|no)\s+(?:really\s+)?(?:a\s+|an\s+)?(?:fixer|project|flip)\b|\bnew(?:er)?\s+(?:construction|build|home)\b|\b(?:remodel|renovation|rehab|update)s?\s+(?:was\s+|were\s+)?(?:done|completed|finished)\b/i;
+// "Not a fixer", "I wouldn't call it a fixer", "new construction", "full
+// remodel done in 2002": the opposite.
+const NOT_A_CANDIDATE_RX = /\b(?:not|isn'?t|never|no)\s+(?:really\s+)?(?:a\s+|an\s+)?(?:fixer|project|flip)\b|\b(?:wouldn'?t|would\s+not|don'?t|do\s+not)\s+(?:really\s+)?call\s+it\s+(?:a\s+|an\s+)?(?:fixer|project|flip)\b|\bnew(?:er)?\s+(?:construction|build|home)\b|\b(?:remodel|renovation|rehab|update)s?\s+(?:was\s+|were\s+)?(?:done|completed|finished)\b/i;
 
 /**
  * saysRealWork(text, { agentRehab }) → true when the agent's own words make
@@ -435,12 +436,17 @@ const OUR_PASS_RX = [
   /\bnot\s+(?:quite\s+)?enough\s+meat\b/i,
   /\bnot\s+(?:quite\s+|really\s+)?(?:the|a)\s+heavy\s+lift\b/i,
   /\bnot\s+(?:quite\s+)?(?:distressed|rough)\s+enough\b/i,
-  /\b(?:pretty|too|a\s+bit)\s+light\s+for\s+us\b/i,
+  /\b(?:pretty|too|a\s+bit|a\s+little)\s+light\s+for\s+(?:us\b|what\s+(?:i|we)(?:'m|\s+am|'re|\s+are)\s+(?:after|looking\s+for))/i,
   /\ba\s+light\s+one\s+for\s+us\b/i,
   /\blighter\s+than\s+(?:we|what\s+we)\s+(?:go|buy|usually)/i,
   /\b(?:is|are)n'?t\s+(?:really\s+|quite\s+)?(?:our\s+lane|a\s+fit\s+for\s+us|for\s+us|what\s+we(?:'re|\s+are)\s+after)\b/i,
   /\bnot\s+(?:really\s+|quite\s+)?(?:our\s+lane|a\s+fit\s+for\s+us|one\s+for\s+us|what\s+we(?:'re|\s+are)\s+(?:after|looking\s+for))\b/i,
-  /\b(?:too|more)\s+(?:turnkey|finished|nice)\s+(?:for\s+us|than\s+what\s+we)\b/i,
+  // "Turkey" is the phone's spelling of turnkey (Lindsey O., 2026-10-22).
+  /\b(?:too|more)\s+(?:turn[\s-]?key|turkey|finished|nice)\s+(?:for\s+us|than\s+what\s+we)\b/i,
+  // Bend, 2026-10-22: "probably not the right fit for us on this one",
+  // "Sounds pretty turnkey then."
+  /\bnot\s+(?:quite\s+|really\s+)?the\s+right\s+fit\b/i,
+  /\bsounds\s+(?:pretty\s+|fairly\s+|mostly\s+|too\s+)?(?:turn[\s-]?key|move[\s-]?in[\s-]?ready)\s*(?:then\b|for\s+us\b|[.!])/i,
   /\b(?:mostly|usually|really)\s+after\s+(?:places|houses|homes|stuff|properties)\s+(?:that\s+)?need(?:ing|s)?\s+(?:real\s+|more\s+)?work\b/i,
   /\boutside\s+the\s+box\s+for\s+us\b/i,
   // "We've actually moved on from this one" (2026-10-15) said it too.
@@ -449,7 +455,7 @@ const OUR_PASS_RX = [
 ];
 // The same reply still chasing a house — ours or another one ("pass on 184th,
 // keep me posted on that Mount Vernon one though"). Then it isn't a pass.
-const STILL_CHASING_RX = /\bworth\s+(?:once\s+it'?s\s+)?fixed\s+up\b|\bwhat'?s\s+the\s+(?:full\s+|street\s+|unit\s+)?address\b|\bunderwriting\b|\brun\s+(?:the\s+|those\s+)?numbers\b|\bgood\s+fit\s+for\s+us\b|\bmore\s+our\s+speed\b|\bsounds\s+like\s+our\s+lane\b|\bARV\b|\bas-is,?\s+(?:cash|quick)/i;
+const STILL_CHASING_RX = /\bworth\s+(?:once\s+it'?s\s+)?fixed\s+up\b|\bwhat'?s\s+the\s+(?:full\s+|street\s+|unit\s+|exact\s+)?address\b|\bi'?ll\s+take\s+a\s+look\b|\bunderwriting\b|\brun\s+(?:the\s+|those\s+)?numbers\b|\bgood\s+fit\s+for\s+us\b|\bmore\s+our\s+speed\b|\bsounds\s+like\s+our\s+lane\b|\bARV\b|\bas-is,?\s+(?:cash|quick)/i;
 
 /** ourReplyPasses(reply) → true when our reply turns the house down and isn't still chasing one. */
 export function ourReplyPasses(reply = "") {
