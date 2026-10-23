@@ -48,6 +48,7 @@ import { railStep, readOfferParam, splitKey, writeOfferParam } from "./offers-sp
 import { runPaneKey } from "./PaneParts.jsx";
 import { offerKey, siblingsKey } from "./OfferPanel.jsx";
 import { forget, forgetPrefix } from "./work-data.js";
+import { onOfferChanged } from "./offer-sync.js";
 import NextFollowUp, { groupNext, nextSortKey } from "./NextFollowUp.jsx";
 import { TABS, SUBS, OTHER, viewFor, defaultTab, tabOf, notSentAge, waitingSince } from "./offer-tabs.js";
 import PipelineStrip from "./PipelineStrip.jsx";
@@ -249,9 +250,21 @@ export default function OffersHistory({ onEdit, onNew = null, onDeal, settings: 
     try {
       const rows = await listOffers({ contactId, lean: true, next: true, limit: 50 });
       const byId = new Map((rows || []).map((o) => [o.id, o]));
-      setOffers((list) => (list || []).map((o) => (byId.has(o.id) ? { ...byId.get(o.id), lastActivity: o.lastActivity } : o)));
+      setOffers((list) => {
+        const had = new Set((list || []).map((o) => o.id));
+        // A row started in another window joins the table; a stray draft the
+        // editor folded into the house's row leaves it (offer-sync.js).
+        const added = [...byId.values()].filter((o) => !had.has(o.id));
+        const kept = (list || []).filter((o) => o.contactId !== contactId || byId.has(o.id) || o.status !== "draft");
+        return [...added, ...kept.map((o) => (byId.has(o.id) ? { ...byId.get(o.id), lastActivity: o.lastActivity } : o))];
+      });
     } catch { /* the column says "updates on reload" until then */ }
   }
+  // An offer saved anywhere — the editor in this window or another — lands in
+  // its agent's rows as it's typed.
+  const refreshRef = useRef(refreshContact);
+  refreshRef.current = refreshContact;
+  useEffect(() => onOfferChanged((msg) => { if (msg.contactId) refreshRef.current(msg.contactId); }), []);
 
   // One patcher for every copy of an offer we're holding. The table keeps the
   // lean row it was loaded with; whatever is open keeps the whole document.

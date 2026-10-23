@@ -17,7 +17,7 @@
 // the name and the Bot menu. The Record button went 2026-10-01: the name
 // opens the record, and so does the ⋯ menu.
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown, Ellipsis, ExternalLink, History, Loader2, MessageSquareWarning, Pencil } from "lucide-react";
 import { CARD_STAGES, CARD_STAGE_LABEL } from "@shared/ghl-stages.js";
 import { annotateCurrent } from "@shared/current-offer.js";
@@ -32,6 +32,7 @@ import CallButton from "./CallButton.jsx";
 import OfferEditorSheet from "./OfferEditorSheet.jsx";
 import { TEACH_EVENT, useRowFeedback } from "./RowFeedback.jsx";
 import { forget, useLoad } from "./work-data.js";
+import { onOfferChanged } from "./offer-sync.js";
 import { defaultOfferFor, teachRowId } from "./work-queue.js";
 import { feedbackItemOf } from "./RowOps.jsx";
 
@@ -71,6 +72,14 @@ export function usePane({ item, targets, bodies = null, feedback = null, onDone 
     // Re-read their list: one cached before Create doesn't have the new offer.
     if (gone) { forget(siblingsKey(targets.contactId)); theirs.reload(); }
   }, [gone]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // No offer on screen yet ("Start one"): an offer started for them in any
+  // window shows up here as it's saved (offer-sync.js).
+  const theirsRef = useRef(theirs);
+  theirsRef.current = theirs;
+  useEffect(() => onOfferChanged((msg) => {
+    if (msg.focus || !msg.contactId || msg.contactId !== targets.contactId) return;
+    forget(siblingsKey(targets.contactId)); theirsRef.current.reload();
+  }), [targets.contactId]);
   useEffect(() => {
     if ((offerId && !gone) || !theirs.data) return;
     const left = gone ? theirs.data.filter((o) => o.id !== offerId) : theirs.data;
@@ -317,7 +326,7 @@ export function PaneBody({ pane, item, targets, convo, settings = null, bodies =
       </div>
 
       {pane.editing && (
-        <OfferEditorSheet offer={pane.editing.offer} settings={settings} contactId={targets.contactId} onDeal={onDeal}
+        <OfferEditorSheet offer={pane.editing.offer} settings={settings} contactId={targets.contactId} address={item.address || ""} onDeal={onDeal}
           onClose={() => pane.setEditing(null)}
           onSaved={(o) => { side.reload(); onDone?.(); if (o?.id && o.id !== pane.editing?.offer?.id) pane.setOfferId(o.id); }}
           onOpenOffer={(o) => { pane.setEditing({ offer: o }); if (o?.id) pane.setOfferId(o.id); }} />

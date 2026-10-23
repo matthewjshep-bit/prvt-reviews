@@ -25,7 +25,7 @@
 //
 // Pure. The broker and the app both read it.
 
-import { parseUsAddress, addressKey } from "./us-address.js";
+import { parseUsAddress, addressKey, sameStreetLoose } from "./us-address.js";
 import { fmtMoney } from "./offer-calc.js";
 
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : 0; };
@@ -95,6 +95,32 @@ export function resolveHouse(rows = []) {
   // it are both history — so no deal is ever superseded; the offers beside
   // one are.
   return { current, superseded: live.filter((o) => o !== current && !o.deal), pinned };
+}
+
+/**
+ * rowOnHouse(rows, { address, exceptId }) → offer | null
+ *
+ * The one row a house keeps in the offer editor (2026-10-23): the editor
+ * saves as you type, so a "New offer" on a house that already has a row —
+ * a draft, an offer that went out, a held auto-underwrite — opens that row
+ * instead of starting a second. `rows` are one agent's offers (or the
+ * contactless drafts). Its current offer, else its newest draft.
+ *
+ * The house number + street, give or take the suffix: the GHL shorthand
+ * field writes "4410 N Mullen" for "4410 N Mullen St". A street with no
+ * house number names no house, and a deal is left to the Deals tab.
+ */
+export function rowOnHouse(rows = [], { address = "", exceptId = null } = {}) {
+  const key = houseKey(address);
+  if (!key || !parseUsAddress(address).houseNo || !/^\s*\d/.test(String(address))) return null;
+  const same = (rows || []).filter((o) => {
+    if (!o || o.id === exceptId || o.deal) return false;
+    const at = o.address || o.calc?.inputs?.address || o.draft?.inputs?.address || "";
+    return houseKey(at) === key || sameStreetLoose(at, address);
+  });
+  if (!same.length) return null;
+  const touched = (o) => ms(o.updatedAt) || ms(o.createdAt);
+  return resolveHouse(same).current || [...same].sort((a, b) => touched(b) - touched(a))[0];
 }
 
 /* ---------- across a book ---------- */
