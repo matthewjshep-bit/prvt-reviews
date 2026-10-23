@@ -27,7 +27,7 @@ import { addressKey } from "./shared/us-address.js";
 import { sameStreet } from "./shared/us-address.js";
 import { supersededIds } from "./shared/current-offer.js";
 import {
-  dueStep, exhausted, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor, HOT_MIN_HOURS,
+  dueStep, exhausted, repeatsSent, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor, HOT_MIN_HOURS,
   offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, CHECKIN_STATUSES, rungsCovered, nudgeTimes,
   OUTREACH_NUDGE_WINDOW_DAYS,
 } from "./shared/follow-up.js";
@@ -945,9 +945,14 @@ async function runSweep(job, ctx) {
       const covered = rungsCovered({ steps: c.ladder.steps, repeatEvery: c.ladder.repeatEvery, startedAt: c.startedAt, texts: nudgeTimes(agentDrafts, c.offerId), pace });
       if (covered.length) c.sentSteps = [...new Set([...c.sentSteps, ...covered])];
     }
+    // The offer nudge's weekly repeats run out (maxRepeats, 2026-10-22):
+    // after that many with nothing back, the ladder is over like any other.
+    const capped = c.kind === "offer_nudge" && Number(c.ladder.maxRepeats) > 0
+      && repeatsSent({ steps: c.ladder.steps, sentSteps: c.sentSteps }) >= Number(c.ladder.maxRepeats);
     // The second look has no ladder: its picker said it is due today
     // (shared/second-look.js), and the spacing below still holds it.
-    const d = c.kind === SECOND_LOOK_KIND ? { due: true, step: c.step, dayOffset: 0 } : dueStep({
+    const d = capped ? { due: false, reason: `asked ${c.ladder.maxRepeats} more times past the last day — the ladder is over` }
+      : c.kind === SECOND_LOOK_KIND ? { due: true, step: c.step, dayOffset: 0 } : dueStep({
       steps: c.ladder.steps, startedAt: c.startedAt, sentSteps: c.sentSteps,
       lastInboundAt, lastTouchAt, now, pace,
       // The hot push re-anchors on their reply instead of stopping on it,
@@ -962,7 +967,7 @@ async function runSweep(job, ctx) {
       // we actually said something into it. A ladder that only ever produced
       // drafts nobody sent proves nothing about the agent.
       if (c.kind === "offer_nudge" && c.ladder.onExhausted === "mark_no_response" && c.sentSteps.length
-          && exhausted({ steps: c.ladder.steps, sentSteps: c.sentSteps, startedAt: c.startedAt, now, repeatEvery: c.ladder.repeatEvery, pace })) {
+          && (capped || exhausted({ steps: c.ladder.steps, sentSteps: c.sentSteps, startedAt: c.startedAt, now, repeatEvery: c.ladder.repeatEvery, pace }))) {
         if (!job.dryRun && typeof deps.setOfferStatus === "function") {
           const r = await deps.setOfferStatus({
             contactId: c.contactId, addressHint: c.address, status: "no_response",

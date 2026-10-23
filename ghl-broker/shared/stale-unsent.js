@@ -122,3 +122,30 @@ export function staleUnsentPatch(offer, { why, now = Date.now() } = {}) {
     retired: { at: ts, by: STALE_UNSENT_BY, reason: why }, updatedAt: ts,
   };
 }
+
+/**
+ * oldDuplicateDrafts(offers, { now, days }) → [{ offerId, contactId, decidedId, decidedStatus, ageDays }]
+ *
+ * A draft more than `days` old on a house the same agent already has a
+ * decided row for (sent, passed, countered, a deal…) — the 2026-10-22 audit
+ * found 35 of 42 old drafts were these: a re-run or a second mention that
+ * never got cleared, sitting in the book as "waiting on you". The one-off
+ * scripts/old-duplicate-drafts.mjs lists them and, with --write, closes them.
+ */
+export const DUPLICATE_DRAFT_DAYS = 20;
+export function oldDuplicateDrafts(offers = [], { now = Date.now(), days = DUPLICATE_DRAFT_DAYS, sameHouse = null } = {}) {
+  const same = typeof sameHouse === "function" ? sameHouse : (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+  const byContact = new Map();
+  for (const o of offers || []) if (o?.contactId) (byContact.get(o.contactId) || byContact.set(o.contactId, []).get(o.contactId)).push(o);
+  const out = [];
+  for (const [contactId, rows] of byContact) {
+    for (const d of rows) {
+      if (effectiveStatus(d) !== "draft" || d.deal) continue;
+      const age = (now - (Date.parse(d.createdAt || "") || now)) / 86400000;
+      if (age < days) continue;
+      const decided = rows.find((o) => o.id !== d.id && effectiveStatus(o) !== "draft" && same(o.address, d.address));
+      if (decided) out.push({ offerId: d.id, contactId, decidedId: decided.id, decidedStatus: effectiveStatus(decided), ageDays: Math.floor(age) });
+    }
+  }
+  return out;
+}

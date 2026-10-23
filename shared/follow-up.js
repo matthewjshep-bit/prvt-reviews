@@ -79,8 +79,12 @@ export const DEFAULT_LADDERS = {
   outreach_nudge: { enabled: false, steps: [2], repeatEvery: 14, onExhausted: "stop" },
   // An offer is asked about until the agent answers — yes, no, or a number.
   // The date printed on it is not a deadline: agents answer lapsed offers all
-  // the time, so after day 14 the ladder keeps going, once a week.
-  offer_nudge:    { enabled: false, steps: [3, 7, 14], repeatEvery: 7, onExhausted: "mark_no_response" },
+  // the time, so after day 14 the ladder keeps going, once a week — four
+  // more times (2026-10-22 audit: the same "our N still stands" went out 3–6
+  // times, and an open offer kept its agent out of the "anything else on
+  // your desk?" check-in for as long as it ran). Then it's marked no
+  // response and the agent check-in asks for their next one.
+  offer_nudge:    { enabled: false, steps: [3, 7, 14], repeatEvery: 7, maxRepeats: 4, onExhausted: "mark_no_response" },
   // Every ten days, for four months.
   passed_checkin: { enabled: false, steps: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], repeatEvery: 0, onExhausted: "stop" },
   // Tight: an agreed price cools fast. It re-anchors on their every reply
@@ -666,6 +670,17 @@ export function offersToSendDeals(text = "") {
 export const MAX_LADDER_STEPS = 12;
 export const MAX_STEP_DAY = 120;
 export const MAX_REPEAT_DAYS = 60;
+// A ladder's repeats, at most (maxRepeats).
+export const MAX_REPEATS = 52;
+
+/**
+ * repeatsSent({ steps, sentSteps }) → how many repeat rungs (past the last
+ * configured day) have gone.
+ */
+export function repeatsSent({ steps = [], sentSteps = [] } = {}) {
+  const last = Math.max(0, ...normalizeSteps(steps));
+  return new Set((sentSteps || []).map((x) => Math.round(Number(x))).filter((x) => Number.isFinite(x) && x > last)).size;
+}
 
 // Every rung the ladder has reached by `now`, plus the next one: the
 // configured days, then — for a repeating ladder — one more every

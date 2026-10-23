@@ -13,7 +13,7 @@
 // own" set; what they share is the persona, the house rules, the examples and
 // the machinery underneath.
 
-import { DEFAULT_LADDERS, ON_EXHAUSTED, MAX_REPEAT_DAYS, PREVIOUS_OUTREACH_NUDGE_STEPS, kindsFor, normalizeSteps } from "./follow-up.js";
+import { DEFAULT_LADDERS, ON_EXHAUSTED, MAX_REPEAT_DAYS, MAX_REPEATS, PREVIOUS_OUTREACH_NUDGE_STEPS, kindsFor, normalizeSteps } from "./follow-up.js";
 import { BOOKING_DEFAULTS } from "./booking.js";
 import { CONTACT_CARD_DEFAULTS, normalizeContactCard } from "./contact-card.js";
 
@@ -1169,6 +1169,9 @@ function normalizeFollowUp(src = {}, party = "agent") {
       steps: steps.length ? steps : [...d.steps],
       // Days between asks once the configured days run out; 0 stops there.
       repeatEvery: oldDefault ? d.repeatEvery : int(one.repeatEvery, d.repeatEvery || 0, 0, MAX_REPEAT_DAYS),
+      // How many of those repeats before the ladder is over; 0 asks until
+      // they answer (offer_nudge: 4, 2026-10-22).
+      maxRepeats: int(one.maxRepeats, d.maxRepeats || 0, 0, MAX_REPEATS),
       onExhausted: oneOf(one.onExhausted, ON_EXHAUSTED, d.onExhausted),
     };
   }

@@ -599,10 +599,13 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   const lastPulseAt = latest(ledger.filter((e) => e.type === "agent_pulse_sent" && !voided.has(e.dedupeKey)).map((e) => e.at));
   const lastTouchAt = latest(events.filter((e) => OUR_TEXT_TYPES.has(e.type)).map((e) => e.at));
   // Their card in GHL's Tier 2 or Tier 3 (agent.ghlTier, read off the
-  // Acquisitions board): the check-in comes `everyDays` after the day they
-  // moved there, or after our last word, whichever is later.
+  // Acquisitions board). A card move isn't a word to them: it starts the
+  // clock only for an agent we've never texted and who never wrote. Anyone
+  // else is due `everyDays` after the last word either way (2026-10-22
+  // audit: 782 agents waited on "moved to Tier 2", 21 offer agents three
+  // weeks and more with no text, because the board moved under them).
   const card = tierCard(agent);
-  const since = latest([lastTouchAt, agent.lastInboundAt, lastPulseAt, card?.movedAt]);
+  const since = latest([lastTouchAt, agent.lastInboundAt, lastPulseAt, ...(lastTouchAt || agent.lastInboundAt || lastPulseAt ? [] : [card?.movedAt])]);
   // Check in less / more with them (shared/bot-hold.js): the three weeks and
   // the cold pings stretch or shrink; the quiet days after any text only grow.
   const { rung, floor } = paceScale(paceOf({ events }).factor);

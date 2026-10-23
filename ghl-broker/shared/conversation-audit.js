@@ -23,6 +23,7 @@ import { unansweredCheckIn, nextMorning, leadIsTheNet } from "./follow-up.js";
 import { NEVER_AUTO } from "./conversation-ai.js";
 import { botHold, holdLine } from "./bot-hold.js";
 import { callEventConnected } from "./talked-to.js";
+import { isAutoReply } from "./brush-offs.js";
 
 // What the audit may not do for someone you stopped the bot on
 // (shared/bot-hold.js): send, release, re-quote, queue a letter, or set a
@@ -550,12 +551,14 @@ export function quietHolds(drafts = [], { now = Date.now() } = {}) {
     const t = ms(d.createdAt);
     if (t == null || now - t < QUIET_CLOSE_HOURS * 3600000) continue;
     const reason = d.autoSend?.reason || (d.flags || [])[0] || "";
-    const quiet = QUIET_INTENTS.has(d.intent);
+    // An office's auto-reply ("one of our agents will get back with you",
+    // a front desk's menu) is nobody to answer either (2026-10-22).
+    const quiet = QUIET_INTENTS.has(d.intent) || isAutoReply(d.inbound);
     if (!quiet && !UNKNOWN_CONTACT_RX.test(reason)) continue;
     out.push({ id: `quiet_hold:${d.id}`, kind: "quiet_hold", severity: "fyi", contactId: d.contactId || null, contactName: d.contactName || "",
       party: d.party || "agent", address: d.propertyAddress || "", draftId: d.id, anchorAt: d.createdAt, dueAt: iso(now),
       action: { type: "close", draftId: d.id },
-      why: quiet ? `${String(d.intent).replace(/_/g, " ")} — nothing to answer` : "a number we don't know — nothing to answer", evidence: {} });
+      why: quiet ? `${QUIET_INTENTS.has(d.intent) ? String(d.intent).replace(/_/g, " ") : "an auto-reply"} — nothing to answer` : "a number we don't know — nothing to answer", evidence: {} });
   }
   return out;
 }

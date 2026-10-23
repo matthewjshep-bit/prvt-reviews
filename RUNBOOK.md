@@ -4896,6 +4896,31 @@ Private Integration. Pure plan: `shared/ghl-mirror.js`; writer:
 `ghl-broker/ghl-mirror.js`; `GET /api/dashboard/ghl/pipelines`,
 `POST /api/dashboard/ghl/mirror/run`.
 
+## Follow-up audit fixes: the clock and the book (2026-10-22)
+
+From the 2026-10-22 agent follow-up audit:
+- **A card move isn't a word.** The agent check-in's clock (`shared/agent-pulse.js`
+  `since`) is our last text, their last word, or our last check-in. A GHL card
+  move only starts it for an agent we've never texted and who never wrote.
+  782 agents had been held "moved to Tier 2 within 14 days". The first noon run
+  after this ships checks in with the ones that were overdue (expect a few
+  hundred, spread over the auto-send hours).
+- **The offer nudge ends.** `offer_nudge.maxRepeats` (default 4): four weekly asks
+  past day 14 with nothing back, then the offer is marked no response and the
+  agent check-in asks for their next one. 0 asks until they answer.
+- **Our "no" closes the draft.** The held sweep reads our pass with
+  `shared/promise-owed.js saysWePass` ("too far apart", "didn't work out for us",
+  "we dont do rural", "we are a no on…", "can't get there", "too thin for us"),
+  so a draft on a house we said no to retires that night.
+- **Office auto-replies** ("one of our agents will get back with you", "you've
+  reached the front desk of…") close themselves after a day like a thanks
+  (`quietHolds`).
+- **One skeleton per house.** A draft waiting on Matt's number stays "known" for
+  60 days under any spelling (`knownOfferFor`), so a re-mention doesn't make another.
+- **Old duplicates.** `node scripts/old-duplicate-drafts.mjs` (Render Shell) lists
+  drafts over 20 days old beside a decided row on the same house; `--write`
+  closes them as we passed, texting nobody.
+
 ## No Today: who owns what (2026-10-20)
 
 Matt, 2026-10-20: "Today really shouldn't just exist. These things should be

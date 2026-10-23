@@ -511,3 +511,21 @@ test("an agent texting about another house of theirs doesn't keep this one open 
   const alone = triage({ offer: old, siblings: [old], drafts: [inbound("Any update?", { propertyAddress: "", createdAt: ago(1) })] });
   assert.notEqual(alone.action, "retire");
 });
+
+// 2026-10-22 audit: drafts sat open after we'd said no in words the reply-side
+// reader didn't know — "didn't work out for us, we're too far apart", "we dont
+// do rural", "we are a no on manufactured", "we cant get there".
+test("a draft on a house we said no to in any of our usual words retires", () => {
+  for (const no of [
+    "Sorry, this one didn't work out for us, we're too far apart on the number. Appreciate you working it with me.",
+    "Thanks for sending over! Unfortunatley we dont do rural properties bc they are too hard to comp",
+    "sorry i talked to my partner and we are a no on manfuactured homes right now. Keep me in mind",
+    "we cant get there unfortunately but lets stay in touch for any other distressed properties",
+  ]) {
+    const t = triageHeldUnderwrite({ offer: welfare(), drafts: [said(no)], now: NOW });
+    assert.equal(t.action, "retire", no);
+    assert.match(t.reason, /we told them we're passing/, no);
+  }
+  const asking = triageHeldUnderwrite({ offer: welfare(), drafts: [said("Good to know. What's the seller hoping to get for it?")], now: NOW });
+  assert.notEqual(asking.status, "we_passed");
+});

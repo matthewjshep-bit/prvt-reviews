@@ -249,6 +249,41 @@ test("exhausting the ladder does not mark no response when no nudge ever actuall
   assert.equal(statuses.length, 0);
 });
 
+// 2026-10-22 audit: an offer nobody answered was asked about every week with
+// no end — "our N still stands" three to six times — and while it ran, its
+// agent never got the "anything else on your desk?" check-in. Four repeats
+// past day 14, then it's marked no response and the check-in has them.
+const CAPPED_SAVED = { aiApiKey: "k", conversationAi: configWith({ agent: { followUp: { enabled: true, ladders: {
+  offer_nudge: { enabled: true, steps: [3, 7, 14], repeatEvery: 7, maxRepeats: 4 } } } } }) };
+test("an offer asked about four more times past day 14 with nothing back is marked no response", async () => {
+  _resetJobs();
+  const sent = [3, 7, 14, 21, 28, 35, 42].map((step) => ({ kind: "offer_nudge", step }));
+  const store = fakeStore({ offers: [anOffer({ followUps: sent })] });
+  const { job, statuses, started } = spySweep(store, { now: T0 + 49.5 * DAY, opts: { saved: CAPPED_SAVED } });
+  await settle();
+  assert.equal(started.length, 0, JSON.stringify(job.results));
+  assert.equal(statuses.length, 1, JSON.stringify(job.results));
+  assert.equal(statuses[0].status, "no_response");
+  assert.match(statuses[0].note, /7 follow-ups/);
+});
+
+test("three repeats in, the fourth still goes", async () => {
+  _resetJobs();
+  const sent = [3, 7, 14, 21, 28, 35].map((step) => ({ kind: "offer_nudge", step }));
+  const store = fakeStore({ offers: [anOffer({ followUps: sent })] });
+  const { job, statuses, started } = spySweep(store, { now: T0 + 42.5 * DAY, opts: { saved: CAPPED_SAVED } });
+  await settle();
+  assert.equal(statuses.length, 0);
+  assert.deepEqual(started.map((s) => s.kind), ["offer_nudge"], JSON.stringify(job.results));
+});
+
+test("an offer ladder saved without a cap keeps the code's four; 0 asks until they answer", async () => {
+  const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
+  const L = (one) => normalizeConversationAi({ parties: { agent: { followUp: { ladders: { offer_nudge: one } } } } }).parties.agent.followUp.ladders.offer_nudge;
+  assert.equal(L({ steps: [3, 7, 14], repeatEvery: 7 }).maxRepeats, 4);
+  assert.equal(L({ steps: [3, 7, 14], repeatEvery: 7, maxRepeats: 0 }).maxRepeats, 0);
+});
+
 /* ---------- the investor ladders ---------- */
 
 // Buck, 3511 NE 153rd St (2026-10-05): never answered the deal, and got the
