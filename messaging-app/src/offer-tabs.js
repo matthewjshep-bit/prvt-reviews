@@ -1,8 +1,10 @@
 // offer-tabs.js — the Offers page's tabs: the three stages of an offer as Matt
 // drew them (2026-10-13), shared/offer-stage.js:
 //
-//   Draft      priced, our number hasn't gone out yet. Oldest first: send these.
-//   Sent       our number is out — the written offer, or a number we texted
+//   Draft      the written offer hasn't gone out yet — priced, held, or a
+//              number we only texted. Oldest first: send these.
+//   Sent       the written offer went out (2026-10-23: a texted number alone
+//              no longer counts here; the GHL card still treats it as Offer Out)
 //   Responded  Passed · Countered · 🔥 Hot · Accepted, one chip each
 //
 // Every current row is in exactly one stage. A row a newer one on the same
@@ -22,13 +24,13 @@ const current = (o) => !o.supersededBy;
 
 export const TABS = OFFER_STAGES.map((s) => ({
   key: s.key, label: s.label, title: s.title,
-  test: (o) => current(o) && offerStage(o).stage === s.key,
+  test: (o) => current(o) && offerStage(o, { texted: false }).stage === s.key,
 }));
 
 // Under Responded, one chip per answer.
 export const SUBS = RESPONDED_SUBS.map((s) => ({
   key: s.key, label: s.label, title: s.title, parent: "responded",
-  test: (o) => current(o) && offerStage(o).sub === s.key,
+  test: (o) => current(o) && offerStage(o, { texted: false }).sub === s.key,
 }));
 
 export const OTHER = [

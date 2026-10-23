@@ -43,9 +43,14 @@ const ms = (t) => { const v = typeof t === "number" ? t : Date.parse(t || ""); r
 export const floatedAt = (o) => o?.floatSentAt || o?.floatedAt || null;
 
 /**
- * offerStage(o) → { stage: "draft"|"sent"|"responded", sub: null|"passed"|"countered"|"hot"|"accepted", why }
+ * offerStage(o, { texted }) → { stage: "draft"|"sent"|"responded", sub: null|"passed"|"countered"|"hot"|"accepted", why }
+ *
+ *   texted  does a number we only texted count as sent? Yes for the GHL
+ *           card (Offer Out) and the dashboard; the Offers page's tabs pass
+ *           false — there Sent is the written offer going out, and a float
+ *           waits in Draft for its letter (Matt, 2026-10-23).
  */
-export function offerStage(o) {
+export function offerStage(o, { texted = true } = {}) {
   if (!o) return { stage: "draft", sub: null, why: "" };
   const status = effectiveStatus(o);
   if (o.deal) {
@@ -57,8 +62,8 @@ export function offerStage(o) {
   if (status !== "draft" && isHot(o)) return { stage: "responded", sub: "hot", why: "hot" };
   if (status === "countered") return { stage: "responded", sub: "countered", why: "they countered" };
   if (status === "sent") return { stage: "sent", sub: null, why: "the written offer went" };
-  if (status === "new" && floatedAt(o)) return { stage: "sent", sub: null, why: "our number went by text" };
-  return { stage: "draft", sub: null, why: status === "draft" ? "held for a look" : "priced, not out yet" };
+  if (status === "new" && floatedAt(o) && texted) return { stage: "sent", sub: null, why: "our number went by text" };
+  return { stage: "draft", sub: null, why: status === "draft" ? "held for a look" : floatedAt(o) ? "our number went by text; the letter hasn't" : "priced, not out yet" };
 }
 
 /** A live deal, by stage — the card's Contract stage. */
