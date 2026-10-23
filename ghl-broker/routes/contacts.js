@@ -21,7 +21,7 @@ import { store } from "../store.js";
 import { getContactRecord, learnFacts, forgetFact, recordEvent, projectToGhl, reconcileFromGhl, needsGhlPull } from "../contact-record.js";
 import { startContactBackfill, getBackfillJob, publicBackfillJob, cancelBackfill } from "../contact-backfill.js";
 import { FACT_KEYS } from "../shared/contact-record.js";
-import { searchConversations, listConversationMessages, getContact, getConversation } from "../ghl.js";
+import { searchConversations, listConversationMessages, getContact, getConversation, messageWords } from "../ghl.js";
 import { syncContactGmail, contactEmails } from "../gmail-sync.js";
 import { sendHandReply } from "../hand-reply.js";
 import { contactTimeline } from "../contact-timeline.js";
@@ -133,7 +133,9 @@ export default function createContactsRouter({ resolveLocation, onHandText = nul
           const channel = channelOf(m);
           if (!channel) continue;
           let body = String(m.body || "").trim();
-          if (channel === "email") body = stripHtml(body);
+          // An email thread's body is its first email, often ours: their reply is inside it.
+          if (channel === "email" && String(m.direction || "").toLowerCase() === "inbound") body = await messageWords(client, m).catch(() => stripHtml(body));
+          else if (channel === "email") body = stripHtml(body);
           if (!body && channel !== "call" && channel !== "voicemail") continue;
           messages.push({
             id: m.id || m.messageId || null, at: m.dateAdded || null, channel,
