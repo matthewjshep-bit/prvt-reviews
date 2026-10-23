@@ -1216,7 +1216,8 @@ function openingFor(outbound) {
     // Our same number, never more, and a call — never "did it sell?".
     case "second_look":
       return `${START} A while back ${o.offerStatus === "no_response" ? "we put a number to this agent on" : o.offerStatus === "countered" ? "this agent countered our number on" : "this agent and their seller passed on our number on"} ` +
-        `${o.street || o.address}, and it went quiet. The seller's number wasn't far from ours. ` +
+        `${o.street || o.address}, and it went quiet. ` +
+        (o.offMarket ? "The listing just came off the market without selling: you may say you saw it come off. " : "The seller's number wasn't far from ours. ") +
         `In one or two short lines, under ${o.maxChars || 240} characters: name ${o.street || "the street"}, say that if the seller is still open to it ` +
         `we can still do ${o.oursK} — our same number, said exactly that way — and ask whether it's worth a quick call. ` +
         `Do NOT name any other number: not theirs, not a range, not a new one, and never hint that we'd go higher. ` +

@@ -45,9 +45,16 @@ import { localHour } from "./promise-sweep.js";
 import { followUpRows } from "./follow-up-sweep.js";
 import { waitingReason } from "./outbox-guard.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
+import { numberPresented, numbersPass, SECOND_LOOK_STATUSES, SECOND_LOOK_KIND } from "./shared/second-look.js";
 
 const DAY_MS = 86400000;
 export const WATCH_DAYS = 90;
+// With followUp.lostHouse on, the watch looks back further: a listing that
+// expires does it months after we priced it.
+export const LOST_WATCH_DAYS = 180;
+// Off the market without selling: expired, withdrawn, cancelled. Zillow says
+// OFF_MARKET; pending, sold and for-rent are not this.
+export const unsoldOffMarket = (status) => /off[_\s-]?market|expired|withdrawn|cancel/i.test(String(status || "")) && !/sold|pending|contingent|rent/i.test(String(status || ""));
 export const WATCH_STATUSES = ["sent", "countered", "passed", "no_response"];
 export const MIN_DROP_DOLLARS = 5000;
 export const MIN_DROP_PCT = 0.02;
@@ -111,8 +118,12 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
   // the houses it was meant to watch were the ones it never read.
   // A number floated by text and never sent is watched too, with the switch.
   const watchFloated = Boolean(config.parties?.agent?.followUp?.watchFloated);
-  const statuses = watchFloated ? [...WATCH_STATUSES, "new"] : WATCH_STATUSES;
-  const rows = await followUpRows(store, locationId, { statuses, since: iso(now - WATCH_DAYS * DAY_MS) });
+  // A house we passed on over the numbers is watched too with lostHouse on:
+  // only for coming off the market, never for a price-drop text.
+  const lostOn = Boolean(config.parties?.agent?.followUp?.lostHouse);
+  const days = lostOn ? LOST_WATCH_DAYS : WATCH_DAYS;
+  const statuses = [...WATCH_STATUSES, ...(watchFloated ? ["new"] : []), ...(lostOn ? ["we_passed"] : [])];
+  const rows = await followUpRows(store, locationId, { statuses, since: iso(now - days * DAY_MS) });
   // One watch per house, on the agent's current offer there (shared/
   // current-offer.js): the price-drop text quotes its number, and a row the
   // house moved past would quote one we've left. Across agents, the row whose
@@ -127,8 +138,9 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
     // carries only floatSentAt, not a realm check's own stamp (2026-10-16),
     // and that stamp alone is a float queued, not one sent (2026-10-21).
     if (effectiveStatus(o) === "new" && !o.floatSentAt) continue;
+    if (effectiveStatus(o) === "we_passed" && !numbersPass(o)) continue;
     const t = Date.parse(o.statusAt || o.createdAt || "");
-    if (!(t >= now - WATCH_DAYS * DAY_MS)) continue;
+    if (!(t >= now - days * DAY_MS)) continue;
     const k = addressKey(o.address);
     const prev = byHouse.get(k);
     if (!prev || pricedAt(o) > pricedAt(prev)) byHouse.set(k, o);
@@ -190,9 +202,18 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
           address: full.address, offerId: full.id, source: "sweep", dedupeKey: `listing_off_market:${full.id}`,
           data: { status: hit.status || null, lastListPrice: from || null } });
         out.results.push({ offerId: full.id, address: full.address, status: "off_market", listing: hit.status });
+        // Came off without selling, on a house our number was in front of:
+        // one second look, our same number (followUp.lostHouse).
+        if (lostOn && unsoldOffMarket(hit.status) && SECOND_LOOK_STATUSES.has(effectiveStatus(full)) && numberPresented(full)) {
+          const r = await reopenLostHouse({ client, locationId, saved, store, sendsEnabled, deps, start, offer: full, status: hit.status, now });
+          out.reopened = (out.reopened || 0) + (r.started ? 1 : 0);
+          out.results.push({ offerId: full.id, address: full.address, status: "lost_house", ...(r.started ? { jobId: r.jobId } : { reason: r.reason }) });
+        }
       }
       continue;
     }
+    // A house we passed on is watched for leaving the market only.
+    if (effectiveStatus(full) === "we_passed") continue;
     const drop = evaluateDrop({ from, to });
     if (!drop.dropped) {
       // The price came back up past the drop we owed: nothing to say now.
@@ -230,6 +251,27 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
     else { out.texted++; out.results.push({ offerId: full.id, address: full.address, status: "dropped", from, to, jobId: r?.job?.id || null }); }
   }
   return out;
+}
+
+/**
+ * reopenLostHouse({ ..., offer, status, now }) → { started, jobId } | { started: false, reason }
+ *
+ * One second look when a house we priced comes off the market unsold:
+ * claimed per offer for good, and nothing while their text or your draft
+ * waits in the outbox. Its own switch is the say-so, as the second look's is.
+ */
+export async function reopenLostHouse({ client, locationId, saved = {}, store, sendsEnabled = false, deps = {}, start, offer, status = "", now = Date.now() }) {
+  const waiting = await waitingReason({ store, locationId, contactId: offer.contactId });
+  if (waiting) return { started: false, reason: waiting };
+  const claim = await recordEvent({ store, locationId, contactId: offer.contactId, party: "agent", type: "lost_house_reopened", at: iso(now),
+    address: offer.address, offerId: offer.id, source: "sweep", dedupeKey: `lost_house_reopened:${offer.id}`, data: { listing: status || null } });
+  if (!claim.inserted) return { started: false, reason: "already reopened once" };
+  const r = await start({
+    client, locationId, saved, store, contactId: offer.contactId, kind: SECOND_LOOK_KIND, offer,
+    subject: { address: offer.address, step: 1, offMarket: true }, sendsEnabled,
+    deps: { ...deps, releaseHeld: true, releaseReason: "the second look on a house that came off the market (followUp.lostHouse)" },
+  }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
+  return r?.skipped ? { started: false, reason: r.skipped } : { started: true, jobId: r?.job?.id || null };
 }
 
 /**

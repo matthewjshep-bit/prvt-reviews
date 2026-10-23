@@ -695,3 +695,13 @@ test("the bot is told it is Matt, and no rule talks about Matt as someone else",
     .replace(/YOU ARE Matt[^\n]*?"let me call you on that"\./, "");
   assert.doesNotMatch(rules, /\bMatt (?:will|is|calls|sends|meets|looked|decide)|only Matt|and Matt\b|to Matt\b|with Matt\b/);
 });
+
+// 2026-10-22: a house we priced came off the market unsold (followUp.lostHouse).
+test("the second look on a house that came off the market says so, and still never asks if it sold", () => {
+  const base = { kind: "second_look", street: "12 Oak St", oursK: "410K", offerStatus: "passed", step: 1, maxChars: 240 };
+  const off = outboundOpening({ ...base, offMarket: true });
+  assert.match(off, /came off the market without selling/);
+  assert.match(off, /Do NOT ask whether it sold/);
+  assert.doesNotMatch(off, /wasn't far from ours/);
+  assert.match(outboundOpening(base), /wasn't far from ours/);
+});
