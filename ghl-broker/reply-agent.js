@@ -928,13 +928,39 @@ export function callsThemOurName(reply, { selfName = "", contactName = "", signO
   return greeting.test(text) || vocative.test(text);
 }
 
+// The bot is Matt; it never hands off to him. "I'll flag it to Matt in case
+// he's got questions before he signs tonight" (Gig Harbor, 2026-10-21) went
+// to an agent who'd talked to Matt by phone twice that day, and she asked who
+// she'd been texting and wanted his driver's license before going on. Our
+// first name is ours to say only as who we are ("it's Matt", "Matt here"), as
+// a sign-off, or inside the saved answer to "are you a bot?".
+export function talksAboutUsAsSomeoneElse(reply, { selfName = "", contactName = "", signOff = "", botAnswer = "" } = {}) {
+  const ours = firstNameOf(selfName);
+  if (ours.length < 2 || !reply) return false;
+  if (ours.toLowerCase() === firstNameOf(contactName).toLowerCase()) return false;
+  const n = escapeRe(ours);
+  let text = String(reply).trim();
+  const so = String(signOff || "").trim();
+  if (so && text.toLowerCase().endsWith(so.toLowerCase())) text = text.slice(0, -so.length).trim();
+  const bot = String(botAnswer || "").trim();
+  if (bot) text = text.split(bot).join(" ");
+  text = text
+    .replace(/\S+@\S+|https?:\/\/\S+|\b[\w-]+\.(?:com|net|org)\b\S*/gi, " ")
+    // An email's signature block: our name alone on its line, surname and all.
+    .replace(new RegExp(`^[ \\t]*[-–—]?[ \\t]*${n}(?:[ \\t]+[A-Z][\\w.'-]*)*[ \\t]*$`, "gm"), " ")
+    .replace(new RegExp(`(?:[\\n.!?,]|\\s[-–—])\\s*(?:thanks|thank you|talk soon|best|cheers)?[,]?\\s*${n}[.!]?$`, "i"), "")
+    .replace(new RegExp(`\\b(?:it'?s|it is|this is|i'?m|i am|my name is|name'?s)\\s+${n}\\b`, "gi"), " ")
+    .replace(new RegExp(`\\b${n}\\s+here\\b`, "gi"), " ");
+  return new RegExp(`\\b${n}\\b`, "i").test(text) && !callsThemOurName(reply, { selfName, contactName, signOff });
+}
+
 // How sure is sure enough. "medium" lets a draft the model was fairly sure
 // of go on its own; "high" waits for a person unless it was certain.
 const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], hiddenAmounts = [], ranges = [], inboundMessage = "", channel = "sms", style = null,
-  minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", ourAmount = 0,
+  minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", botAnswer = "", ourAmount = 0,
   vacantOk = false, carrierCheck = false, houseWords = "", writeUpOk = true, theirValue = 0, ourValue = 0,
 }) {
   const flags = [];
@@ -945,6 +971,10 @@ export function evaluateReplyGates({
   if (blocked.length) flags.push(`carriers block texts like this — it says ${blocked.map((w) => `"${w}"`).join(", ")}`);
   if (callsThemOurName(draft.reply, { selfName, contactName, signOff })) {
     flags.push(`the draft calls them "${firstNameOf(selfName)}", which is our name, not theirs`);
+  }
+  if (talksAboutUsAsSomeoneElse(draft.reply, { selfName, contactName, signOff, botAnswer })) {
+    const me = firstNameOf(selfName);
+    flags.push(`the draft talks about ${me} as someone else — you are ${me}; say it in the first person ("let me call you on that"), never "I'll flag it to ${me}"`);
   }
   const never = NEVER_AUTO[party] || NEVER_AUTO.agent;
   const maxSms = Number(style?.maxSmsChars) > 0 ? Number(style.maxSmsChars) : RA_MAX_SMS_CHARS;
@@ -3642,7 +3672,7 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   // houses we've had with them. A fresh listing of theirs is left out of
   // the list (shared/agent-pulse.js pastHouses).
   const pastHouses = kind === "agent_pulse" ? (Array.isArray(subject?.pastHouses) ? subject.pastHouses : []).filter(Boolean) : [];
-  const gate = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
+  const gate = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
@@ -4795,7 +4825,7 @@ async function runReply(job, ctx) {
   const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft: d, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
     hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: inboundText, channel: job.channel, style: config.style,
-    selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
+    selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
     ourAmount: ourNumberFor(context.offers?.numbers, d.propertyAddress),
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
@@ -6363,7 +6393,7 @@ export async function previewConversation({
   if (SILENT_INTENTS.has(draft.intent)) return optOutView(draft.confidence, draft.summary || "the model read an opt-out");
   const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [], hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: message, channel, style: config.style,
-    selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff,
+    selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
     ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
     writeUpOk: writeUpOkFor(context.offers?.numbers, draft.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),

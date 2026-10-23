@@ -275,7 +275,7 @@ test("an underwrite held on something other than comps doesn't tell the agent th
 // including what the seller would take.
 test("the ask on a house Matt is pricing himself says so, and asks what the seller would take", () => {
   const p = outboundOpening({ kind: "take_ask", address: "8811 NE 15th Pl", heldReason: "ready for your comps", needValue: true, needWork: true, needTake: true });
-  assert.match(p, /Matt is running the numbers himself/);
+  assert.match(p, /you're running the numbers yourself/i);
   assert.match(p, /what the seller would take/);
   assert.doesNotMatch(p, /stuck|ready for your comps/);
 });
@@ -680,4 +680,18 @@ test("a text that closes a house ends on asking for the next one, not keep me in
     assert.match(t, /good flip\?/, subject.why);
     assert.doesNotMatch(t, /keep us in mind/, subject.why);
   }
+});
+
+// Gig Harbor, 2026-10-21: "I'll flag it to Matt in case he's got questions"
+// went to an agent who'd talked to Matt twice that day. The prompt told the
+// bot "our underwritten number and Matt decide that, never you".
+test("the bot is told it is Matt, and no rule talks about Matt as someone else", async () => {
+  const { AGENT_GOAL_RULE, PROMISE_RULE } = await import("./shared/conversation-ai.js");
+  const { accessLines } = await import("./shared/deal-access.js");
+  const p = buildSystemPrompt({ config: normalizeConversationAi({ persona: { name: "Matt" } }), party: "agent" });
+  assert.match(p, /YOU ARE Matt, the person they have been texting/);
+  const rules = [p, AGENT_GOAL_RULE, PROMISE_RULE, ...accessLines({ method: "lockbox" }), ...accessLines({ method: "matt" }),
+    outboundOpening({ kind: "pass_note", houses: [{ address: "1 Elm St" }] })].join("\n")
+    .replace(/YOU ARE Matt[^\n]*?"let me call you on that"\./, "");
+  assert.doesNotMatch(rules, /\bMatt (?:will|is|calls|sends|meets|looked|decide)|only Matt|and Matt\b|to Matt\b|with Matt\b/);
 });

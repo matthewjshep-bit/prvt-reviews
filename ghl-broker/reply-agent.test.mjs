@@ -3,7 +3,7 @@ import { calculateOffers } from "./shared/offer-calc.js";
 import assert from "node:assert/strict";
 import { normalizeDispoAutopilot } from "./dispo-autopilot.js";
 import {
-  evaluateReplyGates, callsThemOurName, moneyIn, summarizeOffers, countToday, startReply,
+  evaluateReplyGates, callsThemOurName, talksAboutUsAsSomeoneElse, moneyIn, summarizeOffers, countToday, startReply,
   sendReplyDraft, dismissReplyDraft, listJobs, _resetJobs, houseWordsFor,
   AUTO_SENDABLE_INTENTS, RA_DEFAULT_DAILY_CAP, RA_MAX_SMS_CHARS,
 } from "./reply-agent.js";
@@ -38,6 +38,27 @@ test("calling the agent by OUR name is flagged — Nate got 'Thanks, Matt.' (132
   assert.equal(callsThemOurName("Talk soon, Matt S.", { ...who, signOff: "Matt S." }), false, "the persona sign-off is ours");
   assert.equal(callsThemOurName("Thanks, Matt.", { selfName: "Matt", contactName: "Matt Jones" }), false, "they share it");
   assert.equal(gate({}, who).ok, true);
+});
+
+test("the bot never talks about Matt as someone else — 'I'll flag it to Matt' made an agent ask who she'd been texting all day (Gig Harbor, 2026-10-21)", () => {
+  const who = { selfName: "Matt", contactName: "Mandy" };
+  const g = gate({ reply: "Appreciate the offer, I'll flag it to Matt in case he's got questions before he signs tonight." }, who);
+  assert.equal(g.ok, false);
+  assert.match(g.flags.join(";"), /talks about Matt as someone else/);
+  for (const r of ["Let me grab Matt and have him call you.", "Matt will get back to you on the number.", "Matt's out today, back tomorrow.",
+    "I'll check with Matt.", "I'll pass it to matt tonight.", "Easier to go over terms on a quick call with Matt."]) {
+    assert.equal(talksAboutUsAsSomeoneElse(r, who), true, r);
+  }
+  for (const r of ["It's Matt, just been slammed tonight.", "This is Matt with Shep Flips.", "I'm Matt, I fix up houses locally.",
+    "Hey, Matt here — saw your listing.", "Email's matt@shepflips.com, send them over.", "Buyer is Matthew Shepherd and/or assigns.",
+    "Hey Doug, checking back on 18408 SE 44th St. Thanks, Matt", "Talk soon\nMatt", "Let me give you a quick call on that."]) {
+    assert.equal(talksAboutUsAsSomeoneElse(r, who), false, r);
+  }
+  // The answer the page saves for "are you a bot?" is said exactly as saved.
+  const botAnswer = "I'm an assistant on Matt's team keeping up with texts! Happy to help either way.";
+  assert.equal(talksAboutUsAsSomeoneElse(botAnswer, { ...who, botAnswer }), false);
+  assert.equal(talksAboutUsAsSomeoneElse("I'll flag it to Matt.", { selfName: "Matt", contactName: "Matt Jones" }), false, "they share it");
+  assert.equal(talksAboutUsAsSomeoneElse("I'll flag it to Matt.", { selfName: "" }), false, "no persona, no name to check");
 });
 
 /* ---------- the money guard ---------- */

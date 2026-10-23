@@ -478,7 +478,7 @@ test("a house waiting on Matt's number asks what the seller would take once, nev
 
 test("the ask for the seller's number says Matt is pricing it himself, not that our numbers are stuck", async () => {
   const { heldInPlainWords } = await import("./held-underwrites.js");
-  assert.match(heldInPlainWords(DRAFT_ONLY), /Matt is running the numbers himself/);
+  assert.match(heldInPlainWords(DRAFT_ONLY), /you're running the numbers yourself/i);
 });
 
 // 2026-10-22 audit: a third of the sweep's closes since 10/11 ended on our

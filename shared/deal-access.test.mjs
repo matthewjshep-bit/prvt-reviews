@@ -14,7 +14,7 @@ test("a lived-in house means no drive-bys and a set time; the private note never
   assert.match(lines, /Never suggest they drive by, knock/);
   assert.match(lines, /by appointment only with 24 hours' notice/);
   assert.doesNotMatch(lines, /4471|Maria/);
-  assert.match(accessLines({ method: "lockbox" }).join(" "), /never give or promise a code yourself/);
+  assert.match(accessLines({ method: "lockbox" }).join(" "), /never give or promise a code in a text/);
 });
 
 test("an older deal's walkthrough access pick carries over, and an edit only changes what it sends", () => {
