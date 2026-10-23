@@ -20,12 +20,14 @@ const ROWS = [
 ];
 const ids = (key) => ROWS.filter(ALL_VIEWS.find((t) => t.key === key).test).map((o) => o.id);
 
-test("Draft holds the held drafts and priced offers whose number hasn't gone out", () => {
-  expect(ids("draft")).toEqual(["unsent", "draft"]);
+// Matt, 2026-10-23: a number the bot texted showed under Sent with a "Not
+// sent" pill. Sent is the written offer going out, nothing less.
+test("Draft holds held drafts, priced offers, and numbers we only texted — the letter hasn't gone", () => {
+  expect(ids("draft")).toEqual(["unsent", "floated", "draft"]);
 });
 
-test("Sent holds the written offers and the numbers we texted", () => {
-  expect(ids("sent")).toEqual(["floated", "sent"]);
+test("Sent holds only the offers whose written letter went out", () => {
+  expect(ids("sent")).toEqual(["sent"]);
 });
 
 test("Responded holds every answer, one chip each, and no reply after the follow-ups counts as passed", () => {
