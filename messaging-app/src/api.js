@@ -344,6 +344,8 @@ export const setAutonomy = (mode) =>
   post(`/api/offers/automations/autonomy`, { mode }, "PUT");
 export const listPipelines = () => fetch(`${API_BASE}/api/dashboard/ghl/pipelines?${locq()}`).then(j);
 export const runGhlMirror = () => post(`/api/dashboard/ghl/mirror/run`, {});
+// Slack (ghl-broker/slack-notify.js): a hello in every channel that's set.
+export const testSlack = () => post(`/api/dashboard/slack/test`, {});
 export const listCalendars = () =>
   fetch(`${API_BASE}/api/offers/automations/conversation/calendars?${locq()}`).then(j);
 export const listWorkflows = () =>

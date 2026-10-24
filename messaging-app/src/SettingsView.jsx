@@ -8,11 +8,12 @@ import {
   CONTRACT_TOKENS, DEFAULT_CONTRACT_CLAUSES,
   ASSIGNMENT_TOKENS, DEFAULT_ASSIGNMENT_CLAUSES,
 } from "@shared/contract-template.js";
-import { getBuyerPulse, runBuyerPulse, sampleBuyerPulse, getAgentPulse, sampleAgentPulse, sampleFirstTexts, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, migratePipeline, regenerateCompToken, runGhlMirror, saveSettings, uploadPsaExhibit } from "./api.js";
+import { getBuyerPulse, runBuyerPulse, sampleBuyerPulse, getAgentPulse, sampleAgentPulse, sampleFirstTexts, leaveTierDrips, getLeaveTierDrips, getCompBookmarklet, getUnderwrites, listPipelines, listWorkflows, migratePipeline, regenerateCompToken, runGhlMirror, saveSettings, testSlack, uploadPsaExhibit } from "./api.js";
 import { ACQ_LANES, ACQ_TERMINAL, DISPO_STAGES, TIER_KEYS } from "@shared/ghl-mirror.js";
 import { LINE_TARGET_DEFAULTS, normalizeLineTargets } from "@shared/line.js";
 import { normalizeDesk } from "@shared/call-list.js";
 import { workflowIdFrom } from "@shared/ghl-calls.js";
+import { normalizeSlack, slackChannelId, slackUserId, SLACK_STREAMS, SLACK_STREAM_LABEL, SLACK_CHANNEL_HINT } from "@shared/slack-notify.js";
 import { UNDERWRITE_CHECKS_DEFAULTS, normalizeUnderwriteChecks } from "@shared/underwrite-checks.js";
 import { normalizeTierOne } from "@shared/tier-one.js";
 import { normalizeGhlStages } from "@shared/ghl-stages.js";
@@ -575,6 +576,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   const setPsa = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, psa: { ...f.psa, [k]: v } })); };
   const [pipelines, setPipelines] = useState(null); // null | { list, scopeMissing, error, lastRun }
   const [mirrorRun, setMirrorRun] = useState(null);
+  const [slackTest, setSlackTest] = useState(null);
   useEffect(() => {
     if (mode !== "offers") return;
     listPipelines().then((r) => setPipelines({ list: r.pipelines || [], scopeMissing: Boolean(r.scopeMissing), error: r.error || "", lastRun: r.lastRun || null }))
@@ -609,6 +611,11 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   // The few things only Matt can do, pinged through GHL (saved.desk.ghlPings, 2026-10-20).
   const ghlPings = { ...normalizeDesk(form.desk).ghlPings, workflowId: form.desk?.ghlPings?.workflowId ?? "" };
   const setGhlPings = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, desk: { ...(f.desk || {}), ghlPings: { ...(f.desk?.ghlPings || {}), [k]: v } } })); };
+  // Slack (saved.slack, 2026-10-24). Channel ids and the member id are kept as
+  // typed (a pasted channel link works) and read down on the broker.
+  const slack = normalizeSlack(form.slack);
+  const setSlack = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, slack: { ...(f.slack || {}), [k]: v } })); };
+  const setSlackIn = (group, s) => (v) => { setSaved(false); setForm((f) => ({ ...f, slack: { ...(f.slack || {}), [group]: { ...(f.slack?.[group] || {}), [s]: v } } })); };
   const setTouch = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), touchBudget: { ...(f.dispoAutopilot?.touchBudget || {}), [k]: v } } })); };
   const setPulse = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, dispoAutopilot: { ...(f.dispoAutopilot || {}), pulse: { ...(f.dispoAutopilot?.pulse || {}), [k]: v } } })); };
   const setOutreachAuto = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, outreachAutopilot: { ...(f.outreachAutopilot || {}), [k]: v } })); };
@@ -790,6 +797,63 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           : ghlPings.enabled && !ghlPings.workflowId
           ? <p className="mt-1 text-xs text-amber-700">Nothing pings until the workflow link is here.</p>
           : null}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="slack-settings">
+        <h2 className="mb-1 text-sm font-bold">Slack</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          What the app is doing, in your Slack: a house that reaches Tier 1 (one thread per house — its underwrite, offer,
+          counter and contract), every underwrite as it runs, what only you can do, buyers on a deal, the machine's errors,
+          and a morning and evening read. A message has the house, the numbers, a first name and a one-line summary — never
+          a phone, an email or what anyone wrote. Nothing is texted to anyone.
+        </p>
+        <label className="mb-3 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={slack.enabled} onChange={(e) => setSlack("enabled")(e.target.checked)} />
+          <span className="font-semibold">Send to Slack</span>
+        </label>
+        <Secret label="Bot token" value={form.slackBotToken || ""} onChange={set("slackBotToken")} placeholder="xoxb-..." secret={form.__secrets?.slackBotToken} />
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {SLACK_STREAMS.map((s) => {
+            const typed = form.slack?.channels?.[s] ?? "";
+            return (
+              <div key={s} className="rounded-lg border border-slate-200 p-2">
+                <label className="mb-2 flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={slack.streams[s]} onChange={(e) => setSlackIn("streams", s)(e.target.checked)} />
+                  <span className="font-semibold">{SLACK_STREAM_LABEL[s]}</span>
+                  <span className="text-xs text-slate-400">{SLACK_CHANNEL_HINT[s]}</span>
+                </label>
+                <Txt label="Channel ID" value={typed} onChange={setSlackIn("channels", s)} placeholder="C0…" />
+                {typed && !slackChannelId(typed)
+                  ? <p className="mt-1 text-xs text-red-600">That doesn't look like a channel ID — it starts with C.</p>
+                  : slack.streams[s] && !typed
+                  ? <p className="mt-1 text-xs text-amber-700">Nothing goes here until the channel ID is set.</p>
+                  : null}
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-3">
+          <Txt label="Your Slack member ID (for @-mentions in Needs Matt)" value={form.slack?.mattUserId ?? ""} onChange={setSlack("mattUserId")} placeholder="U0…" />
+          {form.slack?.mattUserId && !slackUserId(form.slack.mattUserId) && <p className="mt-1 text-xs text-red-600">That doesn't look like a member ID — it starts with U.</p>}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+          <button type="button" className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+            disabled={slackTest === "running"} title="Save first: this uses the saved token and channels"
+            onClick={async () => { setSlackTest("running"); try { setSlackTest(await testSlack()); } catch (e) { setSlackTest({ error: e.message }); } }}>
+            Send test
+          </button>
+          {slackTest && slackTest !== "running" && (
+            <span className={slackTest.error || slackTest.results?.some((r) => !r.ok) ? "text-red-700" : "text-emerald-700"}>
+              {slackTest.error || (slackTest.results?.length
+                ? slackTest.results.map((r) => `${SLACK_STREAM_LABEL[r.stream]} ${r.ok ? "✓" : `✗ ${r.error}`}`).join(" · ")
+                : "no channels set yet")}
+            </span>
+          )}
+        </div>
+        <p className="mt-1 text-xs text-slate-500">
+          Save, then Send test: each channel that's set gets a hello. Invite the bot to each channel first (/invite @Shep Flips).
+          The morning read goes at {slack.morningHour}:00 and the evening one at {slack.eveningHour}:00 Pacific.
+        </p>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="buyer-view-settings">

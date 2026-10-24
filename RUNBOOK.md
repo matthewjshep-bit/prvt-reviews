@@ -5284,6 +5284,115 @@ holds and renders the cache's buy box record-first.
 under `contactProfiles` and `contactEvents`, never pruned — fine for dev,
 not a production shape.
 
+## Slack (2026-10-24)
+
+Matt, 2026-10-24: one place he (and later a VA on acquisitions or
+dispositions) can watch the app work in real time. **The app is the source,
+not GHL.** GHL's stages are a projection of the offers, so only the app can
+say why: the held reasons, their number against ours, which house. No GHL
+workflow posts to Slack.
+
+**What a message carries** (Matt's call): the house, our number and theirs,
+the stage, the person's **first name**, a one-line summary of what they said
+(scrubbed of phones and emails, about 140 characters), and links to the app
+and GHL. It never carries a phone, an email, a full name, or the words of a
+text.
+
+### Channels
+
+| Stream (`saved.slack.streams`) | Channel | What posts |
+|---|---|---|
+| needsMatt | `#needs-matt` | What lands in GHL's **Needs Matt** stage (needs-matt.js's list): a yes to approve, paper to sign, a house to price. Once each, with an @-mention. With `ghlStages` off, the GHL ping rows (`pingReasons`) instead |
+| acquisitions | `#acquisitions` | **One thread per house.** The top post is a Tier 1 house (`tier1_added`, a card moved to Tier 1) or a house an agent named. Replies cover the offer sent or revised, the counter, in the realm, hot, agreed, contract, the underwrite result, and passed. Counter, in the realm, hot, agreed and contract also show in the channel. An underwrite result or a pass only replies to a thread that's already there |
+| underwrites | `#underwrites` | **One message per run**, edited as it goes: running, then priced (number, ARV, rehab), held (the reasons), or failed. Also an address that left the queue without running |
+| dispositions | `#dispositions` | **One thread per deal**: the new deal (contract, fee, closing), each wave of buyer texts as one line ("sent to 25 buyers"), a buyer looking, passing or committed, the package opened, a walkthrough booked, the stage. Closed and fell through also show in the channel |
+| machine | `#machine` | A new kind of app error (once per fingerprint), and a scheduled job whose last run failed (once per run). Mute it |
+| daily | `#daily` | `morningHour` (7am): the last 24 hours in numbers. `eveningHour` (7pm): the evening digest (`shared/digest.js`) by street, plus the machine's failures |
+
+### How it runs
+
+**Code.** The rules live in `shared/slack-notify.js`: routing, thread keys,
+and the words. `ghl-broker/slack-notify.js` reads, claims and posts.
+
+**Event sweep.** It runs on its own 60-second loop (`broker.js`) and reads
+`contact_events` from the last 6 hours.
+
+**Everything else.** Needs Matt, the machine posts and the two daily posts run
+on the 15-minute tick (TICK_JOBS area `slack`). They come after `needs-matt`,
+so each tick reads that tick's list. The daily posts use `daily-gate.js`.
+
+**Claims.** Each post's claim and each thread's `ts` are kept on job cursors:
+
+- `slack`: events and threads;
+- `slackPings`: needs-Matt and machine posts;
+- `slackMorning` and `slackEvening`: the two daily posts.
+
+The claims are not on the contact's timeline, so a notice doesn't clutter
+anyone's history. Each claim is written **before** the post.
+
+**Failures.** A post Slack refuses (for example `not_in_channel`) keeps its
+claim and becomes an `app_errors` row in area `slack`. A rate limit gives the
+claim back and stops the run. A run makes at most 30 posts.
+
+**First switch-on.** The first run after Slack is switched on only marks the
+start (`since`), so no history is posted. Open Needs Matt items do post.
+
+**Underwrite events.** Underwrites leave events now:
+`underwrite_started`, `underwrite_held`, `underwrite_done` and
+`underwrite_failed`, written by `auto-underwrite.js recordRun` with
+`data.jobId`. Runs are in memory, so these are what the timeline and Slack
+read. Dry runs and form fills leave none.
+
+**Hot.** Hot is read from the deal-history note "hot — close to a contract"
+or "flagged hot — close to a contract".
+
+### Setup
+
+1. **Workspace and channels.**
+   - Create a workspace at slack.com/get-started.
+   - Create `#needs-matt`, `#acquisitions`, `#underwrites`, `#dispositions`,
+     `#machine` and `#daily`.
+2. **The Slack app.**
+   - At api.slack.com/apps, choose **Create New App → From a manifest** and
+     pick the workspace.
+   - Paste the manifest below.
+   - Choose **Install to Workspace**.
+   - Copy the **Bot User OAuth Token** (`xoxb-…`).
+
+   ```yaml
+   display_information:
+     name: Shep Flips Bot
+   features:
+     bot_user:
+       display_name: Shep Flips
+       always_online: true
+   oauth_config:
+     scopes:
+       bot:
+         - chat:write
+   ```
+3. **Invite the bot.** In each channel, run `/invite @Shep Flips`.
+4. **Collect the ids.**
+   - A channel's id is at the bottom of the channel's name → About (`C0…`). A
+     pasted channel link works too.
+   - Your member id is under your profile → ⋯ → Copy member ID (`U0…`).
+5. **Settings → Slack.**
+   - Paste the token, the channel ids and your member id.
+   - Switch on the streams you want, then **Send to Slack**.
+   - **Save**, then **Send test**: each channel that's set gets a hello and the
+     result shows ✓/✗ per channel.
+
+### Checking it
+
+- `GET /api/dashboard/slack` shows:
+  - the setting;
+  - whether the token is set;
+  - each cursor's last run (counts and kinds, no words);
+  - how many threads are remembered.
+- `POST /api/dashboard/slack/run` with `{ what: "events" | "pings" }` is a dry
+  run by default: it lists what would post. With `{ what: "morning" | "evening" }`
+  it posts that read now.
+
 ## Companion window (2026-10-16)
 
 The companion is a narrow app window that sits beside GoHighLevel and shows whoever is open there. When Matt opens a contact, or that contact's conversation, in GHL, the companion switches to that person. Nothing has to be clicked in the app.

@@ -1166,6 +1166,16 @@ const contactName = (c) =>
 // Move the contact from whatever uw-* tag it wears to this one. Without the
 // removal a contact ends up permanently tagged uw-running and every GHL filter
 // built on these tags quietly stops meaning anything.
+// What's left of a run on the contact's record (2026-10-24): it started, held,
+// priced the house, or threw. Jobs live in memory; these are what the
+// timeline and Slack read. Never for a dry run or a form fill — nobody is
+// waiting on either. One per run per kind; never throws.
+async function recordRun(job, { store, locationId } = {}, type, data = {}) {
+  if (!job?.contactId || job.dryRun || job.fill) return;
+  await recordEvent({ store, locationId, contactId: job.contactId, party: "agent", type, address: job.address || "", offerId: job.offerId || null,
+    source: "offer", ref: job.id, dedupeKey: `${type}:${job.id}`, data: { jobId: job.id, ...data } }).catch(() => {});
+}
+
 async function setTag(client, contactId, tag, warnings) {
   try {
     const stale = ALL_UW_TAGS.filter((t) => t !== tag);
@@ -1352,6 +1362,7 @@ export async function startUnderwrite({
         job.error = String(e?.message || e).slice(0, 300);
         job.finishedAt = new Date().toISOString();
         await recordError(store, { locationId, area: "underwrite", err: e, context: { contactId, jobId: job.id, stage: job.stage } });
+        await recordRun(job, { store, locationId }, "underwrite_failed", { error: job.error.slice(0, 160), stage: job.stage || "" });
         // A timeout or a provider refusal still leaves work behind — the
         // resolved address, the listing's facts, maybe the comps. Save it as a
         // draft so "Review" opens the form on what loaded rather than nothing.
@@ -1667,6 +1678,7 @@ async function runUnderwrite(job, ctx) {
   // From here on the contact wears a uw-* tag, so any exit — including a crash
   // — owes it a terminal one. See the catch in startUnderwrite.
   job.announced = true;
+  await recordRun(job, ctx, "underwrite_started", { origin: job.origin || "" });
 
   // Only when this run knows better than the field does. Re-writing the same
   // value would churn the contact's audit trail for nothing.
@@ -2521,6 +2533,7 @@ async function runUnderwrite(job, ctx) {
 
   await setTag(client, job.contactId, UW_TAGS.done, warnings);
   await note(client, job.contactId, doneNote(job, rescued || agentValue ? { ...(arv || {}), arv: arvForOffer } : arv, repairs), warnings);
+  await recordRun(job, ctx, "underwrite_done", { cashAmount: job.cashAmount, arv: arvForOffer ?? job.arv ?? null, repairs: job.repairs ?? null, ...(job.held?.length ? { rough: job.held.map(String).slice(0, 3) } : {}) });
 
   // Numbers are back: the Conversation AI may float them to the agent as a
   // soft number before the formal offer goes. Wired by the route; a failure
@@ -2704,6 +2717,7 @@ async function finishHeld(job, ctx, { extraction, held, partial, cleared = false
     await setTag(client, job.contactId, UW_TAGS.review, warnings);
     await note(client, job.contactId, heldNote(job, held), warnings);
   }
+  await recordRun(job, ctx, "underwrite_held", { held: (held || []).map(String).slice(0, 6), arv: job.arv, repairs: job.repairs });
 
   // Held, and an agent may be waiting on the number this run was for. The
   // route decides what to do about that (promise-driver.js: ask for their

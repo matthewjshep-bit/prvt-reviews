@@ -39,6 +39,7 @@ import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
 import { maybeRunGhlCalls } from "./ghl-calls.js";
 import { maybeRunGhlPings } from "./ghl-pings.js";
+import { maybeRunSlack, maybeRunSlackEvents } from "./slack-notify.js";
 import { maybeRunNeedsMatt } from "./needs-matt.js";
 import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
@@ -412,6 +413,14 @@ const TICK_JOBS = [
   { area: "needs-matt", run: async ({ client, locationId, saved }) => {
     await maybeRunNeedsMatt({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
   } },
+  // Slack (slack-notify.js, 2026-10-24): what just landed in Needs Matt
+  // (after needs-matt above, so it's this tick's list) and the machine's
+  // errors every tick; the morning numbers and the evening loose ends once a
+  // day. The events go on their own minute loop below. Off until saved.slack
+  // is on with a bot token; never texts anyone.
+  { area: "slack", run: async ({ client, locationId, saved }) => {
+    await maybeRunSlack({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
+  } },
 ];
 
 setInterval(async () => {
@@ -428,6 +437,20 @@ setInterval(async () => {
     }
   }
 }, 15 * 60 * 1000).unref();
+
+// Slack's events (slack-notify.js): a Tier 1 house, a counter, an underwrite
+// running, a buyer committing — within a minute, not a tick. One settings
+// read per location, nothing more while Slack is off.
+setInterval(async () => {
+  for (const locationId of sweepLocations()) {
+    try {
+      const saved = await store.getOfferSettings(locationId);
+      await maybeRunSlackEvents({ locationId, saved: saved || {}, store });
+    } catch (e) {
+      console.error(`slack events failed for ${locationId}: ${e.message}`);
+    }
+  }
+}, 60 * 1000).unref();
 
 // Conversation AI auto-sends. An approved reply is scheduled a few human
 // minutes out (reply-agent.js → conversation-scheduler.js); this sends the
