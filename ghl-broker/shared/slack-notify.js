@@ -284,6 +284,7 @@ function headline(kind, ev, ctx) {
 export function renderEvent(route, ev = {}, ctx = {}) {
   const kind = route?.kind || "";
   const d = ev?.data || {};
+  if (kind === "tier1") return renderTier1(ev, ctx);
   const head = `${ICON[kind] || ":small_blue_diamond:"} ${headline(kind, ev, ctx)}`;
   const lines = [head];
   if (kind === "held" || kind === "uw_held") {
@@ -300,6 +301,30 @@ export function renderEvent(route, ev = {}, ctx = {}) {
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   return { text: clip(head.replace(/\*/g, ""), 150), blocks };
 }
+/**
+ * renderTier1(ev, ctx) → the post that opens a house in #acquisitions, one
+ * thing a line (Matt, 2026-10-25: "itemized out … and then the links
+ * underneath"): the house, the agent, the full address, the description.
+ * The description is the summary of what they said, else why the house is
+ * Tier 1; scrubbed like every summary.
+ */
+export function renderTier1(ev = {}, ctx = {}) {
+  const full = String(ev?.address || ctx.address || "").replace(/\s+/g, " ").trim();
+  const desc = clip(scrubForSlack(ctx.summary || ev?.data?.why || ""), 300);
+  const head = `${ICON.tier1} *Tier 1 flagged: ${esc(street(full) || "a house")}*`;
+  const lines = [
+    head,
+    `*Agent:* ${esc(ctx.firstName) || "—"}`,
+    `*Address:* ${esc(full) || "—"}`,
+    `*Description:* ${esc(desc) || "—"}`,
+  ];
+  const link = slackLinks({ appUrl: ctx.appUrl, locationId: ctx.locationId, contactId: ev?.contactId });
+  const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
+  if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
+  const who = ctx.firstName ? ` (${ctx.firstName})` : "";
+  return { text: clip(`Tier 1 flagged: ${street(full) || "a house"}${who}`, 150), blocks };
+}
+
 // Where the one-line summary of what they said earns its place.
 const SUMMARY_KINDS = new Set(["tier1", "countered", "realm_yes", "hot", "agreed", "committed", "evaluating", "buyer_passed", "promoted"]);
 
