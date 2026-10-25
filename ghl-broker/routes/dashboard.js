@@ -903,7 +903,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         const since = req.body?.since ? String(req.body.since) : null;
         if (since && !Number.isFinite(Date.parse(since))) return res.status(400).json({ error: "since: an ISO time" });
         const backfill = since ? { since, max: dryRun ? 500 : 40, paceMs: 1100, refresh: req.body?.refresh === true } : {};
-        return res.json({ ok: true, ...(await runSlackEventsNow({ store, locationId, saved, dryRun, ...backfill })) });
+        return res.json({ ok: true, ...(await runSlackEventsNow({ store, locationId, client, saved, dryRun, ...backfill })) });
       }
       if (what === "pings") return res.json({ ok: true, ...(await runSlackPings({ store, locationId, saved, deps: { pipelineFor, client }, dryRun })) });
       if (what === "morning" || what === "evening") {
