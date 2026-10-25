@@ -77,8 +77,8 @@ test("a house's counter replies quietly in its Tier 1 thread; a replay posts not
   await ev(LOC, "ann", "ghl_stage_moved", 1, { address: HOUSE, data: { from: "Tier 2", to: "Tier 1", why: "a house they raised" } });
   await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
   const top = s.of("chat.postMessage")[0];
-  assert.match(said(top), /Tier 1 flagged: 1010 Bellevue Way NE\*\n\*Agent:\* Ann\n/);
-  assert.doesNotMatch(said(top), /Lee/);
+  // Matt, 2026-10-25: "the agent's full name not just Ann".
+  assert.match(said(top), /Tier 1 flagged: 1010 Bellevue Way NE\*\n\*Agent:\* Ann Lee\n/);
 
   await ev(LOC, "ann", "offer_countered", 3, { address: HOUSE, data: { amount: 410000 } });
   await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(4) });
@@ -305,4 +305,28 @@ test("a refresh re-renders the Tier 1 posts already in Slack, in place, once per
   assert.equal(upd[0].body.ts, "170000001.0001");
   assert.equal(upd[0].body.channel, CH.acquisitions);
   assert.equal(s.of("chat.postMessage").length, 1, "nothing posted again");
+});
+
+test("a Tier 1 agent the record has no name for is named from GHL", async () => {
+  const LOC = "loc-name-from-ghl";
+  const s = slack();
+  const client = { calls: [], call: async (p) => { client.calls.push(p); return { contact: { id: "kim", firstName: "Kim", lastName: "Ortega" } }; } };
+  await runSlackEvents({ store, locationId: LOC, client, saved: ON, now: min(0) });
+  await ev(LOC, "kim", "tier1_added", 1, { address: HOUSE });
+  await runSlackEvents({ store, locationId: LOC, client, saved: ON, now: min(2) });
+  assert.match(said(s.of("chat.postMessage")[0]), /\*Agent:\* Kim Ortega\n/);
+  assert.deepEqual(client.calls, ["/contacts/kim"]);
+});
+
+test("with the GHL link set, Open in app opens the app inside GHL; Contact in GHL opens the person", async () => {
+  const LOC = "loc-app-link";
+  const s = slack();
+  const GHL_APP = "https://app.gohighlevel.com/v2/location/LOC1/custom-menu-link/7f7c8c1e-f2d4-4734-9848-136d7078252a";
+  const saved = { ...ON, slack: { ...ON.slack, appLink: GHL_APP } };
+  await runSlackEvents({ store, locationId: LOC, saved, now: min(0) });
+  await ev(LOC, "lou", "tier1_added", 1, { address: HOUSE });
+  await runSlackEvents({ store, locationId: LOC, saved, now: min(2) });
+  const t = said(s.of("chat.postMessage")[0]);
+  assert.ok(t.includes(`<${GHL_APP}|Open in app>`), t);
+  assert.match(t, /contacts\/detail\/lou\|Contact in GHL>/);
 });

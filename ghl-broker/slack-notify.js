@@ -33,10 +33,12 @@ import { pingClaimKey } from "./shared/ghl-pings.js";
 import { buildDigest } from "./shared/digest.js";
 import { lineJobs, errorsByArea } from "./shared/line.js";
 import { addressKey } from "./shared/us-address.js";
+import { getContact } from "./ghl.js";
+import { contactName } from "./contact-record.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
 import { NEEDS_MATT_CURSOR } from "./shared/needs-matt.js";
 import {
-  normalizeSlack, slackOn, streamOn, routeEvent, threadKeyFor, foldBlasts, renderEvent, renderBlasts, renderPing, renderNeed,
+  fullName, normalizeSlack, slackOn, streamOn, routeEvent, threadKeyFor, foldBlasts, renderEvent, renderBlasts, renderPing, renderNeed,
   renderError, renderJobFailed, renderMorning, renderEvening, morningCounts, slackClaimKey, firstName,
   SLACK_EVENT_TYPES, MORNING_EVENT_TYPES, SLACK_STREAMS, SLACK_STREAM_LABEL,
 } from "./shared/slack-notify.js";
@@ -99,13 +101,14 @@ const prune = (map = {}, keepMs, now, at = (v) => v) => Object.fromEntries(Objec
 
 /* ---------- who and which house, for the words ---------- */
 
-// The contact's first name, the house's live offer, the latest summary. One
-// read per contact per run; any of it may be missing.
-function contextReader({ store, locationId, cfg, now }) {
+// The contact's name, the house's live offer, the latest summary. One read
+// per contact per run; any of it may be missing. A name the record doesn't
+// have is read from GHL, when there's a client to read it with.
+function contextReader({ store, locationId, cfg, now, client = null }) {
   const cache = new Map();
   return async (ev) => {
     const id = ev?.contactId;
-    if (!id) return { appUrl: cfg.appUrl, locationId };
+    if (!id) return { appUrl: cfg.appUrl, appLink: cfg.appLink, locationId };
     if (!cache.has(id)) {
       cache.set(id, (async () => {
         const [profile, offers, summaries] = await Promise.all([
@@ -115,7 +118,9 @@ function contextReader({ store, locationId, cfg, now }) {
         ]);
         const latest = (summaries || []).filter((e) => e?.data?.summary).sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
         const fresh = latest && now - (ms(latest.at) ?? 0) < SUMMARY_MAX_AGE_MS ? latest.data.summary : "";
-        return { name: firstName(profile?.name), offers: offers || [], summary: fresh };
+        let name = profile?.name || "";
+        if (!name && client) name = contactName(await getContact(client, id).catch(() => null));
+        return { name: firstName(name), full: fullName(name), offers: offers || [], summary: fresh };
       })());
     }
     const c = await cache.get(id);
@@ -125,7 +130,7 @@ function contextReader({ store, locationId, cfg, now }) {
       || (!ev.address ? c.offers.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] : null)
       || null;
     return {
-      appUrl: cfg.appUrl, locationId, firstName: c.name, summary: c.summary,
+      appUrl: cfg.appUrl, appLink: cfg.appLink, locationId, firstName: c.name, fullName: c.full, summary: c.summary,
       address: ev.address || offer?.address || "", offerId: ev.offerId || offer?.id || null,
       ours: Number(offer?.cashAmount) > 0 ? Number(offer.cashAmount) : null,
     };
@@ -142,7 +147,7 @@ function contextReader({ store, locationId, cfg, now }) {
  * post what happened before that; the claims keep it from posting anything
  * twice. `max` posts a run, `paceMs` between posts (Slack's rate limit).
  */
-export async function runSlackEvents({ store = defaultStore, locationId, saved = {}, now = Date.now(), dryRun = false, since = null, max = MAX_PER_RUN, paceMs = 0, refresh = false } = {}) {
+export async function runSlackEvents({ store = defaultStore, locationId, client = null, saved = {}, now = Date.now(), dryRun = false, since = null, max = MAX_PER_RUN, paceMs = 0, refresh = false } = {}) {
   const cfg = normalizeSlack(saved?.slack);
   const token = String(saved?.slackBotToken || "").trim();
   const out = { dryRun, startedAt: iso(now), finishedAt: null, read: 0, posted: [], skipped: 0, failed: [], error: null };
@@ -188,7 +193,7 @@ export async function runSlackEvents({ store = defaultStore, locationId, saved =
     items.sort((a, b) => String(a.ev.at).localeCompare(String(b.ev.at)));
   }
 
-  const ctxFor = contextReader({ store, locationId, cfg, now });
+  const ctxFor = contextReader({ store, locationId, cfg, now, client });
   const refreshed = new Set();
   for (const it of items) {
     if (out.posted.length >= max) { out.skipped++; out.more = true; continue; }
@@ -434,10 +439,10 @@ export async function runSlackEventsNow({ store = defaultStore, locationId, now 
   return r || { busy: true, error: "the minute loop is posting: try again in a minute" };
 }
 
-/** maybeRunSlackEvents({ locationId, saved, store, now }) → the run, or null — the minute loop. */
-export async function maybeRunSlackEvents({ locationId, saved = {}, store = defaultStore, now = Date.now() }) {
+/** maybeRunSlackEvents({ locationId, client, saved, store, now }) → the run, or null — the minute loop. */
+export async function maybeRunSlackEvents({ locationId, client = null, saved = {}, store = defaultStore, now = Date.now() }) {
   if (!slackOn(normalizeSlack(saved?.slack), saved?.slackBotToken)) return null;
-  return gated({ store, locationId, cursorName: CURSOR_NAME, now, run: () => runSlackEvents({ store, locationId, saved, now }) });
+  return gated({ store, locationId, cursorName: CURSOR_NAME, now, run: () => runSlackEvents({ store, locationId, client, saved, now }) });
 }
 
 /**

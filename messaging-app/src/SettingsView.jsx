@@ -833,6 +833,15 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           })}
         </div>
         <div className="mt-3">
+          <Txt label="Open in app link (the app inside GHL)" value={form.slack?.appLink ?? ""} onChange={setSlack("appLink")}
+            placeholder="https://app.gohighlevel.com/v2/location/…/custom-menu-link/…" />
+          <p className="mt-1 text-xs text-slate-500">
+            Paste the GHL link of the Offers page (open it in GHL, copy the address bar). "Open in app" in Slack goes there;
+            "Contact in GHL" opens the person. Blank: Open in app goes to the app on its own.
+          </p>
+          {form.slack?.appLink && !/^https:\/\/\S+$/.test(form.slack.appLink.trim()) && <p className="mt-1 text-xs text-red-600">That doesn't look like a link — it starts with https://.</p>}
+        </div>
+        <div className="mt-3">
           <Txt label="Your Slack member ID (for @-mentions in Needs Matt)" value={form.slack?.mattUserId ?? ""} onChange={setSlack("mattUserId")} placeholder="U0…" />
           {form.slack?.mattUserId && !slackUserId(form.slack.mattUserId) && <p className="mt-1 text-xs text-red-600">That doesn't look like a member ID — it starts with U.</p>}
         </div>

@@ -445,7 +445,8 @@ setInterval(async () => {
   for (const locationId of sweepLocations()) {
     try {
       const saved = await store.getOfferSettings(locationId);
-      await maybeRunSlackEvents({ locationId, saved: saved || {}, store });
+      const token = getTokenFor(locationId);
+      await maybeRunSlackEvents({ locationId, client: token ? makeClient(token) : null, saved: saved || {}, store });
     } catch (e) {
       console.error(`slack events failed for ${locationId}: ${e.message}`);
     }

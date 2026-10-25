@@ -40,6 +40,10 @@ export const SLACK_DEFAULTS = Object.freeze({
   streams: Object.freeze(blankStreams(false)),
   mattUserId: "",
   appUrl: "https://app.shepflips.com",
+  // Where "Open in app" goes when set: the app inside GHL, a custom menu link
+  // (Matt, 2026-10-25). GHL can't hand a contact through to the page it
+  // frames, so it opens the page; "Contact in GHL" opens the person.
+  appLink: "",
   morningHour: 7,
   eveningHour: 19,
 });
@@ -57,7 +61,7 @@ export function slackUserId(v) {
   return /^[UW][A-Z0-9]{6,}$/i.test(s) ? s.toUpperCase() : "";
 }
 
-/** normalizeSlack(v) → { enabled, channels, streams, mattUserId, appUrl, morningHour, eveningHour } */
+/** normalizeSlack(v) → { enabled, channels, streams, mattUserId, appUrl, appLink, morningHour, eveningHour } */
 export function normalizeSlack(v = {}) {
   const o = v && typeof v === "object" ? v : {};
   const d = SLACK_DEFAULTS;
@@ -71,6 +75,7 @@ export function normalizeSlack(v = {}) {
     streams: Object.fromEntries(SLACK_STREAMS.map((s) => [s, st[s] === true])),
     mattUserId: slackUserId(o.mattUserId),
     appUrl: /^https:\/\/[^\s/]+/.test(url) ? url : d.appUrl,
+    appLink: /^https:\/\/[^\s<>|]+$/.test(String(o.appLink || "").trim()) ? String(o.appLink).trim() : "",
     morningHour: hour(o.morningHour, d.morningHour),
     eveningHour: hour(o.eveningHour, d.eveningHour),
   };
@@ -206,6 +211,13 @@ export const scrubForSlack = (s) => String(s || "").replace(EMAIL, "[email]").re
 // Slack's mrkdwn: &, < and > are control characters.
 const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+/** fullName(name) → a person's whole name on one line, or "" when it doesn't read as a name. */
+export function fullName(name) {
+  const t = String(name || "").replace(/\s+/g, " ").trim();
+  if (!t || /[\d@]/.test(t)) return "";
+  return clip(t, 60);
+}
+
 /** firstName(name) → the first word of a person's name, or "" when it doesn't read as a name. */
 export function firstName(name) {
   const w = String(name || "").trim().split(/\s+/)[0] || "";
@@ -221,13 +233,18 @@ export const summaryLine = (s) => clip(scrubForSlack(s), 140);
 
 const street = (a) => String(a || "").split(",")[0].trim();
 
-/** slackLinks(ctx) → "<app|Open in app> · <ghl|GHL>" for the context line: the contact's page, else `path`. */
-export function slackLinks({ appUrl = SLACK_DEFAULTS.appUrl, locationId = "", contactId = "", path = "", view = "" } = {}) {
+/**
+ * slackLinks(ctx) → "<app|Open in app> · <ghl|Contact in GHL>" for the
+ * context line. "Open in app" is `appLink` (the app inside GHL) when set,
+ * else the contact's page or `path` on the app itself.
+ */
+export function slackLinks({ appUrl = SLACK_DEFAULTS.appUrl, appLink = "", locationId = "", contactId = "", path = "", view = "" } = {}) {
   const out = [];
   const loc = locationId ? { location_id: locationId } : {};
-  if (contactId) out.push(`<${appUrl}/contact?${new URLSearchParams({ contact: contactId, ...loc })}|Open in app>`);
+  if (appLink && (contactId || path)) out.push(`<${appLink}|Open in app>`);
+  else if (contactId) out.push(`<${appUrl}/contact?${new URLSearchParams({ contact: contactId, ...loc })}|Open in app>`);
   else if (path) out.push(`<${appUrl}${path}?${new URLSearchParams({ ...(view ? { view } : {}), ...loc })}|Open in app>`);
-  if (contactId && locationId) out.push(`<https://app.gohighlevel.com/v2/location/${encodeURIComponent(locationId)}/contacts/detail/${encodeURIComponent(contactId)}|GHL>`);
+  if (contactId && locationId) out.push(`<https://app.gohighlevel.com/v2/location/${encodeURIComponent(locationId)}/contacts/detail/${encodeURIComponent(contactId)}|Contact in GHL>`);
   return out.join(" · ");
 }
 
@@ -278,7 +295,7 @@ function headline(kind, ev, ctx) {
 /**
  * renderEvent(route, ev, ctx) → { text, blocks }
  *
- *   ctx  { firstName, address, ours, summary, appUrl, locationId }
+ *   ctx  { firstName, fullName, address, ours, summary, appUrl, appLink, locationId }
  *        — what the runner looked up; none of it is required.
  */
 export function renderEvent(route, ev = {}, ctx = {}) {
@@ -296,7 +313,7 @@ export function renderEvent(route, ev = {}, ctx = {}) {
   const summary = ctx.summary && SUMMARY_KINDS.has(kind) ? summaryLine(ctx.summary) : "";
   if (summary) lines.push(`> ${esc(summary)}`);
   const text = lines.join("\n");
-  const link = slackLinks({ appUrl: ctx.appUrl, locationId: ctx.locationId, contactId: ev?.contactId });
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, contactId: ev?.contactId });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   return { text: clip(head.replace(/\*/g, ""), 150), blocks };
@@ -304,7 +321,8 @@ export function renderEvent(route, ev = {}, ctx = {}) {
 /**
  * renderTier1(ev, ctx) → the post that opens a house in #acquisitions, one
  * thing a line (Matt, 2026-10-25: "itemized out … and then the links
- * underneath"): the house, the agent, the full address, the description.
+ * underneath"): the house, the agent's full name (Matt, the same day: "the
+ * agent's full name not just Ann"), the full address, the description.
  * The description is the summary of what they said, else why the house is
  * Tier 1; scrubbed like every summary.
  */
@@ -314,11 +332,11 @@ export function renderTier1(ev = {}, ctx = {}) {
   const head = `${ICON.tier1} *Tier 1 flagged: ${esc(street(full) || "a house")}*`;
   const lines = [
     head,
-    `*Agent:* ${esc(ctx.firstName) || "—"}`,
+    `*Agent:* ${esc(ctx.fullName || ctx.firstName) || "—"}`,
     `*Address:* ${esc(full) || "—"}`,
     `*Description:* ${esc(desc) || "—"}`,
   ];
-  const link = slackLinks({ appUrl: ctx.appUrl, locationId: ctx.locationId, contactId: ev?.contactId });
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, contactId: ev?.contactId });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   const who = ctx.firstName ? ` (${ctx.firstName})` : "";
@@ -340,7 +358,7 @@ export function renderPing(r = {}, ctx = {}) {
   const why = esc(clip(scrubForSlack(pingWhy(r)), 280));
   const house = r.address ? ` — *${esc(street(r.address))}*` : "";
   const text = `:rotating_light: ${at}${why}${house}`;
-  const link = slackLinks({ appUrl: ctx.appUrl, locationId: ctx.locationId, contactId: r.contactId });
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, contactId: r.contactId });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   return { text: clip(`Needs you: ${pingWhy(r)}`, 150), blocks };
@@ -357,7 +375,7 @@ export function renderNeed(v = {}, ctx = {}) {
   const at = ctx.mattUserId ? `<@${ctx.mattUserId}> ` : "";
   const why = clip(scrubForSlack(v.why || "Something only you can do"), 280);
   const text = `${NEED_ICON[v.kind] || ":rotating_light:"} ${at}${esc(why)}`;
-  const link = slackLinks({ appUrl: ctx.appUrl, locationId: ctx.locationId, contactId: v.contactId });
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, contactId: v.contactId });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   return { text: clip(`Needs you: ${why}`, 150), blocks };
@@ -425,7 +443,7 @@ export function renderMorning(c = {}, ctx = {}) {
     [row("Offers sent", c.offersSent), row("Counters", c.counters), row("Hot", c.hot), row("Agreed", c.agreed)].join(" · "),
     [row("New deals", c.deals), row("Buyer texts", c.buyerTexts), row("Buyers committed", c.buyersCommitted)].join(" · "),
   ];
-  const link = slackLinks({ appUrl: ctx.appUrl, locationId: ctx.locationId, path: "/reports", view: "activity" });
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   return { text: `Yesterday: ${c.offersSent || 0} offers sent, ${c.tier1 || 0} new Tier 1, ${c.deals || 0} new deals`, blocks };
@@ -454,7 +472,7 @@ export function renderEvening(digest = {}, { jobs = [], errors = [] } = {}, ctx 
       errs.length ? `errors in ${errs.map((e) => `${esc(e.area)} ×${e.count}`).join(", ")}` : "",
     ].filter(Boolean).join("; ")}`);
   }
-  const link = slackLinks({ appUrl: ctx.appUrl, locationId: ctx.locationId, path: "/reports", view: "activity" });
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   const open = (digest.sections || []).reduce((a, s) => a + (s.items?.length || 0), 0);
