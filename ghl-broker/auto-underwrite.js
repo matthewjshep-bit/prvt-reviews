@@ -1678,7 +1678,6 @@ async function runUnderwrite(job, ctx) {
   // From here on the contact wears a uw-* tag, so any exit — including a crash
   // — owes it a terminal one. See the catch in startUnderwrite.
   job.announced = true;
-  await recordRun(job, ctx, "underwrite_started", { origin: job.origin || "" });
 
   // Only when this run knows better than the field does. Re-writing the same
   // value would churn the contact's audit trail for nothing.
@@ -1829,6 +1828,10 @@ async function runUnderwrite(job, ctx) {
       listing, photosCount,
     } });
   }
+
+  // A run that will price the house — past the skeleton and draft-only stops,
+  // which only make Matt a draft (2026-10-25: those aren't underwrites).
+  await recordRun(job, ctx, "underwrite_started", { origin: job.origin || "" });
 
   /* --- 3. comps --- */
   job.phase = "comps";
@@ -2717,7 +2720,7 @@ async function finishHeld(job, ctx, { extraction, held, partial, cleared = false
     await setTag(client, job.contactId, UW_TAGS.review, warnings);
     await note(client, job.contactId, heldNote(job, held), warnings);
   }
-  await recordRun(job, ctx, "underwrite_held", { held: (held || []).map(String).slice(0, 6), arv: job.arv, repairs: job.repairs });
+  await recordRun(job, ctx, "underwrite_held", { held: (held || []).map(String).slice(0, 6), arv: job.arv, repairs: job.repairs, ...(job.draftOnly ? { draftOnly: true } : {}) });
 
   // Held, and an agent may be waiting on the number this run was for. The
   // route decides what to do about that (promise-driver.js: ask for their

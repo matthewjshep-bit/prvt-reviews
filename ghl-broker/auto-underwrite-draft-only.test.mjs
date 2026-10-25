@@ -294,8 +294,9 @@ test("two links in one text make two drafts, each its own house, not two of the 
 });
 
 // Slack (2026-10-24) and the timeline read an underwrite off the record: the
-// job itself lives in memory and is gone at the next deploy.
-test("a held underwrite leaves started and held on the contact's record, with the house and why", async () => {
+// job itself lives in memory and is gone at the next deploy. A draft-only run
+// only made Matt a draft (2026-10-25): it says so, and never says it started.
+test("a draft-only run leaves a held marked draft only on the contact's record, and no started", async () => {
   _resetJobs();
   const { restore } = stubFetch();
   try {
@@ -305,10 +306,10 @@ test("a held underwrite leaves started and held on the contact's record, with th
     assert.equal(job.status, "held", job.error || "");
     const events = await store.listContactEvents("LOC-draft-ev", "agent-ev1", { types: ["underwrite_started", "underwrite_held"] });
     const by = Object.fromEntries(events.map((e) => [e.type, e]));
-    assert.ok(by.underwrite_started, "started");
+    assert.equal(by.underwrite_started, undefined, "a draft isn't an underwrite starting");
     assert.ok(by.underwrite_held, "held");
     assert.equal(by.underwrite_held.data.jobId, job.id);
-    assert.equal(by.underwrite_started.data.jobId, job.id);
+    assert.equal(by.underwrite_held.data.draftOnly, true);
     assert.match(by.underwrite_held.address, /4417 Somerset Ln/);
     assert.match(by.underwrite_held.data.held[0], DRAFT_ONLY_RX);
   } finally { restore(); }
