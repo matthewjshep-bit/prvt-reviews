@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeSlack, slackOn, streamOn, slackChannelId, slackUserId, routeEvent, threadKeyFor, foldBlasts,
-  renderEvent, renderTier1, renderPing, fullName, renderMorning, renderEvening, morningCounts, firstName, scrubForSlack, slackLinks, SLACK_EVENT_TYPES,
+  renderEvent, renderTier1, renderPing, fullName, acquisitionStatus, dispositionStatus, withStatus, renderMorning, renderEvening, morningCounts, firstName, scrubForSlack, slackLinks, SLACK_EVENT_TYPES,
 } from "./slack-notify.js";
 
 const textOf = (msg) => [msg.text, ...(msg.blocks || []).flatMap((b) => [b.text?.text, ...(b.elements || []).map((e) => e.text)])].filter(Boolean).join("\n");
@@ -190,4 +190,47 @@ test("a draft the app made for Matt to price posts nowhere; a real held underwri
   assert.deepEqual(routeEvent({ type: "underwrite_held", data: { draftOnly: true, held: ["ready for your comps — the app made a skeleton from the address, nothing looked up"] } }), []);
   assert.deepEqual(routeEvent({ type: "underwrite_held", data: { held: ["ready for your comps — the app made the draft, you price it"] } }), [], "events from before draftOnly was recorded");
   assert.deepEqual(routeEvent({ type: "underwrite_held", data: { held: ["fewer than 8 photos"] } }).map((r) => r.stream), ["underwrites", "acquisitions"]);
+});
+
+// Matt, 2026-10-25: "go to the acquisition channel and see what the offer
+// status is with the emoji" — one status per house, one per deal.
+test("a Tier 1 house's status emoji follows its offer: nothing, sent, countered, hot, agreed or contract, passed", () => {
+  const at = (o) => acquisitionStatus(o) && [acquisitionStatus(o).emoji, acquisitionStatus(o).label];
+  assert.equal(acquisitionStatus({ status: "draft" }), null, "still waiting on us");
+  assert.deepEqual(at({ status: "sent", cashAmount: 386500 }), ["outbox_tray", "Offer sent — $386,500"]);
+  assert.deepEqual(at({ status: "countered" }), ["left_right_arrow", "They countered"]);
+  assert.deepEqual(at({ status: "sent", hot: { at: "2026-10-25T18:00:00Z", by: "operator" } }), ["fire", "Hot — close to a contract"]);
+  assert.deepEqual(at({ status: "accepted" }), ["white_check_mark", "Agreed"]);
+  assert.deepEqual(at({ status: "accepted", deal: { stage: "under_contract" } }), ["white_check_mark", "Under contract"]);
+  assert.deepEqual(at({ status: "we_passed", passReason: { code: "turnkey" } }), ["x", "We passed — too turnkey"]);
+  assert.deepEqual(at({ status: "passed" }), ["x", "They passed"]);
+  assert.deepEqual(at({ status: "accepted", deal: { stage: "fell_through" } }), ["x", "The deal fell through"]);
+});
+
+test("a deal's status emoji follows its buyers and stage; a pre-sale pitch isn't a buyer looking", () => {
+  const ds = (deal) => dispositionStatus({ deal }) && dispositionStatus({ deal }).emoji;
+  assert.equal(dispositionStatus({ deal: { stage: "under_contract" } }), null);
+  assert.equal(ds({ stage: "under_contract", blasts: [{ wave: 1 }] }), "mega");
+  assert.equal(ds({ stage: "under_contract", blasts: [{}], investors: [{ status: "evaluating", source: "presell" }] }), "mega");
+  assert.equal(ds({ stage: "under_contract", investors: [{ status: "evaluating" }, { status: "evaluating" }] }), "eyes");
+  assert.equal(dispositionStatus({ deal: { stage: "under_contract", investors: [{ status: "evaluating" }, { status: "evaluating" }] } }).label, "2 buyers looking");
+  assert.equal(ds({ stage: "under_contract", investors: [{ status: "committed" }] }), "handshake");
+  assert.equal(ds({ stage: "buyer_found" }), "handshake");
+  assert.equal(ds({ stage: "assigned" }), "memo");
+  assert.equal(ds({ stage: "closed" }), "trophy");
+  assert.equal(ds({ stage: "fell_through" }), "x");
+});
+
+test("the Status line sits under the post's first line, is replaced as it moves, and goes when there's none", () => {
+  const blocks = [{ type: "section", text: { type: "mrkdwn", text: "head\n*Agent:* Ann Lee" } }, { type: "context", elements: [{ type: "mrkdwn", text: "links" }] }];
+  const one = withStatus(blocks, { emoji: "outbox_tray", label: "Offer sent — $386,500" }, "2026-10-25T18:00:00Z");
+  assert.equal(one[0].text.text, "head\n*Status:* :outbox_tray: Offer sent — $386,500 (Oct 25)\n*Agent:* Ann Lee");
+  assert.deepEqual(one[1], blocks[1]);
+  const two = withStatus(one, { emoji: "x", label: "We passed — too turnkey" }, "2026-10-26T18:00:00Z");
+  assert.equal(two[0].text.text, "head\n*Status:* :x: We passed — too turnkey (Oct 26)\n*Agent:* Ann Lee");
+  assert.equal(withStatus(two, null)[0].text.text, "head\n*Agent:* Ann Lee");
+});
+
+test("hot taken off posts nothing but still moves the house's status", () => {
+  assert.deepEqual(routeEvent({ type: "note", data: { phrase: "no longer hot" } }).map((r) => [r.stream, r.statusOnly]), [["acquisitions", true]]);
 });

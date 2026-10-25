@@ -330,3 +330,67 @@ test("with the GHL link set, Open in app opens the app inside GHL; Contact in GH
   assert.ok(t.includes(`<${GHL_APP}|Open in app>`), t);
   assert.match(t, /contacts\/detail\/lou\|Contact in GHL>/);
 });
+
+// Matt, 2026-10-25: Slack as a living record — each Tier 1 post wears its
+// house's status, and it moves when the offer does.
+test("a Tier 1 post wears its offer's status emoji and Status line, swapped as the offer moves", async () => {
+  const LOC = "loc-status";
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  const offer = await store.createOffer({ locationId: LOC, contactId: "max", address: HOUSE, status: "draft" });
+  await ev(LOC, "max", "tier1_added", 1, { address: HOUSE, offerId: offer.id });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  assert.equal(s.of("reactions.add").length, 0, "a draft wears nothing");
+
+  await store.updateOffer(offer.id, { ...offer, status: "sent", cashAmount: 386500 });
+  await ev(LOC, "max", "offer_sent", 3, { address: HOUSE, offerId: offer.id, data: { amountText: "$386,500" } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(4) });
+  assert.deepEqual(s.of("reactions.add").map((c) => [c.body.name, c.body.timestamp, c.body.channel]), [["outbox_tray", "170000001.0001", CH.acquisitions]]);
+  const card = s.of("chat.update").at(-1);
+  assert.equal(card.body.ts, "170000001.0001");
+  assert.match(said(card), /Tier 1 flagged: 1010 Bellevue Way NE\*\n\*Status:\* :outbox_tray: Offer sent — \$386,500 \(/);
+
+  const sent = await store.getOffer(offer.id);
+  await store.updateOffer(offer.id, { ...sent, status: "we_passed", passReason: { code: "turnkey" } });
+  await ev(LOC, "max", "offer_we_passed", 5, { address: HOUSE, offerId: offer.id });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(6) });
+  assert.deepEqual(s.of("reactions.remove").map((c) => c.body.name), ["outbox_tray"]);
+  assert.deepEqual(s.of("reactions.add").map((c) => c.body.name), ["outbox_tray", "x"]);
+  assert.match(said(s.of("chat.update").at(-1)), /\*Status:\* :x: We passed — too turnkey/);
+
+  // Nothing new: Slack isn't called again.
+  const calls = s.calls.length;
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(7) });
+  assert.equal(s.calls.length, calls);
+});
+
+test("without the reactions scope, the Status line still moves and the run says what to add", async () => {
+  const LOC = "loc-status-scope";
+  const s = slack({ fail: { method: "reactions.add", error: "missing_scope", times: 5 } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  const offer = await store.createOffer({ locationId: LOC, contactId: "ned", address: HOUSE, status: "sent", cashAmount: 300000 });
+  await ev(LOC, "ned", "tier1_added", 1, { address: HOUSE, offerId: offer.id });
+  const r = await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  assert.match(r.statusError, /reactions:write/);
+  assert.match(said(s.of("chat.update").at(-1)), /\*Status:\* :outbox_tray: Offer sent — \$300,000/);
+  assert.equal(r.failed.length, 0);
+});
+
+test("a refresh puts the status on the Tier 1 posts made before statuses existed", async () => {
+  const LOC = "loc-status-refresh";
+  _resetSlack();
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  const offer = await store.createOffer({ locationId: LOC, contactId: "ola", address: HOUSE, status: "countered" });
+  await ev(LOC, "ola", "tier1_added", 1, { address: HOUSE, offerId: offer.id });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  // As if posted before this change: the thread remembers only where it is.
+  const cur = await store.getJobCursor(LOC, CURSOR_NAME);
+  const threads = Object.fromEntries(Object.entries(cur.doc.threads).map(([k, v]) => [k, { ts: v.ts, channel: v.channel, at: v.at }]));
+  await store.setJobCursor(LOC, CURSOR_NAME, { at: cur.at, doc: { ...cur.doc, threads } });
+  const before = s.of("reactions.add").length;
+  const r = await runSlackEventsNow({ store, locationId: LOC, saved: ON, now: min(3), since: at(0), refresh: true });
+  assert.deepEqual(r.posted.map((p) => p.status), ["refreshed"]);
+  assert.deepEqual(s.of("reactions.add").slice(before).map((c) => c.body.name), ["left_right_arrow"]);
+  assert.match(said(s.of("chat.update").at(-1)), /\*Status:\* :left_right_arrow: They countered/);
+});
