@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeSlack, slackOn, streamOn, slackChannelId, slackUserId, routeEvent, threadKeyFor, foldBlasts,
-  renderEvent, renderPing, renderMorning, renderEvening, morningCounts, firstName, scrubForSlack, slackLinks, SLACK_EVENT_TYPES,
+  renderEvent, renderTier1, renderPing, renderMorning, renderEvening, morningCounts, firstName, scrubForSlack, slackLinks, SLACK_EVENT_TYPES,
 } from "./slack-notify.js";
 
 const textOf = (msg) => [msg.text, ...(msg.blocks || []).flatMap((b) => [b.text?.text, ...(b.elements || []).map((e) => e.text)])].filter(Boolean).join("\n");
@@ -150,4 +150,26 @@ test("scrubForSlack takes out phones and emails; firstName drops what isn't a na
   assert.equal(firstName("LLC123 Holdings"), "");
   assert.equal(firstName(""), "");
   assert.equal(slackLinks({ locationId: "loc1", path: "/reports", view: "activity" }), "<https://app.shepflips.com/reports?view=activity&location_id=loc1|Open in app>");
+});
+
+// Matt, 2026-10-25: "the address flagged, the agent, the full address, and
+// then the description, line by line … and then the links underneath."
+test("the Tier 1 post is itemized: the house, the agent, the full address, the description, then the links", () => {
+  const msg = renderEvent({ kind: "tier1" }, { type: "ghl_stage_moved", contactId: "ann", address: "624 NW Hill St, Seattle, WA 98107", data: { to: "Tier 1", why: "a house they raised" } },
+    { firstName: "Ann", summary: "Vacant, needs roof and kitchen; seller wants a quick close — call 206-555-0142", locationId: "loc1" });
+  assert.equal(msg.blocks[0].text.text, [
+    ":large_green_circle: *Tier 1 flagged: 624 NW Hill St*",
+    "*Agent:* Ann",
+    "*Address:* 624 NW Hill St, Seattle, WA 98107",
+    "*Description:* Vacant, needs roof and kitchen; seller wants a quick close — call [phone]",
+  ].join("\n"));
+  assert.equal(msg.blocks[1].type, "context");
+  assert.match(msg.blocks[1].elements[0].text, /Open in app.*GHL/);
+  assert.equal(msg.text, "Tier 1 flagged: 624 NW Hill St (Ann)");
+});
+
+test("a Tier 1 post with no summary says why it's Tier 1, and a dash for what isn't known", () => {
+  const t = renderTier1({ address: "20160 Reed Ln", data: { why: "a house they raised" } }, {}).blocks[0].text.text;
+  assert.match(t, /\*Agent:\* —\n/);
+  assert.match(t, /\*Description:\* a house they raised$/);
 });

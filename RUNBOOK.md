@@ -5303,7 +5303,7 @@ text.
 | Stream (`saved.slack.streams`) | Channel | What posts |
 |---|---|---|
 | needsMatt | `#needs-matt` | What lands in GHL's **Needs Matt** stage (needs-matt.js's list): a yes to approve, paper to sign, a house to price. Once each, with an @-mention. With `ghlStages` off, the GHL ping rows (`pingReasons`) instead |
-| acquisitions | `#acquisitions` | **The Tier 1 list** (Matt, 2026-10-25: "just the tier 1s that have been flagged, not the back-and-forth"). The only post in the channel is a house reaching Tier 1 (`tier1_added`, a card moved to Tier 1), once per house. Its offer sent or revised, counter, in the realm, hot, agreed, contract, underwrite result and pass reply quietly in that thread, never in the channel feed, and only once the thread exists. A house an agent merely named isn't posted |
+| acquisitions | `#acquisitions` | **The Tier 1 list** (Matt, 2026-10-25: "just the tier 1s that have been flagged, not the back-and-forth"). The only post in the channel is a house reaching Tier 1 (`tier1_added`, a card moved to Tier 1), once per house. The post is itemized, one thing a line, with the links underneath: **Tier 1 flagged: <street>**, Agent (first name), Address (full), Description (the summary of what they said, else why it's Tier 1). Its offer sent or revised, counter, in the realm, hot, agreed, contract, underwrite result and pass reply quietly in that thread, never in the channel feed, and only once the thread exists. A house an agent merely named isn't posted |
 | underwrites | `#underwrites` | **One message per run**, edited as it goes: running, then priced (number, ARV, rehab), held (the reasons), or failed. Also an address that left the queue without running |
 | dispositions | `#dispositions` | **One thread per deal**: the new deal (contract, fee, closing), each wave of buyer texts as one line ("sent to 25 buyers"), a buyer looking, passing or committed, the package opened, a walkthrough booked, the stage. Closed and fell through also show in the channel |
 | machine | `#machine` | A new kind of app error (once per fingerprint), and a scheduled job whose last run failed (once per run). Mute it |
@@ -5401,6 +5401,9 @@ or "flagged hot — close to a contract".
   - It runs under the minute loop's lock, so the two never write the thread map
     over each other.
   - The claims stop anything from posting twice.
+- **Refresh:** add `refresh: true` to a backfill to re-render the Tier 1 posts
+  already in the channel to the current format. They're edited in place, once
+  per house, and nothing is posted again.
 
 ## Companion window (2026-10-16)
 

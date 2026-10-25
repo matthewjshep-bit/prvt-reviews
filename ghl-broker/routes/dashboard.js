@@ -866,6 +866,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   // lists and posts nothing), or "morning" / "evening", which post now.
   // `since` (ISO, at most 48 hours back) backfills events from then: up to
   // 40 posts a call, paced for Slack's rate limit; `more` says call again.
+  // `refresh: true` also re-renders the Tier 1 posts already there, in place.
   router.get("/slack", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -901,7 +902,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       if (what === "events") {
         const since = req.body?.since ? String(req.body.since) : null;
         if (since && !Number.isFinite(Date.parse(since))) return res.status(400).json({ error: "since: an ISO time" });
-        const backfill = since ? { since, max: dryRun ? 500 : 40, paceMs: 1100 } : {};
+        const backfill = since ? { since, max: dryRun ? 500 : 40, paceMs: 1100, refresh: req.body?.refresh === true } : {};
         return res.json({ ok: true, ...(await runSlackEventsNow({ store, locationId, saved, dryRun, ...backfill })) });
       }
       if (what === "pings") return res.json({ ok: true, ...(await runSlackPings({ store, locationId, saved, deps: { pipelineFor, client }, dryRun })) });

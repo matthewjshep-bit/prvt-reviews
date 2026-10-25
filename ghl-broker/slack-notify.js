@@ -142,7 +142,7 @@ function contextReader({ store, locationId, cfg, now }) {
  * post what happened before that; the claims keep it from posting anything
  * twice. `max` posts a run, `paceMs` between posts (Slack's rate limit).
  */
-export async function runSlackEvents({ store = defaultStore, locationId, saved = {}, now = Date.now(), dryRun = false, since = null, max = MAX_PER_RUN, paceMs = 0 } = {}) {
+export async function runSlackEvents({ store = defaultStore, locationId, saved = {}, now = Date.now(), dryRun = false, since = null, max = MAX_PER_RUN, paceMs = 0, refresh = false } = {}) {
   const cfg = normalizeSlack(saved?.slack);
   const token = String(saved?.slackBotToken || "").trim();
   const out = { dryRun, startedAt: iso(now), finishedAt: null, read: 0, posted: [], skipped: 0, failed: [], error: null };
@@ -174,6 +174,9 @@ export async function runSlackEvents({ store = defaultStore, locationId, saved =
       if (!streamOn(cfg, route.stream)) continue;
       const key = slackClaimKey("ev", `${e.id}:${route.stream}`);
       if (!posted[key]) items.push({ keys: [key], ev: e, route });
+      // A backfill with `refresh` re-renders the posts that opened a thread
+      // (a new format, 2026-10-25), editing them in place.
+      else if (refresh && route.opensOnly) items.push({ keys: [key], ev: e, route, refresh: true });
     }
   }
   if (streamOn(cfg, "dispositions")) {
@@ -186,6 +189,7 @@ export async function runSlackEvents({ store = defaultStore, locationId, saved =
   }
 
   const ctxFor = contextReader({ store, locationId, cfg, now });
+  const refreshed = new Set();
   for (const it of items) {
     if (out.posted.length >= max) { out.skipped++; out.more = true; continue; }
     const ctx = await ctxFor(it.ev);
@@ -194,6 +198,20 @@ export async function runSlackEvents({ store = defaultStore, locationId, saved =
     const tk = threadKeyFor(it.route, it.ev, ctx);
     const th = tk && threads[tk]?.channel === channel ? threads[tk] : null;
     const row = { stream: it.route.stream, kind: it.route.kind, contactId: it.ev.contactId || null, type: it.ev.type };
+    if (it.refresh) {
+      if (!th || th.ts === "dry-run" || refreshed.has(tk)) { out.skipped++; continue; }
+      refreshed.add(tk);
+      if (dryRun) { out.posted.push({ ...row, status: "would refresh", house: String(ctx.address || it.ev.address || "").split(",")[0] }); continue; }
+      if (paceMs > 0 && out.posted.length) await new Promise((r) => setTimeout(r, paceMs));
+      try {
+        await edit(token, channel, th.ts, msg);
+        out.posted.push({ ...row, status: "refreshed" });
+      } catch (e) {
+        if (e?.slack === "rate_limited") { out.error = "rate limited: the rest next run"; break; }
+        out.failed.push({ ...row, error: scrubMessage(e).slice(0, 160) });
+      }
+      continue;
+    }
     // Nothing to reply to, or a house already open: claimed and let go, so
     // it isn't weighed again.
     if ((it.route.replyOnly && !th) || (it.route.opensOnly && th)) {

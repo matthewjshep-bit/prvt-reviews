@@ -77,7 +77,7 @@ test("a house's counter replies quietly in its Tier 1 thread; a replay posts not
   await ev(LOC, "ann", "ghl_stage_moved", 1, { address: HOUSE, data: { from: "Tier 2", to: "Tier 1", why: "a house they raised" } });
   await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
   const top = s.of("chat.postMessage")[0];
-  assert.match(said(top), /is Tier 1 \(Ann\)/);
+  assert.match(said(top), /Tier 1 flagged: 1010 Bellevue Way NE\*\n\*Agent:\* Ann\n/);
   assert.doesNotMatch(said(top), /Lee/);
 
   await ev(LOC, "ann", "offer_countered", 3, { address: HOUSE, data: { amount: 410000 } });
@@ -273,7 +273,7 @@ test("a backfill posts the day's Tier 1 houses and their thread once; the minute
   assert.equal(r.posted.length, 2);
   const [top, reply] = s.of("chat.postMessage");
   assert.equal(reply.body.thread_ts, "170000001.0001");
-  assert.match(said(top), /1010 Bellevue Way NE\* is Tier 1/);
+  assert.match(said(top), /Tier 1 flagged: 1010 Bellevue Way NE/);
 
   const again = await runSlackEventsNow({ store, locationId: LOC, saved: ON, now: min(33), since: at(-180) });
   assert.equal(again.posted.length, 0);
@@ -283,4 +283,26 @@ test("a backfill posts the day's Tier 1 houses and their thread once; the minute
   await ev(LOC, "hal", "offer_countered", 51, { address: HOUSE, data: { amount: 410000 } });
   await maybeRunSlackEvents({ locationId: LOC, saved: ON, store, now: min(70) });
   assert.equal(s.of("chat.postMessage")[2].body.thread_ts, "170000001.0001");
+});
+
+// Matt, 2026-10-25: a new look for the Tier 1 post; the ones already in the
+// channel are edited to it, not posted again.
+test("a refresh re-renders the Tier 1 posts already in Slack, in place, once per house", async () => {
+  const LOC = "loc-refresh";
+  _resetSlack();
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  await ev(LOC, "jo", "tier1_added", 1, { address: HOUSE });
+  await ev(LOC, "jo", "ghl_stage_moved", 2, { address: HOUSE, dedupeKey: "jo-m", data: { from: "Tier 2", to: "Tier 1" } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(3) });
+  assert.equal(s.of("chat.postMessage").length, 1);
+  const preview = await runSlackEventsNow({ store, locationId: LOC, saved: ON, now: min(4), dryRun: true, since: at(0), refresh: true });
+  assert.deepEqual(preview.posted.map((p) => p.status), ["would refresh"]);
+  const r = await runSlackEventsNow({ store, locationId: LOC, saved: ON, now: min(5), since: at(0), refresh: true });
+  assert.deepEqual(r.posted.map((p) => p.status), ["refreshed"]);
+  const upd = s.of("chat.update");
+  assert.equal(upd.length, 1);
+  assert.equal(upd[0].body.ts, "170000001.0001");
+  assert.equal(upd[0].body.channel, CH.acquisitions);
+  assert.equal(s.of("chat.postMessage").length, 1, "nothing posted again");
 });
