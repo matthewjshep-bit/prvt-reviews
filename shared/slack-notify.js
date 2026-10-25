@@ -40,9 +40,10 @@ export const SLACK_DEFAULTS = Object.freeze({
   streams: Object.freeze(blankStreams(false)),
   mattUserId: "",
   appUrl: "https://app.shepflips.com",
-  // Where "Open in app" goes when set: the app inside GHL, a custom menu link
-  // (Matt, 2026-10-25). GHL can't hand a contact through to the page it
-  // frames, so it opens the page; "Contact in GHL" opens the person.
+  // The app inside GHL (a custom menu link), for the posts about no one
+  // person (the morning and evening reads). GHL can't hand a contact through
+  // to the page it frames, so a post about a person opens the app itself on
+  // that person instead (Matt, 2026-10-25: "launches to that specific item").
   appLink: "",
   morningHour: 7,
   eveningHour: 19,
@@ -254,14 +255,15 @@ const street = (a) => String(a || "").split(",")[0].trim();
 
 /**
  * slackLinks(ctx) → "<app|Open in app> · <ghl|Contact in GHL>" for the
- * context line. "Open in app" is `appLink` (the app inside GHL) when set,
- * else the contact's page or `path` on the app itself.
+ * context line. About a person, "Open in app" opens Offers with that
+ * person's record open (OfferApp's ?contact= drawer). About no one, it's
+ * `appLink` (the app inside GHL) when set, else `path` on the app itself.
  */
 export function slackLinks({ appUrl = SLACK_DEFAULTS.appUrl, appLink = "", locationId = "", contactId = "", path = "", view = "" } = {}) {
   const out = [];
   const loc = locationId ? { location_id: locationId } : {};
-  if (appLink && (contactId || path)) out.push(`<${appLink}|Open in app>`);
-  else if (contactId) out.push(`<${appUrl}/contact?${new URLSearchParams({ contact: contactId, ...loc })}|Open in app>`);
+  if (contactId) out.push(`<${appUrl}/?${new URLSearchParams({ view: "history", contact: contactId, ...loc })}|Open in app>`);
+  else if (appLink && path) out.push(`<${appLink}|Open in app>`);
   else if (path) out.push(`<${appUrl}${path}?${new URLSearchParams({ ...(view ? { view } : {}), ...loc })}|Open in app>`);
   if (contactId && locationId) out.push(`<https://app.gohighlevel.com/v2/location/${encodeURIComponent(locationId)}/contacts/detail/${encodeURIComponent(contactId)}|Contact in GHL>`);
   return out.join(" · ");

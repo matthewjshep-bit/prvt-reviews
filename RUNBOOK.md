@@ -5466,13 +5466,12 @@ Without it the Status line still moves, and the run's `statusError` says
   - It runs under the minute loop's lock, so the two never write the thread map
     over each other.
   - The claims stop anything from posting twice.
-- **Open in app:** `slack.appLink` (Settings → Slack → "Open in app link") is
-  where "Open in app" goes. Set it to the GHL custom menu link of the Offers page
-  (2026-10-25).
-  - GHL can't pass a contact through to the page it frames, so the link opens
-    that page.
-  - "Contact in GHL" opens the person.
-  - With the setting blank, the link goes to the app on its own.
+- **Open in app:** on a post about a person, "Open in app" opens Offers with
+  that person's record open: `app.shepflips.com/?view=history&contact=<id>`,
+  in a browser tab of its own. "Contact in GHL" opens their GHL contact.
+  - GHL can't open its custom menu page on one person, so `slack.appLink` (the
+    Offers page inside GHL) is used only for the posts about no one, the morning
+    and evening reads (2026-10-25).
 - **Refresh:** add `refresh: true` to a backfill to re-render the Tier 1 posts
   already in the channel to the current format. They're edited in place, once
   per house, and nothing is posted again.
