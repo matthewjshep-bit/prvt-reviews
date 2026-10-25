@@ -13,7 +13,7 @@ process.env.DATA_DIR = DIR;
 delete process.env.DATABASE_URL;
 
 const { store } = await import("./store.js");
-const { runSlackEvents, runSlackPings, maybeRunSlackEvents, testSlack, CURSOR_NAME, _resetSlack } = await import("./slack-notify.js");
+const { runSlackEvents, runSlackEventsNow, runSlackPings, maybeRunSlackEvents, testSlack, CURSOR_NAME, _resetSlack } = await import("./slack-notify.js");
 const { recordEvent } = await import("./contact-record.js");
 const { recordError } = await import("./app-errors.js");
 await store.init();
@@ -69,7 +69,7 @@ test("switching Slack on posts nothing from before; what happens after it does",
   assert.equal(s.calls[0].auth, "Bearer xoxb-test-token");
 });
 
-test("a house's counter replies in its Tier 1 thread and shows in the channel; a replay posts nothing", async () => {
+test("a house's counter replies quietly in its Tier 1 thread; a replay posts nothing", async () => {
   const LOC = "loc-thread";
   const s = slack();
   await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
@@ -84,7 +84,7 @@ test("a house's counter replies in its Tier 1 thread and shows in the channel; a
   await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(4) });
   const reply = s.of("chat.postMessage")[1];
   assert.equal(reply.body.thread_ts, "170000001.0001");
-  assert.equal(reply.body.reply_broadcast, true);
+  assert.equal(reply.body.reply_broadcast, undefined, "the channel shows Tier 1s, not the back-and-forth");
   assert.match(said(reply), /Counter on \*1010 Bellevue Way NE\*: \$410,000/);
 
   const again = await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(5) });
@@ -159,7 +159,8 @@ test("a wave of buyer texts on one deal is one line in its #dispositions thread"
   assert.equal(dispo.length, 2);
   assert.match(said(dispo[0]), /New deal: \*1010 Bellevue Way NE\* — contract \$386,000, fee \$30,000/);
   assert.match(said(dispo[1]), /Deal sent to 3 buyers/);
-  assert.equal(dispo[1].body.thread_ts, "170000002.0001", "the wave replies under the deal");
+  assert.equal(dispo[1].body.thread_ts, "170000001.0001", "the wave replies under the deal");
+  assert.equal(s.of("chat.postMessage").filter((c) => c.body.channel === CH.acquisitions).length, 0, "a contract on a house never in Tier 1 opens nothing there");
 });
 
 test("Slack off, or no token: the minute loop calls nothing", async () => {
@@ -228,4 +229,58 @@ test("a new kind of error goes to #machine once; Slack's own errors don't loop b
   assert.match(said(mach[0]), /New error in \*underwrite\*\n_Apify actor timed out after 300s_/);
   await runSlackPings({ store, locationId: LOC, saved: ON, deps: { pipelineFor: async () => ({ deskAll: { rows: [] }, drafts: [] }) }, now: now + 60000 });
   assert.equal(s.of("chat.postMessage").filter((c) => c.body.channel === CH.machine).length, 1);
+});
+
+// Matt, 2026-10-25: #acquisitions is the Tier 1 list, not the conversation.
+test("a counter or an offer on a house that never reached Tier 1 posts nothing in #acquisitions", async () => {
+  const LOC = "loc-not-tier1";
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  await ev(LOC, "fay", "house_mentioned", 1, { address: HOUSE, dedupeKey: "hm:fay" });
+  await ev(LOC, "fay", "offer_sent", 2, { address: HOUSE, data: { amountText: "$300,000" } });
+  await ev(LOC, "fay", "offer_countered", 3, { address: HOUSE, data: { amount: 340000 } });
+  const r = await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(4) });
+  assert.equal(s.calls.length, 0);
+  assert.equal(r.skipped, 2);
+});
+
+test("a house moved back into Tier 1 isn't posted twice", async () => {
+  const LOC = "loc-tier1-twice";
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  await ev(LOC, "gus", "ghl_stage_moved", 1, { address: HOUSE, dedupeKey: "m1", data: { from: "Tier 2", to: "Tier 1" } });
+  await ev(LOC, "gus", "ghl_stage_moved", 2, { address: HOUSE, dedupeKey: "m2", data: { from: "Tier 2", to: "Tier 1" } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(3) });
+  assert.equal(s.calls.length, 1);
+});
+
+test("a backfill posts the day's Tier 1 houses and their thread once; the minute loop doesn't post them again", async () => {
+  const LOC = "loc-backfill";
+  _resetSlack();
+  const s = slack();
+  // Switched on at 10:30; the morning happened before.
+  await ev(LOC, "hal", "tier1_added", -120, { address: HOUSE });
+  await ev(LOC, "hal", "offer_sent", -90, { address: HOUSE, data: { amountText: "$386,500" } });
+  await ev(LOC, "ivy", "offer_countered", -60, { address: "609 168th Ave NE, Bellevue, WA 98008", data: { amount: 500000 } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(30) });
+  assert.equal(s.calls.length, 0, "switching on posts no history");
+
+  const preview = await runSlackEventsNow({ store, locationId: LOC, saved: ON, now: min(31), dryRun: true, since: at(-180) });
+  assert.deepEqual(preview.posted.map((p) => [p.kind, p.status, p.house]), [["tier1", "would post", "1010 Bellevue Way NE"], ["offer_sent", "would reply", "1010 Bellevue Way NE"]]);
+  assert.equal(s.calls.length, 0, "a preview posts nothing");
+
+  const r = await runSlackEventsNow({ store, locationId: LOC, saved: ON, now: min(32), since: at(-180) });
+  assert.equal(r.posted.length, 2);
+  const [top, reply] = s.of("chat.postMessage");
+  assert.equal(reply.body.thread_ts, "170000001.0001");
+  assert.match(said(top), /1010 Bellevue Way NE\* is Tier 1/);
+
+  const again = await runSlackEventsNow({ store, locationId: LOC, saved: ON, now: min(33), since: at(-180) });
+  assert.equal(again.posted.length, 0);
+  await maybeRunSlackEvents({ locationId: LOC, saved: ON, store, now: min(50) });
+  assert.equal(s.calls.length, 2);
+  // A new event on that house still threads under the backfilled post.
+  await ev(LOC, "hal", "offer_countered", 51, { address: HOUSE, data: { amount: 410000 } });
+  await maybeRunSlackEvents({ locationId: LOC, saved: ON, store, now: min(70) });
+  assert.equal(s.of("chat.postMessage")[2].body.thread_ts, "170000001.0001");
 });

@@ -50,6 +50,8 @@ export const STALE_RUN_MS = 10 * 60 * 1000;
 // How far back the event sweep reads. A claim is kept a while past it, so an
 // event can't come round again as the window slides.
 const LOOKBACK_MS = 6 * 3600 * 1000;
+// A backfill (by hand, POST /slack/run { since }) reads at most this far back.
+const BACKFILL_MAX_MS = 48 * 3600 * 1000;
 const CLAIM_KEEP_MS = 2 * 86400000;
 const THREAD_KEEP_MS = 90 * 86400000;
 const PING_KEEP_MS = 60 * 86400000;
@@ -133,12 +135,14 @@ function contextReader({ store, locationId, cfg, now }) {
 /* ---------- events: every minute ---------- */
 
 /**
- * runSlackEvents({ store, locationId, saved, now, dryRun }) → { posted, skipped, failed, error }
+ * runSlackEvents({ store, locationId, saved, now, dryRun, since, max, paceMs }) → { posted, skipped, failed, error }
  *
  * The first run after Slack is switched on only marks where it starts: no
- * history is posted.
+ * history is posted. A backfill passes `since` (at most 48 hours back) to
+ * post what happened before that; the claims keep it from posting anything
+ * twice. `max` posts a run, `paceMs` between posts (Slack's rate limit).
  */
-export async function runSlackEvents({ store = defaultStore, locationId, saved = {}, now = Date.now(), dryRun = false } = {}) {
+export async function runSlackEvents({ store = defaultStore, locationId, saved = {}, now = Date.now(), dryRun = false, since = null, max = MAX_PER_RUN, paceMs = 0 } = {}) {
   const cfg = normalizeSlack(saved?.slack);
   const token = String(saved?.slackBotToken || "").trim();
   const out = { dryRun, startedAt: iso(now), finishedAt: null, read: 0, posted: [], skipped: 0, failed: [], error: null };
@@ -146,12 +150,15 @@ export async function runSlackEvents({ store = defaultStore, locationId, saved =
   if (!slackOn(cfg, token)) { out.error = "off: switch Slack on and paste the bot token in Settings"; return done(); }
 
   const doc = await readDoc(store, locationId, CURSOR_NAME);
-  if (!doc.since) {
+  const backfillFrom = ms(since);
+  if (!doc.since && backfillFrom == null) {
     if (!dryRun) await patchCursor(store, locationId, CURSOR_NAME, { since: iso(now), posted: {}, threads: {} });
     out.error = "started: events from now on";
     return done();
   }
-  const from = iso(Math.max(ms(doc.since) ?? 0, now - LOOKBACK_MS));
+  const from = backfillFrom != null
+    ? iso(Math.max(backfillFrom, now - BACKFILL_MAX_MS))
+    : iso(Math.max(ms(doc.since) ?? 0, now - LOOKBACK_MS));
   const events = (await store.listContactEventsSince(locationId, from, { types: SLACK_EVENT_TYPES, limit: 3000 }).catch(() => []))
     .slice().sort((a, b) => String(a.at).localeCompare(String(b.at)) || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
   out.read = events.length;
@@ -180,20 +187,27 @@ export async function runSlackEvents({ store = defaultStore, locationId, saved =
 
   const ctxFor = contextReader({ store, locationId, cfg, now });
   for (const it of items) {
-    if (out.posted.length >= MAX_PER_RUN) { out.skipped++; continue; }
+    if (out.posted.length >= max) { out.skipped++; out.more = true; continue; }
     const ctx = await ctxFor(it.ev);
     const msg = it.blasts ? renderBlasts(it.blasts, ctx) : renderEvent(it.route, it.ev, ctx);
     const channel = cfg.channels[it.route.stream];
     const tk = threadKeyFor(it.route, it.ev, ctx);
     const th = tk && threads[tk]?.channel === channel ? threads[tk] : null;
     const row = { stream: it.route.stream, kind: it.route.kind, contactId: it.ev.contactId || null, type: it.ev.type };
-    // Nothing to reply to: claimed and let go, so it isn't weighed again.
-    if (it.route.replyOnly && !th) {
+    // Nothing to reply to, or a house already open: claimed and let go, so
+    // it isn't weighed again.
+    if ((it.route.replyOnly && !th) || (it.route.opensOnly && th)) {
       out.skipped++;
       if (!dryRun) for (const k of it.keys) posted[k] = iso(now);
       continue;
     }
-    if (dryRun) { out.posted.push({ ...row, status: "would post", threaded: Boolean(th) }); continue; }
+    if (dryRun) {
+      // What this run would open, so the preview threads like the real one.
+      if (tk && !th) threads = { ...threads, [tk]: { ts: "dry-run", channel, at: iso(now) } };
+      out.posted.push({ ...row, status: th ? (it.route.update ? "would edit" : "would reply") : "would post", house: String(ctx.address || it.ev.address || "").split(",")[0] });
+      continue;
+    }
+    if (paceMs > 0 && out.posted.length) await new Promise((r) => setTimeout(r, paceMs));
 
     // Claim first.
     const at = iso(now);
@@ -389,6 +403,17 @@ async function gated({ store, locationId, cursorName, now, run }) {
   } finally {
     running.delete(key);
   }
+}
+
+/**
+ * runSlackEventsNow(opts) → the run, or { busy: true } — a hand run (a
+ * backfill) under the minute loop's own lock, so the two never write the
+ * thread map over each other.
+ */
+export async function runSlackEventsNow({ store = defaultStore, locationId, now = Date.now(), ...opts } = {}) {
+  if (opts.dryRun) return runSlackEvents({ store, locationId, now, ...opts });
+  const r = await gated({ store, locationId, cursorName: CURSOR_NAME, now, run: () => runSlackEvents({ store, locationId, now, ...opts }) });
+  return r || { busy: true, error: "the minute loop is posting: try again in a minute" };
 }
 
 /** maybeRunSlackEvents({ locationId, saved, store, now }) → the run, or null — the minute loop. */

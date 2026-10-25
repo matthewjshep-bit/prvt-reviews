@@ -32,13 +32,18 @@ test("a pasted channel link or a lower-case id becomes the channel id; junk is d
   assert.equal(normalizeSlack({ appUrl: "https://app.shepflips.com/" }).appUrl, "https://app.shepflips.com");
 });
 
-test("a house reaching Tier 1 opens its thread in #acquisitions; the counter, hot and agreed show in the channel too", () => {
-  assert.deepEqual(routeEvent({ type: "ghl_stage_moved", data: { to: "Tier 1" } }).map((r) => [r.stream, r.kind]), [["acquisitions", "tier1"]]);
+// Matt, 2026-10-25: "acquisition should just show tier 1s that have been
+// flagged, not the whole conversations of all the back-and-forth."
+test("only a house reaching Tier 1 posts in #acquisitions; its offer, counter, hot and agreed reply quietly in its thread", () => {
+  assert.deepEqual(routeEvent({ type: "ghl_stage_moved", data: { to: "Tier 1" } }).map((r) => [r.stream, r.kind, r.opensOnly]), [["acquisitions", "tier1", true]]);
   assert.deepEqual(routeEvent({ type: "ghl_stage_moved", data: { to: "Tier 2" } }), [], "a card going down isn't news");
-  assert.equal(routeEvent({ type: "offer_countered" })[0].broadcast, true);
-  assert.equal(routeEvent({ type: "offer_accepted" })[0].broadcast, true);
+  assert.deepEqual(routeEvent({ type: "house_mentioned" }), [], "a house an agent named isn't Tier 1");
+  for (const type of ["offer_sent", "offer_countered", "realm_yes", "offer_accepted", "offer_passed"]) {
+    const [r] = routeEvent({ type });
+    assert.deepEqual([r.stream, r.replyOnly, r.broadcast], ["acquisitions", true, false], type);
+  }
   const hot = routeEvent({ type: "note", data: { phrase: "hot — close to a contract" } });
-  assert.deepEqual(hot.map((r) => [r.kind, r.broadcast]), [["hot", true]]);
+  assert.deepEqual(hot.map((r) => [r.kind, r.replyOnly, r.broadcast]), [["hot", true, false]]);
   assert.deepEqual(routeEvent({ type: "note", data: { phrase: "called, left a message" } }), [], "any other note is quiet");
   assert.deepEqual(routeEvent({ type: "deal_promoted" }).map((r) => r.stream), ["acquisitions", "dispositions"]);
 });

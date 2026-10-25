@@ -5303,7 +5303,7 @@ text.
 | Stream (`saved.slack.streams`) | Channel | What posts |
 |---|---|---|
 | needsMatt | `#needs-matt` | What lands in GHL's **Needs Matt** stage (needs-matt.js's list): a yes to approve, paper to sign, a house to price. Once each, with an @-mention. With `ghlStages` off, the GHL ping rows (`pingReasons`) instead |
-| acquisitions | `#acquisitions` | **One thread per house.** The top post is a Tier 1 house (`tier1_added`, a card moved to Tier 1) or a house an agent named. Replies cover the offer sent or revised, the counter, in the realm, hot, agreed, contract, the underwrite result, and passed. Counter, in the realm, hot, agreed and contract also show in the channel. An underwrite result or a pass only replies to a thread that's already there |
+| acquisitions | `#acquisitions` | **The Tier 1 list** (Matt, 2026-10-25: "just the tier 1s that have been flagged, not the back-and-forth"). The only post in the channel is a house reaching Tier 1 (`tier1_added`, a card moved to Tier 1), once per house. Its offer sent or revised, counter, in the realm, hot, agreed, contract, underwrite result and pass reply quietly in that thread, never in the channel feed, and only once the thread exists. A house an agent merely named isn't posted |
 | underwrites | `#underwrites` | **One message per run**, edited as it goes: running, then priced (number, ARV, rehab), held (the reasons), or failed. Also an address that left the queue without running |
 | dispositions | `#dispositions` | **One thread per deal**: the new deal (contract, fee, closing), each wave of buyer texts as one line ("sent to 25 buyers"), a buyer looking, passing or committed, the package opened, a walkthrough booked, the stage. Closed and fell through also show in the channel |
 | machine | `#machine` | A new kind of app error (once per fingerprint), and a scheduled job whose last run failed (once per run). Mute it |
@@ -5392,6 +5392,15 @@ or "flagged hot — close to a contract".
 - `POST /api/dashboard/slack/run` with `{ what: "events" | "pings" }` is a dry
   run by default: it lists what would post. With `{ what: "morning" | "evening" }`
   it posts that read now.
+- **Backfill:** `{ what: "events", since: "<ISO>", dryRun: false }` posts what
+  happened since then, at most 48 hours back.
+  - Run it with `dryRun` (the default) first: it previews each post with its
+    house, and threads like the real run.
+  - A real run makes 40 posts a call, about one a second. While `more` is true,
+    call again.
+  - It runs under the minute loop's lock, so the two never write the thread map
+    over each other.
+  - The claims stop anything from posting twice.
 
 ## Companion window (2026-10-16)
 
