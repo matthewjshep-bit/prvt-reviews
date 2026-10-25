@@ -292,3 +292,24 @@ test("two links in one text make two drafts, each its own house, not two of the 
     assert.match((await store.getOffer(job.offerId)).address, /^4417 Somerset Ln/, job.warnings?.join("; "));
   } finally { restore(); }
 });
+
+// Slack (2026-10-24) and the timeline read an underwrite off the record: the
+// job itself lives in memory and is gone at the next deploy.
+test("a held underwrite leaves started and held on the contact's record, with the house and why", async () => {
+  _resetJobs();
+  const { restore } = stubFetch();
+  try {
+    const { job } = await startUnderwrite({ client, locationId: "LOC-draft-ev", saved: draftOnly, store, contactId: "agent-ev1",
+      message: "Needs a new roof", address: ADDRESS, deps: noOffer });
+    assert.ok(await until(() => ["held", "done", "error"].includes(job.status)), `still ${job.status}/${job.phase}`);
+    assert.equal(job.status, "held", job.error || "");
+    const events = await store.listContactEvents("LOC-draft-ev", "agent-ev1", { types: ["underwrite_started", "underwrite_held"] });
+    const by = Object.fromEntries(events.map((e) => [e.type, e]));
+    assert.ok(by.underwrite_started, "started");
+    assert.ok(by.underwrite_held, "held");
+    assert.equal(by.underwrite_held.data.jobId, job.id);
+    assert.equal(by.underwrite_started.data.jobId, job.id);
+    assert.match(by.underwrite_held.address, /4417 Somerset Ln/);
+    assert.match(by.underwrite_held.data.held[0], DRAFT_ONLY_RX);
+  } finally { restore(); }
+});

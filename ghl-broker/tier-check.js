@@ -517,7 +517,7 @@ async function applyCardPlan({ client, locationId, store, api, acq, routing = {}
   if (plan.move && !plan.move.blocked) {
     const m = plan.move;
     await api.updateOpportunity(client, m.opportunityId, { stageId: m.toStageId, ...(m.status ? { status: m.status } : {}) });
-    await recordEvent({ store, locationId, contactId: m.contactId, party: "agent", type: "ghl_stage_moved", source,
+    await recordEvent({ store, locationId, contactId: m.contactId, party: "agent", type: "ghl_stage_moved", source, address: m.house || "",
       data: { from: m.from, to: m.to, why: m.why, ...(m.status ? { status: m.status } : {}) } }).catch(() => {});
     return { opportunityId: m.opportunityId, from: m.from, to: m.to };
   }
@@ -526,7 +526,7 @@ async function applyCardPlan({ client, locationId, store, api, acq, routing = {}
     // A conversation's card has no offer to name it from: the contact's own name.
     const name = c.name || [who?.firstName, who?.lastName].filter(Boolean).join(" ") || String(who?.name || who?.contactName || "");
     const made = await api.createOpportunity(client, { locationId, pipelineId: acq.id, contactId: c.contactId, name: name || "Agent", stageId: c.toStageId });
-    await recordEvent({ store, locationId, contactId: c.contactId, party: "agent", type: "ghl_stage_moved", source,
+    await recordEvent({ store, locationId, contactId: c.contactId, party: "agent", type: "ghl_stage_moved", source, address: c.house || "",
       data: { from: "", to: c.to, why: c.why, created: true } }).catch(() => {});
     return { opportunityId: made?.id || "", from: "", to: c.to };
   }

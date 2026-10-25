@@ -54,6 +54,11 @@ export const EVENT_TYPES = [
   // left it without running (auto-underwrite.js drainUnderwriteQueue). Today
   // shows it until the house is priced.
   "underwrite_dropped",
+  // An underwrite run, start to finish (ghl-broker/auto-underwrite.js): the
+  // address is known and it's running, it held (data.held, the reasons), it
+  // priced the house (data.cashAmount, arv, repairs), or it threw. Jobs live
+  // in memory; these are what's left of them, and what Slack hears (2026-10-24).
+  "underwrite_started", "underwrite_held", "underwrite_done", "underwrite_failed",
   // The price watch (ghl-broker/price-watch.js): the listing went pending or
   // sold, and — since 2026-09-29 — came back on the market.
   "listing_off_market", "listing_back_on_market",
@@ -167,6 +172,7 @@ export const EVENT_LABEL = {
   offer_passed: "they passed on our offer", offer_we_passed: "we passed on the property", offer_unavailable: "the house is no longer available", offer_no_response: "no response to our offer", offer_accepted: "they accepted our offer",
   realm_yes: "number was in the realm", realm_no: "number was not in the realm",
   underwrite_dropped: "an underwrite left the queue without running",
+  underwrite_started: "an underwrite started", underwrite_held: "an underwrite held for you", underwrite_done: "an underwrite priced the house", underwrite_failed: "an underwrite failed",
   listing_off_market: "the listing went off the market", listing_back_on_market: "the listing came back on the market",
   agent_pulse_sent: "a check-in was started", agent_pulse_texted: "we checked in", agent_pulse_voided: "a check-in drafted nothing",
   agent_pulse_joined: "joined the agent check-in",
@@ -242,6 +248,7 @@ export const EVENT_ICON = {
   email_received: "Mail",
   email_sent: "Mail",
   underwrite_dropped: "Clock",
+  underwrite_started: "Calculator", underwrite_held: "Clock", underwrite_done: "CheckCircle2", underwrite_failed: "XCircle",
   listing_off_market: "XCircle",
   listing_back_on_market: "RefreshCw",
   agent_pulse_sent: "BellRing", agent_pulse_texted: "MessageSquare", agent_pulse_voided: "Clock", agent_pulse_joined: "BellRing",

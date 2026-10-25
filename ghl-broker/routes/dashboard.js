@@ -64,6 +64,8 @@ import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize a
 import { handOffs } from "../shared/hand-off.js";
 import { ghlPingsOn } from "../shared/ghl-pings.js";
 import { runGhlPings, CURSOR_NAME as GHL_PINGS_CURSOR } from "../ghl-pings.js";
+import { normalizeSlack, slackOn, SLACK_STREAMS } from "../shared/slack-notify.js";
+import { runSlackEvents, runSlackPings, postMorning, postEvening, testSlack, CURSOR_NAME as SLACK_CURSOR, PINGS_CURSOR as SLACK_PINGS_CURSOR, MORNING_CURSOR as SLACK_MORNING_CURSOR, EVENING_CURSOR as SLACK_EVENING_CURSOR } from "../slack-notify.js";
 import { runNeedsMatt } from "../needs-matt.js";
 import { NEEDS_MATT_CURSOR } from "../shared/needs-matt.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
@@ -298,7 +300,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const calib = calibrationReport({ offers: await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []), settings });
       out.recommendations = [...out.recommendations, ...calib.recommendations];
       out.current = { ...out.current, underwriteCalibration: settings.underwriteCalibration || null };
-      const secrets = ["aiApiKey", "compsApiKey", "apifyToken", "captureToken", "rentcastApiKey", "googleApiKey", "zillowRapidApiKey", "githubToken"];
+      const secrets = ["aiApiKey", "compsApiKey", "apifyToken", "captureToken", "rentcastApiKey", "googleApiKey", "zillowRapidApiKey", "githubToken", "slackBotToken"];
       res.json({ ok: true, ...out,
         // Why buyers passed in the last 30 days, every deal, by the reason
         // their own words name (shared/funnel.js passThemes).
@@ -854,6 +856,53 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         return res.status(400).json({ error: "Pings are off: switch on \"Ping me in GHL\" and paste the workflow link in Settings first." });
       }
       res.json({ ok: true, ...(await runGhlPings({ store, locationId, client, saved, deps: { pipelineFor }, dryRun, trigger: "manual" })) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Slack (slack-notify.js, 2026-10-24). GET: the setting, whether the token
+  // is set, and what the last runs did (kinds and counts, no words). POST
+  // /slack/test says hello in every channel that's set, on or off. POST
+  // /slack/run { what }: "events" or "pings" ({ dryRun } by default, which
+  // lists and posts nothing), or "morning" / "evening", which post now.
+  router.get("/slack", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const settings = normalizeSlack(saved.slack);
+      const tokenSet = Boolean(String(saved.slackBotToken || "").trim());
+      const last = {};
+      for (const [k, name] of [["events", SLACK_CURSOR], ["pings", SLACK_PINGS_CURSOR], ["morning", SLACK_MORNING_CURSOR], ["evening", SLACK_EVENING_CURSOR]]) {
+        const c = await store.getJobCursor?.(locationId, name).catch(() => null);
+        last[k] = c ? { at: c.at, since: c.doc?.since || null, last: c.doc?.last || null, threads: c.doc?.threads ? Object.keys(c.doc.threads).length : undefined } : null;
+      }
+      res.json({ ok: true, settings, tokenSet, on: slackOn(settings, saved.slackBotToken),
+        streams: SLACK_STREAMS.map((s) => ({ stream: s, on: settings.streams[s], channelSet: Boolean(settings.channels[s]) })), last });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/slack/test", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const r = await testSlack({ saved });
+      if (r.error) return res.status(400).json({ error: r.error });
+      res.json({ ok: true, ...r });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/slack/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const what = String(req.body?.what || "events");
+      const dryRun = req.body?.dryRun !== false;
+      const settings = normalizeSlack(saved.slack);
+      if (!slackOn(settings, saved.slackBotToken)) return res.status(400).json({ error: "Slack is off: paste the bot token and switch it on in Settings first." });
+      if (what === "events") return res.json({ ok: true, ...(await runSlackEvents({ store, locationId, saved, dryRun })) });
+      if (what === "pings") return res.json({ ok: true, ...(await runSlackPings({ store, locationId, saved, deps: { pipelineFor, client }, dryRun })) });
+      if (what === "morning" || what === "evening") {
+        if (!settings.channels.daily) return res.status(400).json({ error: "set the #daily channel first" });
+        return res.json({ ok: true, ...(await (what === "morning" ? postMorning : postEvening)({ store, locationId, saved })) });
+      }
+      res.status(400).json({ error: "what: events, pings, morning or evening" });
     } catch (err) { fail(res, err); }
   });
 
