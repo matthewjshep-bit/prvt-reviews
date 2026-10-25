@@ -65,7 +65,7 @@ import { handOffs } from "../shared/hand-off.js";
 import { ghlPingsOn } from "../shared/ghl-pings.js";
 import { runGhlPings, CURSOR_NAME as GHL_PINGS_CURSOR } from "../ghl-pings.js";
 import { normalizeSlack, slackOn, SLACK_STREAMS } from "../shared/slack-notify.js";
-import { runSlackEvents, runSlackPings, postMorning, postEvening, testSlack, CURSOR_NAME as SLACK_CURSOR, PINGS_CURSOR as SLACK_PINGS_CURSOR, MORNING_CURSOR as SLACK_MORNING_CURSOR, EVENING_CURSOR as SLACK_EVENING_CURSOR } from "../slack-notify.js";
+import { runSlackEventsNow, runSlackPings, postMorning, postEvening, testSlack, CURSOR_NAME as SLACK_CURSOR, PINGS_CURSOR as SLACK_PINGS_CURSOR, MORNING_CURSOR as SLACK_MORNING_CURSOR, EVENING_CURSOR as SLACK_EVENING_CURSOR } from "../slack-notify.js";
 import { runNeedsMatt } from "../needs-matt.js";
 import { NEEDS_MATT_CURSOR } from "../shared/needs-matt.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
@@ -864,6 +864,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   // /slack/test says hello in every channel that's set, on or off. POST
   // /slack/run { what }: "events" or "pings" ({ dryRun } by default, which
   // lists and posts nothing), or "morning" / "evening", which post now.
+  // `since` (ISO, at most 48 hours back) backfills events from then: up to
+  // 40 posts a call, paced for Slack's rate limit; `more` says call again.
   router.get("/slack", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -896,7 +898,12 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const dryRun = req.body?.dryRun !== false;
       const settings = normalizeSlack(saved.slack);
       if (!slackOn(settings, saved.slackBotToken)) return res.status(400).json({ error: "Slack is off: paste the bot token and switch it on in Settings first." });
-      if (what === "events") return res.json({ ok: true, ...(await runSlackEvents({ store, locationId, saved, dryRun })) });
+      if (what === "events") {
+        const since = req.body?.since ? String(req.body.since) : null;
+        if (since && !Number.isFinite(Date.parse(since))) return res.status(400).json({ error: "since: an ISO time" });
+        const backfill = since ? { since, max: dryRun ? 500 : 40, paceMs: 1100 } : {};
+        return res.json({ ok: true, ...(await runSlackEventsNow({ store, locationId, saved, dryRun, ...backfill })) });
+      }
       if (what === "pings") return res.json({ ok: true, ...(await runSlackPings({ store, locationId, saved, deps: { pipelineFor, client }, dryRun })) });
       if (what === "morning" || what === "evening") {
         if (!settings.channels.daily) return res.status(400).json({ error: "set the #daily channel first" });

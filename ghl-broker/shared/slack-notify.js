@@ -95,15 +95,24 @@ const DEAD = { offer_passed: "they passed", offer_we_passed: "we passed", offer_
 const LOUD_STAGES = new Set(["closed", "fell_through"]);
 
 /**
- * routeEvent(ev) → [{ stream, kind, thread, broadcast, update, replyOnly }]
+ * routeEvent(ev) → [{ stream, kind, thread, broadcast, update, replyOnly, opensOnly }]
+ *
+ * #acquisitions is the Tier 1 list (Matt, 2026-10-25: "acquisition should
+ * just show tier 1s that have been flagged, not the whole conversations"):
+ * a house reaching Tier 1 is the only post in the channel. What follows —
+ * the offer, a counter, hot, agreed, contract, the underwrite, a pass —
+ * replies quietly in that house's thread, and only once there is one.
+ * A house an agent merely named isn't Tier 1 and isn't posted.
  *
  *   thread     "house" (the house's thread in that stream), "deal", "run"
  *              (one message per underwrite run, edited as it goes), or null
  *              (a post of its own)
  *   broadcast  a thread reply that also shows in the channel
  *   update     edit the run's message in place rather than post again
- *   replyOnly  only as a reply in a thread already there: an underwrite's
- *              result or a pass doesn't open a house in #acquisitions
+ *   replyOnly  only as a reply in a thread already there: nothing but
+ *              Tier 1 opens a house in #acquisitions
+ *   opensOnly  only when there's no thread yet: a house moved back into
+ *              Tier 1 isn't posted twice
  *
  * Empty for anything Slack doesn't hear about.
  */
@@ -111,23 +120,23 @@ export function routeEvent(ev = {}) {
   const t = ev?.type;
   const d = ev?.data || {};
   const out = [];
-  const base = { broadcast: false, update: false, replyOnly: false };
+  const base = { broadcast: false, update: false, replyOnly: false, opensOnly: false };
   const acq = (kind, o = {}) => out.push({ stream: "acquisitions", kind, thread: "house", ...base, ...o });
   const uw = (kind, o = {}) => out.push({ stream: "underwrites", kind, thread: "run", ...base, ...o });
   const dispo = (kind, o = {}) => out.push({ stream: "dispositions", kind, thread: "deal", ...base, ...o });
   const investor = ev?.party === "investor";
 
-  if (t === "tier1_added") acq("tier1");
-  else if (t === "ghl_stage_moved" && d.to === "Tier 1") acq("tier1");
-  else if (t === "house_mentioned" && !investor) acq("house_named");
-  else if (t === "offer_sent" && !investor) acq("offer_sent");
-  else if (t === "offer_revised" && !investor) acq("offer_revised");
-  else if (t === "offer_countered") acq("countered", { broadcast: true });
-  else if (t === "realm_yes") acq("realm_yes", { broadcast: true });
-  else if (isHotNote(ev)) acq("hot", { broadcast: true });
-  else if (t === "offer_accepted") acq("agreed", { broadcast: true });
-  else if (DEAD[t] && !investor) acq("dead", { replyOnly: true });
-  else if (t === "deal_promoted") { acq("contract", { broadcast: true }); dispo("promoted", { thread: "deal" }); }
+  const reply = { replyOnly: true };
+  if (t === "tier1_added") acq("tier1", { opensOnly: true });
+  else if (t === "ghl_stage_moved" && d.to === "Tier 1") acq("tier1", { opensOnly: true });
+  else if (t === "offer_sent" && !investor) acq("offer_sent", reply);
+  else if (t === "offer_revised" && !investor) acq("offer_revised", reply);
+  else if (t === "offer_countered") acq("countered", reply);
+  else if (t === "realm_yes") acq("realm_yes", reply);
+  else if (isHotNote(ev)) acq("hot", reply);
+  else if (t === "offer_accepted") acq("agreed", reply);
+  else if (DEAD[t] && !investor) acq("dead", reply);
+  else if (t === "deal_promoted") { acq("contract", reply); dispo("promoted", { thread: "deal" }); }
   else if (t === "deal_stage") dispo("stage", { broadcast: LOUD_STAGES.has(String(d.stage || "")) });
   else if (t === "investor_committed") dispo("committed", { broadcast: true });
   else if (t === "investor_evaluating") dispo("evaluating");
@@ -144,7 +153,7 @@ export function routeEvent(ev = {}) {
 
 /** The event types the sweep reads (blast_sent is folded into one line per deal per run). */
 export const SLACK_EVENT_TYPES = Object.freeze([
-  "tier1_added", "ghl_stage_moved", "house_mentioned", "offer_sent", "offer_revised", "offer_countered", "realm_yes",
+  "tier1_added", "ghl_stage_moved", "offer_sent", "offer_revised", "offer_countered", "realm_yes",
   "note", "offer_accepted", ...Object.keys(DEAD), "deal_promoted", "deal_stage", "investor_committed", "investor_evaluating",
   "investor_passed", "dataroom_viewed", "call_booked", "underwrite_started", "underwrite_done", "underwrite_held",
   "underwrite_failed", "underwrite_dropped", "blast_sent",
@@ -223,7 +232,7 @@ export function slackLinks({ appUrl = SLACK_DEFAULTS.appUrl, locationId = "", co
 }
 
 const ICON = {
-  tier1: ":large_green_circle:", house_named: ":house:", offer_sent: ":outbox_tray:", offer_revised: ":pencil2:",
+  tier1: ":large_green_circle:", offer_sent: ":outbox_tray:", offer_revised: ":pencil2:",
   countered: ":left_right_arrow:", realm_yes: ":ok_hand:", hot: ":fire:", agreed: ":handshake:", dead: ":white_circle:",
   contract: ":memo:", promoted: ":memo:", stage: ":arrow_forward:", committed: ":moneybag:", evaluating: ":eyes:",
   buyer_passed: ":white_circle:", viewed: ":open_file_folder:", walkthrough: ":calendar:", waves: ":mega:",
@@ -242,7 +251,6 @@ function headline(kind, ev, ctx) {
   const amount = money(amountOf(d));
   switch (kind) {
     case "tier1": return `${house} is Tier 1${who}`;
-    case "house_named": return `${house}: an agent named a house${who}${n(d.sellerAsk) ? ` — asking ${money(d.sellerAsk)}` : ""}${d.needsAddress ? " — no full address yet" : ""}`;
     case "offer_sent": return `Offer sent on ${house}${amount ? `: ${amount}` : ours ? `: ${ours}` : ""}`;
     case "offer_revised": return `Offer revised on ${house}${amount ? ` to ${amount}` : ""}`;
     case "countered": return `Counter on ${house}${amount ? `: ${amount}` : ""}${ours ? ` (ours ${ours})` : ""}${who}`;
@@ -293,7 +301,7 @@ export function renderEvent(route, ev = {}, ctx = {}) {
   return { text: clip(head.replace(/\*/g, ""), 150), blocks };
 }
 // Where the one-line summary of what they said earns its place.
-const SUMMARY_KINDS = new Set(["tier1", "house_named", "countered", "realm_yes", "hot", "agreed", "committed", "evaluating", "buyer_passed", "promoted"]);
+const SUMMARY_KINDS = new Set(["tier1", "countered", "realm_yes", "hot", "agreed", "committed", "evaluating", "buyer_passed", "promoted"]);
 
 /** renderBlasts(group, ctx) → one line for a wave of buyer texts on one deal. */
 export function renderBlasts(g = {}, ctx = {}) {
