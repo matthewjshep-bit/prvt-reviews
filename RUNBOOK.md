@@ -5304,7 +5304,7 @@ text.
 |---|---|---|
 | needsMatt | `#needs-matt` | What lands in GHL's **Needs Matt** stage (needs-matt.js's list): a yes to approve, paper to sign, a house to price. Once each, with an @-mention. With `ghlStages` off, the GHL ping rows (`pingReasons`) instead |
 | acquisitions | `#acquisitions` | **The Tier 1 list** (Matt, 2026-10-25: "just the tier 1s that have been flagged, not the back-and-forth"). The only post in the channel is a house reaching Tier 1 (`tier1_added`, a card moved to Tier 1), once per house. The post is itemized, one thing a line, with the links underneath: **Tier 1 flagged: <street>**, Agent (full name — from the record, else read from GHL), Address (full), Description (the summary of what they said, else why it's Tier 1). Its offer sent or revised, counter, in the realm, hot, agreed, contract, underwrite result and pass reply quietly in that thread, never in the channel feed, and only once the thread exists. A house an agent merely named isn't posted |
-| underwrites | `#underwrites` | **One message per run**, edited as it goes: running, then priced (number, ARV, rehab), held (the reasons), or failed. Also an address that left the queue without running |
+| underwrites | `#underwrites` | **Real underwrites only**: a run that prices the house, edited in place from running to priced (number, ARV, rehab), held (the reasons) or failed. A skeleton or draft-only run (`autoUnderwriteMode` skeleton/draft, Matt prices by hand, 2026-10-25) only makes a draft: it posts nowhere, here or in the house's Tier 1 thread. With skeleton on, this channel is nearly silent (only full runs a person starts). Also an address that left the queue without running |
 | dispositions | `#dispositions` | **One thread per deal**: the new deal (contract, fee, closing), each wave of buyer texts as one line ("sent to 25 buyers"), a buyer looking, passing or committed, the package opened, a walkthrough booked, the stage. Closed and fell through also show in the channel |
 | machine | `#machine` | A new kind of app error (once per fingerprint), and a scheduled job whose last run failed (once per run). Mute it |
 | daily | `#daily` | `morningHour` (7am): the last 24 hours in numbers. `eveningHour` (7pm): the evening digest (`shared/digest.js`) by street, plus the machine's failures |
@@ -5340,7 +5340,10 @@ start (`since`), so no history is posted. Open Needs Matt items do post.
 **Underwrite events.** Underwrites leave events now:
 `underwrite_started`, `underwrite_held`, `underwrite_done` and
 `underwrite_failed`, written by `auto-underwrite.js recordRun` with
-`data.jobId`. Runs are in memory, so these are what the timeline and Slack
+`data.jobId`. `underwrite_started` is written only past the skeleton and
+draft-only stops (a run that will price). A draft hold carries
+`data.draftOnly`, and Slack skips it. The Offers "Underwrites" strip hides
+those rows too, so its Retry (a full paid run) can't be pressed on a draft. Runs are in memory, so these are what the timeline and Slack
 read. Dry runs and form fills leave none.
 
 **Hot.** Hot is read from the deal-history note "hot — close to a contract"

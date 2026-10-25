@@ -14,6 +14,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, Loader2, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
+import { DRAFT_ONLY_RX } from "@shared/offer-status.js";
 import { cancelUnderwrite, getUnderwrites, retryUnderwrite } from "./api.js";
 import { BTN, Pill } from "./ui.jsx";
 
@@ -45,7 +46,13 @@ const elapsed = (job) => {
 // A job is worth a row while it's live, and for an hour after it stopped
 // needing attention. Successful runs drop off immediately — the offer they
 // made is in the table underneath.
+// A skeleton or draft-only run isn't an underwrite at all (Matt, 2026-10-25:
+// he prices by hand): it made a draft, which is in the table below. Its row
+// read as a warning, and its Retry bought a full machine underwrite.
+export const draftOnlyJob = (job) => job?.status === "held" && DRAFT_ONLY_RX.test(String(job.held?.[0] || ""));
+
 const worthShowing = (job) => {
+  if (draftOnlyJob(job)) return false;
   if (LIVE.has(job.status)) return true;
   // Retried: the new attempt has its own row, and this one would only repeat it.
   if (job.retriedAs) return false;

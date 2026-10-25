@@ -183,3 +183,11 @@ test("the GHL app link must be an https link; a full name that isn't one is drop
   assert.equal(fullName("  Ann   Marie Lee "), "Ann Marie Lee");
   assert.equal(fullName("206-555-0142"), "");
 });
+
+// Matt, 2026-10-25: "we're doing the underwrites by hand" — a skeleton or
+// draft-only run made a draft, it didn't hold an underwrite.
+test("a draft the app made for Matt to price posts nowhere; a real held underwrite still does", () => {
+  assert.deepEqual(routeEvent({ type: "underwrite_held", data: { draftOnly: true, held: ["ready for your comps — the app made a skeleton from the address, nothing looked up"] } }), []);
+  assert.deepEqual(routeEvent({ type: "underwrite_held", data: { held: ["ready for your comps — the app made the draft, you price it"] } }), [], "events from before draftOnly was recorded");
+  assert.deepEqual(routeEvent({ type: "underwrite_held", data: { held: ["fewer than 8 photos"] } }).map((r) => r.stream), ["underwrites", "acquisitions"]);
+});

@@ -18,6 +18,7 @@
 
 import { addressKey } from "./us-address.js";
 import { pingWhy } from "./ghl-pings.js";
+import { DRAFT_ONLY_RX } from "./offer-status.js";
 
 export const SLACK_STREAMS = Object.freeze(["needsMatt", "acquisitions", "underwrites", "dispositions", "machine", "daily"]);
 export const SLACK_STREAM_LABEL = Object.freeze({
@@ -96,6 +97,10 @@ const phraseOf = (ev) => String(ev?.data?.phrase || "").toLowerCase();
 // PATCH /:id/hot and raiseOfferHeat): "hot — close to a contract".
 const isHotNote = (ev) => ev?.type === "note" && /^(flagged )?hot\b/.test(phraseOf(ev));
 
+// Both draft holds start "ready for your comps" (shared/offer-status.js
+// DRAFT_ONLY_HOLD / SKELETON_HOLD); events before data.draftOnly carry only that.
+const isDraftOnlyHold = (d = {}) => d.draftOnly === true || (Array.isArray(d.held) && DRAFT_ONLY_RX.test(String(d.held[0] || "")));
+
 const DEAD = { offer_passed: "they passed", offer_we_passed: "we passed", offer_unavailable: "no longer available", offer_no_response: "no response", tier1_passed: "passed from Tier 1" };
 const LOUD_STAGES = new Set(["closed", "fell_through"]);
 
@@ -150,6 +155,9 @@ export function routeEvent(ev = {}) {
   else if (t === "call_booked" && investor) dispo("walkthrough");
   else if (t === "underwrite_started") uw("started");
   else if (t === "underwrite_done") { uw("done", { update: true }); acq("uw_done", { replyOnly: true }); }
+  // A skeleton or draft-only run only made Matt a draft (Matt, 2026-10-25:
+  // "we're doing the underwrites by hand"); it isn't a held underwrite.
+  else if (t === "underwrite_held" && isDraftOnlyHold(d)) return out;
   else if (t === "underwrite_held") { uw("held", { update: true }); acq("uw_held", { replyOnly: true }); }
   else if (t === "underwrite_failed") { uw("failed", { update: true }); acq("uw_failed", { replyOnly: true }); }
   else if (t === "underwrite_dropped") uw("dropped", { thread: null });
