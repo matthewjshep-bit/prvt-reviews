@@ -36,9 +36,10 @@ import { addressKey } from "./shared/us-address.js";
 import { getContact } from "./ghl.js";
 import { contactName } from "./contact-record.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
+import { offerStageAt } from "./shared/offer-stage.js";
 import { NEEDS_MATT_CURSOR } from "./shared/needs-matt.js";
 import {
-  fullName, normalizeSlack, slackOn, streamOn, routeEvent, threadKeyFor, foldBlasts, renderEvent, renderBlasts, renderPing, renderNeed,
+  acquisitionStatus, dispositionStatus, withStatus, fullName, normalizeSlack, slackOn, streamOn, routeEvent, threadKeyFor, foldBlasts, renderEvent, renderBlasts, renderPing, renderNeed,
   renderError, renderJobFailed, renderMorning, renderEvening, morningCounts, slackClaimKey, firstName,
   SLACK_EVENT_TYPES, MORNING_EVENT_TYPES, SLACK_STREAMS, SLACK_STREAM_LABEL,
 } from "./shared/slack-notify.js";
@@ -150,7 +151,7 @@ function contextReader({ store, locationId, cfg, now, client = null }) {
 export async function runSlackEvents({ store = defaultStore, locationId, client = null, saved = {}, now = Date.now(), dryRun = false, since = null, max = MAX_PER_RUN, paceMs = 0, refresh = false } = {}) {
   const cfg = normalizeSlack(saved?.slack);
   const token = String(saved?.slackBotToken || "").trim();
-  const out = { dryRun, startedAt: iso(now), finishedAt: null, read: 0, posted: [], skipped: 0, failed: [], error: null };
+  const out = { dryRun, startedAt: iso(now), finishedAt: null, read: 0, posted: [], skipped: 0, failed: [], statuses: [], error: null };
   const done = () => { out.finishedAt = iso(Date.now()); return out; };
   if (!slackOn(cfg, token)) { out.error = "off: switch Slack on and paste the bot token in Settings"; return done(); }
 
@@ -195,6 +196,14 @@ export async function runSlackEvents({ store = defaultStore, locationId, client 
 
   const ctxFor = contextReader({ store, locationId, cfg, now, client });
   const refreshed = new Set();
+  // Threads whose house or deal may have changed status this run.
+  const dirty = new Set();
+  const touch = (it, tk) => { if (tk && STATUS_STREAMS.has(it.route.stream) && threads[tk]) dirty.add(tk); };
+  // What a new thread remembers, so its status can be kept on it later.
+  const opener = (it, tk, ctx, msg) => ({
+    stream: it.route.stream, contactId: it.ev.contactId || null, text: msg.text, blocks: msg.blocks,
+    offerId: String(tk).startsWith("deal:") ? String(tk).slice(5) : it.ev.offerId || ctx.offerId || null,
+  });
   for (const it of items) {
     if (out.posted.length >= max) { out.skipped++; out.more = true; continue; }
     const ctx = await ctxFor(it.ev);
@@ -210,6 +219,10 @@ export async function runSlackEvents({ store = defaultStore, locationId, client 
       if (paceMs > 0 && out.posted.length) await new Promise((r) => setTimeout(r, paceMs));
       try {
         await edit(token, channel, th.ts, msg);
+        // The edit took the Status line off: the status pass puts it back.
+        const o = opener(it, tk, ctx, msg);
+        threads = { ...threads, [tk]: { ...th, ...o, offerId: th.offerId || o.offerId, statusLabel: null } };
+        touch(it, tk);
         out.posted.push({ ...row, status: "refreshed" });
       } catch (e) {
         if (e?.slack === "rate_limited") { out.error = "rate limited: the rest next run"; break; }
@@ -217,11 +230,11 @@ export async function runSlackEvents({ store = defaultStore, locationId, client 
       }
       continue;
     }
-    // Nothing to reply to, or a house already open: claimed and let go, so
-    // it isn't weighed again.
-    if ((it.route.replyOnly && !th) || (it.route.opensOnly && th)) {
+    // Nothing to reply to, or a house already open, or only its status to
+    // look at: claimed and let go, so it isn't weighed again.
+    if ((it.route.replyOnly && !th) || (it.route.opensOnly && th) || it.route.statusOnly) {
       out.skipped++;
-      if (!dryRun) for (const k of it.keys) posted[k] = iso(now);
+      if (!dryRun) { for (const k of it.keys) posted[k] = iso(now); if (th) touch(it, tk); }
       continue;
     }
     if (dryRun) {
@@ -242,9 +255,10 @@ export async function runSlackEvents({ store = defaultStore, locationId, client 
       else if (th && it.route.thread !== "run") await post(token, channel, msg, { thread_ts: th.ts, ...(it.route.broadcast ? { reply_broadcast: true } : {}) });
       else ts = (await post(token, channel, msg))?.ts || null;
       if (tk && ts) {
-        threads = { ...threads, [tk]: { ts, channel, at } };
+        threads = { ...threads, [tk]: { ...(th || opener(it, tk, ctx, msg)), ts, channel, at } };
         await patchCursor(store, locationId, CURSOR_NAME, { threads });
       }
+      touch(it, tk);
       out.posted.push({ ...row, status: th ? (it.route.update ? "edited" : "replied") : "posted" });
     } catch (e) {
       if (e?.slack === "rate_limited") {
@@ -259,7 +273,73 @@ export async function runSlackEvents({ store = defaultStore, locationId, client 
     }
   }
   if (!dryRun) await patchCursor(store, locationId, CURSOR_NAME, { posted });
+  if (!dryRun && dirty.size) {
+    threads = await syncStatuses({ store, locationId, token, threads, keys: [...dirty], out, paceMs });
+    await patchCursor(store, locationId, CURSOR_NAME, { threads });
+  }
   return done();
+}
+
+/* ---------- status: one emoji per house and per deal ---------- */
+
+const STATUS_STREAMS = new Set(["acquisitions", "dispositions"]);
+const SCOPE_ERRORS = new Set(["missing_scope", "not_allowed_token_type"]);
+
+/**
+ * syncStatuses({ store, locationId, token, threads, keys, out, paceMs }) → threads
+ *
+ * For each thread, the offer's status now (shared/slack-notify.js
+ * acquisitionStatus / dispositionStatus): the bot's one reaction on the
+ * opening post is swapped to match, and the post's Status line rewritten.
+ * Nothing changes when the status hasn't. Without reactions:write the
+ * Status line still moves and out.statusError says what to add.
+ */
+async function syncStatuses({ store, locationId, token, threads, keys, out, paceMs = 0 }) {
+  let next = { ...threads };
+  let reactions = true;
+  for (const tk of keys) {
+    const th = next[tk];
+    if (!th?.ts || th.ts === "dry-run") continue;
+    const stream = th.stream || (String(tk).startsWith("deal:") ? "dispositions" : "acquisitions");
+    const offerId = th.offerId || (String(tk).startsWith("deal:") ? String(tk).slice(5) : null);
+    const offer = offerId ? await store.getOffer?.(offerId).catch(() => null) : null;
+    if (!offer || (offer.locationId && offer.locationId !== locationId)) continue;
+    const status = stream === "dispositions" ? dispositionStatus(offer) : acquisitionStatus(offer);
+    const emoji = status?.emoji || null;
+    const label = status?.label || null;
+    if (emoji === (th.statusEmoji ?? null) && label === (th.statusLabel ?? null)) continue;
+    if (paceMs > 0 && out.statuses.length) await new Promise((r) => setTimeout(r, paceMs));
+    const upd = { ...th, stream, offerId };
+    try {
+      if (reactions && emoji !== (th.statusEmoji ?? null)) {
+        if (th.statusEmoji) {
+          await slackApi(token, "reactions.remove", { channel: th.channel, timestamp: th.ts, name: th.statusEmoji })
+            .catch((e) => { if (!["no_reaction", "message_not_found"].includes(e?.slack)) throw e; });
+        }
+        if (emoji) {
+          await slackApi(token, "reactions.add", { channel: th.channel, timestamp: th.ts, name: emoji })
+            .catch((e) => { if (e?.slack !== "already_reacted") throw e; });
+        }
+        upd.statusEmoji = emoji;
+      }
+    } catch (e) {
+      if (SCOPE_ERRORS.has(e?.slack)) { reactions = false; out.statusError = "add the reactions:write scope to the Slack app and reinstall it"; }
+      else if (e?.slack === "rate_limited") break;
+      else out.failed.push({ stream, kind: "status", error: scrubMessage(e).slice(0, 160) });
+    }
+    if (th.blocks) {
+      try {
+        await edit(token, th.channel, th.ts, { text: th.text, blocks: withStatus(th.blocks, status, offerStageAt(offer)) });
+        upd.statusLabel = label;
+      } catch (e) {
+        if (e?.slack === "rate_limited") { next = { ...next, [tk]: upd }; break; }
+        out.failed.push({ stream, kind: "status", error: scrubMessage(e).slice(0, 160) });
+      }
+    } else upd.statusLabel = label;
+    next = { ...next, [tk]: upd };
+    out.statuses.push({ stream, status: status?.key || "none", reacted: upd.statusEmoji === emoji });
+  }
+  return next;
 }
 
 /* ---------- needs Matt and the machine: every tick ---------- */
@@ -400,7 +480,7 @@ export function _resetSlack() { running.clear(); }
 // What a run did, for the cursor: kinds and ids, not words.
 export const summarizeSlack = (r) => ({
   startedAt: r?.startedAt || null, finishedAt: r?.finishedAt || null, error: r?.error || null, read: r?.read ?? null,
-  posted: (r?.posted || []).length, skipped: r?.skipped || 0,
+  posted: (r?.posted || []).length, skipped: r?.skipped || 0, statuses: (r?.statuses || []).length, statusError: r?.statusError || null,
   failed: (r?.failed || []).map((p) => ({ stream: p.stream, kind: p.kind, error: p.error })),
 });
 

@@ -15,7 +15,8 @@
 
 import { addressKey } from "./us-address.js";
 import { pingWhy } from "./ghl-pings.js";
-import { DRAFT_ONLY_RX } from "./offer-status.js";
+import { DRAFT_ONLY_RX, wePassReasonOf } from "./offer-status.js";
+import { offerStage } from "./offer-stage.js";
 
 export const SLACK_STREAMS = Object.freeze(["needsMatt", "acquisitions", "underwrites", "dispositions", "machine", "daily"]);
 export const SLACK_STREAM_LABEL = Object.freeze({
@@ -120,6 +121,7 @@ const LOUD_STAGES = new Set(["closed", "fell_through"]);
  *              Tier 1 opens a house in #acquisitions
  *   opensOnly  only when there's no thread yet: a house moved back into
  *              Tier 1 isn't posted twice
+ *   statusOnly posts nothing; only the thread's status emoji is looked at again
  *
  * Empty for anything Slack doesn't hear about.
  */
@@ -141,6 +143,8 @@ export function routeEvent(ev = {}) {
   else if (t === "offer_countered") acq("countered", reply);
   else if (t === "realm_yes") acq("realm_yes", reply);
   else if (isHotNote(ev)) acq("hot", reply);
+  // Hot taken off posts nothing; the house's status emoji still follows it.
+  else if (t === "note" && /^no longer hot\b/.test(phraseOf(ev))) acq("not_hot", { statusOnly: true });
   else if (t === "offer_accepted") acq("agreed", reply);
   else if (DEAD[t] && !investor) acq("dead", reply);
   else if (t === "deal_promoted") { acq("contract", reply); dispo("promoted", { thread: "deal" }); }
@@ -384,6 +388,72 @@ export function renderNeed(v = {}, ctx = {}) {
   const blocks = [{ type: "section", text: { type: "mrkdwn", text } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   return { text: clip(`Needs you: ${why}`, 150), blocks };
+}
+
+/* ---------- status: one emoji per house and per deal ---------- */
+
+// Matt, 2026-10-25: "Slack to be a living record of what's been done" — glance
+// at #acquisitions and see what happened to each house. The app keeps one
+// status emoji (a reaction) and a Status line on the post that opened the
+// thread, and moves them when the offer moves. Reactions people add are
+// theirs and are never touched.
+
+const cap1 = (s) => String(s || "").replace(/^./, (c) => c.toUpperCase());
+
+/**
+ * acquisitionStatus(offer) → { key, emoji, label } | null — a Tier 1 house's
+ * status; null while it's still waiting on us (a draft).
+ */
+export function acquisitionStatus(o) {
+  if (!o) return null;
+  const s = offerStage(o);
+  if (s.sub === "accepted") return { key: "good", emoji: "white_check_mark", label: o.deal ? (o.deal.stage === "closed" ? "Closed" : "Under contract") : "Agreed" };
+  if (s.sub === "passed") {
+    const why = wePassReasonOf(o);
+    return { key: "passed", emoji: "x", label: `${cap1(s.why)}${why ? ` — ${why.label.toLowerCase()}` : ""}` };
+  }
+  if (s.sub === "hot") return { key: "hot", emoji: "fire", label: "Hot — close to a contract" };
+  if (s.sub === "countered") return { key: "countered", emoji: "left_right_arrow", label: "They countered" };
+  if (s.stage === "sent") return { key: "sent", emoji: "outbox_tray", label: `Offer sent${money(o.cashAmount) ? ` — ${money(o.cashAmount)}` : ""}` };
+  return null;
+}
+
+/**
+ * dispositionStatus(offer) → { key, emoji, label } | null — a deal's status
+ * with its buyers. A buyer counts as looking once they showed interest (a
+ * pre-sale pitch alone doesn't).
+ */
+export function dispositionStatus(o) {
+  const d = o?.deal;
+  if (!d) return null;
+  if (d.stage === "closed") return { key: "closed", emoji: "trophy", label: "Closed" };
+  if (d.stage === "fell_through") return { key: "fell", emoji: "x", label: "Fell through" };
+  if (d.stage === "assigned") return { key: "assigned", emoji: "memo", label: "Assigned" };
+  const inv = (d.investors || []).filter(Boolean);
+  if (d.stage === "buyer_found" || inv.some((i) => i.status === "committed")) return { key: "committed", emoji: "handshake", label: "Buyer committed" };
+  const looking = inv.filter((i) => i.status === "evaluating" && i.source !== "presell").length;
+  if (looking) return { key: "looking", emoji: "eyes", label: `${looking} buyer${looking === 1 ? "" : "s"} looking` };
+  if ((d.blasts || []).length) return { key: "marketing", emoji: "mega", label: "Sent to buyers" };
+  return null;
+}
+
+const STATUS_RX = /^\*Status:\*/;
+
+/**
+ * withStatus(blocks, status, at) → the opening post's blocks with its Status
+ * line (second line of the first section) set, replaced, or taken out.
+ */
+export function withStatus(blocks = [], status = null, at = null) {
+  const day = at ? new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" }) : "";
+  const line = status ? `*Status:* :${status.emoji}: ${esc(status.label)}${day ? ` (${day})` : ""}` : null;
+  let done = false;
+  return (blocks || []).map((b) => {
+    if (done || b?.type !== "section" || typeof b.text?.text !== "string") return b;
+    done = true;
+    const lines = b.text.text.split("\n").filter((l) => !STATUS_RX.test(l));
+    if (line) lines.splice(1, 0, line);
+    return { ...b, text: { ...b.text, text: lines.join("\n") } };
+  });
 }
 
 /** slackClaimKey(kind, id) → the cursor's key for one thing told once. */

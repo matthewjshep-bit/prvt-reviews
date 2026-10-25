@@ -5349,6 +5349,57 @@ read. Dry runs and form fills leave none.
 **Hot.** Hot is read from the deal-history note "hot — close to a contract"
 or "flagged hot — close to a contract".
 
+### Status emoji (2026-10-25)
+
+Matt: "Slack to be a living record of what's been done". Glance at a channel
+and see what happened to each house.
+
+The post that opened a thread carries **one status emoji**: a reaction by the
+bot. It also carries a **Status:** line under its first line, for example
+"Status: ❌ We passed — too turnkey (Oct 25)". Both move when the offer moves,
+within a minute, by the minute loop.
+
+**Acquisitions** (`acquisitionStatus`, from `shared/offer-stage.js` offerStage):
+
+| Emoji | Means |
+|---|---|
+| (none) | Waiting on us (a draft) |
+| 📤 | Offer sent, with our number |
+| ↔️ | They countered |
+| 🔥 | Hot |
+| ✅ | Agreed, under contract, or closed |
+| ❌ | We passed (with the reason), they passed, no longer available, no response, or the deal fell through |
+
+**Dispositions** (`dispositionStatus`):
+
+| Emoji | Means |
+|---|---|
+| 📣 | Sent to buyers |
+| 👀 | N buyers looking. A pre-sale pitch alone doesn't count |
+| 🤝 | Buyer committed, or buyer found |
+| 📝 | Assigned |
+| 🏆 | Closed |
+| ❌ | Fell through |
+
+**How it runs.**
+
+- **One direction only:** app → Slack. Reactions people add are theirs and
+  change nothing in the app, and the bot never touches them.
+- **What it remembers:** each thread entry on the `slack` cursor keeps the
+  opening post's blocks, `offerId`, `statusEmoji` and `statusLabel`.
+- **When it updates:** any routed event on the house or deal triggers a status
+  pass (`syncStatuses`). Hot taken off is a silent `statusOnly` route.
+- **Older posts:** a backfill with `refresh: true` puts statuses on posts that
+  were made before statuses existed.
+
+**Missing permission.** The reaction needs the bot scope `reactions:write`.
+Without it the Status line still moves, and the run's `statusError` says
+"add the reactions:write scope". To fix it:
+
+1. Add the scope to the manifest (App Manifest → `oauth_config.scopes.bot`).
+2. Click **Reinstall to Workspace**.
+3. Run a refresh backfill.
+
 ### Setup
 
 1. **Workspace and channels.**
@@ -5373,6 +5424,7 @@ or "flagged hot — close to a contract".
      scopes:
        bot:
          - chat:write
+         - reactions:write
    ```
 3. **Invite the bot.** In each channel, run `/invite @Shep Flips`.
 4. **Collect the ids.**
