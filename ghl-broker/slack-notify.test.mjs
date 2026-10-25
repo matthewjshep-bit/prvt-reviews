@@ -318,7 +318,9 @@ test("a Tier 1 agent the record has no name for is named from GHL", async () => 
   assert.deepEqual(client.calls, ["/contacts/kim"]);
 });
 
-test("with the GHL link set, Open in app opens the app inside GHL; Contact in GHL opens the person", async () => {
+// Matt, 2026-10-25: Open in app opened GHL's Offers page, not the person —
+// "is there no way that when we say open in app it launches to that specific item?"
+test("on a post about a person, Open in app opens Offers on that person, even with the GHL link set", async () => {
   const LOC = "loc-app-link";
   const s = slack();
   const GHL_APP = "https://app.gohighlevel.com/v2/location/LOC1/custom-menu-link/7f7c8c1e-f2d4-4734-9848-136d7078252a";
@@ -327,7 +329,8 @@ test("with the GHL link set, Open in app opens the app inside GHL; Contact in GH
   await ev(LOC, "lou", "tier1_added", 1, { address: HOUSE });
   await runSlackEvents({ store, locationId: LOC, saved, now: min(2) });
   const t = said(s.of("chat.postMessage")[0]);
-  assert.ok(t.includes(`<${GHL_APP}|Open in app>`), t);
+  assert.ok(t.includes(`<https://app.shepflips.com/?view=history&contact=lou&location_id=${LOC}|Open in app>`), t);
+  assert.ok(!t.includes(GHL_APP), "GHL's menu page can't open on one person");
   assert.match(t, /contacts\/detail\/lou\|Contact in GHL>/);
 });
 

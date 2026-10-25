@@ -94,7 +94,7 @@ test("a Slack message names the house, the numbers and a first name, never a pho
   assert.doesNotMatch(t, /206-555-0142|example\.com/);
   assert.match(t, /\[phone\]/);
   assert.match(t, /app\.gohighlevel\.com\/v2\/location\/loc1\/contacts\/detail\/ann/);
-  assert.match(t, /app\.shepflips\.com\/contact\?contact=ann&location_id=loc1/);
+  assert.match(t, /app\.shepflips\.com\/\?view=history&contact=ann&location_id=loc1\|Open in app>/);
 });
 
 test("a held underwrite says why, in the app's own words", () => {
@@ -179,7 +179,8 @@ test("the GHL app link must be an https link; a full name that isn't one is drop
   assert.equal(normalizeSlack({ appLink: link }).appLink, link);
   assert.equal(normalizeSlack({ appLink: "javascript:alert(1)" }).appLink, "");
   assert.equal(normalizeSlack({}).appLink, "");
-  assert.equal(slackLinks({ appLink: link, locationId: "L", path: "/reports" }), `<${link}|Open in app>`);
+  assert.equal(slackLinks({ appLink: link, locationId: "L", path: "/reports" }), `<${link}|Open in app>`, "a post about no one opens the app inside GHL");
+  assert.match(slackLinks({ appLink: link, locationId: "L", contactId: "c9" }), /^<https:\/\/app\.shepflips\.com\/\?view=history&contact=c9&location_id=L\|Open in app> · /);
   assert.equal(fullName("  Ann   Marie Lee "), "Ann Marie Lee");
   assert.equal(fullName("206-555-0142"), "");
 });
