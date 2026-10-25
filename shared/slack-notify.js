@@ -17,6 +17,7 @@ import { addressKey } from "./us-address.js";
 import { pingWhy } from "./ghl-pings.js";
 import { DRAFT_ONLY_RX, wePassReasonOf } from "./offer-status.js";
 import { offerStage } from "./offer-stage.js";
+import { houseKey, resolveHouse } from "./current-offer.js";
 
 export const SLACK_STREAMS = Object.freeze(["needsMatt", "acquisitions", "underwrites", "dispositions", "machine", "daily"]);
 export const SLACK_STREAM_LABEL = Object.freeze({
@@ -185,9 +186,18 @@ export function threadKeyFor(route, ev = {}, ctx = {}) {
     const id = ev?.dealId || ev?.offerId || ctx.offerId;
     return id ? `deal:${id}` : null;
   }
-  const house = addressKey(ev?.address || ctx.address || "");
+  // House number + street (shared/current-offer.js houseKey): one house is
+  // one thread whichever agent raises it. The runner also finds a thread by
+  // a looser spelling ("3 Horizon Hill" / "3 Horizon Hill Ln").
+  const house = houseKey(ev?.address || ctx.address || "");
   if (house) return `house:${route.stream}:${house}`;
   return ev?.contactId ? `contact:${route.stream}:${ev.contactId}` : null;
+}
+
+/** legacyThreadKey(route, ev, ctx) → the key a house's thread had before 2026-10-25 (the whole address). */
+export function legacyThreadKey(route, ev = {}, ctx = {}) {
+  const house = route?.thread === "house" ? addressKey(ev?.address || ctx.address || "") : "";
+  return house ? `house:${route.stream}:${house}` : null;
 }
 
 /**
@@ -277,6 +287,7 @@ function headline(kind, ev, ctx) {
   const amount = money(amountOf(d));
   switch (kind) {
     case "tier1": return `${house} is Tier 1${who}`;
+    case "tier1_also": return `${house}: also flagged by ${esc(ctx.fullName || ctx.firstName || "another agent")}`;
     case "offer_sent": return `Offer sent on ${house}${amount ? `: ${amount}` : ours ? `: ${ours}` : ""}`;
     case "offer_revised": return `Offer revised on ${house}${amount ? ` to ${amount}` : ""}`;
     case "countered": return `Counter on ${house}${amount ? `: ${amount}` : ""}${ours ? ` (ours ${ours})` : ""}${who}`;
@@ -435,6 +446,31 @@ export function dispositionStatus(o) {
   if (looking) return { key: "looking", emoji: "eyes", label: `${looking} buyer${looking === 1 ? "" : "s"} looking` };
   if ((d.blasts || []).length) return { key: "marketing", emoji: "mega", label: "Sent to buyers" };
   return null;
+}
+
+const STATUS_RANK = { good: 6, hot: 5, countered: 4, sent: 3, passed: 2 };
+
+/**
+ * houseStatus(offers) → { key, emoji, label, offer } | null — a house's
+ * status across every agent who has an offer on it: each agent's current
+ * offer (shared/current-offer.js resolveHouse), the furthest along wins. One
+ * agent passing doesn't close a house another agent is hot on.
+ */
+export function houseStatus(offers = []) {
+  const byContact = new Map();
+  for (const o of offers || []) {
+    if (!o) continue;
+    const k = o.contactId || "";
+    if (!byContact.has(k)) byContact.set(k, []);
+    byContact.get(k).push(o);
+  }
+  let best = null;
+  for (const rows of byContact.values()) {
+    const current = resolveHouse(rows).current;
+    const st = acquisitionStatus(current);
+    if (st && (!best || STATUS_RANK[st.key] > STATUS_RANK[best.key])) best = { ...st, offer: current };
+  }
+  return best;
 }
 
 const STATUS_RX = /^\*Status:\*/;

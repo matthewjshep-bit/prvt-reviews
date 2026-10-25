@@ -32,14 +32,15 @@ import { pingReasons } from "./shared/hand-off.js";
 import { pingClaimKey } from "./shared/ghl-pings.js";
 import { buildDigest } from "./shared/digest.js";
 import { lineJobs, errorsByArea } from "./shared/line.js";
-import { addressKey } from "./shared/us-address.js";
+import { addressKey, sameStreetLoose } from "./shared/us-address.js";
+import { houseKey } from "./shared/current-offer.js";
 import { getContact } from "./ghl.js";
 import { contactName } from "./contact-record.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
 import { offerStageAt } from "./shared/offer-stage.js";
 import { NEEDS_MATT_CURSOR } from "./shared/needs-matt.js";
 import {
-  acquisitionStatus, dispositionStatus, withStatus, fullName, normalizeSlack, slackOn, streamOn, routeEvent, threadKeyFor, foldBlasts, renderEvent, renderBlasts, renderPing, renderNeed,
+  acquisitionStatus, dispositionStatus, houseStatus, withStatus, legacyThreadKey, fullName, normalizeSlack, slackOn, streamOn, routeEvent, threadKeyFor, foldBlasts, renderEvent, renderBlasts, renderPing, renderNeed,
   renderError, renderJobFailed, renderMorning, renderEvening, morningCounts, slackClaimKey, firstName,
   SLACK_EVENT_TYPES, MORNING_EVENT_TYPES, SLACK_STREAMS, SLACK_STREAM_LABEL,
 } from "./shared/slack-notify.js";
@@ -202,15 +203,34 @@ export async function runSlackEvents({ store = defaultStore, locationId, client 
   // What a new thread remembers, so its status can be kept on it later.
   const opener = (it, tk, ctx, msg) => ({
     stream: it.route.stream, contactId: it.ev.contactId || null, text: msg.text, blocks: msg.blocks,
+    address: it.ev.address || ctx.address || "",
     offerId: String(tk).startsWith("deal:") ? String(tk).slice(5) : it.ev.offerId || ctx.offerId || null,
   });
+  // A house's thread: its key now, else the key it had before (the whole
+  // address), else a thread on the same house spelled loosely.
+  const threadFor = (route, ev, ctx) => {
+    const tk = threadKeyFor(route, ev, ctx);
+    if (!tk || route.thread !== "house" || threads[tk]) return tk;
+    const legacy = legacyThreadKey(route, ev, ctx);
+    if (legacy && threads[legacy]) return legacy;
+    const addr = ev.address || ctx.address || "";
+    const prefix = `house:${route.stream}:`;
+    const hit = addr && Object.entries(threads).find(([k, v]) => k.startsWith(prefix) && v?.address && sameStreetLoose(v.address, addr));
+    return hit ? hit[0] : tk;
+  };
   for (const it of items) {
     if (out.posted.length >= max) { out.skipped++; out.more = true; continue; }
     const ctx = await ctxFor(it.ev);
-    const msg = it.blasts ? renderBlasts(it.blasts, ctx) : renderEvent(it.route, it.ev, ctx);
     const channel = cfg.channels[it.route.stream];
-    const tk = threadKeyFor(it.route, it.ev, ctx);
+    const tk = threadFor(it.route, it.ev, ctx);
     const th = tk && threads[tk]?.channel === channel ? threads[tk] : null;
+    // Another agent raising a house already in the channel: one line in its
+    // thread, once per agent, not a second post.
+    if (it.route.opensOnly && th && it.ev.contactId && th.contactId && it.ev.contactId !== th.contactId && !(th.also || []).includes(it.ev.contactId) && !it.refresh) {
+      it.route = { ...it.route, kind: "tier1_also", opensOnly: false };
+      it.also = true;
+    }
+    const msg = it.blasts ? renderBlasts(it.blasts, ctx) : renderEvent(it.route, it.ev, ctx);
     const row = { stream: it.route.stream, kind: it.route.kind, contactId: it.ev.contactId || null, type: it.ev.type };
     if (it.refresh) {
       if (!th || th.ts === "dry-run" || refreshed.has(tk)) { out.skipped++; continue; }
@@ -255,7 +275,8 @@ export async function runSlackEvents({ store = defaultStore, locationId, client 
       else if (th && it.route.thread !== "run") await post(token, channel, msg, { thread_ts: th.ts, ...(it.route.broadcast ? { reply_broadcast: true } : {}) });
       else ts = (await post(token, channel, msg))?.ts || null;
       if (tk && ts) {
-        threads = { ...threads, [tk]: { ...(th || opener(it, tk, ctx, msg)), ts, channel, at } };
+        const base = th || opener(it, tk, ctx, msg);
+        threads = { ...threads, [tk]: { ...base, ts, channel, at, ...(it.also ? { also: [...(base.also || []), it.ev.contactId] } : {}) } };
         await patchCursor(store, locationId, CURSOR_NAME, { threads });
       }
       touch(it, tk);
@@ -297,14 +318,33 @@ const SCOPE_ERRORS = new Set(["missing_scope", "not_allowed_token_type"]);
 async function syncStatuses({ store, locationId, token, threads, keys, out, paceMs = 0 }) {
   let next = { ...threads };
   let reactions = true;
+  // Every agent's offers on one house (house number + street, give or take
+  // the suffix), in full: resolveHouse reads sends, pins and deals.
+  let book = null;
+  const offersOnHouse = async (addr) => {
+    if (!addr) return [];
+    book = book || await store.listOffers(locationId, { limit: 3000, lean: true }).catch(() => []);
+    const key = houseKey(addr);
+    const ids = (book || []).filter((o) => o?.address && (houseKey(o.address) === key || sameStreetLoose(o.address, addr))).map((o) => o.id).slice(0, 20);
+    return (await Promise.all(ids.map((id) => store.getOffer?.(id).catch(() => null)))).filter((o) => o && (!o.locationId || o.locationId === locationId));
+  };
   for (const tk of keys) {
     const th = next[tk];
     if (!th?.ts || th.ts === "dry-run") continue;
     const stream = th.stream || (String(tk).startsWith("deal:") ? "dispositions" : "acquisitions");
     const offerId = th.offerId || (String(tk).startsWith("deal:") ? String(tk).slice(5) : null);
-    const offer = offerId ? await store.getOffer?.(offerId).catch(() => null) : null;
-    if (!offer || (offer.locationId && offer.locationId !== locationId)) continue;
-    const status = stream === "dispositions" ? dispositionStatus(offer) : acquisitionStatus(offer);
+    const own = offerId ? await store.getOffer?.(offerId).catch(() => null) : null;
+    const offer = own && (!own.locationId || own.locationId === locationId) ? own : null;
+    let status = null;
+    if (stream === "dispositions") {
+      if (!offer) continue;
+      status = dispositionStatus(offer);
+    } else {
+      const addr = th.address || offer?.address || "";
+      if (!addr && !offer) continue;
+      const house = await offersOnHouse(addr);
+      status = house.length ? houseStatus(house) : acquisitionStatus(offer);
+    }
     const emoji = status?.emoji || null;
     const label = status?.label || null;
     if (emoji === (th.statusEmoji ?? null) && label === (th.statusLabel ?? null)) continue;
@@ -329,7 +369,7 @@ async function syncStatuses({ store, locationId, token, threads, keys, out, pace
     }
     if (th.blocks) {
       try {
-        await edit(token, th.channel, th.ts, { text: th.text, blocks: withStatus(th.blocks, status, offerStageAt(offer)) });
+        await edit(token, th.channel, th.ts, { text: th.text, blocks: withStatus(th.blocks, status, offerStageAt(status?.offer || offer)) });
         upd.statusLabel = label;
       } catch (e) {
         if (e?.slack === "rate_limited") { next = { ...next, [tk]: upd }; break; }

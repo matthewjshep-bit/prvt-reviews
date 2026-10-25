@@ -394,3 +394,50 @@ test("a refresh puts the status on the Tier 1 posts made before statuses existed
   assert.deepEqual(s.of("reactions.add").slice(before).map((c) => c.body.name), ["left_right_arrow"]);
   assert.match(said(s.of("chat.update").at(-1)), /\*Status:\* :left_right_arrow: They countered/);
 });
+
+// 3 Horizon Hill / 3 Horizon Hill Ln, 2026-10-25: two agents, one house, two
+// spellings — it was two posts, and the post wore only its own agent's offer.
+test("a second agent raising a house already in #acquisitions is one line in its thread, and the house wears the furthest-along offer", async () => {
+  const LOC = "loc-two-agents";
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  await store.upsertContactProfile(LOC, "pat", { party: "agent", name: "Pat Quinn" });
+  await store.upsertContactProfile(LOC, "rae", { party: "agent", name: "Rae Soto" });
+  const mine = await store.createOffer({ locationId: LOC, contactId: "pat", address: "3 Horizon Hill", status: "draft" });
+  await ev(LOC, "pat", "tier1_added", 1, { address: "3 Horizon Hill", offerId: mine.id });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  assert.equal(s.of("chat.postMessage").length, 1);
+
+  const theirs = await store.createOffer({ locationId: LOC, contactId: "rae", address: "3 Horizon Hill Ln, Bellingham, WA 98229", status: "countered",
+    hot: { at: at(3), by: "conversation", signal: "writing_up" } });
+  await ev(LOC, "rae", "ghl_stage_moved", 3, { address: "3 Horizon Hill Ln, Bellingham, WA 98229", dedupeKey: "rae-t1", data: { from: "Tier 2", to: "Tier 1" } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(4) });
+  const posts = s.of("chat.postMessage");
+  assert.equal(posts.length, 2);
+  assert.equal(posts[1].body.thread_ts, "170000001.0001");
+  assert.match(said(posts[1]), /also flagged by Rae Soto/);
+  assert.deepEqual(s.of("reactions.add").map((c) => [c.body.name, c.body.timestamp]), [["fire", "170000001.0001"]]);
+  assert.match(said(s.of("chat.update").at(-1)), /\*Status:\* :fire: Hot/);
+
+  // Her next move on it doesn't say she flagged it again.
+  await ev(LOC, "rae", "tier1_added", 5, { address: "3 Horizon Hill Ln, Bellingham, WA 98229", offerId: theirs.id });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(6) });
+  assert.equal(s.of("chat.postMessage").length, 2);
+});
+
+test("a house thread made under the old key (the whole address) is still the one its replies go to", async () => {
+  const LOC = "loc-legacy-key";
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  await ev(LOC, "sam", "tier1_added", 1, { address: HOUSE });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  const cur = await store.getJobCursor(LOC, CURSOR_NAME);
+  const [[key, v]] = Object.entries(cur.doc.threads);
+  const { addressKey } = await import("./shared/us-address.js");
+  const legacy = `house:acquisitions:${addressKey(HOUSE)}`;
+  assert.notEqual(key, legacy);
+  await store.setJobCursor(LOC, CURSOR_NAME, { at: cur.at, doc: { ...cur.doc, threads: { [legacy]: { ts: v.ts, channel: v.channel, at: v.at } } } });
+  await ev(LOC, "sam", "offer_countered", 3, { address: HOUSE, data: { amount: 400000 } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(4) });
+  assert.equal(s.of("chat.postMessage")[1].body.thread_ts, "170000001.0001");
+});
