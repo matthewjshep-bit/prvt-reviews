@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeSlack, slackOn, streamOn, slackChannelId, slackUserId, routeEvent, threadKeyFor, foldBlasts,
-  renderEvent, renderTier1, renderPing, fullName, acquisitionStatus, dispositionStatus, withStatus, renderMorning, renderEvening, morningCounts, firstName, scrubForSlack, slackLinks, SLACK_EVENT_TYPES,
+  renderEvent, renderTier1, renderPing, fullName, acquisitionStatus, dispositionStatus, withStatus, houseStatus, renderMorning, renderEvening, morningCounts, firstName, scrubForSlack, slackLinks, SLACK_EVENT_TYPES,
 } from "./slack-notify.js";
 
 const textOf = (msg) => [msg.text, ...(msg.blocks || []).flatMap((b) => [b.text?.text, ...(b.elements || []).map((e) => e.text)])].filter(Boolean).join("\n");
@@ -233,4 +233,19 @@ test("the Status line sits under the post's first line, is replaced as it moves,
 
 test("hot taken off posts nothing but still moves the house's status", () => {
   assert.deepEqual(routeEvent({ type: "note", data: { phrase: "no longer hot" } }).map((r) => [r.stream, r.statusOnly]), [["acquisitions", true]]);
+});
+
+// 3 Horizon Hill Ln, 2026-10-25: one agent's fresh draft and another agent's
+// hot counter on the same house. The house is hot.
+test("a house's status is the furthest along of every agent's current offer on it", () => {
+  const T = "2026-10-20T18:00:00Z";
+  const hot = { id: "a", contactId: "a1", status: "countered", hot: { at: T, by: "conversation" }, createdAt: T };
+  const draft = { id: "b", contactId: "b1", status: "draft", createdAt: T };
+  const passed = { id: "c", contactId: "c1", status: "passed", createdAt: T };
+  const sent = { id: "d", contactId: "d1", status: "sent", cashAmount: 300000, createdAt: T };
+  assert.equal(houseStatus([draft, hot]).key, "hot");
+  assert.equal(houseStatus([draft, hot]).offer.id, "a");
+  assert.equal(houseStatus([passed, sent]).key, "sent", "one agent passing doesn't close a house another is live on");
+  assert.equal(houseStatus([passed]).key, "passed");
+  assert.equal(houseStatus([draft]), null);
 });

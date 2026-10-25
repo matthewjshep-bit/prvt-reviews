@@ -5359,6 +5359,16 @@ bot. It also carries a **Status:** line under its first line, for example
 "Status: ❌ We passed — too turnkey (Oct 25)". Both move when the offer moves,
 within a minute, by the minute loop.
 
+**One house, one thread.** A house is its house number plus street, give or
+take the suffix (`houseKey`, `sameStreetLoose`): "3 Horizon Hill" and "3 Horizon
+Hill Ln" are one house.
+
+- A second agent raising a house that's already in the channel adds one line
+  in its thread ("also flagged by <name>"), once per agent.
+- The house's status is the furthest along of every agent's current offer
+  (`houseStatus`, using `resolveHouse`). One agent passing doesn't close a house
+  another agent is hot on.
+
 **Acquisitions** (`acquisitionStatus`, from `shared/offer-stage.js` offerStage):
 
 | Emoji | Means |
