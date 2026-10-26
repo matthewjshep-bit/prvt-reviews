@@ -6728,6 +6728,35 @@ to GHL — a cold cache still spends RentCast requests) and "Run it now".
 `GET /api/outreach/autopilot` returns the same; `POST /api/outreach/autopilot/run`
 with `{ "dryRun": false }` runs it.
 
+## Gatekeepers (estate attorneys, title, escrow)
+
+Added 2026-10-26. This is a second supply line beside listing agents, using the same playbook: a public feed names the gatekeeper, one specific house opens the door, and the ask is the next house. It is sequenced on its own, apart from agents. Autopilot → **Gatekeepers** tab; API `/api/gatekeepers` (`routes/gatekeepers.js`).
+
+**Where they come from** (`gatekeeper-feed.js`):
+- **Probate notices.** Every personal representative publishes a Notice to Creditors (RCW 11.40.020) naming their attorney. `shared/probate-notice.js` reads the statutory labels, in any newspaper layout. Each notice becomes an attorney (`gatekeepers`, key `wsba:<bar no>`) and an estate (`gatekeeper_hooks`, key `probate:<county>:<cause no>`).
+  - The three weekly runs of one estate count once.
+  - An estate with no attorney (pro se) is skipped: that's a seller, not a gatekeeper.
+  - Only the counties in `outreachAutopilot.gatekeepers.counties` are kept (default King, Snohomish, Pierce).
+  - Ways in:
+    - paste them (`POST /notices`);
+    - the statewide notice site's daily alert email (wapublicnotices.com Smart Search), read from Gmail **by its sender only** (`noticeEmailFrom`, empty = off). Each message is read once; ids are kept on job cursor `gatekeeperNoticeMail`.
+- **The estate's house.** This is a best-effort match on the county owner of record. Snohomish only, through its Parcels ArcGIS `OWNERNAME` layer, residential use codes `11x`.
+  - A name that fits more than one house is left unmatched.
+  - King publishes no owner names in bulk, and Pierce isn't wired, so their estates come in with no house.
+- **Our closings.** `POST /seed-closings` takes the title or escrow officer set on a deal or its PSA (never the Settings default) as a gatekeeper, with the closing as the hook. Title and escrow can also be added by hand.
+
+**Rank** (`shared/gatekeeper.js` `rankGatekeepers`): estates in the last 90 days with a house ×30, estates in 90 days ×10, closings with us ×15, plus up to 10 for recency. The row opens on the newest estate that has a house.
+
+**Import** (`POST /import`): dry unless `dryRun:false` **and** `OUTREACH_IMPORTS_ENABLED`.
+- Tags `gatekeeper`, `gatekeeper-<kind>`, `gatekeeper-src-<source>`. Never the agent-outreach trigger tag.
+- A contact already in GHL is tagged, with blanks filled only.
+- The profile party is `gatekeeper`.
+- `do_not_contact` is never imported.
+
+**Not yet built** (PR 2 / PR 3 of the plan): the `gatekeeper` bot party and prompt; the email → text → call → 30-day check-in clock; Desk call rows; `gatekeeper_brought` on the Line; a GHL Gatekeepers pipeline. Until then nothing texts or emails a gatekeeper.
+
+**Rules:** no referral fees to attorneys or title (RPC 7.2, RESPA §8). Logs and results carry counts, never a decedent's, a personal representative's or an attorney's name.
+
 ## Dispositions (investor book)
 
 **Separate app, same Netlify site**, at the `/dispo` path:

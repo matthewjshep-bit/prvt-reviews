@@ -999,6 +999,83 @@ const pgStore = {
     return rowCount;
   },
 
+  /* ---- gatekeepers (attorneys on estates, title, escrow) ---- */
+  // Same discipline as outreach agents and investors: a re-read replaces
+  // doc and last_seen, never status, contact_id or imported_at.
+  async upsertGatekeepers(locationId, rows) {
+    let created = 0;
+    let updated = 0;
+    for (const r of rows) {
+      const { rows: out } = await query(
+        `insert into gatekeepers (id, location_id, gk_key, kind, doc)
+         values ($1,$2,$3,$4,$5)
+         on conflict (location_id, gk_key)
+         do update set kind = excluded.kind, doc = excluded.doc, last_seen = now()
+         returning (xmax = 0) as created`,
+        [uuid(), locationId, r.gkKey, r.kind, r.doc]
+      );
+      if (out[0]?.created) created++;
+      else updated++;
+    }
+    return { created, updated };
+  },
+  async listGatekeepers(locationId, { kind = null, status = null, limit = 5000 } = {}) {
+    const { rows } = await query(
+      `select gk_key as "gkKey", kind, status, contact_id as "contactId", imported_at as "importedAt",
+              first_seen as "firstSeen", last_seen as "lastSeen", doc
+       from gatekeepers
+       where location_id = $1 and ($2::text is null or kind = $2) and ($3::text is null or status = $3)
+       order by last_seen desc limit $4`,
+      [locationId, kind, status, limit]
+    );
+    return rows;
+  },
+  async getGatekeeper(locationId, gkKey) {
+    const { rows } = await query(
+      `select gk_key as "gkKey", kind, status, contact_id as "contactId", imported_at as "importedAt",
+              first_seen as "firstSeen", last_seen as "lastSeen", doc
+       from gatekeepers where location_id = $1 and gk_key = $2`,
+      [locationId, gkKey]
+    );
+    return rows[0] || null;
+  },
+  async setGatekeeperStatus(locationId, gkKey, { status, contactId, importedAt } = {}) {
+    const { rowCount } = await query(
+      `update gatekeepers set status = coalesce($3, status), contact_id = coalesce($4, contact_id),
+              imported_at = coalesce($5, imported_at)
+       where location_id = $1 and gk_key = $2`,
+      [locationId, gkKey, status || null, contactId || null, importedAt || null]
+    );
+    return rowCount > 0;
+  },
+  async upsertGatekeeperHooks(locationId, rows) {
+    let created = 0;
+    let updated = 0;
+    for (const r of rows) {
+      const { rows: out } = await query(
+        `insert into gatekeeper_hooks (id, location_id, hook_key, gk_key, kind, doc)
+         values ($1,$2,$3,$4,$5,$6)
+         on conflict (location_id, hook_key)
+         do update set gk_key = excluded.gk_key, kind = excluded.kind, doc = excluded.doc, last_seen = now()
+         returning (xmax = 0) as created`,
+        [uuid(), locationId, r.hookKey, r.gkKey, r.kind, r.doc]
+      );
+      if (out[0]?.created) created++;
+      else updated++;
+    }
+    return { created, updated };
+  },
+  async listGatekeeperHooks(locationId, { gkKey = null, limit = 20000 } = {}) {
+    const { rows } = await query(
+      `select hook_key as "hookKey", gk_key as "gkKey", kind, first_seen as "firstSeen", last_seen as "lastSeen", doc
+       from gatekeeper_hooks
+       where location_id = $1 and ($2::text is null or gk_key = $2)
+       order by first_seen desc limit $3`,
+      [locationId, gkKey, limit]
+    );
+    return rows;
+  },
+
   /* ---- contact record (the app's own memory of a person) ---- */
   // Person-scoped and permanent: nothing re-syncs over these rows and the
   // investor prune never sees them. See schema.pg.sql for the shapes.
@@ -1454,6 +1531,8 @@ const fileStore = (() => {
       data.dealDocs = data.dealDocs || {};
       data.compCaptures = data.compCaptures || {};
       data.investors = data.investors || {};
+      data.gatekeepers = data.gatekeepers || {};
+      data.gatekeeperHooks = data.gatekeeperHooks || {};
       data.jobCursors = data.jobCursors || {};
       data.replyDrafts = data.replyDrafts || {};
       data.appErrors = data.appErrors || {};
@@ -2188,6 +2267,76 @@ const fileStore = (() => {
       }
       if (removed) persist();
       return removed;
+    },
+
+    /* ---- gatekeepers ---- */
+    async upsertGatekeepers(locationId, rows) {
+      ensure();
+      let created = 0;
+      let updated = 0;
+      for (const r of rows) {
+        const k = `${locationId}|${r.gkKey}`;
+        const prev = data.gatekeepers[k];
+        data.gatekeepers[k] = {
+          // Lifecycle survives the re-read; everything else is replaced.
+          status: prev?.status || "new",
+          contactId: prev?.contactId || null,
+          importedAt: prev?.importedAt || null,
+          firstSeen: prev?.firstSeen || nowIso(),
+          lastSeen: nowIso(),
+          locationId, gkKey: r.gkKey, kind: r.kind, doc: r.doc,
+        };
+        if (prev) updated++;
+        else created++;
+      }
+      persist();
+      return { created, updated };
+    },
+    async listGatekeepers(locationId, { kind = null, status = null, limit = 5000 } = {}) {
+      ensure();
+      return Object.values(data.gatekeepers)
+        .filter((g) => g.locationId === locationId && (!kind || g.kind === kind) && (!status || g.status === status))
+        .sort((a, b) => String(b.lastSeen).localeCompare(String(a.lastSeen)))
+        .slice(0, limit);
+    },
+    async getGatekeeper(locationId, gkKey) {
+      ensure();
+      return data.gatekeepers[`${locationId}|${gkKey}`] || null;
+    },
+    async setGatekeeperStatus(locationId, gkKey, { status, contactId, importedAt } = {}) {
+      ensure();
+      const row = data.gatekeepers[`${locationId}|${gkKey}`];
+      if (!row) return false;
+      if (status) row.status = status;
+      if (contactId) row.contactId = contactId;
+      if (importedAt) row.importedAt = importedAt;
+      persist();
+      return true;
+    },
+    async upsertGatekeeperHooks(locationId, rows) {
+      ensure();
+      let created = 0;
+      let updated = 0;
+      for (const r of rows) {
+        const k = `${locationId}|${r.hookKey}`;
+        const prev = data.gatekeeperHooks[k];
+        data.gatekeeperHooks[k] = {
+          firstSeen: prev?.firstSeen || nowIso(),
+          lastSeen: nowIso(),
+          locationId, hookKey: r.hookKey, gkKey: r.gkKey, kind: r.kind, doc: r.doc,
+        };
+        if (prev) updated++;
+        else created++;
+      }
+      persist();
+      return { created, updated };
+    },
+    async listGatekeeperHooks(locationId, { gkKey = null, limit = 20000 } = {}) {
+      ensure();
+      return Object.values(data.gatekeeperHooks)
+        .filter((h) => h.locationId === locationId && (!gkKey || h.gkKey === gkKey))
+        .sort((a, b) => String(b.firstSeen).localeCompare(String(a.firstSeen)))
+        .slice(0, limit);
     },
 
     /* ---- contact record ---- */
