@@ -22,6 +22,8 @@ import express from "express";
 import { store } from "../store.js";
 import { ensureProfile, recordEvents } from "../contact-record.js";
 import { findDuplicateContact, createContact, getContact, updateContact, addContactTags } from "../ghl.js";
+import { matchTagPatterns } from "../conversation-party.js";
+import { conversationConfig } from "../reply-agent.js";
 import { ingestNotices, readNoticeEmails, seedFromClosings } from "../gatekeeper-feed.js";
 import { startGatekeeperSweep, getGatekeeperJob, CURSOR_NAME as SWEEP_CURSOR } from "../gatekeeper-sweep.js";
 import {
@@ -179,14 +181,18 @@ export default function createGatekeepersRouter({ resolveLocation, deps = {} }) 
    * Each one becomes a GHL contact tagged `gatekeeper`, `gatekeeper-<kind>`
    * and where we found them — never the agent-outreach trigger tag, so no
    * agent workflow picks them up. One already in GHL is tagged, not
-   * created, and nothing they have is overwritten. A do-not-contact row is
-   * never imported.
+   * created, and nothing they have is overwritten — unless GHL has them as
+   * an agent or a buyer we work with: the gatekeeper tag would take them
+   * off the bot (reply-agent.js handsOffReason), so they're left as they
+   * are. A do-not-contact row is never imported.
    */
   async function importGatekeepers({ locationId, client, gkKeys = [], dryRun = true }) {
     gkKeys = Array.isArray(gkKeys) ? [...new Set(gkKeys)].slice(0, MAX_IMPORT) : [];
     if (!gkKeys.length) throw Object.assign(new Error("gkKeys required"), { http: 400 });
     dryRun = dryRun !== false || !OUTREACH_IMPORTS_ENABLED();
     const hooks = await store.listGatekeeperHooks(locationId);
+    const routing = conversationConfig(await getSettings(locationId)).routing || {};
+    const theirsAlready = (contact) => matchTagPatterns(contact?.tags || [], [...(routing.agentTags || []), ...(routing.investorTags || [])])[0] || "";
     const results = [];
     for (const gkKey of gkKeys) {
       try {
@@ -201,6 +207,12 @@ export default function createGatekeepersRouter({ resolveLocation, deps = {} }) 
         const tags = gatekeeperTags(row);
         await sleep(150);
         const match = await withRetry(() => findDuplicateContact(client, locationId, { email, phone }));
+        const existing = match ? await withRetry(() => getContact(client, match.id)) : null;
+        const asAgent = theirsAlready(existing);
+        if (asAgent) {
+          results.push({ gkKey, ok: true, skipped: `already in GHL as an agent or buyer (tag: ${asAgent}) — left as they are`, contactId: match.id });
+          continue;
+        }
         if (dryRun) {
           results.push({ gkKey, ok: true, dryRun: true, ...(match ? { wouldUpdate: true, contactId: match.id, matchedBy: match.matchedBy } : { wouldCreate: true }), tags });
           continue;
@@ -210,7 +222,6 @@ export default function createGatekeepersRouter({ resolveLocation, deps = {} }) 
         if (match) {
           contactId = match.id;
           action = "updated";
-          const existing = await withRetry(() => getContact(client, contactId));
           const patch = {};
           if (!existing.phone && phone) patch.phone = phone;
           if (!existing.email && email) patch.email = email;
