@@ -6769,7 +6769,14 @@ Added 2026-10-26. This is a second supply line beside listing agents, using the 
 - **Controls:** `GET /api/gatekeepers/sweep` shows the last run; `POST /api/gatekeepers/sweep/run {dryRun}` runs it now. The tab's "Sequence" panel holds the switches and the "Dry run now" button.
 - Gatekeeper drafts are left off the Follow-up page (`EXCLUDED_KINDS`): they're their own line.
 
-**Not yet built** (PR 3): Desk call rows (`callDue`), `gatekeeper_brought` on the Line, a GHL Gatekeepers pipeline.
+**Desk rows** (`shared/call-list.js`):
+- `call_gatekeeper_replied` (score 97): they answered our note, within 14 days. The bot never answers one, so this row is the only thing that answers them.
+- `call_gatekeeper` (65): our email went `callAfterDays` ago (2) with no answer. It stays up to 10 days after the email, then the check-in is the next touch.
+- A connected call or your own text after the reason clears either row.
+
+**The Line.** `shared/lead-source.js` `gatekeeper_brought`: an offer on a contact we'd sent a gatekeeper note to before it. Reports → Line → "How deals came to us" has a "Gatekeeper brought it" column, the pilot's scorecard.
+
+**Not built:** a separate GHL Gatekeepers pipeline. The `gatekeeper-*` tags already segment them in GHL (a smart list); a pipeline waits until Matt creates one there.
 
 **Rules:** no referral fees to attorneys or title (RPC 7.2, RESPA §8). Logs and results carry counts, never a decedent's, a personal representative's or an attorney's name.
 

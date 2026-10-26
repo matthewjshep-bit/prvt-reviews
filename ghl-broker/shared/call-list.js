@@ -36,6 +36,7 @@ import { ASSIGNMENT_RX } from "./lead-source.js";
 import { PARTNER_TERMS_LABEL } from "./partner-terms.js";
 import { GHL_CALLS_DEFAULTS, normalizeGhlCalls } from "./ghl-calls.js";
 import { GHL_PINGS_DEFAULTS, normalizeGhlPings } from "./ghl-pings.js";
+import { normalizeGatekeepers } from "./gatekeeper.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -115,13 +116,22 @@ export const CALL_KINDS = [
   { key: "call_partner",     label: "Relationship check-in" },
   { key: "call_investor",    label: "Investor-minded agent" },
   { key: "call_partner_terms", label: "Partner terms: yours to answer" },
+  // The gatekeeper line (2026-10-26): an estate attorney, title or escrow
+  // officer answered our note; or our email went a couple of days ago and
+  // nothing came back — the call is the next touch (shared/gatekeeper-sequence.js).
+  { key: "call_gatekeeper_replied", label: "A gatekeeper answered" },
+  { key: "call_gatekeeper", label: "Gatekeeper: call after the email" },
   // A decision, not a call (2026-10-14): someone else they say has one.
   { key: "referral",         label: "Referral: someone else has one" },
   // A decision, not a call (2026-10-15): an email they texted, to check.
   { key: "email_check",      label: "An email they texted, to check" },
 ];
 // They called you: ring back first — they reached out.
-const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_turnkey_week: 50, call_investor: 45, call_partner: 30, call_partner_terms: 80 };
+const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_turnkey_week: 50, call_investor: 45, call_partner: 30, call_partner_terms: 80, call_gatekeeper_replied: 97, call_gatekeeper: 65 };
+// A gatekeeper's answer stays a call this long; the post-email call this long
+// after the email (then the monthly check-in is the next touch).
+const GATEKEEPER_REPLIED_DAYS = 14;
+const GATEKEEPER_CALL_DAYS = 10;
 // A turnkey first reply stays a (small) call this long.
 const TURNKEY_WEEK_DAYS = 7;
 // Points off for each call that didn't connect since the row's reason, and
@@ -209,7 +219,7 @@ const EMAIL_CHECK_DAYS = 21;
 export function callList({
   offers = [], cards = [], actions = [], drafts = [], events = [],
   lastIn = new Map(), lastAny = new Map(), unsubscribed = new Set(), settings = {}, now = Date.now(),
-  machine = {}, asks = [],
+  machine = {}, asks = [], gatekeepers = null,
 } = {}) {
   const cfg = normalizeDesk(settings);
   const offersById = new Map((offers || []).filter((o) => o?.id).map((o) => [o.id, o]));
@@ -562,6 +572,41 @@ export function callList({
       why: `texts are off for them; ${street(card.address)} is still open`,
       goal: `Texting is off for them — settle ${street(card.address)} by phone, or let it go.`,
       opener: `Hi ${first(card.contactName)}, Matt here — calling rather than texting about ${street(card.address)}.` });
+  }
+
+  /* 5z. The gatekeeper line (2026-10-26). They answered our note: call
+   * them back — the bot holds every reply from one, so this row is the only
+   * thing that answers them. Or our email went callAfterDays ago and
+   * nothing came back: the call is the next touch. A connected call or a
+   * text from you after the reason clears it (add's own rule). */
+  {
+    const gk = normalizeGatekeepers(gatekeepers);
+    const gkEvents = (events || []).filter((e) => e?.contactId && (e.type === "gatekeeper_replied" || e.type === "gatekeeper_sent"));
+    const byC = groupBy(gkEvents, (e) => e.contactId);
+    for (const [c, list] of byC) {
+      if (taken.has(c) || unsubscribed.has(c)) continue;
+      const sorted = [...list].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+      const replied = sorted.find((e) => e.type === "gatekeeper_replied");
+      const note = sorted.find((e) => e.type === "gatekeeper_sent" && e.address) || sorted.find((e) => e.type === "gatekeeper_sent");
+      const about = note?.address ? street(note.address) : "";
+      const name = nameOf(c, offersBy, draftsBy);
+      if (replied && now - (ms(replied.at) ?? 0) <= GATEKEEPER_REPLIED_DAYS * DAY_MS) {
+        add("call_gatekeeper_replied", { contactId: c, contactName: name, since: replied.at, address: note?.address || "",
+          why: `answered our note${about ? ` about ${about}` : ""}`,
+          goal: "A gatekeeper wrote back, and the bot never answers one. Call: hear what the estate or the file needs, offer a written number as their floor, and ask what else they're handling.",
+          opener: `Hi ${first(name)}, it's Matt Shepherd, thanks for getting back to me${about ? ` about ${about}` : ""}.`,
+          agePenaltyFrom: ms(replied.at) });
+        continue;
+      }
+      if (replied) continue;
+      const email = [...list].filter((e) => e.type === "gatekeeper_sent" && e.data?.step === "email").sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")))[0];
+      const sentAt = ms(email?.at);
+      if (sentAt == null || now < sentAt + gk.callAfterDays * DAY_MS || now > sentAt + GATEKEEPER_CALL_DAYS * DAY_MS) continue;
+      add("call_gatekeeper", { contactId: c, contactName: name, since: email.at, address: email.address || "",
+        why: `emailed ${gk.callAfterDays === 1 ? "yesterday" : `${Math.max(1, Math.floor((now - sentAt) / DAY_MS))} days ago`}${about ? ` about ${about}` : ""}, no answer`,
+        goal: "Call to put a voice to the email: one estate or closing, a written number as their floor, and whether there are others.",
+        opener: `Hi ${first(name)}, Matt Shepherd. I sent you a note${about ? ` about ${about}` : ""} and figured a quick call was easier.` });
+    }
   }
 
   /* 6a. An agent who offered to work together, on terms (2026-10-14).
