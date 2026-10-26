@@ -50,7 +50,7 @@ import { getFreeSlots, searchConversations, listConversationMessages } from "./g
 import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, PROMISE_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, asksOurNumber, soundsLikeSecondThoughts, soundsCrossedUp, doesntKnowUs } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound, supersededBy } from "./shared/follow-up.js";
-import { normalizeAgentPulse } from "./shared/agent-pulse.js";
+import { normalizeAgentPulse, listingAlreadyRaised, LISTING_REASONS } from "./shared/agent-pulse.js";
 import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_STATUSES } from "./shared/second-look.js";
 import { passNoteStale } from "./shared/pass-note.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
@@ -3798,6 +3798,21 @@ function standardDraft({ kind, offer, outbound, name, contactId }) {
     standard: { set: s.set, index: s.index } };
 }
 
+// A check-in about their fresh listing when the thread already has that
+// house in it (shared/agent-pulse.js listingAlreadyRaised): a cold agent,
+// texted only because of a new listing, hears nothing; anyone else gets the
+// plain check-in instead. 2026-10-19: agents asked about a house in August
+// were asked "is it a bit of a project?" about it again, and texted STOP.
+export function listingCheckInFor({ kind, outbound, transcript = "" }) {
+  if (kind !== "agent_pulse" || !LISTING_REASONS.has(outbound?.reason)) return { outbound };
+  const seen = listingAlreadyRaised(transcript, outbound.address);
+  if (!seen) return { outbound };
+  const cold = outbound.segment === "cold" || /gone quiet/.test(String(outbound.segment || ""));
+  const street = String(outbound.listing?.street || outbound.address).split(",")[0];
+  if (cold) return { skip: `their listing at ${street} came up with them on ${seen.at} — a cold agent hears from us only about a new one` };
+  return { outbound: { ...outbound, reason: "general", listing: null, address: "", coldOpen: false, hook: { kind: "situation" } } };
+}
+
 function withoutSignOff(draft, kind, signer = "") {
   if (!NO_SIGN_OFF_KINDS.has(kind) || !draft?.reply) return draft;
   const reply = stripSignOff(draft.reply, { names: [signer, String(signer || "").split(/\s+/)[0]] });
@@ -3839,7 +3854,9 @@ export async function previewProactive({ client, locationId, saved, store, conta
   const askedOff = optOutInTranscript(a.transcript, config.optOut);
   if (askedOff) return { skipped: `they asked to be left alone on ${askedOff.at}`, contactName: a.contactName };
   const { context } = a;
-  const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier, stance });
+  const listingCheck = listingCheckInFor({ kind, outbound: outboundDescriptor({ kind, offer, subject, saved, dossier, stance }), transcript: a.transcript });
+  if (listingCheck.skip) return { skipped: listingCheck.skip, contactName: a.contactName };
+  const { outbound } = listingCheck;
   const previewArgs = {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
     contact: { name: a.contactName || name, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
@@ -3896,7 +3913,12 @@ async function runProactive(job, ctx) {
     return;
   }
   const { context } = a;
-  const outbound = outboundDescriptor({ kind, offer, subject, saved, dossier, stance });
+  const listingCheck = listingCheckInFor({ kind, outbound: outboundDescriptor({ kind, offer, subject, saved, dossier, stance }), transcript: a.transcript });
+  if (listingCheck.skip) {
+    job.status = "held"; job.phase = ""; job.heldReason = `dropped, not sent: ${listingCheck.skip}`; job.finishedAt = new Date().toISOString();
+    return;
+  }
+  const { outbound } = listingCheck;
 
   job.phase = "drafting";
   const draftArgs = {
@@ -3991,7 +4013,7 @@ async function runProactive(job, ctx) {
       ...(kind === "take_check" ? { arv: outbound.arv, rehab: outbound.rehab } : {}),
       ...(kind === "realm_check" ? { amount: offer.cashAmount, requote: outbound.requote, ...(outbound.range ? { range: { low: outbound.range.low, high: outbound.range.high, step: outbound.range.step } } : {}) } : {}),
       ...(outbound.step != null ? { step: outbound.step, steps: subject?.steps || [], stepLabel: outbound.stepLabel } : {}),
-      ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: subject?.listingKey || null, hook: outbound.hook?.kind || null,
+      ...(kind === "agent_pulse" ? { segment: outbound.segment, reason: outbound.reason, listingKey: LISTING_REASONS.has(outbound.reason) ? subject?.listingKey || null : null, hook: outbound.hook?.kind || null,
         // Matt's 15 (agent-pulse.js startMattsFifteen): his to make his own and send, on Today.
         ...(subject?.forMatt ? { forMatt: true } : {}) } : {}),
       ...((kind === "outreach_open" || kind === "outreach_nudge") && outbound.county ? { county: outbound.county } : {}),

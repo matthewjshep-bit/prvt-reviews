@@ -58,8 +58,8 @@ test("a step's text that needs the address falls back when there's no address", 
   const saved = { outreachAutopilot: { opener: { followUps: ["Hi {first}, about {address}?", "Hi {first}, any fixers lately?"] } } };
   const o = outboundDescriptor({ kind: "outreach_nudge", offer: null, saved, subject: { step: 3, steps: [3, 10] } });
   const s = standardText({ kind: "outreach_nudge", outbound: o, name: "Rigo", contactId: "c-rigo" });
-  // Since 2026-10-20 the pool holds Matt's day-2 text, which names no house.
-  assert.equal(s.text, fillTemplate(DEFAULT_FOLLOW_UP_TEXTS[0], { first: "Rigo" }), "the spare that needs no address");
+  // Since 2026-10-26 follow-up 1 names the house; follow-up 2 names none.
+  assert.equal(s.text, fillTemplate(DEFAULT_FOLLOW_UP_TEXTS[1], { first: "Rigo" }), "the spare that needs no address");
 });
 
 test("follow-up texts are cleaned like first texts: no stop footer, no sign-off; a long one he wrote is kept", () => {

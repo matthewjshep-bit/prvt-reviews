@@ -100,7 +100,17 @@ const DAY_MS = 86400000;
 // After the first text, any of these and an introduction is beside the point:
 // they answered, or we're already talking numbers.
 const ENDED_BY = new Set(["text_summary", "call_summary", "email_received", "hand_reply", "offer_sent", "realm_yes", "deal_promoted"]);
-export const INTRO_EMAIL_EVENT_TYPES = ["outreach_sent", "outreach_email_queued", ...ENDED_BY];
+// A text of ours claimed or sent (the follow-up, the agent check-in). An
+// email never goes the same day as one (2026-10-26: 99 follow-up texts went
+// within 12 hours of an email, and "Got your messages. Please take me off
+// your list" came back); it waits for the next morning's run.
+const OUR_TEXTS = new Set(["follow_up_sent", "agent_pulse_sent", "agent_pulse_texted"]);
+export const EMAIL_AFTER_TEXT_HOURS = 20;
+function textedToday(list, now) {
+  const last = list.filter((e) => OUR_TEXTS.has(e.type)).map((e) => Date.parse(e.at || "")).filter(Number.isFinite);
+  return last.some((t) => t <= now && now - t < EMAIL_AFTER_TEXT_HOURS * 3600000);
+}
+export const INTRO_EMAIL_EVENT_TYPES = ["outreach_sent", "outreach_email_queued", ...ENDED_BY, ...OUR_TEXTS];
 
 /**
  * introEmailDue({ events, day, now }) → { due: true, openedAt, address } | { due: false, reason }
@@ -119,6 +129,7 @@ export function introEmailDue({ events = [], day = 2, now = Date.now() } = {}) {
   if (list.some((e) => ENDED_BY.has(e.type) && String(e.at) > String(opened.at))) return { due: false, reason: "they answered, or we're past an introduction" };
   if (now < at + day * DAY_MS) return { due: false, reason: `day ${day} hasn't come round yet` };
   if (now >= at + (day + INTRO_EMAIL_LATE_DAYS) * DAY_MS) return { due: false, reason: "too long since the first text" };
+  if (textedToday(list, now)) return { due: false, reason: "we texted them today — the email goes tomorrow" };
   return { due: true, openedAt: opened.at, address: opened.address || "", county: opened.data?.county || "" };
 }
 
@@ -187,7 +198,7 @@ export function checkInEmailFor({ checkInEmail, name = "", contactId = "", n = 1
   return null;
 }
 
-export const CHECK_IN_EMAIL_EVENT_TYPES = ["outreach_sent", "outreach_email_queued", "checkin_email_queued", ...ENDED_BY];
+export const CHECK_IN_EMAIL_EVENT_TYPES = ["outreach_sent", "outreach_email_queued", "checkin_email_queued", ...ENDED_BY, ...OUR_TEXTS];
 
 /**
  * checkInEmailDue({ events, steps, repeatEvery, now, windowDays })
@@ -216,5 +227,6 @@ export function checkInEmailDue({ events = [], steps = [], repeatEvery = 0, now 
   if (step >= windowDays) return { due: false, reason: "past the follow-up window" };
   if (daysIn - step > CHECK_IN_EMAIL_LATE_DAYS) return { due: false, reason: `day ${step} went by` };
   if (list.some((e) => e.type === "checkin_email_queued" && Number(e.data?.step) === step)) return { due: false, reason: `day ${step} already emailed` };
+  if (textedToday(list, now)) return { due: false, reason: "we texted them today — the email goes tomorrow" };
   return { due: true, step, n, address: opened.address || "", county: opened.data?.county || "" };
 }

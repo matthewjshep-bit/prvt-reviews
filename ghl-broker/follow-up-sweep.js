@@ -1162,8 +1162,9 @@ async function runSweep(job, ctx) {
     }
   }
 
-  // The day-2 introduction email (outreach-email.js), the same morning as
-  // the day-2 follow-up text. Its own switch; nothing when it's off.
+  // The day-2 introduction email (outreach-email.js), never the same day as
+  // a text of ours: an agent followed up this morning gets it on the next
+  // run. Its own switch; nothing when it's off.
   if (!job.cancelRequested && !scope?.offerId) {
     job.phase = "intro emails";
     const intro = typeof deps.runIntroEmails === "function" ? deps.runIntroEmails : runIntroEmails;
