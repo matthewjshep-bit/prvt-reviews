@@ -11,6 +11,7 @@
 //   GET  /api/outreach/agents                        one batch's agents + request-meter usage
 //   GET  /api/outreach/agents/:agentKey/listings     one agent's listings, ranked
 //   POST /api/outreach/pull                          fetch + score + persist into a batch
+//   POST /api/outreach/recent-listers/preview        what the recent listers' pull would find (reads RentCast, imports nobody)
 //   POST /api/outreach/import                        bulk import to GHL (dry-run by default)
 //   POST /api/outreach/agents/:agentKey/status       skip / unskip
 //
@@ -28,7 +29,7 @@ import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, s
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { scoreListing, medianPricePerSqft, distressSignals, meetsDistressRule, DISTRESS_RULES, OLD_HOUSE_YEAR, medianIndex, offMarketListings, OFF_MARKET_WITHIN_DAYS } from "../outreach-score.js";
+import { scoreListing, medianPricePerSqft, distressSignals, meetsDistressRule, DISTRESS_RULES, OLD_HOUSE_YEAR, medianIndex, offMarketListings, OFF_MARKET_WITHIN_DAYS, recentListings, RECENT_LISTERS_DAYS } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { countyName, firstTextHook } from "../shared/outreach-opener.js";
@@ -40,8 +41,9 @@ import { OUTREACH_FIELDS } from "../field-registry.js";
 import { SUBJECT_PROPERTY_FIELD, seedSubjectProperty } from "../enrich.js";
 import {
   startOutreachSweep, getOutreachJob, publicOutreachJob, normalizeOutreachAutopilot, workflowIdFrom, MAX_DAILY_CAP, PROPERTY_TYPES,
-  CURSOR_NAME as OUTREACH_CURSOR, OUTREACH_SWEEP_HOUR, WORK_TZ, rentcastBudget,
+  CURSOR_NAME as OUTREACH_CURSOR, OUTREACH_SWEEP_HOUR, WORK_TZ, rentcastBudget, countiesFrom, readRecentListers,
 } from "../outreach-sweep.js";
+import { standardText } from "../shared/standard-texts.js";
 import {
   startOutreachFollowUp, getOutreachFollowUpJob, CURSOR_NAME as FOLLOWUP_CURSOR, OUTREACH_FOLLOWUP_HOUR,
 } from "../outreach-followup.js";
@@ -323,8 +325,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     const keepTurnkey = body.keepTurnkey === true || body.keepTurnkey === "true";
     // Listings that came off the market (2026-10-15, the sweep's off-market
     // seats): RentCast's "Inactive", which includes the sold ones.
-    const offMarket = body.status === "Inactive";
-    return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule, keepTurnkey, offMarket };
+    const inactive = body.status === "Inactive";
+    // Agents who had a listing come down lately, sold or not (2026-10-26,
+    // the sweep's recent listers): also "Inactive", read for the agent.
+    const recent = inactive && (body.recent === true || body.recent === "true");
+    const withinDays = Math.min(120, Math.max(30, parseInt(body.withinDays, 10) || RECENT_LISTERS_DAYS));
+    const offMarket = inactive && !recent;
+    return { zips, county, city, state, daysOld, propertyType, yearBuilt, offset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule, keepTurnkey, offMarket, recent, withinDays };
   }
 
   // The Zillow phone lookup for one sweep pull: on or off, how many, and the
@@ -410,7 +417,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * without it, the pull's own median (a county or zip pull is one market).
    */
   async function ingestCohort({ locationId, client, batch, listings, params, medianFor = null, warnings }) {
-    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false, zillow = null, propertyType = "", keepTurnkey = false, offMarket = false, minDom = 0 } = params;
+    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false, zillow = null, propertyType = "", keepTurnkey = false, offMarket = false, recent = false, minDom = 0 } = params;
     const isDistressed = (sig) => meetsDistressRule(sig, distressRule);
     // Cohort medians come from the FULL pull (pre-filter) so they describe the
     // market, not the filtered slice.
@@ -527,6 +534,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         distress: { stale, cut, cheap, old }, qualifies: qualifying.has(l), distressPass: distressedSet.has(l),
         // Came off the market without selling (the off-market pull).
         ...(offMarket ? { offMarket: true, removedDate: l.removedDate || null } : {}),
+        // Came down lately, sold or not (the recent listers' pull): never news to ping about.
+        ...(recent ? { pastListing: true, removedDate: l.removedDate || null } : {}),
       };
       const g = byAgent.get(idc.agentKey) || { identity: idc, listings: [] };
       // Prefer the richest identity seen (a later listing may add email/phone).
@@ -586,6 +595,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
             ...(turnkey ? { turnkey: true } : {}),
             // Came off the market lately: the opener asks if the seller still hopes to sell.
             ...(hook.offMarket ? { offMarket: true, removedDate: hook.removedDate || null } : {}),
+            // Their listing came down lately: the opener names it as theirs, in the past.
+            ...(hook.pastListing ? { pastListing: true, removedDate: hook.removedDate || null } : {}),
           },
           listingCount: g.listings.length,
           // Only listings that passed the filters count — a distressed listing
@@ -822,7 +833,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     if (!apiKey) throw Object.assign(new Error("RentCast API key not configured — add it in Settings"), { http: 400 });
     if (body.statewide === true) return runStatewidePull(locationId, client, body, settings, maxRequestsCap);
 
-    const { zips, county, city, state, daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule, keepTurnkey, offMarket } =
+    const { zips, county, city, state, daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule, keepTurnkey, offMarket, recent, withinDays } =
       pullParams(body, settings, maxRequestsCap);
     // Precedence: zips (one query each) → county (one circular query around
     // the county centroid, post-filtered to the county line) → city/state.
@@ -873,7 +884,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       daysOld: String(daysOld), ...(propertyType ? { propertyType } : {}), ...(yearBuilt ? { yearBuilt } : {}),
       ...(maxPrice ? { price: `*:${maxPrice}` } : {}),
       // rentcastPage asks for Active unless the pull says otherwise.
-      ...(offMarket ? { status: "Inactive" } : {}),
+      ...(offMarket || recent ? { status: "Inactive" } : {}),
       includeTotalCount: "true",
     };
     const paging = startOffset > 0 || body.offset != null;
@@ -905,17 +916,25 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     // token, the freshest MAX_LISTING_LOOKUPS) or RentCast's history can tell.
     // Coming off the market is the distress, so no distress rule after it.
     if (offMarket) listings = await keepOffMarket({ listings, settings, warnings });
+    // Recent listers: the listings that came down in the window, sold or
+    // not. The county's distress rule still applies to each — an agent who
+    // listed a fixer, not any agent.
+    if (recent) {
+      const { kept, dropped } = recentListings(listings, { withinDays });
+      warnings.push(`recent listers: kept ${kept.length} of ${listings.length} (${dropped.notRecent} not taken down in the last ${withinDays} days)`);
+      listings = kept;
+    }
 
     const { pool, agentRows, agentsNew, medianPpsf, medianPrice } = await ingestCohort({
       locationId, client, batch, listings, warnings,
       params: { maxPrice, maxYearBuilt, distressOnly: offMarket ? false : distressOnly, distressRule, staleDom, priceBandPct, propertyType,
-        keepTurnkey: offMarket ? false : keepTurnkey, offMarket, sweep: body.metro === true || body.metro === "true",
+        keepTurnkey: offMarket || recent ? false : keepTurnkey, offMarket, recent, sweep: body.metro === true || body.metro === "true",
         zillow: body.metro === true || body.metro === "true" ? zillowFor(settings) : null },
     });
     await store.recordOutreachPull(locationId, {
       batchId: batch.id,
       params: { targets, ...(countyMeta ? { county: countyMeta.name } : {}), daysOld, propertyType, yearBuilt, offset: startOffset, maxRequests, priceBandPct, distressOnly, staleDom, maxYearBuilt, maxPrice, distressRule,
-        ...(offMarket ? { status: "Inactive" } : {}) },
+        ...(offMarket || recent ? { status: "Inactive" } : {}), ...(recent ? { recent: true, withinDays } : {}) },
       requestsUsed, cached, listingsFetched: listings.length, listingsKept: pool.length,
       agentsTotal: agentRows.length, agentsNew, medianPpsf: Math.round(medianPpsf),
       medianPrice: Math.round(medianPrice),
@@ -1628,6 +1647,33 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
         deps: router.sweepDeps,
       });
       res.status(202).json({ ok: true, job: publicOutreachJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Body: { county: "Pierce, WA", maxRequests = 3 }. What the recent listers'
+  // pull (outreachAutopilot.recentListers) would find, before it's switched
+  // on: it reads RentCast (it spends requests) and files the agents into
+  // their batch, as the sweep would, and says how many are new to us, how
+  // many we already have, how many have no phone, and what two of the first
+  // texts would say. Nobody is imported or texted; the sweep's place is left alone.
+  router.post("/recent-listers/preview", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
+      const [county] = countiesFrom([String(req.body?.county || "")]);
+      if (!county) throw Object.assign(new Error('which county? e.g. "Pierce, WA"'), { http: 400 });
+      const reqs = Math.min(10, Math.max(1, Math.round(Number(req.body?.maxRequests)) || 3));
+      const r = await readRecentListers({ oa, county, reqs, locationId, client, store, deps: router.sweepDeps });
+      const all = await store.listOutreachAgents(locationId, { batchId: r.batchId, status: "new", limit: 5000 });
+      const inGhl = all.filter((x) => x.contactId || x.doc?.ghl?.contactId).length;
+      const noPhone = all.filter((x) => !(x.contactId || x.doc?.ghl?.contactId) && !x.doc?.phone).length;
+      const samples = r.fresh.slice(0, 2).map((x) => {
+        const hook = firstTextHook(x.doc, { county: r.key });
+        return standardText({ kind: "outreach_open", outbound: { mode: "template", pastListing: true, address: hook.address, city: hook.city },
+          name: x.doc?.name || "", contactId: x.agentKey })?.text || "";
+      }).filter(Boolean);
+      res.json({ ok: true, ...r.stats, inBatch: all.length, alreadyInGhl: inGhl, noPhone, pickable: r.fresh.length, samples, warnings: r.warnings });
     } catch (err) { fail(res, err); }
   });
 

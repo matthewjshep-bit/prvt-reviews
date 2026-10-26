@@ -17,7 +17,7 @@ import { store as defaultStore } from "./store.js";
 import { normalizeOpener } from "./shared/outreach-opener.js";
 import { normalizeIntroEmail, normalizeCheckInEmail } from "./shared/outreach-email.js";
 import { isRuralLot } from "./shared/asset-type.js";
-import { isOldHouse, DISTRESS_RULES } from "./outreach-score.js";
+import { isOldHouse, DISTRESS_RULES, RECENT_LISTERS_DAYS } from "./outreach-score.js";
 import { workflowIdFrom } from "./shared/ghl-calls.js";
 import { listingDistress } from "./shared/listing-distress.js";
 import { streetKey } from "./comps-zillow.js";
@@ -312,6 +312,12 @@ export function normalizeOutreachAutopilot(v = {}) {
       enabled: o.expired?.enabled === true,
       share: o.expired?.share === undefined ? 25 : Math.min(100, Math.max(0, Math.round(Number(o.expired.share)) || 0)),
     },
+    // Agents in these counties who had a listing come down in the last
+    // `withinDays`, sold or not, held to the county's distress rule
+    // (2026-10-26, Matt: "only with people who have active listings in the
+    // last 60-90 days … can rentcast pull this info"): `share` (0–100) of the
+    // day's RentCast requests, one county a run, in turn. Off by default.
+    recentListers: normalizeRecentListers(o.recentListers),
     // Read each picked listing on Zillow before its agent is texted
     // (2026-10-17, screenPicked): still for sale, and remarks that say it
     // needs work. At most `perRun` lookups a run, about a fifth of a cent
@@ -320,6 +326,20 @@ export function normalizeOutreachAutopilot(v = {}) {
       enabled: o.distressCheck?.enabled === true,
       perRun: Math.min(MAX_SCREEN_PER_RUN, Math.max(SCREEN_CHUNK, Math.round(Number(o.distressCheck?.perRun)) || DEFAULT_SCREEN_PER_RUN)),
     },
+  };
+}
+
+/**
+ * normalizeRecentListers(v) → { enabled, counties: [{ county, state }], withinDays, share }
+ */
+export function normalizeRecentListers(v = {}) {
+  const o = v && typeof v === "object" ? v : {};
+  const days = Math.round(Number(o.withinDays));
+  return {
+    enabled: o.enabled === true,
+    counties: countiesFrom(o.counties),
+    withinDays: Number.isFinite(days) && days > 0 ? Math.min(120, Math.max(30, days)) : RECENT_LISTERS_DAYS,
+    share: o.share === undefined ? 25 : Math.min(100, Math.max(0, Math.round(Number(o.share)) || 0)),
   };
 }
 
@@ -436,20 +456,23 @@ export function screenSummary(stats) {
  * (routes/outreach.js keepOffMarket) and are left alone.
  */
 async function screenPicked({ groups, oa, job, locationId, store, deps, now, beat = async () => {} }) {
+  // The off-market seats have their own check, and a recent lister's house
+  // is gone by definition: neither is for sale to read.
+  const screened = (g) => !g.offMarket && !g.pastListing;
   if (typeof deps.screenListings !== "function") {
     job.screen = { checked: 0, remembered: 0, kept: 0, dropped: {}, waiting: 0 };
     job.warnings.push("listing check is on but this broker can't read Zillow — nobody is texted today");
-    for (const g of groups) if (!g.offMarket) g.picked = [];
+    for (const g of groups) if (screened(g)) g.picked = [];
     return;
   }
-  const rows = groups.filter((g) => !g.offMarket).flatMap((g) => g.picked);
+  const rows = groups.filter(screened).flatMap((g) => g.picked);
   const { verdict, stats, warnings } = await screenAddresses({
     items: rows.map((r) => ({ id: r.agentKey, address: r.doc?.hook?.address || "", yearBuilt: r.doc?.hook?.yearBuilt })),
     locationId, store, deps, now, perRun: oa.distressCheck.perRun, want: Math.ceil(oa.dailyCap * 1.2), remember: !job.dryRun, beat,
   });
   job.screen = stats;
   job.warnings.push(...warnings);
-  for (const g of groups) if (!g.offMarket) g.picked = g.picked.filter((r) => verdict.get(r.agentKey) === true);
+  for (const g of groups) if (screened(g)) g.picked = g.picked.filter((r) => verdict.get(r.agentKey) === true);
   if (stats.checked) job.warnings.push(`listing check: ${screenSummary(stats)}`);
 }
 
@@ -657,6 +680,8 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
     ...(job.offMarket ? { offMarket: job.offMarket } : {}),
     // The listing check, when on (outreachAutopilot.distressCheck).
     ...(job.screen ? { screen: job.screen } : {}),
+    // The recent listers' pull, when on (outreachAutopilot.recentListers).
+    ...(job.recentListers ? { recentListers: job.recentListers } : {}),
   });
   // A long run (many counties, hundreds of one-at-a-time imports) says it's
   // still alive after every pull and import, so the tick doesn't take it for
@@ -816,6 +841,39 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
       job.warnings.push(`${key}: the off-market pull failed (${String(e?.message || e).slice(0, 120)}) — moving on`);
     }
     await savePages({ ...pages, expiredTurn: (turn + 1) % n });
+    await beat();
+  }
+  // 1c. The recent listers (2026-10-26, outreachAutopilot.recentListers, off
+  // by default): one of its counties a run, in turn, read for listings that
+  // came down in the last `withinDays`, sold or not, by the county's own
+  // rules, into "Autopilot · Recent · Pierce, WA". `share` of the day's
+  // requests, from where its last read stopped; the regular pull always
+  // keeps at least one. Anyone already in GHL is skipped by the import, so
+  // only agents new to us hear the past-listing text.
+  const rl = oa.recentListers;
+  if (rl.enabled && rl.share > 0 && rl.counties.length && left > 1) {
+    const reqs = Math.max(1, Math.min(left - 1, Math.round(perRun * rl.share / 100) || 1));
+    const turn = (Number(pages?.recentTurn) || 0) % rl.counties.length;
+    const county = rl.counties[turn];
+    const key = `${county.county}, ${county.state}`;
+    job.phase = "pulling recent listers";
+    try {
+      const r = await readRecentListers({ oa, county, reqs, pages, locationId, client, store, deps });
+      left -= r.used;
+      const fresh = r.fresh.filter((x) => !seenAgents.has(x.agentKey) && !seenPhones.has(String(x.doc?.phone)));
+      for (const x of fresh) { seenAgents.add(x.agentKey); seenPhones.add(String(x.doc?.phone)); }
+      const seats = Math.max(1, Math.round(oa.dailyCap * rl.share / 100));
+      if (fresh.length) groups.push({ key, batchId: r.batchId, picked: fresh, limit: seats, pastListing: true });
+      pickedTotal += Math.min(fresh.length, seats);
+      job.recentListers = { ...r.stats, picked: fresh.length };
+      job.warnings.push(...r.warnings);
+      // The turn stays on a county with pages left and people in them.
+      await savePages({ ...(pages || {}), recentTurn: r.next && fresh.length ? turn : (turn + 1) % rl.counties.length,
+        recent: { ...(pages?.recent || {}), [key]: { offset: r.next, sig: r.sig } } });
+    } catch (e) {
+      job.warnings.push(`${key}: the recent listers' pull failed (${String(e?.message || e).slice(0, 120)}) — moving on`);
+      await savePages({ ...(pages || {}), recentTurn: (turn + 1) % rl.counties.length });
+    }
     await beat();
   }
   // The first county this run left with pages and people still in it: the
@@ -1074,6 +1132,46 @@ export function stateRead(oa, counties = []) {
   const { yearBuilt: _y, ...rest } = base;
   const query = { ...rest, daysOld: `${minDom}:*`, ...(years.includes(0) ? {} : { yearBuilt: `*:${Math.max(...years)}` }) };
   return { query, rules, sig: JSON.stringify({ query, rules }) };
+}
+
+/**
+ * readRecentListers({ oa, county, reqs, pages, locationId, client, store, deps })
+ *   → { key, batchId, sig, next, used, rows, fresh, stats, warnings }
+ *
+ * One read of a county's recent listers (outreachAutopilot.recentListers):
+ * RentCast's "Inactive" listings by the county's own rules, listed within
+ * about a year of the window, from where the last read stopped (`pages.recent`,
+ * kept only while the query is the same), into "Autopilot · Recent · Pierce,
+ * WA"; then the agents in it the pick would text (new to us, a phone, a
+ * listing that meets the county's distress rule). Saves nothing itself.
+ */
+export async function readRecentListers({ oa, county, reqs = 1, pages = null, locationId, client, store = defaultStore, deps = {} }) {
+  const rl = oa.recentListers;
+  const key = `${county.county}, ${county.state}`;
+  const rules = marketRules(oa, key);
+  // Listed in about the last year, at any age: how long a house that has
+  // already come down sat says nothing about its agent.
+  const ask = { ...pullQuery(oa, key), daysOld: `1:${rl.withinDays + 270}`,
+    county: county.county, state: county.state, status: "Inactive", recent: true, withinDays: rl.withinDays };
+  const sig = JSON.stringify(ask);
+  const place = pages?.recent?.[key]?.sig === sig ? pages.recent[key] : {};
+  const batchId = await autopilotBatchId({ store, locationId, market: `Recent · ${key}` });
+  const pull = await deps.runPull(locationId, client, { ...ask, offset: Number(place.offset) || 0, maxRequests: Math.max(1, reqs), ...(batchId ? { batchId } : {}) },
+    { maxRequestsCap: MAX_REQUESTS_PER_RUN });
+  const rows = typeof store.listOutreachPickable === "function"
+    ? await store.listOutreachPickable(locationId, { batchId: pull.batchId, limit: 1000 })
+    : await store.listOutreachAgents(locationId, { batchId: pull.batchId, status: "new", limit: 1000 });
+  const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress, maxPrice: oa.maxListPrice, distressRule: rules.distressRule,
+    propertyTypes: oa.propertyTypes, maxYearBuilt: rules.maxYearBuilt, staleDom: rules.staleDom })
+    .filter((r) => r.doc?.hook?.pastListing);
+  const used = Number(pull.requestsUsed) || 0;
+  const next = Number(pull.nextOffset) || 0;
+  return {
+    key, batchId: pull.batchId, sig, next, used, rows, fresh,
+    stats: { county: key, requestsUsed: used, listings: Number(pull.listingsFetched) || 0, listingsKept: Number(pull.listingsKept) || 0,
+      candidates: rows.length, offset: Number(place.offset) || 0, nextOffset: next, totalCount: pull.totalCount ?? null },
+    warnings: (pull.warnings || []).filter((w) => /^recent listers/.test(w)).slice(0, 2).map((w) => `${key}: ${w}`),
+  };
 }
 
 // How far back a resumed statewide lap starts: listings come and go

@@ -487,8 +487,9 @@ export function freshListingFor({ listings = [], pinged = new Set(), raised = []
     if (!l?.listingKey || pinged.has(l.listingKey)) return false;
     if (!listingDistressed(l.doc, l.distressRule)) return false;
     // A listing that came off the market is never a check-in's hook
-    // (2026-10-19, Matt: "saw the listing on 126th come off the market").
-    if (l.doc?.offMarket === true) return false;
+    // (2026-10-19, Matt: "saw the listing on 126th come off the market"),
+    // nor one the recent listers' pull read after it came down, sold or not.
+    if (l.doc?.offMarket === true || l.doc?.pastListing === true) return false;
     if (age(l) > s.freshDays * DAY_MS && !widened(l)) return false;
     if (now - (ms(l.lastSeen) ?? 0) > s.listingSeenDays * DAY_MS) return false;
     const k = addressKey(l.doc?.address || "");
