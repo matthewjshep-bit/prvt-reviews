@@ -74,6 +74,27 @@ export const LISTING_PING_COLD_TEXTS = [
   "Hi {first}, it's Matt. Saw your listing on {street}, doesn't look like a fixer, but any other distressed properties on your plate, listed or off market?",
 ];
 
+// Pierce County's first text (2026-10-26, Matt: "switch the wording slightly
+// only for pierce"). The same plain shape as the saved ones, without "I'm in
+// Seattle" or the "a bit of a project, or pretty turnkey?" either-or the
+// 10/26 STOP analysis flagged (3.4% opt-outs), and it names where we buy. It
+// goes in place of the saved first texts for a Pierce listing — a new agent's
+// first text and a focus county's ping alike; every other county keeps
+// what's saved in Autopilot → Agents.
+export const COUNTY_OPENERS = {
+  pierce: [
+    "Hi {first}, saw your listing on {street} in {town}. I fix up older houses around Pierce County. Does it need much work?",
+    "Hey {first}, I buy and fix up houses around {town}. Does your listing on {street} need some work?",
+    "Hi {first}, it's Matt. I renovate a few houses a year in Pierce County. Is your listing on {street} a bit of a project?",
+  ],
+};
+
+/** countyOpener("Pierce") → Pierce's first texts, or null for a county that has none. */
+export function countyOpener(county = "") {
+  const k = String(county || "").split(",")[0].trim().replace(/\s+county$/i, "").toLowerCase();
+  return COUNTY_OPENERS[k] || null;
+}
+
 // The first text to an agent whose listing came down lately, sold or not (the
 // recent listers, 2026-10-26, Matt: agents "who have active listings in the
 // last 60-90 days"). The house is gone, so it is named as theirs, in the
@@ -177,6 +198,10 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
   if (kind === "outreach_open" && o.pastListing) return done("past_listing", pickFilled(PAST_LISTING_TEXTS, v, values));
   if (kind === "outreach_open") {
     if (o.turnkey) return null;
+    // A county with first texts of its own (Pierce).
+    const own = countyOpener(o.county);
+    const mine = own ? pickFilled(own, v, values) : null;
+    if (mine) return done("county_opener", mine);
     const ex = Array.isArray(o.templates) ? o.templates : [];
     return done("opener", pickFilled(ex, v, values));
   }
@@ -211,8 +236,10 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
       // from us about it, so it reads as a new agent's first text does — not
       // "doesn't look like a fixer". Nothing to fill it with: the plain
       // check-in, which names no house.
+      const own = countyOpener(o.county);
       const ex = Array.isArray(o.templates) ? o.templates : [];
-      return done("opener", pickFilled(ex, v, values)) || done("checkin_cold", pickFilled(CHECKIN_COLD_TEXTS, v, values));
+      return (own ? done("county_opener", pickFilled(own, v, values)) : null)
+        || done("opener", pickFilled(ex, v, values)) || done("checkin_cold", pickFilled(CHECKIN_COLD_TEXTS, v, values));
     }
     if (o.reason === "fresh_listing") {
       // The street name, never the house number, like the first text.

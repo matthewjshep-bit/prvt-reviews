@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "plain-outreach-test-"));
 
 const { listingDistress } = await import("./shared/listing-distress.js");
-const { standardText, streetLine, firstNameOf, fillTemplate, NUDGE_TEXTS, CHECKIN_TEXTS, CHECKIN_COLD_TEXTS, LISTING_PING_TEXTS, LISTING_PING_COLD_TEXTS } = await import("./shared/standard-texts.js");
+const { standardText, COUNTY_OPENERS, streetLine, firstNameOf, fillTemplate, NUDGE_TEXTS, CHECKIN_TEXTS, CHECKIN_COLD_TEXTS, LISTING_PING_TEXTS, LISTING_PING_COLD_TEXTS } = await import("./shared/standard-texts.js");
 const { normalizeOpener, DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, PLAIN_DEFAULT_OPENER_EXAMPLES, DEFAULT_HOME, DEFAULT_HOMES } = await import("./shared/outreach-opener.js");
 const { normalizeAgentPulse } = await import("./shared/agent-pulse.js");
 const { QUALIFY_PASSES, ourReplyPasses, qualifyStep } = await import("./shared/flip-read.js");
@@ -278,22 +278,45 @@ test("a check-in when their listing comes up asks about their other distressed p
 // 2026-10-26 (Pierce): a cold agent's distressed listing that has been up a
 // while, read on Zillow as needing work, is the first text they've had from
 // us about it — "doesn't look like a fixer" would read as if we never looked.
-test("a focus ping on a cold Pierce agent's listing reads like the first text, not 'doesn't look like a fixer'", () => {
+test("a focus ping on a cold Pierce agent's listing reads like Pierce's first text, not 'doesn't look like a fixer'", () => {
   const subject = { reason: "fresh_listing", segment: "cold", address: "4521 18th Ave Ct NW, Tacoma, WA 98406",
     listing: { street: "4521 18th Ave Ct NW", city: "Tacoma", county: "Pierce", state: "WA", focus: true } };
-  for (let variant = 0; variant < DEFAULT_OPENER_EXAMPLES.length; variant++) {
+  for (let variant = 0; variant < COUNTY_OPENERS.pierce.length; variant++) {
     const r = standardText({ kind: "agent_pulse", outbound: outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { ...subject, variant } }), name: "Pete" });
-    assert.equal(r.set, "opener");
-    assert.match(r.text, /^(Hi|Hey) Pete, (saw|came across) your listing at 4521 18th Ave Ct NW\./, r.text);
+    assert.equal(r.set, "county_opener");
+    assert.match(r.text, /^(Hi|Hey) Pete, /, r.text);
+    assert.match(r.text, /listing on 18th Ave Ct NW/, r.text);
     assert.doesNotMatch(r.text, /doesn't look like|probably not one for us|not sure it needs enough work/i, r.text);
   }
-  // Matt's own first text, when he has saved one, is the one it uses.
+  // A focus county with no texts of its own uses Matt's saved first text.
   const saved = { outreachAutopilot: { opener: { examples: ["Hi {first}, it's Matt. Saw {address} in {town}, is it a project?"] } } };
-  const mine = standardText({ kind: "agent_pulse", outbound: outboundDescriptor({ kind: "agent_pulse", offer: null, saved, subject: { ...subject, variant: 0 } }), name: "Pete" });
-  assert.equal(mine.text, "Hi Pete, it's Matt. Saw 4521 18th Ave Ct NW in Tacoma, is it a project?");
+  const kitsap = { ...subject, address: "12 Elm St, Bremerton, WA 98310", listing: { street: "12 Elm St", city: "Bremerton", county: "Kitsap", state: "WA", focus: true } };
+  const mine = standardText({ kind: "agent_pulse", outbound: outboundDescriptor({ kind: "agent_pulse", offer: null, saved, subject: { ...kitsap, variant: 0 } }), name: "Pete" });
+  assert.equal(mine.text, "Hi Pete, it's Matt. Saw 12 Elm St in Bremerton, is it a project?");
   // Without the focus flag a listing ping is the plain one, as before.
   const plain = standardText({ kind: "agent_pulse", outbound: outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { ...subject, variant: 0, listing: { ...subject.listing, focus: undefined } } }), name: "Pete" });
   assert.equal(plain.set, "listing_cold");
+});
+
+// 2026-10-26, Matt: "switch the wording slightly only for pierce". The saved
+// first text says "I'm in Seattle" and asks "a bit of a project, or pretty
+// turnkey?" — the 3.4% STOP text. Pierce listings get their own; King keeps it.
+test("a new Pierce agent's first text is Pierce's own, and a King agent's is still the saved one", () => {
+  const saved = { outreachAutopilot: { opener: { examples: ["Hi {first}, came across your listing at {address}. I'm in Seattle and looking for my next flip project around {town}. Is this one a bit of a project, or pretty turnkey?"] } } };
+  const open = (county, city, address) => standardText({ kind: "outreach_open", name: "Robin Agent",
+    outbound: { ...outboundDescriptor({ kind: "outreach_open", offer: null, saved, subject: { address, county, city, house: { address, county, city } } }), variant: 0 } });
+  const pierce = open("Pierce", "Tacoma", "5232 S Yakima Ave, Tacoma, WA 98408");
+  assert.equal(pierce.set, "county_opener");
+  assert.equal(pierce.text, "Hi Robin, saw your listing on S Yakima Ave in Tacoma. I fix up older houses around Pierce County. Does it need much work?");
+  assert.doesNotMatch(pierce.text, /Seattle|turnkey/);
+  const king = open("King", "Kent", "9 Oak St, Kent, WA 98031");
+  assert.equal(king.set, "opener");
+  assert.match(king.text, /I'm in Seattle/);
+  for (const t of COUNTY_OPENERS.pierce) {
+    assert.ok(t.length <= 140, t);
+    assert.deepEqual(carrierFlags(t), [], t);
+    assert.equal((t.match(/\?/g) || []).length, 1, `one question: ${t}`);
+  }
 });
 
 test("a check-in with something real to say — a house they mentioned, a deal we closed, Matt's 15 — is still written for them", () => {
