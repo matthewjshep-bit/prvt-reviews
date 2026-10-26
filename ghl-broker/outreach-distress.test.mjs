@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { distressSignals, OLD_HOUSE_YEAR } from "./outreach-score.js";
+import { distressSignals, meetsDistressRule, OLD_HOUSE_YEAR } from "./outreach-score.js";
 import { pickAgentsToImport, SWEEP_DISTRESS_RULE, pullQuery, normalizeOutreachAutopilot } from "./outreach-sweep.js";
 
 // The 2-week review: the sweep texted agents about finished houses in slow
@@ -58,4 +58,14 @@ test("an agent stored under the old rule whose hook was cut still gets imported"
     row("cheap-unknown", { priceCut: false }, legacy),
   ];
   assert.deepEqual(pickAgentsToImport(rows, { cap: 10, distressRule: "cut-or-old" }).map((r) => r.agentKey).sort(), ["cut", "old"]);
+});
+
+test("Pierce's rule counts a house sitting its stale days, as well as a cut or an older house", () => {
+  const sitting = distressSignals({ daysOnMarket: 70, yearBuilt: 1995, price: 400000, squareFootage: 1500 }, { staleDom: 60 });
+  const fresh = distressSignals({ daysOnMarket: 30, yearBuilt: 1995, price: 400000, squareFootage: 1500 }, { staleDom: 60 });
+  const old = distressSignals({ daysOnMarket: 30, yearBuilt: 1962, price: 400000, squareFootage: 1500 }, { staleDom: 60 });
+  assert.equal(meetsDistressRule(sitting, "cut-old-or-stale"), true);
+  assert.equal(meetsDistressRule(sitting, "cut-or-old"), false, "King's rule doesn't count sitting");
+  assert.equal(meetsDistressRule(fresh, "cut-old-or-stale"), false);
+  assert.equal(meetsDistressRule(old, "cut-old-or-stale"), true);
 });

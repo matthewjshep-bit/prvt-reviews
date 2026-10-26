@@ -3493,6 +3493,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       // A cold agent's fresh listing goes in the short first-text voice,
       // held under OPENER_MAX_CHARS like the first text (2026-10-15).
       coldOpen: (p.segment === "cold" || /gone quiet/.test(String(p.segment || ""))) && (p.reason === "fresh_listing" || p.reason === "off_market_listing") && Boolean(p.listing),
+      // A focus county's listing (pulse.focusListings): texted in Matt's
+      // first-text words, so it carries what those name.
+      ...(p.listing?.focus ? focusOpener({ listing: p.listing, address: p.address, saved }) : {}),
       variant: Number(p.variant) || 0 };
   }
   if (kind === "second_look") {
@@ -3549,7 +3552,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       // A finished listing, texted for the agent rather than the house (the turnkey seats).
       turnkey: subject?.house?.turnkey === true,
       // A listing that came off the market lately without selling (the off-market seats).
-      offMarket: subject?.house?.offMarket === true };
+      offMarket: subject?.house?.offMarket === true,
+      // Their listing came down lately, sold or not (the recent listers): the fixed past-tense text.
+      ...(subject?.house?.pastListing === true ? { pastListing: true } : {}) };
   }
   // The nudges. They carry what the message is ABOUT and no numbers at all.
   return { ...base,
@@ -3558,7 +3563,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
     // Follow-up N's own text (Autopilot → Agents, 2026-10-20).
     ...(kind === "outreach_nudge" ? { home: homeFor({ county: subject?.county, address }, normalizeOpener(saved?.outreachAutopilot?.opener)),
       mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode, followUps: normalizeOpener(saved?.outreachAutopilot?.opener).followUps,
-      checkIns: normalizeOpener(saved?.outreachAutopilot?.opener).checkIns, ...repeatOf(subject) } : {}),
+      checkIns: normalizeOpener(saved?.outreachAutopilot?.opener).checkIns, ...repeatOf(subject),
+      // A recent lister's first text named a house that's gone: no follow-up asks about it.
+      ...(subject?.pastListing ? { pastListing: true } : {}) } : {}),
     // A passed house riding on this nudge as one line (follow-up-sweep.js).
     ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
@@ -3606,7 +3613,9 @@ function outboundSummary({ kind, offer, outbound }) {
     case "passed_checkin": return outbound.relisted
       ? `Saw ${where} is back on the market; asks if the seller would look at our offer now${rung}.`
       : `Checks in after ${where} — asks if any other houses that need work, on the market or off, have come across their desk${rung}.`;
-    case "outreach_open": return outbound.offMarket
+    case "outreach_open": return outbound.pastListing
+      ? `First text: names their recent listing at ${where} as theirs, asks for their next fixer.`
+      : outbound.offMarket
       ? `First text: their listing at ${where} (off the market lately, not said), does it need much work?`
       : outbound.turnkey
         ? `First text: their listing at ${where} looks finished, asks whether they ever get ones that need work.`
@@ -3753,7 +3762,7 @@ function pulseHook(h) {
 function openerChoices(outbound = {}) {
   const p = openerPlan(outbound);
   return { variant: p.variant, move: p.moveIndex, who: p.whoIndex, notice: p.notice || "", turnkey: p.turnkey, examplesHash: p.examplesHash,
-    style: p.style, ...(outbound.offMarket === true ? { offMarket: true } : {}) };
+    style: p.style, ...(outbound.offMarket === true ? { offMarket: true } : {}), ...(outbound.pastListing === true ? { pastListing: true } : {}) };
 }
 
 // The cold open and its nudge never sign off: GHL puts "Thanks, Matt" and
@@ -3791,6 +3800,15 @@ export async function writeShorterFirstText({ draft, kind, redraft, outbound = n
 // Matt's fixed texts (shared/standard-texts.js, 2026-10-17): the first text,
 // its follow-up and the plain check-in, filled in as he writes them. No model
 // call and nothing to rewrite; the gates still read it like any draft.
+// What a focus listing's check-in needs to be filled from Matt's first texts
+// (shared/standard-texts.js): the texts, the city we say we're in, the town
+// and county.
+function focusOpener({ listing = {}, address = "", saved = {} }) {
+  const opener = normalizeOpener(saved?.outreachAutopilot?.opener);
+  return { templates: opener.examples, home: homeFor({ county: listing.county, state: listing.state, address }, opener),
+    city: String(listing.city || ""), county: countyName(listing.county) };
+}
+
 function standardDraft({ kind, offer, outbound, name, contactId }) {
   const s = standardText({ kind, outbound, name, contactId });
   if (!s) return null;
@@ -6951,7 +6969,8 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         ...(d.outbound.variant != null ? { variant: d.outbound.variant, openingMove: d.outbound.move } : {}),
         // "plain" since 2026-10-16; none before that.
         ...(d.outbound.style ? { style: d.outbound.style } : {}),
-        turnkey: d.outbound.turnkey === true, chars: body.length, edited: Boolean(updated.edited), ...(d.outbound.offMarket ? { offMarket: true } : {}) },
+        turnkey: d.outbound.turnkey === true, chars: body.length, edited: Boolean(updated.edited), ...(d.outbound.offMarket ? { offMarket: true } : {}),
+        ...(d.outbound.pastListing ? { pastListing: true } : {}) },
     }).catch(() => {});
   }
   // A reply that promised to come back starts a clock (promise-sweep.js). The

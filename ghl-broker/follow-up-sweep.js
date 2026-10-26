@@ -432,6 +432,7 @@ export async function outreachCandidates({ store, locationId, config, now = Date
     out.push({
       kind: "outreach_nudge", party: "agent", contactId, subjectId: contactId,
       offerId: null, address: opened.address || "", startedAt: opened.at, county: opened.data?.county || "",
+      ...(opened.data?.pastListing ? { pastListing: true } : {}),
       sentSteps: list.filter((e) => e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge").map((e) => Number(e.data?.step)),
       lastInboundAt, lastTouchAt,
       ladder,
@@ -1090,6 +1091,7 @@ async function runSweep(job, ctx) {
         subject: { address: c.address, step: d.step, steps: c.ladder.steps, repeatEvery: c.ladder.repeatEvery || 0,
                    viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, spokeAt: c.spokeAt || null, lastTouchAt, relisted: Boolean(c.relisted),
                    ...(c.county ? { county: c.county } : {}),
+                   ...(c.pastListing ? { pastListing: true } : {}),
                    ...(c.wavering ? { wavering: true } : {}),
                    ...(c.kind === SECOND_LOOK_KIND ? { theirs: c.theirs, source: c.source } : {}),
                    ...(aside ? { aside: { address: aside.address, quiet: Boolean(aside.quiet) } } : {}) },

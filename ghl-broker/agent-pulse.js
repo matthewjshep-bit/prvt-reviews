@@ -22,7 +22,7 @@ import { conversationConfig, startProactive, previewProactive, markUnsubscribed,
 import { getContact, smsUnsubscribed, removeContactFromWorkflow, searchAllContactsByTags, listWorkflows, listPipelines } from "./ghl.js";
 import { acquisitionsPipeline } from "./ghl-mirror.js";
 import { listAcquisitionOpportunities } from "./tier-check.js";
-import { workHour, isWorkday, normalizeOutreachAutopilot, WORK_TZ } from "./outreach-sweep.js";
+import { workHour, isWorkday, normalizeOutreachAutopilot, WORK_TZ, screenAddresses, MAX_SCREEN_PER_RUN } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { mergeEvents } from "./shared/bot-hold.js";
@@ -168,6 +168,13 @@ export function housesFrom(offers = [], events = [], now = Date.now()) {
  * fresh listings. The check-in plans from it; the tiers (agentRoster) read
  * it too.
  */
+// How far back the listings read goes: `freshDays`, or a focus county's
+// `maxAgeDays` when that is on.
+export function listingWindowDays(settings = {}) {
+  const f = settings.focusListings || {};
+  return f.enabled && (f.counties || []).length ? Math.max(settings.freshDays, f.maxAgeDays) : settings.freshDays;
+}
+
 export async function loadPulseAgents({ locationId, saved = {}, store = defaultStore, now = Date.now(), tierCards = null }) {
   const settings = agentPulseSettings(saved);
   const config = conversationConfig(saved);
@@ -188,8 +195,10 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
     // it (ghl-broker/next-follow-up.js): a no ten days back is still the no.
     store.listReplyDrafts(locationId, { since: iso(now - EVENTS_DAYS * DAY_MS), limit: 4000 }).catch(() => []),
     store.lastContactActivity(locationId, { types: INBOUND_EVENT_TYPES, inboundOnly: true, limit: 50000 }).catch(() => []),
+    // As far back as a focus county's listings may go (pulse.focusListings);
+    // shared/agent-pulse.js freshListingFor keeps the rest to `freshDays`.
     typeof store.listFreshAgentListings === "function"
-      ? store.listFreshAgentListings(locationId, { since: iso(now - settings.freshDays * DAY_MS), seenSince: iso(now - settings.listingSeenDays * DAY_MS) }).catch(() => [])
+      ? store.listFreshAgentListings(locationId, { since: iso(now - listingWindowDays(settings) * DAY_MS), seenSince: iso(now - settings.listingSeenDays * DAY_MS) }).catch(() => [])
       : [],
     botEventsByContact({ store, locationId }),
     // A lead they told us the timing of is booked up to thirteen months out
@@ -221,6 +230,7 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
     .filter((d) => d?.id && !seenDraft.has(d.id) && seenDraft.add(d.id)));
   const inboundRow = new Map((inbound || []).filter((r) => r?.contactId).map((r) => [r.contactId, r]));
   const listingsBy = byContact(listings);
+  const hooksBy = byContact(hooks);
   const profiles = (allProfiles || []).filter((p) => p?.party === "agent");
   const investors = (allProfiles || []).filter((p) => p?.party === "investor");
   // An agent's own profile, or one with no party yet (an offer contact whose
@@ -282,6 +292,8 @@ export async function loadPulseAgents({ locationId, saved = {}, store = defaultS
       offers: mine, current: mine.filter((o) => o.isCurrent !== false),
       drafts: draftsBy.get(id) || [], events: eventsBy.get(id) || [], ledger: ledgerBy.get(id) || [],
       lastInboundAt: inboundRow.get(id)?.at || null, listings: listingsBy.get(id) || [],
+      // The listings an import first texted them about (never pinged as news).
+      hooks: hooksBy.get(id) || [],
       ghlTier: cards.get(id) || null,
       // When they joined the check-in, for spreading the first one: the
       // replier backfill's run, or the day the runner first saw their reply.
@@ -431,6 +443,30 @@ export async function voidDroppedClaims({ store = defaultStore, locationId, now 
 }
 
 /**
+ * screenFocusPicks({ picks, job, locationId, store, deps, now, dryRun }) → Map(contactId → true | false)
+ *
+ * A focus county's listing that has been up a while (pulse.focusListings) is
+ * texted about only once Zillow reads it as still for sale and needing work
+ * — the check every first text gets (outreach-sweep.js screenAddresses), and
+ * what it said is remembered for both. A pick it didn't reach, or a broker
+ * that can't read Zillow, texts nobody about it.
+ */
+async function screenFocusPicks({ picks = [], job, locationId, store, deps = {}, now = Date.now(), dryRun = false }) {
+  const focus = picks.filter((p) => p.focus);
+  if (!focus.length) return new Map();
+  if (typeof deps.screenListings !== "function") {
+    job.focus = { picks: focus.length, checked: 0, remembered: 0, kept: 0, error: "this broker can't read Zillow" };
+    return new Map();
+  }
+  const { verdict, stats, warnings } = await screenAddresses({
+    items: focus.map((p) => ({ id: p.contactId, address: p.subject?.address || "", yearBuilt: p.subject?.listing?.yearBuilt || null })),
+    locationId, store, deps, now, perRun: MAX_SCREEN_PER_RUN, remember: !dryRun,
+  });
+  job.focus = { picks: focus.length, ...stats, ...(warnings.length ? { error: warnings[0] } : {}) };
+  return verdict;
+}
+
+/**
  * startAgentPulse({ client, locationId, saved, store, sendsEnabled, deps, trigger, dryRun, limit, now, onDone }) → job
  *
  * A dry run picks and reports; it claims nobody and drafts nothing. `limit`
@@ -476,11 +512,17 @@ export function startAgentPulse({
     // (unsubscribed, tagged off, no phone) hands the seat to the next in line.
     const seats = picks.length;
     let claimed = 0;
-    for (const p of [...picks, ...(dryRun ? [] : plan.spares || [])]) {
+    const queue = [...picks, ...(dryRun ? [] : plan.spares || [])];
+    const focusOk = await screenFocusPicks({ picks: queue, job, locationId, store, deps, now, dryRun });
+    for (const p of queue) {
       if (claimed >= seats) break;
-      const row = { contactId: p.contactId, segment: p.segment, pulse: p.reason, address: p.subject?.address || "" };
+      const row = { contactId: p.contactId, segment: p.segment, pulse: p.reason, address: p.subject?.address || "", ...(p.focus ? { focus: true } : {}) };
       job.results.push(row);
       const skip = (why) => { row.status = "skipped"; row.detail = why; job.skipped++; };
+      if (p.focus && focusOk.get(p.contactId) !== true) {
+        skip(focusOk.has(p.contactId) ? "Zillow doesn't read the listing as needing work" : "the listing check didn't get to it");
+        continue;
+      }
       if (dryRun) { row.status = "would draft"; continue; }
 
       // Their GHL record first: unsubscribed, tagged off, or no phone is never claimed.

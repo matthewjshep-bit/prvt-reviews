@@ -57,11 +57,15 @@ export function distressSignals(listing, { medianPpsf = 0, staleDom = 45 } = {})
 
 /**
  * meetsDistressRule(sig, rule) — a listing's signals read by a pull's rule:
- * "cut-or-old" (a price cut or an older house), "cut-or-cheap" (a price cut
- * or a cheap $/sqft), else "any" (stale, cut or cheap).
+ * "cut-or-old" (a price cut or an older house), "cut-old-or-stale" (one
+ * of those, or sitting `staleDom` days — Pierce, 2026-10-26), "cut-or-cheap"
+ * (a price cut or a cheap $/sqft), else "any" (stale, cut or cheap).
  */
+export const DISTRESS_RULES = ["any", "cut-or-old", "cut-old-or-stale", "cut-or-cheap"];
+
 export function meetsDistressRule(sig = {}, rule = "any") {
   if (rule === "cut-or-old") return Boolean(sig.cut || sig.old);
+  if (rule === "cut-old-or-stale") return Boolean(sig.cut || sig.old || sig.stale);
   if (rule === "cut-or-cheap") return Boolean(sig.cut || sig.cheap);
   return Boolean(sig.stale || sig.cut || sig.cheap);
 }
@@ -180,4 +184,28 @@ export function offMarketListings(listings = [], { now = Date.now(), withinDays 
     kept.push({ ...l, offMarket: true });
   }
   return { kept, dropped };
+}
+
+// Agents who had a listing lately (2026-10-26, Matt: "only with people who
+// have active listings in the last 60-90 days to weed out people who just
+// don't do business recently … can rentcast pull this info"): RentCast's
+// "Inactive" listings that came down in the window, sold or not — the agent,
+// not the house, is what we're after.
+export const RECENT_LISTERS_DAYS = 90;
+
+/**
+ * recentListings(listings, { now, withinDays }) → { kept, dropped: { notRecent } }
+ *
+ * Listings RentCast has as no longer active whose `removedDate` falls in the
+ * last `withinDays`. Each comes back marked `pastListing`.
+ */
+export function recentListings(listings = [], { now = Date.now(), withinDays = RECENT_LISTERS_DAYS } = {}) {
+  const kept = [];
+  let notRecent = 0;
+  for (const l of listings || []) {
+    const t = Date.parse(l?.removedDate || "");
+    if (!Number.isFinite(t) || t > now || now - t > withinDays * 86400000 || String(l?.status || "Inactive").toLowerCase() === "active") { notRecent++; continue; }
+    kept.push({ ...l, pastListing: true });
+  }
+  return { kept, dropped: { notRecent } };
 }

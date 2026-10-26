@@ -441,6 +441,8 @@ export function firstTextHook(doc = {}, { county = "", base = {} } = {}) {
   const turnkey = h.turnkey === true || d.turnkey === true || b.turnkey === true;
   // A listing that came off the market lately (the off-market seats, 2026-10-15).
   const offMarket = h.offMarket === true || b.offMarket === true;
+  // Their listing came down lately, sold or not (the recent listers, 2026-10-26).
+  const pastListing = h.pastListing === true || b.pastListing === true;
   const removedDate = h.removedDate || b.removedDate || null;
   return {
     ...b,
@@ -458,6 +460,7 @@ export function firstTextHook(doc = {}, { county = "", base = {} } = {}) {
     listingCount: Number(d.listingCount) || Number(b.listingCount) || 0,
     ...(turnkey ? { turnkey: true } : {}),
     ...(offMarket ? { offMarket: true, ...(removedDate ? { removedDate } : {}) } : {}),
+    ...(pastListing ? { pastListing: true, ...(removedDate ? { removedDate } : {}) } : {}),
   };
 }
 
