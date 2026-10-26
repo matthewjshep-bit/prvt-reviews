@@ -84,6 +84,8 @@ import { releasableHeld } from "./shared/conversation-audit.js";
 import { addressKey as propertyKey } from "./shared/us-address.js";
 import { findOrCreateCustomFieldByKey, updateContact } from "./ghl.js";
 import { matchTagPatterns } from "./conversation-party.js";
+import { GATEKEEPER_TAG_PATTERNS } from "./shared/gatekeeper.js";
+import { GATEKEEPER_OUT_KINDS } from "./shared/gatekeeper-sequence.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { expandListingLinks } from "./listing-links.js";
 import { inboundPhotoUrls, readPhotoAddresses, expandPhotoAddresses, bodyImageUrls } from "./photo-addresses.js";
@@ -2067,6 +2069,11 @@ export const DND_REASON = "they unsubscribed (DND in GHL) — nothing is drafted
 export function handsOffReason(a) {
   if (a?.dnd) return DND_REASON;
   if (a?.botOff?.length) return `bot is off for this contact (tag: ${a.botOff[0]})`;
+  // An estate attorney, a title or escrow officer (2026-10-26): a
+  // relationship Matt runs himself. The bot never answers one and never
+  // starts an agent's or a buyer's text to one; their own sequence is
+  // gatekeeper-sweep.js.
+  if (a?.gatekeeper) return "a gatekeeper (estate attorney, title or escrow) — yours to answer";
   if (a?.dealHold) {
     return a.dealHold.role === "buyer"
       ? `they are a buyer on your live deal at ${a.dealHold.address} — you are working them yourself`
@@ -2325,6 +2332,9 @@ export async function assembleConversation({
   let party = resolved.party;
   let partySource = resolved.source;
   let classified = null;
+  // Never placed by their words or our offer book: an attorney who sends a
+  // house is still an attorney (handsOffReason holds them for Matt).
+  const gatekeeper = !fakeParty && matchTagPatterns(tags, GATEKEEPER_TAG_PATTERNS).length > 0;
 
   // The real thread when there is a contact, and after it whatever the test
   // window typed — so a test on a real contact is "their conversation so far,
@@ -2363,7 +2373,7 @@ export async function assembleConversation({
   // words. On a confident read the party's first plain tag is stamped on
   // the contact (as an auto action, recorded on the draft) so the next text
   // is routed by tags like everyone else's.
-  if (party === "unknown" && config.routing.unknown === "classify" && aiApiKey && !light && String(message || "").trim()) {
+  if (party === "unknown" && !gatekeeper && config.routing.unknown === "classify" && aiApiKey && !light && String(message || "").trim()) {
     try {
       const c = await classify({ contact: { name, tags }, transcript, message, aiApiKey });
       classified = c;
@@ -2379,7 +2389,7 @@ export async function assembleConversation({
   // A contact we've written an offer to is an agent, whatever their tags say.
   // Mike Renard (9314 Canyon Rd #54) had a live counter in our book and every
   // text he sent sat as "an unknown contact never auto-sends".
-  if (party === "unknown" && contactId && !fakeParty && typeof store?.listOffers === "function") {
+  if (party === "unknown" && !gatekeeper && contactId && !fakeParty && typeof store?.listOffers === "function") {
     const theirs = await store.listOffers(locationId, { contactId, limit: 1, lean: true }).catch(() => []);
     if ((theirs || []).some((o) => o && o.contactId === contactId)) {
       party = "agent";
@@ -2437,7 +2447,7 @@ export async function assembleConversation({
     : null;
 
   return {
-    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive, hold,
+    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive, hold, gatekeeper,
     playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer, companyContact,
   };
 }
@@ -4187,6 +4197,12 @@ async function runReply(job, ctx) {
     job.finishedAt = new Date().toISOString();
     if (a.dnd) await markUnsubscribed({ client, store, locationId, contactId: job.contactId, party: a.party, now });
     await noteHeld(handsOff);
+    // A gatekeeper answered: their sequence stops, and Matt calls.
+    if (a.gatekeeper) {
+      await recordEvent({ store, locationId, contactId: job.contactId, party: "gatekeeper", type: "gatekeeper_replied",
+        at: new Date(now).toISOString(), source: "conversation", ref: job.id, dedupeKey: `gatekeeper_replied:${job.id}`,
+        data: { channel: job.channel || "sms", call: Boolean(isCall) } }).catch(() => {});
+    }
     return;
   }
 
@@ -6955,6 +6971,15 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     await recordEvent({
       store, locationId, contactId: d.contactId, party: "investor", type: "pulse_texted", at: ts,
       source: "conversation", ref: d.id, dedupeKey: `pulse_texted:${d.id}`, data: { draftId: d.id, auto: Boolean(auto) },
+    }).catch(() => {});
+  }
+  // A gatekeeper's email, text or check-in actually went: the sequence's
+  // clock (shared/gatekeeper-sequence.js) runs from here, not the draft.
+  if (GATEKEEPER_OUT_KINDS.includes(d.outbound?.kind)) {
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "gatekeeper", type: "gatekeeper_sent", at: ts, address: d.outbound.address || "",
+      source: "conversation", ref: d.id, dedupeKey: `gatekeeper_sent:${d.id}`,
+      data: { draftId: d.id, step: d.outbound.step || "", hookKey: d.outbound.hookKey || null, channel: d.channel === "email" ? "email" : "sms", auto: Boolean(auto), edited: Boolean(updated.edited) },
     }).catch(() => {});
   }
   if (d.outbound?.kind === "outreach_open") {

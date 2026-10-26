@@ -10,8 +10,10 @@
 //   POST /api/gatekeepers                      add or edit one by hand (title, escrow)
 //   POST /api/gatekeepers/:gkKey/status        { status } skip / do-not-contact / back to new
 //   POST /api/gatekeepers/import               { gkKeys, dryRun } → GHL contacts, tagged
+//   GET  /api/gatekeepers/sweep                the daily sweep: last run, running job
+//   POST /api/gatekeepers/sweep/run            { dryRun } run it now (gatekeeper-sweep.js)
 //
-// Nothing here sends a text or an email. The import is dry unless the
+// Nothing here sends a text or an email: the sweep writes drafts. The import is dry unless the
 // request says dryRun:false AND OUTREACH_IMPORTS_ENABLED is set — the same
 // double gate as the agent import. Errors and results carry counts and keys,
 // never a name.
@@ -21,6 +23,7 @@ import { store } from "../store.js";
 import { ensureProfile, recordEvents } from "../contact-record.js";
 import { findDuplicateContact, createContact, getContact, updateContact, addContactTags } from "../ghl.js";
 import { ingestNotices, readNoticeEmails, seedFromClosings } from "../gatekeeper-feed.js";
+import { startGatekeeperSweep, getGatekeeperJob, CURSOR_NAME as SWEEP_CURSOR } from "../gatekeeper-sweep.js";
 import {
   GATEKEEPER_KINDS, GATEKEEPER_STATUSES, gatekeeperKey, mergeGatekeeperDoc, rankGatekeepers, bestHook, hookLine, splitName,
 } from "../shared/gatekeeper.js";
@@ -242,6 +245,32 @@ export default function createGatekeepersRouter({ resolveLocation, deps = {} }) 
     return { dryRun, results, created: results.filter((r) => r.action === "created").length, updated: results.filter((r) => r.action === "updated").length };
   }
   router.importGatekeepers = importGatekeepers;
+
+  router.get("/sweep", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const cursor = await store.getJobCursor(locationId, SWEEP_CURSOR).catch(() => null);
+      const job = getGatekeeperJob(locationId);
+      res.json({ last: cursor?.doc?.last || null, lastDaily: cursor?.doc?.lastDaily || null, tries: cursor?.doc?.tries || 0,
+        failed: Boolean(cursor?.doc?.failed), error: cursor?.doc?.error || null,
+        job: job ? { status: job.status, trigger: job.trigger, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error, steps: job.result?.steps || null } : null });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Run the day's sweep now. Dry unless asked otherwise, and even then
+  // only as live as Settings allow (the sweep reads gatekeepers.dryRun).
+  router.post("/sweep/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      if (getGatekeeperJob(locationId)?.status === "running") throw Object.assign(new Error("a sweep is already running"), { http: 409 });
+      const saved = await getSettings(locationId);
+      const dryRun = req.body?.dryRun === false ? null : true;
+      const job = startGatekeeperSweep({ client, locationId, saved, store, sendsEnabled: process.env.CARD_SENDS_ENABLED === "true",
+        deps: { ...deps, importGatekeepers }, dryRun, trigger: "manual" });
+      if (req.body?.wait) await job.done;
+      res.json({ ok: true, job: { status: job.status, startedAt: job.startedAt, ...(job.result ? { dryRun: job.result.dryRun, steps: job.result.steps, imported: job.result.imported, rows: job.result.rows.slice(0, 100) } : {}) } });
+    } catch (err) { fail(res, err); }
+  });
 
   router.post("/import", async (req, res) => {
     try {

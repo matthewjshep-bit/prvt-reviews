@@ -1220,6 +1220,27 @@ test("a contact carrying the bot-off tag is left alone: no draft, no note", asyn
   assert.equal(notes.length, 0);
 });
 
+test("an estate attorney who answers our note is Matt's: no draft, even with an agent tag or an offer in the book, and their sequence stops", async () => {
+  for (const tags of [["gatekeeper", "gatekeeper-probate-attorney"], ["agent", "gatekeeper-title"]]) {
+    _resetJobs();
+    const { client } = ghlStubFor(tags);
+    const store = fakeStore();
+    store.listOffers = async () => [{ id: "o1", contactId: "c1", address: "12 Elm St" }];
+    let called = false;
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "Thanks Matt, the PR may want a number on the Elm St house",
+      deps: { draft: async () => { called = true; return DRAFT; } },
+    });
+    await settle();
+    assert.equal(job.status, "held", tags.join(","));
+    assert.match(job.heldReason, /gatekeeper/);
+    assert.equal(called, false, "the model is never asked");
+    const evs = await store.listContactEvents("LOC", "c1", { types: ["gatekeeper_replied"] });
+    assert.equal(evs.length, 1);
+    assert.equal(evs[0].party, "gatekeeper");
+  }
+});
+
 test("the agent on a property you have under contract is yours, not the bot's", async () => {
   _resetJobs();
   const { client, notes } = ghlStubFor(["agent"]);

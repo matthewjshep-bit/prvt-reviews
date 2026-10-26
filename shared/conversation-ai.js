@@ -62,7 +62,10 @@ export function setupQuestionFor({ offerId = "", dossier = null, ask = SETUP_QUE
 }
 
 export const PARTIES = ["agent", "investor"];
-export const PARTY_LABEL = { agent: "Listing agent", investor: "Investor", unknown: "Unknown" };
+// "gatekeeper" isn't a party the bot talks to (an estate attorney, title or
+// escrow: Matt's, see shared/gatekeeper-sequence.js); it's labelled for
+// the outbox, where their drafted notes wait.
+export const PARTY_LABEL = { agent: "Listing agent", investor: "Investor", gatekeeper: "Gatekeeper", unknown: "Unknown" };
 export const CONFIDENCES = ["high", "medium", "low"];
 
 // What the other person is doing, as far as the model can tell. Closed sets,
@@ -115,6 +118,10 @@ export const INTENT_LABEL = {
     outreach_open: "first text about their listing", outreach_nudge: "followed up on a cold text", outreach_email: "introduced us by email", checkin_email: "checked in by email",
     call_followup: "text after a call", showing_ask: "asked for a buyer walkthrough window", promise_due: "kept our word on a number we owed", price_drop: "saw the list price come down", checkin_due: "the check-in they asked for", address_chase: "asked again for the address of a property they said was coming",
     agent_pulse: "checked in on the relationship",
+    // The gatekeeper line's drafts (shared/gatekeeper-sequence.js). Its
+    // contacts aren't a conversation party; the outbox reads labels here.
+    gatekeeper_email: "first email to a gatekeeper (estate attorney, title or escrow)", gatekeeper_text: "text after the gatekeeper email",
+    gatekeeper_checkin: "gatekeeper check-in, about something new",
     second_look: "asked once more about a strong past offer, at our same number",
     question: "question", counter: "counter", acceptance: "wants to move forward", rejection: "passed",
     wants_call: "wants a call", scheduling: "scheduling", proof_of_funds: "proof of funds",

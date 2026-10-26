@@ -6753,7 +6753,23 @@ Added 2026-10-26. This is a second supply line beside listing agents, using the 
 - The profile party is `gatekeeper`.
 - `do_not_contact` is never imported.
 
-**Not yet built** (PR 2 / PR 3 of the plan): the `gatekeeper` bot party and prompt; the email → text → call → 30-day check-in clock; Desk call rows; `gatekeeper_brought` on the Line; a GHL Gatekeepers pipeline. Until then nothing texts or emails a gatekeeper.
+**The sequence** (`gatekeeper-sweep.js`, rules in `shared/gatekeeper-sequence.js`). It's the `gatekeepers` tick job, weekdays from 9am Pacific, gated like the conversation audit (cursor `gatekeepers`, stale retry, 4 tries a day). It is off unless `outreachAutopilot.gatekeepers.enabled`.
+- **Each run:**
+  1. reads the notice email;
+  2. imports the `dailyNew` best new gatekeepers we can reach;
+  3. for every imported one, works out the step that's due.
+- **Steps:**
+  - **Email first**, about their estate (and its house) or our closing.
+  - **Text** `textAfterDays` after the email actually *went* (the `gatekeeper_sent` event `sendReplyDraft` writes). The clock never starts from the draft.
+  - **Check-in** every `checkInEveryDays` (30), and only when there's a new estate or closing since the last note. With no new reason it stays silent.
+  - Each step is claimed first (`gatekeeper_queued`, keyed contact + step + hook), then written by the model from the facts alone (Matt's `voiceExamples` steer the voice).
+- **Checks on every draft** (`draftFlags`): machine tells (no "reach out", no em dashes, no "!", no referral fee, no "public records"), carrier words, length, and whether it names their estate or closing. A flagged draft is written once more; if it still has flags it waits for Matt with them shown.
+- **Sending.** Drafts wait in the outbox unless `autoSend` is on **and** `CARD_SENDS_ENABLED` is set **and** the draft carries no flags.
+- **Replies.** The reply agent never answers a contact tagged `gatekeeper` / `gatekeeper-*` (`handsOffReason`). It won't classify one as an agent from their words or from our offer book, and no agent or buyer ladder starts a text to one. An inbound from one writes `gatekeeper_replied`, which ends their sequence. A call, Matt's own text, an email in Gmail or an opt-out also ends it.
+- **Controls:** `GET /api/gatekeepers/sweep` shows the last run; `POST /api/gatekeepers/sweep/run {dryRun}` runs it now. The tab's "Sequence" panel holds the switches and the "Dry run now" button.
+- Gatekeeper drafts are left off the Follow-up page (`EXCLUDED_KINDS`): they're their own line.
+
+**Not yet built** (PR 3): Desk call rows (`callDue`), `gatekeeper_brought` on the Line, a GHL Gatekeepers pipeline.
 
 **Rules:** no referral fees to attorneys or title (RPC 7.2, RESPA §8). Logs and results carry counts, never a decedent's, a personal representative's or an attorney's name.
 
