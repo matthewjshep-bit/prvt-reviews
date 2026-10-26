@@ -10,6 +10,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { blankIncomeDeal, sampleIncomeDeal, verdictOf } from "@shared/income-underwrite.js";
+import IncomeProjection from "./IncomeProjection.jsx";
 
 /* ---------- small formatting helpers ---------- */
 
@@ -716,6 +717,8 @@ export default function IncomeUnderwriter({ kind, deal, setDeal, run, asking, pr
           </details>
         </div>
       )}
+
+      {run?.ok && <IncomeProjection run={run} />}
     </>
   );
 }

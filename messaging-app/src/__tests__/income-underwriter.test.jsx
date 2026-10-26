@@ -41,6 +41,36 @@ test("a commercial deal shows the tenant roll with leases and NNN", () => {
   expect(html).not.toContain("NaN");
 });
 
+test("an income deal draws the hold: where the NOI goes and the loan against our equity, at the max offer", () => {
+  for (const [kind, asking] of [["multi_family", 1295000], ["commercial", 1450000]]) {
+    const deal = sampleIncomeDeal(kind);
+    const run = underwriteIncome({ ...deal, askingPrice: asking });
+    const html = render(<IncomeUnderwriter kind={kind} deal={deal} setDeal={noop} run={run} asking={asking} priceOverride="" setPriceOverride={noop} fmtTyped={fmt} />);
+    expect(html).toContain("The hold, year by year");
+    expect(html).toContain("Where each year&#x27;s NOI goes");
+    expect(html).toContain("Value, loan and your equity");
+    expect(html).toContain(`$${Math.round(run.result.at.equity).toLocaleString("en-US")}`);
+    expect(html).toContain("Show the numbers");
+    expect(html).not.toContain("NaN");
+  }
+});
+
+test("a deal no price works for draws the hold at asking, with the years the NOI doesn't cover the mortgage", () => {
+  const deal = { ...sampleIncomeDeal("multi_family"), askingPrice: 1295000, taxes: 200000 };
+  const run = underwriteIncome(deal);
+  expect(run.result.at).toBe(null);
+  const html = render(<IncomeUnderwriter kind="multi_family" deal={deal} setDeal={noop} run={run} asking={1295000} priceOverride="" setPriceOverride={noop} fmtTyped={fmt} />);
+  expect(html).toContain("The hold, year by year");
+  expect(html).toContain("doesn&#x27;t cover the mortgage");
+  expect(html).not.toContain("NaN");
+});
+
+test("an empty rent roll draws no hold chart", () => {
+  const deal = blankIncomeDeal("multi_family");
+  const html = render(<IncomeUnderwriter kind="multi_family" deal={deal} setDeal={noop} run={underwriteIncome(deal)} asking={0} priceOverride="" setPriceOverride={noop} fmtTyped={fmt} />);
+  expect(html).not.toContain("The hold, year by year");
+});
+
 test("land shows the value from sold comps and the offer after site work", () => {
   const deal = sampleLandDeal();
   const run = underwriteLand(deal);

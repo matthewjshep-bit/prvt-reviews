@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  analyze, irr, loanBalance, maxOffer, normalizeIncomeDeal, operate, pmt, sampleIncomeDeal,
+  analyze, irr, loanBalance, maxOffer, normalizeIncomeDeal, operate, pmt, projection, sampleIncomeDeal,
   sensitivity, underwriteIncome, validateIncomeDeal, verdictOf, blankIncomeDeal,
 } from "./income-underwrite.js";
 
@@ -119,4 +119,34 @@ test("the verdict reads works, close or overpriced against the asking price", ()
   assert.equal(verdictOf(100, 100).status, "works");
   assert.equal(verdictOf(95, 100).status, "close");
   assert.equal(verdictOf(80, 100).status, "over");
+});
+
+test("the year-by-year chart pays the loan down to the payoff the sale uses and ends at the sale price", () => {
+  for (const kind of ["multi_family", "commercial"]) {
+    const d = normalizeIncomeDeal(sampleIncomeDeal(kind));
+    const a = maxOffer(d).at;
+    const rows = projection(d, a);
+    const last = rows[rows.length - 1];
+    assert.equal(rows.length, d.holdYears + 1);
+    assert.equal(rows[0].value, a.price);
+    assert.equal(rows[0].equity, a.price - a.loan);
+    assert.equal(rows[0].cumCash, -a.equity);
+    near(last.balance, a.balance, 0.01);
+    near(last.value, a.salePrice, 0.01);
+    for (const r of rows.slice(1)) {
+      near(r.interest + r.principal, r.debtService, 0.01);
+      near(r.equity, r.value - r.balance, 0.01);
+    }
+    // Every dollar in and out, sale included, is the last row's running total.
+    near(last.cumCash, a.flows.reduce((s, v) => s + v, 0), 0.01);
+  }
+});
+
+test("an interest-only year builds no equity from the loan", () => {
+  const d = normalizeIncomeDeal({ ...sampleIncomeDeal("multi_family"), ioYears: 2 });
+  const rows = projection(d, analyze(d, 1000000));
+  assert.equal(rows[1].principal, 0);
+  assert.equal(rows[2].principal, 0);
+  assert.ok(rows[3].principal > 0);
+  near(rows[1].interest, rows[1].debtService, 0.01);
 });
