@@ -56,7 +56,7 @@ export default function ContactPane({
       <div className="shrink-0 space-y-2 border-b border-slate-200 px-4 py-3">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <PaneHeading item={item} targets={targets} pane={pane} fallback={String(item.address || item.title || "").split(",")[0]} />
+            <PaneHeading item={item} targets={targets} pane={pane} fallback={String(item.address || item.title || "")} />
             {why}
           </div>
           {nav}

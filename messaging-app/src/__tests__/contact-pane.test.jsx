@@ -28,7 +28,7 @@ test("the Offers split and the companion show one pane: the same name line, the 
     companion: renderToStaticMarkup(<Companion />),
   };
   for (const [where, html] of Object.entries(panes)) {
-    expect(html, where).toMatch(/<h2[^>]*>.*Dana Reyes.*<span> · 12 Elm St<\/span>/s);
+    expect(html, where).toMatch(/<h2[^>]*>.*Dana Reyes.*<span> · 12 Elm St, Renton, WA<\/span>/s);
     for (const s of ["Change status (currently Sent)", "Edit offer", "> Call</button>", 'aria-label="More"', ">Conversation<", ">Offer<", "$410,000"]) expect(html, `${where}: ${s}`).toContain(s);
     // Gone everywhere.
     for (const s of ['aria-label="Bot:', ">History<", "What happened", "Checked", 'aria-label="GHL pipeline stage"']) expect(html, `${where}: ${s}`).not.toContain(s);
@@ -61,4 +61,25 @@ test("with several offers, + New offer sits on their list's header, once", () =>
   expect(html).toContain("Offers with Dana · 2");
   expect(html.match(/New offer/g)).toHaveLength(1);
   expect(html.indexOf("New offer")).toBeLessThan(html.indexOf("9 Oak St"));
+});
+
+// Matt, 2026-10-26: the companion cut every house to its street ("44 Birch
+// Ln…"); he wants the whole address, city and ZIP, on the name line
+// and in their list of offers.
+test("the name line and their list of offers show the whole address, not just the street", () => {
+  const other = { ...offer, id: "o2", address: "44 Birch Ln SE, Kent, WA 98031", cashAmount: 300000, status: "draft" };
+  const many = { ...bodies, siblings: [offer, other] };
+  function Several() {
+    const item = { ...companionPaneItem("c1"), contactName: "Dana Reyes" };
+    const targets = rowTargets(item, []);
+    const pane = usePane({ item, targets, bodies: many });
+    const convo = { item, targets, sendsEnabled: false, serverOffsetMs: 0, onDone: () => {}, fb: pane.fb, taught: [], bot: null };
+    return <ContactPane pane={pane} item={item} targets={targets} convo={convo} bodies={many} defaultTab="offer" />;
+  }
+  const html = renderToStaticMarkup(<Several />);
+  expect(html).toMatch(/<h2[^>]*>.*<span> · 12 Elm St, Renton, WA<\/span>/s);
+  const list = html.slice(html.indexOf("Offers with Dana"), html.indexOf("</ul>"));
+  expect(list).toContain(">12 Elm St, Renton, WA<");
+  expect(list).toContain(">44 Birch Ln SE, Kent, WA 98031<");
+  expect(list).not.toContain("truncate");
 });

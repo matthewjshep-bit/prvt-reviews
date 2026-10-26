@@ -151,8 +151,8 @@ function OfferSwitcher({ book, selectedId, rowOfferId, name, onSelect, newBtn = 
             <li key={o.id}>
               <button type="button" onClick={() => onSelect?.(o.id)} aria-current={on ? "true" : undefined}
                 className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${on ? "bg-blue-50" : "hover:bg-slate-50"}`}>
-                <span className={`min-w-0 flex-1 truncate ${on ? "font-semibold text-slate-900" : "text-slate-800"}`} title={o.address}>
-                  {String(o.address || "Untitled").split(",")[0]}
+                <span className={`min-w-0 flex-1 break-words ${on ? "font-semibold text-slate-900" : "text-slate-800"}`}>
+                  {String(o.address || "Untitled")}
                   {o.id === rowOfferId && !on && <span className="ml-1 text-xs font-normal text-slate-500">· this row</span>}
                 </span>
                 <span className="tabular-nums font-semibold text-slate-700">{money(o.cashAmount)}</span>

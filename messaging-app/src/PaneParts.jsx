@@ -209,9 +209,9 @@ export function GhlStageMenu({ contactId, party, card = undefined }) {
   );
 }
 
-/** The person (their name opens their record) · the house · their GHL stage. */
+/** The person (their name opens their record) · the house, whole address · their GHL stage. */
 export function PaneHeading({ item, targets, pane, fallback = "" }) {
-  const street = String(item.address || pane.side.offer?.address || "").split(",")[0].trim();
+  const street = String(item.address || pane.side.offer?.address || "").trim();
   const name = pane.name;
   return (
     <h2 className="min-w-0 text-base font-bold leading-snug text-slate-900">
