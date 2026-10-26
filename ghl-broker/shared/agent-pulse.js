@@ -183,16 +183,17 @@ export function blockedByTags(tags = [], botOffTags = []) {
  * passed the sweep's filters and is distressed by the agent row's rule
  * (routes/outreach.js: "cut-or-cheap" needs a price cut or a cheap $/sqft,
  * "cut-or-old" a price cut or a house built before 1980 — OLD_HOUSE_YEAR in
- * ghl-broker/outreach-score.js).
+ * ghl-broker/outreach-score.js — and "cut-old-or-stale" either of those or
+ * a listing sitting the pull's stale days, Pierce's rule since 2026-10-26).
  */
 export function listingDistressed(doc = {}, rule = null) {
   if (!doc?.qualifies) return false;
   // Came off the market lately without selling (the off-market pull): that is the distress.
   if (doc.offMarket === true) return true;
   const d = doc.distress || {};
-  if (rule === "cut-or-old") {
+  if (rule === "cut-or-old" || rule === "cut-old-or-stale") {
     const y = Number(doc.yearBuilt) || 0;
-    return Boolean(d.cut || d.old || (y > 1800 && y < 1980));
+    return Boolean(d.cut || d.old || (y > 1800 && y < 1980) || (rule === "cut-old-or-stale" && d.stale));
   }
   return rule === "cut-or-cheap" ? Boolean(d.cut || d.cheap) : Boolean(d.stale || d.cut || d.cheap);
 }

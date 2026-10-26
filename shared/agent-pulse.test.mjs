@@ -135,6 +135,9 @@ test("a cold agent's new listing waits two weeks after any text of ours", () => 
 test("a listing counts only when the pull found it distressed, still up, and new to us", () => {
   assert.equal(listingDistressed({ qualifies: true, distress: { stale: true } }, "cut-or-cheap"), false, "stale alone isn't cut-or-cheap");
   assert.equal(listingDistressed({ qualifies: true, distress: { cheap: true } }, "cut-or-cheap"), true);
+  assert.equal(listingDistressed({ qualifies: true, yearBuilt: 1995, distress: { stale: true } }, "cut-old-or-stale"), true, "Pierce: sitting counts");
+  assert.equal(listingDistressed({ qualifies: true, yearBuilt: 1962, distress: {} }, "cut-old-or-stale"), true);
+  assert.equal(listingDistressed({ qualifies: true, yearBuilt: 1995, distress: { stale: true } }, "cut-or-old"), false);
   assert.equal(listingDistressed({ qualifies: false, distress: { cut: true } }, null), false);
   assert.equal(listingDistressed({ qualifies: true, yearBuilt: 2015, distress: { stale: true, cheap: true } }, "cut-or-old"), false, "a cheap finished house isn't cut-or-old");
   assert.equal(listingDistressed({ qualifies: true, yearBuilt: 1962, distress: { stale: true } }, "cut-or-old"), true, "an older house is");

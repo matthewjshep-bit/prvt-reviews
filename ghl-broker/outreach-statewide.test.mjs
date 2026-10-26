@@ -350,3 +350,93 @@ test("Settings can set a market's rules, and new rules start its pages over", as
   assert.equal(bodies[3].offset, 0, "Bend under new rules reads from the top");
   assert.equal(bodies[2].offset, 1450, "Washington's place is kept");
 });
+
+/* ---------- Pierce's own rules (2026-10-26, Matt: more outreach in Pierce, still distressed houses) ---------- */
+
+// The read asks RentCast for the loosest county's days; each county is filed
+// by its own rules. Pierce: a cut, an older house, or sitting 60 days, and 14
+// days on the market is enough. King keeps 21 days and a cut or an older house.
+const pierceRules = { minDom: 14, maxYearBuilt: 2010, distressRule: "cut-old-or-stale", staleDom: 60 };
+const kingRules = { minDom: 21, maxYearBuilt: 0, distressRule: "cut-or-old" };
+const own = (o) => ({ ...listing(o), yearBuilt: o.yearBuilt, daysOnMarket: o.dom });
+
+test("a Pierce house sitting 60 days gets its agent into the batch while King still needs a cut or an old house", async () => {
+  STATE.push(
+    own({ county: "Pierce", zip: "98411", ppsf: 320, agent: "Sam Sitting", yearBuilt: 1995, dom: 70 }),
+    own({ county: "King", zip: "98011", ppsf: 500, agent: "Kurt Sitting", yearBuilt: 1995, dom: 70 }),
+    own({ county: "Pierce", zip: "98412", ppsf: 320, agent: "Nina Newbuild", yearBuilt: 2018, dom: 70 }),
+  );
+  const k = await store.createOutreachBatch(LOC, { name: "Rules · King, WA", autoNamed: false });
+  const p = await store.createOutreachBatch(LOC, { name: "Rules · Pierce, WA", autoNamed: false });
+  await router.runPull(LOC, client, {
+    ...statewideBody, daysOld: "14:*", distressRule: "cut-or-old",
+    counties: [{ county: "King", state: "WA", rules: kingRules }, { county: "Pierce", state: "WA", rules: pierceRules }],
+    batchIds: { "King, WA": k.id, "Pierce, WA": p.id },
+  }, { maxRequestsCap: 40 });
+  const pierceNames = await names(p.id);
+  assert.ok(pierceNames.includes("Sam Sitting"), "sitting 70 days counts in Pierce");
+  assert.ok(!pierceNames.includes("Nina Newbuild"), "built 2018: past Pierce's 2010");
+  assert.ok(!(await names(k.id)).includes("Kurt Sitting"), "King still wants a cut or a house built before 1980");
+  const sam = (await store.listOutreachAgents(LOC, { batchId: p.id, limit: 100 })).find((r) => r.doc.name === "Sam Sitting");
+  assert.equal(sam.doc.distressRule, "cut-old-or-stale");
+  assert.equal(sam.doc.distressedCount, 1);
+});
+
+test("a 15-day-old Pierce listing is read but a 15-day-old King one is not", async () => {
+  STATE.push(
+    own({ county: "Pierce", zip: "98413", ppsf: 320, agent: "Fran Fresh", yearBuilt: 1962, dom: 15 }),
+    own({ county: "King", zip: "98012", ppsf: 500, agent: "Fred Fresh", yearBuilt: 1962, dom: 15 }),
+  );
+  const k = await store.createOutreachBatch(LOC, { name: "Fresh · King, WA", autoNamed: false });
+  const p = await store.createOutreachBatch(LOC, { name: "Fresh · Pierce, WA", autoNamed: false });
+  await router.runPull(LOC, client, {
+    ...statewideBody, daysOld: "14:*", distressRule: "cut-or-old", maxRequests: 2,
+    counties: [{ county: "King", state: "WA", rules: kingRules }, { county: "Pierce", state: "WA", rules: pierceRules }],
+    batchIds: { "King, WA": k.id, "Pierce, WA": p.id },
+  }, { maxRequestsCap: 40 });
+  assert.ok((await names(p.id)).includes("Fran Fresh"));
+  assert.ok(!(await names(k.id)).includes("Fred Fresh"), "King's 21 days still hold");
+});
+
+test("the sweep asks for the loosest county's days, hands each county its rules, and starts the lap over once", async () => {
+  const { stateRead } = await import("./outreach-sweep.js");
+  const markets = { "Pierce, WA": { minDaysOnMarket: 14, maxYearBuilt: 2010, distressRule: "cut-old-or-stale", staleDom: 60, turnkeyShare: 0 } };
+  const oa = normalizeOutreachAutopilot({ enabled: true, coverage: "statewide", counties: corridor, minDaysOnMarket: 21, markets });
+  const read = stateRead(oa, oa.counties);
+  assert.equal(read.query.daysOld, "14:*");
+  assert.equal(read.query.yearBuilt, undefined, "King and Thurston have no year bound");
+  assert.deepEqual(read.rules["Pierce, WA"], { minDom: 14, maxYearBuilt: 2010, distressRule: "cut-old-or-stale", staleDom: 60 });
+  assert.deepEqual(read.rules["King, WA"], { minDom: 21, maxYearBuilt: 0, distressRule: "cut-or-old" });
+  assert.equal(stateRead(normalizeOutreachAutopilot({ counties: corridor }), corridor).sig, null, "no county of its own: the sweep's query, as before");
+
+  _resetJobs();
+  const store2 = fakeStore({});
+  const bodies = [];
+  const deps = {
+    runPull: async (_l, _c, b) => { bodies.push(b); return { ok: true, requestsUsed: 3, nextOffset: 1500, totalCount: 5600, warnings: [], counties: [] }; },
+    importAgents: async () => ({ results: [] }),
+  };
+  const base = { enabled: true, coverage: "statewide", counties: corridor, monthlyRequests: 1000, minDaysOnMarket: 21 };
+  startOutreachSweep({ locationId: "loc-pierce-sig", client: {}, saved: { outreachAutopilot: base }, store: store2, deps, now: oct2 });
+  await settle();
+  _resetJobs();
+  startOutreachSweep({ locationId: "loc-pierce-sig", client: {}, saved: { outreachAutopilot: { ...base, markets } }, store: store2, deps, now: oct2 });
+  await settle();
+  assert.equal(bodies[1].offset, 0, "new Pierce rules: the state is read from the top");
+  assert.equal(bodies[1].daysOld, "14:*");
+  assert.deepEqual(bodies[1].counties.find((c) => c.county === "Pierce").rules, read.rules["Pierce, WA"]);
+  _resetJobs();
+  startOutreachSweep({ locationId: "loc-pierce-sig", client: {}, saved: { outreachAutopilot: { ...base, markets } }, store: store2, deps, now: oct2 });
+  await settle();
+  assert.equal(bodies[2].offset, 1450, "same rules the next day: the lap carries on");
+});
+
+test("a Pierce agent whose listing has sat 70 days is picked under Pierce's rule, and not under King's", async () => {
+  const { pickAgentsToImport } = await import("./outreach-sweep.js");
+  const row = (k, hook) => ({ agentKey: k, status: "new", contactId: null, doc: { name: k, phone: `25355500${k.length}${k.charCodeAt(0) % 10}`, distressedCount: 1, distressRule: "cut-old-or-stale", hook: { price: 400000, score: 40, ...hook }, ghl: {} } });
+  const rows = [row("sitting", { yearBuilt: 1995, dom: 70 }), row("fresh", { yearBuilt: 1995, dom: 30 }), row("old", { yearBuilt: 1962, dom: 20 })];
+  const pierce = pickAgentsToImport(rows, { cap: 10, distressRule: "cut-old-or-stale", staleDom: 60, maxYearBuilt: 2010 }).map((r) => r.agentKey);
+  assert.deepEqual(pierce.sort(), ["old", "sitting"]);
+  const king = pickAgentsToImport(rows, { cap: 10, distressRule: "cut-or-old" }).map((r) => r.agentKey);
+  assert.deepEqual(king, [], "a cut-or-old pick doesn't take a stale-rule row");
+});

@@ -17,7 +17,7 @@ import { store as defaultStore } from "./store.js";
 import { normalizeOpener } from "./shared/outreach-opener.js";
 import { normalizeIntroEmail, normalizeCheckInEmail } from "./shared/outreach-email.js";
 import { isRuralLot } from "./shared/asset-type.js";
-import { isOldHouse } from "./outreach-score.js";
+import { isOldHouse, DISTRESS_RULES } from "./outreach-score.js";
 import { workflowIdFrom } from "./shared/ghl-calls.js";
 import { listingDistress } from "./shared/listing-distress.js";
 import { streetKey } from "./comps-zillow.js";
@@ -173,7 +173,6 @@ export const MARKET_RULES = ["maxYearBuilt", "minDaysOnMarket", "staleDom", "dis
 export const DEFAULT_MARKETS = {
   "Deschutes, OR": { maxYearBuilt: 2010, minDaysOnMarket: 21, staleDom: 60, distressRule: "any", turnkeyShare: 0 },
 };
-const DISTRESS_RULES = ["any", "cut-or-old", "cut-or-cheap"];
 
 /** marketsFrom(v) → { "County, ST": { …only the rules it sets } } */
 export function marketsFrom(v) {
@@ -471,7 +470,8 @@ export const keepTurnkeyFor = (oa, key = null) => (oa.requireDistress && marketR
  * built before OLD_HOUSE_YEAR), so a row from a "cut-or-cheap" pull whose
  * hook was cut or old still goes, and a cheap finished house doesn't.
  * `maxYearBuilt` (> 0) drops a hook built after it; no year on record goes
- * ahead, as it does in the pull.
+ * ahead, as it does in the pull. Under "cut-old-or-stale" a hook sitting
+ * `staleDom` days goes too.
  */
 export function hookMeetsCutOrOld(hook = {}) {
   const cut = hook.priceCut === true
@@ -479,7 +479,7 @@ export function hookMeetsCutOrOld(hook = {}) {
   return cut || isOldHouse(hook.yearBuilt);
 }
 
-export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null, propertyTypes = [], maxYearBuilt = 0, turnkeyShare = 0 } = {}) {
+export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, requireDistress = true, maxPrice = 0, distressRule = null, propertyTypes = [], maxYearBuilt = 0, turnkeyShare = 0, staleDom = null } = {}) {
   const types = new Set((propertyTypes || []).map((t) => String(t).toLowerCase()));
   // Never a mobile home, whatever is ticked (Matt, 2026-10-13).
   const mobile = (d) => String(d.hook?.propertyType || "").toLowerCase() === "manufactured";
@@ -499,6 +499,10 @@ export function pickAgentsToImport(rows = [], { cap = DEFAULT_DAILY_CAP, require
       // stale-only ("any") or unlabelled row stays out, as it did before.
       if (!["cut-or-old", "cut-or-cheap"].includes(d.distressRule)) return false;
       if (!hookMeetsCutOrOld(d.hook)) return false;
+    } else if (requireDistress && distressRule === "cut-old-or-stale") {
+      // Pierce (2026-10-26): any row is read again by its hook — a cut, an
+      // older house, or a listing sitting the market's `staleDom` days.
+      if (!hookMeetsCutOrOld(d.hook) && !(Number(staleDom) > 0 && Number(d.hook?.dom) >= Number(staleDom))) return false;
     } else if (requireDistress && distressRule && d.distressRule !== distressRule) return false;
     if (maxYearBuilt > 0 && Number(d.hook?.yearBuilt) > maxYearBuilt) return false;
     if (maxPrice && !(Number(d.hook?.price) > 0 && Number(d.hook.price) <= maxPrice)) return false;
@@ -811,7 +815,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     const rules = marketRules(oa, key);
     const fresh = pickAgentsToImport(rows, { cap: MAX_DAILY_CAP, requireDistress: oa.requireDistress,
       maxPrice: oa.maxListPrice, distressRule: rules.distressRule, propertyTypes: oa.propertyTypes,
-      maxYearBuilt: rules.maxYearBuilt, turnkeyShare: rules.turnkeyShare })
+      maxYearBuilt: rules.maxYearBuilt, turnkeyShare: rules.turnkeyShare, staleDom: rules.staleDom })
       .filter((r) => !seenAgents.has(r.agentKey) && !seenPhones.has(String(r.doc?.phone)));
     for (const r of fresh) { seenAgents.add(r.agentKey); seenPhones.add(String(r.doc?.phone)); }
     if (fresh.length) groups.push({ key, batchId, picked: fresh });
@@ -1013,6 +1017,36 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
   job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
 }
 
+/**
+ * stateRead(oa, counties) → { query, rules, sig }
+ *
+ * What the statewide read asks RentCast for, and how each county's share of
+ * it is filed. With no county of rules of its own it is the sweep's query, as
+ * before, and `rules` is empty. Once one has them (Pierce, 2026-10-26: a house
+ * sitting 60 days counts there, and 14 days on the market is enough), the one
+ * query has to be the loosest of them — the fewest days on the market, no
+ * year bound if any county has none — and every county is filed by its own
+ * rules (routes/outreach.js runStatewidePull), so King still needs its 21
+ * days and a cut or an older house. `sig` is the read's place on the cursor:
+ * new rules start the lap over once.
+ */
+export function stateRead(oa, counties = []) {
+  const base = pullQuery(oa);
+  const keys = counties.map((c) => `${c.county}, ${c.state}`);
+  if (!keys.some((k) => oa.markets?.[k])) return { query: base, rules: {}, sig: null };
+  const rules = {};
+  for (const k of keys) {
+    const r = marketRules(oa, k);
+    rules[k] = { minDom: Math.max(1, r.minDaysOnMarket || 1), maxYearBuilt: r.maxYearBuilt || 0,
+      ...(r.distressRule ? { distressRule: r.distressRule } : {}), ...(r.staleDom ? { staleDom: r.staleDom } : {}) };
+  }
+  const minDom = Math.min(...keys.map((k) => rules[k].minDom));
+  const years = keys.map((k) => rules[k].maxYearBuilt);
+  const { yearBuilt: _y, ...rest } = base;
+  const query = { ...rest, daysOld: `${minDom}:*`, ...(years.includes(0) ? {} : { yearBuilt: `*:${Math.max(...years)}` }) };
+  return { query, rules, sig: JSON.stringify({ query, rules }) };
+}
+
 // How far back a resumed statewide lap starts: listings come and go
 // overnight, so the list shifts under a saved offset. Rows are keyed by
 // listing and agent, so re-reading a few costs a little and duplicates none.
@@ -1030,8 +1064,11 @@ async function readState({ oa, job, locationId, client, store, deps, now, left, 
   // The first county's state. Counties in other states are the caller's.
   const state = oa.counties[0].state;
   const counties = oa.counties.filter((c) => c.state === state);
+  // A county of rules of its own changes what the read asks for and its place.
+  const read = stateRead(oa, counties);
+  const sig = read.sig || querySig;
   const cursor = (await store.getJobCursor?.(locationId, PAGES_CURSOR).catch(() => null))?.doc || {};
-  const place = cursor.statewide?.query === querySig ? cursor.statewide : {};
+  const place = cursor.statewide?.query === sig ? cursor.statewide : {};
   const saved = Number(place.offset) || 0;
   const offset = saved > 0 ? Math.max(0, saved - STATEWIDE_STEP_BACK) : 0;
   const batchIds = {};
@@ -1042,7 +1079,8 @@ async function readState({ oa, job, locationId, client, store, deps, now, left, 
   job.phase = "pulling";
   job.county = state;
   const pull = await deps.runPull(locationId, client, {
-    ...pullQuery(oa), ...keepTurnkeyFor(oa), statewide: true, state, counties, batchIds, offset, maxRequests: Math.max(1, left),
+    ...read.query, ...keepTurnkeyFor(oa), statewide: true, state, batchIds, offset, maxRequests: Math.max(1, left),
+    counties: counties.map((c) => (read.rules[`${c.county}, ${c.state}`] ? { ...c, rules: read.rules[`${c.county}, ${c.state}`] } : c)),
   }, { maxRequestsCap: MAX_REQUESTS_PER_RUN });
   const used = Number(pull.requestsUsed) || 0;
   job.pull = {
@@ -1058,7 +1096,7 @@ async function readState({ oa, job, locationId, client, store, deps, now, left, 
     const next = Number(pull.nextOffset) || 0;
     await store.setJobCursor?.(locationId, PAGES_CURSOR, { at: iso(now), doc: {
       ...cursor,
-      statewide: { offset: next, total: pull.totalCount ?? null, query: querySig, ...(next ? { lapAt: place.lapAt || null } : { lapAt: iso(now) }) },
+      statewide: { offset: next, total: pull.totalCount ?? null, query: sig, ...(next ? { lapAt: place.lapAt || null } : { lapAt: iso(now) }) },
     } }).catch((e) => job.warnings.push(`page cursor: ${String(e?.message || e).slice(0, 120)}`));
   }
   const byKey = new Map((pull.counties || []).map((c) => [c.key, c]));

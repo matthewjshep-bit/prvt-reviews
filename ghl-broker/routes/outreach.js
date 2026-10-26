@@ -28,7 +28,7 @@ import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, s
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
-import { scoreListing, medianPricePerSqft, distressSignals, meetsDistressRule, OLD_HOUSE_YEAR, medianIndex, offMarketListings, OFF_MARKET_WITHIN_DAYS } from "../outreach-score.js";
+import { scoreListing, medianPricePerSqft, distressSignals, meetsDistressRule, DISTRESS_RULES, OLD_HOUSE_YEAR, medianIndex, offMarketListings, OFF_MARKET_WITHIN_DAYS } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { countyName, firstTextHook } from "../shared/outreach-opener.js";
@@ -311,10 +311,12 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     // A price ceiling — asked of RentCast (price=*:N) and checked again after.
     const rawMaxPrice = Math.round(Number(body.maxPrice));
     const maxPrice = Number.isFinite(rawMaxPrice) && rawMaxPrice > 0 ? rawMaxPrice : 0;
-    // "any" (stale, cut, or cheap), "cut-or-cheap", or "cut-or-old": the
-    // sweep's pages are all stale by query, so there it takes a price cut or
-    // an older house (a cheap $/sqft found finished houses in slow towns).
-    const distressRule = ["cut-or-cheap", "cut-or-old"].includes(body.distressRule) ? body.distressRule : "any";
+    // "any" (stale, cut, or cheap), "cut-or-cheap", "cut-or-old", or
+    // "cut-old-or-stale": the sweep's pages are all stale by query, so there
+    // it takes a price cut or an older house (a cheap $/sqft found finished
+    // houses in slow towns) — or, where a market says so (Pierce), a house
+    // sitting `staleDom` days.
+    const distressRule = DISTRESS_RULES.includes(body.distressRule) ? body.distressRule : "any";
     // Keep agents whose listings are all turnkey too, flagged, for the
     // sweep's turnkey seats (outreachAutopilot.turnkeyShare): every deal with
     // a committed buyer that an agent brought started on a turnkey listing.
@@ -408,7 +410,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
    * without it, the pull's own median (a county or zip pull is one market).
    */
   async function ingestCohort({ locationId, client, batch, listings, params, medianFor = null, warnings }) {
-    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false, zillow = null, propertyType = "", keepTurnkey = false, offMarket = false } = params;
+    const { maxPrice, maxYearBuilt, distressOnly, distressRule, staleDom, priceBandPct, sweep = false, zillow = null, propertyType = "", keepTurnkey = false, offMarket = false, minDom = 0 } = params;
     const isDistressed = (sig) => meetsDistressRule(sig, distressRule);
     // Cohort medians come from the FULL pull (pre-filter) so they describe the
     // market, not the filtered slice.
@@ -428,6 +430,17 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const before = pool.length;
       pool = pool.filter((l) => Number(l.price) > 0 && Number(l.price) <= maxPrice);
       warnings.push(`price cap ($${maxPrice.toLocaleString()}) kept ${pool.length} of ${before}`);
+    }
+    // A county's own days on the market, when the read asked RentCast for
+    // fewer (the statewide read, by the loosest county's rules). No days on
+    // record goes ahead, as RentCast's own filter would have let it.
+    if (minDom > 0) {
+      const before = pool.length;
+      pool = pool.filter((l) => {
+        const dom = l.daysOnMarket == null || l.daysOnMarket === "" ? NaN : Number(l.daysOnMarket);
+        return !Number.isFinite(dom) || dom >= minDom;
+      });
+      if (pool.length < before) warnings.push(`days on market (${minDom}+) kept ${pool.length} of ${before}`);
     }
     if (maxYearBuilt) {
       const before = pool.length;
@@ -476,6 +489,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       warnings.push(
         distressRule === "cut-or-old"
           ? `distress filter (price cut, or built before ${OLD_HOUSE_YEAR}) kept ${pool.length} of ${before}`
+          : distressRule === "cut-old-or-stale"
+          ? `distress filter (price cut, built before ${OLD_HOUSE_YEAR}, or ${staleDom}+ DOM) kept ${pool.length} of ${before}`
           : distressRule === "cut-or-cheap"
             ? `distress filter (price cut, or ≤90% of ${medianWord}) kept ${pool.length} of ${before}`
             : `distress filter (${staleDom}+ DOM, price cut, or ≤90% of ${medianWord}) kept ${pool.length} of ${before}`
@@ -708,8 +723,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     const p = pullParams({ ...body, zipCodes: "", county: "", city: "" }, settings, maxRequestsCap);
     const state = String(body.state || "").trim().toUpperCase();
     if (!/^[A-Z]{2}$/.test(state)) throw Object.assign(new Error("a statewide pull needs a state"), { http: 400 });
+    // A county may bring rules of its own (outreach-sweep.js stateRead).
     const counties = (Array.isArray(body.counties) ? body.counties : [])
-      .map((c) => ({ key: `${c.county}, ${c.state || state}`, meta: findCounty(c.county, c.state || state), batchId: body.batchIds?.[`${c.county}, ${c.state || state}`] }))
+      .map((c) => ({ key: `${c.county}, ${c.state || state}`, meta: findCounty(c.county, c.state || state), batchId: body.batchIds?.[`${c.county}, ${c.state || state}`],
+        rules: c.rules && typeof c.rules === "object" ? c.rules : null }))
       .filter((c) => c.meta && c.batchId && (c.meta.state || state) === state);
     if (!counties.length) throw Object.assign(new Error("a statewide pull needs its counties and their batches"), { http: 400 });
 
@@ -745,10 +762,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const mine = filed.get(c.key);
       if (!mine.length) { out.push({ key: c.key, batchId: batch.id, batchName: batch.name, listingsFetched: 0, listingsKept: 0, agentsTotal: 0, agentsNew: 0 }); continue; }
       const w = [];
+      const own = c.rules || {};
+      const rule = DISTRESS_RULES.includes(own.distressRule) ? own.distressRule : p.distressRule;
+      const stale = Number(own.staleDom) >= 1 ? Math.min(365, Math.round(Number(own.staleDom))) : p.staleDom;
       const r = await ingestCohort({
         locationId, client, batch, listings: mine, warnings: w, medianFor,
-        params: { maxPrice: p.maxPrice, maxYearBuilt: p.maxYearBuilt, distressOnly: p.distressOnly, distressRule: p.distressRule,
-          staleDom: p.staleDom, priceBandPct: 0, sweep: true, zillow, propertyType: p.propertyType, keepTurnkey: p.keepTurnkey },
+        params: { maxPrice: p.maxPrice, maxYearBuilt: Number(own.maxYearBuilt) || p.maxYearBuilt, distressOnly: p.distressOnly, distressRule: rule,
+          staleDom: stale, minDom: Math.max(0, Math.round(Number(own.minDom)) || 0), priceBandPct: 0, sweep: true, zillow, propertyType: p.propertyType, keepTurnkey: p.keepTurnkey },
       });
       warnings.push(...w.filter((x) => !/kept \d+ of/.test(x)).map((x) => `${c.key}: ${x}`));
       out.push({ key: c.key, batchId: batch.id, batchName: batch.name, listingsFetched: mine.length, listingsKept: r.pool.length,
