@@ -1064,7 +1064,9 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
   for (const g of groups) {
     const room = Math.min(oa.dailyCap - made, g.limit ?? Infinity);
     if (oa.dailyCap - made <= 0) break;
-    if (room <= 0) continue;
+    // The listing check can leave a county with nobody (2026-10-26: the import
+    // refused the empty list and the whole run failed).
+    if (room <= 0 || !g.picked.length) continue;
     await beat();
     const r = await deps.importAgents({
       locationId, client, agentKeys: g.picked.map((p) => p.agentKey), batchId: g.batchId,
