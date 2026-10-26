@@ -1724,7 +1724,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       const limit = req.body?.limit != null ? Number(req.body.limit) : null;
       const job = startAgentPulse({
         client, locationId, saved, store, sendsEnabled: PULSE_SENDS_LIVE, trigger: "manual", dryRun, limit,
-        deps: router.conversationDepsFor?.({ locationId, client, saved }) || {},
+        deps: { ...(router.conversationDepsFor?.({ locationId, client, saved }) || {}), screenListings: router.sweepDeps.screenListings },
       });
       res.json({ ok: true, job });
     } catch (err) { fail(res, err); }

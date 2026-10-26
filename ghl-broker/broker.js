@@ -363,7 +363,8 @@ const TICK_JOBS = [
   // outreachAutopilot.pulse.enabled; drafts until pulse.autoSend.
   { area: "agent-pulse", run: async ({ client, locationId, saved }) => {
     if (await maybeRunAgentPulse({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
-      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) })) console.log(`agent check-in started for ${locationId}`);
+      // The listing check for a focus county's listings (pulse.focusListings).
+      deps: { ...offersRouter.conversationDepsFor({ locationId, client, saved }), screenListings: outreachRouter.sweepDeps.screenListings } })) console.log(`agent check-in started for ${locationId}`);
   } },
   // Matt's 15 (agent-pulse.js): Monday morning, his best agents' check-ins
   // drafted for him to make his own and send, on Today. Off until

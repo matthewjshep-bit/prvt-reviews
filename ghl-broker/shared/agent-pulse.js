@@ -80,6 +80,11 @@ export const AGENT_PULSE_DEFAULTS = {
   // Matt's 15 (2026-10-15): once a week, his best agents' check-ins drafted
   // for him to make his own and send. Off by default.
   mattsFifteen: { enabled: false, size: 15, weekday: 1, hour: 8 },
+  // A cold agent in one of these counties hears about a distressed listing of
+  // theirs that has been up as long as `maxAgeDays`, not only a fresh one,
+  // once Zillow says it needs work (2026-10-26, Matt: more outreach in
+  // Pierce). Off by default.
+  focusListings: { enabled: false, counties: [], maxAgeDays: 120 },
 };
 export const AGENT_PULSE_VOICE_MAX = 600;
 // 0 means no cap (Matt, 2026-10-05: "there should be no caps"): every agent
@@ -125,7 +130,33 @@ export function normalizeAgentPulse(v = {}) {
     // "ai": the model writes each one, as before.
     mode: o.mode === "ai" ? "ai" : "template",
     mattsFifteen: normalizeMattsFifteen(o.mattsFifteen),
+    focusListings: normalizeFocusListings(o.focusListings),
   };
+}
+
+/**
+ * normalizeFocusListings(v) → { enabled, counties: ["Pierce, WA"], maxAgeDays }
+ *
+ * A county is written "Pierce, WA" (a bare "Pierce" matches it in any state).
+ */
+export function normalizeFocusListings(v = {}) {
+  const o = v && typeof v === "object" ? v : {};
+  const D = AGENT_PULSE_DEFAULTS.focusListings;
+  const counties = [...new Set((Array.isArray(o.counties) ? o.counties : String(o.counties || "").split(/\n|;/))
+    .map((c) => String(c || "").trim().replace(/\s+county\b/i, "").replace(/\s*,\s*/g, ", ")).filter(Boolean))].slice(0, 10);
+  return { enabled: o.enabled === true, counties, maxAgeDays: clamp(o.maxAgeDays, D.maxAgeDays, 15, 180) };
+}
+
+// Is this listing in one of the focus counties? The pull writes the county
+// as RentCast names it ("Pierce", sometimes "Pierce County").
+export function inFocusCounty(doc = {}, counties = []) {
+  const name = String(doc?.county || "").trim().replace(/\s+county$/i, "").toLowerCase();
+  if (!name) return false;
+  const state = String(doc?.state || "").trim().toUpperCase();
+  return (counties || []).some((c) => {
+    const [n, st] = String(c).split(",").map((x) => x.trim());
+    return n.toLowerCase() === name && (!st || !state || st.toUpperCase() === state);
+  });
 }
 
 /**
@@ -436,23 +467,29 @@ export function agentOwner({ offers = [], drafts: allDrafts = [], events = [], c
 }
 
 /**
- * freshListingFor({ listings, pinged, raised, houses, settings, now }) → listing | null
+ * freshListingFor({ listings, pinged, raised, houses, settings, cold, now }) → listing | null
  *
  * The best distressed listing of theirs we first saw lately and they still
  * have up: not one we've raised with them, not a house we already have a
- * live offer on, not one we walked away from.
+ * live offer on, not one we walked away from. For a `cold` agent in a focus
+ * county (settings.focusListings) "lately" is `maxAgeDays`; a listing only
+ * that window lets in comes back marked `focus`, for the Zillow read
+ * (ghl-broker/agent-pulse.js) and the first-text wording.
  */
-export function freshListingFor({ listings = [], pinged = new Set(), raised = [], houses = {}, settings = {}, now = Date.now() } = {}) {
+export function freshListingFor({ listings = [], pinged = new Set(), raised = [], houses = {}, settings = {}, cold = false, now = Date.now() } = {}) {
   const s = normalizeAgentPulse(settings);
   const live = houses.live || new Set();
   const walked = houses.walked || new Map();
+  const focus = cold && s.focusListings.enabled && s.focusListings.counties.length ? s.focusListings : null;
+  const age = (l) => now - (ms(l.firstSeen) ?? 0);
+  const widened = (l) => Boolean(focus) && age(l) > s.freshDays * DAY_MS && age(l) <= Math.max(s.freshDays, focus.maxAgeDays) * DAY_MS && inFocusCounty(l.doc, focus.counties);
   const ok = (listings || []).filter((l) => {
     if (!l?.listingKey || pinged.has(l.listingKey)) return false;
     if (!listingDistressed(l.doc, l.distressRule)) return false;
     // A listing that came off the market is never a check-in's hook
     // (2026-10-19, Matt: "saw the listing on 126th come off the market").
     if (l.doc?.offMarket === true) return false;
-    if (now - (ms(l.firstSeen) ?? 0) > s.freshDays * DAY_MS) return false;
+    if (age(l) > s.freshDays * DAY_MS && !widened(l)) return false;
     if (now - (ms(l.lastSeen) ?? 0) > s.listingSeenDays * DAY_MS) return false;
     const k = addressKey(l.doc?.address || "");
     if (!k || live.has(k)) return false;
@@ -463,7 +500,8 @@ export function freshListingFor({ listings = [], pinged = new Set(), raised = []
     return true;
   });
   ok.sort((a, b) => (Number(b.doc?.score) || 0) - (Number(a.doc?.score) || 0) || String(b.firstSeen).localeCompare(String(a.firstSeen)));
-  return ok[0] || null;
+  const best = ok[0] || null;
+  return best && widened(best) ? { ...best, focus: true } : best;
 }
 
 /**
@@ -630,8 +668,12 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   for (const e of ledger) if (e.type === "listing_ping_voided" && e.data?.listingKey) pinged.delete(e.data.listingKey);
   // A listing the outreach opener already asked them about (the workflow's
   // first text, or the app's) is not news.
-  const raised = events.filter((e) => (e.type === "outreach_enrolled" && e.data?.kind !== "followup") || e.type === "outreach_sent")
-    .map((e) => String(e.address || "")).filter(Boolean);
+  // So is the listing an import first texted them about (agent.hooks): the
+  // August imports went out by GHL workflow and left no event of ours.
+  const raised = [
+    ...events.filter((e) => (e.type === "outreach_enrolled" && e.data?.kind !== "followup") || e.type === "outreach_sent").map((e) => String(e.address || "")),
+    ...(agent.hooks || []).map((h) => String(h?.address ?? h ?? "")),
+  ].filter(Boolean);
   const listing = freshListingFor({ listings: agent.listings || [], pinged, raised, houses, settings: s, now });
 
   // An agent we've made an offer to, sent or just drafted, is followed up
@@ -646,11 +688,13 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
     if (unanswered >= s.coldMaxUnanswered + (downgraded ? s.engagedMaxUnanswered : 0)) {
       return out("cold_dropped", `${unanswered} check-ins with nothing back`, { segment: coldSeg });
     }
+    // In a focus county a listing that has been up a while counts too.
+    const listing = freshListingFor({ listings: agent.listings || [], pinged, raised, houses, settings: s, cold: true, now });
     if (!listing) return out("not_due", "only a new listing of theirs is a reason to text", { segment: coldSeg });
     const lastPing = latest(texted.map((e) => e.at));
     if (lastPing && now - (ms(lastPing) ?? 0) < coldEveryDays * DAY_MS) return out("not_due", waitWhy(coldEveryDays, `pinged within ${coldEveryDays} days`), { segment: coldSeg, dueAt: after(lastPing, coldEveryDays) });
     if (!quietFor(quietDays)) return out("not_due", waitWhy(quietDays, `touched within ${quietDays} days`), { segment: coldSeg, dueAt: after(since, quietDays) });
-    return out("due", "", { segment: coldSeg, pulseReason: "fresh_listing", listing, priority: [4, -(Number(listing.doc?.score) || 0)] });
+    return out("due", "", { segment: coldSeg, pulseReason: "fresh_listing", listing, ...(listing.focus ? { focus: true } : {}), priority: [4, -(Number(listing.doc?.score) || 0)] });
   }
 
   const tier = TOP_SEGMENTS.has(segment) ? 0 : 1;
@@ -696,7 +740,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   const counts = {
     pool: agents.length, bySegment: { partner: 0, source: 0, engaged: 0, cold: 0 }, stopped: {}, owned: {}, notDue: 0, coldDropped: 0,
     due: { deal_thanks: 0, fresh_listing: 0, off_market_listing: 0, our_house: 0, general: 0 }, dueNoSeat: 0,
-    fresh: { withListing: 0 }, coverage: { touched: 0, pool: 0 },
+    fresh: { withListing: 0, focus: 0 }, coverage: { touched: 0, pool: 0 },
     ghlTier: { t2: 0, t3: 0, due: 0 },
   };
   const due = [];
@@ -707,7 +751,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
     const card = tierCard(a);
     if (card) { counts.ghlTier[card.tier]++; if (v.status === "due") counts.ghlTier.due++; }
     verdicts.push({ contactId: a.contactId, status: v.status, reason: v.reason || v.pulseReason || "", segment: v.segment || null,
-      dueAt: v.status === "due" ? iso(now) : v.dueAt || null, tier: card?.tier || null, movedAt: card?.movedAt || null });
+      dueAt: v.status === "due" ? iso(now) : v.dueAt || null, tier: card?.tier || null, movedAt: card?.movedAt || null, ...(v.focus ? { focus: true } : {}) });
     const seg = agentSegment({ offers: a.offers || a.current || [], lastInboundAt: a.lastInboundAt });
     counts.bySegment[seg]++;
     if (seg !== "cold") {
@@ -725,6 +769,7 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
     if (v.status === "not_due") { counts.notDue++; continue; }
     counts.due[v.pulseReason]++;
     if (LISTING_REASONS.has(v.pulseReason)) counts.fresh.withListing++;
+    if (v.focus) counts.fresh.focus++;
     due.push({ agent: a, verdict: v });
   }
   const cmp = (x, y) => {
@@ -737,6 +782,8 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   const toPick = ({ agent, verdict }) => ({
     contactId: agent.contactId, name: agent.name || "", segment: verdict.segment, reason: verdict.pulseReason,
     listingKey: verdict.listing?.listingKey || null,
+    // A focus county's listing that has been up a while: Zillow reads it before the claim.
+    ...(verdict.focus ? { focus: true } : {}),
     subject: agentPulseSubject({ agent, verdict, houses, now }),
   });
   const picks = due.slice(0, cap).map(toPick);
@@ -950,7 +997,9 @@ export function agentPulseSubject({ agent = {}, verdict = {}, houses = {}, now =
     // itself names the listing by street (listing.street, listing.city).
     address: l ? String(l.address || "").trim() : h ? String(h.address || "").trim() : "",
     listing: l ? { street: street(l.address), city: l.city || cityOf(l.address), dom: Number(l.daysOnMarket) || 0, cut: Boolean(l.distress?.cut), type: String(l.propertyType || ""),
-      ...(l.offMarket === true ? { offMarket: true } : {}) } : null,
+      ...(l.offMarket === true ? { offMarket: true } : {}),
+      // Texted as the first text is (shared/standard-texts.js), so it carries what that names.
+      ...(verdict.focus ? { focus: true, county: String(l.county || ""), state: String(l.state || ""), yearBuilt: Number(l.yearBuilt) || null } : {}) } : null,
     house: h ? { street: street(h.address), how } : null,
     dealsWithUs: (agent.offers || []).filter((o) => o?.deal).length,
     offersWithUs: (agent.offers || []).length,

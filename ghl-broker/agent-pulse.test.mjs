@@ -536,3 +536,69 @@ test("a Matt's 15 draft that trips a gate waits for him instead of being dropped
   assert.ok((d.flags || []).some((f) => /named a house from before/.test(f)), "the gate still flags it for him");
   assert.match(d.autoSend.reason, /Matt's 15/);
 });
+
+/* ---------- a focus county's listings (2026-10-26, Matt: more outreach in Pierce) ---------- */
+
+const { streetKey } = await import("./comps-zillow.js");
+const focusSaved = () => savedWith({ listingSeenDays: 60, focusListings: { enabled: true, counties: ["Pierce, WA"], maxAgeDays: 120 } });
+const pierceAgents = async (loc) => {
+  const batch = await store.createOutreachBatch(loc, { name: "Autopilot · Pierce, WA" });
+  const rows = [["fz-finished", "1 Finished Ln, Tacoma, WA 98405"], ["fz-fixer", "2 Fixer Way, Tacoma, WA 98405"]];
+  await store.upsertOutreachAgents(loc, batch.id, rows.map(([id]) => ({ agentKey: `p:${id}`, doc: {
+    name: "Pierce Agent", phone: "+12535550100", distressRule: "cut-old-or-stale", ghl: { contactId: id } } })));
+  await store.upsertOutreachListings(loc, batch.id, rows.map(([id, address]) => ({ listingKey: `L-${id}`, agentKey: `p:${id}`, doc: {
+    address, city: "Tacoma", county: "Pierce", state: "WA", price: 380000, daysOnMarket: 75, yearBuilt: 1962, propertyType: "Single Family",
+    qualifies: true, score: 50, distress: { stale: true, cut: false, cheap: false, old: true } } })));
+};
+// Zillow's read: the first house is finished, the second needs work.
+const zillow = (fail = false) => async ({ addresses }) => {
+  if (fail) throw new Error("Apify timed out");
+  return new Map(addresses.map((a) => [streetKey(a), /Finished/.test(a)
+    ? { status: "FOR_SALE", description: "Fully remodeled, move-in ready with a new kitchen.", yearBuilt: 1962 }
+    : { status: "FOR_SALE", description: "Fixer upper. Needs work throughout, bring your contractor.", yearBuilt: 1962 }]));
+};
+
+test("a focus ping whose listing Zillow says is finished is not sent; the one that needs work is", async () => {
+  _resetJobs();
+  const loc = "loc-ap-focus";
+  await pierceAgents(loc);
+  const later = Date.now() + 40 * DAY;
+  const plan = await planAgentPulse({ locationId: loc, saved: focusSaved(), store, now: later });
+  assert.deepEqual(plan.picks.map((p) => [p.contactId, p.focus]).sort(), [["fz-finished", true], ["fz-fixer", true]], JSON.stringify(plan.counts));
+  assert.equal((await planAgentPulse({ locationId: loc, saved: savedWith({ listingSeenDays: 60 }), store, now: later })).picks.length, 0,
+    "with the switch off a 40-day-old listing isn't a reason");
+
+  const calls = [];
+  const job = startAgentPulse({ client, locationId: loc, saved: focusSaved(), store, now: later,
+    deps: { getContact: reachable, screenListings: zillow(), startProactive: async (args) => { calls.push(args); return { job: { id: "j", draftId: "d" } }; } } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(calls.map((c) => c.contactId), ["fz-fixer"]);
+  assert.equal(calls[0].subject.listing.focus, true, "texted in the first text's words");
+  assert.match(job.results.find((r) => r.contactId === "fz-finished").detail, /Zillow doesn't read the listing as needing work/);
+  assert.equal(job.focus.kept, 1);
+  const events = await store.listContactEvents(loc, "fz-finished", { limit: 20 });
+  assert.equal(events.some((e) => e.type === "agent_pulse_sent"), false, "never claimed");
+});
+
+test("a failed Zillow read sends no focus ping", async () => {
+  _resetJobs();
+  const loc = "loc-ap-focus-fail";
+  await pierceAgents(loc);
+  const later = Date.now() + 40 * DAY;
+  const calls = [];
+  const job = startAgentPulse({ client, locationId: loc, saved: focusSaved(), store, now: later,
+    deps: { getContact: reachable, screenListings: zillow(true), startProactive: async (args) => { calls.push(args); return { job: { id: "j", draftId: "d" } }; } } });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal(calls.length, 0);
+  assert.match(job.focus.error, /Apify timed out/);
+  _resetJobs();
+  const none = startAgentPulse({ client, locationId: loc, saved: focusSaved(), store, now: later,
+    deps: { getContact: reachable, startProactive: async (args) => { calls.push(args); return { job: { id: "j" } }; } } });
+  await settle();
+  assert.equal(none.status, "done", none.error);
+  assert.equal(none.picked, 2, "both still due: nobody was claimed");
+  assert.equal(calls.length, 0, "a broker that can't read Zillow texts none of them");
+  assert.match(none.focus.error, /can't read Zillow/);
+});

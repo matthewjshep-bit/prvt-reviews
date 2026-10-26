@@ -275,6 +275,27 @@ test("a check-in when their listing comes up asks about their other distressed p
     "Hey Pete, saw your listing on 18th Ave Ct NW, doesn't look like a fixer. Just wanted to check in, any other distressed properties on your plate?");
 });
 
+// 2026-10-26 (Pierce): a cold agent's distressed listing that has been up a
+// while, read on Zillow as needing work, is the first text they've had from
+// us about it — "doesn't look like a fixer" would read as if we never looked.
+test("a focus ping on a cold Pierce agent's listing reads like the first text, not 'doesn't look like a fixer'", () => {
+  const subject = { reason: "fresh_listing", segment: "cold", address: "4521 18th Ave Ct NW, Tacoma, WA 98406",
+    listing: { street: "4521 18th Ave Ct NW", city: "Tacoma", county: "Pierce", state: "WA", focus: true } };
+  for (let variant = 0; variant < DEFAULT_OPENER_EXAMPLES.length; variant++) {
+    const r = standardText({ kind: "agent_pulse", outbound: outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { ...subject, variant } }), name: "Pete" });
+    assert.equal(r.set, "opener");
+    assert.match(r.text, /^(Hi|Hey) Pete, (saw|came across) your listing at 4521 18th Ave Ct NW\./, r.text);
+    assert.doesNotMatch(r.text, /doesn't look like|probably not one for us|not sure it needs enough work/i, r.text);
+  }
+  // Matt's own first text, when he has saved one, is the one it uses.
+  const saved = { outreachAutopilot: { opener: { examples: ["Hi {first}, it's Matt. Saw {address} in {town}, is it a project?"] } } };
+  const mine = standardText({ kind: "agent_pulse", outbound: outboundDescriptor({ kind: "agent_pulse", offer: null, saved, subject: { ...subject, variant: 0 } }), name: "Pete" });
+  assert.equal(mine.text, "Hi Pete, it's Matt. Saw 4521 18th Ave Ct NW in Tacoma, is it a project?");
+  // Without the focus flag a listing ping is the plain one, as before.
+  const plain = standardText({ kind: "agent_pulse", outbound: outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { ...subject, variant: 0, listing: { ...subject.listing, focus: undefined } } }), name: "Pete" });
+  assert.equal(plain.set, "listing_cold");
+});
+
 test("a check-in with something real to say — a house they mentioned, a deal we closed, Matt's 15 — is still written for them", () => {
   const pulse = (subject) => outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { reason: "general", ...subject } });
   for (const subject of [{ hook: { kind: "mentioned", street: "Birch St" } }, { reason: "deal_thanks" }, { forMatt: true }, { reason: "off_market_listing", listing: { street: "Elm" } }]) {

@@ -3493,6 +3493,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       // A cold agent's fresh listing goes in the short first-text voice,
       // held under OPENER_MAX_CHARS like the first text (2026-10-15).
       coldOpen: (p.segment === "cold" || /gone quiet/.test(String(p.segment || ""))) && (p.reason === "fresh_listing" || p.reason === "off_market_listing") && Boolean(p.listing),
+      // A focus county's listing (pulse.focusListings): texted in Matt's
+      // first-text words, so it carries what those name.
+      ...(p.listing?.focus ? focusOpener({ listing: p.listing, address: p.address, saved }) : {}),
       variant: Number(p.variant) || 0 };
   }
   if (kind === "second_look") {
@@ -3791,6 +3794,15 @@ export async function writeShorterFirstText({ draft, kind, redraft, outbound = n
 // Matt's fixed texts (shared/standard-texts.js, 2026-10-17): the first text,
 // its follow-up and the plain check-in, filled in as he writes them. No model
 // call and nothing to rewrite; the gates still read it like any draft.
+// What a focus listing's check-in needs to be filled from Matt's first texts
+// (shared/standard-texts.js): the texts, the city we say we're in, the town
+// and county.
+function focusOpener({ listing = {}, address = "", saved = {} }) {
+  const opener = normalizeOpener(saved?.outreachAutopilot?.opener);
+  return { templates: opener.examples, home: homeFor({ county: listing.county, state: listing.state, address }, opener),
+    city: String(listing.city || ""), county: countyName(listing.county) };
+}
+
 function standardDraft({ kind, offer, outbound, name, contactId }) {
   const s = standardText({ kind, outbound, name, contactId });
   if (!s) return null;

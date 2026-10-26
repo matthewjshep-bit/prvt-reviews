@@ -844,3 +844,51 @@ test("a card moved to Tier 2 doesn't push back an agent we haven't texted in thr
   assert.equal(w.dueAt, ago(-9));
   assert.match(w.reason, /talked within 14 days/);
 });
+
+/* ---------- a focus county (2026-10-26, Matt: more outreach in Pierce) ---------- */
+
+const FOCUS = normalizeAgentPulse({ enabled: true, focusListings: { enabled: true, counties: ["Pierce, WA"], maxAgeDays: 120 } });
+const pierceListing = (over = {}) => listing({ firstSeen: ago(40), distressRule: "cut-old-or-stale",
+  doc: { ...listing().doc, address: "4521 18th Ave Ct NW, Tacoma, WA 98406", city: "Tacoma", county: "Pierce", state: "WA", yearBuilt: 1962 }, ...over });
+const coldAgent = (over = {}) => agent({ events: [{ type: "outreach_enrolled", at: ago(90), data: { kind: "first" } }], ...over });
+
+test("a cold Pierce agent's listing that has been up a month is a reason to text when Pierce is a focus county", () => {
+  const v = evaluateAgent(coldAgent({ listings: [pierceListing()] }), ctx({ settings: FOCUS }));
+  assert.equal(v.status, "due");
+  assert.equal(v.pulseReason, "fresh_listing");
+  assert.equal(v.focus, true, "marked for the Zillow read and the first-text words");
+  assert.equal(evaluateAgent(coldAgent({ listings: [pierceListing()] }), ctx()).status, "not_due", "with the switch off, a month-old listing isn't news");
+  assert.equal(evaluateAgent(coldAgent({ listings: [pierceListing({ firstSeen: ago(150) })] }), ctx({ settings: FOCUS })).status, "not_due", "past maxAgeDays");
+  const fresh = evaluateAgent(coldAgent({ listings: [pierceListing({ firstSeen: ago(3) })] }), ctx({ settings: FOCUS }));
+  assert.equal(fresh.status, "due");
+  assert.equal(fresh.focus, undefined, "a fresh listing is the ordinary ping");
+  const plan = pickPulseAgents({ agents: [coldAgent({ listings: [pierceListing()] })], settings: FOCUS, config: CONFIG, now: NOW });
+  assert.equal(plan.picks[0].focus, true);
+  assert.equal(plan.picks[0].subject.listing.focus, true);
+  assert.equal(plan.picks[0].subject.listing.county, "Pierce");
+  assert.equal(plan.counts.fresh.focus, 1);
+});
+
+test("the same month-old listing in King is not", () => {
+  const king = pierceListing({ doc: { ...pierceListing().doc, address: "9 Oak St, Kent, WA 98031", city: "Kent", county: "King" } });
+  assert.equal(evaluateAgent(coldAgent({ listings: [king] }), ctx({ settings: FOCUS })).status, "not_due");
+});
+
+test("an engaged Pierce agent's month-old listing doesn't change their check-in", () => {
+  const v = evaluateAgent(agent({ lastInboundAt: ago(60), listings: [pierceListing()] }), ctx({ settings: FOCUS }));
+  assert.equal(v.pulseReason, "general", "the wider window is for cold agents only");
+});
+
+test("a listing that was their August hook is never pinged, however they were texted about it", () => {
+  const hooked = coldAgent({ listings: [pierceListing()], hooks: [{ address: "4521 18th Ave Ct NW, Tacoma, WA 98406", importedAt: ago(70) }] });
+  assert.equal(evaluateAgent(hooked, ctx({ settings: FOCUS })).status, "not_due");
+  const fresh = coldAgent({ listings: [pierceListing({ firstSeen: ago(3) })], hooks: [{ address: "4521 18th Ave Ct NW, Tacoma, WA 98406" }] });
+  assert.equal(evaluateAgent(fresh, ctx()).status, "not_due", "nor as a fresh listing");
+});
+
+test("focus counties are written 'Pierce, WA' and a stray 'County' is dropped", () => {
+  const f = normalizeAgentPulse({ focusListings: { enabled: true, counties: ["Pierce County, WA", "pierce county,wa", "Kitsap"], maxAgeDays: 999 } }).focusListings;
+  assert.deepEqual(f.counties, ["Pierce, WA", "pierce, wa", "Kitsap"]);
+  assert.equal(f.maxAgeDays, 180);
+  assert.equal(normalizeAgentPulse({}).focusListings.enabled, false, "ships off");
+});

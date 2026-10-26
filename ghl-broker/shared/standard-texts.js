@@ -144,7 +144,8 @@ function pickFilled(list, variant, values) {
  *                   repeat rung past the last step, outbound.checkIns in turn
  *   agent_pulse     outbound.mode "template"; CHECKIN_TEXTS, CHECKIN_COLD_TEXTS,
  *                   or LISTING_PING_TEXTS / LISTING_PING_COLD_TEXTS when a
- *                   fresh listing of theirs came up
+ *                   fresh listing of theirs came up; a focus listing
+ *                   (outbound.listing.focus) one of outbound.templates
  */
 export function standardText({ kind, outbound = {}, name = "", contactId = "" } = {}) {
   const o = outbound || {};
@@ -186,6 +187,15 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
   if (kind === "agent_pulse") {
     if (o.forMatt || o.reason === "deal_thanks" || o.reason === "off_market_listing" || o.hook?.kind === "mentioned") return null;
     const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
+    if (o.reason === "fresh_listing" && o.listing?.focus) {
+      // A focus county's listing that has been up a while and that Zillow
+      // says needs work (2026-10-26, Pierce): the first text they've had
+      // from us about it, so it reads as a new agent's first text does — not
+      // "doesn't look like a fixer". Nothing to fill it with: the plain
+      // check-in, which names no house.
+      const ex = Array.isArray(o.templates) ? o.templates : [];
+      return done("opener", pickFilled(ex, v, values)) || done("checkin_cold", pickFilled(CHECKIN_COLD_TEXTS, v, values));
+    }
     if (o.reason === "fresh_listing") {
       // The street name, never the house number, like the first text.
       const street = streetName(o.listing?.street || "") || values.street;

@@ -345,6 +345,81 @@ function screenBucket(why = "") {
 }
 
 /**
+ * screenAddresses({ items, locationId, store, deps, now, perRun, want, remember, beat })
+ *   → { verdict, stats, warnings }
+ *
+ * The Zillow read behind the listing check, for the sweep's picks and the
+ * check-in's focus listings alike. `items` are { id, address, yearBuilt } in
+ * the order they should be read; `verdict` maps each id the read reached to
+ * true (still for sale and its remarks say it needs work,
+ * shared/listing-distress.js) or false. An id with no verdict wasn't reached:
+ * the run's `perRun` lookups were spent, `want` were already kept, or a
+ * lookup failed — and nobody it would have checked is texted. What Zillow
+ * said about an address is remembered SCREEN_REMEMBER_DAYS on the
+ * `outreachScreen` cursor (unless `remember` is false, a dry run), so it
+ * isn't paid for twice.
+ */
+export async function screenAddresses({ items = [], locationId, store = defaultStore, deps = {}, now = Date.now(), perRun = DEFAULT_SCREEN_PER_RUN, want = Infinity, remember = true, beat = async () => {} } = {}) {
+  const stats = { checked: 0, remembered: 0, kept: 0, dropped: {}, waiting: 0 };
+  const verdict = new Map();
+  const warnings = [];
+  const cursor = (await store.getJobCursor?.(locationId, SCREEN_CURSOR).catch(() => null))?.doc || {};
+  const seen = { ...(cursor.seen || {}) };
+  const recent = (e) => e && Date.parse(e.at) > now - SCREEN_REMEMBER_DAYS * DAY_MS;
+  const drop = (why) => { const b = screenBucket(why); stats.dropped[b] = (stats.dropped[b] || 0) + 1; };
+  const keyOf = (it) => streetKey(it.address || "");
+  const toRead = [];
+  for (const it of items) {
+    const k = keyOf(it);
+    if (!k) { verdict.set(it.id, false); drop("no address"); continue; }
+    if (recent(seen[k])) {
+      verdict.set(it.id, seen[k].ok === true);
+      stats.remembered++;
+      if (seen[k].ok) stats.kept++; else drop(seen[k].why);
+      continue;
+    }
+    toRead.push(it);
+  }
+  let i = 0;
+  while (i < toRead.length && stats.kept < want && stats.checked < perRun) {
+    const chunk = toRead.slice(i, i + Math.min(SCREEN_CHUNK, perRun - stats.checked));
+    i += chunk.length;
+    let found;
+    try {
+      found = await deps.screenListings({ locationId, addresses: chunk.map((it) => it.address) });
+    } catch (e) {
+      warnings.push(`listing check: ${String(e?.message || e).slice(0, 120)} — the agents it didn't get to wait for the next run`);
+      break;
+    }
+    stats.checked += chunk.length;
+    for (const it of chunk) {
+      const z = found?.get?.(keyOf(it)) || null;
+      const v = z
+        ? listingDistress({ status: z.status, description: z.description, yearBuilt: z.yearBuilt || it.yearBuilt }, { now })
+        : { ok: false, why: "Zillow couldn't find the listing", signals: [] };
+      verdict.set(it.id, v.ok);
+      seen[keyOf(it)] = { at: iso(now), ok: v.ok, ...(v.why ? { why: v.why } : {}), ...(v.signals?.length ? { signals: v.signals.slice(0, 3) } : {}) };
+      if (v.ok) stats.kept++; else drop(v.why);
+    }
+    await beat();
+  }
+  stats.waiting = items.filter((it) => !verdict.has(it.id)).length;
+  if (remember) {
+    const keep = Object.entries(seen).filter(([, e]) => recent(e))
+      .sort((a, b) => String(b[1].at).localeCompare(String(a[1].at))).slice(0, SCREEN_REMEMBER_MAX);
+    await store.setJobCursor?.(locationId, SCREEN_CURSOR, { at: iso(now), doc: { seen: Object.fromEntries(keep) } })
+      .catch((e) => warnings.push(`listing check memory: ${String(e?.message || e).slice(0, 120)}`));
+  }
+  return { verdict, stats, warnings };
+}
+
+// "12 of 40 listings read as needing work (left out: 20 reads finished, …)"
+export function screenSummary(stats) {
+  const dropped = Object.entries(stats.dropped || {}).map(([b, n]) => `${n} ${b}`).join(", ");
+  return `${stats.kept} of ${stats.checked + stats.remembered} listings read as needing work${dropped ? ` (left out: ${dropped})` : ""}`;
+}
+
+/**
  * screenPicked({ groups, oa, job, locationId, store, deps, now, beat })
  *
  * Matt, 2026-10-17: "we're simply reaching out on a listing that has
@@ -352,76 +427,30 @@ function screenBucket(why = "") {
  * signals." The 10/16 run texted 375 agents off RentCast's numbers (a price
  * cut, or built before 1980), and the answers were "it's move in ready",
  * "new construction", "it's pending", "did you look at the listing?". So each
- * picked agent's listing is read on Zillow, in the pick's order, until the
- * day has its number (with a fifth over, for the ones the import finds
- * already in GHL) or the run's lookups are spent; only those whose listing
- * is still for sale and says it needs work (shared/listing-distress.js) stay
- * picked. One the run didn't get to waits for the next. A failed lookup texts
- * nobody it would have checked. The off-market seats have their own Zillow
- * check (routes/outreach.js keepOffMarket) and are left alone.
+ * picked agent's listing is read on Zillow (screenAddresses), in the pick's
+ * order, until the day has its number (with a fifth over, for the ones the
+ * import finds already in GHL) or the run's lookups are spent; only those
+ * whose listing is still for sale and says it needs work stay picked. One the
+ * run didn't get to waits for the next. A failed lookup texts nobody it would
+ * have checked. The off-market seats have their own Zillow check
+ * (routes/outreach.js keepOffMarket) and are left alone.
  */
 async function screenPicked({ groups, oa, job, locationId, store, deps, now, beat = async () => {} }) {
-  const stats = { checked: 0, remembered: 0, kept: 0, dropped: {}, waiting: 0 };
-  job.screen = stats;
   if (typeof deps.screenListings !== "function") {
+    job.screen = { checked: 0, remembered: 0, kept: 0, dropped: {}, waiting: 0 };
     job.warnings.push("listing check is on but this broker can't read Zillow — nobody is texted today");
     for (const g of groups) if (!g.offMarket) g.picked = [];
     return;
   }
-  const cursor = (await store.getJobCursor?.(locationId, SCREEN_CURSOR).catch(() => null))?.doc || {};
-  const seen = { ...(cursor.seen || {}) };
-  const recent = (e) => e && Date.parse(e.at) > now - SCREEN_REMEMBER_DAYS * DAY_MS;
-  const drop = (why) => { const b = screenBucket(why); stats.dropped[b] = (stats.dropped[b] || 0) + 1; };
-  const keyOf = (r) => streetKey(r.doc?.hook?.address || "");
-  const want = Math.ceil(oa.dailyCap * 1.2);
-  const verdict = new Map();
   const rows = groups.filter((g) => !g.offMarket).flatMap((g) => g.picked);
-  const toRead = [];
-  for (const r of rows) {
-    const k = keyOf(r);
-    if (!k) { verdict.set(r.agentKey, false); drop("no address"); continue; }
-    if (recent(seen[k])) {
-      verdict.set(r.agentKey, seen[k].ok === true);
-      stats.remembered++;
-      if (seen[k].ok) stats.kept++; else drop(seen[k].why);
-      continue;
-    }
-    toRead.push(r);
-  }
-  let i = 0;
-  while (i < toRead.length && stats.kept < want && stats.checked < oa.distressCheck.perRun) {
-    const chunk = toRead.slice(i, i + Math.min(SCREEN_CHUNK, oa.distressCheck.perRun - stats.checked));
-    i += chunk.length;
-    let found;
-    try {
-      found = await deps.screenListings({ locationId, addresses: chunk.map((r) => r.doc.hook.address) });
-    } catch (e) {
-      job.warnings.push(`listing check: ${String(e?.message || e).slice(0, 120)} — the agents it didn't get to wait for the next run`);
-      break;
-    }
-    stats.checked += chunk.length;
-    for (const r of chunk) {
-      const z = found?.get?.(keyOf(r)) || null;
-      const v = z
-        ? listingDistress({ status: z.status, description: z.description, yearBuilt: z.yearBuilt || r.doc.hook.yearBuilt }, { now })
-        : { ok: false, why: "Zillow couldn't find the listing", signals: [] };
-      verdict.set(r.agentKey, v.ok);
-      seen[keyOf(r)] = { at: iso(now), ok: v.ok, ...(v.why ? { why: v.why } : {}), ...(v.signals?.length ? { signals: v.signals.slice(0, 3) } : {}) };
-      if (v.ok) stats.kept++; else drop(v.why);
-    }
-    await beat();
-  }
-  stats.waiting = rows.filter((r) => !verdict.has(r.agentKey)).length;
+  const { verdict, stats, warnings } = await screenAddresses({
+    items: rows.map((r) => ({ id: r.agentKey, address: r.doc?.hook?.address || "", yearBuilt: r.doc?.hook?.yearBuilt })),
+    locationId, store, deps, now, perRun: oa.distressCheck.perRun, want: Math.ceil(oa.dailyCap * 1.2), remember: !job.dryRun, beat,
+  });
+  job.screen = stats;
+  job.warnings.push(...warnings);
   for (const g of groups) if (!g.offMarket) g.picked = g.picked.filter((r) => verdict.get(r.agentKey) === true);
-  if (stats.checked) {
-    const dropped = Object.entries(stats.dropped).map(([b, n]) => `${n} ${b}`).join(", ");
-    job.warnings.push(`listing check: ${stats.kept} of ${stats.checked + stats.remembered} listings read as needing work${dropped ? ` (left out: ${dropped})` : ""}`);
-  }
-  if (job.dryRun) return;
-  const keep = Object.entries(seen).filter(([, e]) => recent(e))
-    .sort((a, b) => String(b[1].at).localeCompare(String(a[1].at))).slice(0, SCREEN_REMEMBER_MAX);
-  await store.setJobCursor?.(locationId, SCREEN_CURSOR, { at: iso(now), doc: { seen: Object.fromEntries(keep) } })
-    .catch((e) => job.warnings.push(`listing check memory: ${String(e?.message || e).slice(0, 120)}`));
+  if (stats.checked) job.warnings.push(`listing check: ${screenSummary(stats)}`);
 }
 
 /**
