@@ -167,6 +167,30 @@ test("when Zillow can't be read, nobody it would have checked is texted that day
   assert.ok(job.warnings.includes("no picked listing read as needing work today"));
 });
 
+// 2026-10-26 dry run: the listing check left Pierce with 3 of 29 picks and
+// some counties with none, and the import was handed an empty list for them —
+// "agentKeys required" — so the run errored before anyone was imported.
+test("a county whose every pick the listing check drops doesn't stop the day's import", async () => {
+  _resetJobs();
+  const byCounty = {
+    King: [rows[1]],                                     // finished: dropped
+    Pierce: [{ ...rows[0], agentKey: "p0", doc: { ...rows[0].doc, phone: "2535550700" } }],   // a fixer: kept
+  };
+  const calls = [];
+  const deps = {
+    runPull: async (_l, _c, b) => ({ batchId: `b-${b.county}`, warnings: [], nextOffset: 0 }),
+    // As the real import does: an empty list is a bad request.
+    importAgents: async (a) => { if (!a.agentKeys.length) throw new Error("agentKeys required"); calls.push(a); return { results: [], imported: a.agentKeys.length }; },
+    screenListings: async ({ addresses }) => zillow(addresses),
+  };
+  const fake = { ...sweepFake([]), async listOutreachAgents(_l, { batchId }) { return byCounty[String(batchId).slice(2)] || []; } };
+  const job = startOutreachSweep({ locationId: "loc-screen-empty", client: {}, store: fake, deps, now: NOW,
+    saved: { outreachAutopilot: { enabled: true, dailyCap: 0, firstTouch: "ghl", counties: ["King, WA", "Pierce, WA"], distressCheck: { enabled: true } } } });
+  await wait(job);
+  assert.equal(job.status, "done", job.error);
+  assert.deepEqual(calls.map((c) => [c.batchId, c.agentKeys]), [["b-Pierce", ["p0"]]]);
+});
+
 test("the listing check stops reading once the day has its agents, and leaves the rest for the next run", async () => {
   _resetJobs();
   const many = Array.from({ length: 90 }, (_, i) => ({ ...rows[0], agentKey: `m${i}`,
