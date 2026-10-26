@@ -396,6 +396,41 @@ export function analyze(d, price, { exitCap } = {}) {
   };
 }
 
+/* ---------- 3b. the hold, year by year, for the charts ---------- */
+
+/**
+ * projection(deal, a) → [{ year, noi, debtService, interest, principal,
+ *   cashFlow, cumCash, value, balance, equity }] for years 0 … hold.
+ *
+ * `a` is analyze() at the price being charted. Year 0 is the day we buy: the
+ * value is the price and cumCash is the cash we bring. Each later year's value
+ * is the next year's NOI at the exit cap — the same rule the sale uses, so the
+ * last row's value is the sale price. The sale's net proceeds land in the
+ * last year's cumCash, not its cashFlow.
+ */
+export function projection(d, a) {
+  const hold = a.years.length;
+  const cap = num(a.exitCap);
+  const rows = [{
+    year: 0, noi: 0, debtService: 0, interest: 0, principal: 0, cashFlow: 0,
+    cumCash: -a.equity, value: a.price, balance: a.loan, equity: a.price - a.loan,
+  }];
+  for (const y of a.years) {
+    const prev = rows[rows.length - 1];
+    const balance = loanBalance(d, a.loan, y.year);
+    const principal = prev.balance - balance;
+    const value = cap > 0 ? Math.max(0, operate(d, y.year + 1, false).noi / cap) : 0;
+    rows.push({
+      year: y.year, noi: y.noi, debtService: y.debtService,
+      interest: y.debtService - principal, principal,
+      cashFlow: y.cashFlow,
+      cumCash: prev.cumCash + y.cashFlow + (y.year === hold ? a.netSale : 0),
+      value, balance, equity: value - balance,
+    });
+  }
+  return rows;
+}
+
 /* ---------- validation ---------- */
 
 /** validateIncomeDeal(deal) → plain-English problems; [] means it can be priced. */
