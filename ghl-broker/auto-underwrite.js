@@ -49,7 +49,7 @@ import { threadPassed } from "./shared/flip-read.js";
 import { leadSourceOf, theirNumberCheck } from "./shared/lead-source.js";
 import { buyerCeiling } from "./shared/post-mortem.js";
 import { markSides, sameSideFirst, isAcross, acrossLabel } from "./shared/same-side.js";
-import { addressKey, completeAddress, sameStreet, sameStreetLoose, sameHouse, parseUsAddress } from "./shared/us-address.js";
+import { addressKey, completeAddress, sameStreet, sameStreetLoose, sameHouse, parseUsAddress, oneAgentsHouse } from "./shared/us-address.js";
 import { effectiveStatus as offerStatusOf, DEAD_STATUSES, priceAgreed, DRAFT_ONLY_HOLD, SKELETON_HOLD } from "./shared/offer-status.js";
 import { expandListingLinks } from "./listing-links.js";
 import { photoMarkers } from "./photo-addresses.js";
@@ -368,13 +368,19 @@ export async function countToday({ store, locationId, now = Date.now() }) {
  * price is AGREED — whatever its age. The one thing an unattended run must
  * never do is put a second number on a house the agent already has ours on.
  */
+// The same house as `address`, for this agent's own rows: the full key, or —
+// with an agent to scope it — the street line give or take a directional or
+// suffix ("12201 Champion Dr" is their "12201 Champion Dr SW, Olympia").
+const onTheirHouse = (o, { contactId, key, address }) =>
+  addressKey(o?.address || "") === key || Boolean(contactId && o?.contactId === contactId && oneAgentsHouse(o.address, address));
+
 export async function findOfferOut({ store, locationId, contactId, address, ignoreId = null }) {
   const key = addressKey(address);
   if (!key) return null;
   const rows = await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []);
   for (const o of rows) {
     if (!o?.id || (ignoreId && o.id === ignoreId) || o.deal) continue;
-    if (addressKey(o.address || "") !== key) continue;
+    if (!onTheirHouse(o, { contactId, key, address })) continue;
     if (DEAD_STATUSES.has(offerStatusOf(o))) continue;
     const sent = (o.sends || []).some((s) => Object.values(s?.results || {}).some((r) => r?.ok));
     // Priced by income or by the acre, by hand (shared/underwrite-model.js):
@@ -395,7 +401,7 @@ export async function findRecent({ store, locationId, contactId, address, ignore
     // second one at 472,500 on the same house.
     if (!o?.id) continue;
     if (ignoreId && o.id === ignoreId) continue;
-    if (addressKey(o.address || "") !== key) continue;
+    if (!onTheirHouse(o, { contactId, key, address })) continue;
     const ts = Date.parse(o.createdAt || o.autoUnderwrite.startedAt || "");
     if (Number.isFinite(ts) && now - ts <= windowMs) return o;
   }
@@ -2814,16 +2820,37 @@ async function saveDraft(job, ctx, { extraction, held, partial, cleared = false 
     ...(offSignal ? { offMarket: { ...offSignal, by: "machine", at: new Date().toISOString() } } : {}),
     updatedAt: new Date().toISOString(),
   };
-  if (job.replaceOfferId) {
-    const prior = await store.getOffer?.(job.replaceOfferId).catch(() => null);
-    if (prior && prior.status === "draft" && prior.locationId === locationId) {
-      const doc = { ...prior, ...record, id: prior.id || job.replaceOfferId, createdAt: prior.createdAt,
-        ...(prior.offMarket?.by === "you" ? { offMarket: prior.offMarket } : {}) };
-      await store.updateOffer(doc.id, doc);
-      return doc;
-    }
+  const prior = await draftToWriteOver(job, ctx, record.address);
+  if (prior) {
+    const doc = { ...prior, ...record, id: prior.id, createdAt: prior.createdAt,
+      ...(prior.offMarket?.by === "you" ? { offMarket: prior.offMarket } : {}) };
+    await store.updateOffer(doc.id, doc);
+    return doc;
   }
   return store.createOffer(record);
+}
+
+// The draft this run's draft replaces: the one a retry names, else the
+// newest draft an earlier run left on this agent's house. Two runs on
+// Kimberly's house a minute apart (2026-10-26) — one read "12201 Champion
+// Dr", the other the full "…Dr SW, Olympia" — left two drafts of one house.
+// Only the machine's drafts: a hand draft is a person's work.
+async function draftToWriteOver(job, { locationId, store }, address) {
+  const ok = (o) => o && o.status === "draft" && o.locationId === locationId;
+  if (job.replaceOfferId) {
+    const prior = await store.getOffer?.(job.replaceOfferId).catch(() => null);
+    if (ok(prior)) return { ...prior, id: prior.id || job.replaceOfferId };
+  }
+  if (!job.contactId || !address || typeof store.listOffers !== "function") return null;
+  const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+  const touched = (o) => Date.parse(o.updatedAt || o.createdAt || "") || 0;
+  const same = (rows || [])
+    .filter((o) => o?.id && o.contactId === job.contactId && o.status === "draft" && o.autoUnderwrite
+      && onTheirHouse(o, { contactId: job.contactId, key: addressKey(address), address }))
+    .sort((a, b) => touched(b) - touched(a))[0];
+  if (!same) return null;
+  const full = await store.getOffer?.(same.id).catch(() => null);
+  return ok(full) && full.autoUnderwrite ? full : null;
 }
 
 /* ---------- shapes ---------- */

@@ -220,6 +220,42 @@ export function sameHouse(a, b) {
   return !ca || !cb || ca === cb;
 }
 
+/**
+ * oneAgentsHouse(a, b) → boolean
+ *
+ * sameHouse for two spellings of a house ONE agent sent us, where a street
+ * line missing its directional or suffix is still their house: "12201
+ * Champion Dr" and "12201 Champion Dr SW, Olympia, WA 98512" (2026-10-26,
+ * two drafts a minute apart), "39th St Ct" / "39th St Ct E", "Binns Swiger
+ * Lp" / "Binns-Swiger Loop". Two different directionals or suffixes are two
+ * streets. Only for one contact's own rows — across a whole book, "58th Ave"
+ * is a dozen houses.
+ */
+const DIRS = new Set(Object.values(DIRECTIONALS).map((d) => d.toLowerCase()));
+const SUFFIX_WORDS = new Set([...Object.values(SUFFIXES).map((s) => s.toLowerCase()), "lp", "way"]);
+const SUFFIX_ALIAS = { loop: "lp" };
+export function oneAgentsHouse(a, b) {
+  const line = (raw) => {
+    const p = parseUsAddress(raw);
+    if (!p.houseNo) return null;
+    const words = normalizeUsAddress(p.street).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean)
+      .map((w) => SUFFIX_ALIAS[w] || w);
+    return {
+      no: p.houseNo.toLowerCase(),
+      city: String(p.city || "").trim().toLowerCase(),
+      dirs: words.filter((w) => DIRS.has(w)).join(" "),
+      core: words.filter((w) => !DIRS.has(w)),
+    };
+  };
+  const x = line(a), y = line(b);
+  if (!x || !y || x.no !== y.no || !x.core.length || !y.core.length) return false;
+  if (x.city && y.city && x.city !== y.city) return false;
+  if (x.dirs && y.dirs && x.dirs !== y.dirs) return false;
+  const [short, long] = x.core.length <= y.core.length ? [x.core, y.core] : [y.core, x.core];
+  if (short.length === long.length) return short.every((w, i) => w === long[i]);
+  return long.length === short.length + 1 && SUFFIX_WORDS.has(long.at(-1)) && short.every((w, i) => w === long[i]);
+}
+
 // Ordered, de-duplicated ladder of address formats to try against picky
 // address matchers. Callers query each until one returns data.
 export function addressQueryVariants(raw) {

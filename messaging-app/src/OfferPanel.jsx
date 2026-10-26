@@ -13,7 +13,7 @@ import { Check, ExternalLink, FileText, Pencil, Plus, X } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { agreedAboveOurNumber, numberApproved, offerHeat, priceAgreed, priceLocked } from "@shared/offer-status.js";
 import { approveNumber, clearAgreedPrice, getOffer, listOffers, offerEditorUrl, requoteOffer, zillowUrl } from "./api.js";
-import { annotateCurrent } from "@shared/current-offer.js";
+import { annotateCurrent, foldHouses } from "@shared/current-offer.js";
 import { BTN, ChecksLine, CurrentPill, HotPill, PaperHeldBanner, StagePill, StatusPill } from "./ui.jsx";
 import { AiProvenance, RehabScope } from "./OfferDetailModal.jsx";
 import { forget, useLoad } from "./work-data.js";
@@ -132,44 +132,66 @@ function OurOffer({ offer, onRequote }) {
   );
 }
 
-// Every offer with this person, newest first: which house, our number, where
-// it stands. Picking one shows it here.
+// Every house with this person, one line each: the offer we're working from
+// (or its newest draft), our number, where it stands. Older versions and
+// leftover drafts on a house fold under it (Matt, 2026-10-26: "one offer per
+// address"). Picking one shows it here.
+function OfferRow({ o, on, rowOfferId, onSelect, older = false }) {
+  return (
+    <button type="button" onClick={() => onSelect?.(o.id)} aria-current={on ? "true" : undefined}
+      className={`flex w-full items-center gap-2 py-1.5 text-left text-sm ${older ? "pl-6 pr-3" : "px-3"} ${on ? "bg-blue-50" : "hover:bg-slate-50"}`}>
+      <span className={`min-w-0 flex-1 truncate ${on ? "font-semibold text-slate-900" : older ? "text-slate-500" : "text-slate-800"}`} title={o.address}>
+        {String(o.address || "Untitled").split(",")[0]}
+        {o.id === rowOfferId && !on && <span className="ml-1 text-xs font-normal text-slate-500">· this row</span>}
+      </span>
+      <span className={`tabular-nums font-semibold ${older ? "text-slate-400" : "text-slate-700"}`}>{money(o.cashAmount)}</span>
+      <StatusPill offer={o} small />
+      {!older && <HotPill heat={offerHeat(o)} />}
+      <CurrentPill offer={o} />
+    </button>
+  );
+}
+
 function OfferSwitcher({ book, selectedId, rowOfferId, name, onSelect, newBtn = null }) {
   const [all, setAll] = useState(false);
-  if (book.length < 2) return null;
-  const shown = all ? book : book.slice(0, 6);
+  const [open, setOpen] = useState(() => new Set());
+  const houses = foldHouses(book);
+  if (!showsSwitcher(houses)) return null;
+  const shown = all ? houses : houses.slice(0, 6);
   return (
     <div>
       <div className="flex items-center justify-between gap-2">
-        <span className={LABEL}>Offers with {name || "them"} · {book.length}</span>
+        <span className={LABEL}>Offers with {name || "them"} · {houses.length}</span>
         {newBtn}
       </div>
       <ul className="mt-1 divide-y divide-slate-100 rounded-xl border border-slate-200">
-        {shown.map((o) => {
-          const on = o.id === selectedId;
+        {shown.map(({ top, older }) => {
+          const expanded = open.has(top.id) || older.some((o) => o.id === selectedId);
           return (
-            <li key={o.id}>
-              <button type="button" onClick={() => onSelect?.(o.id)} aria-current={on ? "true" : undefined}
-                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${on ? "bg-blue-50" : "hover:bg-slate-50"}`}>
-                <span className={`min-w-0 flex-1 truncate ${on ? "font-semibold text-slate-900" : "text-slate-800"}`} title={o.address}>
-                  {String(o.address || "Untitled").split(",")[0]}
-                  {o.id === rowOfferId && !on && <span className="ml-1 text-xs font-normal text-slate-500">· this row</span>}
-                </span>
-                <span className="tabular-nums font-semibold text-slate-700">{money(o.cashAmount)}</span>
-                <StatusPill offer={o} small />
-                <HotPill heat={offerHeat(o)} />
-                <CurrentPill offer={o} />
-              </button>
+            <li key={top.id}>
+              <OfferRow o={top} on={top.id === selectedId} rowOfferId={rowOfferId} onSelect={onSelect} />
+              {older.length > 0 && !expanded && (
+                <button type="button" className="block w-full pb-1.5 pl-6 text-left text-xs text-slate-500 hover:text-slate-800"
+                  onClick={() => setOpen((s) => new Set([...s, top.id]))}>
+                  +{older.length} older on this house
+                </button>
+              )}
+              {expanded && older.map((o) => (
+                <OfferRow key={o.id} o={o} older on={o.id === selectedId} rowOfferId={rowOfferId} onSelect={onSelect} />
+              ))}
             </li>
           );
         })}
       </ul>
-      {book.length > shown.length && (
-        <button type="button" className="mt-1 text-xs text-blue-700 hover:underline" onClick={() => setAll(true)}>+{book.length - shown.length} more</button>
+      {houses.length > shown.length && (
+        <button type="button" className="mt-1 text-xs text-blue-700 hover:underline" onClick={() => setAll(true)}>+{houses.length - shown.length} more</button>
       )}
     </div>
   );
 }
+
+// The list is worth showing with two houses, or one house with history on it.
+const showsSwitcher = (houses) => houses.length > 1 || houses.some((h) => h.older.length);
 
 // "416.5K": never rounded up, so it never reads above the number (kText).
 const kNever = (n) => `${Math.floor((Number(n) || 0) / 100) / 10}K`;
@@ -265,7 +287,7 @@ export function OfferPanelBody({ offer, siblings = [], item = {}, loading = fals
         <div className="flex items-center justify-between gap-2">
           <span className={LABEL}>Offer</span>
           {/* With their list showing, + New offer sits on its header instead. */}
-          <span className="flex items-center gap-3">{book.length < 2 && newBtn}{editBtn}</span>
+          <span className="flex items-center gap-3">{!showsSwitcher(foldHouses(book)) && newBtn}{editBtn}</span>
         </div>
         <div className="mt-1 text-base font-bold leading-snug text-slate-900">{offer.address || "Untitled"}</div>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">

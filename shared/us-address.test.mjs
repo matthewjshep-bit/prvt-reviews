@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sameHouse, sameStreetLoose,
+import { sameHouse, sameStreetLoose, oneAgentsHouse,
   normalizeUsAddress, addressKey, addressQueryVariants, zillowUrl,
   parseUsAddress, splitUnit, stateAbbr,
 } from "./us-address.js";
@@ -174,4 +174,20 @@ test("the thread's short spelling is the deal's house for a guard, but a differe
   assert.equal(sameStreetLoose("5232 S Yakima Ave", "5232 S Yakima Way"), false);
   assert.equal(sameStreetLoose("5232 S Yakima", "5233 S Yakima Ave"), false);
   assert.equal(sameStreetLoose("the property", "5232 S Yakima"), false);
+});
+
+test("one agent's house: a street line missing its SW or its suffix is still the same house", () => {
+  assert.equal(oneAgentsHouse("12201 Champion Dr", "12201 Champion Dr SW, Olympia, WA 98512"), true);
+  assert.equal(oneAgentsHouse("6012 39th St Ct", "6012 39th St Ct E, Fife, WA"), true);
+  assert.equal(oneAgentsHouse("5020 58th Ave", "5020 58th Avenue East"), true);
+  assert.equal(oneAgentsHouse("9020 SE Binns Swiger Lp", "9020 SE Binns-Swiger Loop, Port Orchard, WA"), true);
+  assert.equal(oneAgentsHouse("1001 Maple St", "1001 Maple"), true);
+});
+
+test("one agent's house: another directional, suffix, house number or town is another house", () => {
+  assert.equal(oneAgentsHouse("5020 58th Ave E", "5020 58th Ave W"), false);
+  assert.equal(oneAgentsHouse("1810 19th Pl NE", "1810 19th Ave NE"), false);
+  assert.equal(oneAgentsHouse("12201 Champion Dr SW", "12203 Champion Dr SW"), false);
+  assert.equal(oneAgentsHouse("12201 Champion Dr, Olympia, WA", "12201 Champion Dr, Tumwater, WA"), false);
+  assert.equal(oneAgentsHouse("Champion Dr", "Champion Dr SW"), false, "no house number, no match");
 });

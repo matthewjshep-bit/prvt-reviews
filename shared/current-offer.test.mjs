@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   houseKey, pricedAt, resolveHouse, currentOffers, currentOfferFor, annotateCurrent,
   isSuperseded, ourComeDown, ourMoveUp, paperCheck, lastQuoteOnHouse, machineRaise, machineCut, holdNumber,
-  floatRange, rangeWords, namedInRange, houseRowFor } from "./current-offer.js";
+  floatRange, rangeWords, namedInRange, houseRowFor, foldHouses, rowOnHouse } from "./current-offer.js";
 
 // 13041 SE 208th St, Kent (2026-09-25): five rows on one house, the thread at
 // ~400K since August, and the letter of intent went out at 416,500 off a July
@@ -313,3 +313,35 @@ test("a house the app only has as a held draft is still the house the agent's wo
   assert.equal(houseRowFor([draft, live], { contactId: "c1", address: "12 Elm Street" })?.id, "o2");
 });
 
+
+// Kimberly, 12201 Champion Dr SW (2026-10-26): two drafts a minute apart, one
+// spelling without the SW, listed as two offers.
+test("one agent's rows fold to one line per house, spelling aside, current on top", () => {
+  const rows = [
+    { id: "d1", contactId: "k", address: "12201 Champion Dr SW, Olympia, WA 98512", status: "draft", draft: {}, createdAt: "2026-10-26T16:02:00Z" },
+    { id: "d2", contactId: "k", address: "12201 Champion Dr", status: "draft", draft: {}, createdAt: "2026-10-26T16:03:00Z" },
+    { id: "o1", contactId: "k", address: "9 Oak St, Kent, WA", cashAmount: 300000, status: "sent", createdAt: "2026-10-01T00:00:00Z" },
+    { id: "o2", contactId: "k", address: "9 Oak Street", cashAmount: 290000, status: "sent", createdAt: "2026-10-10T00:00:00Z" },
+  ];
+  const houses = foldHouses(rows);
+  assert.equal(houses.length, 2);
+  assert.equal(houses[0].top.id, "d2", "a house of drafts shows its newest");
+  assert.deepEqual(houses[0].older.map((o) => o.id), ["d1"]);
+  assert.equal(houses[1].top.id, "o2", "the current offer, not the first one made");
+  assert.deepEqual(houses[1].older.map((o) => o.id), ["o1"]);
+});
+
+test("a draft on a house beside a live offer folds under the offer; another agent's house never folds in", () => {
+  const live = { id: "o", contactId: "a", address: "5020 58th Ave E", cashAmount: 400000, status: "sent", createdAt: "2026-10-01T00:00:00Z" };
+  const draft = { id: "d", contactId: "a", address: "5020 58th Ave", status: "draft", draft: {}, createdAt: "2026-10-20T00:00:00Z" };
+  const theirs = { id: "x", contactId: "b", address: "5020 58th Ave E", cashAmount: 380000, status: "sent", createdAt: "2026-10-02T00:00:00Z" };
+  const houses = foldHouses([draft, live, theirs]);
+  assert.equal(houses.length, 2);
+  assert.equal(houses[0].top.id, "o");
+  assert.deepEqual(houses[0].older.map((o) => o.id), ["d"]);
+});
+
+test("a new offer on a house typed without its SW opens the row already there", () => {
+  const there = { id: "d1", contactId: "k", address: "12201 Champion Dr SW, Olympia, WA 98512", status: "draft", draft: {}, createdAt: "2026-10-26T16:02:00Z" };
+  assert.equal(rowOnHouse([there], { address: "12201 Champion Dr" })?.id, "d1");
+});

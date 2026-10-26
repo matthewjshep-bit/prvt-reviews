@@ -25,7 +25,7 @@
 //
 // Pure. The broker and the app both read it.
 
-import { parseUsAddress, addressKey, sameStreetLoose } from "./us-address.js";
+import { parseUsAddress, addressKey, sameStreetLoose, oneAgentsHouse } from "./us-address.js";
 import { fmtMoney } from "./offer-calc.js";
 
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : 0; };
@@ -116,11 +116,39 @@ export function rowOnHouse(rows = [], { address = "", exceptId = null } = {}) {
   const same = (rows || []).filter((o) => {
     if (!o || o.id === exceptId || o.deal) return false;
     const at = o.address || o.calc?.inputs?.address || o.draft?.inputs?.address || "";
-    return houseKey(at) === key || sameStreetLoose(at, address);
+    return houseKey(at) === key || sameStreetLoose(at, address) || oneAgentsHouse(at, address);
   });
   if (!same.length) return null;
   const touched = (o) => ms(o.updatedAt) || ms(o.createdAt);
   return resolveHouse(same).current || [...same].sort((a, b) => touched(b) - touched(a))[0];
+}
+
+/**
+ * foldHouses(offers) → [{ top, older }]
+ *
+ * One agent's offers as the houses they are, for a list a person reads
+ * (Matt, 2026-10-26: "one offer per address" — Kimberly's pane listed
+ * "12201 Champion Dr" and "12201 Champion Dr SW" as two drafts). `top` is
+ * the house's current offer, else its newest draft; `older` is everything
+ * else on it, newest first. Houses keep the order they first appear in.
+ * Spellings fold by oneAgentsHouse, so it is for one contact's rows; the
+ * machines keep groupHouses. A row with no address is its own house.
+ */
+export function foldHouses(offers = []) {
+  const groups = [];
+  for (const o of offers || []) {
+    if (!o) continue;
+    const at = String(o.address || "").trim();
+    const g = at && groups.find((x) => x.contactId === (o.contactId || "") && x.rows.some((r) => oneAgentsHouse(r.address, at)));
+    if (g) g.rows.push(o);
+    else groups.push({ contactId: o.contactId || "", rows: [o] });
+  }
+  const touched = (o) => ms(o.updatedAt) || ms(o.createdAt);
+  return groups.map(({ rows }) => {
+    const top = resolveHouse(rows).current || [...rows].sort((a, b) => touched(b) - touched(a))[0];
+    const older = rows.filter((o) => o !== top).sort((a, b) => (pricedAt(b) || touched(b)) - (pricedAt(a) || touched(a)));
+    return { top, older };
+  });
 }
 
 /* ---------- across a book ---------- */
