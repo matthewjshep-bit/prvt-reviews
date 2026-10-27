@@ -451,6 +451,11 @@ export function PersonaCard({ config, patch }) {
           <Toggle checked={p.useFirstName} onChange={set("useFirstName")}>Use their first name (once at most)</Toggle>
         </div>
       </div>
+      <div className="mt-3">
+        <Field label="Personality" hint="Light lets a short, dry line into a reply now and then: never about a price or an offer, never two in a row. Texts the machine starts keep their own tone.">
+          <Select value={p.personality || "off"} onChange={set("personality")} options={[["off", "Off (plain)"], ["light", "Light (a dry line now and then)"]]} />
+        </Field>
+      </div>
     </Section>
   );
 }

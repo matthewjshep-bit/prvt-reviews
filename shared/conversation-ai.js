@@ -640,6 +640,10 @@ export const actionAllowedFor = (party, type) =>
 export const LIVE_DEAL_HOLDS = ["working", "acquisition", "off"];
 export const RULE_MODES = ["auto", "ask"];
 export const LENGTHS = ["short", "medium", "long"];
+// How much personality a reply carries (ghl-broker/conversation-prompt.js
+// REPLY_PERSONALITY). "off" is the plain voice the replies have had since
+// 2026-09-12; "light" lets a dry line in now and then.
+export const PERSONALITIES = ["off", "light"];
 export const CHANNELS = ["sms", "email"];
 // What a set_field value may interpolate. Anything else is left as typed.
 // Once a person has jumped into a thread the bot stays out of it for at least
@@ -798,7 +802,7 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   version: 2,
   enabled: true,
   dailyCap: 60,
-  persona: { name: "", role: "", voice: "", signOff: "", length: "short", useFirstName: true, ifAskedIfBot: "" },
+  persona: { name: "", role: "", voice: "", signOff: "", length: "short", useFirstName: true, ifAskedIfBot: "", personality: "off" },
   rules: [],
   examples: [],
   // The driver: what the machine does by itself to keep a thread moving
@@ -1336,6 +1340,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       length: oneOf(persona.length, LENGTHS, D.persona.length),
       useFirstName: bool(persona.useFirstName, D.persona.useFirstName),
       ifAskedIfBot: str(persona.ifAskedIfBot, 300),
+      personality: oneOf(persona.personality, PERSONALITIES, D.persona.personality),
     },
     nightlyAudit: (() => {
       const a = d.nightlyAudit && typeof d.nightlyAudit === "object" ? d.nightlyAudit : {};
