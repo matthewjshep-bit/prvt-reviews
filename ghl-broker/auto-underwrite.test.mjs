@@ -679,6 +679,7 @@ const draftStore = (existing = []) => {
     createOffer: async (doc) => { const o = { ...doc, id: `new${rows.size}`, createdAt: new Date().toISOString() }; rows.set(o.id, o); return o; },
     getOffer: async (id) => rows.get(id) || null,
     updateOffer: async (id, doc) => { rows.set(id, doc); return true; },
+    listOffers: async (_loc, { contactId } = {}) => [...rows.values()].filter((o) => !contactId || o.contactId === contactId),
   };
 };
 const failedJob = (over = {}) => ({
@@ -726,6 +727,39 @@ test("a draft someone already turned into an offer is never overwritten by a ret
   assert.equal(store.rows.get("off1").status, "sent");
 });
 
+
+// Kimberly, 12201 Champion Dr SW (2026-10-26): two runs on her house a minute
+// apart, one reading the address without the SW, left two drafts — and the
+// pane listed the one house twice.
+const CHAMPION = "12201 Champion Dr SW, Olympia, WA 98512";
+const machineDraft = (over = {}) => ({ id: "d1", locationId: "LOC", contactId: "c1", status: "draft", address: CHAMPION,
+  autoUnderwrite: { jobId: "uw-0" }, createdAt: "2026-10-26T16:02:00.000Z", ...over });
+const championJob = (address, over = {}) => failedJob({ _got: { extraction: { ...EXTRACTION, address }, subject: { ...SUBJECT } }, ...over });
+
+test("a second run on the agent's house writes over the draft the first left, even spelled without the SW", async () => {
+  const store = draftStore([machineDraft()]);
+  const job = championJob("12201 Champion Dr");
+  await saveLoadedDraft(job, { locationId: "LOC", store });
+  assert.equal(job.offerId, "d1");
+  assert.equal(store.rows.size, 1);
+  assert.equal(store.rows.get("d1").createdAt, "2026-10-26T16:02:00.000Z");
+});
+
+test("a second run never writes over another agent's draft, a hand draft, or an offer that went out", async () => {
+  for (const kept of [machineDraft({ contactId: "c2" }), machineDraft({ autoUnderwrite: undefined }), machineDraft({ status: "sent" })]) {
+    const store = draftStore([kept]);
+    const job = championJob("12201 Champion Dr");
+    await saveLoadedDraft(job, { locationId: "LOC", store });
+    assert.notEqual(job.offerId, "d1");
+    assert.equal(store.rows.size, 2);
+  }
+});
+
+test("findRecent sees the agent's house when this run spelled it without the SW", async () => {
+  const store = fakeStore([machineDraft({ createdAt: iso(60_000) })]);
+  assert.equal((await findRecent({ store, locationId: "LOC", contactId: "c1", address: "12201 Champion Dr" }))?.id, "d1");
+  assert.equal(await findRecent({ store, locationId: "LOC", contactId: "c1", address: "12201 Champion Dr NE" }), null);
+});
 
 /* ---------- widening only when thin ---------- */
 

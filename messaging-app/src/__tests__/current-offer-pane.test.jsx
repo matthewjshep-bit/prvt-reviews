@@ -14,7 +14,7 @@ const july = { id: "july", contactId: "c1", address: A, cashAmount: 416500, stat
 test("the pane marks the current offer, calls the older one superseded, and offers the re-quote", () => {
   const html = renderToStaticMarkup(<OfferPanelBody offer={aug} siblings={[aug, july]} item={{ offerId: "aug" }} onRequote={() => {}} />);
   expect(html).toContain("current");
-  expect(html).toContain("superseded");
+  expect(html).toContain("+1 older on this house");
   expect(html).toContain("Paper held.");
   expect(html).toContain("Re-quote at 400K");
 });
@@ -53,8 +53,25 @@ test("a typed re-quote reads 750k, $750,000 and a bare 750 as the same number", 
 
 test("switching between their offers happens in the pane, with the one shown marked", () => {
   const html = renderToStaticMarkup(<OfferPanelBody offer={aug} siblings={[aug, july]} item={{ offerId: "aug", contactName: "Rae Q" }} onSelectOffer={() => {}} />);
-  expect(html).toContain("Offers with Rae · 2");
+  expect(html).toContain("Offers with Rae · 1");
+  expect(html).toContain("+1 older on this house");
   expect(html).toMatch(/aria-current="true"[^>]*>[\s\S]*?13041 SE 208th St/);
+});
+
+// Kimberly, 12201 Champion Dr SW (2026-10-26): two drafts a minute apart, one
+// without the SW, listed as two offers on one house.
+test("two drafts of one house are one line, with the older one folded under it", () => {
+  const sw = { id: "sw", contactId: "k", address: "12201 Champion Dr SW, Olympia, WA 98512", status: "draft", draft: {}, createdAt: "2026-10-26T16:02:00Z" };
+  const bare = { id: "bare", contactId: "k", address: "12201 Champion Dr", status: "draft", draft: {}, createdAt: "2026-10-26T16:03:00Z" };
+  const other = { id: "oak", contactId: "k", address: "9 Oak St, Kent, WA", cashAmount: 300000, status: "sent", createdAt: "2026-10-01T00:00:00Z" };
+  const html = renderToStaticMarkup(<OfferPanelBody offer={other} siblings={[sw, bare, other]} item={{ offerId: "oak", contactName: "Kimberly T" }} onSelectOffer={() => {}} />);
+  expect(html).toContain("Offers with Kimberly · 2");
+  expect(html).toContain("+1 older on this house");
+  expect(html).not.toContain("12201 Champion Dr SW<");
+  // Showing the older one opens its house.
+  const open = renderToStaticMarkup(<OfferPanelBody offer={sw} siblings={[sw, bare, other]} item={{ offerId: "sw", contactName: "Kimberly T" }} onSelectOffer={() => {}} />);
+  expect(open).not.toContain("older on this house");
+  expect(open).toMatch(/aria-current="true"[^>]*>[\s\S]*?12201 Champion Dr SW/);
 });
 
 // 2026-10-20, no Today: "approve the agreed number" was a Today row and
