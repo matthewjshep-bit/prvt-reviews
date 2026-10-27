@@ -13,6 +13,7 @@ import createPostMortemRouter from "./routes/post-mortem.js";
 import { maybeStartNightlySweep } from "./enrich-sweep.js";
 import createOffersRouter from "./routes/offers.js";
 import createOutreachRouter from "./routes/outreach.js";
+import createGatekeepersRouter from "./routes/gatekeepers.js";
 import createDashboardRouter from "./routes/dashboard.js";
 import createDispoRouter from "./routes/dispo.js";
 import createContactsRouter from "./routes/contacts.js";
@@ -179,6 +180,8 @@ const outreachRouter = createOutreachRouter({
 });
 app.use("/api/outreach", outreachRouter);
 outreachRouter.conversationDepsFor = offersRouter.conversationDepsFor;
+// The gatekeeper line: estate attorneys and title/escrow, apart from agents.
+app.use("/api/gatekeepers", createGatekeepersRouter({ resolveLocation }));
 const dashboardRouter = createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor, handTextDepsFor: (args) => offersRouter.handTextDepsFor?.(args) || {},
   operatorStatus: (args) => offersRouter.applyOperatorStatus?.(args) });
 app.use("/api/dashboard", dashboardRouter);

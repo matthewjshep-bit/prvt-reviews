@@ -452,3 +452,40 @@ create table if not exists coach_proposals (
   updated_at   timestamptz not null
 );
 create index if not exists coach_proposals_loc_idx on coach_proposals (location_id, created_at desc);
+
+-- Gatekeepers (2026-10-26): the people other than listing agents who see a
+-- house before it's listed — the attorney on an estate (from the probate
+-- Notice to Creditors), title and escrow officers. gk_key is who they are
+-- ("wsba:<bar no>" for a lawyer, else e:/p:/n: like outreach_agents).
+-- Lifecycle in columns, the rest in doc, so a re-read never undoes an import.
+create table if not exists gatekeepers (
+  id           uuid primary key,
+  location_id  text not null,
+  gk_key       text not null,
+  kind         text not null,                 -- 'probate_attorney' | 'title' | 'escrow'
+  status       text not null default 'new',   -- 'new' | 'skipped' | 'imported' | 'do_not_contact'
+  contact_id   text,
+  imported_at  timestamptz,
+  first_seen   timestamptz not null default now(),
+  last_seen    timestamptz not null default now(),
+  doc          jsonb not null,
+  unique (location_id, gk_key)
+);
+create index if not exists gatekeepers_loc_idx on gatekeepers (location_id, kind, last_seen desc);
+create index if not exists gatekeepers_contact_idx on gatekeepers (location_id, contact_id);
+
+-- What opens the door with each gatekeeper: an estate (hook_key
+-- "probate:<county>:<cause no>", the three weekly runs are one row), a
+-- closing we shared, a file they told us about.
+create table if not exists gatekeeper_hooks (
+  id           uuid primary key,
+  location_id  text not null,
+  hook_key     text not null,
+  gk_key       text not null,
+  kind         text not null,                 -- 'estate' | 'closing' | 'file'
+  first_seen   timestamptz not null default now(),
+  last_seen    timestamptz not null default now(),
+  doc          jsonb not null,
+  unique (location_id, hook_key)
+);
+create index if not exists gatekeeper_hooks_gk_idx on gatekeeper_hooks (location_id, gk_key);

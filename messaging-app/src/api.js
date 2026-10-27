@@ -842,3 +842,13 @@ export const blastInvestors = ({ contactIds, label, applyTag = true, dryRun = tr
   post(`/api/dispo/blast`, { contactIds, applyTag, dryRun, ...(label ? { label } : {}), ...(offerId ? { offerId } : {}), ...(sendWith ? { sendWith } : {}) });
 
 export { API_BASE };
+
+/* ---------- gatekeepers (estate attorneys, title, escrow) ---------- */
+export const getGatekeepers = (kind = "") =>
+  fetch(`${API_BASE}/api/gatekeepers?${locq()}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}`).then(j);
+export const pasteProbateNotices = (text) => post(`/api/gatekeepers/notices`, { text });
+export const readNoticeMail = () => post(`/api/gatekeepers/notices/mail`, {});
+export const seedGatekeepersFromClosings = () => post(`/api/gatekeepers/seed-closings`, {});
+export const saveGatekeeper = (row) => post(`/api/gatekeepers`, row);
+export const setGatekeeperStatus = (gkKey, status) => post(`/api/gatekeepers/${encodeURIComponent(gkKey)}/status`, { status });
+export const importGatekeepers = (gkKeys, { dryRun = true } = {}) => post(`/api/gatekeepers/import`, { gkKeys, dryRun });

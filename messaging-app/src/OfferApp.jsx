@@ -32,6 +32,7 @@ import LineView from "./LineView.jsx";
 import FollowUpView from "./FollowUpView.jsx";
 import AutopilotView from "./AutopilotView.jsx";
 import AgentsTab from "./AgentsTab.jsx";
+import GatekeepersTab from "./GatekeepersTab.jsx";
 import OverviewTab from "./OverviewTab.jsx";
 import InvestorsTab from "./InvestorsTab.jsx";
 import LessonsTab from "./LessonsTab.jsx";
@@ -98,6 +99,7 @@ const NAV =
     ? [
         { view: "overview", label: "Overview" },
         { view: "agents", label: "Agents" },
+        { view: "gatekeepers", label: "Gatekeepers" },
         { view: "investors", label: "Investors" },
         { view: "advanced", label: "Advanced settings" },
       ]
@@ -370,6 +372,7 @@ export default function OfferApp() {
           </div>
         )}
         {view === "agents" && <AgentsTab settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
+        {view === "gatekeepers" && <GatekeepersTab />}
         {view === "investors" && <InvestorsTab settings={settings} onSettingsSaved={(s) => setSettings(s)} />}
         {view === "lessons" && <LessonsTab onSettingsSaved={(s) => setSettings(s)} />}
         {view === "flow" && <FlowView />}
