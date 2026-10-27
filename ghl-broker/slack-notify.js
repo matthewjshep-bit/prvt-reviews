@@ -34,6 +34,7 @@ import { buildDigest } from "./shared/digest.js";
 import { lineJobs, errorsByArea } from "./shared/line.js";
 import { addressKey, sameStreetLoose } from "./shared/us-address.js";
 import { houseKey } from "./shared/current-offer.js";
+import { passedOnHouse, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { getContact } from "./ghl.js";
 import { contactName } from "./contact-record.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
@@ -321,13 +322,32 @@ function houseReader({ store, locationId }) {
   };
 }
 
+// The Tier 1 list's own record of a house: added, passed, taken off. A house
+// an agent raised in conversation can be Tier 1 with no offer row at all, and
+// passing it from the list writes these, not an offer status (2026-10-26: six
+// such posts never got their ❌). One location-wide read a run.
+function tierOneReader({ store, locationId, now = Date.now() }) {
+  let events = null;
+  return async (addr, keyPart = "") => {
+    if (!addr && !keyPart) return null;
+    events = events || await store.listContactEventsSince(locationId, iso(now - 60 * 86400000), { types: [...TIER_ONE_OUT_EVENTS, "tier1_added"], limit: 5000 }).catch(() => []);
+    const key = addr ? houseKey(addr) : keyPart;
+    const mine = (events || []).filter((e) => e?.address && (houseKey(e.address) === key || addressKey(e.address) === key || (addr && sameStreetLoose(e.address, addr))));
+    if (!mine.length) return null;
+    // Passed (and not added back since), or on the list with nothing to show.
+    const out = passedOnHouse({ offers: [], events: mine, address: addr || mine[0].address });
+    return { status: out ? { key: "passed", emoji: "x", label: "Passed from Tier 1", at: out.at } : null };
+  };
+}
+
 /**
- * statusOf({ tk, th, store, locationId, offersOnHouse }) → { stream, offerId, offer, status, rows, known }
+ * statusOf({ tk, th, store, locationId, offersOnHouse, tierOneOut }) → { stream, offerId, offer, status, rows, known }
  *
- * What the app says a thread's house or deal is now. `known` is false when
- * the app has nothing to say it from (no offer on the house).
+ * What the app says a thread's house or deal is now. A house with no offer
+ * row is read from the Tier 1 list's record. `known` is false when the app
+ * has nothing to say it from.
  */
-async function statusOf({ tk, th, store, locationId, offersOnHouse }) {
+async function statusOf({ tk, th, store, locationId, offersOnHouse, tierOneOut = null }) {
   const isDeal = String(tk).startsWith("deal:");
   const stream = th.stream || (isDeal ? "dispositions" : "acquisitions");
   const offerId = th.offerId || (isDeal ? String(tk).slice(5) : null);
@@ -336,8 +356,9 @@ async function statusOf({ tk, th, store, locationId, offersOnHouse }) {
   if (stream === "dispositions") return { stream, offerId, offer, status: offer ? dispositionStatus(offer) : null, rows: offer ? [offer] : [], known: Boolean(offer) };
   const keyPart = String(tk).startsWith(`house:${stream}:`) ? String(tk).slice(`house:${stream}:`.length) : "";
   const rows = await offersOnHouse(th.address || offer?.address || "", keyPart);
-  const status = rows.length ? houseStatus(rows) : acquisitionStatus(offer);
-  return { stream, offerId, offer, status, rows, known: rows.length > 0 || Boolean(offer) };
+  if (rows.length || offer) return { stream, offerId, offer, status: rows.length ? houseStatus(rows) : acquisitionStatus(offer), rows, known: true };
+  const list = tierOneOut ? await tierOneOut(th.address || "", keyPart) : null;
+  return { stream, offerId, offer: null, status: list?.status || null, rows, known: Boolean(list) };
 }
 
 /**
@@ -355,10 +376,11 @@ async function syncStatuses({ store, locationId, token, threads, keys, out, pace
   let next = { ...threads };
   let reactions = true;
   const offersOnHouse = houseReader({ store, locationId });
+  const tierOneOut = tierOneReader({ store, locationId });
   for (const tk of keys) {
     const th = next[tk];
     if (!th?.ts || th.ts === "dry-run") continue;
-    const { stream, offerId, offer, status, known } = await statusOf({ tk, th, store, locationId, offersOnHouse });
+    const { stream, offerId, offer, status, known } = await statusOf({ tk, th, store, locationId, offersOnHouse, tierOneOut });
     if (!known) continue;
     const emoji = status?.emoji || null;
     const label = status?.label || null;
@@ -384,7 +406,7 @@ async function syncStatuses({ store, locationId, token, threads, keys, out, pace
     }
     if (th.blocks) {
       try {
-        await edit(token, th.channel, th.ts, { text: th.text, blocks: withStatus(th.blocks, status, offerStageAt(status?.offer || offer)) });
+        await edit(token, th.channel, th.ts, { text: th.text, blocks: withStatus(th.blocks, status, status?.at || offerStageAt(status?.offer || offer)) });
         upd.statusLabel = label;
       } catch (e) {
         if (e?.slack === "rate_limited") { next = { ...next, [tk]: upd }; break; }
@@ -424,9 +446,10 @@ export async function reconcileSlack({ store = defaultStore, locationId, saved =
   out.checked = keys.length;
   if (dryRun) {
     const offersOnHouse = houseReader({ store, locationId });
+    const tierOneOut = tierOneReader({ store, locationId, now });
     for (const tk of keys) {
       const th = threads[tk];
-      const { stream, status, rows, known } = await statusOf({ tk, th, store, locationId, offersOnHouse });
+      const { stream, status, rows, known } = await statusOf({ tk, th, store, locationId, offersOnHouse, tierOneOut });
       const shows = { emoji: th.statusEmoji || null, label: th.statusLabel || null };
       const app = { emoji: status?.emoji || null, label: status?.label || null };
       out.rows.push({

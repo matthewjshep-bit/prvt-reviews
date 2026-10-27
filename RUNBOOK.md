@@ -5431,6 +5431,13 @@ minutes. It came from Matt, 2026-10-26: "some … aren't getting tagged".
 
 A thread that never stored its address is matched on its key.
 
+**A Tier 1 house with no offer row.** Some houses an agent raises in
+conversation are Tier 1 with no offer row at all. Their status is read from the
+Tier 1 list's own events (`tier1_passed`, `tier1_kicked`, `tier1_added`;
+`shared/tier-one.js` passedOnHouse). Passing one from the list shows ❌ "Passed
+from Tier 1", and adding it back clears it. This applies both in the minute
+loop and in the reconcile.
+
 **Missing permission.** The reaction needs the bot scope `reactions:write`.
 Without it the Status line still moves, and the run's `statusError` says
 "add the reactions:write scope". To fix it:

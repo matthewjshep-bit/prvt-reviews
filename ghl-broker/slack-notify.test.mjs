@@ -508,3 +508,29 @@ test("a forced reconcile puts the reaction and the Status line back even where t
   assert.deepEqual(s.of("reactions.add").map((c) => c.body.name), ["left_right_arrow", "left_right_arrow"]);
   assert.equal(s.of("reactions.remove").length, 0, "the same emoji isn't taken off");
 });
+
+// Soap Lake, 24735 Summit Landsberg Rd and four more, 2026-10-26: Tier 1 houses
+// an agent raised in conversation, with no offer row. Passing one from the
+// Tier 1 list writes tier1_passed, not an offer status; it never got its ❌.
+test("a Tier 1 house with no offer, passed from the Tier 1 list, gets its ❌ within the minute, and loses it when added back", async () => {
+  const LOC = "loc-tier1-pass";
+  _resetSlack();
+  const s = slack();
+  const LAKE = "24735 Summit Landsberg Rd, Ravensdale, WA 98051";
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  await ev(LOC, "wes", "ghl_stage_moved", 1, { address: LAKE, dedupeKey: "wes-t1", data: { from: "Tier 2", to: "Tier 1", why: "a house they raised" } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  assert.equal(s.of("chat.postMessage").length, 1);
+
+  await ev(LOC, "wes", "tier1_passed", 3, { address: LAKE, dedupeKey: "wes-pass" });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(4) });
+  assert.deepEqual(s.of("reactions.add").map((c) => c.body.name), ["x"]);
+  assert.match(said(s.of("chat.update").at(-1)), /\*Status:\* :x: Passed from Tier 1/);
+
+  // The Tier 1 list orders by when a row was written: a re-add comes after.
+  await new Promise((r) => setTimeout(r, 5));
+  await ev(LOC, "wes", "tier1_added", 5, { address: LAKE, dedupeKey: "wes-back" });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(6) });
+  assert.deepEqual(s.of("reactions.remove").map((c) => c.body.name), ["x"]);
+  assert.doesNotMatch(said(s.of("chat.update").at(-1)), /Status:/);
+});
