@@ -37,6 +37,7 @@ export const OWNER_OF_KIND = Object.freeze({
   call_hot: "call", call_brought: "call", paper_to_sign: "ping", hot_machine: "machine", counter_held: "machine",
   call_missed: "call", call_counter: "call", call_gap: "call", call_first_reply: "call", call_turnkey_week: "call",
   call_quiet: "call", call_phone_only: "call", call_partner: "call", call_investor: "call", call_partner_terms: "call",
+  call_gatekeeper_replied: "call", call_gatekeeper: "call",
   referral: "ping", email_check: "ping",
   // Last night's audit (shared/conversation-audit.js auditActions).
   audit_owed: "machine",

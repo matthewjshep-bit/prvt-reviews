@@ -88,3 +88,14 @@ test("an agent who asks about finder fees, owns rentals or offers to represent u
   assert.ok(ASSIGNMENT_RX.test("They got it at 200 and are selling the assignment at 215"));
   assert.ok(!ASSIGNMENT_RX.test("Seller is an estate, son is executor"));
 });
+
+test("a house a gatekeeper sent after our note counts as theirs, apart from agents", async () => {
+  const { leadSourceOf } = await import("./lead-source.js");
+  const r = leadSourceOf({ offer: { contactId: "gk", address: "9 Oak St, Kent, WA", createdAt: "2026-11-20T00:00:00Z" },
+    events: [{ type: "gatekeeper_sent", at: "2026-11-03T17:00:00Z", address: "1234 Elm St" }] });
+  assert.equal(r.source, "gatekeeper_brought");
+  assert.equal(r.daysToHouse, 16);
+  const before = leadSourceOf({ offer: { contactId: "gk", address: "9 Oak St", createdAt: "2026-11-01T00:00:00Z" },
+    events: [{ type: "gatekeeper_sent", at: "2026-11-03T17:00:00Z" }] });
+  assert.equal(before.source, "direct", "a house before any note isn't the note's");
+});

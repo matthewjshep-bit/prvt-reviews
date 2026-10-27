@@ -530,3 +530,34 @@ test("a missed call with a voicemail on a live house stays a call", () => {
   assert.equal(rows[0]?.kind, "call_missed");
   assert.equal(rows[0].offerId, "o1", "about a live house, so it's one of Today's calls");
 });
+
+/* ---------- the gatekeeper line (2026-10-26) ---------- */
+
+test("a gatekeeper who answered our note is a call — the bot never answers one — and a connected call clears it", () => {
+  const now = Date.parse("2026-11-05T18:00:00Z");
+  const events = [
+    { contactId: "gk1", type: "gatekeeper_sent", at: "2026-11-03T17:00:00Z", address: "1234 Elm St, Kent, WA", data: { step: "email" } },
+    { contactId: "gk1", type: "gatekeeper_replied", at: "2026-11-05T16:00:00Z", data: { channel: "email" } },
+  ];
+  const drafts = [{ contactId: "gk1", contactName: "Paul Counsel", createdAt: "2026-11-03T16:00:00Z", outbound: { kind: "gatekeeper_email" } }];
+  const rows = callList({ events, drafts, now });
+  const r = rows.find((x) => x.contactId === "gk1");
+  assert.equal(r.kind, "call_gatekeeper_replied");
+  assert.match(r.title, /answered our note about 1234 Elm St/);
+  assert.match(r.call.opener, /^Hi Paul, it's Matt Shepherd/);
+  assert.ok(KIND_STRENGTH.includes("call_gatekeeper_replied"));
+  const talked = callList({ events: [...events, { contactId: "gk1", type: "call_summary", at: "2026-11-05T17:00:00Z", data: {} }], drafts, now });
+  assert.equal(talked.find((x) => x.contactId === "gk1"), undefined);
+});
+
+test("our gatekeeper email two days on with no answer is a call; not before, and not once the check-in is the next touch", () => {
+  const sent = { contactId: "gk2", type: "gatekeeper_sent", at: "2026-11-03T17:00:00Z", address: "", data: { step: "email" } };
+  const at = (iso) => callList({ events: [sent], now: Date.parse(iso) }).find((x) => x.contactId === "gk2");
+  assert.equal(at("2026-11-04T18:00:00Z"), undefined, "a day on: too soon");
+  const r = at("2026-11-05T18:00:00Z");
+  assert.equal(r.kind, "call_gatekeeper");
+  assert.match(r.title, /emailed 2 days ago, no answer/);
+  assert.equal(at("2026-11-20T18:00:00Z"), undefined, "past the call window");
+  assert.equal(callList({ events: [sent], now: Date.parse("2026-11-04T18:00:00Z"), gatekeepers: { callAfterDays: 1 } }).find((x) => x.contactId === "gk2").kind, "call_gatekeeper", "the setting moves it");
+  assert.ok(CALL_KINDS.some((k) => k.key === "call_gatekeeper"));
+});

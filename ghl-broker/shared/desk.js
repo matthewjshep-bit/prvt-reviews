@@ -45,7 +45,7 @@ export const CALL_INTENTS = new Set(["wants_call", "scheduling", "wants_walkthro
 // drafts, then the house-level and deal-level work. Anything unlisted sorts
 // after these, by severity.
 export const KIND_STRENGTH = [
-  "call_owed", "call_hot", "call_brought", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
+  "call_owed", "call_hot", "call_brought", "call_gatekeeper_replied", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
   // An agent's partner terms lead their held reply: the row says what they offered.
   "call_partner_terms",
   "paper_to_sign", "pre_contract", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral", "email_check",
@@ -53,7 +53,7 @@ export const KIND_STRENGTH = [
   "no_fit", "approve_number",
   // A house an agent named, drafted for him to price (draft only, 2026-10-16).
   "price_it",
-  "call_first_reply", "call_quiet", "call_turnkey_week", "ladder_exhausted",
+  "call_first_reply", "call_gatekeeper", "call_quiet", "call_turnkey_week", "ladder_exhausted",
   "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "texts_elsewhere", "stage_lag",
   "deal_no_buyers", "deal_no_dataroom", "showing_no_window", "underwrite_dropped",
   "call_phone_only", "call_investor", "call_partner",

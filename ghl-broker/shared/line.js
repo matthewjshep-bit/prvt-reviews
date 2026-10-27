@@ -481,13 +481,13 @@ export function buildLine({
 }
 
 /**
- * pathStats(offers, { now, days }) → { agent_brought, hook, direct, unknown }
+ * pathStats(offers, { now, days }) → { agent_brought, gatekeeper_brought, hook, direct, unknown }
  *
  * The funnel by how the house came to us. Offers carry `leadSource` (the
  * runner annotates them); one without it counts as unknown.
  */
 export function pathStats(offers = [], { now = Date.now(), days = null } = {}) {
-  return funnelBy(offers, (o) => o.leadSource?.source || "unknown", { now, days, sides: ["agent_brought", "hook", "direct", "unknown"] });
+  return funnelBy(offers, (o) => o.leadSource?.source || "unknown", { now, days, sides: ["agent_brought", "gatekeeper_brought", "hook", "direct", "unknown"] });
 }
 
 /** kindStats(offers, { now, days }) → { sfr, other, untyped } — the funnel by kind of house (shared/asset-type.js). */

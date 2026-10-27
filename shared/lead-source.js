@@ -12,6 +12,9 @@
 //                  theirs we texted them about since)
 //   agent_brought  an agent we reached out to brought us a house we never
 //                  raised
+//   gatekeeper_brought  an estate attorney, title or escrow officer we wrote
+//                  to (shared/gatekeeper-sequence.js) sent us the house
+//                  (2026-10-26) — counted apart, so the line can be judged
 //   direct         a house we went after ourselves, with no outreach to that
 //                  agent on record (a call on a listing, a house you typed in)
 //   unknown        no agent on the offer
@@ -27,7 +30,7 @@ import { sameStreetLoose } from "./us-address.js";
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 
-export const LEAD_SOURCES = ["agent_brought", "hook", "direct", "unknown"];
+export const LEAD_SOURCES = ["agent_brought", "gatekeeper_brought", "hook", "direct", "unknown"];
 
 // Our texts that named a house of theirs: the opener and its follow-ups, and
 // a check-in about a fresh listing of theirs.
@@ -35,8 +38,10 @@ export const RAISED_EVENT_TYPES = ["outreach_sent", "outreach_enrolled", "agent_
 // Our texts that ask "anything else?": the check-in clock, a check-in they
 // asked for, the off-market ask, and the outreach follow-up workflow.
 export const CHECKIN_EVENT_TYPES = ["agent_pulse_texted", "checkin_sent", "offmarket_asked", "outreach_enrolled"];
+// A note to a gatekeeper that actually went: anything they send after it is theirs.
+export const GATEKEEPER_SENT_TYPES = ["gatekeeper_sent"];
 // Every type the reader needs, for one events read.
-export const LEAD_EVENT_TYPES = [...new Set([...RAISED_EVENT_TYPES, ...CHECKIN_EVENT_TYPES])];
+export const LEAD_EVENT_TYPES = [...new Set([...RAISED_EVENT_TYPES, ...CHECKIN_EVENT_TYPES, ...GATEKEEPER_SENT_TYPES])];
 
 // A house that turns up this soon after a check-in came from the check-in.
 export const CHECKIN_WINDOW_DAYS = 10;
@@ -77,6 +82,13 @@ export function leadSourceOf({ offer = {}, hooks = [], events = [] } = {}) {
     firstTouchAt: firstTouch != null ? new Date(firstTouch).toISOString() : null,
     daysToHouse: firstTouch != null && Number.isFinite(at) ? Math.max(0, Math.floor((at - firstTouch) / DAY_MS)) : null,
   };
+  // A gatekeeper's house: they're on no agent's outreach, so this decides it.
+  const gk = ours.filter((e) => GATEKEEPER_SENT_TYPES.includes(e.type)).map((e) => ms(e.at)).filter((t) => t != null);
+  if (gk.length) {
+    const first = Math.min(...gk);
+    return { ...none, source: "gatekeeper_brought", firstTouchAt: new Date(first).toISOString(),
+      daysToHouse: Number.isFinite(at) ? Math.max(0, Math.floor((at - first) / DAY_MS)) : null };
+  }
   if (!raised.length && firstTouch == null) return { ...none, ...base, source: "direct" };
   if (offer.address && raised.some((a) => sameStreetLoose(a, offer.address))) return { ...base, source: "hook", checkin: false };
   const lastCheckin = Math.max(-Infinity, ...ours.filter(isCheckin).map((e) => ms(e.at)).filter((t) => t != null));

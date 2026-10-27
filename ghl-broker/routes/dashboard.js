@@ -104,6 +104,8 @@ const PIPELINE_EVENT_TYPES = [
   "partner_terms",
   // An email they texted, to check, until one is saved (shared/call-list.js).
   "email_offered", "email_saved",
+  // The gatekeeper line's notes that went and their answers: its call rows.
+  "gatekeeper_sent", "gatekeeper_replied",
 ];
 
 const DAY_MS = 86400000;
@@ -612,7 +614,8 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     const asks = await store.listContactEventsSince(locationId, new Date(now - 120 * DAY_MS).toISOString(), { types: ["property_details"], limit: 5000 })
       .then((rows) => rows.filter((e) => Number(e?.data?.sellerAsk) > 0)).catch(() => []);
     const callRows = nameRows(callList({ offers, cards: out.cards, actions: out.actions, drafts: [...drafts, ...recentDrafts], events,
-      lastIn: touches.lastIn, lastAny: touches.lastAny, unsubscribed: unsubscribedIds, settings: deskSettings, now, machine: machineDrives(config), asks }), names);
+      lastIn: touches.lastIn, lastAny: touches.lastAny, unsubscribed: unsubscribedIds, settings: deskSettings, now, machine: machineDrives(config), asks,
+      gatekeepers: saved?.outreachAutopilot?.gatekeepers }), names);
     // A hot offer the machine keeps nudging says when, or that it has
     // stood down (2026-10-05: 12502 SE 73rd Pl read "the next nudge on the
     // offer" while Matt had the thread). The Offers column's own rule, one

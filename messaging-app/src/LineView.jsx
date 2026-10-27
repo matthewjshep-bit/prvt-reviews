@@ -346,7 +346,7 @@ function Sources({ sources }) {
 // deals with committed buyers were the agents' next houses, not the listing
 // we texted them about. This says whether the line still finds them, and who
 // brings them.
-const PATH_COLS = [["agent_brought", "Agent brought it"], ["hook", "Listing we texted about"], ["direct", "We went after it"]];
+const PATH_COLS = [["agent_brought", "Agent brought it"], ["gatekeeper_brought", "Gatekeeper brought it"], ["hook", "Listing we texted about"], ["direct", "We went after it"]];
 function Paths({ paths }) {
   const [span, setSpan] = useState("days90");
   const d = paths?.[span];
