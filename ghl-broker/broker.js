@@ -14,6 +14,7 @@ import { maybeStartNightlySweep } from "./enrich-sweep.js";
 import createOffersRouter from "./routes/offers.js";
 import createOutreachRouter from "./routes/outreach.js";
 import createGatekeepersRouter from "./routes/gatekeepers.js";
+import { maybeRunGatekeeperSweep } from "./gatekeeper-sweep.js";
 import createDashboardRouter from "./routes/dashboard.js";
 import createDispoRouter from "./routes/dispo.js";
 import createContactsRouter from "./routes/contacts.js";
@@ -181,7 +182,8 @@ const outreachRouter = createOutreachRouter({
 app.use("/api/outreach", outreachRouter);
 outreachRouter.conversationDepsFor = offersRouter.conversationDepsFor;
 // The gatekeeper line: estate attorneys and title/escrow, apart from agents.
-app.use("/api/gatekeepers", createGatekeepersRouter({ resolveLocation }));
+const gatekeepersRouter = createGatekeepersRouter({ resolveLocation });
+app.use("/api/gatekeepers", gatekeepersRouter);
 const dashboardRouter = createDashboardRouter({ resolveLocation, conversationDepsFor: offersRouter.conversationDepsFor, handTextDepsFor: (args) => offersRouter.handTextDepsFor?.(args) || {},
   operatorStatus: (args) => offersRouter.applyOperatorStatus?.(args) });
 app.use("/api/dashboard", dashboardRouter);
@@ -251,6 +253,12 @@ const TICK_JOBS = [
     if (await maybeStartOutreachSweep({ client, locationId, saved, store, deps: outreachRouter.sweepDeps })) {
       console.log(`outreach sweep started for ${locationId}`);
     }
+  } },
+  // The gatekeeper line (estate attorneys, title, escrow): the notice email,
+  // the day's imports, and each one's next note — off unless switched on.
+  { area: "gatekeepers", run: async ({ client, locationId, saved }) => {
+    if (await maybeRunGatekeeperSweep({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
+      deps: { importGatekeepers: gatekeepersRouter.importGatekeepers } })) console.log(`gatekeeper sweep started for ${locationId}`);
   } },
   // The agents GHL texted and never heard back from, into the second workflow.
   { area: "outreach-follow-up", run: async ({ client, locationId, saved }) => {

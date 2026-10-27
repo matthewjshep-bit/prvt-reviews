@@ -274,7 +274,10 @@ export const MECHANISM_BY_KEY = Object.fromEntries(FOLLOW_UP_MECHANISMS.map((m) 
 //   partner_answer  a person pressed the button
 //   showing_ask     the ask to the listing agent for access, sent on promote
 //   blast_nudge, dataroom_nudge  retired 2026-10-05 (shared/follow-up.js)
-export const EXCLUDED_KINDS = new Set(["check_in", "partner_answer", "showing_ask", "blast_nudge", "dataroom_nudge"]);
+//   gatekeeper_*    the gatekeeper line's own notes, on Autopilot → Gatekeepers
+//                   (ghl-broker/gatekeeper-sweep.js), not an agent or buyer clock
+export const EXCLUDED_KINDS = new Set(["check_in", "partner_answer", "showing_ask", "blast_nudge", "dataroom_nudge",
+  "gatekeeper_email", "gatekeeper_text", "gatekeeper_checkin"]);
 
 const KIND_TO_MECH = new Map();
 for (const m of FOLLOW_UP_MECHANISMS) for (const k of m.kinds) KIND_TO_MECH.set(k, m.key);

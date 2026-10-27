@@ -852,3 +852,5 @@ export const seedGatekeepersFromClosings = () => post(`/api/gatekeepers/seed-clo
 export const saveGatekeeper = (row) => post(`/api/gatekeepers`, row);
 export const setGatekeeperStatus = (gkKey, status) => post(`/api/gatekeepers/${encodeURIComponent(gkKey)}/status`, { status });
 export const importGatekeepers = (gkKeys, { dryRun = true } = {}) => post(`/api/gatekeepers/import`, { gkKeys, dryRun });
+export const getGatekeeperSweep = () => fetch(`${API_BASE}/api/gatekeepers/sweep?${locq()}`).then(j);
+export const runGatekeeperSweep = ({ dryRun = true } = {}) => post(`/api/gatekeepers/sweep/run`, { dryRun, wait: true });

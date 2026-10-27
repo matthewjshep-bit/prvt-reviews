@@ -32,7 +32,7 @@ const client = {
     }
     ghl.writes.push({ path: p, method: opts.method || "GET", body: opts.body });
     if (p === "/contacts/" && opts.method === "POST") return { contact: { id: `c-${ghl.writes.length}` } };
-    if (/^\/contacts\/[^/]+$/.test(p) && !opts.method) return { contact: { id: p.split("/")[2], email: "kept@x.test" } };
+    if (/^\/contacts\/[^/]+$/.test(p) && !opts.method) return { contact: { id: p.split("/")[2], email: "kept@x.test", tags: ghl.tagsOf?.[p.split("/")[2]] || [] } };
     return {};
   },
 };
@@ -114,7 +114,7 @@ test("the import is dry unless asked live AND imports are switched on, and a dry
   assert.equal(r.results[0].wouldCreate, true);
   assert.equal(r.results[1].wouldUpdate, true);
   assert.deepEqual(r.results[0].tags, ["gatekeeper", "gatekeeper-probate-attorney", "gatekeeper-src-probate-notice"]);
-  assert.equal(ghl.writes.length, 0);
+  assert.equal(ghl.writes.filter((w) => w.method !== "GET").length, 0, "reads only");
 });
 
 test("a live import tags gatekeepers apart from agents, fills blanks only, and marks them imported", async () => {
@@ -145,6 +145,22 @@ test("a live import tags gatekeepers apart from agents, fills blanks only, and m
 
     const twice = await post("/import", { gkKeys: ["wsba:28877"], dryRun: false });
     assert.equal(twice.results[0].alreadyImported, true);
+  } finally {
+    delete process.env.OUTREACH_IMPORTS_ENABLED;
+  }
+});
+
+test("someone GHL already has as an agent or a buyer is never tagged a gatekeeper — it would take them off the bot", async () => {
+  process.env.OUTREACH_IMPORTS_ENABLED = "true";
+  try {
+    await post("/", { kind: "escrow", name: "Ann Agent", firm: "Some Escrow", email: "ann@agent.test" });
+    ghl.existing.set("ann@agent.test", "agent-ann");
+    ghl.tagsOf = { "agent-ann": ["agent", "agent-outreach"] };
+    ghl.writes.length = 0;
+    const r = await post("/import", { gkKeys: ["e:ann@agent.test"], dryRun: false });
+    assert.match(r.results[0].skipped, /already in GHL as an agent or buyer \(tag: agent\)/);
+    assert.equal(ghl.writes.filter((w) => w.method !== "GET").length, 0, "nothing written to them");
+    assert.equal((await store.getGatekeeper(LOC, "e:ann@agent.test")).status, "new");
   } finally {
     delete process.env.OUTREACH_IMPORTS_ENABLED;
   }

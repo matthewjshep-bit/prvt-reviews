@@ -10,9 +10,10 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Mail, Plus, Upload, X } from "lucide-react";
-import { GATEKEEPER_KIND_LABEL } from "@shared/gatekeeper.js";
+import { GATEKEEPER_KIND_LABEL, GATEKEEPER_KINDS, MAX_VOICE_EXAMPLES, normalizeGatekeepers } from "@shared/gatekeeper.js";
 import {
   getGatekeepers, pasteProbateNotices, readNoticeMail, seedGatekeepersFromClosings, saveGatekeeper, setGatekeeperStatus, importGatekeepers,
+  getSettings, patchSettings, getGatekeeperSweep, runGatekeeperSweep,
 } from "./api.js";
 import { BTN, BTN_DANGER, BTN_PRIMARY, ErrorBar, FilterChips, Pill, SkeletonRows } from "./ui.jsx";
 
@@ -32,6 +33,111 @@ function noticeSummary(r) {
   if (r.proSe) parts.push(`${r.proSe} with no attorney`);
   if (r.outOfArea) parts.push(`${r.outOfArea} outside our counties`);
   return parts.join(" · ");
+}
+
+/**
+ * The sequence's switches (outreachAutopilot.gatekeepers): on, dry, whether
+ * notes send themselves, the clock, and Matt's own examples. Saved through
+ * PATCH, so nothing else in Settings is touched.
+ */
+function SequencePanel() {
+  const [g, setG] = useState(null);
+  const [sweep, setSweep] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const load = useCallback(() => Promise.all([getSettings(), getGatekeeperSweep().catch(() => null)])
+    .then(([s, sw]) => { setG(normalizeGatekeepers(s?.outreachAutopilot?.gatekeepers)); setSweep(sw); setErr(""); })
+    .catch((e) => setErr(e.message || "Couldn't load the sequence settings.")), []);
+  useEffect(() => { load(); }, [load]);
+  if (!g) return err ? <ErrorBar>{err}</ErrorBar> : null;
+
+  const set = (patch) => setG({ ...g, ...patch });
+  const num = (key, label, min, max) => (
+    <label className="text-xs font-semibold text-slate-600">{label}
+      <input type="number" min={min} max={max} className={INPUT} value={g[key]} onChange={(e) => set({ [key]: Number(e.target.value) })} />
+    </label>
+  );
+  const check = (key, label, hint) => (
+    <label className="flex items-start gap-2 text-sm text-slate-700">
+      <input type="checkbox" className="mt-1" checked={Boolean(g[key])} onChange={(e) => set({ [key]: e.target.checked })} />
+      <span>{label}{hint && <span className="block text-xs text-slate-500">{hint}</span>}</span>
+    </label>
+  );
+  const save = async () => {
+    setBusy("save"); setMsg(""); setErr("");
+    try {
+      const r = await patchSettings({ outreachAutopilot: { gatekeepers: normalizeGatekeepers(g) } });
+      setG(normalizeGatekeepers(r.settings?.outreachAutopilot?.gatekeepers));
+      setMsg("Saved.");
+    } catch (e) { setErr(e.message || "Not saved."); } finally { setBusy(""); }
+  };
+  const tryIt = async () => {
+    setBusy("run"); setMsg(""); setErr("");
+    try {
+      const r = await runGatekeeperSweep({ dryRun: true });
+      const st = r.job?.steps || {};
+      const by = {};
+      for (const row of r.job?.rows || []) if (row.would) by[row.would] = (by[row.would] || 0) + 1;
+      setMsg(`Dry run: ${st.would || 0} notes would be written${Object.keys(by).length ? ` (${Object.entries(by).map(([k, n]) => `${n} ${k}`).join(", ")})` : ""}${r.job?.imported?.picked === 0 ? ", nobody new to import" : ""}.`);
+      await load();
+    } catch (e) { setErr(e.message || "The dry run failed."); } finally { setBusy(""); }
+  };
+  const last = sweep?.last;
+  const examples = g.voiceExamples.length < MAX_VOICE_EXAMPLES ? [...g.voiceExamples, ""] : g.voiceExamples;
+
+  return (
+    <details className="rounded-xl border border-slate-200 bg-white p-3">
+      <summary className="cursor-pointer text-sm font-semibold text-slate-800">
+        Sequence: {g.enabled ? (g.dryRun ? "on, dry run" : g.autoSend ? "on, notes send themselves" : "on, notes wait for you") : "off"}
+      </summary>
+      <div className="mt-3 space-y-3">
+        <p className="max-w-3xl text-xs text-slate-600">
+          Each weekday at 9am: read the notice email, import the day's best new gatekeepers, then write each one's next note: an email about their estate or our closing first, a short text the day after it goes, and a check-in a month on only when there's something new. A reply from a gatekeeper is never answered by the bot. It's yours, and the machine stops writing to them.
+        </p>
+        {err && <ErrorBar>{err}</ErrorBar>}
+        {msg && <p className="text-sm text-blue-800" role="status">{msg}</p>}
+        <div className="grid gap-2 sm:grid-cols-3">
+          {check("enabled", "On", "Runs each weekday morning.")}
+          {check("dryRun", "Dry run", "Says what it would import and write; writes nothing.")}
+          {check("autoSend", "Notes send themselves", "Off: every note waits in the outbox for your Send.")}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-4">
+          {num("dailyNew", "New per day", 0, 100)}
+          {num("textAfterDays", "Text, days after the email", 0, 14)}
+          {num("callAfterDays", "Your call, days after", 0, 30)}
+          {num("checkInEveryDays", "Check-in, every N days", 7, 120)}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="text-xs font-semibold text-slate-600">Counties (comma separated)
+            <input className={INPUT} value={g.counties.join(", ")} onChange={(e) => set({ counties: e.target.value.split(",").map((c) => c.trim()).filter(Boolean) })} />
+          </label>
+          <label className="text-xs font-semibold text-slate-600">Notice alert email sender (blank = off)
+            <input className={INPUT} value={g.noticeEmailFrom} placeholder="the address the notice site's daily alert comes from" onChange={(e) => set({ noticeEmailFrom: e.target.value })} />
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          {GATEKEEPER_KINDS.map((k) => (
+            <label key={k} className="flex items-center gap-1.5 text-sm text-slate-700">
+              <input type="checkbox" checked={g.kinds[k]} onChange={(e) => set({ kinds: { ...g.kinds, [k]: e.target.checked } })} /> {GATEKEEPER_KIND_LABEL[k]}
+            </label>
+          ))}
+        </div>
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-slate-600">How you'd write to an attorney or a title rep, in your own words (up to {MAX_VOICE_EXAMPLES}). The notes match your voice, never your words.</p>
+          {examples.map((v, i) => (
+            <textarea key={i} className={INPUT} rows={3} value={v} placeholder={i === g.voiceExamples.length ? "Add one…" : ""}
+              onChange={(e) => { const next = [...examples]; next[i] = e.target.value; set({ voiceExamples: next.filter((x) => x.trim()) }); }} />
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className={BTN_PRIMARY} disabled={!!busy} onClick={save}>{busy === "save" && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} Save</button>
+          <button type="button" className={BTN} disabled={!!busy} onClick={tryIt}>{busy === "run" && <Loader2 size={12} className="animate-spin" aria-hidden="true" />} Dry run now</button>
+          {last && <span className="text-xs text-slate-500">Last run {String(last.finishedAt || last.startedAt || "").slice(0, 16).replace("T", " ")} UTC · {last.status}{last.error ? `: ${last.error}` : ""}</span>}
+        </div>
+      </div>
+    </details>
+  );
 }
 
 export default function GatekeepersTab() {
@@ -97,6 +203,8 @@ export default function GatekeepersTab() {
           The attorney on an estate sees the house before anyone lists it, the way a listing agent does. Paste probate notices to creditors and the attorneys on them land here, ranked by this quarter's estates that own a house. Title and escrow officers come from our own closings, or add them by hand. They are sequenced on their own, apart from agents.
         </p>
       </div>
+
+      <SequencePanel />
 
       {error && <ErrorBar>{error}</ErrorBar>}
       {note && <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-800" role="status">{note}</p>}

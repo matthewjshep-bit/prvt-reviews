@@ -13,6 +13,9 @@
 export const GATEKEEPER_KINDS = ["probate_attorney", "title", "escrow"];
 export const GATEKEEPER_KIND_LABEL = { probate_attorney: "Probate attorney", title: "Title", escrow: "Escrow" };
 export const GATEKEEPER_STATUSES = ["new", "skipped", "imported", "do_not_contact"];
+// The GHL tags the import puts on every gatekeeper (routes/gatekeepers.js).
+// The reply agent reads them: a contact wearing one is Matt's to answer.
+export const GATEKEEPER_TAG_PATTERNS = ["gatekeeper", "gatekeeper-*"];
 export const HOOK_KINDS = ["estate", "closing", "file"];
 // A hook older than this no longer counts toward an attorney's rank: the
 // house is likely listed or sold by now.
@@ -149,7 +152,11 @@ export const GATEKEEPER_DEFAULTS = Object.freeze({
   // The daily alert email from the statewide notice site, read from Gmail by
   // its sender alone (nothing else in the inbox is looked at). Empty = off.
   noticeEmailFrom: "",
+  // How Matt writes to an attorney or a title rep, in his own words: the
+  // drafts match the voice, never the words. Empty until he gives some.
+  voiceExamples: [],
 });
+export const MAX_VOICE_EXAMPLES = 5;
 
 const int = (v, d, lo, hi) => {
   const n = Math.round(Number(v));
@@ -177,5 +184,7 @@ export function normalizeGatekeepers(raw) {
     checkInEveryDays: int(r.checkInEveryDays, D.checkInEveryDays, 7, 120),
     kinds,
     noticeEmailFrom: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(from) ? from : "",
+    voiceExamples: (Array.isArray(r.voiceExamples) ? r.voiceExamples : [])
+      .map((v) => String(v || "").trim().slice(0, 1500)).filter(Boolean).slice(0, MAX_VOICE_EXAMPLES),
   };
 }

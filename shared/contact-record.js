@@ -107,6 +107,10 @@ export const EVENT_TYPES = [
   // The bot (or a person) put a call or a visit on the calendar.
   "call_booked",
   "call_summary", "text_summary", "note",
+  // The gatekeeper line (ghl-broker/gatekeeper-sweep.js): a step claimed
+  // before its draft is written (data.step, data.hookKey), the draft actually
+  // going, and their answer — which stops the machine for good.
+  "gatekeeper_queued", "gatekeeper_sent", "gatekeeper_replied",
   // A text a person typed on Today's work pane (ghl-broker/hand-reply.js).
   // The words are in GHL's thread, not here.
   "hand_reply",
@@ -193,6 +197,7 @@ export const EVENT_LABEL = {
   outreach_open_queued: "first text started (they'd never been texted)",
   outreach_email_queued: "introduction email queued",
   checkin_email_queued: "check-in email queued",
+  gatekeeper_queued: "gatekeeper note queued", gatekeeper_sent: "gatekeeper note sent", gatekeeper_replied: "gatekeeper answered",
   pulse_sent: "checked in between deals",
   pulse_voided: "a check-in drafted nothing",
   pulse_texted: "we checked in between deals",
@@ -235,6 +240,7 @@ export const EVENT_ICON = {
   outreach_open_queued: "Send",
   outreach_email_queued: "Mail",
   checkin_email_queued: "Mail",
+  gatekeeper_queued: "Mail", gatekeeper_sent: "Send", gatekeeper_replied: "MessageCircle",
   pulse_sent: "BellRing",
   pulse_voided: "Clock",
   pulse_texted: "BellRing",

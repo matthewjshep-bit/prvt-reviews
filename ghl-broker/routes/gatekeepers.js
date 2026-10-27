@@ -10,8 +10,10 @@
 //   POST /api/gatekeepers                      add or edit one by hand (title, escrow)
 //   POST /api/gatekeepers/:gkKey/status        { status } skip / do-not-contact / back to new
 //   POST /api/gatekeepers/import               { gkKeys, dryRun } → GHL contacts, tagged
+//   GET  /api/gatekeepers/sweep                the daily sweep: last run, running job
+//   POST /api/gatekeepers/sweep/run            { dryRun } run it now (gatekeeper-sweep.js)
 //
-// Nothing here sends a text or an email. The import is dry unless the
+// Nothing here sends a text or an email: the sweep writes drafts. The import is dry unless the
 // request says dryRun:false AND OUTREACH_IMPORTS_ENABLED is set — the same
 // double gate as the agent import. Errors and results carry counts and keys,
 // never a name.
@@ -20,7 +22,10 @@ import express from "express";
 import { store } from "../store.js";
 import { ensureProfile, recordEvents } from "../contact-record.js";
 import { findDuplicateContact, createContact, getContact, updateContact, addContactTags } from "../ghl.js";
+import { matchTagPatterns } from "../conversation-party.js";
+import { conversationConfig } from "../reply-agent.js";
 import { ingestNotices, readNoticeEmails, seedFromClosings } from "../gatekeeper-feed.js";
+import { startGatekeeperSweep, getGatekeeperJob, CURSOR_NAME as SWEEP_CURSOR } from "../gatekeeper-sweep.js";
 import {
   GATEKEEPER_KINDS, GATEKEEPER_STATUSES, gatekeeperKey, mergeGatekeeperDoc, rankGatekeepers, bestHook, hookLine, splitName,
 } from "../shared/gatekeeper.js";
@@ -176,14 +181,18 @@ export default function createGatekeepersRouter({ resolveLocation, deps = {} }) 
    * Each one becomes a GHL contact tagged `gatekeeper`, `gatekeeper-<kind>`
    * and where we found them — never the agent-outreach trigger tag, so no
    * agent workflow picks them up. One already in GHL is tagged, not
-   * created, and nothing they have is overwritten. A do-not-contact row is
-   * never imported.
+   * created, and nothing they have is overwritten — unless GHL has them as
+   * an agent or a buyer we work with: the gatekeeper tag would take them
+   * off the bot (reply-agent.js handsOffReason), so they're left as they
+   * are. A do-not-contact row is never imported.
    */
   async function importGatekeepers({ locationId, client, gkKeys = [], dryRun = true }) {
     gkKeys = Array.isArray(gkKeys) ? [...new Set(gkKeys)].slice(0, MAX_IMPORT) : [];
     if (!gkKeys.length) throw Object.assign(new Error("gkKeys required"), { http: 400 });
     dryRun = dryRun !== false || !OUTREACH_IMPORTS_ENABLED();
     const hooks = await store.listGatekeeperHooks(locationId);
+    const routing = conversationConfig(await getSettings(locationId)).routing || {};
+    const theirsAlready = (contact) => matchTagPatterns(contact?.tags || [], [...(routing.agentTags || []), ...(routing.investorTags || [])])[0] || "";
     const results = [];
     for (const gkKey of gkKeys) {
       try {
@@ -198,6 +207,12 @@ export default function createGatekeepersRouter({ resolveLocation, deps = {} }) 
         const tags = gatekeeperTags(row);
         await sleep(150);
         const match = await withRetry(() => findDuplicateContact(client, locationId, { email, phone }));
+        const existing = match ? await withRetry(() => getContact(client, match.id)) : null;
+        const asAgent = theirsAlready(existing);
+        if (asAgent) {
+          results.push({ gkKey, ok: true, skipped: `already in GHL as an agent or buyer (tag: ${asAgent}) — left as they are`, contactId: match.id });
+          continue;
+        }
         if (dryRun) {
           results.push({ gkKey, ok: true, dryRun: true, ...(match ? { wouldUpdate: true, contactId: match.id, matchedBy: match.matchedBy } : { wouldCreate: true }), tags });
           continue;
@@ -207,7 +222,6 @@ export default function createGatekeepersRouter({ resolveLocation, deps = {} }) 
         if (match) {
           contactId = match.id;
           action = "updated";
-          const existing = await withRetry(() => getContact(client, contactId));
           const patch = {};
           if (!existing.phone && phone) patch.phone = phone;
           if (!existing.email && email) patch.email = email;
@@ -242,6 +256,32 @@ export default function createGatekeepersRouter({ resolveLocation, deps = {} }) 
     return { dryRun, results, created: results.filter((r) => r.action === "created").length, updated: results.filter((r) => r.action === "updated").length };
   }
   router.importGatekeepers = importGatekeepers;
+
+  router.get("/sweep", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const cursor = await store.getJobCursor(locationId, SWEEP_CURSOR).catch(() => null);
+      const job = getGatekeeperJob(locationId);
+      res.json({ last: cursor?.doc?.last || null, lastDaily: cursor?.doc?.lastDaily || null, tries: cursor?.doc?.tries || 0,
+        failed: Boolean(cursor?.doc?.failed), error: cursor?.doc?.error || null,
+        job: job ? { status: job.status, trigger: job.trigger, startedAt: job.startedAt, finishedAt: job.finishedAt, error: job.error, steps: job.result?.steps || null } : null });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Run the day's sweep now. Dry unless asked otherwise, and even then
+  // only as live as Settings allow (the sweep reads gatekeepers.dryRun).
+  router.post("/sweep/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      if (getGatekeeperJob(locationId)?.status === "running") throw Object.assign(new Error("a sweep is already running"), { http: 409 });
+      const saved = await getSettings(locationId);
+      const dryRun = req.body?.dryRun === false ? null : true;
+      const job = startGatekeeperSweep({ client, locationId, saved, store, sendsEnabled: process.env.CARD_SENDS_ENABLED === "true",
+        deps: { ...deps, importGatekeepers }, dryRun, trigger: "manual" });
+      if (req.body?.wait) await job.done;
+      res.json({ ok: true, job: { status: job.status, startedAt: job.startedAt, ...(job.result ? { dryRun: job.result.dryRun, steps: job.result.steps, imported: job.result.imported, rows: job.result.rows.slice(0, 100) } : {}) } });
+    } catch (err) { fail(res, err); }
+  });
 
   router.post("/import", async (req, res) => {
     try {
