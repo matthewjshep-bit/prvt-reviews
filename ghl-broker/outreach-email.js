@@ -3,8 +3,8 @@
 // (2026-10-20), and an email with each 14-day check-in after it
 // (2026-10-20, runCheckInEmails).
 //
-// Runs at the end of the morning follow-up sweep (follow-up-sweep.js), so
-// each goes the same day as the text it travels with. Each email is claimed
+// Runs at the end of the morning follow-up sweep (follow-up-sweep.js). Since
+// 2026-10-26 an email waits a day when a text of ours went that morning. Each email is claimed
 // with an event first (`outreach_email_queued` once per agent ever,
 // `checkin_email_queued` once per agent per check-in day), then becomes an
 // email draft: scheduled across the day's machine hours when it may send

@@ -62,8 +62,10 @@ test("the old six-step default saved verbatim reads as day 2 and every 14, repea
   assert.deepEqual([mine.steps, mine.repeatEvery], [[14], 0], "a ladder Matt set himself is kept as he set it");
 });
 
-test("the day-2 follow-up is Matt's 'following up on my earlier message' text", () => {
-  assert.equal(textOn(2), "Hey Brenda, following up on my earlier message. Not sure if that listing needs work, but I'm after distressed or value-add properties, the uglier the better. Anything like that on your end?");
+// Since 2026-10-26 it names the house (fewer-stops.test.mjs): "Not sure if
+// that listing needs work" drew a STOP for every 4 replies.
+test("the day-2 follow-up names their house", () => {
+  assert.equal(textOn(2), "Hey Brenda, circling back on 14820 SE 172nd St. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?");
   assert.deepEqual(carrierFlags(DEFAULT_FOLLOW_UP_TEXTS[0]), []);
 });
 

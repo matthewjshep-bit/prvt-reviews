@@ -502,6 +502,31 @@ export function freshListingFor({ listings = [], pinged = new Set(), raised = []
   return best && widened(best) ? { ...best, focus: true } : best;
 }
 
+// The word of a street that names it: "12th" in "12th Ave W", "morgan" in
+// "SW Morgan St". Directions and suffixes are spelled every which way.
+const STREET_NOISE = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw", "north", "south", "east", "west"]);
+
+/**
+ * listingAlreadyRaised(transcript, address) → { at } | null
+ *
+ * Their listing is in the thread already: a text of ours or theirs names its
+ * house number and street. The first texts the GHL workflow sent before
+ * 2026-10-04 left nothing in the record (freshListingFor's `raised`), so on
+ * 2026-10-19 agents asked about a house in August were asked about it again
+ * — some after we'd told them it was too turnkey for us — and texted STOP.
+ */
+export function listingAlreadyRaised(transcript = "", address = "") {
+  const p = parseUsAddress(address);
+  const core = String(p.street || "").toLowerCase().split(/\s+/).find((w) => w && !STREET_NOISE.has(w));
+  if (!p.houseNo || !core) return null;
+  const rx = new RegExp(`(?<!\\d)${p.houseNo}\\s+(?:\\S+\\s+){0,2}?${core.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+  for (const line of String(transcript || "").split("\n")) {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) \d{2}:\d{2}\] (?:US|THEM) \w+: (.*)$/.exec(line);
+    if (m && rx.test(m[2])) return { at: m[1] };
+  }
+  return null;
+}
+
 /**
  * ourHouseFor({ offers, drafts, events, config, now }) → offer | null
  *

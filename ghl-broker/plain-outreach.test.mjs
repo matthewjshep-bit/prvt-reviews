@@ -239,8 +239,10 @@ test("every first text, follow-up and check-in is short, plain, and has none of 
   for (const t of DEFAULT_OPENER_EXAMPLES) assert.match(t, /other fixers/, "asks for their other fixers");
 });
 
-test("Settings' saved copy of the 10/16 model examples becomes Matt's texts, and 'ai' still has the model write them", () => {
-  assert.deepEqual(normalizeOpener({ examples: PLAIN_DEFAULT_OPENER_EXAMPLES }), { examples: DEFAULT_OPENER_EXAMPLES, followUps: DEFAULT_FOLLOW_UP_TEXTS, checkIns: DEFAULT_CHECK_IN_TEXTS, mode: "template", home: DEFAULT_HOME, homes: DEFAULT_HOMES });
+// Since 2026-10-26 a saved copy of the 10/16 examples is kept: they had the
+// fewest STOPs of the fixed first texts (fewer-stops.test.mjs).
+test("Settings' saved copy of the 10/16 model examples is kept as Matt's texts, and 'ai' still has the model write them", () => {
+  assert.deepEqual(normalizeOpener({ examples: PLAIN_DEFAULT_OPENER_EXAMPLES }), { examples: PLAIN_DEFAULT_OPENER_EXAMPLES, followUps: DEFAULT_FOLLOW_UP_TEXTS, checkIns: DEFAULT_CHECK_IN_TEXTS, mode: "template", home: DEFAULT_HOME, homes: DEFAULT_HOMES });
   assert.equal(normalizeOpener({ mode: "ai" }).mode, "ai");
   const o = outboundDescriptor({ kind: "outreach_open", offer: null, saved: { outreachAutopilot: { opener: { mode: "ai" } } }, subject: { address: "1 Elm St, Kent, WA" } });
   assert.equal(standardText({ kind: "outreach_open", outbound: o, name: "Dana" }), null);

@@ -63,7 +63,7 @@ export const HOMES_MAX = 40;
 
 // The defaults from 2026-10-16 to 2026-10-17, written by the model in a
 // "plain" voice: the street without its number, one question, no fixers ask.
-// Settings saved them verbatim, so a stored copy is read as "never changed".
+// Until 2026-10-26 a stored copy was read as "never changed"; now it is kept.
 export const PLAIN_DEFAULT_OPENER_EXAMPLES = [
   "Hi {first}, I saw your listing on {street}. I fix up older homes locally. Does it need much work, or is it pretty move-in ready?",
   "Hey {first}, does your listing on {street} need much work? I renovate a few houses a year and I'm looking for my next one.",
@@ -95,7 +95,10 @@ export const LEGACY_DEFAULT_OPENER_EXAMPLES = [
   "Hi {first}, saw your {town} listing on {street}, looks like it has some character. Fixer, or already pretty turnkey? I'm after my next flip in {county} County, so if you know of anything else that needs work, I'd love to hear.",
   "Hey {first}, I'm someone who gets way too excited about original kitchens. Does {street} need some work? Looking for my next flip in {county} County, so if you've got other fixers on your radar, I'm all ears.",
 ];
-const LEGACY = new Set([...LEGACY_DEFAULT_OPENER_EXAMPLES, ...PREVIOUS_DEFAULT_OPENER_EXAMPLES, ...PLAIN_DEFAULT_OPENER_EXAMPLES]);
+// The plain set is not among them since 2026-10-26: it had the fewest STOPs
+// of the fixed first texts (1.6%, against 3.4% for "I'm in Seattle and
+// looking for my next flip project around …"), and is saved on purpose.
+const LEGACY = new Set([...LEGACY_DEFAULT_OPENER_EXAMPLES, ...PREVIOUS_DEFAULT_OPENER_EXAMPLES]);
 
 // The follow-ups to a first text nobody answered (outreach_nudge), one per
 // step of the ladder: follow-up 1 is the first text written here, follow-up
@@ -104,10 +107,18 @@ const LEGACY = new Set([...LEGACY_DEFAULT_OPENER_EXAMPLES, ...PREVIOUS_DEFAULT_O
 // picked from one pool, so an agent got the same follow-up on every step.
 // Follow-up 1 is Matt's day-2 text (2026-10-20: "Hey Brenda, following up on
 // my earlier message. Not sure if that listing was distressed, needed work …
-// the uglier the better, anything like that on your end?"); the second is
-// the "circling back" text, for a ladder given a second step. A step with no
-// text of its own uses shared/standard-texts.js NUDGE_TEXTS.
+// the uglier the better, anything like that on your end?"). Since
+// 2026-10-26 follow-up 1 names the house: "Not sure if that listing needs
+// work" read as if we never looked, and drew a STOP for every 4 replies,
+// where "circling back on {address}" drew 34% replies and none. The second
+// names none, so it is also the spare when there's no address. A step with
+// no text of its own uses shared/standard-texts.js NUDGE_TEXTS.
 export const DEFAULT_FOLLOW_UP_TEXTS = [
+  "Hey {first}, circling back on {address}. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?",
+  "Hey {first}, I'm after houses that need real work, the uglier the better. Anything like that on your end, listed or off market?",
+];
+// The two follow-ups from 2026-10-20 to 2026-10-26, read as never changed.
+export const DAY_TWO_DEFAULT_FOLLOW_UP_TEXTS = [
   "Hey {first}, following up on my earlier message. Not sure if that listing needs work, but I'm after distressed or value-add properties, the uglier the better. Anything like that on your end?",
   "Hey {first}, circling back on {address}. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?",
 ];
@@ -164,7 +175,7 @@ export function normalizeOpener(v = {}) {
   // first texts (2026-10-15).
   const examples = cleanTexts(o.examples, LEGACY).map((x) => SEATTLE_DEFAULTS.get(x) || x);
   let followUps = cleanTexts(o.followUps);
-  if (followUps.join("\n") === PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS.join("\n")) followUps = [];
+  if ([PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS, DAY_TWO_DEFAULT_FOLLOW_UP_TEXTS].some((old) => followUps.join("\n") === old.join("\n"))) followUps = [];
   const checkIns = cleanTexts(o.checkIns);
   return {
     examples: examples.length ? examples : [...DEFAULT_OPENER_EXAMPLES],
