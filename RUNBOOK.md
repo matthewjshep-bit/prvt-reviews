@@ -5431,12 +5431,21 @@ minutes. It came from Matt, 2026-10-26: "some … aren't getting tagged".
 
 A thread that never stored its address is matched on its key.
 
-**A Tier 1 house with no offer row.** Some houses an agent raises in
-conversation are Tier 1 with no offer row at all. Their status is read from the
-Tier 1 list's own events (`tier1_passed`, `tier1_kicked`, `tier1_added`;
-`shared/tier-one.js` passedOnHouse). Passing one from the list shows ❌ "Passed
-from Tier 1", and adding it back clears it. This applies both in the minute
-loop and in the reconcile.
+**A Tier 1 house with no offer row** (a house an agent raised, or a draft
+deleted or renamed since). The status comes from the first of these that
+applies:
+
+1. The agent's own raise of it (`shared/ghl-stages.js` raisedHouses). Still
+   open shows nothing. Closed shows ❌ with why: turnkey, they passed, gone, or
+   passed from Tier 1.
+2. The Tier 1 list's record. Passed shows ❌ "Passed from Tier 1"; added back
+   clears it.
+3. The agent's one house in the app. This is used only when the post can't
+   name its house (no house number) or its draft is gone. A numbered house never
+   borrows another house's status.
+
+This applies both in the minute loop and in the reconcile. The preview's `via`
+says which rule decided each post.
 
 **Missing permission.** The reaction needs the bot scope `reactions:write`.
 Without it the Status line still moves, and the run's `statusError` says

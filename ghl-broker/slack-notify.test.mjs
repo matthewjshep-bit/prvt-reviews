@@ -534,3 +534,51 @@ test("a Tier 1 house with no offer, passed from the Tier 1 list, gets its ❌ wi
   assert.deepEqual(s.of("reactions.remove").map((c) => c.body.name), ["x"]);
   assert.doesNotMatch(said(s.of("chat.update").at(-1)), /Status:/);
 });
+
+test("a raised house with no offer that the conversation closed shows ❌ with why", async () => {
+  const LOC = "loc-raised-closed";
+  _resetSlack();
+  const s = slack();
+  const H = "234 SW 208th St, Normandy Park, WA 98166";
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  await ev(LOC, "xan", "house_mentioned", 1, { address: H, dedupeKey: "xan-hm", data: { note: "needs a full gut, roof and foundation" } });
+  await ev(LOC, "xan", "ghl_stage_moved", 2, { address: H, dedupeKey: "xan-t1", data: { from: "Tier 2", to: "Tier 1", why: "a house they raised" } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(3) });
+  assert.equal(s.of("reactions.add").length, 0, "raised and open: still waiting on us");
+  await ev(LOC, "xan", "house_closed", 4, { address: H, dedupeKey: "xan-closed", data: { why: "they sold it to someone else" } });
+  const r = await reconcileSlackNow({ store, locationId: LOC, saved: ON, now: min(5), dryRun: false });
+  assert.deepEqual(r.statuses.map((x) => x.status), ["passed"]);
+  assert.deepEqual(s.of("reactions.add").map((c) => c.body.name), ["x"]);
+  assert.match(said(s.of("chat.update").at(-1)), /\*Status:\* :x: They sold it to someone else/);
+});
+
+// SeaTac, 2026-10-26: the post's draft ("SeaTac", no street) was replaced by
+// the agent's real house; the post read nothing.
+test("a post whose draft was renamed or replaced reads the agent's one house in the app", async () => {
+  const LOC = "loc-renamed";
+  _resetSlack();
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  const draft = await store.createOffer({ locationId: LOC, contactId: "yul", address: "Soap Lake", status: "draft" });
+  await ev(LOC, "yul", "tier1_added", 1, { address: "Soap Lake", offerId: draft.id });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  await store.deleteOffer(draft.id);
+  await store.createOffer({ locationId: LOC, contactId: "yul", address: "412 Main Ave E, Soap Lake, WA 98851", status: "sent", cashAmount: 150000 });
+  const preview = await reconcileSlack({ store, locationId: LOC, saved: ON, now: min(3) });
+  assert.deepEqual(preview.rows.map((x) => [x.app.emoji, x.via]), [["outbox_tray", "the agent's one house"]]);
+  await reconcileSlackNow({ store, locationId: LOC, saved: ON, now: min(4), dryRun: false });
+  assert.deepEqual(s.of("reactions.add").map((c) => c.body.name), ["outbox_tray"]);
+});
+
+test("a numbered house never borrows the status of the agent's other house", async () => {
+  const LOC = "loc-no-borrow";
+  _resetSlack();
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  await ev(LOC, "zed", "ghl_stage_moved", 1, { address: "900 Pine St, Kent, WA 98032", dedupeKey: "zed-t1", data: { from: "Tier 2", to: "Tier 1" } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  await store.createOffer({ locationId: LOC, contactId: "zed", address: "77 Oak Ave, Kent, WA 98032", status: "sent", cashAmount: 200000 });
+  const r = await reconcileSlack({ store, locationId: LOC, saved: ON, now: min(3) });
+  assert.deepEqual(r.rows.map((x) => [x.app.emoji, x.change]), [[null, false]]);
+  assert.equal(s.of("reactions.add").length, 0);
+});

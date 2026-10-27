@@ -32,9 +32,10 @@ import { pingReasons } from "./shared/hand-off.js";
 import { pingClaimKey } from "./shared/ghl-pings.js";
 import { buildDigest } from "./shared/digest.js";
 import { lineJobs, errorsByArea } from "./shared/line.js";
-import { addressKey, sameStreetLoose } from "./shared/us-address.js";
-import { houseKey } from "./shared/current-offer.js";
+import { addressKey, sameStreetLoose, parseUsAddress } from "./shared/us-address.js";
+import { houseKey, houseRowFor } from "./shared/current-offer.js";
 import { passedOnHouse, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
+import { raisedHouses, sameRaisedHouse, HOUSE_EVENT_TYPES } from "./shared/ghl-stages.js";
 import { getContact } from "./ghl.js";
 import { contactName } from "./contact-record.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
@@ -322,43 +323,77 @@ function houseReader({ store, locationId }) {
   };
 }
 
-// The Tier 1 list's own record of a house: added, passed, taken off. A house
-// an agent raised in conversation can be Tier 1 with no offer row at all, and
-// passing it from the list writes these, not an offer status (2026-10-26: six
-// such posts never got their ❌). One location-wide read a run.
-function tierOneReader({ store, locationId, now = Date.now() }) {
+// A Tier 1 house with no offer row of ours (2026-10-26: seven posts said
+// nothing because nothing priced them). In turn:
+//   1. the agent's own raise of it (shared/ghl-stages.js raisedHouses): still
+//      open, or closed and why — turnkey, they passed, gone, a Tier 1 pass;
+//   2. the Tier 1 list's record (passed, taken off, added back);
+//   3. the agent's one house in the app — only for a post that can't name its
+//      house (no house number) or whose draft is gone: a draft renamed or
+//      replaced since. A numbered house never borrows another's status.
+// One location-wide read of the house events a run.
+const DAY = 86400000;
+const firstUp = (t) => String(t || "").replace(/^./, (c) => c.toUpperCase());
+function raisedReader({ store, locationId, now = Date.now() }) {
   let events = null;
-  return async (addr, keyPart = "") => {
+  let book = null;
+  const load = async () => {
+    events = events || await store.listContactEventsSince(locationId, iso(now - 60 * DAY), { types: [...HOUSE_EVENT_TYPES, "tier1_added", "ghl_stage_moved"], limit: 10000 }).catch(() => []);
+    return events || [];
+  };
+  const onHouse = (a, addr, keyPart) => Boolean(a) && (addr
+    ? sameRaisedHouse(a, addr) || houseKey(a) === houseKey(addr)
+    : houseKey(a) === keyPart || addressKey(a) === keyPart);
+  return async ({ addr = "", keyPart = "", contacts = [], lostOffer = false } = {}) => {
     if (!addr && !keyPart) return null;
-    events = events || await store.listContactEventsSince(locationId, iso(now - 60 * 86400000), { types: [...TIER_ONE_OUT_EVENTS, "tier1_added"], limit: 5000 }).catch(() => []);
-    const key = addr ? houseKey(addr) : keyPart;
-    const mine = (events || []).filter((e) => e?.address && (houseKey(e.address) === key || addressKey(e.address) === key || (addr && sameStreetLoose(e.address, addr))));
-    if (!mine.length) return null;
-    // Passed (and not added back since), or on the list with nothing to show.
-    const out = passedOnHouse({ offers: [], events: mine, address: addr || mine[0].address });
-    return { status: out ? { key: "passed", emoji: "x", label: "Passed from Tier 1", at: out.at } : null };
+    const evs = await load();
+    const mine = evs.filter((e) => onHouse(e.address, addr, keyPart));
+    const who = [...new Set([...contacts, ...mine.map((e) => e.contactId)].filter(Boolean))];
+    let open = false;
+    let closed = null;
+    for (const c of who) {
+      const theirs = evs.filter((e) => e.contactId === c && HOUSE_EVENT_TYPES.includes(e.type));
+      const h = raisedHouses({ events: theirs, offers: [], now, staleDays: 3650 }).find((x) => onHouse(x.address, addr, keyPart));
+      if (!h) continue;
+      if (h.open) open = true;
+      else if (!closed || String(h.at) > String(closed.at)) closed = h;
+    }
+    if (open) return { status: null, via: "raised, still open" };
+    if (closed) return { status: { key: "passed", emoji: "x", label: firstUp(String(closed.why || "closed").replace(/^[^:]*:\s*/, "")), at: closed.at }, via: "raised, closed" };
+    const list = mine.filter((e) => TIER_ONE_OUT_EVENTS.includes(e.type) || e.type === "tier1_added");
+    const out = list.length ? passedOnHouse({ offers: [], events: list, address: addr || list[0].address }) : null;
+    if (out) return { status: { key: "passed", emoji: "x", label: "Passed from Tier 1", at: out.at }, via: "tier 1 list" };
+    const noNumber = addr ? !parseUsAddress(addr).houseNo : !/^\d/.test(keyPart);
+    if (who.length === 1 && (noNumber || lostOffer)) {
+      book = book || await store.listOffers(locationId, { limit: 3000, lean: true }).catch(() => []);
+      const ids = (book || []).filter((o) => o?.contactId === who[0]).map((o) => o.id).slice(0, 20);
+      const full = (await Promise.all(ids.map((id) => store.getOffer?.(id).catch(() => null)))).filter((o) => o && (!o.locationId || o.locationId === locationId));
+      const row = houseRowFor(full, { contactId: who[0] });
+      if (row) return { status: acquisitionStatus(row) && { ...acquisitionStatus(row), offer: row }, via: "the agent's one house" };
+    }
+    return list.length ? { status: null, via: "tier 1 list" } : null;
   };
 }
 
 /**
- * statusOf({ tk, th, store, locationId, offersOnHouse, tierOneOut }) → { stream, offerId, offer, status, rows, known }
+ * statusOf({ tk, th, store, locationId, offersOnHouse, raised }) → { stream, offerId, offer, status, rows, known, via }
  *
  * What the app says a thread's house or deal is now. A house with no offer
- * row is read from the Tier 1 list's record. `known` is false when the app
- * has nothing to say it from.
+ * row is read from the agent's raise of it (raisedReader). `known` is false
+ * when the app has nothing to say it from.
  */
-async function statusOf({ tk, th, store, locationId, offersOnHouse, tierOneOut = null }) {
+async function statusOf({ tk, th, store, locationId, offersOnHouse, raised = null }) {
   const isDeal = String(tk).startsWith("deal:");
   const stream = th.stream || (isDeal ? "dispositions" : "acquisitions");
   const offerId = th.offerId || (isDeal ? String(tk).slice(5) : null);
   const own = offerId ? await store.getOffer?.(offerId).catch(() => null) : null;
   const offer = own && (!own.locationId || own.locationId === locationId) ? own : null;
-  if (stream === "dispositions") return { stream, offerId, offer, status: offer ? dispositionStatus(offer) : null, rows: offer ? [offer] : [], known: Boolean(offer) };
+  if (stream === "dispositions") return { stream, offerId, offer, status: offer ? dispositionStatus(offer) : null, rows: offer ? [offer] : [], known: Boolean(offer), via: "the deal" };
   const keyPart = String(tk).startsWith(`house:${stream}:`) ? String(tk).slice(`house:${stream}:`.length) : "";
   const rows = await offersOnHouse(th.address || offer?.address || "", keyPart);
-  if (rows.length || offer) return { stream, offerId, offer, status: rows.length ? houseStatus(rows) : acquisitionStatus(offer), rows, known: true };
-  const list = tierOneOut ? await tierOneOut(th.address || "", keyPart) : null;
-  return { stream, offerId, offer: null, status: list?.status || null, rows, known: Boolean(list) };
+  if (rows.length || offer) return { stream, offerId, offer, status: rows.length ? houseStatus(rows) : acquisitionStatus(offer), rows, known: true, via: "offers on the house" };
+  const r = raised ? await raised({ addr: th.address || "", keyPart, contacts: [th.contactId, ...(th.also || [])].filter(Boolean), lostOffer: Boolean(offerId && !offer) }) : null;
+  return { stream, offerId, offer: null, status: r?.status || null, rows, known: Boolean(r), via: r?.via || null };
 }
 
 /**
@@ -376,11 +411,11 @@ async function syncStatuses({ store, locationId, token, threads, keys, out, pace
   let next = { ...threads };
   let reactions = true;
   const offersOnHouse = houseReader({ store, locationId });
-  const tierOneOut = tierOneReader({ store, locationId });
+  const raised = raisedReader({ store, locationId });
   for (const tk of keys) {
     const th = next[tk];
     if (!th?.ts || th.ts === "dry-run") continue;
-    const { stream, offerId, offer, status, known } = await statusOf({ tk, th, store, locationId, offersOnHouse, tierOneOut });
+    const { stream, offerId, offer, status, known } = await statusOf({ tk, th, store, locationId, offersOnHouse, raised });
     if (!known) continue;
     const emoji = status?.emoji || null;
     const label = status?.label || null;
@@ -446,17 +481,17 @@ export async function reconcileSlack({ store = defaultStore, locationId, saved =
   out.checked = keys.length;
   if (dryRun) {
     const offersOnHouse = houseReader({ store, locationId });
-    const tierOneOut = tierOneReader({ store, locationId, now });
+    const raised = raisedReader({ store, locationId, now });
     for (const tk of keys) {
       const th = threads[tk];
-      const { stream, status, rows, known } = await statusOf({ tk, th, store, locationId, offersOnHouse, tierOneOut });
+      const { stream, status, rows, known, via } = await statusOf({ tk, th, store, locationId, offersOnHouse, raised });
       const shows = { emoji: th.statusEmoji || null, label: th.statusLabel || null };
       const app = { emoji: status?.emoji || null, label: status?.label || null };
       out.rows.push({
         stream, house: String(th.address || "").split(",")[0] || tk.split(":").pop(),
         shows, app, change: known && (shows.emoji !== app.emoji || shows.label !== app.label),
         offers: rows.map((o) => `${o.status || "?"}${o.hot && !o.hot.off ? "+hot" : ""}${o.deal ? `+deal:${o.deal.stage}` : ""}`),
-        ...(known ? {} : { note: "no offer on this house in the app" }),
+        via, ...(known ? {} : { note: "nothing in the app on this house" }),
         ...(th.blocks ? {} : { noStatusLine: true }),
       });
     }
