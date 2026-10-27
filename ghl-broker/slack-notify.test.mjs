@@ -13,7 +13,7 @@ process.env.DATA_DIR = DIR;
 delete process.env.DATABASE_URL;
 
 const { store } = await import("./store.js");
-const { runSlackEvents, runSlackEventsNow, runSlackPings, maybeRunSlackEvents, testSlack, CURSOR_NAME, _resetSlack } = await import("./slack-notify.js");
+const { runSlackEvents, runSlackEventsNow, runSlackPings, maybeRunSlackEvents, maybeRunSlack, reconcileSlack, reconcileSlackNow, testSlack, CURSOR_NAME, _resetSlack } = await import("./slack-notify.js");
 const { recordEvent } = await import("./contact-record.js");
 const { recordError } = await import("./app-errors.js");
 await store.init();
@@ -443,4 +443,68 @@ test("a house thread made under the old key (the whole address) is still the one
   await ev(LOC, "sam", "offer_countered", 3, { address: HOUSE, data: { amount: 400000 } });
   await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(4) });
   assert.equal(s.of("chat.postMessage")[1].body.thread_ts, "170000001.0001");
+});
+
+// Matt, 2026-10-26: "some of my Slack conversations aren't getting tagged
+// with the appropriate emojis … make sure they're reconciled with the
+// application." A status that moved with no event the minute loop could tie
+// to the house stayed wrong for good.
+test("a house passed with no event the minute loop saw is put right by the reconcile on the next tick", async () => {
+  const LOC = "loc-reconcile";
+  _resetSlack();
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  const offer = await store.createOffer({ locationId: LOC, contactId: "tia", address: HOUSE, status: "draft" });
+  await ev(LOC, "tia", "tier1_added", 1, { address: HOUSE, offerId: offer.id });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  // Passed in the app, and nothing the minute loop reads says so.
+  await store.updateOffer(offer.id, { ...offer, status: "we_passed", passReason: { code: "turnkey" } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(3) });
+  assert.equal(s.of("reactions.add").length, 0, "the minute loop never heard");
+
+  const preview = await reconcileSlack({ store, locationId: LOC, saved: ON, now: min(4) });
+  assert.equal(preview.checked, 1);
+  assert.deepEqual(preview.rows.map((r) => [r.house, r.shows.emoji, r.app.emoji, r.change]), [["1010 Bellevue Way NE", null, "x", true]]);
+  assert.equal(s.of("reactions.add").length, 0, "a preview changes nothing");
+
+  await maybeRunSlack({ locationId: LOC, saved: ON, store, now: min(15) });
+  assert.deepEqual(s.of("reactions.add").map((c) => [c.body.name, c.body.timestamp]), [["x", "170000001.0001"]]);
+  assert.match(said(s.of("chat.update").at(-1)), /\*Status:\* :x: We passed — too turnkey/);
+  const after = await reconcileSlack({ store, locationId: LOC, saved: ON, now: min(16) });
+  assert.equal(after.rows[0].change, false, "Slack and the app agree");
+  const calls = s.calls.length;
+  await maybeRunSlack({ locationId: LOC, saved: ON, store, now: min(30) });
+  assert.equal(s.calls.length, calls, "nothing to fix, nothing sent");
+});
+
+test("a post that never stored its house is still reconciled by its key", async () => {
+  const LOC = "loc-reconcile-key";
+  _resetSlack();
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  const offer = await store.createOffer({ locationId: LOC, contactId: "uma", address: HOUSE, status: "draft" });
+  await ev(LOC, "uma", "tier1_added", 1, { address: HOUSE, offerId: offer.id });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  const cur = await store.getJobCursor(LOC, CURSOR_NAME);
+  const threads = Object.fromEntries(Object.entries(cur.doc.threads).map(([k, v]) => [k, { ts: v.ts, channel: v.channel, at: v.at }]));
+  await store.setJobCursor(LOC, CURSOR_NAME, { at: cur.at, doc: { ...cur.doc, threads } });
+  await store.updateOffer(offer.id, { ...offer, status: "sent", cashAmount: 410000 });
+  const r = await reconcileSlackNow({ store, locationId: LOC, saved: ON, now: min(3), dryRun: false });
+  assert.deepEqual(r.statuses.map((x) => x.status), ["sent"]);
+  assert.deepEqual(s.of("reactions.add").map((c) => c.body.name), ["outbox_tray"]);
+});
+
+test("a forced reconcile puts the reaction and the Status line back even where they were remembered as right", async () => {
+  const LOC = "loc-reconcile-force";
+  _resetSlack();
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  const offer = await store.createOffer({ locationId: LOC, contactId: "vic", address: HOUSE, status: "countered" });
+  await ev(LOC, "vic", "tier1_added", 1, { address: HOUSE, offerId: offer.id });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  assert.deepEqual(s.of("reactions.add").map((c) => c.body.name), ["left_right_arrow"]);
+  const r = await reconcileSlackNow({ store, locationId: LOC, saved: ON, now: min(3), dryRun: false, force: true });
+  assert.equal(r.statuses.length, 1);
+  assert.deepEqual(s.of("reactions.add").map((c) => c.body.name), ["left_right_arrow", "left_right_arrow"]);
+  assert.equal(s.of("reactions.remove").length, 0, "the same emoji isn't taken off");
 });

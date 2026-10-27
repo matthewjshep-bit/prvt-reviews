@@ -306,53 +306,68 @@ export async function runSlackEvents({ store = defaultStore, locationId, client 
 const STATUS_STREAMS = new Set(["acquisitions", "dispositions"]);
 const SCOPE_ERRORS = new Set(["missing_scope", "not_allowed_token_type"]);
 
+// A house's offers across every agent (house number + street, give or take
+// the suffix), in full: resolveHouse reads sends, pins and deals. A thread
+// that never stored its address is matched on its key. One book read a run.
+function houseReader({ store, locationId }) {
+  let book = null;
+  return async (addr, keyPart = "") => {
+    if (!addr && !keyPart) return [];
+    book = book || await store.listOffers(locationId, { limit: 3000, lean: true }).catch(() => []);
+    const key = addr ? houseKey(addr) : keyPart;
+    const on = (o) => o?.address && (houseKey(o.address) === key || addressKey(o.address) === key || (addr && sameStreetLoose(o.address, addr)));
+    const ids = (book || []).filter(on).map((o) => o.id).slice(0, 20);
+    return (await Promise.all(ids.map((id) => store.getOffer?.(id).catch(() => null)))).filter((o) => o && (!o.locationId || o.locationId === locationId));
+  };
+}
+
 /**
- * syncStatuses({ store, locationId, token, threads, keys, out, paceMs }) → threads
+ * statusOf({ tk, th, store, locationId, offersOnHouse }) → { stream, offerId, offer, status, rows, known }
+ *
+ * What the app says a thread's house or deal is now. `known` is false when
+ * the app has nothing to say it from (no offer on the house).
+ */
+async function statusOf({ tk, th, store, locationId, offersOnHouse }) {
+  const isDeal = String(tk).startsWith("deal:");
+  const stream = th.stream || (isDeal ? "dispositions" : "acquisitions");
+  const offerId = th.offerId || (isDeal ? String(tk).slice(5) : null);
+  const own = offerId ? await store.getOffer?.(offerId).catch(() => null) : null;
+  const offer = own && (!own.locationId || own.locationId === locationId) ? own : null;
+  if (stream === "dispositions") return { stream, offerId, offer, status: offer ? dispositionStatus(offer) : null, rows: offer ? [offer] : [], known: Boolean(offer) };
+  const keyPart = String(tk).startsWith(`house:${stream}:`) ? String(tk).slice(`house:${stream}:`.length) : "";
+  const rows = await offersOnHouse(th.address || offer?.address || "", keyPart);
+  const status = rows.length ? houseStatus(rows) : acquisitionStatus(offer);
+  return { stream, offerId, offer, status, rows, known: rows.length > 0 || Boolean(offer) };
+}
+
+/**
+ * syncStatuses({ store, locationId, token, threads, keys, out, paceMs, force }) → threads
  *
  * For each thread, the offer's status now (shared/slack-notify.js
  * acquisitionStatus / dispositionStatus): the bot's one reaction on the
  * opening post is swapped to match, and the post's Status line rewritten.
- * Nothing changes when the status hasn't. Without reactions:write the
- * Status line still moves and out.statusError says what to add.
+ * Nothing changes when the status hasn't, unless `force` (the reconcile by
+ * hand), which puts the reaction and the line back whatever was remembered.
+ * Without reactions:write the Status line still moves and out.statusError
+ * says what to add.
  */
-async function syncStatuses({ store, locationId, token, threads, keys, out, paceMs = 0 }) {
+async function syncStatuses({ store, locationId, token, threads, keys, out, paceMs = 0, force = false }) {
   let next = { ...threads };
   let reactions = true;
-  // Every agent's offers on one house (house number + street, give or take
-  // the suffix), in full: resolveHouse reads sends, pins and deals.
-  let book = null;
-  const offersOnHouse = async (addr) => {
-    if (!addr) return [];
-    book = book || await store.listOffers(locationId, { limit: 3000, lean: true }).catch(() => []);
-    const key = houseKey(addr);
-    const ids = (book || []).filter((o) => o?.address && (houseKey(o.address) === key || sameStreetLoose(o.address, addr))).map((o) => o.id).slice(0, 20);
-    return (await Promise.all(ids.map((id) => store.getOffer?.(id).catch(() => null)))).filter((o) => o && (!o.locationId || o.locationId === locationId));
-  };
+  const offersOnHouse = houseReader({ store, locationId });
   for (const tk of keys) {
     const th = next[tk];
     if (!th?.ts || th.ts === "dry-run") continue;
-    const stream = th.stream || (String(tk).startsWith("deal:") ? "dispositions" : "acquisitions");
-    const offerId = th.offerId || (String(tk).startsWith("deal:") ? String(tk).slice(5) : null);
-    const own = offerId ? await store.getOffer?.(offerId).catch(() => null) : null;
-    const offer = own && (!own.locationId || own.locationId === locationId) ? own : null;
-    let status = null;
-    if (stream === "dispositions") {
-      if (!offer) continue;
-      status = dispositionStatus(offer);
-    } else {
-      const addr = th.address || offer?.address || "";
-      if (!addr && !offer) continue;
-      const house = await offersOnHouse(addr);
-      status = house.length ? houseStatus(house) : acquisitionStatus(offer);
-    }
+    const { stream, offerId, offer, status, known } = await statusOf({ tk, th, store, locationId, offersOnHouse });
+    if (!known) continue;
     const emoji = status?.emoji || null;
     const label = status?.label || null;
-    if (emoji === (th.statusEmoji ?? null) && label === (th.statusLabel ?? null)) continue;
+    if (!force && emoji === (th.statusEmoji ?? null) && label === (th.statusLabel ?? null)) continue;
     if (paceMs > 0 && out.statuses.length) await new Promise((r) => setTimeout(r, paceMs));
     const upd = { ...th, stream, offerId };
     try {
-      if (reactions && emoji !== (th.statusEmoji ?? null)) {
-        if (th.statusEmoji) {
+      if (reactions && (force || emoji !== (th.statusEmoji ?? null))) {
+        if (th.statusEmoji && th.statusEmoji !== emoji) {
           await slackApi(token, "reactions.remove", { channel: th.channel, timestamp: th.ts, name: th.statusEmoji })
             .catch((e) => { if (!["no_reaction", "message_not_found"].includes(e?.slack)) throw e; });
         }
@@ -380,6 +395,53 @@ async function syncStatuses({ store, locationId, token, threads, keys, out, pace
     out.statuses.push({ stream, status: status?.key || "none", reacted: upd.statusEmoji === emoji });
   }
   return next;
+}
+
+/* ---------- the reconcile: every post against the app ---------- */
+
+/**
+ * reconcileSlack({ store, locationId, saved, dryRun, force, paceMs }) → { checked, rows, statuses, failed, statusError }
+ *
+ * Matt, 2026-10-26: "some of my Slack conversations aren't getting tagged
+ * … go through all of our Slack messages and make sure they're reconciled
+ * with the application." The minute loop moves a status when an event about
+ * the house reaches it; a status that moved with no event it could tie to
+ * the thread stayed wrong. This reads every remembered house and deal post,
+ * asks the app, and fixes what differs. It runs every tick; by hand,
+ * `dryRun` (the default) lists each post with what Slack shows and what the
+ * app says, and `force` puts every reaction and Status line back.
+ */
+export async function reconcileSlack({ store = defaultStore, locationId, saved = {}, dryRun = true, force = false, paceMs = 0, now = Date.now() } = {}) {
+  const cfg = normalizeSlack(saved?.slack);
+  const token = String(saved?.slackBotToken || "").trim();
+  const out = { dryRun, startedAt: iso(now), finishedAt: null, checked: 0, rows: [], posted: [], statuses: [], failed: [], error: null };
+  const done = () => { out.finishedAt = iso(Date.now()); return out; };
+  if (!slackOn(cfg, token)) { out.error = "off"; return done(); }
+  const doc = await readDoc(store, locationId, CURSOR_NAME);
+  const threads = doc.threads || {};
+  const keys = Object.keys(threads).filter((k) => k.startsWith("house:acquisitions:") || k.startsWith("deal:"))
+    .filter((k) => threads[k]?.ts && threads[k].ts !== "dry-run" && (!threads[k].channel || threads[k].channel === cfg.channels[threads[k].stream || (k.startsWith("deal:") ? "dispositions" : "acquisitions")]));
+  out.checked = keys.length;
+  if (dryRun) {
+    const offersOnHouse = houseReader({ store, locationId });
+    for (const tk of keys) {
+      const th = threads[tk];
+      const { stream, status, rows, known } = await statusOf({ tk, th, store, locationId, offersOnHouse });
+      const shows = { emoji: th.statusEmoji || null, label: th.statusLabel || null };
+      const app = { emoji: status?.emoji || null, label: status?.label || null };
+      out.rows.push({
+        stream, house: String(th.address || "").split(",")[0] || tk.split(":").pop(),
+        shows, app, change: known && (shows.emoji !== app.emoji || shows.label !== app.label),
+        offers: rows.map((o) => `${o.status || "?"}${o.hot && !o.hot.off ? "+hot" : ""}${o.deal ? `+deal:${o.deal.stage}` : ""}`),
+        ...(known ? {} : { note: "no offer on this house in the app" }),
+        ...(th.blocks ? {} : { noStatusLine: true }),
+      });
+    }
+    return done();
+  }
+  const next = await syncStatuses({ store, locationId, token, threads, keys, out, paceMs, force });
+  await patchCursor(store, locationId, CURSOR_NAME, { threads: next });
+  return done();
 }
 
 /* ---------- needs Matt and the machine: every tick ---------- */
@@ -527,7 +589,7 @@ export const summarizeSlack = (r) => ({
 // The audit's gating (conversation-audit.js maybeRunConversationAudit): the
 // cursor is stamped before the run, a run that died under a deploy is
 // retried once it's stale, one at a time in this broker.
-async function gated({ store, locationId, cursorName, now, run }) {
+async function gated({ store, locationId, cursorName, now, run, lastKey = "last" }) {
   const key = `${locationId}:${cursorName}`;
   if (running.has(key)) return null;
   const doc = await readDoc(store, locationId, cursorName);
@@ -537,11 +599,11 @@ async function gated({ store, locationId, cursorName, now, run }) {
   running.add(key);
   try {
     const r = await run();
-    await patchCursor(store, locationId, cursorName, { run: null, last: summarizeSlack(r) });
+    await patchCursor(store, locationId, cursorName, { run: null, [lastKey]: summarizeSlack(r) });
     return r;
   } catch (e) {
     await recordError(store, { locationId, area: "slack", err: e, context: { stage: cursorName } });
-    await patchCursor(store, locationId, cursorName, { run: null, last: { error: scrubMessage(e).slice(0, 200), finishedAt: iso(Date.now()) } });
+    await patchCursor(store, locationId, cursorName, { run: null, [lastKey]: { error: scrubMessage(e).slice(0, 200), finishedAt: iso(Date.now()) } });
     return null;
   } finally {
     running.delete(key);
@@ -556,6 +618,13 @@ async function gated({ store, locationId, cursorName, now, run }) {
 export async function runSlackEventsNow({ store = defaultStore, locationId, now = Date.now(), ...opts } = {}) {
   if (opts.dryRun) return runSlackEvents({ store, locationId, now, ...opts });
   const r = await gated({ store, locationId, cursorName: CURSOR_NAME, now, run: () => runSlackEvents({ store, locationId, now, ...opts }) });
+  return r || { busy: true, error: "the minute loop is posting: try again in a minute" };
+}
+
+/** reconcileSlackNow(opts) → the run, or { busy: true } — a hand reconcile under the minute loop's lock. */
+export async function reconcileSlackNow({ store = defaultStore, locationId, now = Date.now(), ...opts } = {}) {
+  if (opts.dryRun !== false) return reconcileSlack({ store, locationId, now, ...opts, dryRun: true });
+  const r = await gated({ store, locationId, cursorName: CURSOR_NAME, now, lastKey: "reconcile", run: () => reconcileSlack({ store, locationId, now, ...opts, dryRun: false }) });
   return r || { busy: true, error: "the minute loop is posting: try again in a minute" };
 }
 
@@ -575,7 +644,12 @@ export async function maybeRunSlackEvents({ locationId, client = null, saved = {
 export async function maybeRunSlack({ client, locationId, saved = {}, store = defaultStore, deps = {}, now = Date.now() }) {
   const cfg = normalizeSlack(saved?.slack);
   if (!slackOn(cfg, saved?.slackBotToken)) return null;
-  const out = { pings: null, morning: null, evening: null };
+  const out = { pings: null, morning: null, evening: null, reconcile: null };
+  // Every post against the app, every tick, under the minute loop's lock: a
+  // status the minute loop missed is right within 15 minutes.
+  if (streamOn(cfg, "acquisitions") || streamOn(cfg, "dispositions")) {
+    out.reconcile = await gated({ store, locationId, cursorName: CURSOR_NAME, now, lastKey: "reconcile", run: () => reconcileSlack({ store, locationId, saved, dryRun: false, now }) });
+  }
   if (streamOn(cfg, "needsMatt") || streamOn(cfg, "machine")) {
     out.pings = await gated({ store, locationId, cursorName: PINGS_CURSOR, now, run: () => runSlackPings({ store, locationId, saved, deps: { ...deps, client }, now }) });
   }

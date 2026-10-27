@@ -65,7 +65,7 @@ import { handOffs } from "../shared/hand-off.js";
 import { ghlPingsOn } from "../shared/ghl-pings.js";
 import { runGhlPings, CURSOR_NAME as GHL_PINGS_CURSOR } from "../ghl-pings.js";
 import { normalizeSlack, slackOn, SLACK_STREAMS } from "../shared/slack-notify.js";
-import { runSlackEventsNow, runSlackPings, postMorning, postEvening, testSlack, CURSOR_NAME as SLACK_CURSOR, PINGS_CURSOR as SLACK_PINGS_CURSOR, MORNING_CURSOR as SLACK_MORNING_CURSOR, EVENING_CURSOR as SLACK_EVENING_CURSOR } from "../slack-notify.js";
+import { runSlackEventsNow, reconcileSlackNow, runSlackPings, postMorning, postEvening, testSlack, CURSOR_NAME as SLACK_CURSOR, PINGS_CURSOR as SLACK_PINGS_CURSOR, MORNING_CURSOR as SLACK_MORNING_CURSOR, EVENING_CURSOR as SLACK_EVENING_CURSOR } from "../slack-notify.js";
 import { runNeedsMatt } from "../needs-matt.js";
 import { NEEDS_MATT_CURSOR } from "../shared/needs-matt.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
@@ -879,7 +879,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const last = {};
       for (const [k, name] of [["events", SLACK_CURSOR], ["pings", SLACK_PINGS_CURSOR], ["morning", SLACK_MORNING_CURSOR], ["evening", SLACK_EVENING_CURSOR]]) {
         const c = await store.getJobCursor?.(locationId, name).catch(() => null);
-        last[k] = c ? { at: c.at, since: c.doc?.since || null, last: c.doc?.last || null, threads: c.doc?.threads ? Object.keys(c.doc.threads).length : undefined } : null;
+        last[k] = c ? { at: c.at, since: c.doc?.since || null, last: c.doc?.last || null, threads: c.doc?.threads ? Object.keys(c.doc.threads).length : undefined, reconcile: c.doc?.reconcile || undefined } : null;
       }
       res.json({ ok: true, settings, tokenSet, on: slackOn(settings, saved.slackBotToken),
         streams: SLACK_STREAMS.map((s) => ({ stream: s, on: settings.streams[s], channelSet: Boolean(settings.channels[s]) })), last });
@@ -909,11 +909,15 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         return res.json({ ok: true, ...(await runSlackEventsNow({ store, locationId, client, saved, dryRun, ...backfill })) });
       }
       if (what === "pings") return res.json({ ok: true, ...(await runSlackPings({ store, locationId, saved, deps: { pipelineFor, client }, dryRun })) });
+      // Every house and deal post against the app: a dry run lists what Slack
+      // shows beside what the app says; dryRun:false fixes what differs, and
+      // force:true puts every reaction and Status line back.
+      if (what === "reconcile") return res.json({ ok: true, ...(await reconcileSlackNow({ store, locationId, saved, dryRun, force: req.body?.force === true, paceMs: dryRun ? 0 : 1100 })) });
       if (what === "morning" || what === "evening") {
         if (!settings.channels.daily) return res.status(400).json({ error: "set the #daily channel first" });
         return res.json({ ok: true, ...(await (what === "morning" ? postMorning : postEvening)({ store, locationId, saved })) });
       }
-      res.status(400).json({ error: "what: events, pings, morning or evening" });
+      res.status(400).json({ error: "what: events, reconcile, pings, morning or evening" });
     } catch (err) { fail(res, err); }
   });
 

@@ -5413,6 +5413,24 @@ Hill Ln" are one house.
 - **Older posts:** a backfill with `refresh: true` puts statuses on posts that
   were made before statuses existed.
 
+**Reconcile (2026-10-26).** Every tick, `reconcileSlack` reads every
+remembered house and deal post, asks the app (`statusOf`) and fixes what
+differs. It runs under the minute loop's lock, and its summary is
+`last.events.reconcile` in `GET /api/dashboard/slack`. A status that moved
+with no event the minute loop could tie to the house is right within 15
+minutes. It came from Matt, 2026-10-26: "some … aren't getting tagged".
+
+`POST /api/dashboard/slack/run` with `{ what: "reconcile" }` checks by hand:
+
+- **Dry run** (the default): one row per post, with what Slack shows, what the
+  app says, the offers on the house, and why it can't tell ("no offer on this
+  house in the app").
+- **`dryRun: false`** fixes what differs.
+- **`force: true`** puts every reaction and Status line back, whatever was
+  remembered.
+
+A thread that never stored its address is matched on its key.
+
 **Missing permission.** The reaction needs the bot scope `reactions:write`.
 Without it the Status line still moves, and the run's `statusError` says
 "add the reactions:write scope". To fix it:
