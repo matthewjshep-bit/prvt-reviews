@@ -652,6 +652,30 @@ export async function getLatestInboundMessage(client, locationId, contactId, { c
   return rest;
 }
 
+// Our newest text or email in their thread, from any sender — the app, a GHL
+// workflow, a script, a person in GHL — and our newest email. Pure, over raw
+// conversation messages. A send GHL marked failed never reached them.
+const FAILED_SEND = new Set(["failed", "undelivered"]);
+export function ourLastTouches(messages = []) {
+  let lastAt = null, emailedAt = null;
+  for (const m of messages || []) {
+    if (String(m?.direction || "").toLowerCase() !== "outbound") continue;
+    const type = String(m.messageType || m.type || "");
+    if (!/SMS|EMAIL/i.test(type) || FAILED_SEND.has(String(m.status || "").toLowerCase())) continue;
+    const t = Date.parse(m.dateAdded || "");
+    if (!Number.isFinite(t)) continue;
+    if (lastAt === null || t > lastAt) lastAt = t;
+    if (/EMAIL/i.test(type) && (emailedAt === null || t > emailedAt)) emailedAt = t;
+  }
+  return { lastAt, emailedAt };
+}
+export async function getOurLastTouches(client, locationId, contactId, { conversations: maxConvos = 3, perConversation = 30 } = {}) {
+  const { conversations } = await searchConversations(client, locationId, { contactId, limit: 10 });
+  const messages = [];
+  for (const c of conversations.slice(0, maxConvos)) messages.push(...(await listConversationMessages(client, c.id, { limit: perConversation })).messages);
+  return ourLastTouches(messages);
+}
+
 // Every text they've sent since our last one, oldest first, from their
 // newest conversation: what the nightly audit reads before deciding a thread
 // is only a goodbye or a "no" (a lead and then "Not really" is a lead).

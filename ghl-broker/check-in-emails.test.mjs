@@ -62,7 +62,7 @@ test("a check-in email is due on each check-in day, only after the intro email, 
   assert.equal(due([...base, { type: "text_summary", at: ago(3) }]).due, false);
   assert.equal(due([...base, { type: "checkin_email_queued", at: ago(0.2), data: { step: 16 } }]).due, false, "once per check-in day");
   assert.equal(due(base, NOW - 2 * DAY).due, false, "day 14: not yet");
-  assert.equal(due(base, NOW + 6 * DAY).reason, "day 16 went by", "a missed day isn't sent late");
+  assert.equal(due(base, NOW + 7 * DAY).reason, "day 16 went by", "a missed day isn't sent late (six days' grace for the wait after the text)");
   const day30 = due(base, NOW + 14 * DAY);
   assert.deepEqual([day30.step, day30.n], [30, 2]);
   assert.deepEqual([due(base, NOW + 42 * DAY).step, due(base, NOW + 42 * DAY).n], [58, 4], "day 58 is the last");

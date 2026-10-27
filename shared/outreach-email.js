@@ -31,7 +31,9 @@ export const INTRO_EMAIL_MAX_SUBJECT = 150;
 export const INTRO_EMAIL_MAX_BODY = 3000;
 // An agent first texted longer ago than `day` plus this is past the point of
 // an introduction: switching the email on doesn't email two months of agents.
-export const INTRO_EMAIL_LATE_DAYS = 5;
+// Two days wider since 2026-10-27, so the wait after a day-2 text sent late
+// in the afternoon still lands inside it.
+export const INTRO_EMAIL_LATE_DAYS = 7;
 
 /**
  * normalizeIntroEmail(v) → { enabled, autoSend, day, subject, body }
@@ -103,23 +105,42 @@ const ENDED_BY = new Set(["text_summary", "call_summary", "email_received", "han
 // A text of ours claimed or sent (the follow-up, the agent check-in). An
 // email never goes the same day as one (2026-10-26: 99 follow-up texts went
 // within 12 hours of an email, and "Got your messages. Please take me off
-// your list" came back); it waits for the next morning's run.
+// your list" came back). Since 2026-10-27 it waits as long after a text as
+// the follow-up texts wait between themselves (followUp.minHoursBetween,
+// 72 live): a cold agent got the follow-up text and the intro email a day
+// apart, and two touches inside a day drew three times the STOPs.
 const OUR_TEXTS = new Set(["follow_up_sent", "agent_pulse_sent", "agent_pulse_texted"]);
 export const EMAIL_AFTER_TEXT_HOURS = 20;
-function textedToday(list, now) {
-  const last = list.filter((e) => OUR_TEXTS.has(e.type)).map((e) => Date.parse(e.at || "")).filter(Number.isFinite);
-  return last.some((t) => t <= now && now - t < EMAIL_AFTER_TEXT_HOURS * 3600000);
+export const EMAIL_GAP_HOURS = 72;
+
+/**
+ * emailGapHours(conversationConfig) → hours
+ *
+ * How long an email to a cold agent waits after a text of ours: the agent
+ * follow-up's hours between texts, never under EMAIL_AFTER_TEXT_HOURS.
+ */
+export function emailGapHours(config) {
+  const n = Number(config?.parties?.agent?.followUp?.minHoursBetween);
+  return Math.max(EMAIL_AFTER_TEXT_HOURS, Number.isFinite(n) ? n : EMAIL_GAP_HOURS);
+}
+
+// Why an email waits: a text of ours inside the gap, or null.
+function textedWithin(list, now, gapHours) {
+  const last = list.filter((e) => OUR_TEXTS.has(e.type)).map((e) => Date.parse(e.at || "")).filter((t) => Number.isFinite(t) && t <= now);
+  if (!last.length) return null;
+  const hours = (now - Math.max(...last)) / 3600000;
+  return hours < gapHours ? `we texted them ${Math.floor(hours)} hours ago — an email waits ${gapHours} hours after a text` : null;
 }
 export const INTRO_EMAIL_EVENT_TYPES = ["outreach_sent", "outreach_email_queued", ...ENDED_BY, ...OUR_TEXTS];
 
 /**
- * introEmailDue({ events, day, now }) → { due: true, openedAt, address } | { due: false, reason }
+ * introEmailDue({ events, day, now, gapHours }) → { due: true, openedAt, address } | { due: false, reason }
  *
  * One agent's timeline. Due from `day` days after our first text, for
  * INTRO_EMAIL_LATE_DAYS more, when nothing since says they answered or we
  * moved on, and no intro email was ever queued.
  */
-export function introEmailDue({ events = [], day = 2, now = Date.now() } = {}) {
+export function introEmailDue({ events = [], day = 2, now = Date.now(), gapHours = EMAIL_GAP_HOURS } = {}) {
   const list = [...events].filter(Boolean).sort((a, b) => String(a.at).localeCompare(String(b.at)));
   if (list.some((e) => e.type === "outreach_email_queued")) return { due: false, reason: "already emailed" };
   const opened = list.filter((e) => e.type === "outreach_sent").at(-1);
@@ -129,7 +150,8 @@ export function introEmailDue({ events = [], day = 2, now = Date.now() } = {}) {
   if (list.some((e) => ENDED_BY.has(e.type) && String(e.at) > String(opened.at))) return { due: false, reason: "they answered, or we're past an introduction" };
   if (now < at + day * DAY_MS) return { due: false, reason: `day ${day} hasn't come round yet` };
   if (now >= at + (day + INTRO_EMAIL_LATE_DAYS) * DAY_MS) return { due: false, reason: "too long since the first text" };
-  if (textedToday(list, now)) return { due: false, reason: "we texted them today — the email goes tomorrow" };
+  const waits = textedWithin(list, now, gapHours);
+  if (waits) return { due: false, reason: waits };
   return { due: true, openedAt: opened.at, address: opened.address || "", county: opened.data?.county || "" };
 }
 
@@ -153,8 +175,9 @@ export const DEFAULT_CHECK_IN_EMAILS = [
 ];
 export const CHECK_IN_EMAIL_MAX = 8;
 // A check-in whose day passed more than this long ago isn't sent late: the
-// next one comes round in two weeks.
-export const CHECK_IN_EMAIL_LATE_DAYS = 3;
+// next one comes round in two weeks. Six days since 2026-10-27: it waits
+// 72 hours after the check-in text, which can go as late as 6pm.
+export const CHECK_IN_EMAIL_LATE_DAYS = 6;
 
 /**
  * normalizeCheckInEmail(v) → { enabled, autoSend, emails: [{ subject, body }] }
@@ -201,7 +224,7 @@ export function checkInEmailFor({ checkInEmail, name = "", contactId = "", n = 1
 export const CHECK_IN_EMAIL_EVENT_TYPES = ["outreach_sent", "outreach_email_queued", "checkin_email_queued", ...ENDED_BY, ...OUR_TEXTS];
 
 /**
- * checkInEmailDue({ events, steps, repeatEvery, now, windowDays })
+ * checkInEmailDue({ events, steps, repeatEvery, now, windowDays, gapHours })
  *   → { due: true, step, n, address } | { due: false, reason }
  *
  * The check-in rungs of the cold-agent ladder: day last+every, last+2·every
@@ -209,7 +232,7 @@ export const CHECK_IN_EMAIL_EVENT_TYPES = ["outreach_sent", "outreach_email_queu
  * CHECK_IN_EMAIL_LATE_DAYS after) when they had the intro email, haven't
  * answered, and this rung's email hasn't been queued.
  */
-export function checkInEmailDue({ events = [], steps = [], repeatEvery = 0, now = Date.now(), windowDays = 60 } = {}) {
+export function checkInEmailDue({ events = [], steps = [], repeatEvery = 0, now = Date.now(), windowDays = 60, gapHours = EMAIL_GAP_HOURS } = {}) {
   const every = Math.round(Number(repeatEvery) || 0);
   const configured = (steps || []).map(Number).filter((d) => Number.isFinite(d) && d > 0);
   if (!(every > 0) || !configured.length) return { due: false, reason: "the follow-up doesn't repeat" };
@@ -227,6 +250,7 @@ export function checkInEmailDue({ events = [], steps = [], repeatEvery = 0, now 
   if (step >= windowDays) return { due: false, reason: "past the follow-up window" };
   if (daysIn - step > CHECK_IN_EMAIL_LATE_DAYS) return { due: false, reason: `day ${step} went by` };
   if (list.some((e) => e.type === "checkin_email_queued" && Number(e.data?.step) === step)) return { due: false, reason: `day ${step} already emailed` };
-  if (textedToday(list, now)) return { due: false, reason: "we texted them today — the email goes tomorrow" };
+  const waits = textedWithin(list, now, gapHours);
+  if (waits) return { due: false, reason: waits };
   return { due: true, step, n, address: opened.address || "", county: opened.data?.county || "" };
 }

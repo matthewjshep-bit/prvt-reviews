@@ -3,8 +3,11 @@
 // (2026-10-20), and an email with each 14-day check-in after it
 // (2026-10-20, runCheckInEmails).
 //
-// Runs at the end of the morning follow-up sweep (follow-up-sweep.js). Since
-// 2026-10-26 an email waits a day when a text of ours went that morning. Each email is claimed
+// Runs at the end of the morning follow-up sweep (follow-up-sweep.js). An
+// email waits as long after a text of ours as the follow-up texts wait
+// between themselves (72 hours live; 20 hours from 2026-10-26, 2026-10-27
+// since), counting anything their GHL thread shows we sent from outside the
+// app, and no intro goes to someone we already emailed. Each email is claimed
 // with an event first (`outreach_email_queued` once per agent ever,
 // `checkin_email_queued` once per agent per check-in day), then becomes an
 // email draft: scheduled across the day's machine hours when it may send
@@ -14,11 +17,11 @@
 
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig } from "./reply-agent.js";
-import { getContact, emailUnsubscribed } from "./ghl.js";
+import { getContact, emailUnsubscribed, getOurLastTouches } from "./ghl.js";
 import { spreadAcrossDay, machineHours } from "./conversation-scheduler.js";
 import {
   normalizeIntroEmail, introEmailFor, introEmailDue, INTRO_EMAIL_EVENT_TYPES, INTRO_EMAIL_LATE_DAYS,
-  normalizeCheckInEmail, checkInEmailFor, checkInEmailDue, CHECK_IN_EMAIL_EVENT_TYPES,
+  normalizeCheckInEmail, checkInEmailFor, checkInEmailDue, CHECK_IN_EMAIL_EVENT_TYPES, emailGapHours,
 } from "./shared/outreach-email.js";
 import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 
@@ -47,14 +50,17 @@ async function eventsByContact(store, locationId, since, types) {
  * queueEmails({ ...ctx, kind, autoSend, label, due, write, claim, summary }) → { queued, drafted, rows }
  *
  * The loop both emails share: who's `due` (contactId, events → { due,
- * address, … }), the GHL read (an email, not opted out), what to `write`
+ * address, … }), the GHL read (an email, not opted out, nothing from us
+ * inside the gap — and for the intro, no email from us ever), what to `write`
  * (contact name, due → { subject, body } | null), the `claim` event, the
  * draft. `label` names the switch a waiting draft points to.
  */
 async function queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact, kind, autoSend, label, due: dueFor, write, claim, summary }) {
   const out = { queued: 0, drafted: 0, rows: [] };
   const read = typeof deps.getContact === "function" ? deps.getContact : (id) => getContact(client, id);
+  const touches = typeof deps.ourTouches === "function" ? deps.ourTouches : (id) => getOurLastTouches(client, locationId, id);
   const config = conversationConfig(saved);
+  const gapHours = emailGapHours(config);
   const schedule = !dryRun && sendsEnabled && config.enabled && autoSend;
   const why = !sendsEnabled ? "sends are off on the broker (CARD_SENDS_ENABLED)"
     : !config.enabled ? "Conversation AI is switched off" : `${label} wait for you until they may send themselves (Autopilot → Agents)`;
@@ -70,6 +76,14 @@ async function queueEmails({ client, store, locationId, saved, sendsEnabled, now
     if (!contact) { out.rows.push({ ...row, status: "skipped", reason: "couldn't read the contact in GHL" }); continue; }
     if (!String(contact.email || "").trim()) { out.rows.push({ ...row, status: "skipped", reason: "no email in GHL" }); continue; }
     if (emailUnsubscribed(contact)) { out.rows.push({ ...row, status: "skipped", reason: "they opted out of email" }); continue; }
+    // The thread itself: a bulk email or a text from GHL leaves no event of
+    // ours. Unreadable, the app's own records above decide.
+    const ours = await touches(contactId).catch(() => null);
+    if (kind === INTRO_EMAIL_KIND && ours?.emailedAt) { out.rows.push({ ...row, status: "skipped", reason: "they already had an email from us" }); continue; }
+    if (ours?.lastAt && ours.lastAt <= now && now - ours.lastAt < gapHours * 3600000) {
+      out.rows.push({ ...row, status: "skipped", reason: `we reached them ${Math.floor((now - ours.lastAt) / 3600000)} hours ago — an email waits ${gapHours} hours after a text` });
+      continue;
+    }
     const name = nameOf(contact);
     const email = write(name, contactId, due);
     if (!email) { out.rows.push({ ...row, status: "skipped", reason: "the email has a blank we can't fill" }); continue; }
@@ -108,10 +122,11 @@ async function queueEmails({ client, store, locationId, saved, sendsEnabled, now
 export async function runIntroEmails({ client, store, locationId, saved = {}, sendsEnabled = false, now = Date.now(), dryRun = false, held = () => false, deps = {} }) {
   const ie = normalizeIntroEmail(saved?.outreachAutopilot?.introEmail);
   if (!ie.enabled) return { queued: 0, drafted: 0, rows: [] };
+  const gapHours = emailGapHours(conversationConfig(saved));
   const byContact = await eventsByContact(store, locationId, iso(now - (ie.day + INTRO_EMAIL_LATE_DAYS + 1) * DAY_MS), INTRO_EMAIL_EVENT_TYPES);
   return queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact,
     kind: INTRO_EMAIL_KIND, autoSend: ie.autoSend, label: "intro emails",
-    due: (contactId, list) => introEmailDue({ events: list, day: ie.day, now }),
+    due: (contactId, list) => introEmailDue({ events: list, day: ie.day, now, gapHours }),
     write: (name, contactId, due) => introEmailFor({ introEmail: ie, name, address: due.address, county: due.county }),
     claim: (contactId, due) => ({ type: "outreach_email_queued", ref: `${INTRO_EMAIL_KIND}:${contactId}`,
       dedupeKey: `${INTRO_EMAIL_KIND}:${contactId}`, data: { day: ie.day, firstTextAt: due.openedAt } }),
@@ -132,10 +147,11 @@ export async function runCheckInEmails({ client, store, locationId, saved = {}, 
   const ce = normalizeCheckInEmail(saved?.outreachAutopilot?.checkInEmail);
   const ladder = conversationConfig(saved).parties?.agent?.followUp?.ladders?.outreach_nudge;
   if (!ce.enabled || !(Number(ladder?.repeatEvery) > 0) || !ladder?.steps?.length) return { queued: 0, drafted: 0, rows: [] };
+  const gapHours = emailGapHours(conversationConfig(saved));
   const byContact = await eventsByContact(store, locationId, iso(now - (OUTREACH_NUDGE_WINDOW_DAYS + 1) * DAY_MS), CHECK_IN_EMAIL_EVENT_TYPES);
   return queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact,
     kind: CHECK_IN_EMAIL_KIND, autoSend: ce.autoSend, label: "check-in emails",
-    due: (contactId, list) => checkInEmailDue({ events: list, steps: ladder.steps, repeatEvery: ladder.repeatEvery, now, windowDays: OUTREACH_NUDGE_WINDOW_DAYS }),
+    due: (contactId, list) => checkInEmailDue({ events: list, steps: ladder.steps, repeatEvery: ladder.repeatEvery, now, windowDays: OUTREACH_NUDGE_WINDOW_DAYS, gapHours }),
     write: (name, contactId, due) => checkInEmailFor({ checkInEmail: ce, name, contactId, n: due.n, address: due.address, county: due.county }),
     claim: (contactId, due) => ({ type: "checkin_email_queued", ref: `${CHECK_IN_EMAIL_KIND}:${contactId}:${due.step}`,
       dedupeKey: `${CHECK_IN_EMAIL_KIND}:${contactId}:${due.step}`, data: { step: due.step, n: due.n } }),

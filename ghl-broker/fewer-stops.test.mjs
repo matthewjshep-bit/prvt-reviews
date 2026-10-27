@@ -133,9 +133,11 @@ test("a saved copy of the 10/20 follow-ups is read as never changed and gets tod
 const opened = { type: "outreach_sent", at: iso(NOW - 3 * DAY), address: "129 St E, Bonney Lake, WA" };
 
 test("the intro email waits a day when the follow-up text went this morning — 'Got your messages. Please take me off your list'", () => {
+  // Three days since 2026-10-27 (cold-agent-spacing.test.mjs).
   const nudged = { type: "follow_up_sent", at: iso(NOW - 2 * 3600000), data: { kind: "outreach_nudge", step: 2 } };
-  assert.deepEqual(introEmailDue({ events: [opened, nudged], day: 2, now: NOW }), { due: false, reason: "we texted them today — the email goes tomorrow" });
-  const r = introEmailDue({ events: [opened, nudged], day: 2, now: NOW + DAY });
+  assert.deepEqual(introEmailDue({ events: [opened, nudged], day: 2, now: NOW }), { due: false, reason: "we texted them 2 hours ago — an email waits 72 hours after a text" });
+  assert.equal(introEmailDue({ events: [opened, nudged], day: 2, now: NOW + DAY }).due, false);
+  const r = introEmailDue({ events: [opened, nudged], day: 2, now: NOW + 3 * DAY });
   assert.equal(r.due, true, r.reason);
 });
 
@@ -143,7 +145,7 @@ test("the intro email goes on its day when no text went that day", () => {
   assert.equal(introEmailDue({ events: [opened], day: 2, now: NOW }).due, true);
 });
 
-test("the check-in email waits a day after the check-in text too", () => {
+test("the check-in email waits after the check-in text too", () => {
   const start = NOW - 16 * DAY;
   const events = [
     { type: "outreach_sent", at: iso(start), address: "1 Elm St" },
@@ -151,7 +153,7 @@ test("the check-in email waits a day after the check-in text too", () => {
     { type: "follow_up_sent", at: iso(NOW - 3600000), data: { kind: "outreach_nudge", step: 16 } },
   ];
   assert.equal(checkInEmailDue({ events, steps: [2], repeatEvery: 14, now: NOW }).due, false);
-  assert.equal(checkInEmailDue({ events, steps: [2], repeatEvery: 14, now: NOW + DAY }).due, true);
+  assert.equal(checkInEmailDue({ events, steps: [2], repeatEvery: 14, now: NOW + 3 * DAY }).due, true);
 });
 
 /* ---------- the plain first texts can be Matt's choice ---------- */
