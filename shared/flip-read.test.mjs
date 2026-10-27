@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { flipRead, qualifyStep, QUALIFY_ASKS, QUALIFY_ASK_RX, QUALIFY_PASSES, broughtStep, saysCosmeticOnly, workBudgetIn, saysRealWork, asksTheirRehab } from "./flip-read.js";
+import { flipRead, qualifyStep, QUALIFY_ASKS, QUALIFY_ASK_RX, QUALIFY_PASSES, broughtStep, saysCosmeticOnly, workBudgetIn, saysRealWork, asksTheirRehab, pointsToThePhotos, photosPassReply } from "./flip-read.js";
 
 // The kinds of answer to our first text that, on 2026-10-08, each started an
 // underwrite (paraphrased); the vague ones should have bought one question.
@@ -328,4 +328,51 @@ test("a full remodel still to do is real work; a remodel that's done isn't", () 
   assert.equal(saysRealWork("full remodel done in 2002"), false);
   assert.equal(saysRealWork("Fully remodeled kitchen and bath"), false);
   assert.equal(saysRealWork("kitchen and baths original"), false);
+});
+
+// Albert C., 3932 S Angeline St (2026-10-16): asked whether it was a project,
+// he wrote "Did you look at the photos?" and later "Look at the link and
+// you'll see. Lots of interior pictures." It was new construction; the bot
+// priced it and sent a letter at 455K. Matt: sending us to the photos means
+// it's turnkey, not worth pressing on, but we still ask for their others.
+test("'did you look at the photos' to our question about the work means it's turnkey", () => {
+  const ours = [
+    "Albert, is 3932 S Angeline St a bit of a project? Always on the hunt for houses that need some love.",
+    "Thanks, I'll run the numbers on it. What's your read on the work it needs and where it sells fixed up?",
+    "Hi Sam, came across your listing at 12 Oak St. I'm local and fix up houses. Is this one a bit of a project, or pretty turnkey?",
+    QUALIFY_ASKS[0],
+    "What condition's it in and what's the main work it needs?",
+  ];
+  const theirs = [
+    "Did you look at the photos?",
+    "Look at the link and you'll see. Lots of interior pictures.",
+    "Have you seen the pictures?",
+    "did u even look at the listing",
+    "The photos speak for themselves",
+    "Check out the pics",
+  ];
+  for (const o of ours) for (const t of theirs) assert.equal(pointsToThePhotos(t, o), true, `${t} ← ${o}`);
+});
+
+test("pointing to the photos is not turnkey when they name work, or when we didn't ask about the work", () => {
+  const ours = "Is this one a bit of a project, or pretty turnkey?";
+  for (const t of [
+    "Did you look at the photos? It needs everything",
+    "Look at the pictures, the foundation is cracked",
+    "Check the photos, needs a new roof and repairs throughout",
+  ]) assert.equal(pointsToThePhotos(t, ours), false, t);
+  assert.equal(pointsToThePhotos("Did you look at the photos?", "When works to see it, Thursday or Friday?"), false, "a showing question");
+  assert.equal(pointsToThePhotos("Did you look at the photos?", "Here's our letter of intent on 12 Oak St."), false, "not a question");
+  assert.equal(pointsToThePhotos("Did you get my photos?", ours), false, "sending photos isn't pointing at the listing");
+  assert.equal(pointsToThePhotos("It's a project for sure", ours), false);
+});
+
+test("the photos pass is a pass that asks for their other houses", () => {
+  for (const v of [0, 1, 2]) for (const callAsk of [false, true]) {
+    const r = photosPassReply({ variant: v, callAsk });
+    assert.match(r, /too nice|lighter than|not quite distressed|we buy/i, r);
+    assert.match(r, /off-market/i, r);
+  }
+  assert.match(photosPassReply({ variant: 1 }), FIXERS_ASK_RX);
+  assert.match(photosPassReply({ variant: 1, callAsk: true }), CALL_ASK_RX);
 });

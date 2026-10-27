@@ -292,6 +292,35 @@ export function withFixersAsk(reply = "", variant = 0) {
   return [...(replaceable ? parts.slice(0, -1) : parts), ask].join(" ").trim();
 }
 
+// "Did you look at the photos?", "Look at the link and you'll see. Lots of
+// interior pictures." (Albert C., 3932 S Angeline St, 2026-10-16). Asked
+// whether it's a project, an agent who sends us to the pictures is telling us
+// it isn't: that one was new construction, and the bot priced it and sent a
+// letter at 455K. Matt: it usually means turnkey and not worth pressing on,
+// but we still ask for their other distressed houses.
+const SEE_THE_PHOTOS_RX = /\b(?:did|have|had|do)\s+(?:you|u|ya)\s+(?:even\s+|get\s+a\s+chance\s+to\s+)?(?:look(?:ed)?\s+at|see|seen|check(?:ed)?(?:\s+out)?|view(?:ed)?|go\s+through)\s+(?:the|my|our|any\s+of\s+the)\s+(?:photos?|pics?|pictures?|images|listing|link|mls)\b|\b(?:look\s+at|check(?:\s+out)?|see)\s+the\s+(?:photos?|pics?|pictures?|images|link|listing)\b|\b(?:photos?|pics?|pictures?)\s+(?:speak\s+for\s+themselves|say\s+it\s+all|tell\s+(?:the|you\s+the)\s+story)\b|\ball\s+in\s+the\s+(?:photos?|pics?|pictures?|listing)\b|\blots\s+of\s+(?:interior\s+)?(?:photos|pics|pictures)\b/i;
+// Our text asked how much work it needs: the first text's "a bit of a
+// project, or pretty turnkey?", the one question, "what's the work it needs".
+const ASKED_CONDITION_RX = /\bproject\b|\bturn[\s-]?key\b|\bmove[\s-]?in[\s-]?ready\b|\bfixer\b|\bdistressed\b|\bmeat\s+on\s+the\s+bones\b|\bneeds?\s+(?:some\s+|much\s+|any\s+|a\s+lot\s+of\s+)?(?:work|love|TLC)\b|\bcosmetic\b|\brefresh\b/i;
+
+/**
+ * pointsToThePhotos(their, ours) → true when `ours` (our last text) asked
+ * about the work and `their` answer sends us to the photos or the listing
+ * instead, naming no work of its own.
+ */
+export function pointsToThePhotos(their = "", ours = "") {
+  const t = String(their || "");
+  const o = String(ours || "");
+  if (!SEE_THE_PHOTOS_RX.test(t) || !o.includes("?")) return false;
+  if (!ASKED_CONDITION_RX.test(o) && !QUALIFY_ASK_RX.test(o) && !WORK_NEEDED_RX.test(o)) return false;
+  return !WORK_LEFT_RX.test(t) && !saysRealWork(t) && !flipRead(t).qualifies;
+}
+
+/** photosPassReply({ variant, callAsk }) → our pass on it, asking for their other houses. */
+export function photosPassReply({ variant = 0, callAsk = false } = {}) {
+  return pick(callAsk ? QUALIFY_PASSES_CALL : QUALIFY_PASSES, variant);
+}
+
 /**
  * qualifyStep({ words, asked, passed, agentRehab, variant }) → { move, read, reply }
  *

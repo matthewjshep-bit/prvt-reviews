@@ -70,7 +70,7 @@ import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcce
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages, validAddress, sameRaisedHouse } from "./shared/ghl-stages.js";
-import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
+import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, pointsToThePhotos, photosPassReply, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
@@ -4841,6 +4841,33 @@ async function runReply(job, ctx) {
     }
   }
 
+  // "Did you look at the photos?" to our question about the work (Albert C.,
+  // 3932 S Angeline St, 2026-10-16: new construction, and the bot answered
+  // with 647K fixed up). They're telling us it's done: the reply is our pass
+  // with the ask for their other houses (shared/flip-read.js
+  // pointsToThePhotos), and it files the way our own pass does
+  // (replyPassed). Not once a number on it went out: that's a conversation.
+  let photosPass = false;
+  if (party === "agent" && !isCall && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass
+      && !SILENT_INTENTS.has(draft.intent) && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)
+      && pointsToThePhotos(theirLatestWords(a.transcript, job.message), lastOutbound(a.transcript)?.text || "")) {
+    const address = draft.propertyAddress || iceHouse?.address || "";
+    const rows = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const known = address ? knownOfferFor(rows, address, now) : null;
+    if (!known || ["draft", "new"].includes(offerStatus(known))) {
+      photosPass = true;
+      draft = {
+        ...draft,
+        intent: "deal_available",
+        reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
+        propertyAddress: address,
+        needsHuman: false,
+        reply: photosPassReply({ variant: openerVariant(job.contactId, 3), callAsk: Boolean(callAsk) }),
+      };
+      job.intent = draft.intent;
+    }
+  }
+
   // Partner terms are Matt's: the reply waits for him whatever else rewrote
   // it above, and a person's flag keeps a redraft from being spent on it.
   if (terms) {
@@ -4862,7 +4889,7 @@ async function runReply(job, ctx) {
   // "assignment", too long — is written once more, told exactly what held
   // it. The same gates judge the rewrite: clean, it carries on as any clean
   // draft would; still caught, the first draft and its reasons stay for Matt.
-  if (replyArgs && !a.hold?.held) {
+  if (replyArgs && !a.hold?.held && !photosPass) {
     const r = await redraftOnGate({ draft, gate, gateFor, config, redraft: (fix) => deps.draft({ ...replyArgs, fix }) });
     draft = r.draft; gate = r.gate;
   }
@@ -4876,14 +4903,14 @@ async function runReply(job, ctx) {
   // Never on a yes (2026-10-15): a reply that turns down a house they just
   // said yes on is the bot's mistake, not our decision.
   const replyPassed = party === "agent" && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass
-    && ["deal_available", "new_property"].includes(draft.intent) && ourReplyPasses(draft.reply)
+    && ["deal_available", "new_property"].includes(draft.intent) && (photosPass || ourReplyPasses(draft.reply))
     && !saysYes(job.originalMessage || job.message);
   if (replyPassed) {
     draft = {
       ...draft,
       intent: "investor_open",
       reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
-      ...(draft.propertyAddress ? { qualify: { stage: "pass", address: draft.propertyAddress, why: "our reply passed on it" } } : {}),
+      ...(draft.propertyAddress ? { qualify: { stage: "pass", address: draft.propertyAddress, why: photosPass ? "they pointed us to the photos" : "our reply passed on it" } } : {}),
     };
     job.intent = draft.intent;
     gate = gateFor(draft);

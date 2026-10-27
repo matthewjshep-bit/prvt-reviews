@@ -3040,6 +3040,17 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   house), and `retire_unsent_offer` closes a number we priced on that house
   and never sent (`we_passed`, `retired.by: "conversation"`). An offer that
   went out — floated or sent — is never touched.
+- **"Did you look at the photos?" → our pass (2026-10-26).** Albert C.,
+  3932 S Angeline St: asked what work it needed, he sent us to the photos;
+  the bot answered with 647K fixed up, floated 455K and sent a letter on new
+  construction. When our last text asked about the work (project / turnkey /
+  the one question / "the work it needs") and their answer points at the
+  photos, pics or listing and names no work, `pointsToThePhotos`
+  (`shared/flip-read.js`) replaces the reply with a `QUALIFY_PASSES` line
+  (the call-ask one when the call ask is on), which asks for their other
+  houses on or off-market, and files it through the same pass above, with
+  `why: "they pointed us to the photos"`. Not once a number on the house
+  went out.
 - **Their no on a house we never sent → not Tier 1 (2026-10-16).** Brent S.:
   the underwrite on 4203 E Congress stopped early, so the row stayed a held
   draft. Matt texted a number by hand, the agent said "not at this time", and

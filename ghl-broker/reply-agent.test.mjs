@@ -7605,6 +7605,60 @@ test("a reply that passes on one house and chases another still runs the other",
   assert.equal(d.intent, "new_property");
 });
 
+// Albert C., 3932 S Angeline St (2026-10-16): asked what work it needed, he
+// wrote "Did you look at the photos?" and the bot answered with 647K fixed
+// up, floated 455K and sent a letter. It was new construction; Matt called
+// to apologise. Sent to the photos, we pass and ask for their other houses.
+const ANGELINE = "3932 S Angeline St, Seattle, WA 98118";
+async function photosReply(message, { ours = "Thanks, I'll run the numbers on it. What's your read on the work it needs and where it sells fixed up?", offers = [] } = {}) {
+  _resetJobs();
+  const store = fakeStore();
+  store.listOffers = async () => offers;
+  const uw = [];
+  const { job } = await startReply({
+    client: threadClient([
+      ["outbound", "Albert, is 3932 S Angeline St a bit of a project? Always on the hunt for houses that need some love."],
+      ["inbound", "Let me know what you can do with it?"],
+      ["outbound", ours],
+    ]),
+    locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true, message,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "question", confidence: "high", needsHuman: false, propertyAddress: ANGELINE,
+        reply: "Ran the numbers, I'm seeing it around 647k fixed up. What's the seller hoping to get for it?" }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-ph" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return { d: await store.getReplyDraft(job.draftId), uw };
+}
+
+test("an agent who answers 'did you look at the photos' to our question about the work gets a pass and an ask for their other houses, not our number", async () => {
+  const unsent = { id: "o-ang", address: ANGELINE, contactId: "c1", status: "new", cashAmount: 455250, createdAt: iso(3600000) };
+  const { d, uw } = await photosReply("Did you look at the photos?", { offers: [unsent] });
+  assert.equal(uw.length, 0, "no underwrite on a house they told us is done");
+  assert.doesNotMatch(d.reply, /647|run the numbers|seller hoping/i, d.reply);
+  assert.match(d.reply, /off-market/i, "still asks for their other houses");
+  assert.equal(d.intent, "investor_open");
+  assert.equal(d.qualify?.stage, "pass");
+  assert.match(d.qualify?.why || "", /photos/);
+  assert.ok((d.actions || []).some((a) => a.type === "retire_unsent_offer"), "the number we never sent on it closes");
+  assert.deepEqual(tierOneActions(d.actions).filter((a) => a.status !== "skipped"), [], "not Tier 1");
+});
+
+test("'look at the photos' on a house we already sent a number on is left to the conversation", async () => {
+  const sent = { id: "o-ang", address: ANGELINE, contactId: "c1", status: "sent", cashAmount: 455250, sends: [{ at: iso(3600000) }], createdAt: iso(7200000) };
+  const { d } = await photosReply("Did you look at the photos?", { offers: [sent] });
+  assert.equal(d.intent, "question");
+  assert.match(d.reply, /647k/);
+});
+
+test("'look at the photos' to a question that wasn't about the work is not a pass", async () => {
+  const { d } = await photosReply("Did you look at the photos?", { ours: "When works to see it, Thursday or Friday?" });
+  assert.notEqual(d.qualify?.stage, "pass");
+  assert.match(d.reply, /647k/);
+});
+
 test("a reply that wants the house is untouched", async () => {
   const { d, uw } = await ourReplyIs("Good to know. What do you think it'd be worth fixed up, and what would you budget for the work?", { message: "Needs a new roof and the kitchen is original" });
   assert.equal(uw.length, 1);
