@@ -1103,6 +1103,11 @@ const subjectPropertyFieldId = (client, locationId) =>
 export function addressSourceFor({ linked = null, suppliedAddress = "", refereed = null } = {}) {
   if (linked && addressKey(linked.address) !== addressKey(suppliedAddress)) return "link";
   if (linked) return "standing";
+  // A house with its number is never traded for a street without one: the
+  // thread calling 438 NE 9th St "9th Street" is the same house said loosely,
+  // not a newer one (2026-10-28: the run priced "9th Street, Bend, OR" — some
+  // house on 9th — and wrote that on the offer).
+  if (refereed?.moved && parseUsAddress(suppliedAddress).houseNo && !parseUsAddress(refereed.address).houseNo) return "standing";
   if (refereed?.moved) return "thread";
   return "standing";
 }
@@ -3039,6 +3044,9 @@ export function brickedWorkText({ message = "", remarks = "" } = {}) {
 
 async function brickedRead(job, address, saved, { remarks = "" } = {}) {
   if (!brickedOn(saved) || !address) return null;
+  // A street with no house number is some house on that street: Bricked
+  // would price one, and it may not be theirs.
+  if (!parseUsAddress(address).houseNo) { job.warnings.push(`Bricked.ai not asked: "${address}" has no house number`); return null; }
   try {
     const work = brickedWorkText({ message: job.message, remarks });
     const b = await brickedProperty(address, { apiKey: String(saved.brickedApiKey).trim(), ...(work ? { repairs: work } : {}) });
