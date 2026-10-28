@@ -19,7 +19,7 @@ delete process.env.DATABASE_URL;
 delete process.env.AUTO_UNDERWRITE_ENABLED;
 
 const { store } = await import("./store.js");
-const { startUnderwrite, _resetJobs, brickedBasis, brickedLine, brickedOn, brickedWorkText } = await import("./auto-underwrite.js");
+const { startUnderwrite, _resetJobs, brickedBasis, brickedLine, brickedOn, brickedWorkText, addressSourceFor } = await import("./auto-underwrite.js");
 const { isDraftOnly, isSkeleton } = await import("./shared/offer-status.js");
 const { _resetCompsCache } = await import("./comps-zillow.js");
 await store.init();
@@ -200,4 +200,23 @@ test("the work Bricked is told about is the agent's text and the listing's remar
   assert.equal(brickedWorkText({ message: "roof is shot", remarks: "Bring your contractor" }),
     "What the listing agent said: roof is shot\nListing remarks: Bring your contractor");
   assert.equal(brickedWorkText({ message: "x".repeat(5000) }).length, 1200);
+});
+
+test("a street with no house number isn't sent to Bricked, since it would price some house on that street", async () => {
+  _resetJobs();
+  const { calls, restore } = stubFetch();
+  try {
+    const { job } = await startUnderwrite({ client: ghl().client, locationId: "LOC-bk-nonumber", saved: { ...base, autoUnderwriteMode: "skeleton" }, store,
+      contactId: "agent-b7", address: "9th Street, Bend, OR", deps: noOffer });
+    assert.ok(await settle(job), `still ${job.status}/${job.phase}`);
+    assert.equal(calls.bricked.length, 0);
+    assert.ok(job.warnings.some((w) => /no house number/.test(w)), job.warnings.join(" | "));
+  } finally { restore(); }
+});
+
+test("the thread calling a house by its street alone doesn't replace the address with its number", () => {
+  const supplied = "438 NE 9th St, Bend, OR 97701";
+  assert.equal(addressSourceFor({ suppliedAddress: supplied, refereed: { address: "9th Street, Bend, OR", moved: true } }), "standing");
+  assert.equal(addressSourceFor({ suppliedAddress: supplied, refereed: { address: "61180 Tapadera St, Bend, OR 97702", moved: true } }), "thread", "a different house with a number still moves it");
+  assert.equal(addressSourceFor({ suppliedAddress: "9th Street, Bend, OR", refereed: { address: supplied, moved: true } }), "thread", "a number replacing none is fine");
 });
