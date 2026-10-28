@@ -253,6 +253,29 @@ function AutoUnderwrite({ contactId, address, askingPrice, onApply, declined }) 
   );
 }
 
+// Bricked.ai's read on a draft the conversation made (brickedOnDrafts,
+// 2026-10-28): its ARV and repairs are already in the inputs; this shows the
+// rest — the as-is value, how many ARV comps it judged renovated, and its report.
+function BrickedRead({ b }) {
+  const arvComps = (b.comps || []).filter((c) => c.use === "arv");
+  const pct = (x) => (x != null ? `${Math.round(x * 100)}%` : null);
+  return (
+    <div className="mb-3 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 text-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="font-semibold text-indigo-900">Bricked.ai</span>
+        {b.link && <a href={b.link} target="_blank" rel="noreferrer" className="text-xs font-semibold text-indigo-700 underline">Open the Bricked report</a>}
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-slate-700">
+        {b.arv > 0 && <span>ARV <strong>{fmtMoney(b.arv)}</strong>{pct(b.arvConfidence) && <span className="text-slate-500"> ({pct(b.arvConfidence)} confidence)</span>}</span>}
+        {b.asIs > 0 && <span>As-is <strong>{fmtMoney(b.asIs)}</strong></span>}
+        {b.repairs != null && <span>Repairs <strong>{fmtMoney(b.repairs)}</strong></span>}
+        {arvComps.length > 0 && <span>{arvComps.filter((c) => c.renovated).length} of {arvComps.length} ARV comps renovated</span>}
+      </div>
+      <p className="mt-1 text-xs text-slate-500">Its ARV and repairs are in the numbers below. Change either and the offer follows.</p>
+    </div>
+  );
+}
+
 function Field({ label, children }) {
   return (
     <div>
@@ -1683,6 +1706,7 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       )}
 
       {uwModel === "comps" && <>
+      {snap?.bricked && <BrickedRead b={snap.bricked} />}
       <CompsPane
         key={`comps-${paneInit.nonce}`}
         address={inputs.address}

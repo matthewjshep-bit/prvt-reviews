@@ -849,7 +849,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // characters; PUT keeps the stored value wherever the form sent a blank.
   // `?reveal=1` returns them only for a location that has a location key
   // configured (and therefore presented one to get this far).
-  const SECRET_FIELDS = ["aiApiKey", "apifyToken", "compsApiKey", "rentcastApiKey", "googleApiKey", "captureToken", "githubToken", "slackBotToken"];
+  const SECRET_FIELDS = ["aiApiKey", "apifyToken", "brickedApiKey", "compsApiKey", "rentcastApiKey", "googleApiKey", "captureToken", "githubToken", "slackBotToken"];
   const locationHasKey = (locationId) => {
     try { return Boolean(JSON.parse(process.env.GHL_LOCATION_KEYS || "{}")[locationId]); } catch { return false; }
   };

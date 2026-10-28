@@ -86,6 +86,13 @@ export function AiProvenance({ offer }) {
       {uw.mode && <Row label="Underwrite" value={uw.mode} />}
       {uw.dryRun && <Row label="Mode" value="dry run" />}
 
+      {(uw.brickedArv || uw.brickedAsIs) && (
+        <Row label="Bricked.ai" value={<>
+          {[uw.brickedArv ? `ARV ${fmtMoney(uw.brickedArv)}` : "", uw.brickedAsIs ? `as-is ${fmtMoney(uw.brickedAsIs)}` : "",
+            uw.brickedRepairs != null ? `repairs ${fmtMoney(uw.brickedRepairs)}` : ""].filter(Boolean).join(" · ")}
+          {uw.brickedLink && <> · <a href={uw.brickedLink} target="_blank" rel="noreferrer" className="underline">report</a></>}
+        </>} />
+      )}
       {uw.arvBasis && (
         <p className="mt-2 border-t border-black/5 pt-2 text-xs text-slate-600">ARV from {uw.arvBasis}</p>
       )}

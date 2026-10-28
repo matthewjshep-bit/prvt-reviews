@@ -114,6 +114,11 @@ export const DEFAULT_OFFER_SETTINGS = {
   compsApiKey: "",           // enables the comps map + MLS photos (realestateapi.com API key)
   aiApiKey: "",              // enables the AI rehab photo scan (Anthropic API key)
   apifyToken: "",            // Zillow listing photos via Apify (zillow-detail-scraper)
+  // Bricked.ai (2026-10-28): with brickedOnDrafts on, a draft or skeleton the
+  // conversation makes carries Bricked's ARV, as-is value and repairs.
+  // Off by default; ghl-broker/price-bricked.js + auto-underwrite.js.
+  brickedApiKey: "",
+  brickedOnDrafts: false,
   // Credential for the Zillow comp-capture bookmarklet. Minted server-side by
   // POST /api/offers/comps/capture-token; scoped to appending to the comp
   // inbox and nothing else, because it lives in a browser bookmark. Rotating
