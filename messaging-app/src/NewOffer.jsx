@@ -271,7 +271,9 @@ function BrickedRead({ b }) {
         {b.repairs != null && <span>Repairs <strong>{fmtMoney(b.repairs)}</strong></span>}
         {arvComps.length > 0 && <span>{arvComps.filter((c) => c.renovated).length} of {arvComps.length} ARV comps renovated</span>}
       </div>
-      <p className="mt-1 text-xs text-slate-500">Its ARV and repairs are in the numbers below. Change either and the offer follows.</p>
+      {b.repairs == null
+        ? <p className="mt-1 text-xs font-semibold text-amber-700">No repair estimate: nothing described the work. Its ARV is below; put in repairs before you price.</p>
+        : <p className="mt-1 text-xs text-slate-500">Its ARV and repairs are in the numbers below. Change either and the offer follows. Its repair prices can run light, so check the big items.</p>}
     </div>
   );
 }

@@ -31,8 +31,25 @@ export function brickedRequestUrl(address, overrides = {}) {
 /**
  * brickedProperty(address, { apiKey, fetch, ...overrides }) → normalizeBricked(raw)
  * Throws with `.status` on any non-2xx, carrying Bricked's own message.
+ *
+ * Repairs: Bricked prices repairs only from a description of the work
+ * (`repairs`); without one `repairs` comes back null, not zero (2026-10-28,
+ * 7034 S K St: none without, $45,859 in 17 lines with the agent's words).
+ *
+ * A dropped connection is tried once more (the first live call with a
+ * description, 2026-10-28, failed "fetch failed" and the retry went through).
+ * An answer from Bricked, or our own timeout, is not.
  */
-export async function brickedProperty(address, { apiKey, fetch = globalThis.fetch, timeoutMs = BRICKED_TIMEOUT_MS, ...overrides } = {}) {
+export async function brickedProperty(address, opts = {}) {
+  try {
+    return await brickedOnce(address, opts);
+  } catch (e) {
+    if (e?.status || e?.name === "AbortError") throw e;
+    return brickedOnce(address, opts);
+  }
+}
+
+async function brickedOnce(address, { apiKey, fetch = globalThis.fetch, timeoutMs = BRICKED_TIMEOUT_MS, ...overrides } = {}) {
   if (!apiKey) throw new Error("Bricked: no API key");
   if (!String(address || "").trim()) throw new Error("Bricked: no address");
   const ctl = new AbortController();

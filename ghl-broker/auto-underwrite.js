@@ -1838,7 +1838,7 @@ async function runUnderwrite(job, ctx) {
     };
     got.subject = subjectOnly;
     job.draftOnly = true;
-    const b = await brickedRead(job, extraction.address, saved);
+    const b = await brickedRead(job, extraction.address, saved, { remarks: listing?.remarks || "" });
     job.subjectLine = [subjectLineOf(subjectOnly, job.listPrice), b ? brickedLine(b) : ""].filter(Boolean).join(" · ");
     const asking = extraction.askingPrice || job.listPrice || 0;
     return finishHeld(job, ctx, { extraction: { ...extraction, askingPrice: asking }, held: [DRAFT_ONLY_HOLD], partial: {
@@ -2993,10 +2993,22 @@ export function subjectLineOf(s = {}, listPrice = 0) {
 // A failed call is a warning, and the draft is made as before.
 export const brickedOn = (saved) => Boolean(saved?.brickedOnDrafts) && Boolean(String(saved?.brickedApiKey || "").trim());
 
-async function brickedRead(job, address, saved) {
+// What Bricked prices the repairs from: the agent's text and the listing's
+// remarks. With neither it has nothing to go on and gives no repairs.
+export function brickedWorkText({ message = "", remarks = "" } = {}) {
+  const parts = [
+    String(message || "").trim() ? `What the listing agent said: ${String(message).trim()}` : "",
+    String(remarks || "").trim() ? `Listing remarks: ${String(remarks).trim()}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join("\n").slice(0, 1200) : "";
+}
+
+async function brickedRead(job, address, saved, { remarks = "" } = {}) {
   if (!brickedOn(saved) || !address) return null;
   try {
-    const b = await brickedProperty(address, { apiKey: String(saved.brickedApiKey).trim() });
+    const work = brickedWorkText({ message: job.message, remarks });
+    const b = await brickedProperty(address, { apiKey: String(saved.brickedApiKey).trim(), ...(work ? { repairs: work } : {}) });
+    if (b.repairs == null && (b.arv > 0 || b.asIs > 0)) job.warnings.push("Bricked.ai gave no repair estimate — nothing described the work");
     if (!(b.arv > 0) && !(b.asIs > 0)) { job.warnings.push("Bricked.ai had no value for this address"); return null; }
     job.bricked = { arv: b.arv, asIs: b.asIs, repairs: b.repairs, link: b.links.share || b.links.dashboard || null };
     if (b.arv > 0) job.arvBasis = brickedBasis(b);

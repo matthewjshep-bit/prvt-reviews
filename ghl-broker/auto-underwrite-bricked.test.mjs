@@ -19,7 +19,7 @@ delete process.env.DATABASE_URL;
 delete process.env.AUTO_UNDERWRITE_ENABLED;
 
 const { store } = await import("./store.js");
-const { startUnderwrite, _resetJobs, brickedBasis, brickedLine, brickedOn } = await import("./auto-underwrite.js");
+const { startUnderwrite, _resetJobs, brickedBasis, brickedLine, brickedOn, brickedWorkText } = await import("./auto-underwrite.js");
 const { isDraftOnly, isSkeleton } = await import("./shared/offer-status.js");
 const { _resetCompsCache } = await import("./comps-zillow.js");
 await store.init();
@@ -81,12 +81,13 @@ test("with Bricked on, a skeleton opens priced by Bricked's ARV and repairs, and
   const { sent, client } = ghl();
   try {
     const { job } = await startUnderwrite({ client, locationId: "LOC-bk-skel", saved: { ...base, autoUnderwriteMode: "skeleton" }, store,
-      contactId: "agent-b1", address: ADDRESS, deps: noOffer });
+      contactId: "agent-b1", message: "Needs a new roof and the kitchen is original", address: ADDRESS, deps: noOffer });
     assert.ok(await settle(job), `still ${job.status}/${job.phase}`);
     assert.equal(job.status, "held", job.error || "");
     assert.equal(calls.bricked.length, 1, "one Bricked lookup");
     assert.equal(calls.bricked[0].key, "bk-123");
     assert.equal(new URL(calls.bricked[0].url).searchParams.get("address"), ADDRESS);
+    assert.match(new URL(calls.bricked[0].url).searchParams.get("repairs"), /What the listing agent said: Needs a new roof/, "Bricked prices repairs from the agent's words");
     assert.equal(calls.detail + calls.search, 0, "a skeleton still asks Zillow nothing");
 
     const draft = await store.getOffer(job.offerId);
@@ -175,4 +176,28 @@ test("the basis and the line read plainly when Bricked leaves parts out", () => 
   assert.equal(brickedBasis({ comps: [] }), "Bricked.ai");
   assert.equal(brickedLine({ arv: 500000 }), "Bricked ARV $500,000");
   assert.equal(brickedLine({ asIs: 300000, repairs: 0 }), "as-is $300,000 · repairs $0");
+});
+
+test("with nothing describing the work, Bricked is asked for no repairs, and the run says the draft has none", async () => {
+  _resetJobs();
+  const { calls, restore } = stubFetch({ bricked: { status: 200, body: { ...BRICKED, totalRepairCost: null, repairs: [] } } });
+  try {
+    const { job } = await startUnderwrite({ client: ghl().client, locationId: "LOC-bk-norepairs", saved: { ...base, autoUnderwriteMode: "skeleton" }, store,
+      contactId: "agent-b6", address: ADDRESS, deps: noOffer });
+    assert.ok(await settle(job), `still ${job.status}/${job.phase}`);
+    assert.equal(new URL(calls.bricked[0].url).searchParams.has("repairs"), false);
+    assert.ok(job.warnings.some((w) => /no repair estimate/.test(w)), job.warnings.join(" | "));
+    const draft = await store.getOffer(job.offerId);
+    assert.equal(draft.draft.inputs.arv, 640000, "the ARV is still Bricked's");
+    assert.equal(draft.draft.inputs.repairs, 0, "repairs are left for Matt, not guessed");
+    assert.equal(draft.draft.bricked.repairs, null);
+  } finally { restore(); }
+});
+
+test("the work Bricked is told about is the agent's text and the listing's remarks, and nothing when there are neither", () => {
+  assert.equal(brickedWorkText({}), "");
+  assert.equal(brickedWorkText({ message: "  " }), "");
+  assert.equal(brickedWorkText({ message: "roof is shot", remarks: "Bring your contractor" }),
+    "What the listing agent said: roof is shot\nListing remarks: Bring your contractor");
+  assert.equal(brickedWorkText({ message: "x".repeat(5000) }).length, 1200);
 });

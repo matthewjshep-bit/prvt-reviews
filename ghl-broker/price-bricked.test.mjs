@@ -68,3 +68,16 @@ test("missing numbers read as unknown, not zero", () => {
   assert.equal(r.subject.lastSale, null);
   assert.ok(brickedRequestUrl("x").startsWith("https://api.bricked.ai/v1/property/create?address=x"));
 });
+
+test("a dropped connection is tried once more, and an answer from Bricked is not", async () => {
+  let n = 0;
+  const flaky = async () => { n++; if (n === 1) throw new TypeError("fetch failed"); return { ok: true, status: 200, json: async () => RAW }; };
+  const r = await brickedProperty("123 Fern Way", { apiKey: "k", fetch: flaky });
+  assert.equal(r.arv, 640000);
+  assert.equal(n, 2);
+
+  let m = 0;
+  const lapsed = async () => { m++; return { ok: false, status: 402, statusText: "", json: async () => ({ error: "Subscription inactive" }) }; };
+  await assert.rejects(brickedProperty("123 Fern Way", { apiKey: "k", fetch: lapsed }), (e) => e.status === 402);
+  assert.equal(m, 1);
+});
