@@ -705,3 +705,27 @@ test("the second look on a house that came off the market says so, and still nev
   assert.doesNotMatch(off, /wasn't far from ours/);
   assert.match(outboundOpening(base), /wasn't far from ours/);
 });
+
+/* ---------- personality ---------- */
+
+// Matt, 2026-10-27: the replies read dry. Light personality is a switch, off
+// until he turns it on, and never touches money or the texts we start.
+test("replies stay plain until personality is turned on, and the setting survives a save", () => {
+  const plain = normalizeConversationAi({});
+  assert.equal(plain.persona.personality, "off");
+  assert.doesNotMatch(buildSystemPrompt({ config: plain, party: "agent" }), /PERSONALITY \(when answering them/);
+
+  const light = normalizeConversationAi({ persona: { personality: "light" } });
+  assert.equal(light.persona.personality, "light");
+  assert.equal(normalizeConversationAi({ persona: { personality: "zany" } }).persona.personality, "off");
+  for (const party of ["agent", "investor"]) {
+    const sys = buildSystemPrompt({ config: light, party });
+    assert.match(sys, /PERSONALITY \(when answering them/);
+    // The line never lands on money, and never on a text the machine starts.
+    assert.match(sys, /None at all when the message is about a price, an offer, a counter or terms/);
+    assert.match(sys, /a message you are STARTING keeps the tone its own instructions give/);
+    // Concise still wins, and the no-warm-up rule still stands.
+    assert.match(sys, /stays as short as the length rule says/);
+    assert.match(sys, /No warm-up clause before the substance/);
+  }
+});

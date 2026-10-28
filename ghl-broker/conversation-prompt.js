@@ -169,6 +169,22 @@ const CHECKIN_PERSONALITY =
   "Never a pun, never a joke that needs a setup, never sarcasm, never at the agent's, a seller's or a house's expense. " +
   "If nothing comes naturally, warm and plain is fine.";
 
+// Replies with a little personality (Matt, 2026-10-27: "the bot is kind of
+// dry … a splash of personality while keeping it professional", and "keep it
+// concise"). Settings → Who the bot is → Personality. The system prompt is
+// shared with the messages the machine starts, which keep their own tone
+// (the first text went plain on 2026-10-16), so this speaks to replies only.
+// The no-warm-up rule in HUMAN still holds: the line goes inside the point.
+const REPLY_PERSONALITY =
+  "PERSONALITY (when answering them; a message you are STARTING keeps the tone its own instructions give): a little personality, " +
+  "still brief and professional. Now and then, never in two of our messages in a row, one light, dry touch where the moment is easy: " +
+  "a house too nice for us (\"too pretty for us\", \"honestly, the uglier the better\"), they're slammed or away (\"whenever you surface\"), " +
+  "a teardown (\"music to my ears\"), a thread winding down, small talk, asking for their next house. A few words of wry or self-deprecating " +
+  "humour inside the sentence that carries the point, never a clause in front of it, and the reply stays as short as the length rule says. " +
+  "Never a pun, sarcasm, a joke that needs a setup, an emoji or exclamation-mark cheer, and never at the agent's, a seller's, a buyer's or " +
+  "a house's expense. None at all when the message is about a price, an offer, a counter or terms, bad news, a complaint, or someone upset. " +
+  "If nothing comes naturally, plain is right.";
+
 const OFF_MARKET_ASK_WORDS = `Say "off-market" itself, never "before it hits the MLS" or "before it hits the market".`;
 // The sellers behind the deals with committed buyers (2026-10-09), as the
 // check-in may name one: never a list, never all of them.
@@ -276,6 +292,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   ].filter(Boolean);
   parts.push(voice.join(" "));
   parts.push(HUMAN);
+  if (persona.personality === "light") parts.push(REPLY_PERSONALITY);
 
   parts.push(
     persona.ifAskedIfBot
