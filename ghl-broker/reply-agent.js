@@ -6637,8 +6637,8 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       return { ok: true, skipped: why };
     }
     // You stopped outreach on the deal since this was queued (Stop outreach
-    // on the deal pane). The machine's own text about it is dismissed; a
-    // reply to something the buyer said goes as usual (stoppedDealAction).
+    // on the deal pane). A deal text about it is dismissed; what answers a
+    // buyer still goes (stoppedDealAction).
     if (dealOutreachStopped(offer?.deal) && stoppedDealAction(d) === "dismiss") {
       const ts = new Date(now).toISOString();
       const street = String(offer.address || "the deal").split(",")[0].trim();
@@ -7181,28 +7181,30 @@ export async function standDownForHold({ client, store, locationId, contactId, w
  * stoppedDealAction(draft) → "dismiss" | "reply"
  *
  * What stopping outreach on a deal does to an open text about it. Stop is
- * for the outreach the machine starts (Matt, 2026-10-27, 1146 N 77th: "The
- * stop is really just for initial outreach going out to these people"): a
- * blast, a nudge, a walkthrough text — an outbound kind and nothing they
- * said — is dismissed. A reply to something a buyer said goes on as it
- * would on any deal. (Until 2026-10-27 replies were held for you, and a
- * pass or thanks was dropped; on 77th that left every buyer who wrote back
- * without an answer.)
+ * for the first text only (Matt, 2026-10-27, 1146 N 77th: "The stop is really
+ * just for initial outreach going out to these people"; 2026-10-28: the same
+ * for a soft commit, and follow-ups too): the deal text and the nudges after
+ * it to a buyer who never answered are dismissed. Everything that answers a
+ * buyer goes on as it would on any deal — the bot's reply, the follow-up to
+ * one who spoke up, a walkthrough reminder, the deal they asked us to email.
+ * (Until 2026-10-27 replies were held for you and a pass or thanks dropped;
+ * until 2026-10-28 every machine-started text was dropped, follow-ups and
+ * walkthrough reminders included.)
  */
-export const stoppedDealAction = (d) => (d?.outbound?.kind && !String(d.inbound || "").trim() ? "dismiss" : "reply");
+const FIRST_DEAL_TEXTS = new Set(["blast_open", "blast_nudge", "dataroom_nudge"]);
+export const stoppedDealAction = (d) => (FIRST_DEAL_TEXTS.has(d?.outbound?.kind) && !d.outbound.asked && !String(d.inbound || "").trim() ? "dismiss" : "reply");
 
 /**
- * stopDealOutreach({ client, store, locationId, offer }) → { dismissed: [id], held: [id] }
+ * stopDealOutreach({ client, store, locationId, offer }) → { dismissed: [id] }
  *
- * The moment you stop outreach on a deal, every buyer text about it already
+ * The moment you stop outreach on a deal, every deal text about it already
  * queued is pulled back rather than left to be caught at its send time (the
- * guard in sendReplyDraft): the machine's own are dismissed, from the outbox
- * too. A reply to a buyer is left as it is (stoppedDealAction); `held` stays
- * empty and is kept for the route's answer. The listing agent's thread is not
- * a buyer's and is left alone.
+ * guard in sendReplyDraft), from the outbox too. What answers a buyer stays
+ * on its clock (stoppedDealAction). The listing agent's thread is not a
+ * buyer's and is left alone.
  */
 export async function stopDealOutreach({ client, store, locationId, offer, now = Date.now() }) {
-  const out = { dismissed: [], held: [] };
+  const out = { dismissed: [] };
   if (!offer?.id) return out;
   const open = await store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 5000 }).catch(() => []);
   const ts = new Date(now).toISOString();

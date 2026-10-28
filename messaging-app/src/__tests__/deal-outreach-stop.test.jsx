@@ -20,7 +20,7 @@ test("a stopped deal says so on the pane, offers Resume, and the list row says i
   const html = render(o);
   expect(html).toContain("Resume outreach");
   expect(html).toMatch(/Outreach stopped Oct \d+\./);
-  expect(html).toContain("A buyer&#x27;s reply about it waits for you.");
+  expect(html).toContain("Buyers already talking about it are still answered");
   expect(renderToStaticMarkup(<InvestorSummary deal={o.deal} />)).toContain("outreach stopped");
 });
 

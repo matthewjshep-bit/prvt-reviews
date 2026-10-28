@@ -4967,7 +4967,7 @@ pipeline response carries the counts as `handOffs`:
 | price | Matt sets the number — the GHL Tier 1 card | price_it, number owed, underwrite held, no_fit |
 | call | booked on the calendar (`conversationAi.booking`), else GHL Manual Actions (`desk.ghlCalls`) | wants_call / scheduling (held or from the audit), call_* |
 | ping | GHL workflow "App: needs Matt" (`desk.ghlPings`), and its own page | paper_to_sign, approve_number (Approve on the offer), closing tasks, pre_contract, partner questions |
-| drop | closed quietly | a held thanks/photo/stop or a stranger's text a day on (the audit's `quietHolds`), a pass on a deal with outreach stopped, an office line two agents share |
+| drop | closed quietly | a held thanks/photo/stop or a stranger's text a day on (the audit's `quietHolds`), an office line two agents share |
 
 A house waiting on Matt's number (draft only) gets one `take_ask` for the
 agent's read — worth done, the work, what the seller would take — then waits
@@ -6928,8 +6928,11 @@ A fourth buyer standing on a deal, between Evaluating and Committed. Set it on
 the buyer in Deals → open the deal, and **outreach on that deal stops**:
 
 - no new blast (the button, the blast on promote, and the second wave),
-- no follow-up to any other buyer (`deal_followup`),
-- no automatic dataroom invite to anyone but the buyer it is held for.
+- no catch-up send, and the bot doesn't bring it up to a buyer who never had it.
+
+Buyers already talking about it are still worked (2026-10-28, see "Stop
+outreach on a deal" below): their `deal_followup`, the package they ask for,
+and walkthrough reminders still go.
 
 What it deliberately does **not** do: it is not `dealSpokenFor`. The deal is
 still live and still priced, other buyers still see it and its numbers, and
@@ -6953,33 +6956,43 @@ committed or passed.
 Deals → open the deal → **Stop outreach** (top right). Matt asked for it on
 5232 S Yakima: "stop outreach on this one completely." It is the one stored
 switch, `deal.outreachStopped {at, by}`. `dealOutreachPaused` returns
-`{status: "stopped"}` for it before anything else, with no contactId, so
-**no buyer is let through, the committed one included**:
+`{status: "stopped"}` for it before anything else, with no contactId.
+**It holds back first texts only:**
 
-- no blast, whether from the button, on promote or as a later wave (the wave
-  preview says "you stopped outreach");
-- no `deal_followup`, no package invite the machine starts, no walkthrough
-  reminder or follow-up;
+- no blast, whether from the button, on promote, as a later wave or as the
+  morning catch-up (the wave preview says "you stopped outreach");
+- no `blast_open`, `blast_nudge` or `dataroom_nudge` to a buyer who never
+  answered. The send-time guard in `sendReplyDraft` (auto path only)
+  dismisses one with "you stopped outreach on … — not sent";
 - the bot doesn't bring the deal up to a buyer who isn't already on it or
-  blasted (`conversation-context.js`);
-- **a buyer who writes back is answered as on any other deal** (2026-10-27).
-  On 1146 N 77th Matt stopped the deal to catch a wrong price and then sent the
-  deal by hand; every buyer who answered got nothing from the app (13 replies
-  dismissed, the rest held). Matt: "The stop is really just for initial
-  outreach going out to these people." So the send-time guard in
-  `sendReplyDraft` only dismisses a machine-started text about the deal (an
-  outbound kind and nothing they said — `stoppedDealAction`), with "you
-  stopped outreach on … — not sent". A reply follows the usual rules (auto-send
-  intents, NEVER_AUTO, the reply gates), and the package link owed to a buyer
-  who answers a deal text (`blastLink: "on_reply"`) goes with it. Before
-  2026-10-27 a reply was held for you and a pass or thanks dropped.
+  blasted (`conversation-context.js`).
+
+**Everything that answers or follows up a buyer already talking still goes**,
+under the usual rules (auto-send intents, NEVER_AUTO, the reply gates). On
+1146 N 77th (2026-10-27) Matt stopped the deal to catch a wrong price and
+then sent the deal by hand. Every buyer who answered got nothing from the app:
+13 replies were dismissed and the rest held. Matt: "The stop is really just
+for initial outreach going out to these people." So a reply goes as on any
+deal, a pass or thanks included, and so does the package link owed to a buyer
+who answers a deal text (`blastLink: "on_reply"`). On 2026-10-28 Matt widened
+this ("the outreach paused function should just be for initial outreach"):
+the one `deal_followup` to a buyer who spoke up, the walkthrough reminder and
+follow-up, the dataroom guard's package and the deal they ask us to email
+them (`outbound.asked`) go too. The same holds for a soft commit.
+`stoppedDealAction` in `reply-agent.js` is the split. The only thing that
+stops the machine answering a buyer already on a deal is the deal going to
+someone else (`spokenForSomeoneElse` in `shared/offer-status.js`).
+
+Before 2026-10-27 a reply was held for you, and a pass or thanks was dropped.
+Replies held then as "needs a person: you stopped outreach on …" stay on the
+Desk. Nothing releases them.
 
 Pressing Stop also pulls back what is already queued (`stopDealOutreach` in
 `reply-agent.js`, `POST /api/offers/:id/deal/outreach {stopped}`). Buyer texts
 whose outbound offerId (or, failing that, street) is this deal are handled
 this way:
-- the machine's own texts are dismissed;
-- a reply to a buyer, scheduled or waiting for you, is left as it is.
+- queued deal texts (the kinds above) are dismissed;
+- everything else, replies included, keeps its clock.
 
 The listing agent's thread is not touched. The banner on the deal and the
 "outreach stopped" chip on the Deals list say it's on.

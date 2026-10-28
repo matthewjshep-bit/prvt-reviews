@@ -60,12 +60,12 @@ test("stopping outreach on a deal pulls back what was queued about it, leaves ev
   assert.equal(r.ok, true, r.error);
   assert.ok(r.offer.deal.outreachStopped?.at, "the deal carries the stop");
   assert.equal(dealOutreachPaused(r.offer.deal).status, "stopped");
-  assert.deepEqual(r.pulled, { dismissed: 2, held: 0 });
+  assert.deepEqual(r.pulled, { dismissed: 2 });
 
   const after = async (d) => (await store.getReplyDraft(d.id)).status;
   assert.equal(await after(blast), "dismissed", "the queued blast text never goes");
   assert.equal(await after(nudge), "dismissed", "nor the nudge waiting in the outbox");
-  // Stop is for the outreach the machine starts (2026-10-27, 1146 N 77th).
+  // Matt, 2026-10-28: the stop is for the first text only.
   assert.equal(await after(reply), "scheduled", "the bot's reply to a buyer still goes");
   assert.equal((await store.getReplyDraft(reply.id)).sendAt, sendAt);
   assert.equal(await after(waiting), "draft", "a reply already waiting for you is left as it is");

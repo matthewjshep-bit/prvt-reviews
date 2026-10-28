@@ -4344,27 +4344,46 @@ test("a buyer who passes on a deal you stopped outreach on still gets the bot's 
   assert.equal(sent.length, 1);
 });
 
-test("stopping outreach holds only what the machine starts, never a reply to something a buyer said", async () => {
+// Matt, 2026-10-28: "the outreach paused function should just be for initial
+// outreach" — follow-ups and walkthrough reminders to a buyer already talking
+// go too. Only the deal's first texts are held.
+test("stopping outreach holds only the deal's first texts, never what answers or follows up a buyer", async () => {
   const { stoppedDealAction } = await import("./reply-agent.js");
-  for (const kind of ["blast_open", "deal_followup", "showing_invite"]) {
+  for (const kind of ["blast_open", "blast_nudge", "dataroom_nudge"]) {
     assert.equal(stoppedDealAction({ party: "investor", inbound: "", outbound: { kind } }), "dismiss", kind);
   }
   for (const intent of ["passing", "small_talk", "question", "interested", "wants_walkthrough"]) {
     assert.equal(stoppedDealAction({ party: "investor", inbound: "x", intent }), "reply", intent);
   }
+  for (const kind of ["deal_followup", "showing_reminder", "showing_followup"]) {
+    assert.equal(stoppedDealAction({ party: "investor", inbound: "", outbound: { kind } }), "reply", kind);
+  }
+  assert.equal(stoppedDealAction({ party: "investor", inbound: "", channel: "email", outbound: { kind: "blast_open", asked: true } }), "reply",
+    "the deal they asked us to email them");
 });
 
 test("the bot's reply to a buyer about a deal you stopped outreach on sends like any other reply", async () => {
   const { sendReplyDraft } = await import("./reply-agent.js");
   const sent = [];
   const store = fakeStore([{ id: "d2", locationId: "LOC", contactId: "c1", status: "sending", channel: "sms", party: "investor", createdAt: iso(1000), flags: [],
-    reply: "Buyer price is 261k, want the package?", inbound: "What's the number on Yakima?", intent: "question", propertyAddress: "5232 South Yakima Avenue, Tacoma" }]);
+    reply: "Lockbox on the side door, code is with the agent. Want Saturday at 10?", inbound: "How do I get in on Yakima?", intent: "question", propertyAddress: "5232 South Yakima Avenue, Tacoma" }]);
   store.getOffer = async () => null;
   store.listDeals = async () => [STOPPED_DEAL];
   const r = await sendReplyDraft({ client: sendingClient(sent), store, locationId: "LOC", draftId: "d2", live: true, auto: true, readThread: async () => "" });
   assert.ok(!r.skipped && !r.held, JSON.stringify(r));
   assert.equal(sent.length, 1);
   assert.equal((await store.getReplyDraft("d2")).status, "sent");
+});
+
+test("a walkthrough reminder on a deal you stopped outreach on still goes to the buyer coming", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const sent = [];
+  const store = fakeStore([{ id: "d4", locationId: "LOC", contactId: "c1", status: "sending", channel: "sms", party: "investor", createdAt: iso(1000), flags: [],
+    reply: "See you tomorrow at 10 at Yakima.", inbound: "", intent: "showing_reminder", outbound: { kind: "showing_reminder", offerId: "o9", address: STOPPED_DEAL.address } }]);
+  store.getOffer = async (id) => (id === "o9" ? STOPPED_DEAL : null);
+  const r = await sendReplyDraft({ client: sendingClient(sent), store, locationId: "LOC", draftId: "d4", live: true, auto: true, readThread: async () => "" });
+  assert.ok(!r.skipped, JSON.stringify(r));
+  assert.equal(sent.length, 1);
 });
 
 test("pressing Stop pulls back the queued deal text but leaves a reply counting down to a buyer", async () => {
@@ -4379,7 +4398,6 @@ test("pressing Stop pulls back the queued deal text but leaves a reply counting 
   store.listReplyDrafts = async (loc, o = {}) => (await one(loc, { ...o, status: null })).filter((d) => !o.status || [].concat(o.status).includes(d.status));
   const out = await stopDealOutreach({ client: null, store, locationId: "LOC", offer: STOPPED_DEAL });
   assert.deepEqual(out.dismissed, ["b1"]);
-  assert.deepEqual(out.held, []);
   assert.equal((await store.getReplyDraft("b1")).status, "dismissed");
   assert.equal((await store.getReplyDraft("r1")).status, "scheduled", "the reply still goes");
 });

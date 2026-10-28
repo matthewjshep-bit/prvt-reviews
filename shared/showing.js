@@ -17,7 +17,7 @@
 // A text that CONFIRMS a time to a buyer is a person's: `wants_walkthrough`
 // stays in NEVER_AUTO and those replies are drafts on Today.
 
-import { dealOutreachPaused, investorStatus } from "./offer-status.js";
+import { dealSpokenFor, investorStatus } from "./offer-status.js";
 
 export const SHOWING_TZ = "America/Los_Angeles";
 
@@ -266,12 +266,13 @@ const pacific = (t) => {
  *                     came or said they would. A no-show or a no gets nothing.
  * `key` is the claim: one of each per buyer per window, ever. A buyer who has
  * since committed, passed or been taken off the deal has answered, and a deal
- * somebody is taking (dealOutreachPaused) texts nobody new. Pure.
+ * another buyer took (dealSpokenFor) texts nobody. A stop or a soft commit
+ * holds back new outreach only (2026-10-28): a buyer coming is still reminded. Pure.
  */
 export function showingTouches(offer = {}, { now = Date.now(), remindDayBefore = false, followUpAfter = false } = {}) {
   const deal = offer?.deal;
   if (!deal || deal.stage !== "under_contract" || (!remindDayBefore && !followUpAfter)) return [];
-  if (dealOutreachPaused(deal)) return [];
+  if (dealSpokenFor(deal)) return [];
   const s = normalizeShowing(deal.showing);
   if (!s.windows.length || !s.rsvps.length) return [];
   const answered = new Set((deal.investors || []).filter((i) => ["committed", "soft_commit", "passed"].includes(investorStatus(i?.status))).map((i) => i.contactId));

@@ -389,6 +389,27 @@ test("a buyer who passed or committed is not followed up", async () => {
   assert.equal(started.length, 0);
 });
 
+// Matt, 2026-10-28: stopping or pausing outreach on a deal is for the first
+// text only. A buyer who already spoke up about it still gets their follow-up.
+test("a buyer who spoke up about a deal you stopped outreach on, or one soft-committed to someone else, still gets the follow-up", async () => {
+  for (const deal of [
+    { stage: "under_contract", investors: [{ contactId: "i1", status: "evaluating" }], outreachStopped: { at: at(0), by: "you" } },
+    { stage: "under_contract", investors: [{ contactId: "i9", status: "soft_commit" }, { contactId: "i1", status: "evaluating" }] },
+  ]) {
+    _resetJobs();
+    const store = fakeStore({
+      offers: [{ id: "d1", address: "9 Oak Ave", status: "accepted", deal }],
+      events: [
+        { contactId: "i1", type: "text_summary", at: at(0), address: "9 Oak Ave" },
+        { contactId: "i1", type: "investor_evaluating", at: at(0), address: "9 Oak Ave", offerId: "d1" },
+      ],
+    });
+    const { job, started } = spySweep(store, { now: T0 + 6 * DAY });
+    await settle();
+    assert.equal(started.length, 1, JSON.stringify(job.results));
+  }
+});
+
 test("a deal that found its buyer is never followed up with anyone else", async () => {
   _resetJobs();
   const store = fakeStore({

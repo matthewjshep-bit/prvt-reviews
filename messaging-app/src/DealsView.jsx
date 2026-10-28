@@ -429,8 +429,8 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   async function toggleOutreach() {
     const r = await run(() => setDealOutreachStopped(offer.id, !stopped));
     if (!r?.ok) return;
-    const n = r.pulled?.dismissed || 0, h = r.pulled?.held || 0;
-    setPulledNote([n && `${n} queued text${n === 1 ? "" : "s"} pulled back`, h && `${h} repl${h === 1 ? "y" : "ies"} back with you`].filter(Boolean).join(", "));
+    const n = r.pulled?.dismissed || 0;
+    setPulledNote(n ? `${n} queued deal text${n === 1 ? "" : "s"} pulled back` : "");
     setResumedNote(resumedLine(r.resumed));
   }
 
@@ -492,7 +492,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
             {(stopped || !dealIsOver(deal)) && (
               <button type="button" disabled={busy} onClick={toggleOutreach}
                 className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold ${stopped ? "border-slate-300 hover:bg-slate-50" : "border-rose-300 text-rose-800 hover:bg-rose-50"}`}
-                title={stopped ? "The deal texts Stop pulled back go out again, and the next wave counts from now" : "Nothing goes to buyers about this house by itself until you resume"}>
+                title={stopped ? "The deal texts Stop pulled back go out again, and the next wave counts from now" : "No new deal texts go to buyers about this house until you resume. Buyers who write in are still answered"}>
                 {stopped ? <><Play size={14} /> Resume outreach</> : <><Ban size={14} /> Stop outreach</>}
               </button>
             )}
@@ -511,7 +511,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
         {stopped && (
           <p role="status" className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-900">
             <span className="font-semibold">Outreach stopped {shortDate(stopped.at)}.</span>{" "}
-            Nothing goes to buyers about this house by itself: no waves, blasts, nudges, package links or walkthrough texts, and the bot won't bring it up to anyone new. A buyer's reply about it waits for you.
+            No new deal texts go out on this house: no waves, blasts or nudges to buyers who never answered, and the bot won't bring it up to anyone new. Buyers already talking about it are still answered: access, walkthrough times, the package they ask for, their follow-up and walkthrough reminder.
             {pulledNote && <> {pulledNote}.</>}
             {" "}Resume sends the deal texts it pulled back.
           </p>
@@ -597,7 +597,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                 <span className="font-semibold">Outreach paused.</span>{" "}
                 {paused.status === "committed"
                   ? `${paused.name || "A buyer"} is committed — nothing new goes out on this one.`
-                  : `${paused.name || "A buyer"} is a soft commit, so no new blasts, second wave, nudges or package links go to anyone else. Put them back to Evaluating and it picks up where it left off.`}
+                  : `${paused.name || "A buyer"} is a soft commit, so no new blasts, second wave or nudges go to anyone new. Buyers already talking about it are still answered. Put them back to Evaluating and it picks up where it left off.`}
               </p>
             )}
             {deal.stage === "under_contract" && <WalkthroughCard key={offer.id} offer={offer} onUpdated={onUpdated} />}

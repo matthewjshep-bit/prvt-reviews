@@ -34,7 +34,7 @@ import {
   statusAfterUnpromote,
   toListOffer,
   INVESTOR_STATUSES, WORKING_INVESTOR_STATUSES, investorStatus,
-  dealOutreachPaused, dealOutreachStopped, dealSpokenFor, outreachPausedReason, priceAgreed, priceLocked,
+  dealOutreachPaused, dealOutreachStopped, dealSpokenFor, spokenForSomeoneElse, outreachPausedReason, priceAgreed, priceLocked,
   pushesToPaper,
 } from "./offer-status.js";
 
@@ -317,6 +317,20 @@ test("a deal you stopped outreach on is paused for every buyer, the committed on
   assert.equal(dealOutreachStopped({ stage: "under_contract" }), null);
   assert.equal(dealOutreachStopped({ outreachStopped: {} }), null, "a stop with no time on it is not a stop");
   assert.equal(dealOutreachPaused({ stage: "under_contract", investors: [] }), null, "resumed, it's live again");
+});
+
+// Matt, 2026-10-28: stopped or soft-committed holds back the first text only.
+// What stops the bot answering a buyer already on the deal is the deal going
+// to somebody else.
+test("a buyer already talking is shut out only by a deal that went to someone else", () => {
+  const at = "2026-10-02T02:00:00.000Z";
+  assert.equal(spokenForSomeoneElse({ stage: "under_contract", outreachStopped: { at, by: "you" }, investors: [] }, "b2"), false, "stopped");
+  assert.equal(spokenForSomeoneElse({ stage: "under_contract", investors: [{ contactId: "b1", status: "soft_commit" }] }, "b2"), false, "soft commit");
+  const taken = { stage: "under_contract", investors: [{ contactId: "b1", status: "committed" }] };
+  assert.equal(spokenForSomeoneElse(taken, "b2"), true);
+  assert.equal(spokenForSomeoneElse(taken, "b1"), false, "the buyer taking it still hears from us");
+  assert.equal(spokenForSomeoneElse({ stage: "buyer_found", investors: [] }, "b2"), true);
+  assert.equal(spokenForSomeoneElse(null, "b2"), false);
 });
 
 test("a list row keeps the follow-up rungs and the float stamps", () => {

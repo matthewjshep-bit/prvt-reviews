@@ -37,7 +37,7 @@ import { mapPool } from "../map-pool.js";
 import { queueBlastDrafts, normalizeDispoAutopilot, catchUpDue, blastChannel, blastChannels, resumePulledBack, sampleBlastTexts } from "../dispo-autopilot.js";
 import { planBuyerPulse, startBuyerPulse, previewBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
 import { runShowingSweep } from "../showing-sweep.js";
-import { dealOutreachPaused, outreachPausedReason } from "../shared/offer-status.js";
+import { dealOutreachPaused, outreachPausedReason, spokenForSomeoneElse } from "../shared/offer-status.js";
 import {
   searchAllContactsByTags, getContact, updateContact, listLocationTags,
   findOrCreateCustomFieldByKey, customFieldIdKeyMapForDefs, contactCustomRecord,
@@ -1274,8 +1274,9 @@ export default function createDispoRouter({ resolveLocation }) {
    */
   async function emailDealToBuyer({ locationId, offer, contactId, now = Date.now() }) {
     if (!offer?.deal) return { ok: false, reason: "not a deal" };
-    const paused = dealOutreachPaused(offer.deal);
-    if (paused && paused.contactId !== contactId) return { ok: false, reason: outreachPausedReason(paused, offer.address), address: offer.address };
+    // They asked for it: a stop or a soft commit doesn't hold an answer
+    // (2026-10-28), only the deal going to someone else.
+    if (spokenForSomeoneElse(offer.deal, contactId)) return { ok: false, reason: outreachPausedReason(dealOutreachPaused(offer.deal), offer.address), address: offer.address };
     const row = await store.getInvestor(locationId, contactId).catch(() => null);
     const doc = row?.doc || {};
     if (!doc.email) return { ok: false, reason: "no email on file for them", address: offer.address };
@@ -1285,7 +1286,7 @@ export default function createDispoRouter({ resolveLocation }) {
       label: (offer.deal.blastTags || []).at(-1) || "",
       // They just wrote to us: no how-we-found-you line.
       // The email only: the text of it already went, or goes on its own.
-      investors: [{ contactId, name: row?.name || doc.name || "", email: doc.email, phone: doc.phone || "", tags: doc.tags || [], channel: "email", lastRepliedAt: new Date(now).toISOString() }],
+      investors: [{ contactId, name: row?.name || doc.name || "", email: doc.email, phone: doc.phone || "", tags: doc.tags || [], channel: "email", lastRepliedAt: new Date(now).toISOString(), asked: true }],
     });
     const one = r.rows?.[0];
     if (!one?.draftId) return { ok: false, reason: one?.reason || r.reason || "nothing drafted", address: offer.address };
