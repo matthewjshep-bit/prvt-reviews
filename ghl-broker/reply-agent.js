@@ -1133,6 +1133,28 @@ export function personsCall(intent = "") {
 }
 
 /**
+ * confirmBookedSlot({ draft, guard, evaluate, redraft }) → { draft, guard }
+ *
+ * They picked a time we offered and it's still free, but the reply said it
+ * its own way ("Works, talk at 10:30.") and the calendar guard reads only our
+ * label ("Wed Oct 21 at 10:30am"), so a booked call waited 26 hours for Matt
+ * (2026-10-21). Written once more, told the exact words; the guard, unchanged,
+ * judges the rewrite. Any other failed check stands as it was.
+ */
+export async function confirmBookedSlot({ draft, guard, evaluate, redraft }) {
+  if (!draft || !guard || guard.kind !== "booking" || guard.passed || typeof redraft !== "function" || typeof evaluate !== "function") return { draft, guard };
+  const failed = (guard.checks || []).filter((c) => !c.ok);
+  if (failed.length !== 1 || failed[0].name !== "reply_names_it" || !String(draft.chosenSlot || "").trim()) return { draft, guard };
+  const label = String(failed[0].detail || "").trim();
+  if (!label) return { draft, guard };
+  const again = await Promise.resolve().then(() => redraft([`the reply must confirm the time in exactly these words: "${label}"`])).catch(() => null);
+  if (!String(again?.reply || "").trim()) return { draft, guard };
+  const next = { ...draft, reply: again.reply, redraftedFor: [`confirm "${label}"`], replyBeforeRedraft: draft.reply };
+  const g2 = evaluate(next);
+  return g2?.passed ? { draft: next, guard: g2 } : { draft, guard };
+}
+
+/**
  * redraftOnGate({ draft, gate, gateFor, config, redraft }) → { draft, gate }
  *
  * A reply a content gate caught is written once more, with what caught it
@@ -4819,9 +4841,19 @@ async function runReply(job, ctx) {
   // band, a request for a time (or a pick of one we offered, whatever the
   // intent read as) goes to the calendar.
   const bookingApplies = Boolean(booking) && ((BOOKING_INTENTS[party] || []).includes(draft.intent) || (draft.chosenSlot && booking.previouslyOffered.length));
-  const guard = bookingApplies
-    ? evaluateBookingGuard({ draft, offered: booking.offered, previouslyOffered: booking.previouslyOffered, freeSlots: booking.freeSlots, config: config.booking, now })
-    : await evaluateBandFor({ store, locationId, party, draft, config, saved, job, now, transcript: a.transcript });
+  const bookingFor = (d) => evaluateBookingGuard({ draft: d, offered: booking.offered, previouslyOffered: booking.previouslyOffered, freeSlots: booking.freeSlots, config: config.booking, now });
+  let guard = bookingApplies ? bookingFor(draft) : await evaluateBandFor({ store, locationId, party, draft, config, saved, job, now, transcript: a.transcript });
+  // The slot they picked, said in our words: one rewrite if that's all that held it.
+  if (bookingApplies && replyArgs && !a.hold?.held) {
+    const c = await confirmBookedSlot({ draft, guard, evaluate: bookingFor, redraft: (fix) => deps.draft({ ...replyArgs, fix }) });
+    if (c.draft !== draft) {
+      draft = c.draft; guard = c.guard; gate = gateFor(draft);
+      base = decideAutoSend({ gate, party, intent: draft.intent, channel: job.channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
+      if (isCall && base.send && !(config.parties?.[party]?.autoSend?.intents || []).includes("call_followup")) {
+        base = { send: false, code: "not_allowlisted", reason: "text after a call is not on the auto-send list" };
+      }
+    }
+  }
   // A booking guard on an intent that is not itself locked (a "question"
   // that picks a time) has nothing to release; the pass still books.
   let auto = releaseUnderGuard({ base, party, intent: draft.intent, config, guard });

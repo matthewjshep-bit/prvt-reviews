@@ -2232,6 +2232,51 @@ test("end to end: they ask for a call, the bot offers calendar times and the rep
   assert.equal(d3.actions.find((a) => a.type === "book_call").mode, "ask");
 });
 
+// 2026-10-21: they picked 10:30 from the times we offered, the slot was free,
+// and the reply said "Works, talk at 10:30." — not our label, so the calendar
+// guard held a booked call for Matt for 26 hours. Written once more with the
+// exact words, the same guard passes it.
+test("a reply that confirms a picked time in its own words is written once more with ours, and books itself", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const now0 = Date.parse("2026-09-10T15:00:00Z");
+  const store = fakeStore([{ id: "offered1", locationId: "LOC", contactId: "c1", party: "agent", status: "sent", intent: "wants_call", reply: "Does Fri Sep 11 at 10:00am or Mon Sep 14 at 10:00am work?",
+    booking: { offered: [{ iso: "2026-09-11T17:00:00Z", label: "Fri Sep 11 at 10:00am" }, { iso: "2026-09-14T17:00:00Z", label: "Mon Sep 14 at 10:00am" }] },
+    createdAt: new Date(now0).toISOString(), updatedAt: new Date(now0).toISOString(), sentAt: new Date(now0).toISOString() }]);
+  const saved = { ...SAVED, conversationAi: { enabled: true, booking: { enabled: true, calendarId: "cal1", calendarName: "Matt", slotsToOffer: 2, minLeadHours: 1 },
+    parties: { agent: { autoSend: { enabled: true, intents: ["question"] } } } } };
+  const now = Date.parse("2026-09-10T16:00:00Z");
+  const freeSlots = async () => ["2026-09-11T17:00:00Z", "2026-09-14T17:00:00Z"];
+  const booked = [];
+  const fixes = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "friday 10 works", channel: "sms", sendsEnabled: true,
+    deps: { now: () => now, freeSlots,
+      bookAppointment: async (args) => { booked.push(args); return { ok: true, label: args.label, calendarName: "Matt" }; },
+      draft: async (args) => {
+        if (args.fix) { fixes.push(args.fix); return { ...DRAFT, intent: "scheduling", confidence: "high", reply: "Works, talk Fri Sep 11 at 10:00am.", counterAmount: 0, offeredSlots: [], chosenSlot: "2026-09-11T17:00:00Z" }; }
+        return { ...DRAFT, intent: "scheduling", confidence: "high", reply: "Works, talk at 10.", counterAmount: 0, offeredSlots: [], chosenSlot: "2026-09-11T17:00:00Z" };
+      } },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(fixes.length, 1);
+  assert.match(fixes[0][0], /exactly these words: "Fri Sep 11 at 10:00am"/);
+  assert.equal(d.reply, "Works, talk Fri Sep 11 at 10:00am.");
+  assert.equal(d.status, "scheduled", d.autoSend?.reason);
+  assert.equal(booked.length, 1);
+});
+
+test("the booking rewrite is only for the words: a slot that's gone still waits for a person, with no second call", async () => {
+  const { confirmBookedSlot } = await import("./reply-agent.js");
+  let calls = 0;
+  const guard = { kind: "booking", passed: false, checks: [{ name: "chosen_was_offered", ok: true }, { name: "chosen_still_free", ok: false, detail: "that slot is gone" }] };
+  const r = await confirmBookedSlot({ draft: { reply: "Works, talk at 10.", chosenSlot: "2026-09-11T17:00:00Z" }, guard, evaluate: () => ({ passed: true }), redraft: async () => { calls++; return { reply: "x" }; } });
+  assert.equal(calls, 0);
+  assert.equal(r.guard, guard);
+});
+
 test("a reply that invents a time, or offers none, waits for a person even with booking on", async () => {
   _resetJobs();
   const { client } = ghlStub();
