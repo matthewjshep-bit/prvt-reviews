@@ -22,6 +22,7 @@ export const BOOKING_DEFAULTS = Object.freeze({
   slotsToOffer: 3,       // at most this many times in one text
   durationMin: 15,       // the appointment's length
   minLeadHours: 2,       // never a slot sooner than this
+  earliestHour: 9,       // no call starts before this hour (local)
   title: "Call with {{name}}",
 });
 
@@ -56,17 +57,18 @@ export function slotLabel(iso, timeZone = "America/Los_Angeles") {
 }
 
 /**
- * pickSlots(freeSlots, { now, count, minLeadHours, timeZone }) → [{ iso, label }]
+ * pickSlots(freeSlots, { now, count, minLeadHours, earliestHour, timeZone }) → [{ iso, label }]
  *
  * From everything the calendar has, the few worth naming: after the lead
- * time, at most one per day, spread across the days we looked at (two on
+ * time, not before the earliest hour of the day, at most one per day, spread across the days we looked at (two on
  * Thursday and one on Friday reads better than three on Thursday).
  */
-export function pickSlots(freeSlots = [], { now = Date.now(), count = 3, minLeadHours = 2, timeZone = "America/Los_Angeles" } = {}) {
+export function pickSlots(freeSlots = [], { now = Date.now(), count = 3, minLeadHours = 2, earliestHour = BOOKING_DEFAULTS.earliestHour, timeZone = "America/Los_Angeles" } = {}) {
   const lead = now + Math.max(0, Number(minLeadHours) || 0) * 3600000;
+  const hourOf = (t) => Number(new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", hourCycle: "h23" }).format(new Date(t)));
   const ok = [...new Set(freeSlots.map(String))]
     .map((iso) => ({ iso, t: Date.parse(iso) }))
-    .filter((s) => Number.isFinite(s.t) && s.t >= lead)
+    .filter((s) => Number.isFinite(s.t) && s.t >= lead && hourOf(s.t) >= (Number(earliestHour) || 0))
     .sort((a, b) => a.t - b.t);
   const byDay = new Map();
   for (const s of ok) {
