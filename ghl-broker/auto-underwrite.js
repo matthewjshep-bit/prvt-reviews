@@ -1311,6 +1311,8 @@ export async function startUnderwrite({
     subjectLine: "",
     // Bricked.ai's read of the house on a draft (brickedOnDrafts): the numbers, not the comps.
     bricked: null,
+    // Why that read didn't send itself (brickedSendsConfident), when it didn't.
+    brickedHeld: "",
     forceChecks: Boolean(forceChecks),
     quiet: Boolean(quiet),
     declined: declined && typeof declined === "object" ? declined : null,
@@ -1753,10 +1755,30 @@ async function runUnderwrite(job, ctx) {
     // from that one call; Zillow is still not asked.
     const b = await brickedRead(job, extraction.address, saved);
     const subject = b ? brickedSubject(b, resolved) : null;
-    if (b) job.subjectLine = [subjectLineOf(subject, b.subject.listPrice), brickedLine(b)].filter(Boolean).join(" · ");
-    return finishHeld(job, ctx, { extraction, held: [SKELETON_HOLD], partial: b ? {
-      subject, subjectSqft: Number(subject.sqft) || 0, ...brickedPartial(b),
-    } : {} });
+    const partial = b ? { subject, subjectSqft: Number(subject.sqft) || 0, ...brickedPartial(b) } : {};
+    // Confident enough to send itself (brickedSends): the house is checked on
+    // Zillow first, for a few tenths of a cent — single-family, not rural, and
+    // the list price the cap is measured against. A skeleton that won't send
+    // never pays for it.
+    if (b && brickedSends(saved)) {
+      let why = brickedSendGate({ b, minConfidence: brickedSendMinConfidence(saved) });
+      if (!why) {
+        let listing = null, facts = null;
+        try { ({ listing, facts } = await fetchZillowPhotos(extraction.address, apifyToken, { matched: resolved?.matched })); }
+        catch (e) { why = `the house couldn't be checked on Zillow (${String(e?.message || e).slice(0, 80)})`; }
+        if (!why) why = !facts?.homeType ? "Zillow didn't say what kind of house it is" : kindHold(facts.homeType, saved?.focusKinds) || ruralHold(facts.lotSqft);
+        if (!why) {
+          const listed = moneyFromListing(listing?.listPrice);
+          if (listed) job.listPrice = listed;
+          const list = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
+          why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || extraction.askingPrice || 0 }, partial, b, listPrice: list });
+          if (!why) return;
+        }
+      }
+      job.brickedHeld = why;
+    }
+    if (b) job.subjectLine = [subjectLineOf(subject, job.listPrice || b.subject.listPrice), brickedLine(b)].filter(Boolean).join(" · ");
+    return finishHeld(job, ctx, { extraction, held: [SKELETON_HOLD], partial });
   }
 
   /* --- 2. the subject --- */
@@ -1839,12 +1861,20 @@ async function runUnderwrite(job, ctx) {
     got.subject = subjectOnly;
     job.draftOnly = true;
     const b = await brickedRead(job, extraction.address, saved, { remarks: listing?.remarks || "" });
-    job.subjectLine = [subjectLineOf(subjectOnly, job.listPrice), b ? brickedLine(b) : ""].filter(Boolean).join(" · ");
     const asking = extraction.askingPrice || job.listPrice || 0;
-    return finishHeld(job, ctx, { extraction: { ...extraction, askingPrice: asking }, held: [DRAFT_ONLY_HOLD], partial: {
+    const partial = {
       compsData: null, subject: subjectOnly, subjectSqft: Number(facts?.sqft) || 0, grades: {}, rehabbed: null, arv: null, rehabState: null, scope: [], repairs: null,
       listing, photosCount, ...(b ? brickedPartial(b) : {}),
-    } });
+    };
+    // Kind and rural were held above; a confident Bricked read sends itself.
+    if (b && brickedSends(saved)) {
+      const list = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
+      const why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || asking }, partial, b, listPrice: list });
+      if (!why) return;
+      job.brickedHeld = why;
+    }
+    job.subjectLine = [subjectLineOf(subjectOnly, job.listPrice), b ? brickedLine(b) : ""].filter(Boolean).join(" · ");
+    return finishHeld(job, ctx, { extraction: { ...extraction, askingPrice: asking }, held: [DRAFT_ONLY_HOLD], partial });
   }
 
   // A run that will price the house — past the skeleton and draft-only stops,
@@ -2963,6 +2993,8 @@ function auditTrail(job, extraction, gate) {
     ...(job.draftOnly ? { draftOnly: true, subjectLine: job.subjectLine || "" } : {}),
     ...(job.skeleton ? { skeleton: true } : {}),
     ...(job.bricked ? { brickedArv: job.bricked.arv ?? null, brickedAsIs: job.bricked.asIs ?? null, brickedRepairs: job.bricked.repairs ?? null, brickedLink: job.bricked.link || null } : {}),
+    // Why a Bricked read didn't send itself (brickedSends on, gate not cleared).
+    ...(job.brickedHeld ? { brickedHeld: String(job.brickedHeld).slice(0, 200) } : {}),
   };
 }
 
@@ -3017,6 +3049,102 @@ async function brickedRead(job, address, saved, { remarks = "" } = {}) {
     job.warnings.push(`Bricked.ai: ${String(e?.message || e).slice(0, 160)}`);
     return null;
   }
+}
+
+/* --- …and a confident one goes out by itself (2026-10-28) --- */
+// Matt: "can we also automatically send them an offer too when they surface
+// an address" → only the confident ones, and at 70% for a machine-sent offer
+// (the post-mortem: buyers pay at most ~70% of ARV − repairs; Bricked's
+// repair prices run light). A Bricked read that clears brickedSendGate is
+// published like a full run — the list cap, the thread's pass, the dedupes
+// and every send guard in onOfferCreated still apply. One that doesn't stays
+// the draft it was, with the reason on it. Off unless `brickedSendsConfident`.
+export const BRICKED_SEND_PCT = 70;
+export const BRICKED_SEND_MIN_CONFIDENCE = 80;
+export const brickedSends = (saved) => brickedOn(saved) && Boolean(saved?.brickedSendsConfident);
+const pctSetting = (v, dflt, lo, hi) => { const n = Number(v); return v != null && v !== "" && Number.isFinite(n) && n >= lo && n <= hi ? n : dflt; };
+export const brickedSendPct = (saved) => pctSetting(saved?.brickedSendPct, BRICKED_SEND_PCT, 50, 90);
+export const brickedSendMinConfidence = (saved) => pctSetting(saved?.brickedSendMinConfidence, BRICKED_SEND_MIN_CONFIDENCE, 50, 100);
+
+/**
+ * brickedSendGate({ b, minConfidence, listPrice, cash, cap }) → "" | why it stays a draft
+ * Without listPrice it checks only Bricked's read (before a Zillow lookup is paid for).
+ */
+export function brickedSendGate({ b = {}, minConfidence = BRICKED_SEND_MIN_CONFIDENCE, listPrice, cash, cap } = {}) {
+  if (!(b.arv > 0)) return "Bricked had no ARV";
+  const conf = b.arvConfidence != null ? Math.round(b.arvConfidence * 100) : null;
+  if (conf == null || conf < minConfidence) return `Bricked is ${conf ?? "?"}% sure of its ARV — it sends itself at ${minConfidence}% or more`;
+  if (b.repairs == null) return "Bricked gave no repair estimate";
+  if (listPrice === undefined) return "";
+  if (!(listPrice > 0)) return "no list or asking price to check the number against";
+  if (!(cash > 0)) return `the number came out at ${fmtMoney(cash || 0)}`;
+  if (cap > 0 && cash > cap) return `${fmtMoney(cash)} is over ${fmtMoney(cap)}, the share of the ${fmtMoney(listPrice)} list it may go to`;
+  return "";
+}
+
+// Publishes Bricked's number as the offer. → "" when the offer was made (or
+// the thread's pass finished the run), else why it stays a draft.
+async function sendBricked(job, ctx, { extraction, partial, b, listPrice }) {
+  const { client, locationId, saved, store, deps } = ctx;
+  if (job.dryRun) return "dry run — nothing was published";
+  if (!AUTO_UNDERWRITE_ENABLED) return "AUTO_UNDERWRITE_ENABLED is not set on the broker";
+  if (typeof deps?.createOffer !== "function") return "no offer maker wired here";
+  const pct = brickedSendPct(saved);
+  const settings = { ...(saved || {}), underwriteMode: UW_MODE, maoPctOfArv: pct };
+  const cash = listPrice > 0
+    ? calculateOffers({ address: extraction.address, arv: b.arv, repairs: b.repairs, askingPrice: listPrice, priceOverride: 0 }, settings).offers.cash.amount
+    : 0;
+  const pctOfList = Number(saved?.maxOfferPctOfList) > 0 ? Number(saved.maxOfferPctOfList) : UW_MAX_PCT_OF_LIST;
+  const { cap } = capToList({ cash, listPrice, pct: pctOfList });
+  const why = brickedSendGate({ b, minConfidence: brickedSendMinConfidence(saved), listPrice: listPrice || 0, cash, cap });
+  if (why) return why;
+  if (await stopForThread(job, ctx, extraction.address)) return "";
+
+  job.phase = "creating";
+  job.draftOnly = false;
+  job.skeleton = false;
+  job.subjectLine = "";
+  const result = await deps.createOffer({
+    locationId, client,
+    body: {
+      contactId: job.contactId,
+      inputs: { address: extraction.address, arv: b.arv, repairs: b.repairs, askingPrice: listPrice },
+      settings,
+      scope: [],
+      snapshot: buildSnapshot({ extraction, partial, contact: { id: job.contactId, name: job.contactName || "", phone: "", email: "" } }),
+    },
+  });
+  const offer = result.offer;
+  offer.autoUnderwrite = { ...auditTrail(job, extraction, { ok: true }), basis: "bricked", sentPct: pct };
+  const lead = await leadFor(job, ctx, offer.address || extraction.address);
+  if (lead) offer.autoUnderwrite.leadSource = lead.source;
+  await store.updateOffer(offer.id, offer).catch(() => {});
+
+  job.status = "done";
+  job.phase = "";
+  job.offerId = offer.id;
+  job.offerUrl = offer.pdfUrl || null;
+  job.cashAmount = offer.cashAmount ?? null;
+  job.arv = b.arv;
+  job.repairs = b.repairs;
+  job.finishedAt = new Date().toISOString();
+  job.warnings.push(...(result.warnings || []));
+  await setTag(client, job.contactId, UW_TAGS.done, job.warnings);
+  await note(client, job.contactId, [
+    `Offer made from Bricked.ai on ${extraction.address}: ${fmtMoney(job.cashAmount || 0)}.`,
+    ``,
+    `${pct}% of Bricked's ${fmtMoney(b.arv)} ARV (${job.arvBasis}), minus ${fmtMoney(b.repairs)} repairs, minus the fee.`,
+    b.asIs > 0 ? `Bricked's as-is value: ${fmtMoney(b.asIs)}.` : null,
+    b.links?.share ? `Bricked report: ${b.links.share}` : null,
+    ``,
+    `It goes to the agent the way any clean underwrite does (Conversation AI → send offer).`,
+  ].filter((l) => l !== null).join("\n"), job.warnings);
+  await recordRun(job, ctx, "underwrite_done", { cashAmount: job.cashAmount, arv: b.arv, repairs: b.repairs, basis: "bricked" });
+  if (typeof deps?.onOfferCreated === "function") {
+    try { await deps.onOfferCreated({ offer, job }); }
+    catch (e) { job.warnings.push(`realm check: ${String(e?.message || e).slice(0, 120)}`); }
+  }
+  return "";
 }
 
 const brickedArvComps = (b) => {
@@ -3115,6 +3243,7 @@ function heldNote(job, held) {
         ? `Bricked.ai's ARV and repairs are on the draft. Nothing was priced or sent — open it in the app to set the number.`
         : `No comps were pulled and nothing was priced or sent. Open the draft in the app to price it.`,
       ...(job.bricked?.link ? [`Bricked report: ${job.bricked.link}`] : []),
+      ...(job.brickedHeld ? [`Didn't send itself: ${job.brickedHeld}.`] : []),
     ].join("\n");
   }
   return [

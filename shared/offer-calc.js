@@ -116,6 +116,13 @@ export const DEFAULT_OFFER_SETTINGS = {
   // Off by default; ghl-broker/price-bricked.js + auto-underwrite.js.
   brickedApiKey: "",
   brickedOnDrafts: false,
+  // …and a confident read sends itself (Matt, 2026-10-28): Bricked at least
+  // brickedSendMinConfidence% sure of its ARV, repairs priced from a
+  // description, under the list cap. Priced at brickedSendPct% of ARV, not
+  // maoPctOfArv. Off by default.
+  brickedSendsConfident: false,
+  brickedSendPct: 70,
+  brickedSendMinConfidence: 80,
   // Credential for the Zillow comp-capture bookmarklet. Minted server-side by
   // POST /api/offers/comps/capture-token; scoped to appending to the comp
   // inbox and nothing else, because it lives in a browser bookmark. Rotating

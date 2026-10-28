@@ -1139,6 +1139,26 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             texted until you save a number. Each house uses one lookup on your Bricked plan.
           </p>
           <Secret label="Bricked API key" value={form.brickedApiKey || ""} onChange={set("brickedApiKey")} placeholder="bricked.ai → Settings → API" secret={form.__secrets?.brickedApiKey} />
+          <label className="mt-3 flex items-center gap-2 text-sm font-semibold">
+            <input type="checkbox" checked={Boolean(form.brickedSendsConfident)} disabled={!form.brickedOnDrafts}
+              onChange={(e) => set("brickedSendsConfident")(e.target.checked)} />
+            Send the confident ones by themselves
+          </label>
+          <p className="mb-2 mt-1 text-xs text-slate-500">
+            When Bricked is sure of its ARV, priced the repairs from what the agent said, and the number is under the list cap, the
+            draft becomes an offer and goes out the way a clean underwrite does (Conversation AI → send offer). It's priced at the
+            share of ARV below, not your own rule. Anything else stays a draft for you, with the reason on it.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">% of ARV when it sends itself</span>
+              <input type="number" min={50} max={90} value={form.brickedSendPct ?? 70} onChange={(e) => set("brickedSendPct")(e.target.value === "" ? "" : Number(e.target.value))} className={INPUT_CLS} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Sends at Bricked confidence of at least (%)</span>
+              <input type="number" min={50} max={100} value={form.brickedSendMinConfidence ?? 80} onChange={(e) => set("brickedSendMinConfidence")(e.target.value === "" ? "" : Number(e.target.value))} className={INPUT_CLS} />
+            </label>
+          </div>
         </div>
         <p className="mb-3 text-xs text-slate-400">
           A draft carries the agent, the address and the listing's facts, and waits on Today as "Price it"; a skeleton
