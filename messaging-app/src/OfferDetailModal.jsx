@@ -93,6 +93,8 @@ export function AiProvenance({ offer }) {
           {uw.brickedLink && <> · <a href={uw.brickedLink} target="_blank" rel="noreferrer" className="underline">report</a></>}
         </>} />
       )}
+      {uw.basis === "bricked" && <Row label="Sent by itself" value={`${uw.sentPct || 70}% of Bricked's ARV`} />}
+      {uw.brickedHeld && <Row label="Didn't send itself" value={uw.brickedHeld} />}
       {uw.arvBasis && (
         <p className="mt-2 border-t border-black/5 pt-2 text-xs text-slate-600">ARV from {uw.arvBasis}</p>
       )}
