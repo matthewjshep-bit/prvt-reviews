@@ -1356,9 +1356,13 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       const body = draftBodyRef.current();
       if (!cur && !worthARow(body)) return;
       if (!kind && cur) return;   // leaving a draft with nothing pending
-      const r = await saveDraft(cur?.id || null, body);
+      // `keep`: what you typed saves here; the house's other row is named
+      // (houseRow, below), never swapped in over your numbers.
+      const r = await saveDraft(cur?.id || null, body, { keep: true });
       if (r?.reused) { if (mountedRef.current) openRow(r.offer, "Opened the offer you already have on this house."); return; }
       adopt(r?.offer);   // `stale`: it became the offer elsewhere — this is that row now
+      // Saved here, and the house has another row too: say so, with Open it.
+      if (r?.houseRow && mountedRef.current) setHouseHasRow(r.houseRow);
       return;
     }
     if (kind === "live" || (final && historyBehindRef.current)) {

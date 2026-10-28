@@ -132,6 +132,63 @@ test("retyping a draft's address onto a house that has a row moves you there and
   assert.equal(await rowCount(), before - 1);
 });
 
+// What went wrong (2026-10-28, a Tacoma house): two held auto-underwrites on
+// one house for one agent. Every pause in typing saved, the broker answered
+// "open the other one" without saving, and the editor reopened on that row's
+// copy — so whatever was typed cleared, then the next save bounced back.
+// Comps grabbed off Zillow went the same way.
+test("typing in a draft on a house that has a second row saves what you typed instead of swapping rows", async () => {
+  const house = "6614 S Birch St, Tacoma, WA 98409";
+  const held = (n) => store.createOffer({
+    locationId: LOC, status: "draft", autoUnderwrite: true, contactId: "contact-1", contactName: "Dana Reyes",
+    address: house, draft: { inputs: inputsAt(house, { arv: 400000 + n }), contact: { id: "contact-1", name: "Dana Reyes" } },
+    updatedAt: new Date(Date.now() - n * 1000).toISOString(),
+  });
+  const a = await held(1);
+  const b = await held(2);
+  const before = await rowCount();
+
+  const typed = draftBody(house, { inputs: inputsAt(house, { arv: 455000 }) });
+  const r = await req("POST", "/api/offers/draft", { id: b.id, ...typed });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.ok(!r.json.reused, "the form stays on the row you're typing in");
+  assert.equal(r.json.offer.id, b.id);
+  assert.equal((await store.getOffer(b.id)).draft.inputs.arv, 455000, "what you typed is saved");
+  assert.equal(r.json.houseRow?.id, a.id, "the other row is named, so the editor can offer to open it");
+  assert.equal(await rowCount(), before, "nothing is deleted");
+
+  // A plain draft beside a sent offer on the same house saves too.
+  const sent = await req("POST", "/api/offers", { contactId: "contact-1", inputs: inputsAt("31 Elm Ct, Fife, WA 98424"), settings: SETTINGS });
+  const mine = await store.createOffer({
+    locationId: LOC, status: "draft", contactId: "contact-1", address: "31 Elm Ct, Fife, WA 98424",
+    draft: { inputs: inputsAt("31 Elm Ct, Fife, WA 98424"), contact: { id: "contact-1", name: "Dana Reyes" } },
+  });
+  const r2 = await req("POST", "/api/offers/draft", { id: mine.id, ...draftBody("31 Elm Ct, Fife, WA 98424", { inputs: inputsAt("31 Elm Ct, Fife, WA 98424", { repairs: 81000 }) }) });
+  assert.equal(r2.json.offer.id, mine.id);
+  assert.equal((await store.getOffer(mine.id)).draft.inputs.repairs, 81000);
+  assert.equal(r2.json.houseRow?.id, sent.json.offer.id);
+});
+
+// The same day, the other half: a New offer on a house the agent already had
+// a row on. The first save with numbers in it was answered with that row,
+// and the editor reopened there — the numbers you'd typed, gone.
+test("numbers typed into a new offer on a house that already has a row are saved, not cleared", async () => {
+  const house = "6620 S Birch St, Tacoma, WA 98409";
+  const there = await store.createOffer({
+    locationId: LOC, status: "draft", autoUnderwrite: true, contactId: "contact-1", address: house,
+    draft: { inputs: inputsAt(house), contact: { id: "contact-1", name: "Dana Reyes" } },
+  });
+  const before = await rowCount();
+  const r = await req("POST", "/api/offers/draft", { keep: true, ...draftBody(house, { inputs: inputsAt(house, { arv: 610000 }) }) });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.ok(!r.json.reused, "the form keeps what's on it");
+  assert.notEqual(r.json.offer.id, there.id, "the row that was there isn't written over");
+  assert.equal((await store.getOffer(r.json.offer.id)).draft.inputs.arv, 610000);
+  assert.equal(r.json.houseRow?.id, there.id, "the other row is named, so the editor can offer to open it");
+  assert.equal(await rowCount(), before + 1);
+  assert.equal((await store.getOffer(there.id)).draft.inputs.arv, 520000);
+});
+
 test("another agent's offer on the same house is theirs, not this one", async () => {
   await req("POST", "/api/offers/draft", draftBody("77 Pine Ln, Puyallup, WA 98371"));
   const r = await req("POST", "/api/offers/draft", { draft: { inputs: inputsAt("77 Pine Ln, Puyallup, WA 98371"), contact: { id: "contact-2", name: "Lee" } } });

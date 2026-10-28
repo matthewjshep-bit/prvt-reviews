@@ -344,7 +344,9 @@ function send(comps) {
       return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; });
     }).then(function (x) {
       done = true;
-      if (x.ok) toast("✓ " + (x.j.added || comps.length) + " comp(s) in your inbox.\\nOpen Comps & ARV to pull them in.", true);
+      // The offer open in the app takes it in and saves it within seconds.
+      if (x.ok) toast("✓ " + (x.j.added || comps.length) + " comp(s) sent to " +
+        (x.j.target ? "the offer on " + x.j.target : "the next offer you open") + ".", true);
       else toast("✗ " + (x.j.error || "capture rejected"), false);
     }).catch(function () {
       if (!done) relay(payload);

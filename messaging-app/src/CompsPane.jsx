@@ -54,6 +54,8 @@ const COND_CLS = {
 // The route searches half a mile around the geocode; the similarity's distance
 // slope runs out at the same edge.
 const COMPS_RADIUS_MILES = 0.5;
+// How often a pane on screen beside Zillow asks for comps you just grabbed.
+const CLAIM_POLL_MS = 4000;
 
 const MATCH_CLS = {
   strong: "bg-emerald-100 text-emerald-800",
@@ -334,15 +336,32 @@ export default function CompsPane({ address, homeType, onUseArv, sqft: subjectSq
   };
 
   // On mount and whenever the window regains focus — that switch back from the
-  // Zillow tab is exactly when new captures exist. Polling would burn requests
-  // to learn nothing for the 99% of the time you aren't on Zillow.
+  // Zillow tab is exactly when new captures exist. And every few seconds while
+  // this window is on screen but you're working in another one: with Zillow
+  // in a window beside the app (Matt, 2026-10-28) nothing refocuses, so a
+  // grabbed comp sat on the server until you clicked back in. A hidden tab or
+  // the window you're typing in doesn't poll.
   const addressRef = useRef(address);
   useEffect(() => { addressRef.current = address; }, [address]);
+  const claimBusy = useRef(false);
   useEffect(() => {
-    const refresh = () => { claimCaptures(addressRef.current?.trim()).catch(() => {}); };
+    const refresh = () => {
+      if (claimBusy.current) return;
+      claimBusy.current = true;
+      claimCaptures(addressRef.current?.trim()).catch(() => {}).finally(() => { claimBusy.current = false; });
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    const beside = setInterval(() => {
+      if (document.visibilityState === "visible" && !document.hasFocus()) refresh();
+    }, CLAIM_POLL_MS);
     refresh();
     window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(beside);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
