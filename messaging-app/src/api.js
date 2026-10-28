@@ -204,7 +204,10 @@ export const createOffer = ({ contactId, newContact, inputs, settings, scope, dr
   announced(post(`/api/offers`, { contactId, newContact, inputs, settings, scope, draftId, snapshot, ...(asset ? { asset } : {}), ...(underwrite ? { underwrite } : {}) }));
 // The editor's save as you type, before the house has paper. Answers
 // { offer, reused }: reused is the row the house already had — open that one.
-export const saveDraft = (id, draft) => announced(post(`/api/offers/draft`, { id, draft }));
+// `keep`: the editor's autosave — save what's on the form on its own row even
+// when the house has another; the answer names that row as `houseRow`.
+export const saveDraft = (id, draft, { keep = false } = {}) =>
+  announced(post(`/api/offers/draft`, { id, draft, ...(keep ? { keep: true } : {}) }));
 // A draft becomes its own offer on the same row: paper, the contact's fields,
 // note and tag. Send on a draft calls this first; "Let the bot take it" passes
 // handToBot. `form` is the create body (contactId/newContact, inputs, …).

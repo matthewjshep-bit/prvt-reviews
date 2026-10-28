@@ -169,6 +169,26 @@ test("typing in a draft on a house that has a second row saves what you typed in
   assert.equal(r2.json.houseRow?.id, sent.json.offer.id);
 });
 
+// The same day, the other half: a New offer on a house the agent already had
+// a row on. The first save with numbers in it was answered with that row,
+// and the editor reopened there — the numbers you'd typed, gone.
+test("numbers typed into a new offer on a house that already has a row are saved, not cleared", async () => {
+  const house = "6620 S Birch St, Tacoma, WA 98409";
+  const there = await store.createOffer({
+    locationId: LOC, status: "draft", autoUnderwrite: true, contactId: "contact-1", address: house,
+    draft: { inputs: inputsAt(house), contact: { id: "contact-1", name: "Dana Reyes" } },
+  });
+  const before = await rowCount();
+  const r = await req("POST", "/api/offers/draft", { keep: true, ...draftBody(house, { inputs: inputsAt(house, { arv: 610000 }) }) });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.ok(!r.json.reused, "the form keeps what's on it");
+  assert.notEqual(r.json.offer.id, there.id, "the row that was there isn't written over");
+  assert.equal((await store.getOffer(r.json.offer.id)).draft.inputs.arv, 610000);
+  assert.equal(r.json.houseRow?.id, there.id, "the other row is named, so the editor can offer to open it");
+  assert.equal(await rowCount(), before + 1);
+  assert.equal((await store.getOffer(there.id)).draft.inputs.arv, 520000);
+});
+
 test("another agent's offer on the same house is theirs, not this one", async () => {
   await req("POST", "/api/offers/draft", draftBody("77 Pine Ln, Puyallup, WA 98371"));
   const r = await req("POST", "/api/offers/draft", { draft: { inputs: inputsAt("77 Pine Ln, Puyallup, WA 98371"), contact: { id: "contact-2", name: "Lee" } } });

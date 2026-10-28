@@ -2206,7 +2206,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // other row reopened the editor on that row's copy and cleared what you
       // typed — then the next save bounced back (2026-10-28, a Tacoma house).
       // The other row rides along so the editor can offer to open it.
-      const stayHere = wasDraft && there && Boolean(rowOnHouse([mine], { address: record.address }));
+      //
+      // `keep`: the editor's autosave, which only runs once the form holds
+      // numbers. Answering it with another row cleared those numbers too — on
+      // a New offer for a house that already had one, the first save did it.
+      // So what's on the form always saves on its own row, and the other row
+      // is named rather than opened.
+      const keep = Boolean(req.body?.keep);
+      const stayHere = Boolean(there) && (keep || (wasDraft && Boolean(rowOnHouse([mine], { address: record.address }))));
       if (there && !stayHere) {
         if (wasDraft && mine.status === "draft" && !mine.autoUnderwrite) await store.deleteOffer(id).catch(() => {});
         return res.json({ ok: true, offer: there, reused: true });
@@ -2217,7 +2224,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         return res.json({ ok: true, offer: full, ...(stayHere ? { houseRow: there } : {}) });
       }
       const offer = await store.createOffer(record);
-      res.json({ ok: true, offer });
+      res.json({ ok: true, offer, ...(stayHere ? { houseRow: there } : {}) });
     } catch (err) { fail(res, err); }
   });
 
