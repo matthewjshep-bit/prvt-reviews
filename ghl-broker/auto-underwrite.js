@@ -68,6 +68,7 @@ import { otherStreetIn } from "./shared/mentioned-houses.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { meterAi } from "./ai-spend.js";
 import { pricedByHand, underwriteModel } from "./shared/underwrite-model.js";
+import { brickedProperty } from "./price-bricked.js";
 
 /* ---------- the dials ---------- */
 
@@ -1261,8 +1262,9 @@ export async function startUnderwrite({
     if (inFlight) return { deduped: true, job: inFlight };
   }
 
-  // A skeleton buys nothing (1b below), so the day's cap on runs is not spent on it.
-  const skeleton = underwriteMode(saved) === "skeleton" && !full && !fill && !anyKind && !quiet && origin !== "operator";
+  // A skeleton buys nothing (1b below), so the day's cap on runs is not spent
+  // on it — unless Bricked is on, which is a paid lookup per house.
+  const skeleton = underwriteMode(saved) === "skeleton" && !full && !fill && !anyKind && !quiet && origin !== "operator" && !brickedOn(saved);
   const cap = skeleton ? Infinity : underwriteDailyCap(saved);
   const usedToday = cap === Infinity ? 0 : await countToday({ store, locationId });
   if (usedToday >= cap) {
@@ -1307,6 +1309,8 @@ export async function startUnderwrite({
     // Set when the run stopped at the draft (autoUnderwriteMode "draft").
     draftOnly: false,
     subjectLine: "",
+    // Bricked.ai's read of the house on a draft (brickedOnDrafts): the numbers, not the comps.
+    bricked: null,
     forceChecks: Boolean(forceChecks),
     quiet: Boolean(quiet),
     declined: declined && typeof declined === "object" ? declined : null,
@@ -1745,7 +1749,14 @@ async function runUnderwrite(job, ctx) {
     job.draftOnly = true;
     job.skeleton = true;
     job.subjectLine = "";
-    return finishHeld(job, ctx, { extraction, held: [SKELETON_HOLD], partial: {} });
+    // With Bricked on, the skeleton gets its numbers and the house's facts
+    // from that one call; Zillow is still not asked.
+    const b = await brickedRead(job, extraction.address, saved);
+    const subject = b ? brickedSubject(b, resolved) : null;
+    if (b) job.subjectLine = [subjectLineOf(subject, b.subject.listPrice), brickedLine(b)].filter(Boolean).join(" · ");
+    return finishHeld(job, ctx, { extraction, held: [SKELETON_HOLD], partial: b ? {
+      subject, subjectSqft: Number(subject.sqft) || 0, ...brickedPartial(b),
+    } : {} });
   }
 
   /* --- 2. the subject --- */
@@ -1827,11 +1838,12 @@ async function runUnderwrite(job, ctx) {
     };
     got.subject = subjectOnly;
     job.draftOnly = true;
-    job.subjectLine = subjectLineOf(subjectOnly, job.listPrice);
+    const b = await brickedRead(job, extraction.address, saved, { remarks: listing?.remarks || "" });
+    job.subjectLine = [subjectLineOf(subjectOnly, job.listPrice), b ? brickedLine(b) : ""].filter(Boolean).join(" · ");
     const asking = extraction.askingPrice || job.listPrice || 0;
     return finishHeld(job, ctx, { extraction: { ...extraction, askingPrice: asking }, held: [DRAFT_ONLY_HOLD], partial: {
       compsData: null, subject: subjectOnly, subjectSqft: Number(facts?.sqft) || 0, grades: {}, rehabbed: null, arv: null, rehabState: null, scope: [], repairs: null,
-      listing, photosCount,
+      listing, photosCount, ...(b ? brickedPartial(b) : {}),
     } });
   }
 
@@ -2860,13 +2872,15 @@ async function draftToWriteOver(job, { locationId, store }, address) {
 // empty comps board and drops the comps out of the comps PDF, which is the
 // one failure you'd only notice with an agent on the phone.
 function buildSnapshot({ extraction, partial, contact = null }) {
-  const { compsData, subject, subjectSqft, grades, rehabbed, arv, rehabState, scope, repairs, checks = null, checksContext = null } = partial;
+  const { compsData, subject, subjectSqft, grades, rehabbed, arv, rehabState, scope, repairs, checks = null, checksContext = null, bricked = null } = partial;
   const cx = checksContext || {};
   const center = subject?.lat != null ? { lat: subject.lat, lng: subject.lng } : null;
   return {
     // What the buyer-view checks did to this house (shared/underwrite-checks.js),
     // and what a person removed — read back on a retry so a removal sticks.
     checks,
+    // Bricked.ai's read (brickedPartial), when it ran on the draft.
+    ...(bricked ? { bricked } : {}),
     mode: "existing",
     // The agent this was underwritten for. Without it the editor opens on an
     // empty Seller contact and cannot create the offer — the one step a review
@@ -2948,6 +2962,7 @@ function auditTrail(job, extraction, gate) {
     // lean offer row and never the draft itself.
     ...(job.draftOnly ? { draftOnly: true, subjectLine: job.subjectLine || "" } : {}),
     ...(job.skeleton ? { skeleton: true } : {}),
+    ...(job.bricked ? { brickedArv: job.bricked.arv ?? null, brickedAsIs: job.bricked.asIs ?? null, brickedRepairs: job.bricked.repairs ?? null, brickedLink: job.bricked.link || null } : {}),
   };
 }
 
@@ -2965,6 +2980,101 @@ export function subjectLineOf(s = {}, listPrice = 0) {
     n(s?.lotSqft) != null && n(s.lotSqft) >= 21780 ? `${Math.round((n(s.lotSqft) / 43560) * 10) / 10} acres` : "",
     n(listPrice) != null ? `listed ${fmtMoney(n(listPrice))}` : "",
   ].filter(Boolean).join(" · ");
+}
+
+/* ---------- Bricked.ai on the draft (2026-10-28) ---------- */
+
+// Matt: "just use a third-party API … not reinvent the wheel." A house the
+// conversation names gets one Bricked call: its ARV and repairs go into the
+// draft's inputs, so the editor opens priced by the usual rule (% of ARV −
+// repairs − fee), with the as-is value, the comps it judged renovated and the
+// report link beside them. It stays a held draft: nothing is floated or sent
+// until he saves a number. Off unless `brickedOnDrafts` and a key are saved.
+// A failed call is a warning, and the draft is made as before.
+export const brickedOn = (saved) => Boolean(saved?.brickedOnDrafts) && Boolean(String(saved?.brickedApiKey || "").trim());
+
+// What Bricked prices the repairs from: the agent's text and the listing's
+// remarks. With neither it has nothing to go on and gives no repairs.
+export function brickedWorkText({ message = "", remarks = "" } = {}) {
+  const parts = [
+    String(message || "").trim() ? `What the listing agent said: ${String(message).trim()}` : "",
+    String(remarks || "").trim() ? `Listing remarks: ${String(remarks).trim()}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join("\n").slice(0, 1200) : "";
+}
+
+async function brickedRead(job, address, saved, { remarks = "" } = {}) {
+  if (!brickedOn(saved) || !address) return null;
+  try {
+    const work = brickedWorkText({ message: job.message, remarks });
+    const b = await brickedProperty(address, { apiKey: String(saved.brickedApiKey).trim(), ...(work ? { repairs: work } : {}) });
+    if (b.repairs == null && (b.arv > 0 || b.asIs > 0)) job.warnings.push("Bricked.ai gave no repair estimate — nothing described the work");
+    if (!(b.arv > 0) && !(b.asIs > 0)) { job.warnings.push("Bricked.ai had no value for this address"); return null; }
+    job.bricked = { arv: b.arv, asIs: b.asIs, repairs: b.repairs, link: b.links.share || b.links.dashboard || null };
+    if (b.arv > 0) job.arvBasis = brickedBasis(b);
+    return b;
+  } catch (e) {
+    job.warnings.push(`Bricked.ai: ${String(e?.message || e).slice(0, 160)}`);
+    return null;
+  }
+}
+
+const brickedArvComps = (b) => {
+  const arv = (b.comps || []).filter((c) => c.use === "arv");
+  return arv.some((c) => c.selected) ? arv.filter((c) => c.selected) : arv;
+};
+
+/** brickedBasis(b) → "Bricked.ai — 4 of 5 ARV comps renovated, 82% confidence" */
+export function brickedBasis(b = {}) {
+  const comps = brickedArvComps(b);
+  return [
+    "Bricked.ai",
+    [comps.length ? `${comps.filter((c) => c.renovated).length} of ${comps.length} ARV comps renovated` : "",
+      b.arvConfidence != null ? `${Math.round(b.arvConfidence * 100)}% confidence` : ""].filter(Boolean).join(", "),
+  ].filter(Boolean).join(" — ");
+}
+
+/** brickedLine(b) → "Bricked ARV $640,000 · as-is $455,000 · repairs $85,000" */
+export function brickedLine(b = {}) {
+  return [
+    b.arv > 0 ? `Bricked ARV ${fmtMoney(b.arv)}` : "",
+    b.asIs > 0 ? `as-is ${fmtMoney(b.asIs)}` : "",
+    b.repairs != null ? `repairs ${fmtMoney(b.repairs)}` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+// The house as Bricked has it, in the subject shape the draft carries.
+export function brickedSubject(b = {}, resolved = null) {
+  const s = b.subject || {};
+  return {
+    lat: s.lat ?? resolved?.lat ?? null, lng: s.lng ?? resolved?.lng ?? null,
+    beds: s.beds ?? null, baths: s.baths ?? null, sqft: s.sqft ?? null, yearBuilt: s.yearBuilt ?? null,
+    lotSqft: null, homeType: null, units: null, stories: null, subdivision: null, material: null,
+  };
+}
+
+/**
+ * brickedPartial(b) → the draft's ARV and repairs from Bricked, and the read
+ * itself (trimmed) for the editor and the offer page to show.
+ */
+export function brickedPartial(b = {}) {
+  const clip = (s, n) => (s ? String(s).slice(0, n) : null);
+  return {
+    ...(b.arv > 0 ? { arv: { arv: b.arv, basis: brickedBasis(b) } } : {}),
+    ...(b.repairs != null ? { repairs: b.repairs } : {}),
+    bricked: {
+      at: new Date().toISOString(),
+      arv: b.arv, arvConfidence: b.arvConfidence, arvReasoning: clip(b.arvReasoning, 800),
+      asIs: b.asIs, asIsConfidence: b.asIsConfidence,
+      repairs: b.repairs, repairLines: (b.repairLines || []).slice(0, 20),
+      comps: (b.comps || []).filter((c) => c.selected || c.use === "arv").slice(0, 12).map((c) => ({
+        address: c.address, use: c.use, price: c.lastSale?.price ?? null, soldAt: c.lastSale?.at ?? null,
+        sqft: c.sqft, beds: c.beds, baths: c.baths, yearBuilt: c.yearBuilt,
+        renovated: c.renovated, renovationScore: c.renovationScore, condition: c.condition, adjustedValue: c.adjustedValue,
+      })),
+      link: b.links?.share || null, dashboard: b.links?.dashboard || null,
+    },
+  };
 }
 
 /* ---------- the notes a human reads ---------- */
@@ -3001,7 +3111,10 @@ function heldNote(job, held) {
       `Draft ready for your comps — ${job.address || "no address found"}.`,
       ...(job.subjectLine ? [``, job.subjectLine] : []),
       ``,
-      `No comps were pulled and nothing was priced or sent. Open the draft in the app to price it.`,
+      job.bricked
+        ? `Bricked.ai's ARV and repairs are on the draft. Nothing was priced or sent — open it in the app to set the number.`
+        : `No comps were pulled and nothing was priced or sent. Open the draft in the app to price it.`,
+      ...(job.bricked?.link ? [`Bricked report: ${job.bricked.link}`] : []),
     ].join("\n");
   }
   return [

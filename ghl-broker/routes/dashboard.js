@@ -302,7 +302,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       const calib = calibrationReport({ offers: await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []), settings });
       out.recommendations = [...out.recommendations, ...calib.recommendations];
       out.current = { ...out.current, underwriteCalibration: settings.underwriteCalibration || null };
-      const secrets = ["aiApiKey", "compsApiKey", "apifyToken", "captureToken", "rentcastApiKey", "googleApiKey", "zillowRapidApiKey", "githubToken", "slackBotToken"];
+      const secrets = ["aiApiKey", "compsApiKey", "apifyToken", "brickedApiKey", "captureToken", "rentcastApiKey", "googleApiKey", "zillowRapidApiKey", "githubToken", "slackBotToken"];
       res.json({ ok: true, ...out,
         // Why buyers passed in the last 30 days, every deal, by the reason
         // their own words name (shared/funnel.js passThemes).

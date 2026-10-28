@@ -1128,6 +1128,18 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             <option value="full">Underwrite it — comps, photo scan and a priced offer</option>
           </select>
         </label>
+        <div className="mb-3 rounded-lg border border-slate-200 p-3">
+          <label className="flex items-center gap-2 text-sm font-semibold">
+            <input type="checkbox" checked={Boolean(form.brickedOnDrafts)} onChange={(e) => set("brickedOnDrafts")(e.target.checked)} />
+            Price drafts with Bricked.ai
+          </label>
+          <p className="mb-2 mt-1 text-xs text-slate-500">
+            A draft or skeleton the conversation makes gets one Bricked lookup: its ARV and repairs go into the draft, so it
+            opens priced by the rule below, with the as-is value and Bricked's report beside them. It stays a draft. Nothing is
+            texted until you save a number. Each house uses one lookup on your Bricked plan.
+          </p>
+          <Secret label="Bricked API key" value={form.brickedApiKey || ""} onChange={set("brickedApiKey")} placeholder="bricked.ai → Settings → API" secret={form.__secrets?.brickedApiKey} />
+        </div>
         <p className="mb-3 text-xs text-slate-400">
           A draft carries the agent, the address and the listing's facts, and waits on Today as "Price it"; a skeleton
           carries only the agent and the address. Mark either one "We passed" from its row and the bot tells them why
