@@ -6928,8 +6928,11 @@ A fourth buyer standing on a deal, between Evaluating and Committed. Set it on
 the buyer in Deals → open the deal, and **outreach on that deal stops**:
 
 - no new blast (the button, the blast on promote, and the second wave),
-- no follow-up to any other buyer (`deal_followup`),
-- no automatic dataroom invite to anyone but the buyer it is held for.
+- no catch-up send, and the bot doesn't bring it up to a buyer who never had it.
+
+Buyers already talking about it are still worked (2026-10-28, see "Stop
+outreach on a deal" below): their `deal_followup`, the package they ask for,
+and walkthrough reminders still go.
 
 What it deliberately does **not** do: it is not `dealSpokenFor`. The deal is
 still live and still priced, other buyers still see it and its numbers, and
@@ -6953,31 +6956,39 @@ committed or passed.
 Deals → open the deal → **Stop outreach** (top right). Matt asked for it on
 5232 S Yakima: "stop outreach on this one completely." It is the one stored
 switch, `deal.outreachStopped {at, by}`. `dealOutreachPaused` returns
-`{status: "stopped"}` for it before anything else, with no contactId, so
-**no buyer is let through, the committed one included**:
+`{status: "stopped"}` for it before anything else, with no contactId.
 
-- no blast, whether from the button, on promote or as a later wave (the wave
-  preview says "you stopped outreach");
-- no `deal_followup`, no package invite, no walkthrough
-  reminder or follow-up. That includes the link owed to a buyer who answers
-  a deal text that went without it (`blastLink: "on_reply"`). That link is
-  sent as an action while the reply is drafted, so `startReply` checks the
-  stop itself and leaves a warning on the draft;
+**It stops first texts only** (Matt, 2026-10-28: "the outreach paused
+function should just be for initial outreach"). Stopped:
+
+- no blast, whether from the button, on promote, as a later wave or as the
+  morning catch-up (the wave preview says "you stopped outreach");
+- no `blast_open`, `blast_nudge` or `dataroom_nudge` to a buyer who never
+  answered. The send-time guard in `sendReplyDraft` (auto path only)
+  dismisses one with "you stopped outreach on … — not sent";
 - the bot doesn't bring the deal up to a buyer who isn't already on it or
   blasted (`conversation-context.js`);
-- a buyer's reply about it waits for you. The send-time guard in
-  `sendReplyDraft` (auto path only) puts it back to a draft. A machine-started
-  text about it is dismissed with "you stopped outreach on … — not sent".
-  A held reply's `autoSend.reason` reads "needs a person: you stopped
-  outreach on …", so the nightly audit doesn't release it again.
+- a reply to a bare pass, thanks, photo or stop is dismissed (2026-10-20,
+  1538 NW 61st: ten passes sat on Today).
+
+Still goes, under the usual auto-send rules: the bot's reply to a buyer
+(access, walkthrough times, questions), the package link they ask for
+(`blastLink: "on_reply"` and the dataroom guard), the deal they ask us to
+email them (`outbound.asked`), the one `deal_followup` to a buyer who spoke
+up, and the walkthrough reminder and follow-up. `stoppedDealAction` in
+`reply-agent.js` is the split. The only thing that stops the machine
+answering a buyer already on a deal is the deal going to someone else
+(`spokenForSomeoneElse` in `shared/offer-status.js`).
+
+Replies held as "needs a person: you stopped outreach on …" before
+2026-10-28 stay on the Desk for you; nothing releases them.
 
 Pressing Stop also pulls back what is already queued (`stopDealOutreach` in
 `reply-agent.js`, `POST /api/offers/:id/deal/outreach {stopped}`). Buyer texts
 whose outbound offerId (or, failing that, street) is this deal are handled
 this way:
-- the machine's own texts are dismissed;
-- a scheduled reply goes back to a draft;
-- a reply already waiting for you is left as it is.
+- queued deal texts (the kinds above) are dismissed;
+- everything else, replies included, keeps its clock.
 
 The listing agent's thread is not touched. The banner on the deal and the
 "outreach stopped" chip on the Deals list say it's on.

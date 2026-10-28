@@ -5268,15 +5268,11 @@ async function runReply(job, ctx) {
       && !plan.auto.some((x) => x.type === "send_dataroom_invite")) {
     const strangers = doesntKnowUs(theirLatestWords(a.transcript, job.message));
     const owed = strangers ? null : await linkOwed({ store, locationId, contactId: job.contactId, now, prefer: draft.propertyAddress || "" });
-    // You stopped outreach on that deal (the deal pane's Stop outreach): its
-    // link doesn't go by itself either. This runs while the reply is drafted,
-    // before sendReplyDraft's guard ever sees the reply, so it asks here.
-    const owedDeal = owed?.offerId && store.getOffer ? await store.getOffer(owed.offerId).catch(() => null) : null;
+    // A stop on the deal doesn't hold it (2026-10-28): they answered the deal
+    // text, so the details are an answer, not outreach.
     const where = String(owed?.address || "the deal").split(",")[0];
     if (strangers) {
       warnings.push("no package link: they asked who we are or why we texted them");
-    } else if (owed && dealOutreachStopped(owedDeal?.deal)) {
-      warnings.push(`no package link: you stopped outreach on ${where}`);
     } else if (owed) {
       plan.suggested = plan.suggested.filter((x) => x.type !== "suggest_dataroom_invite");
       const action = { id: `a-link-${job.id}`, type: "send_dataroom_invite", status: "pending", party, addressHint: owed.address };
@@ -6609,19 +6605,15 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       return { ok: true, skipped: why };
     }
     // You stopped outreach on the deal since this was queued (Stop outreach
-    // on the deal pane). The machine's own text about it is dismissed; a
-    // reply to something the buyer said goes back to you to send or not.
-    if (dealOutreachStopped(offer?.deal)) {
+    // on the deal pane). A deal text about it is dismissed; what answers a
+    // buyer still goes (stoppedDealAction).
+    if (dealOutreachStopped(offer?.deal) && stoppedDealAction(d) === "dismiss") {
       const ts = new Date(now).toISOString();
       const street = String(offer.address || "the deal").split(",")[0].trim();
       const why = `you stopped outreach on ${street}`;
-      const hold = stoppedDealAction(d) === "hold";
-      await store.updateReplyDraft(d.id, hold
-        ? { ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts, flags: [...(d.flags || []), `${why} — waiting for you`],
-            autoSend: { ...(d.autoSend || {}), decided: false, reason: `needs a person: ${why}` } }
-        : { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts, flags: [...(d.flags || []), `${why} — not sent`] });
-      if (!hold) await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
-      return { ok: true, skipped: why, held: hold };
+      await store.updateReplyDraft(d.id, { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts, flags: [...(d.flags || []), `${why} — not sent`] });
+      await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      return { ok: true, skipped: why };
     }
   }
 
@@ -7154,30 +7146,32 @@ export async function standDownForHold({ client, store, locationId, contactId, w
 }
 
 /**
- * stoppedDealAction(draft) → "dismiss" | "hold"
+ * stoppedDealAction(draft) → "dismiss" | "send"
  *
- * What stopping outreach on a deal does to an open text about it: one the
- * machine started (a blast, a nudge, a walkthrough text — an outbound kind
- * and nothing they said) is dismissed; a reply to a buyer goes back to you —
- * unless there is nothing to answer: a pass, a thanks, a photo or a stop
- * (2026-10-20, 1538 NW 61st: ten builders' passes sat on Today).
+ * What stopping outreach on a deal does to an open text about it. The stop is
+ * for the first text only (Matt, 2026-10-28: "outreach paused should just be
+ * for initial outreach"): the deal text and the nudges after it to a buyer who
+ * never answered are dismissed, and so is a reply to a pass, a thanks, a photo
+ * or a stop (2026-10-20, 1538 NW 61st: ten builders' passes sat on Today).
+ * Everything that answers a buyer still goes — the bot's reply, the follow-up
+ * to one who spoke up, a walkthrough reminder, the deal they asked us to email.
  */
 const NOTHING_TO_ANSWER_ON_A_STOPPED_DEAL = new Set(["passing", "small_talk", "media", "opt_out"]);
-export const stoppedDealAction = (d) => ((d?.outbound?.kind && !String(d.inbound || "").trim())
-  || NOTHING_TO_ANSWER_ON_A_STOPPED_DEAL.has(d?.intent) ? "dismiss" : "hold");
+const FIRST_DEAL_TEXTS = new Set(["blast_open", "blast_nudge", "dataroom_nudge"]);
+export const stoppedDealAction = (d) => ((FIRST_DEAL_TEXTS.has(d?.outbound?.kind) && !d.outbound.asked && !String(d.inbound || "").trim())
+  || NOTHING_TO_ANSWER_ON_A_STOPPED_DEAL.has(d?.intent) ? "dismiss" : "send");
 
 /**
- * stopDealOutreach({ client, store, locationId, offer }) → { dismissed: [id], held: [id] }
+ * stopDealOutreach({ client, store, locationId, offer }) → { dismissed: [id] }
  *
- * The moment you stop outreach on a deal, every buyer text about it already
+ * The moment you stop outreach on a deal, every deal text about it already
  * queued is pulled back rather than left to be caught at its send time (the
- * guard in sendReplyDraft): the machine's own are dismissed, from the outbox
- * too; a reply counting down goes back to a draft. A reply already waiting
- * for you stays as it is. The listing agent's thread is not a buyer's and is
- * left alone.
+ * guard in sendReplyDraft), from the outbox too. What answers a buyer stays
+ * on its clock (stoppedDealAction). The listing agent's thread is not a
+ * buyer's and is left alone.
  */
 export async function stopDealOutreach({ client, store, locationId, offer, now = Date.now() }) {
-  const out = { dismissed: [], held: [] };
+  const out = { dismissed: [] };
   if (!offer?.id) return out;
   const open = await store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 5000 }).catch(() => []);
   const ts = new Date(now).toISOString();
@@ -7191,12 +7185,6 @@ export async function stopDealOutreach({ client, store, locationId, offer, now =
       await store.updateReplyDraft(d.id, { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts, flags: [...(d.flags || []), `${why} — not sent`] });
       if (client) await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
       out.dismissed.push(d.id);
-    } else if (d.status === "scheduled") {
-      // Held as every other hold is (heldAt, not decided), and "needs a person:"
-      // so the nightly audit's release leaves it with you.
-      await store.updateReplyDraft(d.id, { ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts, flags: [...(d.flags || []), `${why} — waiting for you`],
-        autoSend: { ...(d.autoSend || {}), decided: false, reason: `needs a person: ${why}` } });
-      out.held.push(d.id);
     }
   }
   return out;

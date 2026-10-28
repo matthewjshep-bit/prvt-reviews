@@ -70,7 +70,7 @@ import { offerMath, mathSentence } from "../shared/offer-breakdown.js";
 import {
   SETTABLE_STATUSES, STATUS_HISTORY_PHRASE, STATUS_RANK, OPEN_STATUSES, isNegotiable, isExpired, isHot, offerHeat,
   effectiveStatus, statusAfterSend, statusAfterUnpromote,
-  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, weWalkAway, dealIsOver,
+  INVESTOR_STATUSES, investorStatus, dealOutreachPaused, outreachPausedReason, spokenForSomeoneElse, priceAgreed, priceLocked, REVIVABLE_STATUSES, weDecline, weWalkAway, dealIsOver,
   numberApproved, termsOnLetter, WE_PASS_REASONS, WE_PASS_REASON, normalizeWePassReason,
 } from "../shared/offer-status.js";
 import { currentOffers, houseRowFor, paperCheck, annotateCurrent, groupHouses, resolveHouse, houseKey, pricedAt, holdNumber, rowOnHouse } from "../shared/current-offer.js";
@@ -4570,17 +4570,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       else delete offer.deal.outreachStopped;
       offer.deal.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
-      const pulled = stop ? await stopDealOutreach({ client, store, locationId, offer }) : { dismissed: [], held: [] };
+      const pulled = stop ? await stopDealOutreach({ client, store, locationId, offer }) : { dismissed: [] };
       const resumed = !stop && wasStopped ? await resumeDealOutreach({ locationId, client, offer }) : null;
       res.json({ ok: true, offer: resumed ? (await store.getOffer(offer.id)) || offer : offer,
-        pulled: { dismissed: pulled.dismissed.length, held: pulled.held.length }, ...(resumed ? { resumed } : {}) });
+        pulled: { dismissed: pulled.dismissed.length }, ...(resumed ? { resumed } : {}) });
     } catch (err) { fail(res, err); }
   });
 
   // Resume after Stop. The deal texts the stop pulled back go again, to the
   // buyers who still fit it, after the same head start as a new deal's first
   // send (dispo router resumeWave). A deal stopped before its first send was
-  // picked gets that send now. A reply the stop handed back to you stays with you, and nudges
+  // picked gets that send now. Replies to buyers were never pulled (2026-10-28), and nudges
   // come back on their own once the deal text has gone (follow-up-sweep.js
   // starts the ladder off the send).
   async function resumeDealOutreach({ locationId, client, offer }) {
@@ -5921,12 +5921,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const offer = pickDealByAddress(live, addressHint);
       if (!offer) return { ok: false, reason: "" };
       const link = (offer.deal.investors || []).find((i) => i.contactId === contactId);
-      // Someone else is probably taking it — sending the package to a new
-      // buyer now is the outreach a soft commit exists to stop. The buyer it
-      // is soft-committed to still gets theirs.
-      const paused = dealOutreachPaused(offer.deal);
-      if (paused && paused.contactId !== contactId) {
-        return { ok: false, reason: outreachPausedReason(paused, offer.address), address: offer.address };
+      // Someone else took it. A stop or a soft commit doesn't hold the
+      // package (2026-10-28): this buyer wrote in interested, so it answers them.
+      if (spokenForSomeoneElse(offer.deal, contactId)) {
+        return { ok: false, reason: outreachPausedReason(dealOutreachPaused(offer.deal), offer.address), address: offer.address };
       }
       if (link?.status === "passed") return { ok: false, reason: `they passed on ${offer.address}`, address: offer.address };
       if (!(["evaluating", "soft_commit", "committed"].includes(link?.status) || linking)) return { ok: false, reason: `not yet evaluating ${offer.address}`, address: offer.address };

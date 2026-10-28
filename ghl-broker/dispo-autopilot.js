@@ -323,7 +323,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
       const record = await store.createReplyDraft({
         locationId, contactId, contactName: name, status: schedule ? "scheduled" : "draft", channel, jobId: null,
         inbound: "", outbound: { kind: "blast_open", offerId: offer.id, address: offer.address, label: label || "", variant, ...(ownLine ? { note: ownLine } : {}),
-          ...(intro ? { intro } : {}), ...(subject ? { subject } : {}), ...(presell ? { presell: true } : {}) },
+          ...(intro ? { intro } : {}), ...(subject ? { subject } : {}), ...(presell ? { presell: true } : {}), ...(inv.asked ? { asked: true } : {}) },
         reply: text, intent: "blast_open", confidence: "high", needsHuman: Boolean(presell), humanReason: presell ? PRESELL_WAITS : "",
         summary: presell
           ? `Pre-sells ${offer.address} to ${name || "a buyer"} at about ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}, before we sign.`

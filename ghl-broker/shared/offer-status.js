@@ -667,6 +667,11 @@ export function pushesToPaper(offer) {
  * The one stored switch is yours: Stop outreach on the deal pane
  * (`deal.outreachStopped`). It wins over everything here and holds for every
  * buyer, the committed one included (no contactId), until you resume it.
+ *
+ * Both hold back the first text only (Matt, 2026-10-28: "outreach paused
+ * should just be for initial outreach"). A buyer already talking about the
+ * deal is still answered and followed up — access, a walkthrough time, the
+ * package they asked for. What ends that is spokenForSomeoneElse.
  */
 export const OUTREACH_PAUSING_STATUSES = new Set(["soft_commit", "committed"]);
 export function dealOutreachPaused(deal) {
@@ -683,14 +688,25 @@ export function dealOutreachPaused(deal) {
  * dealOutreachStopped(deal) → { at, by } | null
  *
  * You stopped outreach on this deal (Matt, 2026-10-01, 5232 S Yakima: "stop
- * outreach on this one completely"). Nothing goes to a buyer about the house
- * by itself — no wave, blast, nudge, package link or walkthrough text — and a
- * buyer's reply about it waits for you instead of sending itself.
+ * outreach on this one completely"). No wave, blast or nudge puts the house in
+ * front of a buyer. Since 2026-10-28 a buyer who writes about it is still
+ * answered, and one who spoke up is still followed up and reminded of their
+ * walkthrough (dealOutreachPaused).
  */
 export function dealOutreachStopped(deal) {
   const s = deal?.outreachStopped;
   return s && s.at ? { at: s.at, by: s.by || "you" } : null;
 }
+
+/**
+ * spokenForSomeoneElse(deal, contactId) → boolean
+ *
+ * The one thing that stops the machine answering or following up a buyer
+ * already on a deal: it went to another buyer (dealSpokenFor). A stop or a
+ * soft commit does not (dealOutreachPaused).
+ */
+export const spokenForSomeoneElse = (deal, contactId) =>
+  dealSpokenFor(deal) && !(deal.investors || []).some((i) => i?.status === "committed" && i.contactId === contactId);
 
 // The line an operator reads when something refused to go out because of it.
 export const outreachPausedReason = (p, address = "") =>

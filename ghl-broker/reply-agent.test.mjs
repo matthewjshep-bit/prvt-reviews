@@ -4289,32 +4289,58 @@ test("a buyer who passes on a deal you stopped outreach on gets no reply, and no
   assert.equal(d.status, "dismissed");
 });
 
-test("stopping outreach closes a buyer's pass, thanks or photo, and keeps a real question for you", async () => {
+// Matt, 2026-10-28: "the outreach paused function should just be for initial
+// outreach". A stopped deal still answers the buyers already talking about it.
+test("stopping outreach drops the deal's first texts and a bare pass or thanks, and lets everything that answers a buyer go", async () => {
   const { stoppedDealAction } = await import("./reply-agent.js");
   for (const intent of ["passing", "small_talk", "media", "opt_out"]) {
     assert.equal(stoppedDealAction({ party: "investor", inbound: "x", intent }), "dismiss", intent);
   }
-  assert.equal(stoppedDealAction({ party: "investor", inbound: "What's the number?", intent: "question" }), "hold");
+  for (const kind of ["blast_open", "blast_nudge", "dataroom_nudge"]) {
+    assert.equal(stoppedDealAction({ party: "investor", inbound: "", intent: kind, outbound: { kind } }), "dismiss", kind);
+  }
+  assert.equal(stoppedDealAction({ party: "investor", inbound: "What's the access?", intent: "question" }), "send");
+  assert.equal(stoppedDealAction({ party: "investor", inbound: "Can I see it Saturday?", intent: "wants_walkthrough" }), "send");
+  for (const kind of ["deal_followup", "showing_reminder", "showing_followup"]) {
+    assert.equal(stoppedDealAction({ party: "investor", inbound: "", intent: kind, outbound: { kind } }), "send", kind);
+  }
+  assert.equal(stoppedDealAction({ party: "investor", inbound: "", channel: "email", intent: "blast_open", outbound: { kind: "blast_open", asked: true } }), "send",
+    "the deal they asked us to email them");
 });
 
-test("the bot's reply to a buyer about a deal you stopped outreach on waits for you instead of sending itself", async () => {
+test("a buyer asking about access on a deal you stopped outreach on gets the bot's answer", async () => {
   const { sendReplyDraft } = await import("./reply-agent.js");
-  const { client } = ghlStub();
+  const sent = [];
+  const client = { call: async (path, opts = {}) => {
+    if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Dana", tags: ["investor"] } };
+    if (path.startsWith("/conversations/search")) return { conversations: [] };
+    if (path.startsWith("/conversations/messages")) { sent.push(opts.body); return { messageId: "m1" }; }
+    return {};
+  } };
   const store = fakeStore([{ id: "d2", locationId: "LOC", contactId: "c1", status: "sending", channel: "sms", party: "investor", createdAt: iso(1000), flags: [],
-    reply: "Buyer price is 261k, want the package?", inbound: "What's the number on Yakima?", intent: "question", propertyAddress: "5232 South Yakima Avenue, Tacoma" }]);
+    reply: "Lockbox on the side door, code is with the agent. Want Saturday at 10?", inbound: "How do I get in on Yakima?", intent: "question", propertyAddress: "5232 South Yakima Avenue, Tacoma" }]);
   store.getOffer = async () => null;
   store.listDeals = async () => [STOPPED_DEAL];
-  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true, auto: true });
-  assert.equal(r.held, true);
-  const d = await store.getReplyDraft("d2");
-  assert.equal(d.status, "draft", "back with you, not dismissed — it answers something they said");
-  assert.equal(d.sendAt, null);
-  assert.match(d.flags.join(" "), /you stopped outreach on 5232 South Yakima Avenue — waiting for you/);
-  // Held the way every other hold is, so the nightly audit's release doesn't
-  // put it back on a clock (shared/conversation-audit.js skips "needs a person:").
-  assert.equal(d.autoSend?.decided, false);
-  assert.match(d.autoSend?.reason || "", /^needs a person: you stopped outreach on 5232 South Yakima Avenue/);
-  assert.ok(d.heldAt, "stamped like the other holds");
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d2", live: true, auto: true, readThread: async () => "" });
+  assert.ok(!r.skipped, JSON.stringify(r));
+  assert.equal(sent.length, 1);
+});
+
+test("a walkthrough reminder on a deal you stopped outreach on still goes to the buyer coming", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const sent = [];
+  const client = { call: async (path, opts = {}) => {
+    if (/^\/contacts\/c1$/.test(path)) return { contact: { id: "c1", firstName: "Dana", tags: ["investor"] } };
+    if (path.startsWith("/conversations/search")) return { conversations: [] };
+    if (path.startsWith("/conversations/messages")) { sent.push(opts.body); return { messageId: "m1" }; }
+    return {};
+  } };
+  const store = fakeStore([{ id: "d4", locationId: "LOC", contactId: "c1", status: "sending", channel: "sms", party: "investor", createdAt: iso(1000), flags: [],
+    reply: "See you tomorrow at 10 at Yakima.", inbound: "", intent: "showing_reminder", outbound: { kind: "showing_reminder", offerId: "o9", address: STOPPED_DEAL.address } }]);
+  store.getOffer = async (id) => (id === "o9" ? STOPPED_DEAL : null);
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d4", live: true, auto: true, readThread: async () => "" });
+  assert.ok(!r.skipped, JSON.stringify(r));
+  assert.equal(sent.length, 1);
 });
 
 test("a buyer text about a different deal still goes when one deal's outreach is stopped", async () => {
@@ -6437,11 +6463,10 @@ test("the package link waits with a reply that waits for you", async () => {
   assert.equal(link.addressHint, "7034 South K Street, Tacoma, Washington 98408");
 });
 
-// Stop outreach on a deal (2026-10-01) promised no package link goes to a
-// buyer about it by itself. The link owed for a deal text that went without
-// it is sent as an automatic action while the reply is still being drafted,
-// before the send-time guard ever sees the reply, so it needs its own check.
-test("a buyer who answers the deal text on a deal you stopped outreach on gets no link by itself", async () => {
+// Stop outreach on a deal (2026-10-01) held the package link back too. Matt,
+// 2026-10-28: the stop is for the first text only — a buyer who answers the
+// deal text asking for the details gets them with the answer.
+test("a buyer who answers the deal text on a deal you stopped outreach on gets the link with the answer", async () => {
   _resetJobs();
   const { client } = ghlStub();
   client.call = ((orig) => async (path, opts) => {
@@ -6462,8 +6487,8 @@ test("a buyer who answers the deal text on a deal you stopped outreach on gets n
   await settle();
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
-  assert.equal(invites.length, 0, "no package link went out");
-  assert.ok(!(d.actions || []).some((a) => a.type === "send_dataroom_invite" && a.mode === "auto"), `no automatic link: ${(d.actions || []).map((a) => a.type)}`);
+  assert.ok((d.actions || []).some((a) => a.type === "send_dataroom_invite" && a.mode === "auto"), `an automatic link: ${(d.actions || []).map((a) => a.type)}`);
+  assert.ok(!(d.warnings || []).some((w) => /stopped outreach/.test(w)), JSON.stringify(d.warnings));
 });
 
 // 2026-10-02 review: an agent's "we're mutual!" changed nothing — the offer

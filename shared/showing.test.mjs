@@ -129,3 +129,13 @@ test("a buyer who has answered on the deal, or a deal somebody is taking, gets n
   assert.deepEqual(showingTouches(taken, { now: FRI_4PM, ...ALL }), []);
   assert.deepEqual(showingTouches(dealWith(s, { stage: "closed" }), { now: FRI_4PM, ...ALL }), []);
 });
+
+// Matt, 2026-10-28: stopping or pausing outreach holds back the first text,
+// not a reminder to a buyer who said they're coming.
+test("a buyer coming to a walkthrough is reminded on a deal you stopped outreach on, or soft-committed to someone else", () => {
+  const s = { windows: [SAT], rsvps: [{ contactId: "c1", status: "coming", windowStart: SAT.start }] };
+  const stopped = dealWith(s, { outreachStopped: { at: "2026-10-01T00:00:00Z", by: "you" } });
+  assert.deepEqual(showingTouches(stopped, { now: FRI_4PM, ...ALL }).map((x) => x.contactId), ["c1"]);
+  const soft = dealWith(s, { investors: [{ contactId: "c9", status: "soft_commit" }] });
+  assert.deepEqual(showingTouches(soft, { now: FRI_4PM, ...ALL }).map((x) => x.contactId), ["c1"]);
+});
