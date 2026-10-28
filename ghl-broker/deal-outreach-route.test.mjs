@@ -60,14 +60,14 @@ test("stopping outreach on a deal pulls back what was queued about it, leaves ev
   assert.equal(r.ok, true, r.error);
   assert.ok(r.offer.deal.outreachStopped?.at, "the deal carries the stop");
   assert.equal(dealOutreachPaused(r.offer.deal).status, "stopped");
-  assert.deepEqual(r.pulled, { dismissed: 2, held: 1 });
+  assert.deepEqual(r.pulled, { dismissed: 2, held: 0 });
 
   const after = async (d) => (await store.getReplyDraft(d.id)).status;
   assert.equal(await after(blast), "dismissed", "the queued blast text never goes");
   assert.equal(await after(nudge), "dismissed", "nor the nudge waiting in the outbox");
-  assert.equal(await after(reply), "draft", "the bot's reply to a buyer comes back to you");
-  assert.equal((await store.getReplyDraft(reply.id)).sendAt, null);
-  assert.match((await store.getReplyDraft(reply.id)).autoSend?.reason || "", /^needs a person: you stopped outreach/, "the nightly audit won't release it");
+  // Stop is for the outreach the machine starts (2026-10-27, 1146 N 77th).
+  assert.equal(await after(reply), "scheduled", "the bot's reply to a buyer still goes");
+  assert.equal((await store.getReplyDraft(reply.id)).sendAt, sendAt);
   assert.equal(await after(waiting), "draft", "a reply already waiting for you is left as it is");
   assert.equal(await after(elsewhere), "scheduled", "another deal's blast is untouched");
   assert.equal(await after(agent), "scheduled", "the listing agent's thread is not buyer outreach");
@@ -81,7 +81,7 @@ test("stopping outreach on a deal pulls back what was queued about it, leaves ev
   assert.equal(resumed.offer.deal.outreachStopped, undefined);
   assert.equal(dealOutreachPaused((await store.getOffer(o.id)).deal), null, "live again");
   assert.equal(await after(nudge), "dismissed", "a nudge isn't put back; the nudge sweep drafts it again once the deal text has gone");
-  assert.equal(await after(reply), "draft", "a reply the stop handed back stays with you");
+  assert.equal(await after(reply), "scheduled", "the reply was never touched");
   assert.equal(resumed.resumed.dropped, 1, "b1 isn't in the buyer book, so the wave rules don't pick them");
 });
 

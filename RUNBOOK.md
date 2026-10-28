@@ -6958,26 +6958,28 @@ switch, `deal.outreachStopped {at, by}`. `dealOutreachPaused` returns
 
 - no blast, whether from the button, on promote or as a later wave (the wave
   preview says "you stopped outreach");
-- no `deal_followup`, no package invite, no walkthrough
-  reminder or follow-up. That includes the link owed to a buyer who answers
-  a deal text that went without it (`blastLink: "on_reply"`). That link is
-  sent as an action while the reply is drafted, so `startReply` checks the
-  stop itself and leaves a warning on the draft;
+- no `deal_followup`, no package invite the machine starts, no walkthrough
+  reminder or follow-up;
 - the bot doesn't bring the deal up to a buyer who isn't already on it or
   blasted (`conversation-context.js`);
-- a buyer's reply about it waits for you. The send-time guard in
-  `sendReplyDraft` (auto path only) puts it back to a draft. A machine-started
-  text about it is dismissed with "you stopped outreach on … — not sent".
-  A held reply's `autoSend.reason` reads "needs a person: you stopped
-  outreach on …", so the nightly audit doesn't release it again.
+- **a buyer who writes back is answered as on any other deal** (2026-10-27).
+  On 1146 N 77th Matt stopped the deal to catch a wrong price and then sent the
+  deal by hand; every buyer who answered got nothing from the app (13 replies
+  dismissed, the rest held). Matt: "The stop is really just for initial
+  outreach going out to these people." So the send-time guard in
+  `sendReplyDraft` only dismisses a machine-started text about the deal (an
+  outbound kind and nothing they said — `stoppedDealAction`), with "you
+  stopped outreach on … — not sent". A reply follows the usual rules (auto-send
+  intents, NEVER_AUTO, the reply gates), and the package link owed to a buyer
+  who answers a deal text (`blastLink: "on_reply"`) goes with it. Before
+  2026-10-27 a reply was held for you and a pass or thanks dropped.
 
 Pressing Stop also pulls back what is already queued (`stopDealOutreach` in
 `reply-agent.js`, `POST /api/offers/:id/deal/outreach {stopped}`). Buyer texts
 whose outbound offerId (or, failing that, street) is this deal are handled
 this way:
 - the machine's own texts are dismissed;
-- a scheduled reply goes back to a draft;
-- a reply already waiting for you is left as it is.
+- a reply to a buyer, scheduled or waiting for you, is left as it is.
 
 The listing agent's thread is not touched. The banner on the deal and the
 "outreach stopped" chip on the Deals list say it's on.
