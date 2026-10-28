@@ -112,7 +112,7 @@ import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
   startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs, drainUnderwriteQueue, restartVanishedUnderwrites,
   cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob, retryArgs as retryUnderwriteArgs,
-  AUTO_UNDERWRITE_ENABLED, fullAddressFor,
+  AUTO_UNDERWRITE_ENABLED, fullAddressFor, consoleRunIsFull,
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, UW_ENRICH_CANDIDATES, paperAlreadyOut,
 } from "../auto-underwrite.js";
 import {
@@ -5046,6 +5046,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         if (!args.contactId) return res.status(400).json({ error: "contactId or jobId required" });
       }
       const saved = await store.getOfferSettings(locationId);
+      // { bricked: true }: priced by Bricked the way the conversation's run is
+      // (consoleRunIsFull), not the full Zillow machine.
+      if (!b.jobId) args.full = consoleRunIsFull({ bricked: b.bricked, saved });
       const { skipped, job } = await startUnderwrite({
         client, locationId, saved, store, ...args,
         deps: underwriteDeps({ client, locationId, saved }),
