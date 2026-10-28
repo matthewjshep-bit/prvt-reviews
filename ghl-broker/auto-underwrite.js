@@ -3158,6 +3158,16 @@ async function sendBricked(job, ctx, { extraction, partial, b, listPrice, repair
   job.repairs = b.repairs;
   job.finishedAt = new Date().toISOString();
   job.warnings.push(...(result.warnings || []));
+  // As the full run does: the draft this replaced would sit on Today as
+  // "Price it" beside the offer that just went (61180 Tapadera, 2026-10-28).
+  if (job.replaceOfferId && job.replaceOfferId !== offer.id) {
+    try {
+      const prior = await store.getOffer?.(job.replaceOfferId);
+      if (prior?.status === "draft" && prior.locationId === locationId) await store.deleteOffer(prior.id || job.replaceOfferId);
+    } catch (e) {
+      job.warnings.push(`old draft not removed: ${String(e?.message || e).slice(0, 120)}`);
+    }
+  }
   await setTag(client, job.contactId, UW_TAGS.done, job.warnings);
   await note(client, job.contactId, [
     `Offer made from Bricked.ai on ${extraction.address}: ${fmtMoney(job.cashAmount || 0)}.`,
