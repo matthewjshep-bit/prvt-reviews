@@ -126,6 +126,9 @@ export const DEFAULT_OFFER_SETTINGS = {
   brickedSendsConfident: false,
   brickedSendPct: 70,
   brickedSendMinConfidence: 80,
+  // With no repair estimate from Bricked, a sending read uses the medium
+  // rehab for the house's size instead of staying a draft. Off by default.
+  brickedRepairsBySize: false,
   // Credential for the Zillow comp-capture bookmarklet. Minted server-side by
   // POST /api/offers/comps/capture-token; scoped to appending to the comp
   // inbox and nothing else, because it lives in a browser bookmark. Rotating

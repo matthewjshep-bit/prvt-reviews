@@ -20,7 +20,7 @@ delete process.env.DATABASE_URL;
 process.env.AUTO_UNDERWRITE_ENABLED = "true";
 
 const { store } = await import("./store.js");
-const { startUnderwrite, _resetJobs, brickedSendGate, brickedSendPct, brickedSendMinConfidence, consoleRunIsFull } = await import("./auto-underwrite.js");
+const { startUnderwrite, _resetJobs, brickedSendGate, brickedSendPct, brickedSendMinConfidence, consoleRunIsFull, withSizeRepairs } = await import("./auto-underwrite.js");
 const { isDraftOnly } = await import("./shared/offer-status.js");
 const { calculateOffers } = await import("./shared/offer-calc.js");
 const { _resetCompsCache } = await import("./comps-zillow.js");
@@ -174,4 +174,25 @@ test("a console run asked for Bricked is the conversation's run, and the full ma
   const { job, made } = await run({ contactId: "r1", saved: {}, mode: "skeleton" });
   assert.equal(job.status, "done");
   assert.equal(made.length, 1);
+});
+
+test("with no repair estimate and repairs by size on, a sure read sends with the medium rehab for its size, and says so", async () => {
+  const noRepairs = { ...BRICKED, totalRepairCost: null, repairs: [] };
+  const { job, made } = await run({ contactId: "z1", message: "", saved: { brickedRepairsBySize: true }, fetchOpts: { bricked: noRepairs } });
+  assert.equal(job.status, "done", JSON.stringify(job.held));
+  assert.equal(made.length, 1);
+  const { body, offer } = made[0];
+  const { tierRepairs } = await import("./auto-underwrite.js");
+  assert.equal(body.inputs.repairs, tierRepairs(1500, "medium"), "the medium band's top for Bricked's 1,500 sqft");
+  const saved = await store.getOffer(offer.id);
+  assert.equal(saved.autoUnderwrite.repairsSource, "size");
+});
+
+test("repairs by size stand in only when Bricked has none, and only with the switch on", () => {
+  const b = { arv: 500000, repairs: null, subject: { sqft: 1200 } };
+  assert.deepEqual(withSizeRepairs({ ...b, repairs: 40000 }, { brickedRepairsBySize: true }), { b: { ...b, repairs: 40000 }, repairsSource: "bricked" });
+  assert.equal(withSizeRepairs(b, {}).repairsSource, null);
+  assert.equal(withSizeRepairs(b, { brickedRepairsBySize: true }).repairsSource, "size");
+  assert.ok(withSizeRepairs(b, { brickedRepairsBySize: true }).b.repairs > 0);
+  assert.equal(withSizeRepairs({ ...b, subject: {} }, { brickedRepairsBySize: true }, 0).repairsSource, null, "no size, no budget");
 });

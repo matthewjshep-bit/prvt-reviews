@@ -1149,6 +1149,11 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             draft becomes an offer and goes out the way a clean underwrite does (Conversation AI → send offer). It's priced at the
             share of ARV below, not your own rule. Anything else stays a draft for you, with the reason on it.
           </p>
+          <label className="mb-2 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(form.brickedRepairsBySize)} disabled={!form.brickedSendsConfident}
+              onChange={(e) => set("brickedRepairsBySize")(e.target.checked)} />
+            When Bricked has no repair estimate, use the medium rehab for the house's size
+          </label>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">% of ARV when it sends itself</span>

@@ -1761,7 +1761,8 @@ async function runUnderwrite(job, ctx) {
     // the list price the cap is measured against. A skeleton that won't send
     // never pays for it.
     if (b && brickedSends(saved)) {
-      let why = brickedSendGate({ b, minConfidence: brickedSendMinConfidence(saved) });
+      const sized = withSizeRepairs(b, saved, subject?.sqft);
+      let why = brickedSendGate({ b: sized.b, minConfidence: brickedSendMinConfidence(saved) });
       if (!why) {
         let listing = null, facts = null;
         try { ({ listing, facts } = await fetchZillowPhotos(extraction.address, apifyToken, { matched: resolved?.matched })); }
@@ -1771,7 +1772,7 @@ async function runUnderwrite(job, ctx) {
           const listed = moneyFromListing(listing?.listPrice);
           if (listed) job.listPrice = listed;
           const list = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
-          why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || extraction.askingPrice || 0 }, partial, b, listPrice: list });
+          why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || extraction.askingPrice || 0 }, partial, b: sized.b, listPrice: list, repairsSource: sized.repairsSource });
           if (!why) return;
         }
       }
@@ -1869,7 +1870,8 @@ async function runUnderwrite(job, ctx) {
     // Kind and rural were held above; a confident Bricked read sends itself.
     if (b && brickedSends(saved)) {
       const list = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
-      const why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || asking }, partial, b, listPrice: list });
+      const sized = withSizeRepairs(b, saved, facts?.sqft);
+      const why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || asking }, partial, b: sized.b, listPrice: list, repairsSource: sized.repairsSource });
       if (!why) return;
       job.brickedHeld = why;
     }
@@ -3088,9 +3090,22 @@ export function brickedSendGate({ b = {}, minConfidence = BRICKED_SEND_MIN_CONFI
   return "";
 }
 
+// No repair estimate from Bricked (nothing in the thread described the
+// work): with brickedRepairsBySize on (Matt, 2026-10-28 — the agents' texts
+// rarely describe it, so almost nothing could send), the top of the medium
+// rehab band for the house's size stands in, and the offer says so.
+// → { b, repairsSource: "bricked" | "size" | null }
+export function withSizeRepairs(b, saved, sqft = 0) {
+  if (!b) return { b, repairsSource: null };
+  if (b.repairs != null) return { b, repairsSource: "bricked" };
+  if (!saved?.brickedRepairsBySize) return { b, repairsSource: null };
+  const est = tierRepairs(Number(sqft) || Number(b.subject?.sqft) || 0, "medium");
+  return est > 0 ? { b: { ...b, repairs: est }, repairsSource: "size" } : { b, repairsSource: null };
+}
+
 // Publishes Bricked's number as the offer. → "" when the offer was made (or
 // the thread's pass finished the run), else why it stays a draft.
-async function sendBricked(job, ctx, { extraction, partial, b, listPrice }) {
+async function sendBricked(job, ctx, { extraction, partial, b, listPrice, repairsSource = "bricked" }) {
   const { client, locationId, saved, store, deps } = ctx;
   if (job.dryRun) return "dry run — nothing was published";
   if (!AUTO_UNDERWRITE_ENABLED) return "AUTO_UNDERWRITE_ENABLED is not set on the broker";
@@ -3121,7 +3136,7 @@ async function sendBricked(job, ctx, { extraction, partial, b, listPrice }) {
     },
   });
   const offer = result.offer;
-  offer.autoUnderwrite = { ...auditTrail(job, extraction, { ok: true }), basis: "bricked", sentPct: pct };
+  offer.autoUnderwrite = { ...auditTrail(job, extraction, { ok: true }), basis: "bricked", sentPct: pct, repairsSource };
   const lead = await leadFor(job, ctx, offer.address || extraction.address);
   if (lead) offer.autoUnderwrite.leadSource = lead.source;
   await store.updateOffer(offer.id, offer).catch(() => {});
@@ -3139,7 +3154,7 @@ async function sendBricked(job, ctx, { extraction, partial, b, listPrice }) {
   await note(client, job.contactId, [
     `Offer made from Bricked.ai on ${extraction.address}: ${fmtMoney(job.cashAmount || 0)}.`,
     ``,
-    `${pct}% of Bricked's ${fmtMoney(b.arv)} ARV (${job.arvBasis}), minus ${fmtMoney(b.repairs)} repairs, minus the fee.`,
+    `${pct}% of Bricked's ${fmtMoney(b.arv)} ARV (${job.arvBasis}), minus ${fmtMoney(b.repairs)} repairs${repairsSource === "size" ? " (the medium rehab for its size — Bricked had no repair estimate)" : ""}, minus the fee.`,
     b.asIs > 0 ? `Bricked's as-is value: ${fmtMoney(b.asIs)}.` : null,
     b.links?.share ? `Bricked report: ${b.links.share}` : null,
     ``,
