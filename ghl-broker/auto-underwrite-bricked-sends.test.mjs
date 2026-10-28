@@ -61,7 +61,7 @@ const until = async (fn, ms = 5000) => { const t0 = Date.now(); while (!fn()) { 
 const client = { call: async () => ({}) };
 const base = { aiApiKey: "sk-ant-x", apifyToken: "apify-x", brickedApiKey: "bk", brickedOnDrafts: true, brickedSendsConfident: true, maoPctOfArv: 75, wholesaleFee: 30000 };
 
-async function run({ saved, contactId, mode = "skeleton", fetchOpts = {}, message = "needs a roof" }) {
+async function run({ saved, contactId, mode = "skeleton", fetchOpts = {}, message = "needs a roof", replaceOfferId = null }) {
   _resetJobs();
   const { calls, restore } = stubFetch(fetchOpts);
   const made = [], floated = [];
@@ -74,7 +74,7 @@ async function run({ saved, contactId, mode = "skeleton", fetchOpts = {}, messag
   };
   try {
     const { job } = await startUnderwrite({ client, locationId: `LOC-${contactId}`, saved: { ...base, autoUnderwriteMode: mode, ...saved }, store,
-      contactId, message, address: ADDRESS, deps: { createOffer, onOfferCreated: async ({ offer }) => { floated.push(offer); } } });
+      contactId, message, address: ADDRESS, ...(replaceOfferId ? { replaceOfferId } : {}), deps: { createOffer, onOfferCreated: async ({ offer }) => { floated.push(offer); } } });
     assert.ok(await until(() => ["held", "done", "error"].includes(job.status)), `still ${job.status}/${job.phase}`);
     assert.notEqual(job.status, "error", job.error || "");
     return { job, made, floated, calls };
@@ -195,4 +195,12 @@ test("repairs by size stand in only when Bricked has none, and only with the swi
   assert.equal(withSizeRepairs(b, { brickedRepairsBySize: true }).repairsSource, "size");
   assert.ok(withSizeRepairs(b, { brickedRepairsBySize: true }).b.repairs > 0);
   assert.equal(withSizeRepairs({ ...b, subject: {} }, { brickedRepairsBySize: true }, 0).repairsSource, null, "no size, no budget");
+});
+
+test("an offer that sends itself takes the place of the draft it re-priced, so Today doesn't show both", async () => {
+  const draft = await store.createOffer({ locationId: "LOC-x1", status: "draft", contactId: "x1", address: ADDRESS, draft: {}, autoUnderwrite: { skeleton: true, draftOnly: true } });
+  const { job, made } = await run({ contactId: "x1", replaceOfferId: draft.id });
+  assert.equal(job.status, "done");
+  assert.equal(made.length, 1);
+  assert.equal(await store.getOffer(draft.id), null, "the old draft is gone");
 });
