@@ -249,7 +249,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
           <label className="flex items-center gap-2 text-sm text-slate-700">
             Send on day
             <input type="number" className={NUM} min={1} max={30} value={draft?.day ?? ""} onChange={(e) => setDraft({ ...draft, day: e.target.value })} />
-            <span className="text-xs text-slate-500">after the first text, if they haven't replied</span>
+            <span className="text-xs text-slate-500">after the first text, if they haven't replied, and never within 3 days of another text of ours</span>
           </label>
           <label className="block space-y-1 text-sm text-slate-700">
             <span className="text-xs font-semibold text-slate-600">Subject</span>
