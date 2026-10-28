@@ -1427,7 +1427,7 @@ export async function prepareBooking({ client, store, locationId, contactId, par
   } catch (e) {
     return { offered: [], previouslyOffered, freeSlots: [], error: String(e?.message || e).slice(0, 160) };
   }
-  const offered = pickSlots(freeSlots, { now, count: bk.slotsToOffer, minLeadHours: bk.minLeadHours, timeZone });
+  const offered = pickSlots(freeSlots, { now, count: bk.slotsToOffer, minLeadHours: bk.minLeadHours, earliestHour: bk.earliestHour, timeZone });
   return { offered, previouslyOffered, freeSlots, error: null };
 }
 

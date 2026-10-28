@@ -244,6 +244,9 @@ export function BookingCard({ config, patch, calendars }) {
             <Field label="Never sooner than" hint="hours from now">
               <Text type="number" value={bk.minLeadHours} onChange={(v) => set({ minLeadHours: Number(v) })} />
             </Field>
+            <Field label="Earliest call" hint="hour of the day, 9 = 9am">
+              <Text type="number" value={bk.earliestHour} onChange={(v) => set({ earliestHour: Number(v) })} />
+            </Field>
             <Field label="Appointment title" hint="{{name}} is their name">
               <Text value={bk.title} onChange={(v) => set({ title: v })} />
             </Field>

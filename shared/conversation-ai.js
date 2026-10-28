@@ -1439,6 +1439,7 @@ export function normalizeConversationAi(doc, seed = {}) {
         slotsToOffer: int(b.slotsToOffer, BOOKING_DEFAULTS.slotsToOffer, 1, 5),
         durationMin: int(b.durationMin, BOOKING_DEFAULTS.durationMin, 5, 240),
         minLeadHours: int(b.minLeadHours, BOOKING_DEFAULTS.minLeadHours, 0, 72),
+        earliestHour: int(b.earliestHour, BOOKING_DEFAULTS.earliestHour, 0, 23),
         title: str(b.title, 120) || BOOKING_DEFAULTS.title,
       };
     })(),
