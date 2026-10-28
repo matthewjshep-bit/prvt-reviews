@@ -1334,6 +1334,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       const r = await saveDraft(cur?.id || null, body);
       if (r?.reused) { if (mountedRef.current) openRow(r.offer, "Opened the offer you already have on this house."); return; }
       adopt(r?.offer);   // `stale`: it became the offer elsewhere — this is that row now
+      // Saved here, and the house has another row too: say so, with Open it.
+      if (r?.houseRow && mountedRef.current) setHouseHasRow(r.houseRow);
       return;
     }
     if (kind === "live" || (final && historyBehindRef.current)) {

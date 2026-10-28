@@ -2200,14 +2200,21 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // another window): it's no longer a draft to save over. Hand it back.
       if (mine && !wasDraft) return res.json({ ok: true, offer: mine, stale: true });
       const there = await houseRow({ locationId, contactId: record.contactId, address: record.address, exceptId: wasDraft ? id : null });
-      if (there) {
+      // This form's draft was already on this house, and the house has a
+      // second row (two held auto-underwrites, a draft beside a sent offer):
+      // the draft is the one you're typing in, so it saves. Handing back the
+      // other row reopened the editor on that row's copy and cleared what you
+      // typed — then the next save bounced back (2026-10-28, a Tacoma house).
+      // The other row rides along so the editor can offer to open it.
+      const stayHere = wasDraft && there && Boolean(rowOnHouse([mine], { address: record.address }));
+      if (there && !stayHere) {
         if (wasDraft && mine.status === "draft" && !mine.autoUnderwrite) await store.deleteOffer(id).catch(() => {});
         return res.json({ ok: true, offer: there, reused: true });
       }
       if (wasDraft) {
         const full = { ...mine, ...record, status: mine.status, id, createdAt: mine.createdAt };
         await store.updateOffer(id, full);
-        return res.json({ ok: true, offer: full });
+        return res.json({ ok: true, offer: full, ...(stayHere ? { houseRow: there } : {}) });
       }
       const offer = await store.createOffer(record);
       res.json({ ok: true, offer });

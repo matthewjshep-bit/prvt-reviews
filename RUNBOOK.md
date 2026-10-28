@@ -7611,8 +7611,17 @@ For comps found by eye on Zillow rather than pulled from the comps API.
 2. **Drag** the "📍 Grab comp" button to the browser's bookmarks bar (clicking
    it inside the app does nothing but show a hint — it only works on Zillow).
 3. On a Zillow property page it grabs that one comp; on a search-results page
-   it offers to grab every result. Captures land in a server-side inbox and
-   appear as **Zillow inbox (N)** on the Comps & ARV step.
+   it offers to grab every result. Captures are stamped with the offer open
+   in the app (`captureTarget`), and that offer's Comps & ARV pane claims
+   them — on focus, and every 4s while the app is on screen beside Zillow
+   without focus — ticks them, and the editor saves them like any edit.
+   The toast on Zillow names the offer they went to.
+
+   If they vanish after landing, check the house doesn't have two rows for
+   the agent: until 2026-10-28 a draft save on such a house swapped the
+   editor onto the other row and dropped what was on screen. `POST /draft`
+   now saves the draft you're typing in and returns the other row as
+   `houseRow` (the editor's "You already have a draft on this house").
 
 Notes for whoever maintains this:
 
