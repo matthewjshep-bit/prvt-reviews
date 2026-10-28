@@ -20,7 +20,7 @@ delete process.env.DATABASE_URL;
 process.env.AUTO_UNDERWRITE_ENABLED = "true";
 
 const { store } = await import("./store.js");
-const { startUnderwrite, _resetJobs, brickedSendGate, brickedSendPct, brickedSendMinConfidence } = await import("./auto-underwrite.js");
+const { startUnderwrite, _resetJobs, brickedSendGate, brickedSendPct, brickedSendMinConfidence, consoleRunIsFull } = await import("./auto-underwrite.js");
 const { isDraftOnly } = await import("./shared/offer-status.js");
 const { calculateOffers } = await import("./shared/offer-calc.js");
 const { _resetCompsCache } = await import("./comps-zillow.js");
@@ -163,4 +163,15 @@ test("with the send switch off, a confident read is a draft as before", async ()
   assert.equal(made.length, 0);
   assert.equal(calls.detail, 0);
   assert.equal((await store.getOffer(job.offerId)).autoUnderwrite.brickedHeld, undefined);
+});
+
+test("a console run asked for Bricked is the conversation's run, and the full machine otherwise", async () => {
+  assert.equal(consoleRunIsFull({ bricked: true, saved: base }), false);
+  assert.equal(consoleRunIsFull({ bricked: false, saved: base }), true);
+  assert.equal(consoleRunIsFull({ bricked: true, saved: { ...base, brickedOnDrafts: false } }), true, "Bricked off: the full machine");
+  assert.equal(consoleRunIsFull({ bricked: "true", saved: base }), true, "only a real true");
+  // …and that run, given the draft it replaces, sends a confident read.
+  const { job, made } = await run({ contactId: "r1", saved: {}, mode: "skeleton" });
+  assert.equal(job.status, "done");
+  assert.equal(made.length, 1);
 });

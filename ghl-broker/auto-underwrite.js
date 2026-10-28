@@ -3062,6 +3062,12 @@ async function brickedRead(job, address, saved, { remarks = "" } = {}) {
 export const BRICKED_SEND_PCT = 70;
 export const BRICKED_SEND_MIN_CONFIDENCE = 80;
 export const brickedSends = (saved) => brickedOn(saved) && Boolean(saved?.brickedSendsConfident);
+
+// A run started from the console is the full machine (Re-run, Retry). Asked
+// for `bricked` — re-pricing the houses we owe a number on (2026-10-28) — it
+// is the conversation's run instead: Bricked prices it, a confident read
+// sends itself, anything else is the draft again. Only while Bricked is on.
+export const consoleRunIsFull = ({ bricked = false, saved = {} } = {}) => !(bricked === true && brickedOn(saved));
 const pctSetting = (v, dflt, lo, hi) => { const n = Number(v); return v != null && v !== "" && Number.isFinite(n) && n >= lo && n <= hi ? n : dflt; };
 export const brickedSendPct = (saved) => pctSetting(saved?.brickedSendPct, BRICKED_SEND_PCT, 50, 90);
 export const brickedSendMinConfidence = (saved) => pctSetting(saved?.brickedSendMinConfidence, BRICKED_SEND_MIN_CONFIDENCE, 50, 100);
