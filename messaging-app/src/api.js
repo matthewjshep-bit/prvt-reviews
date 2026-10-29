@@ -309,6 +309,10 @@ export const getUnderwrites = () =>
 // run doesn't put them back.
 export const runUnderwrite = ({ contactId, address, askingPrice, declined }) =>
   post(`/api/offers/automations/underwrite/run`, { contactId, address, askingPrice, declined });
+// The form's other option: Bricked.ai's read of the typed address, in one
+// request. `work` is what needs doing — the only thing it prices repairs from.
+export const brickedRead = ({ address, work }) =>
+  post(`/api/offers/bricked`, { address, work });
 export const getUnderwrite = (jobId) =>
   fetch(`${API_BASE}/api/offers/automations/underwrite?${locq()}&jobId=${encodeURIComponent(jobId)}`).then(j).then((r) => r.job);
 export const cancelUnderwrite = (jobId) =>
