@@ -111,7 +111,9 @@ export function normalizeAgentPulse(v = {}) {
     quietDays: clamp(o.quietDays, D.quietDays, 2, 30),
     freshDays: clamp(o.freshDays, D.freshDays, 1, 60),
     listingSeenDays: clamp(o.listingSeenDays, D.listingSeenDays, 3, 90),
-    coldEveryDays: clamp(o.coldEveryDays, D.coldEveryDays, 30, 180),
+    // Down to the two-week check-in gap (CHECK_IN_GAP_DAYS): Matt set 21 on
+    // 2026-10-29 to hear about more of their new distressed listings.
+    coldEveryDays: clamp(o.coldEveryDays, D.coldEveryDays, 14, 180),
     coldMaxUnanswered: clamp(o.coldMaxUnanswered, D.coldMaxUnanswered, 1, 6),
     engagedMaxUnanswered: clamp(o.engagedMaxUnanswered, D.engagedMaxUnanswered, 0, 20),
     hour: clamp(o.hour, D.hour, 8, 17),
