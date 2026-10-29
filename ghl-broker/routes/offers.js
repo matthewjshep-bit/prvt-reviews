@@ -100,7 +100,8 @@ import {
   DEFAULT_CONTRACT_CLAUSES, DEFAULT_ASSIGNMENT_CLAUSES, ASSIGNMENT_TOKENS, ASSIGNMENT_PREAMBLE,
 } from "../shared/contract-template.js";
 import { fetchListingPhotos, fetchZillowPhotos, fetchZillowFacts, scanRehabFromPhotos, gradeCompConditions, anthropicErrorToHttp } from "../rehab-scan.js";
-import { addressKey, addressQueryVariants, zillowUrl, zillowLookupForms, sameStreet, offerForms } from "../shared/us-address.js";
+import { addressKey, addressQueryVariants, zillowUrl, zillowLookupForms, sameStreet, offerForms, parseUsAddress } from "../shared/us-address.js";
+import { brickedProperty } from "../price-bricked.js";
 import { pullComps } from "../comps-pull.js";
 import { geocodeAddress } from "../geocode.js";
 import { pullZillowComps, pullZillowActives, mergeFacts, streetKey } from "../comps-zillow.js";
@@ -112,7 +113,7 @@ import { gradeComps, needsScrape } from "../comps-grade.js";
 import {
   startUnderwrite, wantsDryRun, getJob as getUnderwriteJob, listJobs as listUnderwriteJobs, drainUnderwriteQueue, restartVanishedUnderwrites,
   cancelJob as cancelUnderwriteJob, publicJob as publicUnderwriteJob, retryArgs as retryUnderwriteArgs,
-  AUTO_UNDERWRITE_ENABLED, fullAddressFor, consoleRunIsFull,
+  AUTO_UNDERWRITE_ENABLED, fullAddressFor, consoleRunIsFull, brickedPartial,
   UW_POOL_BEDS_TOLERANCE, UW_POOL_BATHS_TOLERANCE, UW_POOL_SQFT_PCT, UW_ENRICH_CANDIDATES, paperAlreadyOut,
 } from "../auto-underwrite.js";
 import {
@@ -4960,6 +4961,38 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       });
       if (skipped) return res.status(409).json({ error: skipped });
       res.status(202).json({ ok: true, started: true, jobId: job.id });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The offer form's other button (Matt, 2026-10-29): Bricked.ai instead of
+  // our own run. One lookup on the typed address, answered in the request
+  // (well under the 2–5 minutes a run takes): its ARV, repairs and report go
+  // back to the form, which fills them in. Nothing is made, noted or sent.
+  // Needs only the key — pressing it is the ask, so brickedOnDrafts doesn't
+  // gate it — and no contact, since Bricked reads nothing of theirs.
+  // `work`: what needs doing, which is all Bricked prices repairs from.
+  //
+  //   POST { address, work? } → { ok, bricked, arv, repairs, sqft }
+  router.post("/bricked", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const b = req.body || {};
+      const address = String(b.address || "").trim().slice(0, 200);
+      const work = String(b.work || "").trim().slice(0, 1200);
+      if (!address) return res.status(400).json({ error: "type the property address first" });
+      if (!parseUsAddress(address).houseNo) return res.status(400).json({ error: "the address needs its house number — Bricked would price some other house on the street" });
+      const saved = await store.getOfferSettings(locationId);
+      const apiKey = String(saved?.brickedApiKey || "").trim();
+      if (!apiKey) return res.status(400).json({ error: "no Bricked API key — add it in Settings → Auto-underwrite" });
+      let read;
+      try {
+        read = await brickedProperty(address, { apiKey, ...(work ? { repairs: work } : {}) });
+      } catch (e) {
+        return res.status(502).json({ error: `Bricked.ai: ${String(e?.message || e).slice(0, 160)}` });
+      }
+      if (!(read.arv > 0) && !(read.asIs > 0)) return res.status(404).json({ error: "Bricked.ai had no value for this address" });
+      const { bricked } = brickedPartial(read);
+      res.json({ ok: true, bricked, arv: read.arv > 0 ? read.arv : null, repairs: read.repairs, sqft: read.subject?.sqft || null });
     } catch (err) { fail(res, err); }
   });
 

@@ -16,7 +16,7 @@ import { blankIncomeDeal } from "@shared/income-underwrite.js";
 import { blankLandDeal } from "@shared/land-underwrite.js";
 import {
   addContactNote, cancelUnderwrite, getContactDetail, getContactNotes, getOffer, getUnderwrite,
-  ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, publishOffer, runUnderwrite, saveDraft,
+  ghlContactUrl, listDatarooms, listOffers, previewDocument, promoteDeal, publishOffer, runUnderwrite, brickedRead, saveDraft,
   saveOfferWorkspace, saveSettings, searchContacts, setOfferStatus, suggestAddresses, updateDataroom,
   updateOffer, zillowUrl,
   requoteOffer, MAKE_CURRENT,
@@ -137,7 +137,7 @@ const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text
 // and files its notes there, and a contact that doesn't exist yet has none.
 const UW_POLL_MS = 4000;
 
-function AutoUnderwrite({ contactId, address, askingPrice, onApply, declined }) {
+function AutoUnderwrite({ contactId, address, askingPrice, onApply, declined, alongside = null }) {
   const [job, setJob] = useState(null);     // the polled job, once started
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
@@ -190,11 +190,14 @@ function AutoUnderwrite({ contactId, address, askingPrice, onApply, declined }) 
   if (!job) {
     return (
       <div className="mt-2">
-        <button type="button" className={btn} disabled={!ready || starting} title={why || "Pull comps, grade them, scan the listing photos and fill in ARV, repairs and the scope below — 2 to 5 minutes"} onClick={start}>
-          {starting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-          Auto-underwrite this address
-        </button>
-        {why && <span className="ml-2 text-[11px] text-slate-400">{why}</span>}
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className={btn} disabled={!ready || starting} title={why || "Pull comps, grade them, scan the listing photos and fill in ARV, repairs and the scope below — 2 to 5 minutes"} onClick={start}>
+            {starting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            Auto-underwrite this address
+          </button>
+          {alongside}
+        </div>
+        {why && <div className="mt-1 text-[11px] text-slate-400">{why}</div>}
         {error && <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">{error}</div>}
       </div>
     );
@@ -253,9 +256,62 @@ function AutoUnderwrite({ contactId, address, askingPrice, onApply, declined }) 
   );
 }
 
-// Bricked.ai's read on a draft the conversation made (brickedOnDrafts,
-// 2026-10-28): its ARV and repairs are already in the inputs; this shows the
-// rest — the as-is value, how many ARV comps it judged renovated, and its report.
+// The other option (Matt, 2026-10-29): Bricked.ai instead of our run. One
+// lookup on the typed address, answered in seconds; its ARV and repairs go
+// into the form like a typed number, and its read shows above the comps. It
+// needs no contact. Bricked prices repairs only from a description of the
+// work, so the box asks for one before the lookup is spent.
+function BrickedButton({ address, onApply }) {
+  const [open, setOpen] = useState(false);
+  const [work, setWork] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const typed = String(address || "").trim();
+
+  async function look() {
+    setError("");
+    setBusy(true);
+    try {
+      const r = await brickedRead({ address: typed, work: work.trim() });
+      onApply?.(r);
+      setOpen(false);
+    } catch (e) {
+      setError(e.message || "Bricked.ai didn't answer.");
+    } finally { setBusy(false); }
+  }
+
+  const btn = "inline-flex items-center gap-1.5 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50";
+  if (!open) {
+    return (
+      <button type="button" className={btn} disabled={!typed} title={typed ? "Bricked.ai's ARV, as-is value and repairs for this address — one lookup on your Bricked plan" : "Type the property address first"}
+        onClick={() => { setOpen(true); setError(""); }}>
+        <Layers size={13} />
+        Price with Bricked.ai
+      </button>
+    );
+  }
+  return (
+    <div className="mt-2 w-full rounded-lg border border-indigo-200 bg-indigo-50/60 p-2.5 text-xs">
+      <label className="mb-1 block font-semibold text-indigo-900">What needs doing? <span className="font-normal text-slate-500">Optional. Bricked prices repairs only from this.</span></label>
+      <textarea className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none" rows={2}
+        value={work} onChange={(e) => setWork(e.target.value)} placeholder="Dated kitchen and baths, roof near end of life, needs paint and flooring" />
+      <div className="mt-1.5 flex items-center gap-2">
+        <button type="button" className={btn} disabled={busy || !typed} onClick={look}>
+          {busy ? <Loader2 size={13} className="animate-spin" /> : <Layers size={13} />}
+          {busy ? "Asking Bricked…" : "Look it up"}
+        </button>
+        <button type="button" className="rounded-md px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-white" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
+        <span className="text-[11px] text-slate-500">Uses one lookup on your Bricked plan.</span>
+      </div>
+      {error && <div className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-red-700">{error}</div>}
+    </div>
+  );
+}
+
+// Bricked.ai's read, from a draft the conversation made (brickedOnDrafts,
+// 2026-10-28) or the form's button: its ARV and repairs are already in the
+// inputs; this shows the rest — the as-is value, how many ARV comps it judged
+// renovated, and its report.
 function BrickedRead({ b }) {
   const arvComps = (b.comps || []).filter((c) => c.use === "arv");
   const pct = (x) => (x != null ? `${Math.round(x * 100)}%` : null);
@@ -961,6 +1017,20 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
     compsStateRef.current = uw.comps || null;
     setPaneInit((p) => ({ nonce: p.nonce + 1, rehab: uw.rehab || undefined, comps: uw.comps || undefined }));
   }, []);
+  // Bricked.ai's read: from the draft, or the form's "Price with Bricked.ai".
+  // Its ARV and repairs go in as if typed; an empty repairs (nothing
+  // described the work) leaves what's there. Sqft only fills a blank.
+  const [bricked, setBricked] = useState(snap?.bricked || null);
+  const applyBricked = React.useCallback((r) => {
+    if (!r?.bricked) return;
+    setBricked(r.bricked);
+    setInputs((s) => ({
+      ...s,
+      arv: r.arv > 0 ? fmtN(r.arv) : s.arv,
+      repairs: r.repairs != null ? fmtN(r.repairs) || "0" : s.repairs,
+    }));
+    if (r.sqft) setSubjectSqft((v) => v || String(r.sqft));
+  }, []);
   const [preview, setPreview] = useState(null);   // data-url image
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState("");
@@ -1262,6 +1332,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
     // The buyer-view checks' record: the Comps pane's ARV half and the Rehab
     // pane's scope half, as one — what a retry reads to keep removals removed.
     checks: combineChecks(compsStateRef.current?.checks || null, rehabStateRef.current?.checks || null),
+    // Bricked.ai's read, so it is still beside the numbers when this reopens.
+    ...(bricked ? { bricked } : {}),
   });
   const draftBody = () => ({ ...formSnapshot(), cashPreview: calc?.offers?.cash?.amount ?? null });
 
@@ -1658,6 +1730,7 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
               askingPrice={moneyNum(inputs.askingPrice)}
               onApply={applyUnderwrite}
               declined={() => combineChecks(compsStateRef.current?.checks || null, rehabStateRef.current?.checks || null)?.declined || null}
+              alongside={<BrickedButton address={inputs.address} onApply={applyBricked} />}
             />}
           </div>
           {uwModel === "comps" && <div>
@@ -1712,7 +1785,7 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       )}
 
       {uwModel === "comps" && <>
-      {snap?.bricked && <BrickedRead b={snap.bricked} />}
+      {bricked && <BrickedRead b={bricked} />}
       <CompsPane
         key={`comps-${paneInit.nonce}`}
         address={inputs.address}
