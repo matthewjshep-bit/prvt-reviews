@@ -33,7 +33,7 @@ import { runTierOneScreen } from "./tier-one.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { resolveParty } from "./conversation-party.js";
 import { allEventsSince } from "./contact-events.js";
-import { needsMattFromCursor, NEEDS_MATT_CURSOR } from "./shared/needs-matt.js";
+import { needsMattFromCursor, needsMattOutrun, NEEDS_MATT_CURSOR } from "./shared/needs-matt.js";
 
 // What only Matt can do, per agent, as the needs-matt runner last read it
 // (ghl-broker/needs-matt.js). The stage moves read it from the cursor, so
@@ -41,6 +41,18 @@ import { needsMattFromCursor, NEEDS_MATT_CURSOR } from "./shared/needs-matt.js";
 export async function readNeedsMatt(store, locationId) {
   const cur = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
   return needsMattFromCursor(cur?.doc);
+}
+
+// One agent's need, as the last read left it, unless their house's status
+// changed since (needsMattOutrun). A dropped need is marked unplaced so the
+// next read syncs the card again and puts it back if it still holds.
+async function needsMattFor(store, locationId, contactId, offers) {
+  const cur = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
+  const need = needsMattFromCursor(cur?.doc).get(contactId) || null;
+  if (!need || !needsMattOutrun(need, offers, cur?.doc?.readAt)) return need;
+  const needs = { ...(cur.doc.needs || {}), [contactId]: { ...need, placed: false } };
+  await store.setJobCursor?.(locationId, NEEDS_MATT_CURSOR, { at: cur.at, doc: { ...cur.doc, needs } }).catch(() => {});
+  return null;
 }
 
 export const CURSOR_NAME = "tierCheck";
@@ -587,7 +599,7 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
       cardMade: cardsMadeBy(mine).has(contactId),
       handMoves: handMovesByContact(mine).get(contactId) || [],
       raised,
-      needsMatt: needsMatt !== undefined ? needsMatt : (await readNeedsMatt(store, locationId)).get(contactId) || null,
+      needsMatt: needsMatt !== undefined ? needsMatt : await needsMattFor(store, locationId, contactId, offers),
       heardOn: lastWordOnHouses(mine.filter((e) => HOUSE_EVENT_TYPES.includes(e.type) && (Date.parse(e.at || "") || 0) >= since)),
     });
     const fromConversation = (p) => Boolean(p.create?.replier || p.move?.replier || p.create?.conversation || p.move?.conversation);
