@@ -91,6 +91,22 @@ test("the stage menu by their name lists GHL's four stages in the board's order,
   expect(cardNote({ stage: "Tier 1", key: "tier1", status: "open", open: 1 })).toBe("");
 });
 
+// Matt, 2026-10-29: "Right now I don't really have context as to why that was
+// flagged or why it needs me."
+test("a card in Needs Matt says under their name why it's there, and when the bot passes an unpriced house", async () => {
+  const { NeedsMattLine, cardNote } = await import("../PaneParts.jsx");
+  const inNeeds = { stage: "Needs Matt", key: "needsMatt", name: "Needs Matt", status: "open", open: 1,
+    needsMatt: { kind: "price", why: "Price it on Lincoln St: the agent has waited 2 days for our number", landedAt: new Date(Date.now() - 3 * 3600000).toISOString(), passAt: "2026-11-01T22:00:00.000Z" } };
+  const html = renderToStaticMarkup(<NeedsMattLine contactId={CONTACT} party="agent" card={inNeeds} />);
+  expect(html).toContain("Price it on Lincoln St: the agent has waited 2 days for our number");
+  expect(html).toContain("3h ago");
+  expect(html).toMatch(/still unpriced, the bot passes it/);
+  expect(cardNote(inNeeds)).not.toMatch(/old stage/);
+  expect(renderToStaticMarkup(<NeedsMattLine contactId={CONTACT} party="agent" card={{ ...inNeeds, needsMatt: null }} />)).toMatch(/Nothing open for you on file/);
+  expect(renderToStaticMarkup(<NeedsMattLine contactId={CONTACT} party="agent" card={{ stage: "Offer Out", key: "offerOut", status: "open", open: 1, needsMatt: null }} />)).toBe("");
+  expect(renderToStaticMarkup(<NeedsMattLine contactId={CONTACT} party="investor" card={inNeeds} />)).toBe("", "a buyer has no Acquisitions card");
+});
+
 // Matt, 2026-10-19: "it would also be nice to see active deals associated with
 // the person on the companion" — every deal they're on, closed included.
 test("the companion lists the deals a person is on with how they're on it, its stage and a link to the deal", async () => {

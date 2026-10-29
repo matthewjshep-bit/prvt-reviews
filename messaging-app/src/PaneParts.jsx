@@ -4,7 +4,8 @@
 // different sort of interface"):
 //
 //   PaneHeading   the person (their name opens their record) · the house ·
-//                 their GHL stage, which moves from here (GhlStageMenu)
+//                 their GHL stage, which moves from here (GhlStageMenu),
+//                 and under it why they're in Needs Matt (NeedsMattLine)
 //   PaneActions   the app's own buttons: Status ▾ · Edit offer · Call ·
 //                 Coach · ⋯ (Feedback, their record, GHL, and the page's own)
 //   PaneBody      the offer on the left, the conversation and the reply box
@@ -21,7 +22,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown, Ellipsis, ExternalLink, History, Loader2, MessageSquareWarning, Pencil } from "lucide-react";
 import { CARD_STAGES, CARD_STAGE_LABEL } from "@shared/ghl-stages.js";
 import { annotateCurrent } from "@shared/current-offer.js";
-import { Menu, StatusMenu, passNoteLine } from "./ui.jsx";
+import { Menu, StatusMenu, ago, passNoteLine } from "./ui.jsx";
 import { useOpenContact } from "./ContactLink.jsx";
 import ContactLink from "./ContactLink.jsx";
 import { getContactTimeline, getGhlCard, ghlContactUrl, setGhlCardStage, setOfferStatus } from "./api.js";
@@ -129,6 +130,7 @@ export function usePane({ item, targets, bodies = null, feedback = null, onDone 
 export const GHL_STAGE_CLS = {
   tier2: "bg-slate-100 text-slate-700", tier1: "bg-amber-100 text-amber-800",
   offerOut: "bg-blue-100 text-blue-800", contract: "bg-emerald-100 text-emerald-800",
+  needsMatt: "bg-rose-100 text-rose-800",
 };
 export const ghlCardKey = (contactId) => (contactId ? `ghlcard:${contactId}` : null);
 
@@ -139,6 +141,7 @@ export function cardNote(card) {
   if ((card.open || 0) > 1) return "They have two open cards in Acquisitions. Move the right one in GHL.";
   if (card.status === "won") return "Their card is won. Picking a stage makes a new one.";
   if (card.status && card.status !== "open") return `Their card is ${card.status} (was ${card.stage}). Picking a stage reopens it.`;
+  if (card.key === "needsMatt") return "In Needs Matt until what needs you is done. Picking a stage moves it out by hand.";
   if (!card.key || !CARD_STAGES.includes(card.key)) return `In ${card.name || card.stage}, an old stage. Pick one of these to move it.`;
   return "";
 }
@@ -209,16 +212,50 @@ export function GhlStageMenu({ contactId, party, card = undefined }) {
   );
 }
 
-/** The person (their name opens their record) · the house, whole address · their GHL stage. */
+const passWhen = (iso) => {
+  try { return new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric" }); }
+  catch { return ""; }
+};
+
+/**
+ * <NeedsMattLine contactId party card? />
+ * Under their name while their card is in Needs Matt (Matt, 2026-10-29: "I
+ * don't really have context as to why that was flagged"): the runner's one
+ * line (shared/needs-matt.js needsMattWhy), when it landed, and for an
+ * unpriced house when the bot passes it. The same read as the stage pill.
+ *   card  tests only: the card as GET /api/dashboard/ghl/card answers
+ */
+export function NeedsMattLine({ contactId, party, card = undefined }) {
+  const on = Boolean(contactId) && party !== "investor";
+  const loaded = useLoad(on && card === undefined ? ghlCardKey(contactId) : null, () => getGhlCard(contactId), { maxAgeMs: 120000 });
+  if (!on) return null;
+  const data = card !== undefined ? card : loaded.data;
+  const need = data?.needsMatt;
+  if (!need?.why && !(data?.key === "needsMatt" && data?.status === "open")) return null;
+  if (!need?.why) return <p className="mt-0.5 text-xs text-slate-500">Nothing open for you on file: what needed you is done, or the card was moved here by hand.</p>;
+  const landed = ago(need.landedAt);
+  return (
+    <p className="mt-0.5 text-xs leading-snug text-rose-800">
+      <span className="font-semibold">Needs you:</span> {need.why}
+      {landed ? <span className="text-slate-500"> · landed {landed}</span> : null}
+      {need.passAt ? <span className="text-slate-500"> · if it's still unpriced, the bot passes it {passWhen(need.passAt)}</span> : null}
+    </p>
+  );
+}
+
+/** The person (their name opens their record) · the house, whole address · their GHL stage, and why it needs him. */
 export function PaneHeading({ item, targets, pane, fallback = "" }) {
   const street = String(item.address || pane.side.offer?.address || "").trim();
   const name = pane.name;
   return (
-    <h2 className="min-w-0 text-base font-bold leading-snug text-slate-900">
-      {targets.contactId && name
-        ? <><ContactLink contactId={targets.contactId} name={name} party={targets.party} className="font-bold">{name}</ContactLink>{street ? <span> · {street}</span> : null}<GhlStageMenu contactId={targets.contactId} party={targets.party} /></>
-        : (fallback || street || name || "Untitled")}
-    </h2>
+    <>
+      <h2 className="min-w-0 text-base font-bold leading-snug text-slate-900">
+        {targets.contactId && name
+          ? <><ContactLink contactId={targets.contactId} name={name} party={targets.party} className="font-bold">{name}</ContactLink>{street ? <span> · {street}</span> : null}<GhlStageMenu contactId={targets.contactId} party={targets.party} /></>
+          : (fallback || street || name || "Untitled")}
+      </h2>
+      {targets.contactId && name ? <NeedsMattLine contactId={targets.contactId} party={targets.party} /> : null}
+    </>
   );
 }
 

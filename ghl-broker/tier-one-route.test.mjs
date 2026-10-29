@@ -353,6 +353,28 @@ test("one agent's GHL stage is read for the name line: the open card, its four-s
   } finally { h.close(); }
 });
 
+// Matt, 2026-10-29: "Right now I don't really have context as to why that was
+// flagged or why it needs me."
+test("a card in Needs Matt comes with the reason it's there and when it landed", async () => {
+  STAGES.push({ id: "s-nm", name: "Needs Matt", position: STAGES.length });
+  const h = await harness({ cards: [
+    { id: "opA", contactId: "a1", name: "A", pipelineStageId: "s-nm" },
+    { id: "opB", contactId: "b1", name: "B", pipelineStageId: "s-out" },
+  ] });
+  try {
+    await store.setJobCursor(h.LOC, "needsMatt", { at: ago(0), doc: { needs: {
+      a1: { kind: "price", rowKind: "price_it", why: "Price it on Lincoln St: the agent has waited 2 days for our number", at: ago(3), landedAt: ago(1), key: "k1", offerId: "o1", placed: true },
+    } } });
+    const a = (await h.req("GET", "/api/dashboard/ghl/card?contact_id=a1")).json;
+    assert.deepEqual([a.key, a.stage], ["needsMatt", "Needs Matt"]);
+    assert.equal(a.needsMatt.why, "Price it on Lincoln St: the agent has waited 2 days for our number");
+    assert.equal(a.needsMatt.kind, "price");
+    assert.ok(Date.parse(a.needsMatt.landedAt), "when it landed");
+    assert.equal(Date.parse(a.needsMatt.passAt) - Date.parse(a.needsMatt.landedAt), 72 * 3600000, "an unpriced house is passed three days after it landed");
+    assert.equal((await h.req("GET", "/api/dashboard/ghl/card?contact_id=b1")).json.needsMatt, null, "nothing open for them");
+  } finally { STAGES.pop(); h.close(); }
+});
+
 /* ---------- Matt sets the stage from the companion window (2026-10-17) ---------- */
 
 const setStage = (h, contact_id, to) => h.req("POST", "/api/dashboard/ghl/card", { contact_id, to });
@@ -376,6 +398,9 @@ test("the offers don't move a card back that Matt set in the companion, until so
   const h = await harness({ saved, cards: [{ id: "opS", contactId: "c1", name: "Sam Lee", pipelineStageId: "s-out" }] });
   try {
     await offer(h.LOC, { sends: [{ ts: ago(2), results: { sms: { ok: true } } }] });   // Sent: the offers want Offer Out
+    // His pick has to be newer than the offer: in the same millisecond it
+    // isn't, and the test failed whenever the run was fast enough.
+    await new Promise((r) => setTimeout(r, 5));
     assert.equal((await setStage(h, "c1", "tier1")).status, 200);
     const r = await syncAgentCard({ client: h.ghl.client, locationId: h.LOC, contactId: "c1", store, saved });
     assert.ok(r.youMoved, JSON.stringify(r));
