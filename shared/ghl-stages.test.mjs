@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planStageMoves, planCard, planHandMove, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy, raisedHouses, sameRaisedHouse, validAddress, theirWordInGhl, lastWordOnHouses } from "./ghl-stages.js";
+import { planStageMoves, planCard, planHandMove, targetStage, normalizeGhlStages, stageKeys, stageKeyOf, boardCounts, cardHeldBy, raisedHouses, sameRaisedHouse, validAddress, theirWordInGhl } from "./ghl-stages.js";
 
 const NOW = Date.parse("2026-10-13T20:00:00Z");
 const ago = (d) => new Date(NOW - d * 86400000).toISOString();
@@ -53,7 +53,7 @@ test("each offer stage puts the card where Matt drew it", () => {
       offer("p", { status: "passed", statusAt: ago(1) }),
     ],
   });
-  assert.deepEqual(to(r), { d: "Tier 1", f: "Offer Out", s: "Offer Out", c: "Offer Out", h: "Offer Out", a: "Contract", p: "Tier 2" });
+  assert.deepEqual(to(r), { f: "Offer Out", s: "Offer Out", c: "Offer Out", h: "Offer Out", a: "Contract", p: "Tier 2" }, "a draft doesn't move the card");
 });
 
 test("no reply after the follow-ups sends the card back to Tier 2", () => {
@@ -63,12 +63,16 @@ test("no reply after the follow-ups sends the card back to Tier 2", () => {
 test("a pass on one house leaves the card where the agent's other live house puts it", () => {
   const r = plan({ opportunities: [card("m", "s-out")], offers: [offer("m", { status: "we_passed", statusAt: ago(1) }), offer("m")] });
   assert.equal(r.moves.length, 0);
-  assert.equal(targetStage({ offers: [offer("m", { status: "we_passed" }), offer("m", { status: "draft", sends: [], createdAt: ago(1) })], now: NOW }).to, "tier1");
 });
 
-test("a held underwrite counts as a house in hand for three weeks", () => {
-  assert.equal(targetStage({ offers: [offer("x", { status: "draft", sends: [], createdAt: ago(5) })], now: NOW }).to, "tier1");
-  assert.equal(targetStage({ offers: [offer("x", { status: "draft", sends: [], createdAt: ago(30) })], now: NOW }).to, null);
+// Matt, 2026-10-29: "let's just have drafts be neutral."
+test("a draft, held or priced, never moves the card on its own", () => {
+  for (const status of ["draft", "new"]) {
+    assert.equal(targetStage({ offers: [offer("x", { status, sends: [], createdAt: ago(1) })], now: NOW }).to, null, status);
+    assert.equal(targetStage({ offers: [offer("x", { status, sends: [], createdAt: ago(55) })], now: NOW }).to, null, `${status}, old`);
+  }
+  assert.equal(targetStage({ offers: [offer("m", { status: "we_passed" }), offer("m", { status: "draft", sends: [], createdAt: ago(1) })], now: NOW }).to, "tier2",
+    "a draft left after a pass doesn't hold the card up");
 });
 
 test("a row a newer offer on the house replaced doesn't count", () => {
@@ -90,7 +94,8 @@ test("a closed deal marks the card won at Contract; a new house later opens a ne
   const closed = offer("w", { status: "accepted", deal: { stage: "closed", createdAt: ago(30), stageHistory: [{ stage: "closed", ts: ago(2) }] } });
   const r = plan({ opportunities: [card("w", "s-cs")], offers: [closed] });
   assert.deepEqual(r.moves.map((m) => [m.to, m.status]), [["Contract", "won"]]);
-  const next = planCard({ acq: ACQ, cards: [card("w", "s-cs", { status: "won" })], offers: [closed, offer("w", { status: "draft", sends: [], createdAt: ago(1) })], contactId: "w", now: NOW });
+  const raised = raisedHouses({ events: [{ contactId: "w", party: "agent", type: "house_mentioned", address: "7 New St, Kent, WA 98032", at: ago(1), data: { needsAddress: false } }], now: NOW });
+  const next = planCard({ acq: ACQ, cards: [card("w", "s-cs", { status: "won" })], offers: [closed], raised, contactId: "w", now: NOW });
   assert.equal(next.create?.to, "Tier 1", "a won card is never reopened");
 });
 
@@ -253,22 +258,18 @@ test("the bot's tier-2/3 tag and TIER 2/3 workflow are the lower-tier moves; TIE
 
 // Matt, 2026-10-14: Eric B. sat in Tier 1 for 55 days on an August row we
 // priced and never sent; Cheryl P. on a duplicate of a house
-// we'd passed on. A number that never went out is Tier 1 only while live.
-test("a priced offer never sent and quiet 10 days leaves Tier 1", () => {
+// we'd passed on. Drafts are neutral now (2026-10-29), so a card nothing came of
+// leaves Tier 1 on the quiet-card rule.
+test("a Tier 1 card held only by a priced offer never sent leaves after 10 quiet days", () => {
   const stale = offer("e", { status: "new", sends: [], createdAt: ago(55) });
-  const t = targetStage({ offers: [stale], now: NOW, lastIn: ago(55) });
-  assert.equal(t.to, "tier2");
-  assert.match(t.why, /never sent/);
-  assert.equal(targetStage({ offers: [offer("e2", { status: "new", sends: [], createdAt: ago(4) })], now: NOW }).to, "tier1", "a fresh one stays");
-  assert.equal(targetStage({ offers: [offer("e3", { status: "new", sends: [], createdAt: ago(30) })], now: NOW, lastIn: ago(2) }).to, "tier2",
-    "their texts about something else don't keep an unsent number alive");
-  assert.equal(targetStage({ offers: [offer("e5", { status: "new", sends: [], createdAt: ago(30), statusAt: ago(2) })], now: NOW }).to, "tier1", "something on the offer this week does");
-  assert.equal(targetStage({ offers: [offer("e4", { status: "draft", sends: [], createdAt: ago(15) })], now: NOW }).to, "tier2", "a held draft gone quiet too");
+  const r = planCard({ acq: ACQ, cards: [card("e", "s-t1", { lastStageChangeAt: ago(40) })], offers: [stale], contactId: "e", lastIn: ago(55), now: NOW });
+  assert.equal(r.move?.to, "Tier 2", JSON.stringify(r));
+  assert.match(r.move.why, /nothing priced and nothing from them/);
 });
 
 test("a card the app moved itself is not read as one you moved", () => {
   const moved = ago(1);
-  const stale = offer("k", { status: "new", sends: [], createdAt: ago(55) });
+  const stale = offer("k", { status: "passed", statusAt: ago(55), createdAt: ago(60), sends: [{ ts: ago(58) }] });
   const theirs = planCard({ acq: ACQ, cards: [card("k", "s-t1", { lastStageChangeAt: moved })], offers: [stale], contactId: "k", lastIn: ago(55), now: NOW });
   assert.ok(theirs.youMoved, "with no record of ours, a newer card move is yours");
   const ours = planCard({ acq: ACQ, cards: [card("k", "s-t1", { lastStageChangeAt: moved })], offers: [stale], contactId: "k", lastIn: ago(55),
@@ -277,19 +278,14 @@ test("a card the app moved itself is not read as one you moved", () => {
 });
 
 // Matt, 2026-10-16 (Toril S.): he passed her house and her card never left
-// Tier 1. Her other house, a held draft, kept it there, as the rule says, but
-// nothing told him which house or why, so the pass looked broken.
+// Tier 1, and nothing told him which house kept it there or why.
 test("a pass that leaves another house live says which house keeps the card, and why", () => {
   const passed = offer("t", { address: "16910 132nd Ave E, Puyallup, WA 98374", status: "we_passed", statusAt: ago(0) });
   const held = offer("t", { address: "29308 158th Ave E, Graham, WA 98338", status: "draft", cashAmount: null, sends: [], createdAt: ago(3) });
-  const r = cardHeldBy({ offers: [passed, held], now: NOW });
-  assert.equal(r.to, "tier1");
-  assert.equal(r.offerId, held.id);
-  assert.match(r.text, /stays in Tier 1: 29308 158th Ave E is still being priced/);
   const out = cardHeldBy({ offers: [passed, offer("t", { address: "5 Out St, Kent, WA" })], now: NOW });
   assert.match(out.text, /stays in Offer Out: our number on 5 Out St is still out/);
   assert.equal(cardHeldBy({ offers: [passed], now: NOW }), null, "nothing else live: the card goes to Tier 2, nothing to explain");
-  assert.equal(cardHeldBy({ offers: [passed, { ...held, createdAt: ago(15) }], now: NOW }), null, "a draft quiet past staleTier1Days doesn't hold it");
+  assert.equal(cardHeldBy({ offers: [passed, held], now: NOW }), null, "a draft on another house doesn't hold it (2026-10-29)");
 });
 
 // The companion window (Matt, 2026-10-17): he sets an agent's stage by hand.
@@ -433,7 +429,8 @@ test("an unsent offer on a house the agent called light work doesn't put the car
   const t = targetStage({ offers: [priced], raised, now: NOW });
   assert.equal(t.to, "tier2");
   assert.match(t.why, /1823 Maple St: they said it's light work/);
-  const r = planCard({ acq: ACQ, contactId: "kw", cards: [card("kw", "s-t1", { lastStageChangeAt: ago(5) })], offers: [priced], raised, now: NOW });
+  // The old rule's own move into Tier 1 on that row is the app's, not a person's.
+  const r = planCard({ acq: ACQ, contactId: "kw", cards: [card("kw", "s-t1", { lastStageChangeAt: ago(5) })], offers: [priced], raised, appMoves: [ago(5)], now: NOW });
   assert.equal(r.move?.to, "Tier 2");
 });
 
@@ -472,7 +469,8 @@ test("a house number the agent corrected is closed, so its leftover draft doesn'
   assert.match(raised.find((h) => !h.open)?.why || "", /20525 Ne 68th St: they corrected it to 20526 NE 68th St/);
   assert.equal(targetStage({ offers: [draft, passed], raised, now: NOW }).to, "tier2");
   // Moving on to a different street is a new house, not a correction.
-  const moved = raisedHouses({ events: [ev("subject_property_set", "9 Pine St, Redmond, WA 98053", { from: typo }, ago(6))], offers: [draft], now: NOW });
+  const moved = raisedHouses({ events: [{ ...ev("subject_property_set", "9 Pine St, Redmond, WA 98053", { from: typo }, ago(6)), source: "conversation" }], offers: [draft], now: NOW });
+  assert.deepEqual(moved.map((h) => [h.address, h.open]), [["9 Pine St, Redmond, WA 98053", true]]);
   assert.equal(targetStage({ offers: [draft], raised: moved, now: NOW }).to, "tier1");
 });
 
@@ -511,7 +509,7 @@ test("a house the agent called finished stays out of Tier 1 when its next draft 
   assert.equal(targetStage({ offers: [first, passed], raised: after, now: NOW }).to, "tier2", "after Matt passed it");
 });
 
-test("a raise goes quiet after the same 10 days an unsent offer does", () => {
+test("a raise goes quiet 10 days after their last word on it", () => {
   const raised = raisedHouses({ events: [ev("property_details", EDMONDS, { condition: "needs a lot of work" }, ago(11))], now: NOW });
   assert.equal(raised.length, 0);
 });
@@ -600,20 +598,20 @@ test("an agent who calls it cosmetic, then says it needs a full kitchen and bath
 });
 
 // 8420 155th Street Ct E: a short sale, priced 10/6 and texted along since,
-// the agent writing every few days. The row's own age sent it to Tier 2.
-test("a priced house they're still writing about stays Tier 1 past the stale days", () => {
+// the agent writing every few days. Their words keep the house they raised live.
+test("a house they raised stays Tier 1 while they keep writing about it", () => {
   const A = "8420 155th Street Ct E, Puyallup, WA 98375";
   const row = offer("sp", { status: "new", sends: [], cashAmount: 398500, address: A, createdAt: ago(16) });
-  assert.equal(targetStage({ offers: [row], now: NOW }).to, "tier2");
-  const heardOn = lastWordOnHouses([
-    ev("property_details", "8420 155th St Ct E, Puyallup, WA", { timeline: "decision by end of month" }, ago(1)),
+  const brought = ev("house_mentioned", A, { needsAddress: false, note: "short sale" }, ago(16));
+  assert.equal(raisedHouses({ events: [brought], offers: [row], now: NOW }).length, 0, "quiet 16 days");
+  const raised = raisedHouses({ events: [brought,
     ev("property_details", A, { timeline: "end of this month" }, ago(9)),
-  ]);
-  assert.equal(heardOn.length, 1, "one house, however it was spelled");
-  assert.equal(targetStage({ offers: [row], now: NOW, heardOn }).to, "tier1");
-  assert.equal(targetStage({ offers: [row], now: NOW, heardOn: lastWordOnHouses([ev("property_details", A, {}, ago(12))]) }).to, "tier2", "nothing on it in 10+ days");
-  assert.equal(targetStage({ offers: [row], now: NOW, heardOn: lastWordOnHouses([ev("house_mentioned", "77 Oak St, Kent, WA 98032", {}, ago(1))]) }).to, "tier2",
-    "their words on another house don't keep this one alive");
+    ev("property_details", "8420 155th St Ct E, Puyallup, WA", { timeline: "decision by end of month" }, ago(1)),
+  ], offers: [row], now: NOW });
+  assert.deepEqual(raised.map((h) => h.open), [true], "one house, however it was spelled");
+  assert.equal(targetStage({ offers: [row], raised, now: NOW }).to, "tier1");
+  const other = raisedHouses({ events: [brought, ev("house_mentioned", "77 Oak St, Kent, WA 98032", { needsAddress: true }, ago(1))], offers: [row], now: NOW });
+  assert.equal(targetStage({ offers: [row], raised: other, now: NOW }).to, null, "their words on another house don't keep this one alive");
 });
 
 // 1128 N Jackson Ave: Matt quoted 975K by text, the agent said "Ok ✅", and
@@ -625,4 +623,43 @@ test("their yes on a house we have no row for puts the card in Tier 1", () => {
   assert.match(raised[0].why, /they said yes on 1128 N Jackson Ave/);
   const passedOther = offer("mj", { status: "we_passed", address: "24th Ave S", sends: [], createdAt: ago(6), statusAt: ago(6) });
   assert.equal(targetStage({ offers: [passedOther], raised, now: NOW }).to, "tier1");
+});
+
+/* ---------- drafts are neutral; the conversation drives Tier 1 (2026-10-29) ---------- */
+
+// Janette M.: we passed on 190th Ave E (cosmetic) on 10/19, and an underwrite
+// restart nine minutes later left a draft on it. Ten days on, the Kent condo
+// she sent was passed, and that draft put the card straight back in Tier 1.
+test("a draft left on a house we passed on doesn't put the card back in Tier 1", () => {
+  const KENT = "25255 108th Av SE unit J2, Kent, WA 98030";
+  const leftover = offer("jm", { address: "190th Ave E", status: "draft", sends: [], cashAmount: null, createdAt: ago(9.8) });
+  const kent = offer("jm", { address: KENT, status: "we_passed", sends: [], cashAmount: null, createdAt: ago(5), statusAt: ago(0.7) });
+  const events = [{ ...ev("subject_property_set", KENT, { from: "190th Ave E" }, ago(5)), source: "conversation" }];
+  const raised = raisedHouses({ events, offers: [leftover, kent], now: NOW });
+  const t = targetStage({ offers: [leftover, kent], raised, now: NOW });
+  assert.equal(t.to, "tier2", JSON.stringify(t));
+  const r = planCard({ acq: ACQ, contactId: "jm", cards: [card("jm", "s-t1", { lastStageChangeAt: ago(5) })], offers: [leftover, kent], raised, now: NOW });
+  assert.equal(r.move?.to, "Tier 2", JSON.stringify(r));
+});
+
+test("an address they text us puts the card in Tier 1 with nothing priced, and our pass on it sends it back", () => {
+  const KENT = "25255 108th Av SE unit J2, Kent, WA 98030";
+  const sent = { ...ev("subject_property_set", KENT, { from: "" }, ago(2)), source: "conversation" };
+  const raised = raisedHouses({ events: [sent], now: NOW });
+  assert.deepEqual(raised.map((h) => [h.address, h.open]), [[KENT, true]]);
+  assert.match(raised[0].why, /they gave us 25255 108th Av SE unit J2/);
+  const draft = offer("jm", { address: KENT, status: "draft", sends: [], createdAt: ago(1.9) });
+  const withDraft = raisedHouses({ events: [sent], offers: [draft], now: NOW });
+  assert.equal(targetStage({ offers: [draft], raised: withDraft, now: NOW }).to, "tier1", "the draft on it changes nothing");
+  const passed = { ...draft, status: "we_passed", statusAt: ago(0.5) };
+  const after = raisedHouses({ events: [sent], offers: [passed], now: NOW });
+  assert.equal(targetStage({ offers: [passed], raised: after, now: NOW }).to, "tier2");
+});
+
+test("the underwriter's own aim, our icebreaker house being qualified, or an address with no town never raises a house", () => {
+  const A = "2714 SW 164th Pl, Burien, WA 98166";
+  assert.equal(raisedHouses({ events: [{ ...ev("subject_property_set", A, { from: "" }), source: "offer" }], now: NOW }).length, 0);
+  assert.equal(raisedHouses({ events: [{ ...ev("subject_property_set", A, { from: "", qualifying: "ask" }), source: "conversation" }], now: NOW }).length, 0);
+  assert.equal(raisedHouses({ events: [{ ...ev("subject_property_set", A, { from: "", qualifying: "pass" }), source: "conversation" }], now: NOW }).length, 0);
+  assert.equal(raisedHouses({ events: [{ ...ev("subject_property_set", "2714 SW 164th Pl", { from: "" }), source: "conversation" }], now: NOW }).length, 0);
 });

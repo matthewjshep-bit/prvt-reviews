@@ -193,17 +193,22 @@ test("bulk marks many, and can never overwrite an active deal", async () => {
 });
 
 // Matt, 2026-10-16 (Toril S.): he passed her house and the GHL card never
-// left Tier 1, with nothing saying why. Her other house, still being priced,
-// holds it there; the answer to the pass now says so.
+// left Tier 1, with nothing saying why. The answer to the pass now says which
+// house holds it. A draft holds nothing (2026-10-29: drafts are neutral).
 test("a pass that leaves the GHL card where it is says which house holds it there", async () => {
   const before = (await store.getOfferSettings(LOC)) || {};
   await store.saveOfferSettings(LOC, { ...before, ghlStages: { mode: "on" } });
   try {
     const passed = await mkOffer({ contactId: "c-held", address: "16910 132nd Ave E, Puyallup, WA 98374" });
-    await mkOffer({ contactId: "c-held", address: "29308 158th Ave E, Graham, WA 98338", status: "draft", cashAmount: null });
+    await mkOffer({ contactId: "c-held", address: "29308 158th Ave E, Graham, WA 98338", status: "sent", sends: [{ ts: new Date().toISOString() }] });
     const r = await req("PATCH", `/api/offers/${passed.id}/status`, { status: "we_passed" });
     assert.equal(r.status, 200);
-    assert.match(r.json.card?.text || "", /stays in Tier 1: 29308 158th Ave E is still being priced/);
+    assert.match(r.json.card?.text || "", /stays in Offer Out: our number on 29308 158th Ave E is still out/);
+
+    const drafted = await mkOffer({ contactId: "c-draft", address: "16 Draft St, Kent, WA" });
+    await mkOffer({ contactId: "c-draft", address: "18 Draft St, Kent, WA", status: "draft", cashAmount: null });
+    const r3 = await req("PATCH", `/api/offers/${drafted.id}/status`, { status: "we_passed" });
+    assert.equal(r3.json.card, undefined, "a draft on their other house doesn't hold the card");
 
     const alone = await mkOffer({ contactId: "c-alone", address: "77 Solo St, Kent, WA" });
     const r2 = await req("PATCH", `/api/offers/${alone.id}/status`, { status: "we_passed" });
