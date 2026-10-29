@@ -200,6 +200,21 @@ export function needsMattPassDue(need, now = Date.now()) {
   return landed != null && now - landed >= PASS_AFTER_HOURS * HOUR_MS;
 }
 
+/**
+ * needsMattOutrun(need, offers, readAt) → boolean
+ *
+ * The house the need is about changed status after the runner last read the
+ * list (`readAt`), so the list's word on it is stale: a card sync goes by the
+ * offers until the next read. Matt, 2026-10-29: a pass on the click should
+ * move the card, not 15 minutes later.
+ */
+export function needsMattOutrun(need, offers = [], readAt = null) {
+  if (!need?.offerId) return false;
+  const read = ms(readAt);
+  const at = ms((offers || []).find((o) => o?.id === need.offerId)?.statusAt);
+  return read != null && at != null && at > read;
+}
+
 /** needsMattFromCursor(doc) → Map contactId → item, from the runner's last read. */
 export function needsMattFromCursor(doc = null) {
   const m = new Map();

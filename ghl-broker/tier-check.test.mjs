@@ -208,6 +208,35 @@ test("an agent with a live offer and no card gets one, at the stage the offer pu
   assert.deepEqual(made.map((m) => [m.contactId, m.stageId, m.name]), [["c3", "out", "An Agent"]]);
 });
 
+// 2026-10-29 Jessica S.: Matt passed the house the card sat in Needs Matt
+// for, and the card stayed there. The click's sync read the Needs Matt list
+// from 7 minutes before the pass.
+const FIVE = [{ ...FOUR[0], stages: [...FOUR[0].stages, { id: "nm", name: "Needs Matt" }] }];
+const needsMattStore = (offers, need) => {
+  const store = cardStore(offers);
+  store.cursors.set("L-nm|needsMatt", { at: need.readAt, doc: { readAt: need.readAt, needs: { c9: { kind: "price", rowKind: "price_it", why: "Price it", key: "k1", offerId: "o-c9", placed: true, landedAt: "2026-10-28T23:46:03Z" } } } });
+  return store;
+};
+test("changing a house's status after the Needs Matt list was read takes the card out on that click", async () => {
+  _resetWorkflowCache();
+  const passed = sentOffer("c9", { status: "we_passed", statusAt: "2026-10-13T19:53:00Z", sends: [] });
+  const moved = [];
+  const store = needsMattStore([passed], { readAt: "2026-10-13T19:46:00Z" });
+  const r = await syncAgentCard({ client: {}, locationId: "L-nm", contactId: "c9", store,
+    ghl: { ...cardGhl({ moved, cards: [{ id: "op9", pipelineId: "pA", stageId: "nm", status: "open" }] }), listPipelines: async () => FIVE }, now: NOW13 });
+  assert.equal(r.applied?.to, "Tier 2");
+  assert.deepEqual(moved, [{ id: "op9", stageId: "t2" }]);
+  assert.equal(store.cursors.get("L-nm|needsMatt").doc.needs.c9.placed, false, "the Needs Matt run reads them again and puts the card back if something still needs him");
+
+  _resetWorkflowCache();
+  const kept = [];
+  const read = needsMattStore([passed], { readAt: "2026-10-13T19:55:00Z" });
+  const s = await syncAgentCard({ client: {}, locationId: "L-nm", contactId: "c9", store: read,
+    ghl: { ...cardGhl({ moved: kept, cards: [{ id: "op9", pipelineId: "pA", stageId: "nm", status: "open" }] }), listPipelines: async () => FIVE }, now: NOW13 });
+  assert.match(s.skip, /already in Needs Matt/, "a list read after the change still holds");
+  assert.equal(kept.length, 0);
+});
+
 test("every 15 minutes, only agents whose offers moved since the last run are synced; the first run only sets the clock", async () => {
   _resetWorkflowCache();
   const moved = [];
