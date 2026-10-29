@@ -168,6 +168,15 @@ test("a cold agent hears only about a new listing, 60 days apart, and never afte
   assert.equal(evaluateAgent(three, ctx()).status, "cold_dropped");
 });
 
+test("a cold agent can hear about a new listing of theirs every 21 days when Matt sets it", () => {
+  const s21 = normalizeAgentPulse({ enabled: true, coldEveryDays: 21 });
+  assert.equal(s21.coldEveryDays, 21);
+  assert.equal(normalizeAgentPulse({ coldEveryDays: 3 }).coldEveryDays, 14, "never closer than the two-week check-in gap");
+  const cold = agent({ events: [{ type: "outreach_enrolled", at: ago(90), data: { kind: "first" } }], listings: [listing()] });
+  assert.equal(evaluateAgent({ ...cold, ledger: [{ type: "agent_pulse_texted", at: ago(22) }] }, ctx({ settings: s21 })).status, "due", "22 days after the last ping");
+  assert.equal(evaluateAgent({ ...cold, ledger: [{ type: "agent_pulse_texted", at: ago(18) }] }, ctx({ settings: s21 })).status, "not_due", "18 days is too soon");
+});
+
 test("an engaged agent long into silence falls back to listings only", () => {
   const quiet = agent({ lastInboundAt: ago(300), ledger: [120, 99, 78, 57, 36, 22].map((d) => ({ type: "agent_pulse_texted", at: ago(d) })) });
   const v = evaluateAgent(quiet, ctx());
