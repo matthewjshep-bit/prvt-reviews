@@ -67,7 +67,7 @@ import { runGhlPings, CURSOR_NAME as GHL_PINGS_CURSOR } from "../ghl-pings.js";
 import { normalizeSlack, slackOn, SLACK_STREAMS } from "../shared/slack-notify.js";
 import { runSlackEventsNow, reconcileSlackNow, runSlackPings, postMorning, postEvening, testSlack, CURSOR_NAME as SLACK_CURSOR, PINGS_CURSOR as SLACK_PINGS_CURSOR, MORNING_CURSOR as SLACK_MORNING_CURSOR, EVENING_CURSOR as SLACK_EVENING_CURSOR } from "../slack-notify.js";
 import { runNeedsMatt } from "../needs-matt.js";
-import { NEEDS_MATT_CURSOR } from "../shared/needs-matt.js";
+import { NEEDS_MATT_CURSOR, PASS_AFTER_HOURS } from "../shared/needs-matt.js";
 import { foldDesk, heldVerdicts, nameRows, deskKpis, TODAY_SECTIONS, urgentReasons, pacificStart, machineDrives, withoutQueuedCalls, GHL_CALLS_EMPTY } from "../shared/desk.js";
 import { ghlCallsOn, liveGhlQueues, GHL_CALL_EVENT_TYPES, ghlCallWindow } from "../shared/ghl-calls.js";
 import { runGhlCalls, startGhlCalls, getGhlCallsJob, summarizeRun, patchCursor as patchGhlCallsCursor, pacificDay, CURSOR_NAME as GHL_CALLS_CURSOR } from "../ghl-calls.js";
@@ -1032,7 +1032,15 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       if (!card) return res.json({ ok: true, stage: null });
       const key = stageKeyOf(stageKeys(acq), card.stageId);
       const name = (acq.stages || []).find((x) => x.id === card.stageId)?.name || "";
-      res.json({ ok: true, stage: CARD_STAGE_LABEL[key] || name || null, key: key || null, name, status: card.status || "open", opportunityId: card.id, cards: cards.length, open: cards.filter((c) => (c.status || "open") === "open").length });
+      // What needs him on them, from the Needs Matt runner's last read
+      // (Matt, 2026-10-29: "I don't really have context as to why that was
+      // flagged"): the one line it writes on the card, when it landed, and
+      // for an unpriced house when the runner passes it (needsMattPassDue).
+      const need = (await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null))?.doc?.needs?.[contactId] || null;
+      const landed = Date.parse(need?.landedAt || "");
+      const passAt = need?.kind === "price" && need.offerId && Number.isFinite(landed) ? new Date(landed + PASS_AFTER_HOURS * 3600000).toISOString() : null;
+      const needsMatt = need?.kind ? { kind: need.kind, why: need.why || "", at: need.at || null, landedAt: need.landedAt || null, passAt } : null;
+      res.json({ ok: true, stage: CARD_STAGE_LABEL[key] || name || null, key: key || null, name, status: card.status || "open", opportunityId: card.id, cards: cards.length, open: cards.filter((c) => (c.status || "open") === "open").length, needsMatt });
     } catch (err) { fail(res, err); }
   });
 
