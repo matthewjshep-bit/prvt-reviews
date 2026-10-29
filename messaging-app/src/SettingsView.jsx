@@ -733,7 +733,7 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
       <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="ghl-stages-settings">
         <h2 className="mb-1 text-sm font-bold">GHL pipeline follows the offers</h2>
         <p className="mb-3 text-xs text-slate-500">
-          Four stages: Tier 2 (replied, nothing live) → Tier 1 (a house being priced) → Offer Out (our number is out, they
+          Four stages: Tier 2 (replied, nothing live) → Tier 1 (a house they gave us; drafts don't count) → Offer Out (our number is out, they
           countered, or it's hot) → Contract (under contract; a closed deal marks the card won). Each agent's card moves when
           their offers do. A card you drag in GHL after that stays where you put it. Read the Offers page's pipeline report
           and finish the move off the old stages before switching this on.

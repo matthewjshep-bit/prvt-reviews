@@ -7,7 +7,7 @@
 // is, in four stages, and the offer's stage (shared/offer-stage.js) drives it:
 //
 //   Tier 2     agent nurture: has replied, nothing live     every offer passed, or none
-//   Tier 1     a property identified                        a draft: priced or being priced
+//   Tier 1     a property identified                        a house they gave us, nothing closed it (drafts are neutral)
 //   Offer Out  our number is out                            Sent, Countered or Hot
 //   Contract   under contract                               Accepted (a closed deal: the card is won)
 //
@@ -100,7 +100,9 @@ export function sameRaisedHouse(a, b) {
  * nothing has closed them, and closed ones too, so the card goes back to
  * Tier 2 when we pass the way it does after an offer is passed. `events`
  * are one agent's HOUSE_EVENT_TYPES. A house is raised by:
- *   - house_mentioned with a valid address (their own words named it), or
+ *   - house_mentioned with a valid address (their own words named it),
+ *   - a valid address the conversation moved the thread onto
+ *     (subject_property_set from the conversation, not while qualifying), or
  *   - their words about it reading as real work (property_details
  *     condition / workNeeded, a house_mentioned note: flip-read.js
  *     saysRealWork), or their own rehab budget of 50K or more.
@@ -111,12 +113,12 @@ export function sameRaisedHouse(a, b) {
  * number), Pass or Kick on the Tier 1 list
  * (that house, or every house before it when the pass named none), or an
  * opt-out. A house with an
- * offer row of ours is the row's to say (targetStage), and a raise is live
- * for `staleDays` (ghlStages.staleTier1Days) like an unsent row. One
+ * offer row of ours past draft is the row's to say (targetStage); a draft
+ * says nothing. A raise is live for `staleDays` (ghlStages.staleTier1Days)
+ * after their last word on the house. One
  * exception (Matt, 2026-10-19, Tyler E. and Loren K.): a house with a row
  * that the conversation closed is kept, closed, however old, raised or not —
- * our row made it a candidate — so a row we priced and never sent can't hold
- * Tier 1 on a house they turned down (targetStage). Only their own word
+ * our row made it a candidate. Only their own word
  * reopens it; our re-pricing doesn't.
  */
 export function raisedHouses({ events = [], offers = [], now = Date.now(), staleDays = GHL_STAGES_DEFAULTS.staleTier1Days } = {}) {
@@ -162,6 +164,15 @@ export function raisedHouses({ events = [], offers = [], now = Date.now(), stale
       close(String(d.from), at, `${String(d.from).split(",")[0].trim()}: they corrected it to ${street}`);
     }
     if (e.type === "subject_property_set" && d.notOurKind) { close(a, at, `${street}: they said it's turnkey`); continue; }
+    // An address they texted us moves the thread onto it: a house to look at
+    // (Matt, 2026-10-29: "any surfaced addresses that we haven't really taken a
+    // look at" are Tier 1). Not the underwriter's own aim (source "offer"), and
+    // not our icebreaker house while it's being qualified or passed.
+    if (e.type === "subject_property_set" && e.source === "conversation" && !d.qualifying && validAddress(a)) { raise(a, at, `they gave us ${street}`); continue; }
+    // Their word on a house they raised keeps it live (2026-10-22, a short
+    // sale the agent wrote about every few days).
+    const known = find(a);
+    if (known?.open && HOUSE_WORD_TYPES.has(e.type)) known.at = at;
     const words = e.type === "property_details" ? [d.condition, d.workNeeded].filter(Boolean).join(". ")
       : e.type === "house_mentioned" ? String(d.note || "") : "";
     const rehab = e.type === "agent_estimate" ? Number(d.rehab) || 0 : 0;
@@ -170,33 +181,20 @@ export function raisedHouses({ events = [], offers = [], now = Date.now(), stale
     if (e.type === "house_mentioned" && !d.needsAddress && validAddress(a)) raise(a, at, `they gave us ${street}`);
   }
   for (const h of houses) if (h.open && optOut != null && optOut >= h.at) { h.open = false; h.at = optOut; h.why = "they opted out"; }
+  // A row past draft (sent, answered, passed) speaks for its house. A draft
+  // doesn't (Matt, 2026-10-29): the raise stands on its own.
+  const current = annotateCurrent(rows).filter((o) => !o.supersededBy);
+  const spoken = (a) => current.some((o) => sameRaisedHouse(o.address, a) && offerStage(o).stage !== "draft");
+  const fresh = (h) => now - h.at <= staleDays * DAY_MS;
   return houses
-    // The row speaks for its house, except that a close stays (above).
-    .filter((h) => (hasRow(h.address) ? !h.open : now - h.at <= staleDays * DAY_MS))
+    // A close on a house with a row of ours stays, however old (above).
+    .filter((h) => (h.open ? !spoken(h.address) && fresh(h) : hasRow(h.address) || fresh(h)))
     .sort((x, y) => y.at - x.at)
     .map(({ address, at, why, open }) => ({ address, at: new Date(at).toISOString(), why, open }));
 }
 
-// Their words on a house: what keeps a row of ours on it live (targetStage).
+// Their words on a house: what keeps a house they raised live (raisedHouses).
 const HOUSE_WORD_TYPES = new Set(["house_mentioned", "house_agreed", "property_details", "agent_estimate"]);
-
-/**
- * lastWordOnHouses(events) → [{ address, at }]
- *
- * The newest word from them on each house they've talked about, from one
- * agent's HOUSE_EVENT_TYPES. A priced row we never sent stays Tier 1 while
- * they're still writing about its house, past its own stale days.
- */
-export function lastWordOnHouses(events = []) {
-  const out = [];
-  for (const e of events || []) {
-    if (!HOUSE_WORD_TYPES.has(e?.type) || ms(e.at) == null || !parseUsAddress(String(e.address || "")).houseNo) continue;
-    const h = out.find((x) => sameRaisedHouse(x.address, e.address));
-    if (!h) out.push({ address: String(e.address), at: e.at });
-    else if (ms(e.at) > ms(h.at)) h.at = e.at;
-  }
-  return out;
-}
 
 export const GHL_STAGES_DEFAULTS = Object.freeze({ mode: "off", staleTier1Days: 10, allowNurtureTrigger: false, maxMovesPerRun: 100, tier2Repliers: false });
 
@@ -246,8 +244,7 @@ export const OLD_STAGES = Object.freeze(["newLead", "contacted", "tier3", "negot
 export const APP_MOVE_SLACK_MS = 10 * 60000;
 
 // A held underwrite counts as a house in hand this long (shared/tiers.js
-// HELD_DAYS) — the outer bound. Inside it, the card follows the thread: see
-// targetStage's `staleDays`.
+// HELD_DAYS). The card doesn't read it: drafts are neutral (targetStage).
 export const HELD_DAYS = 21;
 
 /** stageKeys(acq) → { key: stageId } for the stages this knows, by name. `contract` is Contract Signed, else Contract Sent. */
@@ -283,54 +280,31 @@ const RANK = { contract: 5, offerOut: 4, tier1: 3, won: 2, tier2: 1 };
  * rows don't count. `at` is the newest offer event across their current rows
  * (offerStageAt). `to` is null when the agent has no offers at all.
  *
- * A house we priced and never sent (a held draft, or a `new` row) is Tier 1
- * only while it's live: something happened on the offer in the last
- * `staleDays` (ghlStages.staleTier1Days, 10). After that it's Tier 2 —
- * Matt, 2026-10-14: Eric B. sat in Tier 1 for 55 days on an August row that
- * never went out, and Cheryl P. on a duplicate of a house we'd passed on.
- * Their texts about something else don't keep a number alive: a re-run, a
- * float or a send is what does. `lastIn` is accepted and unused here.
+ * A draft — held, or priced and never sent — is neutral: it neither puts
+ * the card in Tier 1 nor takes it out (Matt, 2026-10-29: "let's just have
+ * drafts be neutral"). Tier 1 is the conversation's (raisedHouses): a house
+ * they gave us that nothing has closed. Janette M.'s Kent condo was passed,
+ * and a leftover draft on "190th Ave E" — a house we'd passed on ten days
+ * before — put her straight back in Tier 1. Our pass on a draft is a row
+ * past draft, so it still sends the card back to Tier 2. `lastIn` is
+ * accepted and unused here.
  */
-export function targetStage({ offers = [], now = Date.now(), lastIn = null, staleDays = GHL_STAGES_DEFAULTS.staleTier1Days, raised = [], heardOn = [] } = {}) {
+export function targetStage({ offers = [], now = Date.now(), lastIn = null, staleDays = GHL_STAGES_DEFAULTS.staleTier1Days, raised = [] } = {}) {
   const rows = annotateCurrent((offers || []).filter(Boolean)).filter((o) => !o.supersededBy);
   let best = null;
   let at = null;
   const consider = (key, o, why) => {
     if (!best || RANK[key] > RANK[best.key]) best = { key, offerId: o.id || null, why };
   };
-  const live = (t) => t != null && now - t <= staleDays * DAY_MS;
-  // An unsent row stays live while they're still writing about that house
-  // (lastWordOnHouses; 2026-10-22, a short sale priced 10/6 with the agent texting
-  // every few days). Their words about anything else don't (Eric B.).
-  const liveRow = (o, t) => live(t) || (heardOn || []).some((h) => sameRaisedHouse(o.address, h.address) && live(ms(h.at)));
-  // A house the conversation closed (raisedHouses): an unsent row on it is
-  // not Tier 1, however fresh our pricing.
-  const closedOn = (o) => (raised || []).find((h) => !h.open && sameRaisedHouse(o.address, h.address)) || null;
-  const unsent = (o, tier1Why) => {
-    const shut = closedOn(o);
-    if (shut) consider("tier2", o, shut.why);
-    else consider("tier1", o, tier1Why);
-  };
   for (const o of rows) {
-    const t = offerStageAt(o);
-    if (o.status === "draft") {
-      const age = now - (ms(o.createdAt) ?? now);
-      if (!o.contactId || age > HELD_DAYS * DAY_MS) continue;
-      if (t != null) at = Math.max(at ?? t, t);
-      if (liveRow(o, t)) unsent(o, "a house being priced");
-      else consider("tier2", o, `held, and nothing on it in ${staleDays}+ days`);
-      continue;
-    }
-    if (t != null) at = Math.max(at ?? t, t);
     const s = offerStage(o);
+    if (s.stage === "draft") continue;
+    const t = offerStageAt(o);
+    if (t != null) at = Math.max(at ?? t, t);
     if (s.sub === "accepted") {
       if (o.deal && !LIVE_DEAL_STAGES.has(o.deal.stage)) consider("won", o, "the deal closed");
       else consider("contract", o, "under contract");
     } else if (s.stage === "sent" || s.sub === "countered" || s.sub === "hot") consider("offerOut", o, s.sub ? `responded: ${s.sub}` : s.why);
-    else if (s.stage === "draft") {
-      if (liveRow(o, t)) unsent(o, "priced, our number not out yet");
-      else consider("tier2", o, `priced but never sent, and nothing on it in ${staleDays}+ days`);
-    }
     else consider("tier2", o, `every house passed (${s.why})`);
   }
   // A house they raised that nothing closed is Tier 1 with no row behind it
@@ -370,7 +344,6 @@ export function cardHeldBy({ offers = [], now = Date.now(), staleDays = GHL_STAG
   const street = String(o?.address || "").split(",")[0].trim() || "another house";
   const label = CARD_STAGE_LABEL[t.to];
   const because = {
-    tier1: o?.status === "draft" ? `${street} is still being priced. Pass that house too and it goes to Tier 2` : `${street} is priced and our number isn't out yet`,
     offerOut: `our number on ${street} is still out`,
     contract: `${street} is under contract`,
   }[t.to];
@@ -394,7 +367,7 @@ export function cardHeldBy({ offers = [], now = Date.now(), staleDays = GHL_STAG
  * Matt" stage while it's open — above every stage but Contract — and back to
  * where the offers put it once it's gone. No stage by that name: no effect.
  */
-export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], handMoves = [], replied = null, cardMade = false, raised = [], heardOn = [], needsMatt = null, settings = {}, now = Date.now() } = {}) {
+export function planCard({ acq = null, keys = null, cards = [], offers = [], contactId = "", name = "", lastIn = null, openPromise = false, nurtureLive = [], appMoves = [], handMoves = [], replied = null, cardMade = false, raised = [], needsMatt = null, settings = {}, now = Date.now() } = {}) {
   const cfg = normalizeGhlStages(settings);
   const k = keys || stageKeys(acq);
   const label = (key) => (key === "needsMatt" ? NEEDS_MATT_STAGE_NAME : CARD_STAGE_LABEL[key] || key);
@@ -403,7 +376,7 @@ export function planCard({ acq = null, keys = null, cards = [], offers = [], con
   const mine = (cards || []).filter((c) => c && (!c.pipelineId || c.pipelineId === acq.id));
   const open = mine.filter((c) => String(c.status || "open") === "open");
   if (open.length > 1) return { skip: "two open cards — a person's call" };
-  const offersT = targetStage({ offers, now, lastIn, staleDays: cfg.staleTier1Days, raised, heardOn });
+  const offersT = targetStage({ offers, now, lastIn, staleDays: cfg.staleTier1Days, raised });
   // Something only Matt can do outranks the offers' stage, except a house
   // under contract or a closed deal: those cards stay where he tracks them.
   const need = needsMatt?.kind && k.needsMatt && offersT.to !== "contract" && !offersT.won ? needsMatt : null;
@@ -611,7 +584,7 @@ export function planHandMove({ acq = null, keys = null, cards = [], to = "", con
  *   repliers             Map contactId → ISO of an agent's last word (opt-outs left out): Tier 2 cards, with tier2Repliers
  *   cardsMade            Set of contactIds the app has made a card for
  */
-export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), handMoves = new Map(), repliers = new Map(), cardsMade = new Set(), raised = new Map(), heardOn = new Map(), needsMatt = new Map(), settings = {}, now = Date.now() } = {}) {
+export function planStageMoves({ acq = null, opportunities = [], offers = [], lastIn = new Map(), openPromiseContacts = new Set(), nurtureLive = [], appMoves = new Map(), handMoves = new Map(), repliers = new Map(), cardsMade = new Set(), raised = new Map(), needsMatt = new Map(), settings = {}, now = Date.now() } = {}) {
   const counts = { considered: 0, planned: 0, blocked: 0, created: 0, youMoved: 0, old: 0, tier2Repliers: 0, conversation: 0, byMove: {} };
   const out = { moves: [], creates: [], youMoved: [], counts };
   if (!acq?.id) return out;
@@ -634,7 +607,7 @@ export function planStageMoves({ acq = null, opportunities = [], offers = [], la
     const r = planCard({ acq, keys, cards: cardsBy.get(contactId) || [], offers: mineOffers, contactId, name,
       lastIn: lastIn?.get?.(contactId) || null, openPromise: openPromiseContacts?.has?.(contactId) || false, nurtureLive,
       appMoves: appMoves?.get?.(contactId) || [], handMoves: handMoves?.get?.(contactId) || [], replied: repliers?.get?.(contactId) || null, cardMade: cardsMade?.has?.(contactId) || false,
-      raised: raised?.get?.(contactId) || [], heardOn: heardOn?.get?.(contactId) || [], needsMatt: needsMatt?.get?.(contactId) || null, settings, now });
+      raised: raised?.get?.(contactId) || [], needsMatt: needsMatt?.get?.(contactId) || null, settings, now });
     if (r.old) counts.old++;
     if (r.youMoved) { counts.youMoved++; out.youMoved.push(r.youMoved); continue; }
     if (r.create?.replier || r.move?.replier) counts.tier2Repliers++;
