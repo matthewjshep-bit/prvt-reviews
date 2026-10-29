@@ -31,10 +31,16 @@ test("'one coming up shortly' books a check-in a couple of weeks out, at low con
   assert.equal(l.confidence, "low");
 });
 
-test("a short sale they'll know about by the end of the month is asked about a couple of days after", () => {
-  const l = detectLeadTiming("The short sale is in bank underwriting, should know by end of this month", NOW);
+test("a probate they'll know about by the end of the month is asked about a couple of days after", () => {
+  const l = detectLeadTiming("The probate is with the court, should know by end of this month", NOW);
   assert.equal(day(l), "2026-11-02");
-  assert.match(l.what, /short sale/);
+  assert.match(l.what, /probate/);
+});
+
+// Matt, 2026-10-29: we don't buy short sales, so one isn't a lead to chase.
+test("a short sale they'll know about by the end of the month is not a lead we check back on", () => {
+  assert.equal(detectLeadTiming("The short sale is in bank underwriting, should know by end of this month", NOW), null);
+  assert.match(detectLeadTiming("Short sale fell apart. I have a fixer coming up next week though", NOW)?.what || "", /fixer|coming up/, "another house in the same text still counts");
 });
 
 test("'if it doesn't sell by end of October she'll pull it until spring' asks just after October, the earlier date", () => {

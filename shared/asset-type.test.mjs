@@ -165,3 +165,11 @@ test("commercial and land are kinds a person picks, never what Zillow says", () 
   assert.equal(assetLabel({ type: "commercial" }), "Commercial");
   assert.equal(assetPhrase({ type: "land" }), "land");
 });
+
+// Matt, 2026-10-29: short sales and bank-owned houses are out of the buy box.
+test("the agent bot is told we don't buy short sales or bank-owned houses, in Matt's words", async () => {
+  const { agentFocusRule } = await import("./asset-type.js");
+  const r = agentFocusRule();
+  assert.match(r, /don't buy short sales or bank-owned houses/);
+  assert.match(r, /Hey, yeah, we don't like to touch those\. We're going to pass on it\./);
+});

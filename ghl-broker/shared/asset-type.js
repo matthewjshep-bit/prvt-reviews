@@ -301,7 +301,10 @@ export function agentFocusRule(focusKinds = FOCUS_KINDS_DEFAULT, { pricedAnyway 
     `RURAL: we don't buy rural houses — anything on ${RURAL_LOT_ACRES} acres or more, acreage, a farm or a ranch. Our buyers want houses ` +
     `on under ${RURAL_LOT_ACRES} acres where there are sales nearby to compare them to. If the agent says the house sits on ${RURAL_LOT_ACRES}+ acres ` +
     "or is plainly rural, don't promise numbers on it: say kindly that we can't do rural properties and ask if they have any fixers in town. " +
-    "If you can't tell the lot size, treat it as a normal lot." +
+    "If you can't tell the lot size, treat it as a normal lot. " +
+    "SHORT SALES AND BANK-OWNED: we don't buy short sales or bank-owned houses (REO, foreclosed, HUD). If the agent says the house is one, " +
+    "don't promise numbers on it: say \"Hey, yeah, we don't like to touch those. We're going to pass on it.\" If they ask whether we buy them, " +
+    "say no plainly and kindly and ask if they have any single-family fixers instead." +
     (pricedAnyway.length
       ? ` EXCEPT: we chose to price ${pricedAnyway.slice(0, 3).map((a) => String(a).split(",")[0]).join(", ")} anyway — ` +
         `${pricedAnyway.length === 1 ? "talk numbers on it" : "talk numbers on those"} like any other house.`

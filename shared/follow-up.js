@@ -17,6 +17,7 @@
 // Pure. No I/O, no clock of its own — `now` is always passed in.
 
 import { paceScale } from "./bot-hold.js";
+import { bankSaleIn } from "./flip-read.js";
 
 export const FOLLOW_UP_KINDS = {
   // The cold cadence. Until this existed the twelve touches after a first
@@ -451,7 +452,6 @@ function spanFrom(today, n, unit) {
 // answer they're waiting on — so we ask a couple of days after it.
 const HOUSE_WORD = /\b(?:house|home|property|seller|owner|bank|lender|condition|inspection|listing|probate|court|repairs|tenants?|fixer)\b/i;
 const LEAD_CUES = [
-  { rx: /\bshort[\s-]sale\b/i, what: "the short sale" },
   { rx: /\bprobate\b/i, what: "the probate" },
   { rx: /\b(?:an?|the|this|that)\s+estate\b(?!\s+(?:agent|market|industry|business|license))|\bestate\s+(?:sale|house|property|home|listing)\b/i, what: "the estate" },
   { rx: /\bhoarder\b/i, what: "the hoarder house" },
@@ -482,7 +482,7 @@ const LEAD_NEAR = 70;
  * deadline ("should know by", "expires"), the day after an "after", and never
  * sooner than two days out. The earliest one wins ("if it doesn't sell by end
  * of October she'll pull it until spring" is asked about in November).
- * `what` names the lead ("the short sale"), or "" when they only said to
+ * `what` names the lead ("the probate"), or "" when they only said to
  * check back. `checkBack: false` hears only the lead words — for a call
  * transcript with our side in it too.
  */
@@ -521,7 +521,7 @@ export function detectLeadTiming(text = "", now = Date.now(), { checkBack = true
       if (!w) continue;
       // A lead in the same sentence: "...decided to go on market! I'll send
       // what I find this week" is two things. The sentence before may still
-      // name it better ("exploring a short sale. We should know next week").
+      // name it better ("heading to probate. We should know next week").
       const between = (c) => (c.end <= start ? t.slice(c.end, start) : c.start >= end ? t.slice(end, c.start) : "");
       const close = cues.filter((c) => between(c).length <= LEAD_NEAR);
       if (!close.some((c) => !/[!?]|\.\s/.test(between(c)))) continue;
@@ -529,6 +529,11 @@ export function detectLeadTiming(text = "", now = Date.now(), { checkBack = true
       const near = nearby[0];
       // "I'll circle back shortly" is no date at all.
       if (w.low && near.cue.checkBack) continue;
+      // A short sale or a bank-owned house isn't a lead we chase (Matt,
+      // 2026-10-29: out of the buy box), whatever its date.
+      const lo = Math.min(start, near.start), hi = Math.max(end, near.end);
+      const sentence = t.slice(Math.max(0, t.slice(0, lo).search(/[^.!?\n]*$/)), hi + t.slice(hi).search(/[.!?\n]|$/));
+      if (bankSaleIn(sentence)) continue;
       let day = w.day;
       if (w.how === "by" || nearby.some((c) => c.cue.by)) day += 2 * DAY_MS;
       else if (w.how === "after") day += DAY_MS;
