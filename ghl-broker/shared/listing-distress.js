@@ -12,8 +12,13 @@
 // for sale. This reads that page's status and description before anyone is
 // texted about it.
 //
+// A short sale or a bank-owned listing is out of the buy box (Matt,
+// 2026-10-29), however much work it needs: no agent is texted about it.
+//
 // Pure. The sweep (ghl-broker/outreach-sweep.js) applies it when
 // outreachAutopilot.distressCheck is on.
+
+import { bankSaleIn } from "./flip-read.js";
 
 // Words a listing uses when the house needs work. Any one of these is enough,
 // even beside a "remodeled" ("kitchen remodeled in 1998, now needs TLC").
@@ -28,7 +33,6 @@ const STRONG = [
   ["needs work", /\bneeds?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+|significant\s+|major\s+|extensive\s+|substantial\s+|a\s+little\s+|work\s+and\s+)?(?:work|repairs?|updating|updates|renovation|remodel(?:ing)?|rehab|love|attention|everything)\b|\bin\s+need\s+of\b/i],
   ["cash buyers", /\bcash\s+(?:only|buyers?|offers?)\b|\bnot\s+(?:fha|va|conventional\s+)?(?:financeable|eligible\s+for\s+financing)\b|\bwon'?t\s+(?:qualify|appraise)\b/i],
   ["estate or probate", /\bestate\s+sale\b|\bprobate\b|\btrust\s+sale\b|\bpersonal\s+representative\b|\bexecut(?:or|rix)\b/i],
-  ["bank or short sale", /\bforeclos(?:ure|ed)\b|\bbank[\s-]owned\b|\breo\b|\bshort\s+sale\b|\bhud\s+home\b/i],
   ["deferred maintenance", /\bdeferred\s+maintenance\b|\bneglected\b|\bvacant\s+for\s+years\b/i],
   ["structural or water", /\bfoundation\s+(?:issues?|problems?|repairs?|work)\b|\bmold\b|\bwater\s+damage\b|\bfire\s+damage\b|\bstructural\b/i],
   ["teardown", /\btear[\s-]?down\b|\bland\s+value\b|\bvalue\s+(?:is\s+)?in\s+the\s+land\b|\bbuilders?\s+(?:opportunity|special|alert)\b/i],
@@ -88,6 +92,8 @@ export function listingDistress(l = {}, { now = Date.now() } = {}) {
   if (status && !FOR_SALE_RX.test(status)) return out(false, `not for sale on Zillow (${status.toLowerCase().replace(/_/g, " ")})`);
   if (year > 1800 && year >= new Date(now).getUTCFullYear() - NEW_BUILD_YEARS) return out(false, `built in ${year}`);
   if (!text) return out(false, "no listing remarks to check");
+  const bank = bankSaleIn(text);
+  if (bank) return out(false, `${bank} — we don't buy those`);
   const plain = text.replace(NEGATED_ALL_RX, " ");
   const strong = hits(STRONG, plain);
   const soft = hits(SOFT, plain);

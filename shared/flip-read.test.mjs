@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { flipRead, qualifyStep, QUALIFY_ASKS, QUALIFY_ASK_RX, QUALIFY_PASSES, broughtStep, saysCosmeticOnly, workBudgetIn, saysRealWork, asksTheirRehab, pointsToThePhotos, photosPassReply } from "./flip-read.js";
+import { flipRead, qualifyStep, QUALIFY_ASKS, QUALIFY_ASK_RX, QUALIFY_PASSES, broughtStep, saysCosmeticOnly, workBudgetIn, saysRealWork, asksTheirRehab, pointsToThePhotos, photosPassReply, bankSaleIn, BANK_SALE_PASS } from "./flip-read.js";
 
 // The kinds of answer to our first text that, on 2026-10-08, each started an
 // underwrite (paraphrased); the vague ones should have bought one question.
@@ -375,4 +375,33 @@ test("the photos pass is a pass that asks for their other houses", () => {
   }
   assert.match(photosPassReply({ variant: 1 }), FIXERS_ASK_RX);
   assert.match(photosPassReply({ variant: 1, callAsk: true }), CALL_ASK_RX);
+});
+
+// Matt, 2026-10-29: short sales and bank-owned houses are out of the buy box.
+test("an agent saying it's a short sale or bank-owned is heard, whichever way they put it", () => {
+  for (const [said, kind] of [
+    ["Heads up, it's a short sale", "short sale"],
+    ["This one is a short-sale, any offer needs bank approval", "short sale"],
+    ["Seller is doing a shortsale", "short sale"],
+    ["Subject to lender approval", "short sale"],
+    ["It's bank owned, sold as-is", "bank-owned"],
+    ["REO, the bank wants offers by Friday", "bank-owned"],
+    ["The bank took it back last year", "bank-owned"],
+    ["It's a foreclosed property", "bank-owned"],
+    ["HUD home, owner occupants get first crack", "bank-owned"],
+  ]) assert.equal(bankSaleIn(said), kind, said);
+});
+
+test("'not a short sale', pre-foreclosure, and the word 'bank' alone are not a bank sale", () => {
+  for (const said of [
+    "It's not a short sale, plenty of equity",
+    "Isn't bank-owned, the family is selling",
+    "No bank approval needed",
+    "Owner is in pre-foreclosure and wants out fast",
+    "Seller has to talk to the bank about the payoff",
+    "Needs a new roof and the kitchen is original",
+    "Theo reached out about it",
+  ]) assert.equal(bankSaleIn(said), "", said);
+  assert.match(BANK_SALE_PASS, /don't like to touch those/);
+  assert.match(BANK_SALE_PASS, /pass on it/);
 });

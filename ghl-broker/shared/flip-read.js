@@ -35,7 +35,8 @@ const STRONG = [
   ["fire", /\bfire[\s-]damage(?:d)?\b|\b(?:had|house|kitchen)\s+(?:a\s+)?fire\b/i],
   ["hoarder", /\bhoard(?:er|ers|ing)\b/i],
   ["estate or probate", /\bestate\s+sale\b|\bprobate\b|\bpassed\s+away\b|\bdeceased\b|\binherit(?:ed|ance)\b|\bheirs?\b/i],
-  ["financial distress", /\bforeclos(?:ure|ing|ed)\b|\bshort\s+sale\b|\bbank[\s-]owned\b|\breo\b|\bbehind\s+on\s+(?:payments|the\s+mortgage)\b|\btax\s+lien\b|\bdivorce\b/i],
+  // Not a short sale or a bank-owned house: those are out of the box (bankSaleIn).
+  ["financial distress", /\bforeclos(?:ure|ing)\b|\bbehind\s+on\s+(?:payments|the\s+mortgage)\b|\btax\s+lien\b|\bdivorce\b/i],
   ["unlivable", /\bcondemned\b|\bred[\s-]tagged?\b|\buninhabitable\b|\bunlivable\b|\bnot\s+livable\b|\btear[\s-]?down\b|\bgutted\b|\bgut\s+(?:job|rehab|remodel)\b|\bneeds?\s+(?:a\s+)?gut\b|\bneeds\s+(?:everything|it\s+all)\b|\bfull\s+(?:gut|rehab|remodel|renovation)\b|\bmajor\s+(?:repairs?|work|rehab|renovation)\b/i],
   ["unfinished", /\bunfinished\b|\bnever\s+(?:been\s+)?(?:finished|completed)\b|\bnot\s+(?:been\s+)?(?:finished|completed)\b|\bhalf[\s-](?:done|finished)\b/i],
   ["can't finance", /\bcash\s+only\b|\bwon'?t\s+(?:finance|qualify|appraise)\b|\bnot\s+financeable\b|\bcan'?t\s+(?:be\s+)?financed?\b/i],
@@ -315,6 +316,33 @@ export function pointsToThePhotos(their = "", ours = "") {
   if (!ASKED_CONDITION_RX.test(o) && !QUALIFY_ASK_RX.test(o) && !WORK_NEEDED_RX.test(o)) return false;
   return !WORK_LEFT_RX.test(t) && !saysRealWork(t) && !flipRead(t).qualifies;
 }
+
+// Short sales and bank-owned houses are out of the buy box (Matt,
+// 2026-10-29: "If anyone, like an agent, mentions that it's a short sale or
+// bank-owned, then just say, 'Hey yeah, we don't like to touch those. We're
+// going to pass on it.'"). The bank decides, slowly, and an assignment rarely
+// survives its approval. Pre-foreclosure is not here: that owner still sells
+// their own house.
+const BANK_SALE = [
+  ["short sale", /\bshort[\s-]?sales?\b|\b(?:short\s+sale|bank|lender|lienholder)\s+approval\b|\bsubject\s+to\s+(?:bank|lender|lienholder)\s+approval\b/i],
+  ["bank-owned", /\bbank[\s-]?owned\b|\b(?:the\s+)?bank\s+(?:owns|took\s+(?:it\s+)?back)\b|\blender[\s-]?owned\b|\breo\b|\breal\s+estate\s+owned\b|\bforeclosed\b|\bforeclosure\s+(?:sale|listing|property|house|home)\b|\bhud\s+(?:home|house|property|owned)\b/i],
+];
+// "Not a short sale", "no bank approval needed", "isn't bank-owned": said the other way round.
+const NOT_BANK_SALE = /\b(?:not|no|isn'?t|is\s+not|wasn'?t|never|nor)\s+(?:a\s+|an\s+)?(?:short[\s-]?sale|bank[\s-]?owned|reo|foreclosure)\b|\bno\s+(?:bank|lender|short\s+sale)\s+approval\b/gi;
+
+/**
+ * bankSaleIn(text) → "short sale" | "bank-owned" | ""
+ *
+ * The agent told us the house is a short sale or bank-owned (REO, foreclosed,
+ * HUD). A negation ("it's not a short sale") is not one.
+ */
+export function bankSaleIn(text = "") {
+  const t = String(text || "").replace(NOT_BANK_SALE, " ");
+  return (BANK_SALE.find(([, rx]) => rx.test(t)) || [""])[0];
+}
+
+// Matt's own words for it.
+export const BANK_SALE_PASS = "Hey, yeah, we don't like to touch those. We're going to pass on it.";
 
 /** photosPassReply({ variant, callAsk }) → our pass on it, asking for their other houses. */
 export function photosPassReply({ variant = 0, callAsk = false } = {}) {

@@ -70,7 +70,7 @@ import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcce
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages, validAddress, sameRaisedHouse } from "./shared/ghl-stages.js";
-import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, pointsToThePhotos, photosPassReply, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
+import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, pointsToThePhotos, photosPassReply, bankSaleIn, BANK_SALE_PASS, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
@@ -4584,6 +4584,10 @@ async function runReply(job, ctx) {
     draft = { ...draft, intent: "investor_open", reclassifiedFrom: draft.intent };
     job.intent = draft.intent;
   }
+  // A short sale or a bank-owned house (Matt, 2026-10-29): out of the buy
+  // box whatever work it needs. No qualify question, no number first, no
+  // underwrite; the pass below says so in his words.
+  const bankSale = party === "agent" && !isCall ? bankSaleIn(theirLatestWords(a.transcript, job.message)) : "";
 
   // Qualify first (shared/flip-read.js, Matt 2026-10-08). The house our
   // first text opened with is an icebreaker: "it's a project" or "come take
@@ -4629,7 +4633,7 @@ async function runReply(job, ctx) {
   };
 
   let qualify = null;
-  if (party === "agent" && !isCall && !notOurKind && config.parties.agent.qualifyFirst?.enabled
+  if (party === "agent" && !isCall && !notOurKind && !bankSale && config.parties.agent.qualifyFirst?.enabled
       && !SILENT_INTENTS.has(draft.intent)
       && (["deal_available", "new_property", "wants_walkthrough"].includes(draft.intent) || isShowingOffer(job.message))
       && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)) {
@@ -4640,7 +4644,7 @@ async function runReply(job, ctx) {
   // A house they raised themselves (2026-10-16, qualifyFirst.brought): the
   // same screen, a little kinder (shared/flip-read.js broughtStep). Their
   // own house unclear after our question still goes to Matt.
-  if (!qualify && party === "agent" && !isCall && !notOurKind && config.parties.agent.qualifyFirst?.brought
+  if (!qualify && party === "agent" && !isCall && !notOurKind && !bankSale && config.parties.agent.qualifyFirst?.brought
       && ["deal_available", "new_property"].includes(draft.intent) && !isShowingOffer(job.message)) {
     const take = draft.agentTake ?? normalizeAgentTake(draft) ?? agentTakeFromText(job.message);
     qualify = await qualifyBrought({ store, locationId, contactId: job.contactId, draft, message: job.message, transcript: a.transcript, now, agentRehab: qualifyRehab(take, job.message), ice: iceHouse, callAsk: Boolean(callAsk) })
@@ -4694,7 +4698,7 @@ async function runReply(job, ctx) {
     draft = { ...draft, needsHuman: true, showingOffered: { address: draft.propertyAddress },
       humanReason: `they offered a showing on ${street || "the house"} — yours: book it, call them, or pass` };
   };
-  if (party === "agent" && !qualifyHeld && !SILENT_INTENTS.has(draft.intent)
+  if (party === "agent" && !qualifyHeld && !bankSale && !SILENT_INTENTS.has(draft.intent)
       && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)
       // A showing, not a call: "give me a call tomorrow" stays with the calendar.
       && (draft.intent === "wants_walkthrough" || isShowingOffer(job.message))
@@ -4752,6 +4756,28 @@ async function runReply(job, ctx) {
     }
   }
 
+  // They told us it's a short sale or bank-owned: Matt's pass, and it files
+  // the way our own pass does (replyPassed). A number we already sent on it,
+  // or their yes, is his: walking away from an offer that went out is never
+  // the machine's (setOfferStatus), so the pass waits for him there.
+  let bankSalePass = false;
+  if (bankSale && !SILENT_INTENTS.has(draft.intent) && draft.intent !== "opt_out") {
+    const address = draft.propertyAddress || iceHouse?.address || "";
+    const rows = address ? await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []) : [];
+    const known = address ? knownOfferFor(rows, address, now) : null;
+    const unsent = !known || ["draft", "new"].includes(offerStatus(known));
+    const street = String(address || "").split(",")[0].trim() || "the house";
+    if ((known && !unsent && OPEN_OFFER_STATUSES.has(offerStatus(known))) || ["acceptance", "realm_yes"].includes(draft.intent)) {
+      draft = { ...draft, needsHuman: true, reply: BANK_SALE_PASS, bankSale,
+        humanReason: `they said ${street} is a ${bankSale} — we pass on those, but we sent a number on it, so walking away is yours` };
+    } else if (unsent && address) {
+      bankSalePass = true;
+      draft = { ...draft, intent: "deal_available", reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
+        propertyAddress: address, needsHuman: false, humanReason: "", reply: BANK_SALE_PASS, bankSale };
+      job.intent = draft.intent;
+    }
+  }
+
   // "Other" with real information in it — Diane Tien's developer terms, Angie
   // Bomar's park manager and "best time to call is morning" (2026-09-14) — sat
   // silent as "a person's call". A confident read that asks nothing of us gets
@@ -4786,10 +4812,10 @@ async function runReply(job, ctx) {
   // house is the lead), not on a canned qualify or number-first text, not on
   // a reply that turned the conversation (a counter, a yes, a no-contact).
   const theirHouse = Boolean(namedHouses.length) || (Boolean(draft.propertyAddress) && Boolean(iceHouse?.address) && !sameStreet(draft.propertyAddress, iceHouse.address));
-  if (callAsk?.first && !qualifyHeld && !numberFirst && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
+  if (callAsk?.first && !qualifyHeld && !numberFirst && !bankSale && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
       && String(draft.reply || "").trim() && !CALL_ASK_RX.test(draft.reply)) {
     draft = { ...draft, reply: withCallAsk(draft.reply, openerVariant(job.contactId, 3)), callAskAdded: true };
-  } else if (!callOn && firstAnswer?.first && !qualifyHeld && !numberFirst && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
+  } else if (!callOn && firstAnswer?.first && !qualifyHeld && !numberFirst && !bankSale && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
       && String(draft.reply || "").trim() && !FIXERS_ASK_RX.test(draft.reply)) {
     draft = { ...draft, reply: withFixersAsk(draft.reply, openerVariant(job.contactId, 3)), fixersAskAdded: true };
   }
@@ -4857,7 +4883,7 @@ async function runReply(job, ctx) {
     // "Call me about 1412 Pine and 88 Alder": the call is yours, and each
     // house is still a skeleton for you to look at before you dial
     // (skeleton mode, 2026-10-19). Nothing else of the plan runs here.
-    if (party === "agent" && underwriteMode(saved) === "skeleton" && !notOurKind && typeof deps.startUnderwrite === "function") {
+    if (party === "agent" && underwriteMode(saved) === "skeleton" && !notOurKind && !bankSale && typeof deps.startUnderwrite === "function") {
       for (const h of await skeletonHouses()) {
         const r = await deps.startUnderwrite({ contactId: job.contactId, message: job.message, address: h.address, askingPrice: h.sellerAsk || 0 })
           .catch((e) => ({ skipped: String(e?.message || e).slice(0, 120) }));
@@ -4908,7 +4934,7 @@ async function runReply(job, ctx) {
   // pointsToThePhotos), and it files the way our own pass does
   // (replyPassed). Not once a number on it went out: that's a conversation.
   let photosPass = false;
-  if (party === "agent" && !isCall && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass
+  if (party === "agent" && !isCall && !qualifyHeld && !numberFirst && !notOurKind && !bankSale && !yesAfterPass
       && !SILENT_INTENTS.has(draft.intent) && !["counter", "acceptance", "rejection", "realm_yes", "proof_of_funds", "opt_out"].includes(draft.intent)
       && pointsToThePhotos(theirLatestWords(a.transcript, job.message), lastOutbound(a.transcript)?.text || "")) {
     const address = draft.propertyAddress || iceHouse?.address || "";
@@ -4949,7 +4975,7 @@ async function runReply(job, ctx) {
   // "assignment", too long — is written once more, told exactly what held
   // it. The same gates judge the rewrite: clean, it carries on as any clean
   // draft would; still caught, the first draft and its reasons stay for Matt.
-  if (replyArgs && !a.hold?.held && !photosPass) {
+  if (replyArgs && !a.hold?.held && !photosPass && !bankSalePass) {
     const r = await redraftOnGate({ draft, gate, gateFor, config, redraft: (fix) => deps.draft({ ...replyArgs, fix }) });
     draft = r.draft; gate = r.gate;
   }
@@ -4962,15 +4988,15 @@ async function runReply(job, ctx) {
   // underwrite stops (threadPassed), and an unsent offer on it is closed.
   // Never on a yes (2026-10-15): a reply that turns down a house they just
   // said yes on is the bot's mistake, not our decision.
-  const replyPassed = party === "agent" && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass
+  const replyPassed = (bankSalePass && !yesAfterPass) || (party === "agent" && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass
     && ["deal_available", "new_property"].includes(draft.intent) && (photosPass || ourReplyPasses(draft.reply))
-    && !saysYes(job.originalMessage || job.message);
+    && !saysYes(job.originalMessage || job.message));
   if (replyPassed) {
     draft = {
       ...draft,
       intent: "investor_open",
       reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
-      ...(draft.propertyAddress ? { qualify: { stage: "pass", address: draft.propertyAddress, why: photosPass ? "they pointed us to the photos" : "our reply passed on it" } } : {}),
+      ...(draft.propertyAddress ? { qualify: { stage: "pass", address: draft.propertyAddress, why: bankSalePass ? `they said it's a ${bankSale}` : photosPass ? "they pointed us to the photos" : "our reply passed on it" } } : {}),
     };
     job.intent = draft.intent;
     gate = gateFor(draft);
@@ -5073,7 +5099,7 @@ async function runReply(job, ctx) {
       why: "the seller accepted — send the contract" });
   }
   // Not our kind of house, in their words: no rule spends a credit on it.
-  if (notOurKind) {
+  if (notOurKind || bankSale) {
     plan.auto = plan.auto.filter((x) => x.type !== "start_underwrite");
     plan.suggested = plan.suggested.filter((x) => x.type !== "start_underwrite");
   }
@@ -5127,7 +5153,7 @@ async function runReply(job, ctx) {
   // underwrite. Not one this reply already answered — passed on, called
   // turnkey, or still asking its one question about — and never a house
   // already in the book. Their own words only, as above.
-  if (party === "agent" && underwriteMode(saved) === "skeleton" && !notOurKind && !replyPassed && !qualifyHeld) {
+  if (party === "agent" && underwriteMode(saved) === "skeleton" && !notOurKind && !bankSale && !replyPassed && !qualifyHeld) {
     const planned = new Set(plan.auto.filter((x) => x.type === "start_underwrite").map((x) => addressKey(x.address || draft.propertyAddress || "")).filter(Boolean));
     for (const h of (await skeletonHouses()).filter((x) => !planned.has(addressKey(x.address)))) {
       plan.auto.push({ id: `a-sk-${job.id}-${addressKey(h.address).slice(0, 24)}`, type: "start_underwrite", mode: "auto", status: "pending", party,
@@ -6032,7 +6058,7 @@ async function runReply(job, ctx) {
   // 2026-10-11, on 1425 33rd St SE: "even though we passed, if the numbers
   // work out we should proceed." It is an ordinary underwrite
   // from here: its number goes out only the way any number does.
-  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !qualifyHeld && !replyPassed && reopensOnTheirNumbers(namedKnown)) {
+  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !bankSale && !qualifyHeld && !replyPassed && reopensOnTheirNumbers(namedKnown)) {
     const since = Date.parse(namedKnown.retired?.at || namedKnown.statusAt || "") || 0;
     const evs = (await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => [])) || [];
     const told = evs.some((e) => e?.type === "agent_estimate" && e.address
@@ -6059,7 +6085,7 @@ async function runReply(job, ctx) {
   // planned an underwrite on this message. Not when a re-quote on their
   // numbers is already planned, and not on a house we've been told isn't ours
   // or are still qualifying.
-  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !qualifyHeld && !replyPassed
+  if (!rerunHeld && namedKnown && party === "agent" && !notOurKind && !bankSale && !qualifyHeld && !replyPassed
       && ![...plan.auto, ...plan.suggested].some((x) => x.type === "requote_from_agent_numbers")) {
     const evs = (await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => [])) || [];
     if (rerunsRoughOffer({ known: namedKnown, book: bookRows, events: evs })) {
@@ -6088,7 +6114,7 @@ async function runReply(job, ctx) {
   }
   // Not when their own words say it isn't a flip: the reply is "that one's
   // more finished than what we buy", and Tier 1 is houses that need work.
-  if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent) && !notOurKind && !qualifyHeld && !replyPassed) {
+  if (subjectMoved && playbook && !LIFECYCLE.has(draft.intent) && !notOurKind && !bankSale && !qualifyHeld && !replyPassed) {
     const already = new Set([...plan.auto, ...plan.suggested].map((a) => `${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`));
     const extra = planActions({ party, intent: "new_property", confidence: "high", playbook, minConfidence: "high" });
     const fresh = [...extra.auto, ...extra.suggested].filter((a) => !already.has(`${a.type}:${a.workflowId || (a.tags || []).join(",") || a.key || ""}`))

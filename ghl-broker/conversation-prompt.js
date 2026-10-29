@@ -1258,15 +1258,15 @@ function openingFor(outbound) {
               `Do NOT apologise, do NOT mention the gap or the delay, and do NOT re-answer what they said. `
           : o.sourceKind === "lead"
             // A lead they told us the timing of, and it's that time. The text
-            // is about THAT lead — "Did the bank come back on the short
-            // sale?" — not the generic "anything distressed come across your
+            // is about THAT lead — "Did the family decide on the probate
+            // house?" — not the generic "anything distressed come across your
             // desk?" (2026-10-14: every dated lead got the generic one).
             ? `${o.lead?.toldAt ? `On ${String(o.lead.toldAt).slice(0, 10)}` : "Earlier"}${o.lead?.via === "call" ? ", on a call," : ""} this agent told us ` +
               `about ${o.lead?.what ? `a lead (${o.lead.what})` : "when to check back"}${o.phrase ? ` and when ("${o.phrase}")` : ""}. ` +
               (o.lead?.said ? `Their words: "${o.lead.said}". ` : "") +
               `It's that time now. ` +
               (o.lead?.what
-                ? `Ask about that lead specifically, in a line, the way a person who remembered would — e.g. "Did the bank come back on the short sale?" ` +
+                ? `Ask about that lead specifically, in a line, the way a person who remembered would — e.g. "Did the family decide on the probate house?" ` +
                   `or "Did that one end up relisting?" Do NOT ask the generic "anything distressed or off-market come across your desk?" question. `
                 : `Mention it naturally ("you'd mentioned ${o.phrase || "circling back"}") and ask whether anything landed that needs work. `)
           : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally ` +

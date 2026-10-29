@@ -8559,3 +8559,65 @@ test("a flyer placed in an email's body is read too, and makes its draft", async
   assert.deepEqual(urls, ["https://x.site/flyer.png"]);
   assert.deepEqual(uw.map((u) => u.address), [FLYERS[0]]);
 });
+
+/* ---------- short sales and bank-owned houses (2026-10-29) ---------- */
+
+// Matt, 2026-10-29: "in our current buy box, we don't buy short sales or
+// bank-owned properties. If anyone, like an agent, mentions that it's a
+// short sale or bank-owned, then just say, 'Hey yeah, we don't like to touch
+// those. We're going to pass on it.'" Until then "short sale" and
+// "bank-owned" read as distress — a reason to run the numbers.
+const BANK_HOUSE = "4521 S Holly St, Seattle, WA 98118";
+async function bankSaleReply(message, { intent = "deal_available", offers = [], reply = "Thanks! Let me run the numbers on it and I'll text you where we'd be." } = {}) {
+  _resetJobs();
+  const store = fakeStore();
+  store.listOffers = async () => offers;
+  const uw = [];
+  const { job } = await startReply({
+    client: threadClient([["outbound", "Hi, is 4521 S Holly St a bit of a project? Always on the hunt for houses that need some love."]]),
+    locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", sendsEnabled: true, message,
+    deps: {
+      draft: async () => ({ ...DRAFT, intent, confidence: "high", needsHuman: false, propertyAddress: BANK_HOUSE, reply }),
+      startUnderwrite: async (args) => { uw.push(args); return { job: { id: "uw-bank" } }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return { d: await store.getReplyDraft(job.draftId), uw };
+}
+
+test("an agent who says the house is a short sale gets Matt's pass, not an underwrite", async () => {
+  const { d, uw } = await bankSaleReply("Yes it needs a full gut. FYI it's a short sale, so any offer needs bank approval");
+  assert.equal(uw.length, 0, "no credits on a house we won't buy");
+  assert.equal(d.reply, "Hey, yeah, we don't like to touch those. We're going to pass on it.");
+  assert.equal(d.intent, "investor_open");
+  assert.equal(d.qualify?.stage, "pass", "stamped passed, so a racing underwrite stops");
+  assert.match(d.qualify?.why || "", /short sale/);
+  assert.deepEqual(tierOneActions(d.actions).filter((a) => a.status !== "skipped"), [], "not Tier 1");
+  assert.ok((d.actions || []).some((a) => a.type === "retire_unsent_offer"), "a number we never sent on it closes");
+  assert.ok(["sent", "scheduled"].includes(d.status), `the pass goes out by itself (${d.status})`);
+});
+
+test("an agent who says the house is bank-owned gets the same pass, even with a showing on offer", async () => {
+  const { d, uw } = await bankSaleReply("It's bank owned, REO. Happy to show it tomorrow if you want to take a look", { intent: "wants_walkthrough" });
+  assert.equal(uw.length, 0);
+  assert.equal(d.reply, "Hey, yeah, we don't like to touch those. We're going to pass on it.");
+  assert.match(d.qualify?.why || "", /bank-owned/);
+  assert.ok(["sent", "scheduled"].includes(d.status), `the pass goes out by itself (${d.status})`);
+});
+
+test("'it's not a short sale' is a house like any other", async () => {
+  const { d, uw } = await bankSaleReply("Needs a new roof and the kitchen is original. It's not a short sale, seller has equity");
+  assert.notEqual(d.reply, "Hey, yeah, we don't like to touch those. We're going to pass on it.");
+  assert.notEqual(d.qualify?.stage, "pass");
+  assert.equal(uw.length, 1);
+});
+
+test("a short sale named on a house we already sent a number on drafts the pass and waits for Matt", async () => {
+  const sent = { id: "o-holly", address: BANK_HOUSE, contactId: "c1", status: "sent", cashAmount: 312000, sends: [{ at: iso(86400000), results: { sms: { ok: true } } }], createdAt: iso(2 * 86400000) };
+  const { d, uw } = await bankSaleReply("Seller says thanks. Just so you know it's a short sale, the bank will have to approve", { intent: "status_check", offers: [sent] });
+  assert.equal(uw.length, 0);
+  assert.equal(d.reply, "Hey, yeah, we don't like to touch those. We're going to pass on it.");
+  assert.notEqual(d.status, "sent", "walking from a number we sent is Matt's call");
+  assert.match(d.humanReason || "", /short sale/);
+});
