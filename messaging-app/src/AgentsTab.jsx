@@ -13,7 +13,7 @@ import { Loader2, Plus, Trash2, X } from "lucide-react";
 import { agentFlow } from "@shared/autopilot-flows.js";
 import { NUDGE_TEXTS } from "@shared/standard-texts.js";
 import { OPENER_MAX_EXAMPLES, homesFrom, homesText, normalizeOpener } from "@shared/outreach-opener.js";
-import { normalizeIntroEmail, normalizeCheckInEmail, CHECK_IN_EMAIL_MAX } from "@shared/outreach-email.js";
+import { normalizeIntroEmail, normalizeCheckInEmail, CHECK_IN_EMAIL_MAX, EMAIL_MAX_CHARS } from "@shared/outreach-email.js";
 import { MAX_REPEAT_DAYS } from "@shared/follow-up.js";
 import { getConversationAi, getDashboardPipeline, getSettings, patchSettings, saveConversationAi } from "./api.js";
 import { BTN, BTN_DANGER, BTN_PRIMARY, ErrorBar, SkeletonRows } from "./ui.jsx";
@@ -24,6 +24,18 @@ import SettingsView from "./SettingsView.jsx";
 const AREA = "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm leading-snug focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 const NUM = "w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm";
 const MAX_FOLLOW_UPS = 6;
+
+/** How an email reads filled in for the sample agent, with its length against the 99-character limit. */
+function EmailReads({ body }) {
+  const text = emailSampleOf(body || "");
+  const n = text.length;
+  const over = n > EMAIL_MAX_CHARS;
+  return (
+    <p className="whitespace-pre-wrap text-xs text-slate-500">
+      <span className={over ? "font-semibold text-red-700" : "font-semibold text-slate-600"}>{n} characters{over ? ` — keep it under 100` : ""}.</span> Reads: {text || "—"}
+    </p>
+  );
+}
 
 /** A text box with what it reads like filled in, and what would stop it. */
 function TextBox({ value, onChange, onRemove, label }) {
@@ -259,8 +271,8 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
             <span className="text-xs font-semibold text-slate-600">Email</span>
             <textarea className={AREA} rows={12} value={draft?.body || ""} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
           </label>
-          <p className="whitespace-pre-wrap text-xs text-slate-500">Reads: {emailSampleOf(draft?.body || "") || "—"}</p>
-          <p className="text-xs text-slate-500">{"{first}"} is their first name, {"{area}"} the town of their listing (or its county) "or the surrounding areas". A blank line starts a new paragraph.</p>
+          <EmailReads body={draft?.body} />
+          <p className="text-xs text-slate-500">Under 100 characters, the greeting and sign-off included. {"{first}"} is their first name, {"{town}"} the town of their listing (or its county), and "you" when the town would run it past 99 characters, so write "near {"{town}"}". A blank line starts a new paragraph.</p>
           <EditorBar busy={busy} onCancel={close}
             onSave={() => {
               if (!dayOk) { setError("The intro email goes out between day 1 and day 30."); return; }
@@ -284,7 +296,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
             It sends itself
             <span className="text-xs text-slate-500">otherwise each one waits in the outbox for your Send</span>
           </label>
-          <p className="text-xs text-slate-500">Each check-in sends the next of these. {"{first}"} is their first name, {"{area}"} the town of their listing (or its county) "or the surrounding areas". A blank line starts a new paragraph.</p>
+          <p className="text-xs text-slate-500">Each check-in sends the next of these that fits under 100 characters, the greeting and sign-off included. {"{first}"} is their first name, {"{town}"} the town of their listing (or its county), and "you" when the town would run it past 99 characters, so write "near {"{town}"}". A blank line starts a new paragraph.</p>
           {emails.map((e, i) => (
             <div key={i} className="space-y-1 rounded-lg border border-slate-200 p-2">
               <div className="flex items-center gap-2">
@@ -297,7 +309,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
               </div>
               <input type="text" className={AREA} placeholder="Subject" value={e.subject} onChange={(ev) => set(i, "subject", ev.target.value)} />
               <textarea className={AREA} rows={7} value={e.body} onChange={(ev) => set(i, "body", ev.target.value)} />
-              <p className="whitespace-pre-wrap text-xs text-slate-500">Reads: {emailSampleOf(e.body) || "—"}</p>
+              <EmailReads body={e.body} />
             </div>
           ))}
           <EditorBar busy={busy} onCancel={close}

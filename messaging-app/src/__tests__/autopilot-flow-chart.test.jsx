@@ -21,9 +21,8 @@ test("the agent chart shows the first text and each follow-up as an agent would 
   expect(html).toContain("Hi Brenda, saw your listing at 14820 SE 172nd St.");
   expect(html).toContain("Hey Brenda, circling back on 14820 SE 172nd St.");
   expect(html).toContain("Hi Brenda, circling back. Any fixers or distressed properties");
-  // The email keeps its paragraphs and shows the website.
-  expect(html).toContain("Hi Brenda,\n\nThis is Matt Shepherd with Shep Flips.");
-  expect(html).toContain("https://shepflips.com");
+  // The email keeps its paragraphs, under 100 characters (2026-11-02).
+  expect(html).toContain("Hi Brenda,\n\nMatt with Shep Flips. Got any fixers near Renton? The uglier the better!");
   expect(html).toContain("Sends itself");
   expect(html).toContain("Drafts for you");
   expect(html).not.toContain("{first}");

@@ -20,7 +20,7 @@ after(() => fs.rmSync(dir, { recursive: true, force: true }));
 const { store } = await import("./store.js");
 const { recordEvent } = await import("./contact-record.js");
 const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
-const { normalizeCheckInEmail, checkInEmailFor, checkInEmailDue, DEFAULT_CHECK_IN_EMAILS, areaOf, introEmailFor } = await import("./shared/outreach-email.js");
+const { normalizeCheckInEmail, checkInEmailFor, checkInEmailDue, DEFAULT_CHECK_IN_EMAILS, areaOf, townOf, introEmailFor } = await import("./shared/outreach-email.js");
 const { runCheckInEmails } = await import("./outreach-email.js");
 const { startFollowUpSweep, getFollowUpJob, _resetJobs } = await import("./follow-up-sweep.js");
 await store.init();
@@ -36,9 +36,8 @@ test("the check-in emails are short, fun, and each one asks for the ugly ones", 
     assert.ok(words <= 45, `${words} words: ${e.subject}`);
     assert.match(e.subject, /^[a-z]/, "lowercase subjects, like 'texted you'");
     assert.match(e.body, /^Hi \{first\},\n\n/);
-    assert.match(e.body, /shepflips\.com/);
     assert.doesNotMatch(e.body, /rather not get these/i, "Matt took the opt-out line out");
-    assert.match(e.body, /\{area\}/, "names where they work");
+    assert.match(e.body, /near \{town\}/, "names where they work, and reads 'near you' when that won't fit");
   }
   const ce = normalizeCheckInEmail({});
   assert.deepEqual([ce.enabled, ce.autoSend, ce.emails.length], [false, false, DEFAULT_CHECK_IN_EMAILS.length]);
@@ -76,10 +75,46 @@ test("the emails name where the agent works: the listing's town, else its county
   assert.equal(areaOf({}), "your area");
   for (const n of [1, 2, 3, 4]) {
     const e = checkInEmailFor({ checkInEmail: {}, name: "Brenda", contactId: "c-1", n, address: "5232 S Yakima Ave, Tacoma, WA", county: "Pierce" });
-    assert.match(e.body, /Tacoma or the surrounding areas/, e.subject);
-    assert.doesNotMatch(e.body, /\{area\}/);
+    assert.match(e.body, /near Tacoma/, e.subject);
+    assert.doesNotMatch(e.body, /\{(?:area|town)\}/);
   }
-  assert.match(introEmailFor({ introEmail: {}, name: "Brenda", address: "1 Elm St", county: "Snohomish" }).body, /houses that need work around Snohomish County or the surrounding areas\./);
+  assert.match(introEmailFor({ introEmail: {}, name: "Brenda", address: "1 Elm St", county: "Snohomish" }).body, /fixers near Snohomish County\?/);
+  // {area} still fills for wording a person wrote with it.
+  assert.match(introEmailFor({ introEmail: { body: "Hi {first}, anything around {area}?" }, name: "Brenda", address: "5232 S Yakima Ave, Tacoma, WA" }).body, /around Tacoma or the surrounding areas\?/);
+});
+
+// 2026-11-02, Matt: "keep the email outreach emails to under 100 characters
+// but personalized". The intro read 480 characters and the check-ins 230–300.
+test("every outreach email is under 100 characters and still says their name and town", () => {
+  const agents = [
+    { name: "Brenda Smith", address: "14820 SE 172nd St, Renton, WA 98058" },
+    { name: "Jo", address: "1 Elm St", county: "Snohomish" },
+    { name: "Christopher Montgomery", address: "1 Main St, Mountlake Terrace, WA" },
+    { name: "Bartholomew", address: "9 Oak Ave, University Place, WA" },
+    { name: "Brenda" },
+  ];
+  for (const a of agents) {
+    const first = a.name.split(" ")[0];
+    const intro = introEmailFor({ introEmail: {}, ...a });
+    assert.ok(intro.body.length < 100, `${intro.body.length}: ${intro.body}`);
+    assert.ok(intro.body.startsWith(`Hi ${first},`));
+    for (const n of [1, 2, 3, 4]) {
+      const e = checkInEmailFor({ checkInEmail: {}, contactId: "c-1", n, ...a });
+      assert.ok(e.body.length < 100, `${e.body.length}: ${e.body}`);
+      assert.ok(e.body.startsWith(`Hi ${first},`));
+      assert.doesNotMatch(e.body, /\{/);
+    }
+  }
+  // The town when it fits; "near you" when a long name and town wouldn't.
+  assert.match(introEmailFor({ introEmail: {}, ...agents[0] }).body, /near Renton\?/);
+  assert.match(introEmailFor({ introEmail: {}, ...agents[2] }).body, /near you\?/);
+  assert.match(introEmailFor({ introEmail: {}, ...agents[4] }).body, /near you\?/);
+  assert.equal(townOf({ address: "1 Elm St", county: "Pierce County" }), "Pierce County");
+  // A check-in that can't fit gives way to the next one that does.
+  const long = { emails: [{ subject: "a", body: `Hi {first},\n\n${"so much to say ".repeat(8)}` }, { subject: "b", body: "Hi {first}, short one." }] };
+  assert.equal(checkInEmailFor({ checkInEmail: long, name: "Brenda", contactId: "c-1", n: 1 }).subject, "b");
+  // Wording a person wrote that runs long still goes when nothing shorter is there.
+  assert.ok(checkInEmailFor({ checkInEmail: { emails: [long.emails[0]] }, name: "Brenda", contactId: "c-1", n: 1 }).body.length > 99);
 });
 
 const AI = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: { outreach_nudge: { enabled: true, ...LADDER } } } } } });

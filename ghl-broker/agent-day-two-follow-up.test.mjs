@@ -112,13 +112,15 @@ test("the intro email is off and waits for Matt until he says otherwise, on day 
   assert.deepEqual([ie.enabled, ie.autoSend, ie.day], [false, false, 2]);
 });
 
-test("the intro email says who we are, what we buy, the website, and asks for distressed properties", () => {
+// Under 100 characters since 2026-11-02 (Matt): the website and the long
+// paragraphs don't fit; who we are and what we want still do.
+test("the intro email says who we are and asks for their fixers, near their town, in under 100 characters", () => {
   const e = introEmailFor({ introEmail: {}, name: "Brenda Jones", address: "14820 SE 172nd St, Renton, WA 98058" });
-  assert.match(e.body, /^Hi Brenda,\n\n/);
-  assert.match(e.body, /Shep Flips/);
-  assert.match(e.body, /https:\/\/shepflips\.com/);
-  assert.match(e.body, /distressed/);
-  assert.match(e.body, /\n\nThanks,\nMatt Shepherd\nShep Flips$/, "the paragraphs and the sign-off lines keep their shape");
+  assert.match(e.body, /^Hi Brenda,\n\n/, "the greeting keeps its own paragraph");
+  assert.match(e.body, /Matt with Shep Flips/);
+  assert.match(e.body, /fixers near Renton\?/);
+  assert.match(e.body, /uglier the better/);
+  assert.ok(e.body.length < 100, `${e.body.length} characters`);
   assert.ok(e.subject.length > 0);
   assert.match(introEmailFor({ introEmail: {}, name: "", address: "" }).body, /^Hi,\n\n/);
 });

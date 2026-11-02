@@ -19,14 +19,12 @@ import { parseUsAddress } from "./us-address.js";
 import { coldTouchGapDays, MORNING_SLACK_HOURS } from "./follow-up.js";
 
 export const DEFAULT_INTRO_EMAIL_SUBJECT = "Matt with Shep Flips: houses that need work";
-export const DEFAULT_INTRO_EMAIL_BODY = [
-  "Hi {first},",
-  "This is Matt Shepherd with Shep Flips. I texted you a couple of days ago about your listing. We're a small local team buying houses that need work around {area}. We fix them up, buy as-is, and try to make it easy on the agent's side.",
-  "If you have any distressed or value-add properties, listed or off market, the uglier the better, I'd love to hear about them.",
-  "You can see more about us at https://shepflips.com.",
-  "If you'd rather I didn't email, just reply and say so.",
-  "Thanks,\nMatt Shepherd\nShep Flips",
-].join("\n\n");
+// Under 100 characters, greeting and sign-off included, with their first
+// name and the town of the listing we texted them about (2026-11-02, Matt:
+// "keep the email outreach emails to under 100 characters but
+// personalized"). It read 480 before, with the website and an opt-out line.
+export const EMAIL_MAX_CHARS = 99;
+export const DEFAULT_INTRO_EMAIL_BODY = "Hi {first},\n\nMatt with Shep Flips. Got any fixers near {town}? The uglier the better!";
 
 export const INTRO_EMAIL_MAX_SUBJECT = 150;
 export const INTRO_EMAIL_MAX_BODY = 3000;
@@ -73,17 +71,50 @@ export function areaOf({ address = "", county = "" } = {}) {
 }
 
 /**
+ * townOf({ address, county }) → "Renton" | "King County" | ""
+ *
+ * {town} in the emails: the listing's town, else its county. The emails say
+ * "near {town}", so where neither is known, or the email would run past
+ * EMAIL_MAX_CHARS with it, it reads "near you" (fillEmail).
+ */
+export function townOf({ address = "", county = "" } = {}) {
+  const town = parseUsAddress(address).city.trim();
+  const c = countyName(county);
+  return town || (c ? `${c} County` : "");
+}
+
+/**
+ * fillEmail(text, values) → { body, fits } | null
+ *
+ * The email filled for one agent, kept under EMAIL_MAX_CHARS: with their
+ * town, else "you" in its place. Wording a person wrote that can't fit goes
+ * as written (fits: false); the caller prefers one that fits.
+ */
+export function fillEmail(text, values = {}) {
+  const tries = values.town && values.town !== "you" ? [values.town, "you"] : ["you"];
+  let first = null;
+  for (const town of tries) {
+    const body = fillParagraphs(text, { ...values, town });
+    if (!body) continue;
+    if (body.length <= EMAIL_MAX_CHARS) return { body, fits: true };
+    first = first || body;
+  }
+  return first ? { body: first, fits: false } : null;
+}
+
+/**
  * introEmailFor({ introEmail, name, address, county }) → { subject, body } | null
  *
- * The email with its blanks filled ({first}, {address}, {street}, {area}).
+ * The email with its blanks filled ({first}, {town}, {address}, {street},
+ * {area}), under EMAIL_MAX_CHARS where the wording allows (fillEmail).
  * A blank we have nothing for leaves the default wording in its place; null
  * only when even that can't be filled.
  */
 export function introEmailFor({ introEmail, name = "", address = "", county = "" } = {}) {
   const ie = normalizeIntroEmail(introEmail);
-  const values = { first: firstNameOf(name), address: streetLine(address), street: streetName(address), area: areaOf({ address, county }) };
+  const values = { first: firstNameOf(name), town: townOf({ address, county }), address: streetLine(address), street: streetName(address), area: areaOf({ address, county }) };
   const subject = fillTemplate(ie.subject, values) || fillTemplate(DEFAULT_INTRO_EMAIL_SUBJECT, values);
-  const body = fillParagraphs(ie.body, values) || fillParagraphs(DEFAULT_INTRO_EMAIL_BODY, values);
+  const body = (fillEmail(ie.body, values) || fillEmail(DEFAULT_INTRO_EMAIL_BODY, values))?.body || "";
   return subject && body ? { subject, body } : null;
 }
 
@@ -188,16 +219,17 @@ export function introEmailDue({ events = [], day = 2, now = Date.now(), gapHours
 // with the 14-day check-in: something short, concise, and to the point …
 // Make it personable. Make it fun."). One per check-in, the next of these
 // each time, subject and body together.
-const CHECK_IN_SIGN_OFF = "Thanks,\nMatt Shepherd\nShep Flips | shepflips.com";
+// Under 100 characters each since 2026-11-02 (EMAIL_MAX_CHARS), "near
+// {town}" so a long name and town still fit as "near you".
 export const DEFAULT_CHECK_IN_EMAILS = [
   { subject: "anything ugly lately?",
-    body: `Hi {first},\n\nMatt again, your friendly neighborhood fixer-upper guy. Anything around {area} cross your desk lately with shag carpet, a tired roof, or a kitchen stuck in 1974? That's my kind of house, listed or off market.\n\n${CHECK_IN_SIGN_OFF}` },
+    body: "Hi {first},\n\nAnything ugly near {town} lately? Listed or not, I'm buying.\n\nMatt" },
   { subject: "my two favorite words",
-    body: `Hi {first},\n\n"Needs work." If you've come across any fixers or value-add properties around {area} lately, on or off market, I'd love to take a look. I keep it easy on the agent's side.\n\n${CHECK_IN_SIGN_OFF}` },
+    body: "Hi {first},\n\n\"Needs work.\" Seen any fixers near {town} lately? Send them my way.\n\nMatt" },
   { subject: "checking in",
-    body: `Hi {first},\n\nQuick check-in from the guy who gets excited about the houses everyone else walks past. Got anything distressed, dated, or downright ugly around {area}? I'm all ears.\n\n${CHECK_IN_SIGN_OFF}` },
+    body: "Hi {first},\n\nGot anything dated or downright ugly near {town}? I'm all ears.\n\nMatt" },
   { subject: "the uglier the better",
-    body: `Hi {first},\n\nStill on the lookout for the ugliest house in {area} (in the best way). If a fixer lands on your desk, listed or not, send it my way and I'll take a look quickly.\n\n${CHECK_IN_SIGN_OFF}` },
+    body: "Hi {first},\n\nIf the ugliest house near {town} lands on your desk, send it my way!\n\nMatt" },
 ];
 export const CHECK_IN_EMAIL_MAX = 8;
 // A check-in whose day passed more than this long ago isn't sent late: the
@@ -241,15 +273,20 @@ export function normalizeCheckInEmail(v = {}) {
  */
 export function checkInEmailFor({ checkInEmail, name = "", contactId = "", n = 1, address = "", county = "" } = {}) {
   const { emails } = normalizeCheckInEmail(checkInEmail);
-  const values = { first: firstNameOf(name), area: areaOf({ address, county }) };
+  const values = { first: firstNameOf(name), town: townOf({ address, county }), area: areaOf({ address, county }) };
   const start = openerVariant(contactId, 997) + Math.max(0, Math.round(Number(n) || 1) - 1);
+  // The next one in turn that fills under EMAIL_MAX_CHARS; one that fills
+  // but runs long only when none fits.
+  let long = null;
   for (let i = 0; i < emails.length; i++) {
     const index = (start + i) % emails.length;
     const subject = fillTemplate(emails[index].subject, values);
-    const body = fillParagraphs(emails[index].body, values);
-    if (subject && body) return { subject, body, index };
+    const filled = fillEmail(emails[index].body, values);
+    if (!subject || !filled) continue;
+    if (filled.fits) return { subject, body: filled.body, index };
+    long = long || { subject, body: filled.body, index };
   }
-  return null;
+  return long;
 }
 
 export const CHECK_IN_EMAIL_EVENT_TYPES = ["outreach_sent", "outreach_email_queued", "checkin_email_queued", ...ENDED_BY, ...OUR_TEXTS];
