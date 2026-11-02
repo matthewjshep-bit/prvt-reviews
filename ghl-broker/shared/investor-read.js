@@ -393,10 +393,18 @@ export function cleanRead(r = {}) {
 export const lastSaidAt = (read) => (read?.quotes || []).reduce((max, q) => (q.at && q.at > (max || "") ? q.at : max), null);
 
 // A read is out of date when their thread has moved past what it covered.
+// A time from the store or GHL: an ISO string, or a Date as Postgres hands
+// back timestamptz (Date.parse on a Date drops its milliseconds).
+const timeOf = (v) => (v instanceof Date ? v.getTime() : Date.parse(v || ""));
+// GHL stamps a conversation's last message a few seconds after the message
+// (seen up to 36s, 2026-11-02); a message past this is a new one.
+export const READ_STALE_SLACK_MS = 60_000;
 export function readIsStale(read, lastMessageAt) {
   if (!read) return true;
-  if (!lastMessageAt) return false;
-  return !read.through || Date.parse(lastMessageAt) > Date.parse(read.through) + 1000;
+  const last = timeOf(lastMessageAt);
+  if (!Number.isFinite(last)) return false;
+  const through = timeOf(read.through);
+  return !Number.isFinite(through) || last > through + READ_STALE_SLACK_MS;
 }
 
 /* ---------- what the table and the export show ---------- */
