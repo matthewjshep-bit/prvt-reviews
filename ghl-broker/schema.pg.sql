@@ -247,6 +247,27 @@ create unique index if not exists investors_contact_uniq on investors (location_
 create index if not exists investors_loc_idx on investors (location_id, synced_at desc);
 create index if not exists investors_status_idx on investors (location_id, status);
 
+-- What each investor has told us about how they buy, in their own words, and
+-- the columns read from those words (shared/investor-read.js). One row per
+-- investor, replaced whole by the next read of their thread
+-- (ghl-broker/investor-read.js). Its own table, not a key in investors.doc:
+-- the book sync replaces doc wholesale and prunes contacts that lose their
+-- tag, and a read costs a model call to make. Evidence, not the buy box: the
+-- contact record's facts stay what deals go out on.
+--
+-- doc: { summary, fields: {areas, property_types, …}, quotes: [{text, at,
+--        channel, messageId, about}], through, readAt, by, stats }
+-- through_at: the newest message the read covered — a thread that moved
+-- past it is due a re-read.
+create table if not exists investor_reads (
+  location_id  text not null,
+  contact_id   text not null,
+  doc          jsonb not null,
+  read_at      timestamptz not null default now(),
+  through_at   timestamptz,
+  primary key (location_id, contact_id)
+);
+
 -- Zillow comp inbox. The bookmarklet POSTs comps here from a Zillow tab; the
 -- Comps & ARV pane pulls them into an offer later. This table exists because
 -- the app runs in a GHL iframe on a different origin from zillow.com, so there

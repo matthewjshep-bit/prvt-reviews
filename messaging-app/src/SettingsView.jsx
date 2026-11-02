@@ -1765,6 +1765,10 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.bookSync?.enabled)} onChange={(e) => setDispoAuto("bookSync")({ ...(form.dispoAutopilot?.bookSync || {}), enabled: e.target.checked })} />
           <span><span className="font-semibold">Sync the investor list from GHL every night at 4am</span><span className="block text-xs text-slate-500">Brings in new buyers, tag changes and fields edited in GHL, the same as pressing Sync on Dispositions. What investors text us reaches the list straight away either way. Reads GHL only; nothing is sent.</span></span>
         </label>
+        <label className="mt-3 flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.reads?.enabled)} onChange={(e) => setDispoAuto("reads")({ ...(form.dispoAutopilot?.reads || {}), enabled: e.target.checked })} />
+          <span><span className="font-semibold">Keep "In their words" current every night at 5am</span><span className="block text-xs text-slate-500">Re-reads each investor's texts, emails and calls once their thread has moved, and keeps what they said about how they buy, word for word, on Dispositions. One AI call per thread that moved (up to {form.dispoAutopilot?.reads?.maxPerRun || 150} a night). Nothing is sent, and their buy box only changes when you press Add to buy box.</span></span>
+        </label>
         <div className="mt-4 space-y-3 rounded-lg border border-slate-200 p-3">
           <div className="text-sm font-semibold">Pulse check between deals</div>
           <p className="text-xs text-slate-500">

@@ -189,7 +189,8 @@ export function relationshipOf(i = {}) {
  * matchesText(investor, text) → boolean
  *
  * The page's search box: plain words, every one must appear somewhere in the
- * name, email, phone, company, areas, cities, types or tags. Phone digits
+ * name, email, phone, company, areas, cities, types, tags or what they told
+ * us in their own words. Phone digits
  * match however they're typed.
  */
 export function matchesText(i = {}, text = "") {
@@ -200,6 +201,8 @@ export function matchesText(i = {}, text = "") {
     ...(i.markets?.cities || []).map((c) => c.replace(/-/g, " ")),
     ...(i.markets?.regions || []), ...(i.markets?.types || []).map((t) => t.replace(/-/g, " ")),
     ...(i.tags || []),
+    // What they told us, in their words (shared/investor-read.js readSearchText).
+    i.readText,
   ].filter(Boolean).join(" ").toLowerCase();
   const digits = String(i.phone || "").replace(/\D/g, "");
   return words.every((w) => {

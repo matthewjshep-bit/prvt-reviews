@@ -798,6 +798,11 @@ export const getInvestors = (status) =>
   fetch(`${API_BASE}/api/dispo/investors?${locq()}${status ? `&status=${encodeURIComponent(status)}` : ""}`).then(j);
 export const getInvestor = (contactId) =>
   fetch(`${API_BASE}/api/dispo/investors/${encodeURIComponent(contactId)}?${locq()}`).then(j);
+// In their words (ghl-broker/investor-read.js): the CSV of every investor who
+// told us how they buy, and re-reading threads (a model call each).
+export const investorReadsCsvUrl = () => `${API_BASE}/api/dispo/reads/export.csv?${locq()}`;
+export const runInvestorReads = (body) => post("/api/dispo/reads/run", body);
+export const getInvestorReadsStatus = () => fetch(`${API_BASE}/api/dispo/reads/status?${locq()}`).then(j);
 
 export const syncInvestors = () => post(`/api/dispo/sync`, {});
 // The check-in between deals: status, and a run by hand (a dry run by default).

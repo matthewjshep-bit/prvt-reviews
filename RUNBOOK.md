@@ -6922,6 +6922,89 @@ the buyer price, the ARV and the rehab estimate.** The contract price and the
 assignment fee are not in `dealFacts` and must never be — that is asserted in
 `shared/blast-text.test.mjs`.
 
+### In their words — what each investor told us about how they buy (2026-11-02)
+
+Matt, 2026-11-02: "all that information is kind of locked up in all the
+investor conversations, both the text and the call transcripts." On that day
+the book held 2,786 buyers. 619 had written back or talked on the phone, and
+155 had a buy box on file.
+
+**What a read is.** One per investor (`investor_reads`, shared/investor-read.js). It holds:
+- **Their words.** The sentences where they said what, where and how they buy,
+  word for word, each dated and marked text / email / call. Every quote is
+  checked against the thread before it's kept (`verifyQuotes`). A quote that
+  isn't in their own messages is dropped, and so is one found only in our texts.
+  The date, channel and message id come from the message the quote was found
+  in, never from the model.
+- **The columns** read from those words (`READ_FIELDS`): areas they buy, areas they won't,
+  kinds of house, strategy (flip / rental / BRRRR / new construction /
+  ADU-DADU / land …), price band, rehab, how they pay, beds / baths / sq ft / lot
+  minimums, must-haves, dealbreakers, how they run numbers, volume, buying now?,
+  timing, who they are (investor / builder / wholesaler / lender …), company,
+  how they want deals, how fast they close, worth knowing. A column is filled
+  only where their words or their plain yes to our question support it. A
+  house we pitched them never counts as an area.
+
+**A read is evidence, not the buy box.** Deals still go out on the contact
+record's facts, and a read changes nothing by itself. On the investor's row,
+**Add to buy box** shows exactly what it will file, then files it on Matt's
+press (`readFacts` → `POST /api/contacts/:id/facts`). It adds only list values
+the record lacks, and never overwrites a scalar (price, rehab, lot) that is
+already set. Those facts change which deals they're sent.
+
+**On the page (Dispositions).**
+- **Column.** "In their words" shows the one-line summary, the number of
+  quotes, and when they last said something. It sorts by the last time they said it.
+- **Filter.** "In their words": told us how they buy, or nothing yet.
+- **Search.** The search box looks through their words too (`readText` →
+  `matchesText`), so "ADU" finds everyone who said ADU.
+- **Expanded row.** The columns, every quote newest first with its channel
+  and date, plus *Add to buy box* and *Read again* (one model call).
+- **Export CSV.** `GET /api/dispo/reads/export.csv` gives one row per investor
+  who told us anything, with every column and every quote in one cell.
+  `?all=1` adds the rest of the book.
+
+**Keeping it current.** Settings → Dispositions → *Keep "In their words"
+current every night at 5am* (`dispoAutopilot.reads {enabled:false, hour:5,
+maxPerRun:150}`). It ships **off**.
+- It runs an hour after the book sync, which is what tells it whose thread
+  moved (`doc.lastMessageAt`).
+- It re-reads each investor who has talked and whose thread moved past their
+  read (`readIsStale`), most recent first, up to `maxPerRun`.
+- Gating is investor-sync.js's: cursor `investorReads` written before the run,
+  a stale run retried, 3 tries a night.
+- A thread with nothing in their words is stored as an empty read with no model
+  call, so it isn't asked about again until it moves.
+- Model: `ENRICH_MODEL` (the enrichment sweep's), metered as `investor_read`.
+
+**Routes.**
+- `POST /reads/run {contactIds?, limit?, dryRun}`: dry by default; needs the AI key to read.
+- `GET /reads/status`: settings, job, how many are due and why, last night's run.
+- `POST /reads/import {reads:[{contactId, read}], by, dryRun}`: dry by default;
+  only contacts in the book; at most 2,000 a call.
+
+**The thread read** (`ghl-broker/investor-thread.js`) is the whole record, not the
+prompt digest: every conversation, every page, every call transcript, and
+their own words out of an email thread (`messageWords`). Every request retries
+429 / 5xx / a dropped connection with backoff. A page or transcript that still
+fails is counted in `stats.failures`, not read as an empty thread (the
+2026-10-29 scan lost 1,524 of 2,058 threads to 429s and looked finished). GHL
+answers 400 for some calls' transcripts (no recording). That is "no
+transcript", not a failure.
+
+**The backfill (2026-11-02).** It covered every thread from 2026-06-02 to
+2026-11-02.
+- 681 investors read (talking, replied or opted out), 0 failed.
+- 475 calls, 353 of them transcribed.
+- 453 had something in their own words; the other 228 had only our texts,
+  reactions or untranscribed calls.
+- It was read in-session in 11 batches with the same instructions and input
+  format as `READ_SYSTEM` / `threadForModel`.
+- Every quote went through `verifyQuotes`. The result loads with
+  `POST /reads/import` (by `backfill:2026-11-02`) once this is deployed.
+- Quotes under 8 characters ("yes", "Stop") aren't kept. A plain yes to our
+  question can back a column with no quote shown.
+
 ### Soft commit — "I think I have a buyer for this one" (2026-09-16)
 
 A fourth buyer standing on a deal, between Evaluating and Committed. Set it on

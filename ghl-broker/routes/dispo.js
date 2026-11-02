@@ -32,6 +32,8 @@ import { DISPO_IMPORTS_ENABLED, previewCsv, startImport, getImportJob, publicImp
 import { FACT_KEYS, factsAsCustom, factsEmpty } from "../shared/contact-record.js";
 import { buyboxCustom, investorProfileText, refreshInvestorRow } from "../investor-row.js";
 import { CURSOR_NAME as BOOK_SYNC_CURSOR } from "../investor-sync.js";
+import { cleanRead, fieldsEmpty, lastSaidAt, readSearchText, readsCsv } from "../shared/investor-read.js";
+import { startInvestorReads, getReadJob, publicReadJob, planReads, investorReadSettings, CURSOR_NAME as READS_CURSOR } from "../investor-read.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
 import { queueBlastDrafts, normalizeDispoAutopilot, catchUpDue, blastChannel, blastChannels, resumePulledBack, sampleBlastTexts } from "../dispo-autopilot.js";
@@ -226,6 +228,27 @@ export default function createDispoRouter({ resolveLocation }) {
     relationship: i.relationship || relationshipOf(i),
   });
 
+  // What they told us, as the table shows it: the columns and the count of
+  // quotes, and one lower-cased blob the page's plain search looks through
+  // (their words included, so "ADU" finds the people who said it). The quotes
+  // themselves come with GET /investors/:contactId.
+  async function readsByContact(locationId) {
+    const rows = await store.listInvestorReads?.(locationId).catch(() => []) || [];
+    return new Map(rows.map((r) => [r.contactId, cleanRead(r.doc)]));
+  }
+  const readHasWords = (read) => Boolean(read && (read.quotes.length || read.summary || !fieldsEmpty(read.fields)));
+  const readSlim = (read) => {
+    if (!read) return { read: null };
+    const words = readHasWords(read);
+    return {
+      read: {
+        summary: read.summary, fields: read.fields, quotes: read.quotes.length, lastSaid: lastSaidAt(read),
+        readAt: read.readAt, through: read.through, by: read.by, empty: !words,
+      },
+      ...(words ? { readText: readSearchText(read) } : {}),
+    };
+  };
+
   // The whole book with what the page ranks on: markets, flips, engagement off
   // the timeline, and the buyer score + tier. One read per event family.
   async function scoredBook(locationId, { status = null } = {}) {
@@ -365,13 +388,16 @@ export default function createDispoRouter({ resolveLocation }) {
       // can see the deals and the timeline, and the browse table filters and
       // sorts on them without a second round trip.
       const investors = await scoredBook(locationId, { status: req.query.status || null });
+      const reads = await readsByContact(locationId);
       const tally = (pick) => investors.filter((i) => i.status !== "archived")
         .reduce((a, i) => { for (const k of pick(i)) a[k] = (a[k] || 0) + 1; return a; }, {});
       res.json({
         ok: true,
-        investors: investors.map(slim),
+        investors: investors.map((i) => ({ ...slim(i), ...readSlim(reads.get(i.contactId)) })),
         counts: {
           total: investors.length,
+          // Investors with something on file in their own words.
+          withWords: investors.filter((i) => readHasWords(reads.get(i.contactId))).length,
           active: investors.filter((i) => i.status !== "archived").length,
           documented: investors.filter((i) => !buyboxIsEmpty(i.buybox)).length,
           needsBuybox: investors.filter((i) => buyboxIsEmpty(i.buybox)).length,
@@ -403,9 +429,11 @@ export default function createDispoRouter({ resolveLocation }) {
       const row = await store.getInvestor(locationId, req.params.contactId);
       if (!row) return res.status(404).json({ error: "investor not found — run a sync first" });
       const purchases = await store.listContactEvents(locationId, req.params.contactId, { types: ["property_financed"], limit: 100 }).catch(() => []);
+      const readRow = await store.getInvestorRead?.(locationId, req.params.contactId).catch(() => null);
       res.json({
         ok: true,
         investor: hydrate(row),
+        read: readRow ? cleanRead(readRow.doc) : null,
         deals: await dealsFor(locationId, req.params.contactId),
         purchases: purchases.map((e) => ({ at: e.at, address: e.address, ...(e.data || {}) })),
       });
@@ -591,6 +619,82 @@ export default function createDispoRouter({ resolveLocation }) {
     try {
       const { locationId, client } = resolveLocation(req);
       res.json({ ok: true, ...(await syncBook({ locationId, client })) });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- in their words (investor-read.js) ---------- */
+
+  // The whole database as a spreadsheet: one row per investor who has told us
+  // anything, every column, every quote. ?all=1 adds the rest of the book.
+  router.get("/reads/export.csv", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const [investors, reads] = await Promise.all([scoredBook(locationId), readsByContact(locationId)]);
+      const all = req.query.all === "1";
+      const rows = investors
+        .filter((i) => all || readHasWords(reads.get(i.contactId)))
+        .map((i) => ({ contactId: i.contactId, name: i.name, relationship: i.relationship || relationshipOf(i), tier: i.tier, read: reads.get(i.contactId) || null }))
+        // Whoever spoke to us most recently first.
+        .sort((a, b) => String(lastSaidAt(b.read) || "").localeCompare(String(lastSaidAt(a.read) || "")));
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="investors-in-their-words-${new Date().toISOString().slice(0, 10)}.csv"`);
+      res.send(`\uFEFF${readsCsv(rows)}`);
+    } catch (err) { fail(res, err); }
+  });
+
+  // Reads made elsewhere (the 2026-11-02 backfill of every thread since June),
+  // loaded as they are. Each is cleaned to the read's shape; only contacts in
+  // the book are taken. A dry run counts.
+  router.post("/reads/import", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const list = Array.isArray(req.body?.reads) ? req.body.reads : [];
+      if (!list.length) throw Object.assign(new Error("reads: [] is empty"), { http: 400 });
+      if (list.length > 2000) throw Object.assign(new Error("at most 2,000 reads a call"), { http: 400 });
+      const book = new Set((await store.listInvestors(locationId)).map((r) => r.contactId));
+      const dryRun = req.body?.dryRun !== false;
+      const by = String(req.body?.by || "import").slice(0, 60);
+      let saved = 0, notInBook = 0, withWords = 0;
+      for (const r of list) {
+        const contactId = String(r?.contactId || "");
+        if (!book.has(contactId)) { notInBook++; continue; }
+        const read = cleanRead({ ...(r.read || {}), by: r.read?.by || by });
+        if (readHasWords(read)) withWords++;
+        if (!dryRun) await store.upsertInvestorRead(locationId, contactId, read);
+        saved++;
+      }
+      res.json({ ok: true, dryRun, received: list.length, saved, withWords, notInBook });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Read threads now: contactIds (re-read those) or the investors whose thread
+  // moved past their read. A model call each; a dry run (the default) only
+  // plans. The job runs in the background — GET /reads/status.
+  router.post("/reads/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const contactIds = Array.isArray(req.body?.contactIds) ? req.body.contactIds.map(String).slice(0, 500) : null;
+      const limit = Math.max(0, Math.min(1000, Math.round(Number(req.body?.limit) || 0)));
+      const dryRun = req.body?.dryRun !== false;
+      if (!dryRun && !String(saved.aiApiKey || "").trim()) throw Object.assign(new Error("Add the Anthropic key in Settings → AI features first"), { http: 400 });
+      const job = startInvestorReads({ client, locationId, store, saved, contactIds, limit, dryRun, trigger: "manual" });
+      res.json({ ok: true, job: publicReadJob(job) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.get("/reads/status", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const cursor = await store.getJobCursor?.(locationId, READS_CURSOR).catch(() => null);
+      const due = await planReads({ store, locationId });
+      const reads = await store.listInvestorReads?.(locationId).catch(() => []) || [];
+      res.json({
+        ok: true, settings: investorReadSettings(saved), job: publicReadJob(getReadJob(locationId)),
+        reads: reads.length, due: due.length, dueWhy: due.reduce((a, d) => ({ ...a, [d.why]: (a[d.why] || 0) + 1 }), {}),
+        lastRunAt: cursor?.doc?.lastDaily || null, last: cursor?.doc?.last || null,
+      });
     } catch (err) { fail(res, err); }
   });
 

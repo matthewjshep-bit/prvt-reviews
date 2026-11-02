@@ -8,7 +8,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle, ChevronDown, ChevronUp, Loader2, Map as MapIcon, Megaphone,
-  Pencil, RefreshCw, Search, X, Eye } from "lucide-react";
+  Pencil, RefreshCw, Search, X, Eye, Download } from "lucide-react";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_LABELS, REHAB_APPETITES, REHAB_APPETITE_LABELS,
   buyboxIsEmpty, priceBandText,
@@ -22,8 +22,9 @@ import { RELATIONSHIPS, matchesText, relationshipOf } from "@shared/talked-to.js
 import { buyerTier } from "@shared/tiers.js";
 import { REGIONS, REGION_KEYS, STRATEGIES, cityLabel, regionFor } from "@shared/dispo-regions.js";
 import { TIERS } from "@shared/buyer-score.js";
-import { getDispoInsights, listDeals, rankBuyersForDeal } from "./api.js";
+import { getDispoInsights, listDeals, rankBuyersForDeal, investorReadsCsvUrl } from "./api.js";
 import BuyerMap from "./BuyerMap.jsx";
+import InvestorWords from "./InvestorWords.jsx";
 import DispoCharts from "./DispoCharts.jsx";
 
 const TIER_CLS = { vip: "bg-violet-100 text-violet-800", active: "bg-emerald-100 text-emerald-800", cold: "bg-slate-100 text-slate-500" };
@@ -58,6 +59,7 @@ const SORTS = {
   largest: (i) => i.flips?.largest || 0,
   reply: (i) => i.lastRepliedAt || i.lastMessageAt || "",
   blasted: (i) => i.lastBlastAt || "",
+  said: (i) => i.read?.lastSaid || "",
   score: (i) => i.score ?? 0,
   match: (i) => i.rank ?? 0,
 };
@@ -250,7 +252,7 @@ function BuyboxEditor({ investor, onSaved, onCancel }) {
 
 /* ---------------- expanded row ---------------- */
 
-function InvestorDetail({ investor, onSaved }) {
+function InvestorDetail({ investor, onSaved, onRefresh }) {
   const [editing, setEditing] = useState(false);
   // Which of OUR deals this investor is actually on — a different thing from
   // the AI-written property history below, which records what they said about
@@ -259,13 +261,19 @@ function InvestorDetail({ investor, onSaved }) {
   // the conversation summary and property history come from this one fetch
   // rather than riding along on every row.
   const [detail, setDetail] = useState(null);
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     let live = true;
     getInvestor(investor.contactId)
       .then((r) => { if (live) setDetail(r); })
       .catch(() => { if (live) setDetail({ deals: [] }); });
     return () => { live = false; };
-  }, [investor.contactId]);
+  }, [investor.contactId, reload]);
+  const words = (
+    <InvestorWords investor={{ ...investor, buybox: detail?.investor?.buybox || investor.buybox }}
+      read={detail ? detail.read || null : undefined}
+      onChanged={() => { setReload((n) => n + 1); onRefresh?.(); }} />
+  );
 
   const full = { ...investor, ...(detail?.investor || {}) };
   const deals = detail?.deals || null;
@@ -293,6 +301,8 @@ function InvestorDetail({ investor, onSaved }) {
   ];
 
   return (
+    <>
+    {words}
     <div className="grid gap-4 md:grid-cols-2">
       <div>
         <div className="mb-2 flex items-center gap-2">
@@ -375,6 +385,7 @@ function InvestorDetail({ investor, onSaved }) {
         </div>
       </div>
     </div>
+    </>
   );
 }
 
@@ -423,6 +434,7 @@ export default function Dispositions() {
   const [type, setType] = useState("");
   const [tier, setTier] = useState("");
   const [buyboxStatus, setBuyboxStatus] = useState(""); // "" | documented | missing
+  const [saidStatus, setSaidStatus] = useState(""); // "" | said | silent — what they've told us, in their words
   const [excludeOnDeal, setExcludeOnDeal] = useState(false);
   // Matching the book against one live deal: ranked buyers replace the order.
   const [deals, setDeals] = useState([]);
@@ -503,10 +515,10 @@ export default function Dispositions() {
 
   const pickWho = (k) => { setWho(k); setSelected(new Set()); setParam("who", k); };
   const clearFilters = () => {
-    setText(""); setRegion(""); setCity(""); setType(""); setTier(""); setBuyboxStatus(""); setExcludeOnDeal(false);
+    setText(""); setRegion(""); setCity(""); setType(""); setTier(""); setBuyboxStatus(""); setSaidStatus(""); setExcludeOnDeal(false);
     setSelected(new Set());
   };
-  const filtersOn = !!(text || region || city || type || tier || buyboxStatus || excludeOnDeal);
+  const filtersOn = !!(text || region || city || type || tier || buyboxStatus || saidStatus || excludeOnDeal);
 
   // Every row carries its relationship from the server; a row from before the
   // server learned to send it is worked out here the same way.
@@ -540,13 +552,15 @@ export default function Dispositions() {
     if (excludeOnDeal) base = base.filter((i) => !i.onLiveDeal);
     if (buyboxStatus === "documented") base = base.filter((i) => !buyboxIsEmpty(i.buybox));
     if (buyboxStatus === "missing") base = base.filter((i) => buyboxIsEmpty(i.buybox));
+    if (saidStatus === "said") base = base.filter((i) => i.read && !i.read.empty);
+    if (saidStatus === "silent") base = base.filter((i) => !i.read || i.read.empty);
     if (region) base = base.filter((i) => i.markets?.regions?.includes(region));
     if (city) base = base.filter((i) => i.markets?.cities?.includes(city));
     if (type) base = base.filter((i) => i.markets?.types?.includes(type));
     if (tier) base = base.filter((i) => i.tier === tier);
     if (text.trim()) base = base.filter((i) => matchesText(i, text));
     return base;
-  }, [ranking, investors, byId, excludeOnDeal, buyboxStatus, region, city, type, tier, text]);
+  }, [ranking, investors, byId, excludeOnDeal, buyboxStatus, saidStatus, region, city, type, tier, text]);
 
   const shownCounts = useMemo(() => {
     const c = { all: 0 };
@@ -653,7 +667,7 @@ export default function Dispositions() {
   if (error) return <ErrorBar>{error}</ErrorBar>;
   if (!data) return <Spinner />;
 
-  const cols = 8 + (ranking?.results ? 1 : 0);
+  const cols = 9 + (ranking?.results ? 1 : 0);
 
   return (
     <div className="space-y-3">
@@ -670,6 +684,10 @@ export default function Dispositions() {
           <button type="button" onClick={() => setShowInsights((v) => !v)} aria-expanded={showInsights} className={BTN}>
             <MapIcon size={13} /> {showInsights ? "Hide map" : "Map & charts"}
           </button>
+          <a href={investorReadsCsvUrl()} className={BTN} download
+            title="Every investor who has told us how they buy: each column, and every quote in their words, dated">
+            <Download size={13} /> Export CSV
+          </a>
           <button type="button" onClick={doSync} disabled={syncing} className={BTN}
             title="Re-read every investor-tagged contact from GoHighLevel, with how much each has talked to us. Runs nightly too.">
             {syncing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Sync
@@ -747,6 +765,11 @@ export default function Dispositions() {
           <option value="">Buy box: any</option>
           <option value="documented">Has a buy box</option>
           <option value="missing">No buy box yet</option>
+        </select>
+        <select value={saidStatus} onChange={(e) => { setSaidStatus(e.target.value); setSelected(new Set()); }} className={SELECT_CLS} aria-label="In their words">
+          <option value="">In their words: any</option>
+          <option value="said">Told us how they buy ({(data.counts.withWords || 0).toLocaleString()})</option>
+          <option value="silent">Nothing from them yet</option>
         </select>
         <label className="flex items-center gap-1.5 text-xs text-slate-600"
           title="Hides investors already linked to a deal that is still live. Someone who passed on a deal stays in — they're free for the next one.">
@@ -902,6 +925,7 @@ export default function Dispositions() {
                 <SortTh label="Last heard from" sortKey="reply" sort={sort} onSort={onSort} />
                 <SortTh label="Market" sortKey="region" sort={sort} onSort={onSort} />
                 <th className="px-4 py-2.5">Buys</th>
+                <SortTh label="In their words" sortKey="said" sort={sort} onSort={onSort} />
                 <SortTh label="Score" sortKey="score" sort={sort} onSort={onSort} />
                 <SortTh label="Blasted" sortKey="blasted" sort={sort} onSort={onSort} />
                 <th className="sticky right-0 bg-white px-4 py-2.5" />
@@ -976,6 +1000,16 @@ export default function Dispositions() {
                           {inv.flips && <> · last loan {fmtMonth(inv.flips.lastAt)}{inv.flips.count > 1 ? ` (${inv.flips.count})` : ""}</>}
                         </div>
                       </td>
+                      <td className="max-w-[20rem] px-4 py-2.5 align-top">
+                        {inv.read && !inv.read.empty ? (
+                          <button type="button" onClick={() => setExpanded(open ? "" : inv.contactId)} className="block w-full text-left">
+                            <span className="line-clamp-2 text-slate-800" title={inv.read.summary}>{inv.read.summary || "Said something about how they buy"}</span>
+                            <span className="text-xs text-slate-500">
+                              {inv.read.quotes} quote{inv.read.quotes === 1 ? "" : "s"}{inv.read.lastSaid ? ` · last ${fmtAgo(inv.read.lastSaid)}` : ""}
+                            </span>
+                          </button>
+                        ) : <span className="text-slate-400">—</span>}
+                      </td>
                       <td className="px-4 py-2.5 align-top"><TierBadge inv={inv} /></td>
                       <td className="px-4 py-2.5 align-top text-xs text-slate-500">{inv.lastBlastAt ? fmtAgo(inv.lastBlastAt) : "—"}</td>
                       <td className="sticky right-0 bg-white px-4 py-2.5 align-top group-hover:bg-slate-50">
@@ -993,7 +1027,7 @@ export default function Dispositions() {
                     {open && (
                       <tr className="border-b border-slate-100 bg-slate-50 last:border-0">
                         <td colSpan={cols} className="px-4 py-4">
-                          <InvestorDetail investor={inv} onSaved={onBuyboxSaved} />
+                          <InvestorDetail investor={inv} onSaved={onBuyboxSaved} onRefresh={refresh} />
                           <button type="button" onClick={() => archive(inv)}
                             className="mt-3 text-xs font-semibold text-slate-500 hover:text-slate-700">
                             {inv.status === "archived" ? "Restore to the active book" : "Archive (hide from the book)"}
