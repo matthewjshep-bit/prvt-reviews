@@ -36,6 +36,7 @@ import { sweepPassNotes } from "./pass-note.js";
 import { maybeUnderwriteTierOne } from "./tier-one.js";
 import { maybeStartDispoSweep, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
 import { maybeRunBookSync } from "./investor-sync.js";
+import { maybeRunInvestorReads } from "./investor-read.js";
 import { maybeRunBuyerPulse } from "./buyer-pulse.js";
 import { maybeMirror } from "./ghl-mirror.js";
 import { maybeSweepCalls } from "./call-intake.js";
@@ -360,6 +361,12 @@ const TICK_JOBS = [
   // picks from it. Read-only; off until dispoAutopilot.bookSync.enabled.
   { area: "book-sync", run: async ({ client, locationId, saved }) => {
     if (await maybeRunBookSync({ client, locationId, saved, store, deps: { syncBook: dispoRouter.syncBook } })) console.log(`investor book sync started for ${locationId}`);
+  } },
+  // What each investor said about how they buy, re-read where their thread
+  // moved since the last read: the hour after the book sync, which is what
+  // tells us whose did. A model call a thread; off until dispoAutopilot.reads.
+  { area: "investor-reads", run: async ({ client, locationId, saved }) => {
+    if (await maybeRunInvestorReads({ client, locationId, saved, store })) console.log(`investor reads started for ${locationId}`);
   } },
   // The check-in between deals: a few buyers a workday, never blasted. Off
   // until dispoAutopilot.pulse.enabled; drafts until pulse.autoSend.

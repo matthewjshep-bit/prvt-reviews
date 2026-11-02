@@ -999,6 +999,35 @@ const pgStore = {
     return rowCount;
   },
 
+  /* ---- investor reads (what they told us, in their words) ---- */
+  // A read replaces the last one whole: it is made from the whole thread.
+  async upsertInvestorRead(locationId, contactId, doc) {
+    await query(
+      `insert into investor_reads (location_id, contact_id, doc, read_at, through_at)
+       values ($1,$2,$3,coalesce($4::timestamptz, now()),$5)
+       on conflict (location_id, contact_id)
+       do update set doc = excluded.doc, read_at = excluded.read_at, through_at = excluded.through_at`,
+      [locationId, contactId, doc, doc?.readAt || null, doc?.through || null]
+    );
+    return true;
+  },
+  async getInvestorRead(locationId, contactId) {
+    const { rows } = await query(
+      `select contact_id as "contactId", doc, read_at as "readAt", through_at as "throughAt"
+       from investor_reads where location_id = $1 and contact_id = $2`,
+      [locationId, contactId]
+    );
+    return rows[0] || null;
+  },
+  async listInvestorReads(locationId) {
+    const { rows } = await query(
+      `select contact_id as "contactId", doc, read_at as "readAt", through_at as "throughAt"
+       from investor_reads where location_id = $1`,
+      [locationId]
+    );
+    return rows;
+  },
+
   /* ---- gatekeepers (attorneys on estates, title, escrow) ---- */
   // Same discipline as outreach agents and investors: a re-read replaces
   // doc and last_seen, never status, contact_id or imported_at.
@@ -1531,6 +1560,7 @@ const fileStore = (() => {
       data.dealDocs = data.dealDocs || {};
       data.compCaptures = data.compCaptures || {};
       data.investors = data.investors || {};
+      data.investorReads = data.investorReads || {};
       data.gatekeepers = data.gatekeepers || {};
       data.gatekeeperHooks = data.gatekeeperHooks || {};
       data.jobCursors = data.jobCursors || {};
@@ -2267,6 +2297,29 @@ const fileStore = (() => {
       }
       if (removed) persist();
       return removed;
+    },
+
+    /* ---- investor reads ---- */
+    async upsertInvestorRead(locationId, contactId, doc) {
+      ensure();
+      data.investorReads[`${locationId}|${contactId}`] = {
+        locationId, contactId, doc,
+        readAt: doc?.readAt || nowIso(),
+        throughAt: doc?.through || null,
+      };
+      persist();
+      return true;
+    },
+    async getInvestorRead(locationId, contactId) {
+      ensure();
+      const r = data.investorReads[`${locationId}|${contactId}`];
+      return r ? { contactId: r.contactId, doc: r.doc, readAt: r.readAt, throughAt: r.throughAt } : null;
+    },
+    async listInvestorReads(locationId) {
+      ensure();
+      return Object.values(data.investorReads)
+        .filter((r) => r.locationId === locationId)
+        .map((r) => ({ contactId: r.contactId, doc: r.doc, readAt: r.readAt, throughAt: r.throughAt }));
     },
 
     /* ---- gatekeepers ---- */

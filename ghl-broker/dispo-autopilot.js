@@ -26,6 +26,7 @@ import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { store as defaultStore } from "./store.js";
 import { blastMessage, blastNote, dealFacts, blastSubject, presellMessage, normalizeDealTexts } from "./shared/blast-text.js";
 import { normalizeBookSync } from "./investor-sync.js";
+import { normalizeInvestorReads } from "./investor-read.js";
 import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
 import { walkthroughAsk } from "./shared/showing.js";
 import { dealNumbers } from "./dataroom.js";
@@ -71,6 +72,10 @@ export function normalizeDispoAutopilot(v = {}) {
     pulse: normalizeBuyerPulse(o.pulse),
     // The buyer book re-read from GHL once a night (investor-sync.js). Off.
     bookSync: normalizeBookSync(o.bookSync),
+    // What each investor said about how they buy, re-read from their thread
+    // once it moves (investor-read.js), the night after the book sync. A model
+    // call per moved thread, so off.
+    reads: normalizeInvestorReads(o.reads),
     // The buyer walkthrough (shared/showing.js).
     showings: normalizeShowings(o.showings),
     // A buyer with no phone gets the deal by email (2026-10-01: fourteen of
