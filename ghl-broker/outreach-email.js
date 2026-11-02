@@ -22,6 +22,7 @@ import { spreadAcrossDay, machineHours } from "./conversation-scheduler.js";
 import {
   normalizeIntroEmail, introEmailFor, introEmailDue, INTRO_EMAIL_EVENT_TYPES, INTRO_EMAIL_LATE_DAYS,
   normalizeCheckInEmail, checkInEmailFor, checkInEmailDue, CHECK_IN_EMAIL_EVENT_TYPES, emailGapHours,
+  checkInEmailGapHours, emailWaitReason,
 } from "./shared/outreach-email.js";
 import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 
@@ -55,12 +56,12 @@ async function eventsByContact(store, locationId, since, types) {
  * (contact name, due → { subject, body } | null), the `claim` event, the
  * draft. `label` names the switch a waiting draft points to.
  */
-async function queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact, kind, autoSend, label, due: dueFor, write, claim, summary }) {
+async function queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact, kind, autoSend, label, due: dueFor, write, claim, summary, gapHours: gap }) {
   const out = { queued: 0, drafted: 0, rows: [] };
   const read = typeof deps.getContact === "function" ? deps.getContact : (id) => getContact(client, id);
   const touches = typeof deps.ourTouches === "function" ? deps.ourTouches : (id) => getOurLastTouches(client, locationId, id);
   const config = conversationConfig(saved);
-  const gapHours = emailGapHours(config);
+  const gapHours = gap ?? emailGapHours(config);
   const schedule = !dryRun && sendsEnabled && config.enabled && autoSend;
   const why = !sendsEnabled ? "sends are off on the broker (CARD_SENDS_ENABLED)"
     : !config.enabled ? "Conversation AI is switched off" : `${label} wait for you until they may send themselves (Autopilot → Agents)`;
@@ -81,7 +82,7 @@ async function queueEmails({ client, store, locationId, saved, sendsEnabled, now
     const ours = await touches(contactId).catch(() => null);
     if (kind === INTRO_EMAIL_KIND && ours?.emailedAt) { out.rows.push({ ...row, status: "skipped", reason: "they already had an email from us" }); continue; }
     if (ours?.lastAt && ours.lastAt <= now && now - ours.lastAt < gapHours * 3600000) {
-      out.rows.push({ ...row, status: "skipped", reason: `we reached them ${Math.floor((now - ours.lastAt) / 3600000)} hours ago — an email waits ${gapHours} hours after a text` });
+      out.rows.push({ ...row, status: "skipped", reason: emailWaitReason((now - ours.lastAt) / 3600000, gapHours, "reached") });
       continue;
     }
     const name = nameOf(contact);
@@ -147,9 +148,10 @@ export async function runCheckInEmails({ client, store, locationId, saved = {}, 
   const ce = normalizeCheckInEmail(saved?.outreachAutopilot?.checkInEmail);
   const ladder = conversationConfig(saved).parties?.agent?.followUp?.ladders?.outreach_nudge;
   if (!ce.enabled || !(Number(ladder?.repeatEvery) > 0) || !ladder?.steps?.length) return { queued: 0, drafted: 0, rows: [] };
-  const gapHours = emailGapHours(conversationConfig(saved));
+  // A week after the check-in text, not three days (Terry V., 2026-11-02).
+  const gapHours = checkInEmailGapHours(conversationConfig(saved));
   const byContact = await eventsByContact(store, locationId, iso(now - (OUTREACH_NUDGE_WINDOW_DAYS + 1) * DAY_MS), CHECK_IN_EMAIL_EVENT_TYPES);
-  return queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact,
+  return queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact, gapHours,
     kind: CHECK_IN_EMAIL_KIND, autoSend: ce.autoSend, label: "check-in emails",
     due: (contactId, list) => checkInEmailDue({ events: list, steps: ladder.steps, repeatEvery: ladder.repeatEvery, now, windowDays: OUTREACH_NUDGE_WINDOW_DAYS, gapHours }),
     write: (name, contactId, due) => checkInEmailFor({ checkInEmail: ce, name, contactId, n: due.n, address: due.address, county: due.county }),

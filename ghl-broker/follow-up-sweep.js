@@ -29,7 +29,7 @@ import { supersededIds } from "./shared/current-offer.js";
 import {
   dueStep, exhausted, repeatsSent, followUpDedupeKey, FOLLOW_UP_KINDS, kindsFor, HOT_MIN_HOURS,
   offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, CHECKIN_STATUSES, rungsCovered, nudgeTimes,
-  OUTREACH_NUDGE_WINDOW_DAYS,
+  OUTREACH_NUDGE_WINDOW_DAYS, coldTouchGapDays,
 } from "./shared/follow-up.js";
 import { focusOf, focusHolds, machineTexts, spacingHolds, lightTouchDue, pickAside } from "./shared/agent-focus.js";
 import { threadHealth } from "./shared/thread-health.js";
@@ -402,6 +402,18 @@ const CHECKIN_QUIET_HOURS = 72;
  * workflow texted first join the same ladder (ghlCohortCandidates).
  */
 export const OUTREACH_WINDOW_DAYS = OUTREACH_NUDGE_WINDOW_DAYS;
+
+// Terry V., 2026-11-02 (cold-agent-check-ins-spaced.test.mjs): a day-2
+// follow-up that went eight days late was followed by the day-16 check-in a
+// week later, and each check-in email went three days after its text. A
+// cold agent's check-in now waits `repeatEvery` days after our last text,
+// and any follow-up text half that after an email of ours (the intro or a
+// check-in email: the claim, made the morning it's scheduled).
+const COLD_EMAIL_TYPES = ["outreach_email_queued", "checkin_email_queued"];
+export function coldSpacing(ladder, lastEmailAt = null) {
+  return { repeatFromLastTouch: true, lastEmailAt, emailGapDays: coldTouchGapDays(ladder?.repeatEvery) };
+}
+
 export async function outreachCandidates({ store, locationId, config, now = Date.now(), ghlCohort = false }) {
   const pb = config?.parties?.agent;
   const ladder = pb?.followUp?.ladders?.outreach_nudge;
@@ -409,7 +421,7 @@ export async function outreachCandidates({ store, locationId, config, now = Date
 
   const since = iso(now - OUTREACH_WINDOW_DAYS * DAY_MS);
   const events = await store.listContactEventsSince(locationId, since, {
-    types: ["outreach_sent", "follow_up_sent", "offer_sent", "realm_yes", "deal_promoted", "text_summary", "call_summary"],
+    types: ["outreach_sent", "follow_up_sent", "offer_sent", "realm_yes", "deal_promoted", "text_summary", "call_summary", ...COLD_EMAIL_TYPES],
     limit: 5000,
   }).catch(() => []);
 
@@ -429,12 +441,14 @@ export async function outreachCandidates({ store, locationId, config, now = Date
     if (after("offer_sent") || after("realm_yes") || after("deal_promoted")) continue;
     const lastInboundAt = list.filter((e) => e.type === "text_summary" || e.type === "call_summary").at(-1)?.at || null;
     const lastTouchAt = list.filter((e) => e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge").at(-1)?.at || null;
+    const lastEmailAt = list.filter((e) => COLD_EMAIL_TYPES.includes(e.type)).at(-1)?.at || null;
     out.push({
       kind: "outreach_nudge", party: "agent", contactId, subjectId: contactId,
       offerId: null, address: opened.address || "", startedAt: opened.at, county: opened.data?.county || "",
       ...(opened.data?.pastListing ? { pastListing: true } : {}),
       sentSteps: list.filter((e) => e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge").map((e) => Number(e.data?.step)),
       lastInboundAt, lastTouchAt,
+      spacing: coldSpacing(ladder, lastEmailAt),
       ladder,
     });
   }
@@ -499,6 +513,7 @@ export async function ghlCohortCandidates({ store, locationId, ladder, now = Dat
       sentSteps: nudges.map((e) => Number(e.data?.step)),
       lastInboundAt: list.filter((e) => e.type === "text_summary" || e.type === "call_summary").at(-1)?.at || null,
       lastTouchAt: nudges.at(-1)?.at || null,
+      spacing: coldSpacing(ladder),
       ladder,
     });
   }
@@ -961,6 +976,8 @@ async function runSweep(job, ctx) {
       stopOnAnyInbound: c.kind === "passed_checkin" || c.kind === "hot_push" || reanchored ? false : fu.stopOnAnyInbound,
       minHoursBetween: c.kind === "hot_push" ? HOT_MIN_HOURS : fu.minHoursBetween,
       repeatEvery: c.ladder.repeatEvery,
+      // The cold-agent ladder's spacing (coldSpacing): only it carries one.
+      ...(c.spacing || {}),
     });
 
     if (!d.due) {

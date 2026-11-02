@@ -20,7 +20,7 @@ import {
 import { annotateCurrent, currentOffers } from "./shared/current-offer.js";
 import { buildFlow } from "./shared/flow.js";
 import { offerLeaks } from "./shared/line.js";
-import { nextRungAt, staleHeld, PERSON_PROMISES, PROMISE_DUE_HOURS } from "./shared/follow-up.js";
+import { nextRungAt, staleHeld, PERSON_PROMISES, PROMISE_DUE_HOURS, MORNING_SLACK_HOURS } from "./shared/follow-up.js";
 import { sweepTime } from "./shared/next-follow-up.js";
 import { effectiveStatus, OPEN_STATUSES, priceAgreed, isHot } from "./shared/offer-status.js";
 import { holdState, callsInstead } from "./shared/counter-hold.js";
@@ -189,6 +189,16 @@ function ladderAt(c, { fu, weekends, now }) {
   let t = r.due ? now : ms(r.at);
   const touched = ms(c.lastTouchAt);
   if (touched != null) t = Math.max(t, touched + (Number(fu.minHoursBetween) || 0) * HOUR_MS);
+  // The cold-agent ladder's spacing, as dueStep holds it (coldSpacing).
+  const sp = c.spacing;
+  if (sp) {
+    const slack = MORNING_SLACK_HOURS * HOUR_MS;
+    const every = Math.round(Number(c.ladder.repeatEvery) || 0);
+    const lastDay = Math.max(0, ...(c.ladder.steps || []).map(Number).filter(Number.isFinite));
+    if (sp.repeatFromLastTouch && every > 0 && touched != null && r.step > lastDay) t = Math.max(t, touched + every * DAY_MS - slack);
+    const emailed = ms(sp.lastEmailAt);
+    if (emailed != null && sp.emailGapDays > 0) t = Math.max(t, emailed + sp.emailGapDays * DAY_MS - slack);
+  }
   return { at: sweepTime(t, FOLLOW_UP_UTC_HOUR, weekends), step: r.step };
 }
 

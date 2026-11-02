@@ -708,6 +708,26 @@ function rungsThrough(ladder, repeatEvery, started, now, unit = DAY_MS) {
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 
+// The morning sweep runs before the hour a text went out the afternoon
+// before, so "N days after" a touch counts the Nth morning, not N×24 hours.
+export const MORNING_SLACK_HOURS = 12;
+
+/**
+ * coldTouchGapDays(repeatEvery) → days
+ *
+ * After the day-2 follow-up, a cold agent who hasn't answered hears from us
+ * at most once in half a check-in interval, text or email (2026-11-02,
+ * Matt: "needs to be more time between outreach"). Check-ins every 14 days
+ * are a text and, a week later, the check-in email. A ladder that doesn't
+ * repeat has no check-ins to space.
+ */
+export function coldTouchGapDays(repeatEvery) {
+  const every = Math.round(Number(repeatEvery) || 0);
+  return every > 0 ? every / 2 : 0;
+}
+
+const daysWord = (n) => `${n} day${n === 1 ? "" : "s"}`;
+
 /**
  * normalizeSteps(v) → [day]
  *
@@ -740,10 +760,17 @@ export function normalizeSteps(v) {
  *
  * `reason` is in the operator's words — it goes on the sweep's result row so
  * "why didn't it follow up?" is a lookup rather than a guess.
+ *
+ * The cold-agent ladder's spacing (outreachCandidates sets it, 2026-11-02):
+ * `repeatFromLastTouch` holds a check-in (a repeat rung) until `repeatEvery`
+ * days after `lastTouchAt`, so a follow-up that went late pushes the next
+ * one back instead of landing a week before it. `lastEmailAt` +
+ * `emailGapDays` hold any rung that long after an email of ours.
  */
 export function dueStep({
   steps = [], startedAt, sentSteps = [], lastInboundAt = null, lastTouchAt = null,
   now = Date.now(), stopOnAnyInbound = true, minHoursBetween = 0, repeatEvery = 0, pace = 1,
+  repeatFromLastTouch = false, lastEmailAt = null, emailGapDays = 0,
 } = {}) {
   const configured = normalizeSteps(steps);
   if (!configured.length) return { due: false, reason: "no ladder" };
@@ -784,6 +811,19 @@ export function dueStep({
   if (minHoursBetween > 0 && touched != null && now - touched < minHoursBetween * floor * 3600000) {
     const hrs = Math.round((now - touched) / 3600000);
     return { due: false, reason: `we texted them ${hrs}h ago — too soon` };
+  }
+  // Terry V., 2026-11-02: the day-2 follow-up went on day 10 and the day-16
+  // check-in a week after it, because every rung counted from the first text.
+  const every = Math.round(Number(repeatEvery) || 0);
+  const slack = MORNING_SLACK_HOURS * 3600000;
+  if (repeatFromLastTouch && every > 0 && touched != null && pick > configured[configured.length - 1]
+      && now - touched < every * unit - slack) {
+    return { due: false, reason: `the last follow-up went ${daysWord(Math.floor((now - touched) / DAY_MS))} ago — a check-in waits ${daysWord(every)} after it` };
+  }
+  const emailed = ms(lastEmailAt);
+  const gap = Number(emailGapDays) || 0;
+  if (gap > 0 && emailed != null && emailed <= now && now - emailed < gap * unit - slack) {
+    return { due: false, reason: `we emailed them ${daysWord(Math.floor((now - emailed) / DAY_MS))} ago — a text waits ${daysWord(Math.ceil(gap))} after an email` };
   }
   return { due: true, step: pick, dayOffset: pick };
 }
