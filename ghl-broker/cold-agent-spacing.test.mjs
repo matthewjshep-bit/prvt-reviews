@@ -140,7 +140,8 @@ test("a check-in email isn't held back by an email weeks ago, only by a touch in
   const r = await runCheckInEmails({ store, locationId: loc, saved, sendsEnabled: true, now: NOW, deps: { getContact, ourTouches: async (id) => threads[id] } });
   const byId = Object.fromEntries(r.rows.map((x) => [x.contactId, x]));
   assert.equal(byId["c-bulk"].status, "scheduled", byId["c-bulk"].reason);
-  assert.equal(byId["c-texted"].reason, "we reached them 5 hours ago — an email waits 72 hours after a text");
+  // A week since 2026-11-02 (cold-agent-check-ins-spaced.test.mjs).
+  assert.equal(byId["c-texted"].reason, "we reached them 5 hours ago — an email waits 7 days after a text");
 });
 
 test("a GHL thread that can't be read doesn't stop the email", async () => {

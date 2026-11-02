@@ -19,6 +19,7 @@
 import { fillTemplate, firstNameOf, streetLine } from "./standard-texts.js";
 import { streetName, openerVariant, countyName } from "./outreach-opener.js";
 import { parseUsAddress } from "./us-address.js";
+import { coldTouchGapDays, MORNING_SLACK_HOURS } from "./follow-up.js";
 
 export const DEFAULT_INTRO_EMAIL_SUBJECT = "Matt with Shep Flips: houses that need work";
 export const DEFAULT_INTRO_EMAIL_BODY = [
@@ -127,12 +128,37 @@ export function emailGapHours(config) {
   return Math.max(EMAIL_AFTER_TEXT_HOURS, Number.isFinite(n) ? n : EMAIL_GAP_HOURS);
 }
 
+/**
+ * checkInEmailGapHours(conversationConfig) → hours
+ *
+ * The check-in email waits half a check-in interval after a text (a week,
+ * with check-ins every 14 days), counted in mornings, so it lands midway
+ * between two check-in texts instead of three days after one (Terry V.,
+ * 2026-11-02). Never shorter than emailGapHours.
+ */
+export function checkInEmailGapHours(config) {
+  const every = config?.parties?.agent?.followUp?.ladders?.outreach_nudge?.repeatEvery;
+  const half = coldTouchGapDays(every) * 24 - MORNING_SLACK_HOURS;
+  return Math.max(emailGapHours(config), half);
+}
+
+/**
+ * emailWaitReason(hoursSince, gapHours, verb) → "we texted them 2 days ago — an email waits 7 days after a text"
+ *
+ * In hours up to the 72-hour gap, in days past it (the check-in email's week).
+ */
+export function emailWaitReason(hoursSince, gapHours, verb = "texted") {
+  if (gapHours <= EMAIL_GAP_HOURS) return `we ${verb} them ${Math.floor(hoursSince)} hours ago — an email waits ${gapHours} hours after a text`;
+  const since = hoursSince < 48 ? `${Math.floor(hoursSince)} hours` : `${Math.floor(hoursSince / 24)} days`;
+  return `we ${verb} them ${since} ago — an email waits ${Math.round(gapHours / 24)} days after a text`;
+}
+
 // Why an email waits: a text of ours inside the gap, or null.
 function textedWithin(list, now, gapHours) {
   const last = list.filter((e) => OUR_TEXTS.has(e.type)).map((e) => Date.parse(e.at || "")).filter((t) => Number.isFinite(t) && t <= now);
   if (!last.length) return null;
   const hours = (now - Math.max(...last)) / 3600000;
-  return hours < gapHours ? `we texted them ${Math.floor(hours)} hours ago — an email waits ${gapHours} hours after a text` : null;
+  return hours < gapHours ? emailWaitReason(hours, gapHours) : null;
 }
 export const INTRO_EMAIL_EVENT_TYPES = ["outreach_sent", "outreach_email_queued", ...ENDED_BY, ...OUR_TEXTS];
 
@@ -181,6 +207,11 @@ export const CHECK_IN_EMAIL_MAX = 8;
 // next one comes round in two weeks. Six days since 2026-10-27: it waits
 // 72 hours after the check-in text, which can go as late as 6pm.
 export const CHECK_IN_EMAIL_LATE_DAYS = 6;
+// Since 2026-11-02 the email waits a week after the check-in text, so the
+// window is the wait plus three days of mornings and weekends.
+export function checkInEmailLateDays(gapHours = EMAIL_GAP_HOURS) {
+  return Math.max(CHECK_IN_EMAIL_LATE_DAYS, Math.ceil((Number(gapHours) || 0) / 24) + 3);
+}
 
 /**
  * normalizeCheckInEmail(v) → { enabled, autoSend, emails: [{ subject, body }] }
@@ -251,7 +282,8 @@ export function checkInEmailDue({ events = [], steps = [], repeatEvery = 0, now 
   const n = Math.floor((daysIn - last) / every);
   const step = last + n * every;
   if (step >= windowDays) return { due: false, reason: "past the follow-up window" };
-  if (daysIn - step > CHECK_IN_EMAIL_LATE_DAYS) return { due: false, reason: `day ${step} went by` };
+  // Wide enough that the wait after the check-in text still lands inside it.
+  if (daysIn - step > checkInEmailLateDays(gapHours)) return { due: false, reason: `day ${step} went by` };
   if (list.some((e) => e.type === "checkin_email_queued" && Number(e.data?.step) === step)) return { due: false, reason: `day ${step} already emailed` };
   const waits = textedWithin(list, now, gapHours);
   if (waits) return { due: false, reason: waits };
