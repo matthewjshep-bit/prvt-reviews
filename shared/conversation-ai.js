@@ -642,8 +642,9 @@ export const RULE_MODES = ["auto", "ask"];
 export const LENGTHS = ["short", "medium", "long"];
 // How much personality a reply carries (ghl-broker/conversation-prompt.js
 // REPLY_PERSONALITY). "off" is the plain voice the replies have had since
-// 2026-09-12; "light" lets a dry line in now and then.
-export const PERSONALITIES = ["off", "light"];
+// 2026-09-12; "light" lets a dry line in now and then; "more" (2026-11-03,
+// Matt: "turn up slightly") lets a touch into any easy reply, never two in a row.
+export const PERSONALITIES = ["off", "light", "more"];
 export const CHANNELS = ["sms", "email"];
 // What a set_field value may interpolate. Anything else is left as typed.
 // Once a person has jumped into a thread the bot stays out of it for at least

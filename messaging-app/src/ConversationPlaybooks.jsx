@@ -455,8 +455,8 @@ export function PersonaCard({ config, patch }) {
         </div>
       </div>
       <div className="mt-3">
-        <Field label="Personality" hint="Light lets a short, dry line into a reply now and then: never about a price or an offer, never two in a row. Texts the machine starts keep their own tone.">
-          <Select value={p.personality || "off"} onChange={set("personality")} options={[["off", "Off (plain)"], ["light", "Light (a dry line now and then)"]]} />
+        <Field label="Personality" hint="Light lets a short, dry line into a reply now and then. More lets a dry or warm touch into any easy reply. Either way: never about a price or an offer, never two in a row. Texts the machine starts keep their own tone.">
+          <Select value={p.personality || "off"} onChange={set("personality")} options={[["off", "Off (plain)"], ["light", "Light (a dry line now and then)"], ["more", "More (a touch in any easy reply)"]]} />
         </Field>
       </div>
     </Section>
