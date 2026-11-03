@@ -45,12 +45,31 @@ export const HOUSE_LEAD_INTENTS = new Set(["deal_available", "new_property", "in
 // "1200 Main St, Suite 300": an office in a signature, not a house.
 const OFFICE_AFTER = /^\s*,?\s*(?:Suite|Ste\.?|Unit|Floor|Fl\.?|#)\s*\w/i;
 
-/** streetKey(address) → "pine st" — the street with no number, unit or city; "" when it isn't a street. */
+// A direction after the suffix: "9th St E", "5th Ave NE", "Birch Drive Southeast".
+const TRAILING_DIRECTION_RX = /\s+(?:N|S|E|W|NE|NW|SE|SW|North|South|East|West|Northeast|Northwest|Southeast|Southwest)\.?$/i;
+const KEY_DIRECTION_RX = /\s+(?:n|s|e|w|ne|nw|se|sw)$/;
+
+/** streetKey(address) → "pine st", "9th st e" — the street with no number, unit or city; "" when it isn't a street. */
 export function streetKey(address = "") {
   const p = parseUsAddress(String(address || ""));
   const street = String(p.street || "").trim();
-  if (!street || !SUFFIX_RX.test(street)) return "";
+  // 2026-10-28: "9th St E" read as no street at all, so the house our first
+  // text named wasn't known as ours when they said "9th Street".
+  const base = street.replace(TRAILING_DIRECTION_RX, "");
+  if (!base || !SUFFIX_RX.test(base) || (base !== street && !/\s/.test(base))) return "";
   return normalizeUsAddress(`1 ${street}`).toLowerCase().replace(/^1\s+/, "").replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * sameStreetKey(a, b) → true when two streetKeys are one street: the same,
+ * or one is the other without its direction ("9th st" is "9th st e"). Two
+ * directions are two streets ("5th ave ne" is not "5th ave s").
+ */
+export function sameStreetKey(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const ba = a.replace(KEY_DIRECTION_RX, ""), bb = b.replace(KEY_DIRECTION_RX, "");
+  return ba === bb && (ba === a || bb === b);
 }
 
 /** hasHouseNumber(address) → true when there's a number to underwrite on. */
@@ -125,11 +144,13 @@ export function streetMentions(text = "") {
  * that house, not another.
  */
 export function housesInText({ houses = [], message = "", except = [] } = {}) {
-  const skip = new Set((except || []).map(streetKey).filter(Boolean));
+  const skip = (except || []).map(streetKey).filter(Boolean);
   const byStreet = new Map();
   for (const h of [...normalizeMentionedHouses(houses), ...streetMentions(message)]) {
-    const key = streetKey(h.address);
-    if (!key || skip.has(key)) continue;
+    const own = streetKey(h.address);
+    if (!own || skip.some((s) => sameStreetKey(s, own))) continue;
+    // "9th Street" and "18 9th St E" in one text are one street.
+    const key = [...byStreet.keys()].find((k) => sameStreetKey(k, own)) || own;
     const had = byStreet.get(key);
     if (!had) { byStreet.set(key, h); continue; }
     if (!hasHouseNumber(had.address) && hasHouseNumber(h.address)) {
@@ -538,7 +559,7 @@ export function housesAwaitingAddress({ events = [], offers = [], now = Date.now
     }
     if (hasHouseNumber(e.address)) continue;
     const key = streetKey(e.address);
-    if (!key || numbered.has(key)) continue;
+    if (!key || [...numbered].some((n) => sameStreetKey(n, key))) continue;
     open.set(key, { address: e.address, sellerAsk: Number(e.data?.sellerAsk) || 0, note: String(e.data?.note || ""), at: e.at });
   }
   return [...open.values()];

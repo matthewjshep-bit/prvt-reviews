@@ -656,6 +656,42 @@ test("an address they text us puts the card in Tier 1 with nothing priced, and o
   assert.equal(targetStage({ offers: [passed], raised: after, now: NOW }).to, "tier2");
 });
 
+// 2026-10-30, Lake Tapps: the call was about a house of theirs, and we passed
+// on it. The bot then asked about the house our first text named; they said
+// it sold and was never distressed, and the thread's subject moved back onto
+// it. The 7am sweep read that move as "they gave us" it and put the card in
+// Tier 1.
+test("the house we texted them about isn't one they gave us, even when the thread moves back onto it", () => {
+  const OURS = "18 Orchard St E, Bonney Lake, WA 98391";
+  const THEIRS = "77 Birch Dr SE, Olympia, WA 98503";
+  const events = [
+    { ...ev("subject_property_set", THEIRS, { from: OURS }, ago(2.1)), source: "conversation" },
+    { ...ev("house_closed", THEIRS, { why: "they passed" }, ago(2.1)), source: "call" },
+    { ...ev("subject_property_set", OURS, { from: THEIRS, ours: true }, ago(2)), source: "conversation" },
+  ];
+  const raised = raisedHouses({ events, now: NOW });
+  assert.deepEqual(raised.filter((h) => h.open), [], JSON.stringify(raised));
+  assert.equal(targetStage({ offers: [], raised, now: NOW }).to === "tier1", false);
+  // Their own word that it needs real work still raises it.
+  const work = [...events, { ...ev("property_details", OURS, { condition: "needs a full gut, foundation is shot" }, ago(1)), source: "conversation" }];
+  assert.deepEqual(raisedHouses({ events: work, now: NOW }).filter((h) => h.open).map((h) => h.address), [OURS]);
+});
+
+// 2026-11-03, Redmond: the agent called our first-text house a tear down or
+// fixer, and twelve days on she's still working it with the sellers. The
+// thread coming back to it keeps that house live; it just never raises one.
+test("the house we texted them about stays live while the thread is on it, once they called it a fixer", () => {
+  const OURS = "18 Orchard St E, Bonney Lake, WA 98391";
+  const events = [
+    { ...ev("property_details", OURS, { condition: "tear down or fixer" }, ago(12)), source: "conversation" },
+    { ...ev("subject_property_set", OURS, { from: "", ours: true }, ago(3)), source: "conversation" },
+  ];
+  const open = raisedHouses({ events, now: NOW }).filter((h) => h.open);
+  assert.deepEqual(open.map((h) => h.address), [OURS]);
+  assert.match(open[0].why, /needs real work/);
+  assert.deepEqual(raisedHouses({ events: [events[0]], now: NOW }).filter((h) => h.open), [], "stale without the thread on it");
+});
+
 test("the underwriter's own aim, our icebreaker house being qualified, or an address with no town never raises a house", () => {
   const A = "2714 SW 164th Pl, Burien, WA 98166";
   assert.equal(raisedHouses({ events: [{ ...ev("subject_property_set", A, { from: "" }), source: "offer" }], now: NOW }).length, 0);

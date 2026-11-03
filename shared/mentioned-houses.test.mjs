@@ -17,6 +17,33 @@ test("a street with no number is still a street; prose is not", () => {
   assert.equal(hasHouseNumber("1412 Pine St"), true);
 });
 
+// 2026-10-28, Lake Tapps: our first text named "… 9th St E", the call
+// mentioned "9th Street", and the call reader took it for a new house of
+// theirs with no number. "9th St E" read as no street at all, so nothing
+// knew it was the house we'd texted about, and the bot asked them for its
+// address.
+test("a street with a direction after it is still a street, and its bare name is the same street", () => {
+  assert.equal(streetKey("18 Orchard St E, Bonney Lake, WA 98391"), "orchard st e");
+  assert.equal(streetKey("1234 5th Ave NE, Seattle, WA"), "5th ave ne");
+  assert.equal(streetKey("77 Birch Drive Southeast, Olympia, WA 98503"), "birch dr se");
+  assert.equal(streetKey("Avenue E"), "", "a lone suffix and a direction is not a street");
+  assert.deepEqual(normalizeMentionedHouses([{ address: "1234 5th Ave NE, Seattle, WA" }]).map((h) => h.address), ["1234 5th Ave NE, Seattle, WA"]);
+  assert.deepEqual(housesInText({ houses: [{ address: "Orchard Street" }], message: "Was looking at your listing on Orchard Street.", except: ["18 Orchard St E, Bonney Lake, WA 98391"] }), [],
+    "the house we texted about is ours by its bare street too");
+});
+
+test("two streets that differ only by direction stay two streets", () => {
+  const found = housesInText({ houses: [{ address: "1234 5th Ave NE, Seattle, WA" }, { address: "88 5th Ave S, Seattle, WA" }], message: "" });
+  assert.deepEqual(found.map((h) => h.address), ["1234 5th Ave NE, Seattle, WA", "88 5th Ave S, Seattle, WA"]);
+  assert.deepEqual(housesInText({ houses: [{ address: "5th Ave S" }], message: "", except: ["1234 5th Ave NE, Seattle, WA"] }).map((h) => h.address), ["5th Ave S"]);
+});
+
+test("a street we already have the number for isn't asked for again, direction or not", () => {
+  const events = [{ type: "house_mentioned", address: "Orchard Street", at: "2026-10-28T17:00:00Z", data: { needsAddress: true } }];
+  const offers = [{ address: "18 Orchard St E, Bonney Lake, WA 98391", createdAt: "2026-10-27T17:00:00Z" }];
+  assert.deepEqual(housesAwaitingAddress({ events, offers, now: Date.parse("2026-10-29T00:00:00Z") }), []);
+});
+
 test("both streets an agent names in one text are found, with the town when they gave it", () => {
   assert.deepEqual(streetMentions(TWO_MORE).map((h) => h.address), ["Pine St, Shelton", "Alder Street"]);
 });

@@ -102,7 +102,8 @@ export function sameRaisedHouse(a, b) {
  * are one agent's HOUSE_EVENT_TYPES. A house is raised by:
  *   - house_mentioned with a valid address (their own words named it),
  *   - a valid address the conversation moved the thread onto
- *     (subject_property_set from the conversation, not while qualifying), or
+ *     (subject_property_set from the conversation, not while qualifying,
+ *     and not the house we texted them about: data.ours), or
  *   - their words about it reading as real work (property_details
  *     condition / workNeeded, a house_mentioned note: flip-read.js
  *     saysRealWork), or their own rehab budget of 50K or more.
@@ -166,8 +167,14 @@ export function raisedHouses({ events = [], offers = [], now = Date.now(), stale
     if (e.type === "subject_property_set" && d.notOurKind) { close(a, at, `${street}: they said it's turnkey`); continue; }
     // An address they texted us moves the thread onto it: a house to look at
     // (Matt, 2026-10-29: "any surfaced addresses that we haven't really taken a
-    // look at" are Tier 1). Not the underwriter's own aim (source "offer"), and
-    // not our icebreaker house while it's being qualified or passed.
+    // look at" are Tier 1). Not the underwriter's own aim (source "offer"),
+    // not our icebreaker house while it's being qualified or passed, and not
+    // the house our first text named at all (`ours`, 2026-10-30): they didn't
+    // give us that one. The thread came back to it because we asked, and the
+    // agent said it sold. Their word that it needs real work still raises it,
+    // and once raised, the thread being on it keeps it live (2026-11-03, a
+    // "tear down or fixer" the agent was still working with the sellers).
+    if (e.type === "subject_property_set" && d.ours) { const known = find(a); if (known?.open) known.at = at; continue; }
     if (e.type === "subject_property_set" && e.source === "conversation" && !d.qualifying && validAddress(a)) { raise(a, at, `they gave us ${street}`); continue; }
     // Their word on a house they raised keeps it live (2026-10-22, a short
     // sale the agent wrote about every few days).

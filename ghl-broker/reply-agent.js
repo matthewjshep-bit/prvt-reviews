@@ -1771,7 +1771,7 @@ export function underwritableAddress(raw) {
  * the two never fight. Returns { learned: [line], written: [key] }. Never
  * throws; a field write that fails is a warning on the draft.
  */
-export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [], store = null, draftId = null, intent = "", inbound = "", notOurKind = false, qualifying = "" }) {
+export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [], store = null, draftId = null, intent = "", inbound = "", notOurKind = false, qualifying = "", ourHouse = "" }) {
   if ((!profile && !subjectProperty) || !contactId || party === "unknown") return { learned: [], written: [] };
   const type = party === "investor" ? "investor" : "agent";
   // The record first, GHL second. Everything the model read out of this
@@ -1828,7 +1828,11 @@ export async function applyProfileUpdates({ client, locationId, contactId, party
     if (aim && addressKey(aim) !== addressKey(cur("subject_property"))) {
       writes.subject_property = aim;
       learned.push(`subject property: ${aim}`);
-      if (store && draftId) await recordEvent({ store, locationId, contactId, party: "agent", type: "subject_property_set", at: new Date(now).toISOString(), address: aim, source: "conversation", ref: draftId, data: { from: cur("subject_property"), ...(notOurKind ? { notOurKind: true } : {}), ...(qualifying ? { qualifying } : {}) } });
+      // The house our first text named (`ourHouse`) is ours, not one they
+      // gave us: the GHL card's Tier 1 leaves it out (shared/ghl-stages.js
+      // raisedHouses; 2026-10-30, an agent who said it had sold).
+      const ours = Boolean(ourHouse) && sameRaisedHouse(aim, ourHouse);
+      if (store && draftId) await recordEvent({ store, locationId, contactId, party: "agent", type: "subject_property_set", at: new Date(now).toISOString(), address: aim, source: "conversation", ref: draftId, data: { from: cur("subject_property"), ...(notOurKind ? { notOurKind: true } : {}), ...(qualifying ? { qualifying } : {}), ...(ours ? { ours: true } : {}) } });
     }
   }
   if (profile?.personalDetails) {
@@ -5680,6 +5684,7 @@ async function runReply(job, ctx) {
       client, locationId, contactId: job.contactId, party, profile: learnable, custom: a.custom,
       summary: draft.summary, subjectProperty: draft.propertyAddress, config, now, warnings,
       store, draftId: record.id, intent: draft.intent, inbound: job.message, notOurKind, qualifying: qualifyHeld ? draft.qualify.stage : replyPassed ? "pass" : "",
+      ourHouse: iceHouse?.address || "",
     });
     if (filed.learned.length || filed.written.length) {
       record = { ...record, profileUpdates: { learned: filed.learned, written: filed.written }, warnings: warnings.slice(0, 6), updatedAt: new Date().toISOString() };

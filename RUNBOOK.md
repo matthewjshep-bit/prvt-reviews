@@ -3128,7 +3128,24 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
     down…), or a rehab budget of their own of 50K+. A list of rooms ("kitchen
     and baths original") is not their word that it's a flip. Neither is "not
     a fixer", new construction, a remodel already done, or an unfinished
-    basement.
+    basement. Since 2026-10-29 (drafts are neutral) a full address the
+    conversation moves the thread onto (`subject_property_set`, source
+    `conversation`) raises it too ("they gave us …"). That excludes the
+    underwriter's own aim, our icebreaker while it's being qualified
+    (`qualifying`), and **the house our first text named** (`data.ours`,
+    2026-11-03). An agent said that house had sold and was never distressed.
+    The subject moved back onto it because the bot had asked, and the 7am
+    sweep read that as "they gave us" it. Only their word that it needs real
+    work raises the house we texted them about. Once it's raised, the thread
+    being on it keeps it live: a "tear down or fixer" the agent was still
+    working with the sellers stays in Tier 1.
+  - **Streets with a direction after them (2026-11-03).** `streetKey`
+    (`shared/mentioned-houses.js`) used to read "9th St E" or "5th Ave NE" as
+    no street at all. So a call or text that named our first-text house by
+    its bare street ("9th Street") filed it as a new house of theirs with no
+    number, and the bot asked them for its address. Keys now keep the
+    direction, and `sameStreetKey` treats a bare street as that street. Two
+    directions are still two streets: 5th Ave NE is not 5th Ave S.
   - **Closed:** a later `house_closed`. The reply agent files one when our
     reply or the qualify step passes, they say it's turnkey, they pass, or it
     sold. Also closed by: a later read of their words as turnkey or light, a
