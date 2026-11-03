@@ -729,3 +729,27 @@ test("replies stay plain until personality is turned on, and the setting survive
     assert.match(sys, /No warm-up clause before the substance/);
   }
 });
+
+// Matt, 2026-11-03: "can we turn up slightly the personality dial". Light
+// gave a clear line in about 2 of 12 easy drafts. "More" is one notch up: a
+// touch whenever the moment is easy, warmth as well as dry, and the flat
+// examples no longer cap it. The money, bad-news and length rails are Light's.
+test("a notch above light lets a touch into every easy reply, with the same rails on money and length", () => {
+  const more = normalizeConversationAi({ persona: { personality: "more" } });
+  assert.equal(more.persona.personality, "more");
+  for (const party of ["agent", "investor"]) {
+    const sys = buildSystemPrompt({ config: more, party });
+    assert.match(sys, /PERSONALITY \(when answering them/);
+    assert.match(sys, /Whenever the moment is easy/);
+    assert.doesNotMatch(sys, /Now and then/);
+    assert.match(sys, /skip it when our last message already had one/);
+    assert.match(sys, /the examples of our voice don't cap this/i);
+    assert.match(sys, /None at all when the message is about a price, an offer, a counter or terms/);
+    assert.match(sys, /a message you are STARTING keeps the tone its own instructions give/);
+    assert.match(sys, /stays as short as the length rule says/);
+    assert.match(sys, /No warm-up clause before the substance/);
+    assert.equal((sys.match(/PERSONALITY \(when answering them/g) || []).length, 1);
+  }
+  // Light reads as it did.
+  assert.match(buildSystemPrompt({ config: normalizeConversationAi({ persona: { personality: "light" } }), party: "agent" }), /Now and then/);
+});
