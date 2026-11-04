@@ -68,7 +68,7 @@ import { otherStreetIn } from "./shared/mentioned-houses.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { meterAi } from "./ai-spend.js";
 import { pricedByHand, underwriteModel } from "./shared/underwrite-model.js";
-import { brickedProperty } from "./price-bricked.js";
+import { brickedProperty, isRenovatedComp } from "./price-bricked.js";
 
 /* ---------- the dials ---------- */
 
@@ -1756,30 +1756,32 @@ async function runUnderwrite(job, ctx) {
     job.draftOnly = true;
     job.skeleton = true;
     job.subjectLine = "";
-    // With Bricked on, the skeleton gets its numbers and the house's facts
-    // from that one call; Zillow is still not asked.
-    const b = await brickedRead(job, extraction.address, saved);
+    // With Bricked on, the house is looked up on Zillow first, for a few
+    // tenths of a cent: Bricked prices repairs only from a description, and
+    // the agent's text rarely is one — 46 of 50 reads came back with no
+    // repairs (2026-11-04) because the listing's remarks never reached it.
+    // The same lookup answers the send path below: single-family, not rural,
+    // and the list price the cap is measured against. Bricked off, the
+    // skeleton still buys nothing.
+    let listing = null, facts = null, zillowWhy = "";
+    if (brickedOn(saved) && parseUsAddress(extraction.address).houseNo) {
+      try { ({ listing, facts } = await fetchZillowPhotos(extraction.address, apifyToken, { matched: resolved?.matched })); }
+      catch (e) { zillowWhy = `the house couldn't be checked on Zillow (${String(e?.message || e).slice(0, 80)})`; }
+      const listed = moneyFromListing(listing?.listPrice);
+      if (listed) job.listPrice = listed;
+    }
+    const b = await brickedRead(job, extraction.address, saved, { remarks: listing?.remarks || "" });
     const subject = b ? brickedSubject(b, resolved) : null;
     const partial = b ? { subject, subjectSqft: Number(subject.sqft) || 0, ...brickedPartial(b) } : {};
-    // Confident enough to send itself (brickedSends): the house is checked on
-    // Zillow first, for a few tenths of a cent — single-family, not rural, and
-    // the list price the cap is measured against. A skeleton that won't send
-    // never pays for it.
+    const priced = b ? machineRehab(job, b, saved, { sqft: subject?.sqft || facts?.sqft, yearBuilt: subject?.yearBuilt || facts?.yearBuilt, remarks: listing?.remarks || "" }) : null;
+    // Confident enough to send itself (brickedSends).
     if (b && brickedSends(saved)) {
-      const sized = withSizeRepairs(b, saved, subject?.sqft);
-      let why = brickedSendGate({ b: sized.b, minConfidence: brickedSendMinConfidence(saved) });
+      let why = brickedSendGate({ b: priced.b, minConfidence: brickedSendMinConfidence(saved), repairsSource: priced.repairsSource });
+      if (!why) why = zillowWhy || (!facts?.homeType ? "Zillow didn't say what kind of house it is" : kindHold(facts.homeType, saved?.focusKinds) || ruralHold(facts.lotSqft));
       if (!why) {
-        let listing = null, facts = null;
-        try { ({ listing, facts } = await fetchZillowPhotos(extraction.address, apifyToken, { matched: resolved?.matched })); }
-        catch (e) { why = `the house couldn't be checked on Zillow (${String(e?.message || e).slice(0, 80)})`; }
-        if (!why) why = !facts?.homeType ? "Zillow didn't say what kind of house it is" : kindHold(facts.homeType, saved?.focusKinds) || ruralHold(facts.lotSqft);
-        if (!why) {
-          const listed = moneyFromListing(listing?.listPrice);
-          if (listed) job.listPrice = listed;
-          const list = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
-          why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || extraction.askingPrice || 0 }, partial, b: sized.b, listPrice: list, repairsSource: sized.repairsSource });
-          if (!why) return;
-        }
+        const list = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
+        why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || extraction.askingPrice || 0 }, partial, b: priced.b, listPrice: list, repairsSource: priced.repairsSource });
+        if (!why) return;
       }
       job.brickedHeld = why;
     }
@@ -1872,11 +1874,11 @@ async function runUnderwrite(job, ctx) {
       compsData: null, subject: subjectOnly, subjectSqft: Number(facts?.sqft) || 0, grades: {}, rehabbed: null, arv: null, rehabState: null, scope: [], repairs: null,
       listing, photosCount, ...(b ? brickedPartial(b) : {}),
     };
+    const priced = b ? machineRehab(job, b, saved, { sqft: facts?.sqft, yearBuilt: facts?.yearBuilt, remarks: listing?.remarks || "" }) : null;
     // Kind and rural were held above; a confident Bricked read sends itself.
     if (b && brickedSends(saved)) {
       const list = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
-      const sized = withSizeRepairs(b, saved, facts?.sqft);
-      const why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || asking }, partial, b: sized.b, listPrice: list, repairsSource: sized.repairsSource });
+      const why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || asking }, partial, b: priced.b, listPrice: list, repairsSource: priced.repairsSource });
       if (!why) return;
       job.brickedHeld = why;
     }
@@ -3002,6 +3004,10 @@ function auditTrail(job, extraction, gate) {
     ...(job.bricked ? { brickedArv: job.bricked.arv ?? null, brickedAsIs: job.bricked.asIs ?? null, brickedRepairs: job.bricked.repairs ?? null, brickedLink: job.bricked.link || null } : {}),
     // Why a Bricked read didn't send itself (brickedSends on, gate not cleared).
     ...(job.brickedHeld ? { brickedHeld: String(job.brickedHeld).slice(0, 200) } : {}),
+    // What the machine would price the rehab at (Bricked, the size band, the
+    // gut tier or the calibrated floor), sent or not: Lessons sets Matt's own
+    // number beside it when he publishes the draft.
+    ...(job.machineRepairs > 0 ? { machineRepairs: job.machineRepairs, machineRepairsSource: job.machineRepairsSource || null } : {}),
   };
 }
 
@@ -3050,7 +3056,7 @@ async function brickedRead(job, address, saved, { remarks = "" } = {}) {
   try {
     const work = brickedWorkText({ message: job.message, remarks });
     const b = await brickedProperty(address, { apiKey: String(saved.brickedApiKey).trim(), ...(work ? { repairs: work } : {}) });
-    if (b.repairs == null && (b.arv > 0 || b.asIs > 0)) job.warnings.push("Bricked.ai gave no repair estimate — nothing described the work");
+    if (!(b.repairs > 0) && (b.arv > 0 || b.asIs > 0)) job.warnings.push("Bricked.ai gave no repair estimate — nothing described the work");
     if (!(b.arv > 0) && !(b.asIs > 0)) { job.warnings.push("Bricked.ai had no value for this address"); return null; }
     job.bricked = { arv: b.arv, asIs: b.asIs, repairs: b.repairs, link: b.links.share || b.links.dashboard || null };
     if (b.arv > 0) job.arvBasis = brickedBasis(b);
@@ -3086,11 +3092,22 @@ export const brickedSendMinConfidence = (saved) => pctSetting(saved?.brickedSend
  * brickedSendGate({ b, minConfidence, listPrice, cash, cap }) → "" | why it stays a draft
  * Without listPrice it checks only Bricked's read (before a Zillow lookup is paid for).
  */
-export function brickedSendGate({ b = {}, minConfidence = BRICKED_SEND_MIN_CONFIDENCE, listPrice, cash, cap } = {}) {
+export function brickedSendGate({ b = {}, minConfidence = BRICKED_SEND_MIN_CONFIDENCE, listPrice, cash, cap, repairsSource = null } = {}) {
   if (!(b.arv > 0)) return "Bricked had no ARV";
   const conf = b.arvConfidence != null ? Math.round(b.arvConfidence * 100) : null;
   if (conf == null || conf < minConfidence) return `Bricked is ${conf ?? "?"}% sure of its ARV — it sends itself at ${minConfidence}% or more`;
-  if (b.repairs == null) return "Bricked gave no repair estimate";
+  // $0 is not an estimate (19223 Vista Dr, 2026-10-30: a text that only
+  // named the address came back as one $0 "Listing agent statement" line).
+  if (!(b.repairs > 0)) return "Bricked gave no repair estimate";
+  // Worth nearly its ARV as it stands: nothing for a flipper to add, so no
+  // number of ours should go (61180 Tapadera, 2026-10-28: as-is 530k, ARV 559k).
+  if (b.asIs > 0 && b.asIs >= b.arv * BRICKED_TURNKEY_SHARE) {
+    return `turnkey: Bricked's as-is ${fmtMoney(b.asIs)} is ${Math.round((b.asIs / b.arv) * 100)}% of its ${fmtMoney(b.arv)} ARV — nothing left for a flipper to add`;
+  }
+  // A gut job or a teardown by their own words is priced at the gut tier, and
+  // still a person's to look at: every dead teardown was signed off a number
+  // nobody walked (3511 NE 153rd, 3831 Bagley).
+  if (repairsSource === "gut") return "a gut job or teardown by their words — the rehab is at the gut tier; yours to look at";
   if (listPrice === undefined) return "";
   if (!(listPrice > 0)) return "no list or asking price to check the number against";
   if (!(cash > 0)) return `the number came out at ${fmtMoney(cash || 0)}`;
@@ -3103,12 +3120,67 @@ export function brickedSendGate({ b = {}, minConfidence = BRICKED_SEND_MIN_CONFI
 // rarely describe it, so almost nothing could send), the top of the medium
 // rehab band for the house's size stands in, and the offer says so.
 // → { b, repairsSource: "bricked" | "size" | null }
+// A $0 from Bricked is no estimate (19223 Vista Dr). The size band never
+// prices a house under Matt's ballpark: "use 60k as a ballpark benchmark
+// number if you don't have anything" (2026-11-04).
+export const BRICKED_MIN_REPAIRS = 60000;
+export const BRICKED_TURNKEY_SHARE = 0.9;
 export function withSizeRepairs(b, saved, sqft = 0) {
   if (!b) return { b, repairsSource: null };
-  if (b.repairs != null) return { b, repairsSource: "bricked" };
-  if (!saved?.brickedRepairsBySize) return { b, repairsSource: null };
+  if (b.repairs > 0) return { b, repairsSource: "bricked" };
+  const none = { b: { ...b, repairs: null }, repairsSource: null };
+  if (!saved?.brickedRepairsBySize) return none;
   const est = tierRepairs(Number(sqft) || Number(b.subject?.sqft) || 0, "medium");
-  return est > 0 ? { b: { ...b, repairs: est }, repairsSource: "size" } : { b, repairsSource: null };
+  return est > 0 ? { b: { ...b, repairs: Math.max(est, BRICKED_MIN_REPAIRS) }, repairsSource: "size" } : none;
+}
+
+/**
+ * floorBrickedRepairs({ b, repairsSource }, { saved, sqft, yearBuilt, said, remarks })
+ *   → { b, repairsSource, notes }
+ *
+ * The full run's two rehab floors, on a Bricked number too (the 2026-11-04
+ * review: the Bricked path skipped both, and the machine's rehab ran ~40%
+ * under Matt's at every age of house):
+ *   - a gut job or teardown in the agent's words or the remarks prices at the
+ *     gut tier ($150/sqft, shared/rehab-catalog.js gutSignal), even with no
+ *     other estimate;
+ *   - Matt's calibrated $/sqft floor for the house's age, once he has applied
+ *     one in Lessons (shared/calibration.js), up to the heavy band's top.
+ * Neither ever lowers a figure. The calibrated ARV haircut is learned off the
+ * comps path and is not applied to Bricked's ARV.
+ */
+export function floorBrickedRepairs(sized = {}, { saved = {}, sqft = 0, yearBuilt = 0, said = "", remarks = "" } = {}) {
+  const b = sized.b;
+  if (!b) return { ...sized, notes: [] };
+  let repairs = Number(b.repairs) > 0 ? Number(b.repairs) : 0;
+  let source = repairs > 0 ? sized.repairsSource : null;
+  const notes = [];
+  const size = Number(sqft) || Number(b.subject?.sqft) || 0;
+  const gut = gutSignal({ said, remarks });
+  if (gut && size > 0 && repairs < gutRehab(size)) {
+    repairs = gutRehab(size);
+    source = "gut";
+    notes.push(`rehab at the gut tier (${fmtMoney(repairs)}, $${GUT_PER_SQFT}/sqft): ${gut.why}`);
+  }
+  if (saved?.underwriteCalibration && repairs > 0) {
+    const cal = calibrate({ calibration: saved.underwriteCalibration, arv: 0, repairs, sqft: size, yearBuilt: Number(yearBuilt) || Number(b.subject?.yearBuilt) || 0,
+      heavyTop: Math.max(heavyCeiling(size), gut ? gutRehab(size) : 0) });
+    if (cal.repairsAdd > 0) {
+      repairs = cal.repairsTarget;
+      if (source !== "gut") source = "calibrated";
+      notes.push(cal.repairsNote);
+    }
+  }
+  return { b: { ...b, repairs: repairs > 0 ? repairs : null }, repairsSource: repairs > 0 ? source : null, notes };
+}
+
+// The rehab the machine would price this house at, whether or not it sends:
+// kept on the draft so Lessons can measure it against Matt's own number.
+function machineRehab(job, b, saved, { sqft = 0, yearBuilt = 0, remarks = "" } = {}) {
+  const r = floorBrickedRepairs(withSizeRepairs(b, saved, sqft), { saved, sqft, yearBuilt, said: job.message || "", remarks });
+  if (r.b.repairs > 0) { job.machineRepairs = r.b.repairs; job.machineRepairsSource = r.repairsSource; }
+  job.warnings.push(...r.notes);
+  return r;
 }
 
 // Publishes Bricked's number as the offer. → "" when the offer was made (or
@@ -3125,7 +3197,7 @@ async function sendBricked(job, ctx, { extraction, partial, b, listPrice, repair
     : 0;
   const pctOfList = Number(saved?.maxOfferPctOfList) > 0 ? Number(saved.maxOfferPctOfList) : UW_MAX_PCT_OF_LIST;
   const { cap } = capToList({ cash, listPrice, pct: pctOfList });
-  const why = brickedSendGate({ b, minConfidence: brickedSendMinConfidence(saved), listPrice: listPrice || 0, cash, cap });
+  const why = brickedSendGate({ b, minConfidence: brickedSendMinConfidence(saved), listPrice: listPrice || 0, cash, cap, repairsSource });
   if (why) return why;
   if (await stopForThread(job, ctx, extraction.address)) return "";
 
@@ -3172,7 +3244,7 @@ async function sendBricked(job, ctx, { extraction, partial, b, listPrice, repair
   await note(client, job.contactId, [
     `Offer made from Bricked.ai on ${extraction.address}: ${fmtMoney(job.cashAmount || 0)}.`,
     ``,
-    `${pct}% of Bricked's ${fmtMoney(b.arv)} ARV (${job.arvBasis}), minus ${fmtMoney(b.repairs)} repairs${repairsSource === "size" ? " (the medium rehab for its size — Bricked had no repair estimate)" : ""}, minus the fee.`,
+    `${pct}% of Bricked's ${fmtMoney(b.arv)} ARV (${job.arvBasis}), minus ${fmtMoney(b.repairs)} repairs${repairsSource === "size" ? " (the medium rehab for its size, never under 60k — Bricked had no repair estimate)" : repairsSource === "calibrated" ? " (your calibrated rehab floor for a house its age)" : ""}, minus the fee.`,
     b.asIs > 0 ? `Bricked's as-is value: ${fmtMoney(b.asIs)}.` : null,
     b.links?.share ? `Bricked report: ${b.links.share}` : null,
     ``,
@@ -3196,7 +3268,7 @@ export function brickedBasis(b = {}) {
   const comps = brickedArvComps(b);
   return [
     "Bricked.ai",
-    [comps.length ? `${comps.filter((c) => c.renovated).length} of ${comps.length} ARV comps renovated` : "",
+    [comps.length ? `${comps.filter((c) => isRenovatedComp(c)).length} of ${comps.length} ARV comps renovated` : "",
       b.arvConfidence != null ? `${Math.round(b.arvConfidence * 100)}% confidence` : ""].filter(Boolean).join(", "),
   ].filter(Boolean).join(" — ");
 }
@@ -3234,10 +3306,13 @@ export function brickedPartial(b = {}) {
       arv: b.arv, arvConfidence: b.arvConfidence, arvReasoning: clip(b.arvReasoning, 800),
       asIs: b.asIs, asIsConfidence: b.asIsConfidence,
       repairs: b.repairs, repairLines: (b.repairLines || []).slice(0, 20),
+      // The house's own grade (C1 best … C6 worst) and renovation score, for
+      // the rehab: lost until 2026-11-04.
+      subject: { condition: b.subject?.condition ?? null, renovationScore: b.subject?.renovationScore ?? null, sqft: b.subject?.sqft ?? null, yearBuilt: b.subject?.yearBuilt ?? null },
       comps: (b.comps || []).filter((c) => c.selected || c.use === "arv").slice(0, 12).map((c) => ({
         address: c.address, use: c.use, price: c.lastSale?.price ?? null, soldAt: c.lastSale?.at ?? null,
         sqft: c.sqft, beds: c.beds, baths: c.baths, yearBuilt: c.yearBuilt,
-        renovated: c.renovated, renovationScore: c.renovationScore, condition: c.condition, adjustedValue: c.adjustedValue,
+        renovated: isRenovatedComp(c), renovationScore: c.renovationScore, condition: c.condition, adjustedValue: c.adjustedValue,
       })),
       link: b.links?.share || null, dashboard: b.links?.dashboard || null,
     },

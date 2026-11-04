@@ -123,6 +123,7 @@ import {
 } from "../reply-agent.js";
 import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
+import { publishedFromOf } from "../shared/calibration.js";
 import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
 import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
@@ -2696,6 +2697,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const at = new Date().toISOString();
     offer.autoUnderwrite = { ...held.autoUnderwrite, publishedAt: at };
     offer.approved = { amount: Math.round(Number(offer.cashAmount) || 0), at, by: "publish" };
+    // What the machine read beside what he priced, for Lessons (2026-11-04).
+    // Not a revision: those read as negotiation history.
+    const from = publishedFromOf({ held, offer, at });
+    if (from) offer.publishedFrom = from;
     if (handToBot) offer.handedToBotAt = at;
     await store.updateOffer(offer.id, offer).catch(() => {});
     if (!handToBot) return;
