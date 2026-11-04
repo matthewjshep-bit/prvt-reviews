@@ -777,11 +777,28 @@ test("an agent asking if we do list-backs gets held for Matt with a partner row,
   assert.equal(events.some((e) => e.type === "investor_minded"), false, "an agent asking for a list-back isn't an investor");
 });
 
-test("an agent offering to be our buyer's agent raises a partner row", async () => {
-  const { d, events } = await runPartner("I can represent you as your buyer's agent and keep an eye out for you");
+// Matt, 2026-11-04: "We definitely do work with buyer's agents … we have them
+// be our buyer representation. That's part of why people set us up as a
+// deal." An agent offering to represent us gets that yes from the bot, in the
+// same message; only money and the other terms wait for him.
+test("an agent who offers to represent us as our buyer's agent gets a yes that sends itself", async () => {
+  const { d, events, asked } = await runPartner("As a co-signer, I represent you. I can be your buyer's agent on this one",
+    { ...DRAFT, reply: "Yes, we'd love that. You can represent us and write it up on NWMLS forms for us to sign." });
+  assert.equal(d.status, "scheduled", "not held for Matt");
+  assert.notEqual(d.needsHuman, true);
+  assert.equal(d.partnerTerms, undefined, "no partner-terms hold on the draft");
+  assert.match(asked[0].context.text, /BUYER'S AGENT: they offered to represent us/);
+  assert.doesNotMatch(asked[0].context.text, /A person reads this one before it goes/);
+  const row = events.find((e) => e.type === "partner_terms");
+  assert.equal(row.data.kind, "buyer_agent");
+  assert.equal(row.data.answered, true, "recorded as answered, so the Desk raises no 'yours to answer' row");
+});
+
+test("an agent who offers to represent us and asks about our commission is still held for Matt", async () => {
+  const { d } = await runPartner("Happy to be your buyer's agent. Would you be paying my buyer agent commission?");
   assert.equal(d.status, "draft");
-  assert.equal(d.partnerTerms.kind, "buyer_agent");
-  assert.equal(events.filter((e) => e.type === "partner_terms").length, 1);
+  assert.equal(d.needsHuman, true);
+  assert.deepEqual(d.partnerTerms.kinds, ["buyer_agent", "referral_fee"]);
 });
 
 test("an agent who says they'd pay an assignment fee is investor-minded and flagged for the buyer list", async () => {

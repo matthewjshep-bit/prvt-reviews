@@ -181,9 +181,41 @@ const LINE_ASK = {
   investor_buyer: "they said they buy houses themselves, or would pay an assignment fee",
 };
 
+// Matt, 2026-11-04: "We definitely do work with buyer's agents … we have them
+// be our buyer representation. That's part of why people set us up as a
+// deal." His own words in the threads: "fine with the buyers agency agreement
+// as long as its property specific or non-exclusive", "we stay open since we
+// pick up multiple properties sporadically through the year". So an agent who
+// offers to represent us gets the yes from the bot, every time, in the same
+// message. What the representation pays (a commission, a fee) is still his.
+export const BUYER_AGENT_RULE =
+  "THE BUYER'S AGENT: we work with buyer's agents, and the agent who brings us a house often represents us on it — " +
+  "that's part of how our deals get put together. When an agent offers to represent us, asks to be our buyer's agent " +
+  "or broker, or says they need a buyer agency (buyer broker) agreement first, say yes plainly in that same message: " +
+  "they're welcome to represent us and write it up on NWMLS forms for our signature, with the buyer written as in the " +
+  "WRITE-UP TERMS. A buyer agency agreement is fine as long as it's property-specific or non-exclusive, since we pick " +
+  "up houses from different agents through the year. Never \"let me check\", never a partner, never a call just to " +
+  "say yes. A commission or compensation figure is not yours to settle: give the yes, say you'll confirm the " +
+  "compensation side today, and set needsHuman.";
+
+/**
+ * answersItself(terms) → true when all they offered is to represent us: the
+ * bot says yes (BUYER_AGENT_RULE) and nothing waits for Matt. A commission,
+ * fee, list-back, deal list or buying of their own beside it is still his.
+ */
+export function answersItself(terms) {
+  const kinds = Array.isArray(terms?.kinds) && terms.kinds.length ? terms.kinds : terms?.kind ? [terms.kind] : [];
+  return kinds.length > 0 && kinds.every((k) => k === "buyer_agent");
+}
+
 /** partnerTermsLine(terms) → one instruction for the draft, or "". */
 export function partnerTermsLine(terms) {
   if (!terms?.kind || !LINE_ASK[terms.kind]) return "";
+  if (answersItself(terms)) {
+    return `BUYER'S AGENT: they offered to represent us ("${terms.phrase}"). Say yes in this reply, the way THE BUYER'S ` +
+      "AGENT rule says: they can represent us and write it up on NWMLS forms for our signature, and a buyer agency " +
+      "agreement is fine if it's property-specific or non-exclusive. Then carry on with the rest of what they said.";
+  }
   return `PARTNER TERMS: ${LINE_ASK[terms.kind]} ("${terms.phrase}"). Answer that offer directly and warmly: name what they offered, ` +
     "say you'd like to work together that way and that you'll call to go over how you'd set it up. Never \"keep me in mind\", " +
     "\"keep us on the list\" or only an address request, never \"let me check with my partner\", and never agree to a fee, a " +

@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { partnerTerms, partnerTermsLine, PARTNER_TERMS_KINDS, PARTNER_TERMS_LABEL } from "./partner-terms.js";
+import { partnerTerms, partnerTermsLine, answersItself, PARTNER_TERMS_KINDS, PARTNER_TERMS_LABEL } from "./partner-terms.js";
 
 const kindOf = (text) => partnerTerms(text)?.kind || null;
 
@@ -127,13 +127,15 @@ test("the phrase is theirs, short, with no phone or email in it", () => {
 test("every kind has a label and a line for the draft", () => {
   for (const k of PARTNER_TERMS_KINDS) {
     assert.ok(PARTNER_TERMS_LABEL[k], k);
-    assert.match(partnerTermsLine({ kind: k, phrase: "x" }), /keep me in mind/i, "the rule names the brush-off it replaces");
+    // An offer to represent us is a yes the bot gives (2026-11-04); the rest name the brush-off they replace.
+    if (k === "buyer_agent") assert.match(partnerTermsLine({ kind: k, phrase: "x" }), /Say yes/);
+    else assert.match(partnerTermsLine({ kind: k, phrase: "x" }), /keep me in mind/i, "the rule names the brush-off it replaces");
   }
   assert.equal(partnerTermsLine(null), "");
 });
 
 // 2026-10-15 (agents work for us): an agent who'd be our agent on the buy is
-// a buyer-agent offer, however it's put — it goes to Matt as a Call row.
+// a buyer-agent offer, however it's put — since 2026-11-04 the bot says yes to it.
 test("an agent offering to be our agent, or needing a buyer agreement, is a buyer-agent offer", () => {
   for (const said of [
     "I'd want to represent you on this one",
@@ -149,4 +151,19 @@ test("an agent offering to be our agent, or needing a buyer agreement, is a buye
     "Who will be your agent on this?", "Is anyone going to be your agent?"]) {
     assert.notEqual(kindOf(said), "buyer_agent", said);
   }
+});
+
+// Matt, 2026-11-04: an offer to represent us is answered yes by the bot; a
+// fee, a commission, a list-back or a deal list beside it is still his.
+test("an offer to represent us answers itself; one with money or other terms beside it doesn't", () => {
+  assert.equal(answersItself(partnerTerms("I can represent you as your buyer's agent")), true);
+  assert.equal(answersItself(partnerTerms("As a co-signer, I represent you")), true);
+  assert.equal(answersItself(partnerTerms("Happy to be your buyer's agent. Would you be paying my buyer agent commission?")), false);
+  assert.equal(answersItself(partnerTerms("I'll represent you, and do you do list backs?")), false);
+  assert.equal(answersItself(partnerTerms("Do you do list backs?")), false);
+  assert.equal(answersItself(null), false);
+  const line = partnerTermsLine(partnerTerms("I can be your buyer's agent on this one"));
+  assert.match(line, /^BUYER'S AGENT: they offered to represent us/);
+  assert.match(line, /say yes/i);
+  assert.doesNotMatch(line, /A person reads this one before it goes/);
 });

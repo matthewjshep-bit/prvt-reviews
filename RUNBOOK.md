@@ -5877,6 +5877,25 @@ Replay over the 5,503 texts agents sent us (saved threads, 2026-10-14): 56 hits 
 partner terms: a wholesaler pointing us to their dispo person about one house, and "I'm a
 wholesaler myself so I understand".
 
+### An offer to represent us gets a yes (2026-11-04)
+
+Matt: "We definitely do work with buyer's agents … we have them be our buyer representation. That's
+part of why people set us up as a deal. Whenever someone asks that, we are able to fully tell them."
+An agent's "as a co-signer, I represent you" was being held as partner terms.
+
+- **The rule.** `BUYER_AGENT_RULE` (`shared/partner-terms.js`) is in every agent prompt, after the
+  WRITE-UP TERMS. It says yes in the same message: they can represent us, and they write it up on
+  NWMLS forms for our signature, with the buyer as in the write-up terms. A buyer agency (buyer broker)
+  agreement is fine if it's property-specific or non-exclusive, which is Matt's own wording in the
+  threads. A commission or compensation figure is still his: the bot gives the yes, says it'll confirm
+  the compensation side today, and sets needsHuman.
+- **No hold when that's all they offered.** `answersItself(terms)`: when every kind heard is
+  `buyer_agent`, the draft carries no `partnerTerms`, isn't forced to needsHuman, and `partnerTermsLine`
+  tells it to say yes. The `partner_terms` event is recorded with `answered: true`, and
+  `call_partner_terms` skips it, so no "yours to answer" row appears for a yes already sent. The bot
+  can't place a commission, a fee, a list-back, a deal list or buying of their own, so any of those
+  beside it still holds the reply for Matt as before.
+
 ### Agents work for us (2026-10-15)
 
 From the funnel review: agents asked for written offers, NWMLS forms and to
