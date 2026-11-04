@@ -124,6 +124,8 @@ import {
 import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
 import { publishedFromOf } from "../shared/calibration.js";
+import { buildScorecard, maybeRunPriceScorecard } from "../price-scorecard.js";
+import { normalizePricingV2 } from "../shared/price-engine.js";
 import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
 import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
@@ -6933,6 +6935,28 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // What every Claude call cost, by day and feature (ai-spend.js): drafts,
   // photo scans, comp grading, enrichment, dispo, the coach. Body-free GET;
   // ?days=1..60, default 7.
+  // The offer engine v2 (2026-11-04): how far its shadow prices are from Matt's and from what
+  // happened, per grade and lead source, and whether a grade is ready for his switch. Read-only:
+  // outcomes are worked out for the answer and not saved (the daily run saves them).
+  router.get("/automations/pricing/scorecard", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const days = Math.min(365, Math.max(7, parseInt(req.query.days, 10) || 120));
+      const { card, records } = await buildScorecard({ store, locationId, saved, days, persist: false });
+      res.json({ ok: true, records, switches: normalizePricingV2(saved.pricingV2), card });
+    } catch (err) { fail(res, err); }
+  });
+  // One house's record: the engine's reads, its answer and history, and the outcome.
+  router.get("/automations/pricing/house", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const key = String(req.query.key || "").trim();
+      if (!key) return res.status(400).json({ error: "key is required (a house key, as the scorecard lists it)" });
+      res.json({ ok: true, record: (await store.getHousePricing(locationId, key)) || null });
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/automations/ai-spend", async (req, res) => {
     try {
       resolveLocation(req);

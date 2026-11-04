@@ -69,6 +69,7 @@ import { usageOf } from "./shared/ai-cost.js";
 import { meterAi } from "./ai-spend.js";
 import { pricedByHand, underwriteModel } from "./shared/underwrite-model.js";
 import { brickedProperty, isRenovatedComp } from "./price-bricked.js";
+import { shadowPrice } from "./price-v2.js";
 
 /* ---------- the dials ---------- */
 
@@ -1774,6 +1775,10 @@ async function runUnderwrite(job, ctx) {
     const subject = b ? brickedSubject(b, resolved) : null;
     const partial = b ? { subject, subjectSqft: Number(subject.sqft) || 0, ...brickedPartial(b) } : {};
     const priced = b ? machineRehab(job, b, saved, { sqft: subject?.sqft || facts?.sqft, yearBuilt: subject?.yearBuilt || facts?.yearBuilt, remarks: listing?.remarks || "" }) : null;
+    // The offer engine v2 in the shadow (pricingV2.shadow): its own answer on this house, written to
+    // the house's record and nowhere else (ghl-broker/price-v2.js).
+    await shadowPrice({ store, locationId, saved, job, address: extraction.address, b, listing, facts, subject,
+      listPrice: job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0) });
     // Confident enough to send itself (brickedSends).
     if (b && brickedSends(saved)) {
       let why = brickedSendGate({ b: priced.b, minConfidence: brickedSendMinConfidence(saved), repairsSource: priced.repairsSource });
@@ -1875,6 +1880,8 @@ async function runUnderwrite(job, ctx) {
       listing, photosCount, ...(b ? brickedPartial(b) : {}),
     };
     const priced = b ? machineRehab(job, b, saved, { sqft: facts?.sqft, yearBuilt: facts?.yearBuilt, remarks: listing?.remarks || "" }) : null;
+    await shadowPrice({ store, locationId, saved, job, address: extraction.address, b, listing, facts,
+      listPrice: job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0) });
     // Kind and rural were held above; a confident Bricked read sends itself.
     if (b && brickedSends(saved)) {
       const list = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
@@ -2377,6 +2384,11 @@ async function runUnderwrite(job, ctx) {
     warnings.push(`rehab at the gut tier (${fmtMoney(gutRehab(sqft))}, $${GUT_PER_SQFT}/sqft): ${gut.why}`);
     job.gut = { why: gut.why, source: gut.source, floor: floorAt };
   }
+
+  /* --- the offer engine v2, in the shadow: the run's own comps and scope --- */
+  await shadowPrice({ store, locationId, saved, job, address: extraction.address, listing, facts: subject,
+    comps: arv?.arv ? { arv: arv.arv, n: rehabbed.length } : null, scope: scan ? { total: repairs, photos: photos.length } : null,
+    listPrice: job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0) });
 
   /* --- the gates --- */
   const gate = evaluateGates({

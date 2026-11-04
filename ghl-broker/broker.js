@@ -31,6 +31,7 @@ import { maybeRunPromiseSweep } from "./promise-sweep.js";
 import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation-audit.js";
 import { releaseMisreadHolds } from "./misread-holds.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
+import { maybeRunPriceScorecard } from "./price-scorecard.js";
 import { maybeRunTierCheck, syncChangedCards } from "./tier-check.js";
 import { sweepPassNotes } from "./pass-note.js";
 import { maybeUnderwriteTierOne } from "./tier-one.js";
@@ -315,6 +316,12 @@ const TICK_JOBS = [
     const watched = await maybeRunPriceWatch({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
       deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
     if (watched) console.log(`price watch for ${locationId}: ${JSON.stringify({ watched: watched.watched, checked: watched.checked, dropped: watched.dropped, offMarket: watched.offMarket, backOnMarket: watched.backOnMarket, texted: watched.texted, error: watched.error || null })}`);
+  } },
+  // Once a day in the evening, while the offer engine prices in the shadow
+  // (pricingV2.shadow): outcomes filled in, the scorecard posted to Slack.
+  { area: "price-scorecard", run: async ({ locationId, saved }) => {
+    const r = await maybeRunPriceScorecard({ store, locationId, saved });
+    if (r) console.log(`price scorecard for ${locationId}: ${JSON.stringify({ records: r.records, updated: r.updated, posted: r.posted, readyA: r.readyA })}`);
   } },
   // Once a day: every agent's tier tag agrees with their Acquisitions card.
   { area: "tier-check", run: async ({ client, locationId, saved }) => {

@@ -253,6 +253,10 @@ export async function fetchZillowListings(addresses = [], apifyToken) {
       // For the outreach screen: is this listing a house that needs work?
       homeType: item.homeType || null, description: String(item.description || "").slice(0, 1500),
       yearBuilt: Number(item.yearBuilt) || Number(item.resoFacts?.yearBuilt) || null,
+      // What it sold for, when it has (2026-11-04: the offer engine's scorecard measures our numbers
+      // against the market's). The detail row says it; the facts lookup already read it.
+      lastSoldPrice: Number(item.lastSoldPrice ?? item.resoFacts?.lastSoldPrice) || null,
+      lastSoldDate: item.dateSold ? new Date(item.dateSold).toISOString().slice(0, 10) : null,
     });
   }
   return out;

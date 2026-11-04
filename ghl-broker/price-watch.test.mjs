@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runPriceWatch, maybeRunPriceWatch, evaluateDrop, stillForSale, CURSOR_NAME } from "./price-watch.js";
+import { runPriceWatch, maybeRunPriceWatch, evaluateDrop, stillForSale, soldOf, CURSOR_NAME } from "./price-watch.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { streetKey } from "./comps-zillow.js";
 
@@ -90,6 +90,17 @@ test("a listing that went pending is noted once and never texted", async () => {
   assert.equal(r.offMarket, 1);
   assert.equal(s.calls.length, 0);
   assert.ok(store.events.some((e) => e.type === "listing_off_market"));
+});
+
+// 2026-11-04: the offer engine's scorecard measures our numbers against what houses really sold for.
+test("a house that sold after we priced it keeps its sale price; an older sale doesn't count", async () => {
+  const store = fakeStore([lisa({ priceWatch: { listPrice: 715000, status: "FOR_SALE" } })]);
+  await runPriceWatch({ locationId: "LOC", saved: SAVED, store, now: NOW,
+    deps: { ...starter(), fetchListings: listings([["10511 Moller Dr, Gig Harbor, WA", { listPrice: 675000, status: "SOLD", lastSoldPrice: 650000, lastSoldDate: "2026-09-12" }]]) } });
+  assert.deepEqual(store.map.get("o1").priceWatch.sold, { price: 650000, at: "2026-09-12" });
+  assert.equal(soldOf({ lastSoldPrice: 300000, lastSoldDate: "2019-04-01" }, { since: "2026-08-16T00:00:00Z" }), null, "the seller's own purchase years ago");
+  assert.equal(soldOf({ lastSoldPrice: 0 }), null);
+  assert.equal(soldOf({ lastSoldPrice: 500000, lastSoldDate: null }, { since: "2026-08-16" }), null, "no date, no claim it was after us");
 });
 
 test("offers that became deals, or went quiet over 90 days ago, aren't watched", async () => {
