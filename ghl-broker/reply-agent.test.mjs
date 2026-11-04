@@ -2402,6 +2402,35 @@ test("the band reads the offer book and works out the ceiling, but a counter abo
   assert.match(v.reason, /never goes above the \$240,000 we sent/);
 });
 
+// Matt, 2026-11-04: on a grade-A house the engine priced and sent itself, the machine may come up
+// in at most two moves to the walk-away, never past it (shared/walkaway.js). Every other offer
+// keeps the band exactly as above.
+const ENGINE_OFFER = { ...BAND_OFFER, id: "eo1", cashAmount: 335500, arv: 640000, repairs: 82500, address: "4417 Somerset Ln, Everett, WA",
+  autoUnderwrite: { basis: "engine" }, pricing: { live: true, grade: "A", walkAway: 350500, moves: 0 } };
+test("a counter just over a grade-A walk-away moves us halfway, released under the walk-away", async () => {
+  const v = await evaluateBandFor({
+    store: bandStore([ENGINE_OFFER]), locationId: "LOC", party: "agent", config: bandCfg, saved: { pricingV2: { walkaway: true } },
+    draft: { intent: "counter", counterAmount: 355000, confidence: "high", propertyAddress: ENGINE_OFFER.address },
+    job: { contactId: "c1", message: "Seller would do 355,000 on Somerset" }, now: Date.now(),
+  });
+  assert.equal(v.kind, "walkaway");
+  assert.equal(v.passed, true);
+  assert.equal(v.releaseAmount, 345250);
+  const out = releaseUnderGuard({ base: { send: false, code: "never_auto", reason: "a counter is a person's call" }, party: "agent", intent: "counter", config: bandCfg, guard: v });
+  assert.equal(out.send, true);
+  assert.match(out.reason, /released under the walk-away — moving to \$345,250 against their \$355,000/);
+});
+
+test("with the walk-away switch off, an engine offer's counter waits for Matt as before", async () => {
+  const v = await evaluateBandFor({
+    store: bandStore([ENGINE_OFFER]), locationId: "LOC", party: "agent", config: bandCfg, saved: {},
+    draft: { intent: "counter", counterAmount: 345000, confidence: "high", propertyAddress: ENGINE_OFFER.address },
+    job: { contactId: "c1", message: "Seller would do 345,000" }, now: Date.now(),
+  });
+  assert.equal(v.kind, "counter_band");
+  assert.equal(v.passed, false);
+});
+
 test("the band is not even computed when it is switched off", async () => {
   const v = await evaluateBandFor({
     store: bandStore(), locationId: "LOC", party: "agent", saved: {},
@@ -3453,7 +3482,9 @@ test("an invitation to make an appointment on a project we haven't priced gets '
 
 // Draft only (Matt, 2026-10-16): he prices it, so a showing is his to book.
 // "Let me run the numbers first" put off 42 walkthroughs in the review.
-test("with draft only on, an invitation to see a house we haven't priced is yours to book, and the draft is still made", async () => {
+// Matt, 2026-11-04: "Just say that we'd like to first underwrite from our desktop, based on comps
+// and pictures, float a number, and see if it's even worth continuing the conversation."
+test("an invitation to see a house we haven't priced gets the desk-first reply, not a hold, and the draft is still made", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
@@ -3470,12 +3501,24 @@ test("with draft only on, an invitation to see a house we haven't priced is your
   await settle();
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
-  assert.doesNotMatch(d.reply, /run the numbers/);
-  assert.equal(d.needsHuman, true);
-  assert.equal(d.showingOffered?.address, "450 Overlake Dr E, Medina, WA 98039");
-  assert.ok(d.flags.some((f) => /they offered a showing on 450 Overlake Dr E — yours to book, call or pass/.test(f)), d.flags.join(" · "));
-  assert.equal(d.autoSend.decided, false, "it waits for you");
+  assert.match(d.reply, /^Appreciate that\. We like to underwrite from the desk first, off the comps and the photos, so let me get you a number on 450 Overlake Dr E/);
+  assert.match(d.reply, /worth going further before anyone sets a time\.$/);
+  assert.equal(d.needsHuman, false);
+  assert.equal(d.deskFirst, "unpriced");
+  assert.equal(d.showingOffered, undefined, "not held for Matt");
+  assert.ok(!d.flags.some((f) => /offered a showing/.test(f)), d.flags.join(" · "));
+  assert.equal(d.intent, "deal_available");
+  assert.equal(d.autoSend.decided, true, `it sends itself: ${d.autoSend.reason}`);
   assert.equal(uw.length, 1, "the draft is made so the house is ready to price");
+});
+
+test("an invitation to see a house we priced asks whether our number is in the realm first", async () => {
+  const { deskFirstReply } = await import("./reply-agent.js");
+  const r = deskFirstReply({ street: "450 Overlake Dr E", priced: true });
+  assert.match(r, /underwriting from the desk first, off the comps and the photos/);
+  assert.match(r, /is the number we sent on 450 Overlake Dr E in the realm for the seller\?/);
+  assert.doesNotMatch(r, /\$|\d{3},\d{3}|\bk\b/, "no figure in it: the number is the offer's");
+  assert.ok(r.length <= 300);
 });
 
 // Matt, 2026-10-05: an agent who says the house needs nothing has told us

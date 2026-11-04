@@ -5707,7 +5707,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // identically. The band itself never reaches this — it is ask-only.
     // `by`: "counter_band" when the band ran it by itself, "you" when a person
     // applied it from the row — only a person's press approves the number.
-    reviseOfferToCounter: async ({ contactId, addressHint, amount, draftId = null, by = "counter_band" }) => {
+    reviseOfferToCounter: async ({ contactId, addressHint, amount, draftId = null, by = "counter_band", move = false }) => {
       const price = Math.round(Number(amount) || 0);
       if (!price) return { ok: false, reason: "no number to re-issue at" };
       // Open, or dead on their side and revived by this counter — the same
@@ -5720,7 +5720,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!full) return { ok: false, reason: "offer vanished" };
       const revived = !OPEN_STATUSES.has(effectiveStatus(full));
       const out = await createOfferFromRequest({
-        locationId, client, existing: full, revisedBy: by === "you" ? "you" : "counter_band",
+        locationId, client, existing: full, revisedBy: by === "you" ? "you" : by === "walkaway" ? "walkaway" : "counter_band",
         body: { contactId, scope: full.scope,
                 // priceOverride is the manual final price: the letter prints
                 // their number while the breakdown still shows the model that
@@ -5734,7 +5734,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       revised.counterBand = { ...(revised.counterBand || {}), at: revised.counterBand?.at || acceptedAt, acceptedAt, amount: price, draftId };
       // Both sides said yes to this number: the price is locked from here
       // (priceLocked in shared/offer-status.js) — no re-quote, no re-run.
-      revised.agreed = { amount: price, at: acceptedAt, via: "counter_band" };
+      // A walk-away MOVE is our number going up toward theirs (shared/walkaway.js): nothing is
+      // agreed yet, and the move counts against its two.
+      if (move) revised.pricing = { ...(revised.pricing || {}), moves: (Number(revised.pricing?.moves) || 0) + 1, lastMoveAt: acceptedAt, lastMove: price };
+      else revised.agreed = { amount: price, at: acceptedAt, via: by === "walkaway" ? "walkaway" : "counter_band" };
       // A revived offer is open again from here, so the paper can go
       // (sendOfferDocs reads open offers only) and the ladders see it live.
       if (revived) recordStatus(revised, "countered", "revived by their counter", acceptedAt, { amount: price, source: "conversation" });

@@ -69,7 +69,8 @@ import { usageOf } from "./shared/ai-cost.js";
 import { meterAi } from "./ai-spend.js";
 import { pricedByHand, underwriteModel } from "./shared/underwrite-model.js";
 import { brickedProperty, isRenovatedComp } from "./price-bricked.js";
-import { shadowPrice } from "./price-v2.js";
+import { shadowPrice, engineLive } from "./price-v2.js";
+import { normalizePricingV2 } from "./shared/price-engine.js";
 
 /* ---------- the dials ---------- */
 
@@ -1777,10 +1778,14 @@ async function runUnderwrite(job, ctx) {
     const priced = b ? machineRehab(job, b, saved, { sqft: subject?.sqft || facts?.sqft, yearBuilt: subject?.yearBuilt || facts?.yearBuilt, remarks: listing?.remarks || "" }) : null;
     // The offer engine v2 in the shadow (pricingV2.shadow): its own answer on this house, written to
     // the house's record and nowhere else (ghl-broker/price-v2.js).
-    await shadowPrice({ store, locationId, saved, job, address: extraction.address, b, listing, facts, subject,
+    const engine = await shadowPrice({ store, locationId, saved, job, address: extraction.address, b, listing, facts, subject,
       listPrice: job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0) });
-    // Confident enough to send itself (brickedSends).
-    if (b && brickedSends(saved)) {
+    // Live on grade A (pricingV2.liveA, 2026-11-04): the engine's number replaces Bricked's send.
+    if (engineLive(saved)) {
+      const why = await sendEngine(job, ctx, { extraction, partial, engine, b, zillowWhy });
+      if (!why) return;
+      job.brickedHeld = why;
+    } else if (b && brickedSends(saved)) {
       let why = brickedSendGate({ b: priced.b, minConfidence: brickedSendMinConfidence(saved), repairsSource: priced.repairsSource });
       if (!why) why = zillowWhy || (!facts?.homeType ? "Zillow didn't say what kind of house it is" : kindHold(facts.homeType, saved?.focusKinds) || ruralHold(facts.lotSqft));
       if (!why) {
@@ -1880,10 +1885,14 @@ async function runUnderwrite(job, ctx) {
       listing, photosCount, ...(b ? brickedPartial(b) : {}),
     };
     const priced = b ? machineRehab(job, b, saved, { sqft: facts?.sqft, yearBuilt: facts?.yearBuilt, remarks: listing?.remarks || "" }) : null;
-    await shadowPrice({ store, locationId, saved, job, address: extraction.address, b, listing, facts,
+    const engine = await shadowPrice({ store, locationId, saved, job, address: extraction.address, b, listing, facts,
       listPrice: job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0) });
-    // Kind and rural were held above; a confident Bricked read sends itself.
-    if (b && brickedSends(saved)) {
+    // Live on grade A: the engine's number. Otherwise kind and rural were held above; a confident Bricked read sends itself.
+    if (engineLive(saved)) {
+      const why = await sendEngine(job, ctx, { extraction: { ...extraction, askingPrice: job.listPrice || asking }, partial, engine, b });
+      if (!why) return;
+      job.brickedHeld = why;
+    } else if (b && brickedSends(saved)) {
       const list = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
       const why = await sendBricked(job, ctx, { extraction: { ...extraction, askingPrice: list || asking }, partial, b: priced.b, listPrice: list, repairsSource: priced.repairsSource });
       if (!why) return;
@@ -3193,6 +3202,96 @@ function machineRehab(job, b, saved, { sqft = 0, yearBuilt = 0, remarks = "" } =
   if (r.b.repairs > 0) { job.machineRepairs = r.b.repairs; job.machineRepairsSource = r.repairsSource; }
   job.warnings.push(...r.notes);
   return r;
+}
+
+/**
+ * engineSendGate({ engine }) → "" | why the engine's number stays a draft
+ * Live on grade A only (Matt, 2026-11-04). A house it can't measure against a seller's number or
+ * a list price, a no-fit, a turnkey, or a killer fact stays Matt's, with the reason on it.
+ */
+export const ENGINE_SENDS_TRIAGE = new Set(["hot", "workable", "long_shot"]);
+export function engineSendGate({ engine = null } = {}) {
+  const v = engine?.v2;
+  if (!v) return "the offer engine had nothing to price (no ARV from any read)";
+  if (v.grade !== "A") return `the offer engine graded it ${v.grade || "C"}${(v.misses || []).length ? ` (not sure of: ${v.misses.join(", ")})` : ""}${(v.killers || []).length ? ` — ${v.killers.join(", ")}` : ""} — yours to price`;
+  if (!(v.walkAway > 0) || !(v.open > 0)) return "the offer engine's number came out at nothing";
+  if (v.triage === "turnkey") return "turnkey by the offer engine's read — nothing for a flipper to add";
+  if (v.triage === "unknown") return "no list price or seller's number to measure the offer engine's number against";
+  if (!ENGINE_SENDS_TRIAGE.has(v.triage)) return `no fit: the offer engine's ${fmtMoney(v.walkAway)} walk-away is ${Math.round((v.spread || 0) * 100)}% of ${v.against || "their number"}`;
+  return "";
+}
+
+// Publishes the offer engine's grade-A number (pricingV2.liveA). The offer opens at the engine's
+// `open`, carries its walk-away and grade on `offer.pricing` (the counter band, numberApproved and
+// the walk-away negotiation read it), and goes to the agent the way a clean underwrite does.
+// → "" when the offer was made (or the thread's pass finished the run), else why it stays a draft.
+async function sendEngine(job, ctx, { extraction, partial, engine, b = null, zillowWhy = "" }) {
+  const { client, locationId, saved, store, deps } = ctx;
+  if (zillowWhy) return zillowWhy;
+  const why = engineSendGate({ engine });
+  if (why) return why;
+  if (job.dryRun) return "dry run — nothing was published";
+  if (!AUTO_UNDERWRITE_ENABLED) return "AUTO_UNDERWRITE_ENABLED is not set on the broker";
+  if (typeof deps?.createOffer !== "function") return "no offer maker wired here";
+  if (await stopForThread(job, ctx, extraction.address)) return "";
+  const v = engine.v2;
+  const listPrice = Number(engine.reads?.list) || 0;
+  const s = normalizePricingV2(saved?.pricingV2);
+  job.phase = "creating";
+  job.draftOnly = false;
+  job.skeleton = false;
+  job.subjectLine = "";
+  const result = await deps.createOffer({
+    locationId, client,
+    body: {
+      contactId: job.contactId,
+      inputs: { address: extraction.address, arv: v.arv, repairs: v.rehab, askingPrice: listPrice, priceOverride: v.open },
+      settings: { ...(saved || {}), underwriteMode: UW_MODE, maoPctOfArv: s.maoPct, wholesaleFee: s.targetFee },
+      scope: [],
+      snapshot: buildSnapshot({ extraction, partial, contact: { id: job.contactId, name: job.contactName || "", phone: "", email: "" } }),
+    },
+  });
+  const offer = result.offer;
+  offer.pricing = { live: true, grade: v.grade, open: v.open, walkAway: v.walkAway, investorPrice: v.investorPrice, arv: v.arv, rehab: v.rehab,
+    rehabWhy: v.rehabWhy, triage: v.triage, spread: v.spread, version: v.version, at: v.at, moves: 0 };
+  offer.autoUnderwrite = { ...auditTrail(job, extraction, { ok: true }), basis: "engine", grade: v.grade };
+  const lead = await leadFor(job, ctx, offer.address || extraction.address);
+  if (lead) offer.autoUnderwrite.leadSource = lead.source;
+  await store.updateOffer(offer.id, offer).catch(() => {});
+
+  job.status = "done";
+  job.phase = "";
+  job.offerId = offer.id;
+  job.offerUrl = offer.pdfUrl || null;
+  job.cashAmount = offer.cashAmount ?? null;
+  job.arv = v.arv;
+  job.repairs = v.rehab;
+  job.finishedAt = new Date().toISOString();
+  job.warnings.push(...(result.warnings || []));
+  if (job.replaceOfferId && job.replaceOfferId !== offer.id) {
+    try {
+      const prior = await store.getOffer?.(job.replaceOfferId);
+      if (prior?.status === "draft" && prior.locationId === locationId) await store.deleteOffer(prior.id || job.replaceOfferId);
+    } catch (e) {
+      job.warnings.push(`old draft not removed: ${String(e?.message || e).slice(0, 120)}`);
+    }
+  }
+  await setTag(client, job.contactId, UW_TAGS.done, job.warnings);
+  await note(client, job.contactId, [
+    `Offer made by the offer engine on ${extraction.address}: ${fmtMoney(job.cashAmount || 0)} (grade A, walk-away ${fmtMoney(v.walkAway)}).`,
+    ``,
+    `${s.maoPct}% of the ${fmtMoney(v.arv)} ARV, less ${fmtMoney(v.rehab)} rehab (${v.rehabWhy}), less the fee.`,
+    ...(v.reasons || []).map((r) => `• ${r}`),
+    b?.links?.share ? `Bricked report: ${b.links.share}` : null,
+    ``,
+    `It goes to the agent the way any clean underwrite does (Conversation AI → send offer).`,
+  ].filter((l) => l !== null).join("\n"), job.warnings);
+  await recordRun(job, ctx, "underwrite_done", { cashAmount: job.cashAmount, arv: v.arv, repairs: v.rehab, basis: "engine" });
+  if (typeof deps?.onOfferCreated === "function") {
+    try { await deps.onOfferCreated({ offer, job }); }
+    catch (e) { job.warnings.push(`realm check: ${String(e?.message || e).slice(0, 120)}`); }
+  }
+  return "";
 }
 
 // Publishes Bricked's number as the offer. → "" when the offer was made (or

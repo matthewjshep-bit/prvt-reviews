@@ -619,6 +619,10 @@ export function numberApproved(offer) {
   // At or under the number he approved (Matt, 2026-10-22: "Bot runs it"): the
   // band taking their lower counter, or a re-quote coming down, is still his.
   if (Number(offer.approved?.amount) > 0 && Math.round(Number(offer.approved.amount)) >= amount) return true;
+  // A grade-A number the offer engine sent itself, at or under its walk-away (Matt, 2026-11-04: "yes,
+  // on grade A" — the walk-away is his approval, and a yes there gets the write-up ask). Only an
+  // offer the engine made live carries `pricing.live`; he still signs every contract.
+  if (offer.pricing?.live && offer.pricing.grade === "A" && Number(offer.pricing.walkAway) > 0 && amount <= Math.round(Number(offer.pricing.walkAway))) return true;
   const machineAt = Math.max(0,
     ...(offer.requotes || []).map((r) => tsOf(r?.ts)),
     ...(offer.revisions || []).filter((r) => MACHINE_REVISERS.has(r?.by)).map((r) => tsOf(r?.ts)),

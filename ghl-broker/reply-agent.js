@@ -122,6 +122,8 @@ import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
 import { meterAi } from "./ai-spend.js";
 import { investorMindedCue } from "./shared/lead-source.js";
 import { partnerTerms, partnerTermsLine, PARTNER_TERMS_LABEL } from "./shared/partner-terms.js";
+import { walkawayOffer, evaluateWalkaway, walkawayReply } from "./shared/walkaway.js";
+import { normalizePricingV2 } from "./shared/price-engine.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
 import { followWithCard, defaultCardBaseUrl, mintCardToken } from "./contact-card.js";
 
@@ -1382,6 +1384,10 @@ export function releaseUnderGuard({ base, party = "agent", intent = "other", con
     send: true, code: "released",
     reason: family === "booking"
       ? `released under the calendar — ${guard.reason}`
+      : guard.kind === "walkaway"
+        ? (guard.counterBack
+          ? `released under the walk-away — moving to ${fmtMoney(guard.releaseAmount)}${guard.final ? ", the walk-away itself" : ""} against their ${fmtMoney(guard.theirAmount)}`
+          : `released under the walk-away — ${fmtMoney(guard.theirAmount)} is at or under the ${fmtMoney(guard.ceiling)} walk-away`)
       : guard.kind === "acceptance_band"
         ? "released under the acceptance band — they took our number and named no new one"
       : guard.counterBack
@@ -1527,6 +1533,13 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
   // both places; an acceptance that names one is still a counter, which is
   // what that check is for.
   const saidMoney = moneySaidAgainst(job.message || "", full?.cashAmount);
+  // An offer the engine priced and sent itself on grade A (pricingV2.walkaway, Matt 2026-11-04):
+  // the walk-away answers its counters, up to two moves and never past it (shared/walkaway.js).
+  if (draft.intent === "counter" && full && normalizePricingV2(saved?.pricingV2).walkaway && walkawayOffer(full)) {
+    const theirAmount = Math.round(Number(draft.counterAmount) || 0);
+    const theirOwnWords = theirAmount > 0 && saidMoney(job.message || "").map((n) => Math.round(n)).includes(theirAmount);
+    return { ...evaluateWalkaway({ offer: full, theirAmount, theirOwnWords, comeDown: ourComeDown(full, transcript) || ourMoveUp(full, transcript) }), at: new Date(now).toISOString() };
+  }
   const args = { offer: full, draft, inboundMessage: job.message || "", settings: saved || {},
                  band, openOffers: open, releasedToday, now, moneyIn: saidMoney,
                  // A higher number we texted that the offer never moved to
@@ -3253,6 +3266,18 @@ export function chooseProactiveKind() {
  * person reviews and publishes it, which makes it theirs. null: not an
  * auto-underwrite at all (a hand-built offer keeps "their read first").
  */
+/**
+ * deskFirstReply({ street, priced }) → the reply to a showing offer (Matt, 2026-11-04): we
+ * underwrite from the desk first, off the comps and the photos, float a number, and see whether
+ * it's worth going further before anyone sets a time. No figure in it: the number is the offer's.
+ */
+export function deskFirstReply({ street = "", priced = false } = {}) {
+  const on = street ? ` on ${street}` : "";
+  return priced
+    ? `Appreciate that. We do our underwriting from the desk first, off the comps and the photos, so before anyone sets a time: is the number we sent${on} in the realm for the seller? If it is, we can line up a walkthrough from there.`
+    : `Appreciate that. We like to underwrite from the desk first, off the comps and the photos, so let me get you a number${on} and we'll see if it's worth going further before anyone sets a time.`;
+}
+
 export const CONFIDENT_COMPS = 4;
 export function numberConfidence({ offer = null, job = null } = {}) {
   if (job) {
@@ -3263,6 +3288,8 @@ export function numberConfidence({ offer = null, job = null } = {}) {
   const uw = offer?.autoUnderwrite;
   if (!uw) return null;
   if (uw.publishedAt) return "high";
+  // The offer engine's grade (shared/price-engine.js): A leads with the number, B is held back.
+  if (offer?.pricing?.live && offer.pricing.grade) return offer.pricing.grade === "A" ? "high" : offer.pricing.grade === "B" ? "medium" : "low";
   if (!uw.passed) return "low";
   return (Number(uw.compsUsedCount) || 0) >= CONFIDENT_COMPS ? "high" : "medium";
 }
@@ -4689,6 +4716,13 @@ async function runReply(job, ctx) {
   // reply that says so. A house we already priced is left alone: the offer is
   // the conversation there.
   let numberFirst = null;
+  // Desk first (Matt, 2026-11-04): "Just say that we'd like to first underwrite from our desktop,
+  // based on comps and pictures, float a number, and see if it's even worth continuing the
+  // conversation." A showing offer no longer waits for him: the reply says so and goes, on a house
+  // we priced (is our number in the realm?) and one we haven't (the number comes first).
+  const deskFirst = (street, { priced }) => {
+    draft = { ...draft, needsHuman: false, deskFirst: priced ? "priced" : "unpriced", reply: deskFirstReply({ street, priced }) };
+  };
   // An agent opening the door on a live house (2026-10-15, agents work for
   // us): booking it, calling, or passing is Matt's. The reply waits for him
   // (the "more finished than what we buy" line is drafted, never sent by
@@ -4711,8 +4745,8 @@ async function runReply(job, ctx) {
       ? agentRuledOut(await store.listContactEvents?.(locationId, job.contactId, { limit: 200 }).catch(() => []) || [], draft.propertyAddress)
       : null;
     if (known && known.status !== "draft" && OPEN_OFFER_STATUSES.has(offerStatus(known))) {
-      // A house we priced and they're still working: the showing is the next step, and it's Matt's.
-      holdForShowing(street);
+      // A house we priced and they're still working: desk first — is our number in the realm?
+      deskFirst(street, { priced: true });
     } else if (!known || known.status === "draft") {
       if (notOurKind) {
         // They've told us it needs nothing: not a number to chase (Matt,
@@ -4740,7 +4774,7 @@ async function runReply(job, ctx) {
           intent: draft.intent === "investor_open" ? "investor_open" : "deal_available",
           reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
         };
-        holdForShowing(street);
+        deskFirst(street, { priced: false });
       } else {
         numberFirst = { replaceOfferId: known?.id || null };
         draft = {
@@ -5193,10 +5227,13 @@ async function runReply(job, ctx) {
   // offer, capped per day) ever re-prices an offer unattended. If either step
   // fails, the reply is held below: it must not say "sent" when nothing went.
   if (auto.exception?.passed && draft.intent === "counter") {
-    // Inside the ceiling: their number. A little over it: ours — the ceiling.
-    const amount = guard.counterBack ? guard.ceiling : guard.theirAmount;
+    // Inside the ceiling: their number. A little over it: ours — the ceiling. On the walk-away
+    // (shared/walkaway.js): their number at or under it, else our move toward it.
+    const walk = guard.kind === "walkaway";
+    const amount = walk ? guard.releaseAmount : guard.counterBack ? guard.ceiling : guard.theirAmount;
     plan.auto.push(
-      { id: `a-band-${job.id}`, type: "revise_offer_to_counter", mode: "auto", status: "pending", party, amount, via: "counter band",
+      { id: `a-band-${job.id}`, type: "revise_offer_to_counter", mode: "auto", status: "pending", party, amount, via: walk ? "walkaway" : "counter band",
+        ...(walk && guard.counterBack ? { move: true } : {}),
         why: guard.counterBack
           ? `they countered at ${fmtMoney(guard.theirAmount)}, just over the ${fmtMoney(guard.ceiling)} ceiling — countering back at it`
           : `they countered at ${fmtMoney(amount)}, inside the ${fmtMoney(guard.ceiling)} ceiling` },
@@ -5206,9 +5243,11 @@ async function runReply(job, ctx) {
     const street = String(draft.propertyAddress || "").split(",")[0].trim();
     // No dollar sign: carriers filter it, and the gate flags it.
     const k = amount % 1000 === 0 ? `${amount / 1000}k` : amount.toLocaleString("en-US");
-    draft.reply = guard.counterBack
-      ? `Best we can do${street ? ` on ${street}` : ""} is ${k} as-is, cash. Sending the updated offer over now.`
-      : `${k} works for us${street ? ` on ${street}` : ""}. Sending the updated offer over now.`;
+    draft.reply = walk
+      ? walkawayReply({ amount, street, final: guard.final, theirs: !guard.counterBack })
+      : guard.counterBack
+        ? `Best we can do${street ? ` on ${street}` : ""} is ${k} as-is, cash. Sending the updated offer over now.`
+        : `${k} works for us${street ? ` on ${street}` : ""}. Sending the updated offer over now.`;
   }
   // The investor band released a buyer's own number: write the price down
   // for this buyer on this deal, and say yes in fixed words that name that
@@ -5596,6 +5635,7 @@ async function runReply(job, ctx) {
     ...(draft.partnerTerms ? { partnerTerms: draft.partnerTerms } : {}),
     // A showing they offered on a live house, held for Matt (2026-10-15).
     ...(draft.showingOffered ? { showingOffered: draft.showingOffered } : {}),
+    ...(draft.deskFirst ? { deskFirst: draft.deskFirst } : {}),
     // They told us it isn't our kind of house: a pass on it, which the
     // contact card reads (shared/contact-card.js).
     ...(notOurKind ? { notOurKind: true } : {}),

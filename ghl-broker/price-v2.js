@@ -17,7 +17,9 @@ export const ENGINE_VERSION = "v2.0";
 const HISTORY_MAX = 10;
 const TEXT_MAX = 1500;
 
-export const shadowOn = (saved) => normalizePricingV2(saved?.pricingV2).shadow;
+// The engine prices a house whenever it is on at all: in the shadow, or live on grade A.
+export const shadowOn = (saved) => { const s = normalizePricingV2(saved?.pricingV2); return s.shadow || s.liveA; };
+export const engineLive = (saved) => normalizePricingV2(saved?.pricingV2).liveA;
 
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
 const zipOf = (address) => (String(address || "").match(/\b(\d{5})(?:-\d{4})?\s*$/) || String(address || "").match(/\b(9[789]\d{3})\b/) || [])[1] || "";

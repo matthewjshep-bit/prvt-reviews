@@ -1179,6 +1179,18 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             <input type="checkbox" checked={Boolean(form.pricingV2?.reads)} onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), reads: e.target.checked })} />
             Read every agent and investor conversation that moved, each night (texts, emails and call transcripts; uses model calls)
           </label>
+          <p className="mb-1 mt-3 text-xs text-slate-500">
+            When the scorecard on Lessons says grade A is ready (two weeks in the shadow, measured against your own numbers):
+          </p>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(form.pricingV2?.liveA)} onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), liveA: e.target.checked })} />
+            Send grade-A numbers by themselves — floated with the math, the letter of intent on their yes, the NWMLS write-up ask at or under the walk-away
+          </label>
+          <label className="mt-1 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(form.pricingV2?.walkaway)} disabled={!form.pricingV2?.liveA}
+              onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), walkaway: e.target.checked })} />
+            Negotiate grade-A counters up to the walk-away — at most two moves, never past it; anything higher comes to you as a call
+          </label>
         </div>
         <p className="mb-3 text-xs text-slate-400">
           A draft carries the agent, the address and the listing's facts, and waits on Today as "Price it"; a skeleton

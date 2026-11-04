@@ -398,6 +398,42 @@ moved, each night" (`pricingV2.reads`, off).
     "2026-11-04T23:00:00Z"`).
   - Dry-run first, then `dryRun:false`. No model calls.
 
+**Grade A live, and the walk-away (Phases 4–5, 2026-11-04).** Matt's decisions:
+- write-up on grade A without his approval;
+- the engine's evidence counts on big and agent-brought houses;
+- proof of funds stays his;
+- showings get the desk-first reply.
+
+Switches in Settings → Auto-underwrite → The offer engine, both off. They are meant for the day the
+scorecard says grade A is ready.
+- **`pricingV2.liveA`** — `sendEngine` in auto-underwrite.js. In the skeleton and draft blocks the
+  engine's answer replaces Bricked's own send.
+  - **Sends** when `engineSendGate` passes: grade A, triage hot, workable or long shot, and a list price
+    or seller's number to measure against. The offer opens at `v2.open` (`priceOverride`) and carries
+    `offer.pricing {live, grade, open, walkAway, investorPrice, arv, rehab, rehabWhy, triage, spread,
+    moves}`. `onOfferCreated` then floats it and the letter follows, as with any clean underwrite.
+  - **Otherwise** it stays a draft, with the engine's reason in `autoUnderwrite.brickedHeld`.
+  - **On a live grade-A offer:**
+    - `numberApproved` counts any amount at or under `pricing.walkAway` as approved, so their yes gets
+      the NWMLS write-up ask (`asksForWriteUp`). Matt signs.
+    - `numberStance` is firm, so big and agent-brought houses aren't held to a range.
+    - `numberConfidence` reads the grade.
+    - `autoAcceptCeiling` never goes past the walk-away (`engineCapped`).
+- **`pricingV2.walkaway`** — `shared/walkaway.js`. `evaluateBandFor` answers a counter on an offer
+  `walkawayOffer` accepts: engine-live, grade A, and nothing a person did to it (no revise, publish,
+  send, pin or hand revision).
+  - **Their number ≤ the walk-away:** take it ("N works for us").
+  - **≤ 10% over:** up to `WALKAWAY_MAX_MOVES` (2). The first goes halfway, the second to the walk-away
+    as "best we can do". Moves are recorded `by:"walkaway"` with `pricing.moves` counted; a move doesn't
+    set `offer.agreed`.
+  - **Further over, or both moves spent:** the band's own path — held, and a close one becomes a call.
+  - Their own words and a lower number we texted are checked as the band checks them.
+- **Showings (always on, Matt's words):** "we'd like to first underwrite from our desktop, based on comps
+  and pictures, float a number, and see if it's even worth continuing the conversation."
+  `deskFirstReply` replaces the showing hold on a house we priced ("is the number we sent in the realm
+  for the seller?") and on one we haven't ("let me get you a number…"; its draft or engine run is still
+  started). A turnkey house keeps its line.
+
 **Refresh the county table** by hand every month or two: `node scripts/kc-flips.mjs --refresh`, then
 `node scripts/kc-flip-table.mjs`, `node scripts/sync-shared.mjs`, and commit.
 
