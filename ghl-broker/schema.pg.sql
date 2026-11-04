@@ -263,6 +263,17 @@ create index if not exists investors_status_idx on investors (location_id, statu
 -- house — the engine's reads and answer, what happened next, and what the
 -- conversations said about it. Keyed by house (shared/current-offer.js
 -- houseKey), so every spelling of an address is one row.
+-- Every agent and investor conversation, read for pricing evidence (shared/thread-read.js,
+-- 2026-11-04): one read per contact, replaced whole when their thread moves.
+create table if not exists thread_reads (
+  location_id  text not null,
+  contact_id   text not null,
+  doc          jsonb not null,
+  read_at      timestamptz not null default now(),
+  through_at   timestamptz,
+  primary key (location_id, contact_id)
+);
+
 create table if not exists house_pricing (
   location_id  text not null,
   house_key    text not null,

@@ -125,6 +125,8 @@ import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
 import { publishedFromOf } from "../shared/calibration.js";
 import { buildScorecard, maybeRunPriceScorecard } from "../price-scorecard.js";
+import { importThreadReads, startThreadReads, getThreadReadJob, CURSOR_NAME as THREAD_READS_CURSOR } from "../thread-reads.js";
+import { questionTopics } from "../shared/thread-read.js";
 import { normalizePricingV2 } from "../shared/price-engine.js";
 import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
@@ -6947,6 +6949,37 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       res.json({ ok: true, records, switches: normalizePricingV2(saved.pricingV2), card });
     } catch (err) { fail(res, err); }
   });
+  // Every conversation, read for pricing evidence (shared/thread-read.js). The import takes the
+  // 2026-11-04 backfill and is dry unless dryRun:false; a run reads what moved (dry by default).
+  router.post("/automations/thread-reads/import", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const b = req.body || {};
+      const rows = Array.isArray(b.rows) ? b.rows : Array.isArray(b.reads) ? b.reads : [];
+      res.json({ ok: true, dryRun: b.dryRun !== false, ...(await importThreadReads({ store, locationId, rows, by: String(b.by || "import"), through: b.through || null, dryRun: b.dryRun !== false })) });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/automations/thread-reads/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const job = startThreadReads({ client, locationId, store, saved, since: b.since || null, limit: Math.min(1000, Math.max(1, Number(b.limit) || 150)), dryRun: b.dryRun !== false });
+      res.json({ ok: true, job });
+    } catch (err) { fail(res, err); }
+  });
+  router.get("/automations/thread-reads/status", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const reads = (await store.listThreadReads(locationId).catch(() => [])) || [];
+      const cursor = await store.getJobCursor?.(locationId, THREAD_READS_CURSOR).catch(() => null);
+      res.json({ ok: true, on: normalizePricingV2(saved.pricingV2).reads, job: getThreadReadJob(locationId), last: cursor?.doc?.last || null,
+        reads: reads.length, byParty: reads.reduce((m, r) => (m[r.doc?.party || "?"] = (m[r.doc?.party || "?"] || 0) + 1, m), {}),
+        unanswered: questionTopics(reads.map((r) => r.doc)).slice(0, 40) });
+    } catch (err) { fail(res, err); }
+  });
+
   // One house's record: the engine's reads, its answer and history, and the outcome.
   router.get("/automations/pricing/house", async (req, res) => {
     try {

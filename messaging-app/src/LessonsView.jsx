@@ -9,7 +9,7 @@
 import React, { useEffect, useState } from "react";
 import { Check, Loader2, Wand2 } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
-import { getDashboardLessons, getSettings, saveSettings } from "./api.js";
+import { getDashboardLessons, getPricingScorecard, getSettings, saveSettings } from "./api.js";
 import { BTN, BTN_PRIMARY, ErrorBar, KpiRow, SkeletonRows } from "./ui.jsx";
 
 const pctText = (n) => (n == null ? "—" : `${Math.round(n * 10) / 10}%`);
@@ -27,6 +27,61 @@ const fmtCalibration = (v) => {
 // The buyer-view checks block is a whole object; say the part that moves.
 const fmtChecks = (v) => (!v?.enabled ? "off" : `on (busy road ${v.site?.busyRoadPct}%, distressed rehab ≥ ${v.rehab?.distressedMinPctOfArv}% of ARV)`);
 const fmtSetting = (k, v) => (k === "underwriteCalibration" ? fmtCalibration(v) : k === "underwriteChecks" ? fmtChecks(v) : k === "wholesaleFee" || k === "repairBuffer" ? fmtMoney(v) : k === "maoPctOfArv" || k === "cashPctOfArv" ? `${v}%` : String(v));
+
+/**
+ * The offer engine v2 in the shadow (shared/price-scorecard.js): per grade, how far its answers sit
+ * from Matt's own numbers and from what the houses sold for, and whether a grade has cleared the
+ * bars he switches it live on. A read; the switch is his (Settings → Auto-underwrite). Exported for tests.
+ */
+const pct1 = (x) => (x == null ? "—" : `${Math.round(x * 1000) / 10}%`);
+export function EngineScorecard({ data }) {
+  if (!data) return null;
+  const { card, switches, records } = data;
+  if (!switches?.shadow && !records) {
+    return (
+      <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600" data-testid="engine-scorecard">
+        <div className="mb-1 font-semibold text-slate-800">Offer engine (shadow)</div>
+        Off. Turn it on in Settings → Auto-underwrite → "Price every named house in the shadow" and it starts measuring itself against your numbers.
+      </div>
+    );
+  }
+  const row = (g) => card.byGrade?.[g] || {};
+  const ready = card.ready?.A || {};
+  return (
+    <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4" data-testid="engine-scorecard">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <div className="font-semibold text-slate-800">Offer engine (shadow)</div>
+        <div className="text-xs text-slate-500">{card.total?.n || 0} houses priced · {card.total?.withMatt || 0} with your own number · last {card.days} days</div>
+      </div>
+      <p className="mb-3 text-xs text-slate-500">
+        Its numbers are never sent. ARV and rehab are measured against yours; the walk-away against your inputs at the same formula (so 100% means it lands where you would).
+      </p>
+      <table className="w-full text-left text-sm">
+        <thead className="text-xs uppercase tracking-wide text-slate-500">
+          <tr><th className="py-1">Grade</th><th>Houses</th><th>ARV off yours</th><th>Rehab under yours</th><th>Walk-away vs yours</th><th>Over what it sold for</th></tr>
+        </thead>
+        <tbody>
+          {["A", "B", "C"].map((g) => (
+            <tr key={g} className="border-t border-slate-100">
+              <td className="py-1 font-semibold">{g}</td>
+              <td>{row(g).n || 0}</td>
+              <td>{pct1(row(g).arvGap)}</td>
+              <td>{pct1(row(g).rehabBelowShare)}</td>
+              <td>{row(g).walkVsMatt == null ? "—" : `${Math.round(row(g).walkVsMatt * 100)}%`}</td>
+              <td>{row(g).sold ? `${row(g).overSold} of ${row(g).sold}` : "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className={`mt-3 text-sm ${ready.ready ? "text-emerald-700" : "text-slate-600"}`}>
+        {ready.ready ? "Grade A has cleared the bars: ready for your switch." : `Grade A isn't ready: ${(ready.missing || []).join("; ") || "—"}.`}
+      </p>
+      {card.trend?.prior30?.n ? (
+        <p className="mt-1 text-xs text-slate-500">ARV off yours: {pct1(card.trend.last30.arvGap)} the last 30 days, {pct1(card.trend.prior30.arvGap)} the 30 before.</p>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * Why buyers passed in the last 30 days, every deal, by the reason their own
@@ -130,8 +185,9 @@ export default function LessonsView({ onSettingsSaved }) {
   const [applying, setApplying] = useState("");
   const [digestBusy, setDigestBusy] = useState(false);
 
+  const [engine, setEngine] = useState(null);
   const load = () => getDashboardLessons().then(setData).catch((e) => setError(e.message));
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); getPricingScorecard().then(setEngine).catch(() => setEngine(null)); }, []);
 
   async function apply(r) {
     const lines = Object.entries(r.suggestedSettings).map(([k, v]) => `${SETTING_LABEL[k] || k}: ${fmtSetting(k, data.current[k])} → ${fmtSetting(k, v)}`).join("\n");
@@ -161,6 +217,7 @@ export default function LessonsView({ onSettingsSaved }) {
   return (
     <div>
       {error && <div className="mb-2"><ErrorBar>{error}</ErrorBar></div>}
+      <EngineScorecard data={engine} />
       <LessonsBody data={data} onApply={apply} onDigest={saveDigest} applying={applying} digestBusy={digestBusy} />
     </div>
   );

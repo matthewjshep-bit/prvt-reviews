@@ -1165,6 +1165,21 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             </label>
           </div>
         </div>
+        <div className="mb-3 rounded-lg border border-slate-200 p-3">
+          <div className="mb-1 text-sm font-semibold">The offer engine (v2)</div>
+          <p className="mb-2 text-xs text-slate-500">
+            One price per house: ARV from Bricked (checked by our comps), rehab never under the floor for the house's age and
+            condition, 70% of ARV less rehab, a $30k fee to open and a $15k walk-away. Graded A, B or C by how sure it is.
+          </p>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(form.pricingV2?.shadow)} onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), shadow: e.target.checked })} />
+            Price every named house in the shadow (never sent — the scorecard on Lessons measures it against you)
+          </label>
+          <label className="mt-1 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(form.pricingV2?.reads)} onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), reads: e.target.checked })} />
+            Read every agent and investor conversation that moved, each night (texts, emails and call transcripts; uses model calls)
+          </label>
+        </div>
         <p className="mb-3 text-xs text-slate-400">
           A draft carries the agent, the address and the listing's facts, and waits on Today as "Price it"; a skeleton
           carries only the agent and the address. Mark either one "We passed" from its row and the bot tells them why

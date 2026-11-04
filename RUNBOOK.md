@@ -347,6 +347,57 @@ it until the shadow runner lands.
 (shared/pricing-v2-settings.js). Every switch is off: `shadow`, `liveA`, `walkaway`, `reads`,
 `autoCalibrate`.
 
+**Shadow, outcomes, scorecard (Phase 2, 2026-11-04).** Settings → Auto-underwrite → "The offer engine
+(v2)". Both switches are off.
+- **"Price every named house in the shadow"** (`pricingV2.shadow`):
+  - `ghl-broker/price-v2.js` `shadowPrice` runs at the end of the skeleton block, the draft block, and
+    the full run just before its gates.
+  - It reads only what the run already bought: Bricked, the listing, the comps and scope of a full
+    run, and the agent's `property_details` / `agent_estimate` events on the house.
+  - It writes the house's record in `house_pricing` (keyed by `houseKey`): `reads`, `v2`, the last 10
+    answers in `history`, then `outcome` and `evidence`.
+  - It never changes the draft, the thread or a send, and a failure only adds a warning.
+- **The evening scorecard** (`ghl-broker/price-scorecard.js`, 7pm Pacific, cursor `priceScorecard`):
+  - It fills each record's `outcome` from the offers on the house (`outcomeOf`): the number a person
+    stood behind and its ARV and rehab, the machine's sent number, the lowest counter, a yes or a
+    deal, and the sold price.
+  - For houses with no offer, it looks the sold price up once a week, at most 40 a day.
+  - It posts one line to the Underwrites Slack channel, or Daily when that's off.
+- **Read it any time:** `GET /api/offers/automations/pricing/scorecard` (read-only; the Lessons card
+  reads it) and `GET …/pricing/house?key=`.
+- **The bars per grade** (`shared/price-scorecard.js` `BARS`, lopsided because over-pricing is the
+  costly miss):
+  - ≥ 20 houses with Matt's own number;
+  - median ARV gap ≤ 5%;
+  - rehab under his on ≤ 30% of houses;
+  - none over his number by more than 10% at the same formula;
+  - none over a sold price.
+- **The price watch keeps sale prices.** `fetchZillowListings` keeps `lastSoldPrice` / `lastSoldDate`,
+  and `priceWatch.sold` is recorded only for a sale on or after the offer was made (`soldOf`).
+
+**Every conversation, read (Phase 2b, 2026-11-04).** "Read every agent and investor conversation that
+moved, each night" (`pricingV2.reads`, off).
+- `ghl-broker/thread-reads.js` (6am Pacific, cursor `threadReads`, at most 150 a night) finds every GHL
+  conversation that moved since the last run.
+  - Agents and investors are split by the live routing; an untagged contact is read as an agent.
+  - Each moved thread is read whole, every call transcript included.
+  - The model call (`READ_MODEL`, metered `thread_read`) uses the schemas in `shared/thread-read.js`.
+    They are the field names of the 2026-11-04 reader brief.
+  - Quotes are kept only when they are in their own words (`verifyQuotes`).
+- Reads are stored on `thread_reads`. Each house's evidence (seller's lowest, the agent's value and
+  rehab, condition, killers, outcome, what another buyer paid, a walk-back; an investor's price, ARV,
+  rehab and verdict) goes onto that house's record, one row per contact.
+- **Routes:**
+  - `GET /api/offers/automations/thread-reads/status`: counts, plus the unanswered-question topics that
+    feed the knowledge base.
+  - `POST …/thread-reads/run {dryRun, limit, since}` (dry by default).
+  - `POST …/thread-reads/import {rows, by, through, dryRun}` (dry by default).
+- **The backfill:** `~/Downloads/conversation-evidence-2026-11-04.json` holds 1,288 reads of every
+  thread since 7/27.
+  - After deploy, import it (`rows` = its `rows`, `by: "backfill:2026-11-04"`, `through:
+    "2026-11-04T23:00:00Z"`).
+  - Dry-run first, then `dryRun:false`. No model calls.
+
 **Refresh the county table** by hand every month or two: `node scripts/kc-flips.mjs --refresh`, then
 `node scripts/kc-flip-table.mjs`, `node scripts/sync-shared.mjs`, and commit.
 

@@ -32,6 +32,7 @@ import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation
 import { releaseMisreadHolds } from "./misread-holds.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunPriceScorecard } from "./price-scorecard.js";
+import { maybeRunThreadReads } from "./thread-reads.js";
 import { maybeRunTierCheck, syncChangedCards } from "./tier-check.js";
 import { sweepPassNotes } from "./pass-note.js";
 import { maybeUnderwriteTierOne } from "./tier-one.js";
@@ -316,6 +317,12 @@ const TICK_JOBS = [
     const watched = await maybeRunPriceWatch({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
       deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
     if (watched) console.log(`price watch for ${locationId}: ${JSON.stringify({ watched: watched.watched, checked: watched.checked, dropped: watched.dropped, offMarket: watched.offMarket, backOnMarket: watched.backOnMarket, texted: watched.texted, error: watched.error || null })}`);
+  } },
+  // Once a night (6am Pacific), while pricingV2.reads is on: every agent and
+  // investor conversation that moved, read whole for pricing evidence.
+  { area: "thread-reads", run: async ({ client, locationId, saved }) => {
+    const job = await maybeRunThreadReads({ client, locationId, saved, store });
+    if (job) console.log(`thread reads started for ${locationId}: ${job.id}`);
   } },
   // Once a day in the evening, while the offer engine prices in the shadow
   // (pricingV2.shadow): outcomes filled in, the scorecard posted to Slack.
