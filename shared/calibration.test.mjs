@@ -81,3 +81,36 @@ test("the rehab floor stops at the heavy band and needs a size, a year and a sca
   assert.equal(eraOf(1980).key, "1980on");
   assert.equal(CALIBRATION_MIN_N, 5);
 });
+
+// 2026-11-04: Matt prices skeleton and Bricked drafts by publishing them, and
+// a publish wrote no revision, so Lessons never saw how he moves the
+// machine's numbers. The publish now keeps the machine's figures beside his.
+test("publishing a priced skeleton records Matt's ARV and rehab for Lessons", async () => {
+  const { publishedFromOf } = await import("./calibration.js");
+  const held = { autoUnderwrite: { skeleton: true, brickedArv: 587012.4, machineRepairs: 90000, machineRepairsSource: "size" }, draft: { subjectInfo: { sqft: 1580, yearBuilt: 1945 } } };
+  const offer = { calc: { inputs: { arv: 600000, repairs: 125000 } }, snapshot: { subjectInfo: { sqft: 1580, yearBuilt: 1945 } } };
+  const p = publishedFromOf({ held, offer, at: "2026-11-04T19:42:00Z" });
+  assert.deepEqual(p, { at: "2026-11-04T19:42:00Z", source: "bricked", machineRepairsSource: "size", arv: [587012, 600000], repairs: [90000, 125000], sqft: 1580, yearBuilt: 1945 });
+  assert.equal(publishedFromOf({ held: { autoUnderwrite: { skeleton: true } }, offer }), null, "nothing the machine read, nothing to compare");
+  // Five of them make a floor recommendation.
+  const offers = [60, 70, 75, 80, 90].map((psf, i) => ({ id: `p${i}`, address: `${i} Elm St, Kent, WA`, autoUnderwrite: { skeleton: true, brickedArv: 600000, publishedAt: "2026-11-01T00:00:00Z" },
+    publishedFrom: { source: "bricked", arv: [600000, 600000], repairs: [70000, psf * 1500], sqft: 1500, yearBuilt: 1940 } }));
+  const r = calibrationReport({ offers });
+  assert.equal(r.sample.revisions, 5);
+  assert.ok(r.recommendations.find((x) => x.id === "rehab_psf_floor"), r.note);
+});
+
+test("Lessons never takes Bricked's ARV for the comps path's haircut", () => {
+  const offers = Array.from({ length: 6 }, (_, i) => ({ id: `b${i}`, address: `${i} Oak St, Kent, WA`, autoUnderwrite: { basis: "bricked", brickedArv: 700000 },
+    publishedFrom: { source: "bricked", arv: [700000, 600000], repairs: null, sqft: 1500, yearBuilt: 1960 } }));
+  assert.equal(calibrationReport({ offers }).recommendations.find((x) => x.id === "arv_haircut"), undefined);
+  // The comps path's own revisions still teach it.
+  const comps = Array.from({ length: 6 }, (_, i) => revised(i, { arv: [500000, 450000] }));
+  assert.ok(calibrationReport({ offers: comps }).recommendations.find((x) => x.id === "arv_haircut"));
+});
+
+test("the lean row Lessons reads carries the publish record", async () => {
+  const { toListOffer } = await import("./offer-status.js");
+  const publishedFrom = { source: "bricked", arv: [600000, 600000], repairs: [70000, 120000], sqft: 1500, yearBuilt: 1940 };
+  assert.deepEqual(toListOffer({ id: "x", status: "new", autoUnderwrite: { skeleton: true }, publishedFrom }).publishedFrom, publishedFrom);
+});

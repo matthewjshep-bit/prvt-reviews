@@ -125,11 +125,12 @@ test("in draft mode a confident read sends too, with the listing's own facts", a
   assert.equal(made[0].offer.snapshot.subjectInfo.sqft, 1480);
 });
 
-test("a read Bricked isn't sure of stays a draft, says why, and pays for no Zillow check", async () => {
+test("a read Bricked isn't sure of stays a draft, says why, and buys no comps", async () => {
   const { job, made, floated, calls } = await run({ contactId: "s2", fetchOpts: { bricked: { ...BRICKED, arvConfidence: 0.7 } } });
   assert.equal(job.status, "held");
   assert.equal(made.length + floated.length, 0);
-  assert.equal(calls.detail, 0);
+  assert.equal(calls.detail, 1, "the listing lookup that tells Bricked the remarks (2026-11-04)");
+  assert.equal(calls.search, 0);
   const draft = await store.getOffer(job.offerId);
   assert.ok(isDraftOnly(draft));
   assert.match(draft.autoUnderwrite.brickedHeld, /70% sure of its ARV/);
@@ -161,7 +162,7 @@ test("with the send switch off, a confident read is a draft as before", async ()
   const { job, made, calls } = await run({ contactId: "s6", saved: { brickedSendsConfident: false } });
   assert.equal(job.status, "held");
   assert.equal(made.length, 0);
-  assert.equal(calls.detail, 0);
+  assert.equal(calls.search, 0, "no comps bought");
   assert.equal((await store.getOffer(job.offerId)).autoUnderwrite.brickedHeld, undefined);
 });
 

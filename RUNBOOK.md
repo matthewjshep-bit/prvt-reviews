@@ -456,6 +456,46 @@ nothing more about it, and if the thread hasn't told them yet, tell them in
 this reply. Before this, the checklist had the bot asking what a passed house
 was worth fixed up. This works with the pass note switched off.
 
+### Bricked.ai on the draft, and the number it may send (2026-10-28, rehab fixed 2026-11-04)
+
+**What it does.** With `brickedOnDrafts` and a key saved, every house the conversation names gets one
+Bricked call (`brickedRead`, ghl-broker/auto-underwrite.js). Its ARV and repairs go on the draft.
+With `brickedSendsConfident` on, a read that clears `brickedSendGate` publishes itself at
+`brickedSendPct` (70) × ARV − repairs − the fee, capped at `maxOfferPctOfList` of list, and goes
+through `onOfferCreated` like any clean underwrite.
+
+**The rehab, after the 2026-11-04 review.** Read against 50 reads: 46 had no repair figure, a $0 line
+passed as an estimate, a turnkey house sent itself, and the machine's rehab ran ~40% under Matt's at
+every age of house.
+- **The skeleton asks Zillow first.** With Bricked on it fetches the listing (`fetchZillowPhotos`, a
+  few tenths of a cent) before Bricked, so Bricked gets the listing remarks as the work description
+  (`brickedWorkText`), not just the agent's text. The same lookup answers the send's kind, rural and
+  list-price checks. With Bricked off, the skeleton still buys nothing.
+- **$0 is no estimate.** `withSizeRepairs` fills a null or $0 with the medium band for the size,
+  never under `BRICKED_MIN_REPAIRS` ($60k, Matt's ballpark). The gate refuses repairs ≤ 0.
+- **The full run's floors apply** (`floorBrickedRepairs`): a gut job or teardown in the agent's
+  words or the remarks prices at $150/sqft (`gutSignal`). Matt's calibrated $/sqft floor for the
+  house's age applies once he has applied one in Lessons. Neither ever lowers a figure, and the
+  calibrated ARV haircut stays on the comps path.
+- **The gate holds** a turnkey read (Bricked's as-is ≥ 90% of its ARV, `BRICKED_TURNKEY_SHARE`) and a
+  gut or teardown house (`repairsSource: "gut"`). Both stay a draft with the reason in `brickedHeld`.
+- **The label reads Bricked's grading.** `is_renovated` comes back null; a comp with
+  `renovation_score ≥ 0.7` (`RENOVATED_SCORE`, price-bricked.js `isRenovatedComp`) is renovated. The
+  draft keeps the house's own condition grade and renovation score (`draft.bricked.subject`).
+- **Lessons sees Matt's pricing.** The draft carries `autoUnderwrite.machineRepairs` and
+  `machineRepairsSource` (bricked, size, gut or calibrated), whether or not it sent. Publishing it
+  stores `offer.publishedFrom {source, arv: [machine, his], repairs: [machine, his], sqft, yearBuilt}`
+  (shared/calibration.js `publishedFromOf`), which `calibrationReport` reads. It is not a revision:
+  revisions are read as negotiation history ("first offer", "we moved on price").
+- **The bot.** `MATT_PRICES_LINE` speaks only to houses with no number in OUR OFFERS. A house the
+  machine priced follows the book.
+
+**Check:**
+- New drafts show `brickedHeld` "turnkey: …", "no repair estimate" or "gut job or teardown" where they
+  apply.
+- `autoUnderwrite.machineRepairs` is on each Bricked draft.
+- A published draft has `publishedFrom`.
+
 ### A shorthand address, and a run a redeploy killed (2026-09-16)
 
 **Short addresses.** Agents write "34418 54th Ave S" — no city. A geocoder

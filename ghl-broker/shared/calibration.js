@@ -100,21 +100,49 @@ export function calibrate({ calibration = null, arv = 0, repairs = 0, sqft = 0, 
   return out;
 }
 
-// One offer's correction: the machine's figures before Matt's first revision,
-// his after the last one. Only revisions a person made, on an auto-underwrite.
+/**
+ * publishedFromOf({ held, offer, at }) → { at, source, machineRepairsSource, arv: [machine, his], repairs: [machine, his], sqft, yearBuilt } | null
+ *
+ * Matt prices skeleton and Bricked drafts by publishing them, and a publish
+ * writes no revision (a revision is negotiation history: "first offer", "we
+ * moved on price"), so Lessons never saw him move the machine's figures
+ * (2026-11-04). This keeps the machine's read — Bricked's ARV, and the rehab
+ * the machine would have used (`autoUnderwrite.machineRepairs`) — beside his
+ * numbers on the published offer. Null when the machine read nothing.
+ */
+export function publishedFromOf({ held = {}, offer = {}, at = new Date().toISOString() } = {}) {
+  const au = held?.autoUnderwrite || {};
+  const inputs = offer?.calc?.inputs || {};
+  const info = { ...(held?.draft?.subjectInfo || held?.snapshot?.subjectInfo || {}), ...(offer?.snapshot?.subjectInfo || {}) };
+  const pair = (a, b) => (round(a) > 0 && round(b) > 0 ? [round(a), round(b)] : null);
+  const arv = pair(au.brickedArv, inputs.arv);
+  const repairs = pair(au.machineRepairs || au.brickedRepairs, inputs.repairs);
+  if (!arv && !repairs) return null;
+  return {
+    at, source: au.brickedArv ? "bricked" : "draft", machineRepairsSource: au.machineRepairsSource || null,
+    arv, repairs, sqft: round(info.sqft), yearBuilt: round(info.yearBuilt),
+  };
+}
+
+// One offer's correction: the machine's figures before Matt's first revision
+// (or what it read when he published its draft), his after the last one.
+// Only a person's revisions, on an auto-underwrite. Bricked's ARV is not the
+// comps path's, so it never teaches the ARV haircut, which only that path uses.
 function correctionOf(o) {
   if (!o?.autoUnderwrite) return null;
   const mine = (o.revisions || []).filter((r) => r?.by === "you" && (Array.isArray(r.arv) || Array.isArray(r.repairs)));
-  if (!mine.length) return null;
-  const first = mine[0], last = mine.at(-1);
+  const pub = o.publishedFrom && (Array.isArray(o.publishedFrom.arv) || Array.isArray(o.publishedFrom.repairs)) ? o.publishedFrom : null;
+  if (!mine.length && !pub) return null;
+  const first = pub || mine[0], last = mine.at(-1) || pub;
   const pair = (k) => {
     const a = Array.isArray(first[k]) ? round(first[k][0]) : 0;
-    const b = Array.isArray(last[k]) ? round(last[k][1]) : 0;
+    const b = Array.isArray(last[k]) ? round(last[k][1]) : Array.isArray(first[k]) ? round(first[k][1]) : 0;
     return a > 0 && b > 0 ? [a, b] : null;
   };
   const sqft = round(last.sqft || first.sqft);
   const yearBuilt = round(last.yearBuilt || first.yearBuilt);
-  return { offerId: o.id, street: String(o.address || "").split(",")[0].trim(), arv: pair("arv"), repairs: pair("repairs"), sqft, yearBuilt };
+  const source = pub?.source || (o.autoUnderwrite.basis === "bricked" ? "bricked" : "comps");
+  return { offerId: o.id, street: String(o.address || "").split(",")[0].trim(), source, arv: source === "comps" ? pair("arv") : null, repairs: pair("repairs"), sqft, yearBuilt };
 }
 
 /**
