@@ -40,6 +40,7 @@
 // the mean of those three.
 import { normalizeConversationAi } from "./conversation-ai.js";
 import { normalizeUnderwriteCalibration } from "./calibration.js";
+import { normalizePricingV2 } from "./pricing-v2-settings.js";
 
 export const UNDERWRITE_MODES = [
   { key: "backstack", label: "Back-stack from ARV", hint: "ARV − selling costs − flip profit − repairs − holding − your fee" },
@@ -126,6 +127,9 @@ export const DEFAULT_OFFER_SETTINGS = {
   // With no repair estimate from Bricked, a sending read uses the medium
   // rehab for the house's size instead of staying a draft. Off by default.
   brickedRepairsBySize: false,
+  // The offer engine v2 (shared/price-engine.js, 2026-11-04): every switch off.
+  // Filled by effectiveSettings; see shared/pricing-v2-settings.js.
+  pricingV2: null,
   // Credential for the Zillow comp-capture bookmarklet. Minted server-side by
   // POST /api/offers/comps/capture-token; scoped to appending to the comp
   // inbox and nothing else, because it lives in a browser bookmark. Rotating
@@ -354,6 +358,8 @@ export function effectiveSettings(overrides = {}) {
   // Matt's calibration from Lessons (shared/calibration.js): absent until he
   // applies it, and absent changes nothing.
   if ((overrides || {}).underwriteCalibration !== undefined) s.underwriteCalibration = normalizeUnderwriteCalibration(overrides.underwriteCalibration);
+  // The offer engine v2: every key present and in range, every switch off unless saved true.
+  s.pricingV2 = normalizePricingV2((overrides || {}).pricingV2);
   return s;
 }
 
