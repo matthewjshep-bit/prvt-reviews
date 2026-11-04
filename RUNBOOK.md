@@ -313,6 +313,51 @@ should load and contact search should return results.
 
 ## Auto-underwrite (inbound text → offer)
 
+### The offer engine v2 — price once, grade it, walk away at a number (2026-11-04, not wired yet)
+
+Plan: `~/.claude/plans/pasted-content-id-7fe7-okay-i-lexical-wreath.md`. Matt's decisions (2026-11-04):
+- On grade-A houses only, the machine may come up in at most two steps to a walk-away.
+- The minimum fee is $15k.
+- Rehab is priced by age from his own numbers.
+- The engine runs in shadow for two weeks before anything goes live.
+
+`shared/price-engine.js` `priceHouse(reads, settings, { ratios })` is pure. Nothing in the broker calls
+it until the shadow runner lands.
+- **ARV.** Bricked's ARV, cross-checked by our comps. Reads more than `arvSplitPct` (10) apart drop the
+  grade.
+- **Rehab.** The best evidence (a photo scope at ≥ 8 photos, Bricked's lines for described work, their
+  own figure when higher), never under `rehabFloor` (shared/rehab-floor.js):
+  - by age: $70/sqft before 1950, $55 for 1950–79, $55 for 1980–99, $35 for 2000 on;
+  - heavy at $100/sqft for fire, water or mold words, a Bricked grade of C4 or worse, or a county
+    condition of 2 or below;
+  - gut at $150/sqft;
+  - never under $60k.
+- **Investor price.** `maoPct` (70) × ARV − rehab. King County's ZIP flip ratio
+  (shared/kc-flip-ratios.js) drops the grade when the price runs past the ZIP's top quarter, and only
+  binds with ≥ 15 flips there.
+- **The two numbers.** Walk-away = investor price − `minFee` (15k). Open = investor price −
+  `targetFee` (30k). Both capped at 90% of list.
+- **Grade.** A: the ARV is sure, the rehab has evidence, and the house is in the box. B: one miss.
+  C: two misses, or any killer fact (`killersOf`: manufactured or park, land, rural, teardown, short
+  sale or bank-owned, someone else bidding, wholesaler paper, moved) or turnkey.
+- **Triage.** `triageOf`: the walk-away against their number, else the list price. Hot at ≥ 95%,
+  workable at ≥ 85%, long shot at ≥ 70%, no fit below that.
+
+**Settings.** `settings.pricingV2`, normalised in `effectiveSettings` by `normalizePricingV2`
+(shared/pricing-v2-settings.js). Every switch is off: `shadow`, `liveA`, `walkaway`, `reads`,
+`autoCalibrate`.
+
+**Refresh the county table** by hand every month or two: `node scripts/kc-flips.mjs --refresh`, then
+`node scripts/kc-flip-table.mjs`, `node scripts/sync-shared.mjs`, and commit.
+
+**Back-test** (read-only): `node scripts/price-engine-backtest.mjs`, or `--from offers.json --deals
+deals.json`. On 2026-11-04:
+- the walk-away was a median 1.00× Matt's own inputs at 70% − $15k, across 144 houses;
+- the closed deals landed 2% under contract;
+- the deals that died on price or rehab landed 17–45% under;
+- rehab by age alone was under Matt's on 46% of houses, which is why grade A needs evidence.
+
+
 ### Draft only: the app makes the draft, you price it (2026-10-16)
 
 **Why.** Read against all 363 runs and their 269 threads:
