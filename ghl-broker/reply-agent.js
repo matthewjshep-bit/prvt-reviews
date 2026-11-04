@@ -121,7 +121,7 @@ import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
 import { meterAi } from "./ai-spend.js";
 import { investorMindedCue } from "./shared/lead-source.js";
-import { partnerTerms, partnerTermsLine, PARTNER_TERMS_LABEL } from "./shared/partner-terms.js";
+import { partnerTerms, partnerTermsLine, answersItself, PARTNER_TERMS_LABEL } from "./shared/partner-terms.js";
 import { walkawayOffer, evaluateWalkaway, walkawayReply } from "./shared/walkaway.js";
 import { normalizePricingV2 } from "./shared/price-engine.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
@@ -4326,7 +4326,7 @@ async function runReply(job, ctx) {
   if (terms) {
     const at = new Date(now).toISOString();
     const events = [{ type: "partner_terms", at, source: "conversation", ref: job.id, dedupeKey: `partner_terms:${job.contactId}:${terms.kind}:${at.slice(0, 10)}`,
-      data: { kind: terms.kind, phrase: terms.phrase, kinds: terms.kinds, addToBuyers: terms.addToBuyers } }];
+      data: { kind: terms.kind, phrase: terms.phrase, kinds: terms.kinds, addToBuyers: terms.addToBuyers, ...(answersItself(terms) ? { answered: true } : {}) } }];
     if (terms.addToBuyers) events.push({ type: "investor_minded", at, source: "conversation", ref: job.id, dedupeKey: `investor_minded:${job.contactId}`, data: { cue: terms.phrase.slice(0, 80) } });
     await recordEvents({ store, locationId, contactId: job.contactId, party: "agent", events }).catch(() => {});
   }
@@ -4990,7 +4990,9 @@ async function runReply(job, ctx) {
 
   // Partner terms are Matt's: the reply waits for him whatever else rewrote
   // it above, and a person's flag keeps a redraft from being spent on it.
-  if (terms) {
+  // An offer to represent us is not (Matt, 2026-11-04): the bot says yes
+  // (BUYER_AGENT_RULE), and the reply goes like any other.
+  if (terms && !answersItself(terms)) {
     draft = { ...draft, partnerTerms: terms, needsHuman: true, humanReason: `they ${PARTNER_TERMS_LABEL[terms.kind]} — the terms are yours to answer` };
   }
   const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,

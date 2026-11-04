@@ -387,6 +387,15 @@ test("an agent who offered partner terms gets a partner row carrying what they o
   assert.equal(callList({ events: [ev()], drafts, unsubscribed: new Set(["c8"]), now: NOW }).filter((x) => x.kind === "call_partner_terms").length, 0);
 });
 
+// 2026-11-04: an offer to represent us is the bot's to answer (yes), so it
+// isn't a "terms are yours" row once the bot has said so.
+test("an offer to represent us that the bot already answered raises no partner row", () => {
+  const ev = { type: "partner_terms", contactId: "c9", at: ago(0.2), data: { kind: "buyer_agent", phrase: "I can be your buyer's agent", kinds: ["buyer_agent"], addToBuyers: false, answered: true } };
+  assert.equal(callList({ events: [ev], drafts: [], now: NOW }).filter((x) => x.kind === "call_partner_terms").length, 0);
+  const asked = { ...ev, data: { ...ev.data, answered: false } };
+  assert.equal(callList({ events: [asked], drafts: [], now: NOW }).filter((x) => x.kind === "call_partner_terms").length, 1, "one the bot held is still yours");
+});
+
 test("an agent who talks like an investor gets one relationship call, and a brought house that's a wholesaler's assignment says so", () => {
   const ev = { type: "investor_minded", contactId: "c7", at: ago(1), data: { cue: "finder's fee" } };
   const rows = callList({ offers: [offer({ id: "x", contactId: "c7", contactName: "Sam T", status: "passed" })], events: [ev], now: NOW });
