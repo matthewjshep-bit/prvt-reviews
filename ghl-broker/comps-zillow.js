@@ -20,7 +20,7 @@
 //
 // Same ToS caveat as fetchZillowPhotos: unofficial scraper, acknowledged.
 
-import { milesBetween } from "./shared/comp-match.js";
+import { milesBetween, remodelSignal } from "./shared/comp-match.js";
 
 const ACTOR = "maxcopell~zillow-scraper";
 
@@ -346,6 +346,8 @@ export function mergeFacts(comps = [], facts = new Map()) {
       beds: c.beds ?? f.beds ?? null,
       baths: c.baths ?? f.baths ?? null,
       garage: typeof c.garage === "boolean" ? c.garage : (typeof f.garage === "boolean" ? f.garage : null),
+      // What its listing said about the finish (2026-11-04): the words beat the $/sqft guess.
+      remodel: c.remodel ?? remodelSignal(f.description),
       factsSource: "zillow-detail",
     };
   });

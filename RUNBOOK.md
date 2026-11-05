@@ -313,6 +313,202 @@ should load and contact search should return results.
 
 ## Auto-underwrite (inbound text → offer)
 
+### The offer engine v2 — price once, grade it, walk away at a number (2026-11-04)
+
+Plan: `~/.claude/plans/pasted-content-id-7fe7-okay-i-lexical-wreath.md`. Matt's decisions (2026-11-04):
+- On grade-A houses only, the machine may come up in at most two steps to a walk-away.
+- The minimum fee is $15k.
+- Rehab is priced by age from his own numbers.
+- The engine runs in shadow for two weeks before anything goes live.
+
+`shared/price-engine.js` `priceHouse(reads, settings, { ratios })` is pure. Nothing in the broker calls
+it until the shadow runner lands.
+- **ARV.** Bricked's ARV, our own comps' ARV, or both. Reads more than `arvSplitPct` (10) apart drop
+  the grade. Bricked alone is sure at ≥ 85% with ≥ 3 renovated comps; our comps alone at 4 remodeled
+  comps.
+- **Rehab.** The best evidence (a photo scope at ≥ 8 photos, Bricked's lines for described work, their
+  own figure when higher), never under `rehabFloor` (shared/rehab-floor.js):
+  - by age: $70/sqft before 1950, $55 for 1950–79, $55 for 1980–99, $35 for 2000 on;
+  - heavy at $100/sqft for fire, water or mold words, a Bricked grade of C4 or worse, or a county
+    condition of 2 or below;
+  - gut at $150/sqft;
+  - never under $60k.
+- **Investor price.** `maoPct` (70) × ARV − rehab. King County's ZIP flip ratio
+  (shared/kc-flip-ratios.js) drops the grade when the price runs past the ZIP's top quarter, and only
+  binds with ≥ 15 flips there.
+- **The two numbers.** Walk-away = investor price − `minFee` (15k). Open = investor price −
+  `targetFee` (30k). Both capped at 90% of list.
+- **Grade.** A: the ARV is sure, the rehab has evidence, and the house is in the box. B: one miss.
+  C: two misses, or any killer fact (`killersOf`: manufactured or park, land, rural, teardown, short
+  sale or bank-owned, someone else bidding, wholesaler paper, moved) or turnkey.
+- **Triage.** `triageOf`: the walk-away against their number, else the list price. Hot at ≥ 95%,
+  workable at ≥ 85%, long shot at ≥ 70%, no fit below that.
+
+**Settings.** `settings.pricingV2`, normalised in `effectiveSettings` by `normalizePricingV2`
+(shared/pricing-v2-settings.js). Every switch is off: `shadow`, `liveA`, `walkaway`, `reads`,
+`autoCalibrate`.
+
+**Shadow, outcomes, scorecard (Phase 2, 2026-11-04).** Settings → Auto-underwrite → "The offer engine
+(v2)". Both switches are off.
+- **"Price every named house in the shadow"** (`pricingV2.shadow`):
+  - `ghl-broker/price-v2.js` `shadowPrice` runs at the end of the skeleton block, the draft block, and
+    the full run just before its gates.
+  - It reads only what the run already bought: Bricked, the listing, the comps and scope of a full
+    run, and the agent's `property_details` / `agent_estimate` events on the house.
+  - It writes the house's record in `house_pricing` (keyed by `houseKey`): `reads`, `v2`, the last 10
+    answers in `history`, then `outcome` and `evidence`.
+  - It never changes the draft, the thread or a send, and a failure only adds a warning.
+- **The evening scorecard** (`ghl-broker/price-scorecard.js`, 7pm Pacific, cursor `priceScorecard`):
+  - It fills each record's `outcome` from the offers on the house (`outcomeOf`): the number a person
+    stood behind and its ARV and rehab, the machine's sent number, the lowest counter, a yes or a
+    deal, and the sold price.
+  - For houses with no offer, it looks the sold price up once a week, at most 40 a day.
+  - It posts one line to the Underwrites Slack channel, or Daily when that's off.
+- **Read it any time:** `GET /api/offers/automations/pricing/scorecard` (read-only; the Lessons card
+  reads it) and `GET …/pricing/house?key=`.
+- **The bars per grade** (`shared/price-scorecard.js` `BARS`, lopsided because over-pricing is the
+  costly miss):
+  - ≥ 20 houses with Matt's own number;
+  - median ARV gap ≤ 5%;
+  - rehab under his on ≤ 30% of houses;
+  - none over his number by more than 10% at the same formula;
+  - none over a sold price.
+- **The price watch keeps sale prices.** `fetchZillowListings` keeps `lastSoldPrice` / `lastSoldDate`,
+  and `priceWatch.sold` is recorded only for a sale on or after the offer was made (`soldOf`).
+
+**Every conversation, read (Phase 2b, 2026-11-04).** "Read every agent and investor conversation that
+moved, each night" (`pricingV2.reads`, off).
+- `ghl-broker/thread-reads.js` (6am Pacific, cursor `threadReads`, at most 150 a night) finds every GHL
+  conversation that moved since the last run.
+  - Agents and investors are split by the live routing; an untagged contact is read as an agent.
+  - Each moved thread is read whole, every call transcript included.
+  - The model call (`READ_MODEL`, metered `thread_read`) uses the schemas in `shared/thread-read.js`.
+    They are the field names of the 2026-11-04 reader brief.
+  - Quotes are kept only when they are in their own words (`verifyQuotes`).
+- Reads are stored on `thread_reads`. Each house's evidence (seller's lowest, the agent's value and
+  rehab, condition, killers, outcome, what another buyer paid, a walk-back; an investor's price, ARV,
+  rehab and verdict) goes onto that house's record, one row per contact.
+- **Routes:**
+  - `GET /api/offers/automations/thread-reads/status`: counts, plus the unanswered-question topics that
+    feed the knowledge base.
+  - `POST …/thread-reads/run {dryRun, limit, since}` (dry by default).
+  - `POST …/thread-reads/import {rows, by, through, dryRun}` (dry by default).
+- **The backfill:** `~/Downloads/conversation-evidence-2026-11-04.json` holds 1,288 reads of every
+  thread since 7/27.
+  - After deploy, import it (`rows` = its `rows`, `by: "backfill:2026-11-04"`, `through:
+    "2026-11-04T23:00:00Z"`).
+  - Dry-run first, then `dryRun:false`. No model calls.
+
+**Grade A live, and the walk-away (Phases 4–5, 2026-11-04).** Matt's decisions:
+- write-up on grade A without his approval;
+- the engine's evidence counts on big and agent-brought houses;
+- proof of funds stays his;
+- showings get the desk-first reply.
+
+Switches in Settings → Auto-underwrite → The offer engine, both off. They are meant for the day the
+scorecard says grade A is ready.
+- **`pricingV2.liveA`** — `sendEngine` in auto-underwrite.js. In the skeleton and draft blocks the
+  engine's answer replaces Bricked's own send.
+  - **Sends** when `engineSendGate` passes: grade A, triage hot, workable or long shot, and a list price
+    or seller's number to measure against. The offer opens at `v2.open` (`priceOverride`) and carries
+    `offer.pricing {live, grade, open, walkAway, investorPrice, arv, rehab, rehabWhy, triage, spread,
+    moves}`. `onOfferCreated` then floats it and the letter follows, as with any clean underwrite.
+  - **Otherwise** it stays a draft, with the engine's reason in `autoUnderwrite.brickedHeld`.
+  - **On a live grade-A offer:**
+    - `numberApproved` counts any amount at or under `pricing.walkAway` as approved, so their yes gets
+      the NWMLS write-up ask (`asksForWriteUp`). Matt signs.
+    - `numberStance` is firm, so big and agent-brought houses aren't held to a range.
+    - `numberConfidence` reads the grade.
+    - `autoAcceptCeiling` never goes past the walk-away (`engineCapped`).
+- **`pricingV2.walkaway`** — `shared/walkaway.js`. `evaluateBandFor` answers a counter on an offer
+  `walkawayOffer` accepts: engine-live, grade A, and nothing a person did to it (no revise, publish,
+  send, pin or hand revision).
+  - **Their number ≤ the walk-away:** take it ("N works for us").
+  - **≤ 10% over:** up to `WALKAWAY_MAX_MOVES` (2). The first goes halfway, the second to the walk-away
+    as "best we can do". Moves are recorded `by:"walkaway"` with `pricing.moves` counted; a move doesn't
+    set `offer.agreed`.
+  - **Further over, or both moves spent:** the band's own path — held, and a close one becomes a call.
+  - Their own words and a lower number we texted are checked as the band checks them.
+- **Showings (always on, Matt's words):** "we'd like to first underwrite from our desktop, based on comps
+  and pictures, float a number, and see if it's even worth continuing the conversation."
+  `deskFirstReply` replaces the showing hold on a house we priced ("is the number we sent in the realm
+  for the seller?") and on one we haven't ("let me get you a number…"; its draft or engine run is still
+  started). A turnkey house keeps its line.
+
+**Refresh the county table** by hand every month or two: `node scripts/kc-flips.mjs --refresh`, then
+`node scripts/kc-flip-table.mjs`, `node scripts/sync-shared.mjs`, and commit.
+
+**Back-test** (read-only): `node scripts/price-engine-backtest.mjs`, or `--from offers.json --deals
+deals.json`. On 2026-11-04:
+- the walk-away was a median 1.00× Matt's own inputs at 70% − $15k, across 144 houses;
+- the closed deals landed 2% under contract;
+- the deals that died on price or rehab landed 17–45% under;
+- rehab by age alone was under Matt's on 46% of houses, which is why grade A needs evidence.
+
+### Our own underwrite: engine mode (2026-11-04)
+
+Matt (2026-11-04): Bricked has about 300 lookups left and is expensive. "Can we use our auto underwrite
+instead, or dial it in so it's a lot more accurate?" His choices:
+- our own comps and photo scope on every named house (about $0.43 a house);
+- Bricked only when ours is unsure, at most 3 a day.
+
+Settings → Auto-underwrite → "When an agent names a house" → **Price it ourselves**
+(`autoUnderwriteMode: "engine"`).
+- **Which houses.** The conversation starts a run for every house an agent names with a full address,
+  the same houses skeleton mode drafts (`everyNamedHouse` in reply-agent.js).
+- **The run** is the full machine: the subject from Zillow, nearby sold comps, and the photo scope.
+- **Which comps are "renovated":**
+  - A comp's own listing description decides first (`remodelSignal` in shared/comp-match.js, kept by
+    `factsFromDetail` → `mergeFacts`):
+    - "fully remodeled", "flipped", or two or more "new X" parts → renovated;
+    - "fixer", "investor special", "sold as-is", "original kitchen", "tear down" → dated;
+    - a dated word wins over a remodel word.
+  - When 3 or more comps say remodeled in their own listings, they carry the ARV
+    (`gradeByPriceProxy`, source "listing").
+  - Otherwise the $/sqft guess runs over the comps that don't call themselves dated, plus the ones that
+    say remodeled.
+- **The ending** (`engineFinish` in auto-underwrite.js):
+  - The offer engine prices the house on our comps' ARV and the photo scope.
+  - **Bricked is asked only when the engine is unsure of the ARV** (`engineUnsure`: no ARV, or fewer
+    than 4 remodeled comps).
+    - It is limited to `pricingV2.brickedPerDay` (default 3, 0 = never) a Pacific day, counted in the
+      `brickedBudget` job cursor (`takeBrickedCredit`), and only while "Price drafts with Bricked.ai" is
+      on.
+    - Its read joins ours, and the engine prices again.
+- **What Matt sees.** With grade A off, every house is a "Price it" draft (`ENGINE_HOLD`). Its subject
+  line carries "our comps ARV $X · rehab $Y from N photos", and the engine's grade is on
+  `autoUnderwrite.brickedHeld`. The house record (`house_pricing`) holds the engine's answer for the
+  scorecard, whether or not shadow is on.
+- **With grade A live** (`pricingV2.liveA`), `sendEngine` sends as above, plus one extra check. The
+  old gates' data holds (`evaluateGates` → `data`) keep the house a draft, however sure the engine is:
+  - no record of the house, or an address read unsure;
+  - an unknown size;
+  - a location placed only at the ZIP or city centre;
+  - a scope past the heavy band;
+  - a structural flag from the photos.
+
+  Too few comps is not one of them; the grade and Bricked answer that.
+- **A rent is not a list price.**
+  - At the source, `saleListPrice` (rehab-scan.js) returns 0 for a for-rent listing's `price` (the
+    month's rent) and for any price under $20k. `fetchZillowDetail` and `fetchZillowListings` both use
+    it.
+  - In the engine, `priceHouse` ignores a list under `LIST_MIN` ($20k) or under `LIST_MIN_OF_ARV`
+    (15%) of the ARV. The house triages "unknown" and stays a draft.
+  - Why: the 2026-11-04 backtest priced a Des Moines rental's $2,900 a month as its list price and
+    capped the walk-away at $2,500.
+- **Operator runs** (Re-run, Retry, the editor) and the backtest still run the full machine as before.
+- Test: `ghl-broker/engine-mode.test.mjs`.
+
+**Backtest, 2026-11-04** (54 houses with Matt's ARV and another reference, run quietly on prod's comps
+code from before the listing-description fix; scratchpad `scripts/analyze-backtest.mjs`):
+- Our comps' ARV against Matt's: median 0.98×; 27 of 51 within 5%, 34 within 10%, 6 more than 10% high.
+- The engine's rehab (the higher of the photo scope and the age floor) against Matt's: median 1.29×.
+  Over his 131 hand prices, the age floor alone is a median 1.00×.
+- The engine's walk-away against Matt's own ARV and rehab at the same formula: median 0.885×.
+- 7 of 51 would send by themselves with grade A live; none more than 10% over Matt's number at the
+  same formula.
+
+
 ### Draft only: the app makes the draft, you price it (2026-10-16)
 
 **Why.** Read against all 363 runs and their 269 threads:
@@ -455,6 +651,46 @@ planned" field. In their place goes one line: WE PASSED ON <house> (why), ask
 nothing more about it, and if the thread hasn't told them yet, tell them in
 this reply. Before this, the checklist had the bot asking what a passed house
 was worth fixed up. This works with the pass note switched off.
+
+### Bricked.ai on the draft, and the number it may send (2026-10-28, rehab fixed 2026-11-04)
+
+**What it does.** With `brickedOnDrafts` and a key saved, every house the conversation names gets one
+Bricked call (`brickedRead`, ghl-broker/auto-underwrite.js). Its ARV and repairs go on the draft.
+With `brickedSendsConfident` on, a read that clears `brickedSendGate` publishes itself at
+`brickedSendPct` (70) × ARV − repairs − the fee, capped at `maxOfferPctOfList` of list, and goes
+through `onOfferCreated` like any clean underwrite.
+
+**The rehab, after the 2026-11-04 review.** Read against 50 reads: 46 had no repair figure, a $0 line
+passed as an estimate, a turnkey house sent itself, and the machine's rehab ran ~40% under Matt's at
+every age of house.
+- **The skeleton asks Zillow first.** With Bricked on it fetches the listing (`fetchZillowPhotos`, a
+  few tenths of a cent) before Bricked, so Bricked gets the listing remarks as the work description
+  (`brickedWorkText`), not just the agent's text. The same lookup answers the send's kind, rural and
+  list-price checks. With Bricked off, the skeleton still buys nothing.
+- **$0 is no estimate.** `withSizeRepairs` fills a null or $0 with the medium band for the size,
+  never under `BRICKED_MIN_REPAIRS` ($60k, Matt's ballpark). The gate refuses repairs ≤ 0.
+- **The full run's floors apply** (`floorBrickedRepairs`): a gut job or teardown in the agent's
+  words or the remarks prices at $150/sqft (`gutSignal`). Matt's calibrated $/sqft floor for the
+  house's age applies once he has applied one in Lessons. Neither ever lowers a figure, and the
+  calibrated ARV haircut stays on the comps path.
+- **The gate holds** a turnkey read (Bricked's as-is ≥ 90% of its ARV, `BRICKED_TURNKEY_SHARE`) and a
+  gut or teardown house (`repairsSource: "gut"`). Both stay a draft with the reason in `brickedHeld`.
+- **The label reads Bricked's grading.** `is_renovated` comes back null; a comp with
+  `renovation_score ≥ 0.7` (`RENOVATED_SCORE`, price-bricked.js `isRenovatedComp`) is renovated. The
+  draft keeps the house's own condition grade and renovation score (`draft.bricked.subject`).
+- **Lessons sees Matt's pricing.** The draft carries `autoUnderwrite.machineRepairs` and
+  `machineRepairsSource` (bricked, size, gut or calibrated), whether or not it sent. Publishing it
+  stores `offer.publishedFrom {source, arv: [machine, his], repairs: [machine, his], sqft, yearBuilt}`
+  (shared/calibration.js `publishedFromOf`), which `calibrationReport` reads. It is not a revision:
+  revisions are read as negotiation history ("first offer", "we moved on price").
+- **The bot.** `MATT_PRICES_LINE` speaks only to houses with no number in OUR OFFERS. A house the
+  machine priced follows the book.
+
+**Check:**
+- New drafts show `brickedHeld` "turnkey: …", "no repair estimate" or "gut job or teardown" where they
+  apply.
+- `autoUnderwrite.machineRepairs` is on each Bricked draft.
+- A published draft has `publishedFrom`.
 
 ### A shorthand address, and a run a redeploy killed (2026-09-16)
 
@@ -5876,6 +6112,25 @@ Replay over the 5,503 texts agents sent us (saved threads, 2026-10-14): 56 hits 
 (list_back 15, referral_fee 16, buyer_agent 13, co_wholesale 9, investor_buyer 3). Two were not
 partner terms: a wholesaler pointing us to their dispo person about one house, and "I'm a
 wholesaler myself so I understand".
+
+### An offer to represent us gets a yes (2026-11-04)
+
+Matt: "We definitely do work with buyer's agents … we have them be our buyer representation. That's
+part of why people set us up as a deal. Whenever someone asks that, we are able to fully tell them."
+An agent's "as a co-signer, I represent you" was being held as partner terms.
+
+- **The rule.** `BUYER_AGENT_RULE` (`shared/partner-terms.js`) is in every agent prompt, after the
+  WRITE-UP TERMS. It says yes in the same message: they can represent us, and they write it up on
+  NWMLS forms for our signature, with the buyer as in the write-up terms. A buyer agency (buyer broker)
+  agreement is fine if it's property-specific or non-exclusive, which is Matt's own wording in the
+  threads. A commission or compensation figure is still his: the bot gives the yes, says it'll confirm
+  the compensation side today, and sets needsHuman.
+- **No hold when that's all they offered.** `answersItself(terms)`: when every kind heard is
+  `buyer_agent`, the draft carries no `partnerTerms`, isn't forced to needsHuman, and `partnerTermsLine`
+  tells it to say yes. The `partner_terms` event is recorded with `answered: true`, and
+  `call_partner_terms` skips it, so no "yours to answer" row appears for a yes already sent. The bot
+  can't place a commission, a fee, a list-back, a deal list or buying of their own, so any of those
+  beside it still holds the reply for Matt as before.
 
 ### Agents work for us (2026-10-15)
 

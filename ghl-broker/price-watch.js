@@ -65,6 +65,19 @@ const MIN_GAP_MS = 20 * 3600 * 1000;
 const iso = (ms) => new Date(ms).toISOString();
 
 // { dropped, from, to, pct }
+/**
+ * soldOf(hit, { since }) → { price, at } | null
+ * The sale Zillow shows for the house, when it happened on or after `since` (the day we priced it):
+ * an older sale is the seller buying it, not the market answering our number (2026-11-04).
+ */
+export function soldOf(hit = {}, { since = null } = {}) {
+  const price = Math.round(Number(hit?.lastSoldPrice) || 0);
+  if (!(price > 0)) return null;
+  const at = hit.lastSoldDate || null;
+  if (since && (!at || at < String(since).slice(0, 10))) return null;
+  return { price, at };
+}
+
 export function evaluateDrop({ from = 0, to = 0 } = {}) {
   const a = Math.round(Number(from) || 0), b = Math.round(Number(to) || 0);
   const gap = a - b;
@@ -182,9 +195,12 @@ export async function runPriceWatch({ client, locationId, saved = {}, store, sen
     const onMarket = stillForSale(hit.status);
     const back = onMarket && seen.offMarketAt ? seen.offMarketAt : null;
     const { offMarketAt: _off, ...rest } = seen;
+    const sold = onMarket ? null : soldOf(hit, { since: full.createdAt });
     full.priceWatch = { ...(onMarket ? rest : seen), listPrice: to || from || null, status: hit.status || null, checkedAt: iso(now),
       ...(onMarket ? {} : { offMarketAt: seen.offMarketAt || iso(now) }),
-      ...(back ? { backOnMarketAt: iso(now) } : {}) };
+      ...(back ? { backOnMarketAt: iso(now) } : {}),
+      // What it sold for, once Zillow shows the sale (the offer engine's scorecard).
+      ...(sold ? { sold } : {}) };
     await store.updateOffer(full.id, full).catch(() => {});
 
     if (back) {

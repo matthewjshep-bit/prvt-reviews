@@ -112,6 +112,11 @@ export function autoAcceptCeiling({ offer, settings = {} } = {}) {
     const cap = Math.round((listPrice * pctOfList) / 100);
     if (cap < ceiling) { ceiling = cap; listCapped = true; }
   }
+  // The offer engine's walk-away (shared/price-engine.js, 2026-11-04): on a house it priced, nothing
+  // the band does goes past it. This only ever lowers the ceiling.
+  const walk = round(offer.pricing?.walkAway);
+  let engineCapped = false;
+  if (walk > 0 && walk < ceiling) { ceiling = walk; engineCapped = true; }
   // An offer whose printed price was hand-raised above every model has no band
   // at all. The honest answer is "never auto-accepts", not "auto-accepts
   // anything above the number we inflated".
@@ -120,8 +125,10 @@ export function autoAcceptCeiling({ offer, settings = {} } = {}) {
 
   return {
     ceiling, computable: true, reason: "",
-    mode: top.key, modes, arv, repairs, source, fee: AUTO_ACCEPT_FEE, listCapped,
-    basis: listCapped
+    mode: top.key, modes, arv, repairs, source, fee: AUTO_ACCEPT_FEE, listCapped, engineCapped,
+    basis: engineCapped
+      ? `the offer engine's ${fmtK(walk)} walk-away`
+      : listCapped
       ? `${pctOfList}% of the ${fmtK(listPrice)} list price (under ${top.label} at a ${fmtK(AUTO_ACCEPT_FEE)} assignment)`
       : `${top.label} at a ${fmtK(AUTO_ACCEPT_FEE)} assignment`,
   };

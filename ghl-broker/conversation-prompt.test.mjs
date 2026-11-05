@@ -189,6 +189,19 @@ test("the agent prompt carries the write-up terms and says to give them in the s
   assert.match(sys, /Commission[^.]*not yours to settle/i);
 });
 
+// Matt, 2026-11-04: we work with buyer's agents — the agent who brings us a
+// deal often represents us. Whoever asks gets the whole answer, every time.
+test("the agent prompt says yes to a buyer's agent, on NWMLS forms, with a property-specific or non-exclusive agreement", () => {
+  const sys = buildSystemPrompt({ config: normalizeConversationAi(null), party: "agent", channel: "sms" });
+  assert.match(sys, /THE BUYER'S AGENT/);
+  assert.match(sys, /we work with buyer's agents/i);
+  assert.match(sys, /write it up on NWMLS forms for our signature/);
+  assert.match(sys, /property-specific or non-exclusive/);
+  assert.match(sys, /commission[^.]*not yours to settle/i);
+  const inv = buildSystemPrompt({ config: normalizeConversationAi(null), party: "investor", channel: "sms" });
+  assert.doesNotMatch(inv, /THE BUYER'S AGENT/, "investors don't represent us");
+});
+
 // 10917 48th St E, 2026-09-27: the prompt itself said "close fast, cash,
 // with no lender" and "a 10 to 14 day target close", and the bot said both.
 test("the agent prompt says we buy with a hard money loan, a 10 to 14 day inspection and roughly 10 to 21 days to close, never cash with no lender", () => {

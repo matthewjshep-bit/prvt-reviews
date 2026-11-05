@@ -123,6 +123,11 @@ import {
 } from "../reply-agent.js";
 import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
+import { publishedFromOf } from "../shared/calibration.js";
+import { buildScorecard, maybeRunPriceScorecard } from "../price-scorecard.js";
+import { importThreadReads, startThreadReads, getThreadReadJob, CURSOR_NAME as THREAD_READS_CURSOR } from "../thread-reads.js";
+import { questionTopics } from "../shared/thread-read.js";
+import { normalizePricingV2 } from "../shared/price-engine.js";
 import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
 import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
@@ -2696,6 +2701,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const at = new Date().toISOString();
     offer.autoUnderwrite = { ...held.autoUnderwrite, publishedAt: at };
     offer.approved = { amount: Math.round(Number(offer.cashAmount) || 0), at, by: "publish" };
+    // What the machine read beside what he priced, for Lessons (2026-11-04).
+    // Not a revision: those read as negotiation history.
+    const from = publishedFromOf({ held, offer, at });
+    if (from) offer.publishedFrom = from;
     if (handToBot) offer.handedToBotAt = at;
     await store.updateOffer(offer.id, offer).catch(() => {});
     if (!handToBot) return;
@@ -5698,7 +5707,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     // identically. The band itself never reaches this — it is ask-only.
     // `by`: "counter_band" when the band ran it by itself, "you" when a person
     // applied it from the row — only a person's press approves the number.
-    reviseOfferToCounter: async ({ contactId, addressHint, amount, draftId = null, by = "counter_band" }) => {
+    reviseOfferToCounter: async ({ contactId, addressHint, amount, draftId = null, by = "counter_band", move = false }) => {
       const price = Math.round(Number(amount) || 0);
       if (!price) return { ok: false, reason: "no number to re-issue at" };
       // Open, or dead on their side and revived by this counter — the same
@@ -5711,7 +5720,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!full) return { ok: false, reason: "offer vanished" };
       const revived = !OPEN_STATUSES.has(effectiveStatus(full));
       const out = await createOfferFromRequest({
-        locationId, client, existing: full, revisedBy: by === "you" ? "you" : "counter_band",
+        locationId, client, existing: full, revisedBy: by === "you" ? "you" : by === "walkaway" ? "walkaway" : "counter_band",
         body: { contactId, scope: full.scope,
                 // priceOverride is the manual final price: the letter prints
                 // their number while the breakdown still shows the model that
@@ -5725,7 +5734,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       revised.counterBand = { ...(revised.counterBand || {}), at: revised.counterBand?.at || acceptedAt, acceptedAt, amount: price, draftId };
       // Both sides said yes to this number: the price is locked from here
       // (priceLocked in shared/offer-status.js) — no re-quote, no re-run.
-      revised.agreed = { amount: price, at: acceptedAt, via: "counter_band" };
+      // A walk-away MOVE is our number going up toward theirs (shared/walkaway.js): nothing is
+      // agreed yet, and the move counts against its two.
+      if (move) revised.pricing = { ...(revised.pricing || {}), moves: (Number(revised.pricing?.moves) || 0) + 1, lastMoveAt: acceptedAt, lastMove: price };
+      else revised.agreed = { amount: price, at: acceptedAt, via: by === "walkaway" ? "walkaway" : "counter_band" };
       // A revived offer is open again from here, so the paper can go
       // (sendOfferDocs reads open offers only) and the ladders see it live.
       if (revived) recordStatus(revised, "countered", "revived by their counter", acceptedAt, { amount: price, source: "conversation" });
@@ -6928,6 +6940,59 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // What every Claude call cost, by day and feature (ai-spend.js): drafts,
   // photo scans, comp grading, enrichment, dispo, the coach. Body-free GET;
   // ?days=1..60, default 7.
+  // The offer engine v2 (2026-11-04): how far its shadow prices are from Matt's and from what
+  // happened, per grade and lead source, and whether a grade is ready for his switch. Read-only:
+  // outcomes are worked out for the answer and not saved (the daily run saves them).
+  router.get("/automations/pricing/scorecard", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const days = Math.min(365, Math.max(7, parseInt(req.query.days, 10) || 120));
+      const { card, records } = await buildScorecard({ store, locationId, saved, days, persist: false });
+      res.json({ ok: true, records, switches: normalizePricingV2(saved.pricingV2), card });
+    } catch (err) { fail(res, err); }
+  });
+  // Every conversation, read for pricing evidence (shared/thread-read.js). The import takes the
+  // 2026-11-04 backfill and is dry unless dryRun:false; a run reads what moved (dry by default).
+  router.post("/automations/thread-reads/import", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const b = req.body || {};
+      const rows = Array.isArray(b.rows) ? b.rows : Array.isArray(b.reads) ? b.reads : [];
+      res.json({ ok: true, dryRun: b.dryRun !== false, ...(await importThreadReads({ store, locationId, rows, by: String(b.by || "import"), through: b.through || null, dryRun: b.dryRun !== false })) });
+    } catch (err) { fail(res, err); }
+  });
+  router.post("/automations/thread-reads/run", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const b = req.body || {};
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const job = startThreadReads({ client, locationId, store, saved, since: b.since || null, limit: Math.min(1000, Math.max(1, Number(b.limit) || 150)), dryRun: b.dryRun !== false });
+      res.json({ ok: true, job });
+    } catch (err) { fail(res, err); }
+  });
+  router.get("/automations/thread-reads/status", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const reads = (await store.listThreadReads(locationId).catch(() => [])) || [];
+      const cursor = await store.getJobCursor?.(locationId, THREAD_READS_CURSOR).catch(() => null);
+      res.json({ ok: true, on: normalizePricingV2(saved.pricingV2).reads, job: getThreadReadJob(locationId), last: cursor?.doc?.last || null,
+        reads: reads.length, byParty: reads.reduce((m, r) => (m[r.doc?.party || "?"] = (m[r.doc?.party || "?"] || 0) + 1, m), {}),
+        unanswered: questionTopics(reads.map((r) => r.doc)).slice(0, 40) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // One house's record: the engine's reads, its answer and history, and the outcome.
+  router.get("/automations/pricing/house", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const key = String(req.query.key || "").trim();
+      if (!key) return res.status(400).json({ error: "key is required (a house key, as the scorecard lists it)" });
+      res.json({ ok: true, record: (await store.getHousePricing(locationId, key)) || null });
+    } catch (err) { fail(res, err); }
+  });
+
   router.get("/automations/ai-spend", async (req, res) => {
     try {
       resolveLocation(req);

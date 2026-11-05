@@ -777,11 +777,28 @@ test("an agent asking if we do list-backs gets held for Matt with a partner row,
   assert.equal(events.some((e) => e.type === "investor_minded"), false, "an agent asking for a list-back isn't an investor");
 });
 
-test("an agent offering to be our buyer's agent raises a partner row", async () => {
-  const { d, events } = await runPartner("I can represent you as your buyer's agent and keep an eye out for you");
+// Matt, 2026-11-04: "We definitely do work with buyer's agents … we have them
+// be our buyer representation. That's part of why people set us up as a
+// deal." An agent offering to represent us gets that yes from the bot, in the
+// same message; only money and the other terms wait for him.
+test("an agent who offers to represent us as our buyer's agent gets a yes that sends itself", async () => {
+  const { d, events, asked } = await runPartner("As a co-signer, I represent you. I can be your buyer's agent on this one",
+    { ...DRAFT, reply: "Yes, we'd love that. You can represent us and write it up on NWMLS forms for us to sign." });
+  assert.equal(d.status, "scheduled", "not held for Matt");
+  assert.notEqual(d.needsHuman, true);
+  assert.equal(d.partnerTerms, undefined, "no partner-terms hold on the draft");
+  assert.match(asked[0].context.text, /BUYER'S AGENT: they offered to represent us/);
+  assert.doesNotMatch(asked[0].context.text, /A person reads this one before it goes/);
+  const row = events.find((e) => e.type === "partner_terms");
+  assert.equal(row.data.kind, "buyer_agent");
+  assert.equal(row.data.answered, true, "recorded as answered, so the Desk raises no 'yours to answer' row");
+});
+
+test("an agent who offers to represent us and asks about our commission is still held for Matt", async () => {
+  const { d } = await runPartner("Happy to be your buyer's agent. Would you be paying my buyer agent commission?");
   assert.equal(d.status, "draft");
-  assert.equal(d.partnerTerms.kind, "buyer_agent");
-  assert.equal(events.filter((e) => e.type === "partner_terms").length, 1);
+  assert.equal(d.needsHuman, true);
+  assert.deepEqual(d.partnerTerms.kinds, ["buyer_agent", "referral_fee"]);
 });
 
 test("an agent who says they'd pay an assignment fee is investor-minded and flagged for the buyer list", async () => {
@@ -2402,6 +2419,35 @@ test("the band reads the offer book and works out the ceiling, but a counter abo
   assert.match(v.reason, /never goes above the \$240,000 we sent/);
 });
 
+// Matt, 2026-11-04: on a grade-A house the engine priced and sent itself, the machine may come up
+// in at most two moves to the walk-away, never past it (shared/walkaway.js). Every other offer
+// keeps the band exactly as above.
+const ENGINE_OFFER = { ...BAND_OFFER, id: "eo1", cashAmount: 335500, arv: 640000, repairs: 82500, address: "4417 Somerset Ln, Everett, WA",
+  autoUnderwrite: { basis: "engine" }, pricing: { live: true, grade: "A", walkAway: 350500, moves: 0 } };
+test("a counter just over a grade-A walk-away moves us halfway, released under the walk-away", async () => {
+  const v = await evaluateBandFor({
+    store: bandStore([ENGINE_OFFER]), locationId: "LOC", party: "agent", config: bandCfg, saved: { pricingV2: { walkaway: true } },
+    draft: { intent: "counter", counterAmount: 355000, confidence: "high", propertyAddress: ENGINE_OFFER.address },
+    job: { contactId: "c1", message: "Seller would do 355,000 on Somerset" }, now: Date.now(),
+  });
+  assert.equal(v.kind, "walkaway");
+  assert.equal(v.passed, true);
+  assert.equal(v.releaseAmount, 345250);
+  const out = releaseUnderGuard({ base: { send: false, code: "never_auto", reason: "a counter is a person's call" }, party: "agent", intent: "counter", config: bandCfg, guard: v });
+  assert.equal(out.send, true);
+  assert.match(out.reason, /released under the walk-away — moving to \$345,250 against their \$355,000/);
+});
+
+test("with the walk-away switch off, an engine offer's counter waits for Matt as before", async () => {
+  const v = await evaluateBandFor({
+    store: bandStore([ENGINE_OFFER]), locationId: "LOC", party: "agent", config: bandCfg, saved: {},
+    draft: { intent: "counter", counterAmount: 345000, confidence: "high", propertyAddress: ENGINE_OFFER.address },
+    job: { contactId: "c1", message: "Seller would do 345,000" }, now: Date.now(),
+  });
+  assert.equal(v.kind, "counter_band");
+  assert.equal(v.passed, false);
+});
+
 test("the band is not even computed when it is switched off", async () => {
   const v = await evaluateBandFor({
     store: bandStore(), locationId: "LOC", party: "agent", saved: {},
@@ -3453,7 +3499,9 @@ test("an invitation to make an appointment on a project we haven't priced gets '
 
 // Draft only (Matt, 2026-10-16): he prices it, so a showing is his to book.
 // "Let me run the numbers first" put off 42 walkthroughs in the review.
-test("with draft only on, an invitation to see a house we haven't priced is yours to book, and the draft is still made", async () => {
+// Matt, 2026-11-04: "Just say that we'd like to first underwrite from our desktop, based on comps
+// and pictures, float a number, and see if it's even worth continuing the conversation."
+test("an invitation to see a house we haven't priced gets the desk-first reply, not a hold, and the draft is still made", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);
   const store = fakeStore();
@@ -3470,12 +3518,24 @@ test("with draft only on, an invitation to see a house we haven't priced is your
   await settle();
   assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
-  assert.doesNotMatch(d.reply, /run the numbers/);
-  assert.equal(d.needsHuman, true);
-  assert.equal(d.showingOffered?.address, "450 Overlake Dr E, Medina, WA 98039");
-  assert.ok(d.flags.some((f) => /they offered a showing on 450 Overlake Dr E — yours to book, call or pass/.test(f)), d.flags.join(" · "));
-  assert.equal(d.autoSend.decided, false, "it waits for you");
+  assert.match(d.reply, /^Appreciate that\. We like to underwrite from the desk first, off the comps and the photos, so let me get you a number on 450 Overlake Dr E/);
+  assert.match(d.reply, /worth going further before anyone sets a time\.$/);
+  assert.equal(d.needsHuman, false);
+  assert.equal(d.deskFirst, "unpriced");
+  assert.equal(d.showingOffered, undefined, "not held for Matt");
+  assert.ok(!d.flags.some((f) => /offered a showing/.test(f)), d.flags.join(" · "));
+  assert.equal(d.intent, "deal_available");
+  assert.equal(d.autoSend.decided, true, `it sends itself: ${d.autoSend.reason}`);
   assert.equal(uw.length, 1, "the draft is made so the house is ready to price");
+});
+
+test("an invitation to see a house we priced asks whether our number is in the realm first", async () => {
+  const { deskFirstReply } = await import("./reply-agent.js");
+  const r = deskFirstReply({ street: "450 Overlake Dr E", priced: true });
+  assert.match(r, /underwriting from the desk first, off the comps and the photos/);
+  assert.match(r, /is the number we sent on 450 Overlake Dr E in the realm for the seller\?/);
+  assert.doesNotMatch(r, /\$|\d{3},\d{3}|\bk\b/, "no figure in it: the number is the offer's");
+  assert.ok(r.length <= 300);
 });
 
 // Matt, 2026-10-05: an agent who says the house needs nothing has told us
@@ -8494,6 +8554,23 @@ test("with skeleton on, houses named on a lead the rule underwrites one of are a
     sent: [{ id: "p1", locationId: "LOC", contactId: "c1", status: "sent", createdAt: iso(3600000), reply: "…", qualify: { stage: "pass", address: ICE } }],
     reply: "We do buy in Kent. Let me take a look at both." });
   assert.deepEqual(uw.map((u) => u.address).sort(), ["1412 Pine St, Kent, WA 98031", "88 Alder St, Kent, WA 98031"]);
+});
+
+// Matt (2026-11-04): Bricked's credits are few — "can we use our auto underwrite instead?" Engine
+// mode prices every house they name on our own comps and photo scope, the same houses skeleton
+// mode would have drafted (engine-mode.test.mjs has the run itself).
+test("with our own underwrite on, every house they name is priced, the same houses a skeleton would have been", async () => {
+  const ENGINE_SAVED = { ...QUALIFY_SAVED, autoUnderwriteMode: "engine" };
+  const opts = { intent: "wants_call", address: "", houses: KENT,
+    lines: [["outbound", OPENER], ["inbound", "Sold already, sorry"], ["outbound", "No worries, anything else that needs work?"]],
+    sent: [{ id: "p1", locationId: "LOC", contactId: "c1", status: "sent", createdAt: iso(3600000), reply: "…", qualify: { stage: "pass", address: ICE } }],
+    reply: "We do buy in Kent. Let me take a look at both." };
+  const { uw } = await replyTo(ASKED, { ...opts, saved: ENGINE_SAVED });
+  assert.deepEqual(uw.map((u) => u.address).sort(), ["1412 Pine St, Kent, WA 98031", "88 Alder St, Kent, WA 98031"]);
+  const lead = await replyTo(ASKED.replace("Give me a call about", "I have"), { ...opts, intent: "investor_open", saved: ENGINE_SAVED });
+  assert.deepEqual(lead.uw.map((u) => u.address).sort(), ["1412 Pine St, Kent, WA 98031", "88 Alder St, Kent, WA 98031"], "each once");
+  const icebreaker = await replyTo("Cosmetic fixer", { saved: ENGINE_SAVED });
+  assert.equal(icebreaker.uw.length, 0, "the first-text house we're still asking about isn't priced yet");
 });
 
 /* ---------- a flyer they send is a house (2026-10-22) ---------- */

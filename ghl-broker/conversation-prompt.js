@@ -7,6 +7,7 @@
 // who knows they are an investor. Pure.
 
 import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS, writeUpTermsText, CONVERSATION_AI_DEFAULTS } from "./shared/conversation-ai.js";
+import { BUYER_AGENT_RULE } from "./shared/partner-terms.js";
 import { heldInPlainWords } from "./shared/held-underwrites.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { CARRIER_RULE } from "./shared/carrier-words.js";
@@ -446,6 +447,12 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "give; a specific closing date, commission, proof of funds, or anything not listed here is not " +
       "yours to settle: answer the terms you have, and say you will confirm the rest today, with needsHuman set."
     );
+  }
+  if (party === "agent") {
+    // Matt, 2026-11-04: we work with buyer's agents — the agent who brings us
+    // a deal often represents us. An offer to represent us was held for him
+    // as "partner terms"; it's a yes, and the bot gives it (shared/partner-terms.js).
+    parts.push(BUYER_AGENT_RULE);
   }
   if (party === "agent") {
     // Matt, 2026-09-22 (Joseph Brazen, Medina): an offer marked "we passed"

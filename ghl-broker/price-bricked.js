@@ -70,6 +70,17 @@ async function brickedOnce(address, { apiKey, fetch = globalThis.fetch, timeoutM
 
 const num = (x) => (x == null || x === "" || !Number.isFinite(Number(x)) ? null : Number(x));
 
+// Bricked grades every comp's photos, but `is_renovated` comes back null on
+// nearly every read (49 of 50, 2026-11-04) while `renovation_score` (0–1) is
+// there: the ARV comps it picks score 0.77–0.94. A score at or over this is a
+// renovated comp. Reads saved before the fix carry only the score.
+export const RENOVATED_SCORE = 0.7;
+export function isRenovatedComp(c = {}) {
+  if (c.renovated === true || c.renovated === false) return c.renovated;
+  const s = num(c.renovationScore);
+  return s == null ? null : s >= RENOVATED_SCORE;
+}
+
 // The house as Bricked has it on record. Comps carry the same fields.
 function house(p = {}) {
   const d = p.details || {};
@@ -95,7 +106,7 @@ export function normalizeBricked(raw = {}) {
       ...house(c),
       use: c.compType || null, selected: !!c.selected,
       adjustedValue: num(c.adjusted_value),
-      renovated: c.is_renovated ?? null, renovationScore: num(c.renovation_score), renovationConfidence: num(c.renovation_confidence),
+      renovated: isRenovatedComp({ renovated: c.is_renovated ?? null, renovationScore: c.renovation_score }), renovationScore: num(c.renovation_score), renovationConfidence: num(c.renovation_confidence),
       condition: num(c.condition_rating),
     })),
     links: { share: raw.shareLink || null, dashboard: raw.dashboardLink || null },

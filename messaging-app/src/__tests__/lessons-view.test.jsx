@@ -2,7 +2,8 @@ import { test, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { buildPostMortem, dealScorecard, lessons } from "@shared/post-mortem.js";
-import { LessonsBody } from "../LessonsView.jsx";
+import { LessonsBody, EngineScorecard } from "../LessonsView.jsx";
+import { scorecard } from "@shared/price-scorecard.js";
 import { PostMortemBody } from "../PostMortemView.jsx";
 
 const snap = { underwriteMode: "lowball", maoPctOfArv: 70, wholesaleFee: 30000, cashPctOfArv: 90, repairBuffer: 30000, repairHeavyPctOfArv: 10, repairBaseMult: 2, repairHeavyMult: 1.5, precisionJitter: true };
@@ -64,4 +65,14 @@ test("the lessons block shows a calibration from his revisions with its Apply, a
   const thin = calibrationReport({ offers: offers.slice(0, 2) });
   const note = renderToStaticMarkup(<LessonsBody data={{ ...base, recommendations: [], calibration: { note: thin.note }, digestSaved: "" }} />);
   expect(note).toContain("Not enough of your revisions yet to calibrate: 2 of 5");
+});
+
+test("the offer engine's scorecard says it's off, or how close it is to your numbers and whether grade A is ready", () => {
+  const off = renderToStaticMarkup(<EngineScorecard data={{ switches: { shadow: false }, records: 0, card: scorecard([]) }} />);
+  expect(off).toContain("Off. Turn it on in Settings");
+  const now = Date.parse("2026-11-20T03:00:00Z");
+  const recs = Array.from({ length: 22 }, (_, i) => ({ v2: { arv: 600000, rehab: 95000, walkAway: 310000, grade: "A", at: new Date(now - i * 86400000).toISOString() }, outcome: { mattArv: 610000, mattRehab: 90000 } }));
+  const on = renderToStaticMarkup(<EngineScorecard data={{ switches: { shadow: true }, records: 22, card: scorecard(recs, { now }) }} />);
+  expect(on).toContain("22 houses priced");
+  expect(on).toContain("Grade A has cleared the bars");
 });

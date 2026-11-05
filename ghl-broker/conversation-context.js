@@ -331,7 +331,10 @@ function offMarketLines({ offers = [], events = [], now = Date.now() }) {
 // line only reaches the model once its draft exists, and the first reply was
 // written before that — "let me run the numbers and text you where we'd
 // land", a promise nobody kept (2026-10-22 audit: 27 of 100 unkept).
-export const MATT_PRICES_LINE = "PRICING A NEW HOUSE: every house is priced by hand, not by the machine. When they name one, never say you'll run the numbers or text them where we'd land, and never give a figure, a range or a time for it. Say you'll take a look at it, and ask what the seller would take and how soon they need to move.";
+// Scoped to houses with no number yet (2026-11-04): a confident Bricked read
+// sends a number by itself, and the line had read "every house is priced by
+// hand… never give a figure", against our own offer on the book.
+export const MATT_PRICES_LINE = "PRICING A NEW HOUSE: a house with no number in OUR OFFERS yet is priced by hand. When they name one, never say you'll run the numbers or text them where we'd land, and never give a figure, a range or a time for it. Say you'll take a look at it, and ask what the seller would take and how soon they need to move. A house already in OUR OFFERS is not new: follow the book for it.";
 
 export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "", highStakes = null, mattPrices = false }) {
   const custom = recordOverCustom(rawCustom, facts);

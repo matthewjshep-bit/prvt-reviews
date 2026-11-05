@@ -659,3 +659,13 @@ test("the bot doesn't promise a number on a house Matt prices", async () => {
   const off = buildAgentContext({ offers: [], custom: {}, now: NOW });
   assert.ok(!off.text.includes("PRICING A NEW HOUSE"));
 });
+
+// 2026-11-04 review: a confident Bricked read floats and sends a number on a
+// house, and the same prompt said "every house is priced by hand… never give
+// a figure", so the bot could refuse to say our own sent number back.
+test("a house with our number out isn't told never to give a figure", async () => {
+  const { MATT_PRICES_LINE } = await import("./conversation-context.js");
+  assert.match(MATT_PRICES_LINE, /no number in OUR OFFERS/);
+  assert.match(MATT_PRICES_LINE, /already in OUR OFFERS is not new: follow the book/);
+  assert.doesNotMatch(MATT_PRICES_LINE, /every house is priced by hand/);
+});
