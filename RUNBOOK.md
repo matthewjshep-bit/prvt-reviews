@@ -429,6 +429,19 @@ scorecard says grade A is ready.
     set `offer.agreed`.
   - **Further over, or both moves spent:** the band's own path — held, and a close one becomes a call.
   - Their own words and a lower number we texted are checked as the band checks them.
+  - **A push with no number (2026-11-04).** Matt: "if they push back on us on price, can we
+    proactively offer a higher counter, ratcheting up to our own walkaway?"
+    - What counts: "too low", "not enough", "can you come up", "they won't take that"
+      (`pushesOnPrice`).
+    - It spends the same two moves: halfway to the walk-away ("We can come up to N"), then the
+      walk-away itself ("Best we can do on {street} is N as-is"). The revised paper goes with each.
+    - A "too low" read as a no is answered as a counter while moves are left
+      (`reclassifiedFrom: "rejection"`). With both spent it stays a no, and the first-no / their-pass
+      path closes it as before.
+    - Never on a house that's gone or contested: sold, pending, under contract, another or
+      multiple offers, best and final.
+    - Never on a call transcript; a re-quote on their numbers doesn't also run.
+    - The "holding at N" and call-card stamps the counter blocks wrote are cleared when we move.
 - **Showings (always on, Matt's words):** "we'd like to first underwrite from our desktop, based on comps
   and pictures, float a number, and see if it's even worth continuing the conversation."
   `deskFirstReply` replaces the showing hold on a house we priced ("is the number we sent in the realm

@@ -122,7 +122,7 @@ import { gmailBeforeDraft, contactEmails } from "./gmail-sync.js";
 import { meterAi } from "./ai-spend.js";
 import { investorMindedCue } from "./shared/lead-source.js";
 import { partnerTerms, partnerTermsLine, answersItself, PARTNER_TERMS_LABEL } from "./shared/partner-terms.js";
-import { walkawayOffer, evaluateWalkaway, walkawayReply } from "./shared/walkaway.js";
+import { walkawayOffer, evaluateWalkaway, walkawayReply, pushesOnPrice, WALKAWAY_MAX_MOVES } from "./shared/walkaway.js";
 import { normalizePricingV2 } from "./shared/price-engine.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
 import { followWithCard, defaultCardBaseUrl, mintCardToken } from "./contact-card.js";
@@ -1388,7 +1388,9 @@ export function releaseUnderGuard({ base, party = "agent", intent = "other", con
     reason: family === "booking"
       ? `released under the calendar — ${guard.reason}`
       : guard.kind === "walkaway"
-        ? (guard.counterBack
+        ? (guard.pushback
+          ? `released under the walk-away — they pushed back on price with no number; stepping up to ${fmtMoney(guard.releaseAmount)}${guard.final ? ", the walk-away itself" : ` toward the ${fmtMoney(guard.ceiling)} walk-away`}`
+          : guard.counterBack
           ? `released under the walk-away — moving to ${fmtMoney(guard.releaseAmount)}${guard.final ? ", the walk-away itself" : ""} against their ${fmtMoney(guard.theirAmount)}`
           : `released under the walk-away — ${fmtMoney(guard.theirAmount)} is at or under the ${fmtMoney(guard.ceiling)} walk-away`)
       : guard.kind === "acceptance_band"
@@ -1541,7 +1543,9 @@ export async function evaluateBandFor({ store, locationId, party, draft, config,
   if (draft.intent === "counter" && full && normalizePricingV2(saved?.pricingV2).walkaway && walkawayOffer(full)) {
     const theirAmount = Math.round(Number(draft.counterAmount) || 0);
     const theirOwnWords = theirAmount > 0 && saidMoney(job.message || "").map((n) => Math.round(n)).includes(theirAmount);
-    return { ...evaluateWalkaway({ offer: full, theirAmount, theirOwnWords, comeDown: ourComeDown(full, transcript) || ourMoveUp(full, transcript) }), at: new Date(now).toISOString() };
+    // No number of theirs, but "too low" / "can you come up": we step up on our own (Matt, 2026-11-04).
+    const pushback = !(theirAmount > 0) && job.inboundKind !== "call" && Boolean(draft.pushback || pushesOnPrice(job.originalMessage || job.message || ""));
+    return { ...evaluateWalkaway({ offer: full, theirAmount, theirOwnWords, pushback, comeDown: ourComeDown(full, transcript) || ourMoveUp(full, transcript) }), at: new Date(now).toISOString() };
   }
   const args = { offer: full, draft, inboundMessage: job.message || "", settings: saved || {},
                  band, openOffers: open, releasedToday, now, moneyIn: saidMoney,
@@ -4439,6 +4443,23 @@ async function runReply(job, ctx) {
     draft = { ...draft, intent: "counter", counterFloor: "list_price", reclassifiedFrom: draft.intent === "counter" ? draft.reclassifiedFrom : draft.intent };
     job.intent = draft.intent;
   }
+  // "Too low", with no number of theirs, on an offer the engine priced and sent on grade A (Matt,
+  // 2026-11-04: "if they push back on us on price, can we proactively offer a higher counter,
+  // ratcheting up to our own walkaway?"): a counter we answer by stepping up — halfway to the
+  // walk-away, then the walk-away itself (shared/walkaway.js). With both steps made it stays a no,
+  // and the no closes it the usual way. A house that's gone is never a push (pushesOnPrice). Texts
+  // only: a call's transcript carries Matt's own words.
+  if (party === "agent" && !isCall && draft.intent === "rejection" && !(Number(draft.counterAmount) > 0)
+      && normalizePricingV2(saved?.pricingV2).walkaway && pushesOnPrice(job.originalMessage || job.message)) {
+    const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
+    const open = currentOffers(book).filter(isNegotiable);
+    const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
+    const full = picked && typeof store.getOffer === "function" ? (await store.getOffer(picked.id).catch(() => null)) || picked : picked;
+    if (full && walkawayOffer(full) && (Number(full.pricing.moves) || 0) < WALKAWAY_MAX_MOVES && Number(full.cashAmount) < Number(full.pricing.walkAway)) {
+      draft = { ...draft, intent: "counter", counterAmount: 0, pushback: true, reclassifiedFrom: "rejection" };
+      job.intent = draft.intent;
+    }
+  }
   if (party === "agent" && draft.intent === "counter") {
     const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []);
     const open = currentOffers(book).filter(isNegotiable);   // the number we're working from, per house
@@ -5219,7 +5240,7 @@ async function runReply(job, ctx) {
   // house on a misread is the failure that costs something. It concedes no
   // money either way, which is why it may run unattended at all.
   if (party === "agent" && config.parties.agent.requote?.enabled &&
-      ["counter", "rejection"].includes(draft.intent) &&
+      ["counter", "rejection"].includes(draft.intent) && !(auto.exception?.passed && guard?.kind === "walkaway") &&
       ![...plan.auto, ...plan.suggested].some((a) => a.type === "requote_from_agent_numbers")) {
     const action = { id: `a-rq-${job.id}`, type: "requote_from_agent_numbers", status: "pending", party,
       why: "they pushed back on the number — re-run it on theirs" };
@@ -5237,10 +5258,17 @@ async function runReply(job, ctx) {
     // (shared/walkaway.js): their number at or under it, else our move toward it.
     const walk = guard.kind === "walkaway";
     const amount = walk ? guard.releaseAmount : guard.counterBack ? guard.ceiling : guard.theirAmount;
+    // We moved: the "holding at N" and the call card the counter blocks wrote no longer apply.
+    if (walk) {
+      const { counterHold: _hold, callCounter: _call, ...moved } = draft;
+      draft = { ...moved, needsHuman: false, humanReason: "" };
+    }
     plan.auto.push(
       { id: `a-band-${job.id}`, type: "revise_offer_to_counter", mode: "auto", status: "pending", party, amount, via: walk ? "walkaway" : "counter band",
         ...(walk && guard.counterBack ? { move: true } : {}),
-        why: guard.counterBack
+        why: guard.pushback
+          ? `they pushed back on price with no number — stepping up to ${fmtMoney(amount)}${guard.final ? ", our walk-away" : ` toward the ${fmtMoney(guard.ceiling)} walk-away`}`
+          : guard.counterBack
           ? `they countered at ${fmtMoney(guard.theirAmount)}, just over the ${fmtMoney(guard.ceiling)} ceiling — countering back at it`
           : `they countered at ${fmtMoney(amount)}, inside the ${fmtMoney(guard.ceiling)} ceiling` },
       { id: `a-band-send-${job.id}`, type: "send_offer", mode: "auto", status: "pending", party, afterCounter: true, via: "counter band",

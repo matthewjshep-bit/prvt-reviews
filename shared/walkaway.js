@@ -16,7 +16,15 @@
 //                                         itself as "best we can do"
 //   otherwise                             not ours to move: held, and a close one becomes a call
 //
+// A push with no number (Matt, 2026-11-04: "if they push back on us on price, can we proactively
+// offer a higher counter, ratcheting up to our own walkaway?"): "too low", "can you come up",
+// "not enough" moves us the same two steps — halfway to the walk-away, then the walk-away itself as
+// the best we can do. After that a no is their pass, the usual way. A no because the house is gone
+// (sold, pending, another offer) is never a push.
+//
 // Pure.
+
+import { asksUsToComeUp } from "./conversation-ai.js";
 
 export const WALKAWAY_MAX_MOVES = 2;
 export const WALKAWAY_REACH = 0.10;
@@ -33,15 +41,28 @@ export function walkawayOffer(offer) {
   return true;
 }
 
+// Our number is too low for them, said without one of theirs.
+const TOO_LOW_RX = /\btoo low\b|\blow ?ball|\bnot (?:even )?close\b|\bway (?:off|under|below|low)\b|\bnot enough\b|\bneeds? (?:more|(?:it |to be )?higher)\b|\b(?:won'?t|wouldn'?t|will not|would not|not going to|isn'?t going to|can'?t|cannot)\s+(?:take|accept|do|go)\s+(?:that|this|it)\b|\binsult/i;
+// The house is gone or someone else is in it: not a price we can move to.
+const GONE_RX = /\bsold\b|\bpending\b|\bunder contract\b|\bin escrow\b|\b(?:another|other|an|multiple|competing|backup|higher|better) offers?\b|\baccepted (?:an?|another|their|the other)\b|\bwent (?:with|another)\b|\boff the market\b|\bwithdrawn?\b|\b(?:not|no longer) (?:selling|for sale|going to sell)\b|\bdecided (?:not|to keep|to rent)\b|\bbest and (?:final|highest)\b/i;
+
+/** pushesOnPrice(message) → true when they say our number is too low (or ask us up) and the house isn't gone. */
+export function pushesOnPrice(message = "") {
+  const m = String(message || "");
+  if (!m.trim() || GONE_RX.test(m)) return false;
+  return TOO_LOW_RX.test(m) || asksUsToComeUp(m);
+}
+
 /**
- * evaluateWalkaway({ offer, theirAmount, theirOwnWords, comeDown }) →
+ * evaluateWalkaway({ offer, theirAmount, theirOwnWords, comeDown, pushback }) →
  *   { kind: "walkaway", passed, checks, theirAmount, ceiling, releaseAmount, counterBack, final, reason }
  *
  * `ceiling` is the walk-away; `releaseAmount` the number we move to (their number when it's at or
  * under the walk-away). `counterBack`: we answer with a number of ours, not theirs. `final`: that
- * number is the walk-away itself.
+ * number is the walk-away itself. `pushback`: they pushed on price with no number — we step up on
+ * our own (halfway to the walk-away, then the walk-away).
  */
-export function evaluateWalkaway({ offer = null, theirAmount = 0, theirOwnWords = false, comeDown = null } = {}) {
+export function evaluateWalkaway({ offer = null, theirAmount = 0, theirOwnWords = false, comeDown = null, pushback = false } = {}) {
   const checks = [];
   const check = (name, ok, detail = "") => { checks.push({ name, ok: Boolean(ok), detail }); return Boolean(ok); };
   const ours = num(offer?.cashAmount);
@@ -53,6 +74,14 @@ export function evaluateWalkaway({ offer = null, theirAmount = 0, theirOwnWords 
 
   check("engine_offer", walkawayOffer(offer), "not an offer the engine priced and sent on its own");
   check("current_number", !comeDown, comeDown ? "we texted a different number after this offer last moved" : "");
+  if (!(their > 0) && pushback) {
+    if (checks.some((c) => !c.ok)) return verdict(false);
+    if (!check("moves_left", moves < WALKAWAY_MAX_MOVES, `both moves made (${moves}) — yours to call`)) return verdict(false);
+    if (!check("room_left", ours < walk, "we're already at the walk-away")) return verdict(false);
+    // Halfway to the walk-away the first time; the walk-away itself the second.
+    const step = moves >= WALKAWAY_MAX_MOVES - 1 ? walk : Math.min(walk, Math.max(round250(ours + (walk - ours) / 2), ours + 250));
+    return verdict(true, { releaseAmount: step, counterBack: true, final: step >= walk, pushback: true });
+  }
   check("their_own_words", their > 0 && theirOwnWords, their > 0 ? "their number isn't in their own message" : "no number read");
   check("above_ours", their > ours, "at or under our own number");
   if (checks.some((c) => !c.ok)) return verdict(false);
