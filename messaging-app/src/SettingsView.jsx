@@ -1121,13 +1121,22 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         </div>
         <label className="mb-1 block">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">When an agent names a house</span>
-          <select value={["skeleton", "draft"].includes(form.autoUnderwriteMode) ? form.autoUnderwriteMode : "full"} onChange={(e) => set("autoUnderwriteMode")(e.target.value)}
+          <select value={["skeleton", "draft", "engine"].includes(form.autoUnderwriteMode) ? form.autoUnderwriteMode : "full"} onChange={(e) => set("autoUnderwriteMode")(e.target.value)}
             className={INPUT_CLS}>
+            <option value="engine">Price it ourselves — our comps and photo scope, the offer engine's number (Bricked only when ours is unsure)</option>
             <option value="skeleton">Make a skeleton — just the agent and the address, nothing looked up</option>
             <option value="draft">Make a draft — I price it (no comps, no photo scan)</option>
             <option value="full">Underwrite it — comps, photo scan and a priced offer</option>
           </select>
         </label>
+        {form.autoUnderwriteMode === "engine" && (
+          <p className="mb-3 mt-1 text-xs text-slate-500">
+            Every named house gets our own Zillow comps (the ones whose own listings say remodeled carry the ARV) and a photo scope
+            of the rehab (about $0.43 a house). The offer engine prices it and it waits as "Price it" with our ARV and rehab on it,
+            until you switch grade A live below. Bricked is asked only when our comps can't carry the ARV, and at most the number a
+            day you set below, so its credits last.
+          </p>
+        )}
         <div className="mb-3 rounded-lg border border-slate-200 p-3">
           <label className="flex items-center gap-2 text-sm font-semibold">
             <input type="checkbox" checked={Boolean(form.brickedOnDrafts)} onChange={(e) => set("brickedOnDrafts")(e.target.checked)} />
@@ -1163,13 +1172,19 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
               <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Sends at Bricked confidence of at least (%)</span>
               <input type="number" min={50} max={100} value={form.brickedSendMinConfidence ?? 80} onChange={(e) => set("brickedSendMinConfidence")(e.target.value === "" ? "" : Number(e.target.value))} className={INPUT_CLS} />
             </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Bricked lookups a day when we price it ourselves</span>
+              <input type="number" min={0} max={50} value={form.pricingV2?.brickedPerDay ?? 3}
+                onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), brickedPerDay: e.target.value === "" ? 3 : Number(e.target.value) })} className={INPUT_CLS} />
+            </label>
           </div>
         </div>
         <div className="mb-3 rounded-lg border border-slate-200 p-3">
           <div className="mb-1 text-sm font-semibold">The offer engine (v2)</div>
           <p className="mb-2 text-xs text-slate-500">
-            One price per house: ARV from Bricked (checked by our comps), rehab never under the floor for the house's age and
-            condition, 70% of ARV less rehab, a $30k fee to open and a $15k walk-away. Graded A, B or C by how sure it is.
+            One price per house: ARV from our own remodeled comps or Bricked (when both are read and disagree by more than 10%,
+            the grade drops), rehab never under the floor for the house's age and condition, 70% of ARV less rehab, a $30k fee
+            to open and a $15k walk-away. Graded A, B or C by how sure it is.
           </p>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={Boolean(form.pricingV2?.shadow)} onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), shadow: e.target.checked })} />

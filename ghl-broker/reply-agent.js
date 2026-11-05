@@ -127,6 +127,9 @@ import { normalizePricingV2 } from "./shared/price-engine.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
 import { followWithCard, defaultCardBaseUrl, mintCardToken } from "./contact-card.js";
 
+// Skeleton and engine modes both take every house an agent names, not only the one the rule picks.
+const everyNamedHouse = (saved) => ["skeleton", "engine"].includes(underwriteMode(saved));
+
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
 const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "deal_followup", "outreach_nudge", "outreach_open", "buyer_pulse", "agent_pulse"]);
@@ -4917,7 +4920,7 @@ async function runReply(job, ctx) {
     // "Call me about 1412 Pine and 88 Alder": the call is yours, and each
     // house is still a skeleton for you to look at before you dial
     // (skeleton mode, 2026-10-19). Nothing else of the plan runs here.
-    if (party === "agent" && underwriteMode(saved) === "skeleton" && !notOurKind && !bankSale && typeof deps.startUnderwrite === "function") {
+    if (party === "agent" && everyNamedHouse(saved) && !notOurKind && !bankSale && typeof deps.startUnderwrite === "function") {
       for (const h of await skeletonHouses()) {
         const r = await deps.startUnderwrite({ contactId: job.contactId, message: job.message, address: h.address, askingPrice: h.sellerAsk || 0 })
           .catch((e) => ({ skipped: String(e?.message || e).slice(0, 120) }));
@@ -5188,12 +5191,13 @@ async function runReply(job, ctx) {
   // a skeleton for him to eyeball and mark, not only the one the rule would
   // underwrite. Not one this reply already answered — passed on, called
   // turnkey, or still asking its one question about — and never a house
-  // already in the book. Their own words only, as above.
-  if (party === "agent" && underwriteMode(saved) === "skeleton" && !notOurKind && !bankSale && !replyPassed && !qualifyHeld) {
+  // already in the book. Their own words only, as above. Engine mode
+  // (2026-11-04) prices every one of them the same way, on our own comps.
+  if (party === "agent" && everyNamedHouse(saved) && !notOurKind && !bankSale && !replyPassed && !qualifyHeld) {
     const planned = new Set(plan.auto.filter((x) => x.type === "start_underwrite").map((x) => addressKey(x.address || draft.propertyAddress || "")).filter(Boolean));
     for (const h of (await skeletonHouses()).filter((x) => !planned.has(addressKey(x.address)))) {
       plan.auto.push({ id: `a-sk-${job.id}-${addressKey(h.address).slice(0, 24)}`, type: "start_underwrite", mode: "auto", status: "pending", party,
-        address: h.address, askingPrice: h.sellerAsk || 0, why: `they named ${h.address} — a skeleton for you to look at` });
+        address: h.address, askingPrice: h.sellerAsk || 0, why: underwriteMode(saved) === "engine" ? `they named ${h.address} — priced on our own comps and photo scope` : `they named ${h.address} — a skeleton for you to look at` });
     }
   }
   if (numberFirst) {

@@ -8556,6 +8556,23 @@ test("with skeleton on, houses named on a lead the rule underwrites one of are a
   assert.deepEqual(uw.map((u) => u.address).sort(), ["1412 Pine St, Kent, WA 98031", "88 Alder St, Kent, WA 98031"]);
 });
 
+// Matt (2026-11-04): Bricked's credits are few — "can we use our auto underwrite instead?" Engine
+// mode prices every house they name on our own comps and photo scope, the same houses skeleton
+// mode would have drafted (engine-mode.test.mjs has the run itself).
+test("with our own underwrite on, every house they name is priced, the same houses a skeleton would have been", async () => {
+  const ENGINE_SAVED = { ...QUALIFY_SAVED, autoUnderwriteMode: "engine" };
+  const opts = { intent: "wants_call", address: "", houses: KENT,
+    lines: [["outbound", OPENER], ["inbound", "Sold already, sorry"], ["outbound", "No worries, anything else that needs work?"]],
+    sent: [{ id: "p1", locationId: "LOC", contactId: "c1", status: "sent", createdAt: iso(3600000), reply: "…", qualify: { stage: "pass", address: ICE } }],
+    reply: "We do buy in Kent. Let me take a look at both." };
+  const { uw } = await replyTo(ASKED, { ...opts, saved: ENGINE_SAVED });
+  assert.deepEqual(uw.map((u) => u.address).sort(), ["1412 Pine St, Kent, WA 98031", "88 Alder St, Kent, WA 98031"]);
+  const lead = await replyTo(ASKED.replace("Give me a call about", "I have"), { ...opts, intent: "investor_open", saved: ENGINE_SAVED });
+  assert.deepEqual(lead.uw.map((u) => u.address).sort(), ["1412 Pine St, Kent, WA 98031", "88 Alder St, Kent, WA 98031"], "each once");
+  const icebreaker = await replyTo("Cosmetic fixer", { saved: ENGINE_SAVED });
+  assert.equal(icebreaker.uw.length, 0, "the first-text house we're still asking about isn't priced yet");
+});
+
 /* ---------- a flyer they send is a house (2026-10-22) ---------- */
 // Matt: "Are we able to scrub images that people sent over and create the
 // drafts from the address(es) that are in the image?" An agent answered "send

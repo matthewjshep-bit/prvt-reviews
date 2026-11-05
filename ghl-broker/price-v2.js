@@ -85,8 +85,9 @@ export function nextRecord(prev = null, { address = "", contactId = null, offerI
  * shadowPrice({ store, locationId, saved, job, address, b, listing, facts, subject, comps, scope, listPrice })
  *   → the record written, or null (switch off, nothing to price, or a failure — never thrown).
  */
-export async function shadowPrice({ store, locationId, saved = {}, job = {}, address = "", b = null, listing = null, facts = null, subject = null, comps = null, scope = null, listPrice = 0, now = Date.now() } = {}) {
-  if (!shadowOn(saved) || !address || !store?.upsertHousePricing) return null;
+export async function shadowPrice({ store, locationId, saved = {}, job = {}, address = "", b = null, listing = null, facts = null, subject = null, comps = null, scope = null, listPrice = 0, force = false, now = Date.now() } = {}) {
+  // `force`: engine mode prices every house it reads, switch or not (the record is what it's for).
+  if ((!shadowOn(saved) && !force) || !address || !store?.upsertHousePricing) return null;
   try {
     const key = houseKey(address);
     if (!key) return null;

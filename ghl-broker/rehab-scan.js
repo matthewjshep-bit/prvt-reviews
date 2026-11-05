@@ -337,6 +337,8 @@ function factsFromDetail(item) {
     units: unitsFromDetail(item) || null,
     lastSoldPrice: Number(item.lastSoldPrice ?? item.resoFacts?.lastSoldPrice) || null,
     lastSoldDate: item.dateSold ? new Date(item.dateSold).toISOString().slice(0, 10) : null,
+    // The listing's own words, for the comp's finish (shared/comp-match.js remodelSignal).
+    description: String(item.description || "").slice(0, 800) || null,
     // The comp's garage, so a no-garage subject is measured against comps
     // that have one (shared/arv-checks.js compParity) — known only when the
     // detail row says.

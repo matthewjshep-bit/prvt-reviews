@@ -144,6 +144,9 @@ export const DRAFT_ONLY_RX = /^ready for your comps\b/i;
 // Read as draft-only everywhere (the same "Price it" row); you can mark it
 // "We passed" from the row and the bot tells them (pass-note.js).
 export const SKELETON_HOLD = "ready for your comps — the app made a skeleton from the address, nothing looked up";
+// Engine mode (2026-11-04): our comps and photo scope are on the draft; the offer engine priced it
+// in the shadow (or it didn't clear grade A live). Same "Price it" row (DRAFT_ONLY_RX).
+export const ENGINE_HOLD = "ready for your comps — our comps and photo scope are on it, the offer engine priced it in the background";
 export const isSkeleton = (offer) => Boolean(offer?.autoUnderwrite?.skeleton);
 export const isDraftOnly = (offer) => Boolean(offer?.autoUnderwrite?.draftOnly)
   || DRAFT_ONLY_RX.test(String(aiHoldReasons(offer)[0] || ""));

@@ -313,7 +313,7 @@ should load and contact search should return results.
 
 ## Auto-underwrite (inbound text → offer)
 
-### The offer engine v2 — price once, grade it, walk away at a number (2026-11-04, not wired yet)
+### The offer engine v2 — price once, grade it, walk away at a number (2026-11-04)
 
 Plan: `~/.claude/plans/pasted-content-id-7fe7-okay-i-lexical-wreath.md`. Matt's decisions (2026-11-04):
 - On grade-A houses only, the machine may come up in at most two steps to a walk-away.
@@ -323,8 +323,9 @@ Plan: `~/.claude/plans/pasted-content-id-7fe7-okay-i-lexical-wreath.md`. Matt's 
 
 `shared/price-engine.js` `priceHouse(reads, settings, { ratios })` is pure. Nothing in the broker calls
 it until the shadow runner lands.
-- **ARV.** Bricked's ARV, cross-checked by our comps. Reads more than `arvSplitPct` (10) apart drop the
-  grade.
+- **ARV.** Bricked's ARV, our own comps' ARV, or both. Reads more than `arvSplitPct` (10) apart drop
+  the grade. Bricked alone is sure at ≥ 85% with ≥ 3 renovated comps; our comps alone at 4 remodeled
+  comps.
 - **Rehab.** The best evidence (a photo scope at ≥ 8 photos, Bricked's lines for described work, their
   own figure when higher), never under `rehabFloor` (shared/rehab-floor.js):
   - by age: $70/sqft before 1950, $55 for 1950–79, $55 for 1980–99, $35 for 2000 on;
@@ -443,6 +444,52 @@ deals.json`. On 2026-11-04:
 - the closed deals landed 2% under contract;
 - the deals that died on price or rehab landed 17–45% under;
 - rehab by age alone was under Matt's on 46% of houses, which is why grade A needs evidence.
+
+### Our own underwrite: engine mode (2026-11-04)
+
+Matt (2026-11-04): Bricked has about 300 lookups left and is expensive. "Can we use our auto underwrite
+instead, or dial it in so it's a lot more accurate?" His choices:
+- our own comps and photo scope on every named house (about $0.43 a house);
+- Bricked only when ours is unsure, at most 3 a day.
+
+Settings → Auto-underwrite → "When an agent names a house" → **Price it ourselves**
+(`autoUnderwriteMode: "engine"`).
+- **Which houses.** The conversation starts a run for every house an agent names with a full address,
+  the same houses skeleton mode drafts (`everyNamedHouse` in reply-agent.js).
+- **The run** is the full machine: the subject from Zillow, nearby sold comps, and the photo scope.
+- **Which comps are "renovated":**
+  - A comp's own listing description decides first (`remodelSignal` in shared/comp-match.js, kept by
+    `factsFromDetail` → `mergeFacts`):
+    - "fully remodeled", "flipped", or two or more "new X" parts → renovated;
+    - "fixer", "investor special", "sold as-is", "original kitchen", "tear down" → dated;
+    - a dated word wins over a remodel word.
+  - When 3 or more comps say remodeled in their own listings, they carry the ARV
+    (`gradeByPriceProxy`, source "listing").
+  - Otherwise the $/sqft guess runs over the comps that don't call themselves dated, plus the ones that
+    say remodeled.
+- **The ending** (`engineFinish` in auto-underwrite.js):
+  - The offer engine prices the house on our comps' ARV and the photo scope.
+  - **Bricked is asked only when the engine is unsure of the ARV** (`engineUnsure`: no ARV, or fewer
+    than 4 remodeled comps).
+    - It is limited to `pricingV2.brickedPerDay` (default 3, 0 = never) a Pacific day, counted in the
+      `brickedBudget` job cursor (`takeBrickedCredit`), and only while "Price drafts with Bricked.ai" is
+      on.
+    - Its read joins ours, and the engine prices again.
+- **What Matt sees.** With grade A off, every house is a "Price it" draft (`ENGINE_HOLD`). Its subject
+  line carries "our comps ARV $X · rehab $Y from N photos", and the engine's grade is on
+  `autoUnderwrite.brickedHeld`. The house record (`house_pricing`) holds the engine's answer for the
+  scorecard, whether or not shadow is on.
+- **With grade A live** (`pricingV2.liveA`), `sendEngine` sends as above, plus one extra check. The
+  old gates' data holds (`evaluateGates` → `data`) keep the house a draft, however sure the engine is:
+  - no record of the house, or an address read unsure;
+  - an unknown size;
+  - a location placed only at the ZIP or city centre;
+  - a scope past the heavy band;
+  - a structural flag from the photos.
+
+  Too few comps is not one of them; the grade and Bricked answer that.
+- **Operator runs** (Re-run, Retry, the editor) and the backtest still run the full machine as before.
+- Test: `ghl-broker/engine-mode.test.mjs`.
 
 
 ### Draft only: the app makes the draft, you price it (2026-10-16)

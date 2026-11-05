@@ -342,7 +342,9 @@ export function netComparison(cashAmount, s = {}) {
  */
 export function underwriteMode(saved = {}) {
   const m = String(saved?.autoUnderwriteMode || "").trim().toLowerCase();
-  return m === "skeleton" || m === "draft" ? m : "full";
+  // "engine" (2026-11-04): our own comps and photo scope on every named house, priced by the offer
+  // engine (shared/price-engine.js); Bricked only when our read is unsure.
+  return m === "skeleton" || m === "draft" || m === "engine" ? m : "full";
 }
 
 export function effectiveSettings(overrides = {}) {

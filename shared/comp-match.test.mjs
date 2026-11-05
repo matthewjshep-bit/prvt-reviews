@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { compareByMatch, matchLabel, matchTone, mergeSelection, milesBetween, scoreComp } from "./comp-match.js";
+import { compareByMatch, matchLabel, matchTone, mergeSelection, milesBetween, scoreComp, remodelSignal } from "./comp-match.js";
 
 const KENT = { lat: 47.3809, lng: -122.2348 };
 const SPOKANE = { lat: 47.6588, lng: -117.426 };
@@ -401,4 +401,15 @@ test("inPool is the loose gate and abstains on unknowns", () => {
   assert.deepEqual(inPool(SUBJECT, twin({ yearBuilt: 2000 })).misses, ["yearBuilt"]);
   assert.deepEqual(inPool(SUBJECT, twin({ sqft: 2400 })).misses, ["sqft"]);
   assert.equal(inPool(SUBJECT, twin({ yearBuilt: null, sqft: null })).ok, true, "what nobody knows can't miss");
+});
+
+test("a comp's own listing says whether it's a finished house", () => {
+  assert.equal(remodelSignal("Fully remodeled 3 bed with new kitchen and quartz counters"), "renovated");
+  assert.equal(remodelSignal("Just flipped! Move-in ready."), "renovated");
+  assert.equal(remodelSignal("New roof, new LVP flooring, fresh paint throughout"), "renovated", "two new big parts");
+  assert.equal(remodelSignal("New roof in 2019. Great bones."), null, "one part isn't a remodel");
+  assert.equal(remodelSignal("Investor special! Bring your contractor. Sold as-is."), "dated");
+  assert.equal(remodelSignal("Original kitchen, updated bath — great opportunity"), "dated", "a dated cue wins over one update");
+  assert.equal(remodelSignal("Charming home on a quiet street"), null);
+  assert.equal(remodelSignal(""), null);
 });

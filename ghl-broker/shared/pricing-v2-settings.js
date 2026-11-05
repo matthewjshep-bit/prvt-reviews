@@ -26,6 +26,9 @@ export const PRICING_V2_DEFAULTS = Object.freeze({
   minZipFlips: 15,
   maxPctOfList: 90,
   rehabFloorByEra: null, // { pre1950, y1950, y1980, y2000 } $/sqft over the defaults
+  // Engine mode asks Bricked only when our own comps can't carry the ARV, at most this many a day
+  // (Matt, 2026-11-04: ~300 credits left; "only when ours is unsure"). 0 = never.
+  brickedPerDay: 3,
 });
 
 const ERA_KEYS = ["pre1950", "y1950", "y1980", "y2000"];
@@ -49,6 +52,7 @@ export function normalizePricingV2(v) {
     arvSplitPct: numIn(s.arvSplitPct, 2, 50, D.arvSplitPct),
     minZipFlips: numIn(s.minZipFlips, 1, 200, D.minZipFlips),
     maxPctOfList: numIn(s.maxPctOfList, 50, 100, D.maxPctOfList),
+    brickedPerDay: Math.round(numIn(s.brickedPerDay, 0, 50, D.brickedPerDay)),
     rehabFloorByEra: floors,
   };
 }

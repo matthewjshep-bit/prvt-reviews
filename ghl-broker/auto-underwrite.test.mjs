@@ -790,6 +790,26 @@ test("the price proxy step is the same whether the ladder or the run calls it", 
 
 const priced = (n) => Array.from({ length: n }, (_, i) => ({ id: `p${i}`, address: `${i} Main St`, price: 500000 + i * 25000, sqft: 1400, distance: 0.3 }));
 
+// 2026-11-04: against agents' own ARVs our comps landed within 10% on only 56% of houses; the
+// "top half by $/sqft is renovated" guess was the weak part. A comp's own listing decides first.
+test("comps whose listings say remodeled carry the ARV; a comp its listing calls a fixer never does", () => {
+  const ring = Array.from({ length: 8 }, (_, i) => ({ id: `r${i}`, address: `${i} Oak St`, price: 520000 + i * 20000, sqft: 1400, distance: 0.2 + i * 0.02 }));
+  // The two priciest say "fixer" (a lot buy, a builder's teardown): they'd have topped the $/sqft tier.
+  ring[7].remodel = "dated"; ring[6].remodel = "dated";
+  ["r0", "r1", "r2"].forEach((id) => { ring.find((c) => c.id === id).remodel = "renovated"; });
+  const g = gradeByPriceProxy(ring, { subjectSqft: 1400 });
+  const ids = g.rehabbed.map((c) => c.id).sort();
+  assert.deepEqual(ids, ["r0", "r1", "r2"], "the three the listings call remodeled");
+  assert.match(g.proxy.reason, /3 of the 8 most similar comps say remodeled in their own listings/);
+  assert.equal(Object.values(g.grades).every((x) => x.source === "listing" && x.confidence === "high"), true);
+  // With fewer than three saying so, the price guess fills in, but never with a "dated" comp.
+  ring.find((c) => c.id === "r2").remodel = null;
+  const mixed = gradeByPriceProxy(ring, { subjectSqft: 1400 });
+  assert.ok(!mixed.rehabbed.some((c) => c.id === "r7" || c.id === "r6"), mixed.rehabbed.map((c) => c.id).join(","));
+  assert.ok(mixed.rehabbed.some((c) => c.id === "r0") && mixed.rehabbed.some((c) => c.id === "r1"), "the listed remodels are always in");
+  assert.match(mixed.proxy.reason, /2 left out as dated by their listings/);
+});
+
 test("three priced comps is a gut check, not a hold: the top three by $/sqft carry it", () => {
   const g = gradeByPriceProxy(priced(3));
   assert.equal(g.proxy.gutCheck, true);
