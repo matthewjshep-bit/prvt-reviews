@@ -8698,3 +8698,109 @@ test("a short sale named on a house we already sent a number on drafts the pass 
   assert.notEqual(d.status, "sent", "walking from a number we sent is Matt's call");
   assert.match(d.humanReason || "", /short sale/);
 });
+
+/* ---------- the walk-away, end to end on the dial's Full settings (Matt, 2026-11-04) ---------- */
+// The rule tests above call the guard alone. These run a whole reply the way prod is set: the dial
+// on Full (counter band, hold-then-pass and the follow-up clock all on), grade A live, walk-away on.
+
+import { applyAutonomy } from "./shared/autonomy.js";
+
+const WALK_OFFER = {
+  id: "w1", locationId: "LOC", contactId: "c1", address: "12 Elm St, Seattle, WA 98101", status: "sent",
+  arv: 600000, repairs: 80000, cashAmount: 300000, createdAt: new Date().toISOString(),
+  autoUnderwrite: { basis: "engine" }, pricing: { live: true, grade: "A", open: 300000, walkAway: 315000, moves: 0 },
+};
+const walkSaved = () => {
+  const s = applyAutonomy(STARTER_SAVED, "full");
+  return { ...s, conversationAi: { ...s.conversationAi, autoSend: { ...s.conversationAi.autoSend, debounceSec: 0 } }, pricingV2: { liveA: true, walkaway: true } };
+};
+const walkRun = async ({ offer = WALK_OFFER, message, draft }) => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(offer);
+  const order = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: walkSaved(), store, contactId: "c1", sendsEnabled: true, message,
+    deps: {
+      draft: async () => ({ ...DRAFT, confidence: "high", needsHuman: false, propertyAddress: "12 Elm St", reply: "Let me run that by my partner.", ...draft }),
+      reviseOfferToCounter: async ({ amount }) => { order.push(["revise", amount]); return { ok: true, address: "12 Elm St", amount }; },
+      sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return { d: await store.getReplyDraft(job.draftId), order };
+};
+
+test("on the Full dial, their number under a grade-A walk-away is taken and the paper re-issued at it", async () => {
+  const { d, order } = await walkRun({ message: "seller would do 310k on 12 Elm", draft: { intent: "counter", counterAmount: 310000 } });
+  assert.deepEqual(order, [["revise", 310000], ["send", true]], `${d.status}: ${d.autoSend?.reason || d.humanReason}`);
+  assert.match(d.reply, /310k works for us on 12 Elm St/);
+});
+
+test("on the Full dial, their number just over a grade-A walk-away moves us halfway, never past it", async () => {
+  const { d, order } = await walkRun({ message: "seller would do 325k on 12 Elm", draft: { intent: "counter", counterAmount: 325000 } });
+  assert.deepEqual(order, [["revise", 312500], ["send", true]], `${d.status}: ${d.autoSend?.reason || d.humanReason}`);
+  assert.match(d.reply, /We can come up to 312\.5k|We can come up to 312,500/);
+});
+
+// Matt, 2026-11-04: "if they push back on us on price, can we proactively offer a higher counter,
+// ratcheting up to our own walkaway?" A push with no number of theirs: halfway to the walk-away,
+// then the walk-away as the best we can do, then a no closes it the usual way.
+test("an agent who says our grade-A number is too low, with no number of their own, gets us halfway to the walk-away and the paper at it", async () => {
+  const { d, order } = await walkRun({ message: "That's way too low for the seller on 12 Elm", draft: { intent: "rejection", counterAmount: 0 } });
+  assert.deepEqual(order, [["revise", 307500], ["send", true]], `${d.status}: ${d.autoSend?.reason || d.humanReason}`);
+  assert.equal(d.reply, "We can come up to 307,500 on 12 Elm St. Sending the updated offer over now.");
+  assert.equal(d.intent, "counter", "a push on price, answered — not filed as their no");
+  assert.match(d.autoSend?.reason || "", /they pushed back on price with no number; stepping up to \$307,500 toward the \$315,000 walk-away/);
+  assert.ok(!(d.actions || []).some((x) => x.type === "requote_from_agent_numbers" || x.type === "mark_offer_passed"), JSON.stringify((d.actions || []).map((x) => x.type)));
+  assert.ok(!d.counterHold && !d.callCounter, "we moved: no 'holding at 300k' and no call card left on the row");
+});
+
+test("an ask to come up with no number moves us the same way", async () => {
+  const { d, order } = await walkRun({ message: "Any chance you can come up on 12 Elm?", draft: { intent: "counter", counterAmount: 0 } });
+  assert.deepEqual(order, [["revise", 307500], ["send", true]], `${d.status}: ${d.autoSend?.reason || d.humanReason}`);
+  assert.match(d.autoSend?.reason || "", /they pushed back on price/);
+});
+
+test("a second push with no number gets the walk-away as the best we can do", async () => {
+  const offer = { ...WALK_OFFER, cashAmount: 307500, pricing: { ...WALK_OFFER.pricing, moves: 1 },
+    revisions: [{ by: "walkaway", ts: new Date().toISOString(), cashAmount: [300000, 307500] }] };
+  const { d, order } = await walkRun({ offer, message: "Still not enough for them", draft: { intent: "rejection", counterAmount: 0 } });
+  assert.deepEqual(order, [["revise", 315000], ["send", true]], `${d.status}: ${d.autoSend?.reason || d.humanReason}`);
+  assert.equal(d.reply, "Best we can do on 12 Elm St is 315k as-is. Sending the updated offer over now.");
+});
+
+test("after the walk-away, a push with no number moves nothing: their no closes it", async () => {
+  const offer = { ...WALK_OFFER, cashAmount: 315000, pricing: { ...WALK_OFFER.pricing, moves: 2 },
+    revisions: [{ by: "walkaway", ts: new Date().toISOString(), cashAmount: [307500, 315000] }] };
+  const { d, order } = await walkRun({ offer, message: "Still too low, sorry", draft: { intent: "rejection", counterAmount: 0 } });
+  assert.deepEqual(order, []);
+  assert.equal(d.intent, "rejection");
+});
+
+test("a no because the house is gone never steps us up", async () => {
+  const { d, order } = await walkRun({ message: "Too low, and the seller accepted another offer this morning", draft: { intent: "rejection", counterAmount: 0 } });
+  assert.deepEqual(order, []);
+  assert.equal(d.intent, "rejection");
+});
+
+test("with the walk-away switch off, too low steps nothing up", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const store = negotiationStore(WALK_OFFER);
+  const order = [];
+  const saved = { ...walkSaved(), pricingV2: { liveA: true, walkaway: false } };
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", sendsEnabled: true, message: "That's way too low",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "rejection", confidence: "high", needsHuman: false, counterAmount: 0, propertyAddress: "12 Elm St", reply: "Understood. What would the seller need to see?" }),
+      reviseOfferToCounter: async ({ amount }) => { order.push(["revise", amount]); return { ok: true }; },
+      sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, channels: ["sms"] }; },
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.ok(!order.some(([k]) => k === "revise"), JSON.stringify(order));
+  assert.equal(d.intent, "rejection");
+});
