@@ -488,8 +488,25 @@ Settings → Auto-underwrite → "When an agent names a house" → **Price it ou
   - a structural flag from the photos.
 
   Too few comps is not one of them; the grade and Bricked answer that.
+- **A rent is not a list price.**
+  - At the source, `saleListPrice` (rehab-scan.js) returns 0 for a for-rent listing's `price` (the
+    month's rent) and for any price under $20k. `fetchZillowDetail` and `fetchZillowListings` both use
+    it.
+  - In the engine, `priceHouse` ignores a list under `LIST_MIN` ($20k) or under `LIST_MIN_OF_ARV`
+    (15%) of the ARV. The house triages "unknown" and stays a draft.
+  - Why: the 2026-11-04 backtest priced a Des Moines rental's $2,900 a month as its list price and
+    capped the walk-away at $2,500.
 - **Operator runs** (Re-run, Retry, the editor) and the backtest still run the full machine as before.
 - Test: `ghl-broker/engine-mode.test.mjs`.
+
+**Backtest, 2026-11-04** (54 houses with Matt's ARV and another reference, run quietly on prod's comps
+code from before the listing-description fix; scratchpad `scripts/analyze-backtest.mjs`):
+- Our comps' ARV against Matt's: median 0.98×; 27 of 51 within 5%, 34 within 10%, 6 more than 10% high.
+- The engine's rehab (the higher of the photo scope and the age floor) against Matt's: median 1.29×.
+  Over his 131 hand prices, the age floor alone is a median 1.00×.
+- The engine's walk-away against Matt's own ARV and rehab at the same formula: median 0.885×.
+- 7 of 51 would send by themselves with grade A live; none more than 10% over Matt's number at the
+  same formula.
 
 
 ### Draft only: the app makes the draft, you price it (2026-10-16)

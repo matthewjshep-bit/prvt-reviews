@@ -53,9 +53,9 @@ const row = (c, i) => {
     hdpData: { homeInfo: { zpid: `z${i}`, price: c.sqft * c.ppsf, dateSold: Date.now() - (20 + i * 10) * DAY,
       livingArea: c.sqft, bedrooms: 3, bathrooms: 2, homeType: "SINGLE_FAMILY", latitude: lat, longitude: lng } } };
 };
-const subjectRow = ({ price }) => ({
+const subjectRow = ({ price, status = "FOR_SALE" }) => ({
   address: { streetAddress: "2210 Quarry Ave N", city: "Shoreline", state: "WA", zipcode: "98133" },
-  homeType: "SINGLE_FAMILY", bedrooms: 3, bathrooms: 2, livingArea: 1500, yearBuilt: 1955, lotSize: 7200, price, homeStatus: "FOR_SALE",
+  homeType: "SINGLE_FAMILY", bedrooms: 3, bathrooms: 2, livingArea: 1500, yearBuilt: 1955, lotSize: 7200, price, homeStatus: status,
   listingPhotos: Array.from({ length: 12 }, (_, i) => ({ url: `https://photos.zillowstatic.com/fp/${i}abc-p_f.jpg` })),
   description: "Original kitchen, roof near the end of its life.",
 });
@@ -65,7 +65,7 @@ const BRICKED = { id: "b1", arv: 495000, arvConfidence: 0.92, cmv: 330000, total
   property: { address: { fullAddress: ADDRESS }, details: { bedrooms: 3, bathrooms: 2, squareFeet: 1500, yearBuilt: 1955, condition_rating: 3.4 } },
   comps: [1, 2, 3].map((i) => ({ compType: "arv", selected: true, is_renovated: null, renovation_score: 0.85, details: { lastSaleAmount: 490000 + i } })) };
 
-function stubFetch({ near = NEAR, price = 420000 } = {}) {
+function stubFetch({ near = NEAR, price = 420000, status } = {}) {
   const calls = { bricked: 0 };
   const original = globalThis.fetch;
   globalThis.fetch = async (url, opts = {}) => {
@@ -80,7 +80,7 @@ function stubFetch({ near = NEAR, price = 420000 } = {}) {
       let asked = [];
       try { asked = JSON.parse(body).addresses || []; } catch { asked = []; }
       const known = near.filter((c) => asked.some((a) => String(a).startsWith(c.street)));
-      const subj = asked.some((a) => String(a).startsWith("2210 Quarry")) ? [subjectRow({ price })] : [];
+      const subj = asked.some((a) => String(a).startsWith("2210 Quarry")) ? [subjectRow({ price, status })] : [];
       return ok([...subj, ...known.map(detailRow)]);
     }
     return ok({ features: [] });
@@ -92,9 +92,9 @@ const scanPhotos = async () => ({ summary: "Dated throughout.", items: [{ id: "p
 const until = async (fn, ms = 8000) => { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) return false; await new Promise((r) => setTimeout(r, 10)); } return true; };
 
 let n = 0;
-async function run({ saved = {}, near, price, scan = scanPhotos, locationId = `LOC-engine-${++n}`, contactId = `agent-${n}` } = {}) {
+async function run({ saved = {}, near, price, status, scan = scanPhotos, locationId = `LOC-engine-${++n}`, contactId = `agent-${n}` } = {}) {
   _resetJobs(); _resetCompsCache(); _resetSiteCache(); _resetFactsCache();
-  const { calls, restore } = stubFetch({ near, price });
+  const { calls, restore } = stubFetch({ near, price, status });
   const made = [];
   try {
     const createOffer = async ({ body }) => {
@@ -166,4 +166,13 @@ test("with grade A live, a house the photo scan flags for its structure stays Ma
   assert.equal(made.length, 0, "the same house sends when the scan is clean (above)");
   assert.equal(job.status, "held");
   assert.match(job.brickedHeld || "", /the underwrite's own checks held it: the photo scan flagged a possible foundation or structural problem/);
+});
+
+// The 2026-11-04 backtest: Zillow showed a Des Moines rental at "$2,900" (the month's rent). The
+// engine capped its walk-away at 90% of that "list price" and would have offered $2,500.
+test("a house Zillow shows for rent at $2,900 a month is never offered $2,500", async () => {
+  const { job, made } = await run({ saved: { pricingV2: { liveA: true } }, price: 2900, status: "FOR_RENT" });
+  assert.equal(made.length, 0, "no offer measured against a month's rent");
+  assert.doesNotMatch(job.brickedHeld || "", /\$2,[0-9]{3} walk-away/);
+  assert.match(job.brickedHeld || "", /no list price or seller's number/);
 });

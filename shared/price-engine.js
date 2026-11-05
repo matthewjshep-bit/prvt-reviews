@@ -98,13 +98,17 @@ export function triageOf({ walkAway = 0, sellerNumber = 0, list = 0 } = {}) {
  *   said, remarks                  the agent's words, the listing remarks
  * ratios: shared/kc-flip-ratios.js KC_FLIP_RATIOS (optional)
  */
+// Under either, a "list price" is not one: no house we buy sells for under $20k or 15% of its ARV.
+export const LIST_MIN = 20000;
+export const LIST_MIN_OF_ARV = 0.15;
+
 export function priceHouse(reads = {}, settings = {}, { ratios = null } = {}) {
   const s = normalizePricingV2(settings);
   const reasons = [];
   const misses = [];
   const b = reads.bricked || null;
   const c = reads.comps && Number(reads.comps.arv) > 0 ? reads.comps : null;
-  const list = Number(reads.list) || 0;
+  let list = Number(reads.list) || 0;
   const said = String(reads.said || "");
   const remarks = String(reads.remarks || "");
 
@@ -144,6 +148,12 @@ export function priceHouse(reads = {}, settings = {}, { ratios = null } = {}) {
       killers, turnkey: Boolean(turnkeyBy), misses: ["arv"], reasons: ["no ARV from any read"] };
   }
   if (!arvSure) misses.push("arv");
+  // A "list price" a house could never sell for is a rent or a typo (the 2026-11-04 backtest: Zillow's
+  // $2,900 a month on a Des Moines rental capped the walk-away at $2,500). Measure against nothing.
+  if (list > 0 && (list < LIST_MIN || list < arv * LIST_MIN_OF_ARV)) {
+    reasons.push(`$${Math.round(list).toLocaleString("en-US")} isn't a sale price for a ${k(arv)} house (a month's rent?) — not measured against`);
+    list = 0;
+  }
 
   /* --- rehab: the best evidence, never under the floor --- */
   const floors = normalizeRehabFloors(s.rehabFloorByEra || {});

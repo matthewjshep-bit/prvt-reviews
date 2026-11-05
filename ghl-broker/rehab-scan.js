@@ -137,6 +137,18 @@ export async function fetchZillowPhotos(address, apifyToken, { matched = "" } = 
 
 // One detail-actor lookup. `houseNo`: a retry by another spelling must land on
 // the same house number, or it found a neighbour.
+/**
+ * saleListPrice(item) → the Zillow item's asking price as a sale price, or 0.
+ * A for-rent listing's `price` is the month's rent (2026-11-04: a Des Moines rental's $2,900 became
+ * our "list price"), and nothing we buy sells for under $20k, so neither is a list price.
+ */
+export function saleListPrice(item = {}) {
+  const status = String(item.listingStatus || item.homeStatus || "");
+  if (/rent/i.test(status)) return 0;
+  const price = Math.round(Number(item.listingPrice?.amount ?? item.price) || 0);
+  return price >= 20000 ? price : 0;
+}
+
 async function fetchZillowDetail(address, apifyToken, { houseNo = "" } = {}) {
   const r = await fetch(
     `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}&timeout=180`,
@@ -190,7 +202,7 @@ async function fetchZillowDetail(address, apifyToken, { houseNo = "" } = {}) {
     photosCount: rawPhotos.length,
     listing: {
       status: item.listingStatus || item.homeStatus || null,
-      listPrice: item.listingPrice?.amount ?? item.price ?? null,
+      listPrice: saleListPrice(item) || null,
       remarks: (item.description || "").slice(0, 1500) || null,
     },
     facts: {
@@ -247,9 +259,8 @@ export async function fetchZillowListings(addresses = [], apifyToken) {
     const a = item.address && typeof item.address === "object" ? item.address : null;
     const key = streetKey(a?.streetAddress || item.streetAddress || item.addressOrUrlFromInput || "");
     if (!key) continue;
-    const price = Number(item.listingPrice?.amount ?? item.price) || 0;
     out.set(key, {
-      listPrice: price > 0 ? Math.round(price) : 0, status: item.listingStatus || item.homeStatus || null,
+      listPrice: saleListPrice(item), status: item.listingStatus || item.homeStatus || null,
       // For the outreach screen: is this listing a house that needs work?
       homeType: item.homeType || null, description: String(item.description || "").slice(0, 1500),
       yearBuilt: Number(item.yearBuilt) || Number(item.resoFacts?.yearBuilt) || null,

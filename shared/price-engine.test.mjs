@@ -145,3 +145,10 @@ test("a gut job that died prices well under what we signed", () => {
   assert.ok(r.walkAway <= 740000 * 0.9, `walk-away ${r.walkAway}`);
   assert.equal(r.grade, "C", "a teardown is never the machine's to send");
 });
+
+test("a rent read as the list price never caps the walk-away at a few thousand dollars", () => {
+  const v = priceHouse({ list: 2900, sqft: 1220, yearBuilt: 1967, comps: { arv: 542000, n: 4 }, scope: { total: 67000, photos: 30 } }, {});
+  assert.ok(v.walkAway > 200000, `walk-away ${v.walkAway}`);
+  assert.equal(v.triage, "unknown", "nothing real to measure against");
+  assert.ok(v.reasons.some((r) => /2,900 isn't a sale price/.test(r)), v.reasons.join(" | "));
+});
