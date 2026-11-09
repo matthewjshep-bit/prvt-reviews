@@ -999,6 +999,66 @@ const pgStore = {
     return rowCount;
   },
 
+  /* ---- house pricing (the offer engine v2, shared/price-engine.js) ---- */
+  // One record per house: the engine's reads and answer, its history, what
+  // happened next (outcome) and what the conversations said (evidence). A
+  // write replaces the doc whole; callers merge.
+  async upsertHousePricing(locationId, houseKey, doc) {
+    await query(
+      `insert into house_pricing (location_id, house_key, doc, priced_at, updated_at)
+       values ($1,$2,$3,coalesce($4::timestamptz, now()), now())
+       on conflict (location_id, house_key)
+       do update set doc = excluded.doc, priced_at = coalesce($4::timestamptz, house_pricing.priced_at), updated_at = now()`,
+      [locationId, houseKey, doc, doc?.v2?.at || null]
+    );
+    return true;
+  },
+  async getHousePricing(locationId, houseKey) {
+    const { rows } = await query(
+      `select house_key as "houseKey", doc, priced_at as "pricedAt", updated_at as "updatedAt"
+       from house_pricing where location_id = $1 and house_key = $2`,
+      [locationId, houseKey]
+    );
+    return rows[0] || null;
+  },
+  async listHousePricing(locationId, { since = null, limit = 2000 } = {}) {
+    const { rows } = await query(
+      `select house_key as "houseKey", doc, priced_at as "pricedAt", updated_at as "updatedAt"
+       from house_pricing where location_id = $1 and ($2::timestamptz is null or updated_at >= $2::timestamptz)
+       order by updated_at desc limit $3`,
+      [locationId, since, Math.max(1, Math.min(5000, Number(limit) || 2000))]
+    );
+    return rows;
+  },
+
+  /* ---- thread reads (every conversation, read for pricing evidence) ---- */
+  async upsertThreadRead(locationId, contactId, doc) {
+    await query(
+      `insert into thread_reads (location_id, contact_id, doc, read_at, through_at)
+       values ($1,$2,$3,coalesce($4::timestamptz, now()),$5)
+       on conflict (location_id, contact_id)
+       do update set doc = excluded.doc, read_at = excluded.read_at, through_at = excluded.through_at`,
+      [locationId, contactId, doc, doc?.readAt || null, doc?.through || null]
+    );
+    return true;
+  },
+  async getThreadRead(locationId, contactId) {
+    const { rows } = await query(
+      `select contact_id as "contactId", doc, read_at as "readAt", through_at as "throughAt"
+       from thread_reads where location_id = $1 and contact_id = $2`,
+      [locationId, contactId]
+    );
+    return rows[0] || null;
+  },
+  async listThreadReads(locationId) {
+    const { rows } = await query(
+      `select contact_id as "contactId", doc, read_at as "readAt", through_at as "throughAt"
+       from thread_reads where location_id = $1`,
+      [locationId]
+    );
+    return rows;
+  },
+
   /* ---- investor reads (what they told us, in their words) ---- */
   // A read replaces the last one whole: it is made from the whole thread.
   async upsertInvestorRead(locationId, contactId, doc) {
@@ -1561,6 +1621,8 @@ const fileStore = (() => {
       data.compCaptures = data.compCaptures || {};
       data.investors = data.investors || {};
       data.investorReads = data.investorReads || {};
+      data.housePricing = data.housePricing || {};
+      data.threadReads = data.threadReads || {};
       data.gatekeepers = data.gatekeepers || {};
       data.gatekeeperHooks = data.gatekeeperHooks || {};
       data.jobCursors = data.jobCursors || {};
@@ -2297,6 +2359,48 @@ const fileStore = (() => {
       }
       if (removed) persist();
       return removed;
+    },
+
+    /* ---- thread reads ---- */
+    async upsertThreadRead(locationId, contactId, doc) {
+      ensure();
+      data.threadReads[`${locationId}|${contactId}`] = { locationId, contactId, doc, readAt: doc?.readAt || nowIso(), throughAt: doc?.through || null };
+      persist();
+      return true;
+    },
+    async getThreadRead(locationId, contactId) {
+      ensure();
+      const r = data.threadReads[`${locationId}|${contactId}`];
+      return r ? { contactId: r.contactId, doc: r.doc, readAt: r.readAt, throughAt: r.throughAt } : null;
+    },
+    async listThreadReads(locationId) {
+      ensure();
+      return Object.values(data.threadReads).filter((r) => r.locationId === locationId)
+        .map((r) => ({ contactId: r.contactId, doc: r.doc, readAt: r.readAt, throughAt: r.throughAt }));
+    },
+
+    /* ---- house pricing ---- */
+    async upsertHousePricing(locationId, houseKey, doc) {
+      ensure();
+      const k = `${locationId}|${houseKey}`;
+      const prev = data.housePricing[k];
+      data.housePricing[k] = { locationId, houseKey, doc, pricedAt: doc?.v2?.at || prev?.pricedAt || nowIso(), updatedAt: nowIso() };
+      persist();
+      return true;
+    },
+    async getHousePricing(locationId, houseKey) {
+      ensure();
+      const r = data.housePricing[`${locationId}|${houseKey}`];
+      return r ? { houseKey: r.houseKey, doc: r.doc, pricedAt: r.pricedAt, updatedAt: r.updatedAt } : null;
+    },
+    async listHousePricing(locationId, { since = null, limit = 2000 } = {}) {
+      ensure();
+      const from = since ? Date.parse(since) : -Infinity;
+      return Object.values(data.housePricing)
+        .filter((r) => r.locationId === locationId && Date.parse(r.updatedAt) >= from)
+        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+        .slice(0, Math.max(1, Math.min(5000, Number(limit) || 2000)))
+        .map((r) => ({ houseKey: r.houseKey, doc: r.doc, pricedAt: r.pricedAt, updatedAt: r.updatedAt }));
     },
 
     /* ---- investor reads ---- */

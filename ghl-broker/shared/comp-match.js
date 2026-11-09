@@ -195,6 +195,28 @@ export const PRICE_PROXY_MIN_POOL = 6;
  *
  * Returns { comps, applied, pool, reason }.
  */
+/**
+ * remodelSignal(description) → "renovated" | "dated" | null
+ *
+ * What a sold comp's own listing says about its finish (2026-11-04). Our ARV picked "renovated"
+ * comps as the top half by $/sqft, a guess: against agents' own ARVs it landed within 10% on only
+ * 56% of houses. The detail lookup that already runs on the 20 most similar comps carries the
+ * listing description, so the words decide where they speak: "fully remodeled", "new kitchen",
+ * "flipped" is a finished house; "fixer", "investor special", "bring your contractor" is not. A
+ * listing that says neither is null, and the price proxy decides it as before.
+ */
+const DATED_RX = /\b(?:fixer(?:[\s-]?upper)?|handyman(?:'?s)?\s+special|investor\s+special|needs?\s+(?:work|tlc|updating|updates|some\s+love|a\s+lot)|bring\s+your\s+(?:contractor|ideas|vision|tools|imagination)|sweat\s+equity|sold\s+as[\s-]?is|as[\s-]?is\s+(?:sale|condition)|original\s+(?:condition|kitchen|baths?|owner)|tear[\s-]?down|cash\s+only|won'?t\s+(?:qualify|finance)|estate\s+sale|value\s+(?:is\s+)?in\s+the\s+land)\b/i;
+const REMODEL_STRONG_RX = /\b(?:(?:fully|completely|totally|beautifully|newly|recently|tastefully|extensively|meticulously)\s+(?:remodel(?:l?ed)?|renovated|updated|restored|rebuilt)|remodel(?:l?ed)\s+(?:from|top)|(?:just\s+)?flipped|full\s+(?:remodel|renovation|rehab)|down\s+to\s+the\s+studs|like\s+new|brand[\s-]?new\s+(?:kitchen|everything|interior))\b/i;
+const REMODEL_PART_RX = /\bnew\s+(?:kitchen|roof|flooring|floors|lvp|baths?|bathrooms?|cabinets|counter(?:top)?s|quartz|appliances|siding|windows|furnace|hvac|heat\s+pump|electrical|plumbing|paint|carpet|fixtures|water\s+heater)\b|\b(?:quartz|granite)\s+counter|\bstainless(?:\s+steel)?\s+appliances\b|\bmove[\s-]?in\s+ready\b|\bremodel(?:l?ed)\b|\brenovated\b|\bupdated\b/gi;
+export function remodelSignal(description = "") {
+  const t = String(description || "");
+  if (!t.trim()) return null;
+  if (DATED_RX.test(t)) return "dated";
+  if (REMODEL_STRONG_RX.test(t)) return "renovated";
+  const parts = new Set((t.match(REMODEL_PART_RX) || []).map((m) => m.toLowerCase().replace(/\s+/g, " ")));
+  return parts.size >= 2 ? "renovated" : null;
+}
+
 export function markRenovatedByPrice(comps = [], { take = 4, minPool = PRICE_PROXY_MIN_POOL } = {}) {
   const priced = comps.filter((c) => n(c.price) > 0);
   if (priced.length < minPool) {

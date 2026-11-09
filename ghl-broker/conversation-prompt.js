@@ -7,6 +7,7 @@
 // who knows they are an investor. Pure.
 
 import { INTENTS, INTENT_GLOSS, PARTY_LABEL, CONFIDENCES, PASS_REASONS, PASS_REASON_GLOSS, DEAL_SIGNALS, writeUpTermsText, CONVERSATION_AI_DEFAULTS } from "./shared/conversation-ai.js";
+import { BUYER_AGENT_RULE } from "./shared/partner-terms.js";
 import { heldInPlainWords } from "./shared/held-underwrites.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { CARRIER_RULE } from "./shared/carrier-words.js";
@@ -175,15 +176,31 @@ const CHECKIN_PERSONALITY =
 // shared with the messages the machine starts, which keep their own tone
 // (the first text went plain on 2026-10-16), so this speaks to replies only.
 // The no-warm-up rule in HUMAN still holds: the line goes inside the point.
+const PERSONALITY_RAILS =
+  "Never a pun, sarcasm, a joke that needs a setup, an emoji or exclamation-mark cheer, and never at the agent's, a seller's, a buyer's or " +
+  "a house's expense. None at all when the message is about a price, an offer, a counter or terms, bad news, a complaint, or someone upset. " +
+  "If nothing comes naturally, plain is right.";
 const REPLY_PERSONALITY =
   "PERSONALITY (when answering them; a message you are STARTING keeps the tone its own instructions give): a little personality, " +
   "still brief and professional. Now and then, never in two of our messages in a row, one light, dry touch where the moment is easy: " +
   "a house too nice for us (\"too pretty for us\", \"honestly, the uglier the better\"), they're slammed or away (\"whenever you surface\"), " +
   "a teardown (\"music to my ears\"), a thread winding down, small talk, asking for their next house. A few words of wry or self-deprecating " +
   "humour inside the sentence that carries the point, never a clause in front of it, and the reply stays as short as the length rule says. " +
-  "Never a pun, sarcasm, a joke that needs a setup, an emoji or exclamation-mark cheer, and never at the agent's, a seller's, a buyer's or " +
-  "a house's expense. None at all when the message is about a price, an offer, a counter or terms, bad news, a complaint, or someone upset. " +
-  "If nothing comes naturally, plain is right.";
+  PERSONALITY_RAILS;
+// One notch up (Matt, 2026-11-03: "turn up slightly the personality dial").
+// On Light, 2 of 12 easy drafts carried a clear line; the flat examples of
+// our voice ("match the tone") held the rest back. Same rails as Light.
+const REPLY_PERSONALITY_MORE =
+  "PERSONALITY (when answering them; a message you are STARTING keeps the tone its own instructions give): some personality, " +
+  "still brief and professional, the way you'd text an agent you like. Whenever the moment is easy, one light touch: a dry or " +
+  "self-deprecating line, a warm aside, or a bit of real enthusiasm for an ugly house. The easy moments: a house too nice for us " +
+  "(\"too pretty for us\", \"honestly, the uglier the better\"), they're slammed or away (\"whenever you surface\"), a teardown " +
+  "(\"music to my ears\"), a thank-you, a thread winding down, small talk, asking for their next house. Not every message: skip it " +
+  "when our last message already had one. A few words inside the sentence that carries the point, never a clause in front of it, " +
+  "and the reply stays as short as the length rule says. The examples of our voice don't cap this: they show what we say, and a " +
+  "touch like this belongs even where they have none. " +
+  PERSONALITY_RAILS;
+const REPLY_PERSONALITY_BY_LEVEL = { light: REPLY_PERSONALITY, more: REPLY_PERSONALITY_MORE };
 
 const OFF_MARKET_ASK_WORDS = `Say "off-market" itself, never "before it hits the MLS" or "before it hits the market".`;
 // The sellers behind the deals with committed buyers (2026-10-09), as the
@@ -292,7 +309,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   ].filter(Boolean);
   parts.push(voice.join(" "));
   parts.push(HUMAN);
-  if (persona.personality === "light") parts.push(REPLY_PERSONALITY);
+  if (REPLY_PERSONALITY_BY_LEVEL[persona.personality]) parts.push(REPLY_PERSONALITY_BY_LEVEL[persona.personality]);
 
   parts.push(
     persona.ifAskedIfBot
@@ -430,6 +447,12 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
       "give; a specific closing date, commission, proof of funds, or anything not listed here is not " +
       "yours to settle: answer the terms you have, and say you will confirm the rest today, with needsHuman set."
     );
+  }
+  if (party === "agent") {
+    // Matt, 2026-11-04: we work with buyer's agents — the agent who brings us
+    // a deal often represents us. An offer to represent us was held for him
+    // as "partner terms"; it's a yes, and the bot gives it (shared/partner-terms.js).
+    parts.push(BUYER_AGENT_RULE);
   }
   if (party === "agent") {
     // Matt, 2026-09-22 (Joseph Brazen, Medina): an offer marked "we passed"

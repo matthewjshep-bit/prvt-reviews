@@ -290,8 +290,10 @@ const EXECUTORS = {
     const amount = Math.round(Number(action?.amount ?? draft?.counterAmount) || 0);
     if (!amount) return "no number to re-issue at";
     const r = await deps.reviseOfferToCounter({ contactId, addressHint: draft?.propertyAddress || "", amount, draftId: draft?.id || null,
-      // The band ran it by itself, or a person applied it from the row.
-      by: action?.mode === "auto" && !deps?.byPerson ? "counter_band" : "you" });
+      // The band ran it by itself (or the walk-away did), or a person applied it from the row.
+      by: action?.mode === "auto" && !deps?.byPerson ? (action?.via === "walkaway" ? "walkaway" : "counter_band") : "you",
+      // A walk-away move is our number going up, not their number taken: nothing is agreed yet.
+      move: Boolean(action?.move) });
     if (!r?.ok) return r?.reason || "no offer to re-issue";
     return `re-issued ${r.address} at ${fmtMoney(amount)}`;
   },

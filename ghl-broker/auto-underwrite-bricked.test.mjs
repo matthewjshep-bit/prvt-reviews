@@ -88,7 +88,10 @@ test("with Bricked on, a skeleton opens priced by Bricked's ARV and repairs, and
     assert.equal(calls.bricked[0].key, "bk-123");
     assert.equal(new URL(calls.bricked[0].url).searchParams.get("address"), ADDRESS);
     assert.match(new URL(calls.bricked[0].url).searchParams.get("repairs"), /What the listing agent said: Needs a new roof/, "Bricked prices repairs from the agent's words");
-    assert.equal(calls.detail + calls.search, 0, "a skeleton still asks Zillow nothing");
+    // Since 2026-11-04 the listing is looked up first (a few tenths of a
+    // cent) so Bricked hears its remarks; still no comps are bought.
+    assert.equal(calls.search, 0, "a skeleton buys no comps");
+    assert.ok(calls.detail <= 1, "at most the one listing lookup");
 
     const draft = await store.getOffer(job.offerId);
     assert.equal(draft.status, "draft");

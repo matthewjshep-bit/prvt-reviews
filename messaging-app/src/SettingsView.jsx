@@ -1121,13 +1121,22 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
         </div>
         <label className="mb-1 block">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">When an agent names a house</span>
-          <select value={["skeleton", "draft"].includes(form.autoUnderwriteMode) ? form.autoUnderwriteMode : "full"} onChange={(e) => set("autoUnderwriteMode")(e.target.value)}
+          <select value={["skeleton", "draft", "engine"].includes(form.autoUnderwriteMode) ? form.autoUnderwriteMode : "full"} onChange={(e) => set("autoUnderwriteMode")(e.target.value)}
             className={INPUT_CLS}>
+            <option value="engine">Price it ourselves — our comps and photo scope, the offer engine's number (Bricked only when ours is unsure)</option>
             <option value="skeleton">Make a skeleton — just the agent and the address, nothing looked up</option>
             <option value="draft">Make a draft — I price it (no comps, no photo scan)</option>
             <option value="full">Underwrite it — comps, photo scan and a priced offer</option>
           </select>
         </label>
+        {form.autoUnderwriteMode === "engine" && (
+          <p className="mb-3 mt-1 text-xs text-slate-500">
+            Every named house gets our own Zillow comps (the ones whose own listings say remodeled carry the ARV) and a photo scope
+            of the rehab (about $0.43 a house). The offer engine prices it and it waits as "Price it" with our ARV and rehab on it,
+            until you switch grade A live below. Bricked is asked only when our comps can't carry the ARV, and at most the number a
+            day you set below, so its credits last.
+          </p>
+        )}
         <div className="mb-3 rounded-lg border border-slate-200 p-3">
           <label className="flex items-center gap-2 text-sm font-semibold">
             <input type="checkbox" checked={Boolean(form.brickedOnDrafts)} onChange={(e) => set("brickedOnDrafts")(e.target.checked)} />
@@ -1163,7 +1172,40 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
               <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Sends at Bricked confidence of at least (%)</span>
               <input type="number" min={50} max={100} value={form.brickedSendMinConfidence ?? 80} onChange={(e) => set("brickedSendMinConfidence")(e.target.value === "" ? "" : Number(e.target.value))} className={INPUT_CLS} />
             </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Bricked lookups a day when we price it ourselves</span>
+              <input type="number" min={0} max={50} value={form.pricingV2?.brickedPerDay ?? 3}
+                onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), brickedPerDay: e.target.value === "" ? 3 : Number(e.target.value) })} className={INPUT_CLS} />
+            </label>
           </div>
+        </div>
+        <div className="mb-3 rounded-lg border border-slate-200 p-3">
+          <div className="mb-1 text-sm font-semibold">The offer engine (v2)</div>
+          <p className="mb-2 text-xs text-slate-500">
+            One price per house: ARV from our own remodeled comps or Bricked (when both are read and disagree by more than 10%,
+            the grade drops), rehab never under the floor for the house's age and condition, 70% of ARV less rehab, a $30k fee
+            to open and a $15k walk-away. Graded A, B or C by how sure it is.
+          </p>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(form.pricingV2?.shadow)} onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), shadow: e.target.checked })} />
+            Price every named house in the shadow (never sent — the scorecard on Lessons measures it against you)
+          </label>
+          <label className="mt-1 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(form.pricingV2?.reads)} onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), reads: e.target.checked })} />
+            Read every agent and investor conversation that moved, each night (texts, emails and call transcripts; uses model calls)
+          </label>
+          <p className="mb-1 mt-3 text-xs text-slate-500">
+            When the scorecard on Lessons says grade A is ready (two weeks in the shadow, measured against your own numbers):
+          </p>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(form.pricingV2?.liveA)} onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), liveA: e.target.checked })} />
+            Send grade-A numbers by themselves — floated with the math, the letter of intent on their yes, the NWMLS write-up ask at or under the walk-away
+          </label>
+          <label className="mt-1 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(form.pricingV2?.walkaway)} disabled={!form.pricingV2?.liveA}
+              onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), walkaway: e.target.checked })} />
+            Negotiate grade-A counters up to the walk-away — at most two moves, never past it; anything higher comes to you as a call
+          </label>
         </div>
         <p className="mb-3 text-xs text-slate-400">
           A draft carries the agent, the address and the listing's facts, and waits on Today as "Price it"; a skeleton

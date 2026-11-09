@@ -616,7 +616,8 @@ export function callList({
    * a call or a text from you after it clears it. Ahead of 6b: the same
    * person is one row, and what they offered is the more specific. */
   const PARTNER_DAYS = 14;
-  for (const e of [...(events || [])].filter((x) => x?.type === "partner_terms" && x.contactId && PARTNER_TERMS_LABEL[x.data?.kind])
+  // An offer to represent us that the bot answered yes (2026-11-04) is done.
+  for (const e of [...(events || [])].filter((x) => x?.type === "partner_terms" && x.contactId && PARTNER_TERMS_LABEL[x.data?.kind] && !x.data?.answered)
     .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))) {
     const c = e.contactId;
     if (taken.has(c) || unsubscribed.has(c) || irritated(c)) continue;

@@ -664,6 +664,9 @@ export const savePostMortemAnalysis = (id, analysis) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/postmortem`, { analysis }, "PUT");
 export const getDashboardLessons = () =>
   fetch(`${API_BASE}/api/dashboard/lessons?${locq()}`).then(j);
+// The offer engine v2 in the shadow: how close to Matt and to the market, per grade (read-only).
+export const getPricingScorecard = () =>
+  fetch(`${API_BASE}/api/offers/automations/pricing/scorecard?${locq()}`).then(j);
 export const getDashboardPipeline = () =>
   fetch(`${API_BASE}/api/dashboard/pipeline?${locq()}`).then(j);
 // The day's loose ends: acceptances, close counters, owed promises, unanswered texts.
