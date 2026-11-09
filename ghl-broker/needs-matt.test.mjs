@@ -170,3 +170,24 @@ test("a house the agent called cosmetic is passed at once and never lands; one w
   assert.equal(hal.passNote?.status, "due");
   assert.equal((await store.getOffer("o-ida")).status, "draft", "the address chase is the bot's, nothing marked");
 });
+
+// Matt, 2026-11-09 (Ed K., 624 NW Hill St): we texted "can't make that work",
+// he wrote back "you can try under 595", and the card went to Needs Matt as a
+// house to price. We'd already passed on it.
+test("their number on a house we passed on keeps the card out of Needs Matt", async () => {
+  const loc = "loc-walked";
+  const ghl = ghlWith(STAGES);
+  const noOffer = { ok: false, name: "offer_live", detail: "no open offer" };
+  const counter = (who) => ({ id: `d-${who}`, contactId: who, party: "agent", status: "draft", intent: "counter", counterAmount: 595000,
+    propertyAddress: `1 ${who} St, Bend, OR`, createdAt: hoursAgo(30), exception: { kind: "counter_band", passed: false, checks: [noOffer] } });
+  await store.createOffer({ id: "o-ek", locationId: loc, contactId: "ek", address: "1 ek St, Bend, OR", status: "we_passed", cashAmount: null });
+  await store.createOffer({ id: "o-fo", locationId: loc, contactId: "fo", address: "1 fo St, Bend, OR", status: "passed", cashAmount: null });
+  const drafts = [counter("ek"), counter("fo")];
+  const rows = drafts.map((d) => ({ id: `draft_waiting:o-${d.contactId}`, kind: "draft_waiting", draftId: d.id, contactId: d.contactId, offerId: `o-${d.contactId}` }));
+  const sync = syncStub();
+  const r = await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: ON, now: NOW,
+    deps: { pipelineFor: async () => ({ shownActions: rows, shownCalls: [], drafts }), syncAgentCard: sync.fn } });
+  assert.deepEqual(sync.seen, [{ contactId: "fo", need: "price" }], "they passed and came back with a number: his to price");
+  assert.equal(r.needs, 1);
+  assert.equal((await store.getOffer("o-ek")).status, "we_passed", "our pass stands");
+});

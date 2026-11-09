@@ -36,6 +36,7 @@ import { fieldId } from "./ghl-pings.js";
 import { normalizeGhlStages, stageKeys } from "./shared/ghl-stages.js";
 import { needsMattByContact, needsMattFromCursor, needsMattPassDue, botTakesHouse, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
 import { effectiveStatus } from "./shared/offer-status.js";
+import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { ghlPingNote } from "./shared/ghl-pings.js";
 
 export const STALE_RUN_MS = 30 * 60 * 1000;
@@ -85,7 +86,16 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
     screened.set(r.offerId, v);
     if (v) out.screened.push({ contactId: r.contactId || o.contactId || null, offerId: r.offerId, ...(v.pass ? { pass: v.pass } : { chase: true }) });
   }
-  const needs = needsMattByContact(rows, { drafts: read.drafts || [], now, screened });
+  // Their number on a house we walked away from is answered by our pass, not
+  // a house to price (Matt, 2026-11-09: Ed K., Mary S.). The held sweep's
+  // quiet pass stays open to their numbers (reopensOnTheirNumbers).
+  const walkedAway = new Set();
+  for (const r of rows.flatMap((x) => [x, ...(x?.also || [])])) {
+    if (r?.kind !== "draft_waiting" || !r.offerId || walkedAway.has(r.offerId)) continue;
+    const o = await store.getOffer?.(r.offerId).catch(() => null);
+    if (o && o.locationId === locationId && effectiveStatus(o) === "we_passed" && !reopensOnTheirNumbers(o)) walkedAway.add(r.offerId);
+  }
+  const needs = needsMattByContact(rows, { drafts: read.drafts || [], now, screened, walkedAway });
   const cur = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
   const prev = needsMattFromCursor(cur?.doc);
   // The pass clock starts when the thing first landed, kept across reads.

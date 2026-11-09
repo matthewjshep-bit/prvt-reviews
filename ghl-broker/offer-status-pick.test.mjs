@@ -71,6 +71,29 @@ test("a counter on a house they passed on reopens it, but only by address", asyn
   assert.equal(guessed.ok, false, "no address, no open offer: nothing is reopened on a guess");
 });
 
+// Matt, 2026-11-09 (195 SE Roosevelt, Bend; 624 NW Hill St, Bend): we passed,
+// and the agent's next text named a price — "I'm lowering it to 899 today",
+// "you can try under 595 but not sure what she will say". Each one reopened
+// our pass as "countered", so the card went Tier 2 → Offer Out → Needs Matt →
+// Offer Out, and every redraft of the same old text did it again.
+test("a price an agent names after we passed doesn't reopen the house we walked away from", async () => {
+  const ours = await mkOffer({ contactId: "a-walked", address: "195 SE Roosevelt Ave, Bend, OR 97702", status: "we_passed", cashAmount: null });
+  const r = await deps.setOfferStatus({ contactId: "a-walked", addressHint: "195 SE Roosevelt Ave", status: "countered", amount: 899000 });
+  assert.equal(r.ok, false, "nothing to mark: we walked away from it");
+  assert.match(r.reason, /we passed/);
+  const row = await store.getOffer(ours.id);
+  assert.equal(row.status, "we_passed", "our pass stands");
+  assert.equal(row.counter, undefined, "their number isn't filed as a counter on a house we passed on");
+});
+
+test("a house the held sweep passed quietly, with no number of ours out, still reopens on their number", async () => {
+  const quiet = await mkOffer({ contactId: "a-quiet", address: "1425 33rd St SE, Auburn, WA 98002", status: "we_passed", cashAmount: null,
+    retired: { by: "held-sweep", reason: "held 12 days and nothing since", at: new Date().toISOString() } });
+  const r = await deps.setOfferStatus({ contactId: "a-quiet", addressHint: "1425 33rd St SE", status: "countered", amount: 300000 });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal((await store.getOffer(quiet.id)).status, "countered");
+});
+
 
 // Matt, 2026-10-02: a house the agent says sold is "no longer available" —
 // not our pass and not theirs. A reply can record it (it's a fact they told

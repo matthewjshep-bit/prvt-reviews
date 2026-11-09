@@ -57,6 +57,11 @@ const HOUR_MS = 3600000;
 const noNumberOfOurs = (d) => d?.exception?.kind === "counter_band"
   && (d.exception.checks || []).some((c) => c?.name === "offer_live" && c.ok === false);
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
+// A redraft of the same text (the audit, the daytime pass) carries the first
+// draft's time as `waitingSince` (reply-agent.js): the wait is theirs, not
+// the draft's. Mary S., 2026-11-09: each redraft restarted the clock, so the
+// card left Needs Matt and came back a day later, three times on one text.
+const waitedFrom = (d) => d?.waitingSince || d?.createdAt || null;
 const street = (a) => String(a || "").split(",")[0].trim();
 const clip = (s, n) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const k$ = (n) => { const v = Math.round(Number(n) || 0); return v ? `${Math.round(v / 1000)}K` : ""; };
@@ -77,7 +82,7 @@ export function needsMattKind(row, { draftsById = new Map(), now = Date.now() } 
     // A counter is the bot's: it holds our number (reply-agent.js). Only
     // their number on a house with no offer of ours to hold is his to price.
     if (isCounterDraft(d) && noNumberOfOurs(d)) {
-      const at = ms(d.createdAt);
+      const at = ms(waitedFrom(d));
       return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? "price" : null;
     }
     return null;
@@ -116,14 +121,18 @@ export function needsMattWhy(x = {}) {
 }
 
 /**
- * needsMattByContact(rows, { drafts, now, screened }) → Map contactId → { kind, why, at, key, rowKind, offerId, address }
+ * needsMattByContact(rows, { drafts, now, screened, walkedAway }) → Map contactId → { kind, why, at, key, rowKind, offerId, address }
  *
  * From the pipeline read's folded rows (each row and its `also`), the most
  * pressing open thing per agent. `at` is when it started (the stage move
  * reads it as "newest wins" against a person's drag); `key` is stable per
  * thing, so the card's note is written once.
+ *
+ * `walkedAway`: offer ids we passed on. Their number on one of those is not
+ * a house to price — our pass is the answer (Matt, 2026-11-09: Mary S. and
+ * Ed K. landed here after we'd passed, then bounced back to Offer Out).
  */
-export function needsMattByContact(rows = [], { drafts = [], now = Date.now(), screened = null } = {}) {
+export function needsMattByContact(rows = [], { drafts = [], now = Date.now(), screened = null, walkedAway = null } = {}) {
   const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
   const out = new Map();
   for (const row of rows || []) {
@@ -134,8 +143,10 @@ export function needsMattByContact(rows = [], { drafts = [], now = Date.now(), s
       if (!kind) continue;
       // A house the bot settles itself (botTakesHouse) never lands.
       if (kind === "price" && r.offerId && screened?.get?.(r.offerId)) continue;
+      // Their number on a house we walked away from: nothing to price.
+      if (kind === "price" && r.kind === "draft_waiting" && r.offerId && walkedAway?.has?.(r.offerId)) continue;
       const d = r.draftId ? draftsById.get(r.draftId) : null;
-      const since = r.owedAt || r.readyAt || r.promisedAt || d?.createdAt || r.at || null;
+      const since = r.owedAt || r.readyAt || r.promisedAt || waitedFrom(d) || r.at || null;
       const theirs = kind === "price" && d && isCounterDraft(d) ? Math.round(Number(d.counterAmount) || 0) || null : null;
       const item = { kind, rowKind: r.kind, offerId: r.offerId || null, address: r.address || d?.propertyAddress || "",
         amount: r.amount || null, title: r.title || "", since, now, theirs };
