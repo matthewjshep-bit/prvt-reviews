@@ -3387,7 +3387,16 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
     sweep read that as "they gave us" it. Only their word that it needs real
     work raises the house we texted them about. Once it's raised, the thread
     being on it keeps it live: a "tear down or fixer" the agent was still
-    working with the sellers stays in Tier 1.
+    working with the sellers stays in Tier 1. The `ours` stamp isn't the
+    only check (2026-11-09). An agent's only answers to our first text were
+    about when she could take a call. Twelve days later the daily redraft
+    of that text moved her empty GHL subject onto our listing, with no
+    stamp, and the 7am sweep put her in Tier 1. Every reader of
+    `raisedHouses` now also reads our texts that named a house of theirs
+    (`OUR_TEXT_EVENT_TYPES`: `outreach_sent`, `outreach_enrolled`, and a
+    fresh-listing `agent_pulse_texted`), however old. A move onto a house a
+    text of ours named first counts as ours, stamped or not. The readers
+    are the 7am sweep, the 15-minute sync, and the pass routes.
   - **Streets with a direction after them (2026-11-03).** `streetKey`
     (`shared/mentioned-houses.js`) used to read "9th St E" or "5th Ave NE" as
     no street at all. So a call or text that named our first-text house by

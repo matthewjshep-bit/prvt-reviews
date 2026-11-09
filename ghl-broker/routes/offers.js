@@ -140,7 +140,7 @@ import { preContractChecks, preContractRecord, openChecks, tickPreContract, norm
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
 import { normalizeTierOne } from "../shared/tier-one.js";
-import { normalizeGhlStages, cardHeldBy, HELD_DAYS, raisedHouses, HOUSE_EVENT_TYPES } from "../shared/ghl-stages.js";
+import { normalizeGhlStages, cardHeldBy, HELD_DAYS, raisedHouses, HOUSE_EVENT_TYPES, OUR_TEXT_EVENT_TYPES } from "../shared/ghl-stages.js";
 import { ourReplyPasses } from "../shared/flip-read.js";
 import { syncAgentCard } from "../tier-check.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
@@ -3789,7 +3789,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const [offers, events] = await Promise.all([
       store.listOffers(locationId, { contactId, limit: 100, lean: true }).catch(() => []),
       // A house they raised in the conversation holds Tier 1 with no row behind it.
-      store.listContactEvents?.(locationId, contactId, { types: HOUSE_EVENT_TYPES, limit: 300 }).catch(() => []) || [],
+      store.listContactEvents?.(locationId, contactId, { types: [...HOUSE_EVENT_TYPES, ...OUR_TEXT_EVENT_TYPES], limit: 300 }).catch(() => []) || [],
     ]);
     const raised = raisedHouses({ events, offers, staleDays: cfg.staleTier1Days });
     return cardHeldBy({ offers, raised, staleDays: cfg.staleTier1Days });
@@ -3938,7 +3938,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
    */
   async function closeRaised({ locationId, contactId, offers, text, at, phrase, via }) {
     const atMs = Date.parse(at) || Date.now();
-    const events = (await store.listContactEvents?.(locationId, contactId, { types: HOUSE_EVENT_TYPES, limit: 300 }).catch(() => [])) || [];
+    const events = (await store.listContactEvents?.(locationId, contactId, { types: [...HOUSE_EVENT_TYPES, ...OUR_TEXT_EVENT_TYPES], limit: 300 }).catch(() => [])) || [];
     const open = raisedHouses({ events, offers, now: atMs }).filter((h) => h.open && Date.parse(h.at) <= atMs + 60000);
     const targets = walkTargets(open, text);
     if (!targets.length) return null;

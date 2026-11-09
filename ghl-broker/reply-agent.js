@@ -69,7 +69,7 @@ import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
-import { normalizeGhlStages, validAddress, sameRaisedHouse } from "./shared/ghl-stages.js";
+import { normalizeGhlStages, validAddress, sameRaisedHouse, namesOurHouse, OUR_TEXT_EVENT_TYPES } from "./shared/ghl-stages.js";
 import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, pointsToThePhotos, photosPassReply, bankSaleIn, BANK_SALE_PASS, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
@@ -1966,16 +1966,14 @@ export function theirWordsSince(transcript = "", sinceMs = 0, message = "") {
  */
 export function icebreakerHouse(events = []) {
   const e = (events || [])
-    .filter((x) => x?.address && (x.type === "outreach_sent"
-      || (x.type === "outreach_enrolled" && x.data?.kind !== "followup")
-      || (x.type === "agent_pulse_texted" && (x.data?.listingKey || x.data?.reason === "fresh_listing"))))
+    .filter(namesOurHouse)
     .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0];
   return e ? { address: e.address, at: Date.parse(e.at || "") || 0 } : null;
 }
 
 // The first-text house for a contact, off their timeline.
 export async function firstTextHouse(store, locationId, contactId) {
-  const evs = (await store.listContactEvents?.(locationId, contactId, { types: ["outreach_sent", "outreach_enrolled", "agent_pulse_texted"], limit: 50 }).catch(() => [])) || [];
+  const evs = (await store.listContactEvents?.(locationId, contactId, { types: OUR_TEXT_EVENT_TYPES, limit: 50 }).catch(() => [])) || [];
   return icebreakerHouse(evs);
 }
 
