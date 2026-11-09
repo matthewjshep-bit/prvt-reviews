@@ -69,7 +69,7 @@ import { holdLine } from "./shared/bot-hold.js";
 import { evaluateCounterBand, evaluateAcceptance, evaluateInvestorBand, autoAcceptCeiling, COUNTER_MARGIN, acceptanceAtOurNumber } from "./shared/auto-accept.js";
 import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
-import { normalizeGhlStages, validAddress, sameRaisedHouse } from "./shared/ghl-stages.js";
+import { normalizeGhlStages, validAddress, sameRaisedHouse, namesOurHouse, OUR_TEXT_EVENT_TYPES } from "./shared/ghl-stages.js";
 import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, pointsToThePhotos, photosPassReply, bankSaleIn, BANK_SALE_PASS, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
 import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
@@ -1791,7 +1791,7 @@ export function underwritableAddress(raw) {
  * the two never fight. Returns { learned: [line], written: [key] }. Never
  * throws; a field write that fails is a warning on the draft.
  */
-export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [], store = null, draftId = null, intent = "", inbound = "", notOurKind = false, qualifying = "" }) {
+export async function applyProfileUpdates({ client, locationId, contactId, party, profile, custom = {}, summary = "", subjectProperty = "", config, now = Date.now(), warnings = [], store = null, draftId = null, intent = "", inbound = "", notOurKind = false, qualifying = "", ourHouse = "" }) {
   if ((!profile && !subjectProperty) || !contactId || party === "unknown") return { learned: [], written: [] };
   const type = party === "investor" ? "investor" : "agent";
   // The record first, GHL second. Everything the model read out of this
@@ -1848,7 +1848,11 @@ export async function applyProfileUpdates({ client, locationId, contactId, party
     if (aim && addressKey(aim) !== addressKey(cur("subject_property"))) {
       writes.subject_property = aim;
       learned.push(`subject property: ${aim}`);
-      if (store && draftId) await recordEvent({ store, locationId, contactId, party: "agent", type: "subject_property_set", at: new Date(now).toISOString(), address: aim, source: "conversation", ref: draftId, data: { from: cur("subject_property"), ...(notOurKind ? { notOurKind: true } : {}), ...(qualifying ? { qualifying } : {}) } });
+      // The house our first text named (`ourHouse`) is ours, not one they
+      // gave us: the GHL card's Tier 1 leaves it out (shared/ghl-stages.js
+      // raisedHouses; 2026-10-30, an agent who said it had sold).
+      const ours = Boolean(ourHouse) && sameRaisedHouse(aim, ourHouse);
+      if (store && draftId) await recordEvent({ store, locationId, contactId, party: "agent", type: "subject_property_set", at: new Date(now).toISOString(), address: aim, source: "conversation", ref: draftId, data: { from: cur("subject_property"), ...(notOurKind ? { notOurKind: true } : {}), ...(qualifying ? { qualifying } : {}), ...(ours ? { ours: true } : {}) } });
     }
   }
   if (profile?.personalDetails) {
@@ -1962,16 +1966,14 @@ export function theirWordsSince(transcript = "", sinceMs = 0, message = "") {
  */
 export function icebreakerHouse(events = []) {
   const e = (events || [])
-    .filter((x) => x?.address && (x.type === "outreach_sent"
-      || (x.type === "outreach_enrolled" && x.data?.kind !== "followup")
-      || (x.type === "agent_pulse_texted" && (x.data?.listingKey || x.data?.reason === "fresh_listing"))))
+    .filter(namesOurHouse)
     .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0];
   return e ? { address: e.address, at: Date.parse(e.at || "") || 0 } : null;
 }
 
 // The first-text house for a contact, off their timeline.
 export async function firstTextHouse(store, locationId, contactId) {
-  const evs = (await store.listContactEvents?.(locationId, contactId, { types: ["outreach_sent", "outreach_enrolled", "agent_pulse_texted"], limit: 50 }).catch(() => [])) || [];
+  const evs = (await store.listContactEvents?.(locationId, contactId, { types: OUR_TEXT_EVENT_TYPES, limit: 50 }).catch(() => [])) || [];
   return icebreakerHouse(evs);
 }
 
@@ -5764,6 +5766,7 @@ async function runReply(job, ctx) {
       client, locationId, contactId: job.contactId, party, profile: learnable, custom: a.custom,
       summary: draft.summary, subjectProperty: draft.propertyAddress, config, now, warnings,
       store, draftId: record.id, intent: draft.intent, inbound: job.message, notOurKind, qualifying: qualifyHeld ? draft.qualify.stage : replyPassed ? "pass" : "",
+      ourHouse: iceHouse?.address || "",
     });
     if (filed.learned.length || filed.written.length) {
       record = { ...record, profileUpdates: { learned: filed.learned, written: filed.written }, warnings: warnings.slice(0, 6), updatedAt: new Date().toISOString() };

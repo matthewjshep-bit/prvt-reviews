@@ -407,6 +407,34 @@ test("an agent who says the house needs a lot of work gets a Tier 1 card at the 
   assert.equal(r.counts.conversation, 1);
 });
 
+// 2026-11-09, Bend: our first text asked about her listing, and all she
+// wrote back was when she could take a call. The daily redraft of that text
+// moved the thread onto our listing, and the morning sweep put her card in
+// Tier 1 as "they gave us" it. The move carried no `ours` stamp: the sweep
+// has to know our first text named that house.
+test("an agent whose thread moved onto the listing our first text asked about stays out of Tier 1 at the morning sweep and the 15-minute sync; one who moved it onto a house of theirs goes in", async () => {
+  _resetWorkflowCache();
+  const OURS = "1181 NW Knoxville Blvd, Bend, OR 97703";
+  const THEIRS = "63609 Hunters Cir, Bend, OR 97701";
+  const made = [];
+  const events = [
+    raisedEv("dw", "outreach_sent", { auto: true }, "2026-09-25T23:31:50Z", OURS),
+    { ...raisedEv("dw", "subject_property_set", { from: "" }, "2026-10-13T19:40:00Z", OURS), source: "conversation" },
+    raisedEv("aa-talk", "outreach_sent", { auto: true }, "2026-09-25T23:31:50Z", OURS),
+    { ...raisedEv("aa-talk", "subject_property_set", { from: OURS }, "2026-10-13T19:40:00Z", THEIRS), source: "conversation" },
+  ];
+  const store = replierStore({ saved: ONLY_OFFERS, events });
+  const r = await runStagePlan({ client: {}, locationId: "L-raise-ours", store, ghl: replierGhl({ made }), saved: ONLY_OFFERS, dryRun: true, now: NOW13 });
+  assert.deepEqual(r.creates.map((c) => [c.contactId, c.to, c.why]), [["aa-talk", "Tier 1", "they gave us 63609 Hunters Cir"]]);
+  // The 15-minute sync reads the same.
+  const tick = replierStore({ saved: ONLY_OFFERS, events: [] });
+  await syncChangedCards({ client: {}, locationId: "L-raise-ours2", store: tick, saved: ONLY_OFFERS, ghl: replierGhl({ made }), now: Date.parse("2026-10-13T19:30:00Z") });
+  tick.listContactEventsSince = async (_l, since, { types } = {}) => events.filter((e) => String(e.at) >= since && (!types || types.includes(e.type)));
+  tick.listContactEvents = async (_l, id, { types } = {}) => events.filter((e) => e.contactId === id && (!types || types.includes(e.type)));
+  const t = await syncChangedCards({ client: {}, locationId: "L-raise-ours2", store: tick, saved: ONLY_OFFERS, ghl: replierGhl({ made }), now: NOW13 });
+  assert.deepEqual(made.map((m) => [m.contactId, m.stageId]), [["aa-talk", "t1"]], JSON.stringify(t));
+});
+
 test("a Tier 1 card from the conversation waits for GHL's agent tag, even when the profile says agent", async () => {
   _resetWorkflowCache();
   const made = [];

@@ -46,6 +46,21 @@ const ms = (v) => { const t = typeof v === "number" ? v : Date.parse(v || ""); r
 // houses they raised (ghl-broker/reply-agent.js files these events).
 export const HOUSE_EVENT_TYPES = Object.freeze(["house_mentioned", "house_agreed", "property_details", "agent_estimate", "subject_property_set", "house_closed", "tier1_passed", "tier1_kicked", "unsubscribed"]);
 
+// Our own texts that name a house of theirs: the app's first text, the GHL
+// workflow's first text for the cohort it texted, and a check-in about a
+// fresh listing of theirs. Read beside the house events so raisedHouses
+// knows which house we asked about. They aren't house events themselves:
+// a text of ours is no news on their card.
+export const OUR_TEXT_EVENT_TYPES = Object.freeze(["outreach_sent", "outreach_enrolled", "agent_pulse_texted"]);
+/** namesOurHouse(event) → whether this text of ours opened with a house of theirs (the icebreaker). */
+export function namesOurHouse(e) {
+  if (!e?.address) return false;
+  if (e.type === "outreach_sent") return true;
+  if (e.type === "outreach_enrolled") return e.data?.kind !== "followup";
+  if (e.type === "agent_pulse_texted") return Boolean(e.data?.listingKey || e.data?.reason === "fresh_listing");
+  return false;
+}
+
 // A house number, a street, and a town or ZIP: a place the map can find.
 export function validAddress(raw) {
   const p = parseUsAddress(raw);
@@ -96,10 +111,13 @@ export function sameRaisedHouse(a, b) {
  * The houses an agent raised as a candidate, newest first: `open` while
  * nothing has closed them, and closed ones too, so the card goes back to
  * Tier 2 when we pass the way it does after an offer is passed. `events`
- * are one agent's HOUSE_EVENT_TYPES. A house is raised by:
+ * are one agent's HOUSE_EVENT_TYPES, with their OUR_TEXT_EVENT_TYPES
+ * however old. A house is raised by:
  *   - house_mentioned with a valid address (their own words named it),
  *   - a valid address the conversation moved the thread onto
- *     (subject_property_set from the conversation, not while qualifying), or
+ *     (subject_property_set from the conversation, not while qualifying,
+ *     and not a house our own text named: data.ours, or an earlier text
+ *     of ours that named it), or
  *   - their words about it reading as real work (property_details
  *     condition / workNeeded, a house_mentioned note: flip-read.js
  *     saysRealWork), or their own rehab budget of 50K or more.
@@ -138,8 +156,11 @@ export function raisedHouses({ events = [], offers = [], now = Date.now(), stale
     if (h && h.open) { h.open = false; h.at = at; h.why = why; }
     else if (!h && parseUsAddress(a).houseNo && hasRow(a)) houses.push({ address: a, at, why, open: false });
   };
+  // The houses our own texts named, as of each event (namesOurHouse).
+  const ourTexts = [];
   for (const e of evs) {
     const a = String(e.address || "").trim();
+    if (OUR_TEXT_EVENT_TYPES.includes(e.type)) { if (namesOurHouse(e)) ourTexts.push(a); continue; }
     // Pass or Kick on the Tier 1 list: you looked at their card.
     if (e.type === "tier1_passed" || e.type === "tier1_kicked") {
       const why = e.type === "tier1_passed" ? "you passed from Tier 1" : "you took it off Tier 1";
@@ -163,8 +184,19 @@ export function raisedHouses({ events = [], offers = [], now = Date.now(), stale
     if (e.type === "subject_property_set" && d.notOurKind) { close(a, at, `${street}: they said it's turnkey`); continue; }
     // An address they texted us moves the thread onto it: a house to look at
     // (Matt, 2026-10-29: "any surfaced addresses that we haven't really taken a
-    // look at" are Tier 1). Not the underwriter's own aim (source "offer"), and
-    // not our icebreaker house while it's being qualified or passed.
+    // look at" are Tier 1). Not the underwriter's own aim (source "offer"),
+    // not our icebreaker house while it's being qualified or passed, and not
+    // the house our first text named at all (`ours`, 2026-10-30): they didn't
+    // give us that one. The thread came back to it because we asked, and the
+    // agent said it sold. Their word that it needs real work still raises it,
+    // and once raised, the thread being on it keeps it live (2026-11-03, a
+    // "tear down or fixer" the agent was still working with the sellers).
+    // The stamp isn't the only word on it (2026-11-09, Bend): a move filed
+    // before the stamp, or by a path that doesn't add it, is ours all the
+    // same when a text of ours named that house first. The agent had only
+    // said when she could take a call.
+    const ours = d.ours || (e.type === "subject_property_set" && ourTexts.some((x) => sameRaisedHouse(x, a)));
+    if (e.type === "subject_property_set" && ours) { const known = find(a); if (known?.open) known.at = at; continue; }
     if (e.type === "subject_property_set" && e.source === "conversation" && !d.qualifying && validAddress(a)) { raise(a, at, `they gave us ${street}`); continue; }
     // Their word on a house they raised keeps it live (2026-10-22, a short
     // sale the agent wrote about every few days).

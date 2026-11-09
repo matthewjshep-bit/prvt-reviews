@@ -8468,6 +8468,30 @@ test("their yes on a house is filed for Tier 1, even with no row of ours on it",
   assert.deepEqual(raisedHouses({ events: agreed }).map((h) => [h.address, h.open]), [[jackson, true]]);
 });
 
+// 2026-10-30, Lake Tapps: we'd passed on the house they raised on a call;
+// the bot asked after the house our first text named, they said it sold
+// and was never distressed, and the subject moved back onto it. The 7am
+// sweep read that as "they gave us" the house and put the card in Tier 1.
+test("the house we texted them about stays ours when the thread comes back to it, so it doesn't put them in Tier 1", async () => {
+  const { store } = await replyTo("Sold back in the summer, it wasn't distressed", {
+    saved: STARTER_SAVED, intent: "question",
+    reply: "Got it, must've had old data on that one. Keep me in mind for anything with real distress.",
+    lines: [["outbound", OPENER], ["inbound", "Call me tonight"], ["outbound", "Thanks for the call. What's the exact address on the Cedar Hollow one?"]],
+  });
+  const events = await houseRecord(store);
+  const set = events.find((e) => e.type === "subject_property_set");
+  assert.equal(set?.data?.ours, true, JSON.stringify(set));
+  assert.deepEqual(raisedHouses({ events }).filter((h) => h.open), []);
+});
+
+test("a house they bring us is never marked ours", async () => {
+  const birch = "77 Birch Ln, Everett, WA 98201";
+  const { store } = await replyTo("Got another one, 77 Birch Ln Everett", { saved: STARTER_SAVED, intent: "new_property", address: birch });
+  const set = (await houseRecord(store)).find((e) => e.type === "subject_property_set");
+  assert.equal(set?.address, birch);
+  assert.equal(set?.data?.ours, undefined);
+});
+
 /* ---------- a reply the bot couldn't place goes at once (2026-10-18) ---------- */
 
 // Matt, 2026-10-18, on an agent pitching her own buyer and her son's loan:

@@ -25,7 +25,7 @@ import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { recordEvent } from "./contact-record.js";
 import { localHour } from "./promise-sweep.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
-import { planStageMoves, planCard, planHandMove, normalizeGhlStages, stageKeys, CARD_STAGE_LABEL, raisedHouses, HOUSE_EVENT_TYPES, theirWordInGhl } from "./shared/ghl-stages.js";
+import { planStageMoves, planCard, planHandMove, normalizeGhlStages, stageKeys, CARD_STAGE_LABEL, raisedHouses, HOUSE_EVENT_TYPES, OUR_TEXT_EVENT_TYPES, theirWordInGhl } from "./shared/ghl-stages.js";
 import { offerStageAt } from "./shared/offer-stage.js";
 import { openPromises } from "./shared/promise-resolver.js";
 import { INBOUND_EVENT_TYPES } from "./shared/last-activity.js";
@@ -419,7 +419,13 @@ export async function runStagePlan({ client, locationId, store = defaultStore, s
   // Houses the conversation raised (shared/ghl-stages.js raisedHouses): Tier 1
   // with no row behind them, for a contact we know is an agent.
   const houseEvents = await store.listContactEventsSince?.(locationId, iso(now - Math.max(HOUSE_LOOKBACK_MS, (cfg.staleTier1Days + 1) * 86400000)), { types: HOUSE_EVENT_TYPES, limit: 20000 }).catch(() => []) || [];
-  const raisedBy = raisedByContact({ events: houseEvents, offers, now, staleDays: cfg.staleTier1Days });
+  // The houses our own texts named, for the agents whose thread moved onto
+  // a house: the one we asked about isn't one they gave us (2026-11-09).
+  const moved = new Set(houseEvents.filter((e) => e?.type === "subject_property_set").map((e) => e.contactId));
+  const ourTexts = moved.size
+    ? (await allEventsSince(store, locationId, iso(now - YEAR_MS), { types: OUR_TEXT_EVENT_TYPES }, { ceiling: 200000 }).then((r) => r.events).catch(() => [])).filter((e) => moved.has(e?.contactId))
+    : [];
+  const raisedBy = raisedByContact({ events: [...houseEvents, ...ourTexts], offers, now, staleDays: cfg.staleTier1Days });
   const needAgents = cfg.tier2Repliers || raisedBy.size > 0;
   const [agentProfiles, agentSigns] = cfg.tier2Repliers || !needAgents ? [profiles, signs] : await Promise.all([
     store.listContactProfiles?.(locationId, { limit: 20000 }).catch(() => []) || [],
@@ -569,12 +575,13 @@ export async function syncAgentCard({ client, locationId, contactId, store = def
       // A stage set in the companion is read every time: this search has no
       // lastStageChangeAt, so without it any offer update would undo it.
       store.listContactEvents?.(locationId, contactId, {
-        types: [...new Set([...INBOUND_EVENT_TYPES, "unsubscribed", ...APP_MOVE_EVENT_TYPES, ...HAND_MOVE_EVENT_TYPES, ...HOUSE_EVENT_TYPES])], limit: 500,
+        types: [...new Set([...INBOUND_EVENT_TYPES, "unsubscribed", ...APP_MOVE_EVENT_TYPES, ...HAND_MOVE_EVENT_TYPES, ...HOUSE_EVENT_TYPES, ...OUR_TEXT_EVENT_TYPES])], limit: 500,
       }).catch(() => []) || [],
     ]);
     const mine = (events || []).map((e) => ({ ...e, contactId }));
     const since = now - Math.max(HOUSE_LOOKBACK_MS, (cfg.staleTier1Days + 1) * 86400000);
-    const raised = raisedHouses({ events: mine.filter((e) => HOUSE_EVENT_TYPES.includes(e.type) && (Date.parse(e.at || "") || 0) >= since), offers, now, staleDays: cfg.staleTier1Days });
+    // Our texts however old: the house we asked about isn't one they gave us.
+    const raised = raisedHouses({ events: mine.filter((e) => (HOUSE_EVENT_TYPES.includes(e.type) && (Date.parse(e.at || "") || 0) >= since) || OUR_TEXT_EVENT_TYPES.includes(e.type)), offers, now, staleDays: cfg.staleTier1Days });
     const lastWord = mine.filter(isTheirWord).sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
     const plan = planCard({
       acq, keys: stageKeys(acq), contactId, offers, settings: cfg, now,
