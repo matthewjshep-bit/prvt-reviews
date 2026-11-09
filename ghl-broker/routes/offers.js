@@ -183,7 +183,7 @@ import { ensureOfferPage, refreshOfferPages } from "../offer-page.js";
 import { startSweep, getSweepJob, cancelSweepJob, publicSweepJob } from "../enrich-sweep.js";
 import { OFF_MARKET_TAG } from "../shared/off-market.js";
 import { sentDeal, pickDealForReply } from "../shared/deal-reply-match.js";
-import { agentRuledOut } from "../shared/held-underwrites.js";
+import { agentRuledOut, reopensOnTheirNumbers } from "../shared/held-underwrites.js";
 import { startPassNote } from "../pass-note.js";
 import { wantsPassNote } from "../shared/pass-note.js";
 
@@ -6358,6 +6358,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const draft = pickDealByAddress(held, hint);
       if (draft) return draft;
       const closed = pickDealByAddress(live, hint);
+      // A counter reopens a house they passed on, never one we walked away
+      // from (Matt, 2026-11-09: Mary S.'s "lowering it to 899 today" and Ed
+      // K.'s "you can try under 595" each turned our pass back into a
+      // counter, and the card bounced Tier 2 → Offer Out → Needs Matt). The
+      // one exception is the held sweep's quiet pass with no number of ours
+      // out, which stays open to their numbers (reopensOnTheirNumbers).
+      const ourPass = closed && effectiveStatus(closed) === "we_passed" && !reopensOnTheirNumbers(closed);
+      if (closed && status === "countered" && ourPass) return { reason: `we passed on ${closed.address}; their number doesn't reopen it` };
       if (closed && (status === "countered" || effectiveStatus(closed) === status)) return closed;
       // "It sold", in answer to a check-in on a house they passed on: it
       // lands on that row. A house we walked away from stays ours.

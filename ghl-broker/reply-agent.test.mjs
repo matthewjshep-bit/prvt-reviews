@@ -422,6 +422,25 @@ test("a second text supersedes the open draft rather than stacking up", async ()
   const fresh = await store.getReplyDraft(job.draftId);
   assert.deepEqual(fresh.supersededIds, ["old"]);
   assert.equal((await store.listReplyDrafts("LOC", { status: "draft" })).length, 1);
+  assert.equal(fresh.waitingSince, undefined, "a new text is a new wait");
+});
+
+// Mary S., 2026-11-09: the audit redrafted her one "lowering it to 899" text
+// every couple of days, and each new draft restarted the Needs Matt clock, so
+// her card left the stage and came back a day later, three times.
+test("a redraft of the same text keeps how long it has waited", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const firstDraftAt = iso(2 * 86400000);
+  const store = fakeStore([{ ...openDraft(), id: "old", inbound: "I'm lowering  it to 899 today", createdAt: firstDraftAt }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "I'm lowering it to 899 today",
+    deps: { draft: async () => DRAFT },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal((await store.getReplyDraft("old")).status, "superseded");
+  assert.equal((await store.getReplyDraft(job.draftId)).waitingSince, firstDraftAt);
 });
 
 test("small talk with nothing to say saves no draft and tags nothing", async () => {

@@ -70,6 +70,30 @@ test("their number on a house we never priced is a house to price, after the sam
   assert.equal(m.has("fay"), false);
 });
 
+// Matt, 2026-11-09 (Mary S., 195 SE Roosevelt): the audit redrafted her one
+// "lowering it to 899" text every couple of days. Each redraft was a new
+// draft with a new clock, so the card left Needs Matt for Offer Out at the
+// next 7am sweep and came back a day later — three round trips on one text.
+test("a redraft of the same text keeps the wait it had, so the card doesn't leave Needs Matt and come back", () => {
+  const noOffer = { ok: false, name: "offer_live", detail: "no open offer" };
+  const redraft = { id: "d-r2", contactId: "mo", party: "agent", intent: "counter", counterAmount: 899000, propertyAddress: "195 SE Roosevelt Ave, Bend, OR",
+    createdAt: hoursAgo(2), waitingSince: hoursAgo(PRICE_WAIT_HOURS + 30), exception: { kind: "counter_band", passed: false, checks: [noOffer] } };
+  const row = { id: "draft_waiting:o-mo", kind: "draft_waiting", draftId: redraft.id, contactId: "mo", offerId: "o-mo" };
+  const need = needsMattByContact([row], { drafts: [redraft], now: NOW }).get("mo");
+  assert.equal(need?.kind, "price", "still his to price: the text has waited more than a day");
+  assert.equal(need.at, redraft.waitingSince, "the wait runs from the first draft of the text, not the redraft");
+});
+
+test("a number an agent names on a house we walked away from doesn't land in Needs Matt", () => {
+  const noOffer = { ok: false, name: "offer_live", detail: "no open offer" };
+  const d = { id: "d-ed", contactId: "ek", party: "agent", intent: "counter", counterAmount: 595000, propertyAddress: "624 NW Hill St, Bend, OR",
+    createdAt: hoursAgo(PRICE_WAIT_HOURS + 5), exception: { kind: "counter_band", passed: false, checks: [noOffer] } };
+  const row = { id: "draft_waiting:o-ek", kind: "draft_waiting", draftId: d.id, contactId: "ek", offerId: "o-ek" };
+  assert.equal(needsMattByContact([row], { drafts: [d], now: NOW }).get("ek")?.kind, "price", "on a house we never priced or passed, it's his");
+  const m = needsMattByContact([row], { drafts: [d], now: NOW, walkedAway: new Set(["o-ek"]) });
+  assert.equal(m.has("ek"), false, "we passed on it: our pass is the answer, the card stays where the offers put it");
+});
+
 test("a house still unpriced three days after it landed is the bot's to pass", () => {
   const need = (h, over = {}) => ({ kind: "price", offerId: "o-kay", at: hoursAgo(24 * 9), landedAt: hoursAgo(h), ...over });
   assert.equal(needsMattPassDue(need(PASS_AFTER_HOURS - 1), NOW), false);
