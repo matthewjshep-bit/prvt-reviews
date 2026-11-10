@@ -47,10 +47,14 @@ export async function runTodayTimers({ client = null, locationId, saved = {}, st
   if (!config.driver?.timers?.enabled) return { ...out, reason: "the timers are switched off" };
 
   const jobsFor = typeof deps.listUnderwriteJobs === "function" ? deps.listUnderwriteJobs : (loc) => listUnderwriteJobs(loc, { limit: 100 }).map(publicJob);
-  const [offers, drafts] = await Promise.all([
+  // The held drafts on their own, as Today's read takes them (routes/dashboard.js,
+  // 2026-11-09): a blast's hundreds of scheduled texts never push one out.
+  const [offers, held, scheduled] = await Promise.all([
     store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []),
-    store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }).catch(() => []),
+    store.listReplyDrafts(locationId, { status: "draft", limit: 5000 }).catch(() => []),
+    store.listReplyDrafts(locationId, { status: "scheduled", limit: 500 }).catch(() => []),
   ]);
+  const drafts = [...held, ...scheduled];
   const actions = buildPipeline({ offers, drafts, events: [], jobs: jobsFor(locationId) || [], config, now }).actions;
 
   for (const m of timerMoves(actions, { config, now })) {

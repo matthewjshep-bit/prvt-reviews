@@ -209,6 +209,20 @@ test("a call queued ten days ago is taken back when its reason ends", async () =
   assert.ok(ev.some((e) => e.type === "ghl_call_withdrawn" && e.data.claimKey === "ghl_call:dana:2026-10-05"));
 });
 
+// FUP-02: a held reply asking for a call fell out of a newest-500 read when a
+// blast filled the outbox, and its call was taken back out of GHL.
+test("a call isn't taken back off a held-draft read that hit its cap", async () => {
+  const LOC = "loc-withdraw-capped";
+  await runGhlCalls({ store, locationId: LOC, client: ghl(), saved: ON, deps: { pipelineFor: pipelineFor({ who: ["hal"] }) }, mode: "urgent", now: NOW });
+  const full = async (a) => ({ ...(await pipelineFor({ who: [] })(a)), capped: { held: true } });
+  const later = ghl();
+  const r = await runGhlCalls({ store, locationId: LOC, client: later, saved: ON, deps: { pipelineFor: full }, mode: "urgent", now: NOW + H });
+  assert.equal(r.withdrawn.length, 0, "unknown, not gone");
+  assert.equal(later.of("DELETE", /\/workflow\//).length, 0);
+  const whole = await runGhlCalls({ store, locationId: LOC, client: ghl(), saved: ON, deps: { pipelineFor: pipelineFor({ who: [] }) }, mode: "urgent", now: NOW + 2 * H });
+  assert.deepEqual(whole.withdrawn.map((w) => w.contactId), ["hal"], "a whole read without it: taken back");
+});
+
 test("the first run after a backlog takes back ten at a time", async () => {
   const LOC = "loc-withdraw-backlog";
   const { recordEvent } = await import("./contact-record.js");

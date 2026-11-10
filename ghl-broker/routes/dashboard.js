@@ -90,6 +90,14 @@ const CARD_SENDS_ENABLED = process.env.CARD_SENDS_ENABLED === "true";
 // than this is not a live disposition, it is history.
 const PIPELINE_EVENT_DAYS = 90;
 const PIPELINE_EVENT_LIMIT = 5000;
+// The open drafts, read as two lists (FUP-02, 2026-11-09): the held ones (a
+// reply waiting on Matt, his yes among them) on their own, and the scheduled
+// ones (machine texts, a deal blast's hundreds) beside them. One newest-500
+// list let a blast push the oldest held yes out of the read, and Needs Matt
+// and the GHL calls took that as done. A read that hits its cap says so
+// (`capped`), and those runners treat a row missing from it as unknown.
+const HELD_DRAFTS_CAP = 5000;
+const SCHEDULED_DRAFTS_CAP = 500;
 const PIPELINE_EVENT_TYPES = [
   "blast_sent", "dataroom_sent", "dataroom_viewed",
   "investor_evaluating", "investor_committed", "investor_passed",
@@ -545,9 +553,10 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   async function pipelineFor({ locationId, client, now = Date.now() }) {
     const since = new Date(now - PIPELINE_EVENT_DAYS * DAY_MS).toISOString();
     const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
-    const [allOffers, allDrafts, windowed, saved, investors, allRecentDrafts, feedbackEvents, botEvents] = await Promise.all([
+    const [allOffers, heldDrafts, scheduledDrafts, windowed, saved, investors, allRecentDrafts, feedbackEvents, botEvents] = await Promise.all([
       store.listOffers(locationId, { limit: 2000, lean: true }),
-      store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }),
+      store.listReplyDrafts(locationId, { status: "draft", limit: HELD_DRAFTS_CAP }),
+      store.listReplyDrafts(locationId, { status: "scheduled", limit: SCHEDULED_DRAFTS_CAP }),
       store.listContactEventsSince(locationId, since, { types: PIPELINE_EVENT_TYPES, limit: PIPELINE_EVENT_LIMIT }).catch(() => []),
       store.getOfferSettings(locationId).catch(() => null),
       store.listInvestors(locationId).catch(() => []),
@@ -561,6 +570,9 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // (this route polls every 15s): a stop pressed in June still holds.
       store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: BOT_EVENT_TYPES, limit: 20000 }).catch(() => []),
     ]);
+    // Newest first, as the one read was.
+    const allDrafts = [...heldDrafts, ...scheduledDrafts].sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")));
+    const capped = { held: heldDrafts.length >= HELD_DRAFTS_CAP, scheduled: scheduledDrafts.length >= SCHEDULED_DRAFTS_CAP };
     const config = conversationConfig(saved || {});
     // Your own contact (a test text to the line) is not work
     // (shared/self-contact.js): its offers and drafts never reach the board.
@@ -767,7 +779,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       desk: { sections, rows: desk.rows, counts: desk.counts, kpis,
         ...(ghlOn ? { ghlCalls: { on: true, inGhlToday: [...ghlQueued.values()].filter((q) => Date.parse(q.at) >= dayStart).length } } : {}) },
     };
-    return { body, desk, deskAll, callRows, shownCalls, shownActions, drafts, offers, cards: out.cards, events, saved, deskSettings };
+    return { body, desk, deskAll, callRows, shownCalls, shownActions, drafts, offers, cards: out.cards, events, saved, deskSettings, capped };
   }
   router.pipelineFor = pipelineFor;
 

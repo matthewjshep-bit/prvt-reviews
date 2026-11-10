@@ -112,8 +112,10 @@ export async function runGhlCalls({ store = defaultStore, locationId, client, sa
 
   /* Taken back: in GHL's queue, its reason gone, and nobody has called since. */
   // Only off a whole read: with no timeline at all, every call would look gone.
+  // A held-draft read that hit its cap (routes/dashboard.js, 2026-11-09)
+  // isn't whole either: a reason missing from it is unknown, not gone.
   const due = ghlCallsDue([...(read.shownActions || []), ...(read.shownCalls || [])], { drafts });
-  const wholeRead = (read.events || []).length > 0;
+  const wholeRead = (read.events || []).length > 0 && !read.capped?.held;
   for (const [contactId, q] of wholeRead ? live : []) {
     if (due.has(contactId) || calledSince(read.events, contactId, q.at)) continue;
     if (out.withdrawn.length >= MAX_WITHDRAW_PER_RUN) break;
