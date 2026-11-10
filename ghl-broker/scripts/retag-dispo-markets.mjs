@@ -15,7 +15,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { makeClient, searchAllContactsByTags, addContactTags } from "../ghl.js";
 import { mapPool } from "../map-pool.js";
-import { parseCsv, writeCsv, groupBuyers, contactIndex, matchBuyer, withRetry, sleep } from "../buyer-import.js";
+import { parseCsv, writeCsv, groupBuyers, contactIndex, matchBuyer, sleep } from "../buyer-import.js";
 import { REGIONS } from "../shared/dispo-regions.js";
 
 async function main() {
@@ -77,7 +77,7 @@ async function main() {
     await mapPool(tagged, 2, async ({ out, buyer }) => {
       try {
         await sleep(150);
-        await withRetry(() => addContactTags(client, out.contactId, [...buyer.tags, "investor"]));
+        await addContactTags(client, out.contactId, [...buyer.tags, "investor"]);
       } catch (e) {
         out.action = "error"; out.reason = `${e.status || ""} ${e.message}`.trim();
         console.error(`  ! ${out.name}: ${out.reason}`);

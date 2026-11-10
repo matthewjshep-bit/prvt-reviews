@@ -71,18 +71,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Same bands the ranker is told to use, applied to a filter-only score.
 const fitFor = (score) => (score >= 70 ? "strong" : score >= 40 ? "possible" : "weak");
 
-// Retry a GHL call on 429 (2s, then 4s) — same policy as outreach import.
-async function withRetry(fn) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fn();
-    } catch (e) {
-      if (e.status !== 429 || attempt >= 2) throw e;
-      await sleep(2000 * (attempt + 1));
-    }
-  }
-}
-
 // Where a contact stands:
 //   replied  — they have answered us at least once (lastRepliedAt holds when)
 //   awaiting — we have messaged them and they have never answered
@@ -759,12 +747,10 @@ export default function createDispoRouter({ resolveLocation }) {
       const customFields = [];
       for (const [key, value] of Object.entries(changed)) {
         const def = FIELD_BY_KEY.get(key);
-        const id = await withRetry(() =>
-          findOrCreateCustomFieldByKey(client, locationId, def.key, def.name, def.dataType)
-        );
+        const id = await findOrCreateCustomFieldByKey(client, locationId, def.key, def.name, def.dataType);
         customFields.push({ id, value });
       }
-      await withRetry(() => updateContact(client, contactId, { customFields }));
+      await updateContact(client, contactId, { customFields });
 
       // Mirror the write locally so the UI and the next search see it without
       // waiting for a full re-sync. The record half is re-rendered below,
@@ -1223,10 +1209,8 @@ export default function createDispoRouter({ resolveLocation }) {
           await sleep(150);
           // Confirm the contact still exists before tagging — an investor
           // deleted in GHL since the last sync would otherwise 404 mid-batch.
-          await withRetry(() => getContact(client, contactId));
-          await withRetry(() =>
-            addContactTags(client, contactId, [blastTag, ...(applyTag ? [DISPO_TAG] : [])])
-          );
+          await getContact(client, contactId);
+          await addContactTags(client, contactId, [blastTag, ...(applyTag ? [DISPO_TAG] : [])]);
           const at = new Date().toISOString();
           await store.setInvestorStatus(locationId, contactId, { lastBlastAt: at });
           // The record: this deal went out to them. The blast knows its
@@ -1328,7 +1312,7 @@ export default function createDispoRouter({ resolveLocation }) {
     if (!dryRun && (r.queued || r.drafted)) {
       const warnings = [];
       await mapPool(investors, 2, async (inv) => {
-        try { await sleep(120); await withRetry(() => addContactTags(client, inv.contactId, [blastTag])); }
+        try { await sleep(120); await addContactTags(client, inv.contactId, [blastTag]); }
         catch (e) { warnings.push(`${inv.contactId}: tag: ${e.message}`); }
       });
       const full = await store.getOffer(offer.id);

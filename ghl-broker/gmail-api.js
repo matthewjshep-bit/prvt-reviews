@@ -21,13 +21,17 @@ const httpError = (status, what) => Object.assign(new Error(`gmail ${what}: HTTP
 let cached = null;   // { key, token, expiresAt }
 export function _resetToken() { cached = null; }
 
-export async function accessToken(creds, { now = Date.now() } = {}) {
+// The token refresh gives up after 15 seconds (2026-11-09), like every other
+// Gmail call here: a draft waits on it.
+export const GMAIL_TOKEN_TIMEOUT_MS = 15000;
+export async function accessToken(creds, { now = Date.now(), timeoutMs = GMAIL_TOKEN_TIMEOUT_MS } = {}) {
   const key = `${creds.clientId}|${creds.refreshToken.slice(-8)}`;
   if (cached && cached.key === key && cached.expiresAt - 60000 > now) return cached.token;
   const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: creds.clientId, client_secret: creds.clientSecret, refresh_token: creds.refreshToken, grant_type: "refresh_token" }).toString(),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw httpError(res.status, "token refresh");
   const j = await res.json();

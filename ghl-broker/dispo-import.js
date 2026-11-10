@@ -10,7 +10,7 @@
 
 import { findDuplicateContact, createContact, updateContact, addContactTags } from "./ghl.js";
 import { recordEvents } from "./contact-record.js";
-import { parseCsv, groupBuyers, purchaseEvents, withRetry, sleep, e164 } from "./buyer-import.js";
+import { parseCsv, groupBuyers, purchaseEvents, sleep, e164 } from "./buyer-import.js";
 
 export const DISPO_IMPORTS_ENABLED = process.env.DISPO_IMPORTS_ENABLED === "true";
 const PACE_MS = 150;
@@ -111,7 +111,7 @@ async function run(job, { client, store, locationId, buyers, live, source }) {
         job.counts.skipped++;
         push({ name, action: "skip", reason: "no phone or email to reach them" });
       } else {
-        const match = await withRetry(() => findDuplicateContact(client, locationId, { email, phone }));
+        const match = await findDuplicateContact(client, locationId, { email, phone });
         const tags = [...b.tags, "investor", job.batchTag];
         let contactId = match?.id || "";
         if (match) {
@@ -120,17 +120,17 @@ async function run(job, { client, store, locationId, buyers, live, source }) {
           if (email && match.matchedBy !== "email") patch.email = email;
           if (phone && match.matchedBy !== "phone") patch.phone = phone;
           if (live) {
-            if (Object.keys(patch).length) await withRetry(() => updateContact(client, contactId, patch)).catch(() => {});
-            await withRetry(() => addContactTags(client, contactId, tags));
+            if (Object.keys(patch).length) await updateContact(client, contactId, patch).catch(() => {});
+            await addContactTags(client, contactId, tags);
           }
           job.counts.updated++;
           push({ name, action: live ? "updated" : "would update", matchedBy: match.matchedBy, contactId, tags: tags.join(" ") });
         } else {
           if (live) {
-            contactId = await withRetry(() => createContact(client, locationId, {
+            contactId = await createContact(client, locationId, {
               firstName: b.firstName, lastName: b.lastName, ...(phone ? { phone } : {}), ...(email ? { email } : {}),
               source: `borrower list ${source || ""}`.trim(), tags,
-            }));
+            });
           }
           job.counts.created++;
           push({ name, action: live ? "created" : "would create", contactId, tags: tags.join(" ") });
