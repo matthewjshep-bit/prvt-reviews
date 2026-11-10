@@ -510,3 +510,29 @@ test("a held office auto-reply closes itself after a day like a thanks", () => {
   assert.deepEqual(found.map((f) => f.draftId), ["desk", "agents"]);
   assert.match(found[0].why, /an auto-reply/);
 });
+
+// 2026-11-09 audit: two of our answers to someone asking who we were were
+// blocked by the carrier, and the nightly audit read both threads as answered
+// because the draft said "sent". The delivery check (ghl-broker/delivery-
+// watch.js) now writes what GHL said on the draft. Names and words are made up.
+test("a blocked answer counts as unanswered in the nightly audit", () => {
+  const ghlLast = new Map([["c7", { at: ago(2.9), dir: "out" }]]);
+  const blocked = draft({ id: "d-blocked", contactId: "c7", contactName: "Robin Vale", inbound: "Sorry, do I know you?", reply: "Matt here, I fix up houses locally.",
+    createdAt: ago(3), sentAt: ago(2.9), channel: "sms", propertyAddress: "12 Alder Ln, Kent, WA 98030",
+    delivery: { status: "undelivered", code: "30007", checkedAt: ago(0.5) } });
+  const r = audit({ drafts: [blocked], events: [], offers: [], ghlLast });
+  assert.equal(r.findings.length, 1);
+  const f = r.findings[0];
+  assert.equal(f.kind, "unanswered_inbound");
+  assert.equal(f.draftId, "d-blocked");
+  assert.equal(f.action, null, "the machine never resends an answer by itself");
+  assert.equal(f.why, "our answer never arrived (the carrier blocked it): call or email");
+  assert.equal(r.counts.answered, 0);
+  // One that arrived, or one the check hasn't read yet, answered it, as before.
+  assert.equal(audit({ drafts: [{ ...blocked, delivery: { status: "delivered", code: null } }], events: [], offers: [], ghlLast }).findings.length, 0);
+  assert.equal(audit({ drafts: [{ ...blocked, delivery: undefined }], events: [], offers: [], ghlLast }).findings.length, 0);
+  // The morning's row stays until something reaches them.
+  const row = { kind: "audit_owed", findingKind: "unanswered_inbound", contactId: "c7", anchorAt: ago(3) };
+  assert.equal(stillOwed([row], { drafts: [blocked], now: NOW }).length, 1);
+  assert.equal(stillOwed([row], { drafts: [blocked], events: [{ contactId: "c7", type: "hand_reply", at: ago(1) }], now: NOW }).length, 0);
+});
