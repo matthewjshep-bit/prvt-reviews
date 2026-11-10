@@ -70,6 +70,8 @@ const DISPO_TAG = process.env.DISPO_TAG || "dispo-blast";
 // dispo-agent-buyer (2026-11-09) is an agent Matt added with Add to buyers:
 // in the book, still an agent in their own thread.
 const DEFAULT_DISPO_TAGS = ["investor", "investor-active", "investor-stale", "on-deal", AGENT_BUYER_TAG];
+// The most buyer records one deal's money lines read (GET /buyers/funding).
+const FUNDING_READ_MAX = 60;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -875,6 +877,24 @@ export default function createDispoRouter({ resolveLocation }) {
       await store.upsertInvestors(locationId, [{ contactId, name, doc, buyboxText: investorProfileText(doc) }]);
       const row = await store.getInvestor(locationId, contactId);
       res.json({ ok: true, contactId, tagged: add, dispoTags, areas, party: (await store.getContactProfile(locationId, contactId))?.party || null, investor: slim(hydrate(row)) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // GET /buyers/funding?ids=a,b — how each buyer said they pay (the
+  // `buyer_funding` fact: its newest value, when and where we heard it), for
+  // the deal's buyer rows (2026-11-09). One record read per id, at most
+  // FUNDING_READ_MAX, never the whole book. A buyer who never said is absent.
+  router.get("/buyers/funding", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const ids = [...new Set(String(req.query.ids || "").split(",").map((s) => s.trim().slice(0, 64)).filter(Boolean))].slice(0, FUNDING_READ_MAX);
+      const funding = {};
+      await mapPool(ids, 6, async (contactId) => {
+        const said = (await store.getContactProfile(locationId, contactId).catch(() => null))?.facts?.buyer_funding;
+        const last = Array.isArray(said) && said.length ? said[said.length - 1] : null;
+        if (last?.value) funding[contactId] = { value: last.value, at: last.at || null, source: last.source || null };
+      });
+      res.json({ ok: true, read: ids.length, funding });
     } catch (err) { fail(res, err); }
   });
 

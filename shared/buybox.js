@@ -129,7 +129,86 @@ export function normalizeBuybox(custom = {}) {
     lotMin: num(c.buybox_lot_min),
     rehabAppetite: REHAB_APPETITES.includes(appetite) ? appetite : null,
     exclusions: String(c.buybox_exclusions || "").trim(),
+    // How they pay (the buyer_funding fact). Not a buy box criterion: no
+    // deal is matched or ruled out on it.
+    funding: BUYER_FUNDING.includes(String(c.buyer_funding || "").trim()) ? String(c.buyer_funding).trim() : null,
   };
+}
+
+/* ---------- how they pay ---------- */
+
+// 2026-11-09: how a buyer pays was unknown in 283 of 307 buyer threads, and
+// a buyer who took a contract was still lining up money days later. What
+// they say is filed as the `buyer_funding` fact (shared/contact-record.js)
+// and shown on the deal's buyer row. The words match the read's "How they
+// pay" column (shared/investor-read.js FUNDING) plus a HELOC.
+export const BUYER_FUNDING = ["cash", "hard_money", "private_money", "heloc", "conventional", "dscr", "partners"];
+export const BUYER_FUNDING_LABELS = {
+  cash: "cash", hard_money: "hard money", private_money: "private money", heloc: "HELOC",
+  conventional: "conventional loan", dscr: "DSCR loan", partners: "partners",
+};
+const FUNDING_CUES = [
+  ["hard_money", /\bhard[\s-]?money\b|\bhml\b/gi],
+  ["private_money", /\bprivate\s+(?:money|lenders?|capital|funds?|investors?)\b/gi],
+  ["heloc", /\bheloc\b|\bhome\s+equity\s+line\b/gi],
+  ["dscr", /\bdscr\b/gi],
+  ["conventional", /\bconventional\s+(?:loans?|financing|mortgages?|lenders?)\b|\bfha\b|\bva\s+loans?\b/gi],
+  ["partners", /\b(?:my|our)\s+(?:money\s+|capital\s+|equity\s+)?partners?\s+(?:fund|funds|put\s+up|bring|brings|cover|covers|finance|finances)\b|\bfunded\s+by\s+(?:my|our)\s+(?:partners?|investors?)\b|\bpartner\s+money\b/gi],
+  ["cash", /\bcash\s*(?:or|and|\/|&)\s*(?:hard|private|heloc|dscr|conventional|a\s+loan|financing)\b|\ball[\s-]cash\b|\bpay(?:ing)?\s+(?:all\s+)?cash\b|\bpaid\s+(?:all\s+)?cash\b|\b(?:buy|buying|close|closing|purchase|purchasing)\s+(?:with\s+|in\s+|all\s+)?cash\b|\bcash\s+buyers?\b|\b(?:i'?m|we'?re|i\s+am|we\s+are)\s+(?:a\s+)?cash\b|\b(?:my|our)\s+own\s+cash\b|\bcash\s+on\s+hand\b/gi],
+];
+// "not a cash buyer", "no hard money", "don't use a HELOC": a no, not a yes.
+const NOT_BEFORE = /\b(?:not|no|don'?t|do\s+not|never|isn'?t|aren'?t|without|won'?t)\b(?:\s+\w+){0,2}\s*$/i;
+// "Would the seller take hard money?" is a question, not how they pay.
+const inQuestion = (t, to) => {
+  const end = t.slice(to).search(/[.!?\n]/);
+  return end >= 0 && t[to + end] === "?";
+};
+
+/**
+ * fundingSaid(text) → one of BUYER_FUNDING, or null
+ *
+ * How a buyer said they pay, in their own words: the first way they named,
+ * outside a question and not after a no.
+ */
+export function fundingSaid(text = "") {
+  const t = String(text || "");
+  let best = null;
+  for (const [value, rx] of FUNDING_CUES) {
+    for (const m of t.matchAll(rx)) {
+      if (NOT_BEFORE.test(t.slice(Math.max(0, m.index - 30), m.index))) continue;
+      if (inQuestion(t, m.index + m[0].length)) continue;
+      if (!best || m.index < best.at) best = { value, at: m.index };
+      break;
+    }
+  }
+  return best?.value || null;
+}
+
+// The day they said it, in Pacific time wherever this runs.
+const saidDay = (at) => {
+  const d = at ? new Date(at) : null;
+  if (!d || !Number.isFinite(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", timeZone: "America/Los_Angeles" });
+};
+
+/** paysLine({ value, at }) → "pays: hard money (said 10/30)" | "pays: unknown" */
+export function paysLine(fact) {
+  const label = BUYER_FUNDING_LABELS[fact?.value];
+  if (!label) return "pays: unknown";
+  const day = saidDay(fact.at);
+  return `pays: ${label}${day ? ` (said ${day})` : ""}`;
+}
+
+/**
+ * buyerMoneyLine(fact, { committed, proofOnFile }) → the deal's buyer row line
+ *
+ * How they pay, and for the buyer who committed, "no proof of funds on file"
+ * until the checklist's proof of funds item (shared/deal-checklist.js
+ * assignee_funds) is ticked.
+ */
+export function buyerMoneyLine(fact, { committed = false, proofOnFile = false } = {}) {
+  const pays = paysLine(fact);
+  return committed && !proofOnFile ? `${pays} · no proof of funds on file` : pays;
 }
 
 /* ---------- what their own words refuse ---------- */

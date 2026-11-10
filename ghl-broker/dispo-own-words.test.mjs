@@ -176,3 +176,32 @@ test("when Matt's routing reads every dispo tag as a buyer, the agent is tagged 
     assert.equal((await store.getOfferSettings(loc)).dispoTags, undefined, "no saved Investor tags: the default list has the tag");
   } finally { close(); }
 });
+
+/* ---------- how a buyer pays, on the deal's buyer row (2026-11-09) ---------- */
+
+// What went wrong: how a buyer pays was unknown in 283 of 307 buyer threads,
+// and a buyer who took a contract was still lining up money three days
+// later with nothing on the deal saying so.
+test("a buyer who says they use hard money has it on the deal row", async () => {
+  const loc = "LOC-buyer-funding";
+  const { base, close } = appFor(loc);
+  try {
+    const { learnFacts } = await import("./contact-record.js");
+    const { buyerMoneyLine } = await import("./shared/buybox.js");
+    await learnFacts({ store, locationId: loc, contactId: "buyer-hm", party: "investor",
+      facts: [{ key: "buyer_funding", value: "hard_money", source: "conversation", at: "2026-10-30T19:00:00.000Z", ref: "job-1" }] });
+    await store.upsertContactProfile(loc, "buyer-quiet", { party: "investor", name: "Quill" });
+
+    const r = await (await fetch(`${base}/buyers/funding?ids=buyer-hm,buyer-quiet,nobody-here`)).json();
+    assert.equal(r.ok, true, r.error);
+    assert.deepEqual(r.funding, { "buyer-hm": { value: "hard_money", at: "2026-10-30T19:00:00.000Z", source: "conversation" } });
+    assert.equal(buyerMoneyLine(r.funding["buyer-hm"]), "pays: hard money (said 10/30)");
+    assert.equal(buyerMoneyLine(r.funding["buyer-quiet"], { committed: true }), "pays: unknown · no proof of funds on file");
+
+    // A light read: a long list is cut, never a scan of the whole book.
+    const many = Array.from({ length: 90 }, (_, n) => `id-${n}`).join(",");
+    const capped = await (await fetch(`${base}/buyers/funding?ids=${many}`)).json();
+    assert.equal(capped.ok, true);
+    assert.equal(capped.read, 60);
+  } finally { close(); }
+});

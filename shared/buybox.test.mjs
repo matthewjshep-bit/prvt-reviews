@@ -22,6 +22,9 @@ import {
   queryChips,
   rehabRank,
   removeChip,
+  fundingSaid,
+  paysLine,
+  buyerMoneyLine,
 } from "./buybox.js";
 
 const box = (over = {}) => ({
@@ -246,6 +249,60 @@ test("manufactured survives the buy box, however they wrote it", () => {
   assert.deepEqual(normalizeBuybox({ buybox_property_types: "Mobile Home" }).propertyTypes, ["manufactured"]);
   const m = matchBuybox(normalizeBuybox({ buybox_property_types: "manufactured" }), { propertyTypes: ["manufactured"] });
   assert.deepEqual(m.matched, ["propertyTypes"]);
+});
+
+/* ---------------- how a buyer pays (2026-11-09) ---------------- */
+
+// What went wrong: how a buyer pays was unknown in 283 of 307 buyer threads,
+// though many had said it. A buyer took a contract and was still lining up
+// money three days later. What they say is filed and shown on the deal.
+test("how a buyer pays is read off their own words", () => {
+  assert.equal(fundingSaid("We use hard money on these, close in 3 weeks"), "hard_money");
+  assert.equal(fundingSaid("All cash, can close in 10 days"), "cash");
+  assert.equal(fundingSaid("I'm a cash buyer"), "cash");
+  assert.equal(fundingSaid("pulling it from my HELOC"), "heloc");
+  assert.equal(fundingSaid("a private lender funds it"), "private_money");
+  assert.equal(fundingSaid("my partners fund the deals"), "partners");
+  assert.equal(fundingSaid("conventional loan, 20 down"), "conventional");
+  assert.equal(fundingSaid("DSCR on the rentals"), "dscr");
+  assert.equal(fundingSaid("cash or hard money depending"), "cash", "the first they named");
+  assert.equal(fundingSaid("not a cash buyer, we use hard money"), "hard_money");
+  assert.equal(fundingSaid("does it cash flow?"), null);
+  assert.equal(fundingSaid("no hard money on this one"), null);
+  assert.equal(fundingSaid(""), null);
+});
+
+// A question is theirs to ask, not how they pay: "do you take hard money?"
+test("a buyer asking about money isn't filed as how they pay", () => {
+  assert.equal(fundingSaid("Would the seller take hard money? Need to know before I look"), null);
+  assert.equal(fundingSaid("Are you only working with cash buyers?"), null);
+  assert.equal(fundingSaid("Is a HELOC ok? We close with hard money either way."), "hard_money");
+});
+
+// The book's row carries it, so Add to buy box never files a read's "how
+// they pay" over one a person already set (shared/investor-read.js readFacts).
+test("a buyer's row in the book knows how they pay", () => {
+  assert.equal(normalizeBuybox({ buyer_funding: "hard_money" }).funding, "hard_money");
+  assert.equal(normalizeBuybox({ buyer_funding: "seashells" }).funding, null);
+  assert.equal(buyboxIsEmpty(normalizeBuybox({ buyer_funding: "cash" })), true, "how they pay isn't a buy box");
+});
+
+test("the deal row says how a buyer pays, or that we don't know", () => {
+  assert.equal(paysLine({ value: "hard_money", at: "2026-10-30T19:00:00Z" }), "pays: hard money (said 10/30)");
+  // The day is Pacific, wherever the page or the broker runs.
+  assert.equal(paysLine({ value: "cash", at: "2026-10-31T03:00:00Z" }), "pays: cash (said 10/30)");
+  assert.equal(paysLine({ value: "cash" }), "pays: cash");
+  assert.equal(paysLine(null), "pays: unknown");
+  assert.equal(paysLine({ value: "bitcoin" }), "pays: unknown");
+});
+
+// What went wrong: a buyer took a contract and was still lining up money
+// three days later, and nothing on the deal said so.
+test("a committed buyer with no proof of funds on the checklist says so on the deal row", () => {
+  assert.equal(buyerMoneyLine({ value: "hard_money", at: "2026-10-30T19:00:00Z" }), "pays: hard money (said 10/30)");
+  assert.equal(buyerMoneyLine(null, { committed: true }), "pays: unknown · no proof of funds on file");
+  assert.equal(buyerMoneyLine({ value: "cash" }, { committed: true, proofOnFile: true }), "pays: cash");
+  assert.equal(buyerMoneyLine({ value: "cash" }, { committed: false, proofOnFile: false }), "pays: cash", "only a commit asks for proof");
 });
 
 /* ---------------- Find buyers reads areas the way the deal sends do (2026-11-09) ---------------- */

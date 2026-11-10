@@ -16,7 +16,7 @@ import PostMortemModal from "./PostMortemView.jsx";
 import {
   addDealInvestor, dealDocUrl, deleteDealDoc, getOffer, ghlContactUrl, listDealDocs, listDeals,
   removeDeal, removeDealInvestor, setDealOutreachStopped, suggestInvestors, updateDeal, updateDealInvestor,
-  uploadDealDoc, zillowUrl, dealFeedbackUrl } from "./api.js";
+  uploadDealDoc, zillowUrl, dealFeedbackUrl, getBuyerFunding } from "./api.js";
 import AssignmentModal from "./AssignmentModal.jsx";
 import ContactLink from "./ContactLink.jsx";
 import DataroomModal from "./DataroomModal.jsx";
@@ -31,6 +31,7 @@ import DealKind from "./DealKind.jsx";
 import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
 import { resolveChecklist, dueWords } from "@shared/deal-checklist.js";
 import { resolveParties } from "@shared/deal-parties.js";
+import { buyerMoneyLine } from "@shared/buybox.js";
 import {
   BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
   rowActivation,
@@ -56,6 +57,21 @@ const sortInvestors = (list) =>
   [...(list || [])].sort((a, b) =>
     (STATUS_ORDER[investorStatus(a.status)] ?? 9) - (STATUS_ORDER[investorStatus(b.status)] ?? 9) ||
     String(a.name || "").localeCompare(String(b.name || "")));
+
+/**
+ * <BuyerMoney fact committed proofOnFile /> — how a buyer said they pay, under
+ * their name on the deal (2026-11-09): "pays: hard money (said 10/30)" or
+ * "pays: unknown", and for the buyer who committed, "no proof of funds on
+ * file" until the checklist's proof of funds item is ticked.
+ */
+export function BuyerMoney({ fact = null, committed = false, proofOnFile = false }) {
+  const warn = committed && !proofOnFile;
+  return (
+    <div className={`pl-3 text-[11px] leading-tight ${warn ? "text-amber-800" : "text-slate-500"}`}>
+      {buyerMoneyLine(fact, { committed, proofOnFile })}
+    </div>
+  );
+}
 
 // yyyy-mm-dd parsed as a LOCAL date (same convention as the contract PDFs) so
 // the countdown never drifts a day across timezones.
@@ -441,6 +457,23 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   };
 
   const investorIds = new Set((deal.investors || []).map((i) => i.contactId));
+  // How each buyer said they pay (GET /api/dispo/buyers/funding), for the
+  // buyers still in it, committed first. Only a buyer who was asked about
+  // gets a line, so a slow or failed read never shows "unknown" for someone
+  // who said.
+  const [funding, setFunding] = useState({});
+  const buyerKey = sortInvestors(deal.investors).filter((i) => i.contactId && investorStatus(i.status) !== "passed")
+    .slice(0, 60).map((i) => i.contactId).join(",");
+  useEffect(() => {
+    if (!buyerKey) return undefined;
+    let live = true;
+    const asked = buyerKey.split(",");
+    getBuyerFunding(asked)
+      .then((r) => { if (live) setFunding({ ...Object.fromEntries(asked.map((id) => [id, null])), ...(r.funding || {}) }); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [buyerKey]);
+  const proofOnFile = checklist.items.some((it) => it.id === "assignee_funds" && it.done);
 
   async function runSuggest() {
     setSuggest({ busy: true });
@@ -606,9 +639,14 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               <div className="space-y-1.5">
                 {sortInvestors(deal.investors).map((i) => (
                   <div key={i.contactId} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5">
-                    <span className="inline-flex min-w-0 items-center gap-1 text-sm font-medium">
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[investorStatus(i.status)] || "bg-slate-400"}`} />
-                      <ContactLink contactId={i.contactId} name={i.name} party="investor" className="min-w-0" />
+                    <span className="min-w-0">
+                      <span className="inline-flex min-w-0 items-center gap-1 text-sm font-medium">
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[investorStatus(i.status)] || "bg-slate-400"}`} />
+                        <ContactLink contactId={i.contactId} name={i.name} party="investor" className="min-w-0" />
+                      </span>
+                      {i.contactId in funding && investorStatus(i.status) !== "passed" && (
+                        <BuyerMoney fact={funding[i.contactId]} committed={investorStatus(i.status) === "committed"} proofOnFile={proofOnFile} />
+                      )}
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
                       <select value={investorStatus(i.status)} disabled={busy}

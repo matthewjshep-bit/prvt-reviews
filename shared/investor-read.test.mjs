@@ -172,6 +172,15 @@ test("Add to buy box files list values the record lacks and never overwrites a s
   ]);
 });
 
+// 2026-11-09: how a buyer pays was read but never filed, so it never reached
+// their record or the deal row. Add to buy box files the first way they
+// named, and never over one a person set.
+test("Add to buy box files how they pay as their funding, once", () => {
+  const read = { fields: normalizeFields({ funding: ["hard money", "cash"] }) };
+  assert.deepEqual(readFacts(read), [{ key: "buyer_funding", value: "hard_money" }]);
+  assert.deepEqual(readFacts(read, { have: { buyer_funding: "cash" } }), []);
+});
+
 test("the table's columns and the search read the same words", () => {
   const read = normalizeRead({ summary: "Builder, ADUs in Ballard", fields: { strategies: ["adu_dadu"], price_max: 900000, areas: ["Ballard"] }, quotes: [{ ref: "m2", text: "Mostly Tacoma and Lakewood.", about: ["areas"] }] }, thread);
   const cols = readColumns(read);

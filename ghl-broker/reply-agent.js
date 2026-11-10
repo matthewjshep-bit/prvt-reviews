@@ -42,6 +42,7 @@ import { leaveOutreachWorkflows } from "./outreach-followup.js";
 import { learnFacts, recordEvent, recordEvents } from "./contact-record.js";
 import { saveTextedEmail, setDealsBy } from "./contact-email.js";
 import { wantsDealsByEmail } from "./shared/contact-email.js";
+import { fundingSaid } from "./shared/buybox.js";
 import { recordError } from "./app-errors.js";
 import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, bookingContextText } from "./shared/booking.js";
 import { paperWent, paperWorthy, floatSentAt, isRoughNumber } from "./shared/paper-follows.js";
@@ -4255,6 +4256,14 @@ async function runReply(job, ctx) {
     if (party === "investor" && wantsDealsByEmail(words)) {
       const r = await setDealsBy({ client, store, locationId, contactId: job.contactId, value: "email", source: "conversation", ref: job.id }).catch(() => null);
       if (r?.ok) job.dealsByEmail = { hasEmail: Boolean(mail?.ok || a.contact?.email) };
+    }
+    // How a buyer pays, in their words (2026-11-09: unknown in 283 of 307
+    // buyer threads): the `buyer_funding` fact, newest wins, on the deal's
+    // buyer row. A question about money isn't an answer (shared/buybox.js).
+    const funding = party === "investor" ? fundingSaid(words) : null;
+    if (funding) {
+      await learnFacts({ store, locationId, contactId: job.contactId, party: "investor",
+        facts: [{ key: "buyer_funding", value: funding, source: "conversation", at: new Date(now).toISOString(), ref: job.id }] }).catch(() => {});
     }
   }
 

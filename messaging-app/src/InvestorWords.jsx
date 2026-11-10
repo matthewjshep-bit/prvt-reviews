@@ -38,6 +38,7 @@ export function haveFromBuybox(b = {}) {
     rehab_appetite: b.rehabAppetite || "",
     buybox_lot_min: b.lotMin ?? "",
     buybox_exclusions: String(b.exclusions || "").split(/[,;\n]/).map((x) => x.trim()).filter(Boolean),
+    buyer_funding: b.funding || "",
   };
 }
 

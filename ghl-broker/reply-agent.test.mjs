@@ -1827,6 +1827,43 @@ test("a real run leaves the conversation on the timeline", async () => {
   assert.deepEqual((await store.getContactProfile("LOC", "c1")).facts.buybox_areas.map((e) => e.value), ["Everett"]);
 });
 
+// What went wrong (2026-11-09 audit): how a buyer pays was unknown in 283 of
+// 307 buyer threads though many had said it, and a buyer who took a contract
+// was still lining up money three days later. What they say is filed.
+test("a buyer who says they use hard money has it on their record", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "Could work. We use hard money on these, close in about 3 weeks",
+    deps: { draft: async () => ({ ...DRAFT, intent: "interested", summary: "Might want it.", reply: "Sounds good, I'll send the details." }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const funding = (await store.getContactProfile("LOC", "c1")).facts.buyer_funding;
+  assert.deepEqual(funding.map((e) => [e.value, e.source, e.ref]), [["hard_money", "conversation", job.id]]);
+
+  // A question about money isn't how they pay, and an agent's words are never a buyer's funding.
+  _resetJobs();
+  const asks = fakeStore();
+  const r2 = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store: asks, contactId: "c1", message: "Would the seller take hard money?",
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", summary: "Asked about terms." }) },
+  });
+  await settle();
+  assert.equal(r2.job.status, "done", r2.job.error);
+  assert.equal((await asks.getContactProfile("LOC", "c1"))?.facts?.buyer_funding, undefined);
+  _resetJobs();
+  const agentStore = fakeStore();
+  const r3 = await startReply({
+    client: ghlStubFor(["agent"]).client, locationId: "LOC", saved: STARTER_NOW, store: agentStore, contactId: "c1", message: "Seller wants all cash, no financing",
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", summary: "Cash only." }) },
+  });
+  await settle();
+  assert.equal(r3.job.status, "done", r3.job.error);
+  assert.equal((await agentStore.getContactProfile("LOC", "c1"))?.facts?.buyer_funding, undefined);
+});
+
 test("an agent's own ARV and rehab are kept as theirs, recorded on the property, and never become ours", async () => {
   const { normalizeAgentTake } = await import("./reply-agent.js");
   assert.deepEqual(normalizeAgentTake({ agentArv: 715000, agentRehab: 40000, agentTakeNote: "comps support 715, cosmetic" }), { arv: 715000, rehab: 40000, note: "comps support 715, cosmetic" });

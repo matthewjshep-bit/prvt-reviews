@@ -26,28 +26,43 @@ function Field({ label, value, onChange, type = "text", span, placeholder }) {
   );
 }
 
-export default function AssignmentModal({ offer, settings, onClose, onGenerated }) {
+/**
+ * assignmentDefaults(offer, settings) → the form's opening fields
+ *
+ * What was typed into the last assignment wins. Otherwise the total price is
+ * the price the buyer agreed in the thread (`deal.investors[].agreedPrice`,
+ * ghl-broker/investor-price.js, 2026-11-09), the same price the
+ * draft-on-commit paper uses, and failing that contract price plus the
+ * assignment fee (the assignment price is defined as exactly that sum).
+ * Deal terms (Deals tab) win over the contract/calc-derived values.
+ */
+export function assignmentDefaults(offer = {}, settings = {}, now = new Date()) {
   const saved = offer.assignment?.fields || null;
-  // Prefill the total price with contract price + assignment fee when both are
-  // known (the assignment price is defined as exactly that sum). Deal terms
-  // (Deals tab) win over the contract/calc-derived values.
   const contractPrice = Number(offer.deal?.contractPrice) || Number(offer.contract?.fields?.price) || Number(offer.cashAmount) || 0;
   const fee = Number(offer.deal?.assignmentFee) || Number(offer.calc?.settings?.wholesaleFee ?? settings?.wholesaleFee) || 0;
   // The committed disposition investor (if the deal has one) is the assignee.
   // The assignee named on the deal's parties wins over the committed buyer.
-  const committed = offer.deal?.parties?.assignee || offer.deal?.investors?.find((i) => i.status === "committed");
-  const [fields, setFields] = useState(() => ({
-    effectiveDate: saved?.effectiveDate || ymd(new Date()),
+  const investors = offer.deal?.investors || [];
+  const committedBuyer = investors.find((i) => i.status === "committed");
+  const committed = offer.deal?.parties?.assignee || committedBuyer;
+  const buyer = (committed?.contactId && investors.find((i) => i.contactId === committed.contactId)) || committedBuyer;
+  const agreed = Math.round(Number(buyer?.agreedPrice?.amount) || 0);
+  return {
+    effectiveDate: saved?.effectiveDate || ymd(now),
     assignorName: saved?.assignorName || settings?.company?.signer || "",
     assignorCompany: saved?.assignorCompany || settings?.company?.name || "",
     assigneeName: saved?.assigneeName || committed?.name || "",
     assigneeCompany: saved?.assigneeCompany || committed?.company || "",
     address: saved?.address || offer.address || "",
-    totalPrice: saved?.totalPrice || (contractPrice ? contractPrice + fee : ""),
+    totalPrice: saved?.totalPrice || agreed || (contractPrice ? contractPrice + fee : ""),
     deposit: saved?.deposit || "",
     depositDueDate: saved?.depositDueDate || "",
     closingDate: saved?.closingDate || offer.deal?.closingDate || offer.contract?.fields?.closingDate || "",
-  }));
+  };
+}
+
+export default function AssignmentModal({ offer, settings, onClose, onGenerated }) {
+  const [fields, setFields] = useState(() => assignmentDefaults(offer, settings));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [pdfUrl, setPdfUrl] = useState(offer.assignmentPdfUrl || "");
