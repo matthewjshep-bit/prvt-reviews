@@ -137,6 +137,10 @@ import { quoteGateFlags, awaitingReprice, otherAgentsNumber, typedAboveBook } fr
 import { sellerOwnNumber, workAfterPricing } from "./shared/number-stance.js";
 import { repriceStaleRow } from "./price-v2.js";
 import { numberTimeFlags, callPromiseFlags, inventedPeopleFlags, contactClaimFlags, sentOfferFlags, claimGateInputs, CALL_OWED_FLAG, CLAIMS_EMAIL_RX } from "./shared/reply-claims.js";
+// Passes, goodbyes and what the bot says about us (the 2026-11-09 audit).
+import { notTheirNumber, NEXT_ONE_QUESTION, nextOneAskedToday } from "./shared/flip-read.js";
+import { asksIfWholesaler, wholesaleFlags, wholesaleAskLine, formsFlags, formsStateOf, WHOLESALE_ASK_FLAG } from "./shared/partner-terms.js";
+import { buyBoxRule } from "./shared/conversation-ai.js";
 
 // Skeleton and engine modes both take every house an agent names, not only the one the rule picks.
 const everyNamedHouse = (saved) => ["skeleton", "engine"].includes(underwriteMode(saved));
@@ -993,6 +997,7 @@ export function evaluateReplyGates({
   quotes = null,
   numberUnpriced = false, callOwedUnkept = false, connectedCallRecently = true, callTriedRecently = connectedCallRecently, offerWentOut = true, sendOfferDone = false,
   closeDaysMin = 0,
+  formsState = "",
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -1192,6 +1197,10 @@ export function evaluateReplyGates({
   flags.push(...(party === "agent" || party === "investor" ? inventedPeopleFlags(claimed) : []));
   flags.push(...(party === "agent" || party === "investor" ? contactClaimFlags(claimed, { connectedCallRecently, callTriedRecently }) : []));
   flags.push(...(party === "agent" ? sentOfferFlags(claimed, { offerWentOut, sendOfferDone }) : []));
+  // Their wholesale question is Matt's, and a reply never denies we wholesale
+  // or assign; an Oregon house is written on OREF forms (shared/partner-terms.js).
+  flags.push(...wholesaleFlags({ reply: draft.reply, party, asked: draft.asksWholesale }));
+  flags.push(...formsFlags(draft.reply, { state: formsState }));
   // `ok` is the row's word — a counter is not auto-sendable, full stop. But
   // the lock is the ONE flag a guard may overturn, so it is named apart from
   // the rest: `clean` says every OTHER gate passed. decideAutoSend lets a
@@ -1813,6 +1822,59 @@ export function yesAfterOurPass({ offers = [], drafts = [], events = [], draft =
   const answered = (drafts || []).some((d) => d?.status === "sent" && after(d.sentAt || d.updatedAt || d.createdAt))
     || (events || []).some((e) => e?.type === "hand_reply" && after(e.at));
   return answered ? null : { ...found, at: before.at };
+}
+
+// How far back our own ask about a passed house still counts.
+export const ASKED_AFTER_PASS_DAYS = 14;
+// Our text invited a second look at a house we passed on: has the seller
+// moved or softened, is it still available, another look.
+const SECOND_LOOK_ASK_RX = /\b(?:seller|sellers|owner|owners|they|she|he)\b[^.?!]{0,40}\b(?:moved|budged?|budging|soften(?:ed)?|come down|came down|flexib\w*|reconsider\w*|any room|more open|still firm)\b|\bany (?:movement|change|update|wiggle room)\b|\b(?:second|another|fresh) look\b|\bstill (?:available|on the market|for sale|active|around)\b|\bopen to (?:it|an offer|offers|our number)\b/i;
+// Their answer moves it forward: an LOI or an offer asked for, or a number.
+const ASKS_FOR_PAPER_RX = /\bLOI\b|\bletter of intent\b|\b(?:send|submit|write|put)\s+(?:me\s+|us\s+|over\s+|in\s+|up\s+)*(?:an?|the|your)\s+(?:offer|loi)\b|\bwrite\s+(?:it|one|something)\s+up\b|\bmake\s+(?:an?\s+|us\s+an?\s+|them\s+an?\s+)?offer\b|\bwhat\s+(?:would|could|can)\s+you\s+(?:offer|do|pay)\b/i;
+const NAMES_A_PRICE_RX = /\b(?:at|to|for|around|about|do|take|wants?|needs?|is)\s+\$?\d{3}(?:\.\d+)?\s*k?\b/i;
+
+/**
+ * askedAfterOurPass({ offers, transcript, message, draft, now }) → { offerId, address, at } | null
+ *
+ * A house we marked we passed on, where our own newest text about it in the
+ * last ASKED_AFTER_PASS_DAYS, sent after the pass and by anyone (Matt's hand
+ * sends included), asked whether the seller moved or softened, offered a
+ * second look, or asked whether it's still available — and their answer asks
+ * for an LOI or an offer, or names a number. "We've moved on" is the wrong
+ * answer to our own question (the 2026-11-09 audit, two answers to the 11/4
+ * hand sweep): reopen or pass is Matt's. A text of ours is about the house
+ * when it names it (namesHouse: its number or its street name), or about
+ * anything when it's the only house they have with us. `at` is our ask.
+ */
+export function askedAfterOurPass({ offers = [], transcript = "", message = "", draft = {}, now = Date.now() } = {}) {
+  const current = currentOffers(offers || []).filter((o) => o?.address && !o.deal);
+  const walked = current.filter((o) => offerStatus(o) === "we_passed");
+  if (!walked.length) return null;
+  const words = String(message || "");
+  const ref = Math.max(0, ...walked.map((o) => Number(o.cashAmount) || 0));
+  const answers = ASKS_FOR_PAPER_RX.test(words) || NAMES_A_PRICE_RX.test(words) || moneyIn(words).length > 0 || shorthandPrices(words, ref).length > 0
+    || Number(draft?.counterAmount) > 0 || ["counter", "acceptance", "realm_yes"].includes(draft?.intent);
+  if (!answers) return null;
+  const since = now - ASKED_AFTER_PASS_DAYS * 86400000;
+  const ours = [];
+  for (const line of String(transcript || "").split("\n")) {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US \w+: (.*)$/.exec(line);
+    if (!m) continue;
+    const ts = Date.parse(`${m[1]}T${m[2]}:00Z`);
+    if (Number.isFinite(ts) && ts >= since && ts <= now) ours.push({ ts, text: m[3].trim() });
+  }
+  const only = current.length === 1 ? current[0] : null;
+  const hits = [];
+  for (const o of walked) {
+    const about = ours.filter((l) => namesHouse(l.text, o.address) || only?.id === o.id).sort((x, y) => x.ts - y.ts);
+    const newest = about.at(-1);
+    const passedAt = Date.parse(o.statusAt || "") || 0;
+    if (!newest || newest.ts + 60000 < passedAt || !SECOND_LOOK_ASK_RX.test(newest.text)) continue;
+    hits.push({ offerId: o.id, address: o.address, at: new Date(newest.ts).toISOString() });
+  }
+  if (!hits.length) return null;
+  const named = draft?.propertyAddress ? pickOfferByAddress(hits.map((h) => ({ ...h, id: h.offerId })), draft.propertyAddress) : null;
+  return named ? { offerId: named.offerId, address: named.address, at: named.at } : hits.sort((x, y) => y.at.localeCompare(x.at))[0];
 }
 
 /* ---------- GHL writeback ---------- */
@@ -2560,7 +2622,8 @@ export async function assembleConversation({
   // What we buy right now (shared/asset-type.js): single-family only since
   // 2026-10-01, so a condo or a mobile home gets a plain no, not a promise —
   // except a house we chose to price anyway, which is named.
-  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, AGENT_PAPER_RULE, CLARIFY_RULE, AGENT_HONESTY_RULE, PROMISE_RULE, agentFocusRule(saved?.focusKinds, { pricedAnyway: context.pricedOutsideFocus || [] })].filter(Boolean).join("\n")
+  // What we buy, said one fixed way (buyBoxRule, the 2026-11-09 audit: 50 threads got a made-up buy box).
+  const instructions = party === "agent" ? [base, AGENT_GOAL_RULE, buyBoxRule(saved), AGENT_PAPER_RULE, CLARIFY_RULE, AGENT_HONESTY_RULE, PROMISE_RULE, agentFocusRule(saved?.focusKinds, { pricedAnyway: context.pricedOutsideFocus || [] })].filter(Boolean).join("\n")
     : party === "investor" ? [base, CLARIFY_RULE].filter(Boolean).join("\n") : base;
   const signer = config.persona.name || saved?.company?.signer || saved?.company?.name || "";
   // Ours to hand out when asked — an agent who asks "what's your email?" got
@@ -3477,6 +3540,29 @@ export function whatWentOut(offer) {
   return offer && offerStatus(offer) !== "new" ? "paper" : "";
 }
 
+/**
+ * numberWentOut({ offer, drafts, transcript }) → boolean
+ *
+ * Our number on this offer is in front of them: the offer is past draft and
+ * new (sent, countered, answered — the bank-sale pass's "unsent" rule), the
+ * letter went, a float of it left by text (floatSentAt, on the offer or a
+ * sent realm check in `drafts`), or a text of ours named it on the house
+ * (lastQuoteOnHouse, whoever typed it). A goodbye for being too far apart,
+ * or "the number we sent", needs one of these (the 2026-11-09 audit).
+ * Countered, passed or no response is a reply's word as often as ours: a
+ * reply files their number as countered on a `new` row that never went
+ * (setOfferStatus), so those count only when the row was marked sent first
+ * or the evidence above says it went.
+ */
+const NUMBER_UNPROVEN_STATUSES = new Set(["draft", "new", "countered", "passed", "no_response"]);
+export function numberWentOut({ offer = null, drafts = [], transcript = "" } = {}) {
+  if (!offer) return false;
+  const status = offerStatus(offer);
+  if (!NUMBER_UNPROVEN_STATUSES.has(status)) return true;
+  if (status !== "draft" && status !== "new" && (offer.statusHistory || []).some((h) => h?.status === "sent")) return true;
+  return Boolean(offer.floatSentAt || paperWent(offer) || (offer.id && floatSentAt(drafts || [], offer.id)) || lastQuoteOnHouse(offer, transcript));
+}
+
 // What the float carries besides the number (2026-10-07), each behind its own
 // realmCheck switch and none on a re-quote (that one is already their
 // numbers): how we got there, a range topped by our number, and one setup
@@ -3503,7 +3589,8 @@ export function floatGate({ offer, outbound, style = null, amounts = [], party =
   return (d) => evaluateReplyGates({ draft: d, party, allowedAmounts: allowed, hiddenAmounts: outbound?.math?.hidden ? [outbound.math.hidden] : [],
     ranges: outbound?.range ? [outbound.range] : [], channel: "sms", style: styleFor("realm_check", outbound, style),
     ourAmount: Math.max(Number(offer?.cashAmount) || 0, ...realmFloats({ offer, outbound })),
-    quotes });
+    quotes,
+    formsState: formsStateOf(d.propertyAddress, offer?.address) });
 }
 
 // What a realm check may say about our number: the exact figure, its rough
@@ -3644,7 +3731,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       askSeller: true, sellerQuestion: dossier?.have?.sellerAsk ? "what's the seller's timeline looking like?" : SELLER_NUMBER_QUESTION };
   }
   if (kind === "pass_note") {
-    const houses = (subject?.houses || []).slice(0, 6).map((h) => ({ offerId: h.offerId, address: String(h.address || ""), code: h.code, label: h.label || "", words: h.words || "", statusAt: h.statusAt || null }));
+    const houses = (subject?.houses || []).slice(0, 6).map((h) => ({ offerId: h.offerId, address: String(h.address || ""), code: h.code, label: h.label || "", words: h.words || "", statusAt: h.statusAt || null,
+      // Whose house it was (shared/pass-note.js broughtBy): ours is never thanked for as sent.
+      broughtBy: h.broughtBy === "us" ? "us" : "them" }));
     return { ...base, address: houses.map((h) => h.address).join("; ") || address, houses, notBefore: subject?.notBefore || null };
   }
   if (kind === "kind_pass") {
@@ -3935,7 +4024,8 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
     houseWords: houseWordsFor(context?.deals, a.transcript),
     theirValue: party === "agent" ? Math.round(Number(dossier?.have?.arv?.value) || 0) : 0,
     ourValue: ourValueFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
-    quotes: quotesFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address) });
+    quotes: quotesFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
+    formsState: formsStateOf(d.propertyAddress, subject?.address, offer?.address) });
   // The second look is one or two short lines (shared/second-look.js), and
   // says our same number and nothing above it — not even the book's own
   // rounding up ("378K" on 377,552).
@@ -4545,6 +4635,10 @@ async function runReply(job, ctx) {
     if (terms.addToBuyers) events.push({ type: "investor_minded", at, source: "conversation", ref: job.id, dedupeKey: `investor_minded:${job.contactId}`, data: { cue: terms.phrase.slice(0, 80) } });
     await recordEvents({ store, locationId, contactId: job.contactId, party: "agent", events }).catch(() => {});
   }
+  // Whether we wholesale or assign, or a seller who won't work with
+  // wholesalers (the 2026-11-09 audit: answered "we close ourselves, no
+  // assignments"). How we buy is Matt's: the reply waits for him below.
+  const wholesaleAsk = party === "agent" && !isCall ? asksIfWholesaler(theirLatestWords(a.transcript, job.originalMessage || job.message)) : null;
 
   /* --- 1b. the calendar, when a time is on the table --- */
   const booking = await prepareBooking({ client, store, locationId, contactId: job.contactId, party, message: job.message, config, now, deps }).catch(() => null);
@@ -4563,7 +4657,8 @@ async function runReply(job, ctx) {
       transcript: a.transcript, message: job.originalMessage || job.message, ice: iceHouse })
     : null;
   const callAsk = callOn ? firstAnswer : null;
-  const extraText = [bookingText, partnerTermsLine(terms), firstAnswer?.first ? (callOn ? CALL_ASK_LINE : FIXERS_ASK_LINE) : ""].filter(Boolean).join("\n\n");
+  const extraText = [bookingText, partnerTermsLine(terms), firstAnswer?.first ? (callOn ? CALL_ASK_LINE : FIXERS_ASK_LINE) : "",
+    wholesaleAskLine(wholesaleAsk)].filter(Boolean).join("\n\n");
   const draftContext = extraText ? { ...context, text: [context.text, extraText].filter(Boolean).join("\n\n") } : context;
 
   /* --- 2. the draft --- */
@@ -4607,6 +4702,20 @@ async function runReply(job, ctx) {
   // on file that even loosely names this house, leaves it a counter — the
   // band matches loosely and falls back to a lone open offer, so this must
   // not call something new that the band would have recognised.
+  // A rival's offer, the seller's payoff, an appraisal or the list price they
+  // mention is not their number to us (shared/flip-read.js notTheirNumber, the
+  // 2026-11-09 audit), whatever the model filed it as and whether or not we
+  // priced the house: never their counter, never a goodbye's reason. Agents
+  // text 575 for 575,000. The counter block below reads it again on the
+  // shorthand it settles against our number. The list price as their floor
+  // ("full list, it's listed at 799") stays theirs (listPriceFloor).
+  if (party === "agent" && !isCall && Number(draft.counterAmount) > 0 && !listPriceFloor(job.message)) {
+    const said = Math.round(Number(draft.counterAmount));
+    const n = said < 10000 ? said * 1000 : said;
+    if (notTheirNumber(job.originalMessage || job.message).some((m) => Math.abs(m - n) <= Math.max(1000, n * 0.005))) {
+      draft = { ...draft, counterAmount: 0, notTheirNumber: n };
+    }
+  }
   if (party === "agent" && draft.intent === "counter" && draft.propertyAddress) {
     const book = await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => null);
     const anyOpen = (book || []).some(isNegotiable);
@@ -4682,6 +4791,14 @@ async function runReply(job, ctx) {
       if (read !== Math.round(Number(draft.counterAmount) || 0)) {
         draft = { ...draft, counterAmount: read, counterShorthand: true };
       }
+      // A rival's offer, the seller's payoff, an appraisal or the list price
+      // they mention is not their number to us (shared/flip-read.js
+      // notTheirNumber, the 2026-11-09 audit): it is never the counter a
+      // goodbye answers. The draft stays a counter, a person's call.
+      const marked = isCall || draft.counterFloor === "list_price" ? [] : notTheirNumber(job.originalMessage || job.message);
+      if (read > 0 && marked.some((n) => Math.abs(n - read) <= Math.max(1000, read * 0.005))) {
+        draft = { ...draft, counterAmount: 0, notTheirNumber: read };
+      }
       if (draft.counterFloor === "list_price") {
         // The list price as we know it: on the offer, else the seller's ask
         // on the timeline ("another price reduction, currently at 1,195,000"
@@ -4735,13 +4852,31 @@ async function runReply(job, ctx) {
           // and one to a text about a second house. The model's reply waits
           // for a person instead.
           draft = { ...draft, needsHuman: true, passHeld: { offerId: full.id, theirs, why: heldWhy, passed: offerStatus(full) === "passed" }, humanReason: heldWhy };
+        } else if (reference > 0 && theirs > passLine
+            && !numberWentOut({ offer: full, drafts: await store.listReplyDrafts(locationId, { contactId: job.contactId, limit: 30 }).catch(() => []), transcript: a.transcript })) {
+          // Our number never went out (priced, never sent or floated): they
+          // haven't seen it, so "too far apart" isn't true yet (the
+          // 2026-11-09 audit: three goodbyes to agents who had never seen a
+          // number of ours). Float ours or pass is Matt's; nothing is filed,
+          // and the card lands in Needs Matt as a price (shared/needs-matt.js).
+          const where = String(full.address || draft.propertyAddress || "").split(",")[0].trim() || "the house";
+          const ours = Math.round(Number(full.cashAmount) || 0);
+          draft = { ...draft, needsHuman: true,
+            passHeld: { offerId: full.id, theirs, why: "our number never went out", passed: false, unsent: true },
+            unsentCounter: { offerId: full.id, theirs, ours },
+            // A row with only the ceiling behind it has no number of ours to float.
+            humanReason: ours > 0 ? `their ${kText(theirs)} vs our unsent ${kText(ours)} on ${where}: float ours or pass`
+              : `their ${kText(theirs)} on ${where}, and no number of ours went out: price it or pass` };
         } else if (reference > 0 && theirs > passLine) {
+          // It ends on the NEXT ONE question (Matt, 2026-10-21), unless that
+          // already went to them today.
+          const nextOne = nextOneAskedToday({ transcript: a.transcript, now }) ? "" : ` ${NEXT_ONE_QUESTION}`;
           draft = {
             ...draft, intent: "rejection", reclassifiedFrom: "counter",
             summary: weMovedOnPrice
               ? `Their number (${fmtMoney(theirs)}) is over the most we'd pay (${fmtMoney(reference)}) after we already came back — filed as a pass.`
               : `Their number (${fmtMoney(theirs)}) is more than ${Math.round(COUNTER_PASS_MARGIN * 100)}% over the most we'd pay (${fmtMoney(reference)}) — filed as a pass.`,
-            reply: "Sorry, this one didn't work out for us, we're too far apart on the number. Appreciate you working it with me. Keep me in mind for the next one that needs work, and if anything changes with the seller I'm here.",
+            reply: `Sorry, this one didn't work out for us, we're too far apart on the number. Appreciate you working it with me.${nextOne}`,
             needsHuman: false,
           };
           job.intent = draft.intent;
@@ -4989,7 +5124,10 @@ async function runReply(job, ctx) {
       : null;
     if (known && known.status !== "draft" && OPEN_OFFER_STATUSES.has(offerStatus(known))) {
       // A house we priced and they're still working: desk first — is our number in the realm?
-      deskFirst(street, { priced: true });
+      // "The number we sent" only when it went (numberWentOut); priced and never
+      // sent or floated, it's the unpriced wording (the 2026-11-09 audit).
+      const went = numberWentOut({ offer: known, drafts: await store.listReplyDrafts(locationId, { contactId: job.contactId, limit: 30 }).catch(() => []), transcript: a.transcript });
+      deskFirst(street, { priced: went });
     } else if (!known || known.status === "draft") {
       if (notOurKind) {
         // They've told us it needs nothing: not a number to chase (Matt,
@@ -5187,6 +5325,7 @@ async function runReply(job, ctx) {
   // "We've actually moved on". Whatever the model filed it as, the reply
   // waits for Matt — reopening it is his call — and Today says why.
   let yesAfterPass = null;
+  let askedAfterPass = null;
   // Their timeline, kept for the gate's "what they said it's worth".
   let agentEvents = [];
   if (party === "agent" && !isCall) {
@@ -5201,6 +5340,15 @@ async function runReply(job, ctx) {
       const where = String(yesAfterPass.address || "the house").split(",")[0].trim();
       draft = { ...draft, needsHuman: true, yesAfterPass,
         humanReason: `they said yes to our ${fmtMoney(yesAfterPass.amount)} on ${where} after we passed on it — reopening it is your call; never answer a yes with a goodbye` };
+    }
+    // We asked about a house after we passed on it (has the seller moved,
+    // still available, a second look) and they answer with an LOI ask, an
+    // offer or a number (the 2026-11-09 audit): "we've moved on" is the wrong
+    // answer to our own question. Reopen or pass is Matt's.
+    askedAfterPass = yesAfterPass ? null : askedAfterOurPass({ offers: book || [], transcript: a.transcript, message: job.originalMessage || job.message, draft, now });
+    if (askedAfterPass) {
+      const where = String(askedAfterPass.address || "the house").split(",")[0].trim();
+      draft = { ...draft, needsHuman: true, askedAfterPass, humanReason: `we asked them about ${where} after our pass: reopen or pass` };
     }
   }
 
@@ -5242,6 +5390,13 @@ async function runReply(job, ctx) {
   // timeline only after the draft is saved, 4a below); a voicemail they left
   // is a call we missed, not a talk.
   const thisCall = isCall && job.call ? { callTriedRecently: true, ...(job.call.missed ? {} : { connectedCallRecently: true, callOwedUnkept: false }) } : {};
+  // Their wholesale question waits for Matt the same way (the gate flags it).
+  // A yes after our pass, our own ask after it, their number over ours unsent
+  // or their terms keep their own why: those cards are the bigger thing.
+  if (wholesaleAsk) {
+    const bigger = draft.partnerTerms || draft.yesAfterPass || draft.askedAfterPass || draft.unsentCounter;
+    draft = { ...draft, asksWholesale: wholesaleAsk, needsHuman: true, humanReason: bigger && draft.humanReason ? draft.humanReason : WHOLESALE_ASK_FLAG };
+  }
   const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft: d, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
     hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: inboundText, channel: job.channel, style: config.style,
@@ -5257,6 +5412,7 @@ async function runReply(job, ctx) {
     theirValue: party === "agent" ? theirValueFor({ draft: d, message: isCall ? "" : job.message, events: agentEvents, address: d.propertyAddress }) : 0,
     ourValue: ourValueFor(context.offers?.numbers, d.propertyAddress),
     quotes: quotesFor(context.offers?.numbers, d.propertyAddress, { sellerAsk: sellerAskIn(d) }),
+    formsState: party === "agent" ? formsStateOf(d.propertyAddress, iceHouse?.address) : "",
   });
   let gate = gateFor(draft);
   // A draft a content gate caught — a number not in the book, "cash close",
@@ -5278,7 +5434,7 @@ async function runReply(job, ctx) {
   // said yes on is the bot's mistake, not our decision.
   const replyPassed = (bankSalePass && !yesAfterPass) || (party === "agent" && !qualifyHeld && !numberFirst && !notOurKind && !yesAfterPass
     && ["deal_available", "new_property"].includes(draft.intent) && (photosPass || ourReplyPasses(draft.reply))
-    && !saysYes(job.originalMessage || job.message));
+    && !saysYes(job.originalMessage || job.message) && !askedAfterPass);
   if (replyPassed) {
     draft = {
       ...draft,
@@ -5344,6 +5500,14 @@ async function runReply(job, ctx) {
   if (yesAfterPass) {
     auto = { ...auto, send: false, code: "needs_you", reason: "they said yes after we passed — you take this one" };
   }
+  // Their answer to our own question about a house we passed on, the same.
+  if (askedAfterPass) {
+    auto = { ...auto, send: false, code: "needs_you", reason: "they answered our ask after our pass — reopen or pass is yours" };
+  }
+  // Their number against ours that never went out: float ours or pass is his.
+  if (draft.unsentCounter) {
+    auto = { ...auto, send: false, code: "needs_you", reason: "their number is far over ours, and ours never went out — float ours or pass is yours" };
+  }
   // An agent with a live house called and left a voicemail (2026-10-15): a
   // call back from Matt first (the Desk's "they called you" row), so the text
   // after it waits for him.
@@ -5386,6 +5550,9 @@ async function runReply(job, ctx) {
   if (draft.passHeld?.passed || draft.closedHold) {
     plan.auto = plan.auto.filter((x) => x.type !== "mark_offer_countered");
   }
+  // Their number against ours that never went out: nothing is countered
+  // until Matt floats ours or passes (unsentCounter).
+  if (draft.passHeld?.unsent) plan.auto = plan.auto.filter((x) => x.type !== "mark_offer_countered");
   // Number first: the reply promises numbers, so the underwrite runs whatever
   // the tier's rule carries (Tier 2 carries none) — replacing a held draft
   // rather than standing down behind it.
@@ -5757,7 +5924,9 @@ async function runReply(job, ctx) {
         why: "they pushed back on the number we floated — the written offer goes anyway, for their records" };
       const line = "I'll send our written offer over anyway so you have it on file.";
       const said = String(draft.reply || "").trim();
-      const withLine = /\bkeep me in mind\b/i.test(said) ? said.replace(/\b(keep me in mind)/i, `${line} $1`) : `${said}${said ? " " : ""}${line}`;
+      // Before the closing ask, so the text still ends on its one question.
+      const withLine = said.endsWith(NEXT_ONE_QUESTION) ? `${said.slice(0, -NEXT_ONE_QUESTION.length).trim()} ${line} ${NEXT_ONE_QUESTION}`
+        : /\bkeep me in mind\b/i.test(said) ? said.replace(/\b(keep me in mind)/i, `${line} $1`) : `${said}${said ? " " : ""}${line}`;
       const next = { ...draft, replyBeforeSend: draft.replyBeforeSend ?? draft.reply, reply: withLine };
       if (auto.send && gateFor(next).ok) {
         plan.auto.unshift(action);
@@ -5989,6 +6158,11 @@ async function runReply(job, ctx) {
     ...(draft.yesAfterPass ? { yesAfterPass: draft.yesAfterPass } : {}),
     // A counter close to ours: a call, not the hold text (call_counter).
     ...(draft.callCounter ? { callCounter: draft.callCounter } : {}),
+    // Their number against ours that never went out: a price card in Needs Matt.
+    ...(draft.unsentCounter ? { unsentCounter: draft.unsentCounter } : {}),
+    // Their answer to our ask about a house we passed on; their wholesale question.
+    ...(draft.askedAfterPass ? { askedAfterPass: draft.askedAfterPass } : {}),
+    ...(draft.asksWholesale ? { asksWholesale: draft.asksWholesale } : {}),
     promptVersion: 3,
     updatedAt: ts,
   });
@@ -6151,7 +6325,7 @@ async function runReply(job, ctx) {
     // agents raised held their cards in Tier 1). Never on their yes to a
     // number of ours; saysYes alone is too loose here ("Seller situation is
     // good" reads as one), and a sent offer's row keeps its own stage anyway.
-    const ourWordsPass = !yesAfterPass && ourReplyPasses(draft.reply);
+    const ourWordsPass = !yesAfterPass && !askedAfterPass && ourReplyPasses(draft.reply);
     const closedWhy = !closedHouse ? ""
       : gone ? "it sold or came off the market"
       : replyPassed || ourWordsPass || (draft.qualify && ["pass", "closed"].includes(draft.qualify.stage)) ? "we passed on it"
@@ -6925,6 +7099,7 @@ export async function previewConversation({
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, message),
     quotes: quotesFor(context.offers?.numbers, draft.propertyAddress, { sellerAsk: sellerAskIn(draft) }),
+    formsState: party === "agent" ? formsStateOf(draft.propertyAddress) : "",
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };

@@ -22,6 +22,8 @@ import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
 import { offerForms } from "./shared/us-address.js";
+import { passWordsFor } from "./shared/offer-status.js";
+import { broughtBy } from "./shared/pass-note.js";
 import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor, walkedAwayFrom, liveRange, rangeWords, awaitingReprice, lastQuoteOnHouse, personSettledAt } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { emailContextText } from "./shared/gmail.js";
@@ -279,7 +281,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         : status === "we_passed" ? "WE WALKED AWAY from this house: closed on our side, do not chase it or name its number; " +
           "if they say yes to our number on it, never say we've moved on: thank them and say you'll confirm it with them today (a person reopens it)" +
           // Why, when Matt said (WE_PASS_REASONS): the one reason the bot may give.
-          (wePassReasonOf(o) ? `. WHY WE PASSED (${wePassReasonOf(o).label.toLowerCase()}): ${wePassReasonOf(o).words}` : "") : "",
+          (wePassReasonOf(o) ? `. WHY WE PASSED (${wePassReasonOf(o).label.toLowerCase()}): ${passWordsFor(o)}` : "") : "",
       status === "unavailable" ? "THE HOUSE IS GONE (sold or off the market, per the agent): do not chase it or name its number; if it comes back, a person re-offers" : "",
       lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" || repricing ? "" : "not sent yet",
       // No expiry date: the offer stands until they answer, and a date here
@@ -406,12 +408,18 @@ export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.n
   let dossierText = "";
   if (passedSubject) {
     const why = wePassReasonOf(passedSubject);
+    // Its words only say "we couldn't get it to a number" when one was made
+    // (passWordsFor), and a house our own text asked about was never theirs
+    // to send (broughtBy): the 2026-11-09 audit.
+    const whyWords = why ? passWordsFor(passedSubject) : "";
+    const ours = broughtBy({ address: passedSubject.address || subject, events, before: passedSubject.createdAt || null }) === "us";
     dossierText = passedSubject.status === "unavailable"
       ? `${subject} IS GONE (sold or off the market, per the agent): ask nothing more about it, and ask whether they have anything else that needs work.`
-      : `WE PASSED ON ${subject}${why ? ` (why: ${why.words})` : ""} — the house they're on about is closed on our side. ` +
+      : `WE PASSED ON ${subject}${why ? ` (why: ${whyWords})` : ""} — the house they're on about is closed on our side. ` +
         "Ask nothing more about it (what it's worth, the work, the seller, the timing) and never say you'll run numbers on it. " +
-        "If we haven't told them since we passed — nothing in the thread after the pass says so — tell them in this reply: thank them for " +
-        `sending it, say plainly we're going to pass${why ? " and why, in those few words" : ""}, and ask whether they have anything else that needs work. ` +
+        "If we haven't told them since we passed — nothing in the thread after the pass says so — tell them in this reply: " +
+        (ours ? "thank them for getting back to us on it (our own text asked them about it; never say they sent it)" : "thank them for sending it") +
+        `, say plainly we're going to pass${why ? " and why, in those few words" : ""}, and ask whether they have anything else that needs work. ` +
         "Once they've been told, don't say it again: answer what they write and turn to the next house. A yes to a number we gave or a new price on it follows WE PASSED.";
   } else if (dossier && (Object.keys(dossier.have).length || dossier.missing.length < PROPERTY_DETAIL_FIELDS.length)) {
     const haveLines = PROPERTY_DETAIL_FIELDS.filter((f) => dossier.have[f.key]).map((f) => {

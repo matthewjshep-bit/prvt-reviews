@@ -405,3 +405,41 @@ test("'not a short sale', pre-foreclosure, and the word 'bank' alone are not a b
   assert.match(BANK_SALE_PASS, /don't like to touch those/);
   assert.match(BANK_SALE_PASS, /pass on it/);
 });
+
+/* ---------- a figure that isn't their number; the next-one question ---------- */
+
+// The 2026-11-09 audit: a rival's offer and the seller's payoff, each named
+// in an agent's text, were read as the agent's counter, and each drew our
+// too-far-apart goodbye. The wording below is invented.
+test("last offer was at 575 is not their counter", async () => {
+  const { notTheirNumber } = await import("./flip-read.js");
+  assert.deepEqual(notTheirNumber("The last offer was at 575 and it fell through"), [575000]);
+  for (const [said, n] of [
+    ["Seller still owes around 310 on it", 310000],
+    ["Getting offers in the 400s on it", 400000],
+    ["payoff is about 312k", 312000],
+    ["It appraised at 610 last spring", 610000],
+    ["assessed value is 480,000", 480000],
+    ["tax value 455k", 455000],
+    ["It's listed at 799", 799000],
+    ["They have another offer at 600 but it's financed", 600000],
+    ["another offer came in 2 days ago at 640", 640000],
+  ]) assert.deepEqual(notTheirNumber(said), [n], said);
+  // Their own number stays theirs, and a payoff with no figure marks nothing.
+  for (const said of ["Seller needs 755 on it", "They'd take 450k", "Seller owes nothing on it, needs 450", "Lowest they'll go is $700k"]) {
+    assert.deepEqual(notTheirNumber(said), [], said);
+  }
+  assert.deepEqual(notTheirNumber("They owe 295 and need 350 to walk away"), [295000], "the payoff is marked, the 350 is theirs");
+});
+
+test("the next-one question is Matt's one closing ask, and it isn't asked twice in a day", async () => {
+  const { NEXT_ONE_QUESTION, nextOneAskedToday } = await import("./flip-read.js");
+  assert.equal(NEXT_ONE_QUESTION, "Have anything else that needs work or would be a good flip?");
+  const now = Date.parse("2026-11-09T20:00:00Z");   // 12pm Pacific
+  const said = (at, who, text) => `[${at}] ${who} sms: ${text}`;
+  assert.equal(nextOneAskedToday({ transcript: said("2026-11-09 17:05", "US", `Understood. ${NEXT_ONE_QUESTION}`), now }), true);
+  assert.equal(nextOneAskedToday({ transcript: said("2026-11-09 17:05", "US", "If you've got other fixers on your radar, I'm all ears."), now }), true);
+  assert.equal(nextOneAskedToday({ transcript: said("2026-11-08 17:05", "US", NEXT_ONE_QUESTION), now }), false, "yesterday");
+  assert.equal(nextOneAskedToday({ transcript: said("2026-11-09 17:05", "THEM", "anything else that needs work? nope"), now }), false, "their words");
+  assert.equal(nextOneAskedToday({ transcript: "", now }), false);
+});

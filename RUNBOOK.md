@@ -504,7 +504,9 @@ scorecard says grade A is ready.
   and pictures, float a number, and see if it's even worth continuing the conversation."
   `deskFirstReply` replaces the showing hold on a house we priced ("is the number we sent in the realm
   for the seller?") and on one we haven't ("let me get you a number…"; its draft or engine run is still
-  started). A turnkey house keeps its line.
+  started). A turnkey house keeps its line. "The number we sent" needs the number to have gone out
+  (`numberWentOut`, 2026-11-09): priced and never sent or floated, it's the "let me get you a number"
+  wording.
 
 **Refresh the county table** by hand every month or two: `node scripts/kc-flips.mjs --refresh`, then
 `node scripts/kc-flip-table.mjs`, `node scripts/sync-shared.mjs`, and commit.
@@ -813,6 +815,36 @@ planned" field. In their place goes one line: WE PASSED ON <house> (why), ask
 nothing more about it, and if the thread hasn't told them yet, tell them in
 this reply. Before this, the checklist had the bot asking what a passed house
 was worth fixed up. This works with the pass note switched off.
+
+**Pass notes only say what happened (2026-11-09 audit).** 45 notes said "we
+couldn't get it to a number" on houses nobody priced, and some thanked an
+agent for sending a house our own cold text had asked about.
+- **The quiet words.** `passWordsFor(offer, { walkAway })`
+  (shared/offer-status.js): the `quiet` reason says "we couldn't get it to a
+  number that worked for us" only when an underwrite made a number (the
+  offer's `cashAmount`, its engine `pricing.walkAway`, or the house's
+  `house_pricing` walk-away, which startPassNote reads). Otherwise it says
+  "we're going to pass on this one for now". The bot's book and the WE PASSED
+  line use the same words.
+- **Whose house it was.** `broughtBy` (shared/pass-note.js) is "us" when a
+  text of ours named the house before its offer was made (`outreach_sent`,
+  `outreach_enrolled`, `agent_pulse_texted`, `listing_pinged`) or the thread
+  moved onto it as our first-text house (`subject_property_set` with
+  `ours`). The pass note and the WE PASSED line then thank them for getting
+  back to us on it, never for sending it.
+- **The close.** The note ends on the NEXT ONE question ("Have anything else
+  that needs work or would be a good flip?").
+
+**We asked about a house after our pass (2026-11-09 audit).** When a house is
+we_passed and our own newest text about it in the last 14 days, sent after the
+pass by anyone (your hand texts too), asked whether the seller moved or
+softened, offered a second look, or asked if it's still available, and their
+answer asks for an LOI or an offer or names a number (`askedAfterOurPass`,
+reply-agent.js), the reply waits for you with "we asked them about <street>
+after our pass: reopen or pass". The draft carries `askedAfterPass`; the reply
+is never filed as our pass. A text of ours is about the house when it names
+its number or street, or when it's their only house with us. With no such
+ask, "we've moved on" stands.
 
 ### Bricked.ai on the draft, and the number it may send (2026-10-28, rehab fixed 2026-11-04)
 
@@ -5553,10 +5585,30 @@ reply-agent.js (`WALK_AWAY_GAP`, `listPriceFloor`):
   their value and repairs asked for, one re-quote. Past `WALK_AWAY_GAP`
   (25%) or at the list price, the soft round is skipped too.
 - **The goodbye** names no number: "Sorry, this one didn't work out for us,
-  we're too far apart on the number. Appreciate you working it with me.
-  Keep me in mind for the next one that needs work, and if anything changes
-  with the seller I'm here." The second no with no number closes the same way
+  we're too far apart on the number. Appreciate you working it with me. Have
+  anything else that needs work or would be a good flip?" (`NEXT_ONE_QUESTION`,
+  shared/flip-read.js; left off when a text of ours already asked it that day,
+  `nextOneAskedToday`). The second no with no number closes the same way
   (prompt: no second ask, no new number).
+- **Only after our number went out (2026-11-09 audit).** The goodbye fired at
+  agents who had never seen a number of ours. It now needs `numberWentOut`
+  (reply-agent.js): the offer is marked sent (or was, before a later status),
+  the letter went, a float left by text (`floatSentAt`), or a text of ours
+  named the number on that house, whoever typed it. Countered, passed or no
+  response alone don't count: a reply files their number as countered on a
+  row that never went out, so their first number would otherwise have let
+  their second one draw the goodbye. Otherwise the reply waits for you with "their N vs
+  our unsent M on <street>: float ours or pass", the draft carries
+  `unsentCounter`, nothing is marked countered, and after the usual day's
+  wait the card is a Needs Matt price: "They named 755K on <street>, over our
+  300K that never went out: float ours or pass".
+- **A figure that isn't theirs (2026-11-09 audit).** `notTheirNumber`
+  (shared/flip-read.js) marks a figure after "last/other/another offer",
+  "offers in the 400s", "owe(s)", "payoff", "appraised", "assessed", "tax
+  value" or "listed at". A marked figure is never their counter, on any
+  intent and whether or not we priced the house: the draft's counterAmount is
+  cleared and it waits as a counter with no number. The list price as their
+  floor ("full list") stays theirs (`listPriceFloor`).
 - **What follows** is the rejection rule as configured (prod: tier-3 + TIER 3
   workflow + `mark_offer_passed`) and the passed-offer check-in ladder
   (every 10 days) — that is the "stay in touch".
@@ -6797,6 +6849,27 @@ Replay over the 5,503 texts agents sent us (saved threads, 2026-10-14): 56 hits 
 partner terms: a wholesaler pointing us to their dispo person about one house, and "I'm a
 wholesaler myself so I understand".
 
+**The wholesaler question reaches Matt (2026-11-09 audit).** Three agents who asked whether we
+wholesale or assign were told "we close ourselves, no assignments" or "we do the flips ourselves".
+- `asksIfWholesaler(text)` (shared/partner-terms.js) reads their burst for "wholesal…", "assign",
+  "assignment", "assignable", "won't work with wholesalers", "do you close yourselves" and "are you
+  the end buyer". "And/or assigns" and "assigned" (their listing) are not it.
+- The draft gets `asksWholesale` and needsHuman ("they asked if we wholesale: your answer"), the
+  gates flag it (`wholesaleFlags`), and `wholesaleAskLine` tells the draft never to deny or claim it,
+  to leave that question for you, and not to promise a call.
+  No redraft, no guard and no audit release opens it.
+- `deniesWholesaling(reply)` is a gate on every agent text: "no assignments", "not wholesalers",
+  "we close ourselves", "we do the flips ourselves", "buy direct with our own cash" and "we're the
+  end buyer" hold the draft, asked or not.
+
+**What we buy, said one way (2026-11-09 audit).** 50 threads got a buy box made up on the spot.
+`buyBoxRule(saved)` (shared/conversation-ai.js, after AGENT_GOAL_RULE in every agent reply): "WHAT
+WE BUY: single-family houses that need work, under about a million, in <the outreach counties and
+markets, Deschutes said as around Bend>. The work has to be real, more than a refresh. We pass on
+mobile homes, short sales, bank-owned, wholesaler deals and condos; rural lots of 2+ acres are
+usually out." Small multi-family is added when `focusKinds` ticks it. No setting of its own: it
+follows `outreachAutopilot.counties` and `markets`, and `focusKinds`.
+
 ### An offer to represent us gets a yes (2026-11-04)
 
 Matt: "We definitely do work with buyer's agents … we have them be our buyer representation. That's
@@ -6805,10 +6878,15 @@ An agent's "as a co-signer, I represent you" was being held as partner terms.
 
 - **The rule.** `BUYER_AGENT_RULE` (`shared/partner-terms.js`) is in every agent prompt, after the
   WRITE-UP TERMS. It says yes in the same message: they can represent us, and they write it up on
-  NWMLS forms for our signature, with the buyer as in the write-up terms. A buyer agency (buyer broker)
-  agreement is fine if it's property-specific or non-exclusive, which is Matt's own wording in the
-  threads. A commission or compensation figure is still his: the bot gives the yes, says it'll confirm
-  the compensation side today, and sets needsHuman.
+  NWMLS forms (OREF forms for an Oregon house) for our signature, with the buyer as in the write-up
+  terms. A buyer agency (buyer broker) agreement is fine if it's property-specific or non-exclusive,
+  which is Matt's own wording in the threads. A commission or compensation figure is still his: the
+  bot gives the yes, says it'll confirm the compensation side (no "today" since 2026-11-09), and sets
+  needsHuman.
+- **Oregon forms (2026-11-09 audit).** A Bend agent was told NWMLS. `formsFlags(reply, { state })`
+  holds an agent text that says NWMLS about an Oregon house: the state comes from the draft's address,
+  the first-text house or the offer (`formsStateOf`: a written state, or a Central Oregon town such as
+  Bend, Sisters or Sunriver; Redmond alone is read as Washington).
 - **No hold when that's all they offered.** `answersItself(terms)`: when every kind heard is
   `buyer_agent`, the draft carries no `partnerTerms`, isn't forced to needsHuman, and `partnerTermsLine`
   tells it to say yes. The `partner_terms` event is recorded with `answered: true`, and

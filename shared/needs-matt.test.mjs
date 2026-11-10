@@ -73,6 +73,20 @@ test("their number on a house we never priced is a house to price, after the sam
   assert.equal(m.has("fay"), false);
 });
 
+// The 2026-11-09 audit: a far counter on a house we'd priced and never sent
+// drew our "too far apart" goodbye. The reply now waits (unsentCounter), and
+// the decision is his: float our number, or pass.
+test("their number against ours that never went out is a price card, after the same day's wait", () => {
+  const d = (id, contactId, hours) => ({ id, contactId, party: "agent", intent: "counter", counterAmount: 755000, propertyAddress: "12 Elm St, Kent, WA",
+    createdAt: hoursAgo(hours), unsentCounter: { offerId: `o-${contactId}`, theirs: 755000, ours: 300000 } });
+  const drafts = [d("d-u", "uma", PRICE_WAIT_HOURS + 1), d("d-v", "val", 2)];
+  const rows = drafts.map((x) => ({ id: `draft:${x.id}`, kind: "draft_waiting", draftId: x.id, contactId: x.contactId, offerId: x.unsentCounter.offerId }));
+  const m = needsMattByContact(rows, { drafts, now: NOW });
+  assert.equal(m.get("uma")?.kind, "price");
+  assert.match(m.get("uma").why, /They named 755K on 12 Elm St, over our 300K that never went out: float ours or pass/);
+  assert.equal(m.has("val"), false, "not before the day's wait");
+});
+
 // Matt, 2026-11-09 (Mary S., 195 SE Roosevelt): the audit redrafted her one
 // price-drop text every couple of days. Each redraft was a new
 // draft with a new clock, so the card left Needs Matt for Offer Out at the
