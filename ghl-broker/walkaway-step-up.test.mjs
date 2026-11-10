@@ -32,7 +32,7 @@ process.env.CARD_SERVICE_URL = `http://127.0.0.1:${cardServer.address().port}`;
 
 const { store } = await import("./store.js");
 const { default: createOffersRouter } = await import("./routes/offers.js");
-const { priceAgreed, priceLocked, offerHeat, asksForWriteUp, pushesToPaper } = await import("./shared/offer-status.js");
+const { priceAgreed, priceLocked, offerHeat, asksForWriteUp, pushesToPaper, toListOffer } = await import("./shared/offer-status.js");
 
 const LOC = "loc-walkaway-step-up";
 const client = { call: async () => ({}) };
@@ -98,6 +98,8 @@ test("a step-up recorded before this fix (stamped as accepted at the move) reads
     // The letter at the first move went five minutes ago.
     sends: [{ ts: new Date(Date.now() - 86400000).toISOString(), channels: ["sms"], results: { sms: { ok: true } } },
       { ts: new Date(Date.now() - 300000).toISOString(), channels: ["sms"], results: { sms: { ok: true } } }],
+    // The move went through the revision ledger as the walk-away's, a moment before its stamp.
+    revisions: [{ ts: new Date(Date.now() - 601000).toISOString(), from: 300000, to: 307500, by: "walkaway" }],
     pricing: { live: true, grade: "A", open: 300000, walkAway: 315000, moves: 1, lastMoveAt: at, lastMove: 307500 } });
   const before = await store.getOffer(o.id);
   assert.equal(priceAgreed(before), null, "a band record stamped at the last move, with nothing agreed, is a move");
@@ -115,4 +117,26 @@ test("a step-up recorded before this fix (stamped as accepted at the move) reads
   const sent = await deps.sendOfferDocs({ contactId: "agent-z", addressHint: "77 Fernhollow Rd", afterCounter: true, transcript: "" });
   assert.equal(sent.ok, true, sent.reason);
   assert.notEqual(sent.unchanged, true, "a send after the first move isn't the send after this one");
+});
+
+// The hot push, the Hot lane and the follow-up sweep read lean rows (shared/offer-status.js
+// OFFER_LIST_FIELDS), which carry no `pricing`, so an old step-up's lastMoveAt can't be seen there.
+// The walk-away's own revision at the band's amount, with nothing agreed, says it was a move.
+test("a step-up from before this fix isn't read as their yes on the rows the hot push reads", async () => {
+  const at = new Date(Date.now() - 600000).toISOString();
+  const o = await mkOffer({ contactId: "agent-l", address: "19 Corvid Ln, Tacoma, WA 98404", cashAmount: 307500,
+    counterBand: { at, acceptedAt: at, amount: 307500, draftId: null },
+    revisions: [{ ts: new Date(Date.now() - 601000).toISOString(), from: 300000, to: 307500, by: "walkaway" }],
+    pricing: { live: true, grade: "A", open: 300000, walkAway: 315000, moves: 1, lastMoveAt: at, lastMove: 307500 } });
+  const lean = toListOffer(await store.getOffer(o.id));
+  assert.equal(lean.pricing, undefined, "a lean row has no pricing");
+  assert.equal(priceAgreed(lean), null, "the old move reads as a move on the lean row too");
+  assert.equal(offerHeat(lean), null, "not hot");
+  assert.equal(asksForWriteUp(lean), false, "the hot push never asks them to write it up at it");
+
+  // Their number taken at or under the walk-away is still their yes on a lean row.
+  const y = await mkOffer({ contactId: "agent-m", address: "23 Corvid Ln, Tacoma, WA 98404", counter: { amount: 310000, at: new Date().toISOString() } });
+  const r = await deps.reviseOfferToCounter({ contactId: "agent-m", addressHint: "23 Corvid Ln", amount: 310000, by: "walkaway" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(priceAgreed(toListOffer(await store.getOffer(y.id)))?.amount, 310000);
 });

@@ -363,9 +363,14 @@ export function priceAgreed(offer) {
   }
   // A walk-away step-up is our number going up, not their yes (2026-11-09). Since then it is
   // stamped counterBand.movedAt; one from before was stamped accepted at its own
-  // pricing.lastMoveAt with nothing agreed, and is read as the move it was.
+  // pricing.lastMoveAt with nothing agreed, and is read as the move it was. A lean row has no
+  // `pricing` (the hot push and the Hot lane read those): there the walk-away's own revision at
+  // the band's amount, with nothing agreed, says the same. Their number the walk-away took
+  // always wrote `agreed`.
   const bandAt = offer.counterBand?.acceptedAt;
-  const wasMove = bandAt && bandAt === offer.pricing?.lastMoveAt;
+  const bandAmount = Math.round(Number(offer.counterBand?.amount) || 0);
+  const wasMove = bandAt && (bandAt === offer.pricing?.lastMoveAt
+    || (!offer.agreed && bandAmount > 0 && (offer.revisions || []).some((r) => r?.by === "walkaway" && Math.round(Number(r.to) || 0) === bandAmount)));
   if (bandAt && !wasMove && live(bandAt)) return { amount: Number(offer.counterBand.amount) || Number(offer.cashAmount) || 0, at: bandAt, via: "counter_band" };
   if (offer.realm?.answer === "yes" && live(offer.realm.ts)) return { amount: Number(offer.cashAmount) || 0, at: offer.realm.ts || null, via: "realm_yes" };
   return null;
