@@ -5685,6 +5685,9 @@ async function runReply(job, ctx) {
     // A showing they offered on a live house, held for Matt (2026-10-15).
     ...(draft.showingOffered ? { showingOffered: draft.showingOffered } : {}),
     ...(draft.deskFirst ? { deskFirst: draft.deskFirst } : {}),
+    // The model's read of how warm they are ("writing_up"): a held reply
+    // that says they're writing it up is Matt's (shared/hand-off.js closeSignal).
+    ...(draft.dealSignal ? { dealSignal: draft.dealSignal } : {}),
     // They told us it isn't our kind of house: a pass on it, which the
     // contact card reads (shared/contact-card.js).
     ...(notOurKind ? { notOurKind: true } : {}),

@@ -740,3 +740,23 @@ test("a buyer asking who we are or why we texted reads as not knowing us; a ques
     assert.equal(doesntKnowUs(t), false, t);
   }
 });
+
+// The 2026-11-09 audit: a seller at our number quoting our terms back was
+// read as a plain reply. Made-up numbers and words.
+import { quotesOurTerms, theirYesIn, asksForPaper } from "./conversation-ai.js";
+
+test("our terms quoted back at our number, however they write the number", () => {
+  const ours = { cashAmount: 683750 };
+  for (const t of ["683,750 cash, 10 day inspection", "$683,750 and/or assigns", "683.75k with 5k EMD", "684k, close in 21 days", "Buyer name for the 683750 one?"]) {
+    assert.equal(quotesOurTerms(t, ours), true, t);
+  }
+  assert.equal(quotesOurTerms("Seller wants 720k with a 10 day inspection", ours), false, "their number, not ours");
+  assert.equal(quotesOurTerms("683,750 works, let me check with the seller", ours), false, "our number, no terms");
+  assert.equal(quotesOurTerms("Seller won't do 683,750 even with a short inspection", ours), false, "a no");
+  assert.equal(quotesOurTerms("683,750 cash, 10 day inspection", null), false, "nothing of ours to match");
+  assert.equal(theirYesIn("Let me know what you want me to write up", [ours]), "writing_up");
+  assert.equal(theirYesIn("I'll present it to the seller tonight", [ours]), "");
+  assert.equal(asksForPaper("Can you send proof of funds and the LLC name?"), true);
+  assert.equal(asksForPaper("Send me a copy of your ID"), true);
+  assert.equal(asksForPaper("I'd love to see it Tuesday"), false);
+});

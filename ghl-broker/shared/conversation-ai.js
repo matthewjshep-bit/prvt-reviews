@@ -498,7 +498,10 @@ export const DEAL_SIGNAL_LABEL = {
 };
 const SIGNAL_NEGATED = /\b(won'?t|will not|not going to|isn'?t going to|doesn'?t|does not|don'?t think|do not think|might not|may not|probably not|never|no way|can'?t see|cannot see|too low|way off|not even close|not close)\b/i;
 const SIGNAL_RX = {
-  writing_up: /\b(i'?ll|i will|i can|let me|happy to|going to|gonna)\s+(write|draw|draft|type)\s+(it|that|this|one|an offer|the offer|something)?\s*up\b|\bwrit(e|ing) (it|the offer|an offer) up\b|\bon (nwmls|mls) forms\b.*\b(i'?ll|i can|i will)\b|\bi'?ll (represent|write the offer)\b/i,
+  // The 2026-11-09 audit: "let me know what you want me to write up", "would
+  // you like me to put the offer together", "send it over to sign" and "who
+  // do I make it out to" were read as nothing, and each one waited on nobody.
+  writing_up: /\b(i'?ll|i will|i can|let me|happy to|going to|gonna)\s+(write|draw|draft|type)\s+(it|that|this|one|an offer|the offer|something)?\s*up\b|\bwrit(e|ing) (it|the offer|an offer) up\b|\bon (nwmls|mls) forms\b.*\b(i'?ll|i can|i will)\b|\bi'?ll (represent|write the offer)\b|\bwhat (?:do |would )?(?:you|u)(?:'d)? (?:want|like) me to write\b|\b(?:want|like) me to (?:put|write) (?:the|an|your|our) offer (?:together|up)\b|\bi'?ll write it up for (?:you|u)\b|\bsend (?:it|the offer|the paperwork) over (?:to|for (?:you|u) to) sign\b|\bwho (?:should|do) i make (?:it|the offer) out to\b/i,
   presenting: /\b(let'?s|i'?ll|i will|i can|happy to|going to|gonna)\s+(present|submit|take|bring|run|send|pass|forward)\s+(it|that|this|your offer|the offer|your number)\b|\bi'?ll (talk|speak|check) (to|with) (the |my )?(seller|sellers|client|clients|owner|owners)\b|\brun it by (the |my )?(seller|sellers|client|clients|owner)\b/i,
   warm: /\b(might|may|could|should|would|will) (probably |possibly |likely |actually |just )?(work|do it|get it done|fly)\b|\b(that|this|it) (might|may|could) be (doable|workable|possible)\b|\b(that'?s|thats|that is|you'?re|we'?re|getting) (a lot |much |way |pretty |very |really )?(closer|close|in the ballpark|in the range|in range|in the realm|doable|workable|reasonable)\b|\bnot (too )?far off\b|\b(sounds?|seems?|looks?) (doable|workable|reasonable|promising|good to me)\b|\bi think (they|she|he|the seller|we)('?d| would| could| might| can)? (take|accept|consider|go for|do|entertain|be open)\b|\b(they|she|he|seller)('?d| would| might| may| could) (take|accept|consider|go for|entertain|be open to) (it|that|this)\b|\bworth (presenting|a shot|a try|taking to)\b/i,
 };
@@ -512,6 +515,61 @@ export function dealSignalFromText(message = "") {
     }
   }
   return "";
+}
+
+// Dollar figures in their words: "512,400", "$512,400", "512.4k", "512k",
+// "$512400". A bare "512" is left alone: it could be a street number.
+const MONEY_IN_RX = /\$\s?\d{1,3}(?:,\d{3})+(?:\.\d+)?|\$?\s?\d+(?:\.\d+)?\s?k\b|\$\s?\d{4,7}\b|\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b|\b\d{6,7}\b/gi;
+const moneyIn = (text = "") => [...String(text || "").matchAll(MONEY_IN_RX)].map(([m]) => {
+  const n = Number(m.replace(/[$,\s]/g, "").replace(/k$/i, ""));
+  return Number.isFinite(n) ? (/k$/i.test(m) ? n * 1000 : n) : 0;
+}).filter((n) => n >= 10000);
+// The words of a written offer: who it's made out to, the deposit, the
+// inspection, the close.
+const OUR_TERMS_RX = /\band\s*\/\s*or\s+assigns?\b|\bearnest\b|\bemd\b|\binspections?\b|\bclos(?:e|ing) (?:in|by)\b|\bbuyer(?:'s)? name\b/i;
+/**
+ * quotesOurTerms(text, offer) → true when their text carries our cash number
+ * (within 0.5%: 683,750, 683.75k and 684k are all ours) together with the
+ * words of a written offer ("and/or assigns", earnest or EMD, inspection,
+ * "close in", "buyer name").
+ *
+ * The audit, 2026-11-09: a seller at our own number, terms quoted back and
+ * our email asked for, read as a plain reply and answered "calling you
+ * shortly". `offer` is an offer (its cashAmount), a number, or a list of them.
+ * A sentence that says no to the number ("won't do", "too low") isn't one.
+ */
+export function quotesOurTerms(text = "", offer = null) {
+  const t = String(text || "");
+  const ours = (Array.isArray(offer) ? offer : [offer])
+    .map((o) => Math.round(Number(o && typeof o === "object" ? o.cashAmount : o) || 0)).filter((n) => n > 0);
+  if (!ours.length || !OUR_TERMS_RX.test(t)) return false;
+  const isOurs = (n) => ours.some((c) => Math.abs(n - c) <= c * 0.005);
+  const sentences = t.split(/(?<=[.!?\n])\s+/).filter((s) => moneyIn(s).some(isOurs));
+  return sentences.some((s) => !SIGNAL_NEGATED.test(s));
+}
+
+/**
+ * theirYesIn(text, offers) → "quotes_terms" | "writing_up" | ""
+ *
+ * An agent's text that is a yes Matt has to answer himself: our terms quoted
+ * back at our number, or they're writing it up ("what do you want me to write
+ * up", shared SIGNAL_RX). "I'll present it to the seller" is neither: the bot
+ * keeps that one.
+ */
+export function theirYesIn(text = "", offers = []) {
+  if (quotesOurTerms(text, offers)) return "quotes_terms";
+  return dealSignalFromText(text) === "writing_up" ? "writing_up" : "";
+}
+
+// They ask for the paper or its terms (beyond WRITE_UP_ASK_RX below): a bank
+// letter or proof of funds, the entity or LLC, ID, a buyer agency or
+// brokerage form, "send it signed".
+const PAPER_ASK_RX = /\bbank (?:letter|statement)s?\b|\bproof of (?:funds?|financing)\b|\bpof\b|\bllc\b|\bentity\b|\bbuyer(?:'s)? agency\b|\bbrokerage (?:form|agreement|services)\b|\bsend (?:it|them|that|this|the (?:offer|paperwork|psa|contract)) (?:back )?signed\b|\bphoto id\b|\bdriver'?s licen[cs]e\b|\bidentification\b/i;
+const ID_RX = /\bID\b/;
+/** asksForPaper(text) → true when their text asks for the paper or its terms. */
+export function asksForPaper(text = "") {
+  const t = String(text || "");
+  return WRITE_UP_ASK_RX.test(t) || PAPER_ASK_RX.test(t) || ID_RX.test(t);
 }
 
 // They want US to move: "unless you want to come closer to where they are",

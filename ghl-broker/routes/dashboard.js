@@ -590,7 +590,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     const dealRooms = await dealRoomIds({ store, locationId, offers });
     // The limit is the windowed read's: the stop events merged in on top
     // must not read as "the read filled up".
-    const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT + (events.length - windowed.length), dealRooms });
+    const out = buildPipeline({ offers, drafts, events, jobs, config, contactNames, sentDrafts, heldTriageByOffer, now, eventsLimit: PIPELINE_EVENT_LIMIT + (events.length - windowed.length), dealRooms, recentDrafts });
     // Last night's audit: the rows that are Matt's join the queue under
     // "From last night"; the rest of the result rides along for the card.
     const auditCursor = await store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null);
@@ -763,7 +763,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       ...out,
       actions: shownActions.map(withFeedback),
       // Who has what used to wait on Today (shared/hand-off.js, 2026-10-20).
-      handOffs: handOffs(reasons, { drafts }),
+      handOffs: handOffs(reasons, { drafts, offers }),
       desk: { sections, rows: desk.rows, counts: desk.counts, kpis,
         ...(ghlOn ? { ghlCalls: { on: true, inGhlToday: [...ghlQueued.values()].filter((q) => Date.parse(q.at) >= dayStart).length } } : {}) },
     };
