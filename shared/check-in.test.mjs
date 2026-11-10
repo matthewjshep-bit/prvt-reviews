@@ -260,3 +260,233 @@ test("a town after a dash or a teammate signing her phone is never the name she 
   assert.equal(goesBySaid("Thx\nSteve", { first: "Steven" }), "Steve");
   assert.equal(goesBySaid("Sounds good\nJen", { first: "Jennifer" }), "Jen");
 });
+
+/* ---------- the one real thing (the composer, 2026-11-09) ---------- */
+//
+// Matt, 2026-11-09: check-ins personable and not AI, one real thing each; and
+// at ~22:05, never a past property. Every word, town and street here is
+// invented.
+
+const { namesAHouse, namesBookHouse, checkInFlags, composeRoute, composerArm, normalizeCheckInComposer, CHECK_IN_COMPOSER_DEFAULTS,
+  openingIndex, nothingToSay, checkInReport, LEAD_HOOK_DAYS } = await import("./check-in.js");
+const fact = (value, d) => ({ value, at: ago(d) });
+const packOf = (lines, context = {}, subject = {}) => checkInPack(thread(lines), subject, { party: "agent", ...context }, NOW);
+
+test("the composer ships off, and its settings survive a save", () => {
+  const c = normalizeConversationAi({}).checkIns;
+  assert.deepEqual({ composer: c.composer, composerShare: c.composerShare, skipEmpty: c.skipEmpty, skipDays: c.skipDays, personal: c.personal },
+    { ...CHECK_IN_COMPOSER_DEFAULTS });
+  assert.equal(c.composer, "off");
+  const typed = normalizeConversationAi({ checkIns: { composer: "loud", composerShare: 250, skipDays: 1, personal: "false" } }).checkIns;
+  assert.deepEqual({ composer: typed.composer, composerShare: typed.composerShare, skipDays: typed.skipDays, personal: typed.personal },
+    { composer: "off", composerShare: 100, skipDays: 7, personal: false });
+  const on = normalizeConversationAi(normalizeConversationAi({ checkIns: { composer: "shadow", composerShare: 50 } })).checkIns;
+  assert.equal(on.composer, "shadow");
+  assert.equal(on.composerShare, 50);
+  assert.equal(composeRoute({ pack: {}, kind: "agent_pulse", settings: c, contactId: "a1" }).mode, "off", "off: nothing changes");
+});
+
+test("an agent's trip is the check-in's one thing when it's under 60 days old", () => {
+  const facts = { personal_details: [fact("heading to Maui with the kids next month", 20)] };
+  const pack = packOf([[30, "US", "Hey Wren, anything new on your end that needs real work?"], [29, "THEM", "ok thanks"]], { facts });
+  assert.equal(pack.hooks[0].kind, "personal");
+  assert.match(pack.hooks[0].line, /Maui/);
+  assert.equal(pack.hooks[0].anchor, "Maui");
+  // Older than 60 days: not the one thing.
+  const old = packOf([[30, "US", "Hey Wren, anything new?"]], { facts: { personal_details: [fact("heading to Maui with the kids", 75)] } });
+  assert.equal(old.hooks.length, 0);
+  // Switched off: never.
+  assert.equal(packOf([], { facts, composer: { personal: false } }).hooks.length, 0);
+});
+
+test("a seller's surgery is never a check-in's personal touch", () => {
+  for (const what of ["her seller is having surgery next month", "client going through a divorce, house may sell", "out for a week after knee surgery"]) {
+    const pack = packOf([[30, "US", "Hey Wren, anything new?"]], { facts: { personal_details: [fact(what, 10)] } });
+    assert.equal(pack.personal, null, what);
+    assert.equal(pack.hooks.length, 0, what);
+  }
+});
+
+test("a June summary is never the one thing in November", () => {
+  const june = (d) => ({ type: "call_summary", at: ago(d), data: { summary: "Talked about how slow the Halden market has been this year.", transcribed: true } });
+  const pack = packOf([[150, "THEM", "Market in Halden is slow, sellers are holding"], [140, "US", "Got it, thanks Wren."]],
+    { calls: [june(150)], facts: { last_convo_summary: [fact("talked about the slow Halden market", 150)], personal_details: [fact("just back from Lisbon", 150)] } });
+  assert.deepEqual(pack.hooks, [], "every one of them is months old");
+  assert.equal(pack.lastSummary, null, "not even as background");
+  // The same call last week is.
+  const fresh = packOf([], { calls: [june(6)] });
+  assert.equal(fresh.hooks[0].kind, "call");
+});
+
+test("an agent who called about her market is asked about that, and the check-in names no house", () => {
+  const call = { type: "call_summary", at: ago(9), data: { transcribed: true,
+    summary: "She said the Halden market is slow and her sellers are holding out for spring. She also brought up 1412 Pine St, which is listed." } };
+  const pack = packOf([[20, "US", "Hey Wren, anything new on your end?"]], { calls: [call] });
+  assert.equal(pack.hooks[0].kind, "call");
+  assert.match(pack.hooks[0].line, /Halden market is slow/);
+  assert.doesNotMatch(pack.hooks[0].line, /Pine|1412|listed/, "the call's topic, never its house");
+  // A call that was only about a house is no one thing at all.
+  const onlyHouse = packOf([], { calls: [{ type: "call_summary", at: ago(9), data: { transcribed: true, summary: "Went over 1412 Pine St and the seller's timeline." } }] });
+  assert.equal(onlyHouse.call, null);
+});
+
+test("a check-in that names any past house or street is held, even a deal we closed together", () => {
+  const flags = (t) => checkInFlags({ text: t });
+  assert.match(flags("Still thinking about the Corvid Ln deal we did together. Got another?")[0], /^named a house \(Corvid Ln/);
+  assert.match(flags("Hey Wren, the deal we did together was a good one. Got another like it?")[0], /^named a house \(the deal we did/);
+  assert.match(flags("any word on 1412 Pine?")[0], /^named a house \(1412 Pine/);
+  assert.match(flags("how's the house on Oak coming along?")[0], /^named a house/);
+  assert.deepEqual(flags("Hey Wren, how's Halden treating you this fall? Anything rough sitting?"), [], "their town is their area, not a house");
+  assert.equal(namesBookHouse("know 163rd didn't work out", ["11435 163rd Avenue Southeast, Halden, WA"]), "163rd");
+  assert.equal(namesBookHouse("still buying around Auburn?", ["88 Auburn Way S, Auburn, WA"]), "", "a street word that's a town is the town");
+  assert.equal(namesBookHouse("the main thing is timing", ["12 Main St, Halden, WA"]), "");
+});
+
+test("a check-in never says the place you called about", () => {
+  for (const t of ["How did the place you called about turn out?", "Did that last one ever sell?", "Any news on the one we sent you?", "Whatever happened with the house you mentioned?"]) {
+    assert.ok(namesAHouse(t), t);
+  }
+  // The lead line is how a lead is asked about, and names nothing.
+  assert.equal(namesAHouse("any word on the one you said was coming up?"), "");
+  assert.equal(namesAHouse("Anything on the market or off that needs real work?"), "");
+  assert.equal(namesAHouse("Free for a quick one on Monday?"), "", "a day is not a street");
+});
+
+test("a model check-in written around their trip has to say it", () => {
+  const hook = { kind: "personal", anchor: "Maui", line: "heading to Maui" };
+  assert.deepEqual(checkInFlags({ text: "Hope Maui treated you well. Did any sellers call while you were gone?", hook }), []);
+  assert.match(checkInFlags({ text: "Did any sellers call while you were gone?", hook })[0], /doesn't say the one thing \(Maui\)/);
+  assert.match(checkInFlags({ text: "hope the trip was a good one. anything new come up while you were out?", hook: { kind: "personal" } })[0], /copied a voice example/);
+});
+
+test("composer on at share 50 splits agents by contact id", () => {
+  const ids = Array.from({ length: 400 }, (_, i) => `c-${i}`);
+  const model = ids.filter((id) => composerArm(id, 50) === "model");
+  assert.ok(model.length > 150 && model.length < 250, `${model.length} of 400`);
+  assert.equal(composerArm("c-7", 50), composerArm("c-7", 50), "an agent stays in one arm");
+  assert.ok(ids.every((id) => composerArm(id, 100) === "model"));
+  assert.ok(ids.every((id) => composerArm(id, 0) === "control"));
+  const hook = { kind: "personal", key: "personal:x", from: "our notes" };
+  const r = composeRoute({ pack: { hooks: [hook] }, kind: "agent_pulse", reason: "general", settings: { composer: "on", composerShare: 50 }, contactId: model[0] });
+  assert.equal(r.mode, "model");
+  const c = composeRoute({ pack: { hooks: [hook] }, kind: "agent_pulse", reason: "general", settings: { composer: "on", composerShare: 50 }, contactId: ids.find((id) => !model.includes(id)) });
+  assert.equal(c.mode, "control");
+  // Never a listing ping, the thank-you, Matt's 15 or the net under their text.
+  for (const [kind, o] of [["agent_pulse", { reason: "fresh_listing" }], ["agent_pulse", { reason: "deal_thanks" }], ["agent_pulse", { forMatt: true }], ["checkin_due", { sourceKind: "unanswered" }], ["offer_nudge", {}]]) {
+    assert.equal(composeRoute({ pack: { hooks: [hook] }, kind, ...o, settings: { composer: "on" }, contactId: model[0] }).mode, "off", `${kind} ${JSON.stringify(o)}`);
+  }
+});
+
+test("with the composer on and nothing real to say, a general check-in waits two weeks", () => {
+  const r = composeRoute({ pack: { hooks: [] }, kind: "agent_pulse", reason: "general", settings: { composer: "on" }, contactId: "a1", now: NOW });
+  assert.equal(r.mode, "skip");
+  assert.equal(r.why, "nothing real to say");
+  assert.equal(r.until, new Date(NOW + 14 * DAY).toISOString());
+  // A dated check-in they asked for is written anyway.
+  assert.equal(composeRoute({ pack: { hooks: [] }, kind: "checkin_due", sourceKind: "date", settings: { composer: "on" }, contactId: "a1", now: NOW }).mode, "model");
+  // skipEmpty off: today's text.
+  assert.equal(composeRoute({ pack: { hooks: [] }, kind: "agent_pulse", reason: "general", settings: { composer: "on", skipEmpty: false }, contactId: "a1" }).mode, "fallback");
+  assert.ok(nothingToSay({ reply: "", needsHuman: true, humanReason: "nothing real to say" }));
+  assert.ok(!nothingToSay({ reply: "Hey", humanReason: "nothing real to say" }));
+});
+
+test("the weekly deal-source check-in skips a week with nothing new", () => {
+  // Their words came before our last check-in: nothing new since.
+  const lines = [[16, "THEM", "Will keep you in mind, Halden has been quiet lately"], [7, "US", "Hey Wren, anything turn up this week?"]];
+  const pack = packOf(lines, { newerThan: ago(7) });
+  assert.deepEqual(pack.hooks, []);
+  const r = composeRoute({ pack, kind: "checkin_due", sourceKind: "source", settings: { composer: "on" }, contactId: "a1", now: NOW });
+  assert.equal(r.mode, "skip");
+  assert.equal(r.until, new Date(NOW + 7 * DAY).toISOString(), "until next week's");
+  // Something new from them since: written.
+  const fresh = packOf([...lines, [2, "THEM", "Halden finally picked up, sellers are calling again"]], { newerThan: ago(7) });
+  assert.equal(fresh.hooks[0].kind, "their_words");
+});
+
+test("the check-in after an undated lead asks about that lead", () => {
+  const lead = { what: "the one coming up", said: "I may have one coming up", at: ago(20), undated: true };
+  const pack = packOf([[30, "THEM", "I may have one coming up"], [29, "US", "Sounds good, thanks Wren."]], {}, { lead });
+  assert.equal(pack.hooks[0].kind, "lead");
+  assert.match(pack.hooks[0].line, /any word on the one you said was coming up/);
+  // With the composer off: the fixed lead line, in either mode.
+  for (const mode of ["template", "ai"]) {
+    const s = standardText({ kind: "agent_pulse", outbound: { mode, reason: "general", segment: "engaged", lead, touch: 0 }, name: "Wren Halloway", contactId: "a1" });
+    assert.equal(s.set, "lead", mode);
+    assert.match(s.text, /the one you said was coming/);
+    assert.equal(namesAHouse(s.text), "");
+  }
+});
+
+test("a lead older than 60 days is dropped", () => {
+  const lead = (d) => ({ what: "the one coming up", at: ago(d), undated: true });
+  assert.equal(packOf([], {}, { lead: lead(LEAD_HOOK_DAYS + 2) }).lead, null);
+  assert.ok(packOf([], {}, { lead: lead(30) }).lead);
+});
+
+test("a buyer's pulse quotes what they said only when it's under six months old", () => {
+  const quotes = [{ text: "We only want 3 bed ramblers north of the lake", at: ago(200) }, { text: "Mostly cosmetic flips in Halden for now", at: ago(40) },
+    { text: "The one on Corvid Ln was too rough", at: ago(10) }];
+  const pack = checkInPack("", {}, { party: "investor", quotes }, NOW);
+  assert.deepEqual(pack.quotes.map((q) => q.text), ["Mostly cosmetic flips in Halden for now"], "not the old one, not the one naming a house");
+  assert.equal(pack.hooks[0].kind, "quotes");
+});
+
+test("the composer opens a different way than our last text did, by the contact's own count", () => {
+  const seen = new Set([0, 1, 2, 3].map((touch) => openingIndex({ touch, contactId: "a1" })));
+  assert.ok(seen.size >= 2);
+  for (let t = 0; t < 6; t++) assert.notEqual(openingIndex({ touch: t, contactId: "a1", ourLast: [{ text: "Wren, anything new on your end?" }] }), 1);
+});
+
+test("the check-ins report counts each arm's texts, replies within a week and opt-outs, and never a name", () => {
+  const ev = [
+    { type: "agent_pulse_texted", contactId: "a", at: ago(10), data: { checkIn: { arm: "model", hook: "personal" } } },
+    { type: "text_summary", contactId: "a", at: ago(9), data: { inbound: "nice, thanks" } },
+    { type: "agent_pulse_texted", contactId: "b", at: ago(10), data: { checkIn: { arm: "control", hook: null } } },
+    { type: "unsubscribed", contactId: "b", at: ago(9) },
+    { type: "agent_pulse_texted", contactId: "c", at: ago(10), data: {} },
+    { type: "checkin_skipped", contactId: "d", at: ago(5), data: { why: "nothing real to say" } },
+  ];
+  const r = checkInReport(ev, { days: 30, now: NOW });
+  assert.deepEqual(r.arms.model, { sent: 1, replied: 1, stops: 0, replyRate: 100 });
+  assert.deepEqual(r.arms.control, { sent: 1, replied: 0, stops: 1, replyRate: 0 });
+  assert.equal(r.arms.none.sent, 1);
+  assert.equal(r.hooks.personal.replied, 1);
+  assert.equal(r.skips["nothing real to say"], 1);
+  assert.doesNotMatch(JSON.stringify(r), /nice, thanks/);
+});
+
+/* ---------- review fixes (2026-11-10) ---------- */
+
+test("the cold check-in that names a town of two words is not held for a street that shares a word with it", () => {
+  // The cold ladder names the town of the listing we first texted about. A
+  // listing on a "Lake ..." street made "Lake" in "Lake Stevens" read as it.
+  // (Streets and numbers invented; the towns are towns.)
+  const cases = [
+    ["Hey Jo, anything around Lake Stevens that needs real work?", ["1820 Lake Quillback Rd, Lake Stevens, WA 98000"]],
+    ["Jo, how is Maple Valley treating you?", ["2201 Maple Fernhill Ln, Maple Valley, WA 98000"]],
+    ["anything around Bonney Lake sitting?", ["9004 Lake Corvid Pkwy, Bonney Lake, WA 98000"]],
+    ["anything around Fernhollow Bay that needs work?", ["41 Fernhollow Bay Rd, Fernhollow Bay, WA 98000"]],
+  ];
+  for (const [text, book] of cases) assert.equal(namesBookHouse(text, book), "", text);
+  // The street itself still holds.
+  assert.equal(namesBookHouse("any word on the Maple place?", ["2201 Maple Fernhill Ln, Maple Valley, WA 98000"]), "Maple");
+  assert.equal(namesBookHouse("still thinking about 1820?", ["1820 Lake Quillback Rd, Lake Stevens, WA 98000"]), "1820");
+});
+
+test("every way of sounding the composer is shown asks one question, so the voice check never holds the shape it was taught", async () => {
+  const { voiceFlags, hardVoiceKeys } = await import("./voice.js");
+  const { CHECK_IN_VOICE_EXAMPLES, BUYER_VOICE_EXAMPLES } = await import("./check-in.js");
+  for (const x of CHECK_IN_VOICE_EXAMPLES) assert.deepEqual(hardVoiceKeys(voiceFlags({ text: x, kind: "agent_pulse", channel: "sms", prior: [] })), [], x);
+  for (const x of BUYER_VOICE_EXAMPLES) assert.deepEqual(hardVoiceKeys(voiceFlags({ text: x, kind: "buyer_pulse", channel: "sms", prior: [] })), [], x);
+});
+
+test("a one thing only the shadow or the control arm saw is still there for the model", async () => {
+  const { spentHookKeys } = await import("./check-in.js");
+  const texted = (arm, key) => ({ type: "agent_pulse_texted", at: ago(20), data: { checkIn: { arm, hook: "personal", key } } });
+  assert.deepEqual(spentHookKeys([texted("shadow", "personal:a"), texted("control", "personal:b"), texted("model", "personal:c"), { type: "pulse_texted", data: { checkIn: { arm: "model", key: "quotes:d" } } }]),
+    ["personal:c", "quotes:d"]);
+  // And the report counts a one thing only where the model said it.
+  const r = checkInReport([texted("shadow", "personal:a"), texted("model", "personal:c")].map((e, i) => ({ ...e, contactId: `c${i}` })), { days: 30, now: NOW });
+  assert.equal(r.hooks.personal.sent, 1);
+  assert.equal(r.arms.shadow.sent, 1);
+});

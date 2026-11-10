@@ -844,6 +844,10 @@ export const getAgentPulse = () => fetch(`${API_BASE}/api/outreach/pulse?${locq(
 export const runAgentPulse = ({ dryRun = true, limit = null } = {}) => post(`/api/outreach/pulse/run`, { dryRun, ...(limit != null ? { limit } : {}) });
 // A few check-ins as the drafter would write them now, from real threads. Nothing saved or sent.
 export const sampleAgentPulse = (limit = 3) => post(`/api/outreach/pulse/preview`, { limit });
+// The same, with the composer's check-in beside each (Settings → Check-ins). Nothing saved or sent.
+export const sampleComposedCheckIns = (limit = 3) => post(`/api/outreach/pulse/preview`, { limit, compose: true });
+// What the check-ins did: per composer arm and per one thing, sent, replied, opted out. Counts only.
+export const getCheckInReport = (days = 30) => fetch(`${API_BASE}/api/outreach/check-ins/report?${locq()}&days=${encodeURIComponent(days)}`).then(j);
 // The app's first text to new agents, drafted for the next few the sweep could pick. Nothing saved or sent.
 export const sampleFirstTexts = (limit = 3) => post(`/api/outreach/opener/preview`, { limit });
 // Everyone tagged tier-2/tier-3, out of the GHL drips the check-in replaces. dryRun only counts.

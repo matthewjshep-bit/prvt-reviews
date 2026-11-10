@@ -7831,6 +7831,92 @@ open):
   check-in waits: …" with their `dueAt`. A contact's timeline shows "a
   check-in waited" with why and until when.
 
+**Check-ins name one real thing, never a past house (2026-11-09).** Matt:
+"check-ins need to sound more personable and not AI", and the same night:
+"make sure the checkins dont reference past properties, that gets confusing
+and annoying too". Agents answered the model's one-off texts 55.4% of the
+time against 27.9% for the fixed ones, and 1,845 details they had shared sat
+unused. So a check-in may be written around **one real thing** they gave us,
+and none of those is a house.
+- **Never a house from before** (the gate, live now, `shared/check-in.js`
+  `strictNoHouse`, `checkInFlags`, `namesAHouse`, `namesBookHouse`). The
+  agent check-in, the check-ins they asked for (dated, lead and our-word),
+  the weekly deal-source check-in, the buyer pulse, the check-in after a
+  pass and the cold ladder past day 2 are held when they name a street, an
+  address, a house number, a house in their book, or point at one ("the
+  place you called about", "the deal we did together", "that last one").
+  Not even a deal we closed together, not even by its town. Their town or the
+  area they work is fine (a town of two words, "Lake Stevens", is read as the
+  town before any street word, so a house on a "Lake ..." road doesn't hold
+  it). A held one is written once more, told why, then dropped with a
+  timeline note; never on the Desk. An agent check-in or buyer pulse dropped
+  that way also waits `skipDays` (`checkin_skipped`, "it named a house from
+  before, twice") so the same person isn't tried again the next morning.
+  Out of it: the listing
+  ping about a listing they just posted, a relisted house, the net under a
+  text of theirs we never answered, and a live offer's nudges (they name
+  their house). The old `pastHouses` gate still holds any house we've had
+  with them, word for word as before.
+- **The agent check-in's hooks** (`shared/agent-pulse.js checkInHook`) no
+  longer carry a house they mentioned ("mentioned") or one of our closes in
+  their town ("closed_nearby"). With the composer off, the agent check-in's
+  prompt is otherwise byte for byte what it was.
+- **A lead with no day.** "I may have one coming up", "might have an estate
+  soon" with no date (`shared/follow-up.js detectLead`) is booked as
+  `checkin_requested { kind: "lead", dueAt: null, undated: true }`: nothing
+  fires on it by itself (`isUndatedLead`; the lead sweep, the follow-up
+  engine, Next follow-up and the audit's net all leave it alone). Their next
+  regular check-in, no sooner than 14 days after they said it and not after
+  60, asks about it with no address (`undatedLeadFor`): with the composer
+  off, one fixed line ("{first}, any word on the one you said was coming
+  up?", `LEAD_CHECKIN_TEXTS`), in either mode. Asked once: the texted
+  event carries its `leadAt`, and asking once covers every time they said
+  it before. Never asked once a house of theirs came in after it (one they
+  named, an address chase, the house a reply was about). Not booked when
+  the address chase already asks, when the text was about a house we know,
+  when it was an "if" ("I'll let you know if I have one"), or when it fell
+  through.
+- **The weekly deal-source check-in** carries "check-in N of 6" and the words
+  they offered in ("I'll keep you in mind for any fixers", `dealSourceWords`).
+- **Referrals to reach** in the morning post (#daily): someone an agent named
+  for a house, by their first name and brokerage, and whose referral it was,
+  by first name. Never a phone or an email. The bot never contacts them.
+- **The composer** (`conversationAi.checkIns.composer`, **off**). It reads the
+  thread and the record (`composeFor`, `checkInPack`) and ranks the one
+  thing (`hooks[0]`), each dated:
+  - agents: a lead they said is coming › a question of theirs we never
+    answered (30 days) › a call's topic, never its house (45) › their own
+    words about their market or plans (45) › a detail they shared (60, never
+    health, money, a death, a divorce, or a seller's, client's or tenant's
+    life) › their old no, after `afterNoDays`;
+  - buyers: their own words › their read's quotes (`investor_reads`, 180
+    days) › the town they bought in › a detail they shared.
+
+  Nothing that names a house is ever a hook, and a hook one of the model's
+  check-ins already used (`checkIn.key` on a texted event in the model's
+  arm, `spentHookKeys`) is never used twice; the hook stamped on a shadow or
+  control text was never said, so it isn't spent, and the report counts a
+  hook only where the model said it.
+  "Shadow": today's text goes; the model's, written from the one thing with
+  our last three texts and the spent phrases in front of it, is kept beside
+  it on the draft (`checkInShadow`), never sent. "On": `composerShare` percent
+  of contacts (by contact id, so an agent stays in one arm) get the model's
+  text, the rest today's. In the model's arm a check-in with nothing real to
+  name waits `skipDays` (14; a deal-source week with nothing new since the
+  last one waits a week) when `skipEmpty` is on, and the model may answer
+  NOTHING TO SAY, which waits the same way. A wait writes `checkin_skipped`
+  and never reaches the Desk. Dated, lead and our-word check-ins are written
+  either way. Every draft and texted event carries `checkIn { arm, hook,
+  detailKind, key }`. `personal` (on) lets a shared detail be the one thing.
+  About 1 to 1.5 cents a check-in on the Batch API, double in shadow.
+- **How to roll it out.** Conversation AI page → "Texting rules" → "Check-ins:
+  one real thing". Set Composer to Shadow for about a week; press **Read 3
+  side by side** (`POST /api/outreach/pulse/preview { compose: true }`) until
+  you've read about 30. Then On at 50% for three weeks and compare the arms
+  on **What they did** (`GET /api/outreach/check-ins/report?days=30`: per
+  arm and per one thing, sent, replied within a week, opt-outs, and why the
+  ones that waited waited). Then decide the share.
+
 ### How often they asked, and when to stop asking (2026-10-14)
 
 Reading 2,014 threads turned up agents who told us how often to check in,
@@ -9472,6 +9558,25 @@ them about a house they ignored.
 - **Settings → Dispositions → Pulse** has Voice, After a deal, the never-replied
   cadence, the preview's new groups, and **Write 3 sample pulse checks**
   (`POST /api/dispo/pulse/preview`: nothing saved or sent).
+
+**No past deals, no apology, Matt's own home (2026-11-09).** 383 of 821
+pulses opened with "sent you a couple deals, sorry they weren't a fit", and
+Matt's rule since 11-09 is that a check-in never references a past property;
+for a buyer that's any deal we sent them. These ship on (the pulse was
+already model-written):
+- the brief never mentions a house or deal we sent them, whether they
+  answered, or why they passed, and has no apology; the deals sent are
+  background only. The after-deal line still seats a buyer who ignored a
+  deal first, but the house is no longer the way in;
+- the gate holds a pulse that names a street, an address or a house we sent
+  them (`pulseSubject.pastHouses`, never shown to the drafter);
+- "someone in Seattle" is the city we say we're in, by where they buy;
+- our last three texts to them are in the brief, so none is opened or
+  worded alike; a buy box on file is confirmed in a few words, never asked
+  for from scratch;
+- with the composer on, the pulse is written around one thing (their words,
+  their read's quotes under six months, the town they bought in) and a buyer
+  with nothing new since our last pulse waits.
 
 ### The buyer greenhouse (2026-09-29)
 

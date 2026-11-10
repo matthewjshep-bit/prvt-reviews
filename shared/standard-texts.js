@@ -85,6 +85,15 @@ export const CHECKIN_COLD_TEXTS = [
   "Hi {first}, Matt again. Anything on your end that needs real work?",
   "{first}, got a seller who'd rather skip the repairs and the showings?",
 ];
+// …after they told us one might be coming, with no day on it ("I may have
+// one coming up", shared/follow-up.js detectLead), two weeks or more ago: the
+// check-in asks about that lead, never by an address (Matt, 2026-11-09:
+// check-ins never reference past properties).
+export const LEAD_CHECKIN_TEXTS = [
+  "{first}, any word on the one you said was coming up?",
+  "Hey {first}, any word yet on the one you said was coming?",
+  "Any update on the one you said was coming up, {first}?",
+];
 // …when a fresh listing of theirs came up (pool C): still a check-in, the
 // listing named in passing and never judged. The 10-21 "doesn't look like a
 // fixer" was said about listings the pull had rated distressed.
@@ -134,6 +143,9 @@ export const LEGACY_LISTING_PING_COLD_TEXTS = [
   "Hey {first}, Matt here, I fix up houses locally. Saw your listing on {street}, probably not one for us, but anything on your plate that needs work?",
   "Hi {first}, it's Matt. Saw your listing on {street}, doesn't look like a fixer, but any other distressed properties on your plate, listed or off market?",
 ];
+
+// The agent check-ins that never carry the lead line: a listing ping and the thank-you have their own one thing.
+const LEAD_SKIP_REASONS = new Set(["fresh_listing", "off_market_listing", "deal_thanks"]);
 
 export const POOL_VERSIONS = ["v1", "v2"];
 const POOLS = {
@@ -283,7 +295,7 @@ function pickFilled(list, variant, values, prior = []) {
 // texts, the v1 pools a rollback restores, the cold ladder's own check-ins)
 // is advisory: flagged on the page, never blocked (shared/voice.js).
 export const SHIPPED_TEXTS = new Set([
-  ...NUDGE_TEXTS, ...CHECKIN_TEXTS, ...CHECKIN_COLD_TEXTS, ...LISTING_PING_TEXTS, ...LISTING_PING_COLD_TEXTS,
+  ...NUDGE_TEXTS, ...CHECKIN_TEXTS, ...CHECKIN_COLD_TEXTS, ...LISTING_PING_TEXTS, ...LISTING_PING_COLD_TEXTS, ...LEAD_CHECKIN_TEXTS,
   ...DEFAULT_FOLLOW_UP_TEXTS, ...DAY_TWO_TEXTS, ...PAST_LISTING_TEXTS, ...Object.values(COUNTY_OPENERS).flat(),
 ]);
 /** isShippedText(template) → true for one of the app's own v2 texts, as written. */
@@ -328,7 +340,10 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
   const o = outbound || {};
   // The recent listers' first text and its first follow-up are these fixed
   // texts in either mode: the model has no words for a house that's gone.
-  if (o.mode !== "template" && !(o.pastListing && (kind === "outreach_open" || kind === "outreach_nudge"))) return null;
+  // So is the check-in about a lead they said was coming (outbound.lead): one
+  // line, whatever the mode, so the model's prompt stays as it was.
+  const leadLine = kind === "agent_pulse" && o.lead && !o.forMatt && !LEAD_SKIP_REASONS.has(o.reason);
+  if (o.mode !== "template" && !(o.pastListing && (kind === "outreach_open" || kind === "outreach_nudge")) && !leadLine) return null;
   const P = poolsFor(pools);
   const values = {
     first: firstNameOf(goesBy) || firstNameOf(name),
@@ -417,6 +432,12 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
     const pick = (pool, vals = values) => (o.touch != null
       ? pickVariant(pool, prior, contactId, (Number(o.touch) || 0) + Math.max(0, Math.round(Number(shift) || 0)), { fill: (t) => fillTemplate(t, vals), noRepeat })
       : pickFilled(pool, v, vals));
+    // A lead they said was coming: asked about, by no address.
+    if (leadLine) {
+      const r = done("lead", pick(LEAD_CHECKIN_TEXTS));
+      if (r) return r;
+      if (o.mode !== "template") return null;
+    }
     if (o.reason === "fresh_listing" && o.listing?.focus) {
       // A focus county's listing that has been up a while and that Zillow
       // says needs work (2026-10-26, Pierce): the first text they've had

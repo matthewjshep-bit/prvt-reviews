@@ -592,21 +592,27 @@ test("asked who this is, the answer starts with Matt", () => {
   assert.match(sys, /never your bare name followed by a comma/);
 });
 
-test("a buyer who never answered a deal is asked what fits, with that house as the way in", () => {
-  const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 1, conversed: false, lastHouse: { street: "3511 NE 153rd St", city: "Lake Forest Park", how: "no answer" }, missing: ["price range"] });
-  assert.match(t, /THE LAST HOUSE WE SENT THEM: 3511 NE 153rd St in Lake Forest Park, and they never answered/);
-  assert.match(t, /Never ask whether they want it/);
-  assert.match(t, /SHAPE FOR THIS ONE: open with the house you sent/);
+// Matt, 2026-11-09 ~22:05: check-ins never reference past properties; for a
+// buyer, that's a deal we sent them. Until then the house they never answered
+// was the pulse's way in, by street. (Every street here is invented.)
+test("a buyer pulse never names a deal we sent them", async () => {
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  const o = outboundDescriptor({ kind: "buyer_pulse", offer: null, saved: {}, subject: { dealsSent: 1, conversed: false, missing: ["price range"],
+    lastHouse: { street: "4410 Corvid Ln", city: "Halden", how: "no answer" }, passReasons: ["4410 Corvid Ln: too far south"], pastHouses: ["4410 Corvid Ln, Halden, WA"] } });
+  assert.equal(o.lastHouse, undefined, "the brief never gets the house");
+  assert.equal(o.passReasons, undefined);
+  const t = outboundOpening(o);
+  assert.doesNotMatch(t, /Corvid|THE LAST HOUSE|open with the house you sent|too far south/);
+  assert.match(t, /never mention a house or a deal we sent them/);
+  assert.match(t, /no street address\./);
   assert.match(t, /the piece of their buy box we don't have — price range/);
-  assert.match(t, /THE ONE REFERENCE/);
-  assert.match(t, /no street address except the house we sent them/);
 });
 
-test("the pulse carries Matt's voice and the notes that make it personal", () => {
+test("the pulse carries Matt's voice and the notes that make it personal, never why they passed on a house", () => {
   const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 4, conversed: true, voice: "short, like a friend, no pitch",
-    passReasons: ["7034 South K Street: too far south"], lastSummary: "Wants north King only", aboutThem: "Building spec homes in Shoreline" });
+    passReasons: ["7034 Larchmere St: too far south"], lastSummary: "Wants north King only", aboutThem: "Building spec homes in Shoreline" });
   assert.match(t, /HOW MATT WANTS THESE TO SOUND .*short, like a friend, no pitch/);
-  assert.match(t, /Why they passed before, as recorded: 7034 South K Street: too far south/);
+  assert.doesNotMatch(t, /Why they passed before|Larchmere/);
   assert.match(t, /Our last conversation: Wants north King only/);
   assert.match(t, /About them, from our notes: Building spec homes in Shoreline/);
 });
@@ -791,4 +797,110 @@ test("an underwrite in progress lets the bot say we're working on it, never when
   assert.match(ctx, /IN PROGRESS RIGHT NOW: we are working up numbers on 88 Larkspur Ln/);
   assert.doesNotMatch(ctx, /coming shortly/);
   assert.match(ctx, /never a figure or a time for it/);
+});
+
+/* ---------- check-ins that name one real thing (2026-11-09) ---------- */
+//
+// Matt, 2026-11-09: check-ins personable and not AI; at ~22:05, never a past
+// property. Every name, town and street here is invented.
+
+test("with the composer off, the agent check-in prompt is byte-for-byte today's", async () => {
+  const crypto = await import("node:crypto");
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  const sha = (x) => crypto.createHash("sha256").update(x).digest("hex");
+  // The briefs as they were before the composer (base f517c20), for five kinds of agent check-in.
+  const fixtures = {
+    general: [{ reason: "general", segment: "engaged", address: "", listing: null, house: null, areas: ["Kentwood"], aboutThem: [{ what: "coaches her son's soccer team", daysAgo: 12 }], lastSummary: "talked about the fall market", hook: { kind: "situation" }, variant: 1, dealsWithUs: 0, offersWithUs: 2 },
+      "ce967cb6b3bea9d3baf77e4fd8fae44248a7e4e5497650e529560b0b9b1b2bf0"],
+    cold: [{ reason: "general", segment: "cold", address: "", listing: null, house: null, hook: { kind: "situation" }, variant: 2 }, "0c89502f689d9af32ac5a7146604899d21a84972b8e603a869445ac158fec873"],
+    listing: [{ reason: "fresh_listing", segment: "engaged", address: "88 Quillback Ln, Kentwood, WA 98000", listing: { street: "Quillback Ln", city: "Kentwood", dom: 12 }, hook: { kind: "listing" }, variant: 0 },
+      "06947395ab13757d98300568d853fff8794388733ff52da85f07d3655623d28b"],
+    coldListing: [{ reason: "fresh_listing", segment: "cold", address: "88 Quillback Ln, Kentwood, WA 98000", listing: { street: "Quillback Ln", city: "Kentwood", dom: 12 }, hook: { kind: "listing" }, variant: 1 },
+      "49b0bf471276a1db84d5ce603b2005f8c2e95e438dea28bd45b350aac914f049"],
+    thanks: [{ reason: "deal_thanks", segment: "engaged", address: "", dealsWithUs: 1, offersWithUs: 1, variant: 0 }, "f2f3655062052601bd87f9502a63bc97ed75790b17555a8af30caee798a76b4b"],
+  };
+  for (const [k, [subject, hash]] of Object.entries(fixtures)) {
+    assert.equal(sha(outboundOpening(outboundDescriptor({ kind: "agent_pulse", offer: null, subject, saved: {}, dossier: null }))), hash, k);
+  }
+});
+
+test("the composed check-in is written around the one thing, names no house, and may say there's nothing to say", async () => {
+  const { checkInFacts } = await import("./conversation-prompt.js");
+  const pack = { ourLast: [{ text: "Hey Wren, anything new on your plate that needs real work?", daysAgo: 21 }], theirLast: { text: "Halden is dead quiet till spring", daysAgo: 12, channel: "sms" },
+    areas: ["Halden"], lastSummary: { text: "talked about the slow fall", daysAgo: 12 } };
+  const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", pack, opening: 2,
+    oneThing: { kind: "their_words", line: "what they told us 12 days ago, in their words: \"Halden is dead quiet till spring\"" } });
+  assert.match(t, /THE ONE THING: what they told us 12 days ago/);
+  assert.match(t, /OUR LAST TEXTS TO THEM, newest first .*\n1\) 21 days ago: "Hey Wren, anything new on your plate/);
+  assert.match(t, /NEVER A HOUSE FROM BEFORE: no address, no street/);
+  assert.match(t, /no deal we did together, not even by its town/);
+  assert.match(t, /NOTHING TO SAY: .*humanReason "nothing real to say"/);
+  assert.match(t, /OPEN THIS ONE on the question/);
+  assert.doesNotMatch(t, /never a personal detail/, "a detail they shared may be the one thing");
+  assert.match(checkInFacts({}), /- nothing more/);
+  // A lead, asked about with no address.
+  const lead = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", pack: {}, oneThing: { kind: "lead", line: "they told us 20 days ago that one might be coming up" } });
+  assert.match(lead, /never by an address or a street \("any word on the one you said was coming up\?"\)/);
+});
+
+test("the weekly deal-source check-in says which week of six it is and picks up their own words", () => {
+  const t = outboundOpening({ kind: "checkin_due", sourceKind: "source", week: 3, weeks: 6, said: "I'll keep you in mind for any fixers.", pack: { ourLast: [] } });
+  assert.match(t, /This is check-in 3 of 6/);
+  assert.match(t, /their words then: "I'll keep you in mind for any fixers\."/);
+  assert.match(t, /humanReason "nothing new to say"/);
+  assert.match(t, /NEVER A HOUSE FROM BEFORE/);
+  // With the composer off, the dated check-in with no phrase never hands the model a stand-in.
+  const off = outboundOpening({ kind: "checkin_due", sourceKind: "date", phrase: "" });
+  assert.doesNotMatch(off, /you'd mentioned checking back/);
+  assert.match(off, /Never name a house, a street or an address from before/);
+  assert.doesNotMatch(outboundOpening({ kind: "checkin_due", sourceKind: "unanswered", phrase: "" }), /Never name a house/, "the net under their text picks up their words");
+});
+
+test("the buyer pulse never opens on the same apology twice: it never apologises at all", () => {
+  for (const dealsSent of [1, 3, 6]) {
+    const t = outboundOpening({ kind: "buyer_pulse", dealsSent, conversed: false, variant: dealsSent });
+    assert.doesNotMatch(t, /sorry they weren't a fit|sent you a couple deals|Own it lightly|what we sent missed/);
+    assert.match(t, /no apology for the deals/);
+  }
+});
+
+test("a pulse doesn't apologise for a deal whose text never delivered", () => {
+  // The deal is counted as sent; the brief keeps it as background, never said.
+  const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 1, conversed: false, variant: 0 });
+  assert.match(t, /We have sent them one deal by text and never heard back\. \(Background only: never mention those deals/);
+  assert.doesNotMatch(t, /sorry/i);
+});
+
+test("a buyer who already gave their buy box is asked to confirm it, not asked again", () => {
+  const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 0, conversed: true, buyBox: "areas Halden, Kentwood; SFR; heavy rehab", missing: [], variant: 0 });
+  assert.match(t, /confirm the buy box we have on file in a few words and ask whether it's still right/);
+  assert.doesNotMatch(t, /what's their buy box/);
+  // Nothing on file: asked.
+  assert.match(outboundOpening({ kind: "buyer_pulse", dealsSent: 0, conversed: false, missing: ["where they buy", "what kind of house", "price range", "how much work they take on"] }), /what's their buy box/);
+});
+
+test("the buyer pulse says the city we're in by where they buy, and shows our last texts so it never opens alike", async () => {
+  const { outboundDescriptor } = await import("./reply-agent.js");
+  const o = outboundDescriptor({ kind: "buyer_pulse", offer: null, subject: { dealsSent: 0, conversed: false, cities: ["Bend"] },
+    saved: { outreachAutopilot: { opener: { homes: [{ home: "Bend", state: "OR" }] } } } });
+  assert.equal(o.home, "Bend");
+  const t = outboundOpening({ ...o, ourTexts: [{ text: "It's Matt, still buying around Bend?", daysAgo: 90 }] });
+  assert.match(t, /someone in Bend who comes across more fixer deals/);
+  assert.match(t, /OUR LAST TEXTS TO THEM, newest first \(don't reuse their opening or their phrases\): 1\) 90 days ago: "It's Matt, still buying around Bend\?"/);
+});
+
+test("a composed buyer pulse uses at most one of their own words, never a deal we sent", () => {
+  const t = outboundOpening({ kind: "buyer_pulse", dealsSent: 2, conversed: true, buyBox: "areas Halden", pack: { quotes: [{ text: "Mostly cosmetic flips in Halden for now", daysAgo: 40 }], ourLast: [] },
+    oneThing: { kind: "quotes", line: "in their own words, 40 days ago: \"Mostly cosmetic flips in Halden for now\"" }, opening: 0 });
+  assert.match(t, /IN THEIR WORDS \(from our notes, newest first; use at most one\): "Mostly cosmetic flips in Halden for now" \(40 days ago\)/);
+  assert.match(t, /NEVER A DEAL FROM BEFORE/);
+  assert.match(t, /confirm it in a few words, never ask for it from scratch/);
+  assert.match(t, /humanReason "nothing new to say"/);
+});
+
+test("a check-in about something open sees our last three texts and is told not to repeat them", () => {
+  const ctx = buildUserContext({ party: "agent", contact: { name: "Wren Halloway" }, outbound: { kind: "offer_nudge", address: "4410 Corvid Ln", stepIndex: 1, stepCount: 3,
+    ourTexts: [{ text: "Any thoughts on our number for Corvid?", daysAgo: 3 }] } });
+  assert.match(ctx, /OUR LAST TEXTS TO THEM, newest first: 1\) 3 days ago: "Any thoughts on our number for Corvid\?"\. Don't repeat a sentence or the opening of these\./);
+  assert.doesNotMatch(buildUserContext({ party: "agent", contact: { name: "Wren" }, outbound: { kind: "agent_pulse", reason: "general", ourTexts: [{ text: "x", daysAgo: 1 }] } }), /OUR LAST TEXTS TO THEM, newest first: 1\)/);
 });

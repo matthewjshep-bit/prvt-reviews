@@ -420,12 +420,15 @@ const mention = (address, d = 10, data = {}) => ({ type: "house_mentioned", at: 
 const closedDeal = (address, d = 20) => ({ id: `c-${address}`, contactId: "other", address, status: "accepted",
   deal: { stage: "closed", stageHistory: [{ stage: "under_contract", ts: ago(d + 30) }, { stage: "closed", ts: ago(d) }] } });
 
-test("a check-in names a house they mentioned that we never priced, and the gate stops holding that one", () => {
+// Matt, 2026-11-09 ~22:05: "make sure the checkins dont reference past
+// properties, that gets confusing and annoying too". Until then a house they
+// mentioned that we never priced was the check-in's one thing.
+test("a house they mentioned is never the check-in's one thing, and every house of theirs stays behind the gate", () => {
   const a = agent({ lastInboundAt: ago(30), events: [mention("Pine St, Shelton, WA", 12), { type: "subject_property_set", at: ago(12), address: "Pine St, Shelton, WA" }],
     offers: [passed({ address: "9 Oak St, Kent, WA 98031" })] });
   const subj = agentPulseSubject({ agent: a, verdict: { pulseReason: "general", segment: "engaged" }, now: NOW });
-  assert.deepEqual({ kind: subj.hook.kind, street: subj.hook.street, daysAgo: subj.hook.daysAgo }, { kind: "mentioned", street: "Pine St", daysAgo: 12 });
-  assert.ok(!subj.pastHouses.includes("Pine St, Shelton, WA"), "the hook's own house may be named");
+  assert.deepEqual(subj.hook, { kind: "situation" });
+  assert.ok(subj.pastHouses.includes("Pine St, Shelton, WA"), "the house they mentioned is held like any other");
   assert.ok(subj.pastHouses.includes("9 Oak St, Kent, WA 98031"), "a house we priced stays behind the gate");
   assert.equal(subj.address, "", "no house of record, so the reply isn't gated as a first-text house");
 });
@@ -441,23 +444,23 @@ test("a house we priced, passed on, or texted them about first is never the chec
   assert.equal(mentionedHouseFor({ events: [mention("5 Ash Ave, Kent, WA", 30), mention("7 Fir Ln, Kent, WA", 5)], now: NOW }).street, "7 Fir Ln", "the newest");
 });
 
-test("with no house to name, a check-in may say we just closed one in a town they work — by the town only", () => {
+// Until 2026-11-09 one of our closes in a town they work was the one thing
+// ("we just closed one in Kent"): a house from before, by its town.
+test("a check-in never says we just closed one in their town", () => {
   const closes = recentCloses([closedDeal("88 Quill Ave S, Kent, WA 98032"), closedDeal("1 Far Rd, Yakima, WA 98901", 70),
     { ...closedDeal("2 Mid St, Kent, WA 98032"), deal: { stage: "assigned", stageHistory: [{ stage: "assigned", ts: ago(3) }] } }], NOW);
   assert.deepEqual(closes.map((c) => c.town), ["Kent"], "closed in the last 60 days; an assignment isn't a close");
   const works = agent({ lastInboundAt: ago(30), listings: [listing({ firstSeen: ago(40) })] });
-  assert.deepEqual(checkInHook({ agent: works, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }), { kind: "closed_nearby", town: "Kent" });
-  const elsewhere = agent({ lastInboundAt: ago(30), offers: [passed({ address: "3 Bay St, Everett, WA 98201" })] });
-  assert.deepEqual(checkInHook({ agent: elsewhere, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }), { kind: "situation" });
-  assert.doesNotMatch(JSON.stringify(agentPulseSubject({ agent: works, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }).hook), /88 Quill|Quill Ave/);
+  assert.deepEqual(checkInHook({ agent: works, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }), { kind: "situation" });
+  assert.doesNotMatch(JSON.stringify(agentPulseSubject({ agent: works, verdict: { pulseReason: "general" }, houses: { closes }, now: NOW }).hook), /Kent|Quill/);
   assert.equal(checkInHook({ agent: works, verdict: { pulseReason: "deal_thanks" }, houses: { closes }, now: NOW }), null, "the thank-you is about that deal");
   assert.deepEqual(checkInHook({ agent: works, verdict: { pulseReason: "fresh_listing", listing: listing() }, houses: { closes }, now: NOW }), { kind: "listing" });
 });
 
-test("the plan hands each pick its hook, from our closes", () => {
+test("the plan hands each pick a hook that names no house, our closes in their town or not", () => {
   const a = agent({ lastInboundAt: ago(30), listings: [listing({ firstSeen: ago(40) })] });
   const { picks } = pickPulseAgents({ agents: [a], settings: S, config: CONFIG, houses: { live: new Set(), walked: new Map(), closes: [{ town: "Kent", at: ago(10) }] }, now: NOW });
-  assert.deepEqual(picks[0].subject.hook, { kind: "closed_nearby", town: "Kent" });
+  assert.deepEqual(picks[0].subject.hook, { kind: "situation" });
 });
 
 // Matt's 15 (2026-10-15): his own specific texts got 70% replies. Once a
@@ -950,4 +953,46 @@ test("a check-in pick carries the agent's own count of check-ins that went", () 
   const never = agent({ contactId: "a-zero", lastInboundAt: ago(40) });
   const plan = pickPulseAgents({ agents: [never, twice], settings: S, config: CONFIG, houses: { live: new Set(), walked: new Map() }, now: NOW });
   assert.deepEqual(Object.fromEntries(plan.picks.map((p) => [p.contactId, p.touch])), { "a-two": 2, "a-zero": 0 });
+});
+
+/* ---------- a lead with no day, at the next check-in (2026-11-09) ---------- */
+
+test("the check-in after an undated lead asks about that lead, not before two weeks and only once", async () => {
+  const { undatedLeadFor } = await import("./agent-pulse.js");
+  const req = (d) => ({ type: "checkin_requested", at: ago(d), address: "", data: { kind: "lead", dueAt: null, undated: true, lead: { what: "the one coming up", said: "I may have one coming up" } } });
+  assert.equal(undatedLeadFor({ events: [req(5)], now: NOW }), null, "too soon after they said it");
+  assert.deepEqual(undatedLeadFor({ events: [req(20)], now: NOW }), { what: "the one coming up", said: "I may have one coming up", at: ago(20), undated: true });
+  const subj = agentPulseSubject({ agent: agent({ lastInboundAt: ago(20), events: [req(20)] }), verdict: { pulseReason: "general", segment: "engaged" }, now: NOW });
+  assert.equal(subj.lead.what, "the one coming up");
+  // Asked once: the texted check-in carries its leadAt.
+  assert.equal(undatedLeadFor({ events: [req(20)], ledger: [{ type: "agent_pulse_texted", at: ago(1), data: { leadAt: ago(20) } }], now: NOW }), null);
+  // Not on a listing ping.
+  assert.equal(agentPulseSubject({ agent: agent({ events: [req(20)] }), verdict: { pulseReason: "fresh_listing", listing: { doc: { address: "1 A St, Halden, WA" } } }, now: NOW }).lead, undefined);
+});
+
+test("a lead older than 60 days is dropped", async () => {
+  const { undatedLeadFor } = await import("./agent-pulse.js");
+  const req = { type: "checkin_requested", at: ago(61), data: { kind: "lead", dueAt: null, undated: true, lead: { what: "the one coming up" } } };
+  assert.equal(undatedLeadFor({ events: [req], now: NOW }), null);
+});
+
+/* ---------- review fixes (2026-11-10) ---------- */
+
+test("an agent who said twice that one might be coming is asked about it once", async () => {
+  const { undatedLeadFor } = await import("./agent-pulse.js");
+  const req = (d) => ({ type: "checkin_requested", at: ago(d), address: "", data: { kind: "lead", dueAt: null, undated: true, lead: { what: "the one coming up" } } });
+  // Asked at day 20 about the newer one; the older one is the same lead.
+  const ledger = [{ type: "agent_pulse_texted", at: ago(15), data: { leadAt: ago(30) } }];
+  assert.equal(undatedLeadFor({ events: [req(33), req(30)], ledger, now: NOW }), null);
+});
+
+test("a lead whose house came in afterwards is never asked about", async () => {
+  const { undatedLeadFor } = await import("./agent-pulse.js");
+  const req = { type: "checkin_requested", at: ago(25), address: "", data: { kind: "lead", dueAt: null, undated: true, lead: { what: "the one coming up" } } };
+  for (const came of [{ type: "house_mentioned", at: ago(20), address: "12 Wren Ct, Halden, WA" }, { type: "address_pending", at: ago(20), data: {} },
+    { type: "subject_property_set", at: ago(20), address: "12 Wren Ct, Halden, WA", data: {} }]) {
+    assert.equal(undatedLeadFor({ events: [req, came], now: NOW }), null, came.type);
+  }
+  // Our own first text's house is not theirs coming in.
+  assert.ok(undatedLeadFor({ events: [req, { type: "subject_property_set", at: ago(20), address: "12 Wren Ct, Halden, WA", data: { ours: true } }], now: NOW }));
 });

@@ -478,7 +478,12 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     if (!claim.inserted) continue;
     const r = await start({
       client, locationId, saved, store, contactId, kind: "checkin_due", offer: null, continues,
-      subject: { address: req.address || "", phrase: req.data?.phrase || "", sourceKind: req.data?.kind || "date", ...(req.data?.ours ? { ours: true } : {}) },
+      subject: { address: req.address || "", phrase: req.data?.phrase || "", sourceKind: req.data?.kind || "date", ...(req.data?.ours ? { ours: true } : {}),
+        // A deal source's week of the six, and their own words when they
+        // offered (2026-11-09): the check-in picks those up, and with the
+        // composer on, a week with nothing new from them waits.
+        ...(req.data?.kind === "source" ? { week: Math.max(1, SOURCE_TOUCHES - (Number(req.data?.left) || 0)), weeks: SOURCE_TOUCHES,
+          ...(req.data?.said ? { said: String(req.data.said).slice(0, 160) } : {}) } : {}) },
       sendsEnabled, deps,
     }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
     if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });
@@ -493,7 +498,7 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
       await recordEvent({
         store, locationId, contactId, party: "agent", type: "checkin_requested", at: iso(now), address: req.address || "",
         source: "conversation", dedupeKey: `checkin_requested:source:${contactId}:${iso(now).slice(0, 10)}`,
-        data: { kind: "source", phrase: "", dueAt: iso(now + SOURCE_REPEAT_DAYS * 86400000), left: left - 1 },
+        data: { kind: "source", phrase: "", dueAt: iso(now + SOURCE_REPEAT_DAYS * 86400000), left: left - 1, ...(req.data?.said ? { said: req.data.said } : {}) },
       });
     }
   }

@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PartyPlaybooks, BookingCard, AutoSendCard, readOffDays } from "../ConversationPlaybooks.jsx";
+import { PartyPlaybooks, BookingCard, AutoSendCard, readOffDays, CheckInComposerFields } from "../ConversationPlaybooks.jsx";
 import { normalizeConversationAi, NEVER_AUTO, INTENT_LABEL } from "@shared/conversation-ai.js";
 
 test("the playbook grid offers every eligible intent as a box and every locked one as a lock", () => {
@@ -48,4 +48,21 @@ test("the realm check's float switches show under it, off until ticked", () => {
   expect(html2).toContain("anything I won&#x27;t see in the photos");
   const off = normalizeConversationAi({ parties: { agent: { realmCheck: { enabled: false } } } });
   expect(renderToStaticMarkup(<PartyPlaybooks config={off} patch={() => {}} workflows={{ list: [], loading: false }} />)).not.toContain("Float a range topped by our number");
+});
+
+// 2026-11-09: check-ins that name one real thing. The composer is new
+// automation: it shows Off until Matt sets it, and its samples sit side by side.
+test("the check-in composer shows off by default, with its share, wait and personal switches", () => {
+  const html = renderToStaticMarkup(<CheckInComposerFields config={normalizeConversationAi({})} patch={() => {}} />);
+  expect(html).toContain("Check-ins: one real thing");
+  expect(html).toContain("Never a past house, street or address");
+  expect(html).toMatch(/<option value="off" selected="">Off<\/option>/);
+  expect(html).toContain("Shadow (write beside, send the fixed one)");
+  expect(html).toContain("Share written by the model (%)");
+  expect(html).toContain("Wait when there&#x27;s nothing to say (days)");
+  expect(html).toContain("A detail they shared may be the one thing");
+  expect(html).toContain("Read 3 side by side");
+  const on = renderToStaticMarkup(<CheckInComposerFields config={normalizeConversationAi({ checkIns: { composer: "shadow", composerShare: 50 } })} patch={() => {}} />);
+  expect(on).toMatch(/<option value="shadow" selected="">/);
+  expect(on).toContain('value="50"');
 });

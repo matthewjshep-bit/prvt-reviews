@@ -16,6 +16,7 @@ import { OUR_BOX_WORDS } from "./shared/asset-type.js";
 import { offerForms } from "./shared/us-address.js";
 import { NEXT_ONE_QUESTION } from "./shared/flip-read.js";
 import { VOICE_RULE } from "./shared/voice.js";
+import { CHECK_IN_VOICE_EXAMPLES, BUYER_VOICE_EXAMPLES } from "./shared/check-in.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -586,7 +587,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
 const PULSE_SHAPES = [
   "SHAPE FOR THIS ONE: open with the question itself, then who you are, then the reason. Do NOT use the purchase clue in this one.",
   "SHAPE FOR THIS ONE: if there is a purchase city above, open with having noticed they picked something up there, as a peer would; then the question. Keep who-you-are to a clause.",
-  "SHAPE FOR THIS ONE: open with who you are and that what we sent missed; then make a GUESS at what they buy from where/what they seem to do (\"guessing flips around Auburn is still your lane?\") and ask them to correct you. Do NOT use the purchase clue in this one.",
+  "SHAPE FOR THIS ONE: open with who you are; then make a GUESS at what they buy from where/what they seem to do (\"guessing flips around Auburn is still your lane?\") and ask them to correct you. Do NOT use the purchase clue in this one.",
   "SHAPE FOR THIS ONE: shortest version you can write that still has their name, the question and the reason — two sentences. No clue at all.",
 ];
 
@@ -608,6 +609,144 @@ const AGENT_PULSE_LISTING_SHAPES = [
 
 const START = "YOU ARE STARTING THIS MESSAGE — nothing new came in.";
 const CONTINUE = "Reference the thread so it reads as a continuation.";
+
+/* ---------- the composed check-in (shared/check-in.js, 2026-11-09) ---------- */
+// Matt, 2026-11-09: "check-ins need to sound more personable and not AI"; and
+// at ~22:05, "make sure the checkins dont reference past properties, that
+// gets confusing and annoying too". With the composer on (or shadowing),
+// runProactive hands the brief the pack (`pack`: our last texts and their
+// last words, dated, and the background) and THE ONE THING (`oneThing`:
+// their words about their market or plans, a detail they shared, a question
+// they asked us, a call's topic, a lead they said is coming). With it off,
+// none of this runs and the prompts below are as they were. VOICE_RULE
+// itself follows every brief (buildUserContext).
+const CHECKIN_SPENT = "SPENT WORDS: a phrase OUR LAST TEXTS already used on them is spent; say it another way or leave it out " +
+  "(desk, radar, on your plate, on or off market, listed or not, the uglier the better, fixers, off-market, estates or rentals).";
+const voiceExamples = (list) => list.map((x) => `"${x}"`).join(" / ");
+const CHECKIN_VOICE = `${CHECKIN_SPENT} HOW HE ACTUALLY SOUNDS (the voice, never the words; never copy one): ${voiceExamples(CHECK_IN_VOICE_EXAMPLES)}`;
+const CHECKIN_VOICE_INVESTOR = `${CHECKIN_SPENT} HOW HE ACTUALLY SOUNDS WITH A BUYER (the voice, never the words; never copy one): ${voiceExamples(BUYER_VOICE_EXAMPLES)}`;
+// The opening, chosen by code (shared/check-in.js openingIndex) so a run
+// doesn't open alike and never the shape of our last text.
+export const OPENINGS = [
+  "OPEN THIS ONE on the thing itself, with their name after it or not at all.",
+  "OPEN THIS ONE on their first name and the thing, in one breath.",
+  "OPEN THIS ONE on the question, and fit the thing inside it.",
+];
+// The one question, by what the one thing is.
+const ASK_BY_HOOK = {
+  lead: "they told us one might be coming. Ask about that lead the way someone who remembered would, never by an address or a street " +
+    "(\"any word on the one you said was coming up?\"). Not the general \"anything that needs work\" question.",
+  question: "they asked us something we never really answered. Answer it in a few plain words from what's here (never invent; if you can't answer it truthfully, " +
+    "it's NOTHING TO SAY), then ask the one question.",
+  call: "pick up from what the call was about (its topic, never a house from it): how the thing they told us went, or whether there's another like it.",
+  their_words: "pick up from what they told us about their market or their plans, as if you'd been thinking about it: how it's going, or whether it's turned up anything that needs real work.",
+  personal: "one warm line about it, the way a colleague would, then the ask. Never health, money trouble, a death, a divorce or anyone else's situation; " +
+    "if it's any of those, it's NOTHING TO SAY.",
+  their_no: "they told us nothing was in the works a while back. Don't pretend otherwise; ask lightly whether that's changed.",
+  deal_talk: "pick up from what they told us about what they're buying or where: is that still what they're after.",
+  quotes: "pick up from their own words about what they buy, in a clause of your own: is that still the box, or has it moved.",
+  purchase_city: "they've been buying around that town lately: is that still where they want to be, and what kind of house.",
+};
+const NEVER_A_HOUSE = "NEVER A HOUSE FROM BEFORE: no address, no street, no house number, no \"the place you called about\", no listing of theirs, " +
+  "no house we priced, offered on or passed on, and no deal we did together, not even by its town. Never ask whether a house sold, closed or is still available. " +
+  "Their town, or the area they work, is fine.";
+const daysWord = (n) => (n == null ? "a while back" : n === 0 ? "today" : n === 1 ? "yesterday" : `${n} days ago`);
+// The check-ins about something open that also see our last three texts (buildUserContext).
+export const OUR_TEXTS_KINDS = new Set(["offer_nudge", "hot_push", "counter_nudge", "second_look", "promise_due", "price_drop", "address_chase", "passed_checkin"]);
+
+/**
+ * checkInFacts(pack) → the dated background a composed check-in may lean on:
+ * the areas they work, what we last talked about (only when recent), their
+ * last words, and our last three texts, which it must not repeat or open
+ * like. Exported for the tests.
+ */
+export function checkInFacts(pack = {}) {
+  const p = pack || {};
+  const lines = ["WHAT ELSE YOU KNOW (background; use none of it unless it makes THE ONE THING clearer):"];
+  if ((p.areas || []).length) lines.push(`- Areas they work: ${p.areas.join(", ")}`);
+  if (p.lastSummary?.text) lines.push(`- Our last conversation (${daysWord(p.lastSummary.daysAgo)}): ${p.lastSummary.text}`);
+  if (lines.length === 1) lines.push("- nothing more");
+  const t = p.theirLast;
+  if (t?.text) lines.push(`THEIR LAST WORDS (${daysWord(t.daysAgo)}, by ${t.channel === "email" ? "email" : "text"}): "${t.text}"`);
+  const ours = (p.ourLast || []).slice(0, 3);
+  if (ours.length) {
+    lines.push("OUR LAST TEXTS TO THEM, newest first (never repeat a sentence of these, never open the way they open; their phrases are spent):");
+    ours.forEach((o, i) => lines.push(`${i + 1}) ${daysWord(o.daysAgo)}: "${o.text}"`));
+  }
+  return lines.join("\n");
+}
+
+// The agent check-in, written around THE ONE THING (checkins-design 3.2, as
+// amended 11-09: no house, no past deal, no listing among its things).
+function agentCheckInV2(o) {
+  const h = o.oneThing;
+  const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
+  return `${START} There is NO offer in this message. It is a check-in with a listing agent${cold ? " who has never written back" : " we know"}, ` +
+    `and it exists for ONE reason: THE ONE THING below. Say it the way someone who remembers would, in a clause of your own words ` +
+    `(never quote them back at length, never recite the thread), then ask one easy question that follows from it.\n` +
+    `THE ONE THING: ${h.line}\n` +
+    `${checkInFacts(o.pack)}\n` +
+    `THE ASK: ${ASK_BY_HOOK[h.kind] || ASK_BY_HOOK.their_words}\n` +
+    `${NEVER_A_HOUSE} Never a price, a number, an ARV, a percentage, a date or a count of days. Never promise an offer or say what we'd pay. ` +
+    `The rule about never asking again whether anything else needs work is for replies; here you may ask it, but never in the words of OUR LAST TEXTS. ` +
+    (cold ? `They've never written back: "it's Matt" in a clause is the only introduction, nothing about what we do. ` : `Do NOT introduce yourself or say what we do. `) +
+    `${OPENINGS[o.opening] || OPENINGS[0]}\n` +
+    `${CHECKIN_VOICE}\n` +
+    (o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}"\n` : "") +
+    `NOTHING TO SAY: if THE ONE THING can't be said without inventing something or naming a house, or it would read as watching them, leave reply empty, ` +
+    `set needsHuman true and humanReason "nothing real to say". Never fill the space with a general line.\n` +
+    `Set intent to agent_pulse.`;
+}
+
+// The check-in they asked for (checkins-design 3.3, as amended 11-09).
+function checkinDueV2(o) {
+  const h = o.oneThing;
+  const head =
+    o.sourceKind === "source"
+      ? `They said they'd send us houses that need work${o.said ? ` (their words then: "${o.said}")` : ""}. This is check-in ${o.week || 1} of ${o.weeks || 6}. ` +
+        (h ? `THE ONE THING, new since our last check-in: ${h.line}. Pick it up in a clause of your own, then ` : "") +
+        `ask whether one turned up, in words OUR LAST TEXTS haven't used. If the only thing to say is the same ask as last time, ` +
+        `leave reply empty, set needsHuman true and humanReason "nothing new to say".`
+    : o.sourceKind === "lead"
+      ? `${o.lead?.toldAt ? `On ${String(o.lead.toldAt).slice(0, 10)}` : "Earlier"}${o.lead?.via === "call" ? ", on a call," : ""} they told us about ` +
+        `${o.lead?.what ? `a lead (${o.lead.what})` : "one that might be coming"}${o.phrase ? ` and when ("${o.phrase}")` : ""}. ` +
+        `${o.lead?.said ? `Their words: "${o.lead.said}". ` : ""}It's that time now. Ask about that lead specifically, the way a person who ` +
+        `remembered would, never by an address or a street. Not the general "anything that needs work" question.`
+    : o.ours
+      ? `We told them we'd check back${o.phrase ? ` (${o.phrase})` : ""} and it's that time. Keep our word in a few words of your own, never the wording of that text, ` +
+        `then ask whether anything landed that needs work.${h ? ` If it fits, carry THE ONE THING in a clause: ${h.line}.` : ""}`
+    : `They told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Open on that in a few words of your own, ` +
+      `then ask whether anything landed that needs work.${h ? ` If it fits, carry THE ONE THING in a clause: ${h.line}.` : ""}`;
+  return `${START} This is a check-in they asked for, so it keeps an appointment; it doesn't chase. ${head}\n` +
+    `${checkInFacts(o.pack)}\n` +
+    `${NEVER_A_HOUSE} Never ask anything they already answered in the thread. Do NOT name any number or price.\n` +
+    `${OPENINGS[o.opening] || OPENINGS[0]}\n${CHECKIN_VOICE}\nSet intent to checkin_due.`;
+}
+
+// The buyer pulse, written around THE ONE THING (checkins-design 3.4, as
+// amended 11-09: never a deal we sent them, never an apology for one).
+function buyerPulseV2(o, clues) {
+  const h = o.oneThing;
+  const quotes = (o.pack?.quotes || []).length
+    ? `IN THEIR WORDS (from our notes, newest first; use at most one): ${o.pack.quotes.map((q) => `"${q.text}" (${daysWord(q.daysAgo)})`).join(" / ")}\n` : "";
+  return `${START} There is NO deal in this message. It is a check-in with a buyer on our list, between deals.\n` +
+    `WHAT WE KNOW: ${clues}\n${quotes}` +
+    `${checkInFacts(o.pack)}\n` +
+    `THE ONE THING: ${h.line}\n` +
+    `THE ASK: ${ASK_BY_HOOK[h.kind] || ASK_BY_HOOK.deal_talk}\n` +
+    `WHAT TO WRITE: one text, one or two short sentences, the way one local buyer texts another. Say THE ONE THING in a clause of your own words, ` +
+    `then ONE question that follows from it. ` +
+    (o.buyBox ? `They've told us what they buy: confirm it in a few words, never ask for it from scratch. ` : "") +
+    (o.conversed ? `You've talked before: don't reintroduce yourself. `
+      : `They've never written back: "it's Matt" and, in a clause, that you come across more fixer deals around ${o.home || "Seattle"} than you can take on. `) +
+    `NEVER A DEAL FROM BEFORE: never mention a house or a deal we sent them, whether they answered it, why they passed, or that what we sent wasn't a fit; ` +
+    `no apology, no address, no street. Use at most ONE thing from above; never list what you know, never mention records, lenders, prices or how many properties they own. ` +
+    `Do NOT name a price, a number, a percentage or a link. Do NOT pitch a deal or promise one is coming.\n` +
+    `${OPENINGS[o.opening] || OPENINGS[0]}\n${CHECKIN_VOICE_INVESTOR}\n` +
+    (o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}"\n` : "") +
+    `NOTHING TO SAY: if they've never answered and nothing above is newer than our last text to them, or THE ONE THING can't be said without inventing ` +
+    `something, leave reply empty, set needsHuman true and humanReason "nothing new to say".\nSet intent to buyer_pulse.`;
+}
 
 // How hard the nudge leans, by rung. The first is a light bump; by the third
 // the useful thing is to make it easy to say no and then stop.
@@ -1059,21 +1198,19 @@ function openingFor(outbound) {
     // ever had blasts from us, so this has to read like one person texting
     // another — and every clue below is optional colour, never a dossier.
     case "buyer_pulse": {
-      // A deal they never answered is the way in (shared/buyer-pulse.js
-      // after_deal, 2026-10-05): asked what fits, not whether they want it.
-      const lh = o.lastHouse;
-      const afterDeal = Boolean(lh?.street && lh.how === "no answer");
+      // Until 2026-11-09 a deal they never answered was the way in ("the
+      // last house we sent them", by street), and a buyer who'd had deals got
+      // "sent you a couple deals, sorry they weren't a fit": 383 of 821
+      // pulses opened on that apology. Matt, 2026-11-09 ~22:05: check-ins
+      // never reference past properties, and for a buyer that's a deal we
+      // sent them. The deals are background now, never said.
       const clues = [
-        o.dealsSent > 1 ? `We have sent them ${o.dealsSent >= 4 ? "several" : "a couple of"} deals by text${o.conversed ? "" : " and never heard back"}.`
+        (o.dealsSent > 1 ? `We have sent them ${o.dealsSent >= 4 ? "several" : "a couple of"} deals by text${o.conversed ? "" : " and never heard back"}.`
           : o.dealsSent === 1 ? `We have sent them one deal by text${o.conversed ? "" : " and never heard back"}.`
-          : "We have not sent them a deal yet.",
+          : "We have not sent them a deal yet.") + (o.dealsSent > 0 ? " (Background only: never mention those deals, a house we sent, or whether they answered.)" : ""),
         o.boughtFromUs ? "They have bought from us before — this is a friend, write like it." : "",
         !o.boughtFromUs && o.lookedAtDeals ? "They have looked at a deal of ours without taking it." : "",
         o.passed ? "They passed on something we sent." : "",
-        lh?.street ? (afterDeal
-          ? `THE LAST HOUSE WE SENT THEM: ${lh.street}${lh.city ? ` in ${lh.city}` : ""}, and they never answered. That house is the way in: guess lightly that it wasn't their kind of house and ask what is. Never ask whether they want it, and say nothing about it but its street or city.`
-          : `The last house we sent them: ${lh.street}${lh.city ? ` in ${lh.city}` : ""} (${lh.how}).`) : "",
-        o.passReasons?.length ? `Why they passed before, as recorded: ${o.passReasons.join("; ")}.` : "",
         o.aboutThem ? `About them, from our notes: ${o.aboutThem}.` : "",
         o.lastSummary ? `Our last conversation: ${o.lastSummary}` : "",
         o.nextAction ? `What we meant to do next with them: ${o.nextAction}.` : "",
@@ -1082,38 +1219,50 @@ function openingFor(outbound) {
         o.types?.length ? `What they seem to do: ${o.types.join(", ").replace(/-/g, " ")}.` : "",
         o.buyBox ? `THE BUY BOX WE HAVE ON FILE: ${o.buyBox}. Do not ask for it from scratch — say what you have in a few words (areas and type only; leave any price out of the text) and ask if that is still right or has changed.` : "",
       ].filter(Boolean).join(" ");
+      // The composed pulse (shared/check-in.js), when there's one real thing.
+      if (o.pack && o.oneThing) return buyerPulseV2(o, clues);
       // Who's texting, by name. Buck, 2026-09-24: a pulse that only said
       // "a Seattle investor" got "who is this?". Never the bare name and a
       // comma first — that reads as calling THEM Matt, and the gate holds it.
+      // Where we are, by where they buy (2026-11-09: it said Seattle to everyone).
       const who = `who you are by first name ("It's Matt" / "This is Matt" — your name is under YOU ARE; never open with your bare name and a comma)` +
-        `${o.source ? `, how we found them (${o.source})` : ""}, and that you're someone in Seattle who comes across more fixer deals than you can take on yourself`;
-      // Ask for what we don't know, confirm what we do.
+        `${o.source ? `, how we found them (${o.source})` : ""}, and that you're someone in ${o.home || "Seattle"} who comes across more fixer deals than you can take on yourself`;
+      // Ask for what we don't know, confirm what we do. A buy box on file is
+      // confirmed in a few words, never asked for from scratch (2026-11-09).
       const missing = (o.missing || []).filter(Boolean);
-      const ask = missing.length && missing.length < 4
+      const ask = o.buyBox && missing.length < 4
+        ? `(3) The ask, as ONE question: confirm the buy box we have on file in a few words and ask whether it's still right${missing.length ? `, or the piece we don't have (${missing.slice(0, 2).join(" or ")})` : ""} — so what you send is actually relevant. `
+        : missing.length && missing.length < 4
         ? `(3) The ask, as ONE question about the piece of their buy box we don't have — ${missing.slice(0, 2).join(" or ")} — so what you send is actually relevant. `
         : `(3) The ask, as ONE question: are they looking to buy right now, and what's their buy box — so what you send is actually relevant to them. `;
-      const reference = (o.conversed || afterDeal || o.lastSummary || o.passReasons?.length)
+      const reference = (o.conversed || o.lastSummary)
         ? `THE ONE REFERENCE: carry exactly ONE real, specific thing from the thread or the notes above, in your own words, in a clause — in this order of preference: ` +
-          `something they told us that's still open; the last house we sent and how it went (by street, never a number); why they passed, so you can say you'll only send what fits; ` +
-          `something personal, only if it's recent and reads warm, not nosy; their market. Never quote them, never recite the thread, never more than one, never invent one. `
+          `something they told us that's still open (never a house or a deal); something personal, only if it's recent and reads warm, not nosy; their market. ` +
+          `Never quote them, never recite the thread, never more than one, never invent one. `
+        : "";
+      // Our last texts to them (runProactive), so this one never opens or
+      // says it the way one of those did.
+      const ours = (o.ourTexts || []).slice(0, 3).filter((x) => x?.text);
+      const lastTexts = ours.length
+        ? `OUR LAST TEXTS TO THEM, newest first (don't reuse their opening or their phrases): ${ours.map((x, i) => `${i + 1}) ${daysWord(x.daysAgo)}: "${String(x.text).slice(0, 240)}"`).join(" ")} `
         : "";
       return `${START} There is NO deal in this message. It is a check-in with a buyer on our list, between deals. ` +
         `WHAT WE KNOW: ${clues} ` +
+        lastTexts +
         `WHAT TO WRITE: two to four short sentences, one text, the way one local buyer texts another. ` +
         `(1) Their first name. (2) ${o.conversed
-          ? "You have talked before — READ THE THREAD and pick up from it like someone who remembers (what they said they buy, what they passed on and why). Do NOT reintroduce yourself, but if the thread shows they ever asked who this is, say your name. "
-          : o.dealsSent > 0
-            ? `Own it lightly that the deals we sent weren't a fit ("sent you a couple deals, sorry they weren't a fit") — once, no grovelling. Then ${who}. `
-            : `Say ${who}. `}` +
+          ? "You have talked before — READ THE THREAD and pick up from it like someone who remembers (what they said they buy, where, how they work). Do NOT reintroduce yourself, but if the thread shows they ever asked who this is, say your name. "
+          : `Say ${who}. `}` +
         ask +
         `${reference}` +
-        `${afterDeal ? "SHAPE FOR THIS ONE: open with the house you sent and a light guess that it missed, then the question." : PULSE_SHAPES[(Number(o.variant) || 0) % PULSE_SHAPES.length]} ` +
+        `${PULSE_SHAPES[(Number(o.variant) || 0) % PULSE_SHAPES.length]} ` +
         `${o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}" ` : ""}` +
         `Always give the reason for asking in your own words — so what you send them is actually relevant. ` +
         `Use at most ONE clue from above, and only if it makes the text warmer; never list what you know about them, ` +
         `never mention records, lenders, prices or how many properties they own. If the thread shows they ` +
         `already told us what they buy, confirm it instead of asking again. ` +
-        `Do NOT name a price, a number, a percentage or a link, and no street address except the house we sent them. Do NOT pitch a deal or promise one is coming. ` +
+        `NEVER A DEAL FROM BEFORE: never mention a house or a deal we sent them, whether they answered it, why they passed, or that what we sent wasn't a fit; no apology for the deals. ` +
+        `Do NOT name a price, a number, a percentage or a link, and no street address. Do NOT pitch a deal or promise one is coming. ` +
         `Easy to ignore, easy to answer in a line. Set intent to buyer_pulse.`;
     }
 
@@ -1128,6 +1277,8 @@ function openingFor(outbound) {
     // of theirs is still named — that one is news, not history. 2026-10-15:
     // and so is one other real thing, never a house we priced (see `hook`).
     case "agent_pulse": {
+      // The composed check-in (shared/check-in.js), when there's one real thing.
+      if (o.pack && o.oneThing) return agentCheckInV2(o);
       const l = o.listing || null;
       const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
       // One kind of seller that becomes a deal, named in passing (2026-10-09:
@@ -1297,6 +1448,8 @@ function openingFor(outbound) {
     // The check-in they asked for. It is theirs — they said when — so it reads
     // as keeping an appointment, not chasing.
     case "checkin_due":
+      // The composed one (shared/check-in.js): the pack, and THE ONE THING when there is one.
+      if (o.pack) return checkinDueV2(o);
       return `${START} ` +
         (o.sourceKind === "source"
           ? `This agent offered to send us properties that need work. A light weekly check-in: anything new cross their desk? `
@@ -1320,7 +1473,7 @@ function openingFor(outbound) {
               (o.lead?.what
                 ? `Ask about that lead specifically, in a line, the way a person who remembered would — e.g. "Did the family decide on the probate house?" ` +
                   `or "Did that one end up relisting?" Do NOT ask the generic "anything distressed or off-market come across your desk?" question. `
-                : `Mention it naturally ("you'd mentioned ${o.phrase || "checking back"}") and ask whether anything landed that needs work. `)
+                : `Mention it naturally${o.phrase ? ` ("you'd mentioned ${o.phrase}")` : ", in a few words of your own"} and ask whether anything landed that needs work. `)
           : o.ours
             // We said when (shared/brush-offs.js ourCheckBack, 2026-11-09): the
             // day we named came, and this keeps our word. Never a house from before,
@@ -1328,12 +1481,16 @@ function openingFor(outbound) {
             // holds a sentence we already sent them.
             ? `We told this agent we'd check back${o.phrase ? ` (${o.phrase})` : ""} and it's that time. Keep our word in a few words of your own, ` +
               `never the wording of that text: they've read it. Then ask whether anything landed that needs work. Never name a house, a street or an address. `
-          : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally ` +
-            `("you'd mentioned ${o.phrase || "checking back"}"). Ask whether anything landed that needs work. `) +
+          : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally` +
+            `${o.phrase ? ` ("you'd mentioned ${o.phrase}")` : ", in a few words of your own"}. Ask whether anything landed that needs work. `) +
         // Never the same question twice: 1010 Bellevue's agent was asked for
         // "a real number" after saying three times where the sellers were.
         `Never ask anything they already answered in the thread: if they told us where the seller is, or that they won't move, ` +
         `don't ask for it again — say something new or let it rest. ` +
+        // A check-in never names a house from before (Matt, 2026-11-09 ~22:05):
+        // the gate holds one that does. The net under their unanswered text
+        // picks their own words back up, so it may.
+        (o.sourceKind === "unanswered" ? "" : `Never name a house, a street or an address from before, not even one they told us about. `) +
         `One or two lines, warm and easy to ignore. Do NOT name any number or price. ${CONTINUE} Set intent to checkin_due.`;
 
     // A property they told us was coming, and we still don't have the
@@ -1413,6 +1570,13 @@ export function buildUserContext({
     // Every text the machine starts (2026-11-09): one voice rule in place of
     // each kind's own list (shared/voice.js checks the result).
     outbound && outboundOpening(outbound) ? VOICE_RULE : "",
+    // A check-in about something open (OUR_TEXTS_KINDS): our last three
+    // texts to them, dated, so this one never repeats a sentence or an
+    // opening of theirs (2026-11-09). The buyer pulse shows its own.
+    outbound && OUR_TEXTS_KINDS.has(outbound.kind) && (outbound.ourTexts || []).length && outboundOpening(outbound)
+      ? `OUR LAST TEXTS TO THEM, newest first: ${outbound.ourTexts.slice(0, 3).map((x, i) => `${i + 1}) ${daysWord(x.daysAgo)}: "${String(x.text || "").slice(0, 240)}"`).join(" ")}. ` +
+        "Don't repeat a sentence or the opening of these."
+      : "",
     // A reply a gate held, written once more (redraftOnGate): what held it,
     // said plainly, as corrections.
     !outbound && Array.isArray(fix) && fix.length

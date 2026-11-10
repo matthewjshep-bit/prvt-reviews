@@ -13,7 +13,7 @@ import { isIsoDate, normalizeOffDays } from "@shared/conversation-ai.js";
 import { FOLLOW_UP_KINDS, kindsFor } from "@shared/follow-up.js";
 import { BTN } from "./ui.jsx";
 import { isVcard } from "@shared/contact-card.js";
-import { contactCardUrl } from "./api.js";
+import { contactCardUrl, sampleComposedCheckIns, getCheckInReport } from "./api.js";
 import VoiceNote from "./VoiceNote.jsx";
 
 export const INPUT_CLS =
@@ -764,6 +764,7 @@ export function StyleCard({ config, patch }) {
         </Field>
       </div>
       <VoiceCheckFields config={config} patch={patch} />
+      <CheckInComposerFields config={config} patch={patch} />
       <div className="mt-3 grid gap-2 sm:grid-cols-2 border-t border-slate-100 pt-3">
         <Toggle checked={config.notes.onDraft} onChange={(v) => patch({ notes: { ...config.notes, onDraft: v } })}>Leave a GHL note on every draft</Toggle>
         <Toggle checked={config.notes.onAutoSend} onChange={(v) => patch({ notes: { ...config.notes, onAutoSend: v } })}>Leave a GHL note when it sends itself</Toggle>
@@ -788,6 +789,89 @@ function VoiceCheckFields({ config, patch }) {
       <Field label="Fixed check-ins, follow-ups and emails" hint="The Nov 9 rewrite, or the Oct 17 texts back in one switch.">
         <Select value={ci.pools} onChange={set("pools")} options={[["v2", "Rewritten (Nov 9)"], ["v1", "The Oct 17 texts"]]} />
       </Field>
+    </div>
+  );
+}
+
+// Check-ins that name one real thing (shared/check-in.js, 2026-11-09): their
+// own words about their market or plans, a detail they shared, a question
+// they asked, a call's topic, a lead they said is coming. Never a house from
+// before. Off until you set it: Shadow writes the model's check-in beside
+// the fixed one and sends only the fixed one; On lets it send for the share
+// below (by contact, so each agent stays in one arm), the rest the control.
+const COMPOSER_LABEL = { off: "Off", shadow: "Shadow (write beside, send the fixed one)", on: "On" };
+export function CheckInComposerFields({ config, patch }) {
+  const ci = { composer: "off", composerShare: 100, skipEmpty: true, skipDays: 14, personal: true, ...(config.checkIns || {}) };
+  const set = (k) => (v) => patch({ checkIns: { ...(config.checkIns || {}), ...ci, [k]: v } });
+  const [samples, setSamples] = useState({ loading: false, list: null, error: "" });
+  const [report, setReport] = useState({ loading: false, data: null, error: "" });
+  const loadSamples = async () => {
+    setSamples({ loading: true, list: null, error: "" });
+    try { const r = await sampleComposedCheckIns(3); setSamples({ loading: false, list: r.previews || [], error: "" }); }
+    catch (e) { setSamples({ loading: false, list: null, error: String(e?.message || e) }); }
+  };
+  const loadReport = async () => {
+    setReport({ loading: true, data: null, error: "" });
+    try { setReport({ loading: false, data: await getCheckInReport(30), error: "" }); }
+    catch (e) { setReport({ loading: false, data: null, error: String(e?.message || e) }); }
+  };
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3">
+      <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">Check-ins: one real thing</h3>
+      <p className={HINT}>
+        A check-in written around one thing they gave us: their words about their market, a detail they shared, a question they asked, a call, a lead they said was coming. Never a past house, street or address. With nothing real to say, it waits.
+      </p>
+      <div className="mt-2 grid gap-3 sm:grid-cols-3">
+        <Field label="Composer" hint="Shadow for a week first: nothing extra is sent.">
+          <Select value={ci.composer} onChange={set("composer")} options={Object.entries(COMPOSER_LABEL)} />
+        </Field>
+        <Field label="Share written by the model (%)" hint="With On: the rest get the fixed text, so the two can be compared.">
+          <Text type="number" value={ci.composerShare} onChange={(v) => set("composerShare")(Number(v))} />
+        </Field>
+        <Field label="Wait when there's nothing to say (days)" hint="7 to 60. With On only.">
+          <Text type="number" value={ci.skipDays} onChange={(v) => set("skipDays")(Number(v))} />
+        </Field>
+        <div className="flex items-end pb-2"><Toggle checked={ci.skipEmpty} onChange={set("skipEmpty")}>Wait instead of a general check-in</Toggle></div>
+        <div className="flex items-end pb-2"><Toggle checked={ci.personal} onChange={set("personal")}>A detail they shared may be the one thing</Toggle></div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button type="button" className={BTN} onClick={loadSamples} disabled={samples.loading}>
+          {samples.loading ? "Writing samples…" : "Read 3 side by side"}
+        </button>
+        <button type="button" className={BTN} onClick={loadReport} disabled={report.loading}>
+          {report.loading ? "Reading…" : "What they did (30 days)"}
+        </button>
+      </div>
+      {samples.error && <p className="mt-2 text-xs text-red-600">{samples.error}</p>}
+      {samples.list && (
+        <div className="mt-2 grid gap-2">
+          {samples.list.length === 0 && <p className={HINT}>Nobody is due a check-in right now.</p>}
+          {samples.list.map((p) => (
+            <div key={p.contactId} className="grid gap-2 rounded-lg border border-slate-200 p-2 text-sm sm:grid-cols-2">
+              <div>
+                <div className={LABEL_CLS}>Today's text</div>
+                <p>{p.skipped ? <span className="text-slate-400">{p.skipped}</span> : p.reply}</p>
+              </div>
+              <div>
+                <div className={LABEL_CLS}>The composer's{p.composed?.hook ? ` (${p.composed.hook.replace(/_/g, " ")})` : ""}</div>
+                <p>{p.composed ? (p.composed.reply || <span className="text-slate-400">{p.composed.skipped || "nothing"}</span>) : <span className="text-slate-400">not one it writes</span>}</p>
+                {p.composed?.held && <p className="mt-1 text-xs text-amber-700">Would wait: {(p.composed.flags || []).slice(0, 2).join("; ")}</p>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {report.error && <p className="mt-2 text-xs text-red-600">{report.error}</p>}
+      {report.data && (
+        <table className="mt-2 w-full text-xs">
+          <thead><tr className="text-left text-slate-500"><th>Arm</th><th>Sent</th><th>Replied</th><th>Reply %</th><th>Opt-outs</th></tr></thead>
+          <tbody>
+            {Object.entries(report.data.arms || {}).map(([arm, v]) => (
+              <tr key={arm}><td>{arm === "none" ? "before the composer" : arm}</td><td>{v.sent}</td><td>{v.replied}</td><td>{v.replyRate}</td><td>{v.stops}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
