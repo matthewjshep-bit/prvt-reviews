@@ -302,8 +302,9 @@ things changed:
   `offer-autosave.js` `restoredInputs` takes the figures from `calc.inputs`,
   the override included, over the workspace's. `pricedSettings` takes the
   price settings from `calc.settings`: the mode, the percentages, the carry,
-  the repair multipliers and the fee. The terms, the company and the expiry
-  stay today's. `editorSettings` stacks today's settings, then those, then
+  the repair multipliers and the fee. What the letter prints besides the
+  price (its rows, letterhead and expiry) is today's. `editorSettings` stacks
+  today's settings, then those, then
   what you set on the offer. A draft or a blank form opens as before, and so
   does an income or land row, which is priced from its deal.
 - **A save that raises a sent offer waits for you.** `PUT /api/offers/:id`
@@ -317,16 +318,25 @@ things changed:
   went out has no ceiling. The editor keeps what you typed, stops retrying,
   and shows "This raises a sent offer from X to Y: confirm?" with **Confirm
   the raise**. The next edit tries again, so bringing the number back down
-  saves without a confirm.
+  saves without a confirm. While a raise waits, **Send** waits too: the
+  save never happened, so the letter is still the old one. It says "Not
+  sent: this raises a sent offer from X to Y" until you confirm or come back
+  down (`sendWaitsLine`). The placeholders on the price settings show what
+  the offer went out at, not today's.
 - **A deal's letter is the contract price.** A save on an offer with a
   `deal` pins `priceOverride` to `deal.contractPrice`, so the letter and the
   agent's link never move off it. The figures you typed are kept beside it.
+  When the screen comes out at another number, the editor says "Under
+  contract: the letter stays at the contract price".
 - **A held engine draft opens on the engine's numbers.** When the engine run
   puts `draft.engine` (`{ grade, arv, rehab, rehabWhy, open, walkAway,
   triage, reasons }`) on a held draft's form copy, the editor opens it on the
   engine's ARV and rehab (the age floor, not the bare scope) and shows
   "Engine: grade B · open 238k · walk-away 249k · rehab 62k (…)" above the
-  offer tabs. The price stays yours to set. Your first save writes
+  offer tabs. When the engine marked it `over_theirs` (its walk-away far
+  over the seller's number, so its ARV is likely high), the draft opens on
+  the lower of the engine's ARV and our own comps ARV. The price stays
+  yours to set. Your first save writes
   `engineApplied` on the form copy, so reopening keeps what you typed.
   Without `draft.engine` nothing changes.
 
@@ -4942,7 +4952,10 @@ The seller's net, on the agent page ("What the seller nets",
 (`NetSheetModal.jsx`), now says it is before excise tax and closing costs.
 Nothing in the math takes off WA excise tax yet, so the net runs about 6k
 high on a 300k offer (audit UWM-16). The wording changed and the math did
-not.
+not. That draft message is pasted to the agent, often as a text, so it now
+opens the way the offer text does ("Hi Dana, here's our letter of intent on
+27 Wrenfield Ct: 412k, close on your timeline. Letter's attached."), with no
+"as-is" and no dash.
 
 ### Matt's contact card (2026-10-09)
 
