@@ -193,6 +193,25 @@ test("a day that opens nobody posts the reason to the machine channel once", asy
   assert.equal(calls.filter((c) => c.method === "chat.postMessage").length, 1);
 });
 
+// The told mark writes the sweep's own cursor. While a Run now is going it
+// leaves that cursor alone, so a `run` the sweep has cleared isn't written
+// back (that reads as a hung run, and the tick would start the day again).
+test("telling Slack about a short day leaves a running sweep's cursor alone", async () => {
+  const LOC = "loc-told-running";
+  const store = fakeStore();
+  const run = { id: "oa-hand", trigger: "manual", startedAt: iso(MON + 15 * MIN) };
+  const emptyDay = { day: "2026-11-09", at: iso(MON), text: "Agent sweep opened 0 new agents today (alert below 10): picked 0. Biggest reason: nobody new in the counties read." };
+  store.cursors.set(`${LOC}|${CURSOR_NAME}`, { at: iso(MON), doc: { tries: 1, lastDaily: iso(MON), emptyDay, run } });
+  const calls = slack();
+  const saved = { ...SWEEP(), ...SLACK };
+  await runSlackPings({ store, locationId: LOC, saved, now: MON + 20 * MIN });
+  assert.equal(calls.filter((c) => c.method === "chat.postMessage").length, 1);
+  assert.deepEqual(store.cursors.get(`${LOC}|${CURSOR_NAME}`).doc.run, run, "the running sweep's cursor is untouched");
+  assert.equal(store.cursors.get(`${LOC}|${CURSOR_NAME}`).doc.lastEmptyAlertDay, undefined);
+  await runSlackPings({ store, locationId: LOC, saved, now: MON + 35 * MIN });
+  assert.equal(calls.filter((c) => c.method === "chat.postMessage").length, 1, "still once: the claim on the Slack cursor holds it");
+});
+
 test("a day that opens its number, or a run by hand, posts nothing", async () => {
   _resetJobs();
   const LOC = "loc-full";

@@ -599,10 +599,13 @@ function renderEmptyDay(e = {}) {
 
 // Told: the day goes on the sweep's cursor, beside the claim on ours. Its
 // `at` is when the day's run was claimed, which the sweep's gate reads, so
-// it is left as it was.
+// it is left as it was. Not while a sweep (a Run now) is going: its own
+// stamps write the same cursor, and writing back a `run` it has since
+// cleared would read as a hung run and start the day again. The claim on
+// ours still keeps the line to once.
 async function markEmptyDayTold(store, locationId, day) {
   const cur = await store.getJobCursor?.(locationId, OUTREACH_CURSOR).catch(() => null);
-  if (!cur) return;
+  if (!cur || cur.doc?.run) return;
   await store.setJobCursor?.(locationId, OUTREACH_CURSOR, { at: cur.at, doc: { ...(cur.doc || {}), lastEmptyAlertDay: day } }).catch(() => {});
 }
 
