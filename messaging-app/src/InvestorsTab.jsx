@@ -16,7 +16,7 @@ import { Loader2, X } from "lucide-react";
 import { DEFAULT_DEAL_TEXTS, normalizeDealTexts } from "@shared/blast-text.js";
 import { investorFlow } from "@shared/autopilot-flows.js";
 import { LIVE_DEAL_STAGES } from "@shared/offer-status.js";
-import { getConversationAi, getDashboardPipeline, getSettings, getWavesPreview, listDeals, patchSettings, saveConversationAi } from "./api.js";
+import { getConversationAi, getDashboardAutopilot, getSettings, getWavesPreview, listDeals, patchSettings, saveConversationAi } from "./api.js";
 import { BTN, BTN_PRIMARY, ErrorBar, SkeletonRows } from "./ui.jsx";
 import DealTextsEditor, { sameTexts } from "./DealTextsEditor.jsx";
 import FlowChart from "./FlowChart.jsx";
@@ -69,7 +69,7 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
   const [busy, setBusy] = useState(false);
   const [setupVersion, setSetupVersion] = useState(0);
 
-  const load = useCallback(() => Promise.all([getSettings(), getConversationAi(), getDashboardPipeline().catch(() => null), listDeals().catch(() => [])])
+  const load = useCallback(() => Promise.all([getSettings(), getConversationAi(), getDashboardAutopilot().catch(() => null), listDeals().catch(() => [])])
     .then(([s, c, p, d]) => {
       setSettings(s); setConfig(c.config); setSwitches(p?.autopilot?.switches || []);
       const live = (d || []).filter((o) => LIVE_DEAL_STAGES.has(o.deal?.stage || "under_contract"));

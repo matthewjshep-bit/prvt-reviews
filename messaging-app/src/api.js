@@ -669,6 +669,10 @@ export const getPricingScorecard = () =>
   fetch(`${API_BASE}/api/offers/automations/pricing/scorecard?${locq()}`).then(j);
 export const getDashboardPipeline = () =>
   fetch(`${API_BASE}/api/dashboard/pipeline?${locq()}`).then(j);
+// The switchboard alone: { autopilot, conversationEnabled }. The Autopilot
+// tabs read only this; the whole of Today is GET /pipeline.
+export const getDashboardAutopilot = () =>
+  fetch(`${API_BASE}/api/dashboard/autopilot?${locq()}`).then(j);
 // The day's loose ends: acceptances, close counters, owed promises, unanswered texts.
 export const getDashboardDigest = (hours = 24) =>
   fetch(`${API_BASE}/api/dashboard/digest?${locq()}&hours=${hours}`).then(j);

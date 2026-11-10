@@ -187,6 +187,45 @@ const PROMISE_MOVE_LABEL = {
  *                 given does a deal without one get a row: a caller that
  *                 didn't look never guesses.
  */
+/**
+ * coldNoReplyCount({ offers, events, config, now }) → number
+ *
+ * Agents we reached out to from the app whose outreach ladder ran out with
+ * nothing back. Counted, not queued: there is nothing for a person to do
+ * about an agent who never answered, so it is a number on Reports and not a
+ * row on Today. The moment they answer they leave the count; the moment we
+ * offer on something, they have a card. Its own function (2026-11-09) so
+ * Flow can show the number without building the whole board.
+ */
+export function coldNoReplyCount({ offers = [], events = [], config = null, now = Date.now() } = {}) {
+  const ladder = config?.parties?.agent?.followUp || null;
+  const outreachLadder = ladder?.ladders?.outreach_nudge || null;
+  if (!ladder?.enabled || !outreachLadder?.enabled) return 0;
+  const withOffer = new Set(offers.map((o) => o?.contactId).filter(Boolean));
+  const cold = new Map();
+  for (const e of events) {
+    if (!e?.contactId) continue;
+    if (e.type === "outreach_sent" || (e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge")
+        || e.type === "text_summary" || e.type === "call_summary") {
+      if (!cold.has(e.contactId)) cold.set(e.contactId, []);
+      cold.get(e.contactId).push(e);
+    }
+  }
+  let n = 0;
+  for (const [contactId, list] of cold) {
+    if (withOffer.has(contactId)) continue;                 // they have an offer now
+    list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const opened = list.filter((e) => e.type === "outreach_sent").at(-1);
+    if (!opened) continue;
+    const answered = list.some((e) => (e.type === "text_summary" || e.type === "call_summary") && String(e.at) > String(opened.at));
+    if (answered) continue;
+    const sentSteps = list.filter((e) => e.type === "follow_up_sent" && String(e.at) > String(opened.at)).map((e) => Number(e.data?.step));
+    if (!exhausted({ steps: outreachLadder.steps, sentSteps, startedAt: opened.at, now })) continue;
+    n++;
+  }
+  return n;
+}
+
 export function buildPipeline({
   offers = [], drafts = [], events = [], jobs = [], config = null, contactNames = {},
   sentDrafts = [], heldTriageByOffer = {},
@@ -714,33 +753,7 @@ export function buildPipeline({
   }
 
   /* cold agents: reached out from the app, the ladder ran out, nothing back */
-  // Counted, not queued: there is nothing for a person to do about an agent
-  // who never answered, so it is a number on Reports and not a row on Today.
-  // The moment they answer they leave the count; the moment we offer on
-  // something, they have a card.
-  const outreachLadder = ladders.agent?.ladders?.outreach_nudge || null;
-  if (ladders.agent?.enabled && outreachLadder?.enabled) {
-    const cold = new Map();
-    for (const e of events) {
-      if (!e?.contactId) continue;
-      if (e.type === "outreach_sent" || (e.type === "follow_up_sent" && e.data?.kind === "outreach_nudge")
-          || e.type === "text_summary" || e.type === "call_summary") {
-        if (!cold.has(e.contactId)) cold.set(e.contactId, []);
-        cold.get(e.contactId).push(e);
-      }
-    }
-    for (const [contactId, list] of cold) {
-      if (byContact.has(contactId)) continue;                 // they have an offer now
-      list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
-      const opened = list.filter((e) => e.type === "outreach_sent").at(-1);
-      if (!opened) continue;
-      const answered = list.some((e) => (e.type === "text_summary" || e.type === "call_summary") && String(e.at) > String(opened.at));
-      if (answered) continue;
-      const sentSteps = list.filter((e) => e.type === "follow_up_sent" && String(e.at) > String(opened.at)).map((e) => Number(e.data?.step));
-      if (!exhausted({ steps: outreachLadder.steps, sentSteps, startedAt: opened.at, now })) continue;
-      counts.coldNoReply++;
-    }
-  }
+  counts.coldNoReply = coldNoReplyCount({ offers, events, config, now });
 
   /* --- promises we made and haven't kept (promise-sweep.js) --- */
   // Owed until a promise_kept for that contact lands after it; three days on,

@@ -24,7 +24,8 @@
 // recorded to power the month-to-date meter in the UI.
 
 import express from "express";
-import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, startLeaveDrips, getLeaveDripsJob, pulseWorkflows, pulseTierCards, CURSOR_NAME as AGENT_PULSE_CURSOR,
+import { agentPulsePlanFor } from "../pulse-plans.js";
+import { startAgentPulse, getAgentPulseJob, previewAgentPulse, startLeaveDrips, getLeaveDripsJob, pulseTierCards, CURSOR_NAME as AGENT_PULSE_CURSOR,
   planMattsFifteen, startMattsFifteen, getMattsFifteenJob, MATTS_FIFTEEN_CURSOR } from "../agent-pulse.js";
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
@@ -125,18 +126,6 @@ const splitName = (name) => {
 const e164 = (phone) => (phone ? `+1${normPhone(phone)}` : "");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Retry a GHL call on 429 (2s, then 4s). Other errors propagate.
-async function withRetry(fn) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fn();
-    } catch (e) {
-      if (e.status !== 429 || attempt >= 2) throw e;
-      await sleep(2000 * (attempt + 1));
-    }
-  }
-}
 
 /* ---------- RentCast ---------- */
 
@@ -677,9 +666,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       && !(r.doc.ghl.checkedAt && Date.now() - Date.parse(r.doc.ghl.checkedAt) < recheckMs));
     await mapPool(unchecked, 3, async (r) => {
       try {
-        const match = await withRetry(() =>
-          findDuplicateContact(client, locationId, { email: r.doc.email, phone: r.doc.phone })
-        );
+        const match = await findDuplicateContact(client, locationId, { email: r.doc.email, phone: r.doc.phone });
         r.doc.ghl = {
           contactId: match?.id || null,
           matchedBy: match?.matchedBy || null,
@@ -701,9 +688,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     await mapPool(withContact, 3, async (r) => {
       if (convScopeMissing) return;
       try {
-        const lm = await withRetry(() =>
-          getLastMessageDate(client, locationId, r.doc.ghl.contactId || r.stored.contactId)
-        );
+        const lm = await getLastMessageDate(client, locationId, r.doc.ghl.contactId || r.stored.contactId);
         r.doc.ghl.lastMessageAt = lm?.at || null;
         r.doc.ghl.lastMessageDirection = lm?.direction || null;
         r.doc.ghl.activityCheckedAt = new Date().toISOString();
@@ -1329,10 +1314,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       if (!dryRun) {
         fieldIds = {};
         for (const f of IMPORT_FIELDS) {
-          fieldIds[f.key] = await withRetry(() =>
-            findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType,
-              { siblingKey: f.folderSibling })
-          );
+          fieldIds[f.key] = await findOrCreateCustomFieldByKey(client, locationId, f.key, f.name, f.dataType,
+            { siblingKey: f.folderSibling });
         }
       }
 
@@ -1349,9 +1332,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
 
           // Authoritative dedupe re-check at import time.
           await sleep(150);
-          const match = await withRetry(() =>
-            findDuplicateContact(client, locationId, { email: a.email, phone: a.phone })
-          );
+          const match = await findDuplicateContact(client, locationId, { email: a.email, phone: a.phone });
 
           // New-only (the daily sweep): an agent already in GHL is skipped, not
           // updated. They may be in the first-text workflow now, or have been
@@ -1385,7 +1366,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
             contactId = match.id;
             action = "updated";
             // Fill blanks only — never clobber an existing name/phone/email.
-            existing = await withRetry(() => getContact(client, contactId));
+            existing = await getContact(client, contactId);
             const patch = {};
             if (!existing.phone && a.phone) patch.phone = e164(a.phone);
             if (!existing.email && a.email) patch.email = a.email;
@@ -1393,18 +1374,16 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
               patch.firstName = a.firstName;
               patch.lastName = a.lastName;
             }
-            if (Object.keys(patch).length) await withRetry(() => updateContact(client, contactId, patch));
+            if (Object.keys(patch).length) await updateContact(client, contactId, patch);
           } else {
             action = "created";
-            contactId = await withRetry(() =>
-              createContact(client, locationId, {
-                firstName: a.firstName || a.name || "Agent",
-                lastName: a.lastName || "",
-                ...(a.phone ? { phone: e164(a.phone) } : {}),
-                ...(a.email ? { email: a.email } : {}),
-                source: "agent-outreach",
-              })
-            );
+            contactId = await createContact(client, locationId, {
+              firstName: a.firstName || a.name || "Agent",
+              lastName: a.lastName || "",
+              ...(a.phone ? { phone: e164(a.phone) } : {}),
+              ...(a.email ? { email: a.email } : {}),
+              source: "agent-outreach",
+            });
           }
           if (!contactId) throw new Error("no contact id returned");
 
@@ -1432,17 +1411,15 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           const customFields = IMPORT_FIELDS
             .filter((f) => values[f.key] !== "" && values[f.key] != null)
             .map((f) => ({ id: fieldIds[f.key], value: values[f.key] }));
-          if (customFields.length) await withRetry(() => updateContact(client, contactId, { customFields }));
+          if (customFields.length) await updateContact(client, contactId, { customFields });
 
           // Batch + session tags always; the trigger tag only when requested
           // (it fires the GHL texting workflow).
-          await withRetry(() =>
-            addContactTags(client, contactId, [
-              batchTag,
-              ...(sessionTag ? [sessionTag] : []),
-              ...(applyTag ? [OUTREACH_TAG] : []),
-            ])
-          );
+          await addContactTags(client, contactId, [
+            batchTag,
+            ...(sessionTag ? [sessionTag] : []),
+            ...(applyTag ? [OUTREACH_TAG] : []),
+          ]);
           const tagged = applyTag;
 
           // The record: a new agent, where we found them, and what we seeded.
@@ -1478,7 +1455,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
             enrolled = { skipped: "already in GHL" };
           } else if (enrollWorkflowId) {
             try {
-              await withRetry(() => addContactToWorkflow(client, contactId, enrollWorkflowId));
+              await addContactToWorkflow(client, contactId, enrollWorkflowId);
               enrolled = { workflowId: enrollWorkflowId };
               await recordEvent({
                 store, locationId, contactId, party: "agent", type: "outreach_enrolled", source: "import",
@@ -1711,11 +1688,13 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
   // (live) into the follow-up workflow. Dry by default.
   // The agent check-in (agent-pulse.js, shared/agent-pulse.js): who it would
   // text today and why, what it did last, and whether it's on. Writes nothing.
+  // The plan is the one Line and Follow-up show (pulse-plans.js): kept 90
+  // seconds, one compute at a time. It took 28 seconds uncached on 11-09.
   router.get("/pulse", async (req, res) => {
     try {
       const { locationId, client } = resolveLocation(req);
       const saved = await getSettings(locationId);
-      const plan = await planAgentPulse({ locationId, saved, store, workflows: await pulseWorkflows(client, locationId), tierCards: await pulseTierCards(client, locationId) });
+      const plan = await agentPulsePlanFor({ store, locationId, saved, client });
       const cursor = await store.getJobCursor?.(locationId, AGENT_PULSE_CURSOR).catch(() => null);
       res.json({
         ok: true, settings: plan.settings, counts: plan.counts, claimedToday: plan.claimedToday, seats: plan.seats, truncated: plan.truncated,

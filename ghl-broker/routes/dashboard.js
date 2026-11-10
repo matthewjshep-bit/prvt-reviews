@@ -33,7 +33,8 @@ import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
 } from "../ghl.js";
 import { offerFunnel, counterSpread, passReasons, followUpPerformance, passThemes } from "../shared/funnel.js";
-import { buildPipeline } from "../shared/pipeline.js";
+import { buildPipeline, coldNoReplyCount } from "../shared/pipeline.js";
+import { createMemo, heavyGate, settingsSig } from "../read-memo.js";
 import { owedPromises } from "../shared/promise-owed.js";
 import { selfNames, selfContactIds, withoutSelf } from "../shared/self-contact.js";
 import { autopilotSummary, graduationReport, GRADUATION } from "../shared/graduation.js";
@@ -352,22 +353,20 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   // The line, measured (shared/line.js): each station against its target,
   // the waits between stations, what fell off with nothing scheduled, the
   // jobs and the errors, and what buyers paid all-in beside the offer
-  // setting. Reads only. Cached a minute a location: it runs both pulse
-  // planners. ?fresh=1 skips the cache.
-  const lineCache = new Map();
+  // setting. Reads only. Kept a minute a location; two people opening it at
+  // once share one compute, and ?fresh=1 joins one already running
+  // (read-memo.js, 2026-11-09: the 11-09 crash came right after a /line).
+  // A settings save starts a new one.
+  const lineMemo = createMemo({ ttlMs: 60000, gate: heavyGate });
   router.get("/line", async (req, res) => {
     try {
-      const { locationId } = resolveLocation(req);
-      const hit = lineCache.get(locationId);
-      if (hit && Date.now() - hit.at < 60000 && req.query?.fresh !== "1") return res.json(hit.body);
+      const { locationId, client } = resolveLocation(req);
       const saved = (await store.getOfferSettings(locationId)) || {};
-      const line = await lineFor({
-        store, locationId, saved,
+      const body = await lineMemo.get(locationId, async () => ({ ok: true, ...(await lineFor({
+        store, locationId, saved, client,
         flow: { eventTypes: FLOW_EVENT_TYPES, jobs: listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob) },
         buyerBook: router.buyerBook || null,
-      });
-      const body = { ok: true, ...line };
-      lineCache.set(locationId, { at: Date.now(), body });
+      })) }), { sig: settingsSig(saved), fresh: req.query?.fresh === "1" });
       res.json(body);
     } catch (err) { fail(res, err); }
   });
@@ -375,25 +374,21 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   // Reports → Follow-up (shared/follow-up-engine.js): every follow-up the
   // app sends, by the mechanism that sends it — what went in the period,
   // what's queued, and what each sweep's own planner says comes next. Reads
-  // only. Cached a minute a location and period (it runs the check-in
-  // planners); ?fresh=1 skips the cache. The rows behind a bar or a
-  // mechanism are /followup/items, sliced from the same cached page.
-  const followUpCache = new Map();
+  // only. Kept a minute a location and period, one compute at a time like
+  // /line, and its check-in plans are the ones Line shows (pulse-plans.js);
+  // ?fresh=1 joins a compute already running. The rows behind a bar or a
+  // mechanism are /followup/items, sliced from the same kept page.
+  const followUpMemo = createMemo({ ttlMs: 60000, gate: heavyGate });
   const FOLLOW_UP_ITEMS_MAX = 300;
   async function followUpPage(req) {
     const { locationId, client } = resolveLocation(req);
     const period = String(req.query?.period || "week");
-    const key = `${locationId}|${period}`;
-    const hit = followUpCache.get(key);
-    if (hit && Date.now() - hit.at < 60000 && req.query?.fresh !== "1") return hit.page;
     const saved = (await store.getOfferSettings(locationId)) || {};
-    const page = await followUpEngineFor({
+    return followUpMemo.get(`${locationId}|${period}`, () => followUpEngineFor({
       store, locationId, saved, period, client,
       deps: { buyerBook: router.buyerBook || null },
       env: { sends: CARD_SENDS_ENABLED, blasts: process.env.DISPO_BLASTS_ENABLED === "true", imports: process.env.OUTREACH_IMPORTS_ENABLED === "true" },
-    });
-    followUpCache.set(key, { at: Date.now(), page });
-    return page;
+    }), { sig: settingsSig(saved), fresh: req.query?.fresh === "1" });
   }
   router.get("/followup", async (req, res) => {
     try {
@@ -411,43 +406,68 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     } catch (err) { if (err.http === 400) return res.status(400).json({ error: err.message }); fail(res, err); }
   });
 
+  // Flow polls every thirty seconds, and Reports opens on it. Since
+  // 2026-11-09 it is kept 25 seconds a location and window, one compute at a
+  // time, reads its feed's few missing names by id instead of the whole
+  // investor book (3.5MB), and counts the cold agents without building the
+  // whole board. The board's action counts it used to carry (`queue`) went
+  // with it: nothing on the page read them.
+  const flowMemo = createMemo({ ttlMs: 25000, gate: heavyGate });
   router.get("/flow", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
       const { days, tzOffset, end } = readWindow(req);
-      const { startMs, endMs, startIso } = windowFor(days, tzOffset, end);
-      const now = Date.now();
-      const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
-      const [offers, eventsRead, drafts, saved, openDrafts, recentDrafts, investors] = await Promise.all([
-        store.listOffers(locationId, { limit: 2000, lean: true }),
-        allEventsSince(store, locationId, startIso, { types: FLOW_EVENT_TYPES }).catch(() => ({ events: [], truncated: false })),
-        store.listReplyDrafts(locationId, { since: startIso, limit: 1000 }).catch(() => []),
+      const saved = await store.getOfferSettings(locationId).catch(() => null);
+      const body = await flowMemo.get(`${locationId}|${days}|${tzOffset}|${end || ""}`, async () => {
+        const { startMs, endMs, startIso } = windowFor(days, tzOffset, end);
+        const now = Date.now();
+        const gradSince = new Date(now - GRADUATION.windowDays * DAY_MS).toISOString();
+        const [offers, eventsRead, drafts, recentDrafts] = await Promise.all([
+          store.listOffers(locationId, { limit: 2000, lean: true }),
+          allEventsSince(store, locationId, startIso, { types: FLOW_EVENT_TYPES }).catch(() => ({ events: [], truncated: false })),
+          store.listReplyDrafts(locationId, { since: startIso, limit: 1000 }).catch(() => []),
+          store.listReplyDrafts(locationId, { since: gradSince, limit: 1000 }).catch(() => []),
+        ]);
+        const events = eventsRead.events;
+        const config = conversationConfig(saved || {});
+        const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
+        const flow = buildFlow({ offers, events, drafts, jobs, now, windowStartMs: startMs, windowEndMs: endMs });
+        // Names the feed is missing (buyers, mostly): the investor book's,
+        // then the contact record's, for just those ids.
+        const missing = flow.feed.filter((f) => f?.contactId && !f.contactName).map((f) => f.contactId);
+        const names = missing.length && typeof store.contactNamesByIds === "function"
+          ? await store.contactNamesByIds(locationId, missing).catch(() => ({})) : {};
+        for (const f of flow.feed) if (!f.contactName && names[f.contactId]) f.contactName = names[f.contactId];
+        return {
+          ok: true, now: new Date(now).toISOString(), window: { days, startIso, end },
+          ...flow,
+          // The window was bigger than the read's ceiling: the counts are low.
+          eventsTruncated: Boolean(eventsRead.truncated),
+          autopilot: autopilotFor({ saved, config, recentDrafts }),
+          // Agents whose outreach ladder ran out with nothing back. A number for
+          // Reports; there is nothing on Today for a person to do about them.
+          coldNoReply: coldNoReplyCount({ offers, events: events.filter((e) => PIPELINE_EVENT_TYPES.includes(e.type)), config, now }),
+          conversationEnabled: config.enabled,
+        };
+      }, { sig: settingsSig(saved) });
+      res.json(body);
+    } catch (err) { fail(res, err); }
+  });
+
+  // The switchboard alone (2026-11-09): the Autopilot tabs (Controls, Agents,
+  // Investors) only ever read the switch pills off GET /pipeline, which built
+  // the whole of Today for them. Settings, one draft read and the broker's
+  // flags.
+  router.get("/autopilot", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const gradSince = new Date(Date.now() - GRADUATION.windowDays * DAY_MS).toISOString();
+      const [saved, recentDrafts] = await Promise.all([
         store.getOfferSettings(locationId).catch(() => null),
-        store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }).catch(() => []),
         store.listReplyDrafts(locationId, { since: gradSince, limit: 1000 }).catch(() => []),
-        store.listInvestors(locationId).catch(() => []),
       ]);
-      const events = eventsRead.events;
       const config = conversationConfig(saved || {});
-      const jobs = listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob);
-      const flow = buildFlow({ offers, events, drafts, jobs, now, windowStartMs: startMs, windowEndMs: endMs });
-      // Buyer names for the feed come from the investor book.
-      const names = {};
-      for (const i of investors) if (i?.contactId && i.name) names[i.contactId] = i.name;
-      for (const f of flow.feed) if (!f.contactName && names[f.contactId]) f.contactName = names[f.contactId];
-      const pipeline = buildPipeline({ offers, drafts: openDrafts, events: events.filter((e) => PIPELINE_EVENT_TYPES.includes(e.type)), jobs, config, contactNames: names, now });
-      res.json({
-        ok: true, now: new Date(now).toISOString(), window: { days, startIso, end },
-        ...flow,
-        // The window was bigger than the read's ceiling: the counts are low.
-        eventsTruncated: Boolean(eventsRead.truncated),
-        autopilot: autopilotFor({ saved, config, recentDrafts }),
-        queue: pipeline.counts.actions,
-        // Agents whose outreach ladder ran out with nothing back. A number for
-        // Reports; there is nothing on Today for a person to do about them.
-        coldNoReply: pipeline.counts.coldNoReply || 0,
-        conversationEnabled: config.enabled,
-      });
+      res.json({ ok: true, autopilot: autopilotFor({ saved, config, recentDrafts }), conversationEnabled: config.enabled });
     } catch (err) { fail(res, err); }
   });
 
@@ -494,31 +514,41 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   });
 
   // Rows that came back without a name (the audit's findings, a promise to an
-  // agent with no offer or draft in reach): the contact record first, then
-  // GHL — at most 25 lookups a load, three at a time, cached for the process
-  // so a refresh doesn't ask again.
-  const nameCache = new Map();
+  // agent with no offer or draft in reach): the investor book and the contact
+  // record by id, then GHL — at most 25 lookups a load, three at a time,
+  // cached for the process so a refresh doesn't ask again. GHL having no name
+  // is kept a day too (2026-11-09): the tick's jobs read Today several times
+  // an hour and asked GHL again about the same nameless contacts each time.
+  const nameCache = new Map();   // "<loc>|<id>" -> name
+  const nameMisses = new Map();  // "<loc>|<id>" -> when GHL had none
+  const NAME_MISS_MS = DAY_MS;
   const contactName = (c) => String(c?.contactName || c?.name || [c?.firstName, c?.lastName].filter(Boolean).join(" ") || "").trim();
-  async function namesFor({ store, client, locationId, rows }) {
+  async function namesFor({ store, client, locationId, rows, now = Date.now() }) {
     const missing = [...new Set((rows || []).filter((f) => f?.contactId && !f.contactName).map((f) => f.contactId))];
     const out = {};
     const need = [];
     for (const id of missing) {
-      const hit = nameCache.get(`${locationId}|${id}`);
-      if (hit) out[id] = hit; else need.push(id);
+      const k = `${locationId}|${id}`;
+      const hit = nameCache.get(k);
+      if (hit) out[id] = hit;
+      else if (now - (nameMisses.get(k) ?? -Infinity) < NAME_MISS_MS) continue;
+      else need.push(id);
     }
     if (!need.length) return out;
-    const profiles = await store.listContactProfiles?.(locationId, { limit: 5000 }).catch(() => []) || [];
-    const byId = new Map(profiles.filter((p) => p?.name).map((p) => [p.contactId, p.name]));
+    const known = typeof store.contactNamesByIds === "function" ? await store.contactNamesByIds(locationId, need).catch(() => ({})) : {};
     const ask = [];
     for (const id of need) {
-      if (byId.has(id)) { out[id] = byId.get(id); nameCache.set(`${locationId}|${id}`, out[id]); } else ask.push(id);
+      if (known[id]) { out[id] = known[id]; nameCache.set(`${locationId}|${id}`, out[id]); } else ask.push(id);
     }
     await mapPool(ask.slice(0, 25), 3, async (id) => {
-      const c = await getContact(client, id).catch(() => null);
+      const k = `${locationId}|${id}`;
+      let c = null;
+      try { c = await getContact(client, id); } catch { return; } // a failed read is asked again next time
       const name = contactName(c) || "";
-      if (name) { out[id] = name; nameCache.set(`${locationId}|${id}`, name); }
+      if (name) { out[id] = name; nameCache.set(k, name); nameMisses.delete(k); }
+      else nameMisses.set(k, now);
     });
+    if (nameMisses.size > 20000) nameMisses.delete(nameMisses.keys().next().value);
     return out;
   }
 
@@ -770,6 +800,13 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     return { body, desk, deskAll, callRows, shownCalls, shownActions, drafts, offers, cards: out.cards, events, saved, deskSettings };
   }
   router.pipelineFor = pipelineFor;
+  // The tick's jobs (ghl-calls, ghl-pings, needs-matt, slack) each read Today
+  // through this one (broker.js): the first read of a tick is shared by the
+  // rest for 75 seconds, one compute at a time, so a tick is one Today read
+  // instead of three or four. GET /pipeline stays fresh on every poll.
+  const tickPipeline = createMemo({ ttlMs: 75000 });
+  router.pipelineForTick = ({ locationId, client, now = Date.now() }) =>
+    tickPipeline.get(locationId, () => pipelineFor({ locationId, client, now }), { now });
 
   router.get("/pipeline", async (req, res) => {
     try {
@@ -1511,8 +1548,11 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   // 100-req/10s burst. Sized for real volume (~6k contacts / 30 days here):
   // beyond the cap the tiles show "N+" (partial).
   const MAX_CONVERSATIONS = 2000;
-  const MSG_CHUNK = 8;            // concurrent per-conversation message fetches
-  const MSG_CHUNK_PACE_MS = 1000; // ≈ 8 req/s ≈ 80 req / 10s worst case
+  // Three at a time (2026-11-09): eight crowded out the bot's own sends just
+  // after a deploy, when the in-memory tally is empty. The GHL client's
+  // per-location limit (ghl.js) holds the line under that too.
+  const MSG_CHUNK = 3;            // concurrent per-conversation message fetches
+  const MSG_CHUNK_PACE_MS = 1000; // ≈ 3 req/s ≈ 30 req / 10s worst case
   const TALLY_HORIZON_DAYS = 90;  // how far back a conversation is tallied
   const TALLY_CACHE_MAX = 30000;  // conversations kept per location+tz
   // `${locationId}:${tzOffset}` -> Map(convoId -> { last, h, days, truncated })
