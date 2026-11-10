@@ -335,3 +335,26 @@ test("our missed-call text-back is a promise of a call", () => {
   assert.equal(detectPromise("Call back whenever works for you."), null, "asks them");
   assert.equal(detectPromise("Will call back if it pencils."), null, "a conditional call is not a promise");
 });
+
+/* ---------- a lead with no day (2026-11-09) ---------- */
+
+test("I may have one coming up is a lead with no date", async () => {
+  const { detectLead, isUndatedLead, leadIsTheNet, leadCheckInPending, dealSourceWords } = await import("./follow-up.js");
+  const now = Date.parse("2026-11-10T19:00:00Z");
+  const l = detectLead("Nothing right now, but I may have one coming up", now);
+  assert.equal(l.when, null);
+  assert.equal(l.what, "the one coming up");
+  assert.equal(detectLead("Might have a probate I am working on", now)?.when, null);
+  // A day on it is the dated lead, as before.
+  assert.ok(detectLead("I may have one coming up after Thanksgiving", now).when);
+  // Not a lead: none coming, or one behind us.
+  for (const t of ["I don't have anything coming up", "No, nothing coming up", "I sold a fixer last year", "Sounds good", "not sure yet"]) assert.equal(detectLead(t, now), null, t);
+  // Booked with no day: nothing fires on it by itself, and a dated lead isn't hidden behind it.
+  const undated = { type: "checkin_requested", at: "2026-11-05T19:00:00Z", data: { kind: "lead", dueAt: null, undated: true } };
+  const dated = { type: "checkin_requested", at: "2026-11-01T19:00:00Z", data: { kind: "lead", dueAt: "2026-11-09T17:00:00Z" } };
+  assert.ok(isUndatedLead(undated));
+  assert.ok(!isUndatedLead(dated));
+  assert.equal(leadIsTheNet(undated, now), false, "never the net under a held reply");
+  assert.equal(leadCheckInPending([dated, undated], now)?.at, dated.at);
+  assert.equal(dealSourceWords("Thanks. I'll keep you in mind for any fixers. Have a good one"), "I'll keep you in mind for any fixers.");
+});

@@ -541,6 +541,13 @@ export function morningCounts(events = [], { since = null, until = null } = {}) 
     else if (t === "blast_sent") c.buyerTexts++;
     else if (t === "investor_committed") c.buyersCommitted++;
     else if (t === "text_summary" && e.data?.inbound) c.replies++;
+    // Someone an agent pointed us to for a house (2026-11-09): whose referral,
+    // who they named and where, first names only and never a phone.
+    else if (t === "referral_mentioned") {
+      const d = e.data || {};
+      (c.referrals ||= []).push({ agentFirst: firstName(d.agentFirst), named: firstName(d.name) || (d.relation ? `their ${clip(d.relation, 20)}` : "someone"),
+        brokerage: clip(scrubForSlack(d.brokerage), 40) });
+    }
   }
   c.tier1 = tier1.size;
   return c;
@@ -548,6 +555,7 @@ export function morningCounts(events = [], { since = null, until = null } = {}) 
 export const MORNING_EVENT_TYPES = Object.freeze([
   "tier1_added", "ghl_stage_moved", "house_mentioned", "offer_sent", "offer_countered", "offer_accepted", "note",
   "underwrite_done", "underwrite_held", "underwrite_failed", "deal_promoted", "blast_sent", "investor_committed", "text_summary",
+  "referral_mentioned",
 ]);
 
 /**
@@ -589,6 +597,14 @@ export function renderMorning(c = {}, ctx = {}) {
   // The calls we owe this morning (the pipeline's call_owed rows: a call we
   // said we'd make, a booked call nobody made), 2026-11-09.
   if (Number(c.callsOwed) > 0) lines.push(`:telephone_receiver: ${row("Calls we owe", c.callsOwed)}`);
+  // Referrals to reach (2026-11-09): someone an agent named for a house. The
+  // bot never contacts them; Matt does, mentioning the agent. First names
+  // and the brokerage, never a phone or an email.
+  if (c.referrals?.length) {
+    const shown = c.referrals.slice(0, 3).map((r) => `${esc(clip(scrubForSlack(r.named), 30) || "someone")}` +
+      `${r.brokerage ? ` at ${esc(clip(scrubForSlack(r.brokerage), 40))}` : ""} (from ${esc(clip(scrubForSlack(r.agentFirst), 20) || "an agent")})`);
+    lines.push(`:handshake: Referrals to reach: *${c.referrals.length}* — ${shown.join(", ")}${c.referrals.length > shown.length ? ", …" : ""}`);
+  }
   const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });

@@ -143,8 +143,15 @@ export function pulseSubject(inv = {}, { now = Date.now(), history = null } = {}
   const lastCity = recentBuy ? cityOf(inv.flips?.lastAddress) : "";
   const cities = [...new Set([lastCity, ...(m.cities || []).map(titleCase)].filter(Boolean))].slice(0, 3);
   return {
+    // The last house we sent and why they passed: the plan's to read (the
+    // after-deal line, a dry run's clues), never the pulse's to say (Matt,
+    // 2026-11-09 ~22:05: check-ins never reference past properties; the
+    // reply agent's buyer_pulse brief leaves them out).
     lastHouse: deal?.address ? { street: streetOf(deal.address), city: cityOf(deal.address), how, at: deal.at || null } : null,
     passReasons: (h.passes || []).filter((x) => x?.reason).slice(0, 3).map((x) => `${streetOf(x.address)}: ${clip(x.reason, 80)}`),
+    // Every house we sent them that we know of, for the gate that holds a
+    // pulse naming one (ghl-broker/reply-agent.js). Never shown to the drafter.
+    pastHouses: [...new Set([deal?.address, ...(h.passes || []).map((x) => x?.address)].filter(Boolean).map(String))].slice(0, 10),
     aboutThem: clip(rec.personal_details, 200),
     lastSummary: clip(rec.last_convo_summary, 240),
     nextAction: clip(rec.suggested_next_action, 160),

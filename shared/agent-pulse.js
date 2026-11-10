@@ -40,7 +40,7 @@
 // Pure. The runner (ghl-broker/agent-pulse.js) reads; this decides.
 
 import { effectiveStatus, OPEN_STATUSES, DEAD_STATUSES, dealIsOver, priceAgreed } from "./offer-status.js";
-import { threadTimes, staleHeld, leadCheckInPending } from "./follow-up.js";
+import { threadTimes, staleHeld, leadCheckInPending, isUndatedLead } from "./follow-up.js";
 import { nextFollowUp } from "./next-follow-up.js";
 import { IRRITATED_RX, PERSON_HAS_IT_DAYS, HAND_REPLY_EVENT, HOUSE_OVER_REASONS, threadHealth } from "./thread-health.js";
 import { offerHasTheirAnswer } from "./tiers.js";
@@ -53,7 +53,7 @@ import { CHECK_IN_GAP_DAYS } from "./agent-focus.js";
 import { callOwedWait } from "./promise-owed.js";
 import { worksOn, runDaysFrom, pacificParts } from "./follow-up-engine.js";
 import { BLOCK_TAG_RX } from "./opt-out.js";
-import { checkInWait } from "./check-in.js";
+import { checkInWait, LEAD_WAIT_DAYS, LEAD_HOOK_DAYS } from "./check-in.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -975,44 +975,46 @@ export function recentCloses(offers = [], now = Date.now()) {
   return out.sort((a, b) => String(b.at).localeCompare(String(a.at)));
 }
 
-// The towns an agent works: their listings, the houses we've had with them,
-// and the areas they told us.
-function agentTowns(agent = {}) {
-  const towns = new Set();
-  for (const l of agent.listings || []) if (l?.doc?.city || l?.doc?.address) towns.add(String(l.doc.city || cityOf(l.doc.address)).trim().toLowerCase());
-  for (const o of agent.offers || []) if (o?.address) towns.add(cityOf(o.address).toLowerCase());
-  for (const e of agent.events || []) if (e?.type === "house_mentioned" && (e.data?.town || e.address)) towns.add(String(e.data?.town || cityOf(e.address)).toLowerCase());
-  for (const f of agent.facts?.agent_market_area || []) towns.add(String(f?.value || "").trim().toLowerCase());
-  towns.delete("");
-  return towns;
-}
-
 /**
  * checkInHook({ agent, verdict, houses, now }) → { kind, … } | null
  *
  * The ONE real thing a check-in names (2026-10-15, the funnel review: Matt's
  * own specific texts got 70% replies, the generic check-ins 35%). In order:
  *   listing        their fresh listing (named in passing in the check-in)
- *   mentioned      a house they named in the last 60 days that we never
- *                  priced or passed on
- *   closed_nearby  one of our deals closed in the last 60 days in a town they
- *                  work, named by town only
  *   situation      otherwise, a kind of seller we're good for
  * Never a house we priced or passed on, and never "did it sell?" (Matt,
  * 2026-10-08). The thank-you after a close has none: it is about that deal.
+ *
+ * Until 2026-11-09 it could also be a house they mentioned that we never
+ * priced ("mentioned"), or one of our closes in a town they work
+ * ("closed_nearby"). Matt, 2026-11-09 ~22:05: "make sure the checkins dont
+ * reference past properties, that gets confusing and annoying too". Neither
+ * is the one thing any more; the check-in's real detail comes from the
+ * composer's pack (shared/check-in.js), which never holds a house.
+ * mentionedHouseFor and recentCloses stay for anything else that reads them.
  */
-export function checkInHook({ agent = {}, verdict = {}, houses = {}, now = Date.now() } = {}) {
+export function checkInHook({ verdict = {} } = {}) {
   if (verdict.pulseReason === "deal_thanks") return null;
   if (LISTING_REASONS.has(verdict.pulseReason) && verdict.listing) return { kind: "listing" };
-  const m = mentionedHouseFor({ events: agent.events || [], offers: agent.offers || [], now });
-  if (m) {
-    const days = Math.max(0, Math.floor((now - (ms(m.at) ?? now)) / DAY_MS));
-    return { kind: "mentioned", address: m.address, street: m.street, label: m.label, town: m.town, daysAgo: days };
-  }
-  const towns = agentTowns(agent);
-  const close = (houses.closes || []).find((c) => towns.has(String(c.town || "").toLowerCase()));
-  if (close) return { kind: "closed_nearby", town: close.town };
   return { kind: "situation" };
+}
+
+/**
+ * undatedLeadFor({ events, ledger, now }) → { what, said, at, undated: true } | null
+ *
+ * A lead they told us about with no day on it ("I may have one coming up",
+ * shared/follow-up.js detectLead): the next regular check-in asks about it,
+ * never sooner than LEAD_WAIT_DAYS after they said it and never after
+ * LEAD_HOOK_DAYS, once (a check-in that asked carries its `leadAt`).
+ */
+export function undatedLeadFor({ events = [], ledger = [], now = Date.now() } = {}) {
+  const asked = new Set((ledger || []).filter((e) => e?.type === "agent_pulse_texted" && e.data?.leadAt).map((e) => String(e.data.leadAt)));
+  const e = (events || []).filter(isUndatedLead)
+    .filter((x) => { const t = ms(x.at); return t != null && now - t >= LEAD_WAIT_DAYS * DAY_MS && now - t <= LEAD_HOOK_DAYS * DAY_MS; })
+    .filter((x) => !asked.has(String(x.at)))
+    .sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+  if (!e) return null;
+  return { what: String(e.data?.lead?.what || "").slice(0, 80), said: String(e.data?.lead?.said || "").slice(0, 200), at: e.at, undated: true };
 }
 
 /**
@@ -1062,9 +1064,15 @@ export function agentPulseSubject({ agent = {}, verdict = {}, houses = {}, now =
     areas,
     avoid,
     // The one real thing this check-in names (checkInHook): their fresh
-    // listing, a house they mentioned that we never priced, one of our
-    // closes in their town (by town only), or a kind of seller we're good for.
+    // listing, or a kind of seller we're good for. Never a house from before.
     hook,
+    // A lead they said is coming, with no day on it (undatedLeadFor): the
+    // check-in asks about it, never by its address. Not on a listing ping
+    // or a thank-you.
+    ...(() => {
+      const lead = hook?.kind === "situation" ? undatedLeadFor({ events: agent.events || [], ledger: agent.ledger || [], now }) : null;
+      return lead ? { lead } : {};
+    })(),
     // Every house we've had with them, for the gate that holds a check-in
     // naming one (ghl-broker/reply-agent.js): never a house we priced or
     // passed on (Matt, 2026-10-09). The hook's own house is left out.

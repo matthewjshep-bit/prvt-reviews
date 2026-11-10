@@ -47,6 +47,7 @@ import {
   CURSOR_NAME as OUTREACH_CURSOR, OUTREACH_SWEEP_HOUR, WORK_TZ, rentcastBudget, countiesFrom, readRecentListers,
 } from "../outreach-sweep.js";
 import { standardText } from "../shared/standard-texts.js";
+import { checkInReport, normalizeCheckInComposer, CHECK_IN_REPORT_TYPES } from "../shared/check-in.js";
 import {
   startOutreachFollowUp, getOutreachFollowUpJob, CURSOR_NAME as FOLLOWUP_CURSOR, OUTREACH_FOLLOWUP_HOUR,
 } from "../outreach-followup.js";
@@ -1786,8 +1787,27 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     try {
       const { locationId, client } = resolveLocation(req);
       const saved = await getSettings(locationId);
-      const r = await previewAgentPulse({ client, locationId, saved, store, limit: req.body?.limit ?? 3, reason: String(req.body?.reason || "").slice(0, 40) });
+      const r = await previewAgentPulse({ client, locationId, saved, store, limit: req.body?.limit ?? 3, reason: String(req.body?.reason || "").slice(0, 40),
+        // { compose: true }: the composer's check-in beside each (Settings → Check-ins).
+        compose: req.body?.compose === true });
       res.json({ ok: true, ...r });
+    } catch (err) { fail(res, err); }
+  });
+
+  // ?days=30 (1–90). What the check-ins did (shared/check-in.js
+  // checkInReport): per composer arm and per one thing, how many went, got
+  // a reply within a week or an opt-out, and why the ones that waited
+  // waited. Read-only, counts only: no names, no numbers, no words.
+  router.get("/check-ins/report", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const days = Math.max(1, Math.min(90, Math.round(Number(req.query?.days)) || 30));
+      const now = Date.now();
+      const events = await store.listContactEventsSince(locationId, new Date(now - (days + 7) * 86400000).toISOString(),
+        { types: [...CHECK_IN_REPORT_TYPES], limit: 20000 }).catch(() => []);
+      const saved = await getSettings(locationId);
+      res.json({ ok: true, ...checkInReport(events || [], { days, now }), composer: normalizeCheckInComposer(saved?.conversationAi?.checkIns),
+        truncated: (events || []).length >= 20000 });
     } catch (err) { fail(res, err); }
   });
 

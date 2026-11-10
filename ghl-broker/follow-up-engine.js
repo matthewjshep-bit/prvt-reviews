@@ -20,7 +20,7 @@ import {
 import { annotateCurrent, currentOffers } from "./shared/current-offer.js";
 import { buildFlow } from "./shared/flow.js";
 import { offerLeaks } from "./shared/line.js";
-import { nextRungAt, staleHeld, PERSON_PROMISES, PROMISE_DUE_HOURS, MORNING_SLACK_HOURS } from "./shared/follow-up.js";
+import { nextRungAt, staleHeld, PERSON_PROMISES, PROMISE_DUE_HOURS, MORNING_SLACK_HOURS, isUndatedLead } from "./shared/follow-up.js";
 import { sweepTime } from "./shared/next-follow-up.js";
 import { effectiveStatus, OPEN_STATUSES, priceAgreed, isHot } from "./shared/offer-status.js";
 import { holdState, callsInstead } from "./shared/counter-hold.js";
@@ -230,7 +230,8 @@ export function contactAsks({ events = [], config, now = Date.now() }) {
   const fu = config.parties?.agent?.followUp || {};
   if (!config.enabled || !fu.enabled) return out;
   for (const [contactId, list] of byContact(events)) {
-    const req = list.filter((e) => e.type === "checkin_requested").at(-1);
+    // A lead with no day is the agent check-in's to ask about, not a clock (shared/follow-up.js isUndatedLead).
+    const req = list.filter((e) => e.type === "checkin_requested" && !isUndatedLead(e)).at(-1);
     if (req && !list.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)
         && !list.some((e) => INBOUND_TYPES.includes(e.type) && String(e.at) > String(req.at))) {
       const at = ms(req.data?.dueAt) ?? ms(req.at);

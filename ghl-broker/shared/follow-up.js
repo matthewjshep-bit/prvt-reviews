@@ -589,6 +589,66 @@ export function detectLeadTiming(text = "", now = Date.now(), { checkBack = true
   return { when: morningOf(best.day), what: best.what, phrase: best.phrase, said: best.said, confidence: best.confidence };
 }
 
+// What an agent says is coming with no day on it: a house of their own
+// they'll have, never a check-back, a deadline or what they'll find out.
+const UNDATED_LEAD_WHATS = new Set(["the one coming up", "the one coming on the market", "the off-market one", "the unlisted house",
+  "the probate", "the estate", "the hoarder house", "the foreclosure", "the fixer"]);
+// Ahead of us: they have it, will have it, are working on it.
+const LEAD_AHEAD_RX = /\b(?:have|got|has|may|might|will|'ll|gonna|going\s+to|getting|about\s+to|plan(?:s|ning)?|prepar\w*|soon|upcoming|coming|working\s+on|in\s+the\s+works|lined\s+up|on\s+deck|maybe|probably|possibly)\b/i;
+// "I don't have one coming up", "nothing like that": no lead.
+const LEAD_NOT_RX = /\b(?:no|not|nothing|none|never|don'?t|doesn'?t|haven'?t|hasn'?t|won'?t|isn'?t|aren'?t|wasn'?t|didn'?t)\s+(?:\w+\s+){0,3}$/i;
+// "Sold a fixer last spring": behind us.
+const LEAD_PAST_RX = /\b(?:sold|closed|had|bought|did|was|were|last\s+(?:year|month|week|spring|summer|fall|winter))\b/i;
+
+/**
+ * detectLead(text, now) → { when, what, phrase, said, confidence } | null
+ *
+ * A lead an agent told us about. With a day ("relisting in the spring"),
+ * detectLeadTiming's, `when` its check-in time. Without one ("I may have one
+ * coming up", "might have an estate soon"), the lead itself with `when:
+ * null` (2026-11-09): asked about at their next regular check-in, never
+ * sooner than two weeks after they said it and never after 60 days
+ * (shared/check-in.js LEAD_WAIT_DAYS, LEAD_HOOK_DAYS), and never by its
+ * address: "any word on the one you said was coming up?".
+ */
+export function detectLead(text = "", now = Date.now()) {
+  const dated = detectLeadTiming(text, now);
+  if (dated) return dated;
+  const t = String(text || "").replace(/[’‘]/g, "'");
+  if (!t.trim()) return null;
+  if (/^\s*(?:liked|loved|disliked|emphasi[sz]ed|laughed\s+at|questioned)\s+[“"]/i.test(t)) return null;
+  for (const c of LEAD_CUES) {
+    if (c.checkBack || c.by || c.needsHouse) continue;
+    for (const m of t.matchAll(new RegExp(c.rx.source, "gi"))) {
+      const what = typeof c.what === "function" ? c.what(m) : c.what;
+      if (!UNDATED_LEAD_WHATS.has(what)) continue;
+      if (/\b(?:your|our)\s+offer\b/i.test(t.slice(Math.max(0, m.index - 14), m.index + m[0].length))) continue;
+      if (/\b(?:if\s+you|you\s+(?:could|would|can|'d|might|fix\w*|flip\w*|bought|buy))\b[^.!?]{0,40}$/i.test(t.slice(Math.max(0, m.index - 60), m.index))) continue;
+      if (LEAD_NOT_RX.test(t.slice(Math.max(0, m.index - 40), m.index))) continue;
+      const said = sentenceAround(t, m.index, m.index + m[0].length);
+      if (!LEAD_AHEAD_RX.test(said) || (LEAD_PAST_RX.test(said) && !/\b(?:will|'ll|may|might|soon|coming|upcoming|gonna|going\s+to)\b/i.test(said))) continue;
+      if (bankSaleIn(said)) continue;
+      return { when: null, what, phrase: m[0].trim(), said, confidence: "low" };
+    }
+  }
+  return null;
+}
+
+/** isUndatedLead(event) → true for a `checkin_requested` lead with no day: the agent check-in's to ask about, never a clock of its own. */
+export const isUndatedLead = (e) => e?.type === "checkin_requested" && e?.data?.kind === "lead" && !e?.data?.dueAt;
+
+/**
+ * dealSourceWords(text) → the sentence they offered to send us houses in
+ * ("I'll keep you in mind for any fixers"), for the weekly check-in to pick
+ * up in its own words. "" when there is none.
+ */
+export function dealSourceWords(text = "") {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!offersToSendDeals(t)) return "";
+  const parts = t.split(/(?<=[.!?])\s+/);
+  return (parts.find((p) => offersToSendDeals(p)) || "").slice(0, 160);
+}
+
 // The sentence (or two) a match sits in, clipped.
 function sentenceAround(t, from, to) {
   const before = t.slice(0, from).search(/[^.!?\n]*$/);
@@ -605,6 +665,8 @@ export const LEAD_NET_DAYS = 7;
 /** leadIsTheNet(event, now) → true for any check-in request but a lead more than LEAD_NET_DAYS out. */
 export function leadIsTheNet(e, now = Date.now()) {
   if (e?.data?.kind !== "lead") return true;
+  // A lead with no day (detectLead) is the agent check-in's, never a clock.
+  if (!e?.data?.dueAt) return false;
   return (ms(e.data?.dueAt) ?? 0) - now <= LEAD_NET_DAYS * DAY_MS;
 }
 
@@ -630,7 +692,8 @@ export function leadCheckInAnswered(req, events = []) {
  */
 export function leadCheckInPending(events = [], now = Date.now()) {
   const byTime = [...(events || [])].filter(Boolean).sort((a, b) => String(a.at).localeCompare(String(b.at)));
-  const req = byTime.filter((e) => e.type === "checkin_requested" && e.data?.kind === "lead").at(-1);
+  // A lead with no day is the agent check-in's (isUndatedLead), and never hides a dated one.
+  const req = byTime.filter((e) => e.type === "checkin_requested" && e.data?.kind === "lead" && !isUndatedLead(e)).at(-1);
   if (!req) return null;
   if (byTime.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)) return null;
   const due = ms(req.data?.dueAt);

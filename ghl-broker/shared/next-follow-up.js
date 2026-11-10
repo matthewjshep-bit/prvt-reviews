@@ -22,7 +22,7 @@ import { effectiveStatus, OPEN_STATUSES, pushesToPaper, asksForWriteUp, offerHea
 import { paperWent } from "./paper-follows.js";
 import {
   nextRungAt, offerNudgeStart, offerNudgeAnchor, passedStart, threadTimes, stepLabel, normalizeSteps,
-  CHECKIN_STATUSES, HOT_MIN_HOURS, rungsCovered, nudgeTimes, PERSON_PROMISES,
+  CHECKIN_STATUSES, HOT_MIN_HOURS, rungsCovered, nudgeTimes, PERSON_PROMISES, isUndatedLead,
 } from "./follow-up.js";
 import { streetOf } from "./agent-focus.js";
 import { threadHealth } from "./thread-health.js";
@@ -171,7 +171,8 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
 
   /* ---- a check-in they asked for ---- */
   const byTime = [...(events || [])].sort((a, b) => String(a.at).localeCompare(String(b.at)));
-  const req = byTime.filter((e) => e?.type === "checkin_requested").at(-1);
+  // A lead with no day (shared/follow-up.js isUndatedLead) is the agent check-in's to ask about, not a clock.
+  const req = byTime.filter((e) => e?.type === "checkin_requested" && !isUndatedLead(e)).at(-1);
   if (req && fu.enabled && !byTime.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)
       && !byTime.some((e) => (e.type === "text_summary" || e.type === "call_summary") && String(e.at) > String(req.at))) {
     const phrase = String(req.data?.phrase || "").trim();

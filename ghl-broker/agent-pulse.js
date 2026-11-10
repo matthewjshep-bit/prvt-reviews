@@ -740,7 +740,7 @@ export async function maybeRunMattsFifteen({ client, locationId, saved = {}, sto
  * claim, no draft row, nothing sent (reply-agent.js previewProactive). One
  * model call each, so a handful at most.
  */
-export async function previewAgentPulse({ client, locationId, saved = {}, store = defaultStore, limit = 3, reason = "", deps = {}, now = Date.now() }) {
+export async function previewAgentPulse({ client, locationId, saved = {}, store = defaultStore, limit = 3, reason = "", compose = false, deps = {}, now = Date.now() }) {
   const plan = await planAgentPulse({ locationId, saved, store, now, workflows: await pulseWorkflows(client, locationId, deps), tierCards: await pulseTierCards(client, locationId, deps) });
   const preview = typeof deps.previewProactive === "function" ? deps.previewProactive : previewProactive;
   const n = Math.max(1, Math.min(5, Math.round(Number(limit)) || 3));
@@ -752,12 +752,14 @@ export async function previewAgentPulse({ client, locationId, saved = {}, store 
   const line = [...plan.picks, ...(plan.spares || [])].filter((p) => !reason || p.reason === reason).slice(0, n + 4);
   for (const [i, p] of line.entries()) {
     if (drafted >= n) break;
-    const r = await preview({ client, locationId, saved, store, contactId: p.contactId, kind: "agent_pulse", offer: null, subject: { ...p.subject, variant: i } })
+    // `compose`: the composer's check-in beside today's (shared/check-in.js), for Settings → Check-ins.
+    const r = await preview({ client, locationId, saved, store, contactId: p.contactId, kind: "agent_pulse", offer: null, subject: { ...p.subject, variant: i }, ...(compose ? { compose: true } : {}) })
       .catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
     if (!r?.skipped) drafted++;
     previews.push({
       contactId: p.contactId, name: r?.contactName || p.name || "", segment: p.segment, reason: p.reason, street: String(p.subject?.address || "").split(",")[0].trim(),
       reply: r?.reply || "", held: Boolean(r?.held), flags: r?.flags || [], skipped: r?.skipped || "",
+      ...(r?.composed ? { composed: r.composed } : {}),
     });
   }
   return { previews, counts: plan.counts, drips: plan.drips };

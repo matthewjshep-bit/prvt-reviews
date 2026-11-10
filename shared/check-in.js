@@ -25,14 +25,22 @@
 //   checkInWait(ledger, { lastInboundAt, now })       the skip the agent check-in waits on
 //   goesBySaid(text, { first, ours })                 the name a person goes by
 //
+// And the one real thing a check-in names (the composer, below): the pack's
+// dated hooks, composeRoute (off | shadow | model | control | skip),
+// namesAHouse and checkInFlags (a check-in never names a house from before),
+// and checkInReport.
+//
 // Pure. ghl-broker/reply-agent.js runProactive routes; shared/agent-pulse.js
 // evaluateAgent waits; shared/standard-texts.js picks.
 
-import { repeatsUs, groupsOf, ourLastTexts, AI_COMPLAINT_RX, ONCE_LAST, ONCE_DAYS, PRIOR_MAX } from "./voice.js";
+import { repeatsUs, groupsOf, ourLastTexts, AI_COMPLAINT_RX, SENSITIVE_RX, ONCE_LAST, ONCE_DAYS, PRIOR_MAX } from "./voice.js";
 import { isTapback, isAutoReply, cadenceRequest, ourCheckBack } from "./brush-offs.js";
 import { checkInRequested, detectLeadTiming } from "./follow-up.js";
 import { isPlainNo } from "./conversation-audit.js";
 import { openerVariant } from "./outreach-opener.js";
+import { streetMentions } from "./mentioned-houses.js";
+import { parseUsAddress } from "./us-address.js";
+import { WA_CITY_COORDS } from "./wa-city-coords.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -133,7 +141,14 @@ function laterFromTheirs(text, at) {
  *   homeowner   our first text asked about their own house, and no agent tag
  *   retracted   { offerId, address, at } our number went and we passed within a day, and silence since
  *
- * `context`: { offers (this contact's), agentTagged, repeatTouches, aiComplaintDays }.
+ * and the one real thing a check-in may name (oneThings, below): `lead`,
+ * `question`, `call`, `theirWords`, `personal`, `theirNo`, `quotes`,
+ * `buyCity`, `areas`, `lastSummary`, and `hooks`, ranked, hooks[0] first.
+ *
+ * `context`: { offers (this contact's), agentTagged, repeatTouches, aiComplaintDays }
+ * and for the composer { party, calls (call_summary events), facts (the
+ * contact record's), quotes (an investor read's), personal, spent (hook keys
+ * we already used), newerThan, afterNoDays }.
  */
 export const AUTO_ONLY_DAYS = 90;
 export const RETRACTED_HOURS = 24;
@@ -212,7 +227,8 @@ export function checkInPack(transcript = "", subject = {}, context = {}, now = D
     if (!retracted || passedAt > ms(retracted.at)) retracted = { offerId: o.id || null, address: String(o.address || ""), at: iso(passedAt) };
   }
 
-  return { theirLast, laterUntil, ourLast, autoOnly, autoAt, aiComplaint, homeowner, retracted, subjectKind: subject?.kind || null };
+  return { theirLast, laterUntil, ourLast, autoOnly, autoAt, aiComplaint, homeowner, retracted, subjectKind: subject?.kind || null,
+    ...oneThings({ lines, theirLast, ourLast, subject, context, now }) };
 }
 
 /* ---------- the route ---------- */
@@ -419,4 +435,447 @@ export function goesByOf(facts = {}) {
   const list = Array.isArray(facts?.goes_by) ? facts.goes_by : [];
   const newest = [...list].sort((a, b) => String(a?.at || "").localeCompare(String(b?.at || ""))).at(-1);
   return String(newest?.value || "").trim();
+}
+
+/* ---------- the one real thing (the composer) ---------- */
+//
+// Matt, 2026-11-09: "check-ins need to sound more personable and not AI".
+// Agents answered the model's one-off texts 55.4% of the time and the fixed
+// ones 27.9%; 1,845 details they had shared sat unused. So a check-in may be
+// written around ONE real thing they gave us. And the same night (~22:05):
+// "make sure the checkins dont reference past properties, that gets
+// confusing and annoying too". The one thing is never a house: no address,
+// no street, no "the place you called about", no listing we texted about, no
+// passed house, no old offer, no deal we did together (not even by town),
+// and for a buyer no deal we sent them. It is their own words about their
+// market or plans, a detail they shared, a question they asked us, the topic
+// of a call, or a lead they said is coming ("any word on the one you said
+// was coming up?"). With nothing like that, the check-in waits.
+
+// conversationAi.checkIns, the composer's keys. `composer` is new automation
+// and ships "off"; "shadow" writes the model's check-in beside the fixed one
+// and sends only the fixed one; "on" lets the model write it for the share
+// of contacts in `composerShare` (by contact id, so an agent stays in one
+// arm), the rest the control. `skipEmpty` (with the composer on only): a
+// check-in with nothing real to name waits `skipDays` instead of sending a
+// general line. `personal`: a detail they shared may be the one thing.
+export const CHECK_IN_COMPOSER_DEFAULTS = Object.freeze({ composer: "off", composerShare: 100, skipEmpty: true, skipDays: 14, personal: true });
+export const COMPOSER_MODES = Object.freeze(["off", "shadow", "on"]);
+export function normalizeCheckInComposer(v = {}) {
+  const o = v && typeof v === "object" ? v : {};
+  const D = CHECK_IN_COMPOSER_DEFAULTS;
+  const bool = (x, d) => (x == null ? d : x === true || x === "true" || x === 1 || x === "1");
+  return {
+    composer: COMPOSER_MODES.includes(o.composer) ? o.composer : D.composer,
+    composerShare: clamp(o.composerShare, D.composerShare, 0, 100),
+    skipEmpty: bool(o.skipEmpty, D.skipEmpty),
+    skipDays: clamp(o.skipDays, D.skipDays, 7, 60),
+    personal: bool(o.personal, D.personal),
+  };
+}
+
+// How long each kind of thing stays news. Something from June never reads as
+// new in November: past these, it isn't the one thing.
+export const CALL_HOOK_DAYS = 45;
+export const QUESTION_HOOK_DAYS = 30;
+export const WORDS_HOOK_DAYS = 45;
+export const PERSONAL_HOOK_DAYS = 60;
+export const SUMMARY_FACT_DAYS = 60;
+// An undated lead ("I may have one coming up"): asked about at the next
+// regular check-in, never sooner than LEAD_WAIT_DAYS after they said it, and
+// dropped after LEAD_HOOK_DAYS.
+export const LEAD_HOOK_DAYS = 60;
+export const LEAD_WAIT_DAYS = 14;
+// An investor's own words from their read (shared/investor-read.js quotes).
+export const QUOTE_HOOK_DAYS = 180;
+
+/* -- a house, from before -- */
+
+// "1412 Pine", "88 NE 12th": a house number in front of a name.
+const NUMBERED_RX = /\b\d{2,6}\s+(?:[NSEW]{1,2}\.?\s+)?(?:[A-Z][a-z'’-]+|\d{1,3}(?:st|nd|rd|th))\b/;
+// A pointer to one from before: "the place you called about", "the house we
+// sent you", "the deal we did", "that last one".
+const HOUSE_HINT_RX = /\b(?:the|that|this|your|our)\s+(?:last\s+|old\s+|other\s+)?(?:place|house|home|property|listing|deal|lot)\s+(?:(?:you|we|i)\s+(?:called|texted|talked|asked|wrote|emailed|sent|mentioned|passed|priced|offered|looked|closed|did|bought|showed|listed|posted|had|sold))\b|\bthat\s+last\s+one\b|\b(?:the|that)\s+(?:last\s+)?one\s+(?:you|we|i)\s+(?:called|texted|emailed|sent|passed|priced|offered|closed|did|bought|showed|listed|had|sold)\b/i;
+// "the house on Oak", "the one on 5th": case matters (on the market isn't a street).
+// Not a day or a month ("one on Monday").
+const HOUSE_ON_RX = /\b(?:house|place|home|property|listing|lot|one)\s+(?:over\s+)?on\s+(?!(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\b|(?:January|February|March|April|May|June|July|August|September|October|November|December)\b)(?:[A-Z][a-z'’-]+|\d{1,3}(?:st|nd|rd|th))\b/;
+
+/**
+ * namesAHouse(text) → the words that name one | ""
+ *
+ * Whether a text names or points at a house: a street ("Elm St", "5th Ave
+ * in Kent"), a house number before a name ("1412 Pine"), or a pointer to
+ * one from before ("the place you called about", "the house on Oak", "the
+ * deal we did together"). A town alone is not a house: "anything around
+ * Kentwood?" is fine. A check-in that names one is held (checkInFlags).
+ */
+export function namesAHouse(text = "") {
+  const t = String(text || "").replace(/[’‘]/g, "'");
+  if (!t.trim()) return "";
+  const st = streetMentions(t)[0]?.address;
+  if (st) return st;
+  const m = NUMBERED_RX.exec(t) || HOUSE_HINT_RX.exec(t) || HOUSE_ON_RX.exec(t);
+  return m ? m[0].trim() : "";
+}
+
+// "163rd" of "11435 163rd Avenue Southeast"; never a direction.
+const DIRECTION_WORD_RX = /^(?:n|s|e|w|ne|nw|se|sw|north|south|east|west|northeast|northwest|southeast|southwest)\.?$/i;
+/**
+ * namesBookHouse(text, addresses) → the words that name one of them | ""
+ *
+ * Whether a text names a house we've had with them by its number or its
+ * street's own word ("1412", "Tamsin", "163rd"), without the suffix
+ * namesAHouse needs. A street word that is also a town ("Auburn" of Auburn
+ * Way) is their area, not the house; a word is matched as the street
+ * writes it, so "the main thing" is never Main St.
+ */
+export function namesBookHouse(text = "", addresses = []) {
+  const t = String(text || "");
+  if (!t.trim()) return "";
+  const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const a of addresses || []) {
+    const { houseNo, street } = parseUsAddress(String(a || ""));
+    if (houseNo && houseNo.length >= 3 && new RegExp(`\\b${esc(houseNo)}\\b`).test(t)) return houseNo;
+    const core = String(street || "").split(/\s+/).find((w) => w && !DIRECTION_WORD_RX.test(w)) || "";
+    if (core.length < 3) continue;
+    if (/^\d/.test(core)) { if (new RegExp(`\\b${esc(core)}\\b`, "i").test(t)) return core; continue; }
+    const word = core.charAt(0).toUpperCase() + core.slice(1).toLowerCase();
+    if (WA_CITY_COORDS[word.toLowerCase()]) continue;
+    if (new RegExp(`\\b${esc(word)}\\b`).test(t)) return word;
+  }
+  return "";
+}
+
+// The sentences of a text that name no house: a call's topic, never its house.
+const sentencesOf = (s) => String(s || "").replace(/\s+/g, " ").split(/(?<=[.?!;])\s+/).map((x) => x.trim()).filter(Boolean);
+export const withoutHouses = (text = "") => sentencesOf(text).filter((x) => !namesAHouse(x)).join(" ");
+
+// A personal detail about someone else's life (their seller's divorce, a
+// client's move, a tenant) is never the warm line; nor anything sensitive.
+const SOMEONE_ELSE_RX = /\b(?:sellers?|clients?|tenants?|buyers?|(?:home)?owners?|landlords?|heirs?|renters?)\b/i;
+// "ok", "thanks", "sounds good": nothing to pick up.
+const ACK_RX = /^\s*(?:ok(?:ay)?|k|kk|thanks?(?: you)?|thx|ty|sounds good|got it|will do|yes|yep|yeah|yup|sure|no problem|np|cool|great|perfect|nice|awesome|you too|same to you|appreciate (?:it|you))\b[\s.!,]*(?:thanks?|thank you|matt)?[\s.!]*$/i;
+// A proper noun past the start of a sentence: the word a check-in about it
+// would say ("the Maui trip" → Maui). Not a month, a day or a name of ours.
+const NOT_AN_ANCHOR = new Set(["i", "matt", "mls", "ok", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+  "november", "december", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "thanks", "hi", "hey", "zillow", "redfin",
+  "christmas", "thanksgiving", "easter", "realtor", "ai"]);
+export function anchorOf(text = "", { skip = [] } = {}) {
+  const no = new Set([...NOT_AN_ANCHOR, ...(skip || []).map((x) => String(x || "").toLowerCase()).filter(Boolean)]);
+  for (const s of sentencesOf(text)) {
+    const words = s.split(/\s+/).map((w) => w.replace(/^[^A-Za-z]+|[^A-Za-z'’]+$/g, "")).filter(Boolean);
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i].replace(/['’]s$/, "");
+      if (/^[A-Z][a-z]{2,}$/.test(w) && !no.has(w.toLowerCase())) return w;
+    }
+  }
+  return "";
+}
+
+const clip = (s, n) => String(s || "").replace(/\s+/g, " ").trim().slice(0, n);
+const keyOf = (kind, at, text = "") => `${kind}:${String(at || "").slice(0, 10)}${text ? `:${clip(text, 24).toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : ""}`;
+
+/**
+ * oneThings({ lines, theirLast, ourLast, subject, context, now }) → the
+ * composer's part of the pack: each thing dated, none naming a house, and
+ * `hooks`, ranked; hooks[0] is THE ONE THING.
+ *
+ *   agents     lead › question › call › their words › personal › their old no
+ *   investors  their words (deal talk) › their quotes › where they bought › personal
+ *
+ * `context.spent`: hook keys one of our check-ins already used (the texted
+ * events' checkIn.key), never used twice. `context.newerThan`: only what is
+ * newer than that (the weekly deal-source check-in: something new since
+ * last week, or nothing).
+ */
+function oneThings({ lines = [], theirLast = null, ourLast = [], subject = {}, context = {}, now = Date.now() } = {}) {
+  const party = context.party === "investor" ? "investor" : "agent";
+  const c = normalizeCheckInComposer(context.composer || { personal: context.personal });
+  const s = normalizeCheckInRoute(context);
+  const spent = new Set(context.spent || []);
+  const newer = ms(context.newerThan);
+  const daysAgo = (at) => Math.max(0, Math.floor((now - (ms(at) ?? now)) / DAY_MS));
+  const within = (at, days) => { const t = ms(at); return t != null && t <= now + HOUR_MS && now - t <= days * DAY_MS; };
+  const skipNames = [String(subject?.first || ""), String(context.first || "")];
+
+  // Their last words, worth picking up: a person, not a no, not "are you a
+  // bot?", not an "ok", and no house in it.
+  let question = null;
+  let theirWords = null;
+  const lastWords = lines.filter((l) => (l.channel === "sms" || l.channel === "email") && l.text && !isTapback(l.text)).at(-1) || null;
+  const t = theirLast;
+  if (t && !["no", "auto", "ai_complaint", "house"].includes(t.read) && !namesAHouse(t.text) && !ACK_RX.test(t.text) && t.text.length >= 12) {
+    if (t.read === "question" && lastWords?.who === "THEM" && within(t.at, QUESTION_HOOK_DAYS)) {
+      question = { text: clip(t.text, 240), at: t.at, daysAgo: daysAgo(t.at) };
+    } else if (within(t.at, WORDS_HOOK_DAYS)) {
+      theirWords = { text: clip(t.text, 240), at: t.at, daysAgo: daysAgo(t.at), channel: t.channel || "sms" };
+    }
+  }
+  const theirNo = t?.read === "no" && t.daysAgo >= s.afterNoDays ? { text: clip(t.text, 120), at: t.at, daysAgo: t.daysAgo } : null;
+
+  // The newest call we really had, by its topic: the sentences of its
+  // summary that name no house.
+  let call = null;
+  const calls = [...(context.calls || [])].filter((e) => e && (!e.type || e.type === "call_summary"))
+    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+  for (const e of calls) {
+    const d = e.data || {};
+    if (!within(e.at, CALL_HOOK_DAYS)) break;
+    if (d.transcribed === false || d.missed || d.tooShort) continue;
+    const topic = withoutHouses(String(d.summary || "").replace(/^\(.*\)$/, ""));
+    if (topic.length >= 12) { call = { line: clip(topic, 240), at: e.at, daysAgo: daysAgo(e.at) }; break; }
+  }
+
+  // A lead they said is coming: the undated one the agent check-in carries
+  // (shared/agent-pulse.js agentPulseSubject), or the one a dated check-in
+  // is about. Never its address.
+  let lead = null;
+  const L = subject?.lead || context.lead || null;
+  if (L) {
+    const at = L.at || L.toldAt || null;
+    const fresh = L.undated ? within(at, LEAD_HOOK_DAYS) : true;
+    const what = namesAHouse(L.what) ? "" : clip(L.what, 80);
+    const said = namesAHouse(L.said) ? "" : clip(L.said, 200);
+    if (fresh) lead = { what, said, at, daysAgo: at ? daysAgo(at) : null, undated: Boolean(L.undated) };
+  }
+
+  // A detail they shared about themselves, under 60 days old, nothing
+  // sensitive and nothing about someone else (a seller's surgery is never
+  // a check-in's warm line).
+  let personal = null;
+  if (c.personal) {
+    const list = [...(context.facts?.personal_details || [])].sort((a, b) => String(b?.at || "").localeCompare(String(a?.at || "")));
+    for (const f of list) {
+      const v = clip(f?.value, 160);
+      if (!v || !within(f?.at, PERSONAL_HOOK_DAYS)) continue;
+      if (SENSITIVE_RX.test(v) || SOMEONE_ELSE_RX.test(v) || namesAHouse(v)) continue;
+      personal = { what: v, at: f.at, daysAgo: daysAgo(f.at) };
+      break;
+    }
+  }
+  // Background, dated: what we last talked about (only when it's recent) and
+  // the areas they work.
+  const sum = [...(context.facts?.last_convo_summary || [])].sort((a, b) => String(b?.at || "").localeCompare(String(a?.at || "")))[0];
+  const lastSummary = sum && within(sum.at, SUMMARY_FACT_DAYS) && !namesAHouse(sum.value) ? { text: clip(sum.value, 200), daysAgo: daysAgo(sum.at) } : null;
+  const areas = [...new Set((context.facts?.agent_market_area || []).map((f) => clip(f?.value, 40)).filter(Boolean))].slice(0, 3);
+
+  // An investor's own words from their read, newest first, under six months.
+  const quotes = party === "investor"
+    ? [...(context.quotes || [])].filter((q) => q?.text && within(q.at, QUOTE_HOOK_DAYS) && !namesAHouse(q.text))
+      .sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))).slice(0, 2)
+      .map((q) => ({ text: clip(q.text, 200), at: q.at, daysAgo: daysAgo(q.at) }))
+    : [];
+  const buyCity = party === "investor" ? clip(subject?.lastBuyCity, 40) : "";
+
+  const hooks = [];
+  const add = (h) => {
+    if (!h) return;
+    if (spent.has(h.key)) return;
+    if (newer != null && h.kind !== "lead" && (ms(h.at) ?? 0) <= newer) return;
+    hooks.push(h);
+  };
+  const dayWord = (n) => (n == null ? "a while back" : n === 0 ? "today" : n === 1 ? "yesterday" : `${n} days ago`);
+  const words = theirWords && { kind: party === "investor" ? "deal_talk" : "their_words", key: keyOf("their_words", theirWords.at), at: theirWords.at, daysAgo: theirWords.daysAgo,
+    line: `what they told us ${dayWord(theirWords.daysAgo)}, in their words: "${theirWords.text}"`, anchor: anchorOf(theirWords.text, { skip: skipNames }), from: theirWords.channel === "email" ? "their email" : "their text" };
+  const personalHook = personal && { kind: "personal", key: keyOf("personal", personal.at, personal.what), at: personal.at, daysAgo: personal.daysAgo,
+    line: `something they told us about themselves ${dayWord(personal.daysAgo)}: ${personal.what}`, anchor: anchorOf(personal.what, { skip: skipNames }), from: "our notes" };
+  if (party === "agent") {
+    if (lead) add({ kind: "lead", key: keyOf("lead", lead.at), at: lead.at, daysAgo: lead.daysAgo,
+      line: `they told us ${dayWord(lead.daysAgo)} that one might be coming up${lead.what ? ` (${lead.what})` : ""}. Ask about it without any address or street: "any word on the one you said was coming up?"`,
+      anchor: "", from: "their text" });
+    if (question) add({ kind: "question", key: keyOf("question", question.at), at: question.at, daysAgo: question.daysAgo,
+      line: `they asked us ${dayWord(question.daysAgo)} and never got a real answer: "${question.text}"`, anchor: "", from: "their text" });
+    if (call) add({ kind: "call", key: keyOf("call", call.at), at: call.at, daysAgo: call.daysAgo,
+      line: `on a call ${dayWord(call.daysAgo)}: ${call.line}`, anchor: anchorOf(call.line, { skip: skipNames }), from: "a call" });
+    add(words);
+    add(personalHook);
+    if (theirNo) add({ kind: "their_no", key: keyOf("their_no", theirNo.at), at: theirNo.at, daysAgo: theirNo.daysAgo,
+      line: `${dayWord(theirNo.daysAgo)} they told us nothing was in the works`, anchor: "", from: "their text" });
+  } else {
+    add(words);
+    for (const q of quotes) add({ kind: "quotes", key: keyOf("quotes", q.at, q.text), at: q.at, daysAgo: q.daysAgo,
+      line: `in their own words, ${dayWord(q.daysAgo)}: "${q.text}"`, anchor: anchorOf(q.text, { skip: skipNames }), from: "their read" });
+    if (buyCity) add({ kind: "purchase_city", key: `purchase_city:${buyCity.toLowerCase()}`, at: null, daysAgo: null,
+      line: `public records show they bought around ${buyCity} lately: name the town as where they buy, never the house`, anchor: buyCity, from: "public records" });
+    add(personalHook);
+  }
+  return { lead, question, call, theirWords, personal, theirNo, quotes, buyCity, areas, lastSummary, hooks };
+}
+
+/* -- which check-ins the composer writes -- */
+
+const LISTING_PULSE_REASONS = new Set(["fresh_listing", "off_market_listing"]);
+/**
+ * composes(kind, { sourceKind, reason, forMatt }) → whether the composer
+ * writes this check-in: the agent check-in (not a fresh listing of theirs,
+ * which is the listing ping, nor the thank-you after a close, nor Matt's 15),
+ * the check-ins they asked for (not the net under a text of theirs we never
+ * answered, which picks their own words back up), and the buyer pulse.
+ */
+export function composes(kind = "", { sourceKind = "", reason = "", forMatt = false } = {}) {
+  if (kind === "agent_pulse") return !forMatt && !LISTING_PULSE_REASONS.has(reason) && reason !== "deal_thanks";
+  if (kind === "checkin_due") return sourceKind !== "unanswered";
+  return kind === "buyer_pulse";
+}
+
+/**
+ * strictNoHouse(kind, outbound) → true for a check-in that may never name a
+ * house, a street or an address from before (Matt, 2026-11-09 ~22:05): the
+ * agent check-in (but the listing ping about a listing they just posted),
+ * the check-ins they asked for (but the one picking up a text of theirs we
+ * never answered), the buyer pulse, a check-in after a house we passed on
+ * (but one back on the market), and the cold ladder's rungs past day 2.
+ */
+export function strictNoHouse(kind = "", outbound = {}) {
+  const o = outbound || {};
+  if (kind === "agent_pulse") return !LISTING_PULSE_REASONS.has(o.reason) && !o.listing?.focus;
+  if (kind === "checkin_due") return o.sourceKind !== "unanswered";
+  if (kind === "buyer_pulse") return true;
+  if (kind === "passed_checkin") return !o.relisted;
+  if (kind === "outreach_nudge") return Boolean(o.repeats) && !Number(o.stepIndex);
+  return false;
+}
+
+/** composerArm(contactId, share) → "model" for the share of contacts the model writes for, "control" for the rest. */
+export const composerArm = (contactId = "", share = 100) => (openerVariant(String(contactId || ""), 100) < clamp(share, 100, 0, 100) ? "model" : "control");
+
+/**
+ * composeRoute({ pack, kind, sourceKind, reason, forMatt, settings, contactId, now }) → { mode, arm, hook, why?, until? }
+ *
+ *   off       the composer is off, or this check-in isn't one it writes: as today
+ *   shadow    today's text goes; the model's is written beside it, unsent
+ *   control   the contact is in the control arm: today's text, stamped
+ *   model     the model writes it from hooks[0] (a dated check-in they asked
+ *             for is written whether or not there's a hook)
+ *   fallback  the model's arm with nothing to name and skipEmpty off: today's text
+ *   skip      the model's arm with nothing to name: waits `skipDays` (a week
+ *             for the weekly deal-source check-in), never on the Desk
+ *
+ * `settings` is conversationAi.checkIns.
+ */
+export function composeRoute({ pack = {}, kind = "", sourceKind = "", reason = "", forMatt = false, settings = {}, contactId = "", now = Date.now() } = {}) {
+  const s = normalizeCheckInComposer(settings);
+  if (s.composer === "off" || !composes(kind, { sourceKind, reason, forMatt })) return { mode: "off" };
+  const hook = (pack?.hooks || [])[0] || null;
+  const critical = isCriticalCheckIn(kind, sourceKind);
+  if (s.composer === "shadow") return { mode: "shadow", arm: "shadow", hook, critical };
+  const arm = composerArm(contactId, s.composerShare);
+  if (arm === "control") return { mode: "control", arm, hook, critical };
+  if (hook || (kind === "checkin_due" && critical)) return { mode: "model", arm, hook, critical };
+  if (s.skipEmpty && !critical) {
+    const days = kind === "checkin_due" && sourceKind === "source" ? 7 : s.skipDays;
+    return { mode: "skip", arm, hook: null, critical, why: sourceKind === "source" ? "nothing new since last week's check-in" : "nothing real to say", until: iso(now + days * DAY_MS) };
+  }
+  return { mode: "fallback", arm, hook: null, critical };
+}
+
+/** checkInStamp(route) → what the draft and its texted event carry: the arm, the hook and where the detail came from. */
+export function checkInStamp(route = {}) {
+  if (!route || route.mode === "off" || !route.arm) return null;
+  const h = route.hook || null;
+  return { arm: route.arm, hook: h?.kind || null, detailKind: h?.from || null, key: h?.key || null };
+}
+
+/**
+ * openingIndex({ touch, contactId, ourLast }) → 0 | 1 | 2
+ *
+ * Which way the model opens (ghl-broker/conversation-prompt.js OPENINGS):
+ * on the thing, on their name and the thing, or on the question. By the
+ * contact's own count of check-ins, and never the shape our last text had
+ * (two texts running that open on their name read like a mail merge).
+ */
+export function openingIndex({ touch = 0, contactId = "", ourLast = [] } = {}) {
+  let i = (openerVariant(String(contactId || ""), 3) + Math.max(0, Math.round(Number(touch) || 0))) % 3;
+  const last = String((ourLast || [])[0]?.text ?? (ourLast || [])[0] ?? "");
+  const onName = /^\s*(?:hi |hey |hello )?[A-Z][a-z'’-]+,/.test(last);
+  if (onName && i === 1) i = 2;
+  return i;
+}
+
+/** nothingToSay(draft) → true when the model declined: no text, and "nothing real (or new) to say". */
+export const nothingToSay = (draft) => !String(draft?.reply || "").trim() && /\bnothing (?:real|new) to say\b/i.test(String(draft?.humanReason || ""));
+
+// How Matt sounds checking in, for the composed prompt (ghl-broker/
+// conversation-prompt.js CHECKIN_VOICE): invented lines in the shape his own
+// answered texts take, never a real thread's words, and none names a house.
+// The voice, never the words: a check-in that copies one is held.
+export const CHECK_IN_VOICE_EXAMPLES = Object.freeze([
+  "how was the trip? anything new come up while you were out?",
+  "you said spring is when your sellers start moving. seeing any of that yet?",
+  "still slammed with the new team? anything rough land on your end lately?",
+  "any word on the one you said was coming up?",
+  "how's Kentwood treating you this fall? any older ones sitting that the sellers are tired of?",
+]);
+export const BUYER_VOICE_EXAMPLES = Object.freeze([
+  "still buying flips right now? got you down for heavy rehab around Kentwood, still right?",
+  "you said you were done with rentals for a while. still the case, or open to one again?",
+  "still looking north of the lake, or has that moved?",
+]);
+
+/**
+ * checkInFlags({ text, hook }) → [flag]
+ *
+ * A check-in that names a house from before is held: any street, address or
+ * pointer to one (namesAHouse), even a deal we closed together (Matt,
+ * 2026-11-09). A model check-in written around a hook with a plain anchor
+ * word (their town, the trip) has to say it; otherwise it isn't about the
+ * one thing. runProactive writes it once more, then drops it.
+ */
+export function checkInFlags({ text = "", hook = null } = {}) {
+  const out = [];
+  const house = namesAHouse(text);
+  if (house) out.push(`named a house (${clip(house, 40)}): a check-in never names a house, a street or an address from before`);
+  const a = String(hook?.anchor || "").trim();
+  if (a && String(text || "").trim() && !new RegExp(`\\b${a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(String(text))) {
+    out.push(`doesn't say the one thing (${a}): name it, or leave the text empty`);
+  }
+  // A voice example said back word for word (the lead line is the one we mean them to use).
+  // (The same words or the same sentence; opening alike is fine.)
+  const copied = [...CHECK_IN_VOICE_EXAMPLES, ...BUYER_VOICE_EXAMPLES].filter((x) => !/said was coming up/.test(x));
+  const copies = (list) => { const r = repeatsUs(text, list); return r && !/^opens like/.test(r) ? r : ""; };
+  if (hook && String(text || "").trim() && (copies(copied.slice(0, PRIOR_MAX)) || copies(copied.slice(PRIOR_MAX)))) {
+    out.push("copied a voice example: say it in its own words");
+  }
+  return out;
+}
+
+/**
+ * checkInReport(events, { days, now }) → { days, arms, hooks, skips }
+ *
+ * What the check-ins did: per arm (model, control, shadow, and "none" for
+ * the ones before the composer), how many went, how many got a reply within
+ * a week and how many an opt-out; per hook kind the same; and why the ones
+ * that waited, waited. `events` are agent_pulse_texted, pulse_texted,
+ * checkin_skipped, text_summary and unsubscribed rows. Counts only.
+ */
+export const CHECK_IN_REPORT_TYPES = Object.freeze(["agent_pulse_texted", "pulse_texted", "checkin_skipped", "text_summary", "unsubscribed"]);
+export function checkInReport(events = [], { days = 30, now = Date.now() } = {}) {
+  const since = now - Math.max(1, Number(days) || 30) * DAY_MS;
+  const replies = new Map();
+  const stops = new Map();
+  for (const e of events || []) {
+    if (!e?.contactId) continue;
+    if (e.type === "text_summary" && e.data?.inbound) (replies.get(e.contactId) || replies.set(e.contactId, []).get(e.contactId)).push(ms(e.at) ?? 0);
+    if (e.type === "unsubscribed") (stops.get(e.contactId) || stops.set(e.contactId, []).get(e.contactId)).push(ms(e.at) ?? 0);
+  }
+  const after = (map, id, t) => (map.get(id) || []).some((x) => x > t && x - t <= 7 * DAY_MS);
+  const arms = {};
+  const hooks = {};
+  const skips = {};
+  const bump = (o, k, f) => { o[k] ||= { sent: 0, replied: 0, stops: 0 }; o[k][f]++; };
+  for (const e of events || []) {
+    const t = ms(e?.at);
+    if (t == null || t < since || t > now) continue;
+    if (e.type === "checkin_skipped") { const w = clip(e.data?.why, 60) || "waited"; skips[w] = (skips[w] || 0) + 1; continue; }
+    if (e.type !== "agent_pulse_texted" && e.type !== "pulse_texted") continue;
+    const ci = e.data?.checkIn || null;
+    const arm = ci?.arm || "none";
+    const hook = ci?.hook || (ci ? "none" : "");
+    bump(arms, arm, "sent");
+    if (hook) bump(hooks, hook, "sent");
+    if (after(replies, e.contactId, t)) { arms[arm].replied++; if (hook) hooks[hook].replied++; }
+    if (after(stops, e.contactId, t)) { arms[arm].stops++; if (hook) hooks[hook].stops++; }
+  }
+  const rate = (o) => { for (const v of Object.values(o)) v.replyRate = v.sent ? Math.round((v.replied / v.sent) * 1000) / 10 : 0; return o; };
+  return { days: Math.max(1, Number(days) || 30), arms: rate(arms), hooks: rate(hooks), skips };
 }

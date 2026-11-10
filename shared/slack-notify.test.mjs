@@ -281,3 +281,17 @@ test("a house's status is the furthest along of every agent's current offer on i
   assert.equal(houseStatus([passed]).key, "passed");
   assert.equal(houseStatus([draft]), null);
 });
+
+// 2026-11-09: someone an agent pointed us to for a house was thanked and
+// forgotten unless Matt opened the Desk. Names here are invented.
+test("a referral shows in the morning post without a phone number", () => {
+  const c = morningCounts([
+    { type: "referral_mentioned", contactId: "a", at: "2026-11-10T01:00:00Z",
+      data: { name: "Juniper Ashgrove", brokerage: "Fernhill Realty", relation: "colleague", phone: "(206) 555-0142", agentFirst: "Wren" } },
+    { type: "referral_mentioned", contactId: "b", at: "2026-11-10T02:00:00Z", data: { name: "", relation: "brother", brokerage: "" } },
+  ], { since: "2026-11-09T15:00:00Z", until: "2026-11-10T15:00:00Z" });
+  const t = textOf(renderMorning(c));
+  assert.match(t, /Referrals to reach: \*2\* — Juniper at Fernhill Realty \(from Wren\), their brother \(from an agent\)/);
+  assert.doesNotMatch(t, /555|0142|Ashgrove/, "never a phone, never a whole name");
+  assert.doesNotMatch(textOf(renderMorning({})), /Referrals/, "none: no line");
+});

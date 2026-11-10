@@ -61,7 +61,8 @@ import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 // shared/voice.js's reader returns { text, at, channel } for the voice check; this file's own
 // ourLastTexts (below, the cold ladder's) returns plain text, so the voice one goes by voicePrior.
 import { voiceFlags, hardVoiceKeys, voiceLine, ourLastTexts as voicePrior, VOICE_LINE_RX } from "./shared/voice.js";
-import { checkInPack, routeCheckIn, routesCheckIn, normalizeCheckInRoute, asksIfBot, onlyAsksIfBot, botAskFlags, BOT_ASK_REASON, goesBySaid, goesByOf } from "./shared/check-in.js";
+import { checkInPack, routeCheckIn, routesCheckIn, normalizeCheckInRoute, asksIfBot, onlyAsksIfBot, botAskFlags, BOT_ASK_REASON, goesBySaid, goesByOf,
+  strictNoHouse, checkInFlags, namesBookHouse, namesAHouse, composeRoute, composes, checkInStamp, openingIndex, nothingToSay, normalizeCheckInComposer } from "./shared/check-in.js";
 import { normalizeDealTexts } from "./shared/blast-text.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
@@ -113,14 +114,14 @@ import { optedOutFor, recordOptOut, machineStarted } from "./opt-out.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { endsWithQuestionToThem } from "./shared/promise-resolver.js";
 import { keepsOurWord } from "./shared/promise-owed.js";
-import { detectPromise, isConditionalPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn, detectLeadTiming, leadIsTheNet } from "./shared/follow-up.js";
+import { detectPromise, isConditionalPromise, PROMISE_DUE_HOURS, checkInRequested, offersToSendDeals, addressPending, takingItToSeller, unansweredCheckIn, detectLeadTiming, leadIsTheNet, detectLead, dealSourceWords } from "./shared/follow-up.js";
 import { resolveParty } from "./conversation-party.js";
 import {
   loadContactContext, loadAgentContext, loadInvestorContext, summarizeOffers, RA_OFFERS_IN_CONTEXT, liveDealHold, lessonsContextText, roughAmounts,
   investorFacingPrice, INVESTOR_DEAL_STAGES } from "./conversation-context.js";
 import {
   buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext, CARRIER_CHECKED_KINDS,
-  openerPlan,
+  openerPlan, OUR_TEXTS_KINDS,
 } from "./conversation-prompt.js";
 import { carrierFlags, coldBuyerFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
@@ -3907,7 +3908,10 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       variant: Number(p.variant) || 0,
       // Their own count of check-ins that went (agent-pulse.js): which fixed
       // text is next (shared/check-in.js pickVariant).
-      ...(p.touch != null ? { touch: Number(p.touch) || 0 } : {}) };
+      ...(p.touch != null ? { touch: Number(p.touch) || 0 } : {}),
+      // A lead they said was coming, with no day on it (shared/agent-pulse.js
+      // undatedLeadFor): asked about, never by an address.
+      ...(p.lead?.at ? { lead: { what: String(p.lead.what || "").slice(0, 80), said: String(p.lead.said || "").slice(0, 200), at: p.lead.at, undated: true } } : {}) };
   }
   if (kind === "second_look") {
     // Our same number, said in thousands rounded down, and nothing else.
@@ -3925,16 +3929,23 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
   }
   if (kind === "buyer_pulse") {
     // Context clues for a check-in with no deal in it (shared/buyer-pulse.js
-    // pulseSubject). There is no property, so no address.
+    // pulseSubject). There is no property, so no address. And no house we
+    // sent them, how it went or why they passed (Matt, 2026-11-09 ~22:05:
+    // check-ins never reference past properties): the subject still knows
+    // them (subject.pastHouses, for the gate), the prompt never sees them.
     const p = subject || {};
+    // The city we say we're in, by where they buy (2026-11-09: until then
+    // every pulse said "someone in Seattle", Bend buyers too).
+    const opener = normalizeOpener(saved?.outreachAutopilot?.opener);
+    const town = String((p.cities || [])[0] || "").toLowerCase();
+    const home = (opener.homes || []).find((h) => town && String(h?.home || "").toLowerCase() === town)?.home || homeFor({}, opener);
     return { kind, address: "", dealsSent: Number(p.dealsSent) || 0, conversed: Boolean(p.conversed), passed: Number(p.passed) || 0,
       lookedAtDeals: Boolean(p.lookedAtDeals), boughtFromUs: Boolean(p.boughtFromUs),
       lastBuyCity: String(p.lastBuyCity || ""), lastBuyYear: p.lastBuyYear || null, purchases: Number(p.purchases) || 0,
       cities: (p.cities || []).slice(0, 3), types: (p.types || []).slice(0, 3), buyBox: String(p.buyBox || "").slice(0, 200),
-      variant: Number(p.variant) || 0,
+      variant: Number(p.variant) || 0, home,
+      ...(p.touch != null ? { touch: Number(p.touch) || 0 } : {}),
       // What makes it personal (2026-10-05, shared/buyer-pulse.js pulseSubject).
-      lastHouse: p.lastHouse?.street ? { street: String(p.lastHouse.street).slice(0, 80), city: String(p.lastHouse.city || "").slice(0, 40), how: String(p.lastHouse.how || "").slice(0, 100) } : null,
-      passReasons: (p.passReasons || []).slice(0, 3).map((x) => String(x).slice(0, 120)),
       aboutThem: String(p.aboutThem || "").slice(0, 200), lastSummary: String(p.lastSummary || "").slice(0, 240), nextAction: String(p.nextAction || "").slice(0, 160),
       missing: (p.missing || []).slice(0, 4).map(String), source: String(p.source || "").slice(0, 80),
       voice: String(saved?.dispoAutopilot?.pulse?.voice || "").slice(0, 600) };
@@ -3993,8 +4004,14 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
     ...(kind === "checkin_due" ? { phrase: subject?.phrase || "", sourceKind: subject?.sourceKind || "date",
       // We said when (shared/brush-offs.js ourCheckBack): keeping our word, not theirs.
       ...(subject?.ours ? { ours: true } : {}),
+      // The weekly deal-source check-in: which week of the six, and the words
+      // they offered in ("I'll keep you in mind for any fixers").
+      ...(Number(subject?.week) > 0 ? { week: Number(subject.week), weeks: Number(subject.weeks) || 6 } : {}),
+      ...(subject?.said ? { said: String(subject.said).slice(0, 160) } : {}),
       // The lead they told us about, in their words (promise-sweep.js).
-      ...(subject?.lead ? { lead: { what: String(subject.lead.what || "").slice(0, 80), said: String(subject.lead.said || "").slice(0, 200),
+      // Their words, unless they name the house: the check-in asks about the lead, never by an address (2026-11-09).
+      ...(subject?.lead ? { lead: { what: namesAHouse(subject.lead.what) ? "" : String(subject.lead.what || "").slice(0, 80),
+        said: namesAHouse(subject.lead.said) ? "" : String(subject.lead.said || "").slice(0, 200),
         toldAt: subject.lead.toldAt || null, via: subject.lead.via || "text" } } : {}) } : {}),
     ...(kind === "address_chase" ? { hint: String(subject?.hint || "").slice(0, 300), phrase: subject?.phrase || "",
       rung: Number(subject?.rung) || 1, rungs: Number(subject?.rungs) || 1,
@@ -4110,13 +4127,33 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   // or address in it, or any house in their book, holds it. runProactive
   // writes it once more, then drops it.
   const noHouse = kind === "checkin_due" && Boolean(outbound?.ours);
-  const bookHouses = noHouse ? [...(context.offers?.numbers || []).map((n) => n?.address), subject?.address, offer?.address].filter(Boolean) : [];
+  // Every recurring check-in, not only that one (Matt, 2026-11-09 ~22:05:
+  // "make sure the checkins dont reference past properties"): the agent
+  // check-in, the check-ins they asked for, the buyer pulse, the check-in
+  // after a pass and the cold ladder past day 2 never name a street, an
+  // address or a house from before, not even a deal we closed together
+  // (shared/check-in.js strictNoHouse, checkInFlags). Out of it: the listing
+  // ping about a listing they just posted, a relisted house, and the net
+  // under a text of theirs we never answered. Only adds a hold; runProactive
+  // writes it once more, then drops it.
+  const strict = strictNoHouse(kind, outbound);
+  const bookHouses = noHouse || strict ? [...(context.offers?.numbers || []).map((n) => n?.address), subject?.address, offer?.address,
+    ...(Array.isArray(subject?.pastHouses) ? subject.pastHouses : [])].filter(Boolean) : [];
+  // The one real thing a composed check-in was written around (runProactive).
+  const oneThing = outbound?.oneThing || null;
+  const strictFlags = (d) => {
+    if (!strict) return [];
+    const out = checkInFlags({ text: d?.reply || "", hook: oneThing });
+    const named = !out.some((f) => /^named a house/.test(f)) ? namesBookHouse(d?.reply || "", bookHouses) : "";
+    if (named) out.unshift(`named a house (${named}): a check-in never names a house, a street or an address from before`);
+    return out;
+  };
   // The voice check against our last texts to them (2026-11-09). A fixed
   // text of Matt's own is flagged, never held (shared/standard-texts.js
   // isShippedText); the app's own texts and the model's are machine.
   const prior = config.checkIns?.lint !== false ? voicePrior(a.transcript) : null;
   const voiceFor = (d) => (prior ? { kind: voiceKindOf(kind, outbound), prior, machine: !d?.standard || isShippedText(d.template), signOff: config.persona?.signOff } : null);
-  const gate = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
+  const baseGate = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
     // A text we start sends nothing with it: what it claims went, went before (shared/reply-claims.js).
     ...claimGateInputs(context.claims, { address: d.propertyAddress || subject?.address || offer?.address }),
     voice: voiceFor(d),
@@ -4129,6 +4166,11 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
     ourValue: ourValueFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
     quotes: quotesFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
     formsState: formsStateOf(d.propertyAddress, subject?.address, offer?.address) });
+  const gate = strict ? (d) => {
+    const g = baseGate(d);
+    const extra = strictFlags(d);
+    return extra.length ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), ...extra] } : g;
+  } : baseGate;
   // The second look is one or two short lines (shared/second-look.js), and
   // says our same number and nothing above it — not even the book's own
   // rounding up ("378K" on 377,552).
@@ -4153,23 +4195,30 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   }
   if (pastHouses.length) {
     return voiceLast((d) => {
-      const g = gate(d);
+      // The house we've had with them is named first: it's what the redraft is told.
+      const g = baseGate(d);
       const named = pastHouses.map((h) => namesHouse(d?.reply, h)).find(Boolean);
-      return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named a house from before (${named}): the check-in is generic — ask about distressed or off-market houses, never one we've had with them`] } : g;
+      const extra = [...(named ? [`named a house from before (${named}): the check-in is generic — ask about distressed or off-market houses, never one we've had with them`] : []),
+        ...strictFlags(d).filter((f) => !named || !/^named a house/.test(f))];
+      return extra.length ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), ...extra] } : g;
     });
   }
   if (noHouse) {
     return voiceLast((d) => {
-      const g = gate(d);
+      const g = baseGate(d);
       const named = streetMentions(d?.reply || "")[0]?.address || bookHouses.map((h) => namesHouse(d?.reply, h)).find(Boolean);
-      return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named a house (${named}): a check-in never names a house, a street or an address from before`] } : g;
+      const extra = [...(named ? [`named a house (${named}): a check-in never names a house, a street or an address from before`] : []),
+        ...strictFlags(d).filter((f) => !named || !/^named a house/.test(f))];
+      return extra.length ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), ...extra] } : g;
     });
   }
-  if (!oldHouse) return gate;
+  if (!oldHouse) return strict ? voiceLast(gate) : gate;
   return voiceLast((d) => {
-    const g = gate(d);
+    const g = baseGate(d);
     const named = namesHouse(d?.reply, oldHouse);
-    return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named the house we passed on (${named}): a check-in asks about other houses that need work, never that one`] } : g;
+    const extra = [...(named ? [`named the house we passed on (${named}): a check-in asks about other houses that need work, never that one`] : []),
+      ...strictFlags(d).filter((f) => !named || !/^named a house/.test(f))];
+    return extra.length ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), ...extra] } : g;
   });
 }
 
@@ -4309,6 +4358,62 @@ export function listingCheckInFor({ kind, outbound, transcript = "" }) {
   return { outbound: { ...outbound, reason: "general", listing: null, address: "", coldOpen: false, hook: { kind: "situation" } } };
 }
 
+/**
+ * composeFor({ store, locationId, contactId, kind, subject, outbound, a, config, party, now }) → { route, pack }
+ *
+ * The composer's read (shared/check-in.js, 2026-11-09): the thread, the
+ * contact record's facts (a detail they shared, the areas they work, what we
+ * last talked about), their calls' summaries, an investor's own quotes, and
+ * which one things our check-ins already used; then the route. Only when the
+ * composer is on or shadowing.
+ */
+async function composeFor({ store, locationId, contactId, kind, subject, outbound, a, config, party, now }) {
+  const ci = normalizeCheckInRoute(config.checkIns);
+  const profile = typeof store?.getContactProfile === "function" ? await store.getContactProfile(locationId, contactId).catch(() => null) : null;
+  const events = (await store.listContactEvents?.(locationId, contactId, { types: ["call_summary", "agent_pulse_texted", "pulse_texted"], limit: 100 }).catch(() => [])) || [];
+  const read = party === "investor" && typeof store?.getInvestorRead === "function" ? await store.getInvestorRead(locationId, contactId).catch(() => null) : null;
+  const sourceKind = subject?.sourceKind || "";
+  const ourLast = voicePrior(a.transcript, { limit: 1 });
+  const pack = checkInPack(a.transcript, { ...(subject || {}), first: firstNameOf(a.contactName) }, {
+    offers: [], agentTagged: true, repeatTouches: ci.repeatTouches, aiComplaintDays: ci.aiComplaintDays, afterNoDays: ci.afterNoDays,
+    party, composer: normalizeCheckInComposer(config.checkIns), facts: profile?.facts || {},
+    calls: events.filter((e) => e?.type === "call_summary"),
+    quotes: Array.isArray(read?.doc?.quotes) ? read.doc.quotes : [],
+    spent: events.filter((e) => (e?.type === "agent_pulse_texted" || e?.type === "pulse_texted") && e.data?.checkIn?.key).map((e) => e.data.checkIn.key),
+    // The weekly deal-source check-in: something new since last week's, or nothing.
+    newerThan: kind === "checkin_due" && sourceKind === "source" ? ourLast[0]?.at || null : null,
+    lead: kind === "checkin_due" && sourceKind === "lead" && subject?.lead ? subject.lead : (outbound?.lead || null),
+  }, now);
+  const route = composeRoute({ pack, kind, sourceKind, reason: outbound?.reason || "", forMatt: subject?.forMatt === true, settings: config.checkIns, contactId, now });
+  return { route, pack };
+}
+
+// The buyer pulse's brief carries our last three texts to them, dated, and
+// so do the check-ins about something open (the critical kinds,
+// conversation-prompt.js OUR_TEXTS_KINDS): none opens or says it the way one
+// of those did (2026-11-09).
+function withOurTexts(kind, outbound, transcript = "") {
+  if (kind !== "buyer_pulse" && !OUR_TEXTS_KINDS.has(kind)) return outbound;
+  const dayAgo = (at) => { const t = Date.parse(at || ""); return Number.isFinite(t) ? Math.max(0, Math.floor((Date.now() - t) / 86400000)) : null; };
+  return { ...outbound, ourTexts: voicePrior(transcript, { limit: 3 }).map((o) => ({ text: String(o.text || "").slice(0, 240), daysAgo: dayAgo(o.at) })) };
+}
+
+// What the composed prompt sees of the pack (conversation-prompt.js
+// checkInFacts): our last three texts and their last words, dated, and the
+// background. Their words that name a house are left out.
+function promptPack(pack) {
+  if (!pack) return null;
+  const dayAgo = (at) => { const t = Date.parse(at || ""); return Number.isFinite(t) ? Math.max(0, Math.floor((Date.now() - t) / 86400000)) : null; };
+  const t = pack.theirLast;
+  return {
+    ourLast: (pack.ourLast || []).slice(0, 3).map((o) => ({ text: String(o.text || "").slice(0, 240), daysAgo: dayAgo(o.at) })),
+    theirLast: t && t.read !== "auto" && t.read !== "ai_complaint" ? { text: namesAHouse(t.text) ? "" : String(t.text || "").slice(0, 240), daysAgo: t.daysAgo, channel: t.channel || "sms" } : null,
+    lastSummary: pack.lastSummary || null,
+    areas: pack.areas || [],
+    quotes: (pack.quotes || []).slice(0, 2),
+  };
+}
+
 // The name they go by (the goes_by fact, shared/check-in.js goesBySaid), or "".
 async function goesByFor({ store, locationId, contactId }) {
   if (typeof store?.getContactProfile !== "function" || !contactId) return "";
@@ -4333,7 +4438,7 @@ function withoutSignOff(draft, kind, signer = "") {
  * `held` is the money guard or another gate objecting; the check-in's own
  * "a person's call" lock is not counted, since its switch releases that.
  */
-export async function previewProactive({ client, locationId, saved, store, contactId, kind, offer = null, subject = null, deps = {}, name = "" }) {
+export async function previewProactive({ client, locationId, saved, store, contactId, kind, offer = null, subject = null, deps = {}, name = "", compose = false }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
   const config = conversationConfig(saved);
@@ -4373,7 +4478,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
   const previewArgs = {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
     contact: { name: a.contactName || name, tags: a.tags, ...(goesBy ? { goesBy } : {}) }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
-    aiApiKey, party, config, context, channel: "sms", outbound, batch: null,
+    aiApiKey, party, config, context, channel: "sms", outbound: withOurTexts(kind, outbound, a.transcript), batch: null,
   };
   const draftWith = deps.draft || draftReply;
   const draft = standardDraft({ kind, offer, outbound, name: a.contactName || name, contactId, transcript: a.transcript, pools: config.checkIns?.pools || "v2", goesBy, checkIns: config.checkIns }) || await writeShorterFirstText({
@@ -4388,8 +4493,29 @@ export async function previewProactive({ client, locationId, saved, store, conta
   draft.intent = kind;
   const gate = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound, dossier })(draft);
   const clean = Boolean(gate.ok || (gate.locked && gate.clean));
+  // Side by side (Settings → Check-ins, 2026-11-09): what the composer would
+  // write from the one real thing, whatever the composer is set to. Nothing
+  // real to name: no model call, and it says so.
+  let composed = null;
+  if (compose && composes(kind, { sourceKind: subject?.sourceKind || "", reason: outbound.reason || "", forMatt: subject?.forMatt === true })) {
+    const shadowConfig = { ...config, checkIns: { ...(config.checkIns || {}), composer: "shadow" } };
+    const { route, pack } = await composeFor({ store, locationId, contactId, kind, subject, outbound, a, config: shadowConfig, party, now: Date.now() });
+    const critical = Boolean(route.critical);
+    if (!route.hook && !(kind === "checkin_due" && critical)) composed = { reply: "", skipped: "nothing real to say: it would wait" };
+    else {
+      const sh = { ...outbound, pack: promptPack(pack), oneThing: route.hook || null,
+        opening: openingIndex({ touch: subject?.touch ?? outbound.touch ?? 0, contactId, ourLast: pack?.ourLast || [] }) };
+      const d2 = await draftWith({ ...previewArgs, outbound: sh });
+      if (nothingToSay(d2)) composed = { reply: "", skipped: "nothing real to say: it would wait", hook: route.hook?.kind || null };
+      else {
+        const g2 = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound: sh, dossier })({ ...d2, intent: kind });
+        composed = { reply: String(d2?.reply || ""), hook: route.hook?.kind || null, line: String(route.hook?.line || "").slice(0, 200),
+          held: !(g2.ok || (g2.locked && g2.clean)), flags: (g2.flags || []).filter((f) => f !== g2.locked) };
+      }
+    }
+  }
   return { contactName: a.contactName || name, reply: String(draft.reply || ""), summary: String(draft.summary || ""),
-    held: !clean, flags: (gate.flags || []).filter((f) => f !== gate.locked) };
+    held: !clean, flags: (gate.flags || []).filter((f) => f !== gate.locked), ...(composed ? { composed } : {}) };
 }
 
 async function runProactive(job, ctx) {
@@ -4468,11 +4594,40 @@ async function runProactive(job, ctx) {
     if (route.route === "matt") forMatt = route;
   }
 
+  // The one real thing (shared/check-in.js composeRoute, 2026-11-09, Matt:
+  // check-ins that read like him, and never a past house). Off by default:
+  // with the composer off, nothing below changes what goes. In "shadow",
+  // today's text goes and the model's, written around the one thing, is
+  // kept beside it, unsent. "On": the model's arm gets the model's text, or,
+  // with nothing real to name, waits (never on the Desk); the control arm
+  // gets today's. Both are stamped on the draft and the texted event.
+  let compose = { mode: "off" };
+  let composePack = null;
+  if (ctx.machine && !forMatt && normalizeCheckInComposer(config.checkIns).composer !== "off"
+      && composes(kind, { sourceKind: subject?.sourceKind || "", reason: outbound.reason || "", forMatt: subject?.forMatt === true })) {
+    ({ route: compose, pack: composePack } = await composeFor({ store, locationId, contactId: job.contactId, kind, subject, outbound, a, config, party, now }));
+  }
+  const skipDaysFor = () => (kind === "checkin_due" && subject?.sourceKind === "source" ? 7 : normalizeCheckInComposer(config.checkIns).skipDays);
+  const waitForNothing = async (why, until) => {
+    await recordEvent({ store, locationId, contactId: job.contactId, party, type: "checkin_skipped", at: new Date(now).toISOString(), source: "sweep",
+      dedupeKey: `checkin_skipped:${job.contactId}:${kind}:${new Date(now).toISOString().slice(0, 10)}`,
+      data: { kind, why, until, route: "skip", composer: true, ...(compose.arm ? { arm: compose.arm } : {}) } }).catch(() => {});
+    job.status = "held"; job.phase = ""; job.heldReason = `waits, not sent: ${why}`; job.finishedAt = new Date().toISOString();
+  };
+  if (compose.mode === "skip") return waitForNothing(compose.why, compose.until);
+  const opening = openingIndex({ touch: subject?.touch ?? outbound.touch ?? 0, contactId: job.contactId, ourLast: composePack?.ourLast || [] });
+  const composed = (route) => ({ ...outbound, pack: promptPack(composePack), oneThing: route.hook || null, opening });
+  // What the model writes from: the composed brief in the model's arm, today's otherwise.
+  // The buyer pulse's own brief shows our last three texts to them, so it
+  // never opens or says it the way one of those did (2026-11-09).
+  const writeOut = compose.mode === "model" ? composed(compose) : withOurTexts(kind, outbound, a.transcript);
+  const stamp = checkInStamp(compose);
+
   job.phase = "drafting";
   const draftArgs = {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
     contact: { name: a.contactName, tags: a.tags, ...(goesBy ? { goesBy } : {}) }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
-    aiApiKey, party, config, context, channel: "sms", outbound,
+    aiApiKey, party, config, context, channel: "sms", outbound: writeOut,
     // Nobody is waiting on a sweep's text: half price through the Batch API,
     // falling back to a direct call (draft-batch.js). `subject.direct`: a
     // person is waiting on this one (first texts held and written again,
@@ -4481,19 +4636,24 @@ async function runProactive(job, ctx) {
   };
   // Still reads like an ad the carriers block: written once more without it.
   const pools = config.checkIns?.pools || "v2";
-  let draft = standardDraft({ kind, offer, outbound, name: a.contactName, contactId: job.contactId, transcript: a.transcript, pools, goesBy, checkIns: config.checkIns }) || await writeShorterFirstText({
+  let draft = (compose.mode === "model" ? null : standardDraft({ kind, offer, outbound, name: a.contactName, contactId: job.contactId, transcript: a.transcript, pools, goesBy, checkIns: config.checkIns })) || await writeShorterFirstText({
     draft: withoutSignOff(await writeAgainWithoutCarrierWords({
       draft: await deps.draft(draftArgs), kind,
-      redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
+      redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...writeOut, avoid } }),
     }), kind, a.signer),
-    kind, outbound, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer),
+    kind, outbound: writeOut, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...writeOut, tooLong: n } }), kind, a.signer),
   }).then((d) => writeWithoutOverused({ draft: d, kind, variant: outbound.variant,
-    redraft: async (words) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, overused: words } }), kind, a.signer) }))
-    .then((d) => writeShorterFirstText({ draft: d, kind, outbound, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...outbound, tooLong: n } }), kind, a.signer) }));
+    redraft: async (words) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...writeOut, overused: words } }), kind, a.signer) }))
+    .then((d) => writeShorterFirstText({ draft: d, kind, outbound: writeOut, redraft: async (n) => withoutSignOff(await deps.draft({ ...draftArgs, outbound: { ...writeOut, tooLong: n } }), kind, a.signer) }));
   draft.intent = kind;
   if (draft.shadow && !draft.shadow.error) draft.shadow.intent = kind;
+  // The model had nothing real to say (the composed brief's NOTHING TO SAY):
+  // the check-in waits, like one with nothing to name. Never a Desk row.
+  if (compose.mode === "model" && !compose.critical && nothingToSay(draft)) {
+    return waitForNothing("nothing real to say", new Date(now + skipDaysFor() * 86400000).toISOString());
+  }
   job.summary = draft.summary;
-  const gateFor = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound, dossier });
+  const gateFor = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound: writeOut, dossier });
   let gate = gateFor(draft);
   // A text the machine started that a gate caught (not the kind's own
   // lock): written once more, told what tripped it. If it still trips,
@@ -4517,7 +4677,7 @@ async function runProactive(job, ctx) {
     // Held for how it reads: the redraft sees what our last text said, so it
     // opens and says it another way.
     const ourLast = tripped.some((f) => /^reads like a machine: /.test(f)) ? voicePrior(a.transcript, { limit: 1 })[0]?.text || "" : "";
-    const again = tripped.length ? await deps.draft({ ...draftArgs, outbound: { ...outbound, fix: tripped, ...(ourLast ? { ourLast } : {}) } }).catch(() => null) : null;
+    const again = tripped.length ? await deps.draft({ ...draftArgs, outbound: { ...writeOut, fix: tripped, ...(ourLast ? { ourLast } : {}) } }).catch(() => null) : null;
     if (again?.reply) {
       again.intent = kind;
       const g2 = gateFor(again);
@@ -4553,6 +4713,26 @@ async function runProactive(job, ctx) {
   if (a.optedOut) {
     auto = { send: false, code: "switch_off", reason: `needs a person: ${optedOutLine(a.optedOut)}` };
     gate = { ...gate, ok: false, flags: [...(gate.flags || []), OPTED_OUT_HOLD] };
+  }
+
+  // Shadow: the model's check-in, written around the one thing, kept beside
+  // today's text and never sent (Settings → Check-ins, read side by side).
+  // Nothing real to name: no call, and the row says so.
+  let checkInShadow = null;
+  if (compose.mode === "shadow") {
+    const at = new Date().toISOString();
+    if (!compose.hook && !(kind === "checkin_due" && compose.critical)) checkInShadow = { skipped: "nothing real to say", at };
+    else {
+      const sh = composed(compose);
+      const d2 = await deps.draft({ ...draftArgs, outbound: sh }).catch((e) => ({ error: String(e?.message || e).slice(0, 160) }));
+      if (d2?.error) checkInShadow = { error: d2.error, hook: compose.hook?.kind || null, at };
+      else if (nothingToSay(d2)) checkInShadow = { skipped: "nothing real to say", hook: compose.hook?.kind || null, at };
+      else {
+        const g2 = outboundGateFor({ spec, offer, subject, context, config, party, a, kind, outbound: sh, dossier })({ ...d2, intent: kind });
+        checkInShadow = { reply: String(d2?.reply || ""), hook: compose.hook?.kind || null, detailKind: compose.hook?.from || null,
+          flags: (g2.flags || []).filter((f) => f !== g2.locked).slice(0, 8), held: !passes(g2), usage: d2?.usage || null, at };
+      }
+    }
   }
 
   job.phase = "saving";
@@ -4604,7 +4784,14 @@ async function runProactive(job, ctx) {
       ...(kind === "outreach_open" ? openerChoices(outbound) : {}),
       // Which of Matt's fixed texts went, when one did.
       ...(draft.standard ? { standard: draft.standard, ...(kind === "outreach_open" ? { style: "standard" } : {}) } : {}),
+      // The composer's arm and the one thing it named (shared/check-in.js
+      // checkInStamp), read back by the check-ins report.
+      ...(stamp ? { checkIn: stamp } : {}),
+      // The lead they said was coming, asked about: the next check-in doesn't ask again.
+      ...(kind === "agent_pulse" && outbound.lead?.at && (draft.standard?.set === "lead" || (compose.mode === "model" && compose.hook?.kind === "lead"))
+        ? { leadAt: outbound.lead.at } : {}),
     },
+    ...(checkInShadow ? { checkInShadow } : {}),
     // What the voice check reads it as at send (sendReplyDraft's last look),
     // and a fixed text of Matt's own, which it flags but never holds.
     voiceKind: voiceKindOf(kind, outbound),
@@ -6633,7 +6820,9 @@ async function runReply(job, ctx) {
         store, locationId, contactId: job.contactId, party: "agent", type: "referral_mentioned", at: new Date(now).toISOString(),
         address: "", source: isCall ? "call" : "conversation", ref: record.id,
         dedupeKey: `referral_mentioned:${job.contactId}:${referralKey(referral)}`,
-        data: { name: referral.name, brokerage: referral.brokerage, relation: referral.relation, phone: referral.phone, phrase: referral.phrase },
+        data: { name: referral.name, brokerage: referral.brokerage, relation: referral.relation, phone: referral.phone, phrase: referral.phrase,
+          // Whose referral, by first name, for the morning post (shared/slack-notify.js): never a phone there.
+          agentFirst: String(a.contactName || "").trim().split(/\s+/)[0].slice(0, 30) },
       }).catch(() => {});
     }
     if (pend && (refusesAddress(job.message) || notAHouse(job.message))) {
@@ -6698,6 +6887,25 @@ async function runReply(job, ctx) {
     // Only a lead days away is the net under a held reply; one in March isn't.
     if (leadIsTheNet({ data: { kind: "lead", dueAt: lead.when } }, now)) checkInBooked = true;
   }
+  // A lead with no day on it ("I may have one coming up", shared/follow-up.js
+  // detectLead, 2026-11-09): booked with no date, so nothing fires on it by
+  // itself. Their next regular check-in asks about it, never sooner than two
+  // weeks from now and never after 60 days, and never by an address
+  // (shared/agent-pulse.js undatedLeadFor). Not when the address chase is
+  // already asking, nor about a house this text is about.
+  if (party === "agent" && !lead && !chaseStarted && draft.intent !== "opt_out" && !String(draft.propertyAddress || "").trim()) {
+    const theirWords = isCall ? callTheirs : (job.originalMessage || job.message);
+    const undated = theirWords ? detectLead(theirWords, now) : null;
+    if (undated && !undated.when) {
+      await recordEvent({
+        store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
+        address: "", source: isCall ? "call" : "conversation", ref: record.id,
+        dedupeKey: `checkin_requested:lead:${job.contactId}:undated:${new Date(now).toISOString().slice(0, 10)}`,
+        data: { kind: "lead", phrase: undated.phrase, dueAt: null, undated: true,
+          lead: { what: undated.what, when: null, said: namesAHouse(undated.said) ? "" : undated.said, confidence: undated.confidence, via: isCall ? "call" : "text" } },
+      }).catch(() => {});
+    }
+  }
   if (party === "agent" && !isCall && !["opt_out", "counter", "acceptance", "realm_yes"].includes(draft.intent)) {
     const ask = chaseHasDate || leadBooked ? null : (checkInRequested(job.message, now) || takingItToSeller(job.message, now)
       || (cadence?.checkBack ? { dueAt: cadenceDueAt(now, cadence.days), phrase: cadence.phrase } : null));
@@ -6727,7 +6935,9 @@ async function runReply(job, ctx) {
           store, locationId, contactId: job.contactId, party: "agent", type: "checkin_requested", at: new Date(now).toISOString(),
           address: "", source: "conversation", ref: record.id,
           dedupeKey: `checkin_requested:source:${job.contactId}:${new Date(now).toISOString().slice(0, 10)}`,
-          data: { kind: "source", phrase: "", dueAt: new Date(now + 7 * 86400000).toISOString(), left: 5 },
+          data: { kind: "source", phrase: "", dueAt: new Date(now + 7 * 86400000).toISOString(), left: 5,
+            // Their words when they offered, for the weekly check-in to pick up (never a house).
+            ...(() => { const w = dealSourceWords(job.message); return w && !namesAHouse(w) ? { said: w } : {}; })() },
         }).catch(() => {});
       }
     }
@@ -7988,7 +8198,11 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       address: d.outbound.address || "", source: "conversation", ref: d.id, dedupeKey: `agent_pulse_texted:${d.id}`,
       data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null,
         // What it named (shared/agent-pulse.js checkInHook), to read replies by.
-        ...(d.outbound.hook ? { hook: d.outbound.hook } : {}) },
+        ...(d.outbound.hook ? { hook: d.outbound.hook } : {}),
+        // The composer's arm and one thing (shared/check-in.js checkInStamp), and
+        // the lead it asked about, so the next check-in doesn't ask again.
+        ...(d.outbound.checkIn ? { checkIn: d.outbound.checkIn } : {}),
+        ...(d.outbound.leadAt ? { leadAt: d.outbound.leadAt } : {}) },
     }).catch(() => {});
   }
   // The pass note went: each house it named is done (shared/pass-note.js).
@@ -8032,7 +8246,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   if (d.outbound?.kind === "buyer_pulse") {
     await recordEvent({
       store, locationId, contactId: d.contactId, party: "investor", type: "pulse_texted", at: ts,
-      source: "conversation", ref: d.id, dedupeKey: `pulse_texted:${d.id}`, data: { draftId: d.id, auto: Boolean(auto) },
+      source: "conversation", ref: d.id, dedupeKey: `pulse_texted:${d.id}`, data: { draftId: d.id, auto: Boolean(auto), ...(d.outbound.checkIn ? { checkIn: d.outbound.checkIn } : {}) },
     }).catch(() => {});
   }
   // A gatekeeper's email, text or check-in actually went: the sequence's

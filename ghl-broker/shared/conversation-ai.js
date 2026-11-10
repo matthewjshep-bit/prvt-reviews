@@ -1126,8 +1126,16 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // (`afterNoDays`) or a "later" (theirs or ours); an "are you a bot?" keeps
   // every machine text off them for `aiComplaintDays` and waits for Matt.
   // These only hold a text back, so they ship on.
+  // The one real thing (shared/check-in.js composeRoute, 2026-11-09, Matt:
+  // check-ins personable and not AI, and never a past house): `composer`
+  // "shadow" writes the model's check-in beside the fixed one and sends only
+  // the fixed one; "on" lets the model write it for `composerShare` percent
+  // of contacts (by contact id), the rest the control. It is new automation
+  // and ships off. `skipEmpty` (composer on only): nothing real to name, the
+  // check-in waits `skipDays`. `personal`: a detail they shared may be it.
   checkIns: { lint: true, pools: "v2",
-    noRepeat: true, repeatTouches: 6, respectLastWord: true, afterNoDays: 30, aiComplaintDays: 30 },
+    noRepeat: true, repeatTouches: 6, respectLastWord: true, afterNoDays: 30, aiComplaintDays: 30,
+    composer: "off", composerShare: 100, skipEmpty: true, skipDays: 14, personal: true },
 });
 
 // The photo-only reply until 2026-11-09, read as never changed.
@@ -1557,6 +1565,11 @@ export function normalizeConversationAi(doc, seed = {}) {
         respectLastWord: bool(c.respectLastWord, C.respectLastWord),
         afterNoDays: int(c.afterNoDays, C.afterNoDays, 7, 120),
         aiComplaintDays: int(c.aiComplaintDays, C.aiComplaintDays, 7, 120),
+        composer: oneOf(c.composer, ["off", "shadow", "on"], C.composer),
+        composerShare: int(c.composerShare, C.composerShare, 0, 100),
+        skipEmpty: bool(c.skipEmpty, C.skipEmpty),
+        skipDays: int(c.skipDays, C.skipDays, 7, 60),
+        personal: bool(c.personal, C.personal),
       };
     })(),
     driver: (() => {
