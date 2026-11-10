@@ -949,6 +949,10 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
     // send — the action it refers to is ask-only regardless.
     minConfidence: "medium",           // "high" | "medium"
     holdOnNeedsHuman: false,
+    // Days off, "YYYY-MM-DD" in Pacific (2026-11, before Thanksgiving):
+    // nothing the machine starts goes out on one; replies still go. Empty
+    // changes nothing.
+    offDays: [],
   },
   // The nightly audit (shared/conversation-audit.js): every thread touched
   // today, checked at `hour` Pacific — answered where the dial allows, owed
@@ -1001,6 +1005,24 @@ export function isValidTimeZone(tz) {
   } catch {
     return false;
   }
+}
+
+/** isIsoDate(v) → true for a "YYYY-MM-DD" string that is a real calendar day (no 2026-02-30). */
+export function isIsoDate(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(typeof v === "string" ? v : "");
+  if (!m) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+}
+
+// Days off (autoSend.offDays): real dates only, once each, in order. At most
+// OFF_DAYS_MAX; past that the newest are kept, since a holiday gone by is
+// the one that no longer does anything.
+export const OFF_DAYS_MAX = 60;
+export function normalizeOffDays(v) {
+  if (!Array.isArray(v)) return [];
+  const days = [...new Set(v.filter((x) => typeof x === "string").map((x) => x.trim()).filter(isIsoDate))].sort();
+  return days.slice(-OFF_DAYS_MAX);
 }
 
 const FIELD_KEY_RE = /^[a-z][a-z0-9_]{0,59}$/;
@@ -1483,6 +1505,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       minConfidence: oneOf(auto.minConfidence, ["high", "medium"], D.autoSend.minConfidence),
       holdOnNeedsHuman: bool(auto.holdOnNeedsHuman, D.autoSend.holdOnNeedsHuman),
       otherNow: bool(auto.otherNow, D.autoSend.otherNow),
+      offDays: normalizeOffDays(auto.offDays),
     },
   };
   // Version 1 → 2, once. A deploy never edits a saved setting — except this

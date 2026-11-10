@@ -8,6 +8,7 @@ import {
   periodWindow, pacificDayKey, runsBetween, rollOntoRuns, dedupePlanned, attributeReplies, buildFollowUpEngine,
   mechanismOf, describeMechanism, FOLLOW_UP_MECHANISMS, FOLLOW_UP_GROUPS, EXCLUDED_KINDS,
 } from "./follow-up-engine.js";
+import { isOffDay, machineWorkday } from "./follow-up-engine.js";
 import { MACHINE_STARTED_KINDS } from "./follow-up.js";
 import { addWorkingHours, workingHoursBetween } from "./paper-follows.js";
 
@@ -28,6 +29,24 @@ test("the week the clocks go back still has seven days, one of them 25 hours", (
   assert.equal(w.buckets.length, 7);
   assert.deepEqual(w.buckets.map((b) => (b.end - b.start) / HOUR), [24, 24, 24, 24, 24, 24, 25]);
   assert.equal(pacificDayKey(w.buckets.at(-1).start + HOUR), "2026-11-01");
+});
+
+// Weekends and days off (2026-11).
+test("a day off is read on the Pacific calendar, and the machine doesn't work it", () => {
+  const thanksgiving = ["2026-11-26"];
+  // Thursday 11:30pm Pacific is Friday in UTC; 12:30am Friday Pacific is Friday.
+  assert.equal(isOffDay(Date.parse("2026-11-27T07:30:00Z"), thanksgiving), true, "Thursday night, Pacific");
+  assert.equal(isOffDay(Date.parse("2026-11-27T08:30:00Z"), thanksgiving), false, "Friday, just after midnight Pacific");
+  assert.equal(isOffDay(Date.parse("2026-11-26T18:00:00Z"), []), false, "no days off");
+  assert.equal(isOffDay(Date.parse("2026-11-27T07:30:00Z"), ["2026-11-27"], "UTC"), true, "another zone reads its own calendar");
+  const thu = Date.parse("2026-11-26T18:00:00Z"), sat = Date.parse("2026-11-28T18:00:00Z"), sun = Date.parse("2026-11-29T18:00:00Z");
+  assert.equal(machineWorkday(thu, { weekends: "replies_only", offDays: [] }), true);
+  assert.equal(machineWorkday(thu, { weekends: "replies_only", offDays: thanksgiving }), false);
+  assert.equal(machineWorkday(thu, { weekends: "all", offDays: thanksgiving }), false, "a day off holds even when weekends are worked");
+  assert.equal(machineWorkday(sat, { weekends: "replies_only" }), false);
+  assert.equal(machineWorkday(sat, { weekends: "sun_to_fri" }), false);
+  assert.equal(machineWorkday(sun, { weekends: "sun_to_fri" }), true);
+  assert.equal(machineWorkday(sat, { weekends: "all" }), true);
 });
 
 test("today is hours, the month is its days, the year is weeks plus thirty days ahead", () => {
