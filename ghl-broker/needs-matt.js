@@ -17,7 +17,12 @@
 //     contact note, claimed by a `needs_matt_noted` event first.
 //   - A house still unpriced PASS_AFTER_HOURS after it landed is marked we
 //     passed ("went quiet") with its pass note due (Matt, 2026-10-22: "Land,
-//     then bot passes"). Only with the stage there, like the moves.
+//     then bot passes"). Only with the stage there, like the moves. Since
+//     2026-11-10 the clock counts working hours (weekdays, not the
+//     conversationAi offDays), and a house the offer engine priced at grade A
+//     or B (the draft's engine read or the house's record) is never passed by
+//     it; it waits with the engine's number on the card. A grade-C number
+//     passes like an unpriced house (a manufactured home, a short sale).
 //   - A house the bot settles itself never lands (shared/needs-matt.js
 //     botTakesHouse): the agent called it cosmetic or done (passed at once,
 //     "too turnkey", pass note due), or it has no house number (the address
@@ -37,7 +42,8 @@ import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { syncAgentCard } from "./tier-check.js";
 import { fieldId } from "./ghl-pings.js";
 import { normalizeGhlStages, stageKeys } from "./shared/ghl-stages.js";
-import { needsMattByContact, needsMattFromCursor, needsMattPassDue, botTakesHouse, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
+import { needsMattByContact, needsMattFromCursor, needsMattPassDue, botTakesHouse, engineKeeps, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
+import { engineNumberFor } from "./price-v2.js";
 import { effectiveStatus } from "./shared/offer-status.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { ghlPingNote } from "./shared/ghl-pings.js";
@@ -86,7 +92,16 @@ async function patchCursor(store, locationId, patch) {
 // person's drag that stands, or a skip); one a GHL error stopped is tried
 // again next tick.
 // `landedAt`: when the runner first saw this thing (the pass clock's start).
-const keep = (v, placed = false, landedAt = null) => ({ kind: v.kind, rowKind: v.rowKind || "", why: v.why || "", at: v.at || null, key: v.key, offerId: v.offerId || null, placed, landedAt });
+// `engine`: the offer engine's number on a price card ({ grade, open, walkAway }), which keeps the
+// clock off it (2026-11-10).
+const keep = (v, placed = false, landedAt = null) => ({ kind: v.kind, rowKind: v.rowKind || "", why: v.why || "", at: v.at || null, key: v.key, offerId: v.offerId || null, placed, landedAt,
+  ...(v.engine ? { engine: v.engine } : {}) });
+
+// The row kinds that can land as a price card, read for the engine's number.
+const PRICE_ROW_KINDS = new Set(["price_it", "number_owed", "promise_owed", "draft_waiting"]);
+// At most this many houses read for the engine's number per run (one light read each, past the
+// offer itself).
+export const MAX_ENGINE_READS = 80;
 
 /**
  * runNeedsMatt({ store, locationId, client, saved, deps, now, dryRun, ghl })
@@ -110,12 +125,18 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
     ? await undeliveredRows({ store, locationId, now })
     : [];
   const rows = [...(read.shownActions || []), ...(read.shownCalls || []), ...undelivered];
+  // Each offer is read once per run, whichever check asks first.
+  const offersRead = new Map();
+  const offerOf = (id) => {
+    if (!offersRead.has(id)) offersRead.set(id, Promise.resolve().then(() => store.getOffer?.(id)).catch(() => null));
+    return offersRead.get(id);
+  };
   // The houses waiting on his price, read first: one the bot settles itself
   // (botTakesHouse) never lands.
   const screened = new Map();
   for (const r of rows.flatMap((x) => [x, ...(x?.also || [])])) {
     if (!r?.offerId || screened.has(r.offerId) || !["price_it", "number_owed", "promise_owed"].includes(r.kind)) continue;
-    const o = await store.getOffer?.(r.offerId).catch(() => null);
+    const o = await offerOf(r.offerId);
     const v = o && o.locationId === locationId ? botTakesHouse(o) : null;
     screened.set(r.offerId, v);
     if (v) out.screened.push({ contactId: r.contactId || o.contactId || null, offerId: r.offerId, ...(v.pass ? { pass: v.pass } : { chase: true }) });
@@ -126,12 +147,20 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   const walkedAway = new Set();
   for (const r of rows.flatMap((x) => [x, ...(x?.also || [])])) {
     if (r?.kind !== "draft_waiting" || !r.offerId || walkedAway.has(r.offerId)) continue;
-    const o = await store.getOffer?.(r.offerId).catch(() => null);
+    const o = await offerOf(r.offerId);
     if (o && o.locationId === locationId && effectiveStatus(o) === "we_passed" && !reopensOnTheirNumbers(o)) walkedAway.add(r.offerId);
+  }
+  // The offer engine's number on each house that could land as a price card
+  // (2026-11-10): the card names it, and the pass clock leaves it alone.
+  const engineByOffer = new Map();
+  for (const r of rows.flatMap((x) => [x, ...(x?.also || [])])) {
+    if (!r?.offerId || engineByOffer.has(r.offerId) || !PRICE_ROW_KINDS.has(r.kind) || engineByOffer.size >= MAX_ENGINE_READS) continue;
+    const o = await offerOf(r.offerId);
+    engineByOffer.set(r.offerId, o && o.locationId === locationId ? await engineNumberFor({ store, locationId, offer: o }) : null);
   }
   // The offers ride along: a held reply that quotes our terms, or asks for
   // the paper where our number is out, is read against them (hand-off.js).
-  const needs = needsMattByContact(rows, { drafts: read.drafts || [], offers: read.offers || [], now, screened, walkedAway });
+  const needs = needsMattByContact(rows, { drafts: read.drafts || [], offers: read.offers || [], now, screened, walkedAway, engineByOffer });
   const cur = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
   const prev = needsMattFromCursor(cur?.doc);
   // A held-draft read that hit its cap (routes/dashboard.js, 2026-11-09): a
@@ -151,7 +180,9 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   const left = [...prev.keys()].filter((id) => !needs.has(id));
   out.entered = entered.map((id) => ({ contactId: id, kind: needs.get(id).kind }));
   out.left = left.map((id) => ({ contactId: id }));
-  out.passDue = [...needs].filter(([id, v]) => !unknown.has(id) && needsMattPassDue(v, now)).map(([id, v]) => ({ contactId: id, offerId: v.offerId }));
+  // Working days only, and not his days off (2026-11-10).
+  const offDays = normalizeConversationAi(saved?.conversationAi).autoSend?.offDays || [];
+  out.passDue = [...needs].filter(([id, v]) => !unknown.has(id) && needsMattPassDue(v, now, { offDays })).map(([id, v]) => ({ contactId: id, offerId: v.offerId }));
   if (dryRun) return done();
 
   // The list first: the 7am plan and every card sync read it from here.
@@ -211,7 +242,7 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
 // it since the pipeline read wins), marked we passed the way the held sweep
 // closes a quiet house. pass-note.js sends the note in machine hours.
 const PASS_WHY = {
-  quiet: { note: "it waited three days in Needs Matt with no price", retired: "no price three days after it landed in Needs Matt" },
+  quiet: { note: "it waited three working days in Needs Matt with no price", retired: "no price three working days after it landed in Needs Matt" },
   turnkey: { note: "the agent called it cosmetic or done", retired: "the agent's own words: not a flip" },
 };
 async function passUnpriced({ store, locationId, client, contactId, offerId, reason = "quiet", now }) {
@@ -219,6 +250,9 @@ async function passUnpriced({ store, locationId, client, contactId, offerId, rea
   const full = await store.getOffer?.(offerId).catch(() => null);
   if (!full || full.locationId !== locationId || full.deal || effectiveStatus(full) !== "draft") return false;
   if ((full.sends || []).length || full.floatSentAt) return false;
+  // The clock never passes a house the engine priced at grade A or B (2026-11-10), even one it
+  // priced since the read. A grade-C number doesn't keep it.
+  if (reason === "quiet" && engineKeeps(await engineNumberFor({ store, locationId, offer: full }))) return false;
   const ts = iso(now);
   const street = String(full.address || "").split(",")[0].trim() || "the house";
   const note = `We passed on ${street}: ${why.note}. The bot's pass note tells the agent.`;

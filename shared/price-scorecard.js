@@ -33,6 +33,8 @@ const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t
  * outcomeOf({ address, offers }) → what happened on the house, from its offer rows (full docs).
  *   mattNumber/mattArv/mattRehab   the last number a person stood behind, and its inputs
  *   machineSent                    a machine number that went out with no person behind it
+ *   machineGrade                   the engine's grade on it when the engine sent it ("A", or "B"
+ *                                  at the lower open, 2026-11-10), else null
  *   sellerLowest                   the lowest counter amount on record
  *   agreed                         an acceptance, or a deal
  *   deal                           { stage, contractPrice }
@@ -59,6 +61,7 @@ export function outcomeOf({ address = "", offers = [] } = {}) {
     mattRehab: inputs.repairs != null && Number(inputs.repairs) >= 0 ? Math.round(Number(inputs.repairs)) : (matt?.repairs != null ? Math.round(Number(matt.repairs)) : null),
     mattAt: matt ? (matt.approved?.at || matt.updatedAt || null) : null,
     machineSent: machine ? Math.round(num(machine.cashAmount)) : null,
+    machineGrade: machine?.pricing?.live ? machine.pricing.grade || null : null,
     sellerLowest: counters.length ? Math.min(...counters) : null,
     agreed: rows.some((o) => o.deal || (o.statusHistory || []).some((h) => h?.status === "accepted") || o.status === "accepted"),
     status: current?.status || null,
@@ -109,6 +112,14 @@ export function measure(doc = {}, { maoPct = 70, minFee = 15000 } = {}) {
     arvVsTheir: num(v.arv) && num(o.theirArv) ? v.arv / o.theirArv : null,
     rehabVsTheir: num(v.rehab) && theirRehab ? v.rehab / theirRehab : null,
     agreed: Boolean(o.agreed),
+    // Grade B (2026-11-10): the lower open it went at, or would have in the shadow, against the
+    // number Matt stood behind; and which grade an engine number that went out carried.
+    bMode: v.gradeB?.mode || null,
+    bOpen: num(v.gradeB?.open) || null,
+    bSent: v.gradeB?.sent === true,
+    bWould: v.gradeB?.mode === "shadow" && v.gradeB?.wouldSend === true,
+    bOpenVsMatt: num(v.gradeB?.open) && num(o.mattNumber) ? v.gradeB.open / o.mattNumber : null,
+    sentGrade: o.machineGrade || null,
   };
 }
 
@@ -132,6 +143,16 @@ function summarize(ms_ = []) {
     arvVsTheir: round3(median(ms_.map((m) => m.arvVsTheir).filter((x) => x != null))),
     rehabVsTheir: round3(median(ms_.map((m) => m.rehabVsTheir).filter((x) => x != null))),
     triage,
+    // Grade B's lower open: how many it priced, would have sent (shadow) and sent (live), and
+    // where it opened against Matt's own number. Which grade each engine send carried.
+    gradeB: {
+      priced: ms_.filter((m) => m.bOpen).length,
+      wouldSend: ms_.filter((m) => m.bWould).length,
+      sent: ms_.filter((m) => m.bSent).length,
+      withMatt: ms_.filter((m) => m.bOpenVsMatt != null).length,
+      openVsMatt: round3(median(ms_.map((m) => m.bOpenVsMatt).filter((x) => x != null))),
+    },
+    sentByGrade: { A: ms_.filter((m) => m.sentGrade === "A").length, B: ms_.filter((m) => m.sentGrade === "B").length },
   };
 }
 
@@ -209,5 +230,13 @@ export function scorecardLine(card = {}) {
     `ARV off yours ${pct(t.arvGap)} at the median, rehab under yours on ${pct(t.rehabBelowShare)}, ` +
     `walk-away ${t.walkVsMatt == null ? "—" : `${Math.round(t.walkVsMatt * 100)}%`} of yours at the same formula. ` +
     `Grade A: ${a.n || 0} houses. ${ready}.` +
-    (t.overTheir ? ` ${t.overTheir} walk-away${t.overTheir === 1 ? "" : "s"} above the seller's stated number.` : "");
+    (t.overTheir ? ` ${t.overTheir} walk-away${t.overTheir === 1 ? "" : "s"} above the seller's stated number.` : "") +
+    gradeBClause(card.byGrade?.B?.gradeB);
+}
+
+// " Grade B at the lower open: 6 priced, 4 would have gone out, 0 went; it opened at 91% of yours."
+function gradeBClause(b = null) {
+  if (!b?.priced) return "";
+  const vs = b.openVsMatt == null ? "" : `; it opened at ${Math.round(b.openVsMatt * 100)}% of yours (${b.withMatt})`;
+  return ` Grade B at the lower open: ${b.priced} priced, ${b.wouldSend} would have gone out in the shadow, ${b.sent} went${vs}.`;
 }

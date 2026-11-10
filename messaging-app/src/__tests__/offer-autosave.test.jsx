@@ -217,6 +217,21 @@ test("an engine draft opens on the engine's rehab, not the bare scope", async ()
   expect(html).toContain("rehab 62k (1950s house: age floor)");
 });
 
+// Grade B (2026-11-10): in the shadow the Price-it draft says what it would have sent; live and
+// held, the lower number it opens at and why it waited.
+test("a grade-B draft shows the number the engine would send, or opens at and why it waited", async () => {
+  const NewOffer = await editor();
+  const shadow = { ...ENGINE_DRAFT, draft: { ...ENGINE_DRAFT.draft, engine: { ...ENGINE_DRAFT.draft.engine,
+    gradeB: { mode: "shadow", open: 214250, engineOpen: 238000, pct: 10, wouldSend: true, sent: false, held: "" } } } };
+  const html = renderToStaticMarkup(<NewOffer settings={LOCATION} restore={shadow} />);
+  expect(html).toContain("Engine (B): would send $214,250");
+  expect(html).toContain("Engine: grade B");
+  const held = { ...shadow, draft: { ...shadow.draft, engine: { ...shadow.draft.engine,
+    gradeB: { mode: "live", open: 214250, engineOpen: 238000, pct: 10, wouldSend: false, sent: false, held: "no fit" } } } };
+  expect(renderToStaticMarkup(<NewOffer settings={LOCATION} restore={held} />)).toContain("Engine (B): opens at $214,250, held for you (no fit)");
+  expect(renderToStaticMarkup(<NewOffer settings={LOCATION} restore={ENGINE_DRAFT} />)).not.toContain("Engine (B)");
+});
+
 // Before 11-09 any row with paper and no saved workspace opened on its calc.inputs. An income or
 // land row is still priced from its deal, but it keeps its address and figures off calc.inputs.
 test("an income row with no saved workspace still opens on its address", () => {

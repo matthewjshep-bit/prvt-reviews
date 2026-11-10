@@ -766,7 +766,17 @@ export function engineLine(e) {
     kAmt(e.rehab) && `rehab ${kAmt(e.rehab)}${e.rehabWhy ? ` (${e.rehabWhy})` : ""}`,
     ...(Array.isArray(e.reasons) ? e.reasons.slice(0, 3).map(String) : []),
   ].filter(Boolean);
-  return bits.join(" · ");
+  const b = gradeBBit(e.gradeB);
+  return [b, ...bits].filter(Boolean).join(" · ");
+}
+
+// Grade B's lower open (2026-11-10), first on the line: "Engine (B): would send $280,250" in the
+// shadow; live and held, the number it opens at and why it waited.
+const dollars = (n) => `$${Math.round(Number(n) || 0).toLocaleString("en-US")}`;
+function gradeBBit(b) {
+  if (!b || !(Number(b.open) > 0)) return "";
+  if (b.mode === "shadow") return b.wouldSend ? `Engine (B): would send ${dollars(b.open)}` : `Engine (B): would open at ${dollars(b.open)}, held (${b.held || "a guard"})`;
+  return `Engine (B): opens at ${dollars(b.open)}, held for you (${b.held || "a guard"})`;
 }
 
 export function SaveStatus({ state, row }) {

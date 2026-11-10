@@ -21,7 +21,7 @@ import { pingWhy } from "./ghl-pings.js";
 import { DRAFT_ONLY_RX, wePassReasonOf } from "./offer-status.js";
 import { offerStage } from "./offer-stage.js";
 import { houseKey, resolveHouse } from "./current-offer.js";
-import { PASS_AFTER_HOURS, needsMattPassDue } from "./needs-matt.js";
+import { needsMattPassDue, needsMattPassAt } from "./needs-matt.js";
 
 export const SLACK_STREAMS = Object.freeze(["needsMatt", "acquisitions", "underwrites", "dispositions", "machine", "daily"]);
 export const SLACK_STREAM_LABEL = Object.freeze({
@@ -639,20 +639,20 @@ export const MORNING_EVENT_TYPES = Object.freeze([
 ]);
 
 /**
- * passesToday(needs, { now, withinHours }) → [{ contactId, offerId, landedAt, passAt }], soonest first
+ * passesToday(needs, { now, withinHours, offDays }) → [{ contactId, offerId, landedAt, passAt }], soonest first
  *
  * The Needs Matt price cards (the runner's cursor, ghl-broker/needs-matt.js)
- * that pass PASS_AFTER_HOURS after they landed within the next `withinHours`,
- * or are already due and go on the next tick. Only a card the runner can mark
- * (one with an offer); a yes or paper is never passed by the machine.
+ * that pass PASS_AFTER_HOURS working hours after they landed within the next
+ * `withinHours`, or are already due and go on the next tick. Only a card the
+ * runner can mark (one with an offer); a yes or paper is never passed by the
+ * machine, and since 2026-11-10 neither is a house the engine priced.
  */
-export function passesToday(needs = {}, { now = Date.now(), withinHours = 24 } = {}) {
+export function passesToday(needs = {}, { now = Date.now(), withinHours = 24, offDays = null } = {}) {
   const out = [];
   for (const [contactId, v] of Object.entries(needs || {})) {
     // The runner's own test (needsMattPassDue), asked of the end of the window.
-    if (!needsMattPassDue(v, now + withinHours * 3600000)) continue;
-    const passAt = Date.parse(v.landedAt) + PASS_AFTER_HOURS * 3600000;
-    out.push({ contactId, offerId: v.offerId, landedAt: v.landedAt, passAt: new Date(passAt).toISOString() });
+    if (!needsMattPassDue(v, now + withinHours * 3600000, { offDays })) continue;
+    out.push({ contactId, offerId: v.offerId, landedAt: v.landedAt, passAt: needsMattPassAt(v, { offDays }) });
   }
   return out.sort((a, b) => a.passAt.localeCompare(b.passAt));
 }
@@ -667,12 +667,13 @@ export function renderMorning(c = {}, ctx = {}) {
     [row("Offers sent", c.offersSent), row("Counters", c.counters), row("Hot", c.hot), row("Agreed", c.agreed)].join(" · "),
     [row("New deals", c.deals), row("Buyer texts", c.buyerTexts), row("Buyers committed", c.buyersCommitted)].join(" · "),
   ];
-  // Houses the 72-hour clock passes today unless Matt prices them (2026-11-09 audit), with the
-  // offer engine's number when it priced one in the background. Streets only.
+  // Houses the clock passes today unless Matt prices them (2026-11-09 audit): three working days
+  // on Needs Matt with no number of his. A house the engine priced at grade A or B never passes
+  // (2026-11-10); a grade-C one does, shown with the engine's number and grade. Streets only.
   if (c.passesToday?.count) {
     const shown = (c.passesToday.houses || []).slice(0, 5)
-      .map((h) => `${esc(street(h.street || h.address) || "a house")}${money(h.engine) ? ` (engine ${money(h.engine)})` : ""}`);
-    lines.push(`:hourglass_flowing_sand: Passes today unless you price it: *${c.passesToday.count}*${shown.length ? ` — ${shown.join(", ")}${c.passesToday.count > shown.length ? ", …" : ""}` : ""}`);
+      .map((h) => `${esc(street(h.street || h.address) || "a house")}${money(h.engine) ? ` (engine ${money(h.engine)}, grade ${esc(h.grade || "C")})` : ""}`);
+    lines.push(`:hourglass_flowing_sand: Passes today unless you price it (three working days, no grade-A or -B engine number): *${c.passesToday.count}*${shown.length ? ` — ${shown.join(", ")}${c.passesToday.count > shown.length ? ", …" : ""}` : ""}`);
   }
   // The calls we owe this morning (the pipeline's call_owed rows: a call we
   // said we'd make, a booked call nobody made), 2026-11-09.

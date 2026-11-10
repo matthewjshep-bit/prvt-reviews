@@ -1213,6 +1213,28 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
               onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), walkaway: e.target.checked })} />
             Negotiate grade-A counters up to the walk-away — at most two moves, never past it; anything higher comes to you as a call
           </label>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Grade B: Off / Shadow / Live</span>
+              <select value={form.pricingV2?.liveB || "off"} className={INPUT_CLS}
+                onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), liveB: e.target.value })}>
+                <option value="off">Off</option>
+                <option value="shadow">Shadow — write the number it would send beside each house, send nothing</option>
+                <option value="live" disabled={!form.pricingV2?.liveA}>Live — send grade-B numbers at the lower open</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Grade B opens this % lower</span>
+              <input type="number" min={0} max={25} value={form.pricingV2?.gradeBOpenPct ?? 10}
+                onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), gradeBOpenPct: e.target.value === "" ? 10 : Number(e.target.value) })} className={INPUT_CLS} />
+            </label>
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            A grade-B house is one the engine is less sure of. In the shadow it writes the number it would have sent on the house's
+            draft, its timeline and the scorecard, and sends nothing. Live, it goes out the way grade A does and under every same
+            guard, opening this much under the engine's number. It never comes up on a counter by itself, and a yes on it waits
+            for your approval. Live needs grade A live too.
+          </p>
           <label className="mt-3 block">
             <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Hold for me when the walk-away is this % over the seller's number</span>
             <input type="number" min={0} max={50} value={form.pricingV2?.overSellerPct ?? 10}

@@ -226,3 +226,45 @@ test("a full run whose house got an offer from another run while it worked makes
   const alone = await run({ saved: { autoUnderwriteMode: "full" }, price: 520000, locationId: "LOC-engine-alone", contactId: "sib-2" });
   assert.equal(alone.made.length, 1);
 });
+
+/* ---------- grade B (Matt, 2026-11-10) ---------- */
+
+// Three plain sales and no Bricked today: our comps can't vouch for the ARV (a gut check), the
+// photo scope is evidence, so the engine grades it B. Opens at 116,750; grade B at 105,000.
+const B_HOUSE = { near: NEAR.slice(5), price: 150000 };
+
+test("with grade B in the shadow, the Price-it draft shows the number it would have sent", async () => {
+  const { job, made, locationId } = await run({ ...B_HOUSE, saved: { pricingV2: { brickedPerDay: 0, liveA: true, liveB: "shadow" } } });
+  assert.equal(made.length, 0, "nothing extra is sent");
+  const draft = await store.getOffer(job.offerId);
+  assert.equal(draft.draft.engine.grade, "B");
+  assert.equal(draft.draft.engine.open, 116750);
+  assert.deepEqual({ mode: draft.draft.engine.gradeB.mode, open: draft.draft.engine.gradeB.open, wouldSend: draft.draft.engine.gradeB.wouldSend },
+    { mode: "shadow", open: 105000, wouldSend: true });
+  assert.match(draft.autoUnderwrite.subjectLine, /engine open \$116,750 \/ walk-away \$131,750 · grade B would send \$105,000$/);
+  const rec = await store.getHousePricing(locationId, houseKey(ADDRESS));
+  assert.equal(rec.doc.v2.gradeB.open, 105000);
+});
+
+test("with grade B live, engine mode sends a grade-B house at the lower open", async () => {
+  const { job, made } = await run({ ...B_HOUSE, saved: { pricingV2: { brickedPerDay: 0, liveA: true, liveB: "live" } } });
+  assert.equal(job.status, "done", job.brickedHeld || "");
+  assert.equal(made.length, 1);
+  const offer = await store.getOffer(made[0].id);
+  assert.equal(offer.cashAmount, 105000);
+  assert.equal(offer.pricing.grade, "B");
+  assert.equal(offer.pricing.engineOpen, 116750);
+});
+
+test("with grade B live, a grade-B house held by the seller's number stays Matt's, with the lower number on the draft", async () => {
+  // Their number is 100k: our 131,750 walk-away is 32% over it, a likely ARV error, held as grade A would be.
+  await store.appendContactEvents("LOC-engine-b-held", "b-held", [{ type: "property_details", at: "2026-11-08T18:00:00Z", address: "2210 Quarry Ave N", data: { sellerAsk: 100000 } }]);
+  const { job, made } = await run({ ...B_HOUSE, locationId: "LOC-engine-b-held", contactId: "b-held", saved: { pricingV2: { brickedPerDay: 0, liveA: true, liveB: "live" } } });
+  assert.equal(made.length, 0);
+  assert.equal(job.brickedHeld, "our walk-away is far over their number, likely an ARV error: yours to price");
+  const draft = await store.getOffer(job.offerId);
+  assert.deepEqual({ mode: draft.draft.engine.gradeB.mode, open: draft.draft.engine.gradeB.open, sent: draft.draft.engine.gradeB.sent },
+    { mode: "live", open: 90000, sent: false }, "their 100k caps the open, then 10% under");
+  assert.equal(draft.draft.engine.gradeB.held, job.brickedHeld);
+  assert.match(draft.autoUnderwrite.subjectLine, /grade B opens at \$90,000$/);
+});

@@ -14,6 +14,11 @@ const MIN_REHAB = 60000; // Matt's ballpark (2026-11-04); shared/rehab-floor.js 
 export const PRICING_V2_DEFAULTS = Object.freeze({
   shadow: false,        // price every named house beside the live path; writes a record, sends nothing
   liveA: false,         // grade-A houses get the engine's number for real
+  // Grade B (Matt, 2026-11-10): "off", "shadow" (the number it would have sent goes on the house's
+  // record, the draft and the timeline; nothing extra is sent) or "live" (a grade-B house goes out
+  // the way grade A does, opening `gradeBOpenPct` lower). Live needs liveA on too.
+  liveB: "off",
+  gradeBOpenPct: 10,    // grade B opens this % under the engine's open (0–25)
   walkaway: false,      // grade A may come up to the walk-away on a counter
   reads: false,         // the nightly conversation reader
   autoCalibrate: false, // safer-direction calibration applies itself
@@ -35,6 +40,7 @@ export const PRICING_V2_DEFAULTS = Object.freeze({
 });
 
 const ERA_KEYS = ["pre1950", "y1950", "y1980", "y2000"];
+export const GRADE_B_MODES = Object.freeze(["off", "shadow", "live"]);
 const numIn = (v, lo, hi, dflt) => { const n = Number(v); return v != null && v !== "" && Number.isFinite(n) && n >= lo && n <= hi ? n : dflt; };
 
 /** normalizePricingV2(v) → every key present, every number in range; switches off unless true. */
@@ -47,6 +53,8 @@ export function normalizePricingV2(v) {
     : null;
   return {
     shadow: s.shadow === true, liveA: s.liveA === true, walkaway: s.walkaway === true, reads: s.reads === true, autoCalibrate: s.autoCalibrate === true,
+    liveB: GRADE_B_MODES.includes(s.liveB) ? s.liveB : D.liveB,
+    gradeBOpenPct: numIn(s.gradeBOpenPct, 0, 25, D.gradeBOpenPct),
     maoPct: numIn(s.maoPct, 50, 85, D.maoPct),
     targetFee,
     minFee: Math.min(numIn(s.minFee, 0, 200000, D.minFee), targetFee),

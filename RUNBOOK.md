@@ -388,7 +388,9 @@ it until the shadow runner lands.
   comps.
 - **Rehab.** The best evidence (a photo scope at ≥ 8 photos, Bricked's lines for described work, their
   own figure when higher), never under `rehabFloor` (shared/rehab-floor.js):
-  - by age: $70/sqft before 1950, $55 for 1950–79, $55 for 1980–99, $35 for 2000 on;
+  - by age: $91/sqft before 1950, $72 for 1950–79, $72 for 1980–99, $46 for 2000 on, $72 with no year
+    built (Matt, 2026-11-10, decision 11: his 2026-11-04 medians of 70/55/55/35 × 1.3, because against
+    what buyers paid our rehab ran 34% low and the age floor sat 43% under them on 5 of 5 deals);
   - heavy at $100/sqft for fire, water or mold words, a Bricked grade of C4 or worse, or a county
     condition of 2 or below;
   - gut at $150/sqft;
@@ -604,6 +606,65 @@ the ones above; each only lowers a number or adds a hold.
   verified-evidence `maoPct`.
 - Tests: `shared/price-engine.test.mjs`, `ghl-broker/price-v2.test.mjs`, `ghl-broker/engine-live.test.mjs`,
   `shared/offer-status.test.mjs`.
+
+#### Every house gets a number: grade B opens lower (Matt, 2026-11-10, decision 11)
+
+Matt asked: "is there a way we can get a price to every agent through the app, to automate it
+entirely". The audit behind it: 11-04 to 11-09, 39 engine runs, 8 sent themselves at grade A and about
+19 went to Matt (10 of them grade B: 7 held on ARV, 3 on rehab); 134 of 229 named houses never got a
+number; the 72-hour clock passed 43 houses unpriced in 16 days, 18 of them on weekends. His decision:
+
+1. **The rehab floor goes up 1.3×** (`shared/rehab-floor.js`, see the by-age line above). On a 1,800
+   sqft house: built 1940 126k → 164k, 1965 or 1990 99k → 129.5k, 2005 63k → 83k. The walk-away and the
+   open drop by the same amount. King County's condition code is not part of this.
+2. **Grade B gets a number, opening lower.** The less sure the engine is, the lower it opens: grade A
+   at today's number, grade B `pricingV2.gradeBOpenPct` (default 10, 0–25) under the engine's open,
+   to the $250 (`gradeBOpen`, shared/price-engine.js). Too low costs a no or a counter; too high costs a
+   re-trade after the yes.
+3. **Every guard stays.** Never over the seller's number (the `overSellerPct` hold), never over the list
+   cap (`maxPctOfList`), the killers and the data holds, the machine never raises a number, the
+   walk-away stays capped and grade A's.
+4. **The 72-hour clock no longer passes a house the engine priced at grade A or B**, and counts
+   working days only (Needs Matt, "Unpriced houses get passed", and the morning line under "The
+   stall is owed too"). A grade-C number passes like an unpriced house: grade C is a house we
+   shouldn't buy as it stands (a mobile home, a short sale, a turnkey), and it must not sit on Needs
+   Matt for good.
+
+**Switch: `pricingV2.liveB`**, "off" (default) | "shadow" | "live". Settings → Auto-underwrite → The
+offer engine (v2) → "Grade B: Off / Shadow / Live" and "Grade B opens this % lower". Matt's rollout:
+shadow for a week after deploy, then live. Live needs `liveA` on too.
+- **Off:** grade B is held for Matt exactly as before, and nothing new is written.
+- **Shadow:** nothing extra is sent. `gradeBPlan` (ghl-broker/auto-underwrite.js) works out the number
+  it would have sent and whether the send gates would have let it go (the run's data holds, then
+  `engineSendGate` as if grade B were live). It goes:
+  - on the house's record, `house_pricing` `v2.gradeB` { mode, open, engineOpen, walkAway, pct,
+    wouldSend, sent, held } and `bOpen` on the newest history point (`recordGradeB`, price-v2.js);
+  - on engine mode's Price-it draft, `draft.engine.gradeB`, where the editor's engine line starts
+    "Engine (B): would send $X", and on the run's subject line ("grade B would send $X");
+  - on the timeline, as the `underwrite_held` event's `note` ("Engine (B): would send $X (10% under its
+    $Y open). In the shadow, so nothing was sent."), and in the held note on the contact.
+- **Live:** `sendEngine` sends a grade-B house on grade A's own path, through the same gate
+  (`engineSendGate({ liveB })` passes B only when live; every other check is grade A's), the same
+  `stopForThread` and one-house checks, `createOffer` with `priceOverride` at the lower open, then
+  `onOfferCreated` (float or letter, send hours, off days, the voice and claim gates, holds).
+  - The offer carries `pricing { grade: "B", open: <lower>, engineOpen, lowerOpenPct, walkAway }` and
+    `autoUnderwrite { grade: "B", gradeB { open, engineOpen, pct } }`; the `underwrite_done` event
+    carries `grade` and a note; the house record's `v2.gradeB.sent` is true.
+  - **It never comes up on a counter by itself:** `walkawayOffer` is grade A only, so a counter on a B
+    goes to the counter band (capped at the walk-away) or Matt, as before.
+  - **A yes on it waits for Matt:** `numberApproved` reads the walk-away on grade A only, so the
+    write-up ask needs his approval.
+  - **A person's raise past what went out asks first:** `raiseCeiling` (shared/offer-raise.js) counts
+    the walk-away as room on grade A only.
+  - A B that any guard holds goes to Matt as before, with the lower number on the draft ("Engine (B):
+    opens at $X, held for you: …") and the timeline.
+- Grade C and houses the engine couldn't price are exactly as before.
+- **Scorecard:** `outcomeOf` adds `machineGrade` (A or B on an engine send); each grade's summary has
+  `gradeB { priced, wouldSend, sent, withMatt, openVsMatt }` and `sentByGrade`. Lessons (under the
+  table) and the evening Slack line add "Grade B at the lower open: N priced, N would have gone out, N
+  went", and where it opened against the number Matt stood behind, once there is one.
+- Tests: `ghl-broker/engine-live.test.mjs` (grade B), `ghl-broker/engine-mode.test.mjs`,
+  `shared/price-engine.test.mjs`, `shared/price-scorecard.test.mjs`, `shared/offer-raise.test.mjs`.
 
 ### Our own underwrite: engine mode (2026-11-04)
 
@@ -3488,12 +3549,16 @@ after a day, kept by a connected or tried call. Expect more of both after
 deploy. Changing the text-back itself is a GHL setting, yours.
 
 **The morning line.** #daily's morning post adds "Passes today unless you
-price it: N — 88 Larkspur Ln (engine $412,000), …": the Needs Matt price
-cards whose `landedAt` + 72h falls in the next 24 hours (or is already due
-and goes on the next tick), soonest first, up to five streets, with the
-offer engine's opening number when it priced the house in the background
-(`house_pricing` v2.open). It reads the needsMatt cursor (`passesToday` in
-shared/slack-notify.js, `passesTodayFor` in ghl-broker/slack-notify.js).
+price it (three working days, no grade-A or -B engine number): N — 14 Quarry
+Rd, 5 Thistle Ln (engine $151,000, grade C), …": the Needs Matt price cards
+whose three working days (2026-11-10: weekdays, not the off days) run out in
+the next 24 hours (or are already due and go on the next tick), soonest
+first, up to five streets. A house the engine priced at grade A or B is never
+in it: the clock doesn't pass those (2026-11-10), and each house is re-read
+for its engine number before it's listed. A grade-C house is listed with the
+engine's number and grade. It reads the needsMatt
+cursor (`passesToday` in shared/slack-notify.js, `passesTodayFor` in
+ghl-broker/slack-notify.js).
 Streets only, never a name. No line when nothing passes, and none while the
 Needs Matt runner is off (`ghlStages.mode` off, or no Needs Matt stage on its
 last run): its cursor stays behind, and nothing would pass. Each house is
@@ -6484,10 +6549,35 @@ Matt's answers the same day kept it shorter:
   called it cosmetic or done (the brought-house screen's reading), it's
   passed at once, reason "too turnkey", and the pass note goes. Off-market
   is always Matt's. A house with no house number is the address chase's.
-- **Unpriced houses get passed.** A price row still unpriced 72 hours after
-  it landed (`PASS_AFTER_HOURS`) is marked we passed, reason "went quiet",
-  with its pass note due. `pass-note.js` texts the agent. This only happens
-  with the stage there.
+- **Unpriced houses get passed.** A price row still unpriced 72 working
+  hours after it landed (`PASS_AFTER_HOURS`) is marked we passed, reason
+  "went quiet", with its pass note due. `pass-note.js` texts the agent. This
+  only happens with the stage there.
+  - **Working days (Matt, 2026-11-10, decision 11).** The clock counts
+    weekday hours, Pacific, and not the days off in Conversation AI → auto
+    send (`conversationAi.autoSend.offDays`): `needsMattPassDue` /
+    `needsMattPassAt` with `workingHoursBetween` / `addWorkingHours`
+    (shared/paper-follows.js, which now take `{ offDays }`). A house that
+    lands Friday at 10am passes Wednesday at 10am, not Monday. 18 of the 43
+    houses it passed in 16 days had waited over a weekend.
+  - **Never a house the engine priced at grade A or B.** A card whose house
+    has a grade-A or -B engine number (the Price-it draft's `draft.engine`,
+    else the house's `house_pricing` v2 open or walk-away: `engineOn` and
+    `engineKeeps` in shared/needs-matt.js, `engineNumberFor` in
+    ghl-broker/price-v2.js) is never passed by the clock. A grade-C number
+    doesn't keep it: grade C is a killer fact (a manufactured home, a short
+    sale or bank-owned house), a turnkey, or two things the engine isn't sure
+    of, out of the buy box as it stands, so it passes on the same three
+    working days as an unpriced house. It stays on Needs Matt, the card carries
+    `engine { grade, open, walkAway }` on the cursor, and its why line reads
+    "Price it on 12 Alder Ct: the engine has 238K (grade B) on the draft;
+    the agent has waited 2 days". `passUnpriced` re-checks just before a
+    pass, so one the engine priced A or B since the read stays too. There is no
+    one-tap send on the card: Matt opens the draft, where the engine's
+    numbers (and grade B's lower one) are shown, and sets the price.
+  - The card's "the bot passes it …" date in the contact pane
+    (`GET /api/dashboard/ghl/card` `needsMatt.passAt`) uses the same clock,
+    and is empty for a house the engine priced at grade A or B.
 
 Nothing else lands there: counters, booked calls, calls (Manual Actions), passes,
 promises, check-ins, closing tasks (the card stays in Contract) and buyers

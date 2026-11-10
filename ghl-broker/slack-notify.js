@@ -43,7 +43,9 @@ import { getContact } from "./ghl.js";
 import { contactName } from "./contact-record.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
 import { offerStageAt } from "./shared/offer-stage.js";
-import { NEEDS_MATT_CURSOR } from "./shared/needs-matt.js";
+import { NEEDS_MATT_CURSOR, engineKeeps, engineNumber } from "./shared/needs-matt.js";
+import { engineNumberFor } from "./price-v2.js";
+import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { effectiveStatus } from "./shared/offer-status.js";
 import {
   acquisitionStatus, dispositionStatus, houseStatus, withStatus, legacyThreadKey, fullName, normalizeSlack, slackOn, streamOn, routeEvent, threadKeyFor, foldBlasts, renderEvent, renderBlasts, renderPing, renderNeed,
@@ -669,23 +671,27 @@ export async function postMorning({ store = defaultStore, locationId, saved = {}
 const PASSES_READ_MAX = 40;
 
 /**
- * passesTodayFor({ store, locationId, saved, now }) → { count, houses: [{ street, engine }] } | null
+ * passesTodayFor({ store, locationId, saved, now }) → { count, houses: [{ street, engine?, grade? }] } | null
  *
  * The houses the Needs Matt runner passes in the next 24 hours unless Matt
- * prices them (shared/slack-notify.js passesToday, off its cursor), with the
- * offer engine's opening number when it priced the house in the background.
- * Streets only; the five soonest are named.
+ * prices them (shared/slack-notify.js passesToday, off its cursor): three
+ * working days on the stage (weekdays, not the conversationAi offDays) with
+ * no number of his. Streets only; the five soonest are named, a grade-C one
+ * with the engine's number and grade.
  *
  * Only what the runner will really pass: nothing when it's off (ghlStages
  * mode, or no Needs Matt stage on its last run; the cursor stays behind), and
  * each house re-read the way the runner re-reads it before a pass (a draft
- * nothing went out on), so one Matt priced since its last read isn't listed.
+ * nothing went out on, and no grade-A or -B engine number on it: since
+ * 2026-11-10 the clock never passes those), so one priced since its last read
+ * isn't listed.
  */
 export async function passesTodayFor({ store = defaultStore, locationId, saved = {}, now = Date.now() } = {}) {
   if (normalizeGhlStages(saved?.ghlStages).mode !== "on") return null;
   const doc = await readDoc(store, locationId, NEEDS_MATT_CURSOR);
   if (doc.last?.stage === false) return null;
-  const due = passesToday(doc.needs, { now });
+  const offDays = normalizeConversationAi(saved?.conversationAi).autoSend?.offDays || [];
+  const due = passesToday(doc.needs, { now, offDays });
   if (!due.length) return null;
   const read = async (f) => { try { return await f(); } catch { return null; } };
   const still = [];
@@ -693,15 +699,13 @@ export async function passesTodayFor({ store = defaultStore, locationId, saved =
     const offer = await read(() => store.getOffer?.(d.offerId));
     if (!offer || offer.locationId !== locationId || offer.deal || effectiveStatus(offer) !== "draft") continue;
     if ((offer.sends || []).length || offer.floatSentAt) continue;
-    still.push(offer);
+    const engine = await read(() => engineNumberFor({ store, locationId, offer }));
+    if (engineKeeps(engine)) continue;
+    still.push({ offer, engine });
   }
   if (!still.length) return null;
-  const houses = [];
-  for (const offer of still.slice(0, 5)) {
-    const address = String(offer.address || "");
-    const priced = address ? await read(() => store.getHousePricing?.(locationId, houseKey(address))) : null;
-    houses.push({ street: address.split(",")[0].trim(), engine: Math.round(Number(priced?.doc?.v2?.open) || 0) || null });
-  }
+  const houses = still.slice(0, 5).map(({ offer, engine }) => ({ street: String(offer.address || "").split(",")[0].trim(),
+    ...(engineNumber(engine) ? { engine: engineNumber(engine), grade: engine.grade || "C" } : {}) }));
   return { count: still.length + Math.max(0, due.length - PASSES_READ_MAX), houses };
 }
 

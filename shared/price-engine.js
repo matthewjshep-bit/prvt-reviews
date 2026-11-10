@@ -30,6 +30,9 @@
 // - Triage: walk-away ÷ the seller's number (theirs when said, else list): hot ≥ 95%, workable
 //   ≥ 85%, long shot ≥ 70%, no fit below. Agreements happen within 5% (23 → 4 deals); 5–10% went
 //   17 → 0 before anything could move up.
+// - Grade B opens lower (Matt, 2026-11-10: the less sure the engine is, the lower it opens):
+//   gradeBOpen is the open less `gradeBOpenPct` (10), to the $250. Too low costs a no or a counter;
+//   too high costs a re-trade after the yes.
 //
 // Pure: no I/O, no clock.
 
@@ -289,6 +292,21 @@ export function priceHouse(reads = {}, settings = {}, { ratios = null } = {}) {
   return { arv: Math.round(arv), rehab, rehabOwn, rehabWhy, rehabTier: floor.tier, investorPrice, rawWalk: Math.round(rawWalk), walkAway, open, grade,
     triage: t.triage, spread: t.spread, against: t.against, overList, overTheirs, sellerNumber: seller,
     killers, turnkey: Boolean(turnkeyBy), misses, reasons };
+}
+
+/**
+ * gradeBOpen(v2, settings) → the number a grade-B house opens at, or 0 for anything not grade B.
+ *
+ * Matt (2026-11-10): every house the engine can price gets a number, and the less sure it is, the
+ * lower it opens. Grade B opens `gradeBOpenPct` (10) under the engine's own open, to the $250 the
+ * way the open is rounded. The open already sits under the walk-away, the list cap and the seller's
+ * number, so this only ever lowers it.
+ */
+export function gradeBOpen(v2, settings = {}) {
+  const open = Number(v2?.open) || 0;
+  if (v2?.grade !== "B" || !(open > 0)) return 0;
+  const pct = normalizePricingV2(settings).gradeBOpenPct;
+  return Math.max(0, Math.min(open, round250(open * (1 - pct / 100))));
 }
 
 function k(n) {

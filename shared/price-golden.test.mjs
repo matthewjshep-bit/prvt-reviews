@@ -30,19 +30,20 @@ const readsOf = (d, { arv = d.matt.arv, rehab = 0, words = "" } = {}) => ({ sqft
 /* ---------------- Part 1: the formulas as they are ---------------- */
 
 describe("every formula pin in the golden set passes", () => {
-  test("rehab floor: $70 a foot before 1950, $55 from 1950 to 1999, $35 from 2000, never under $60k", () => {
-    assert.equal(eraFor(1949).psf, 70);
-    assert.equal(eraFor(1950).psf, 55);
-    assert.equal(eraFor(1999).psf, 55);
-    assert.equal(eraFor(2000).psf, 35);
-    assert.equal(rehabFloor({ sqft: 2000, yearBuilt: 1924 }).floor, 140000);
-    assert.equal(rehabFloor({ sqft: 2000, yearBuilt: 1972 }).floor, 110000);
-    assert.equal(rehabFloor({ sqft: 2000, yearBuilt: 2005 }).floor, 70000);
-    assert.equal(rehabFloor({ sqft: 900, yearBuilt: 2005 }).floor, MIN_REHAB, "31.5k at $35 a foot is under the ballpark");
+  // Matt, 2026-11-10 (decision 11): his medians x 1.3. Against what buyers paid our rehab ran 34% low.
+  test("rehab floor: $91 a foot before 1950, $72 from 1950 to 1999, $46 from 2000, never under $60k", () => {
+    assert.equal(eraFor(1949).psf, 91);
+    assert.equal(eraFor(1950).psf, 72);
+    assert.equal(eraFor(1999).psf, 72);
+    assert.equal(eraFor(2000).psf, 46);
+    assert.equal(rehabFloor({ sqft: 2000, yearBuilt: 1924 }).floor, 182000);
+    assert.equal(rehabFloor({ sqft: 2000, yearBuilt: 1972 }).floor, 144000);
+    assert.equal(rehabFloor({ sqft: 2000, yearBuilt: 2005 }).floor, 92000);
+    assert.equal(rehabFloor({ sqft: 900, yearBuilt: 2005 }).floor, MIN_REHAB, "41.4k at $46 a foot is under the ballpark");
   });
 
-  test("rehab floor: no year built is $55 a foot, no size is the $60k ballpark", () => {
-    assert.equal(rehabFloor({ sqft: 2000 }).floor, 110000);
+  test("rehab floor: no year built is $72 a foot, no size is the $60k ballpark", () => {
+    assert.equal(rehabFloor({ sqft: 2000 }).floor, 144000);
     const none = rehabFloor({ yearBuilt: 1924 });
     assert.equal(none.floor, 60000);
     assert.match(none.why, /no size on record/);
@@ -57,11 +58,11 @@ describe("every formula pin in the golden set passes", () => {
   });
 
   test("engine: investor price is 70% of ARV less rehab; walk-away less $15k and open less $30k, to $250", () => {
-    const r = priceHouse({ sqft: 1500, yearBuilt: 1961, bricked: SURE(640000), scope: { total: 91234, photos: 20 } });
-    assert.equal(r.rehab, 91000, "the scope beat the 82.5k floor, rounded to $500");
-    assert.equal(r.investorPrice, 0.7 * 640000 - 91000);
-    assert.equal(r.walkAway, 342000);
-    assert.equal(r.open, 327000);
+    const r = priceHouse({ sqft: 1500, yearBuilt: 1961, bricked: SURE(640000), scope: { total: 121234, photos: 20 } });
+    assert.equal(r.rehab, 121000, "the scope beat the 108k floor, rounded to $500");
+    assert.equal(r.investorPrice, 0.7 * 640000 - 121000);
+    assert.equal(r.walkAway, 312000);
+    assert.equal(r.open, 297000);
   });
 
   test("engine: the walk-away never tops 90% of list", () => {
@@ -109,13 +110,18 @@ test("a manufactured home, a park home or a teardown is never grade A", () => {
   }
 });
 
-test("pairs: on the machine's own ARV, today's engine lands within 10% of Matt's inputs at the same formula on most houses", () => {
+// 2026-11-09: 15 of 24 within 10%, 5 more than 10% over Matt. The 2026-11-10 floor (x1.3; Matt's own
+// rehab ran low against what buyers paid too) moves the engine under him: 12 within, 3 over, 9 under.
+// Over is the costly side, so that is the bar that must not slip back.
+test("pairs: on the machine's own ARV, today's engine lands within 10% of Matt's inputs on half the houses and rarely 10% over", () => {
   const xs = G.pairs.filter((p) => p.sqft > 0 && p.machine.arv > 0 && p.matt.arv > 0).map((p) => {
     const e = priceHouse({ sqft: p.sqft, yearBuilt: p.yearBuilt || 0, comps: { arv: p.machine.arv, n: 4 }, ...(p.machine.rehab ? { scope: { total: p.machine.rehab, photos: 20 } } : {}) });
     return e.walkAway / (0.7 * p.matt.arv - p.matt.rehab - 15000) - 1;
   });
   const within = xs.filter((x) => Math.abs(x) <= 0.1).length;
-  assert.ok(within / xs.length >= 0.6, `${within} of ${xs.length} within 10%`); // 2026-11-09: 15 of 24
+  const over = xs.filter((x) => x > 0.1).length;
+  assert.ok(within / xs.length >= 0.5, `${within} of ${xs.length} within 10%`);
+  assert.ok(over <= 3, `${over} of ${xs.length} more than 10% over Matt's`);
 });
 
 test("every won deal's contract is within reach of the walk-away on Matt's own inputs",
@@ -203,8 +209,11 @@ test("the engine reads the agent's own ARV and drops the grade when ours is more
     assert.ok(r.misses.includes("arv"), r.reasons.join(" | "));
   });
 
+// The 2026-11-10 floor (x1.3) brought won-05 from 33% over to 23% over (rehab 120.5k to 157.5k on a
+// 1994 house of 2,190 sqft); the other three won deals with a size sit 5.5-9% under. Still a todo:
+// what's left is the house's own condition, and King County's condition code is not in this change.
 test("a won deal is never priced more than 10% over its contract on the inputs we had then",
-  { todo: "rehab floor re-seed from what buyers paid (BT-04, needs Matt): the age floor prices the Vashon deal about 33% over" }, () => {
+  { todo: "rehab floor re-seed from what buyers paid (BT-04, needs Matt): after the 11-10 x1.3 floor the age floor still prices the Vashon deal about 23% over; the county's condition code is the rest" }, () => {
     for (const d of G.deals.filter((x) => x.outcome === "won" && x.sqft)) {
       const r = priceHouse(readsOf(d, {}));
       assert.ok(r.walkAway <= d.contract * 1.1, `${d.id}: walk-away ${r.walkAway} vs contract ${d.contract} (rehab ${r.rehab}: ${r.rehabWhy})`);
