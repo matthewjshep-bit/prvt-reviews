@@ -2503,7 +2503,17 @@ async function runUnderwrite(job, ctx) {
   // The old machine never makes its own offer here: grade A goes live through the engine (liveA),
   // anything else is a draft with our comps and scope on it for Matt.
   if (engineEnding) {
-    return engineFinish(job, ctx, { extraction, partial, listing, subject, arv, rehabbed, scan, repairs, photos, dataHeld: gate.data });
+    // How far the comps reached (audit 2026-11-09): an ARV carried only by price-guessed comps
+    // that went past the first ring, across a main road or past the era band is not sure.
+    // `listing`: the ARV comps confirmed renovated by their own listings (or graded by the AI).
+    const reach = {
+      listing: compsCondition === "ai" ? rehabbed.length : rehabbed.filter((c) => c.conditionSource === "listing").length,
+      radius: compsRadiusMiles, acrossInArv: acrossInArv.length, eraGivesWay: Boolean(eraGivesWay), gutCheck: Boolean(proxy?.gutCheck),
+    };
+    // A size borrowed from the comps is a guess about this house, as an unknown one is.
+    const sizeHeld = sqftSource === "comps" ? [`the house's own size isn't on record: ${sqftFilled.toLocaleString("en-US")} sqft was borrowed from the comps`] : [];
+    return engineFinish(job, ctx, { extraction, partial, listing, subject, arv, rehabbed, scan, repairs, photos,
+      dataHeld: [...gate.data, ...sizeHeld], reach, thread: threadText || "" });
   }
 
   // Our numbers are stuck, but the agent gave us theirs: price on them,
@@ -3017,6 +3027,8 @@ function buildSnapshot({ extraction, partial, contact = null }) {
     checks,
     // Bricked.ai's read (brickedPartial), when it ran on the draft.
     ...(bricked ? { bricked } : {}),
+    // The offer engine's answer on an engine-mode Price-it draft (engineOnDraft).
+    ...(partial.engine ? { engine: partial.engine } : {}),
     mode: "existing",
     // The agent this was underwritten for. Without it the editor opens on an
     // empty Seller contact and cannot create the offer — the one step a review
@@ -3305,12 +3317,14 @@ export const engineUnsure = (engine) => !engine?.v2?.arv || (engine.v2.misses ||
 
 // Engine mode's ending: price on our reads, ask Bricked only when unsure (and allowed today),
 // then send grade A live or leave Matt the draft with our comps and scope on it.
-async function engineFinish(job, ctx, { extraction, partial, listing, subject, arv, rehabbed, scan, repairs, photos, dataHeld = [] }) {
+async function engineFinish(job, ctx, { extraction, partial, listing, subject, arv, rehabbed, scan, repairs, photos, dataHeld = [], reach = null, thread = "" }) {
   const { store, locationId, saved } = ctx;
   const listPrice = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
-  const comps = arv?.arv ? { arv: arv.arv, n: (rehabbed || []).length } : null;
+  const comps = arv?.arv ? { arv: arv.arv, n: (rehabbed || []).length, ...(reach || {}) } : null;
   const scope = scan ? { total: repairs, photos: (photos || []).length } : null;
-  const base = { store, locationId, saved, job, address: extraction.address, listing, facts: subject, comps, scope, listPrice, force: true };
+  // `thread`: the run's transcript, so the engine's killers hear the agent's own words about this
+  // house since it was first named (price-v2.js houseLines), not only the text that started it.
+  const base = { store, locationId, saved, job, address: extraction.address, listing, facts: subject, comps, scope, listPrice, thread, force: true };
   let engine = await shadowPrice(base);
   let b = null;
   if (engineUnsure(engine) && await takeBrickedCredit({ store, locationId, saved })) {
@@ -3331,9 +3345,38 @@ async function engineFinish(job, ctx, { extraction, partial, listing, subject, a
   }
   // A "Price it" draft for Matt, like draft and skeleton mode, with our own evidence on it.
   job.draftOnly = true;
+  const v = engine?.v2 || null;
   job.subjectLine = [subjectLineOf(subject, job.listPrice), arv?.arv ? `our comps ARV ${fmtMoney(arv.arv)}` : "",
-    scan ? `rehab ${fmtMoney(repairs)} from ${(photos || []).length} photos` : ""].filter(Boolean).join(" · ");
+    scan ? `rehab ${fmtMoney(repairs)} from ${(photos || []).length} photos` : "",
+    v?.walkAway > 0 ? `engine open ${fmtMoney(v.open)} / walk-away ${fmtMoney(v.walkAway)}` : ""].filter(Boolean).join(" · ");
+  if (v) engineOnDraft(partial, v);
   return finishHeld(job, ctx, { extraction, held: [ENGINE_HOLD], partial });
+}
+
+/**
+ * engineOnDraft(partial, v2) → the draft's partial, carrying the engine's answer for Matt.
+ *
+ * Audit 2026-11-09 (UWM-05): the Price-it draft opened on the bare photo scope, which runs about
+ * 0.88x Matt's own rehab, and showed nothing of the engine's, so Matt priced from a lighter
+ * number than the engine had. Now `draft.engine` carries { grade, arv, rehab, rehabWhy, open,
+ * walkAway, triage, reasons } (the offer editor reads it), and when the engine's rehab is above
+ * the scope an "age_floor" allowance row carries the difference, so the draft opens on it.
+ */
+export function engineOnDraft(partial, v = {}) {
+  partial.engine = { grade: v.grade || "C", arv: v.arv || 0, rehab: v.rehab || 0, rehabWhy: v.rehabWhy || "", open: v.open || 0,
+    walkAway: v.walkAway || 0, triage: v.triage || "", reasons: (v.reasons || []).slice(0, 12) };
+  const scoped = Number(partial.repairs) || 0;
+  if (!(Number(v.rehab) > scoped)) return partial;
+  const base = partial.rehabState || seedRoomCounts(undefined, { beds: Number(partial.subject?.beds) || 0, baths: Number(partial.subject?.baths) || 0 });
+  const contingency = 1 + (Number(base?.contingency) || 0) / 100;
+  const row = { id: "age_floor", key: "age_floor", label: `Offer engine's rehab floor: ${v.rehabWhy || "the age floor"}`,
+    cost: Math.ceil((Number(v.rehab) - scoped) / contingency / 100) * 100 };
+  const state = withAllowance(base, [...(base.allowance || []).filter((r) => r.key !== "age_floor"), row]);
+  const priced = priceScope(state, Number(partial.subjectSqft) || 0);
+  partial.rehabState = state;
+  partial.scope = priced.lines;
+  partial.repairs = priced.total;
+  return partial;
 }
 
 /**
