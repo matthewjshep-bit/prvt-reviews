@@ -162,3 +162,14 @@ test("the repair figure check stands on its own for the float's other doors", as
   assert.equal(workAfterPricing({ offer: engine, dossier: { have: {} } }), null);
   assert.equal(workAfterPricing({ offer: { ...engine, pricing: undefined }, dossier: later }), null, "no rehab of ours to measure against");
 });
+
+// Review, 2026-11-09: a counter filed without its thousands (450) read as the
+// seller's number and stood every float down at "0K".
+test("a seller's figure under 10K is a misread, not a cap", async () => {
+  const { sellerOwnNumber } = await import("./number-stance.js");
+  const ours = listed({ cashAmount: 400000 });
+  assert.equal(sellerOwnNumber({ offer: { ...ours, counter: { amount: 450, at: "2026-11-08T00:00:00Z" } } }), null);
+  assert.equal(sellerOwnNumber({ offer: ours, dossier: { have: { sellerAsk: { value: 380, at: "2026-11-08T00:00:00Z" } } } }), null);
+  assert.ok(!["requote_down", "hold"].includes(listedFit({ offer: { ...ours, counter: { amount: 450, at: "2026-11-08T00:00:00Z" } } }).move), "no cap, no hold");
+  assert.equal(sellerOwnNumber({ offer: { ...ours, counter: { amount: 450000, at: "2026-11-08T00:00:00Z" } } }).amount, 450000);
+});

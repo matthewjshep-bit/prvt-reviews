@@ -326,10 +326,15 @@ const COST_BEFORE = "\\bclosing(?:\\s+costs?)?|\\bholding(?:\\s+costs?)?|\\bcarr
 // Zestimate or an appraisal. A their-word is required before "bottom" or
 // "number": "our bottom line is 400" is ours. Read on the rough numbers only
 // (roughHits), so a figure the money gate already caught stays caught.
-const THEIRS_BEFORE = "\\b(?:their|his|her|the\\s+sellers?'?s?|sellers?'?s?|the\\s+owners?'?s?|owners?'?s?)\\s+(?:bottom(?:\\s+line)?|floor|number|price|ask(?:ing)?|target|net)|" +
+const THEIRS_BEFORE = "\\b(?:their|his|her|the\\s+sellers?'?s?|sellers?'?s?|the\\s+owners?'?s?|owners?'?s?)\\s+(?:bottom(?:\\s+line)?|floor|number|price|ask(?:ing)?|target|net|counter(?:\\s+offer)?)|" +
   "\\b(?:they(?:'re|\\s+are)?|he(?:'s|\\s+is)?|she(?:'s|\\s+is)?|(?:the\\s+)?sellers?(?:\\s+(?:is|are))?)\\s+hoping\\s+(?:to\\s+get|for)|" +
   "\\bzestimate|\\bapprais(?:ed|al)|\\bassessed|\\bhoa(?:\\s+dues)?|\\bdues|\\brent|\\btax(?:es)?|\\bpayoff|\\bowes?|\\bowed|\\bmortgage|\\bloan";
 const THEIRS_BEFORE_RX = new RegExp("(?:" + THEIRS_BEFORE + ")\\s*(?:is|of|at|=|:|around|about|~|for)?\\s*$", "i");
+// A hedge between the word and the number ("the rehab is probably 110", "ARV
+// is likely 450", "taxes are probably 4"): the number is still the rehab's,
+// the ARV's, the taxes'. Review, 2026-11-09: read as our price, the counter
+// hold texted the rehab as our number.
+const HEDGE_TAIL_RX = /(?:\s+(?:is|are|was|were|be|'s|likely|probably|prob|roughly|around|about|maybe|somewhere|near|close\s+to|more\s+like))+\s*$/i;
 
 /* ---------- a range topped by our number (2026-10-07) ---------- */
 
@@ -497,27 +502,37 @@ const SHORT_AFTER_RX = /(?<![\d,.$])\b(\d{2,4})(ish)?\s+(?:works|would\s+work|co
 // "mid" 433K, "high" or "upper" 466K. Each hit passes the not-ours words below
 // (the seller's bottom, the list, the HOA, the work) before it counts, so a
 // their-price phrasing that trips goes there, never into a looser rule.
-const ROUGH_CUE_RX = /\b(?:is|likely|probably|land(?:ing)?(?:\s+(?:at|around|near|in\s+at))?|number\s+is|come\s+in\s+at|around)\s+(\d{2,4})(?![\d,]|\.\d|\s?[kKmM]\b|'?s\b)/gi;
+const ROUGH_CUE_RX = /\b(?:is|likely|probably|land(?:ing)?(?:\s+(?:at|around|near|in\s+at))?|number\s+is|come\s+in\s+at|around)\s+(\d{2,4})(ish)?(?![\d,]|\.\d|\s?[kKmM]\b|'?s\b)/gi;
 const ROUGH_ISH_RX = /(?<![\w,.$])\$?(\d{2,4})\s?([kK])?ish\b/g;
 const ROUGH_BAND_RX = /\b(low|mid|high|upper)[\s-]+\$?(\d{2,4})[kK]?'?s\b/gi;
 const ROUGH_RANGE_RX = /(?<![\w,.$])\$?(\d{2,4})\s?([kK])?\s+(?:range|or\s+so)\b/gi;
 const YEAR = /^(?:19|20)\d\d$/;
+// After a rough number, not money: the rest of a phone number ("my cell is"
+// and ten digits) or a count or a distance ("probably 200 photos", "is 300 feet").
+// Review, 2026-11-09: read low, a hold would have texted it as our number.
+const ROUGH_NOT_MONEY_RX = /^(?:[\s.)-]*\d{3}[\s.-]*\d{4}\b|\s+(?:photos?|pics?|pictures?|feet|foot|ft\b|miles?|mi\b|acres?|homes?|houses?|units?|doors?|people|agents?|buyers?|showings?|offers?|times?|calls?|texts?|emails?|percent)\b)/i;
 function roughHits(t) {
   const hits = [];
   for (const m of t.matchAll(ROUGH_CUE_RX)) {
-    const start = m.index + m[0].length - m[1].length;
-    const end = start + m[1].length;
+    // "probably 550ish fixed up": the end is past the "ish", so the words
+    // after it are the ones read.
+    const said = m[1] + (m[2] || "");
+    const start = m.index + m[0].length - said.length;
+    const end = start + said.length;
     const rest = t.slice(end, end + 12);
-    if (YEAR.test(m[1]) || SHORT_UNIT.test(rest) || SHORT_STREET.test(rest) || /^\s+[A-Z]/.test(rest)) continue;
+    if (YEAR.test(m[1]) || SHORT_UNIT.test(rest) || SHORT_STREET.test(rest) || /^\s+[A-Z]/.test(rest) || ROUGH_NOT_MONEY_RX.test(rest)) continue;
     hits.push({ v: Number(m[1]) * 1000, start, end });
   }
+  // A year is never a rough price: "built 1995 or so", "the mid 1900s".
   for (const rx of [ROUGH_ISH_RX, ROUGH_RANGE_RX]) {
     for (const m of t.matchAll(rx)) {
+      if (YEAR.test(m[1]) || ROUGH_NOT_MONEY_RX.test(t.slice(m.index + m[0].length, m.index + m[0].length + 16))) continue;
       const start = m.index + m[0].indexOf(m[1]);
       hits.push({ v: Number(m[1]) * 1000, start, end: m.index + m[0].length });
     }
   }
   for (const m of t.matchAll(ROUGH_BAND_RX)) {
+    if (YEAR.test(m[2])) continue;
     const n = Number(m[2]);
     const width = n % 100 === 0 ? 100 : n % 10 === 0 ? 10 : 1;
     const step = { low: 0, mid: Math.floor(width / 3), high: Math.floor((2 * width) / 3), upper: Math.floor((2 * width) / 3) }[m[1].toLowerCase()];
@@ -526,7 +541,10 @@ function roughHits(t) {
   }
   return hits.filter((h) => notTheirs(t, h.start, h.end));
 }
-function shorthandHits(t, reference) {
+// `rough: false` reads as before rough numbers were read: the money gate's
+// allowlist of the agent's own figures, so reading more of OUR words never
+// lets the bot echo more of theirs.
+function shorthandHits(t, reference, { rough = true } = {}) {
   const ref = Math.max(0, Number(reference) || 0);
   const plausible = (v) => (ref ? v >= ref * 0.4 && v <= ref * 3 : v >= 50000 && v <= 5e6);
   const hits = [];
@@ -541,11 +559,11 @@ function shorthandHits(t, reference) {
       if (plausible(v)) hits.push({ v, start, end });
     }
   }
-  for (const h of roughHits(t)) if (plausible(h.v)) hits.push(h);
+  if (rough) for (const h of roughHits(t)) if (plausible(h.v)) hits.push(h);
   return hits;
 }
-export function shorthandPrices(text = "", reference = 0) {
-  return [...new Set(shorthandHits(String(text || ""), reference).map((h) => h.v))];
+export function shorthandPrices(text = "", reference = 0, { rough = true } = {}) {
+  return [...new Set(shorthandHits(String(text || ""), reference, { rough }).map((h) => h.v))];
 }
 
 // Not a price we'd pay: the list price, their price, and the value or the
@@ -555,8 +573,9 @@ const NOT_OURS_BEFORE = new RegExp("(?:\\barv|after[- ]repair value|\\brehab|\\b
 // Is the rough number at [start, end) a price we'd pay, by the words around
 // it? The not-ours words above, and their number said back to them.
 function notTheirs(t, start, end) {
-  const before = t.slice(Math.max(0, start - 28), start);
-  return !NOT_OURS_AFTER.test(t.slice(end, end + 28)) && !NOT_OURS_BEFORE.test(before) && !THEIRS_BEFORE_RX.test(before);
+  const raw = t.slice(Math.max(0, start - 40), start);
+  const befores = [raw, raw.replace(HEDGE_TAIL_RX, " ")];
+  return !NOT_OURS_AFTER.test(t.slice(end, end + 28)) && !befores.some((b) => NOT_OURS_BEFORE.test(b) || THEIRS_BEFORE_RX.test(b));
 }
 
 /**
@@ -898,7 +917,7 @@ function holdAmount({ offer = null, transcript = "", offers = null } = {}) {
 }
 
 /**
- * holdNumber({ offer, transcript, offers, events }) → { amount, text, from } | null
+ * holdNumber({ offer, transcript, offers, events }) → { amount, raw, text, from } | null
  *
  * "Hold our number" on a counter (the Desk, 2026-10-02). Their counter is
  * above ours and Matt stands where we are: the number said is the lowest we
@@ -911,7 +930,8 @@ function holdAmount({ offer = null, transcript = "", offers = null } = {}) {
  * (typedAboveBook, with the timeline's `events`): null, and that line is
  * Needs Matt's why. And the number is said rounded DOWN to the thousand
  * ("hold at 418,000", not 418,640), inside machineCut's slack: an odd book
- * number read as machine-made.
+ * number read as machine-made. `raw` is the number before the rounding, so a
+ * reader can tell it was already said the old way.
  */
 export function holdNumber({ offer = null, transcript = "", offers = null, events = [] } = {}) {
   const h = holdAmount({ offer, transcript, offers });
@@ -923,7 +943,7 @@ export function holdNumber({ offer = null, transcript = "", offers = null, event
   const text = `Appreciate you working it. On ${where} we're going to hold at $${amount.toLocaleString("en-US")}: that's where the numbers work for us. If the seller can get there, we're ready to go.`;
   if (pricesWeName(text, amount).some((n) => n > amount)) return null;
   const from = down && raw === Math.round(down.amount) ? "come_down" : last && raw === Math.round(last.amount) && raw !== book ? "last_quote" : "book";
-  return { amount, text, from };
+  return { amount, raw, text, from };
 }
 
 /**

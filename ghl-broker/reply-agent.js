@@ -1110,8 +1110,10 @@ export function evaluateReplyGates({
   }
   // Their shorthand counts as theirs the way ours counts as ours: "$650 is
   // their bottom" is 650K, and echoing it is not inventing it.
+  // Read as before rough numbers were read ({ rough: false }): reading more of
+  // our words never lets the bot echo more of theirs (2026-11-09).
   const theirShort = [
-    ...shorthandPrices(inboundMessage, ours),
+    ...shorthandPrices(inboundMessage, ours, { rough: false }),
     ...moneyIn(inboundMessage).filter((n) => n >= 10 && n < 10000).map((n) => n * 1000),
   ];
   const allowed = new Set([...allowedAmounts, ...moneyIn(inboundMessage), ...theirShort].map((n) => Math.round(n)));
@@ -1143,7 +1145,7 @@ export function evaluateReplyGates({
   // theirs is the take check, and stands. Their own figures may be echoed.
   const theirs = party === "agent" ? Math.max(0, Math.round(Number(theirValue) || 0)) : 0;
   if (theirs > 0) {
-    const echo = new Set([...moneyIn(inboundMessage), ...shorthandPrices(inboundMessage, theirs)].map((n) => Math.round(n)));
+    const echo = new Set([...moneyIn(inboundMessage), ...shorthandPrices(inboundMessage, theirs, { rough: false })].map((n) => Math.round(n)));
     const ourArv = Math.max(0, Math.round(Number(ourValue) || 0));
     const above = (n) => n > theirs * 1.05 && !echo.has(n);
     const named = [...new Set([
@@ -4708,10 +4710,13 @@ async function runReply(job, ctx) {
     if (hold && aboutThisOnly && (theirs > hold.amount || (!theirs && asksUsToComeUp(msg)))) {
       const n = hold.amount.toLocaleString("en-US");
       const where = String(closed.address || "").split(",")[0].trim() || "the house";
-      const saidIt = new RegExp(`still at \\$?${n}\\b`, "i").test(a.transcript || "");
+      // Said before hold texts rounded down ("still at 418,640") counts too.
+      const saidAs = [hold.amount, hold.raw].filter((v) => v > 0).map((v) => v.toLocaleString("en-US"))
+        .find((said) => new RegExp(`still at \\$?${said}\\b`, "i").test(a.transcript || ""));
+      const saidIt = Boolean(saidAs);
       const closedHold = { offerId: closed.id, ours: hold.amount, theirs, ...(saidIt ? { quiet: true } : {}) };
       draft = saidIt
-        ? { ...draft, needsHuman: false, closedHold, humanReason: `we already told them we're still at ${n} on ${where}; nothing more to say` }
+        ? { ...draft, needsHuman: false, closedHold, humanReason: `we already told them we're still at ${saidAs} on ${where}; nothing more to say` }
         : { ...draft, needsHuman: false, closedHold, humanReason: "",
           reply: `Understood. We're still at ${n} on ${where}; if anything changes on the seller's side, I'm here.` };
     }

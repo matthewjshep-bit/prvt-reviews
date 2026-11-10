@@ -522,3 +522,49 @@ test("a range we floated makes its bottom ours to say, not a cut", async () => {
   assert.deepEqual(quoteGateFlags({ reply: "We're at 285k on it.", quotes }), []);
   assert.match(quoteGateFlags({ reply: "We're at 262k on it.", quotes }).join(" | "), /below the 295K we last texted/);
 });
+
+// Review, 2026-11-09: the rough reader took the rehab for our price ("the
+// rehab is probably 110"), and the counter hold then texted that as our
+// number, 140K under the offer.
+test("the rehab said with a hedge is not our price, and a hold never says it", async () => {
+  const { pricesWeName } = await import("./current-offer.js");
+  for (const said of [
+    "Rehab is probably 100 on this one.",
+    "The ARV is likely 450 once it's done.",
+    "The work is likely 120 on it.",
+    "Taxes are probably 450 a year there.",
+    "Comps are probably 550ish fixed up.",
+    "Their counter is 450 on it.",
+    "The house was built 1995 or so.",
+    "Probably mid 1900s construction.",
+    "Call me anytime, my cell is 253 555 0134.",
+    "We went through probably 200 photos on it.",
+    "It is 300 feet from the water.",
+  ]) assert.deepEqual(pricesWeName(said, 300000), [], said);
+  // The same hedges on our own number still read as ours.
+  assert.deepEqual(pricesWeName("Our number is probably 400 on it.", 380000), [400000]);
+  assert.deepEqual(pricesWeName("Rehab is probably 100, so we're probably 250 on it.", 250000), [250000]);
+  const offer = { id: "pine", contactId: "kp", address: "21 Pine Hollow Rd, Tacoma, WA 98404", cashAmount: 250000, status: "countered",
+    createdAt: "2026-10-01T00:00:00Z", sends: [{ ts: "2026-10-02T00:00:00Z" }] };
+  const thread = "[2026-10-03 17:00] US sms: On 21 Pine Hollow the rehab is probably 110, so we're where we are.";
+  assert.equal(lastQuoteOnHouse(offer, thread), null);
+  assert.equal(holdNumber({ offer, transcript: thread })?.amount, 250000);
+});
+
+// An agent's number said with a cue word ("best is 350") was never one the
+// money gate let the bot echo; reading rough numbers doesn't change that.
+test("an agent's rough number is read only when asked for, so the money gate's allowlist is as before", async () => {
+  const { shorthandPrices } = await import("./current-offer.js");
+  assert.deepEqual(shorthandPrices("Best they'd do is 350.", 400000), [350000]);
+  assert.deepEqual(shorthandPrices("Best they'd do is 350.", 400000, { rough: false }), []);
+  assert.deepEqual(shorthandPrices("They'd go to 350.", 400000, { rough: false }), [350000], "the old shorthand still reads");
+});
+
+// A closed house's "still at N" said before hold texts rounded down: the
+// next answer must see it was already said, at either spelling.
+test("a hold names the number it rounded from, so a goodbye said before the rounding isn't said again", () => {
+  const o = { id: "odd2", address: "5 Birch Ct, Kent, WA 98030", cashAmount: 418640, createdAt: "2026-10-01T00:00:00Z", sends: [{ ts: "2026-10-01T00:00:00Z" }] };
+  const h = holdNumber({ offer: o });
+  assert.equal(h.amount, 418000);
+  assert.equal(h.raw, 418640);
+});

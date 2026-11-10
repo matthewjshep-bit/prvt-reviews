@@ -9036,3 +9036,38 @@ test("an engine number the agent put more work on after we priced it isn't float
   const pressed = await float({ personAsked: true });
   assert.ok(pressed.r.job, "a person pressing Float has decided");
 });
+
+// Review, 2026-11-09: hold texts now round down to the thousand. A house we
+// already told "still at 300,640" must not hear "still at 300,000" as a
+// second goodbye at a lower number.
+test("a closed house told our odd number before the rounding doesn't get a second goodbye at the rounded one", async () => {
+  _resetJobs();
+  const client = withMessages(ghlStubFor(["agent"]).client, [
+    { direction: "outbound", dateAdded: hoursAgo(30), body: "Understood. We're still at 300,640 on 12 Elm St; if anything changes on the seller's side, I'm here." },
+  ]);
+  const offer = { ...HELD_OFFER, cashAmount: 300640, status: "we_passed" };
+  const store = negotiationStore(offer);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: HOLD_SAVED(), store, contactId: "c1", sendsEnabled: true, message: "Seller still needs 400 to cover the payoff",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: 400000, propertyAddress: "12 Elm St",
+        reply: "Got it, let me check whether there's any room and get back to you." }),
+      setOfferStatus: async ({ status }) => ({ ok: true, address: offer.address, status }),
+      markCounterHold: async () => ({ ok: true }),
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.doesNotMatch(d.reply, /still at 300,000/, d.reply);
+  assert.equal(d.humanReason, "we already told them we're still at 300,640 on 12 Elm St; nothing more to say");
+});
+
+// The agent's own figure said with a cue word was never one the bot could
+// echo; the rough reader reads our words, not more of theirs.
+test("an agent's 'best is 350' is not a number the bot may say back, as before", () => {
+  const g = evaluateReplyGates({ draft: { ...DRAFT, intent: "question", reply: "Got it, 350 could work for us.", propertyAddress: "12 Elm St" },
+    party: "agent", allowedAmounts: [400000], ourAmount: 400000, inboundMessage: "Best they'd do is 350." });
+  assert.equal(g.ok, false);
+  assert.ok(g.flags.some((f) => /\$350,000, which is not in the offer book/.test(f)), g.flags.join(" | "));
+});

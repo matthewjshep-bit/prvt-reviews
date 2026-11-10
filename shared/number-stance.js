@@ -138,16 +138,18 @@ export function sellerNumberOn({ offer = null, dossier = null, events = [] } = {
  * they'd take" (2026-11-06: ours went out 49K over the seller's number two
  * minutes after the agent named it, and the agent said yes).
  */
+// Under 10K is a figure filed without its thousands, not a seller's number.
+const SELLER_MIN = 10000;
 export function sellerOwnNumber({ offer = null, dossier = null, events = [] } = {}) {
   const found = [];
   const said = dossier?.have?.sellerAsk;
-  if (round(said?.value) > 0) found.push({ amount: round(said.value), at: String(said.at || ""), from: "said" });
+  if (round(said?.value) >= SELLER_MIN) found.push({ amount: round(said.value), at: String(said.at || ""), from: "said" });
   for (const e of events || []) {
-    if (e?.type === "house_mentioned" && round(e.data?.sellerAsk) > 0 && e.address && offer?.address && sameStreet(e.address, offer.address)) {
+    if (e?.type === "house_mentioned" && round(e.data?.sellerAsk) >= SELLER_MIN && e.address && offer?.address && sameStreet(e.address, offer.address)) {
       found.push({ amount: round(e.data.sellerAsk), at: String(e.at || ""), from: "mentioned" });
     }
   }
-  if (round(offer?.counter?.amount) > 0) found.push({ amount: round(offer.counter.amount), at: String(offer.counter.at || ""), from: "counter" });
+  if (round(offer?.counter?.amount) >= SELLER_MIN) found.push({ amount: round(offer.counter.amount), at: String(offer.counter.at || ""), from: "counter" });
   if (!found.length) return null;
   return { ...found.sort((a, b) => b.at.localeCompare(a.at))[0], source: "seller" };
 }

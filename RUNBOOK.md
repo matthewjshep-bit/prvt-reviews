@@ -1634,7 +1634,8 @@ them. All in code, all holds only:
   `hand_reply` event) is above what the hold would say. The draft goes to you
   with the why "you texted 270K on 88 Larch Way; the offer says 263,750".
   Hold texts say the number rounded down to the thousand ("hold at
-  418,000", not 418,640), inside never-cut's slack.
+  418,000", not 418,640), inside never-cut's slack. A closed house we already
+  told "still at 418,640" isn't told "still at 418,000" as a second goodbye.
 - **Two agents, one house, one number.** Before the machine floats a number
   or our read (realm check, hot push, take check), a number a person put on
   the same house for another agent in the last 14 days must match ours within
@@ -2404,14 +2405,23 @@ The agent said yes, which unlocked the write-up ask.
   after a figure that is no price on the house (HOA, dues, rent, taxes,
   payoff, owe, mortgage, loan, Zestimate, appraisal, assessed) doesn't count.
   These words only ever take a rough number out; a figure the gate already
-  read as ours stays ours, and "our bottom line is 400" is ours.
+  read as ours stays ours, and "our bottom line is 400" is ours. A hedge
+  between the word and the number doesn't change whose it is: "the rehab is
+  probably 110" and "ARV is likely 450" are the work and the value, never our
+  price (a review on 11-09 caught the counter hold texting the rehab as our
+  number). A year is never a rough price ("built 1995 or so").
+- **Only our words are read rough.** The agent's own figures the bot may say
+  back (the money gate's allowlist) are read as before
+  (`shorthandPrices(text, ref, { rough: false })`), so reading more of our
+  words never lets the bot echo more of theirs.
 - **Never above the seller's own number.** The reply gate holds an agent
   reply that names a price above the house's seller number: "the seller's
   number on <street> is 610K: we never offer above it". The number is their
   own: the dossier's `sellerAsk`, a `house_mentioned` ask, their counter, or
   the one in the message being answered (the model's `propertyDetails.sellerAsk`,
-  or their counter). Never the list price or a payoff. Saying their number
-  back, or ours at it, goes.
+  or their counter). Never the list price or a payoff, and never a figure
+  under 10K (one filed without its thousands). Saying their number back, or
+  ours at it, goes.
 
 ### What the drafts cost (2026-09-25)
 
