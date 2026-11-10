@@ -274,10 +274,12 @@ export function followUpPerformance(followUpEvents = [], inboundEvents = [], { w
     const row = rows.get(key);
     row.sent++;
     const at = Date.parse(e.at);
-    const next = (inboundBy.get(e.contactId) || []).find((x) => x.t > at && x.t - at <= windowDays * 86400000);
-    // A STOP is their answer, but not a reply the nudge earned (2026-11-09).
-    if (next?.stop) row.stopped++;
-    else if (next) { row.replied++; row.hours.push(Math.round((next.t - at) / 3600000)); }
+    const answers = (inboundBy.get(e.contactId) || []).filter((x) => x.t > at && x.t - at <= windowDays * 86400000);
+    // A STOP is their answer, but not a reply the nudge earned (2026-11-09),
+    // even after a first question: a STOP anywhere in the window is stopped,
+    // as Reports → Follow-up and the text scoreboard count it.
+    if (answers.some((x) => x.stop)) row.stopped++;
+    else if (answers.length) { row.replied++; row.hours.push(Math.round((answers[0].t - at) / 3600000)); }
   }
   return [...rows.values()]
     .map(({ hours, ...r }) => ({ ...r, replyRate: pct(r.replied, r.sent), stopRate: pct(r.stopped, r.sent), medianHoursToReply: median(hours.sort((a, b) => a - b)) }))

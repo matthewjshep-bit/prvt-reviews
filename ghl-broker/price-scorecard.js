@@ -62,13 +62,21 @@ export async function buildScorecard({ store, locationId, saved = {}, now = Date
   const theirEvents = records.length
     ? (await store.listContactEventsSince?.(locationId, iso(now - (days + 30) * DAY_MS), { types: THEIR_EVENT_TYPES, limit: 20000 }).catch(() => [])) || []
     : [];
+  // Filed by house once: matching every said number against every priced
+  // house parsed records × events addresses on the one thread (2026-11-09).
+  const theirByHouse = new Map();
+  for (const e of theirEvents) {
+    const k = e?.address ? houseKey(e.address) : "";
+    if (k) (theirByHouse.get(k) || theirByHouse.set(k, []).get(k)).push(e);
+  }
   const docs = [];
   let updated = 0;
   for (const rec of records) {
     const fresh = outcomes.get(rec.houseKey);
     // A sold price found for a house with no offer row stays (outcome.sold from the unpriced read).
     const base = fresh ? { ...fresh, sold: fresh.sold || rec.doc?.outcome?.sold || null } : rec.doc?.outcome || null;
-    const their = theirReadOf({ address: rec.doc?.address || "", events: theirEvents });
+    const address = rec.doc?.address || "";
+    const their = theirReadOf({ address, events: theirByHouse.get(houseKey(address)) || [] });
     const said = Object.fromEntries(Object.entries(their).filter(([, v]) => v != null));
     const outcome = Object.keys(said).length ? { ...(base || {}), ...said } : base;
     const doc = { ...rec.doc, outcome, leadSource: rec.doc?.leadSource || fresh?.leadSource || null };

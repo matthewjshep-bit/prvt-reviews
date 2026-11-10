@@ -96,3 +96,21 @@ test("the evening's card is kept for Lessons to read, and it knows the seller's 
   assert.ok(kept.card.ready.A.missing.some((x) => /above their stated number/.test(x)));
   assert.equal((await store.getHousePricing(LOC2, houseKey(addr))).doc.outcome.theirNumber, 300000);
 });
+
+test("the evening card files what agents said by house once, not once for every house it priced", async () => {
+  // Each said number was matched against every priced house, so 1,000 houses
+  // and 5,000 said numbers parsed five million addresses on the broker's one
+  // thread (seconds of nothing else, on the evening run or a "Work it out now").
+  let reads = 0;
+  const said = Array.from({ length: 60 }, (_, i) => {
+    const e = { type: "property_details", at: "2026-11-12T18:00:00Z", data: { sellerAsk: 300000 + i } };
+    const address = `${100 + i} Wren Way, Kent, WA 98030`;
+    Object.defineProperty(e, "address", { enumerable: true, get() { reads++; return address; } });
+    return e;
+  });
+  const houses = Array.from({ length: 40 }, (_, i) => { const address = `${100 + i} Wren Way, Kent, WA 98030`; return { houseKey: houseKey(address), doc: record(address) }; });
+  const stub = { listHousePricing: async () => houses, listOffers: async () => [], getOffer: async () => null, listContactEventsSince: async () => said };
+  const { card } = await buildScorecard({ store: stub, locationId: "LOC-sc-3", now: EVENING });
+  assert.equal(card.total.withTheir, 40, "every house still finds its own number");
+  assert.ok(reads <= said.length * 5, `${reads} address reads for ${said.length} said numbers and ${houses.length} houses`);
+});

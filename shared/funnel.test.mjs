@@ -270,3 +270,14 @@ test("the follow-up table reads the texts that went, and a STOP is not a reply",
   const r = followUpPerformance(rows, [{ contactId: "c1", at: D(2) }, { contactId: "c2", at: D(2), stop: true }]);
   assert.deepEqual([r[0].sent, r[0].replied, r[0].stopped], [2, 1, 1]);
 });
+
+test("a follow-up answered with a question and then a STOP counts as stopped, the way Follow-up counts it", () => {
+  // Reports → Follow-up (shared/follow-up-engine.js attributeAnswers) and the
+  // scoreboard both count a STOP in the window over a reply; the Funnel tab
+  // counted whichever came first, so the same text read replied here.
+  const r = followUpPerformance([fu("c1", "offer_nudge", 3, D(1))], [
+    { contactId: "c1", at: D(2) },
+    { contactId: "c1", at: "2026-09-02T15:00:00.000Z", stop: true },
+  ]);
+  assert.deepEqual([r[0].sent, r[0].replied, r[0].stopped], [1, 0, 1]);
+});
