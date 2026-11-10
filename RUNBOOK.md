@@ -2330,8 +2330,10 @@ send a due text twice, and dropped any reply job still in memory.
   webhook writes `inbound_received` (channel and GHL's message id, never the
   words) before the reply job starts (reply-agent.js `recordInbound`). GHL
   delivering the same text again, even after a restart, is skipped when a
-  reply was drafted since or the first is under 10 minutes old; older than
-  that with nothing drafted, the first job is gone and the text is answered.
+  reply was drafted since, or when this broker still has the first one's
+  reply job (under 10 minutes old). With no job here, the first try died
+  before its reply started (GHL only sends again after a failure) or a
+  restart took the job, and the text is answered.
   "The same text" is GHL's message id when the webhook carries one
   (`message.id`, `messageId` or `customData.message_id`), otherwise the same
   words from the same contact inside the same or the next minute.
@@ -2345,9 +2347,12 @@ send a due text twice, and dropped any reply job still in memory.
   the gates and the dial all apply. Claimed on the `bootPass` cursor, once
   per start, retried by the tick if it failed, at most 30 a day. With it off,
   a dropped reply waits for the daytime pass or the 7pm audit, as before.
-  There is no switch on the Conversation AI page yet: it is turned on by
-  saving the config (`PUT /api/offers/automations/conversation/config`) with
-  `nightlyAudit.bootPass: true`, and a page save keeps whatever is there.
+  There is no switch on the Conversation AI page yet. The PUT replaces the
+  whole Conversation AI blob, so a body with only this key would put every
+  other setting back to its default: `GET
+  /api/offers/automations/conversation/config`, set
+  `config.nightlyAudit.bootPass` to `true` in what comes back, and `PUT` that
+  whole `config` to the same path. A page save keeps whatever is there.
 
 ### Never more than our number (2026-09-28)
 

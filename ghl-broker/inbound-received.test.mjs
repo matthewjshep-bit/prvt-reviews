@@ -103,6 +103,47 @@ test("a second delivery of a text whose first job died, with nothing drafted in 
   assert.equal(modelCalls, 1);
 });
 
+test("GHL sending a text again after the first try failed before its reply started gets it answered", async () => {
+  _resetJobs();
+  const LOC = "loc-retry";
+  const contactId = "c-retry";
+  const { client } = ghl();
+  let modelCalls = 0;
+  const deps = { draft: async () => { modelCalls++; return DRAFT; }, debounceMs: 0 };
+  // The first delivery was written down a minute ago, then the request died
+  // (a 500, or the broker going down) before any reply job started, so GHL
+  // sends it again. Nothing has it in hand: it is answered now, not in ten minutes.
+  await recordInbound({ store, locationId: LOC, contactId, messageId: "ghl-msg-retry", message: "what's your number on 9 Fennel Ln?", now: Date.now() - MIN });
+  const again = await recordInbound({ store, locationId: LOC, contactId, messageId: "ghl-msg-retry", message: "what's your number on 9 Fennel Ln?" });
+  assert.equal(again.duplicate, true);
+  const r = await startReply({ client, locationId: LOC, saved: SAVED, store, contactId, message: "what's your number on 9 Fennel Ln?", deps, received: again });
+  await settle();
+  assert.ok(r.job, r.skipped);
+  assert.equal(modelCalls, 1);
+  assert.equal((await draftsFor(LOC, contactId)).length, 1);
+});
+
+test("a second delivery while this broker still has the first one's reply waiting is skipped", async () => {
+  _resetJobs();
+  const LOC = "loc-in-hand";
+  const contactId = "c-in-hand";
+  const { client } = ghl();
+  let modelCalls = 0;
+  const deps = { draft: async () => { modelCalls++; return DRAFT; }, debounceMs: 60000 };
+  const first = await recordInbound({ store, locationId: LOC, contactId, messageId: "ghl-msg-hand", message: "can I bring a buyer Tuesday?" });
+  const r1 = await startReply({ client, locationId: LOC, saved: SAVED, store, contactId, message: "can I bring a buyer Tuesday?", deps, received: first });
+  assert.equal(r1.job.phase, "waiting");
+  // The same GHL message again, this time with its picture link, so only the
+  // record can tell it's the same text.
+  const again = await recordInbound({ store, locationId: LOC, contactId, messageId: "ghl-msg-hand", message: "can I bring a buyer Tuesday?" });
+  const r2 = await startReply({ client, locationId: LOC, saved: SAVED, store, contactId, message: "can I bring a buyer Tuesday?", deps, received: again,
+    attachments: 1, attachmentUrls: ["https://example.invalid/front-door.jpg"] });
+  assert.equal(r2.job, null);
+  assert.match(r2.skipped, /duplicate of the text that came in at/);
+  _resetJobs();
+  assert.equal(modelCalls, 0);
+});
+
 test("without GHL's message id the key is the words and the minute, and never the words themselves", async () => {
   const at = Date.parse("2026-11-09T20:15:30.000Z");
   const k = inboundKey({ contactId: "c1", message: "the Larkspur house is ready to show", at });

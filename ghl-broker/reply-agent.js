@@ -2506,9 +2506,10 @@ export async function assembleConversation({
 // twice. The record carries the channel and GHL's message id, never the words.
 export const INBOUND_RECEIVED = "inbound_received";
 // A second delivery of a text recorded less than this long ago, with no reply
-// drafted since, is treated as the same text still being worked (on this
-// broker or the one a deploy is replacing). Older than this with nothing
-// drafted, the first job is gone and the text is answered.
+// drafted since, is the same text still being worked when this broker has a
+// reply job for them started since it came. With no job here (the first try
+// died before its job started, or a restart took the job), or older than
+// this with nothing drafted, the text is answered.
 export const INBOUND_IN_HAND_MS = 10 * 60 * 1000;
 
 /**
@@ -2666,13 +2667,20 @@ export async function startReply({
   }
   // The same check, kept where a restart can't clear it (2026-11-09): GHL's
   // second delivery of a text already on the record is skipped when a reply
-  // was drafted since, or when the first is recent enough to still be in
-  // hand. A first delivery whose job a restart lost, and nothing drafted in
-  // ten minutes, is answered now.
+  // was drafted since, or when this broker still has the first one's reply
+  // job (recent, not superseded or failed). GHL only sends a text again when
+  // the first try failed, so a recent first copy with no job here is one
+  // whose request died before its reply started (a 500, a crash, a deploy):
+  // it is answered now, not left for the 7pm audit. The job check comes after
+  // the read, with nothing awaited between it and this job starting, so a
+  // first delivery whose job started while we read is still seen.
   if (received?.duplicate) {
     const firstAt = received.firstAt || received.at || new Date().toISOString();
     const recent = Date.now() - (Date.parse(firstAt) || 0) < INBOUND_IN_HAND_MS;
-    if (recent || await answeredSince({ store, locationId, contactId, sinceIso: firstAt })) {
+    const answered = await answeredSince({ store, locationId, contactId, sinceIso: firstAt });
+    const inHand = recent && [...jobs.values()].some((j) => j.locationId === locationId && j.contactId === contactId &&
+      j.status !== "superseded" && j.status !== "error" && String(j.startedAt || "") >= String(firstAt));
+    if (answered || inHand) {
       return { skipped: `duplicate of the text that came in at ${firstAt}`, job: null, duplicate: true };
     }
   }
