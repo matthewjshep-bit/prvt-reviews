@@ -1323,6 +1323,24 @@ never from the picture, and in skeleton mode every one becomes an agent +
 address draft. More than four addresses in one burst (a comps sheet) reads as
 none. Pictures are cached six hours by URL, so a burst is paid for once.
 
+**Answers by email are read in their own words (2026-11-09).** GHL lists an
+email thread as one stub. Its body is the thread's FIRST email (ours, when
+they answered our email), marked inbound at the time of their reply, with no
+attachments. The bot's transcript (`enrich.js` `buildTranscript`, which the
+reply, the send-time "did a person answer?" read and the underwrites use)
+read that body, so an agent's emailed answer showed as our own pitch on a
+THEM line. Now the transcript reads the emails inside the stubs
+(`ghl.js` `withEmails`, `/conversations/messages/email/:id`): each email is
+its own line with its real direction and time, the quoted thread under it
+cut (`shared/gmail.js` `cutQuotedHtml`, then `emailReplyText`). An email of
+theirs with no words of its own adds no THEM line, and a stub over several
+emails that wasn't read adds no line at all. At most 5 email reads per
+transcript (`EMAIL_READS_PER_LIST`, `maxEmailReads`), newest first; each
+email is read once per process. `listConversationMessages` keeps the stubs
+unless a reader asks (`emails: true` or a shared budget), and the bulk scans
+(the enrichment sweep, a deal's buyer read, investor suggestions) pass
+`maxEmailReads: 0` and read as they did.
+
 **The starter playbook.** "Load starter playbook" on the tab fills the
 persona, rules, examples, routing, texting rules, opt-outs and both playbooks
 with the Shep Flips setup consolidated from the three GHL bots it replaces
@@ -5312,6 +5330,34 @@ Matt drags out stays where he put it. Rules: `shared/needs-matt.js`; runner:
 the move: `shared/ghl-stages.js` planCard `needsMatt`.
 `GET /api/dashboard/needs-matt` lists who's in it (ids and kinds);
 `POST /api/dashboard/needs-matt/run` is a dry run by default.
+
+**An agent's yes, or an ask for the paper (2026-11-09).** The audit found 45
+contacts with a held reply and their text unanswered. The ones closest to a
+contract (a seller at our own number quoting our terms back, "what do you
+want me to write up", proof of funds asked on our offer) were the machine's,
+so nothing told Matt. Now, for a held agent reply (`shared/hand-off.js`
+`closeSignal`, owner "ping"):
+
+| Kind | When | The card says |
+|---|---|---|
+| yes | their text carries our cash number (within 0.5%) with the words of a written offer: and/or assigns, earnest or EMD, inspection, close in, buyer name (`quotesOurTerms`) | They quoted our terms back on <street>: confirm and send the email |
+| yes | they're writing it up: "what do you want me to write up", "want me to put the offer together", "send it over to sign", "who do I make it out to" (`SIGNAL_RX.writing_up`, or the model's `dealSignal`) | They're writing it up on <street>: send the terms |
+| paper | intent `proof_of_funds`, at once | They asked for proof of funds on <street> |
+| paper | they ask for the terms (earnest, inspection days, the LLC or entity, ID, a buyer agency or brokerage form, "send it signed") and our number is out on that house: sent, countered, accepted, floated or hot | They asked about the paper on <street>: send the terms |
+| paper | a call we owe (`call_owed`) after a text like those, on a house where our number is out | They sent terms on <street> and we said we'd call: call them or send the terms |
+
+"I'll present it to the seller" stays the bot's, a counter stays on the
+counter hold (unless it is our own number with terms), and buyers stay on
+Deals. A no stays a no ("I won't write it up at that number").
+
+**Their yes on a house we closed.** When the house's current row says we
+passed, they passed, no response or unavailable, a yes like those becomes a
+`their_yes` row in the pipeline read (matched by house, `shared/pipeline.js`).
+It outlives the draft: the bot's own reply, their next text and our 72-hour
+pass don't settle it. A person does: sending or dismissing that reply, a text
+or a call of his since, his own pass after it, or reopening the house. After
+two weeks it's history (`THEIR_YES_DAYS`). On a live offer the hot flag and
+Before you sign already carry a yes.
 
 A text GHL turns away without taking it (429 or 503) goes again after 10,
 30 and 60 minutes before it comes back to a person
