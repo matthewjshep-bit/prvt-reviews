@@ -361,7 +361,12 @@ export function priceAgreed(offer) {
     const h = (offer.statusHistory || []).find((x) => x.status === "accepted");
     return { amount: Number(offer.deal?.contractPrice) || Number(offer.cashAmount) || 0, at: h?.ts || offer.deal?.createdAt || offer.statusAt || null, via: "accepted" };
   }
-  if (offer.counterBand?.acceptedAt && live(offer.counterBand.acceptedAt)) return { amount: Number(offer.counterBand.amount) || Number(offer.cashAmount) || 0, at: offer.counterBand.acceptedAt, via: "counter_band" };
+  // A walk-away step-up is our number going up, not their yes (2026-11-09). Since then it is
+  // stamped counterBand.movedAt; one from before was stamped accepted at its own
+  // pricing.lastMoveAt with nothing agreed, and is read as the move it was.
+  const bandAt = offer.counterBand?.acceptedAt;
+  const wasMove = bandAt && bandAt === offer.pricing?.lastMoveAt;
+  if (bandAt && !wasMove && live(bandAt)) return { amount: Number(offer.counterBand.amount) || Number(offer.cashAmount) || 0, at: bandAt, via: "counter_band" };
   if (offer.realm?.answer === "yes" && live(offer.realm.ts)) return { amount: Number(offer.cashAmount) || 0, at: offer.realm.ts || null, via: "realm_yes" };
   return null;
 }
@@ -632,7 +637,7 @@ export function numberApproved(offer) {
   const machineAt = Math.max(0,
     ...(offer.requotes || []).map((r) => tsOf(r?.ts)),
     ...(offer.revisions || []).filter((r) => MACHINE_REVISERS.has(r?.by)).map((r) => tsOf(r?.ts)),
-    tsOf(offer.counterBand?.acceptedAt));
+    tsOf(offer.counterBand?.acceptedAt), tsOf(offer.counterBand?.movedAt));
   if (!offer.autoUnderwrite) return machineAt === 0;
   const personAt = Math.max(tsOf(offer.autoUnderwrite.publishedAt), tsOf(offer.pin?.at));
   return personAt > 0 && personAt >= machineAt;
@@ -817,7 +822,8 @@ export const OFFER_LIST_FIELDS = [
   //               follow-up sweep reads sentSteps off THIS row, so without it
   //               here every exhausted rung was re-claimed daily on Postgres
   //               (the dedupe key made that harmless, but never "step 2 of 3").
-  //   counterBand {acceptedAt, amount, draftId} — the band's one exception used
+  //   counterBand {acceptedAt|movedAt, amount, draftId} — the band's one exception used
+  //               (movedAt: a walk-away step-up, never their yes)
   //   requotes    a few {ts, from, to, ...} — re-runs on the agent's numbers
   //   revisions   ≤20 {ts, from, to} — hand re-prices; with sends/requotes
   //               they say which row on a house is current (current-offer.js)

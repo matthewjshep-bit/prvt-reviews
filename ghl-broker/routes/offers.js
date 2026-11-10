@@ -5730,14 +5730,24 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       });
       const revised = out?.offer || (await store.getOffer(full.id));
       const acceptedAt = new Date().toISOString();
-      // `at` is what the band's once-per-offer check reads.
-      revised.counterBand = { ...(revised.counterBand || {}), at: revised.counterBand?.at || acceptedAt, acceptedAt, amount: price, draftId };
-      // Both sides said yes to this number: the price is locked from here
-      // (priceLocked in shared/offer-status.js) — no re-quote, no re-run.
-      // A walk-away MOVE is our number going up toward theirs (shared/walkaway.js): nothing is
-      // agreed yet, and the move counts against its two.
-      if (move) revised.pricing = { ...(revised.pricing || {}), moves: (Number(revised.pricing?.moves) || 0) + 1, lastMoveAt: acceptedAt, lastMove: price };
-      else revised.agreed = { amount: price, at: acceptedAt, via: by === "walkaway" ? "walkaway" : "counter_band" };
+      if (move) {
+        // A walk-away MOVE is our number going up toward theirs (shared/walkaway.js): nothing is
+        // agreed yet, and the move counts against its two. It is stamped `movedAt`, never
+        // `acceptedAt`, which priceAgreed reads as their yes (2026-11-09: each step-up went Hot,
+        // locked the price and stopped our own typed pass from closing it). A step-up from before
+        // that fix was stamped accepted at its own lastMoveAt with nothing agreed: that stamp was a
+        // move too, and goes now. `at` is what the band's once-per-offer check reads.
+        const { acceptedAt: was, ...band } = revised.counterBand || {};
+        const wasMove = was && !revised.agreed && was === revised.pricing?.lastMoveAt;
+        revised.counterBand = { ...band, ...(was && !wasMove ? { acceptedAt: was } : {}), at: band.at || acceptedAt, movedAt: acceptedAt, amount: price, draftId };
+        revised.pricing = { ...(revised.pricing || {}), moves: (Number(revised.pricing?.moves) || 0) + 1, lastMoveAt: acceptedAt, lastMove: price };
+      } else {
+        // `at` is what the band's once-per-offer check reads.
+        revised.counterBand = { ...(revised.counterBand || {}), at: revised.counterBand?.at || acceptedAt, acceptedAt, amount: price, draftId };
+        // Both sides said yes to this number: the price is locked from here
+        // (priceLocked in shared/offer-status.js) — no re-quote, no re-run.
+        revised.agreed = { amount: price, at: acceptedAt, via: by === "walkaway" ? "walkaway" : "counter_band" };
+      }
       // A revived offer is open again from here, so the paper can go
       // (sendOfferDocs reads open offers only) and the ladders see it live.
       if (revived) recordStatus(revised, "countered", "revived by their counter", acceptedAt, { amount: price, source: "conversation" });
@@ -6115,7 +6125,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           return { ok: false, held: true, address: offer.address, reason: why.reason };
         }
       }
-      const since = afterCounter ? offer.counterBand?.acceptedAt : null;
+      // Re-issued at their number (acceptedAt) or moved toward it by the walk-away (movedAt):
+      // only a send after the newer of the two counts as already sent.
+      const since = afterCounter ? [offer.counterBand?.acceptedAt, offer.counterBand?.movedAt].filter(Boolean).sort().at(-1) || null : null;
       if (afterCounter && !since) return { ok: false, reason: "the offer was not re-issued at their number" };
       // Already out — per CHANNEL. A text that went is not an email that went
       // (Lee Dedinsky, 2026-09-17: she asked for it by email, the earlier text

@@ -4494,7 +4494,7 @@ async function runReply(job, ctx) {
         // Once we've already come back with a number (the band countered or
         // accepted, or a re-quote went out), any counter above what we'd pay is
         // their answer to it — no margin, no second round.
-        const weMovedOnPrice = Boolean(full.counterBand?.acceptedAt || (full.requotes || []).length);
+        const weMovedOnPrice = Boolean(full.counterBand?.acceptedAt || full.counterBand?.movedAt || (full.requotes || []).length);
         const passLine = weMovedOnPrice ? reference : reference * (1 + COUNTER_PASS_MARGIN);
         const firmness = floorFirmness(job.message);
         // Matt, 2026-09-16: "be quicker to pass on ones that aren't in our
@@ -5463,7 +5463,7 @@ async function runReply(job, ctx) {
     // passed." We've moved when the offer was re-quoted on their numbers,
     // re-issued under the counter band, revised, or already heard one no.
     const weMoved = Boolean(full && (
-      full.declinedOnce?.at || (full.requotes || []).length || full.counterBand?.acceptedAt || (full.revisions || []).length
+      full.declinedOnce?.at || (full.requotes || []).length || full.counterBand?.acceptedAt || full.counterBand?.movedAt || (full.revisions || []).length
     ));
     // A counter too far over to negotiate already told us their number — there
     // is nothing left to ask for, so it closes on the first message. And the

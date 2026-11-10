@@ -84,7 +84,7 @@ export function offerStageAt(o) {
   const times = [
     o.createdAt, o.statusAt, floatedAt(o),
     ...(o.sends || []).map((s) => s?.ts || s?.at),
-    o.hot?.at, o.agreed?.at, o.counterBand?.acceptedAt, o.realm?.ts,
+    o.hot?.at, o.agreed?.at, o.counterBand?.acceptedAt, o.counterBand?.movedAt, o.realm?.ts,
     o.deal?.createdAt, ...(o.deal?.stageHistory || []).map((h) => h?.ts || h?.at),
   ].map(ms).filter((t) => t != null);
   return times.length ? Math.max(...times) : null;

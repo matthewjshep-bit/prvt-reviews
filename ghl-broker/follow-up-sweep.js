@@ -303,7 +303,7 @@ export async function hotCandidates({ store, locationId, config, now = Date.now(
     // An agreed number Matt hasn't approved waits for him on Today (2026-10-15).
     if (!OPEN_STATUSES.has(effectiveStatus(o)) || !asksForWriteUp(o)) continue;
     const heat = offerHeat(o);
-    const hotAt = heat?.at || o.counterBand?.acceptedAt || o.realm?.ts || o.statusAt || o.createdAt;
+    const hotAt = heat?.at || o.counterBand?.acceptedAt || o.counterBand?.movedAt || o.realm?.ts || o.statusAt || o.createdAt;
     if (!hotAt) continue;
     const drafts = await store.listReplyDrafts(locationId, { contactId: o.contactId, limit: 20 }).catch(() => []);
     const ins = drafts.filter((d) => d.inbound).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
