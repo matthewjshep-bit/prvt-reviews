@@ -16,11 +16,16 @@ const realFetch = globalThis.fetch;
 test.afterEach(() => { globalThis.fetch = realFetch; });
 
 // A server that never answers: the fetch only ends when its signal fires.
+// AbortSignal.timeout's timer doesn't hold the event loop open, and on Node 22
+// the test runner ends a test whose only pending work is that timer before it
+// fires (CI runs Node 22). A real broker always has its server holding the
+// loop; here a plain timer stands in for it while the request hangs.
 const hangs = (seen) => (url, opts = {}) => {
   seen.push(opts.signal);
+  const holdOpen = setTimeout(() => {}, 5000);
   return new Promise((_, reject) => {
     if (!opts.signal) return; // no signal: it would hang for good
-    opts.signal.addEventListener("abort", () => reject(opts.signal.reason));
+    opts.signal.addEventListener("abort", () => { clearTimeout(holdOpen); reject(opts.signal.reason); });
   });
 };
 
