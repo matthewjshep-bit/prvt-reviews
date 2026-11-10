@@ -169,6 +169,20 @@ test("a wholesaler's house named a text before the address doesn't go out grade 
     homeType: SURE.homeType, sqft: SURE.sqft, yearBuilt: SURE.yearBuilt }).grade, "A");
 });
 
+test("their earlier words about the house add cost to the engine's number, not certainty", () => {
+  const thread = [
+    "[2026-11-05 17:01] THEM sms: Somerset needs everything, the tenant left it rough",
+    "[2026-11-05 17:05] THEM sms: 4417 Somerset Ln, Everett",
+  ].join("\n");
+  const reads = readsFrom({ address: ADDRESS, message: "4417 Somerset Ln, Everett", thread, listPrice: 525000 });
+  assert.equal(reads.saidNow, "4417 Somerset Ln, Everett", "the text that started the run, on its own");
+  const plain = { ...SURE.bricked, condition: null };
+  const v = priceHouse({ ...reads, bricked: plain, homeType: SURE.homeType, sqft: SURE.sqft, yearBuilt: SURE.yearBuilt });
+  assert.equal(v.rehab, 150000, "heavy work at $100 a foot");
+  assert.ok(v.misses.includes("rehab"), v.reasons.join(" | "));
+  assert.notEqual(v.grade, "A");
+});
+
 test("the engine knows what year it is, so a house built last year reads as a new build", () => {
   const reads = readsFrom({ address: ADDRESS, facts: { sqft: 1500, yearBuilt: 2025, homeType: "SINGLE_FAMILY" }, now: Date.parse("2026-11-09T18:00:00Z") });
   assert.equal(reads.currentYear, 2026);

@@ -160,6 +160,8 @@ export function readsFrom({ address = "", message = "", listPrice = 0, askingPri
       : null,
     scope: scope && num(scope.total) ? { total: num(scope.total), photos: Number(scope.photos) || 0 } : null,
     said: saidOf(message, houseLines(thread, address)),
+    // The triggering text alone: their earlier lines add killers and cost, never rehab evidence.
+    saidNow: clip(message),
     remarks: clip(listing?.remarks),
   };
 }
@@ -197,10 +199,10 @@ export function priorRehabOf(record = null, now = Date.now()) {
 }
 
 /**
- * shadowPrice({ store, locationId, saved, job, address, b, listing, facts, subject, comps, scope, listPrice, thread, offer })
+ * shadowPrice({ store, locationId, saved, job, address, b, listing, facts, subject, comps, scope, listPrice, thread, offer, dossier })
  *   → the record written, or null (switch off, nothing to price, or a failure — never thrown).
  */
-export async function shadowPrice({ store, locationId, saved = {}, job = {}, address = "", b = null, listing = null, facts = null, subject = null, comps = null, scope = null, listPrice = 0, thread = "", offer = null, force = false, now = Date.now() } = {}) {
+export async function shadowPrice({ store, locationId, saved = {}, job = {}, address = "", b = null, listing = null, facts = null, subject = null, comps = null, scope = null, listPrice = 0, thread = "", offer = null, dossier = null, force = false, now = Date.now() } = {}) {
   // `force`: engine mode prices every house it reads, switch or not (the record is what it's for).
   if ((!shadowOn(saved) && !force) || !address || !store?.upsertHousePricing) return null;
   try {
@@ -212,7 +214,7 @@ export async function shadowPrice({ store, locationId, saved = {}, job = {}, add
       ? (await store.listContactEvents?.(locationId, job.contactId, { types: ["property_details", "agent_estimate", "house_mentioned", "offer_countered"], limit: 200 }).catch(() => [])) || []
       : [];
     const prev = await store.getHousePricing(locationId, key).catch(() => null);
-    const reads = readsFrom({ address, message: job.message, listPrice, askingPrice: job.askingPrice, b, listing, facts, subject, comps, scope, events, offer, thread, now });
+    const reads = readsFrom({ address, message: job.message, listPrice, askingPrice: job.askingPrice, b, listing, facts, subject, comps, scope, events, offer, dossier, thread, now });
     const priorRehab = priorRehabOf(prev?.doc, now);
     const v2 = priceHouse(priorRehab ? { ...reads, priorRehab } : reads, saved.pricingV2 || {}, { ratios: KC_FLIP_RATIOS });
     const doc = nextRecord(prev?.doc, { address, contactId: job.contactId, offerId: job.offerId, leadSource: job.leadSource, reads, v2, at: new Date(now).toISOString() });

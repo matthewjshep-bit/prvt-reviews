@@ -269,6 +269,23 @@ test("a scope from under 8 photos that reads above the floor raises the rehab an
   assert.equal(kept.rehabOwn, 82500, "what this read alone said");
 });
 
+// The engine hears the agent's earlier lines about the house (price-v2.js houseLines). Those lines
+// may only add a hold or a cost: a heavy word two texts back prices the heavy tier, but it was never
+// what made a house grade A before, so it doesn't now (only the text that started the run is
+// `saidNow`).
+test("the agent's earlier words about the house can raise the rehab but never make the engine surer of it", () => {
+  const plain = { ...HOUSE, bricked: { ...BRICKED, condition: null } };
+  const heard = priceHouse({ ...plain, said: "4417 Somerset Ln\nit needs everything, the last tenant wrecked it", saidNow: "4417 Somerset Ln" });
+  assert.equal(heard.rehab, 150000, "the heavy tier at $100 a foot");
+  assert.ok(heard.misses.includes("rehab"), heard.reasons.join(" | "));
+  assert.notEqual(heard.grade, "A");
+  const now = priceHouse({ ...plain, said: "it needs everything", saidNow: "it needs everything" });
+  assert.equal(now.rehab, 150000);
+  assert.ok(!now.misses.includes("rehab"), "said in the text that started the run: evidence, as before");
+  const older = priceHouse({ ...plain, said: "it needs everything" });
+  assert.ok(!older.misses.includes("rehab"), "a read with no saidNow is judged on said, as before");
+});
+
 test("four price-guessed comps from a widened ring are not a sure ARV", () => {
   const house = { sqft: 1500, yearBuilt: 1961, homeType: "SINGLE_FAMILY", list: 600000, scope: { total: 90000, photos: 20 } };
   const comps = (over) => ({ ...house, comps: { arv: 584000, n: 4, listing: 0, radius: 0.5, acrossInArv: 0, eraGivesWay: false, gutCheck: false, ...over } });

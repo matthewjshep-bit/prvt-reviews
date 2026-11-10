@@ -133,6 +133,9 @@ export function triageOf({ walkAway = 0, sellerNumber = 0, list = 0 } = {}) {
  *   priorRehab                     the house's highest rehab read in the last 14 days (shadowPrice)
  *   countyCondition                King County's condition code (1 poor … 5 very good)
  *   said, remarks                  the agent's words, the listing remarks
+ *   saidNow                        the text that started the run alone, when `said` also carries
+ *                                  their earlier lines about the house (readsFrom): those lines add
+ *                                  killers and cost, never rehab evidence
  * ratios: shared/kc-flip-ratios.js KC_FLIP_RATIOS (optional)
  */
 // Under either, a "list price" is not one: no house we buy sells for under $20k or 15% of its ARV.
@@ -203,6 +206,11 @@ export function priceHouse(reads = {}, settings = {}, { ratios = null } = {}) {
   /* --- rehab: the best evidence, never under the floor --- */
   const floors = normalizeRehabFloors(s.rehabFloorByEra || {});
   const floor = rehabFloor({ sqft: reads.sqft, yearBuilt: reads.yearBuilt, condition: b?.condition, countyCondition: reads.countyCondition, said, remarks, floors, minRehab: s.minRehab });
+  // The tier the evidence check reads: heavy words heard only in their earlier lines raise the floor
+  // above but never vouch for it (they never made a house grade A before the engine heard them).
+  const vouches = reads.saidNow != null && String(reads.saidNow) !== said
+    ? rehabFloor({ sqft: reads.sqft, yearBuilt: reads.yearBuilt, condition: b?.condition, countyCondition: reads.countyCondition, said: String(reads.saidNow || ""), remarks, floors, minRehab: s.minRehab })
+    : floor;
   const photos = Number(reads.scope?.photos) || 0;
   const scopeTotal = Number(reads.scope?.total) > 0 ? Number(reads.scope.total) : 0;
   const scoped = photos >= 8 ? scopeTotal : 0;
@@ -224,7 +232,7 @@ export function priceHouse(reads = {}, settings = {}, { ratios = null } = {}) {
   // Their figure is evidence only above the floor: at or under it, it says nothing the floor didn't
   // (a 60k figure that equalled the floor earned grade A, audit 2026-11-09).
   const theirsCounts = theirs > floor.floor;
-  const rehabEvidence = Boolean(scoped || described || theirsCounts || floor.tier !== "age" || Number(b?.condition) > 0 || Number(reads.countyCondition) > 0);
+  const rehabEvidence = Boolean(scoped || described || theirsCounts || vouches.tier !== "age" || Number(b?.condition) > 0 || Number(reads.countyCondition) > 0);
   if (!rehabEvidence) miss("rehab");
   reasons.push(`rehab ${k(rehab)}: ${rehabWhy}`);
 
