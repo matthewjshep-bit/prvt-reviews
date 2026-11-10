@@ -120,6 +120,64 @@ test("the engine's number is approved up to its walk-away, so their yes gets the
   assert.equal(asksForWriteUp(yes), numberApproved(yes) && asksForWriteUp(yes), "the write-up ask follows the approval");
 });
 
+/* ---------- the seller's number, the list price, one house one offer (audit 2026-11-09) ---------- */
+
+test("the engine's number over the list price, or far over their number, stays Matt's to price", () => {
+  const v2 = { grade: "B", misses: ["arv"], killers: [], walkAway: 270000, open: 255000, triage: "workable", spread: 0.9 };
+  assert.equal(engineSendGate({ engine: { v2: { ...v2, overList: true } } }), "the offer engine's number is over the list price: yours to price");
+  assert.equal(engineSendGate({ engine: { v2: { ...v2, triage: "over_theirs", overTheirs: true } } }),
+    "our walk-away is far over their number, likely an ARV error: yours to price");
+});
+
+test("a sent engine offer stops at the seller's own number and carries it", async () => {
+  await store.appendContactEvents("LOC-g5", "g5", [{ type: "property_details", at: "2026-11-08T18:00:00Z", address: "4417 Somerset Ln", data: { sellerAsk: 340000 } }]);
+  const { job, made } = await run({ contactId: "g5" });
+  assert.equal(job.status, "done", job.brickedHeld || "");
+  assert.equal(made.length, 1);
+  const offer = await store.getOffer(made[0].offer.id);
+  assert.equal(offer.pricing.sellerNumber, 340000, "stamped for numberApproved");
+  assert.equal(offer.pricing.walkAway, 340000, "348k uncapped, down to their 340k");
+  assert.ok(offer.cashAmount <= 340000);
+  assert.equal(numberApproved({ ...offer, cashAmount: 345000 }), false, "a move past their number is nobody's approval");
+});
+
+test("a house listed under the engine's own walk-away is held, not capped and sent", async () => {
+  // 348k uncapped against a 340k list: the cap would have sent 306k; the comps or the scope are off.
+  const { job, made } = await run({ contactId: "g6", fetchOpts: { price: 340000 } });
+  assert.equal(made.length, 0);
+  assert.equal(job.brickedHeld, "the offer engine's number is over the list price: yours to price");
+});
+
+test("two underwrites started for one agent's house under two spellings make one offer", async () => {
+  _resetJobs();
+  const restore = stubFetch();
+  const made = [];
+  const createOffer = async ({ body, locationId }) => {
+    const calc = calculateOffers(body.inputs, body.settings);
+    const offer = await store.createOffer({ locationId, status: "new", contactId: body.contactId, address: body.inputs.address,
+      cashAmount: body.inputs.priceOverride || calc.offers.cash.amount, calc, snapshot: body.snapshot });
+    made.push(offer);
+    return { offer, warnings: [] };
+  };
+  try {
+    const go = (address, contactId = "g7") => startUnderwrite({ client: { call: async () => ({}) }, locationId: "LOC-g7", saved: base, store, contactId,
+      message: "needs a roof", address, deps: { createOffer, onOfferCreated: async () => {} } });
+    // The street line without its suffix is the same agent's same house (texts a few seconds apart).
+    const a = await go(ADDRESS);
+    const b = await go("4417 Somerset, Everett");
+    assert.equal(b.deduped, true, "the second spelling waits on the first");
+    assert.ok(await until(() => ["held", "done", "error"].includes(a.job.status)));
+    assert.equal(made.length, 1);
+    // Two towns for one house (oneAgentsHouse can't pair them), both resolving to the same parcel:
+    // the second run stops once the map says it's the same house.
+    const c = await go(ADDRESS, "g8");
+    const d = await go("4417 Somerset Ln, Silver Firs, WA", "g8");
+    assert.equal(d.deduped, undefined, "the start guard can't tell these two apart");
+    assert.ok(await until(() => [c.job, d.job].every((j) => ["held", "done", "error"].includes(j.status))));
+    assert.equal(made.filter((o) => o.contactId === "g8").length, 1, made.map((o) => o.address).join(" | "));
+  } finally { restore(); }
+});
+
 test("nothing the counter band does goes past the engine's walk-away, and the grade sets how sure the bot sounds", () => {
   const offer = { address: ADDRESS, cashAmount: 335500, arv: 640000, repairs: 82500, askingPrice: 525000, pricing: { live: true, grade: "A", walkAway: 350500 } };
   const c = autoAcceptCeiling({ offer, settings: { maoPctOfArv: 75 } });

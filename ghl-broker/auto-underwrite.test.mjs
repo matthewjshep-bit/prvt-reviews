@@ -8,7 +8,7 @@ import {
   UW_RADIUS_MILES, UW_MIN_REHABBED_COMPS, UW_MIN_SUBJECT_PHOTOS, UW_DEFAULT_DAILY_CAP,
   UW_MAX_ARV_COMPS, UW_RADIUS_LADDER, gradeByPriceProxy, UW_GUT_CHECK_MIN_COMPS, capToList, moneyFromListing, UW_MAX_PCT_OF_LIST,
   UW_SIMILAR_CANDIDATES, UW_PROXY_SHARE, UW_ENRICH_CANDIDATES, UW_POOL_YEAR_TOLERANCE,
-  roughTier, tierRepairs, roughNumber,
+  roughTier, tierRepairs, roughNumber, siblingRun,
 } from "./auto-underwrite.js";
 import { markRenovatedByPrice } from "./shared/comp-match.js";
 
@@ -386,6 +386,33 @@ test("the same address in another spelling is not a rewrite", () => {
   });
   assert.equal(r.address, "741 North 128th Street, Seattle, WA 98133");
   assert.equal(r.typedAddress, "");
+});
+
+// Audit 2026-11-09: a geocode that only found the street, or the house next door, handed back a
+// label without the agent's house number (or with another one), and the run priced that.
+test("a street-only geocode never replaces the house number the agent typed", () => {
+  const typed = "6120 Wren Hollow Dr SW, Lakewood, WA 98499";
+  for (const matched of ["Wren Hollow Dr SW, Lakewood, WA 98499", "6124 Wren Hollow Dr SW, Lakewood, WA 98499"]) {
+    for (const precision of ["street", "address"]) {
+      const r = addressToWorkFrom(typed, { precision, matched });
+      assert.equal(r.address, typed, `${precision}: ${matched}`);
+      assert.equal(r.typedAddress, "");
+    }
+  }
+  // The same house number, finished by the map, is still adopted.
+  assert.equal(addressToWorkFrom("6120 Wren Hollow, Lakewood, WA", { precision: "address", matched: typed }).address, typed);
+});
+
+test("a run that resolves to a house another run of this agent is already on stops", () => {
+  const at = (s) => `2026-11-09T18:00:${String(s).padStart(2, "0")}.000Z`;
+  const first = { id: "uw-a", locationId: "L", contactId: "c1", status: "running", startedAt: at(0), address: "6120 Wren Hollow Dr SW, Lakewood, WA 98499" };
+  const second = { id: "uw-b", locationId: "L", contactId: "c1", status: "running", startedAt: at(30), address: "6120 Wren Hollow Dr SW, Lakewood, WA 98499", suppliedAddress: "6120 Wren Hollow Dr SW, Tillicum, WA" };
+  const all = new Map([[first.id, first], [second.id, second]]);
+  assert.equal(siblingRun(second, all), first, "the later run stops");
+  assert.equal(siblingRun(first, all), null, "the earlier run goes on");
+  assert.equal(siblingRun({ ...second, contactId: "c2" }, all), null, "another agent's run of the house is theirs");
+  assert.equal(siblingRun(second, new Map([[first.id, { ...first, status: "done" }], [second.id, second]])), null, "a finished run is the offer check's job");
+  assert.equal(siblingRun(second, new Map([[first.id, { ...first, address: "6122 Wren Hollow Dr SW, Lakewood, WA 98499" }], [second.id, second]])), null, "the house next door is another house");
 });
 
 test("a centroid has no address to adopt", () => {

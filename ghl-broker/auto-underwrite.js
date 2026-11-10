@@ -71,6 +71,7 @@ import { pricedByHand, underwriteModel } from "./shared/underwrite-model.js";
 import { brickedProperty, isRenovatedComp } from "./price-bricked.js";
 import { shadowPrice, engineLive } from "./price-v2.js";
 import { ENGINE_HOLD } from "./shared/offer-status.js";
+import { houseKey } from "./shared/current-offer.js";
 import { normalizePricingV2 } from "./shared/price-engine.js";
 
 /* ---------- the dials ---------- */
@@ -1102,6 +1103,10 @@ export function addressToWorkFrom(typed, geo) {
   const same = { address: typed, typedAddress: "" };
   if (!atLeast(geo, "street") || !geo.matched) return same;
   if (addressKey(geo.matched) === addressKey(typed)) return same;
+  // Never a label that drops or changes the house number the agent typed (audit 2026-11-09): a
+  // street-only fix, or the house next door, is somewhere else on the street, not this house.
+  const typedNo = String(parseUsAddress(typed).houseNo || "").toLowerCase();
+  if (typedNo && String(parseUsAddress(geo.matched).houseNo || "").toLowerCase() !== typedNo) return same;
   return { address: geo.matched, typedAddress: typed };
 }
 
@@ -1285,11 +1290,16 @@ export async function startUnderwrite({
   // (findRecent) only sees a run once it has FINISHED, and a run takes
   // minutes — an agent who texts the address twice meanwhile would otherwise
   // pay for two. A job with no address yet may be this house, so it counts.
+  // The same house under another spelling is the same house (audit 2026-11-09: "6309 193rd St
+  // SW" two ways got two live offers 30 s apart): one agent's own street line, give or take a
+  // suffix or a ZIP, matches (oneAgentsHouse).
   if (!fill && contactId) {
-    const want = addressKey(String(address || ""));
+    const raw = String(address || "").trim();
+    const want = addressKey(raw);
+    const same = (a) => addressKey(a) === want || oneAgentsHouse(a, raw);
     const inFlight = [...jobs.values()].find((j) => j.locationId === locationId && j.contactId === contactId && !j.fill
       && (j.status === "queued" || j.status === "running")
-      && (!want || !(j.address || j.suppliedAddress) || addressKey(j.address || j.suppliedAddress) === want));
+      && (!want || !(j.address || j.suppliedAddress) || [j.address, j.suppliedAddress].filter(Boolean).some(same)));
     if (inFlight) return { deduped: true, job: inFlight };
   }
 
@@ -1456,6 +1466,22 @@ function runOnLane(locationId, fn) {
   } else {
     lane.waiting.push(fn);
   }
+}
+
+/**
+ * siblingRun(job) → an earlier, still-running underwrite of the same agent's same house, or null.
+ * Read once this run's address has resolved: the same house key, or the agent's own shorter
+ * spelling of it (oneAgentsHouse), against the other run's resolved or supplied address.
+ */
+export function siblingRun(job, all = jobs) {
+  if (!job?.contactId || !job.address) return null;
+  const key = houseKey(job.address);
+  const same = (a) => Boolean(a) && (houseKey(a) === key || oneAgentsHouse(a, job.address));
+  const startedAt = (j) => Date.parse(j.startedAt || "") || 0;
+  return [...all.values()].find((j) => j !== job && j.id !== job.id && j.locationId === job.locationId && j.contactId === job.contactId && !j.fill
+    && (j.status === "queued" || j.status === "running")
+    && (startedAt(j) < startedAt(job) || (startedAt(j) === startedAt(job) && String(j.id) < String(job.id)))
+    && [j.address, j.suppliedAddress].some(same)) || null;
 }
 
 const canceled = (job) => {
@@ -1708,6 +1734,21 @@ async function runUnderwrite(job, ctx) {
     job.typedAddress = chosen.typedAddress;
   }
   job.address = extraction.address;
+
+  // One house, one underwrite (audit 2026-11-09). Two spellings the start guard couldn't pair
+  // ("…, Mill Creek" and "…, Everett") can resolve to the same house; the run that started
+  // second stops here, before anything is bought or announced.
+  if (!job.fill) {
+    const sibling = siblingRun(job);
+    if (sibling) {
+      job.status = "done";
+      job.phase = "";
+      job.siblingOf = sibling.id;
+      job.finishedAt = new Date().toISOString();
+      warnings.push(`another underwrite of ${extraction.address} for this agent started first — this one stopped`);
+      return;
+    }
+  }
 
   // Announce only once we know what we're working on — a note that says
   // "started" with no address is noise on the contact record.
@@ -3304,12 +3345,41 @@ export const ENGINE_SENDS_TRIAGE = new Set(["hot", "workable", "long_shot"]);
 export function engineSendGate({ engine = null } = {}) {
   const v = engine?.v2;
   if (!v) return "the offer engine had nothing to price (no ARV from any read)";
+  // What the engine can't know (audit 2026-11-09), said plainly ahead of the grade it also costs:
+  // an uncapped walk-away over the list price, or far over the seller's own number.
+  if (v.overList) return "the offer engine's number is over the list price: yours to price";
+  if (v.triage === "over_theirs") return "our walk-away is far over their number, likely an ARV error: yours to price";
   if (v.grade !== "A") return `the offer engine graded it ${v.grade || "C"}${(v.misses || []).length ? ` (not sure of: ${v.misses.join(", ")})` : ""}${(v.killers || []).length ? ` — ${v.killers.join(", ")}` : ""} — yours to price`;
   if (!(v.walkAway > 0) || !(v.open > 0)) return "the offer engine's number came out at nothing";
   if (v.triage === "turnkey") return "turnkey by the offer engine's read — nothing for a flipper to add";
   if (v.triage === "unknown") return "no list price or seller's number to measure the offer engine's number against";
   if (!ENGINE_SENDS_TRIAGE.has(v.triage)) return `no fit: the offer engine's ${fmtMoney(v.walkAway)} walk-away is ${Math.round((v.spread || 0) * 100)}% of ${v.against || "their number"}`;
   return "";
+}
+
+/**
+ * siblingFinished(job, ctx, address) → true when another run of this agent's house made its row
+ * while this one was running (the job is then finished as a duplicate of it, nothing made).
+ *
+ * The checks at the top of the run (findOfferOut, findRecent) only see what had finished when it
+ * started; two runs a few seconds apart both passed them and both sent (audit 2026-11-09). Asked
+ * again right before an offer is made.
+ */
+async function siblingFinished(job, ctx, address) {
+  const { client, locationId, store } = ctx;
+  const q = { store, locationId, contactId: job.contactId, address, ignoreId: job.replaceOfferId };
+  const other = (await findOfferOut(q).catch(() => null)) || (await findRecent(q).catch(() => null));
+  if (!other || other.id === job.offerId) return false;
+  job.status = "done";
+  job.phase = "";
+  job.offerId = other.id;
+  job.offerUrl = other.pdfUrl || null;
+  job.cashAmount = other.cashAmount ?? null;
+  job.duplicateOf = other.id;
+  job.finishedAt = new Date().toISOString();
+  await setTag(client, job.contactId, UW_TAGS.done, job.warnings);
+  await note(client, job.contactId, `Another underwrite of ${address} for this agent finished first. This one made nothing.`, job.warnings);
+  return true;
 }
 
 // Publishes the offer engine's grade-A number (pricingV2.liveA). The offer opens at the engine's
@@ -3325,6 +3395,9 @@ async function sendEngine(job, ctx, { extraction, partial, engine, b = null, zil
   if (!AUTO_UNDERWRITE_ENABLED) return "AUTO_UNDERWRITE_ENABLED is not set on the broker";
   if (typeof deps?.createOffer !== "function") return "no offer maker wired here";
   if (await stopForThread(job, ctx, extraction.address)) return "";
+  // One house, one underwrite (audit 2026-11-09: two live engine offers 30 s apart on one house).
+  // A run takes minutes; another run of this agent's house may have made its row meanwhile.
+  if (await siblingFinished(job, ctx, extraction.address)) return "";
   const v = engine.v2;
   const listPrice = Number(engine.reads?.list) || 0;
   const s = normalizePricingV2(saved?.pricingV2);
@@ -3343,8 +3416,11 @@ async function sendEngine(job, ctx, { extraction, partial, engine, b = null, zil
     },
   });
   const offer = result.offer;
+  // sellerNumber: what they said they'd take, which capped the engine; numberApproved never
+  // approves an amount above it (Matt, 2026-11-09).
   offer.pricing = { live: true, grade: v.grade, open: v.open, walkAway: v.walkAway, investorPrice: v.investorPrice, arv: v.arv, rehab: v.rehab,
-    rehabWhy: v.rehabWhy, triage: v.triage, spread: v.spread, version: v.version, at: v.at, moves: 0 };
+    rehabWhy: v.rehabWhy, triage: v.triage, spread: v.spread, version: v.version, at: v.at, moves: 0,
+    sellerNumber: Math.round(Number(engine.reads?.sellerNumber) || 0) };
   offer.autoUnderwrite = { ...auditTrail(job, extraction, { ok: true }), basis: "engine", grade: v.grade };
   const lead = await leadFor(job, ctx, offer.address || extraction.address);
   if (lead) offer.autoUnderwrite.leadSource = lead.source;
