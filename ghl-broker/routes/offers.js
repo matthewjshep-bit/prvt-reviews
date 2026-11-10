@@ -132,6 +132,7 @@ import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
 import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
+import { parseMoney } from "../shared/money.js";
 import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STATUSES } from "../shared/showing.js";
 import { mergeParties } from "../shared/deal-parties.js";
 import { mergeAccess, accessFor } from "../shared/deal-access.js";
@@ -3339,10 +3340,50 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // disposition investors (existing GHL contacts) evaluating the property.
 
   const dealStr = (v, max = 200) => String(v ?? "").trim().slice(0, max);
+  // "15k", "$740K", "4.18M" read as dollars (shared/money.js); they used to
+  // read as nothing and wipe the fee (2026-11-09).
   const dealMoney = (v) => {
-    const n = Number(String(v ?? "").replace(/[$,\s]/g, ""));
-    return Number.isFinite(n) && n > 0 ? n : null;
+    const n = parseMoney(v);
+    return n != null && n > 0 ? n : null;
   };
+  // A contract price this far from our own number, or under this, is asked
+  // about before it's saved: buyers are priced off it the minute it lands.
+  const CONTRACT_FAR_PCT = 30;
+  const CONTRACT_MIN = 10000;
+  /**
+   * dealMoneyEdit(deal, offer, body) → { set: { contractPrice?, assignmentFee? } } | { http, error }
+   *
+   * The two money fields of a PATCH, read before anything is touched. A
+   * value that doesn't read as dollars is a 400, never a null. An empty box
+   * doesn't clear a stored figure unless `clear: true` says so. A contract
+   * price under 10k, or more than 30% off our number, is a 409 until
+   * `confirm: true`. A figure sent back unchanged asks nothing.
+   */
+  function dealMoneyEdit(deal, offer, b = {}) {
+    const set = {};
+    const LABEL = { contractPrice: "contract price", assignmentFee: "assignment fee" };
+    for (const key of ["contractPrice", "assignmentFee"]) {
+      if (b[key] === undefined) continue;
+      const raw = b[key];
+      const empty = raw === null || String(raw).trim() === "";
+      const n = empty ? null : dealMoney(raw);
+      if (!empty && n == null) return { http: 400, error: `couldn't read "${String(raw).slice(0, 40)}" as a ${LABEL[key]}: type it like 450000 or 450k` };
+      if (n == null) {
+        if (deal[key] != null && b.clear !== true) return { http: 400, error: `that would clear the ${LABEL[key]} buyers are priced on: type a number, or clear it on purpose` };
+        set[key] = null;
+        continue;
+      }
+      if (key === "contractPrice" && n !== Number(deal.contractPrice) && b.confirm !== true) {
+        const ours = Number(offer.cashAmount) || 0;
+        const off = ours > 0 ? Math.abs(n - ours) / ours * 100 : 0;
+        if (n < CONTRACT_MIN || off > CONTRACT_FAR_PCT) {
+          return { http: 409, error: `a contract price of ${fmtMoney(n)} is ${n < CONTRACT_MIN ? "under $10,000" : `${Math.round(off)}% off our ${fmtMoney(ours)}`}: save it anyway?`, confirm: true };
+        }
+      }
+      set[key] = n;
+    }
+    return { set };
+  }
 
   // Shared loader: offer must exist, belong to the location, and (unless
   // promoting) already be a deal. Writes the error response itself.
@@ -3562,6 +3603,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       ?? dealMoney(offer.contract?.fields?.price)
       ?? dealMoney(offer.cashAmount);
     const assignmentFee = dealMoney(body.assignmentFee) ?? dealMoney(settings.wholesaleFee);
+    // Whose fee it is: one you typed, or the setting's default filled in
+    // (4334 130th Pl SE went to buyers at the default 30k on 11/09). The
+    // promote heads-up says so; a fee typed on the deal later is yours.
+    const assignmentFeeSource = dealMoney(body.assignmentFee) != null ? "you" : "setting";
     // Inspection contingency deadline: today + the contract's inspection
     // period (local date, same yyyy-mm-dd convention as closingDate).
     const parsedDays = parseInt(offer.contract?.fields?.inspectionDays, 10);
@@ -3575,6 +3620,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       stageHistory: [{ stage: "under_contract", ts }],
       contractPrice,
       assignmentFee,
+      assignmentFeeSource,
       closingDate: dealStr(body.closingDate, 40) || dealStr(offer.contract?.fields?.closingDate, 40),
       inspectionDate: dealStr(body.inspectionDate, 40) || inspectionDefault,
       notes: "",
@@ -4522,6 +4568,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (b.fellThroughCode && !fellThroughCode) {
         return res.status(400).json({ error: `fellThroughCode must be one of: ${Object.keys(FELL_THROUGH_LABEL).join(", ")}` });
       }
+      const money = dealMoneyEdit(deal, offer, b);
+      if (money.http) return res.status(money.http).json({ error: money.error, ...(money.confirm ? { confirm: true } : {}) });
       if (b.stage !== undefined) {
         if (!DEAL_STAGES.includes(b.stage)) {
           return res.status(400).json({ error: `stage must be one of: ${DEAL_STAGES.join(", ")}` });
@@ -4532,8 +4580,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           stageChanged = true;
         }
       }
-      if (b.contractPrice !== undefined) deal.contractPrice = dealMoney(b.contractPrice);
-      if (b.assignmentFee !== undefined) deal.assignmentFee = dealMoney(b.assignmentFee);
+      if ("contractPrice" in money.set) deal.contractPrice = money.set.contractPrice;
+      if ("assignmentFee" in money.set) {
+        if (money.set.assignmentFee !== deal.assignmentFee) deal.assignmentFeeSource = "you";
+        deal.assignmentFee = money.set.assignmentFee;
+      }
       if (b.closingDate !== undefined) deal.closingDate = dealStr(b.closingDate, 40);
       if (b.inspectionDate !== undefined) deal.inspectionDate = dealStr(b.inspectionDate, 40);
       if (b.notes !== undefined) deal.notes = dealStr(b.notes, 4000);
