@@ -129,8 +129,14 @@ test("a cold check-in never repeats one of our last texts to them, however it wa
 test("the first follow-up and every other kind read as before", () => {
   const day2 = standardText({ kind: "outreach_nudge", outbound: { mode: "template", address: "4410 Quarry Rd, Halden, WA 98011", step: 2, stepIndex: 1, stepCount: 1, repeats: true,
     followUps: normalizeOpener({}).followUps, checkIns: DEFAULT_CHECK_IN_TEXTS }, name: "Wendell", contactId: "c-wendell" });
-  assert.equal(day2.set, "follow_up");
+  // Day 2 is one of the voice branch's day-2 texts (2026-11-09), and with pools "v1" the
+  // follow-up as it read before; either way it is still the text about their listing.
+  assert.equal(day2.set, "day_two");
   assert.match(day2.text, /4410 Quarry Rd/, "day 2 is still the text about their listing");
-  // No first name: "Hi," as before.
-  assert.equal(fillTemplate("Hi {first}, anything new?", { first: "" }), "Hi, anything new?");
+  const v1 = standardText({ kind: "outreach_nudge", pools: "v1", outbound: { mode: "template", address: "4410 Quarry Rd, Halden, WA 98011", step: 2, stepIndex: 1, stepCount: 1, repeats: true,
+    followUps: normalizeOpener({}).followUps, checkIns: DEFAULT_CHECK_IN_TEXTS }, name: "Wendell", contactId: "c-wendell" });
+  assert.equal(v1.set, "follow_up");
+  assert.match(v1.text, /4410 Quarry Rd/);
+  // No first name: the greeting goes (the voice branch's fillTemplate), never "Hi, anything new?".
+  assert.equal(fillTemplate("Hi {first}, anything new?", { first: "" }), "Anything new?");
 });

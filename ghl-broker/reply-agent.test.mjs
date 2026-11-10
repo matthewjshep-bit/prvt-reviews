@@ -310,7 +310,8 @@ test("a counter is saved flagged, and the note says why", async () => {
   const { job } = await startReply({
     client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "would you do 425k?",
     deps: { draft: async () => ({ ...DRAFT, intent: "counter", needsHuman: true, humanReason: "the agent named a higher number", counterAmount: 425000,
-      reply: "Got it on 425k, let me look at it and get back to you this afternoon." }) },
+      // No partner (the invented-people check) and no "Got it" (the voice check): the counter alone.
+      reply: "Let me look at 425k and get back to you this afternoon." }) },
   });
   await settle();
   assert.equal(job.status, "done", job.error);
@@ -2830,7 +2831,7 @@ test("a counter under the ceiling is never taken by itself: nothing re-issued, n
     message: `seller would do ${amount / 1000}k on 12 Elm`,
     deps: {
       draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: amount,
-        reply: "Got it, let me look at that and get back to you this afternoon.", propertyAddress: "12 Elm St" }),
+        reply: "Let me look at that and get back to you this afternoon.", propertyAddress: "12 Elm St" }),
       reviseOfferToCounter: async ({ amount: a }) => { order.push(["revise", a]); return { ok: true, address: "12 Elm St", amount: a }; },
       sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
     },
@@ -2859,7 +2860,7 @@ test("a counter just over the ceiling no longer goes out at our max by itself â€
     message: `seller would do ${theirs / 1000}k on 12 Elm`,
     deps: {
       draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: theirs,
-        reply: "Got it, let me look at that and get back to you this afternoon.", propertyAddress: "12 Elm St" }),
+        reply: "Let me look at that and get back to you this afternoon.", propertyAddress: "12 Elm St" }),
       reviseOfferToCounter: async ({ amount: a }) => { order.push(["revise", a]); return { ok: true, address: "12 Elm St", amount: a }; },
       sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
     },
@@ -9258,7 +9259,7 @@ test("the bot doesn't promise a number today on a house Matt is pricing, even af
 });
 
 test("a reply that asks what the seller would take on an unpriced house sends", async () => {
-  const { d, calls } = await claimRun([onLarkspur("Got it. What would the seller take on Larkspur, and how soon do they need to move?")]);
+  const { d, calls } = await claimRun([onLarkspur("What would the seller take on Larkspur, and how soon do they need to move?")]);
   assert.equal(calls.length, 1);
   assert.deepEqual(d.flags, []);
   assert.equal(d.status, "scheduled", d.autoSend.reason);
@@ -9576,7 +9577,8 @@ test("a showing offer on a house whose number never went out doesn't say the num
   assert.match(unsent.reply, /let me get you a number on 33 Quail Run Rd/);
   const sent = await run({ ...base, status: "sent", sends: [{ ts: new Date().toISOString(), channels: ["sms"] }] });
   assert.equal(sent.deskFirst, "priced");
-  assert.match(sent.reply, /is the number we sent on 33 Quail Run Rd in the realm/);
+  // The voice rewrite's words for the priced reply (deskFirstReply, 2026-11-09).
+  assert.match(sent.reply, /Is the number I sent on 33 Quail Run Rd in the realm/);
 });
 
 test("a Bend agent who offers to represent us hears OREF forms, and a reply that says NWMLS waits", async () => {
