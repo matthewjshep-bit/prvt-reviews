@@ -1003,7 +1003,7 @@ function openingFor(outbound) {
     case "passed_checkin":
       if (o.relisted) {
         return `${START} ${o.address} went off the market after ${o.quiet ? "we made this agent an offer and never heard back" : "this agent passed on where we were"}, and it's back on the market now. ` +
-          `In one or two lines, say you saw it's back on the market and ask whether the seller would look at a cash, as-is offer now. ` +
+          `In one or two lines, say you saw it's back on the market and ask whether the seller would look at an offer closer to where we were now. ` +
           `Do NOT name any number: not the one we offered, not theirs, not a new one. Say "our number" or "where we were". Never hint that we'd go higher — ` +
           `movement on ours is a person's call. Keep it light and easy to ignore. ${CONTINUE} Set intent to passed_checkin.`;
       }
@@ -1246,8 +1246,8 @@ function openingFor(outbound) {
           ? `They passed on our ${o.went === "number" ? "number" : "offer"}${o.ourK ? ` of ${o.ourK}` : ""} earlier. `
           : o.went === "number" ? `The number we floated${o.ourK ? ` (${o.ourK})` : ""} is still where we are. `
           : `Our offer${o.ourK ? ` of ${o.ourK}` : ""} is still out to them. `) +
-        `One or two lines: say you saw the price move, and ask whether the seller would look at a cash, as-is offer ` +
-        `closer to ours now. You may say their new list price and restate our number exactly as it is in the offer book; ` +
+        `One or two lines: say you saw the price move, and ask whether the seller would look at an offer ` +
+        `closer to where we were now. You may say their new list price and restate our number exactly as it is in the offer book; ` +
         `do NOT raise ours, hint that we'd go higher, or name any other number. Write it like a text: no dollar signs. ` +
         `${CONTINUE} Set intent to price_drop.`;
 

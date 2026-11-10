@@ -740,3 +740,22 @@ test("a buyer asking who we are or why we texted reads as not knowing us; a ques
     assert.equal(doesntKnowUs(t), false, t);
   }
 });
+
+// 2026-11-09: the bot promised a 10 to 14 day close "with cash" against our 10 to 21 day hard
+// money terms (10-27). "With cash" beside a close window is the same all-cash claim, and so is a
+// close faster than the write-up terms' soonest (writeUp.closeDaysMin), which only a cash buyer makes.
+import { claimsAllCash as claimsCash } from "./conversation-ai.js";
+test("a reply that says we close in 10 to 14 days with cash is caught", () => {
+  for (const m of ["We can close in 10 to 14 days with cash", "We buy with cash, 10-14 day closes", "With cash we can do a 10 to 14 day close",
+    "We can close in 7 days", "we could close within a week if that helps", "I can do a 5 day close on it"]) {
+    assert.ok(claimsCash(m), m);
+  }
+  for (const m of ["Funded with a hard money loan, we close in roughly 10 to 21 days from acceptance", "We can close in 10 days",
+    "We buy houses as-is for cash and close fast.", "Can the seller close in 7 days?", "They want to close in 5 days, is that firm?",
+    "My buyers come with cash and want to see it Tuesday", "10 to 14 day inspection, then we close"]) {
+    assert.equal(claimsCash(m), null, m);
+  }
+  // The soonest close is Matt's setting: at 7, a 7 day close is ours to promise.
+  assert.equal(claimsCash("We can close in 7 days", { closeDaysMin: 7 }), null);
+  assert.ok(claimsCash("We can close in 5 days", { closeDaysMin: 7 }));
+});

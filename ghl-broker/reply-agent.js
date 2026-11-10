@@ -969,6 +969,7 @@ export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], hiddenAmounts = [], ranges = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", botAnswer = "", ourAmount = 0,
   vacantOk = false, carrierCheck = false, houseWords = "", writeUpOk = true, theirValue = 0, ourValue = 0,
+  closeDaysMin = 0,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -1056,7 +1057,8 @@ export function evaluateReplyGates({
       flags.push("the draft asks them to write it up (NWMLS, represent us) at a number you haven't approved — approve it on the offer first (Offers → Hot)");
     }
     // 10917 48th St E, 2026-09-27: "cash means no lender". We use hard money.
-    const cash = claimsAllCash(draft.reply);
+    // "With cash" by a close window, or a close faster than our soonest, says the same (2026-11-09).
+    const cash = claimsAllCash(draft.reply, { closeDaysMin });
     if (cash) flags.push(`the draft says "${cash}" — we buy with a hard money loan, not all cash`);
     // Showing our work names the costs; what's left is never given a figure.
     const margin = namesHidden(draft.reply, hiddenAmounts);
@@ -3758,6 +3760,7 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   const gate = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
+    closeDaysMin: config.writeUp?.closeDaysMin,
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
     houseWords: houseWordsFor(context?.deals, a.transcript),
     theirValue: party === "agent" ? Math.round(Number(dossier?.have?.arv?.value) || 0) : 0,
@@ -5027,6 +5030,7 @@ async function runReply(job, ctx) {
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
     ourAmount: ourNumberFor(context.offers?.numbers, d.propertyAddress),
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress),
+    closeDaysMin: config.writeUp?.closeDaysMin,
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, inboundText),
     theirValue: party === "agent" ? theirValueFor({ draft: d, message: isCall ? "" : job.message, events: agentEvents, address: d.propertyAddress }) : 0,
@@ -6626,6 +6630,7 @@ export async function previewConversation({
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
     ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
     writeUpOk: writeUpOkFor(context.offers?.numbers, draft.propertyAddress),
+    closeDaysMin: config.writeUp?.closeDaysMin,
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, message),
   });

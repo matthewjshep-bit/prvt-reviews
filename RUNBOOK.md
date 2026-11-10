@@ -4883,6 +4883,52 @@ each conversation's messages, and group outbound `TYPE_SMS` by the `Error
 NNNNN` in `error` — read gently (two at a time, back off on 429), the broker
 shares GHL's rate limit.
 
+#### The offer text, one set of words (2026-11-09)
+
+The server dropped "cash, as-is" on 10-02, but the app's Send box kept
+"$525,000 cash, as-is" with an em dash. From 9-20 to 11-03, 13 of the 67
+offer texts that said it were blocked (19%), so those agents never got our
+number. Of the 9 without "cash", 1 was blocked.
+
+- **One module.** `shared/offer-send-text.js` `offerSendText` writes the
+  Send box's starting text (`SendModal.jsx` `defaultSendMessage`) and the
+  server's fallback when nothing is handed in (`sendOfferDocs`). It reads:
+  "Hi Dana, here's our letter of intent on 4417 Somerset Ln: 525k, close on
+  your timeline. Letter's attached. If the seller's open to it, could you
+  write it up on NWMLS forms and represent us?" With no first name it opens
+  "Here's our letter of intent on…". An Oregon house says OREF forms. The
+  rules: no "cash", no "as-is", no dash, no "$", the street not the full
+  address, and money as "525k" (round thousands under a million) or
+  "451,750" (anything else; "1.25M" doesn't read back as our number). How we
+  got the number rides after "Letter's attached." when it's on. A number
+  nobody approved (`numberApproved`) ends "Let me know what the seller
+  thinks." instead of the write-up ask, as before.
+- **For the record.** `forRecordText` is the letter after a quiet float or
+  with the reply to a no: "Hi Dana, sending our written offer on 12 Elm St
+  over so you have it on file: 300k, close on your timeline. Letter's
+  attached." It ends "Happy to answer any questions." when nobody approved
+  the number.
+- **The readers still know it.** Both keep "here's our letter of intent on"
+  and "sending our written offer on", so `OUR_OFFER_TEXT_RX` (our own echo,
+  the thread reader) and `OFFER_DOC_TEXT_RX` (the current-offer readers)
+  match. `shared/offer-send-text.test.mjs` pins both and `carrierFlags`.
+- **Text you type is yours.** The Send box starts from these words and
+  sends what you leave there.
+- **Two prompts.** `price_drop` and a relisted `passed_checkin` ask whether
+  the seller would look at "an offer closer to where we were", not "a cash,
+  as-is offer".
+- **The all-cash gate** (`claimsAllCash`, `evaluateReplyGates`) also holds a
+  draft that says "with cash" within 30 characters of a close window ("we buy
+  with cash, 10-14 day closes"), or that promises a close sooner than
+  `writeUp.closeDaysMin` days (10 by default), as in "we can close in 7
+  days" or "within a week". A question, or a sentence with no "we" or "I" in
+  it, promises nothing. This only adds holds.
+
+Waits for Matt, not built: the email subject "Cash offer — {address}", the
+email body's "Please find … attached —", the letter's financing row "Funded
+with cash or private loan", and the net sheet's "Our cash offer". The
+memory says the letters are his call.
+
 ### Matt's contact card (2026-10-09)
 
 Matt: share my contact card "when people ask or if an initial deal doesn't work,
