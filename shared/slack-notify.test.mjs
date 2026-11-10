@@ -134,6 +134,12 @@ test("the morning numbers count houses and offers, Tier 1 once per contact", () 
   assert.match(textOf(renderMorning(c)), /Offers sent: \*1\*/);
 });
 
+test("the morning post counts the calls we owe", () => {
+  assert.match(textOf(renderMorning({ offersSent: 2, callsOwed: 3 })), /Calls we owe: \*3\*/);
+  assert.doesNotMatch(textOf(renderMorning({ offersSent: 2, callsOwed: 0 })), /Calls we owe/, "none owed: no line");
+  assert.doesNotMatch(textOf(renderMorning({ offersSent: 2 })), /Calls we owe/, "not counted: no line");
+});
+
 test("the evening post lists the loose ends by street, never by name, and the machine's failures", () => {
   const t = textOf(renderEvening(
     { sections: [{ key: "accepted", label: "Seller said yes", items: [{ contactName: "Ann Lee", address: "1010 Bellevue Way NE, Bellevue", detail: "yes let's do it" }] }, { key: "held", label: "Underwrites that held", items: [] }] },

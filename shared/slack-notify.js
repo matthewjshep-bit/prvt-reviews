@@ -556,6 +556,9 @@ export function renderMorning(c = {}, ctx = {}) {
     [row("Offers sent", c.offersSent), row("Counters", c.counters), row("Hot", c.hot), row("Agreed", c.agreed)].join(" · "),
     [row("New deals", c.deals), row("Buyer texts", c.buyerTexts), row("Buyers committed", c.buyersCommitted)].join(" · "),
   ];
+  // The calls we owe this morning (the pipeline's call_owed rows: a call we
+  // said we'd make, a booked call nobody made), 2026-11-09.
+  if (Number(c.callsOwed) > 0) lines.push(`:telephone_receiver: ${row("Calls we owe", c.callsOwed)}`);
   const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });

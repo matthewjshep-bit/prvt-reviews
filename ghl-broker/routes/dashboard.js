@@ -915,7 +915,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       if (what === "reconcile") return res.json({ ok: true, ...(await reconcileSlackNow({ store, locationId, saved, dryRun, force: req.body?.force === true, paceMs: dryRun ? 0 : 1100 })) });
       if (what === "morning" || what === "evening") {
         if (!settings.channels.daily) return res.status(400).json({ error: "set the #daily channel first" });
-        return res.json({ ok: true, ...(await (what === "morning" ? postMorning : postEvening)({ store, locationId, saved })) });
+        return res.json({ ok: true, ...(await (what === "morning" ? postMorning : postEvening)({ store, locationId, saved, client, deps: { pipelineFor } })) });
       }
       res.status(400).json({ error: "what: events, reconcile, pings, morning or evening" });
     } catch (err) { fail(res, err); }

@@ -27,7 +27,7 @@ import { stepLabel, exhausted, normalizeSteps, questionIn } from "./follow-up.js
 import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
 import { addressKey } from "./contact-record.js";
 import { openPromises, resolvePromise } from "./promise-resolver.js";
-import { owedPromises, owedPersonPromises, PERSON_PROMISE_WORDS } from "./promise-owed.js";
+import { owedPromises, owedPersonPromises, PERSON_PROMISE_WORDS, bookedCallsMissed } from "./promise-owed.js";
 import { UNANSWERED_LIMIT } from "./thread-health.js";
 import { botHold, holdLine } from "./bot-hold.js";
 import { groupHouses, resolveHouse, pricedAt } from "./current-offer.js";
@@ -45,6 +45,14 @@ const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t
 const round = (v) => Math.round(Number(v) || 0);
 const money = (n) => `$${round(n).toLocaleString("en-US")}`;
 const streetKey = (address) => addressKey(String(address || "").split(",")[0]);
+// A booked call's time as Matt says it: "Tue 8:00am" (Pacific).
+const bookedWhen = (iso) => {
+  const t = ms(iso);
+  if (t == null) return "";
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short", hour: "numeric", minute: "2-digit", hour12: true })
+    .formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  return `${p.weekday} ${p.hour}:${p.minute}${String(p.dayPeriod || "").toLowerCase()}`;
+};
 
 /* ---------- the vocabulary ---------- */
 
@@ -853,6 +861,34 @@ export function buildPipeline({
       push({ ...base, id: `number_owed:${p.contactId}:${p.what}:${p.since}`, kind: "number_owed", what: p.what,
         ops: [...(offer ? [{ key: "open_editor", label: "Open the offer", intent: "secondary" }] : []), { key: "dismiss_promise", label: "Dismiss" }] });
     }
+  }
+
+  /* --- a booked call nobody made (2026-11-09) --- */
+  // The audit: a call booked for 8am was never made, and the next text from
+  // us asked the agent for fixers (promise-owed.js bookedCallsMissed). The
+  // same Call row as a call we said we'd make, urgent for GHL's Manual
+  // Actions; one per person, so a promised call already up speaks for both.
+  // A call of ours (tried or connected) clears it; Dismiss hides it.
+  const callOwedFor = new Set(actions.filter((a) => a.kind === "call_owed").map((a) => a.contactId));
+  for (const b of bookedCallsMissed(events, now)) {
+    if (callOwedFor.has(b.contactId)) continue;
+    const mine = byContact.get(b.contactId) || [];
+    const theirs = [...sentDrafts, ...drafts].filter((d) => d?.contactId === b.contactId);
+    const named = contactNames[b.contactId] || mine.find((o) => o?.contactName)?.contactName || theirs.find((d) => d.contactName)?.contactName || "";
+    const first = String(named).trim().split(/\s+/)[0] || "";
+    const offer = b.address ? mine.find((o) => o?.address && streetKey(o.address) === streetKey(b.address)) : null;
+    const street = String(b.address || offer?.address || "").split(",")[0].trim();
+    const when = bookedWhen(b.startTime);
+    const days = Math.floor((now - (ms(b.startTime) ?? now)) / DAY_MS);
+    push({ id: `call_owed:booked:${b.contactId}:${b.startTime}`, kind: "call_owed", section: "call", score: CALL_OWED_SCORE, severity: "now", group: "yours",
+      contactId: b.contactId, contactName: named, address: b.address || "", offerId: offer?.id || null, move: "call_owed", why: "booked call missed",
+      draftId: null, booked: { startTime: b.startTime, bookedAt: b.bookedAt },
+      title: `Owed: the call booked with ${first || "them"}${when ? ` for ${when}` : ""}${street ? ` on ${street}` : ""}`,
+      detail: ["booked call missed", days >= 2 ? `${days} days ago` : "", "nobody called"].filter(Boolean).join(" · "),
+      call: { reason: "call_owed", why: "booked call missed", since: b.startTime, tries: 0, houses: [],
+        goal: `We booked a call${when ? ` for ${when}` : ""}${street ? ` about ${street}` : ""} and nobody called. Call them now, or text a new time and keep it.`,
+        opener: `Hi ${first || "there"}, it's Matt, sorry I missed our call${street ? ` about ${street}` : ""}. Is now a good time?` },
+      ops: [] });
   }
 
   // Timers: rows the machine clears by itself after a wait (driver.timers).
