@@ -346,12 +346,15 @@ export function auditConversations({
     // failed (2026-11-09: two answers to "who is this?" blocked by the
     // carrier, both read as answered). The machine never resends an answer,
     // so there is no action: a call or an email is Matt's (Needs Matt has it).
+    // The sent draft is named in the evidence, not as `draftId`: a row naming
+    // a draft that is no longer open steps aside in stillOwed (and its button
+    // would open the outbox), so the morning row went the moment it landed.
     if (newest.status === "sent" && deliveryFailed(newest)) {
       const cls = classifyFailure(newest.delivery?.code, newest.channel === "email" ? "email" : "sms");
       add({ kind: "unanswered_inbound", contactId: c, contactName: who(c), party: newest.party, address: newest.propertyAddress || "",
-        anchorAt: iso(inAt), dueAt: iso(now), draftId: newest.id,
+        anchorAt: iso(inAt), dueAt: iso(now),
         why: `our answer never arrived (${failureWords(cls)}): call or email`,
-        evidence: { inbound: clip(newest.inbound), code: newest.delivery?.code || null } });
+        evidence: { inbound: clip(newest.inbound), code: newest.delivery?.code || null, sentDraftId: newest.id } });
     }
   }
 

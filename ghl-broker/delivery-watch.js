@@ -256,11 +256,15 @@ export async function queueRetry({ store = defaultStore, locationId, saved = {},
   };
   const pb = config.parties?.investor || {};
   const allowed = Boolean(pb.autoSend?.enabled && (pb.autoSend.intents || []).includes(kind));
-  const schedule = Boolean(d.autoSent) && config.enabled && sendsEnabled && allowed && (kind !== "blast_open" || blastsEnabled);
+  // A follow-up deal text went by itself through decideAutoSend, which also
+  // asks that texts are an auto-send channel; its retry asks the same.
+  const textsAuto = kind !== "blast_nudge" || (config.autoSend?.channels || []).includes("sms");
+  const schedule = Boolean(d.autoSent) && config.enabled && sendsEnabled && allowed && textsAuto && (kind !== "blast_open" || blastsEnabled);
   const why = !d.autoSent ? "the first one waited for your Send, so this one does too"
     : !sendsEnabled ? "sends are off on the broker (CARD_SENDS_ENABLED)"
       : kind === "blast_open" && !blastsEnabled ? "blasts are off on the broker (DISPO_BLASTS_ENABLED)"
-        : !config.enabled ? "Conversation AI is switched off" : !allowed ? `'${kind}' is not on the investor auto-send list` : "";
+        : !config.enabled ? "Conversation AI is switched off" : !allowed ? `'${kind}' is not on the investor auto-send list`
+          : !textsAuto ? "texts are not an auto-send channel (Conversation AI → auto-send)" : "";
   const quiet = machineHours(config.autoSend);
   const sendAt = schedule ? nextSendTime({ now: Date.parse(spreadAcrossDay({ now, quietHours: quiet, hours: 0, weekends: config.autoSend.weekends || "all" })), delayMs: 0, quietHours: quiet }) : null;
   const ts = iso(now);

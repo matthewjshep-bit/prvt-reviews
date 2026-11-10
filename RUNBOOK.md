@@ -4888,15 +4888,18 @@ come back dead. `ghl-broker/delivery-watch.js` reads it back. Pure rules:
   sent draft the check read back as failed (`deliveryFailed`) as our answer:
   the thread is a "Texts we never answered" row with no action ("our answer
   never arrived (the carrier blocked it): call or email"), and the morning's
-  row stays until a reply that arrived, a hand text or a call. It never
+  row stays until a reply that arrived, a hand text or a call (the sent
+  draft is in the row's evidence as `sentDraftId`, not its `draftId`: a row
+  naming a draft that is no longer open steps aside in `stillOwed`). It never
   redrafts or resends it.
 - **A dead number** (`numberDead`: one 30005 or 30006, or two 30003s, because
   30003 is sometimes temporary): nothing the machine starts is texted to them.
   `startProactive` and `runProactive` stand down (`handsOffReason` with
   `deadNumber`), and a scheduled machine text or deal text is dismissed at
-  send with "their number came back dead — not sent". Any other text going
-  by itself (a walkthrough ask, a float a person queued) goes back to the
-  outbox to wait for your Send. Email still goes, and an answer to a new text
+  send with "their number came back dead — not sent" (a float you pressed
+  that was set to go by itself is one too, as with a bot stop: its kind is
+  one the machine starts). Any other text going by itself (a walkthrough
+  ask, say) goes back to the outbox to wait for your Send. Email still goes, and an answer to a new text
   from them still drafts and sends. A buyer's GHL record also gets the tag
   `phone-dead` (`BLOCK_TAG_RX` in shared/buyer-pulse.js), and so does their
   row in the buyer book straight away, so no pulse and no deal picks them.
@@ -4912,7 +4915,8 @@ come back dead. `ghl-broker/delivery-watch.js` reads it back. Pure rules:
   blast-refresh.js honours), or the cold deal text for a buyer who never
   wrote back once `dispoAutopilot.coldDealText` exists. It is scheduled only if
   the first one went by itself and the same switches (CARD_SENDS_ENABLED,
-  DISPO_BLASTS_ENABLED, the investor auto-send list) still allow it; otherwise
+  DISPO_BLASTS_ENABLED, the investor auto-send list, and for a `blast_nudge`
+  texts on the auto-send channels) still allow it; otherwise
   it waits for your Send. A retry that is blocked again is never retried.
 - **Check:** `GET /api/dashboard/line` lists the job, when it last ran and
   whether that run failed; the run's counts (checked, delivered, failed by

@@ -299,6 +299,30 @@ test("a deal text the carrier blocked is retried once without the link when retr
   assert.equal((await store.listReplyDrafts(L2, { contactId: C2, status: ["draft", "scheduled"] })).length, 0);
 });
 
+// A follow-up deal text only went by itself because texts were on the
+// auto-send channels (decideAutoSend). With texts taken off since, its retry
+// must not go by itself either.
+test("a blocked follow-up deal text isn't retried by itself once texts are off the auto-send channels", async () => {
+  const { queueRetry } = await import("./delivery-watch.js");
+  const L = "loc-retry-nudge", C = "c-nudge";
+  const offer = await store.createOffer(DEAL("o-nudge", { locationId: L }));
+  const nudge = await blastSent(L, C, offer.id, { sentAt: hoursAgo(4), ghlMessageId: "n-1", intent: "blast_nudge",
+    outbound: { kind: "blast_nudge", offerId: offer.id, address: offer.address } });
+  const conv = (channels) => ({ conversationAi: { enabled: true, autoSend: { channels }, parties: { investor: { autoSend: { enabled: true, intents: ["blast_nudge"] } } } }, dispoAutopilot: { retryBlocked: true } });
+  const off = await queueRetry({ store, locationId: L, saved: conv(["email"]), draft: nudge, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(off.queued, true);
+  assert.equal(off.scheduled, false);
+  assert.match(off.reason, /auto-send/);
+  assert.equal((await store.getReplyDraft(off.draftId)).status, "draft", "it waits for Matt's Send");
+  // With texts on the list it goes by itself, as the first one did.
+  const L2 = "loc-retry-nudge-2";
+  const offer2 = await store.createOffer(DEAL("o-nudge-2", { locationId: L2 }));
+  const nudge2 = await blastSent(L2, C, offer2.id, { sentAt: hoursAgo(4), ghlMessageId: "n-2", intent: "blast_nudge",
+    outbound: { kind: "blast_nudge", offerId: offer2.id, address: offer2.address } });
+  const on = await queueRetry({ store, locationId: L2, saved: conv(["sms"]), draft: nudge2, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(on.scheduled, true);
+});
+
 test("a retried deal text is written again at send without its link, even where deal texts carry one", async () => {
   const { refreshBlastText } = await import("./blast-refresh.js");
   const invites = [];
