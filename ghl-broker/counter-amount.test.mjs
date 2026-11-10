@@ -89,3 +89,85 @@ test("the dedupe key for a countered offer is unchanged by the number", () => {
   assert.equal(eventDedupeKey(withAmount), eventDedupeKey(without));
   assert.equal(eventDedupeKey(withAmount), "ev:2026-09-05:412 elm st tacoma wa:agent countered");
 });
+
+/* ---------- the real write paths (2026-11-09) ---------- */
+
+// The tests above exercise a copy of recordStatus. These go through the two
+// places a counter is actually written: the conversation's setOfferStatus
+// (an agent's text) and the status menu's PATCH /:id/status (Matt's hand).
+// An agent who came down while the offer already read "countered" kept the
+// old number, so the Desk showed the old gap and the hold clock kept
+// nudging; a counter Matt marked by hand had no number at all.
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+import { callsInstead } from "./shared/counter-hold.js";
+
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "counter-amount-test-"));
+delete process.env.DATABASE_URL;
+delete process.env.CARD_SENDS_ENABLED;
+const { default: express } = await import("express");
+const { store } = await import("./store.js");
+const { default: createOffersRouter } = await import("./routes/offers.js");
+
+const LOC = "loc-counter-amount";
+const resolveLocation = () => ({ locationId: LOC, client: { call: async () => ({}) } });
+const app = express();
+app.use(express.json());
+const offersRouter = createOffersRouter({ resolveLocation, uploadDir: process.env.DATA_DIR });
+app.use("/api/offers", offersRouter);
+const server = app.listen(0);
+const B = `http://127.0.0.1:${server.address().port}`;
+await store.init();
+test.after(() => server.close());
+const patch = (p, body) => fetch(`${B}/api/offers${p}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+  .then(async (r) => ({ status: r.status, ...(await r.json()) }));
+const deps = () => offersRouter.conversationDepsFor({ locationId: LOC, client: { call: async () => ({}) }, saved: {} });
+const daysAgo = (d) => new Date(Date.now() - d * 86400000).toISOString();
+
+test("an agent who comes down from 480 to 430 has 430 on file, and the hold stands down for a call", async () => {
+  const address = "2208 Quillback Rd, Auburn, WA 98002";
+  const o = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "agent-q", contactName: "Rowan Agent", address,
+    cashAmount: 400000, status: "countered", createdAt: daysAgo(6), statusAt: daysAgo(4),
+    statusHistory: [{ status: "sent", ts: daysAgo(6) }, { status: "countered", ts: daysAgo(4), amount: 480000 }],
+    sends: [{ ts: daysAgo(6) }], counter: { amount: 480000, at: daysAgo(4), source: "conversation" },
+    // We held our number the day after their 480.
+    counterHold: { at: daysAgo(3), ours: 400000, nudges: [], replies: [] } });
+  assert.equal(callsInstead(await store.getOffer(o.id)), false, "480 against our 400 is a hold, not a call");
+
+  const r = await deps().setOfferStatus({ contactId: "agent-q", addressHint: address, status: "countered", amount: 430000 });
+  assert.equal(r.ok, true, r.reason);
+  assert.notEqual(r.unchanged, true, "a new number is news even when the status already reads countered");
+  const after = await store.getOffer(o.id);
+  assert.equal(after.counter.amount, 430000);
+  assert.equal(after.statusHistory.at(-1).amount, 430000, "the history keeps both");
+  assert.equal(after.statusHistory.filter((h) => h.status === "countered").length, 2);
+  assert.equal(callsInstead(after), true, "430 is within 10% of our 400: a call, not another check-in");
+
+  // The same number again is nothing new.
+  const again = await deps().setOfferStatus({ contactId: "agent-q", addressHint: address, status: "countered", amount: 430000 });
+  assert.equal(again.unchanged, true);
+  assert.equal((await store.getOffer(o.id)).statusHistory.length, 3);
+  // And a counter with no number never wipes the one on file.
+  const bare = await deps().setOfferStatus({ contactId: "agent-q", addressHint: address, status: "countered" });
+  assert.equal(bare.unchanged, true);
+  assert.equal((await store.getOffer(o.id)).counter.amount, 430000);
+});
+
+test("a counter marked by hand with their number records it", async () => {
+  const o = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "agent-w", contactName: "Wren Agent", address: "917 Tidewater Ln, Kent, WA 98031",
+    cashAmount: 300000, status: "sent", createdAt: daysAgo(3), statusHistory: [{ status: "sent", ts: daysAgo(3) }], sends: [{ ts: daysAgo(3) }] });
+  const r = await patch(`/${o.id}/status`, { status: "countered", amount: "345k" });
+  assert.equal(r.status, 200, r.error);
+  assert.equal(r.offer.counter.amount, 345000, "typed the way a person types it");
+  assert.equal(r.offer.counter.source, "operator");
+  // They came down on the phone: marked again with the new number.
+  const down = await patch(`/${o.id}/status`, { status: "countered", amount: 330000 });
+  assert.equal(down.offer.counter.amount, 330000);
+  // A number that doesn't read is refused, not dropped.
+  const junk = await patch(`/${o.id}/status`, { status: "countered", amount: "three thirty" });
+  assert.equal(junk.status, 400);
+  assert.equal((await store.getOffer(o.id)).counter.amount, 330000);
+});

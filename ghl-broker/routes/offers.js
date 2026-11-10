@@ -3792,7 +3792,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ts = new Date(t).toISOString();
       }
       // Their number, when the status is their counter: the band reads it.
-      const amount = status === "countered" ? Math.max(0, Math.round(Number(req.body?.amount) || 0)) : 0;
+      // Typed the way a person types it ("345k", shared/money.js); one that
+      // doesn't read is refused rather than dropped (2026-11-09: a counter
+      // marked by hand had no number, so no call row and no hold clock).
+      const typedAmount = req.body?.amount;
+      const parsedAmount = typedAmount == null || String(typedAmount).trim() === "" ? 0 : parseMoney(typedAmount);
+      if (status === "countered" && parsedAmount == null) {
+        return res.status(400).json({ error: `couldn't read "${String(typedAmount).slice(0, 40)}" as their number: type it like 430000 or 430k` });
+      }
+      const amount = status === "countered" ? Math.max(0, Math.round(parsedAmount || 0)) : 0;
       // A house nothing went out on, marked "We passed: <reason>": the bot
       // tells them (shared/pass-note.js). Read before the status changes.
       const notePass = wantsPassNote({ before: { ...offer }, status, reason: passReason });
@@ -6214,9 +6222,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const rows = await store.listOffers(locationId, { contactId, limit: 50 });
       const offer = pickOfferForStatus(currentOffers(rows), addressHint, status, { drafts: rows });
       if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer to mark" };
-      if (effectiveStatus(offer) === status) return { ok: true, unchanged: true, address: offer.address, status };
-      const ts = new Date().toISOString();
       const counter = Math.max(0, Math.round(Number(amount) || 0));
+      // Already countered: a new number is still news (2026-11-09: an agent
+      // who came down from 480 to 430 kept 480 on file, so the Desk showed
+      // the old gap and the hold clock never stood down for a call). The
+      // same number, or none, changes nothing.
+      const newNumber = status === "countered" && counter > 0 && counter !== Math.round(Number(offer.counter?.amount) || 0);
+      if (effectiveStatus(offer) === status && !newNumber) return { ok: true, unchanged: true, address: offer.address, status };
+      const ts = new Date().toISOString();
       recordStatus(offer, status, dealStr(note, 200), ts, { amount: counter, source: "conversation" });
       // A counter or a no says the price isn't settled: heat the conversation
       // raised comes off (a flag a person set is theirs to clear). A later
