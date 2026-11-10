@@ -194,7 +194,8 @@ export function nextRecord(prev = null, { address = "", contactId = null, offerI
  *
  * The offer engine's number on an offer's house, any grade (shared/needs-matt.js engineOn): the
  * Price-it draft's own engine read first, else the house's record. The Needs Matt clock never
- * passes a house that has one (Matt, 2026-11-10). One light read past the offer; never throws.
+ * passes a house whose number is grade A or B (engineKeeps, Matt 2026-11-10). One light read past
+ * the offer; never throws.
  */
 export async function engineNumberFor({ store, locationId, offer = null } = {}) {
   if (!offer) return null;

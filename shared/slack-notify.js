@@ -665,12 +665,12 @@ export function renderMorning(c = {}, ctx = {}) {
     [row("New deals", c.deals), row("Buyer texts", c.buyerTexts), row("Buyers committed", c.buyersCommitted)].join(" · "),
   ];
   // Houses the clock passes today unless Matt prices them (2026-11-09 audit): three working days
-  // on Needs Matt with no number. A house the engine priced never passes (2026-11-10), so none of
-  // these has an engine number. Streets only.
+  // on Needs Matt with no number of his. A house the engine priced at grade A or B never passes
+  // (2026-11-10); a grade-C one does, shown with the engine's number and grade. Streets only.
   if (c.passesToday?.count) {
     const shown = (c.passesToday.houses || []).slice(0, 5)
-      .map((h) => esc(street(h.street || h.address) || "a house"));
-    lines.push(`:hourglass_flowing_sand: Passes today unless you price it (no engine number, three working days): *${c.passesToday.count}*${shown.length ? ` — ${shown.join(", ")}${c.passesToday.count > shown.length ? ", …" : ""}` : ""}`);
+      .map((h) => `${esc(street(h.street || h.address) || "a house")}${money(h.engine) ? ` (engine ${money(h.engine)}, grade ${esc(h.grade || "C")})` : ""}`);
+    lines.push(`:hourglass_flowing_sand: Passes today unless you price it (three working days, no grade-A or -B engine number): *${c.passesToday.count}*${shown.length ? ` — ${shown.join(", ")}${c.passesToday.count > shown.length ? ", …" : ""}` : ""}`);
   }
   // The calls we owe this morning (the pipeline's call_owed rows: a call we
   // said we'd make, a booked call nobody made), 2026-11-09.

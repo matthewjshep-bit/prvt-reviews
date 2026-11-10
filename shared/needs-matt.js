@@ -24,8 +24,9 @@
 //              PASS_AFTER_HOURS working hours after it landed (weekdays,
 //              not his days off), still unpriced, the runner passes it and
 //              the pass note tells the agent. A house the offer engine priced
-//              is never passed by that clock (Matt, 2026-11-10): it waits
-//              for him with the engine's number on the card
+//              at grade A or B is never passed by that clock (Matt,
+//              2026-11-10): it waits for him with the engine's number on the
+//              card. A grade-C number passes like an unpriced house
 //
 // Everything else stays the machine's: counters (the bot holds our number,
 // Matt 2026-10-22), booked calls (booking), calls (the GHL dialer,
@@ -182,14 +183,23 @@ export function needsMattWhy(x = {}) {
 
 /**
  * engineNumber(engine) → the offer engine's number on a house, or 0.
- * `engine` is { grade, open, walkAway } from the draft's engine read or the house's record: any
- * grade with a number counts (Matt, 2026-11-10: a house the engine priced is never passed by the
- * clock). The open when there is one, else the walk-away.
+ * `engine` is { grade, open, walkAway } from the draft's engine read or the house's record. The
+ * open when there is one, else the walk-away.
  */
 export function engineNumber(engine = null) {
   const open = Math.round(Number(engine?.open) || 0);
   const walk = Math.round(Number(engine?.walkAway) || 0);
   return open > 0 ? open : walk > 0 ? walk : 0;
+}
+
+/**
+ * engineKeeps(engine) → true when the engine's number keeps a house off the pass clock: grade A or
+ * B with a number (Matt, 2026-11-10). Grade C is a house the machine shouldn't buy as it stands (a
+ * killer fact like a manufactured home or a short sale, a turnkey, or two things it isn't sure of):
+ * it passes on the clock like an unpriced one, never waits on Needs Matt for good.
+ */
+export function engineKeeps(engine = null) {
+  return (engine?.grade === "A" || engine?.grade === "B") && engineNumber(engine) > 0;
 }
 
 /**
@@ -220,8 +230,8 @@ export function engineOn({ offer = null, record = null } = {}) {
  * held reply can be read against our number on its house.
  *
  * `engineByOffer`: offer id → the engine's number on that house (engineOn).
- * A price card carries it as `engine`: its why line names it, and the pass
- * clock never passes it (needsMattPassDue).
+ * A price card carries it as `engine`: its why line names it, and at grade A
+ * or B the pass clock never passes it (needsMattPassDue, engineKeeps).
  */
 export function needsMattByContact(rows = [], { drafts = [], offers = null, offersById = null, now = Date.now(), screened = null, walkedAway = null, engineByOffer = null } = {}) {
   const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
@@ -299,11 +309,12 @@ export function botTakesHouse(offer) {
  * passed by the machine.
  *
  * Matt, 2026-11-10: the clock counts weekdays only, and not his days off
- * (conversationAi autoSend.offDays); and a house the offer engine priced
- * (`need.engine`, any grade) is never passed by it.
+ * (conversationAi autoSend.offDays); and a house the offer engine priced at
+ * grade A or B (`need.engine`, engineKeeps) is never passed by it. A grade-C
+ * number doesn't keep it: those pass like an unpriced house.
  */
 export function needsMattPassDue(need, now = Date.now(), { offDays = null } = {}) {
-  if (need?.kind !== "price" || !need.offerId || engineNumber(need.engine)) return false;
+  if (need?.kind !== "price" || !need.offerId || engineKeeps(need.engine)) return false;
   const landed = ms(need.landedAt);
   return landed != null && workingHoursBetween(landed, now, WORK_TZ, { offDays }) >= PASS_AFTER_HOURS;
 }
@@ -311,10 +322,10 @@ export function needsMattPassDue(need, now = Date.now(), { offDays = null } = {}
 /**
  * needsMattPassAt(need, { offDays }) → ISO | null — when the clock passes this card: PASS_AFTER_HOURS
  * working hours after it landed. Null for a card it never passes (not a price card, no row to
- * mark, or the engine priced it).
+ * mark, or the engine priced it at grade A or B).
  */
 export function needsMattPassAt(need, { offDays = null } = {}) {
-  if (need?.kind !== "price" || !need.offerId || engineNumber(need.engine)) return null;
+  if (need?.kind !== "price" || !need.offerId || engineKeeps(need.engine)) return null;
   const landed = ms(need.landedAt);
   return landed == null ? null : new Date(addWorkingHours(landed, PASS_AFTER_HOURS, WORK_TZ, { offDays })).toISOString();
 }

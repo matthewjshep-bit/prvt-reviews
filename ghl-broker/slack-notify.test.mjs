@@ -586,10 +586,11 @@ test("a numbered house never borrows the status of the agent's other house", asy
 // 2026-11-09 audit: houses passed on the 72-hour clock with nothing in the
 // morning post saying which were about to go. Streets only, never a name.
 // 2026-11-10: the clock counts working days, and never passes a house the
-// engine priced, so neither is in the line.
+// engine priced at grade A or B, so neither is in the line; a grade-C house
+// passes and is listed with the engine's number.
 const MON_7AM = Date.parse("2026-10-26T14:05:00Z"); // Monday 7:05am Pacific
 const landedAt = (iso) => new Date(Date.parse(iso)).toISOString();
-test("the morning post names the houses that pass today unless Matt prices them, never one the engine priced or one that waited over the weekend", async () => {
+test("the morning post names the houses that pass today unless Matt prices them, never one the engine priced at grade A or B or one that waited over the weekend", async () => {
   const LOC = "loc-morning-passes";
   const { postMorning } = await import("./slack-notify.js");
   const { houseKey } = await import("./shared/current-offer.js");
@@ -597,17 +598,20 @@ test("the morning post names the houses that pass today unless Matt prices them,
   const lark = await store.createOffer({ locationId: LOC, contactId: "rory", address: "88 Larkspur Ln, Tacoma, WA 98404", status: "draft" });
   const quarry = await store.createOffer({ locationId: LOC, contactId: "nell", address: "14 Quarry Rd, Kent, WA 98030", status: "draft" });
   const later = await store.createOffer({ locationId: LOC, contactId: "ike", address: "9 Bramble Ct, Auburn, WA 98002", status: "draft" });
+  const thistle = await store.createOffer({ locationId: LOC, contactId: "pia", address: "5 Thistle Ln, Kent, WA 98030", status: "draft" });
   await store.upsertHousePricing(LOC, houseKey(lark.address), { address: lark.address, v2: { grade: "B", open: 412000, walkAway: 430000 } });
+  await store.upsertHousePricing(LOC, houseKey(thistle.address), { address: thistle.address, v2: { grade: "C", open: 151000, walkAway: 166000 } });
   await store.setJobCursor(LOC, "needsMatt", { at: at(0), doc: { needs: {
     rory: { kind: "price", offerId: lark.id, landedAt: landedAt("2026-10-20T17:00:00Z") },  // a week on, but the engine priced it
     nell: { kind: "price", offerId: quarry.id, landedAt: landedAt("2026-10-21T19:00:00Z") }, // Wednesday noon: passes Monday noon
     ike: { kind: "price", offerId: later.id, landedAt: landedAt("2026-10-23T19:00:00Z") },   // Friday noon: the weekend doesn't count
+    pia: { kind: "price", offerId: thistle.id, landedAt: landedAt("2026-10-21T20:00:00Z") }, // grade C: passes like an unpriced house
     zoe: { kind: "yes", offerId: null, landedAt: landedAt("2026-10-19T17:00:00Z") },
   } } });
   const r = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: MON_7AM });
-  assert.deepEqual(r.counts.passesToday, { count: 1, houses: [{ street: "14 Quarry Rd" }] });
+  assert.deepEqual(r.counts.passesToday, { count: 2, houses: [{ street: "14 Quarry Rd" }, { street: "5 Thistle Ln", engine: 151000, grade: "C" }] });
   const text = said(s.of("chat.postMessage").at(-1));
-  assert.match(text, /Passes today unless you price it \(no engine number, three working days\): \*1\* — 14 Quarry Rd/);
+  assert.match(text, /Passes today unless you price it \(three working days, no grade-A or -B engine number\): \*2\* — 14 Quarry Rd, 5 Thistle Ln \(engine \$151,000, grade C\)/);
   assert.doesNotMatch(text, /Larkspur|Bramble|rory|nell/);
 });
 

@@ -624,8 +624,11 @@ number; the 72-hour clock passed 43 houses unpriced in 16 days, 18 of them on we
 3. **Every guard stays.** Never over the seller's number (the `overSellerPct` hold), never over the list
    cap (`maxPctOfList`), the killers and the data holds, the machine never raises a number, the
    walk-away stays capped and grade A's.
-4. **The 72-hour clock no longer passes a house the engine priced**, and counts working days only
-   (Needs Matt, "Unpriced houses get passed", and the morning line under "The stall is owed too").
+4. **The 72-hour clock no longer passes a house the engine priced at grade A or B**, and counts
+   working days only (Needs Matt, "Unpriced houses get passed", and the morning line under "The
+   stall is owed too"). A grade-C number passes like an unpriced house: grade C is a house we
+   shouldn't buy as it stands (a mobile home, a short sale, a turnkey), and it must not sit on Needs
+   Matt for good.
 
 **Switch: `pricingV2.liveB`**, "off" (default) | "shadow" | "live". Settings → Auto-underwrite → The
 offer engine (v2) → "Grade B: Off / Shadow / Live" and "Grade B opens this % lower". Matt's rollout:
@@ -3546,12 +3549,14 @@ after a day, kept by a connected or tried call. Expect more of both after
 deploy. Changing the text-back itself is a GHL setting, yours.
 
 **The morning line.** #daily's morning post adds "Passes today unless you
-price it (no engine number, three working days): N — 14 Quarry Rd, …": the
-Needs Matt price cards whose three working days (2026-11-10: weekdays, not
-the off days) run out in the next 24 hours (or are already due and go on the
-next tick), soonest first, up to five streets. A house the engine priced is
-never in it: the clock doesn't pass those (2026-11-10), and each house is
-re-read for an engine number before it's listed. It reads the needsMatt
+price it (three working days, no grade-A or -B engine number): N — 14 Quarry
+Rd, 5 Thistle Ln (engine $151,000, grade C), …": the Needs Matt price cards
+whose three working days (2026-11-10: weekdays, not the off days) run out in
+the next 24 hours (or are already due and go on the next tick), soonest
+first, up to five streets. A house the engine priced at grade A or B is never
+in it: the clock doesn't pass those (2026-11-10), and each house is re-read
+for its engine number before it's listed. A grade-C house is listed with the
+engine's number and grade. It reads the needsMatt
 cursor (`passesToday` in shared/slack-notify.js, `passesTodayFor` in
 ghl-broker/slack-notify.js).
 Streets only, never a name. No line when nothing passes, and none while the
@@ -6555,20 +6560,24 @@ Matt's answers the same day kept it shorter:
     (shared/paper-follows.js, which now take `{ offDays }`). A house that
     lands Friday at 10am passes Wednesday at 10am, not Monday. 18 of the 43
     houses it passed in 16 days had waited over a weekend.
-  - **Never a house the engine priced.** A card whose house has an engine
-    number of any grade (the Price-it draft's `draft.engine`, else the
-    house's `house_pricing` v2 open or walk-away: `engineOn` in
-    shared/needs-matt.js, `engineNumberFor` in ghl-broker/price-v2.js) is
-    never passed by the clock. It stays on Needs Matt, the card carries
+  - **Never a house the engine priced at grade A or B.** A card whose house
+    has a grade-A or -B engine number (the Price-it draft's `draft.engine`,
+    else the house's `house_pricing` v2 open or walk-away: `engineOn` and
+    `engineKeeps` in shared/needs-matt.js, `engineNumberFor` in
+    ghl-broker/price-v2.js) is never passed by the clock. A grade-C number
+    doesn't keep it: grade C is a killer fact (a manufactured home, a short
+    sale or bank-owned house), a turnkey, or two things the engine isn't sure
+    of, out of the buy box as it stands, so it passes on the same three
+    working days as an unpriced house. It stays on Needs Matt, the card carries
     `engine { grade, open, walkAway }` on the cursor, and its why line reads
     "Price it on 12 Alder Ct: the engine has 238K (grade B) on the draft;
     the agent has waited 2 days". `passUnpriced` re-checks just before a
-    pass, so one the engine priced since the read stays too. There is no
+    pass, so one the engine priced A or B since the read stays too. There is no
     one-tap send on the card: Matt opens the draft, where the engine's
     numbers (and grade B's lower one) are shown, and sets the price.
   - The card's "the bot passes it …" date in the contact pane
     (`GET /api/dashboard/ghl/card` `needsMatt.passAt`) uses the same clock,
-    and is empty for a house the engine priced.
+    and is empty for a house the engine priced at grade A or B.
 
 Nothing else lands there: counters, booked calls, calls (Manual Actions), passes,
 promises, check-ins, closing tasks (the card stays in Contract) and buyers

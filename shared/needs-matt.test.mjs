@@ -125,13 +125,24 @@ test("a house still unpriced three days after it landed is the bot's to pass", (
 // The 72-hour clock passed 43 houses unpriced in 16 days, 18 of them over a weekend, and houses
 // the engine had priced went with the rest. Now it counts working days, and leaves those alone.
 
-test("a house the engine priced is never passed by the clock, however long it waits", () => {
+test("a house the engine priced at grade A or B is never passed by the clock, however long it waits", () => {
   const need = (over = {}) => ({ kind: "price", offerId: "o-kay", landedAt: hoursAgo(24 * 9), ...over });
   assert.equal(needsMattPassDue(need(), NOW), true, "no engine number: passed, as before");
+  assert.equal(needsMattPassDue(need({ engine: { grade: "A", open: 301000, walkAway: 316000 } }), NOW), false, "grade A");
   assert.equal(needsMattPassDue(need({ engine: { grade: "B", open: 238000, walkAway: 253000 } }), NOW), false, "grade B");
-  assert.equal(needsMattPassDue(need({ engine: { grade: "C", open: 0, walkAway: 181000 } }), NOW), false, "any grade with a number");
-  assert.equal(needsMattPassDue(need({ engine: { grade: "C", open: 0, walkAway: 0 } }), NOW), true, "an engine read with no number is no number");
+  assert.equal(needsMattPassDue(need({ engine: { grade: "B", open: 0, walkAway: 0 } }), NOW), true, "an engine read with no number is no number");
   assert.equal(needsMattPassAt(need({ engine: { grade: "A", open: 300000 } })), null, "and it has no pass date");
+});
+
+// A grade-C number is a house the machine shouldn't buy as it stands (a manufactured home, a short
+// sale, a turnkey): it must not sit on Needs Matt for good (Matt's buy box, 2026-11-10).
+test("a grade-C house the engine priced still passes after three working days", () => {
+  const c = { grade: "C", open: 0, walkAway: 181000 };
+  const need = { kind: "price", offerId: "o-cee", landedAt: "2026-10-19T17:00:00Z", engine: c }; // Monday 10am Pacific
+  assert.equal(needsMattPassDue(need, Date.parse("2026-10-22T16:00:00Z")), false, "Thursday 9am: 71 working hours");
+  assert.equal(needsMattPassDue(need, Date.parse("2026-10-22T17:00:00Z")), true, "Thursday 10am: three working days, like an unpriced house");
+  assert.equal(needsMattPassAt(need), "2026-10-22T17:00:00.000Z");
+  assert.equal(needsMattPassDue({ ...need, engine: { grade: "B", open: 0, walkAway: 253000 } }, Date.parse("2026-10-30T17:00:00Z")), false, "the same house at grade B waits for Matt");
 });
 
 test("the pass clock counts working days: a house that landed Friday morning isn't passed before Wednesday morning", () => {

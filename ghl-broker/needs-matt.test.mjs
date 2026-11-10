@@ -151,9 +151,9 @@ test("a house still unpriced three days after it landed is passed, and the agent
   assert.equal((await store.getOffer("o-gil")).status, "draft");
 });
 
-// Matt, 2026-11-10: the clock passed houses the engine had already priced. A house with an engine
-// number of any grade stays on Needs Matt with that number on the card; only an unpriced one passes.
-test("a house the engine priced stays on Needs Matt with its number and is never passed by the clock", async () => {
+// Matt, 2026-11-10: the clock passed houses the engine had already priced. A house with a grade-A
+// or -B engine number stays on Needs Matt with that number on the card; only one without passes.
+test("a house the engine priced at grade A or B stays on Needs Matt with its number and is never passed by the clock", async () => {
   const { houseKey } = await import("./shared/current-offer.js");
   const loc = "loc-engine-priced";
   const ghl = ghlWith(STAGES);
@@ -161,7 +161,7 @@ test("a house the engine priced stays on Needs Matt with its number and is never
   await store.createOffer({ id: "o-hal", locationId: loc, contactId: "hal", address: "15 Cedar St, Kent, WA", status: "draft", cashAmount: 0,
     draft: { engine: { grade: "B", open: 238000, walkAway: 253000, gradeB: { mode: "shadow", open: 214250, wouldSend: true } } } });
   await store.createOffer({ id: "o-ida", locationId: loc, contactId: "ida", address: "16 Spruce St, Kent, WA", status: "draft", cashAmount: 0 });
-  await store.upsertHousePricing(loc, houseKey("16 Spruce St, Kent, WA"), { address: "16 Spruce St, Kent, WA", v2: { grade: "C", open: 0, walkAway: 181000, at: hoursAgo(old) } });
+  await store.upsertHousePricing(loc, houseKey("16 Spruce St, Kent, WA"), { address: "16 Spruce St, Kent, WA", v2: { grade: "A", open: 0, walkAway: 181000, at: hoursAgo(old) } });
   await store.createOffer({ id: "o-jo", locationId: loc, contactId: "jo", address: "17 Hemlock St, Kent, WA", status: "draft", cashAmount: 0 });
   const row = (who, h) => ({ id: `price_it:o-${who}`, kind: "price_it", contactId: who, offerId: `o-${who}`, address: { hal: "15 Cedar St, Kent, WA", ida: "16 Spruce St, Kent, WA", jo: "17 Hemlock St, Kent, WA" }[who], readyAt: hoursAgo(h) });
   const rows = ["hal", "ida", "jo"].map((w) => row(w, old));
@@ -170,13 +170,35 @@ test("a house the engine priced stays on Needs Matt with its number and is never
   const r = await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: ON, now: NOW, deps: { pipelineFor: pipelineFor(rows), syncAgentCard: syncStub().fn } });
   assert.deepEqual(r.passed, [{ contactId: "jo", offerId: "o-jo" }], "only the house with no engine number");
   assert.equal((await store.getOffer("o-hal")).status, "draft");
-  assert.equal((await store.getOffer("o-ida")).status, "draft", "the house's record counts too, any grade");
+  assert.equal((await store.getOffer("o-ida")).status, "draft", "the house's record counts too");
   assert.equal((await store.getOffer("o-jo")).status, "we_passed");
   const needs = (await store.getJobCursor(loc, NEEDS_MATT_CURSOR)).doc.needs;
   assert.deepEqual(needs.hal.engine, { grade: "B", open: 238000, walkAway: 253000 });
   assert.equal(needs.hal.why, "Price it on 15 Cedar St: the engine has 238K (grade B) on the draft; the agent has waited 4 days");
   assert.equal(needs.ida.engine.walkAway, 181000);
   assert.equal(needs.jo.engine, undefined);
+});
+
+// Grade C is a house the machine shouldn't buy as it stands (a manufactured home, a short sale):
+// held off the clock it would sit on Needs Matt for good, so it passes like an unpriced one.
+test("a grade-C house the engine priced still passes after three working days", async () => {
+  const { houseKey } = await import("./shared/current-offer.js");
+  const loc = "loc-engine-grade-c";
+  const ghl = ghlWith(STAGES);
+  const old = 24 + 72 + 1;
+  await store.createOffer({ id: "o-lev", locationId: loc, contactId: "lev", address: "19 Birch St, Kent, WA", status: "draft", cashAmount: 0,
+    draft: { engine: { grade: "C", open: 152000, walkAway: 167000 } } });
+  await store.createOffer({ id: "o-mo", locationId: loc, contactId: "mo", address: "20 Willow St, Kent, WA", status: "draft", cashAmount: 0 });
+  await store.upsertHousePricing(loc, houseKey("20 Willow St, Kent, WA"), { address: "20 Willow St, Kent, WA", v2: { grade: "C", open: 0, walkAway: 181000, at: hoursAgo(old) } });
+  const row = (who, address) => ({ id: `price_it:o-${who}`, kind: "price_it", contactId: who, offerId: `o-${who}`, address, readyAt: hoursAgo(old) });
+  const rows = [row("lev", "19 Birch St, Kent, WA"), row("mo", "20 Willow St, Kent, WA")];
+  await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: ON, now: NOW - 73 * 3600000,
+    deps: { pipelineFor: pipelineFor(rows.map((x) => ({ ...x, readyAt: new Date(Date.parse(x.readyAt) - 73 * 3600000).toISOString() }))), syncAgentCard: syncStub().fn } });
+  const r = await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: ON, now: NOW, deps: { pipelineFor: pipelineFor(rows), syncAgentCard: syncStub().fn } });
+  assert.deepEqual(r.passed.map((x) => x.offerId).sort(), ["o-lev", "o-mo"], "on the draft or on the house's record, grade C passes");
+  assert.equal((await store.getOffer("o-lev")).status, "we_passed");
+  assert.equal((await store.getOffer("o-lev")).passReason?.code, "quiet");
+  assert.equal((await store.getOffer("o-mo")).status, "we_passed");
 });
 
 test("the pass clock skips the weekend and his days off", async () => {

@@ -19,9 +19,10 @@
 //     passed ("went quiet") with its pass note due (Matt, 2026-10-22: "Land,
 //     then bot passes"). Only with the stage there, like the moves. Since
 //     2026-11-10 the clock counts working hours (weekdays, not the
-//     conversationAi offDays), and a house the offer engine priced (any grade:
-//     the draft's engine read or the house's record) is never passed by it;
-//     it waits with the engine's number on the card.
+//     conversationAi offDays), and a house the offer engine priced at grade A
+//     or B (the draft's engine read or the house's record) is never passed by
+//     it; it waits with the engine's number on the card. A grade-C number
+//     passes like an unpriced house (a manufactured home, a short sale).
 //   - A house the bot settles itself never lands (shared/needs-matt.js
 //     botTakesHouse): the agent called it cosmetic or done (passed at once,
 //     "too turnkey", pass note due), or it has no house number (the address
@@ -41,7 +42,7 @@ import { acquisitionsPipeline, pipelinesFor } from "./ghl-mirror.js";
 import { syncAgentCard } from "./tier-check.js";
 import { fieldId } from "./ghl-pings.js";
 import { normalizeGhlStages, stageKeys } from "./shared/ghl-stages.js";
-import { needsMattByContact, needsMattFromCursor, needsMattPassDue, botTakesHouse, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
+import { needsMattByContact, needsMattFromCursor, needsMattPassDue, botTakesHouse, engineKeeps, NEEDS_MATT_CURSOR, NEEDS_MATT_EVENT } from "./shared/needs-matt.js";
 import { engineNumberFor } from "./price-v2.js";
 import { effectiveStatus } from "./shared/offer-status.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
@@ -249,8 +250,9 @@ async function passUnpriced({ store, locationId, client, contactId, offerId, rea
   const full = await store.getOffer?.(offerId).catch(() => null);
   if (!full || full.locationId !== locationId || full.deal || effectiveStatus(full) !== "draft") return false;
   if ((full.sends || []).length || full.floatSentAt) return false;
-  // The clock never passes a house the engine priced (2026-11-10), even one it priced since the read.
-  if (reason === "quiet" && await engineNumberFor({ store, locationId, offer: full })) return false;
+  // The clock never passes a house the engine priced at grade A or B (2026-11-10), even one it
+  // priced since the read. A grade-C number doesn't keep it.
+  if (reason === "quiet" && engineKeeps(await engineNumberFor({ store, locationId, offer: full }))) return false;
   const ts = iso(now);
   const street = String(full.address || "").split(",")[0].trim() || "the house";
   const note = `We passed on ${street}: ${why.note}. The bot's pass note tells the agent.`;
