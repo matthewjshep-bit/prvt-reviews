@@ -452,11 +452,13 @@ export const AGENT_HONESTY_RULE =
 // wasn't kept — "let me run it by my underwriting team", "my partner will get
 // back to you this afternoon" — about people who don't exist, at times
 // nothing kept. Fixed beside the paper rule, so no saved playbook drifts.
+// "And say when" went (2026-11-09 audit): it taught "should have something for
+// you today" on houses nobody had priced, about 7 a day, half never kept.
 export const PROMISE_RULE =
-  "PROMISES: promise only what will actually happen, and say when (\"I'll text you the number by 3\"). Never invent " +
-  "someone to check with: no underwriting team, no partner, no 'my team'. Never \"I'll get back to you today\" with " +
-  "nothing behind it. Terms, a price we don't have, a time, anything you'd settle by phone: say you'll go over it on a " +
-  "quick call, and set needsHuman.";
+  "PROMISES: promise only what will actually happen: a time only for something the app does on its own, and " +
+  "never a time or a day for a number we don't have (no \"I'll get back to you today\", no \"should have something " +
+  "for you soon\"). Never invent someone to check with: no underwriting team, no partner, no 'my team'. Terms, a " +
+  "price we don't have, a time, anything you'd settle by phone: say you'll go over it on a quick call, and set needsHuman.";
 
 // Agents work for us (2026-10-15). In the funnel review the agents we let
 // represent us on the buy became our off-market sources. The words the bot

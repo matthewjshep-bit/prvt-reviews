@@ -607,10 +607,25 @@ test("a house drafted for Matt to price tells the bot he's pricing it himself, w
     autoUnderwrite: { draftOnly: true, held: ["ready for your comps — the app made the draft, you price it"] } };
   const book = summarizeOffers([drafted], { now: Date.parse("2026-10-16T21:00:00Z") });
   assert.match(book.text, /MATT IS PRICING THIS ONE HIMSELF \(no number yet\)/);
-  assert.match(book.text, /never a figure, a range or a time/);
+  assert.match(book.text, /Never give a figure, a range, a time or a day for it/);
   assert.doesNotMatch(book.text, /our team's review/);
   const heldRun = { ...drafted, id: "d2", autoUnderwrite: { held: ["only 1 listing photo to scan"] } };
-  assert.match(summarizeOffers([heldRun]).text, /numbers held for our team's review/, "a held run reads as before");
+  assert.match(summarizeOffers([heldRun]).text, /numbers held for a second look on our side \(no number yet\)/, "a held run reads as before, with no team in it");
+});
+
+// 2026-11-09 audit: the line said "say he'll take a look and get back to
+// them", and the bot said "I'll get back to you today" and nothing came.
+test("a house nobody has priced tells the bot never to say when, or that it'll get back to them", () => {
+  const drafted = { id: "d1", contactId: "c", address: "88 Larkspur Ln, Tacoma, WA 98404", cashAmount: null, status: "draft",
+    createdAt: "2026-11-08T20:00:00Z", autoUnderwrite: { draftOnly: true, held: ["ready for your comps — the app made the draft, you price it"] } };
+  const priced = summarizeOffers([drafted], { now: Date.parse("2026-11-09T18:00:00Z") }).text;
+  assert.match(priced, /never say you'll get back to them/);
+  assert.match(priced, /If the seller's number is unknown, ask it once; otherwise ask about their timing/);
+  assert.doesNotMatch(priced, /get back to them —/);
+  for (const o of [{ ...drafted, autoUnderwrite: { held: ["only 1 listing photo to scan"] } }, { ...drafted, autoUnderwrite: null }]) {
+    const t = summarizeOffers([o], { now: Date.parse("2026-11-09T18:00:00Z") }).text;
+    assert.match(t, /never a figure, a range, a time or a day for it/, t);
+  }
 });
 
 test("a commercial building or land Matt priced is one the bot talks numbers on", async () => {

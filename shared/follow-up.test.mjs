@@ -295,3 +295,43 @@ test("a call, a walk-through time and the earnest money are person promises", ()
   assert.deepEqual([...PERSON_PROMISES].sort(), ["call", "emd", "tour"]);
   assert.equal(detectPromise("I'll run it by underwriting and give you a call tomorrow"), "number", "a number we owe still reads as a number");
 });
+
+// 2026-11-09 audit: after the 10/22 prompt fix the stall texts went on, in
+// words the reader didn't know ("should have something for you today"), so
+// nothing tracked them and the house was later passed on the clock.
+test("should have something for you today is a promise of a number", () => {
+  for (const said of [
+    "Thanks Rory, should have something for you today.",
+    "Still working through the numbers on 88 Larkspur Ln.",
+    "Give me today and I'll circle back.",
+    "Give me until Thursday on that one.",
+    "I'll have an answer for you before Friday.",
+    "Will get it to you by 3pm.",
+    "Running numbers now, I'll get back to you shortly.",
+    "Let me get back to you this week on 14 Quarry Rd.",
+  ]) assert.equal(detectPromise(said), "number", said);
+  // Not a stall: their timing, a question, a partner's answer, a sent paper.
+  assert.equal(detectPromise("What would the seller take, and how soon do they need to move?"), null);
+  assert.equal(detectPromise("I'll get it over to you today."), "paper", "the written offer stays the paper");
+  assert.equal(detectPromise("Let me run it by my partner and get back to you today on whether there's room."), "answer", "a partner's question stays an answer");
+});
+
+// "Get back to you today with a time to walk it" owes a time to see the house,
+// not a number: the sweep's "still working on your number" text would be wrong.
+test("getting back to them today with a time to walk it is not a number we owe", () => {
+  for (const said of [
+    "I'll get back to you today with a time to walk it.",
+    "Let me get back to you this week on a time to see it.",
+    "Should have a walkthrough time for you tomorrow.",
+  ]) assert.notEqual(detectPromise(said), "number", said);
+  assert.equal(detectPromise("Let me get back to you this week on 14 Quarry Rd."), "number", "still a number with no walk in it");
+});
+
+// The GHL missed-call text-back promises a call back, and nothing read it as one.
+test("our missed-call text-back is a promise of a call", () => {
+  assert.equal(detectPromise("Tied up right now, will call back when I'm free."), "call");
+  assert.equal(detectPromise("Sorry, on another line. Will call you back in a bit."), "call");
+  assert.equal(detectPromise("I'll be calling you shortly."), "call");
+  assert.equal(detectPromise("Call back whenever works for you."), null, "asks them");
+  assert.equal(detectPromise("Will call back if it pencils."), null, "a conditional call is not a promise");
+});

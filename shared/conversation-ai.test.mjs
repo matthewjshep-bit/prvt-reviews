@@ -688,12 +688,18 @@ test("the call ask is off until switched on, agent only, and survives a save", (
 // 2026-10-15: in 37 of 58 dropped negotiations we'd promised something
 // nobody delivered, often from an "underwriting team" or a "partner".
 import { AGENT_PAPER_RULE, AGENT_GOAL_RULE, PROMISE_RULE } from "./conversation-ai.js";
-test("the agent defaults never invent an underwriting team or a partner to check with, and promise only with a time", () => {
+// 2026-11-09 audit: "say when" for a number taught the stall ("should have
+// something for you today") on houses nobody had priced. A time only for what
+// the app does by itself; never one for a number we don't have.
+test("the agent defaults never invent an underwriting team or a partner to check with, and never give a time for a number we don't have", () => {
   const agent = starterConfig({ signer: "Matt Shepherd" }).parties.agent;
   const words = JSON.stringify({ i: agent.instructions, m: agent.mayCommit, rules: starterConfig({ signer: "Matt Shepherd" }).rules,
     ex: starterConfig({ signer: "Matt Shepherd" }).examples.filter((e) => e.party === "agent") }) + AGENT_PAPER_RULE + AGENT_GOAL_RULE;
   assert.doesNotMatch(words, /underwriting team|my partner|your partner|back to you (?:today|this afternoon)|by underwriting/i);
-  assert.match(PROMISE_RULE, /I'll text you the number by 3/);
+  assert.doesNotMatch(PROMISE_RULE, /say when|I'll text you the number by 3/);
+  assert.match(PROMISE_RULE, /a time only for something the app does on its own/);
+  assert.match(PROMISE_RULE, /never a time or a day for a number we don't have/);
+  assert.match(PROMISE_RULE, /Never invent someone to check with/);
   assert.match(PROMISE_RULE, /quick call/);
 });
 

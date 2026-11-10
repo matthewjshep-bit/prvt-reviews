@@ -34,6 +34,7 @@ import { buyerFacts } from "./shared/underwrite-checks.js";
 import { blastNote, pickedRehabLevel } from "./shared/blast-text.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { numberStance, stanceWaitingFor, sellerOwnNumber } from "./shared/number-stance.js";
+import { claimFacts } from "./shared/reply-claims.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -241,9 +242,11 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
         // A held run is finished, not in progress: someone on the team is
         // checking the numbers, and "coming shortly" would be a promise.
         // Draft only (2026-10-16): Matt prices it himself. No figure and no
-        // time: 71 "I'll have your number today" promises went unkept.
-        : status === "draft" && isDraftOnly(o) ? "MATT IS PRICING THIS ONE HIMSELF (no number yet): say he'll take a look and get back to them — never a figure, a range or a time for it"
-        : status === "draft" ? (o.autoUnderwrite?.held?.length ? "numbers held for our team's review (no number yet)" : "still being underwritten (no number yet)")
+        // time: 71 "I'll have your number today" promises went unkept. And no
+        // "get back to them" (2026-11-09 audit: the line said it, and the bot
+        // said "today"); the bot is Matt, so it's "you", and no team.
+        : status === "draft" && isDraftOnly(o) ? "MATT IS PRICING THIS ONE HIMSELF (no number yet): you are looking at it yourself. Never give a figure, a range, a time or a day for it, and never say you'll get back to them. If the seller's number is unknown, ask it once; otherwise ask about their timing"
+        : status === "draft" ? `${o.autoUnderwrite?.held?.length ? "numbers held for a second look on our side" : "still being underwritten"} (no number yet): never a figure, a range, a time or a day for it, and never say you'll get back to them with it`
         : "no amount recorded",
       range ? `— we floated "${rangeWords(range)}" by text ${dateWord(range.at)}: our number is ${fmtMoney(amount)}, the top of it; the bottom was never an offer on its own (never say ${Math.round(range.low / 1000)} by itself), and if they name a number inside it, a person decides` : "",
       // A high-stakes house (2026-10-15): the number isn't firm yet.
@@ -509,7 +512,9 @@ export async function loadAgentContext({ store, locationId, contactId, custom = 
   engineMode = false }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const { facts, events } = await loadRecord(store, locationId, contactId);
-  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript, highStakes, mattPrices, engineMode }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds) };
+  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript, highStakes, mattPrices, engineMode }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds),
+    // What went out and which calls happened, for the reply gates (shared/reply-claims.js).
+    claims: claimFacts({ offers: rows, events, mattPrices, now }) };
 }
 
 // Zillow's word for the house: the kind a person set on the offer first, then
@@ -825,8 +830,12 @@ export async function loadInvestorContext({ store, locationId, contactId, contac
   } catch { /* the invite line is decoration */ }
 
   const { facts, events } = await loadRecord(store, locationId, contactId);
-  return buildInvestorContext({
-    investor, deals, invites, custom, contactId, tags, now, facts, events,
-    blastPrefix: String(settings?.dispoBlastTagPrefix || "dispo"),
-  });
+  return {
+    ...buildInvestorContext({
+      investor, deals, invites, custom, contactId, tags, now, facts, events,
+      blastPrefix: String(settings?.dispoBlastTagPrefix || "dispo"),
+    }),
+    // Which calls happened, for the reply gates (shared/reply-claims.js).
+    claims: claimFacts({ events, now }),
+  };
 }

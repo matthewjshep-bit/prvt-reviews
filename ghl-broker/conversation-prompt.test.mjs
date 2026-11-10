@@ -766,3 +766,12 @@ test("a notch above light lets a touch into every easy reply, with the same rail
   // Light reads as it did.
   assert.match(buildSystemPrompt({ config: normalizeConversationAi({ persona: { personality: "light" } }), party: "agent" }), /Now and then/);
 });
+
+// 2026-11-09 audit: "you may say an offer is coming shortly" while a run was in
+// progress, and a held run never came. The bot may say we're on it, never when.
+test("an underwrite in progress lets the bot say we're working on it, never when", () => {
+  const ctx = buildUserContext({ party: "agent", contact: { name: "Rory Vance" }, signer: "Matt", message: "any update?", underwriting: ["88 Larkspur Ln"] });
+  assert.match(ctx, /IN PROGRESS RIGHT NOW: we are working up numbers on 88 Larkspur Ln/);
+  assert.doesNotMatch(ctx, /coming shortly/);
+  assert.match(ctx, /never a figure or a time for it/);
+});

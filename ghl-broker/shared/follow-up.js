@@ -159,6 +159,13 @@ export function detectPromise(text = "") {
   ];
   if (!/\bpartner\b/i.test(t) && ours.some((re) => re.test(t))) return "number";
   if (PAPER_PROMISE.some((re) => re.test(t))) return "paper";
+  // The stall (2026-11-09 audit): "should have something for you today",
+  // "give me until Thursday", "still working through the numbers". After the
+  // 10/22 prompt fix these went on at about 7 a day, nothing read them as a
+  // promise, and the house was later passed on the clock. A partner's
+  // question or something we said we'd check stays an answer, and a time to
+  // walk the house is a time, not our number.
+  if (!/\bpartner\b|\b(?:confirm|check\s+(?:on|with|into)|find\s+out|calendar|schedule|availability)\b|\b(?:times?|day)\s+to\s+(?:walk|see|tour|look\s+at|show)\b/i.test(t) && STALL_PROMISE.some((re) => re.test(t))) return "number";
   // A call, a time to walk it, the earnest money (2026-10-15: 37 of the 58
   // negotiations we dropped were a promise not kept, and these were the ones
   // nothing tracked). "…give you a call if it makes sense" promises nothing.
@@ -182,6 +189,32 @@ const CALL_PROMISE = [
   /\b(?:call|ring)\s+you\s+(?:back\s+)?(?:tomorrow|today|tonight|this\s+(?:afternoon|evening|morning|week)|in\s+(?:a\s+bit|an\s+hour|a\s+few))\b/i,
   // What the prompts say to do with terms: "let's go over the terms on a quick call".
   /\b(?:i'?ll|we'?ll|let'?s|let\s+me|happy\s+to|i\s+can|we\s+can)\s+(?:go\s+over|walk\s+(?:you\s+)?through|talk\s+(?:it\s+|that\s+|this\s+)?(?:over|through))\b[^.?!]{0,40}\bon\s+a\s+(?:quick\s+)?(?:phone\s+)?call\b/i,
+  // The GHL missed-call text-back ("will call back when I get a sec") and
+  // "I'll be calling you shortly" (2026-11-09 audit: 27 calls promised since
+  // 10/23, 1 connected).
+  /\bwill\s+call\s+(?:you\s+)?back\b/i,
+  /\b(?:i'?ll|i\s+will|we'?ll|we\s+will)\s+be\s+(?:calling|ringing)\s+you\b/i,
+];
+
+/**
+ * promisesCall(text) → boolean
+ *
+ * Whether a text of ours promises a call, whatever else it promises ("I'll
+ * run it by underwriting and give you a call tomorrow" is a number to
+ * detectPromise, and a call here). A conditional call is not a promise.
+ */
+export function promisesCall(text = "") {
+  const t = String(text || "");
+  return !isConditionalPromise(t) && CALL_PROMISE.some((re) => re.test(t));
+}
+
+// When a stall says it will land (shared/reply-claims.js reads the same words).
+const STALL_WHEN = String.raw`(?:today|tonight|soon|shortly|tomorrow|this\s+(?:week|afternoon|evening|morning)|(?:before|by)\s+(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|(?:the\s+)?end\s+of\s+(?:the\s+)?(?:day|week)|eod|noon|\d{1,2}(?::\d{2})?\s*(?:am|pm)?))`;
+const STALL_PROMISE = [
+  new RegExp(String.raw`\b(?:have|get)\s+(?:something|it|an\s+answer|a\s+number|numbers|the\s+numbers)\s+(?:back\s+)?(?:to|for)\s+you\b[^.?!]{0,30}?\b${STALL_WHEN}`, "i"),
+  /\bgive\s+me\s+(?:today|a\s+day|(?:a\s+)?(?:couple|few)\s+(?:of\s+)?(?:hours|days)|until\s+\w+|till\s+\w+|'?til\s+\w+)\b/i,
+  /\bstill\s+(?:working|running)\s+(?:through\s+|on\s+)?(?:the\s+|our\s+)?numbers\b/i,
+  new RegExp(String.raw`\bget\s+back\s+to\s+you\s+${STALL_WHEN}`, "i"),
 ];
 const TOUR_PROMISE = [
   new RegExp(String.raw`\b${WE_SAY}\s+(?:\w+\s+){0,2}?(?:get\s+(?:back\s+to\s+)?you\s+(?:a\s+)?(?:time|times|day)\s+to\s+(?:walk|see|tour|look\s+at)|(?:come|get)\s+back\s+(?:to\s+you\s+)?(?:with|on)\s+(?:a\s+)?(?:time|times|day)\b|(?:set\s+up|schedule|book|line\s+up)\s+(?:a\s+)?(?:time\s+to\s+(?:walk|see|tour)|walk-?through|showing|tour))`, "i"),

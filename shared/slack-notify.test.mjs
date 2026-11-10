@@ -134,6 +134,31 @@ test("the morning numbers count houses and offers, Tier 1 once per contact", () 
   assert.match(textOf(renderMorning(c)), /Offers sent: \*1\*/);
 });
 
+// 2026-11-09 audit: 43 houses passed on the 72-hour clock unpriced since
+// 10/25, with nothing in the morning post saying which ones were about to go.
+test("the morning post names the houses that pass today unless Matt prices them", async () => {
+  const { passesToday } = await import("./slack-notify.js");
+  const now = Date.parse("2026-11-09T15:00:00Z");
+  const hoursAgo = (h) => new Date(now - h * 3600000).toISOString();
+  const needs = {
+    c1: { kind: "price", offerId: "o1", landedAt: hoursAgo(60) },   // passes in 12h
+    c2: { kind: "price", offerId: "o2", landedAt: hoursAgo(30) },   // in 42h: not today
+    c3: { kind: "yes", offerId: "o3", landedAt: hoursAgo(70) },     // a yes never passes
+    c4: { kind: "price", offerId: "o4", landedAt: hoursAgo(73) },   // due now: goes on the next tick
+    c5: { kind: "price", offerId: null, landedAt: hoursAgo(70) },   // nothing the runner can mark
+  };
+  const due = passesToday(needs, { now });
+  assert.deepEqual(due.map((x) => x.offerId), ["o4", "o1"], "soonest first");
+  assert.equal(due[1].contactId, "c1");
+  const c = { passesToday: { count: 6, houses: [
+    { street: "88 Larkspur Ln", engine: 412000 }, { street: "14 Quarry Rd" }, { street: "6 Ferncliff Ave" },
+    { street: "9 Bramble Ct" }, { street: "300 Tidewater Way" }, { street: "2 Juniper Pl" }] } };
+  const t = textOf(renderMorning(c));
+  assert.match(t, /Passes today unless you price it: \*6\* — 88 Larkspur Ln \(engine \$412,000\), 14 Quarry Rd, 6 Ferncliff Ave, 9 Bramble Ct, 300 Tidewater Way, …/);
+  assert.doesNotMatch(t, /2 Juniper Pl/, "five streets at most");
+  assert.doesNotMatch(textOf(renderMorning({})), /Passes today/, "no line when nothing passes");
+});
+
 test("the evening post lists the loose ends by street, never by name, and the machine's failures", () => {
   const t = textOf(renderEvening(
     { sections: [{ key: "accepted", label: "Seller said yes", items: [{ contactName: "Ann Lee", address: "1010 Bellevue Way NE, Bellevue", detail: "yes let's do it" }] }, { key: "held", label: "Underwrites that held", items: [] }] },

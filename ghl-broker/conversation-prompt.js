@@ -1233,8 +1233,11 @@ function openingFor(outbound) {
         (o.heldReason
           ? `Our numbers are stuck (${o.heldReason}), so say ${heldInPlainWords(o.heldReason)} and you want to get it right, and ask what the ` +
             `seller would take. Never ask what it's worth fixed up or what the work would run: we run our own numbers. `
+          // No "shortly" (2026-11-09 audit): a second time nothing keeps. And not
+          // "still working on the numbers": the reply gates hold that stall on a
+          // house Matt prices (shared/reply-claims.js).
           : o.running
-            ? `The numbers are still running; say you'll have them shortly. `
+            ? `The numbers are still running; say you're still on it, with no time for it, and ask what the seller would take. `
             : `Say you're still on it and ask the one question that would help most. `) +
         `Do NOT name any number, range or percentage, and do NOT promise a new time. ${CONTINUE} Set intent to promise_due.`;
 
@@ -1362,7 +1365,8 @@ export function buildUserContext({
     instructions ? `OPERATOR'S STANDING INSTRUCTIONS (follow these):\n${String(instructions).slice(0, 4000)}` : "",
     context?.text || (party === "investor" ? "DEALS: none on record for this investor." : party === "agent" ? "OUR OFFERS TO THIS AGENT: none on record." : ""),
     underwriting.length
-      ? `IN PROGRESS RIGHT NOW: we are working up numbers on ${underwriting.join("; ")} — you may say an offer is coming shortly, without a number.`
+      // No "coming shortly" (2026-11-09 audit): a run can end held, and the time was never kept.
+      ? `IN PROGRESS RIGHT NOW: we are working up numbers on ${underwriting.join("; ")} — you may say you're working on it, never a figure or a time for it.`
       : "",
     transcript
       ? `THE THREAD SO FAR (US = our team, THEM = ${them}):\n${String(transcript).slice(-14000)}`

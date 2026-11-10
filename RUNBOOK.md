@@ -3147,6 +3147,65 @@ held triage from the contact's timeline and drafts only. GHL is not asked, so
 the tag and stage checks are skipped on the row; the nightly sweep makes them
 before anything is actually done.
 
+#### The bot stops promising what it doesn't have (2026-11-09)
+
+**Why.** The 11-09 audit. After the 10/22 prompt fix the stall texts went
+from 4.6 to 7.3 a day ("I'll run the numbers and get back to you soon",
+"should have something for you today"). About half got no number in 72 hours
+and were then passed on the clock: 139 threads with a promised number that
+never came, 42 of them after the fix. Since 10/23 the bot promised 27 calls
+and 1 connected. It also checked with partners, teams and underwriters we
+don't have, said "we connected" when no call had happened, and said it had
+emailed the offer when nothing went.
+
+**The checks** (`shared/reply-claims.js`, pure, read in `evaluateReplyGates`).
+Each one only adds a hold:
+
+| Check | Flags a reply when | Then |
+|---|---|---|
+| A number or a time on an unpriced house (agents) | the house has no number on its row, nothing of ours went out on it (no send, no float that left, no live engine number), and it's priced by hand (draft, skeleton or engine mode, or a draft-only, skeleton or engine-held draft); and the reply promises our number (`detectPromise` "number"), the written offer by a time, or puts a time word within 8 words of a promise verb and our number or offer | rewritten once, told the rule; still there, held |
+| A second call (agents) | a call we promised in the last 14 days (`promise_made` or `promise_owed` with what "call", or a text of ours that promised a call beside a number) with no connected call, no dismissal and no booking for a time still ahead since, and the reply promises another ("let me give you a quick call", "I'll be calling you shortly"). A reply confirming the slot they picked is the call being booked and passes | held for you, never rewritten: "we already promised them a call that didn't happen" |
+| Someone who doesn't exist (agents and investors) | first person only: my or our partner, a team with my, our or the in front of it, an underwriting team, our underwriter, "our underwriting came back", "confirm internally". Their partner, the seller's partner, and a thank-you to them and their team pass | rewritten once; still there, held |
+| A call that didn't happen (agents and investors) | "we connected", "I spoke with", "spoke to the owner", "like we talked", "per our call" with no connected call in 14 days; "I called", "sorry I missed you" with no call either way in 14 days. "As we discussed" and "per our conversation" pass: a text thread is a discussion too. Their talk ("when you spoke to the seller") passes | rewritten once; still there, held |
+| An email that never went (everyone) | the emailed words (`CLAIMS_EMAIL_RX`: "just emailed it", "check your inbox") when no email went in this run. It used to run only when the reply had automatic actions, and most plans have none | held; checked after the actions run (step 5), whether or not any ran |
+| An offer that never went (agents) | "sent our offer over", "just sent the LOI", when the written offer never went on that house and no `send_offer` went in this run | held, same place |
+
+Your canned replies (the desk-first answer to a showing, the number-first
+reply) are exempt. The text after a call counts that call. The facts come
+from the offers and timeline the prompt already loads (`claimFacts`, on
+`context.claims`); a caller with none flags nothing new.
+
+**The words.** The book's MATT IS PRICING line: "you are looking at it
+yourself. Never give a figure, a range, a time or a day for it, and never
+say you'll get back to them. If the seller's number is unknown, ask it once;
+otherwise ask about their timing." The held and still-being-underwritten
+lines carry the same no-time rule, and the held line says "a second look on
+our side" (no team). `PROMISE_RULE` no longer says "say when": a time only
+for something the app does on its own, never a time or a day for a number we
+don't have. The promise_due text no longer says "you'll have them shortly",
+and the in-progress line says "you're working on it, never a figure or a
+time for it".
+
+**Reading promises.** `detectPromise` reads the stall as a number: "have
+something / it / an answer / a number for you" with today, tonight, soon,
+shortly, tomorrow, this week, before a weekday or by a time; "give me today"
+or "until Thursday"; "still working through the numbers"; "get back to you
+today / soon / this week". A partner's question, or something we said we'd
+confirm or check, stays an answer. `CALL_PROMISE` also reads "will call
+back" (the GHL missed-call text-back) and "I'll be calling you".
+
+**What changes for you.** More replies on houses you haven't priced wait for
+you; the morning post lists the ones about to pass (below). A reply that
+promises a call after one you never made waits with that reason. The checks
+send nothing and there is no switch. One thing does go out that didn't: a
+stall that leaves (a priced house, or one you send) is now a promised number,
+so the promise sweep's follow-through text and Today's owed row pick it up
+like any other promise, under the follow-up switches you already have.
+
+**Check:** a reply "I'll get back to you today with a number" on a
+draft-only house shows `redraftedFor` on the row, or holds with "the draft
+promises a number, or a time for one…".
+
 ### A promised number stays owed until it's delivered (2026-10-14)
 
 **Why.** Reading 2,014 threads turned up at least 15 where we told an agent
@@ -3207,6 +3266,35 @@ days and 28 never got one at all. On deploy, expect up to about that many
 `number_owed` rows. Only promises recorded since `promise_made` existed
 (bot sends from 2026-09-14) show, and your own typed promises only from now
 on.
+
+#### The stall is owed too, and the morning post says what passes today (2026-11-09)
+
+**Why.** 43 houses were passed on the 72-hour clock unpriced since 10/25, and
+18 of them had stall texts in the week before. Nothing read the stall as a
+promise, and nothing told you which houses were about to go.
+
+**The stall is a promised number.** `detectPromise` now reads "should have
+something for you today", "give me until Thursday" and "still working
+through the numbers" as a number (see the checks above), so a stall that
+goes out opens `promise_made {what: "number"}` and becomes a `number_owed`
+row after 24h like any other. The GHL missed-call text-back ("will call
+back…") now opens `promise_made {what: "call"}`: a "We said we'd call" row
+after a day, kept by a connected or tried call. Expect more of both after
+deploy. Changing the text-back itself is a GHL setting, yours.
+
+**The morning line.** #daily's morning post adds "Passes today unless you
+price it: N — 88 Larkspur Ln (engine $412,000), …": the Needs Matt price
+cards whose `landedAt` + 72h falls in the next 24 hours (or is already due
+and goes on the next tick), soonest first, up to five streets, with the
+offer engine's opening number when it priced the house in the background
+(`house_pricing` v2.open). It reads the needsMatt cursor (`passesToday` in
+shared/slack-notify.js, `passesTodayFor` in ghl-broker/slack-notify.js).
+Streets only, never a name. No line when nothing passes, and none while the
+Needs Matt runner is off (`ghlStages.mode` off, or no Needs Matt stage on its
+last run): its cursor stays behind, and nothing would pass. Each house is
+re-read the way the runner re-reads it before a pass, so one you priced or
+floated since its last read isn't listed. It rides on the daily stream, so
+there is no new switch.
 
 ### A call, a time to walk it, the earnest money: promises we keep (2026-10-15)
 
