@@ -414,6 +414,18 @@ test("a buyer the bot told it would stop texting isn't sent the next deal", asyn
   assert.equal(q.queued + q.drafted, 0);
 });
 
+test("a buyer who opted out and then asks for the deal gets it drafted, waiting for Matt", async () => {
+  const loc = "loc-asked-after";
+  const r = await queueBlastDrafts({ store, locationId: loc, offer: { ...OFFER, locationId: loc },
+    investors: [buyer("b-tamsin", "Tamsin", { tags: ["investor", "dnc"], asked: true })],
+    saved: DISPO_SAVED, now: NOW, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(r.queued, 0, "never sent by itself");
+  assert.equal(r.rows[0].status, "draft");
+  const d = await store.getReplyDraft(r.rows[0].draftId);
+  assert.equal(d.status, "draft");
+  assert.equal(d.autoSend.reason, "they opted out earlier — it waits for you");
+});
+
 test("a Find buyers blast skips a buyer tagged do-not-text", async () => {
   const loc = "loc-find-buyers";
   const r = await queueBlastDrafts({ store, locationId: loc, offer: { ...OFFER, locationId: loc },

@@ -1602,7 +1602,9 @@ send asks):
   keyword opt-out by text or email, for a model read at high confidence, when
   you press **Opt out**, and when one of our replies that went by itself
   promised to leave them alone ("I won't text you again", "I'll take you
-  off"). One per contact, ever (`dedupeKey unsubscribed:<contactId>`);
+  off", "I'll remove you from our list"; not "I'll take you off the Tacoma
+  list" or "off for that one": one area or one house isn't all of us). One
+  per contact, ever (`dedupeKey unsubscribed:<contactId>`);
 - an opt-out the reply agent handled (a `handled` row with intent `opt_out`).
 
 **What it stops.** Everything the machine starts: the cold ladder, the
@@ -1633,10 +1635,16 @@ three):
   year", "end up", "cancel that", "cancel the showing / appointment",
   "remove the", a quit claim deed, and a channel they'd rather we used ("don't
   call, just text me", "text me, don't call"). "Don't text" always counts.
+  Nor do someone else we shouldn't reach ("do not contact the tenants",
+  "don't call the seller", "don't email the listing office"), a time to call
+  ("don't call me before 10"), a house off the list ("take 12 Wicket Ln off
+  the list, it's pending", "take the house off the list"), a thing to stop
+  ("please stop sending the photos one at a time"), "revoke my offer", and a
+  contract term ("opt out of the inspection contingency").
 - Anywhere in the text: "take me off", "remove me", "off your list", "do not
   text / contact / call / email", "stop texting", "stop sending me these",
   "unsubscribe", "please stop", "opt me out", "revoke" (not "revoke the
-  offer"), "lose my number", and any configured keyword of more than one word
+  offer" or "revoke my offer"), "lose my number", and any configured keyword of more than one word
   ("wrong number").
 - A one-word keyword ("stop", "remove", "end"...) counts when it opens a text
   of three words or fewer ("STOP", "Stop texting me").

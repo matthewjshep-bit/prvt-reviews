@@ -65,3 +65,15 @@ test("the reason line says how they opted out and that your own texts still go",
   assert.match(optedOutLine({ via: "tag", tag: "dnc" }), /tagged dnc/);
   assert.match(optedOutLine({ via: "maybe" }), /may have opted out/);
 });
+
+test("our reply that takes a buyer off one area's list, or off one house, isn't their opt-out", () => {
+  // Read as a promise to stop, the buyer would never get another deal text.
+  for (const t of ["Got it, I'll take you off the Tacoma list and keep you on King.", "Sure, I'll take you off for that one.",
+    "I'll remove you from the Pierce list.", "I'll take you off my list for duplexes, still sending flips."]) {
+    assert.equal(promisesToStop(t), false, t);
+  }
+  for (const t of ["I'll take you off.", "Understood, I'll take you off our list, sorry for the bother.", "I'll remove you from our texting list right away.",
+    "No problem, I'll remove you", "Done, I took you off the list."]) {
+    assert.equal(promisesToStop(t), true, t);
+  }
+});

@@ -139,12 +139,18 @@ export function optedOutLine(o) {
 
 // Our own reply that promised to leave them alone ("I won't text you
 // again", "I'll take you off"): once it has gone, that is their opt-out.
-// "until it's back on", "about this one" and the like are not.
+// "until it's back on", "about this one" and the like are not, and nor is
+// one area's list or one house ("I'll take you off the Tacoma list", "off
+// for that one"): the buyer still wants the rest. Off the list means our
+// whole list: "off", "off our list", "from our texting list", and then the
+// sentence ends.
+const OFF_OUR_LIST = String.raw`(?:\s+(?:from\s+)?(?:(?:my|our|the|this)\s+)?(?:(?:contact|text|texting|mailing|call|email)\s+)?(?:list|texts?|messages?))?`;
+const AND_THAT_IS_ALL = String.raw`(?=\s*(?:[.!?,;:)\n-]|$)|\s+(?:now|right\s+away|today|for\s+good|permanently|and\s+(?:won'?t|will\s+not)|sorry|thanks)\b)`;
 const PROMISE_TO_STOP_RX = new RegExp([
   String.raw`\b(?:won'?t|will not|wont)\s+(?:text|message|contact|bother|email|reach out to)\s+you\s+(?:again|anymore|any more)\b(?![^.!?\n]{0,12}\b(?:until|unless|till|til|about|on|re|regarding|if|before|after)\b)`,
-  String.raw`\bI'?ll\s+(?:take|remove)\s+you\s+off\b`,
-  String.raw`\bI'?ll\s+remove\s+you\b`,
-  String.raw`\b(?:took|taken|removed)\s+you\s+off\b`,
+  String.raw`\bI'?ll\s+(?:take|remove)\s+you\s+off${OFF_OUR_LIST}${AND_THAT_IS_ALL}`,
+  String.raw`\bI'?ll\s+remove\s+you${OFF_OUR_LIST}${AND_THAT_IS_ALL}`,
+  String.raw`\b(?:took|taken|removed)\s+you\s+off${OFF_OUR_LIST}${AND_THAT_IS_ALL}`,
 ].join("|"), "i");
 export function promisesToStop(text = "") {
   return PROMISE_TO_STOP_RX.test(String(text || "").replace(/[‘’]/g, "'"));

@@ -1513,8 +1513,9 @@ export function normalizeConversationAi(doc, seed = {}) {
 // me out", "revoke" (the FCC's own word; not "revoke the offer"), "do not
 // email", "off your mailing list". 73 of 505 real opt-outs had needed the
 // model to catch them. "Stop sending" counts only for us or our texts ("stop
-// sending me these"), not "stop sending the photos one at a time".
-const LEAVE_ME_ALONE_RX = /\b(take me off|remove me|off (?:your|the|this) (?:mailing |contact |texting |call )?list|do(?: not|n'?t) (?:text|contact|message|call|email)|stop (?:texting|contacting|messaging|calling|emailing)|stop sending (?:me|these|those|them|texts|messages|emails)|unsubscribe|no more (?:texts|messages|emails)|lose my number|please stop|opt[\s-]?(?:me[\s-]?)?out|stopall|revoke\b(?!\s+(?:the|our|their|his|her|its|that|this)\b))\b/i;
+// sending me these"), not "stop sending the photos one at a time". "Revoke
+// my offer" is about a house, not us.
+const LEAVE_ME_ALONE_RX = /\b(take me off|remove me|off (?:your|the|this) (?:mailing |contact |texting |call )?list|do(?: not|n'?t) (?:text|contact|message|call|email)|stop (?:texting|contacting|messaging|calling|emailing)|stop sending (?:me|these|those|them|texts|messages|emails)|unsubscribe|no more (?:texts|messages|emails)|lose my number|please stop|opt[\s-]?(?:me[\s-]?)?out|stopall|revoke\b(?!\s+(?:the|our|their|his|her|its|that|this)\b)(?!\s+(?:my\s+|your\s+)?(?:offer|acceptance|counter(?:offer)?|bid)\b))\b/i;
 // Marketing footers pasted in from a flyer, an MLS blast or an email
 // signature: never their words to us ("Reply STOP to opt out", "STOP to
 // end", "To unsubscribe, click here"). An agent's own listing email carries
@@ -1536,6 +1537,12 @@ const BULK_EMAIL_RX = /\byou(?:'re|\s+are)\s+receiving\s+this\b[^.!?\n]*|\b(?:ma
 // 450", a quit claim deed. And a channel they'd rather we used ("don't call,
 // just text me", "text me, don't call"): that asks for texts, it doesn't
 // stop them. These never count. "Don't text" always does.
+// Nor do someone else we shouldn't reach ("do not contact the tenants",
+// "don't call the seller"), a time to call ("don't call me before 10"), a
+// house off the list ("take 12 Wicket Ln off the list, it's pending"), a
+// thing to stop ("please stop sending the photos one at a time") or a
+// contract term ("opt out of the inspection contingency"): read as an
+// opt-out, each one would silence a working agent for good.
 const NOT_AN_OPT_OUT_RX = new RegExp([
   String.raw`\bstop(?:ping)?\s+(?:by|in|over)\b`,
   String.raw`\bend\s+of\s+(?:the\s+)?(?:day|week|month|year)\b`,
@@ -1547,6 +1554,11 @@ const NOT_AN_OPT_OUT_RX = new RegExp([
   String.raw`\bdo(?:\s+not|n'?t)\s+(?:call|e-?mail)(?:\s+me)?\s*[,.;:-]*\s*(?:(?:just|only|please|but)\s+)?(?:text|txt)(?:s|ing)?(?:\s+me)?\b(?!\s*(?:or|and|&)\b)`,
   String.raw`\bdo(?:\s+not|n'?t)\s+call(?:\s+me)?\s*[,.;:-]*\s*(?:(?:just|only|please|but)\s+)?e-?mail(?:\s+me)?\b(?!\s*(?:or|and|&)\b)`,
   String.raw`\b(?:text|txt)(?:\s+me)?(?:\s+only)?\s*[,.;:-]*\s*(?:please\s+)?do(?:\s+not|n'?t)\s+call(?:\s+me)?\b(?!\s*(?:or|and|&)\b)`,
+  String.raw`\bdo(?:\s+not|n'?t)\s+(?:contact|message|call|e-?mail)\s+(?:(?:the|my|our|his|her|their|any|that|this)\s+)?(?:tenants?|occupants?|renters?|residents?|sellers?|owners?|buyers?|clients?|neighbou?rs?|listing(?:\s+(?:agent|office|broker))?|office|brokerage|lender|hoa|family|him|her|them)\b`,
+  String.raw`\bdo(?:\s+not|n'?t)\s+(?:call|e-?mail)(?:\s+me)?\s+(?:before|after|until|till|during|between|today|tonight|tomorrow|this\s+(?:morning|afternoon|evening|week))\b`,
+  String.raw`\b(?:that\s+one|this\s+one|the\s+(?:house|home|property|listing|lot)|\d+\s+[a-z][a-z0-9']*(?:\s+(?:st|street|ave|avenue|rd|road|ln|lane|dr|drive|ct|court|pl|place|way|blvd|cir|circle|ter|terrace|hwy|ne|nw|se|sw|n|s|e|w|north|south|east|west))*)\s+off\s+(?:the|this|your|ur)\s+list\b`,
+  String.raw`\bplease\s+stop\s+(?!(?:texting|contacting|messaging|calling|emailing|sending\s+(?:me|these|those|them|texts|messages|emails))\b)\w+ing\s+(?:the|a|an|that|his|her|their|our)\b`,
+  String.raw`\bopt(?:ed|s|ing)?[\s-]?out\s+of\s+(?:(?:the|an?|that|this|his|her|their|our)\s+)?(?:\w+\s+)?(?:inspections?|contingenc(?:y|ies)|financing|appraisal|escrow|hoa|contract|feasibility|review|title)\b`,
 ].join("|"), "gi");
 // The opening keyword followed by a clause of its own ("Stop, not
 // interested", "Stop! That's a great number"): a longer text, not a bare STOP.

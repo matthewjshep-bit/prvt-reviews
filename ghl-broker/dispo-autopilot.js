@@ -270,7 +270,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     return stops ? botHold({ events: stops.get(inv.contactId) || [], now }) : { held: true, kind: "unread" };
   };
   const holdText = (hold) => (hold.kind === "bot_off" ? `bot is off for this contact (tag: ${hold.tag})`
-    : hold.kind === "opted_out" ? "they opted out earlier: this waits for you" : holdLine(hold));
+    : hold.kind === "opted_out" ? "they opted out earlier" : holdLine(hold));
   // An opt-out on any channel (Matt, 2026-11-09): a STOP, an email
   // unsubscribe, "wrong number", a do-not-text tag. One read of the record for
   // the whole list (opt-out.js); the book row carries GHL's DND (`dnd`) and
