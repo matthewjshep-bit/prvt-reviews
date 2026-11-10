@@ -11,9 +11,14 @@
 // of these is open, and back to where the offers put it once it's done:
 //
 //   yes        they said yes (an acceptance held for him, a yes after we
-//              passed) or agreed a number he hasn't approved
+//              passed) or agreed a number he hasn't approved; since
+//              2026-11-09 also a held reply that quotes our terms back or
+//              says they're writing it up, and that same yes on a house our
+//              row says is closed, until a person acts on it
 //   paper      paper to sign, a pre-contract warning, a hand-off only he
-//              can do, an answer only he has
+//              can do, an answer only he has; since 2026-11-09 also proof
+//              of funds asked, the terms asked on a house where our number
+//              is out, and a call we owe after they sent terms
 //   price      a house an agent surfaced that has waited PRICE_WAIT_HOURS
 //              for his number, or their number on a house we never priced.
 //              PASS_AFTER_HOURS after it landed, still unpriced, the runner
@@ -28,7 +33,7 @@
 // Pure. The runner is ghl-broker/needs-matt.js; the stage move is
 // shared/ghl-stages.js planCard's `needsMatt`.
 
-import { ownerOf } from "./hand-off.js";
+import { ownerOf, closeSignalFor, termsCallOwed } from "./hand-off.js";
 import { isCounterDraft } from "./desk.js";
 import { saysTurnkey, saysCosmeticOnly, workBudgetIn } from "./flip-read.js";
 import { hasHouseNumber } from "./mentioned-houses.js";
@@ -67,26 +72,54 @@ const clip = (s, n) => { const t = String(s || "").replace(/\s+/g, " ").trim(); 
 const k$ = (n) => { const v = Math.round(Number(n) || 0); return v ? `${Math.round(v / 1000)}K` : ""; };
 
 /**
- * needsMattKind(row, { draftsById, now }) → "yes" | "paper" | "price" | null
+ * needsMattKind(row, { draftsById, offersById, now }) → "yes" | "paper" | "price" | null
  *
  * `row` is one action from the pipeline read (shared/pipeline.js) or a call
- * list row; `draftsById` the open drafts the read came with.
+ * list row; `draftsById` the open drafts the read came with; `offersById`
+ * the offers it read (a held reply that quotes our terms, or asks for the
+ * paper on a house where our number is out, needs them).
  */
-export function needsMattKind(row, { draftsById = new Map(), now = Date.now() } = {}) {
+export function needsMattKind(row, ctx = {}) {
+  return needsMattReason(row, ctx)?.kind || null;
+}
+
+/**
+ * needsMattReason(row, ctx) → { kind, reason } | null — needsMattKind, with
+ * what made it his (the why line reads it). The 2026-11-09 audit's three:
+ *
+ *   yes    quotes_terms, writing_up   a held agent reply (hand-off.js
+ *          closeSignal), or their yes on a house our row says is closed
+ *          (the pipeline's their_yes row, which outlives the draft)
+ *   paper  proof_of_funds, paper_ask  a held agent reply, at once
+ *          terms_call                 a call we owe after they sent terms,
+ *                                     on a house where our number is out
+ */
+export function needsMattReason(row, { draftsById = new Map(), offersById = new Map(), now = Date.now() } = {}) {
   const kind = String(row?.kind || "");
-  if (kind === "approve_number") return "yes";
+  if (kind === "approve_number") return { kind: "yes", reason: "approve" };
+  if (kind === "their_yes") return { kind: "yes", reason: row.signal || "writing_up" };
   if (kind === "draft_waiting") {
     const d = draftsById.get(row.draftId) || null;
     if (!d || d.party === "investor") return null;
-    if (row.yesAfterPass || d.yesAfterPass?.offerId || d.intent === "acceptance") return "yes";
+    const close = closeSignalFor(row, d, { offersById });
+    if (row.yesAfterPass || d.yesAfterPass?.offerId || d.intent === "acceptance") return { kind: "yes", reason: close?.kind === "yes" ? close.reason : "accepted" };
+    if (close) return close;
     // A counter is the bot's: it holds our number (reply-agent.js). Only
     // their number on a house with no offer of ours to hold is his to price.
     if (isCounterDraft(d) && noNumberOfOurs(d)) {
       const at = ms(waitedFrom(d));
-      return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? "price" : null;
+      return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? { kind: "price", reason: "their_number" } : null;
     }
     return null;
   }
+  // The bot answered their terms with "calling you shortly" (2026-11-09: a
+  // seller at our number, three of those, no call): the terms are his.
+  if (kind === "call_owed") return termsCallOwed(row, { offersById }) ? { kind: "paper", reason: "terms_call" } : null;
+  const plain = needsMattPlainKind(kind, row, now);
+  return plain ? { kind: plain, reason: "" } : null;
+}
+
+function needsMattPlainKind(kind, row, now) {
   if (PAPER_KINDS.has(kind)) return "paper";
   if (kind === "promise_owed") {
     const owner = ownerOf(row);
@@ -102,14 +135,27 @@ export function needsMattKind(row, { draftsById = new Map(), now = Date.now() } 
   return null;
 }
 
+// What the 2026-11-09 kinds ask of him (needsMattReason's reasons).
+const YES_WHY = {
+  writing_up: (at) => `They're writing it up${at}: send the terms`,
+  quotes_terms: (at) => `They quoted our terms back${at}: confirm and send the email`,
+};
+const PAPER_WHY = {
+  proof_of_funds: (at) => `They asked for proof of funds${at}`,
+  paper_ask: (at) => `They asked about the paper${at}: send the terms`,
+  terms_call: (at) => `They sent terms${at} and we said we'd call: call them or send the terms`,
+};
+
 /** needsMattWhy(item) → the card's one line: what it is and what to do. */
 export function needsMattWhy(x = {}) {
   const on = street(x.address);
   const at = on ? ` on ${on}` : "";
   if (x.kind === "yes") {
     if (x.rowKind === "approve_number") return clip(`They agreed${at}${x.amount ? ` at ${k$(x.amount)}` : ""}: approve the number in Offers → Hot, then the machine asks for the write-up`, 300);
+    if (YES_WHY[x.reason]) return clip(YES_WHY[x.reason](at), 300);
     return clip(`They said yes${at}: the bot's reply is held for you`, 300);
   }
+  if (x.kind === "paper" && PAPER_WHY[x.reason]) return clip(PAPER_WHY[x.reason](at), 300);
   if (x.kind === "paper") return clip(`${x.title || "Something only you can do"}${x.title && on && !String(x.title).includes(on) ? ` (${on})` : ""}`, 300);
   if (x.kind === "price" && x.theirs) return clip(`They named ${k$(x.theirs)}${at}: price it or pass`, 300);
   if (x.kind === "price") {
@@ -130,16 +176,22 @@ export function needsMattWhy(x = {}) {
  *
  * `walkedAway`: offer ids we passed on. Their number on one of those is not
  * a house to price — our pass is the answer (Matt, 2026-11-09: Mary S. and
- * Ed K. landed here after we'd passed, then bounced back to Offer Out).
+ * Ed K. landed here after we'd passed, then bounced back to Offer Out). Only
+ * a number: their yes on such a house still lands (needsMattReason).
+ *
+ * `offersById`: the offers the read came with (a Map, or pass `offers`), so a
+ * held reply can be read against our number on its house.
  */
-export function needsMattByContact(rows = [], { drafts = [], now = Date.now(), screened = null, walkedAway = null } = {}) {
+export function needsMattByContact(rows = [], { drafts = [], offers = null, offersById = null, now = Date.now(), screened = null, walkedAway = null } = {}) {
   const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
+  const byId = offersById instanceof Map ? offersById : new Map((offers || []).filter((o) => o?.id).map((o) => [o.id, o]));
   const out = new Map();
   for (const row of rows || []) {
     for (const r of [row, ...(row?.also || [])]) {
       const contactId = r?.contactId || row?.contactId;
       if (!contactId) continue;
-      const kind = needsMattKind(r, { draftsById, now });
+      const found = needsMattReason(r, { draftsById, offersById: byId, now });
+      const kind = found?.kind || null;
       if (!kind) continue;
       // A house the bot settles itself (botTakesHouse) never lands.
       if (kind === "price" && r.offerId && screened?.get?.(r.offerId)) continue;
@@ -148,7 +200,7 @@ export function needsMattByContact(rows = [], { drafts = [], now = Date.now(), s
       const d = r.draftId ? draftsById.get(r.draftId) : null;
       const since = r.owedAt || r.readyAt || r.promisedAt || waitedFrom(d) || r.at || null;
       const theirs = kind === "price" && d && isCounterDraft(d) ? Math.round(Number(d.counterAmount) || 0) || null : null;
-      const item = { kind, rowKind: r.kind, offerId: r.offerId || null, address: r.address || d?.propertyAddress || "",
+      const item = { kind, reason: found.reason || "", rowKind: r.kind, offerId: r.offerId || null, address: r.address || d?.propertyAddress || "",
         amount: r.amount || null, title: r.title || "", since, now, theirs };
       const prev = out.get(contactId);
       if (prev && RANK[prev.kind] <= RANK[kind]) continue;

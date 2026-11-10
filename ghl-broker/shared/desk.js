@@ -49,6 +49,8 @@ export const KIND_STRENGTH = [
   // An agent's partner terms lead their held reply: the row says what they offered.
   "call_partner_terms",
   "paper_to_sign", "pre_contract", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral", "email_check",
+  // Their yes on a house our row says is closed (shared/pipeline.js, 2026-11-09).
+  "their_yes",
   // A listed house too far under the seller to text (shared/number-stance.js): his price.
   "no_fit", "approve_number",
   // A house an agent named, drafted for him to price (draft only, 2026-10-16).
@@ -174,6 +176,8 @@ const URGENT_KINDS = new Set([
   // A house an agent named, drafted for him to price (draft only, 2026-10-16):
   // the machine isn't pricing it, so nothing happens unless he does.
   "price_it",
+  // Their yes on a house our row says is closed (shared/pipeline.js, 2026-11-09).
+  "their_yes",
 ]);
 // Urgent rows that sit under Today's calls rather than Needs you.
 const URGENT_CALLS = new Set(["call_owed"]);

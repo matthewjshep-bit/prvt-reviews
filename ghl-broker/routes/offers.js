@@ -4401,7 +4401,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch { /* no events yet — the tags and the deal record still count */ }
     const linked = new Set((deal.investors || []).map((i) => i.contactId));
     const readThread = async (contactId) => {
-      try { const t = await buildTranscript(client, locationId, contactId, { maxCallTranscripts: 6 }); await sleep(120); return { thread: t.text || "", stats: t.stats || null }; }
+      // Every buyer the deal went to: no extra reads for their email stubs (enrich.js emailWords).
+      try { const t = await buildTranscript(client, locationId, contactId, { maxCallTranscripts: 6, maxEmailReads: 0 }); await sleep(120); return { thread: t.text || "", stats: t.stats || null }; }
       catch (e) { await sleep(120); return { thread: "", stats: { error: String(e?.message || e).slice(0, 120) } }; }
     };
     const flipOf = (thread) => { const m = /recent flip you did at ([^\n]+?)(?: and| wondering|\n)/i.exec(thread); return m ? `flipped ${m[1].trim()}` : null; };
@@ -6367,8 +6368,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (draft) return draft;
       const closed = pickDealByAddress(live, hint);
       // A counter reopens a house they passed on, never one we walked away
-      // from (Matt, 2026-11-09: Mary S.'s "lowering it to 899 today" and Ed
-      // K.'s "you can try under 595" each turned our pass back into a
+      // from (Matt, 2026-11-09: Mary S.'s price drop and Ed K.'s lower
+      // number each turned our pass back into a
       // counter, and the card bounced Tier 2 → Offer Out → Needs Matt). The
       // one exception is the held sweep's quiet pass with no number of ours
       // out, which stays open to their numbers (reopensOnTheirNumbers).
@@ -7360,7 +7361,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await mapPool(candidates, 3, async (c) => {
         try {
           const t = await buildTranscript(client, locationId, c.contactId, {
-            maxConversations: 3, maxPagesPerConvo: 1, maxMessages: 80, maxChars: 6000, maxCallTranscripts: 0,
+            maxConversations: 3, maxPagesPerConvo: 1, maxMessages: 80, maxChars: 6000, maxCallTranscripts: 0, maxEmailReads: 0,
           });
           c.snippet = t.text;
         } catch (e) {

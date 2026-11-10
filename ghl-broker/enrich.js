@@ -6,7 +6,8 @@
 // in routes/offers.js own all writes.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { searchConversations, listConversationMessages, getMessageTranscription } from "./ghl.js";
+import { searchConversations, listConversationMessages, getMessageTranscription, emailReplyText, EMAIL_READS_PER_LIST } from "./ghl.js";
+import { decodeEntities } from "./shared/gmail.js";
 import { meterAi } from "./ai-spend.js";
 
 // Sonnet: structured extraction (buy box, areas, personal details) doesn't
@@ -213,8 +214,19 @@ const MAX_CALL_CHARS = 4000;
 
 // Email bodies arrive as HTML; the model doesn't need the markup.
 const stripHtml = (s) =>
-  String(s).replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/\s+/g, " ").trim();
+  decodeEntities(String(s).replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+// An email in the thread. Read whole (ghl.js withEmails): the words it added,
+// the quoted thread under it cut, ours and theirs alike. A stub over more than
+// one email that nobody read says nothing we can trust: its body is the
+// thread's FIRST email (ours, when they answered our email), marked with the
+// time and direction of the newest. It adds no line, rather than our words
+// on a THEM line (2026-11-09). A caller that reads no emails (a bulk scan,
+// `maxEmailReads: 0`) keeps the stubs as they always read.
+const emailWords = (m, { readsEmails = true } = {}) => {
+  if (m.emailMessageId) return decodeEntities(emailReplyText(m.body)).replace(/\s+/g, " ").trim();
+  const ids = Array.isArray(m?.meta?.email?.messageIds) ? m.meta.email.messageIds.filter(Boolean) : [];
+  return readsEmails && ids.length > 1 ? "" : stripHtml(m.body || "");
+};
 
 const channelOf = (m) => {
   const t = String(m.messageType || m.type || "").toUpperCase();
@@ -237,6 +249,11 @@ export async function buildTranscript(client, locationId, contactId, opts = {}) 
   const maxMessages = opts.maxMessages ?? MAX_MESSAGES;
   const maxChars = opts.maxChars ?? MAX_CHARS;
   const maxCallTranscripts = opts.maxCallTranscripts ?? MAX_CALL_TRANSCRIPTS;
+  // The emails inside GHL's stubs, read in full, so an agent who answered our
+  // email by email is heard in their own words (2026-11-09). One budget for
+  // the whole transcript, newest first: GHL limits reads per location.
+  const emailBudget = { left: Math.max(0, Number(opts.maxEmailReads ?? EMAIL_READS_PER_LIST) || 0) };
+  const readsEmails = emailBudget.left > 0;
 
   const { conversations } = await searchConversations(client, locationId, {
     contactId,
@@ -251,7 +268,7 @@ export async function buildTranscript(client, locationId, contactId, opts = {}) 
     sawConversations++;
     let lastMessageId;
     for (let page = 0; page < maxPagesPerConvo; page++) {
-      const r = await listConversationMessages(client, convo.id, { lastMessageId, limit: 100 });
+      const r = await listConversationMessages(client, convo.id, { lastMessageId, limit: 100, emails: readsEmails ? emailBudget : false });
       for (const m of r.messages) {
         const ts = new Date(m.dateAdded || 0).getTime();
         if (!Number.isFinite(ts) || ts <= 0 || ts < cutoff) continue;
@@ -259,7 +276,7 @@ export async function buildTranscript(client, locationId, contactId, opts = {}) 
         if (!channel) continue;
         const dir = String(m.direction || "").toLowerCase() === "inbound" ? "THEM" : "US";
         let body = String(m.body || "").trim();
-        if (channel === "email" && body) body = stripHtml(body);
+        if (channel === "email") body = emailWords(m, { readsEmails });
         if (body.length > MAX_BODY_CHARS) body = `${body.slice(0, MAX_BODY_CHARS)}…`;
         const stamp = new Date(ts).toISOString().slice(0, 16).replace("T", " ");
         if (channel === "call" || channel === "voicemail") {

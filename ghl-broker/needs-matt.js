@@ -95,7 +95,9 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
     const o = await store.getOffer?.(r.offerId).catch(() => null);
     if (o && o.locationId === locationId && effectiveStatus(o) === "we_passed" && !reopensOnTheirNumbers(o)) walkedAway.add(r.offerId);
   }
-  const needs = needsMattByContact(rows, { drafts: read.drafts || [], now, screened, walkedAway });
+  // The offers ride along: a held reply that quotes our terms, or asks for
+  // the paper where our number is out, is read against them (hand-off.js).
+  const needs = needsMattByContact(rows, { drafts: read.drafts || [], offers: read.offers || [], now, screened, walkedAway });
   const cur = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
   const prev = needsMattFromCursor(cur?.doc);
   // The pass clock starts when the thing first landed, kept across reads.

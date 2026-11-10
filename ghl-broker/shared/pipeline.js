@@ -24,13 +24,13 @@ import {
   offerHeat, priceAgreed, agreedAboveOurNumber, numberApproved, isDraftOnly,
 } from "./offer-status.js";
 import { stepLabel, exhausted, normalizeSteps, questionIn } from "./follow-up.js";
-import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL } from "./conversation-ai.js";
+import { NEVER_AUTO, ASK_ONLY_ACTIONS, ACTION_LABEL, theirYesIn, asksForPaper } from "./conversation-ai.js";
 import { addressKey } from "./contact-record.js";
 import { openPromises, resolvePromise } from "./promise-resolver.js";
 import { owedPromises, owedPersonPromises, PERSON_PROMISE_WORDS } from "./promise-owed.js";
 import { UNANSWERED_LIMIT } from "./thread-health.js";
 import { botHold, holdLine } from "./bot-hold.js";
-import { groupHouses, resolveHouse, pricedAt } from "./current-offer.js";
+import { groupHouses, resolveHouse, pricedAt, houseKey } from "./current-offer.js";
 import { showingSummary } from "./showing.js";
 import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
 import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
@@ -41,6 +41,14 @@ import { callEventConnected } from "./talked-to.js";
 const DAY_MS = 86400000;
 // How long a hand-made offer nobody sent stays a decision on the Desk.
 export const OFFER_READY_DAYS = 7;
+// How long their yes on a closed house stays a row (shared/pre-contract.js
+// PRE_CONTRACT_FRESH_DAYS: an older yes is history).
+export const THEIR_YES_DAYS = 14;
+// A counter draft (shared/desk.js isCounterDraft; not imported: desk.js reads
+// this file), and the number it names for theirYesIn: a counter at their own
+// number isn't our terms quoted back.
+const isCounterLike = (d) => Boolean(d) && (d.intent === "counter" || Boolean(d.exception && !d.exception.passed && Number(d.exception.theirAmount) > 0));
+const counterOpts = (d) => (isCounterLike(d) ? { counter: Number(d.counterAmount) || Number(d.exception?.theirAmount) || 0 } : {});
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const round = (v) => Math.round(Number(v) || 0);
 const money = (n) => `$${round(n).toLocaleString("en-US")}`;
@@ -101,6 +109,7 @@ export const ACTION_KINDS = [
   { key: "underwrite_failed", label: "Underwrites that failed" },
   { key: "underwrite_dropped", label: "Underwrites that never ran" },
   { key: "texts_elsewhere",   label: "Their texts go to another number" },
+  { key: "their_yes",         label: "A yes on a house we closed" },
 ];
 
 // Investor state on a deal card, and its precedence. A buyer who committed
@@ -189,11 +198,14 @@ const PROMISE_MOVE_LABEL = {
  *   dealRooms     offer ids with a live buyer package (dataroom). Only when
  *                 given does a deal without one get a row: a caller that
  *                 didn't look never guesses.
+ *   recentDrafts  the last two weeks of reply drafts, any status, so an
+ *                 agent's yes outlives the draft that held it (their_yes)
  */
 export function buildPipeline({
   offers = [], drafts = [], events = [], jobs = [], config = null, contactNames = {},
   sentDrafts = [], heldTriageByOffer = {},
   now = Date.now(), eventsLimit = 0, dealRooms = null,
+  recentDrafts = [],
 } = {}) {
   const rooms = dealRooms ? new Set(dealRooms) : null;
   const ladders = {
@@ -722,6 +734,80 @@ export function buildPipeline({
     }
   }
 
+  /* --- their yes on a house our row says is closed (2026-11-09) --- */
+  // The audit: a seller at our own number, our terms quoted back and our
+  // email asked for, on a house whose five rows all said passed or no
+  // response. The held draft was the only place it showed; once the bot's
+  // "calling you shortly" went, or their next text replaced the draft,
+  // nothing did, and four days later the house was passed for good. On a
+  // live offer the hot flag and Before you sign carry a yes; on a closed
+  // house nothing does, so it is a row here (matched by house) until a
+  // person acts: sends or bins that reply, texts or talks to them, passes on
+  // the house himself, or reopens it. The machine's own passes after their
+  // yes don't settle it. Two weeks on, it's history (PRE_CONTRACT_FRESH_DAYS).
+  {
+    const NOT_A_YES = new Set(["rejection", "opt_out", "we_passed", "price_pushback"]);
+    const yesOf = (d, rows) => {
+      if (d?.party !== "agent" || NOT_A_YES.has(d.intent)) return "";
+      const seen = theirYesIn(String(d.inbound || ""), rows, counterOpts(d));
+      if (seen === "quotes_terms") return seen;
+      return !isCounterLike(d) && (seen === "writing_up" || d.dealSignal === "writing_up") ? "writing_up" : "";
+    };
+    // This read runs on every dashboard poll: each address is parsed once.
+    const keys = new Map();
+    const keyFor = (a) => { const s = String(a || ""); if (!keys.has(s)) keys.set(s, houseKey(s)); return keys.get(s); };
+    const keyOf = (d) => keyFor(d.propertyAddress) || keyFor(offers.find((o) => o?.id === draftOfferId(d, byContact, offers))?.address);
+    const all = new Map();
+    for (const d of [...recentDrafts, ...sentDrafts, ...drafts]) if (d?.id && d.contactId) all.set(d.id, d);
+    const theirDrafts = new Map();
+    for (const d of all.values()) {
+      if (!theirDrafts.has(d.contactId)) theirDrafts.set(d.contactId, []);
+      theirDrafts.get(d.contactId).push(d);
+    }
+    const byPerson = (id) => (e) => e?.contactId === id;
+    const done = new Set();
+    // ISO times sort as strings; localeCompare is slow on a thousand drafts.
+    const newestFirst = [...all.values()].filter((d) => d.party === "agent" && d.status !== "draft" && d.status !== "scheduled"
+      && ms(d.createdAt) != null && now - ms(d.createdAt) <= THEIR_YES_DAYS * DAY_MS)
+      .sort((a, b) => { const x = String(a.createdAt), y = String(b.createdAt); return x < y ? 1 : x > y ? -1 : 0; });
+    for (const d of newestFirst) {
+      const at = ms(d.createdAt);
+      // Most texts are neither: read the words against all their houses
+      // before working out which house this one is.
+      const theirOffers = byContact.get(d.contactId) || [];
+      if (!theirOffers.length || !yesOf(d, theirOffers)) continue;
+      const key = keyOf(d);
+      const houseId = `${d.contactId}|${key}`;
+      if (!key || done.has(houseId)) continue;
+      const rows = theirOffers.filter((o) => keyFor(o.address) === key);
+      const signal = rows.length ? yesOf(d, rows) : "";
+      if (!signal) continue;
+      done.add(houseId);
+      const { current } = resolveHouse(rows);
+      if (!current || current.deal || !DEAD_STATUSES.has(effectiveStatus(current))) continue;
+      const mine = theirDrafts.get(d.contactId) || [];
+      // An open draft on the house that says it too is already the row.
+      if (mine.some((x) => (x.status === "draft" || x.status === "scheduled") && keyOf(x) === key && yesOf(x, rows))) continue;
+      // A person acted on it.
+      const after = (v) => (ms(v) ?? 0) > at;
+      if (d.status === "sent" && !d.autoSent) continue;
+      if (d.status === "dismissed" && d.dismissedBy === "you") continue;
+      if (mine.some((x) => x.status === "sent" && !x.autoSent && after(x.sentAt || x.updatedAt))) continue;
+      if (events.some((e) => byPerson(d.contactId)(e) && after(e.at) && (e.type === "hand_reply" || callEventConnected(e)))) continue;
+      if (rows.some((o) => o.status === "we_passed" && o.passReason?.by === "operator" && after(o.passReason.at))) continue;
+      const who = d.contactName || contactNames[d.contactId] || current.contactName || "An agent";
+      const street = String(current.address || d.propertyAddress || "the house").split(",")[0];
+      const id = push({ id: `their_yes:${d.contactId}:${key}:${d.createdAt}`, kind: "their_yes", severity: "now", group: "yours",
+        offerId: current.id, draftId: null, fromDraftId: d.id, contactId: d.contactId, contactName: who,
+        address: current.address || d.propertyAddress || "", at: d.createdAt, signal,
+        title: `${who}: a yes on ${street} after our row closed`,
+        detail: [signal === "quotes_terms" ? "they quoted our terms back" : "they're writing it up",
+          `our row says ${String(effectiveStatus(current)).replace(/_/g, " ")}`, "nobody has answered it by hand"].join(" · "),
+        ops: [{ key: "open_editor", label: "Open the offer", intent: "primary" }] });
+      cardById.get(current.id)?.actionIds.push(id);
+    }
+  }
+
   /* cold agents: reached out from the app, the ladder ran out, nothing back */
   // Counted, not queued: there is nothing for a person to do about an agent
   // who never answered, so it is a number on Reports and not a row on Today.
@@ -850,7 +936,15 @@ export function buildPipeline({
       draftId: null, fromDraftId: p.draftId || null, promisedAt: p.lastAt, severity: "now", group: "yours",
       title: `Owed: ${PERSON_PROMISE_WORDS[p.what]} to ${first || "an agent"}${street ? ` on ${street}` : ""}`, detail };
     if (v.move === "call_owed") {
+      // The text we answered with the promise sent terms or asked for the
+      // paper (2026-11-09: a seller at our number, our terms quoted back,
+      // answered "calling you shortly" three times and no call). Needs Matt
+      // reads it as paper when our number is out on the house.
+      const saidIn = theirs.find((d) => d.id === p.draftId) || null;
+      const said = String(saidIn?.inbound || "");
+      const aboutTerms = Boolean(said) && (Boolean(theirYesIn(said, mine, counterOpts(saidIn))) || asksForPaper(said));
       push({ ...base, id: `call_owed:${p.contactId}:${p.since}`, kind: "call_owed", section: "call", score: CALL_OWED_SCORE,
+        ...(aboutTerms ? { aboutTerms: true } : {}),
         call: { reason: "call_owed", why: "we said we'd call them", since: p.since, tries: 0, houses: [],
           goal: `We told them we'd call${street ? ` about ${street}` : ""} (${detail}). Make the call, or text them a time that works and keep it.`,
           opener: `Hi ${first || "there"}, it's Matt — calling like I said I would${street ? ` about ${street}` : ""}.` },

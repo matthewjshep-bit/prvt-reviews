@@ -22,6 +22,9 @@
 // Pure.
 
 import { CALL_INTENTS, isCounterDraft } from "./desk.js";
+import { theirYesIn, asksForPaper } from "./conversation-ai.js";
+import { effectiveStatus, isHot } from "./offer-status.js";
+import { houseKey } from "./current-offer.js";
 
 export const OWNERS = ["machine", "price", "call", "ping", "drop"];
 
@@ -44,6 +47,8 @@ export const OWNER_OF_KIND = Object.freeze({
   referral: "ping", email_check: "ping",
   // Last night's audit (shared/conversation-audit.js auditActions).
   audit_owed: "machine",
+  // Their yes on a house our row says is closed (shared/pipeline.js, 2026-11-09).
+  their_yes: "ping",
 });
 
 // Held replies with nothing to answer (shared/conversation-audit.js quietHolds).
@@ -52,14 +57,109 @@ const UNKNOWN_CONTACT_RX = /unknown contact never auto-sends/;
 // Audit findings about a number we owe: the house is his to price.
 const OWED_A_NUMBER = new Set(["promise_open_overdue"]);
 
+/* ---------- their yes, an ask for the paper (2026-11-09) ---------- */
+
+// The audit, 2026-11-09: 45 contacts had a held reply and their text
+// unanswered. The ones closest to a contract (a seller at our own number with
+// our terms quoted back, "what do you want me to write up", proof of funds on
+// our offer) were all owned by the machine here, so nothing told Matt.
+
+// Our number is out on it: sent, countered, accepted, or hot.
+const LIVE_FOR_PAPER = new Set(["sent", "countered", "accepted"]);
+export const offerIsOut = (o) => Boolean(o) && (Boolean(o.deal) || LIVE_FOR_PAPER.has(effectiveStatus(o)) || Boolean(o.floatSentAt) || isHot(o));
+// Not a yes whatever the words: they said no, or pushed back.
+const NOT_A_YES = new Set(["rejection", "opt_out", "we_passed", "price_pushback"]);
+
+const byContactCache = new WeakMap();
+function offersOfContact(offersById, contactId) {
+  if (!contactId || !(offersById instanceof Map)) return [];
+  let idx = byContactCache.get(offersById);
+  if (!idx) {
+    idx = new Map();
+    for (const o of offersById.values()) {
+      if (!o?.contactId) continue;
+      if (!idx.has(o.contactId)) idx.set(o.contactId, []);
+      idx.get(o.contactId).push(o);
+    }
+    byContactCache.set(offersById, idx);
+  }
+  return idx.get(contactId) || [];
+}
+
 /**
- * ownerOf(reason, { draftsById }) → one of OWNERS, or null for a kind nobody
- * owns (the test makes sure there is none)
+ * houseRowsOf({ contactId, address, offerId }, { offersById }) → the agent's
+ * rows on the house a reason is about: by its address, else the row the
+ * pipeline pinned it to, else every row of theirs.
  */
-export function ownerOf(a, { draftsById = new Map() } = {}) {
+export function houseRowsOf({ contactId = "", address = "", offerId = null } = {}, { offersById = new Map() } = {}) {
+  const all = offersOfContact(offersById, contactId);
+  const key = houseKey(address || "");
+  if (key) {
+    const same = all.filter((o) => houseKey(o.address || "") === key);
+    if (same.length) return same;
+  }
+  const pinned = offerId && offersById instanceof Map ? offersById.get(offerId) : null;
+  return pinned ? [pinned] : all;
+}
+
+/**
+ * closeSignal(draft, { offers }) → { kind: "yes" | "paper", reason } | null
+ *
+ * A held agent reply only Matt can answer, from their own words:
+ *
+ *   yes    quotes_terms   our cash number with the terms of a written offer
+ *                         (shared/conversation-ai.js quotesOurTerms)
+ *          writing_up     they're writing it up: "what do you want me to
+ *                         write up", "who do I make it out to" (dealSignal)
+ *   paper  proof_of_funds they asked for proof of funds or a bank letter
+ *          paper_ask      earnest, inspection days, the entity, ID, a buyer
+ *                         agency form, "send it signed", on a house where
+ *                         our number is out (`offers` holds one)
+ *
+ * "I'll present it to the seller" is none of these: the bot keeps it. A
+ * counter stays on the counter hold unless it is our own number with terms.
+ * Buyers are never here: their paper is on Deals.
+ */
+export function closeSignal(d, { offers = [] } = {}) {
+  if (!d || d.party !== "agent" || NOT_A_YES.has(d.intent)) return null;
+  const words = String(d.inbound || "");
+  const counter = isCounterDraft(d);
+  // A counter at their own number isn't our terms quoted back (theirYesIn).
+  const yes = theirYesIn(words, offers, counter ? { counter: Number(d.counterAmount) || Number(d.exception?.theirAmount) || 0 } : {});
+  if (yes === "quotes_terms") return { kind: "yes", reason: yes };
+  if (!counter && (yes === "writing_up" || d.dealSignal === "writing_up")) return { kind: "yes", reason: "writing_up" };
+  if (d.intent === "proof_of_funds") return { kind: "paper", reason: "proof_of_funds" };
+  if (!counter && asksForPaper(words) && (offers || []).some(offerIsOut)) return { kind: "paper", reason: "paper_ask" };
+  return null;
+}
+
+/** closeSignalFor(row, draft, { offersById }) → closeSignal on the house the row is about. */
+export function closeSignalFor(a, d, { offersById = new Map() } = {}) {
+  if (!d) return null;
+  const offers = houseRowsOf({ contactId: d.contactId || a?.contactId, address: d.propertyAddress || a?.address || "", offerId: a?.offerId || null }, { offersById });
+  return closeSignal(d, { offers });
+}
+
+/** termsCallOwed(row, { offersById }) → true for a call we owe about their terms, on a house where our number is out. */
+export function termsCallOwed(a, { offersById = new Map() } = {}) {
+  if (a?.kind !== "call_owed" || !a.aboutTerms) return false;
+  return houseRowsOf({ contactId: a.contactId, address: a.address || "", offerId: a.offerId || null }, { offersById }).some(offerIsOut);
+}
+
+/**
+ * ownerOf(reason, { draftsById, offersById }) → one of OWNERS, or null for a
+ * kind nobody owns (the test makes sure there is none)
+ *
+ * `offersById` lets a held reply that quotes our terms, or asks for the paper
+ * on a house where our number is out, be read as his (closeSignal). Without
+ * it, a write-up or a proof of funds ask still is.
+ */
+export function ownerOf(a, { draftsById = new Map(), offersById = new Map() } = {}) {
   const kind = String(a?.kind || "");
+  if (kind === "call_owed" && termsCallOwed(a, { offersById })) return "ping";
   if (kind === "draft_waiting") {
     const d = draftsById.get(a.draftId) || null;
+    if (closeSignalFor(a, d, { offersById })) return "ping";
     if (CALL_INTENTS.has(d?.intent)) return "call";
     if (QUIET.has(d?.intent) || UNKNOWN_CONTACT_RX.test(d?.autoSend?.reason || "")) return "drop";
     // A counter goes to the counter hold: our number, never above it.
@@ -86,13 +186,15 @@ export function ownerOf(a, { draftsById = new Map() } = {}) {
  *
  * What used to be on Today, by who has it now. No names.
  */
-export function handOffs(reasons = [], { drafts = [] } = {}) {
+const offersMap = (offers) => new Map((offers || []).filter((o) => o?.id).map((o) => [o.id, o]));
+export function handOffs(reasons = [], { drafts = [], offers = [] } = {}) {
   const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
+  const offersById = offersMap(offers);
   const counts = Object.fromEntries([...OWNERS, "unowned"].map((o) => [o, 0]));
   const byKind = {};
   for (const a of reasons || []) {
     if (!a?.kind) continue;
-    const owner = ownerOf(a, { draftsById }) || "unowned";
+    const owner = ownerOf(a, { draftsById, offersById }) || "unowned";
     counts[owner]++;
     const k = `${a.kind}:${owner}`;
     byKind[k] = { kind: a.kind, owner, n: (byKind[k]?.n || 0) + 1 };
@@ -101,20 +203,21 @@ export function handOffs(reasons = [], { drafts = [] } = {}) {
 }
 
 /**
- * pingReasons(rows, { drafts }) → [{ ...reason, contactId }] — the reasons
+ * pingReasons(rows, { drafts, offers }) → [{ ...reason, contactId }] — the reasons
  * that ping Matt (owner "ping"), one per reason, from Today's folded rows
  * (each row and what's folded under it). A reason with nobody to hang it on
  * in GHL is left out.
  */
-export function pingReasons(rows = [], { drafts = [] } = {}) {
+export function pingReasons(rows = [], { drafts = [], offers = [] } = {}) {
   const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
+  const offersById = offersMap(offers);
   const out = [];
   const seen = new Set();
   for (const row of rows || []) {
     for (const r of [row, ...(row?.also || [])]) {
       const contactId = r?.contactId || row?.contactId;
       if (!r?.id || !contactId || seen.has(r.id)) continue;
-      if (ownerOf(r, { draftsById }) !== "ping") continue;
+      if (ownerOf(r, { draftsById, offersById }) !== "ping") continue;
       seen.add(r.id);
       out.push({ ...r, contactId, contactName: r.contactName || row.contactName || "" });
     }

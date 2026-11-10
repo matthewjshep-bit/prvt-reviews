@@ -5790,8 +5790,8 @@ async function runReply(job, ctx) {
   const inboundLine = isCall ? `(call${job.call?.durationSec ? `, ${Math.round(job.call.durationSec / 60)} min` : ""}) ${inboundText.replace(/\s+/g, " ").slice(0, 240)}${inboundText.length > 240 ? "…" : ""}` : job.message;
   // A redraft of the text a held draft already answers (the nightly audit,
   // the daytime pass) is the same wait, not a new one: it keeps the first
-  // draft's time. Mary S., 2026-11-09: each redraft of one "lowering it to
-  // 899" text restarted the Needs Matt clock (shared/needs-matt.js), so her
+  // draft's time. Mary S., 2026-11-09: each redraft of one price-drop
+  // text restarted the Needs Matt clock (shared/needs-matt.js), so her
   // card left the stage and came back a day later, three times.
   const sameText = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
   const waitedOn = open.find((old) => old.status === "draft" && sameText(old.inbound) && sameText(old.inbound) === sameText(inboundLine));
@@ -5821,6 +5821,9 @@ async function runReply(job, ctx) {
     jobId: job.id,
     inbound: inboundLine,
     ...(waitingSince ? { waitingSince } : {}),
+    // The check-in's go at a text we never answered (promise-sweep.js): if
+    // this one holds too, it's a person's (shared/conversation-audit.js heldAgain).
+    ...(job.fromCheckIn ? { fromCheckIn: true } : {}),
     inboundKind: job.inboundKind || "text",
     call: job.call ? { messageId: job.call.messageId, direction: job.call.direction, at: job.call.at, durationSec: job.call.durationSec } : null,
     reply: draft.reply,
@@ -5846,6 +5849,9 @@ async function runReply(job, ctx) {
     // It may be an opt-out ("Stop, not interested"): nothing the machine
     // makes goes to them while it waits (shared/opt-out.js "maybe").
     ...(draft.optOutMaybe ? { optOutMaybe: true } : {}),
+    // The model's read of how warm they are ("writing_up"): a held reply
+    // that says they're writing it up is Matt's (shared/hand-off.js closeSignal).
+    ...(draft.dealSignal ? { dealSignal: draft.dealSignal } : {}),
     // They told us it isn't our kind of house: a pass on it, which the
     // contact card reads (shared/contact-card.js).
     ...(notOurKind ? { notOurKind: true } : {}),

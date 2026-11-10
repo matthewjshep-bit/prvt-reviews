@@ -171,8 +171,8 @@ test("a house the agent called cosmetic is passed at once and never lands; one w
   assert.equal((await store.getOffer("o-ida")).status, "draft", "the address chase is the bot's, nothing marked");
 });
 
-// Matt, 2026-11-09 (Ed K., 624 NW Hill St): we texted "can't make that work",
-// he wrote back "you can try under 595", and the card went to Needs Matt as a
+// Matt, 2026-11-09 (Ed K., 624 NW Hill St): we told him we couldn't make it work,
+// he named a lower number the seller might take, and the card went to Needs Matt as a
 // house to price. We'd already passed on it.
 test("their number on a house we passed on keeps the card out of Needs Matt", async () => {
   const loc = "loc-walked";

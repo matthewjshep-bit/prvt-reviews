@@ -532,7 +532,7 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
     }
   } else if (streamOn(cfg, "needsMatt") && typeof deps.pipelineFor === "function") {
     const read = await deps.pipelineFor({ locationId, client: deps.client, now });
-    for (const r of pingReasons(read.deskAll?.rows || read.desk?.rows || [], { drafts: read.drafts || [] })) {
+    for (const r of pingReasons(read.deskAll?.rows || read.desk?.rows || [], { drafts: read.drafts || [], offers: read.offers || [] })) {
       const key = slackClaimKey("ping", pingClaimKey(r));
       if (!claimed[key]) owed.push({ key, stream: "needsMatt", contactId: r.contactId || null, kind: r.kind, msg: renderPing(r, { ...cfg, locationId }) });
     }

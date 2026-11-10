@@ -7,6 +7,7 @@
 
 import { tallyMessages } from "./shared/talked-to.js";
 import { dndOn } from "./shared/opt-out.js";
+import { cutQuotedHtml } from "./shared/gmail.js";
 
 const BASE = "https://services.leadconnectorhq.com";
 const V2 = "2021-07-28";
@@ -565,7 +566,12 @@ export async function searchConversations(client, locationId, { limit = 100, sta
 // One page of a conversation's messages, newest first. Returns { messages:
 // [{ type, direction, dateAdded, ... }], lastMessageId, nextPage }. Tolerates
 // both response shapes (data.messages.messages vs data.messages).
-export async function listConversationMessages(client, conversationId, { lastMessageId, limit = 100 } = {}) {
+//
+// `emails`: GHL's email stubs stay stubs by default (a reader that counts, or
+// only wants texts and calls, spends no reads). `true` reads the emails in
+// them, at most EMAIL_READS_PER_LIST; a budget object ({ left }) shares one
+// cap across pages, the way a transcript does (withEmails, below).
+export async function listConversationMessages(client, conversationId, { lastMessageId, limit = 100, emails = false } = {}) {
   const p = new URLSearchParams({ limit: String(limit) });
   if (lastMessageId) p.set("lastMessageId", lastMessageId);
   const data = await client.call(
@@ -573,7 +579,9 @@ export async function listConversationMessages(client, conversationId, { lastMes
     { version: V_CONVERSATIONS }
   );
   const box = data.messages && !Array.isArray(data.messages) ? data.messages : data;
-  const messages = Array.isArray(box.messages) ? box.messages : Array.isArray(data.messages) ? data.messages : [];
+  const listed = Array.isArray(box.messages) ? box.messages : Array.isArray(data.messages) ? data.messages : [];
+  const budget = emails && typeof emails === "object" ? emails : emails ? { left: EMAIL_READS_PER_LIST } : null;
+  const messages = budget ? await withEmails(client, listed, { budget }) : listed;
   return {
     messages,
     lastMessageId: box.lastMessageId || null,
@@ -589,6 +597,88 @@ export async function getConversation(client, conversationId) {
   const data = await client.call(`/conversations/${encodeURIComponent(conversationId)}`, { version: V_CONVERSATIONS });
   const c = data.conversation && typeof data.conversation === "object" ? data.conversation : data;
   return c?.contactId ? { id: c.id || conversationId, contactId: String(c.contactId) } : null;
+}
+
+// One email, in full. The conversation's message list carries an email as a
+// stub (its body the thread's first email, no attachments, a direction that
+// can't be trusted) with the emails' ids in meta.email.messageIds; the email
+// itself is read here. Returns { id, direction, dateAdded, subject, body,
+// attachments } or null.
+export async function getEmailMessage(client, emailMessageId) {
+  const data = await client.call(`/conversations/messages/email/${encodeURIComponent(emailMessageId)}`, { version: V_CONVERSATIONS });
+  const e = data?.emailMessage && typeof data.emailMessage === "object" ? data.emailMessage : data;
+  if (!e || typeof e !== "object") return null;
+  return {
+    id: e.id || emailMessageId,
+    direction: String(e.direction || "").toLowerCase(),
+    dateAdded: e.dateAdded || "",
+    subject: String(e.subject || ""),
+    body: String(e.body || ""),
+    attachments: Array.isArray(e.attachments) ? e.attachments : [],
+  };
+}
+
+// The emails inside GHL's stubs, read in full (2026-10-22 on a branch, rebuilt
+// on main 2026-11-09). An agent who answered our outreach email showed in the
+// bot's transcript as our own pitch on a THEM line, because the stub's body
+// is the thread's first email. Each stub becomes one message per email,
+// newest first like the list, with its real direction and time, its
+// attachments, and the quoted history cut (shared/gmail.js cutQuotedHtml).
+//
+// GHL limits reads per location, so a reader spends at most `budget.left`
+// reads (EMAIL_READS_PER_LIST unless the caller shares one budget across
+// pages): the newest stubs first, the newest emails in a stub first (GHL
+// lists a stub's ids oldest first). An email never changes, so each is read
+// once per process; a cached one costs nothing. A stub nothing could be read
+// for is left as it was.
+export const EMAIL_READS_PER_LIST = 5;
+const EMAILS_PER_STUB = 20;
+const EMAIL_CACHE_MAX = 3000;
+const emailCache = new Map();
+async function cachedEmail(client, id, budget) {
+  if (emailCache.has(id)) return emailCache.get(id);
+  if (budget) {
+    if (!(budget.left > 0)) return null;
+    budget.left--;
+  }
+  const e = await getEmailMessage(client, id).catch(() => null);
+  if (e) {
+    if (emailCache.size >= EMAIL_CACHE_MAX) emailCache.delete(emailCache.keys().next().value);
+    emailCache.set(id, e);
+  }
+  return e;
+}
+export function _resetEmailCache() { emailCache.clear(); }
+const emailIdsOf = (m) => (Array.isArray(m?.meta?.email?.messageIds) ? m.meta.email.messageIds.filter(Boolean) : []);
+
+export async function withEmails(client, messages = [], { budget = null } = {}) {
+  const out = [];
+  for (const m of messages || []) {
+    const ids = emailIdsOf(m);
+    if (!ids.length) { out.push(m); continue; }
+    const found = [];
+    for (const id of ids.slice(-EMAILS_PER_STUB).reverse()) {
+      const e = await cachedEmail(client, id, budget);
+      if (e) found.push(e);
+    }
+    if (!found.length) { out.push(m); continue; }
+    found.sort((a, b) => (Date.parse(b.dateAdded) || 0) - (Date.parse(a.dateAdded) || 0));
+    for (const e of found) {
+      out.push({
+        ...m,
+        // A stub of one email keeps its own id; several get the email's.
+        id: found.length === 1 ? m.id : e.id,
+        emailMessageId: e.id,
+        messageType: m.messageType || "TYPE_EMAIL",
+        direction: e.direction || m.direction || m.meta?.email?.direction || "",
+        dateAdded: e.dateAdded || m.dateAdded,
+        subject: e.subject,
+        body: cutQuotedHtml(e.body),
+        attachments: e.attachments,
+      });
+    }
+  }
+  return out;
 }
 
 // An email thread is ONE message in GHL's list, and its body is the FIRST
@@ -607,6 +697,8 @@ export function emailReplyText(html = "") {
   return (cut >= 0 ? text.slice(0, cut) : text).replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim();
 }
 export async function messageWords(client, m) {
+  // Already one email, read whole (withEmails): its own words.
+  if (m?.emailMessageId) return emailReplyText(m.body);
   const ids = m?.meta?.email?.messageIds;
   if (!/EMAIL/i.test(String(m?.messageType || m?.type || "")) || !Array.isArray(ids) || !ids.length) return String(m?.body || "").trim();
   const emails = [];

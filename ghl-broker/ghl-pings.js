@@ -64,7 +64,7 @@ export async function runGhlPings({ store = defaultStore, locationId, client, sa
   if (typeof deps.pipelineFor !== "function") throw new Error("runGhlPings needs deps.pipelineFor");
 
   const read = await deps.pipelineFor({ locationId, client, now });
-  const picks = pingReasons(read.deskAll?.rows || read.desk?.rows || [], { drafts: read.drafts || [] });
+  const picks = pingReasons(read.deskAll?.rows || read.desk?.rows || [], { drafts: read.drafts || [], offers: read.offers || [] });
   out.picked = picks.length;
   const ledger = await store.listContactEventsSince(locationId, iso(now - LEDGER_DAYS * DAY_MS), { types: GHL_PING_EVENT_TYPES, limit: 5000 }).catch(() => []);
   const claimed = new Set(ledger.filter((e) => e?.type === "ghl_ping_sent").map((e) => e.dedupeKey));

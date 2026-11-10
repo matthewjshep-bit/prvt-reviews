@@ -425,22 +425,44 @@ test("a second text supersedes the open draft rather than stacking up", async ()
   assert.equal(fresh.waitingSince, undefined, "a new text is a new wait");
 });
 
-// Mary S., 2026-11-09: the audit redrafted her one "lowering it to 899" text
+// Mary S., 2026-11-09: the audit redrafted her one price-drop text
 // every couple of days, and each new draft restarted the Needs Matt clock, so
 // her card left the stage and came back a day later, three times.
 test("a redraft of the same text keeps how long it has waited", async () => {
   _resetJobs();
   const { client } = ghlStub();
   const firstDraftAt = iso(2 * 86400000);
-  const store = fakeStore([{ ...openDraft(), id: "old", inbound: "I'm lowering  it to 899 today", createdAt: firstDraftAt }]);
+  const store = fakeStore([{ ...openDraft(), id: "old", inbound: "We dropped  the price to 480 this morning", createdAt: firstDraftAt }]);
   const { job } = await startReply({
-    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "I'm lowering it to 899 today",
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "We dropped the price to 480 this morning",
     deps: { draft: async () => DRAFT },
   });
   await settle();
   assert.equal(job.status, "done", job.error);
   assert.equal((await store.getReplyDraft("old")).status, "superseded");
   assert.equal((await store.getReplyDraft(job.draftId)).waitingSince, firstDraftAt);
+});
+
+// 2026-11-09, Bend: the check-in re-answered one held text four times in
+// twelve days. The draft it writes says it was the check-in's go, so the
+// audit and the check-in know a second hold is a person's.
+test("a reply the check-in wrote over their same text says so on the draft", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const store = fakeStore([{ ...openDraft(), id: "old", inbound: "I can take a call at 9", createdAt: iso(2 * 86400000) }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "I can take a call at 9", fromCheckIn: true,
+    deps: { draft: async () => DRAFT },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  assert.equal((await store.getReplyDraft(job.draftId)).fromCheckIn, true);
+  const { job: theirs } = await startReply({
+    client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "Actually, Thursday is better",
+    deps: { draft: async () => DRAFT },
+  });
+  await settle();
+  assert.equal((await store.getReplyDraft(theirs.draftId)).fromCheckIn, undefined, "their own new text is theirs");
 });
 
 test("small talk with nothing to say saves no draft and tags nothing", async () => {
