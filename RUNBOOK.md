@@ -504,7 +504,9 @@ the ones above; each only lowers a number or adds a hold.
   A miss means Bricked is asked under the day's allowance, which is unchanged.
 - **Killers hear the thread** (`houseLines`): the agent's own lines about this house since it was first
   named by its street, until another street is named. Before, only the text that started the run
-  counted, so "it's an assignment" said a text before the address never reached them.
+  counted, so "it's an assignment" said a text before the address never reached them. Those earlier
+  lines only add a hold or a cost: a heavy word in them prices the heavy tier, but rehab evidence is
+  judged on the text that started the run alone (`saidNow`), as before.
 - **Send gate** (`engineSendGate`, auto-underwrite.js): `overList` → "the offer engine's number is over
   the list price: yours to price"; `over_theirs` → "our walk-away is far over their number, likely an
   ARV error: yours to price".
@@ -596,13 +598,15 @@ code from before the listing-description fix; scratchpad `scripts/analyze-backte
   - The start guard matches the agent's own shorter spelling (`oneAgentsHouse`), not only the exact key.
   - Once the address resolves, a run that finds an earlier, still-running run of the same agent's same
     house (`siblingRun`) stops before anything is bought or announced.
-  - `sendEngine` asks `findOfferOut` and `findRecent` again right before the offer is made
-    (`siblingFinished`).
+  - Right before an offer is made (the engine's `sendEngine`, Bricked's `sendBricked` and the full
+    machine's own), the run asks `findOfferOut` and `findRecent` again (`siblingFinished`). A row
+    another run made meanwhile finishes this run as its duplicate, with nothing made.
 - **Geocodes.** `addressToWorkFrom` adopts the geocoder's label only when it keeps the house number the
   agent typed; a street-only fix or the house next door is not this house. `geocodeAddress` caches a
   house-numbered query only when the house itself was found, never a street-only or centroid answer.
 - Tests: `ghl-broker/engine-mode.test.mjs`, `ghl-broker/engine-live.test.mjs`,
-  `ghl-broker/auto-underwrite.test.mjs`, `ghl-broker/geocode.test.mjs`.
+  `ghl-broker/auto-underwrite.test.mjs`, `ghl-broker/auto-underwrite-bricked-sends.test.mjs`,
+  `ghl-broker/geocode.test.mjs`.
 
 
 ### Draft only: the app makes the draft, you price it (2026-10-16)

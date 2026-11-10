@@ -1844,7 +1844,7 @@ async function runUnderwrite(job, ctx) {
     // The offer engine v2 in the shadow (pricingV2.shadow): its own answer on this house, written to
     // the house's record and nowhere else (ghl-broker/price-v2.js).
     const engine = await shadowPrice({ store, locationId, saved, job, address: extraction.address, b, listing, facts, subject,
-      listPrice: job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0) });
+      listPrice: job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0), thread: threadText || "" });
     // Live on grade A (pricingV2.liveA, 2026-11-04): the engine's number replaces Bricked's send.
     if (engineLive(saved)) {
       const why = await sendEngine(job, ctx, { extraction, partial, engine, b, zillowWhy });
@@ -1951,7 +1951,7 @@ async function runUnderwrite(job, ctx) {
     };
     const priced = b ? machineRehab(job, b, saved, { sqft: facts?.sqft, yearBuilt: facts?.yearBuilt, remarks: listing?.remarks || "" }) : null;
     const engine = await shadowPrice({ store, locationId, saved, job, address: extraction.address, b, listing, facts,
-      listPrice: job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0) });
+      listPrice: job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0), thread: threadText || "" });
     // Live on grade A: the engine's number. Otherwise kind and rural were held above; a confident Bricked read sends itself.
     if (engineLive(saved)) {
       const why = await sendEngine(job, ctx, { extraction: { ...extraction, askingPrice: job.listPrice || asking }, partial, engine, b });
@@ -2513,7 +2513,7 @@ async function runUnderwrite(job, ctx) {
     // A size borrowed from the comps is a guess about this house, as an unknown one is.
     const sizeHeld = sqftSource === "comps" ? [`the house's own size isn't on record: ${sqftFilled.toLocaleString("en-US")} sqft was borrowed from the comps`] : [];
     return engineFinish(job, ctx, { extraction, partial, listing, subject, arv, rehabbed, scan, repairs, photos,
-      dataHeld: [...gate.data, ...sizeHeld], reach, thread: threadText || "" });
+      dataHeld: [...gate.data, ...sizeHeld], reach, thread: threadText || "", dossier });
   }
 
   // Our numbers are stuck, but the agent gave us theirs: price on them,
@@ -2621,6 +2621,9 @@ async function runUnderwrite(job, ctx) {
   // Again at the last step: the bot's pass can land while the comps and the
   // photo scan run (31 N Colony Surf Dr, 2026-10-13).
   if (await stopForThread(job, ctx, extraction.address)) return;
+  // One house, one underwrite (audit 2026-11-09): another run of this agent's house may have made
+  // its row while this one ran.
+  if (!job.fill && await siblingFinished(job, ctx, extraction.address)) return;
 
   const result = await deps.createOffer({
     locationId,
@@ -3317,14 +3320,15 @@ export const engineUnsure = (engine) => !engine?.v2?.arv || (engine.v2.misses ||
 
 // Engine mode's ending: price on our reads, ask Bricked only when unsure (and allowed today),
 // then send grade A live or leave Matt the draft with our comps and scope on it.
-async function engineFinish(job, ctx, { extraction, partial, listing, subject, arv, rehabbed, scan, repairs, photos, dataHeld = [], reach = null, thread = "" }) {
+async function engineFinish(job, ctx, { extraction, partial, listing, subject, arv, rehabbed, scan, repairs, photos, dataHeld = [], reach = null, thread = "", dossier = null }) {
   const { store, locationId, saved } = ctx;
   const listPrice = job.listPrice || (extraction.source === "conversation" ? Number(extraction.askingPrice) || 0 : 0);
   const comps = arv?.arv ? { arv: arv.arv, n: (rehabbed || []).length, ...(reach || {}) } : null;
   const scope = scan ? { total: repairs, photos: (photos || []).length } : null;
   // `thread`: the run's transcript, so the engine's killers hear the agent's own words about this
   // house since it was first named (price-v2.js houseLines), not only the text that started it.
-  const base = { store, locationId, saved, job, address: extraction.address, listing, facts: subject, comps, scope, listPrice, thread, force: true };
+  // `dossier`: what they told us about the house, whose sellerAsk is one of their numbers.
+  const base = { store, locationId, saved, job, address: extraction.address, listing, facts: subject, comps, scope, listPrice, thread, dossier, force: true };
   let engine = await shadowPrice(base);
   let b = null;
   if (engineUnsure(engine) && await takeBrickedCredit({ store, locationId, saved })) {
@@ -3406,7 +3410,7 @@ export function engineSendGate({ engine = null } = {}) {
  *
  * The checks at the top of the run (findOfferOut, findRecent) only see what had finished when it
  * started; two runs a few seconds apart both passed them and both sent (audit 2026-11-09). Asked
- * again right before an offer is made.
+ * again right before an offer is made: the old machine's, Bricked's and the engine's.
  */
 async function siblingFinished(job, ctx, address) {
   const { client, locationId, store } = ctx;
@@ -3521,6 +3525,8 @@ async function sendBricked(job, ctx, { extraction, partial, b, listPrice, repair
   const why = brickedSendGate({ b, minConfidence: brickedSendMinConfidence(saved), listPrice: listPrice || 0, cash, cap, repairsSource });
   if (why) return why;
   if (await stopForThread(job, ctx, extraction.address)) return "";
+  // One house, one underwrite (audit 2026-11-09), as in sendEngine.
+  if (await siblingFinished(job, ctx, extraction.address)) return "";
 
   job.phase = "creating";
   job.draftOnly = false;

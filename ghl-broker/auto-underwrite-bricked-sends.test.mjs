@@ -35,7 +35,7 @@ const BRICKED = {
   shareLink: "https://bricked.ai/share/b1",
 };
 
-function stubFetch({ bricked = BRICKED, homeType = "SINGLE_FAMILY", price = 525000 } = {}) {
+function stubFetch({ bricked = BRICKED, homeType = "SINGLE_FAMILY", price = 525000, onBricked = null } = {}) {
   _resetCompsCache();
   _resetFactsCache?.();
   const calls = { bricked: 0, detail: 0, search: 0 };
@@ -43,7 +43,7 @@ function stubFetch({ bricked = BRICKED, homeType = "SINGLE_FAMILY", price = 5250
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const reply = (body) => ({ ok: true, status: 200, statusText: "", json: async () => body, text: async () => JSON.stringify(body) });
-    if (u.includes("api.bricked.ai")) { calls.bricked++; return reply(bricked); }
+    if (u.includes("api.bricked.ai")) { calls.bricked++; if (onBricked) await onBricked(); return reply(bricked); }
     if (u.includes("geocoding.geo.census.gov")) {
       return reply({ result: { addressMatches: [{ coordinates: { x: -122.2, y: 47.95 }, matchedAddress: "4417 SOMERSET LN, EVERETT, WA, 98203" }] } });
     }
@@ -204,4 +204,18 @@ test("an offer that sends itself takes the place of the draft it re-priced, so T
   assert.equal(job.status, "done");
   assert.equal(made.length, 1);
   assert.equal(await store.getOffer(draft.id), null, "the old draft is gone");
+});
+
+// Audit 2026-11-09: two runs of one house a few seconds apart both passed the offer checks at the
+// top of the run and both sent. Bricked's send asks again right before the offer is made.
+test("a sure Bricked read on a house another run made an offer on meanwhile sends nothing", async () => {
+  const contactId = "dup1";
+  const onBricked = async () => {
+    await store.createOffer({ locationId: `LOC-${contactId}`, status: "new", contactId, address: "4417 Somerset, Everett", cashAmount: 361000 });
+  };
+  const { job, made, floated } = await run({ contactId, fetchOpts: { onBricked } });
+  assert.equal(made.length, 0, "no second offer");
+  assert.equal(floated.length, 0);
+  assert.equal(job.status, "done");
+  assert.ok(job.duplicateOf, "pointed at the other run's offer");
 });

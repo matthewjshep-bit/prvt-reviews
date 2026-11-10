@@ -206,3 +206,23 @@ test("a size borrowed from the comps keeps the house a draft", async () => {
   assert.equal(job.status, "held");
   assert.match(job.brickedHeld || "", /the house's own size isn't on record: [\d,]+ sqft was borrowed from the comps/);
 });
+
+/* ---------- one house, one offer, in the full machine too (audit 2026-11-09) ---------- */
+
+// Two runs of one house a few seconds apart both passed the offer checks at the top of the run
+// and both made an offer. The check runs again right before the offer is made.
+test("a full run whose house got an offer from another run while it worked makes nothing", async () => {
+  const locationId = "LOC-engine-sibling", contactId = "sib-1";
+  const scan = async (...args) => {
+    // Another run of the same agent's house, under a shorter spelling, finishes while this one scans.
+    await store.createOffer({ locationId, status: "new", contactId, address: "2210 Quarry Ave N, Shoreline, WA", cashAmount: 301000 });
+    return scanPhotos(...args);
+  };
+  const { job, made } = await run({ saved: { autoUnderwriteMode: "full" }, price: 520000, scan, locationId, contactId });
+  assert.equal(made.length, 0, "no second offer");
+  assert.equal(job.status, "done");
+  assert.ok(job.duplicateOf, "pointed at the other run's offer");
+  // Without the other run, the same full run makes its offer.
+  const alone = await run({ saved: { autoUnderwriteMode: "full" }, price: 520000, locationId: "LOC-engine-alone", contactId: "sib-2" });
+  assert.equal(alone.made.length, 1);
+});
