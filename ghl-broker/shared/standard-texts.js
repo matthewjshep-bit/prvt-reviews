@@ -36,6 +36,7 @@
 
 import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, LEGACY_DEFAULT_FOLLOW_UP_TEXTS, DAY_TWO_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME, withHomeBlank, COLD_LAST_RUNG_TEXTS } from "./outreach-opener.js";
 import { parseUsAddress } from "./us-address.js";
+import { pickVariant } from "./check-in.js";
 
 // 2026-11-09 (Matt: check-ins personable, not AI): the pools below are v2,
 // from the audit's read of the sent log. The 10-17 texts said "desk" or
@@ -317,15 +318,23 @@ export const isShippedText = (template = "") => SHIPPED_TEXTS.has(String(templat
  * `pools` is conversationAi.checkIns.pools ("v1": the 10-17 texts). `shift`
  * walks to the next variant along, the gate's answer to a fixed text that
  * would repeat one of ours (ghl-broker/reply-agent.js runProactive).
+ *
+ * 2026-11-09: the agent check-in picked by its place in the day's run, so an
+ * agent third in line twice running heard the same text twice. With
+ * `outbound.touch` (their own count of check-ins that went) it starts at
+ * their contact's variant plus that count and walks past anything that
+ * repeats one of our last texts or spends a "once" phrase (shared/check-in.js
+ * pickVariant); `noRepeat` false starts there and stops. `goesBy` is the
+ * name they go by, used before their GHL first name.
  */
-export function standardText({ kind, outbound = {}, name = "", contactId = "", prior = [], pools = "v2", shift = 0 } = {}) {
+export function standardText({ kind, outbound = {}, name = "", contactId = "", prior = [], pools = "v2", shift = 0, goesBy = "", noRepeat = true } = {}) {
   const o = outbound || {};
   // The recent listers' first text and its first follow-up are these fixed
   // texts in either mode: the model has no words for a house that's gone.
   if (o.mode !== "template" && !(o.pastListing && (kind === "outreach_open" || kind === "outreach_nudge"))) return null;
   const P = poolsFor(pools);
   const values = {
-    first: firstNameOf(name),
+    first: firstNameOf(goesBy) || firstNameOf(name),
     // "the property" is the descriptor's stand-in when there's no address.
     address: /^the property$/i.test(String(o.address || "")) ? "" : streetLine(o.address),
     street: /^the property$/i.test(String(o.address || "")) ? "" : streetName(o.address),
@@ -406,6 +415,11 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
   if (kind === "agent_pulse") {
     if (o.forMatt || o.reason === "deal_thanks" || o.reason === "off_market_listing" || o.hook?.kind === "mentioned") return null;
     const cold = o.segment === "cold" || /gone quiet/.test(String(o.segment || ""));
+    // Their own count of check-ins, when the runner says it; the old run
+    // position otherwise (a preview, Matt's 15).
+    const pick = (pool, vals = values) => (o.touch != null
+      ? pickVariant(pool, prior, contactId, (Number(o.touch) || 0) + Math.max(0, Math.round(Number(shift) || 0)), { fill: (t) => fillTemplate(t, vals), noRepeat })
+      : pickFilled(pool, v, vals));
     if (o.reason === "fresh_listing" && o.listing?.focus) {
       // A focus county's listing that has been up a while and that Zillow
       // says needs work (2026-10-26, Pierce): the first text they've had
@@ -421,9 +435,9 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
       // The street name, never the house number, like the first text.
       const street = streetName(o.listing?.street || "") || values.street;
       const town = String(o.listing?.city || "").trim() || values.town;
-      return done(cold ? "listing_cold" : "listing", pickFilled(cold ? P.listingCold : P.listing, v, { ...values, street, town }));
+      return done(cold ? "listing_cold" : "listing", pick(cold ? P.listingCold : P.listing, { ...values, street, town }));
     }
-    return done(cold ? "checkin_cold" : "checkin", pickFilled(cold ? P.checkinCold : P.checkin, v, values));
+    return done(cold ? "checkin_cold" : "checkin", pick(cold ? P.checkinCold : P.checkin));
   }
   return null;
 }

@@ -69,6 +69,10 @@ export const EVENT_TYPES = [
   // `agent_pulse_joined`: the day an agent who wrote back joined the pool by
   // their reply alone; their first check-in is spread from it.
   "agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided", "agent_pulse_joined",
+  // A check-in that waits instead of going (shared/check-in.js routeCheckIn,
+  // 2026-11-09): data { kind, why, until, route, permanent? }. The agent
+  // check-in reads it and isn't due again before `until`.
+  "checkin_skipped",
   // A GHL workflow the app put them in or took them out of (conversation
   // actions), so the pulse knows who a drip already has.
   "workflow_enrolled", "workflow_left",
@@ -187,6 +191,7 @@ export const EVENT_LABEL = {
   listing_off_market: "the listing went off the market", listing_back_on_market: "the listing came back on the market",
   agent_pulse_sent: "a check-in was started", agent_pulse_texted: "we checked in", agent_pulse_voided: "a check-in drafted nothing",
   agent_pulse_joined: "joined the agent check-in",
+  checkin_skipped: "a check-in waited",
   listing_pinged: "we asked about their listing", listing_ping_voided: "a listing text drafted nothing",
   workflow_enrolled: "added to a GHL workflow", workflow_left: "taken out of a GHL workflow",
   offmarket_asked: "we asked about off-market houses",
@@ -268,6 +273,7 @@ export const EVENT_ICON = {
   listing_off_market: "XCircle",
   listing_back_on_market: "RefreshCw",
   agent_pulse_sent: "BellRing", agent_pulse_texted: "MessageSquare", agent_pulse_voided: "Clock", agent_pulse_joined: "BellRing",
+  checkin_skipped: "Clock",
   listing_pinged: "Crosshair", listing_ping_voided: "Clock",
   workflow_enrolled: "Workflow", workflow_left: "LogOut",
   offmarket_asked: "Crosshair",
@@ -287,6 +293,7 @@ export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "
 export const SOURCE_LABEL = {
   conversation: "from a text", call: "from a call", sweep: "AI sweep", operator: "entered by hand",
   import: "imported", offer: "from an offer", deal: "from a deal", dataroom: "dataroom", blast: "blast", gmail: "from Gmail",
+  "our word": "from our own text",
 };
 // The sources the drawer colours violet: something the AI inferred rather
 // than something a person stated or a record produced.
@@ -323,6 +330,11 @@ export const FACT_KEYS = {
   // buyer names it (shared/buybox.js fundingSaid) and by Add to buy box from
   // a read. Shown on the deal's buyer row. App-only: no GHL field.
   buyer_funding:         { kind: "scalar", party: "investor", cap: 20, ghl: false, label: "How they pay", values: BUYER_FUNDING },
+  // The name they go by (2026-11-09): "call me Kate", or texts signed with a
+  // short form of their GHL first name. Every fixed text and every prompt's
+  // name line uses it before the GHL name (shared/check-in.js goesBySaid).
+  // App-only: no GHL field.
+  goes_by:               { kind: "scalar", party: "both",     cap: 20, ghl: false, label: "Goes by" },
 };
 export const factKeysFor = (party) =>
   Object.keys(FACT_KEYS).filter((k) => FACT_KEYS[k].party === "both" || FACT_KEYS[k].party === party);

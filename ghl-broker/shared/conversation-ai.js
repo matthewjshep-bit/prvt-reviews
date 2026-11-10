@@ -1120,7 +1120,14 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // rewritten fixed check-ins, follow-ups and emails, "v1" the 10-17 ones
   // back in one field. Both only hold or reword a text, so they ship on.
   // Later check-in branches add their keys to this block.
-  checkIns: { lint: true, pools: "v2" },
+  // When a check-in waits (shared/check-in.js, 2026-11-09): `noRepeat` never
+  // says what one of our last `repeatTouches` texts said; `respectLastWord`
+  // waits after an auto-reply-only number, a homeowner, a plain no
+  // (`afterNoDays`) or a "later" (theirs or ours); an "are you a bot?" keeps
+  // every machine text off them for `aiComplaintDays` and waits for Matt.
+  // These only hold a text back, so they ship on.
+  checkIns: { lint: true, pools: "v2",
+    noRepeat: true, repeatTouches: 6, respectLastWord: true, afterNoDays: 30, aiComplaintDays: 30 },
 });
 
 // The photo-only reply until 2026-11-09, read as never changed.
@@ -1545,6 +1552,11 @@ export function normalizeConversationAi(doc, seed = {}) {
       return {
         lint: bool(c.lint, C.lint),
         pools: oneOf(c.pools, ["v1", "v2"], C.pools),
+        noRepeat: bool(c.noRepeat, C.noRepeat),
+        repeatTouches: int(c.repeatTouches, C.repeatTouches, 2, 12),
+        respectLastWord: bool(c.respectLastWord, C.respectLastWord),
+        afterNoDays: int(c.afterNoDays, C.afterNoDays, 7, 120),
+        aiComplaintDays: int(c.aiComplaintDays, C.aiComplaintDays, 7, 120),
       };
     })(),
     driver: (() => {

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { maybeRunBuyerPulse, startBuyerPulse, planBuyerPulse, previewBuyerPulse, getBuyerPulseJob, _resetJobs, CURSOR_NAME } from "./buyer-pulse.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { normalizeDispoAutopilot } from "./dispo-autopilot.js";
+import { openerVariant } from "./shared/outreach-opener.js";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -162,15 +163,34 @@ test("a run that died is tried again that afternoon, and the dead run's buyers a
   assert.deepEqual(s.calls.map((c) => c.contactId), ["b"]);
 });
 
-test("each text in a day gets a different way in, and a second batch carries on rather than starting over", async () => {
+// 2026-11-09: the way in followed a buyer's place in the day's run, so a
+// buyer first in line twice running got the same shape twice. It follows the
+// buyer's own count of pulses that went, from their contact's own variant.
+test("each buyer's pulse follows their own count of pulses, not their place in the day's run", async () => {
   _resetJobs();
-  const store = fakeStore();
-  const s = starter(Array.from({ length: 6 }, (_, i) => buyer(`b${i}`, { score: 50 - i })));
+  const went = (id, d) => ({ contactId: id, type: "pulse_texted", at: ago(d), dedupeKey: `pt:${id}:${d}` });
+  const store = fakeStore({ events: [went("b0", 120), went("b0", 60)] });
+  const s = starter(Array.from({ length: 4 }, (_, i) => buyer(`b${i}`, { score: 50 - i })));
   startBuyerPulse({ locationId: "LOC", saved: saved(), store, deps: s, now: NOW, limit: 2 });
   await done();
   startBuyerPulse({ locationId: "LOC", saved: saved(), store, deps: s, now: NOW + HOUR, limit: 2 });
   await done();
-  assert.deepEqual(s.calls.map((c) => c.subject.variant), [0, 1, 2, 3]);
+  const by = Object.fromEntries(s.calls.map((c) => [c.contactId, c.subject]));
+  assert.deepEqual(Object.keys(by).sort(), ["b0", "b1", "b2", "b3"]);
+  assert.equal(by.b0.touch, 2, "two pulses went to b0");
+  assert.equal(by.b1.touch, 0);
+  for (const [id, sub] of Object.entries(by)) assert.equal(sub.variant, openerVariant(id, 997) + sub.touch, id);
+});
+
+test("a buyer whose pulse waited isn't picked again before its date", async () => {
+  _resetJobs();
+  const until = new Date(NOW + 60 * DAY).toISOString();
+  const store = fakeStore({ events: [{ contactId: "auto", type: "checkin_skipped", at: ago(5), dedupeKey: "cs:auto",
+    data: { kind: "buyer_pulse", why: "only an auto-reply has answered this number in 90 days", until, route: "skip" } }] });
+  const s = starter([buyer("auto", { score: 90 }), buyer("next", { score: 10 })]);
+  startBuyerPulse({ locationId: "LOC", saved: saved({ dailyCap: 1 }), store, deps: s, now: NOW });
+  await done();
+  assert.deepEqual(s.calls.map((c) => c.contactId), ["next"], "the seat goes to the next buyer");
 });
 
 /* ---------- DND never burns a seat; a void gives the claim back (2026-09-29) ---------- */

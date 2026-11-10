@@ -316,10 +316,15 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   parts.push(HUMAN);
   if (REPLY_PERSONALITY_BY_LEVEL[persona.personality]) parts.push(REPLY_PERSONALITY_BY_LEVEL[persona.personality]);
 
+  // 2026-11-09: the saved "I'm an assistant on Matt's team" went out in 9
+  // threads, and nothing ever told them the truth either way. A question
+  // about whether this is a bot is Matt's to answer himself: the reply waits
+  // for him (reply-agent.js holds it), and the model never claims to be a
+  // person or a bot. persona.ifAskedIfBot stays saved for him to send by hand.
   parts.push(
-    persona.ifAskedIfBot
-      ? `IDENTITY: they are talking to a person as far as they know. If they ask whether you are a bot or an AI, answer naturally with exactly: "${persona.ifAskedIfBot}" and carry on. Never volunteer it.`
-      : "IDENTITY: they are talking to a person, not a bot, and must never be told otherwise."
+    "IDENTITY: if they ask whether you are a bot, an AI, automated or a real person, or say this sounds like AI or ChatGPT, " +
+    "write nothing for it: return an EMPTY reply, needsHuman true, humanReason \"they asked if this is a bot\". That one is " +
+    "answered by hand, never in a draft. Never claim to be a person, never claim to be a bot or an assistant, and never bring it up yourself."
   );
   // Gig Harbor, 2026-10-21: "I'll flag it to Matt in case he's got questions"
   // to an agent who'd spoken to Matt twice that day. There is no one to hand
@@ -1316,6 +1321,11 @@ function openingFor(outbound) {
                 ? `Ask about that lead specifically, in a line, the way a person who remembered would — e.g. "Did the family decide on the probate house?" ` +
                   `or "Did that one end up relisting?" Do NOT ask the generic "anything distressed or off-market come across your desk?" question. `
                 : `Mention it naturally ("you'd mentioned ${o.phrase || "checking back"}") and ask whether anything landed that needs work. `)
+          : o.ours
+            // We said when (shared/brush-offs.js ourCheckBack, 2026-11-09): the
+            // day we named came, and this keeps our word. Never a house from before.
+            ? `We told this agent we'd check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Keep our word in a line ` +
+              `("said I'd check back ${o.phrase || "about now"}") and ask whether anything landed that needs work. Never name a house, a street or an address. `
           : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally ` +
             `("you'd mentioned ${o.phrase || "checking back"}"). Ask whether anything landed that needs work. `) +
         // Never the same question twice: 1010 Bellevue's agent was asked for
@@ -1372,6 +1382,11 @@ export function buildUserContext({
   const opening = outboundOpening(outbound) || callHead;
   return [
     `${label}: ${contact.name || "unknown name"}${contact.tags?.length ? ` (tags: ${contact.tags.slice(0, 8).join(", ")})` : ""}`,
+    // The name they go by (shared/check-in.js goesBySaid, 2026-11-09): what
+    // they sign their texts with, or asked to be called.
+    contact.goesBy && String(contact.goesBy).toLowerCase() !== String(contact.name || "").trim().split(/\s+/)[0].toLowerCase()
+      ? `THEY GO BY: ${contact.goesBy}. When you use their name, it is ${contact.goesBy}, never ${String(contact.name || "").trim().split(/\s+/)[0]}.`
+      : "",
     signer ? `YOU ARE: ${signer}` : "",
     `TODAY: ${today}. Dates in the thread are measured against this — never say a day or a month has passed unless it has.`,
     signer && contact.name && signer.split(/\s+/)[0].toLowerCase() !== String(contact.name).split(/\s+/)[0].toLowerCase()

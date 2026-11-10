@@ -441,8 +441,8 @@ export function PersonaCard({ config, patch }) {
         </Field>
       </div>
       <div className="mt-3">
-        <Field label="If they ask whether it's a bot" hint="Left blank, it never admits to being one. Filled in, it answers with exactly this line and carries on — the compliant choice.">
-          <Text value={p.ifAskedIfBot} onChange={set("ifAskedIfBot")} placeholder="I'm an assistant on Matt's team keeping up with texts! Happy to help either way." />
+        <Field label="If they ask whether it's a bot" hint="The bot never answers this itself: a text asking whether it's a bot or AI waits for you on the Desk, and no machine text goes to them for 30 days. Anything saved here is for you to send by hand.">
+          <Text value={p.ifAskedIfBot} onChange={set("ifAskedIfBot")} placeholder="Your own answer, sent by you" />
         </Field>
       </div>
       <div className="mt-3 grid gap-3 sm:grid-cols-3">

@@ -925,3 +925,29 @@ test("focus counties are written 'Pierce, WA' and a stray 'County' is dropped", 
   assert.equal(f.maxAgeDays, 180);
   assert.equal(normalizeAgentPulse({}).focusListings.enabled, false, "ships off");
 });
+
+/* ---------- a check-in that waited (shared/check-in.js, 2026-11-09) ---------- */
+
+test("a skipped check-in gives the seat to the next agent and isn't picked again before its date", () => {
+  const until = new Date(NOW + 18 * DAY).toISOString();
+  const waits = agent({ contactId: "a-wait", lastInboundAt: ago(70),
+    ledger: [{ type: "checkin_skipped", at: ago(1), data: { kind: "agent_pulse", why: "they said to check back (after the holidays)", until, route: "skip" } }] });
+  const next = agent({ contactId: "a-next", lastInboundAt: ago(30) });
+  const one = normalizeAgentPulse({ enabled: true, dailyCap: 1 });
+  const houses = { live: new Set(), walked: new Map() };
+  const today = pickPulseAgents({ agents: [waits, next], settings: one, config: CONFIG, houses, now: NOW });
+  assert.deepEqual(today.picks.map((p) => p.contactId), ["a-next"], "the most overdue agent waits; the seat goes on");
+  const v = today.verdicts.find((x) => x.contactId === "a-wait");
+  assert.deepEqual([v.status, v.dueAt], ["not_due", until]);
+  assert.match(v.reason, /the check-in waits: they said to check back/);
+  const after = pickPulseAgents({ agents: [waits, next], settings: one, config: CONFIG, houses, now: NOW + 19 * DAY });
+  assert.deepEqual(after.picks.map((p) => p.contactId), ["a-wait"], "its date came: due again, and first");
+});
+
+test("a check-in pick carries the agent's own count of check-ins that went", () => {
+  const texted = (d) => ({ type: "agent_pulse_texted", at: ago(d) });
+  const twice = agent({ contactId: "a-two", lastInboundAt: ago(90), ledger: [texted(60), texted(30)] });
+  const never = agent({ contactId: "a-zero", lastInboundAt: ago(40) });
+  const plan = pickPulseAgents({ agents: [never, twice], settings: S, config: CONFIG, houses: { live: new Set(), walked: new Map() }, now: NOW });
+  assert.deepEqual(Object.fromEntries(plan.picks.map((p) => [p.contactId, p.touch])), { "a-two": 2, "a-zero": 0 });
+});

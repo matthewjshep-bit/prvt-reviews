@@ -26,6 +26,8 @@ import { botHold, paceOf, MAX_PACE } from "./shared/bot-hold.js";
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { sameStreet } from "./shared/us-address.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
+import { checkInWait } from "./shared/check-in.js";
+import { openerVariant } from "./shared/outreach-opener.js";
 
 export const CURSOR_NAME = "buyerPulse";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -100,7 +102,15 @@ export async function planBuyerPulse({ locationId, saved = {}, store = defaultSt
   // cadence, and a pulse that old still has to count.
   // Far enough back to see two unanswered pulses at the slow cadence too.
   const lookback = Math.max(settings.everyDays, settings.quietEveryDays, SLOW_EVERY_DAYS) * MAX_PACE;
-  const events = await store.listContactEventsSince(locationId, iso(now - lookback * DAY_MS), { types: ["pulse_sent", "pulse_voided", "pulse_texted"], limit: 20000 }).catch(() => []);
+  const events = await store.listContactEventsSince(locationId, iso(now - lookback * DAY_MS), { types: ["pulse_sent", "pulse_voided", "pulse_texted", "checkin_skipped"], limit: 20000 }).catch(() => []);
+  // Each buyer's own count of pulses that went: the next one's shape follows
+  // it, never the buyer's place in today's run (2026-11-09).
+  const touches = new Map();
+  for (const e of events) if (e?.contactId && e.type === "pulse_texted") touches.set(e.contactId, (touches.get(e.contactId) || 0) + 1);
+  // A pulse that read the thread and waited (shared/check-in.js: an
+  // auto-reply-only number, "are you a bot?") isn't due before its date.
+  const waits = new Map();
+  for (const e of events) if (e?.contactId && e.type === "checkin_skipped") waits.set(e.contactId, [...(waits.get(e.contactId) || []), e]);
   // A claim that drafted nothing (the bot stood down, a waiting reply, a
   // failure) is voided: it neither starts the buyer's cadence nor takes a
   // seat. Until 2026-09-29 it did both — a DND buyer cost a seat and 30 days.
@@ -141,10 +151,12 @@ export async function planBuyerPulse({ locationId, saved = {}, store = defaultSt
   // Pulses that actually went (pulse_texted), not claims: a draft you
   // dismissed or never sent isn't one they ignored.
   const history = await buyerHistory({ store, locationId, pulses: events.filter((e) => e?.type === "pulse_texted"), now });
+  // A pulse that waited, until its date; a word from them since lifts it.
+  const waiting = new Set([...waits].filter(([id, list]) => checkInWait(list, { lastInboundAt: history.get(id)?.lastInboundAt || null, now })).map(([id]) => id));
   // Tried today already (a voided claim): tomorrow, not twice today.
-  const plan = pickPulseBuyers({ investors: investors.filter((i) => !triedToday.has(i.contactId)), pulsedAt, openDraftIds, stopped, paceBy, history, settings, now });
+  const plan = pickPulseBuyers({ investors: investors.filter((i) => !triedToday.has(i.contactId) && !waiting.has(i.contactId)), pulsedAt, openDraftIds, stopped, paceBy, history, settings, now });
   const line = [...plan.picks, ...(plan.spares || [])];
-  return { picks: line.slice(0, left), spares: line.slice(left, left + Math.max(5, Math.ceil(settings.dailyCap / 2))), counts: { ...plan.counts, claimedToday, seatsLeft: left }, settings };
+  return { picks: line.slice(0, left), spares: line.slice(left, left + Math.max(5, Math.ceil(settings.dailyCap / 2))), counts: { ...plan.counts, claimedToday, seatsLeft: left, waiting: waiting.size }, settings, touches };
 }
 
 /**
@@ -178,9 +190,11 @@ export function startBuyerPulse({ client, locationId, saved = {}, store = defaul
     // may send buyers anything at all. Otherwise: a draft in the outbox.
     const live = Boolean(sendsEnabled && blastsEnabled);
     job.autoSend = Boolean(plan.settings.autoSend && live && conversationConfig(saved).enabled);
-    // A different way in for each text, continuing across the day's runs so
-    // two batches don't open alike.
-    let n = Number(plan.counts.claimedToday) || 0;
+    // A different way in for each buyer and for each of their pulses: the
+    // buyer's own count of pulses that went, from their contact's variant.
+    // Until 2026-11-09 it was the buyer's place in the day's run, so a buyer
+    // first in line twice running got the same shape twice.
+    const touchOf = (id) => Number(plan.touches?.get?.(id)) || 0;
     const read = typeof deps.getContact === "function" ? deps.getContact : (id) => getContact(client, id);
     const seats = picks.length;
     let claimed = 0;
@@ -198,7 +212,7 @@ export function startBuyerPulse({ client, locationId, saved = {}, store = defaul
         job.results.push({ contactId: p.contactId, group: p.group, status: "skipped", reason: `heard from us this week — their next opening is ${slotWord(week.at)}` });
         continue;
       }
-      p.subject = { ...p.subject, variant: n++ };
+      p.subject = { ...p.subject, touch: touchOf(p.contactId), variant: openerVariant(p.contactId, 997) + touchOf(p.contactId) };
       if (dryRun) { job.results.push({ contactId: p.contactId, name: p.name, group: p.group, status: "would draft", clues: p.subject }); continue; }
       if (!deps.skipPreflight) {
         let contact = null;

@@ -38,6 +38,7 @@ import {
 import { leadSourcesFor } from "./shared/lead-source.js";
 import { selfNames, isSelfName } from "./shared/self-contact.js";
 import { LEAD_MAX_DAYS, LEAD_STALE_DAYS } from "./shared/follow-up.js";
+import { openerVariant } from "./shared/outreach-opener.js";
 
 export const CURSOR_NAME = "agentPulse";
 export const WINDOW_HOURS = 5;
@@ -506,8 +507,6 @@ export function startAgentPulse({
       }
       job.joined = (plan.unjoined || []).length;
     }
-    // A different way in for each text, continuing across the day's runs.
-    let n = Number(plan.claimedToday) || 0;
     // The day's picks, then the spares: an agent skipped before being claimed
     // (unsubscribed, tagged off, no phone) hands the seat to the next in line.
     const seats = picks.length;
@@ -575,7 +574,11 @@ export function startAgentPulse({
       }
       const r = await start({
         client, locationId, saved, store, contactId: p.contactId, kind: "agent_pulse", offer: null,
-        subject: { ...p.subject, listingKey: p.listingKey || null, variant: n++ },
+        // Which fixed text follows the agent's own count of check-ins that
+        // went (shared/check-in.js pickVariant), never their place in the
+        // day's run: an agent third in line twice running heard the same
+        // text twice (2026-11-09). The model's shape follows the same count.
+        subject: { ...p.subject, listingKey: p.listingKey || null, touch: Number(p.touch) || 0, variant: openerVariant(p.contactId, 997) + (Number(p.touch) || 0) },
         sendsEnabled: Boolean(sendsEnabled),
         deps: {
           ...deps,
