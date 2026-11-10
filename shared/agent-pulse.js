@@ -666,7 +666,7 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   // (shared/promise-owed.js callOwedWait; agent-focus.js asks it at the door).
   const owedCall = callOwedWait({ events, now });
   if (owedCall) return out("not_due", `${owedCall.reason}: the call goes first`, { segment, dueAt: owedCall.until });
-  const voided =new Set(ledger.filter((e) => e.type === "agent_pulse_voided").map((e) => e.data?.claimKey || e.ref).filter(Boolean));
+  const voided = new Set(ledger.filter((e) => e.type === "agent_pulse_voided").map((e) => e.data?.claimKey || e.ref).filter(Boolean));
   const texted = ledger.filter((e) => e.type === "agent_pulse_texted" && (!agent.lastInboundAt || String(e.at) > String(agent.lastInboundAt)));
   const unanswered = texted.length;
   const downgraded = segment !== "cold" && segment !== "source" && s.engagedMaxUnanswered > 0 && unanswered >= s.engagedMaxUnanswered;
