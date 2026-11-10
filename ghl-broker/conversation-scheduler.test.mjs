@@ -89,6 +89,20 @@ test("a failed send goes back to the outbox with the reason, and is not retried 
   assert.equal(calls, 1);
 });
 
+// 2026-11-09 audit: the scheduler logged GHL's error text whole, and that
+// text can carry the contact's email or number.
+test("a failed auto-send's log line and flag carry no email or phone", async () => {
+  const store = fakeStore([draft()]);
+  const logged = [];
+  const send = async () => { throw new Error("GHL POST /conversations/messages?contact=kim.fake%40example.com: 422 for kim.fake@example.com, +1 206 555 0166"); };
+  await sendDueDrafts({ store, locations: [{ locationId: "LOC", client: {} }], live: true, now, send, log: (s) => logged.push(s) });
+  const line = logged.find((s) => /auto-send failed/.test(s));
+  assert.ok(line, logged.join("\n"));
+  assert.doesNotMatch(line, /kim\.fake|example\.com|555 0166|%40/, line);
+  const flag = store.rows.get("d1").flags.join(" · ");
+  assert.match(flag, /auto-send failed: GHL POST \/conversations\/messages: 422 for <email>, <phone>/);
+});
+
 test("a draft stuck in sending is handed back to a person after five minutes", async () => {
   const store = fakeStore([
     draft({ status: "sending", sendingAt: new Date(now - STUCK_SENDING_MS - 1000).toISOString() }),

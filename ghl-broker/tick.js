@@ -6,6 +6,8 @@
 // that tick and every tick until it stopped throwing. Now each job fails
 // alone, and its failure is recorded under its own area (`tick:<area>`).
 
+import { scrubMessage } from "./app-errors.js";
+
 /**
  * runLocationTick(ctx, jobs, { store, recordError, log }) → { ran, failed }
  *
@@ -20,7 +22,8 @@ export async function runLocationTick(ctx, jobs = [], { store = null, recordErro
       out.ran++;
     } catch (e) {
       out.failed.push(job.area);
-      log(`tick:${job.area} failed for ${ctx?.locationId}: ${String(e?.message || e).slice(0, 200)}`);
+      // Scrubbed: an error's text can carry a contact's email or number.
+      log(`tick:${job.area} failed for ${ctx?.locationId}: ${scrubMessage(e).slice(0, 200)}`);
       if (typeof recordError === "function") {
         await Promise.resolve(recordError(store, { locationId: ctx?.locationId, area: `tick:${job.area}`, err: e })).catch(() => {});
       }

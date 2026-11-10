@@ -95,6 +95,30 @@ test("a slow or broken Gmail never holds up a draft, and the warning names no ad
   assert.deepEqual(warnings, ["gmail: took too long, drafted without it", "gmail: HTTP 401"]);
 });
 
+// 2026-11-09 audit: a Gmail link that stopped working was a warning on each
+// draft and nothing else, so nobody heard until someone read a draft's flags.
+test("a Gmail token that stops working shows up as an error once per run", async () => {
+  _reset();
+  const recorded = [];
+  const store = { ...fakeStore(), async recordAppError(loc, row) { recorded.push({ loc, ...row }); } };
+  const dead = { ...fakeGmail({}), async list() { return ["m1", "m2", "m3"]; }, async message() { throw Object.assign(new Error("gmail message: HTTP 401"), { status: 401, what: "message" }); } };
+  const warnings = [];
+  await gmailBeforeDraft({ locationId: "L", contactId: "c1", emails: ["jo.fake@example.com"], saved, store, deps: { gmail: dead }, warnings });
+  assert.equal(recorded.length, 1, "three messages, one run, one error");
+  assert.equal(recorded[0].area, "gmail");
+  assert.equal(recorded[0].loc, "L");
+  assert.doesNotMatch(JSON.stringify(recorded[0]), /jo\.fake@example\.com/);
+  assert.deepEqual(warnings, ["gmail: HTTP 401"], "the draft still says so");
+  // Google refusing the refresh token (400 invalid_grant) is the same dead link.
+  const refused = { ...fakeGmail({}), async profile() { throw Object.assign(new Error("gmail token refresh: HTTP 400"), { status: 400, what: "token refresh" }); } };
+  await gmailBeforeDraft({ locationId: "L", contactId: "c2", emails: ["jo.fake@example.com"], saved, store, deps: { gmail: refused }, warnings: [] });
+  assert.equal(recorded.length, 2);
+  // A 500 is Gmail having a bad minute, not a dead link: the warning only.
+  const flaky = { ...fakeGmail({}), async profile() { throw Object.assign(new Error("gmail profile: HTTP 500"), { status: 500, what: "profile" }); } };
+  await gmailBeforeDraft({ locationId: "L", contactId: "c3", emails: ["jo.fake@example.com"], saved, store, deps: { gmail: flaky }, warnings: [] });
+  assert.equal(recorded.length, 2);
+});
+
 test("the reply agent reads Gmail for the contact before it reads their record, only when switched on", async () => {
   const calls = [];
   const client = { call: async (path) => {

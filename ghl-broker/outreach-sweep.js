@@ -14,6 +14,7 @@
 // crash mid-sweep can't spend a second RentCast request the same day.
 
 import { store as defaultStore } from "./store.js";
+import { scrubMessage } from "./app-errors.js";
 import { normalizeOpener } from "./shared/outreach-opener.js";
 import { normalizeIntroEmail, normalizeCheckInEmail } from "./shared/outreach-email.js";
 import { isRuralLot } from "./shared/asset-type.js";
@@ -671,7 +672,10 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
   const summary = () => ({
     id: job.id, trigger, dryRun: job.dryRun, status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt,
     county: job.county, candidates: job.candidates, picked: job.picked, imported: job.imported, enrolled: job.enrolled,
-    skippedExisting: job.skippedExisting || 0, requestsUsed: job.pull?.requestsUsed ?? null, error: job.error, warning: job.warnings[0] || "",
+    // Kept on the cursor, so scrubbed: an error's text can carry an agent's
+    // email or number (2026-11-09 audit).
+    skippedExisting: job.skippedExisting || 0, requestsUsed: job.pull?.requestsUsed ?? null,
+    error: job.error ? scrubMessage(job.error) : job.error, warning: job.warnings[0] ? scrubMessage(job.warnings[0]) : "",
     // First texts that went before the pull: retries, and agents nobody had texted.
     retried: job.retried || 0, neverTexted: job.neverTexted || 0, opened: job.opened || 0,
     // Which counties this run read before it found somebody (or gave up).

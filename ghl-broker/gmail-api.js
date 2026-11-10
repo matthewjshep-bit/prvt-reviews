@@ -16,7 +16,9 @@ export function gmailEnv(env = process.env) {
   return clientId && clientSecret && refreshToken ? { clientId, clientSecret, refreshToken } : null;
 }
 
-const httpError = (status, what) => Object.assign(new Error(`gmail ${what}: HTTP ${status}`), { status });
+// `what` names the call, so a refused refresh token (400 invalid_grant) can be
+// told from a bad request (gmail-sync.js gmailAuthFailed).
+const httpError = (status, what) => Object.assign(new Error(`gmail ${what}: HTTP ${status}`), { status, what });
 
 let cached = null;   // { key, token, expiresAt }
 export function _resetToken() { cached = null; }

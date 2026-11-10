@@ -22,6 +22,8 @@ const videoRow = (r) => ({
 
 const nowIso = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
+// An app error that comes back after this many quiet days is reopened (both backends).
+export const APP_ERROR_REOPEN_DAYS = 3;
 
 // listReplyDraftLedger's trim, both backends: the outbound fields that name
 // the mechanism and its subject. Change the SQL and this together.
@@ -1346,22 +1348,26 @@ const pgStore = {
   },
 
   /* ---- app errors (durable, deduped by fingerprint) ---- */
+  // An error back after APP_ERROR_REOPEN_DAYS quiet days gets reopened_at, so
+  // Slack's #machine tells it again (the SET reads the row as it was).
   async recordAppError(locationId, { fingerprint, area, message, context = {}, at = nowIso() }) {
     await query(
       `insert into app_errors (location_id, fingerprint, area, message, context, count, first_at, last_at)
        values ($1,$2,$3,$4,$5,1,$6,$6)
        on conflict (location_id, fingerprint) do update
-         set count = app_errors.count + 1, last_at = excluded.last_at, message = excluded.message, context = excluded.context`,
-      [locationId, fingerprint, area, message, context, at]
+         set count = app_errors.count + 1,
+             reopened_at = case when excluded.last_at - app_errors.last_at >= make_interval(days => $7::int) then excluded.last_at else app_errors.reopened_at end,
+             last_at = excluded.last_at, message = excluded.message, context = excluded.context`,
+      [locationId, fingerprint, area, message, context, at, APP_ERROR_REOPEN_DAYS]
     );
   },
   async listAppErrorsSince(locationId, sinceIso, { limit = 100 } = {}) {
     const { rows } = await query(
-      `select fingerprint, area, message, context, count, first_at as "firstAt", last_at as "lastAt"
+      `select fingerprint, area, message, context, count, first_at as "firstAt", last_at as "lastAt", reopened_at as "reopenedAt"
          from app_errors where location_id = $1 and last_at >= $2 order by last_at desc limit $3`,
       [locationId, sinceIso, limit]);
     const iso = (v) => (v instanceof Date ? v.toISOString() : v);
-    return rows.map((r) => ({ ...r, firstAt: iso(r.firstAt), lastAt: iso(r.lastAt) }));
+    return rows.map((r) => ({ ...r, firstAt: iso(r.firstAt), lastAt: iso(r.lastAt), reopenedAt: r.reopenedAt ? iso(r.reopenedAt) : null }));
   },
 
   /* ---- coach proposals ---- */
@@ -2633,9 +2639,10 @@ const fileStore = (() => {
       ensure();
       const k = `${locationId}|${fingerprint}`;
       const prev = data.appErrors[k];
+      const back = prev && Date.parse(at) - Date.parse(prev.lastAt) >= APP_ERROR_REOPEN_DAYS * 86400000;
       data.appErrors[k] = prev
-        ? { ...prev, message, context, count: prev.count + 1, lastAt: at }
-        : { locationId, fingerprint, area, message, context, count: 1, firstAt: at, lastAt: at };
+        ? { ...prev, message, context, count: prev.count + 1, lastAt: at, reopenedAt: back ? at : prev.reopenedAt ?? null }
+        : { locationId, fingerprint, area, message, context, count: 1, firstAt: at, lastAt: at, reopenedAt: null };
       persist();
     },
     async listAppErrorsSince(locationId, sinceIso, { limit = 100 } = {}) {

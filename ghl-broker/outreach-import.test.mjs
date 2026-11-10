@@ -173,3 +173,20 @@ test("a re-import never overwrites a Subject Property the conversation moved on"
   assert.equal(fields["Subject Property"], undefined, "must not be written at all");
   assert.equal(fields["Hook Address"], HOOK, "the hook itself is still refreshed");
 });
+
+// 2026-11-09 audit: an import warning named the agent by key (e:<their
+// email>, p:<their phone>) and passed GHL's error text on whole, lookup URL
+// and all; the sweep keeps the first warning on its cursor.
+test("sweep warnings carry no email or phone", async () => {
+  const ghl = fakeGhl({ duplicate: null });
+  const call = ghl.client.call;
+  ghl.client.call = async (pathname, opts = {}) => {
+    if (/\/workflow\//.test(pathname)) throw Object.assign(new Error(`GHL POST ${pathname}?email=agent%40example.com&phone=%2B12065550123: 400 Bad Request`), { status: 400 });
+    return call(pathname, opts);
+  };
+  const res = await runImport(ghl, { enrollWorkflowId: "wf-first-1" });
+  assert.equal(res.results[0].action, "created");
+  const said = JSON.stringify(res.warnings);
+  assert.doesNotMatch(said, /agent@example\.com|agent%40example|2065550123|e:agent|Test Agent/, said);
+  assert.deepEqual(res.warnings, ["workflow enrollment failed for 1 agent: GHL POST /contacts/c-new/workflow/wf-first-1: 400 Bad Request"]);
+});

@@ -29,6 +29,7 @@ import { planAgentPulse, startAgentPulse, getAgentPulseJob, previewAgentPulse, s
 import { ensureProfile, learnFacts, recordEvent, recordEvents } from "../contact-record.js";
 import { store } from "../store.js";
 import { mapPool } from "../map-pool.js";
+import { scrubMessage } from "../app-errors.js";
 import { scoreListing, medianPricePerSqft, distressSignals, meetsDistressRule, DISTRESS_RULES, OLD_HOUSE_YEAR, medianIndex, offMarketListings, OFF_MARKET_WITHIN_DAYS, recentListings, RECENT_LISTERS_DAYS } from "../outreach-score.js";
 import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
@@ -127,6 +128,28 @@ const e164 = (phone) => (phone ? `+1${normPhone(phone)}` : "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Retry a GHL call on 429 (2s, then 4s). Other errors propagate.
+/**
+ * failureTally() → { add(what, err), lines() }
+ *
+ * Per-agent failures, counted: a warning says how many agents and one
+ * scrubbed example, never who. An agent's key is their email or phone
+ * (agentIdentity), and GHL's error text carries the lookup URL; the sweep
+ * keeps its first warning on the cursor (CLAUDE.md: no contact's details in
+ * a stored record; 2026-11-09 audit).
+ */
+export function failureTally() {
+  const by = new Map();
+  return {
+    add(what, err = "") {
+      const g = by.get(what) || { n: 0, sample: "" };
+      g.n++;
+      if (!g.sample) g.sample = scrubMessage(err).slice(0, 160);
+      by.set(what, g);
+    },
+    lines: () => [...by].map(([what, g]) => `${what} for ${g.n} agent${g.n === 1 ? "" : "s"}${g.sample ? `: ${g.sample}` : ""}`),
+  };
+}
+
 async function withRetry(fn) {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -675,6 +698,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     const recheckMs = GHL_RECHECK_DAYS * 86400000;
     const unchecked = agentRows.filter((r) => !r.doc.ghl.contactId && r.stored?.status !== "imported" && r.doc.phone
       && !(r.doc.ghl.checkedAt && Date.now() - Date.parse(r.doc.ghl.checkedAt) < recheckMs));
+    // Counted, never named: an agent's key is their email or phone.
+    const ghlCheck = failureTally();
     await mapPool(unchecked, 3, async (r) => {
       try {
         const match = await withRetry(() =>
@@ -686,9 +711,10 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           checkedAt: new Date().toISOString(),
         };
       } catch (e) {
-        warnings.push(`GHL check failed for ${r.doc.name || r.agentKey}: ${e.message}`);
+        ghlCheck.add("GHL check failed", e);
       }
     });
+    warnings.push(...ghlCheck.lines());
 
     // Last message activity for every agent that has a GHL contact (matched or
     // already imported) — shown in the UI so recently-touched agents stand out.
@@ -1324,6 +1350,8 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       dryRun = dryRun !== false || !OUTREACH_IMPORTS_ENABLED;
 
       const warnings = [];
+      // Per-agent failures, counted and never named (failureTally).
+      const fails = failureTally();
       // Resolve custom-field ids once per batch (created on first use).
       let fieldIds = null;
       if (!dryRun) {
@@ -1361,7 +1389,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           if (newOnly && match) {
             const ghl = { ...(a.ghl || {}), contactId: match.id, matchedBy: match.matchedBy, checkedAt: new Date().toISOString() };
             await store.upsertOutreachAgents(locationId, batch.id, [{ agentKey, doc: { ...a, ghl } }])
-              .catch((e) => warnings.push(`${agentKey}: saving GHL match: ${e.message}`));
+              .catch((e) => fails.add("saving the GHL match failed", e));
             return { agentKey, ok: true, name: a.name, skipped: "already in GHL", contactId: match.id, matchedBy: match.matchedBy };
           }
 
@@ -1459,7 +1487,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
                   ...(openWith === "app" ? { openWith: "app", county: countyName(hook.county, county) } : {}) } },
               ...[batchTag, ...(sessionTag ? [sessionTag] : []), ...(applyTag ? [OUTREACH_TAG] : [])].map((tag) => ({ type: "tag_added", at, source: "import", ref: batch.id, data: { tag } })),
             ] });
-          } catch (e) { warnings.push(`${agentKey}: record: ${e.message}`); }
+          } catch (e) { fails.add("recording the import failed", e); }
 
           await store.setOutreachAgentStatus(locationId, batch.id, agentKey, {
             status: "imported", contactId, importedAt: new Date().toISOString(),
@@ -1471,7 +1499,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
           let opened = null;
           if (openWith === "app" && typeof firstTouch === "function" && action === "created") {
             opened = await openFirstText({ locationId, client, contactId, ref: batch.id, hook: firstTextHook(a, { county }) });
-            if (opened.skipped) warnings.push(`${agentKey}: first text: ${opened.skipped}`);
+            if (opened.skipped) fails.add(`first text skipped (${scrubMessage(opened.skipped).slice(0, 80)})`);
           }
           let enrolled = null;
           if (enrollWorkflowId && action !== "created") {
@@ -1487,12 +1515,12 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
               });
             } catch (e) {
               enrolled = { error: e.message };
-              warnings.push(`${agentKey}: workflow: ${e.message}`);
+              fails.add("workflow enrollment failed", e);
             }
           }
           return { agentKey, ok: true, name: a.name, action, contactId, tagged, ...(opened ? { opened } : {}), ...(enrolled ? { enrolled } : {}) };
         } catch (e) {
-          warnings.push(`${agentKey}: ${e.message}`);
+          fails.add("import failed", e);
           return { agentKey, ok: false, error: e.message };
         }
       };
@@ -1513,6 +1541,7 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
       } else {
         results = await mapPool(agentKeys, 2, importOne);
       }
+      warnings.push(...fails.lines());
 
       return {
         ok: true, dryRun, importsEnabled: OUTREACH_IMPORTS_ENABLED, tag: OUTREACH_TAG,
