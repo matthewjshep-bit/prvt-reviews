@@ -4399,7 +4399,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch { /* no events yet — the tags and the deal record still count */ }
     const linked = new Set((deal.investors || []).map((i) => i.contactId));
     const readThread = async (contactId) => {
-      try { const t = await buildTranscript(client, locationId, contactId, { maxCallTranscripts: 6 }); await sleep(120); return { thread: t.text || "", stats: t.stats || null }; }
+      // Every buyer the deal went to: no extra reads for their email stubs (enrich.js emailWords).
+      try { const t = await buildTranscript(client, locationId, contactId, { maxCallTranscripts: 6, maxEmailReads: 0 }); await sleep(120); return { thread: t.text || "", stats: t.stats || null }; }
       catch (e) { await sleep(120); return { thread: "", stats: { error: String(e?.message || e).slice(0, 120) } }; }
     };
     const flipOf = (thread) => { const m = /recent flip you did at ([^\n]+?)(?: and| wondering|\n)/i.exec(thread); return m ? `flipped ${m[1].trim()}` : null; };
@@ -7352,7 +7353,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await mapPool(candidates, 3, async (c) => {
         try {
           const t = await buildTranscript(client, locationId, c.contactId, {
-            maxConversations: 3, maxPagesPerConvo: 1, maxMessages: 80, maxChars: 6000, maxCallTranscripts: 0,
+            maxConversations: 3, maxPagesPerConvo: 1, maxMessages: 80, maxChars: 6000, maxCallTranscripts: 0, maxEmailReads: 0,
           });
           c.snippet = t.text;
         } catch (e) {

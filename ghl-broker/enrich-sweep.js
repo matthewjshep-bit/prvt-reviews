@@ -260,7 +260,9 @@ async function runSweep(job, { client, locationId, saved, store }) {
 
       let transcript;
       try {
-        transcript = await buildTranscript(client, locationId, contactId);
+        // A sweep reads hundreds of threads: no extra reads for the emails
+        // inside GHL's stubs (enrich.js emailWords), the GHL budget stays as it was.
+        transcript = await buildTranscript(client, locationId, contactId, { maxEmailReads: 0 });
       } catch (e) {
         if (e?.status === 401 || e?.status === 403) {
           throw Object.assign(
