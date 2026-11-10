@@ -53,6 +53,7 @@ import { botHold, paceOf, paceScale } from "./bot-hold.js";
 import { cadenceDays, requestStands, isAutoReply } from "./brush-offs.js";
 import { optOutInTranscript, CONVERSATION_AI_DEFAULTS } from "./conversation-ai.js";
 import { CHECK_IN_GAP_DAYS } from "./agent-focus.js";
+import { callOwedWait } from "./promise-owed.js";
 import { worksOn, runDaysFrom, pacificParts } from "./follow-up-engine.js";
 
 const DAY_MS = 86400000;
@@ -191,6 +192,9 @@ export const AGENT_PULSE_EVENT_TYPES = [
   // A house they named that we never priced: the one thing a check-in may
   // ask about (2026-10-15, checkInHook).
   "house_mentioned",
+  // A call we owe goes first (2026-11-09, agent-focus.js callOwedHolds): a
+  // booked call and the calls we tried read with promise_made and call_summary.
+  "call_booked", "call_attempt",
 ];
 export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided", "agent_pulse_joined"];
 // What counts as them having written back (store.lastContactActivity with
@@ -659,7 +663,13 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   // An agent who talks like an investor is a source before they've sent a
   // house (shared/lead-source.js investorMindedCue).
   if ((segment === "engaged" || segment === "cold") && events.some((e) => e?.type === "investor_minded")) segment = "source";
-  const voided = new Set(ledger.filter((e) => e.type === "agent_pulse_voided").map((e) => e.data?.claimKey || e.ref).filter(Boolean));
+  // A call we owe them goes first (2026-11-09: a booked 8am call nobody made,
+  // then a text asking for fixers). Booked, missed or promised, the check-in
+  // and a cold agent's listing ping wait three days for it
+  // (shared/promise-owed.js callOwedWait; agent-focus.js asks it at the door).
+  const owedCall = callOwedWait({ events, now });
+  if (owedCall) return out("not_due", `${owedCall.reason}: the call goes first`, { segment, dueAt: owedCall.until });
+  const voided =new Set(ledger.filter((e) => e.type === "agent_pulse_voided").map((e) => e.data?.claimKey || e.ref).filter(Boolean));
   const texted = ledger.filter((e) => e.type === "agent_pulse_texted" && (!agent.lastInboundAt || String(e.at) > String(agent.lastInboundAt)));
   const unanswered = texted.length;
   const downgraded = segment !== "cold" && segment !== "source" && s.engagedMaxUnanswered > 0 && unanswered >= s.engagedMaxUnanswered;

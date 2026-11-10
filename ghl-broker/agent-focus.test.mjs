@@ -109,3 +109,17 @@ test("the agent check-in goes out when the live offer has nothing coming and nob
   assert.match(await agentTurnReason({ store: talking, locationId: "LOC", contactId: "c1", kind: "agent_pulse", config, now: NOW }), /one house at a time/,
     "they wrote three days ago: the offer is still the conversation");
 });
+
+// 2026-11-09: a booked call nobody made, then a text from us asking for
+// fixers. Every door asks: a call we owe goes first.
+test("no check-in or cold ladder rung goes through any door to an agent whose booked call we missed", async () => {
+  const booking = { type: "call_booked", contactId: "c1", at: ago(1.2), data: { startTime: ago(1) } };
+  const asked = [];
+  const store = { ...storeWith({ offers: [] }), async listContactEvents(_loc, contactId, opts = {}) { asked.push(opts.types || []); return contactId === "c1" ? [booking] : []; } };
+  assert.match(await agentTurnReason({ store, locationId: "LOC", contactId: "c1", kind: "agent_pulse", config, now: NOW }), /we missed the call booked with them: the call goes first/);
+  assert.match(await agentTurnReason({ store, locationId: "LOC", contactId: "c1", kind: "outreach_nudge", config, now: NOW }), /the call goes first/);
+  assert.ok(asked.every((t) => t.includes("call_booked") && t.includes("call_attempt")), "a small read of the call events");
+  // The live offer's nudge isn't held by it.
+  assert.equal(await agentTurnReason({ store: { ...store, async listOffers() { return [LIVE]; } }, locationId: "LOC", contactId: "c1", kind: "offer_nudge", config, now: NOW }), null);
+  assert.equal(await agentTurnReason({ store, locationId: "LOC", contactId: "c2", kind: "agent_pulse", config, now: NOW }), null, "someone we owe nothing");
+});

@@ -154,6 +154,30 @@ test("a house we walked from is never raised; its agent still hears from us", ()
   assert.equal(live.pulseReason, "general", "a house we already have a live offer on is that offer's business");
 });
 
+// The 2026-11-09 audit: a call booked for 8am was never made, and the next
+// text from us asked the agent for fixers. A call we owe goes first: the
+// check-in (and a cold agent's listing ping) waits three days for it.
+test("no any-fixers check-in goes to an agent whose booked call we missed", () => {
+  const booking = { type: "call_booked", at: ago(2), data: { startTime: ago(1) } };
+  const v = evaluateAgent(agent({ lastInboundAt: ago(30), events: [booking] }), ctx());
+  assert.equal(v.status, "not_due");
+  assert.match(v.reason, /we missed the call booked with them/);
+  assert.equal(v.dueAt, new Date(Date.parse(ago(1)) + 3 * DAY).toISOString());
+  const rang = { type: "call_attempt", at: ago(0.9), data: { outcome: "no_answer", direction: "outbound" } };
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), events: [booking, rang] }), ctx()).status, "due", "we called: the check-in goes");
+  assert.equal(evaluateAgent(agent({ lastInboundAt: ago(30), events: [{ ...booking, data: { startTime: ago(4) } }] }), ctx()).status, "due", "three days on, it goes");
+  // A call we said we'd make: a number going out since keeps the promise
+  // sweep's word, not the call.
+  const promised = { type: "promise_made", at: ago(1), data: { what: "call", text: "I'll give you a call tomorrow." } };
+  const numberWent = { type: "promise_kept", at: ago(0.5), data: { by: "our_number" } };
+  const p = evaluateAgent(agent({ lastInboundAt: ago(30), events: [promised, numberWent] }), ctx());
+  assert.equal(p.status, "not_due");
+  assert.match(p.reason, /we said we'd call them/);
+  // A cold agent's new listing waits too.
+  const cold = agent({ listings: [listing()], events: [{ type: "outreach_enrolled", at: ago(90), data: { kind: "first" } }, booking] });
+  assert.equal(evaluateAgent(cold, ctx()).status, "not_due");
+});
+
 test("a cold agent hears only about a new listing, 60 days apart, and never after three unanswered", () => {
   const cold = agent({ events: [{ type: "outreach_enrolled", at: ago(90), data: { kind: "first" } }, { type: "outreach_enrolled", at: ago(70), data: { kind: "followup" } }] });
   assert.equal(evaluateAgent(cold, ctx()).status, "not_due", "no listing, no reason");

@@ -124,3 +124,18 @@ test("a nudge another path already sent on the offer is that day's rung", () => 
   ];
   assert.deepEqual(nudgeTimes(drafts, "auburn"), [auditNudge]);
 });
+
+// 2026-11-09: a call we owe goes first. The check-in and the cold ladder's
+// repeat rungs wait for it; the live offer's nudge, the push to paper and a
+// first text don't.
+test("a live offer's nudge still goes after a missed call", async () => {
+  const { callOwedHolds, CALL_WAIT_KINDS } = await import("./agent-focus.js");
+  const missed = [{ type: "call_booked", contactId: C, at: ago(1.5), data: { startTime: ago(1) } }];
+  assert.match(callOwedHolds({ kind: "agent_pulse", events: missed, now: NOW }), /we missed the call booked with them/);
+  assert.match(callOwedHolds({ kind: "outreach_nudge", events: missed, now: NOW }), /the call goes first/);
+  for (const kind of ["offer_nudge", "hot_push", "counter_nudge", "outreach_open", "realm_check", "promise_due"]) {
+    assert.equal(callOwedHolds({ kind, events: missed, now: NOW }), null, `${kind} isn't held`);
+  }
+  assert.deepEqual([...CALL_WAIT_KINDS].sort(), ["agent_pulse", "outreach_nudge"]);
+  assert.equal(callOwedHolds({ kind: "agent_pulse", events: [], now: NOW }), null, "nothing owed, nothing held");
+});
