@@ -23,7 +23,7 @@ import { FERRY_ONLY_ZIPS } from "../shared/underwrite-checks.js";
 import express from "express";
 import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
 import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickDealBuyers, blastedTo, isManufacturedTarget, isLandTarget } from "../shared/buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickDealBuyers, blastedTo, isManufacturedTarget, isLandTarget, DEAL_SENT_TYPES, sentTo } from "../shared/buyer-score.js";
 import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
 import { buyersInPlay } from "../shared/offer-status.js";
 import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
@@ -39,6 +39,7 @@ import { mapPool } from "../map-pool.js";
 import { queueBlastDrafts, normalizeDispoAutopilot, catchUpDue, blastChannel, blastChannels, resumePulledBack, sampleBlastTexts } from "../dispo-autopilot.js";
 import { planBuyerPulse, startBuyerPulse, previewBuyerPulse, getBuyerPulseJob, CURSOR_NAME as PULSE_CURSOR } from "../buyer-pulse.js";
 import { runShowingSweep } from "../showing-sweep.js";
+import { startLedgerBackfill, getLedgerJob } from "../deal-ledger.js";
 import { dealOutreachPaused, outreachPausedReason, spokenForSomeoneElse } from "../shared/offer-status.js";
 import {
   searchAllContactsByTags, getContact, updateContact, listLocationTags,
@@ -872,6 +873,29 @@ export default function createDispoRouter({ resolveLocation }) {
     } catch (err) { fail(res, err); }
   });
 
+  // POST /ledger/backfill { offerId, dryRun = true } — who already has this
+  // deal, read back from the threads since it was made (deal-ledger.js): a
+  // deal_hand_sent for each buyer we texted it to by hand, so a Resume or the
+  // morning catch-up doesn't text them again. Dry unless dryRun is false.
+  // Answers with the job: counts only. GET ?offerId= reads the job back.
+  router.post("/ledger/backfill", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const offer = await store.getOffer(String(req.body?.offerId || "").slice(0, 64));
+      if (!offer?.deal || offer.locationId !== locationId) return res.status(404).json({ error: "deal not found" });
+      const job = startLedgerBackfill({ client, store, locationId, offer, dryRun: req.body?.dryRun !== false });
+      res.json({ ok: true, job });
+    } catch (err) { fail(res, err); }
+  });
+  router.get("/ledger/backfill", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const offer = await store.getOffer(String(req.query?.offerId || "").slice(0, 64));
+      if (!offer || offer.locationId !== locationId) return res.status(404).json({ error: "deal not found" });
+      res.json({ ok: true, job: getLedgerJob(offer.id) });
+    } catch (err) { fail(res, err); }
+  });
+
   /* ---------- map + charts ---------- */
 
   // GET /insights?region=&city=&type=&tier= — where the (filtered) book has
@@ -1356,8 +1380,14 @@ export default function createDispoRouter({ resolveLocation }) {
     const paused = dealOutreachPaused(offer?.deal);
     if (paused) return { pulledBack: 0, dropped: 0, queued: 0, drafted: 0, rows: [], paused, reason: outreachPausedReason(paused, offer?.address) };
     const settings = saved || await getSettings(locationId);
+    // Not a buyer who has had it since by another way: texted by hand while it
+    // was stopped (2026-11-09: 4334's builders), or by a send the app recorded.
+    const eligible = async () => {
+      const had = sentTo(offer, await store.listContactEventsSince(locationId, offer?.deal?.createdAt || new Date(now - 365 * 86400000).toISOString(), { types: DEAL_SENT_TYPES, limit: 20000 }).catch(() => []));
+      return (await matchForDeal(locationId, offer, { exclude: "none" })).results.filter((r) => !had.has(r.contactId));
+    };
     const r = await resumePulledBack({ store, locationId, offer, saved: settings, now, startAfterMs, sendsEnabled: CARD_SENDS_ENABLED, blastsEnabled: DISPO_BLASTS_ENABLED,
-      deps: { eligible: async () => (await matchForDeal(locationId, offer, { exclude: "none" })).results } });
+      deps: { eligible } });
     if (r.queued || r.drafted) {
       const full = await store.getOffer(offer.id);
       const last = full?.deal?.blasts?.at(-1);
@@ -1418,8 +1448,9 @@ export default function createDispoRouter({ resolveLocation }) {
       propertyTypes: q.propertyTypes || [], lotMin: q.lotMin ?? null, asset: dq.asset,
       site: siteFlagsOf(offer), island: FERRY_ONLY_ZIPS.has(zip) || checkFlags.includes("thin_island"), onMarket: checkFlags.includes("exposure") });
     const linked = new Set((offer.deal?.investors || []).map((i) => i.contactId));
+    // A deal texted by hand (deal_hand_sent) is a deal they have, like one the app sent.
     const blasted = blastedTo(offer, {
-      events: await store.listContactEventsSince(locationId, new Date(Date.now() - 365 * 86400000).toISOString(), { types: ["blast_sent"], limit: 20000 }).catch(() => []),
+      events: await store.listContactEventsSince(locationId, new Date(Date.now() - 365 * 86400000).toISOString(), { types: DEAL_SENT_TYPES, limit: 20000 }).catch(() => []),
       drafts: await store.listReplyDrafts(locationId, { status: ["draft", "scheduled", "sending"], limit: 5000 }).catch(() => []),
     });
     // A buyer carrying one of the deal's blast tags has had it, whether or not
