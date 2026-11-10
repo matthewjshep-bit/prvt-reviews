@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "follow-up-steps-test-"));
 
 const { standardText, fillTemplate, NUDGE_TEXTS } = await import("./shared/standard-texts.js");
-const { normalizeOpener, DEFAULT_FOLLOW_UP_TEXTS } = await import("./shared/outreach-opener.js");
+const { normalizeOpener, DEFAULT_FOLLOW_UP_TEXTS, DAY_TWO_TEXTS, LEGACY_DEFAULT_FOLLOW_UP_TEXTS } = await import("./shared/outreach-opener.js");
 const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
 const { DEFAULT_LADDERS } = await import("./shared/follow-up.js");
 const { outboundDescriptor } = await import("./reply-agent.js");
@@ -38,12 +38,22 @@ test("each follow-up step sends the text written for that step", () => {
   assert.equal(standardText({ kind: "outreach_nudge", outbound: nudge(saved, 10), name: "Rigo", contactId: "c-rigo" }).text, "Hi Rigo, step two, any fixers?");
 });
 
-test("unset, follow-up 1 and 2 are today's two follow-up texts", () => {
+// 2026-11-09: follow-up 1 left as it ships is one of the eight day-2 texts,
+// picked by the contact (DAY_TWO_TEXTS), so a day's batch doesn't read alike.
+test("unset, follow-up 1 is one of the day-2 texts and follow-up 2 is today's second", () => {
   assert.deepEqual(DEFAULT_FOLLOW_UP_TEXTS, [NUDGE_TEXTS[0], NUDGE_TEXTS[1]]);
   assert.deepEqual(normalizeOpener({}).followUps, DEFAULT_FOLLOW_UP_TEXTS);
-  const values = { first: "Rigo", address: "2210 Pine Ave" };
-  assert.equal(standardText({ kind: "outreach_nudge", outbound: nudge({}, 3), name: "Rigo", contactId: "c-x" }).text, fillTemplate(NUDGE_TEXTS[0], values));
+  const values = { first: "Rigo", address: "2210 Pine Ave", town: "Seattle" };
+  const picks = new Set();
+  for (const contactId of ["c-x", "c-1", "c-2", "c-3", "c-4", "c-5"]) {
+    const first = standardText({ kind: "outreach_nudge", outbound: nudge({}, 3), name: "Rigo", contactId });
+    assert.ok(DAY_TWO_TEXTS.map((t) => fillTemplate(t, values)).includes(first.text), first.text);
+    picks.add(first.text);
+  }
+  assert.ok(picks.size > 1, "not every agent gets the same one");
   assert.equal(standardText({ kind: "outreach_nudge", outbound: nudge({}, 10), name: "Rigo", contactId: "c-x" }).text, fillTemplate(NUDGE_TEXTS[1], values));
+  // Pools "v1" puts the 10-26 pair back in one field.
+  assert.equal(standardText({ kind: "outreach_nudge", outbound: nudge({}, 3), name: "Rigo", contactId: "c-x", pools: "v1" }).text, fillTemplate(LEGACY_DEFAULT_FOLLOW_UP_TEXTS[0], values));
 });
 
 test("a step with no text of its own falls back to the pool, still not repeating the step before", () => {

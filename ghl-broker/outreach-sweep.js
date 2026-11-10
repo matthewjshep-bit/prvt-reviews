@@ -326,6 +326,9 @@ export function normalizeOutreachAutopilot(v = {}) {
       enabled: o.distressCheck?.enabled === true,
       perRun: Math.min(MAX_SCREEN_PER_RUN, Math.max(SCREEN_CHUNK, Math.round(Number(o.distressCheck?.perRun)) || DEFAULT_SCREEN_PER_RUN)),
     },
+    // The postal address the agent emails end on, under the opt-out line
+    // (CAN-SPAM, 2026-11-09; a PO box is fine). Empty: the opt-out line alone.
+    postalAddress: String(o.postalAddress ?? "").replace(/[<>{}]/g, "").replace(/\s+/g, " ").trim().slice(0, 200),
   };
 }
 

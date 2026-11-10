@@ -13,6 +13,7 @@ import { FOLLOW_UP_KINDS, kindsFor } from "@shared/follow-up.js";
 import { BTN } from "./ui.jsx";
 import { isVcard } from "@shared/contact-card.js";
 import { contactCardUrl } from "./api.js";
+import VoiceNote from "./VoiceNote.jsx";
 
 export const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -473,9 +474,12 @@ export function RulesEditor({ config, patch }) {
       intro="Lines it may not cross, whoever is texting. One per row. These sit above everything else in the prompt.">
       <div className="space-y-2">
         {rules.map((r, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <input className={INPUT_CLS} value={r} onChange={(e) => update(i, e.target.value)} placeholder="Never say who the end buyer is." />
-            <button type="button" className={BTN} aria-label="Remove rule" onClick={() => patch({ rules: rules.filter((_, j) => j !== i) })}><Trash2 size={13} /></button>
+          <div key={i} className="space-y-1">
+            <div className="flex items-center gap-2">
+              <input className={INPUT_CLS} value={r} onChange={(e) => update(i, e.target.value)} placeholder="Never say who the end buyer is." />
+              <button type="button" className={BTN} aria-label="Remove rule" onClick={() => patch({ rules: rules.filter((_, j) => j !== i) })}><Trash2 size={13} /></button>
+            </div>
+            <VoiceNote text={r} saved />
           </div>
         ))}
         <button type="button" className={BTN} onClick={() => patch({ rules: [...rules, ""] })}><Plus size={13} /> Add a rule</button>
@@ -505,6 +509,7 @@ export function ExamplesEditor({ config, patch }) {
               <Field label="They said"><Area rows={2} value={e.theySaid} onChange={(v) => update(i, "theySaid", v)} placeholder="you guys still buying?" /></Field>
               <Field label="We'd say"><Area rows={2} value={e.weSay} onChange={(v) => update(i, "weSay", v)} placeholder="Always. Send me the address and I'll have a number back today." /></Field>
             </div>
+            <VoiceNote text={e.weSay} kind="reply" className="mt-1" />
           </div>
         ))}
         <button type="button" className={BTN} onClick={() => patch({ examples: [...ex, { id: `ex-${Date.now().toString(36)}`, party: "any", theySaid: "", weSay: "" }] })}>
@@ -716,11 +721,32 @@ export function StyleCard({ config, patch }) {
           <Text type="number" value={st.maxSmsChars} onChange={(v) => set("maxSmsChars")(Number(v))} />
         </Field>
       </div>
+      <VoiceCheckFields config={config} patch={patch} />
       <div className="mt-3 grid gap-2 sm:grid-cols-2 border-t border-slate-100 pt-3">
         <Toggle checked={config.notes.onDraft} onChange={(v) => patch({ notes: { ...config.notes, onDraft: v } })}>Leave a GHL note on every draft</Toggle>
         <Toggle checked={config.notes.onAutoSend} onChange={(v) => patch({ notes: { ...config.notes, onAutoSend: v } })}>Leave a GHL note when it sends itself</Toggle>
       </div>
     </Section>
+  );
+}
+
+// The one voice check (shared/voice.js, 2026-11-09): every text and email
+// the machine starts, at draft, at queue and as it leaves by itself. A
+// machine text with a tell (a dash, "just checking in", a repeat of our
+// last text) gets one rewrite, then waits for you. Your own saved wording
+// and your Send are never held. `pools` puts the Oct 17 check-ins back.
+function VoiceCheckFields({ config, patch }) {
+  const ci = config.checkIns || { lint: true, pools: "v2" };
+  const set = (k) => (v) => patch({ checkIns: { ...ci, [k]: v } });
+  return (
+    <div className="mt-3 grid gap-2 border-t border-slate-100 pt-3 sm:grid-cols-2">
+      <div className="flex items-end pb-2">
+        <Toggle checked={ci.lint} onChange={set("lint")}>Hold a machine text that reads like a machine</Toggle>
+      </div>
+      <Field label="Fixed check-ins, follow-ups and emails" hint="The Nov 9 rewrite, or the Oct 17 texts back in one switch.">
+        <Select value={ci.pools} onChange={set("pools")} options={[["v2", "Rewritten (Nov 9)"], ["v1", "The Oct 17 texts"]]} />
+      </Field>
+    </div>
   );
 }
 
@@ -816,8 +842,9 @@ export function MediaCard({ config, patch }) {
         An address found counts as if they had typed it, so each house becomes a draft for that contact.
       </p>
       <Field label="Reply to a bare photo">
-        <Text value={config.media.reply} onChange={(v) => patch({ media: { ...config.media, reply: v } })} placeholder="Thanks for the images, taking a look!" />
+        <Text value={config.media.reply} onChange={(v) => patch({ media: { ...config.media, reply: v } })} placeholder="Thanks for the pics." />
       </Field>
+      <VoiceNote text={config.media.reply} kind="reply" className="mt-1" />
     </Section>
   );
 }
@@ -897,6 +924,7 @@ export function PartyPlaybooks({ config, patch, workflows }) {
               ? "We buy as-is with a hard money loan, 10–14 day inspection, close in roughly 10–21 days. If they ask for proof of funds, say we'll send it with the contract. Never discuss our assignment fee or who the end buyer is."
               : "We assign contracts; the buyer price is the price. Deals go out with a dataroom link, never photos by text. If they want to walk it, say we'll set a time today."} />
         </Field>
+        <VoiceNote text={pb.instructions} saved />
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="It may, on its own" hint="Things it can say yes to without asking you.">
             <Area rows={2} value={pb.mayCommit} onChange={(v) => setPb({ mayCommit: v })}

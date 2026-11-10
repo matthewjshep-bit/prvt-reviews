@@ -47,7 +47,7 @@ import { BOOKING_INTENTS, looksLikeScheduling, pickSlots, evaluateBookingGuard, 
 import { paperWent, paperWorthy, floatSentAt, isRoughNumber } from "./shared/paper-follows.js";
 import { RSVP_SIGNALS } from "./shared/showing.js";
 import { getFreeSlots, searchConversations, listConversationMessages } from "./ghl.js";
-import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, PROMISE_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, asksOurNumber, soundsLikeSecondThoughts, soundsCrossedUp, doesntKnowUs } from "./shared/conversation-ai.js";
+import { GUARD_FOR_INTENT, AGENT_PAPER_RULE, AGENT_GOAL_RULE, AGENT_HONESTY_RULE, CLARIFY_RULE, PROMISE_RULE, handsWriteUpBack, clearsWriteUp, DEAL_SIGNALS, DEAL_SIGNAL_LABEL, dealSignalFromText, asksWriteUpTerms, defersWriteUpTerms, claimsAllCash, houseWordsIn, asksUsToComeUp, asksForTheirNumber, asksOurNumber, soundsLikeSecondThoughts, soundsCrossedUp, doesntKnowUs, CONVERSATION_AI_DEFAULTS } from "./shared/conversation-ai.js";
 import { eventFromLedgerLine, normalizePropertyDetails, propertyDossier } from "./shared/contact-record.js";
 import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blockingReason, answersInbound, supersededBy } from "./shared/follow-up.js";
 import { normalizeAgentPulse, listingAlreadyRaised, LISTING_REASONS } from "./shared/agent-pulse.js";
@@ -55,7 +55,9 @@ import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_
 import { passNoteStale } from "./shared/pass-note.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
 import { normalizeOpener, openerVoice, countyName, homeFor, withHomeBlank, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
-import { standardText } from "./shared/standard-texts.js";
+import { standardText, isShippedText } from "./shared/standard-texts.js";
+import { voiceFlags, hardVoiceKeys, voiceLine, ourLastTexts, VOICE_LINE_RX } from "./shared/voice.js";
+import { normalizeDealTexts } from "./shared/blast-text.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -965,10 +967,47 @@ export function talksAboutUsAsSomeoneElse(reply, { selfName = "", contactName = 
 // of go on its own; "high" waits for a person unless it was certain.
 const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
 
+/**
+ * voiceGateFlags(reply, voice) → [] | ["reads like a machine: a dash, two questions"]
+ *
+ * The one voice check (shared/voice.js, 2026-11-09) as a gate flag. `voice`
+ * is { kind, prior, machine, signOff, channel } or null (the check is off,
+ * or a person is sending). `kind` is "reply" for an answer to them, else the
+ * machine kind ("day_two", "cold_ladder", "agent_checkin_cold" …) the
+ * length and question rules read. `prior` is our last texts to them, newest
+ * first. A text Matt wrote himself (`machine: false`) is never held. Money
+ * and links stay the style gate's, which the page may switch off.
+ */
+export function voiceGateFlags(reply, voice) {
+  if (!voice || !String(reply || "").trim()) return [];
+  let text = String(reply).trim();
+  const so = String(voice.signOff || "").trim();
+  if (so && text.toLowerCase().endsWith(so.toLowerCase())) text = text.slice(0, -so.length).trim();
+  const keys = hardVoiceKeys(voiceFlags({ text, channel: voice.channel || "sms", kind: voice.kind || "reply", prior: voice.prior || [],
+    machine: voice.machine !== false, ...(voice.now ? { now: voice.now } : {}) }))
+    .filter((k) => k !== "a dollar sign" && k !== "a link");
+  return keys.length ? [voiceLine(keys)] : [];
+}
+
+/**
+ * voiceKindOf(kind, outbound) → the kind the voice check's length and
+ * question rules read: day 2 and the cold ladder apart from the other
+ * nudges, and a cold agent's check-in held to the first text's length.
+ */
+export function voiceKindOf(kind = "", outbound = null) {
+  const o = outbound || {};
+  if (kind === "outreach_nudge") return o.repeats && !Number(o.stepIndex) ? "cold_ladder" : Number(o.stepIndex) === 1 ? "day_two" : "outreach_nudge";
+  if (kind === "agent_pulse" && (o.segment === "cold" || /gone quiet/.test(String(o.segment || "")))) {
+    return o.reason === "fresh_listing" || o.reason === "off_market_listing" ? "agent_listing_cold" : "agent_checkin_cold";
+  }
+  return kind;
+}
+
 export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], hiddenAmounts = [], ranges = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", botAnswer = "", ourAmount = 0,
   vacantOk = false, carrierCheck = false, houseWords = "", writeUpOk = true, theirValue = 0, ourValue = 0,
+  voice = null,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -1150,6 +1189,7 @@ export function evaluateReplyGates({
         "when their value is under ours we price on theirs, never argue it up");
     }
   }
+  flags.push(...voiceGateFlags(draft.reply, voice));
   // `ok` is the row's word — a counter is not auto-sendable, full stop. But
   // the lock is the ONE flag a guard may overturn, so it is named apart from
   // the rest: `clean` says every OTHER gate passed. decideAutoSend lets a
@@ -1980,15 +2020,15 @@ export async function firstTextHouse(store, locationId, contactId) {
 // What the model is told on their first answer (shared/flip-read.js FIXERS_CALL_ASKS).
 const CALL_ASK_LINE =
   "FIRST ANSWER: this is their first answer to our first text. Close with ONE question that asks for both other fixers and a " +
-  "quick call, in your words or these: \"If you've got other fixers on your radar, I'd love a quick 5-minute call this week, what " +
+  "quick call, in your words or these: \"If you've got other fixers on your radar, a quick 5-minute call this week would be great, what " +
   "time works?\" Never name a day or a time (there's no calendar: they pick), and ask nothing else in the same text. Leave it out " +
   "if they brought up a house of their own (that house is the lead) or don't want to hear from us.";
-// The same, without the call (parties.agent.callAsk off): the first text
-// carries no other-fixers line, so their first answer always asks for one.
+// The same, without the call (parties.agent.callAsk off), when our first
+// text didn't already ask (callAskFor alreadyAsked).
 const FIXERS_ASK_LINE =
   "FIRST ANSWER: this is their first answer to our first text. Close with ONE question asking whether they have other " +
-  "fixers on their radar, on or off-market, in your words or these: \"If you've got other fixers on your radar, on or " +
-  "off-market, I'm all ears.\" Ask nothing else in the same text. Leave it out if they brought up a house of their own " +
+  "fixers coming up, listed or off-market, in your words or these: \"Got any other fixers on your radar, listed or " +
+  "off-market?\" Ask nothing else in the same text, and leave it out if your reply already asks them something. Leave it out if they brought up a house of their own " +
   "(that house is the lead) or don't want to hear from us.";
 // Replies the call ask never rides on: the conversation turned, or a person has it.
 const CALL_ASK_SKIP_INTENTS = new Set(["counter", "acceptance", "realm_yes", "rejection", "proof_of_funds", "opt_out", "wants_call", "scheduling", "wants_walkthrough", "media"]);
@@ -2016,7 +2056,17 @@ export function callAskFor({ events = [], transcript = "", message = "", ice = n
     const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\]\s+US\b/.exec(line);
     return m && Date.parse(`${m[1]}T${m[2]}:00Z`) > since + 60000;
   });
-  return { first: !ours };
+  // Our first text already asked for their other fixers (2026-11-09: the
+  // saved first text and two of the three defaults end on it, and our first
+  // reply asked again in a third of first answers). The send records it
+  // (fixers_asked), and the thread shows it, within minutes of the opener.
+  const near = (t) => Number.isFinite(t) && t >= opener - 10 * 60000 && t <= since + 10 * 60000;
+  const alreadyAsked = (events || []).some((e) => e?.type === "fixers_asked" && near(Date.parse(e.at || "")))
+    || String(transcript || "").split("\n").some((line) => {
+      const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\]\s+US\s+\w+:\s?(.*)$/.exec(line);
+      return m && near(Date.parse(`${m[1]}T${m[2]}:00Z`)) && FIXERS_ASK_RX.test(m[3]);
+    });
+  return { first: !ours, ...(alreadyAsked ? { alreadyAsked: true } : {}) };
 }
 
 /**
@@ -2043,7 +2093,9 @@ export async function qualifyIcebreaker({ store, locationId, contactId, draft, m
   const ours = (stage) => sent.some((d) => d.qualify?.stage === stage && sameStreet(d.qualify.address || "", ice.address));
   const asked = ours("ask") || String(transcript || "").split("\n").some((l) => /^\[[^\]]*\]\s+US\b/.test(l) && QUALIFY_ASK_RX.test(l));
   const passed = ours("pass");
-  const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: openerVariant(contactId, 3), callAsk });
+  // The "closed" line goes in turn, never the same one twice to them.
+  const closedN = sent.filter((d) => d.qualify?.stage === "closed").length;
+  const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: openerVariant(contactId, 3), callAsk, closedN });
   return { stage: step.move === "underwrite" ? "qualified" : step.move, address: ice.address, why: step.read.why, reply: step.reply };
 }
 
@@ -2085,7 +2137,7 @@ export async function qualifyBrought({ store, locationId, contactId, draft, mess
   const from = asked ? Math.min(...asks.map((d) => Date.parse(d.sentAt || d.createdAt || "") || now)) : now;
   const words = theirWordsSince(transcript, from - 2 * 86400000, message);
   const step = broughtStep({
-    words, asked, passed, agentRehab, callAsk, variant: openerVariant(contactId, 3),
+    words, asked, passed, agentRehab, callAsk, variant: openerVariant(contactId, 3), closedN: sent.filter((d) => d.qualify?.stage === "closed").length,
     offMarket: Boolean(offMarketCue(words)), sellerAsk: Number(draft?.propertyDetails?.sellerAsk) || 0,
   });
   return { stage: step.move === "underwrite" ? "qualified" : step.move, address, why: step.read.why, reply: step.reply };
@@ -3280,12 +3332,28 @@ export function chooseProactiveKind() {
  * underwrite from the desk first, off the comps and the photos, float a number, and see whether
  * it's worth going further before anyone sets a time. No figure in it: the number is the offer's.
  */
+// 2026-11-09 (the voice audit): one agent got the priced one word for word
+// twice in four days. Shorter, no "Appreciate that." opener, one question.
 export function deskFirstReply({ street = "", priced = false } = {}) {
   const on = street ? ` on ${street}` : "";
   return priced
-    ? `Appreciate that. We do our underwriting from the desk first, off the comps and the photos, so before anyone sets a time: is the number we sent${on} in the realm for the seller? If it is, we can line up a walkthrough from there.`
-    : `Appreciate that. We like to underwrite from the desk first, off the comps and the photos, so let me get you a number${on} and we'll see if it's worth going further before anyone sets a time.`;
+    ? `I run the numbers off comps and photos before I walk anything. Is the number I sent${on} in the realm for the seller?`
+    : `We like to underwrite from the desk first, off the comps and the photos, so let me get you a number${on} and we'll see if it's worth going further before anyone sets a time.`;
 }
+
+// The fixed replies the reply agent puts in place of the model's (2026-11-09:
+// moved here so shared/voice.js can check every one of them in CI).
+// The far counter we pass on: ends on the next-one question (Matt's 10-21
+// NEXT ONE rule), not "keep me in mind … I'm here".
+export const COUNTER_PASS_REPLY = "We're too far apart on this one, so I'll pass. Thanks for working it with me. Got anything else that needs work or would be a good flip?";
+// They told us it needs nothing: what we do buy, and the next one.
+export const NOT_OUR_KIND_REPLY = "Sounds too finished for me, I go after houses that need real work. Got anything like that coming up?";
+/** closedHoldReply({ amount, where }) → our number again on a house that's done; nothing reopens. */
+export const closedHoldReply = ({ amount = "", where = "the house" } = {}) => `We're still at ${amount} on ${where} if anything changes on the seller's side.`;
+/** sentToSellerReply({ first, forms }) → our letter went by text and email for them to show the seller. */
+export const sentToSellerReply = ({ first = "", forms = "" } = {}) =>
+  `${first ? `No rush, ${first}.` : "No rush."} Sent our letter of intent over by text and email so you have it to share with them.` +
+  (forms ? ` If they're open to it, could you write it up on ${forms} forms for us to sign?` : " Let me know what they think.");
 
 export const CONFIDENT_COMPS = 4;
 export function numberConfidence({ offer = null, job = null } = {}) {
@@ -3755,7 +3823,13 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   // houses we've had with them. A fresh listing of theirs is left out of
   // the list (shared/agent-pulse.js pastHouses).
   const pastHouses = kind === "agent_pulse" ? (Array.isArray(subject?.pastHouses) ? subject.pastHouses : []).filter(Boolean) : [];
+  // The voice check against our last texts to them (2026-11-09). A fixed
+  // text of Matt's own is flagged, never held (shared/standard-texts.js
+  // isShippedText); the app's own texts and the model's are machine.
+  const prior = config.checkIns?.lint !== false ? ourLastTexts(a.transcript) : null;
+  const voiceFor = (d) => (prior ? { kind: voiceKindOf(kind, outbound), prior, machine: !d?.standard || isShippedText(d.template), signOff: config.persona?.signOff } : null);
   const gate = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
+    voice: voiceFor(d),
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
@@ -3765,9 +3839,16 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   // The second look is one or two short lines (shared/second-look.js), and
   // says our same number and nothing above it — not even the book's own
   // rounding up ("378K" on 377,552).
+  // How it reads is named after what it says: the house it named, the
+  // number it went over (the timeline note and the redraft lead with those).
+  const voiceLast = (fn) => (d) => {
+    const g = fn(d);
+    const v = (g.flags || []).filter((f) => VOICE_LINE_RX.test(f));
+    return v.length ? { ...g, flags: [...(g.flags || []).filter((f) => !VOICE_LINE_RX.test(f)), ...v] } : g;
+  };
   if (kind === "second_look") {
     const ours = Math.round(Number(subject?.ours) || 0);
-    return (d) => {
+    return voiceLast((d) => {
       const g = gate(d);
       const extra = [];
       const n = String(d?.reply || "").length;
@@ -3775,21 +3856,21 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
       const above = ours > 0 ? pricesWeName(d?.reply || "", ours).filter((x) => x > ours) : [];
       if (above.length) extra.push(`the draft says ${above.map((x) => fmtMoney(x)).join(", ")} — the second look is our same number, ${fmtMoney(ours)}, never more`);
       return extra.length ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), ...extra] } : g;
-    };
+    });
   }
   if (pastHouses.length) {
-    return (d) => {
+    return voiceLast((d) => {
       const g = gate(d);
       const named = pastHouses.map((h) => namesHouse(d?.reply, h)).find(Boolean);
       return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named a house from before (${named}): the check-in is generic — ask about distressed or off-market houses, never one we've had with them`] } : g;
-    };
+    });
   }
   if (!oldHouse) return gate;
-  return (d) => {
+  return voiceLast((d) => {
     const g = gate(d);
     const named = namesHouse(d?.reply, oldHouse);
     return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named the house we passed on (${named}): a check-in asks about other houses that need work, never that one`] } : g;
-  };
+  });
 }
 
 /**
@@ -3877,11 +3958,32 @@ function focusOpener({ listing = {}, address = "", saved = {} }) {
     city: String(listing.city || ""), county: countyName(listing.county) };
 }
 
-function standardDraft({ kind, offer, outbound, name, contactId }) {
-  const s = standardText({ kind, outbound, name, contactId });
+function standardDraft({ kind, offer, outbound, name, contactId, pools = "v2", shift = 0 }) {
+  const s = standardText({ kind, outbound, name, contactId, pools, shift });
   if (!s) return null;
   return { reply: s.text, summary: outboundSummary({ kind, offer, outbound }), confidence: "high", needsHuman: false, usage: null,
-    standard: { set: s.set, index: s.index } };
+    standard: { set: s.set, index: s.index }, template: s.template };
+}
+
+/**
+ * walkStandard({ draft, kind, offer, outbound, name, contactId, pools, gateFor }) → { draft, gate } | null
+ *
+ * A fixed text the voice check held (it repeats one of ours, or says a
+ * phrase our last texts already spent): the next variant along, then the
+ * next, until one passes every gate. null when none does. No model call.
+ */
+export function walkStandard({ draft, kind, offer, outbound, name, contactId, pools = "v2", gateFor, tries = 12 }) {
+  if (!draft?.standard || typeof gateFor !== "function") return null;
+  const seen = new Set([draft.reply]);
+  for (let shift = 1; shift < tries; shift++) {
+    const next = standardDraft({ kind, offer, outbound, name, contactId, pools, shift });
+    if (!next || seen.has(next.reply)) continue;
+    seen.add(next.reply);
+    next.intent = kind;
+    const g = gateFor(next);
+    if (g.ok || (g.locked && g.clean)) return { draft: next, gate: g };
+  }
+  return null;
 }
 
 // A check-in about their fresh listing when the thread already has that
@@ -3949,7 +4051,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
     aiApiKey, party, config, context, channel: "sms", outbound, batch: null,
   };
   const draftWith = deps.draft || draftReply;
-  const draft = standardDraft({ kind, offer, outbound, name: a.contactName || name, contactId }) || await writeShorterFirstText({
+  const draft = standardDraft({ kind, offer, outbound, name: a.contactName || name, contactId, pools: config.checkIns?.pools || "v2" }) || await writeShorterFirstText({
     draft: withoutSignOff(await writeAgainWithoutCarrierWords({
       draft: await draftWith(previewArgs), kind,
       redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
@@ -4018,7 +4120,8 @@ async function runProactive(job, ctx) {
     batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) && subject?.direct !== true ? batcherFor(aiApiKey) : null,
   };
   // Still reads like an ad the carriers block: written once more without it.
-  const draft = standardDraft({ kind, offer, outbound, name: a.contactName, contactId: job.contactId }) || await writeShorterFirstText({
+  const pools = config.checkIns?.pools || "v2";
+  let draft = standardDraft({ kind, offer, outbound, name: a.contactName, contactId: job.contactId, pools }) || await writeShorterFirstText({
     draft: withoutSignOff(await writeAgainWithoutCarrierWords({
       draft: await deps.draft(draftArgs), kind,
       redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
@@ -4038,6 +4141,12 @@ async function runProactive(job, ctx) {
   // two check-ins sat on the Desk for days over the word "assigning"
   // (2026-10-04). The timeline says what was dropped and why.
   const passes = (g) => Boolean(g.ok || (g.locked && g.clean));
+  // A fixed text the voice check held (2026-11-09): the next variant along
+  // instead, before any model call.
+  if (draft.standard && !passes(gate) && (gate.flags || []).some((f) => /^reads like a machine: /.test(f))) {
+    const walked = walkStandard({ draft, kind, offer, outbound, name: a.contactName, contactId: job.contactId, pools, gateFor });
+    if (walked) { draft = walked.draft; gate = walked.gate; job.summary = draft.summary; }
+  }
   // Not a float or a first text, though: those are marked as gone the
   // moment they're queued (realmCheckAt, takeCheckAt, the outreach record),
   // so a dropped one would read as sent and never be tried again. They still
@@ -4045,11 +4154,18 @@ async function runProactive(job, ctx) {
   // Matt's 15 is his to fix and send, like these (subject.forMatt).
   if (ctx.machine && !passes(gate) && !KEEP_FOR_A_PERSON.has(kind) && !subject?.forMatt) {
     const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
-    const again = tripped.length ? await deps.draft({ ...draftArgs, outbound: { ...outbound, fix: tripped } }).catch(() => null) : null;
+    // Held for how it reads: the redraft sees what our last text said, so it
+    // opens and says it another way.
+    const ourLast = tripped.some((f) => /^reads like a machine: /.test(f)) ? ourLastTexts(a.transcript, { limit: 1 })[0]?.text || "" : "";
+    const again = tripped.length ? await deps.draft({ ...draftArgs, outbound: { ...outbound, fix: tripped, ...(ourLast ? { ourLast } : {}) } }).catch(() => null) : null;
     if (again?.reply) {
       again.intent = kind;
       const g2 = gateFor(again);
-      if (passes(g2)) { Object.assign(draft, again, { intent: kind }); gate = g2; job.summary = draft.summary; }
+      if (passes(g2)) {
+        // The model's words now, not a fixed text's: the record says so.
+        if (!again.standard) { delete draft.standard; delete draft.template; }
+        Object.assign(draft, again, { intent: kind }); gate = g2; job.summary = draft.summary;
+      }
     }
     if (!passes(gate)) {
       const why = String(tripped[0] || gate.flags?.[0] || "a gate held it").replace(/^needs a person:\s*/, "").slice(0, 160);
@@ -4117,6 +4233,10 @@ async function runProactive(job, ctx) {
       // Which of Matt's fixed texts went, when one did.
       ...(draft.standard ? { standard: draft.standard, ...(kind === "outreach_open" ? { style: "standard" } : {}) } : {}),
     },
+    // What the voice check reads it as at send (sendReplyDraft's last look),
+    // and a fixed text of Matt's own, which it flags but never holds.
+    voiceKind: voiceKindOf(kind, outbound),
+    ...(draft.standard && !isShippedText(draft.template) ? { voiceOwn: true } : {}),
     reply: draft.reply, intent: kind, confidence: draft.confidence, needsHuman: draft.needsHuman, humanReason: draft.humanReason,
     usage: draft.usage || null, shadow: shadowRow(draft.shadow, gateFor),
     summary: draft.summary || outboundSummary({ kind, offer, outbound }),
@@ -4353,11 +4473,14 @@ async function runReply(job, ctx) {
   // Off, their first answer still closes on the other-fixers ask alone.
   const callOn = Boolean(config.parties?.agent?.callAsk?.enabled);
   const firstAnswer = party === "agent" && !isCall
-    ? callAskFor({ events: (await store.listContactEvents?.(locationId, job.contactId, { types: ["outreach_sent", "outreach_enrolled", "call_asked"], limit: 50 }).catch(() => [])) || [],
+    ? callAskFor({ events: (await store.listContactEvents?.(locationId, job.contactId, { types: ["outreach_sent", "outreach_enrolled", "call_asked", "fixers_asked"], limit: 50 }).catch(() => [])) || [],
       transcript: a.transcript, message: job.originalMessage || job.message, ice: iceHouse })
     : null;
   const callAsk = callOn ? firstAnswer : null;
-  const extraText = [bookingText, partnerTermsLine(terms), firstAnswer?.first ? (callOn ? CALL_ASK_LINE : FIXERS_ASK_LINE) : ""].filter(Boolean).join("\n\n");
+  // Our first text already asked for their other fixers: their first answer
+  // isn't asked again (2026-11-09).
+  const fixersAsk = !callOn && firstAnswer?.first && !firstAnswer.alreadyAsked;
+  const extraText = [bookingText, partnerTermsLine(terms), firstAnswer?.first ? (callOn ? CALL_ASK_LINE : fixersAsk ? FIXERS_ASK_LINE : "") : ""].filter(Boolean).join("\n\n");
   const draftContext = extraText ? { ...context, text: [context.text, extraText].filter(Boolean).join("\n\n") } : context;
 
   /* --- 2. the draft --- */
@@ -4535,7 +4658,7 @@ async function runReply(job, ctx) {
             summary: weMovedOnPrice
               ? `Their number (${fmtMoney(theirs)}) is over the most we'd pay (${fmtMoney(reference)}) after we already came back — filed as a pass.`
               : `Their number (${fmtMoney(theirs)}) is more than ${Math.round(COUNTER_PASS_MARGIN * 100)}% over the most we'd pay (${fmtMoney(reference)}) — filed as a pass.`,
-            reply: "Sorry, this one didn't work out for us, we're too far apart on the number. Appreciate you working it with me. Keep me in mind for the next one that needs work, and if anything changes with the seller I'm here.",
+            reply: COUNTER_PASS_REPLY,
             needsHuman: false,
           };
           job.intent = draft.intent;
@@ -4620,7 +4743,7 @@ async function runReply(job, ctx) {
       draft = saidIt
         ? { ...draft, needsHuman: false, closedHold, humanReason: `we already told them we're still at ${n} on ${where}; nothing more to say` }
         : { ...draft, needsHuman: false, closedHold, humanReason: "",
-          reply: `Understood. We're still at ${n} on ${where}; if anything changes on the seller's side, I'm here.` };
+          reply: closedHoldReply({ amount: n, where }) };
     }
   }
 
@@ -4784,7 +4907,7 @@ async function runReply(job, ctx) {
           reclassifiedFrom: draft.reclassifiedFrom || draft.intent,
           needsHuman: false,
           notOurKind: true,
-          reply: "Appreciate it, but that one sounds more finished than what we buy. We go after houses that need real work, so if something rough crosses your desk, I'd love a first look.",
+          reply: NOT_OUR_KIND_REPLY,
         };
         if (!ruledBefore) holdForShowing(street);
       } else if (underwriteMode(saved) !== "full") {
@@ -4875,9 +4998,10 @@ async function runReply(job, ctx) {
   if (callAsk?.first && !qualifyHeld && !numberFirst && !bankSale && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
       && String(draft.reply || "").trim() && !CALL_ASK_RX.test(draft.reply)) {
     draft = { ...draft, reply: withCallAsk(draft.reply, openerVariant(job.contactId, 3)), callAskAdded: true };
-  } else if (!callOn && firstAnswer?.first && !qualifyHeld && !numberFirst && !bankSale && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
+  } else if (fixersAsk && !qualifyHeld && !numberFirst && !bankSale && !theirHouse && !CALL_ASK_SKIP_INTENTS.has(draft.intent)
       && String(draft.reply || "").trim() && !FIXERS_ASK_RX.test(draft.reply)) {
-    draft = { ...draft, reply: withFixersAsk(draft.reply, openerVariant(job.contactId, 3)), fixersAskAdded: true };
+    const reply = withFixersAsk(draft.reply, openerVariant(job.contactId, 3));
+    if (reply !== draft.reply) draft = { ...draft, reply, fixersAskAdded: true };
   }
 
   // The model read an opt-out the keywords didn't catch ("lose my number",
@@ -5021,6 +5145,10 @@ async function runReply(job, ctx) {
   if (terms && !answersItself(terms)) {
     draft = { ...draft, partnerTerms: terms, needsHuman: true, humanReason: `they ${PARTNER_TERMS_LABEL[terms.kind]} — the terms are yours to answer` };
   }
+  // The voice check on a reply (2026-11-09): a tell or a repeat of one of
+  // our last texts earns the one redraft below, and still tripping, holds a
+  // reply that would have sent itself.
+  const replyVoice = config.checkIns?.lint !== false ? { kind: "reply", prior: ourLastTexts(a.transcript), signOff: config.persona?.signOff, channel: job.channel === "email" ? "email" : "sms" } : null;
   const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft: d, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
     hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: inboundText, channel: job.channel, style: config.style,
@@ -5031,6 +5159,7 @@ async function runReply(job, ctx) {
     houseWords: houseWordsFor(context?.deals, a.transcript, inboundText),
     theirValue: party === "agent" ? theirValueFor({ draft: d, message: isCall ? "" : job.message, events: agentEvents, address: d.propertyAddress }) : 0,
     ourValue: ourValueFor(context.offers?.numbers, d.propertyAddress),
+    voice: replyVoice,
   });
   let gate = gateFor(draft);
   // A draft a content gate caught — a number not in the book, "cash close",
@@ -5312,8 +5441,7 @@ async function runReply(job, ctx) {
     // The write-up ask only at a number Matt approved (2026-10-15).
     const writeUp = writeUpOkFor(context.offers?.numbers, draft.propertyAddress);
     draft = { ...draft, replyBeforeSend: draft.reply,
-      reply: `Sounds good${first ? ` ${first}` : ""}, no rush. Sent our letter of intent over by text and email so you have it to share with them.` +
-        (writeUp ? ` If they're open to it, could you write it up on ${offerForms(draft.propertyAddress)} forms for us to sign?` : " Let me know what they think.") };
+      reply: sentToSellerReply({ first, forms: writeUp ? offerForms(draft.propertyAddress) : "" }) };
   }
   // They gave us an address to email it to ("my email is …, please cc …"), or
   // ask where the email is. The documents go to THAT address, by email, and
@@ -5509,7 +5637,12 @@ async function runReply(job, ctx) {
         why: "they pushed back on the number we floated — the written offer goes anyway, for their records" };
       const line = "I'll send our written offer over anyway so you have it on file.";
       const said = String(draft.reply || "").trim();
-      const withLine = /\bkeep me in mind\b/i.test(said) ? said.replace(/\b(keep me in mind)/i, `${line} $1`) : `${said}${said ? " " : ""}${line}`;
+      // Before "keep me in mind", or before the closing question (the NEXT
+      // ONE ask stays the last thing they read, 2026-11-09), else at the end.
+      const parts = said.split(/(?<=[.!?])\s+/);
+      const withLine = /\bkeep me in mind\b/i.test(said) ? said.replace(/\b(keep me in mind)/i, `${line} $1`)
+        : /\?\s*$/.test(said) && parts.length > 1 ? [...parts.slice(0, -1), line, parts.at(-1)].join(" ")
+        : `${said}${said ? " " : ""}${line}`;
       const next = { ...draft, replyBeforeSend: draft.replyBeforeSend ?? draft.reply, reply: withLine };
       if (auto.send && gateFor(next).ok) {
         plan.auto.unshift(action);
@@ -6456,7 +6589,7 @@ async function runReply(job, ctx) {
 }
 
 const mediaDraft = (config) => ({
-  intent: "media", confidence: "high", reply: config.media?.reply || "Thanks for the images, taking a look!",
+  intent: "media", confidence: "high", reply: config.media?.reply || CONVERSATION_AI_DEFAULTS.media.reply,
   needsHuman: false, humanReason: "", summary: "Sent a photo with no text; the canned acknowledgement goes back.",
   propertyAddress: "", counterAmount: 0,
 });
@@ -6628,6 +6761,7 @@ export async function previewConversation({
     writeUpOk: writeUpOkFor(context.offers?.numbers, draft.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, message),
+    voice: config.checkIns?.lint !== false ? { kind: "reply", prior: ourLastTexts(a.transcript), signOff: config.persona?.signOff, channel: channel === "email" ? "email" : "sms" } : null,
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
@@ -6669,6 +6803,47 @@ const readRecentThread = async (client, locationId, contactId) => {
     return t.text || "";
   } catch { return ""; }
 };
+
+/**
+ * voiceLastLook({ store, locationId, d, body, liveThread, readThread, now }) → the hard voice flags | []
+ *
+ * shared/voice.js on a machine text as it leaves by itself: a text against
+ * our side of the live thread, an email against the agent emails we sent
+ * them. A buyer's deal text is written again at send from Matt's wording,
+ * so it is checked for tells only, never for "repeating" the last deal. A
+ * draft queued before the check existed (no voiceKind) answers only for a
+ * repeat; Matt's own saved wording (voiceOwn) is never held.
+ */
+export async function voiceLastLook({ store, locationId, d, body, liveThread = null, readThread = null, now = Date.now() }) {
+  const saved = (await store.getOfferSettings?.(locationId).catch(() => null)) || {};
+  const config = conversationConfig(saved);
+  if (config.checkIns?.lint === false || !String(body || "").trim()) return [];
+  const kind = d.outbound?.kind || "";
+  const email = d.channel === "email";
+  const deal = kind === "blast_open";
+  // Deal texts in Matt's own saved wording (Autopilot → Investors) are his.
+  if (deal && normalizeDealTexts(saved.dispoAutopilot?.dealTexts).length) return [];
+  let prior = [];
+  if (email) {
+    prior = ((await store.listReplyDrafts(locationId, { contactId: d.contactId, status: "sent", limit: 20 }).catch(() => [])) || [])
+      .filter((o) => o && o.id !== d.id && o.channel === "email")
+      .sort((a, b) => String(b.sentAt || b.createdAt || "").localeCompare(String(a.sentAt || a.createdAt || "")))
+      .map((o) => ({ text: String(o.sentText || o.reply || ""), at: o.sentAt || o.createdAt || null }));
+  } else if (!deal) {
+    const t = liveThread ?? (typeof readThread === "function" ? await Promise.resolve(readThread()).catch(() => "") : "");
+    prior = ourLastTexts(t || "");
+  }
+  let text = String(body).trim();
+  const so = String(config.persona?.signOff || "").trim();
+  if (so && !email && text.toLowerCase().endsWith(so.toLowerCase())) text = text.slice(0, -so.length).trim();
+  const keys = hardVoiceKeys(voiceFlags({ text, channel: email ? "email" : "sms", kind: deal ? "canned" : (d.voiceKind || kind), prior, machine: !d.voiceOwn, now }))
+    .filter((k) => k !== "a dollar sign" && k !== "a link");
+  // A deal text is the built-in wording filled with the deal's facts, and
+  // its one line is Matt's own headline: only a blank left empty holds it.
+  if (deal) return keys.filter((k) => DEAL_TEXT_VOICE_KEYS.has(k));
+  return d.voiceKind ? keys : keys.filter((k) => /^repeats us/.test(k));
+}
+const DEAL_TEXT_VOICE_KEYS = new Set(["a blank nobody filled"]);
 
 export async function sendReplyDraft({ client, store, locationId, draftId, text, live, auto = false, reason = null, readThread = readRecentThread, now = Date.now(), dataroomBaseUrl = defaultDataroomBaseUrl(), cardBaseUrl = defaultCardBaseUrl() }) {
   const d = await store.getReplyDraft(draftId);
@@ -6878,8 +7053,10 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // draft was written, the bot stands aside for this one — the draft is
   // dismissed and says so — and picks up again on the next inbound. A
   // person pressing Send is a person deciding, so only the auto path asks.
+  let liveThread = null;
   if (auto) {
     const transcript = await readThread(client, locationId, d.contactId);
+    liveThread = transcript;
     const theirs = await humanHasThread({ store, locationId, contactId: d.contactId, transcript, minutes: 7 * 24 * 60, now });
     if (theirs && Date.parse(theirs.at) >= Date.parse(d.createdAt) - 60000) {
       const ts = new Date(now).toISOString();
@@ -7010,6 +7187,27 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       await store.updateReplyDraft(d.id, {
         ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
         flags: [...(d.flags || []), `held: ${why} — not sent`],
+        autoSend: { ...(d.autoSend || {}), decided: false, reason: `${why} — it waits for you` },
+      });
+      return { ok: true, skipped: why, held: true };
+    }
+  }
+
+  // The voice check's last look (2026-11-09): a text or email the machine
+  // started, leaving by itself, read once more against what we have sent
+  // them since it was written. A check-in that sat queued while another
+  // text of ours went, and now repeats it, waits for you. You pressing Send
+  // is you deciding.
+  if (auto && (MACHINE_STARTED_KINDS.has(d.outbound?.kind) || (d.outbound?.kind === "blast_open" && blast?.text)) && !String(d.inbound || "").trim()) {
+    const keys = await voiceLastLook({ store, locationId, d, body, liveThread, readThread: () => readThread(client, locationId, d.contactId), now });
+    if (keys.length) {
+      await release(bundle);
+      if (blast?.invite?.id) await store.updateDataroomInvite?.(blast.invite.id, { status: "revoked" })?.catch?.(() => {});
+      const ts = new Date(now).toISOString();
+      const why = voiceLine(keys);
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `held: ${why}`],
         autoSend: { ...(d.autoSend || {}), decided: false, reason: `${why} — it waits for you` },
       });
       return { ok: true, skipped: why, held: true };

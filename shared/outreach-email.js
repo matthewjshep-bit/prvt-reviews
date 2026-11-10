@@ -19,7 +19,39 @@ import { parseUsAddress } from "./us-address.js";
 import { coldTouchGapDays, MORNING_SLACK_HOURS } from "./follow-up.js";
 
 export const DEFAULT_INTRO_EMAIL_SUBJECT = "Matt with Shep Flips: houses that need work";
-export const DEFAULT_INTRO_EMAIL_BODY = [
+
+// 2026-11-09 (the voice audit): the agent emails read as copywriting. The
+// intro said "I texted you a couple of days ago" on day 5 or later, "value-
+// add" and "I'd love to hear about them" (1.7% replies of 408); the
+// check-ins ("your friendly neighborhood fixer-upper guy", "a kitchen stuck
+// in 1974", "in the best way") drew no reply in 124. Now each is one short
+// body, 50 to 85 characters, in Matt's voice, naming their street or town,
+// picked per agent, in a frame that ends on the opt-out line and, once
+// Matt sets it, his postal address (outreachAutopilot.postalAddress).
+export const EMAIL_OPT_OUT_LINE = "If you'd rather I didn't email, just reply and say so.";
+const OPT_OUT_RX = /\bif you'?d rather I didn'?t email\b/i;
+
+// The intro (pool H): once per agent, the body picked by the contact id.
+export const INTRO_EMAIL_BODIES = [
+  "Matt Shepherd here, I texted you about {street}. If a house near {town} needs real work, can I get a look?",
+  "It's Matt Shepherd, I texted you about {street}. I fix up older houses around {town}. Got any that need a lot?",
+  "Matt with Shep Flips, I texted about {street}. Anything near {town} that's more project than the seller wants?",
+  "Matt here, I texted you about {street}. Any sellers near {town} who'd rather not fix up before selling?",
+  "Matt Shepherd here. I texted you about {street}, and I'm after houses around {town} that need real work. Have one?",
+  "It's Matt from Shep Flips, I texted you about {street}. Any estates or tired rentals coming up near {town}?",
+  "Matt Shepherd here, same Matt who texted about {street}. Anything off-market near {town} that needs work?",
+  "Matt from Shep Flips, I texted about {street}. If one of yours needs too much for retail buyers, can I see it?",
+];
+// For an agent whose listing we have no street for: still one ask.
+export const INTRO_EMAIL_FALLBACK = "Matt Shepherd here, I texted you about your listing. If you have a house that needs real work, can I get a look?";
+/** introFrame(body) → the intro email around one body: greeting, signature, opt-out line. */
+export const introFrame = (body) => `Hi {first},\n\n${body}\n\nMatt\nShep Flips · shepflips.com\n\n${EMAIL_OPT_OUT_LINE}`;
+// What the editor shows as the default: the first body in its frame. A saved
+// copy of this (or of the 10-20 email) reads as never changed, so the body is
+// picked per agent from the eight.
+export const DEFAULT_INTRO_EMAIL_BODY = introFrame(INTRO_EMAIL_BODIES[0]);
+// The intro from 2026-10-20 to 2026-11-09.
+export const LEGACY_INTRO_EMAIL_BODY = [
   "Hi {first},",
   "This is Matt Shepherd with Shep Flips. I texted you a couple of days ago about your listing. We're a small local team buying houses that need work around {area}. We fix them up, buy as-is, and try to make it easy on the agent's side.",
   "If you have any distressed or value-add properties, listed or off market, the uglier the better, I'd love to hear about them.",
@@ -27,6 +59,21 @@ export const DEFAULT_INTRO_EMAIL_BODY = [
   "If you'd rather I didn't email, just reply and say so.",
   "Thanks,\nMatt Shepherd\nShep Flips",
 ].join("\n\n");
+
+/**
+ * withEmailFooter(body, postalAddress) → the email ending on the opt-out
+ * line and, when one is set, the postal address on its own line (CAN-SPAM).
+ * A body that already has either keeps its own. Matt's saved wording is
+ * never changed on the page; this is added as each email is written.
+ */
+export function withEmailFooter(body = "", postalAddress = "") {
+  let out = String(body || "").trim();
+  if (!out) return out;
+  if (!OPT_OUT_RX.test(out)) out = `${out}\n\n${EMAIL_OPT_OUT_LINE}`;
+  const postal = String(postalAddress || "").trim();
+  if (postal && !out.includes(postal)) out = `${out}\n${postal}`;
+  return out;
+}
 
 export const INTRO_EMAIL_MAX_SUBJECT = 150;
 export const INTRO_EMAIL_MAX_BODY = 3000;
@@ -47,12 +94,15 @@ export function normalizeIntroEmail(v = {}) {
   const day = Math.round(Number(o.day));
   const subject = String(o.subject ?? "").replace(/\s+/g, " ").trim().slice(0, INTRO_EMAIL_MAX_SUBJECT);
   const body = String(o.body ?? "").replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, INTRO_EMAIL_MAX_BODY);
+  // A stored copy of a default (today's or the 10-20 one) is read as never
+  // changed: the editor saves the body it shows with every switch.
+  const own = body && body !== LEGACY_INTRO_EMAIL_BODY && body !== DEFAULT_INTRO_EMAIL_BODY ? body : "";
   return {
     enabled: o.enabled === true,
     autoSend: o.autoSend === true,
     day: Number.isFinite(day) && day >= 1 ? Math.min(30, day) : 2,
     subject: subject || DEFAULT_INTRO_EMAIL_SUBJECT,
-    body: body || DEFAULT_INTRO_EMAIL_BODY,
+    body: own || DEFAULT_INTRO_EMAIL_BODY,
   };
 }
 
@@ -73,28 +123,66 @@ export function areaOf({ address = "", county = "" } = {}) {
 }
 
 /**
- * introEmailFor({ introEmail, name, address, county }) → { subject, body } | null
+ * townOf({ address, county }) → "Renton" | "King County" | "your area"
  *
- * The email with its blanks filled ({first}, {address}, {street}, {area}).
- * A blank we have nothing for leaves the default wording in its place; null
- * only when even that can't be filled.
+ * The {town} an email names: the town of the listing we texted them about,
+ * else its county, else "your area", so each of the eight still fills and a
+ * check-in never has to repeat the last one.
  */
-export function introEmailFor({ introEmail, name = "", address = "", county = "" } = {}) {
+export function townOf({ address = "", county = "" } = {}) {
+  const town = parseUsAddress(address).city.trim();
+  const c = countyName(county);
+  return town || (c ? `${c} County` : "") || "your area";
+}
+
+// Which of a pool an agent gets: the contact's, then the next along when one
+// has a blank we can't fill.
+function pickBody(list, start, fill) {
+  for (let i = 0; i < list.length; i++) {
+    const index = (start + i) % list.length;
+    const body = fill(list[index]);
+    if (body) return { body, index };
+  }
+  return null;
+}
+
+/**
+ * introEmailFor({ introEmail, name, address, county, contactId, pools, postalAddress, shift }) → { subject, body, index } | null
+ *
+ * The email with its blanks filled ({first}, {address}, {street}, {town},
+ * {area}). The default body is one of the eight, picked by the contact id
+ * (`shift` walks to the next); a body Matt wrote is his, as written. Pools
+ * "v1" sends the 10-20 email. Either way it ends on the opt-out line and
+ * the postal address when one is set. null when a blank can't be filled.
+ */
+export function introEmailFor({ introEmail, name = "", address = "", county = "", contactId = "", pools = "v2", postalAddress = "", shift = 0 } = {}) {
   const ie = normalizeIntroEmail(introEmail);
-  const values = { first: firstNameOf(name), address: streetLine(address), street: streetName(address), area: areaOf({ address, county }) };
+  const values = { first: firstNameOf(name), address: streetLine(address), street: streetName(address), area: areaOf({ address, county }), town: townOf({ address, county }) };
   const subject = fillTemplate(ie.subject, values) || fillTemplate(DEFAULT_INTRO_EMAIL_SUBJECT, values);
-  const body = fillParagraphs(ie.body, values) || fillParagraphs(DEFAULT_INTRO_EMAIL_BODY, values);
-  return subject && body ? { subject, body } : null;
+  let picked = null;
+  if (ie.body !== DEFAULT_INTRO_EMAIL_BODY) picked = { body: fillParagraphs(ie.body, values), index: null };
+  if (!picked?.body) {
+    picked = pools === "v1"
+      ? { body: fillParagraphs(LEGACY_INTRO_EMAIL_BODY, values), index: null }
+      : pickBody(INTRO_EMAIL_BODIES, openerVariant(contactId, 997) + Math.max(0, Math.round(Number(shift) || 0)), (b) => fillParagraphs(introFrame(b), values))
+        || { body: fillParagraphs(introFrame(INTRO_EMAIL_FALLBACK), values), index: null };
+  }
+  return subject && picked?.body ? { subject, body: withEmailFooter(picked.body, postalAddress), index: picked.index } : null;
 }
 
 // fillTemplate squeezes whitespace, so an email is filled a paragraph (and a
-// line) at a time to keep its shape. "" when a blank can't be filled.
+// line) at a time to keep its shape. "" when a blank can't be filled. A
+// greeting line with no name to put in it ("Hi {first},") is left out, so an
+// email to someone we have no first name for opens on its first sentence.
 export function fillParagraphs(text, values) {
   const out = [];
   for (const para of String(text || "").split(/\n{2,}/)) {
-    const lines = para.split("\n").map((l) => (l.trim() ? fillTemplate(l, values) : ""));
-    if (lines.some((l, i) => !l && para.split("\n")[i].trim())) return "";
-    out.push(lines.join("\n"));
+    const raw = para.split("\n");
+    const lines = raw.map((l) => (l.trim() ? fillTemplate(l, values) : ""));
+    const greetingOnly = (l) => /^\s*(?:hi|hey|hello)\s+\{first\}\s*[,.!]?\s*$/i.test(l);
+    if (lines.some((l, i) => !l && raw[i].trim() && !(greetingOnly(raw[i]) && !values?.first))) return "";
+    const kept = lines.filter((l, i) => l || !raw[i].trim());
+    if (kept.some((l) => l.trim())) out.push(kept.join("\n"));
   }
   return out.join("\n\n").trim();
 }
@@ -188,8 +276,26 @@ export function introEmailDue({ events = [], day = 2, now = Date.now(), gapHours
 // with the 14-day check-in: something short, concise, and to the point …
 // Make it personable. Make it fun."). One per check-in, the next of these
 // each time, subject and body together.
+// 2026-11-09: eight (pool G), lowercase subjects, a 50 to 85 character body
+// naming their town, signed "Matt", ending on the opt-out line.
+/** checkInFrame(body) → a check-in email around one body. */
+export const checkInFrame = (body) => `Hi {first},\n\n${body}\n\nMatt\nShep Flips\n\n${EMAIL_OPT_OUT_LINE}`;
+export const CHECK_IN_EMAIL_BODIES = [
+  { subject: "anything near {town}?", body: "Listed or not, anything near {town} that needs real work?" },
+  { subject: "older houses", body: "Got any older houses around {town} the seller doesn't want to fix up?" },
+  { subject: "estates and rentals", body: "Any estates or long-time rentals coming up around {town}?" },
+  { subject: "off-market", body: "Anything off-market around {town} I should see?" },
+  { subject: "too much work for retail?", body: "If a listing of yours needs more work than retail buyers want, can I take a look?" },
+  { subject: "rough ones", body: "Rough houses are my thing. Seen any around {town} lately?" },
+  { subject: "skip the repairs", body: "Any sellers near {town} who'd rather skip the repairs and the showings?" },
+  { subject: "still looking near {town}", body: "Still after a fixer near {town}. Got one coming?" },
+];
+export const DEFAULT_CHECK_IN_EMAILS = CHECK_IN_EMAIL_BODIES.map((e) => ({ subject: e.subject, body: checkInFrame(e.body) }));
+
+// The check-in emails from 2026-10-20 to 2026-11-09 (pools "v1"); a stored
+// copy of these reads as never changed.
 const CHECK_IN_SIGN_OFF = "Thanks,\nMatt Shepherd\nShep Flips | shepflips.com";
-export const DEFAULT_CHECK_IN_EMAILS = [
+export const LEGACY_CHECK_IN_EMAILS = [
   { subject: "anything ugly lately?",
     body: `Hi {first},\n\nMatt again, your friendly neighborhood fixer-upper guy. Anything around {area} cross your desk lately with shag carpet, a tired roof, or a kitchen stuck in 1974? That's my kind of house, listed or off market.\n\n${CHECK_IN_SIGN_OFF}` },
   { subject: "my two favorite words",
@@ -225,29 +331,36 @@ export function normalizeCheckInEmail(v = {}) {
     }))
     .filter((e) => e.subject && e.body)
     .slice(0, CHECK_IN_EMAIL_MAX);
+  const legacy = emails.length === LEGACY_CHECK_IN_EMAILS.length
+    && emails.every((e, i) => e.subject === LEGACY_CHECK_IN_EMAILS[i].subject && e.body === LEGACY_CHECK_IN_EMAILS[i].body);
   return {
     enabled: o.enabled === true,
     autoSend: o.autoSend === true,
-    emails: emails.length ? emails : DEFAULT_CHECK_IN_EMAILS.map((e) => ({ ...e })),
+    emails: emails.length && !legacy ? emails : DEFAULT_CHECK_IN_EMAILS.map((e) => ({ ...e })),
   };
 }
 
 /**
- * checkInEmailFor({ checkInEmail, name, contactId, n, address, county }) → { subject, body, index } | null
+ * checkInEmailFor({ checkInEmail, name, contactId, n, address, county, pools, postalAddress, shift }) → { subject, body, index } | null
  *
  * The n-th check-in email (1 = the first) for this agent: the emails in
  * turn, starting from one picked by the contact id, so a day's batch doesn't
- * all read alike. One with a blank we can't fill gives way to the next.
+ * all read alike. One with a blank we can't fill gives way to the next;
+ * `shift` walks past one more (the queue's answer to a repeat). Pools "v1"
+ * with the emails never changed sends the 10-20 ones. Each ends on the
+ * opt-out line and the postal address when one is set.
  */
-export function checkInEmailFor({ checkInEmail, name = "", contactId = "", n = 1, address = "", county = "" } = {}) {
-  const { emails } = normalizeCheckInEmail(checkInEmail);
-  const values = { first: firstNameOf(name), area: areaOf({ address, county }) };
-  const start = openerVariant(contactId, 997) + Math.max(0, Math.round(Number(n) || 1) - 1);
+export function checkInEmailFor({ checkInEmail, name = "", contactId = "", n = 1, address = "", county = "", pools = "v2", postalAddress = "", shift = 0 } = {}) {
+  const { emails: saved } = normalizeCheckInEmail(checkInEmail);
+  const defaults = saved.length === DEFAULT_CHECK_IN_EMAILS.length && saved.every((e, i) => e.subject === DEFAULT_CHECK_IN_EMAILS[i].subject && e.body === DEFAULT_CHECK_IN_EMAILS[i].body);
+  const emails = defaults && pools === "v1" ? LEGACY_CHECK_IN_EMAILS : saved;
+  const values = { first: firstNameOf(name), area: areaOf({ address, county }), town: townOf({ address, county }) };
+  const start = openerVariant(contactId, 997) + Math.max(0, Math.round(Number(n) || 1) - 1) + Math.max(0, Math.round(Number(shift) || 0));
   for (let i = 0; i < emails.length; i++) {
     const index = (start + i) % emails.length;
     const subject = fillTemplate(emails[index].subject, values);
     const body = fillParagraphs(emails[index].body, values);
-    if (subject && body) return { subject, body, index };
+    if (subject && body) return { subject, body: withEmailFooter(body, postalAddress), index };
   }
   return null;
 }

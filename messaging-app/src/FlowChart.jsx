@@ -10,6 +10,7 @@ import { carrierFlags } from "@shared/carrier-words.js";
 import { fillTemplate } from "@shared/standard-texts.js";
 import { fillParagraphs } from "@shared/outreach-email.js";
 import { BTN, Pill } from "./ui.jsx";
+import VoiceNote from "./VoiceNote.jsx";
 
 const ICON = { trigger: Zap, text: MessageSquare, email: Mail, wait: Clock, branch: GitBranch, loop: Repeat };
 const DOT = {
@@ -58,7 +59,7 @@ function Bubble({ children }) {
   );
 }
 
-function Step({ step, last, editing, onEdit, renderEditor }) {
+function Step({ step, last, editing, onEdit, renderEditor, voiceKindFor }) {
   const Icon = ICON[step.type] || MessageSquare;
   const open = editing === step.id;
   const small = step.type === "wait";
@@ -92,7 +93,16 @@ function Step({ step, last, editing, onEdit, renderEditor }) {
               <>
                 {(step.texts || []).length > 0 && (
                   <div className="mt-2 space-y-1.5">
-                    {step.texts.map((t, i) => <Bubble key={i}>{step.type === "email" ? emailSampleOf(t) : sampleOf(t)}</Bubble>)}
+                    {step.texts.map((t, i) => {
+                      // What the voice check sees in it (2026-11-09): said, never blocking.
+                      const kind = voiceKindFor ? voiceKindFor(step, i) : null;
+                      return (
+                        <React.Fragment key={i}>
+                          <Bubble>{step.type === "email" ? emailSampleOf(t) : sampleOf(t)}</Bubble>
+                          {kind != null && <VoiceNote text={t} kind={kind} email={step.type === "email"} />}
+                        </React.Fragment>
+                      );
+                    })}
                   </div>
                 )}
                 {step.voice && <p className="mt-2 text-xs text-slate-600"><span className="font-semibold">How it should sound:</span> {step.voice}</p>}
@@ -106,16 +116,18 @@ function Step({ step, last, editing, onEdit, renderEditor }) {
 }
 
 /**
- * <FlowChart steps editing onEdit renderEditor />
+ * <FlowChart steps editing onEdit renderEditor voiceKindFor />
  *
  * `editing` is the id of the step whose editor is open; `onEdit(id)` opens
  * one; `renderEditor(step)` draws it. Without `onEdit` the chart is read-only.
+ * `voiceKindFor(step, i)`: the voice check's kind for a text, or null to
+ * show no note under it.
  */
-export default function FlowChart({ steps = [], editing = null, onEdit = null, renderEditor = () => null }) {
+export default function FlowChart({ steps = [], editing = null, onEdit = null, renderEditor = () => null, voiceKindFor = null }) {
   return (
     <ol className="list-none">
       {steps.map((s, i) => (
-        <Step key={s.id} step={s} last={i === steps.length - 1} editing={editing} onEdit={onEdit} renderEditor={renderEditor} />
+        <Step key={s.id} step={s} last={i === steps.length - 1} editing={editing} onEdit={onEdit} renderEditor={renderEditor} voiceKindFor={voiceKindFor} />
       ))}
     </ol>
   );

@@ -113,8 +113,11 @@ test("the day-2 follow-up names their house instead of 'not sure if that listing
   assert.doesNotMatch(o.followUps.join(" "), /not sure if that listing/i);
   for (const t of DEFAULT_FOLLOW_UP_TEXTS) assert.deepEqual(carrierFlags(fillTemplate(t, { first: "Randi", address: "2714 84th Dr NE" })), []);
   const nudge = outboundDescriptor({ kind: "outreach_nudge", offer: null, saved: {}, subject: { address: "2714 84th Dr NE, Marysville, WA", step: 2, steps: [2] } });
-  assert.equal(standardText({ kind: "outreach_nudge", outbound: nudge, name: "Randi", contactId: "c-r" }).text,
-    "Hey Randi, circling back on 2714 84th Dr NE. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?");
+  // 2026-11-09: one of the eight day-2 texts, each naming the house.
+  const day2 = standardText({ kind: "outreach_nudge", outbound: nudge, name: "Randi", contactId: "c-r" });
+  assert.equal(day2.set, "day_two");
+  assert.match(day2.text, /2714 84th Dr NE/);
+  assert.doesNotMatch(day2.text, /TLC|on or off market/);
 });
 
 test("with no address the follow-up still goes, naming no house", () => {

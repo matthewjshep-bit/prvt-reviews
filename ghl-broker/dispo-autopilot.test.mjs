@@ -127,8 +127,8 @@ test("a buyer we found in county records is told where we found them and who we 
     { contactId: "c3", name: "Pat R", phone: "+12065550103", tags: ["investor", "dispo-source-county", "dispo-type-mobile-home", "dispo-city-arlington"], lastRepliedAt: "2026-10-01T00:00:00Z" },
   ] });
   const [mh, sfr, talked] = [...store.rows.values()];
-  assert.match(mh.reply, /^Hey Colby — saw in the county records you've bought mobile homes around Arlington\. I'm Matt, I fix up houses locally\. Got 9311 12th Pl SE/);
-  assert.match(sfr.reply, /^Hey Kim — saw in the county records you've bought houses around Mill Creek\. I'm Matt, I fix up houses locally\. /);
+  assert.match(mh.reply, /^Hey Colby, saw in the county records you've bought mobile homes around Arlington\. I'm Matt, I fix up houses locally\. Got 9311 12th Pl SE/);
+  assert.match(sfr.reply, /^Hey Kim, saw in the county records you've bought houses around Mill Creek\. I'm Matt, I fix up houses locally\. /);
   assert.doesNotMatch(mh.reply + sfr.reply, /investor/i);
   assert.doesNotMatch(talked.reply, /county records/, "a buyer who has written back already knows us");
 });
@@ -154,8 +154,8 @@ test("a buyer with no phone is emailed the deal as a draft that waits for you; a
   assert.equal(mail.channel, "email");
   assert.equal(mail.status, "draft", "an emailed deal waits for you");
   assert.match(mail.autoSend.reason, /emailed deals wait for you/);
-  assert.equal(mail.outbound.subject, "Mobile home in a park, Kent — under contract, 76k");
-  assert.match(mail.reply, /^Hey Gizelle — found you through the WA real estate Facebook group\. /);
+  assert.equal(mail.outbound.subject, "Mobile home in a park, Kent: under contract, 76k");
+  assert.match(mail.reply, /^Hey Gizelle, found you through the WA real estate Facebook group\. /);
   assert.equal(mail.outbound.intro, "found you through the WA real estate Facebook group");
   assert.equal(r.rows.find((x) => x.contactId === "x1").status, "skipped");
   assert.equal(r.queued, 1);

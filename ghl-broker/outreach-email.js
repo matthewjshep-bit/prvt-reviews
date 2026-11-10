@@ -22,9 +22,10 @@ import { spreadAcrossDay, machineHours } from "./conversation-scheduler.js";
 import {
   normalizeIntroEmail, introEmailFor, introEmailDue, INTRO_EMAIL_EVENT_TYPES, INTRO_EMAIL_LATE_DAYS,
   normalizeCheckInEmail, checkInEmailFor, checkInEmailDue, CHECK_IN_EMAIL_EVENT_TYPES, emailGapHours,
-  checkInEmailGapHours, emailWaitReason,
+  checkInEmailGapHours, emailWaitReason, DEFAULT_INTRO_EMAIL_BODY, DEFAULT_CHECK_IN_EMAILS,
 } from "./shared/outreach-email.js";
 import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
+import { voiceFlags, hardVoiceKeys, voiceLine } from "./shared/voice.js";
 
 const DAY_MS = 86400000;
 const iso = (t) => new Date(t).toISOString();
@@ -34,6 +35,42 @@ export const INTRO_EMAIL_KIND = "outreach_email";
 export const CHECK_IN_EMAIL_KIND = "checkin_email";
 
 const nameOf = (c) => [c?.firstName, c?.lastName].filter(Boolean).join(" ").trim() || String(c?.contactName || c?.name || "").trim();
+
+// The agent emails we already queued or sent them, newest first: what a new
+// one must not repeat (shared/voice.js repeatsUs).
+const EMAIL_KINDS = new Set(["outreach_email", "checkin_email"]);
+const LIVE = new Set(["draft", "scheduled", "sending", "sent"]);
+export async function priorAgentEmails(store, locationId, contactId) {
+  const rows = await store.listReplyDrafts(locationId, { contactId, status: [...LIVE], limit: 50 }).catch(() => []);
+  return (rows || [])
+    .filter((d) => d?.channel === "email" && EMAIL_KINDS.has(d.outbound?.kind))
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .map((d) => ({ text: String(d.sentText || d.reply || ""), at: d.sentAt || d.createdAt || null }))
+    .filter((p) => p.text.trim());
+}
+
+/**
+ * lintEmail({ email, kind, prior, ours, walk }) → { email, flags, hard }
+ *
+ * The voice check at queue time (2026-11-09). Until then every email went
+ * in with `flags: []`. One that repeats an email we already sent them walks
+ * to the next of its set (`walk(k)`); what is still hard after that keeps
+ * the email out of the send queue: it waits for Matt with the reason.
+ * `ours`: the app's own wording; an email Matt wrote himself is flagged,
+ * never held.
+ */
+export function lintEmail({ email, kind, prior = [], ours = true, walk = null, tries = 8 }) {
+  const check = (e) => voiceFlags({ text: e.body, channel: "email", kind, prior, machine: ours });
+  let best = email;
+  let flags = check(email);
+  for (let k = 1; k < tries && typeof walk === "function" && hardVoiceKeys(flags).some((f) => /^repeats us/.test(f)); k++) {
+    const next = walk(k);
+    if (!next || next.body === best.body) break;
+    const f = check(next);
+    if (!hardVoiceKeys(f).some((x) => /^repeats us/.test(x))) { best = next; flags = f; break; }
+  }
+  return { email: best, flags, hard: hardVoiceKeys(flags) };
+}
 
 // Each agent's events in the window, by contact id.
 async function eventsByContact(store, locationId, since, types) {
@@ -56,11 +93,13 @@ async function eventsByContact(store, locationId, since, types) {
  * (contact name, due → { subject, body } | null), the `claim` event, the
  * draft. `label` names the switch a waiting draft points to.
  */
-async function queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact, kind, autoSend, label, due: dueFor, write, claim, summary, gapHours: gap }) {
+async function queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact, kind, autoSend, label, due: dueFor, write, claim, summary, gapHours: gap, appWording = true }) {
   const out = { queued: 0, drafted: 0, rows: [] };
   const read = typeof deps.getContact === "function" ? deps.getContact : (id) => getContact(client, id);
   const touches = typeof deps.ourTouches === "function" ? deps.ourTouches : (id) => getOurLastTouches(client, locationId, id);
+  const priorEmails = typeof deps.priorEmails === "function" ? deps.priorEmails : (id) => priorAgentEmails(store, locationId, id);
   const config = conversationConfig(saved);
+  const lintOn = config.checkIns?.lint !== false;
   const gapHours = gap ?? emailGapHours(config);
   const schedule = !dryRun && sendsEnabled && config.enabled && autoSend;
   const why = !sendsEnabled ? "sends are off on the broker (CARD_SENDS_ENABLED)"
@@ -86,29 +125,40 @@ async function queueEmails({ client, store, locationId, saved, sendsEnabled, now
       continue;
     }
     const name = nameOf(contact);
-    const email = write(name, contactId, due);
+    let email = write(name, contactId, due, 0);
     if (!email) { out.rows.push({ ...row, status: "skipped", reason: "the email has a blank we can't fill" }); continue; }
-    if (dryRun) { out.rows.push({ ...row, status: "would email", subject: email.subject }); continue; }
+    // The voice check (shared/voice.js): one that repeats an email we sent
+    // them walks to the next; what still trips waits for Matt.
+    let voice = { flags: [], hard: [] };
+    if (lintOn) {
+      const prior = await Promise.resolve(priorEmails(contactId)).catch(() => []);
+      voice = lintEmail({ email, kind, prior: prior || [], ours: appWording, walk: (k) => write(name, contactId, due, k) });
+      email = voice.email;
+    }
+    const hold = voice.hard.length > 0;
+    if (dryRun) { out.rows.push({ ...row, status: "would email", subject: email.subject, ...(hold ? { held: voiceLine(voice.hard) } : {}) }); continue; }
 
     const claimed = await recordEvent({ store, locationId, contactId, party: "agent", at: iso(now), address: due.address, source: "conversation", ...claim(contactId, due) });
     if (!claimed.inserted) { out.rows.push({ ...row, status: "skipped", reason: "already claimed" }); continue; }
 
-    const sendAt = schedule
+    const go = schedule && !hold;
+    const sendAt = go
       ? spreadAcrossDay({ now, quietHours: machineHours(auto), hours: auto.nudgeSpreadHours ?? 8, weekends: auto.weekends || "all" })
       : null;
     const ts = iso(now);
     const record = await store.createReplyDraft({
-      locationId, contactId, contactName: name, status: schedule ? "scheduled" : "draft", channel: "email", jobId: null,
-      inbound: "", outbound: { kind, address: due.address, subject: email.subject, ...(due.step != null ? { step: due.step } : {}) },
+      locationId, contactId, contactName: name, status: go ? "scheduled" : "draft", channel: "email", jobId: null,
+      inbound: "", outbound: { kind, address: due.address, subject: email.subject, ...(due.step != null ? { step: due.step } : {}), ...(email.index != null ? { emailIndex: email.index } : {}) }, voiceKind: kind,
       reply: email.body, intent: kind, confidence: "high", needsHuman: false, humanReason: "",
-      summary: summary(due), propertyAddress: due.address, counterAmount: null, autoSendable: true, flags: [], party: "agent", partySource: "outreach",
+      summary: summary(due), propertyAddress: due.address, counterAmount: null, autoSendable: !hold, flags: hold ? [voiceLine(voice.hard)] : [],
+      voiceFlags: voice.flags.map(({ key, level }) => ({ key, level })), ...(appWording ? {} : { voiceOwn: true }), party: "agent", partySource: "outreach",
       matchedTags: { agent: [], investor: [] }, contextSummary: {}, offersInContext: 0,
-      autoSend: { decided: schedule, reason: schedule ? "" : why }, humanActive: null, actions: [],
+      autoSend: { decided: go, reason: go ? "" : hold ? `needs a person: ${voiceLine(voice.hard)}` : why }, humanActive: null, actions: [],
       supersededIds: [], warnings: [], noteOnAutoSend: false, promptVersion: 3,
-      ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
+      ...(go ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
     });
-    if (schedule) out.queued++; else out.drafted++;
-    out.rows.push({ ...row, status: schedule ? "scheduled" : "draft", draftId: record?.id || null, sendAt });
+    if (go) out.queued++; else out.drafted++;
+    out.rows.push({ ...row, status: go ? "scheduled" : "draft", draftId: record?.id || null, sendAt, ...(hold ? { held: voiceLine(voice.hard) } : {}) });
   }
   return out;
 }
@@ -123,12 +173,17 @@ async function queueEmails({ client, store, locationId, saved, sendsEnabled, now
 export async function runIntroEmails({ client, store, locationId, saved = {}, sendsEnabled = false, now = Date.now(), dryRun = false, held = () => false, deps = {} }) {
   const ie = normalizeIntroEmail(saved?.outreachAutopilot?.introEmail);
   if (!ie.enabled) return { queued: 0, drafted: 0, rows: [] };
-  const gapHours = emailGapHours(conversationConfig(saved));
+  const config = conversationConfig(saved);
+  const gapHours = emailGapHours(config);
+  const pools = config.checkIns?.pools || "v2";
+  const postalAddress = String(saved?.outreachAutopilot?.postalAddress || "").trim();
   const byContact = await eventsByContact(store, locationId, iso(now - (ie.day + INTRO_EMAIL_LATE_DAYS + 1) * DAY_MS), INTRO_EMAIL_EVENT_TYPES);
   return queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact,
-    kind: INTRO_EMAIL_KIND, autoSend: ie.autoSend, label: "intro emails",
+    // The app's own wording is held to the voice check; Matt's own body, or
+    // the 10-20 email a "v1" rollback puts back, is flagged, never held.
+    kind: INTRO_EMAIL_KIND, autoSend: ie.autoSend, label: "intro emails", appWording: ie.body === DEFAULT_INTRO_EMAIL_BODY && pools !== "v1",
     due: (contactId, list) => introEmailDue({ events: list, day: ie.day, now, gapHours }),
-    write: (name, contactId, due) => introEmailFor({ introEmail: ie, name, address: due.address, county: due.county }),
+    write: (name, contactId, due, shift = 0) => introEmailFor({ introEmail: ie, name, address: due.address, county: due.county, contactId, pools, postalAddress, shift }),
     claim: (contactId, due) => ({ type: "outreach_email_queued", ref: `${INTRO_EMAIL_KIND}:${contactId}`,
       dedupeKey: `${INTRO_EMAIL_KIND}:${contactId}`, data: { day: ie.day, firstTextAt: due.openedAt } }),
     summary: () => `Introduces us by email, ${ie.day} days after the first text, and asks for distressed properties.` });
@@ -149,12 +204,17 @@ export async function runCheckInEmails({ client, store, locationId, saved = {}, 
   const ladder = conversationConfig(saved).parties?.agent?.followUp?.ladders?.outreach_nudge;
   if (!ce.enabled || !(Number(ladder?.repeatEvery) > 0) || !ladder?.steps?.length) return { queued: 0, drafted: 0, rows: [] };
   // A week after the check-in text, not three days (Terry V., 2026-11-02).
-  const gapHours = checkInEmailGapHours(conversationConfig(saved));
+  const config = conversationConfig(saved);
+  const gapHours = checkInEmailGapHours(config);
+  const pools = config.checkIns?.pools || "v2";
+  const postalAddress = String(saved?.outreachAutopilot?.postalAddress || "").trim();
+  const appWording = pools !== "v1" && ce.emails.length === DEFAULT_CHECK_IN_EMAILS.length
+    && ce.emails.every((e, i) => e.subject === DEFAULT_CHECK_IN_EMAILS[i].subject && e.body === DEFAULT_CHECK_IN_EMAILS[i].body);
   const byContact = await eventsByContact(store, locationId, iso(now - (OUTREACH_NUDGE_WINDOW_DAYS + 1) * DAY_MS), CHECK_IN_EMAIL_EVENT_TYPES);
   return queueEmails({ client, store, locationId, saved, sendsEnabled, now, dryRun, held, deps, byContact, gapHours,
-    kind: CHECK_IN_EMAIL_KIND, autoSend: ce.autoSend, label: "check-in emails",
+    kind: CHECK_IN_EMAIL_KIND, autoSend: ce.autoSend, label: "check-in emails", appWording,
     due: (contactId, list) => checkInEmailDue({ events: list, steps: ladder.steps, repeatEvery: ladder.repeatEvery, now, windowDays: OUTREACH_NUDGE_WINDOW_DAYS, gapHours }),
-    write: (name, contactId, due) => checkInEmailFor({ checkInEmail: ce, name, contactId, n: due.n, address: due.address, county: due.county }),
+    write: (name, contactId, due, shift = 0) => checkInEmailFor({ checkInEmail: ce, name, contactId, n: due.n, address: due.address, county: due.county, pools, postalAddress, shift }),
     claim: (contactId, due) => ({ type: "checkin_email_queued", ref: `${CHECK_IN_EMAIL_KIND}:${contactId}:${due.step}`,
       dedupeKey: `${CHECK_IN_EMAIL_KIND}:${contactId}:${due.step}`, data: { step: due.step, n: due.n } }),
     summary: (due) => `The day-${due.step} check-in by email: anything distressed on their desk?` });

@@ -4637,6 +4637,94 @@ delay band and the hours:
   nothing until Monday; `all` treats Saturday like Tuesday; `none` sends
   nothing at all until Monday.
 
+**One voice check on every machine text (2026-11-09).** Matt: check-ins have
+to read like him, not like AI. The fixed templates said "desk" or "radar" in
+40% of texts (Matt 0.9%), "on or off market" in 31%, "circling back" in 16%,
+and preceded 47 of 61 agent opt-outs after a check-in; until now only two
+outputs were checked after they were written. `shared/voice.js` is now the
+one check, and the later check-in branches import its words (`VOICE_RULE`,
+`TELLS`, `repeatsUs`, `openerKey`, `AI_COMPLAINT_RX`, `SENSITIVE_RX`).
+
+- **What it holds (hard).** A dash (em, en or " - "), "!", an emoji; in a
+  text a dollar sign, a link or a sign-off ("Thanks, Matt"); "hope you're
+  doing well", "reach out", "touch base", "checking in", "following up",
+  "circling back" (allowed once, in the one day-2 text that names their
+  house), "I'd love", "happy to help", "keep me in mind", "I'm here if",
+  "send it my way", "I'm all ears", "don't hesitate", "feel free", "quick
+  question", "just wanted to", "value-add", "TLC", "I'm local", "always
+  looking", "I'm an assistant", "my partner will", "our team will"; a
+  stock opener (Got it, Understood, Perfect, Appreciate it, Good to know,
+  Sounds good, Noted); "Hi," with no name after it in a text we start; a
+  blank nobody filled; two questions in a text we start (the qualify ask
+  is one); a check-in text over 200 characters, a text to someone who never
+  wrote back over 160, a check-in email body over 120; and a repeat of one
+  of our last 6 texts (the same text, a sentence sharing 70% of its words,
+  or the same first three words as either of our last two; names and towns
+  don't count). A phrase Matt uses once is spent when one of our last 3
+  texts this month used the same group: desk/radar/plate, on or off
+  market, off-market, ugly/rough, fixers, rather not fix, estates/rentals,
+  retail buyers, the buyer-pulse apology. Soft (counted, never blocking):
+  "came across your listing", corporate words, their name opening two texts
+  running.
+- **Where it runs.** (a) Drafting a text the machine starts
+  (`evaluateReplyGates` `voice`, against the thread's last 6 lines of ours):
+  a fixed text walks to the next variant along (`walkStandard`, no model
+  call); a model draft is written once more, told the flags and "OUR LAST
+  TEXT TO THEM SAID: …", then dropped with a timeline note (floats and first
+  texts are kept for a person, as before). (b) A reply: a hard flag earns the
+  one `redraftOnGate` rewrite; still tripping, it doesn't send itself and
+  waits on the Desk. (c) The last look in `sendReplyDraft`: every machine
+  text or email leaving by itself is read again against the live thread
+  (texts) or the agent emails we sent (emails); a check-in that sat queued
+  while another text of ours went and now repeats it waits for you with
+  "held: reads like a machine: …". A refreshed deal text is held only for a
+  blank left empty. A draft queued before the check existed answers only for
+  a repeat. (d) The agent emails at queue (`ghl-broker/outreach-email.js`):
+  one that repeats an email we sent them walks to the next; what still trips
+  waits as a draft; the draft carries `voiceFlags`. (e) The nightly coach
+  rejects an example or a rule that teaches a tell. (f) Autopilot → Agents and
+  the Conversation AI page show what it sees beside Matt's saved first
+  texts, follow-ups, check-ins, emails, examples, rules and instructions.
+- **Never blocking a person.** Matt pressing Send is Matt deciding. Matt's
+  own saved texts (anything not equal to a shipped default, and the v1 texts
+  a rollback restores) are flagged, never held or rewritten.
+- **Settings.** `conversationAi.checkIns = { lint: true, pools: "v2" }`
+  (Conversation AI → Texting rules). `lint` off stops the check everywhere.
+  `pools` `"v1"` puts the Oct 17 check-ins, follow-ups and emails back in one
+  field (`LEGACY_*` in `shared/standard-texts.js`, `shared/outreach-opener.js`,
+  `shared/outreach-email.js`). Both only hold or reword, so they ship on.
+- **The v2 texts.** Engaged check-in (10), cold check-in (10, their town
+  when we know it), the fresh-listing check-ins (8 + 8, the listing named in
+  passing, never judged), day 2 (8, each naming the house, one per agent by
+  the contact id, `DAY_TWO_TEXTS`; follow-up 1 left as it ships is the pool,
+  an edit sends his own to everyone), the recent-lister first text without
+  "buy houses". The canned replies (the counter pass, the qualify asks and
+  passes, the "closed" lines in turn, "Sounds too finished for me", the desk
+  first line, "Thanks for the pics.", the package invite) are Matt's voice
+  and end on the next-one question where a house closes. A buyer's deal text
+  has no dash in it. No first name: the greeting and ", {first}" come out
+  ("Saw…", "…lately?"); a GHL name that is a role ("Agent", "Realtor") is no
+  name; an ALL CAPS name reads as a name.
+- **The emails.** Intro (8 bodies) and check-in (8 bodies, lowercase
+  subjects), 50 to 85 characters, picked per agent, never "a couple of days
+  ago". Both end "If you'd rather I didn't email, just reply and say so." and,
+  when `outreachAutopilot.postalAddress` is set (Autopilot → Agents → the
+  intro email; default empty), the address on its own line under it. Matt
+  took the opt-out line off the check-ins on 10-20; this puts it back on
+  both (CAN-SPAM), one line to drop if he says so. A stored copy of the 10-20
+  emails reads as never changed.
+- **The prompts.** Every machine-started text carries `VOICE_RULE` in place of
+  each kind's own list. "We'd love a look" and the call offer stapled onto a
+  check-in are gone. HUMAN's "never ask again whether anything else needs
+  work" is for answers; a check-in exists to ask it, in new words.
+- **The first reply.** When our first text already asked for their other
+  fixers (`fixers_asked` at the send, or the thread for a GHL workflow's
+  text), the first reply doesn't ask again; the fixers line is never stapled
+  onto a reply that already asks something.
+- **Watch in week one.** A false positive drops a machine text with a
+  timeline note ("dropped, not sent: reads like a machine: …") or holds it on
+  the Desk ("held: reads like a machine: …"); count them.
+
 ### Phone calls as an inbound
 
 A finished call runs the same pipeline a text does. Wiring, in GHL:

@@ -23,6 +23,7 @@ import { recordEvent } from "./contact-record.js";
 import { zillowUrl } from "./shared/us-address.js";
 import { assetOf, assetPhrase } from "./shared/asset-type.js";
 import { buyerFacts } from "./shared/underwrite-checks.js";
+import { firstNameOf } from "./shared/standard-texts.js";
 
 export const DEFAULT_EXPIRY_DAYS = 14;
 
@@ -47,14 +48,19 @@ export const expiryFromDays = (days) => {
   return new Date(Date.now() + d * 24 * 60 * 60 * 1000).toISOString();
 };
 
+// 2026-11-09 (the voice audit): in Matt's voice, no dashes, the street not
+// the whole address, and no "Hi there" when we have no name. Until then it
+// read "Hi there — here's the deal package on … This link is yours only and
+// it's tracked — please don't forward it."
 export function inviteMessage({ room, invite, link }) {
-  const first = (invite.name || "").split(" ")[0] || "there";
-  const address = room.address || room.snapshot?.property?.address || "the property";
+  const first = firstNameOf(invite.name || "");
+  const address = room.address || room.snapshot?.property?.address || "";
+  const street = String(address).split(",")[0].trim() || "the house";
   const price = room.snapshot?.numbers?.investorPrice;
   return (
-    `Hi ${first} — here's the deal package on ${address}` +
+    `${first ? `Hi ${first}, here's` : "Here's"} the package on ${street}` +
     (price > 0 ? ` (${fmtMoney(price)})` : "") + `:\n${link}\n` +
-    `This link is yours only and it's tracked — please don't forward it.`
+    `It's set up just for you, so please keep it to yourself.`
   );
 }
 

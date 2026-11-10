@@ -177,7 +177,11 @@ test("style, opt-out and media sections coerce and default", () => {
   assert.deepEqual(c.optOut.keywords, ["stop", "wrong number"]);
   assert.deepEqual(c.optOut.tags, ["stop bot"]);
   assert.equal(c.optOut.workflowId, "wf9");
-  assert.equal(c.media.reply, "Thanks for the images, taking a look!", "an empty reply falls back");
+  assert.equal(c.media.reply, "Thanks for the pics.", "an empty reply falls back");
+  // 2026-11-09: the old line ("…taking a look!") had the exclamation mark and
+  // a promise with nothing behind it; a stored copy reads as never changed.
+  assert.equal(normalizeConversationAi({ media: { reply: "Thanks for the images, taking a look!" } }).media.reply, "Thanks for the pics.");
+  assert.equal(normalizeConversationAi({ media: { reply: "Got the photos, thank you" } }).media.reply, "Got the photos, thank you", "his own line stays");
   assert.equal(c.routing.unknown, "classify");
   assert.equal(c.routing.tagOnClassify, false);
   assert.equal(c.persona.ifAskedIfBot, "I'm an assistant.");
@@ -198,7 +202,8 @@ test("the starter playbook is a valid config with the real tags, and sends what 
   const c = starterConfig({ signer: "Matt Shepherd" });
   assert.deepEqual(normalizeConversationAi(c), c, "idempotent");
   assert.equal(c.persona.name, "Matt");
-  assert.match(c.persona.ifAskedIfBot, /assistant on Matt's team/);
+  // The bot is Matt (2026-10-22): no "assistant on Matt's team" line.
+  assert.equal(c.persona.ifAskedIfBot, "");
   assert.equal(c.routing.unknown, "classify");
   assert.ok(c.routing.investorTags.includes("dispo-*"));
   // On out of the box: reviewing every text is the thing that stops a bot
@@ -308,7 +313,7 @@ test("the starter teaches the bot to pick a dead offer back up rather than start
   assert.match(c.parties.agent.instructions, /PICK BACK UP/);
   assert.match(c.parties.agent.instructions, /anything else you've got that needs work/);
   const agentEx = c.examples.filter((e) => e.party === "agent");
-  assert.ok(agentEx.some((e) => /123 Main offer didn't work out/.test(e.weSay)), "an example of the move itself");
+  assert.ok(agentEx.some((e) => /the last one didn't work out\. Anything else/.test(e.weSay)), "an example of the move itself");
   assert.ok(c.examples.some((e) => e.party === "investor" && /another buyer/.test(e.weSay)));
 });
 

@@ -20,7 +20,8 @@ after(() => fs.rmSync(dir, { recursive: true, force: true }));
 const { store } = await import("./store.js");
 const { recordEvent } = await import("./contact-record.js");
 const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
-const { normalizeCheckInEmail, checkInEmailFor, checkInEmailDue, DEFAULT_CHECK_IN_EMAILS, areaOf, introEmailFor } = await import("./shared/outreach-email.js");
+const { normalizeCheckInEmail, checkInEmailFor, checkInEmailDue, DEFAULT_CHECK_IN_EMAILS, CHECK_IN_EMAIL_BODIES, LEGACY_CHECK_IN_EMAILS, EMAIL_OPT_OUT_LINE, areaOf, introEmailFor } = await import("./shared/outreach-email.js");
+const { voiceFlags, emailCore } = await import("./shared/voice.js");
 const { runCheckInEmails } = await import("./outreach-email.js");
 const { startFollowUpSweep, getFollowUpJob, _resetJobs } = await import("./follow-up-sweep.js");
 await store.init();
@@ -30,18 +31,29 @@ const NOW = Date.parse("2026-11-05T16:30:00Z");
 const ago = (d) => new Date(NOW - d * DAY).toISOString();
 const LADDER = { steps: [2], repeatEvery: 14 };
 
-test("the check-in emails are short, fun, and each one asks for the ugly ones", () => {
-  for (const e of DEFAULT_CHECK_IN_EMAILS) {
-    const words = e.body.split("\n\n")[1].split(/\s+/).length;
-    assert.ok(words <= 45, `${words} words: ${e.subject}`);
+// 2026-11-09 (the voice audit): the 10-20 check-ins ("your friendly
+// neighborhood fixer-upper guy", "a kitchen stuck in 1974") drew no reply in
+// 124. Matt, 11-02: under 100 characters but personalized. Now eight bodies
+// of 50 to 85 characters, signed Matt, each one ask, and the opt-out line.
+test("a check-in email body is under 120 characters, names their town and passes the voice check", () => {
+  assert.equal(DEFAULT_CHECK_IN_EMAILS.length, 8);
+  for (const e of CHECK_IN_EMAIL_BODIES) assert.ok(e.body.length >= 45 && e.body.length <= 85, `${e.body.length}: ${e.body}`);
+  assert.ok(CHECK_IN_EMAIL_BODIES.filter((e) => /\{town\}/.test(e.body)).length >= 7, "names where they work");
+  for (const [i, e] of DEFAULT_CHECK_IN_EMAILS.entries()) {
     assert.match(e.subject, /^[a-z]/, "lowercase subjects, like 'texted you'");
     assert.match(e.body, /^Hi \{first\},\n\n/);
-    assert.match(e.body, /shepflips\.com/);
-    assert.doesNotMatch(e.body, /rather not get these/i, "Matt took the opt-out line out");
-    assert.match(e.body, /\{area\}/, "names where they work");
+    assert.ok(e.body.endsWith(`\n\nMatt\nShep Flips\n\n${EMAIL_OPT_OUT_LINE}`), e.body);
+    for (const name of ["Brenda Jones", ""]) {
+      const filled = checkInEmailFor({ checkInEmail: {}, name, contactId: "c-1", n: 1, shift: i, address: "5232 S Yakima Ave, Lake Forest Park, WA", county: "King" });
+      assert.ok(emailCore(filled.body).length < 120, filled.body);
+      assert.deepEqual(voiceFlags({ text: filled.body, channel: "email", kind: "checkin_email" }), [], filled.body);
+      if (/\{town\}/.test(CHECK_IN_EMAIL_BODIES[filled.index].body)) assert.match(filled.body, /Lake Forest Park/);
+      if (!name) assert.doesNotMatch(filled.body, /^Hi/, "no name, no bare greeting");
+    }
   }
   const ce = normalizeCheckInEmail({});
   assert.deepEqual([ce.enabled, ce.autoSend, ce.emails.length], [false, false, DEFAULT_CHECK_IN_EMAILS.length]);
+  assert.deepEqual(normalizeCheckInEmail({ emails: LEGACY_CHECK_IN_EMAILS }).emails, DEFAULT_CHECK_IN_EMAILS, "a stored copy of the 10-20 four reads as never changed");
 });
 
 test("each check-in email is the next one along, never the same twice running", () => {
@@ -76,10 +88,14 @@ test("the emails name where the agent works: the listing's town, else its county
   assert.equal(areaOf({}), "your area");
   for (const n of [1, 2, 3, 4]) {
     const e = checkInEmailFor({ checkInEmail: {}, name: "Brenda", contactId: "c-1", n, address: "5232 S Yakima Ave, Tacoma, WA", county: "Pierce" });
-    assert.match(e.body, /Tacoma or the surrounding areas/, e.subject);
-    assert.doesNotMatch(e.body, /\{area\}/);
+    if (/\{town\}/.test(CHECK_IN_EMAIL_BODIES[e.index].body)) assert.match(e.body, /Tacoma/, e.subject);
+    assert.doesNotMatch(e.body, /\{area\}|\{town\}/);
   }
-  assert.match(introEmailFor({ introEmail: {}, name: "Brenda", address: "1 Elm St", county: "Snohomish" }).body, /houses that need work around Snohomish County or the surrounding areas\./);
+  // No town on the address: its county.
+  assert.match(introEmailFor({ introEmail: {}, name: "Brenda", address: "1 Elm St", county: "Snohomish" }).body, /Snohomish County/);
+  // Matt's own email may still say {area}.
+  const mine = checkInEmailFor({ checkInEmail: { emails: [{ subject: "hi", body: "Hi {first},\n\nAnything around {area}?" }] }, name: "Brenda", contactId: "c-1", address: "5232 S Yakima Ave, Tacoma, WA" });
+  assert.match(mine.body, /Anything around Tacoma or the surrounding areas\?/);
 });
 
 const AI = normalizeConversationAi({ enabled: true, parties: { agent: { followUp: { enabled: true, ladders: { outreach_nudge: { enabled: true, ...LADDER } } } } } });
@@ -107,8 +123,11 @@ test("on day 16 the agent who had the intro email gets one check-in email, sched
   const [draft] = await store.listReplyDrafts(loc, { contactId: "c-email", limit: 5 });
   assert.deepEqual([draft.channel, draft.status, draft.outbound.kind, draft.outbound.step], ["email", "scheduled", "checkin_email", 16]);
   assert.match(draft.reply, /^Hi Brenda,\n\n/);
-  assert.match(draft.reply, /Renton/, "the town of the listing we texted them about");
-  assert.ok(DEFAULT_CHECK_IN_EMAILS.some((e) => e.subject === draft.outbound.subject));
+  if (/\{town\}/.test(DEFAULT_CHECK_IN_EMAILS.find((e) => e.subject === draft.outbound.subject || e.subject.replace("{town}", "Renton") === draft.outbound.subject)?.body || "")) {
+    assert.match(draft.reply, /Renton/, "the town of the listing we texted them about");
+  }
+  assert.ok(DEFAULT_CHECK_IN_EMAILS.some((e) => e.subject.replace("{town}", "Renton") === draft.outbound.subject), draft.outbound.subject);
+  assert.deepEqual(draft.voiceFlags, [], "the queued draft carries its flags: none");
   const again = await runCheckInEmails({ store, locationId: loc, saved: savedWith({ enabled: true, autoSend: true }), sendsEnabled: true, now: NOW + 3600000, deps: { getContact } });
   assert.equal(again.queued + again.drafted, 0, "once per check-in day");
 });

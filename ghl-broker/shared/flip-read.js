@@ -193,10 +193,12 @@ export function saysRealWork(text = "", { agentRehab = 0 } = {}) {
 }
 
 // Our one question. A few wordings, so a day of them doesn't read as a form.
+// 2026-11-09 (the voice audit): without the "Good to know." / "Appreciate
+// it." / "Helpful, thanks." openers HUMAN bans, which ran on every one.
 export const QUALIFY_ASKS = [
-  "Good to know. Is it big-ticket stuff like roof, foundation or systems, or more paint and flooring? And what's got the seller selling?",
-  "Appreciate it. Honest read, real repairs like roof, foundation or systems, or more of a refresh? And what's the seller's situation?",
-  "Helpful, thanks. What's it actually need, the big stuff like roof or foundation, or mostly cosmetic? And what's the story with the seller?",
+  "Is it big-ticket stuff like roof, foundation or systems, or more paint and flooring? And what's got the seller selling?",
+  "Honest read, real repairs like roof, foundation or systems, or more of a refresh? And what's the seller's situation?",
+  "What's it actually need, the big stuff like roof or foundation, or mostly cosmetic? And what's the story with the seller?",
 ];
 // Our question in a thread, whichever wording went (or a hand-edited one
 // that kept its shape).
@@ -210,11 +212,23 @@ export const QUALIFY_ASK_RX = /\b(?:big[\s-]ticket\s+stuff|real\s+repairs\s+like
 // than we go for, and their other fixers, on or off market. No list of what
 // we buy, no kinds of seller (until 2026-10-17 they named "an unlisted
 // estate" or "a parent moving into care").
+// 2026-11-09: each ends on the question (Matt's 10-21 NEXT ONE rule), with
+// no stock opener and no "I'm all ears" or "I'd love a look".
 export const QUALIFY_PASSES = [
-  "Got it, thanks for letting me know. Sounds a bit too nice for us. If you come across anything that needs work, on or off-market, I'm all ears.",
-  "Appreciate it, sounds lighter than what we usually go for. Any fixers on your radar, listed or off-market?",
-  "Good to know, thanks. Not quite distressed enough for us. If anything that needs real work comes across your desk, on or off-market, I'd love a look.",
+  "Thanks for letting me know. Sounds a bit too nice for us. Got anything that needs real work, on or off-market?",
+  "Sounds lighter than what we usually go for. Any fixers on your radar, listed or off-market?",
+  "Thanks, that's not quite distressed enough for us. Anything coming that needs real work, on or off-market?",
 ];
+// After our pass, a house that still doesn't qualify (move "closed"): three,
+// in turn, so one agent never gets the same one twice. Until 2026-11-09 it
+// was "Appreciate it. Keep me in mind if anything rougher comes up." every
+// time, which asks nothing.
+export const QUALIFY_CLOSED = [
+  "Thanks for the straight answer. Sounds too clean for me. Got anything rougher on your end?",
+  "Sounds like that one's in good shape already. Anything coming that needs real work?",
+  "That one's more finished than I go for. Any older ones on deck that need a lot?",
+];
+const closedReply = (variant, n) => QUALIFY_CLOSED[(Math.abs(Math.round(Number(variant) || 0)) + Math.max(0, Math.round(Number(n) || 0))) % QUALIFY_CLOSED.length];
 
 // The call ask (2026-10-15). The funnel review: all 8 contracts from outreach
 // agents came after a phone call, agents who talked brought us houses 54% of
@@ -222,31 +236,35 @@ export const QUALIFY_PASSES = [
 // So their first answer gets one closing question that asks for both: other
 // fixers, and a quick call. No times — no calendar is connected, so we ask
 // what works for them. parties.agent.callAsk, off by default.
+// 2026-11-09: no "I'd love" (the voice check, shared/voice.js).
 export const FIXERS_CALL_ASKS = [
-  "If you've got other fixers on your radar, I'd love a quick 5-minute call this week, what time works?",
-  "If anything else rough is on your radar, I'd love a quick 5-minute call this week, what time works for you?",
+  "If you've got other fixers on your radar, a quick 5-minute call this week would be great, what time works?",
+  "If anything else rough is on your radar, a quick 5-minute call this week would be easiest, what time works for you?",
   "If you've got other fixers coming up, a quick 5-minute call this week would be great, what time works?",
 ];
 // The same first-answer ask without the call, for when the call ask is off:
 // the first text no longer carries the other-fixers line (2026-10-15), so
 // their first answer is where we ask for the next house either way.
+// 2026-11-09: plain questions. Two of three ended on a statement ("I'm all
+// ears", "send them my way") that asks nothing, and they go only when our
+// first text didn't already ask (ghl-broker/reply-agent.js callAskFor).
 export const FIXERS_ASKS = [
-  "If you've got other fixers on your radar, on or off-market, I'm all ears.",
-  "Anything else rough on your radar, listed or not? I'd love a first look.",
-  "If you've got other fixers coming up, on or off-market, send them my way.",
+  "Got any other fixers on your radar, listed or off-market?",
+  "Anything else rough coming up, listed or not?",
+  "Any other fixers coming up, on or off-market?",
 ];
 // The question and the pass, with the call ask in them: still one question
 // about the house (QUALIFY_ASK_RX reads it), and the pass still asks for
 // others, on or off-market.
 export const QUALIFY_ASKS_CALL = [
-  "Good to know. Big-ticket stuff like roof or foundation, or more of a refresh? I'd love the seller's story, and any other fixers you've got, on a quick 5-minute call this week, what time works?",
-  "Appreciate it. Real repairs like roof, foundation or systems, or more of a refresh? Easier to hear the seller's situation and anything else you've got on a quick 5-minute call this week, what time works?",
-  "Helpful, thanks. Is it the big stuff like roof or foundation, or mostly cosmetic? I'd love the seller's story, and any other fixers, on a quick 5-minute call this week, what time works?",
+  "Big-ticket stuff like roof or foundation, or more of a refresh? The seller's story and any other fixers you've got would be easier on a quick 5-minute call this week, what time works?",
+  "Real repairs like roof, foundation or systems, or more of a refresh? Easier to hear the seller's situation and anything else you've got on a quick 5-minute call this week, what time works?",
+  "Is it the big stuff like roof or foundation, or mostly cosmetic? The seller's story and any other fixers would be easier on a quick 5-minute call this week, what time works?",
 ];
 export const QUALIFY_PASSES_CALL = [
-  `Thanks, sounds too nice for us. We buy ${OUR_BOX_WORDS}. If you've got other fixers on your radar, on or off-market, I'd love a quick 5-minute call this week, what time works?`,
-  `Appreciate it. Lighter than we go for: ${OUR_BOX_WORDS}. If anything like that is on your radar, listed or off-market, I'd love a quick 5-minute call this week, what time works?`,
-  `Good to know. We buy ${OUR_BOX_WORDS}. If you've got other fixers coming up, on or off-market, a quick 5-minute call this week would be great, what time works?`,
+  `Thanks, sounds too nice for us. We buy ${OUR_BOX_WORDS}. If you've got other fixers, on or off-market, a quick 5-minute call this week would be great, what time works?`,
+  `Lighter than we go for: ${OUR_BOX_WORDS}. If anything like that is on your radar, listed or off-market, a quick 5-minute call this week would be easiest, what time works?`,
+  `We buy ${OUR_BOX_WORDS}. If you've got other fixers coming up, on or off-market, a quick 5-minute call this week would be great, what time works?`,
 ];
 // Our text asked for a call, in any words. What the send records
 // (call_asked), and what tells the backstop the model already asked.
@@ -280,7 +298,9 @@ export function withCallAsk(reply = "", variant = 0) {
  *
  * withCallAsk's twin for when the call ask is off. A reply that already asks
  * for other houses is left alone; one ending on a stay-in-touch question has
- * it taken over, so the text still asks one thing.
+ * it taken over, so the text still asks one thing. Any other reply that ends
+ * on a question is left alone too (2026-11-09): stapling a second one on was
+ * two questions in one text.
  */
 export function withFixersAsk(reply = "", variant = 0) {
   const said = String(reply || "").trim();
@@ -290,6 +310,7 @@ export function withFixersAsk(reply = "", variant = 0) {
   const parts = said.split(/(?<=[.!?])\s+/);
   const last = parts.at(-1) || "";
   const replaceable = /\?\s*$/.test(last) && /\bstay\s+in\s+touch\b|\bkeep\s+(?:me|us)\s+in\s+mind\b|\bneeds?\s+(?:real\s+)?work\b|\boff[\s-]?market\b/i.test(last);
+  if (!replaceable && /\?\s*$/.test(said)) return said;
   return [...(replaceable ? parts.slice(0, -1) : parts), ask].join(" ").trim();
 }
 
@@ -361,10 +382,11 @@ export function photosPassReply({ variant = 0, callAsk = false } = {}) {
  * and `passed` are whether our question / our pass already went; `callAsk`
  * puts the call ask in the question or the pass.
  */
-export function qualifyStep({ words = "", asked = false, passed = false, agentRehab = 0, variant = 0, callAsk = false } = {}) {
+export function qualifyStep({ words = "", asked = false, passed = false, agentRehab = 0, variant = 0, callAsk = false, closedN = 0 } = {}) {
   const read = flipRead(words, { agentRehab });
   if (read.qualifies) return { move: "underwrite", read, reply: "" };
-  if (passed) return { move: "closed", read, reply: "Appreciate it. Keep me in mind if anything rougher comes up." };
+  // `closedN`: how many of these this agent has had, so the next is new.
+  if (passed) return { move: "closed", read, reply: closedReply(variant, closedN) };
   // `callAsk`: the ask and the pass carry the call ask (FIXERS_CALL_ASKS).
   if (asked || saysTurnkey(words)) return { move: "pass", read, reply: pick(callAsk ? QUALIFY_PASSES_CALL : QUALIFY_PASSES, variant) };
   return { move: "ask", read, reply: pick(callAsk ? QUALIFY_ASKS_CALL : QUALIFY_ASKS, variant) };
@@ -418,12 +440,12 @@ export function workBudgetIn(text = "") {
  *   "ask"         unclear, and we haven't asked: our one question
  *   "closed"      we already passed and it still doesn't qualify
  */
-export function broughtStep({ words = "", asked = false, passed = false, offMarket = false, sellerAsk = 0, agentRehab: given = 0, variant = 0, callAsk = false } = {}) {
+export function broughtStep({ words = "", asked = false, passed = false, offMarket = false, sellerAsk = 0, agentRehab: given = 0, variant = 0, callAsk = false, closedN = 0 } = {}) {
   const agentRehab = Math.max(Math.round(Number(given) || 0), workBudgetIn(words));
   const read = flipRead(words, { agentRehab });
   if (read.qualifies) return { move: "underwrite", read, reply: "" };
   if (offMarket && Number(sellerAsk) > 0) return { move: "underwrite", read: { ...read, why: "off-market, with the seller's number" }, reply: "" };
-  if (passed) return { move: "closed", read, reply: "Appreciate it. Keep me in mind if anything rougher comes up." };
+  if (passed) return { move: "closed", read, reply: closedReply(variant, closedN) };
   if (saysTurnkey(words) || saysCosmeticOnly(words, { agentRehab })) {
     return { move: "pass", read, reply: pick(callAsk ? QUALIFY_PASSES_CALL : QUALIFY_PASSES, variant) };
   }
@@ -499,7 +521,9 @@ const OUR_PASS_RX = [
   /\b(?:is|are)n'?t\s+(?:really\s+|quite\s+)?(?:our\s+lane|a\s+fit\s+for\s+us|for\s+us|what\s+we(?:'re|\s+are)\s+after)\b/i,
   /\bnot\s+(?:really\s+|quite\s+)?(?:our\s+lane|a\s+fit\s+for\s+us|one\s+for\s+us|what\s+we(?:'re|\s+are)\s+(?:after|looking\s+for))\b/i,
   // "Turkey" is the phone's spelling of turnkey (Lindsey O., 2026-10-22).
-  /\b(?:too|more)\s+(?:turn[\s-]?key|turkey|finished|nice)\s+(?:for\s+us|than\s+what\s+we)\b/i,
+  // 2026-11-09: and the canned replies in Matt's voice, "Sounds too
+  // finished for me", "more finished than I go for".
+  /\b(?:too|more)\s+(?:turn[\s-]?key|turkey|finished|nice|clean)\s+(?:for\s+(?:us|me)\b|than\s+what\s+we\b|than\s+I\s+(?:go\s+for|buy|usually))/i,
   // Bend, 2026-10-22: "probably not the right fit for us on this one",
   // "Sounds pretty turnkey then."
   /\bnot\s+(?:quite\s+|really\s+)?the\s+right\s+fit\b/i,
