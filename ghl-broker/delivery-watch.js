@@ -246,13 +246,16 @@ export async function queueRetry({ store = defaultStore, locationId, saved = {},
   const config = conversationConfig(saved);
   const inv = await store.getInvestor?.(locationId, d.contactId).catch(() => null);
   const buyer = inv ? { tags: inv.doc?.tags || inv.tags || [], lastRepliedAt: inv.doc?.lastRepliedAt || inv.lastRepliedAt || null } : null;
-  // The cold deal text (dispoAutopilot.coldDealText) when the setting exists
-  // and the buyer never wrote back; the send-time rewrite uses it.
-  const cold = kind === "blast_open" && typeof da.coldDealText === "string" && da.coldDealText.trim() && buyer && !buyer.lastRepliedAt ? da.coldDealText.trim() : "";
+  // The cold deal text (dispoAutopilot.coldDealText) when the buyer never
+  // wrote back: queued `cold`, so the send-time rewrite writes it the way the
+  // deal's own cold texts are written (blast-refresh.js coldDealMessage, which
+  // fills {what} and asks nothing else). As `outbound.template` it went
+  // through the deal-text path, which has no {what}: "I've got at 88 ...".
+  const cold = kind === "blast_open" && buyer && !buyer.lastRepliedAt;
   const outbound = {
     ...d.outbound, retryOf: d.id, noLink: true,
     ...(kind === "blast_open" && buyer ? { intro: blastIntro(buyer) } : {}),
-    ...(cold ? { template: cold } : {}),
+    ...(cold ? { cold: true } : {}),
   };
   const pb = config.parties?.investor || {};
   const allowed = Boolean(pb.autoSend?.enabled && (pb.autoSend.intents || []).includes(kind));

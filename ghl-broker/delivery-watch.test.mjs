@@ -350,6 +350,27 @@ test("a retried deal text is written again at send without its link, even where 
   assert.doesNotMatch(cold.text, /under contract|https?:/);
 });
 
+// Merged with the deal-texts branch (2026-11-09): a buyer who never wrote back
+// gets the cold deal text, rendered by blast-refresh.js from `outbound.cold`.
+// Its default names what the house is ({what}), which only that path fills.
+test("a blocked deal text to a buyer who never wrote back is retried in the cold words, naming what the house is", async () => {
+  const { queueRetry } = await import("./delivery-watch.js");
+  const { refreshBlastText } = await import("./blast-refresh.js");
+  const L = "loc-retry-cold", C = "c-cold";
+  const offer = await store.createOffer(DEAL("o-retry-cold", { locationId: L }));
+  await store.upsertInvestors(L, [{ contactId: C, name: "Robin Vale", doc: { tags: ["investor"] } }]);
+  const blast = await blastSent(L, C, offer.id, { sentAt: hoursAgo(4), ghlMessageId: "cold-1" });
+  const q = await queueRetry({ store, locationId: L, saved: { dispoAutopilot: { retryBlocked: true } }, draft: blast, now: NOW });
+  assert.equal(q.queued, true, q.skipped);
+  const retry = await store.getReplyDraft(q.draftId);
+  assert.equal(retry.outbound.cold, true);
+  assert.equal(retry.outbound.noLink, true);
+  const r = await refreshBlastText({ store, client: { call: async () => ({}) }, locationId: L, draft: retry, baseUrl: "https://deals.example.com" });
+  assert.match(r.text, /^Hey Robin, I've got a house at 88 Quill Ct in Kent\./, r.text);
+  assert.doesNotMatch(r.text, /got at|under contract|https?:|\{/, r.text);
+  assert.equal(r.withoutLink, true);
+});
+
 test("a deal text to a dead number marks the phone and the buyer isn't texted again", async () => {
   const L = "loc-deadbuyer", C = "c-deadbuyer";
   const offer = await store.createOffer(DEAL("o-dead", { locationId: L }));
