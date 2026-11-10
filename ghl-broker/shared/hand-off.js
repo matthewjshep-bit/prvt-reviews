@@ -36,6 +36,8 @@ export const OWNER_OF_KIND = Object.freeze({
   showing_soon: "machine", showing_no_window: "ping", deal_no_buyers: "machine", blast_no_opens: "machine",
   deal_interest_stalled: "machine", deal_no_dataroom: "ping", draft_scheduled: "machine", stage_lag: "machine",
   gone_quiet: "machine", underwrite_failed: "machine", underwrite_dropped: "machine", texts_elsewhere: "drop",
+  // An inspection period ending: his decision, on the Deals page like the checklist (not Needs Matt).
+  inspection_deadline: "ping",
   // The call list (shared/call-list.js CALL_KINDS).
   call_hot: "call", call_brought: "call", paper_to_sign: "ping", hot_machine: "machine", counter_held: "machine",
   call_missed: "call", call_counter: "call", call_gap: "call", call_first_reply: "call", call_turnkey_week: "call",

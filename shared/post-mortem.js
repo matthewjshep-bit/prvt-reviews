@@ -160,6 +160,118 @@ function codedReasonsFor(deal = {}, feedback = null) {
   return rows;
 }
 
+/* ---------- what a buyer actually paid (2026-11-09) ---------- */
+
+// The scorecard used to call contract + asked fee "what it sold for", and the
+// fee at promote is the setting unless someone typed one, so the fee lesson
+// compared the setting with itself. None of the committed buyers' prices ever
+// reached it. A price counts only when it came from somewhere real.
+
+// The machine's own assignment draft when a buyer commits
+// (dispoAutopilot.paperworkOnCommit) is priced off the deal's fee, which is the
+// setting as often as not. One a person generated, or generated again, is the
+// price on the paper the buyer signs.
+const MACHINE_DRAFT_MS = 5 * 60000;
+function machineDraftedAssignment(offer) {
+  const drafted = ms(offer?.deal?.paperwork?.assignmentDraftedAt);
+  const made = ms(offer?.assignment?.generatedAt);
+  return drafted != null && made != null && Math.abs(made - drafted) < MACHINE_DRAFT_MS;
+}
+// Money typed the way people type it: 312000, "312,000", "$312,000", "95k", "1.2m".
+const wholeOrNull = (v) => {
+  if (v === "" || v == null) return null;
+  const m = /^(\d+(?:\.\d+)?)([km]?)$/i.exec(String(v).trim().replace(/[$,\s]/g, ""));
+  if (!m) return null;
+  const n = Number(m[1]) * (!m[2] ? 1 : m[2].toLowerCase() === "k" ? 1e3 : 1e6);
+  return Number.isFinite(n) ? round(n) : null;
+};
+
+/**
+ * realizedSale(offer) → { price, fee, source } | null
+ *
+ * What the buyer paid, from the first of these that has it:
+ *   outcome     deal.outcome, recorded when the deal was assigned or closed
+ *   assignment  the assignment a person generated (offer.assignment.fields.totalPrice)
+ *   agreed      the committed buyer's agreed price (inv.agreedPrice)
+ *   fee_you     a fee a person typed on the deal (deal.assignmentFeeSource "you",
+ *               stamped by the deal-texts work)
+ * A fee with no source is the setting filled in at promote: unknown, never
+ * real, so null.
+ */
+export function realizedSale(offer = {}) {
+  const deal = offer?.deal;
+  if (!deal) return null;
+  const contract = round(deal.contractPrice) || round(offer.cashAmount);
+  const feeOver = (price) => (contract > 0 && price >= contract ? price - contract : null);
+  const o = deal.outcome;
+  if (o && typeof o === "object") {
+    const price = wholeOrNull(o.price);
+    const fee = wholeOrNull(o.fee);
+    if (price > 0) return { price, fee: fee ?? feeOver(price), source: "outcome" };
+    if (fee != null && contract > 0) return { price: contract + fee, fee, source: "outcome" };
+  }
+  const total = round(offer.assignment?.fields?.totalPrice);
+  if (total > 0 && !machineDraftedAssignment(offer)) return { price: total, fee: feeOver(total), source: "assignment" };
+  const agreed = (deal.investors || []).filter((i) => i?.status === "committed").map((i) => round(i.agreedPrice?.amount)).find((n) => n > 0);
+  if (agreed) return { price: agreed, fee: feeOver(agreed), source: "agreed" };
+  const fee = round(deal.assignmentFee);
+  if (deal.assignmentFeeSource === "you" && fee > 0 && contract > 0) return { price: contract + fee, fee, source: "fee_you" };
+  return null;
+}
+
+/**
+ * normalizeDealOutcome(raw, { contractPrice, today }) → { outcome } | { error }
+ *
+ * Who bought it and for how much, asked for when a deal is assigned or closed.
+ * `{ buyerContactId, buyerName, price, fee, closedAt }`: the price is what the
+ * buyer paid in all (contract + our fee); a fee left blank is the difference.
+ * A price under five figures is a typo for thousands, refused rather than kept.
+ */
+export function normalizeDealOutcome(raw, { contractPrice = 0, today = "" } = {}) {
+  if (!raw || typeof raw !== "object") return { error: "outcome must be an object" };
+  const s = (v, max) => String(v ?? "").trim().slice(0, max);
+  const price = wholeOrNull(raw.price);
+  const fee = wholeOrNull(raw.fee);
+  if (raw.price != null && raw.price !== "" && price == null) return { error: "the buyer's price isn't a number" };
+  if (raw.fee != null && raw.fee !== "" && fee == null) return { error: "the fee isn't a number" };
+  if (price != null && price < 10000) return { error: "the buyer's price looks short: type the whole number" };
+  const contract = round(contractPrice);
+  const closedAt = /^\d{4}-\d{2}-\d{2}$/.test(s(raw.closedAt, 10)) ? s(raw.closedAt, 10) : today;
+  const buyerContactId = s(raw.buyerContactId, 64);
+  if (!buyerContactId && price == null && fee == null) return { error: "say who bought it, or what they paid" };
+  return {
+    outcome: {
+      buyerContactId, buyerName: s(raw.buyerName, 120),
+      price, fee: fee ?? (price != null && contract > 0 && price >= contract ? price - contract : null),
+      closedAt,
+    },
+  };
+}
+
+/**
+ * normalizeBuyerRead(raw) → { arv, rehab, price, note } | null
+ * What a buyer said the house is worth, needs and would pay, typed in by hand
+ * (KPI-04: the post-mortems found our rehab low and our ARV high on every dead
+ * single-family deal, and no field held the buyers' side of it).
+ */
+export function normalizeBuyerRead(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const n = (v) => { const x = wholeOrNull(v); return x > 0 ? x : null; };
+  const out = { arv: n(raw.arv), rehab: n(raw.rehab), price: n(raw.price), note: String(raw.note ?? "").trim().slice(0, 300) };
+  return out.arv || out.rehab || out.price || out.note ? out : null;
+}
+
+function buyerReadOf(deal, { arv, repairs }) {
+  const b = normalizeBuyerRead(deal?.buyerRead);
+  if (!b || !(b.arv || b.rehab || b.price)) return null;
+  return {
+    arv: b.arv, rehab: b.rehab, price: b.price,
+    // How far over the buyers' ARV ours was, and how far under their rehab.
+    ourArvOverPct: b.arv && arv > 0 ? pct(arv - b.arv, b.arv) : null,
+    ourRehabUnderPct: b.rehab ? pct(b.rehab - repairs, b.rehab) : null,
+  };
+}
+
 /**
  * dealScorecard({ offer, settings, feedback, events, now }) → the same
  * arithmetic on every deal. `feedback` is the buildFeedbackPackage output
@@ -173,7 +285,16 @@ export function dealScorecard({ offer = {}, settings = {}, feedback = null, even
   const repairs = round(offer.repairs ?? offer.calc?.inputs?.repairs);
   const contractPrice = round(deal?.contractPrice) || round(offer.cashAmount);
   const assignmentFee = round(deal?.assignmentFee);
-  const buyerPrice = contractPrice + assignmentFee;
+  // What buyers were asked: the contract plus the fee on the deal.
+  const askedPrice = contractPrice + assignmentFee;
+  // A deal that found its buyer is scored on what they paid, and only that
+  // (realizedSale); null when nobody recorded it. One that died, or is still
+  // selling, is scored on what buyers were asked.
+  const sold = ["closed", "assigned", "buyer_found"].includes(outcome);
+  const realized = sold ? realizedSale(offer) : null;
+  const buyerPrice = sold ? (realized?.price ?? null) : askedPrice;
+  const realizedFee = realized?.fee ?? null;
+  const linePrice = buyerPrice ?? askedPrice;
 
   const cash = offer.calc?.offers?.cash || {};
   const revisions = Array.isArray(offer.revisions) ? offer.revisions.filter((r) => r?.ts) : [];
@@ -190,7 +311,7 @@ export function dealScorecard({ offer = {}, settings = {}, feedback = null, even
   };
 
   const ceiling = buyerCeiling({ offer, settings, fee: assignmentFee || undefined });
-  const gap = ceiling.computable ? buyerPrice - ceiling.noFee : null;
+  const gap = ceiling.computable ? linePrice - ceiling.noFee : null;
 
   // Time: how long we held it, and how fast the market answered.
   const since = ms(deal?.createdAt) ?? ms(stageAt(deal, "under_contract")) ?? ms(offer.statusAt) ?? null;
@@ -238,11 +359,13 @@ export function dealScorecard({ offer = {}, settings = {}, feedback = null, even
     checks: offer.checks || summarizeChecks(offer.snapshot) || null,
     fellThroughReason: String(deal?.fellThroughReason || ""), fellThroughCode, fellThroughCodeLabel: FELL_THROUGH_LABEL[fellThroughCode] || "",
     arv, repairs, rehabPctOfArv: pct(repairs, arv),
-    contractPrice, assignmentFee, buyerPrice,
-    cpPctOfArv: pct(contractPrice, arv), buyerPctOfArv: pct(buyerPrice, arv),
+    contractPrice, assignmentFee, askedPrice, buyerPrice,
+    buyerPriceSource: sold ? (realized?.source || null) : "asked", realizedFee,
+    cpPctOfArv: pct(contractPrice, arv), buyerPctOfArv: buyerPrice != null ? pct(buyerPrice, arv) : null,
     // What the buyer's whole outlay would be as a share of ARV — the number
     // the 70% rule is actually about.
-    allInPctOfArv: pct(buyerPrice + repairs, arv),
+    allInPctOfArv: buyerPrice != null ? pct(buyerPrice + repairs, arv) : null,
+    buyerRead: buyerReadOf(deal, { arv, repairs }),
     underwrite, ceiling,
     gap, gapPctOfArv: gap != null ? pct(gap, arv) : null, overCeiling: gap != null && gap > 0,
     days, buyers,
@@ -476,8 +599,8 @@ export function lessons({ postMortems = [], controls = [], settings = {}, now = 
       title: `Contract price + fee must sit at or under ${s.maoPctOfArv}% of ARV minus repairs`,
       confidence: allFailedOver && allCtrlAt ? "high" : allFailedOver || allCtrlAt ? "medium" : "low",
       evidence: [
-        ...over.map((x) => `${name(x)}: buyers were asked ${money(x.buyerPrice)} against a ceiling of ${money(x.ceiling.noFee)} — ${money(x.gap)} over (${pctS(x.gapPctOfArv)} of ARV); ${x.buyers.passed} of ${x.buyers.contacted} passed`),
-        ...ctrlUnder.map((x) => `${name(x)} (${x.outcome.replace(/_/g, " ")}): asked ${money(x.buyerPrice)} against ${money(x.ceiling.noFee)} — at the line`),
+        ...over.map((x) => `${name(x)}: buyers were asked ${money(x.askedPrice ?? x.buyerPrice)} against a ceiling of ${money(x.ceiling.noFee)} — ${money(x.gap)} over (${pctS(x.gapPctOfArv)} of ARV); ${x.buyers.passed} of ${x.buyers.contacted} passed`),
+        ...ctrlUnder.map((x) => `${name(x)} (${x.outcome.replace(/_/g, " ")}): ${x.buyerPrice != null && x.buyerPriceSource && x.buyerPriceSource !== "asked" ? `paid ${money(x.buyerPrice)}` : `asked ${money(x.askedPrice ?? x.buyerPrice)}`} against ${money(x.ceiling.noFee)} — at the line`),
       ],
       suggestedSettings: null,
       negotiationRule: `Before any counter, compute ${s.maoPctOfArv}% × ARV − repairs. Contract price + our fee never crosses it; if the seller can't get there, the answer is no, not a smaller fee.`,
@@ -507,7 +630,7 @@ export function lessons({ postMortems = [], controls = [], settings = {}, now = 
       title: `Set the buyer line at ${to}% of ARV (currently ${s.maoPctOfArv}%)`,
       confidence: ctrlAllIn.length >= 2 ? "medium" : "low",
       evidence: [
-        ...ctrl.map((x) => `${name(x)} (${x.outcome.replace(/_/g, " ")}): buyer paid ${money(x.buyerPrice)} + ${money(x.repairs)} rehab = ${pctS(x.allInPctOfArv)} of ARV`),
+        ...ctrl.filter((x) => Number.isFinite(x.allInPctOfArv)).map((x) => `${name(x)} (${x.outcome.replace(/_/g, " ")}): buyer paid ${money(x.buyerPrice)} + ${money(x.repairs)} rehab = ${pctS(x.allInPctOfArv)} of ARV`),
         ...failed.map((x) => `${name(x)} (fell through): ${pctS(x.allInPctOfArv)} of ARV all-in`),
       ],
       suggestedSettings: { maoPctOfArv: to },
@@ -515,8 +638,11 @@ export function lessons({ postMortems = [], controls = [], settings = {}, now = 
     });
   }
 
-  // 4. The fee we plan for versus the fee we take.
-  const feesTaken = finite([...ctrl, ...failed].map((x) => x.assignmentFee)).filter((f) => f > 0);
+  // 4. The fee we plan for versus the fee we take: what buyers actually paid
+  // over the contract on the deals that sold (realizedSale), never the fee
+  // filled in from the setting at promote, which only repeats the setting.
+  const paid = ctrl.filter((x) => Number.isFinite(x.realizedFee) && x.realizedFee > 0);
+  const feesTaken = paid.map((x) => x.realizedFee);
   const feeMedian = median(feesTaken);
   if (feeMedian != null && s.wholesaleFee > feeMedian * 1.5) {
     const to = Math.round(feeMedian / 1000) * 1000;
@@ -525,7 +651,7 @@ export function lessons({ postMortems = [], controls = [], settings = {}, now = 
       title: `Underwrite at the fee we actually take (${money(to)}), not ${money(s.wholesaleFee)}`,
       confidence: feesTaken.length >= 3 ? "medium" : "low",
       evidence: [
-        `Fees on the deals we've contracted: ${[...ctrl, ...failed].filter((x) => x.assignmentFee > 0).map((x) => `${name(x)} ${money(x.assignmentFee)}`).join(", ")}`,
+        `Fees buyers paid on the deals that sold: ${paid.map((x) => `${name(x)} ${money(x.realizedFee)}`).join(", ")}`,
         `A ${money(s.wholesaleFee)} fee in the model pushes every offer ${money(s.wholesaleFee - to)} under the line and then gets negotiated away on the contract.`,
       ],
       suggestedSettings: { wholesaleFee: to },

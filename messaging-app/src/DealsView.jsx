@@ -30,6 +30,10 @@ import DealAccess from "./DealAccess.jsx";
 import DealKind from "./DealKind.jsx";
 import { assetLabel, normalizeAsset } from "@shared/asset-type.js";
 import { resolveChecklist, dueWords } from "@shared/deal-checklist.js";
+// A deal keeps its deadlines and records who bought it (2026-11-09).
+import { ymdLabel } from "@shared/deal-checklist.js";
+import { PASS_REASONS, PASS_REASON_LABEL } from "@shared/conversation-ai.js";
+import { updateDealFeedback } from "./api.js";
 import { resolveParties } from "@shared/deal-parties.js";
 import {
   BTN, DEAL_STAGES, EmptyState, ErrorBar, KpiRow, STAGE, SkeletonRows, StagePill, TableCard,
@@ -80,6 +84,50 @@ const assignmentTotal = (contractPrice, assignmentFee) => num(contractPrice) + n
 
 const shortDate = (iso) =>
   iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+
+const localYmd = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+// What the outcome form starts from when a deal is assigned or closed: the
+// committed buyer and the price they agreed. Nobody agreed one, it stays blank
+// rather than contract plus the fee from the setting, which is a guess.
+export function outcomeDraft(deal = {}) {
+  const committed = (deal.investors || []).find((i) => investorStatus(i.status) === "committed");
+  const agreed = Math.round(Number(committed?.agreedPrice?.amount) || 0);
+  return {
+    buyerContactId: committed?.contactId || "", buyerName: committed?.name || "",
+    price: agreed ? String(agreed) : "", fee: "", closedAt: localYmd(),
+  };
+}
+
+// The recorded sale, in one line: "Sold to Oak Tran for $312,000 · our fee $12,000 · closed Nov 5".
+export function outcomeLine(deal = {}) {
+  const o = deal.outcome;
+  if (!o) return "";
+  const who = o.buyerName || (deal.investors || []).find((i) => i.contactId === o.buyerContactId)?.name || "";
+  const parts = [`${who ? `Sold to ${who}` : "Sold"}${o.price ? ` for ${fmtMoney(o.price)}` : ""}`];
+  if (o.fee != null) parts.push(`our fee ${fmtMoney(o.fee)}`);
+  if (o.closedAt) parts.push(`${deal.stage === "assigned" ? "assigned" : "closed"} ${ymdLabel(o.closedAt)}`);
+  return parts.join(" · ");
+}
+
+// Where promote took the deal's dates from (shared/deal-checklist.js
+// promoteDates), so a date from our standard terms gets checked against the
+// signed paper.
+const DATES_FROM = {
+  you: "what you typed", psa: "the PSA we wrote", contract: "the contract we wrote", letter: "the offer letter's terms",
+  terms: "our standard terms", default: "a 10 day default",
+};
+export function datesNote(deal = {}) {
+  const f = deal.datesFrom;
+  if (!f) return "";
+  const out = [];
+  if (f.inspection === "psa_short_sale") out.push("Inspection end not set: a short sale's starts at the lienholder's approval.");
+  else if (DATES_FROM[f.inspection]) out.push(`Inspection end from ${DATES_FROM[f.inspection]}.`);
+  if (DATES_FROM[f.closing]) out.push(`Closing from ${DATES_FROM[f.closing]}.`);
+  if (deal.earnestMoney) out.push(`Earnest ${fmtMoney(deal.earnestMoney)}, due ${deal.earnestDue === "feasibility" ? "after the inspection" : "after mutual acceptance"}.`);
+  return out.length ? `${out.join(" ")} Check them against the signed paper.` : "";
+}
 
 // What Resume put back (POST /deal/outreach → resumed), in one line. Empty
 // when the press wasn't a resume.
@@ -135,7 +183,10 @@ function InvestorSummary({ deal }) {
 // expensive is an opinion, four of them is a price. The Conversation AI files
 // these from replies to a dispo blast; the picker's status menu doesn't, so a
 // deal can show plenty of passes and no feedback at all.
-function BuyerFeedback({ deal }) {
+// A reason filed under the wrong code can be put right (2026-11-09): the
+// post-mortem and the lessons count these.
+export function BuyerFeedback({ deal, onFix, busy }) {
+  const [fixing, setFixing] = useState(false);
   const rows = deal.feedback || [];
   if (!rows.length) return null;
   const { total, byCode } = summarizeFeedback(rows);
@@ -150,7 +201,32 @@ function BuyerFeedback({ deal }) {
             {c.label}{c.count > 1 ? ` ×${c.count}` : ""}
           </span>
         ))}
+        {onFix && (
+          <button type="button" onClick={() => setFixing((v) => !v)}
+            className="ml-auto text-[11px] font-medium text-amber-900 underline decoration-amber-300 underline-offset-2 hover:text-amber-950">
+            {fixing ? "Done" : "Fix a reason"}
+          </button>
+        )}
       </div>
+      {fixing && (
+        <ul className="mt-1.5 space-y-1">
+          {rows.map((r) => (
+            <li key={`fix-${r.contactId}-${r.code}`} className="flex flex-wrap items-center gap-1.5 text-[11px] text-amber-950">
+              <span className="font-medium">{r.name || "a buyer"}</span>
+              <select value={r.code} disabled={busy} aria-label={`Reason for ${r.name || "this buyer"}`}
+                onChange={(e) => onFix({ contactId: r.contactId, code: r.code, to: e.target.value })}
+                className="rounded-md border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] focus:border-blue-500 focus:outline-none">
+                {PASS_REASONS.map((c) => <option key={c} value={c}>{PASS_REASON_LABEL[c] || c}</option>)}
+              </select>
+              <button type="button" disabled={busy} title="Take this reason off the deal"
+                onClick={() => onFix({ contactId: r.contactId, code: r.code, remove: true })}
+                className="rounded p-0.5 text-amber-800 hover:bg-amber-100">
+                <X size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <ul className="mt-1.5 space-y-0.5">
         {rows.filter((r) => r.note).slice(-6).reverse().map((r, n) => (
           <li key={`${r.contactId}-${r.code}-${n}`} className="text-[11px] leading-snug text-slate-600">
@@ -315,6 +391,42 @@ function DealDocuments({ offerId }) {
   );
 }
 
+// What buyers said the house is worth, needs and would pay, typed in from the
+// walkthrough or their texts (2026-11-09). The post-mortem sets it beside our
+// own ARV and rehab, where the dead deals' misses were.
+function BuyerRead({ deal, busy, onSave, labelCls, inputCls }) {
+  const saved = deal.buyerRead || {};
+  const start = { arv: saved.arv ?? "", rehab: saved.rehab ?? "", price: saved.price ?? "", note: saved.note || "" };
+  const [read, setRead] = useState(start);
+  // A save comes back as whole numbers ("95k" → 95000): show what was kept.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setRead(start); }, [saved.at]);
+  const dirty =["arv", "rehab", "price", "note"].some((k) => String(read[k]) !== String(start[k]));
+  const field = (k, label, placeholder) => (
+    <div>
+      <span className={labelCls}>{label}</span>
+      <input className={inputCls} value={read[k]} placeholder={placeholder} onChange={(e) => setRead((r) => ({ ...r, [k]: e.target.value }))} />
+    </div>
+  );
+  return (
+    <div className="rounded-lg border border-slate-200 p-3">
+      <div className="mb-2 text-xs font-semibold text-slate-700">What buyers said it's worth</div>
+      <div className="grid grid-cols-3 gap-2">
+        {field("arv", "Their ARV", "$")}
+        {field("rehab", "Their rehab", "$")}
+        {field("price", "They'd pay", "$")}
+      </div>
+      <div className="mt-2">{field("note", "From", "the walkthrough, a text, a call")}</div>
+      {dirty && (
+        <button type="button" disabled={busy} onClick={() => onSave(read)}
+          className="mt-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
+          Save what buyers said
+        </button>
+      )}
+    </div>
+  );
+}
+
 // Add-investor: the shared GHL contact typeahead, with contacts already on
 // the deal greyed out.
 function InvestorPicker({ existingIds, onPick, busy }) {
@@ -370,6 +482,9 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   // line in your own words. Open when the pill is pressed; a stage change
   // to fell_through goes through here and nowhere else.
   const [fellForm, setFellForm] = useState(null); // null | { code, reason }
+  // Who bought it and for how much, asked when the deal is assigned or closed
+  // (2026-11-09). `stage` is the move it rides on; null when editing.
+  const [outcomeForm, setOutcomeForm] = useState(null); // null | { stage, buyerContactId, buyerName, price, fee, closedAt }
   const [postMortemOpen, setPostMortemOpen] = useState(() => {
     try { return new URLSearchParams(window.location.search).get("postmortem") === "1"; } catch { return false; }
   });
@@ -408,7 +523,20 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
       const open = checklist.items.filter((i) => !i.done && STAGE_ORDER.indexOf(i.gate) < STAGE_ORDER.indexOf(stage));
       if (open.length && !window.confirm(`${open.length} item${open.length === 1 ? "" : "s"} still open before ${STAGE[stage]?.label || stage}:\n\n${open.slice(0, 6).map((i) => `• ${i.label}`).join("\n")}${open.length > 6 ? "\n…" : ""}\n\nMove it anyway?`)) return;
     }
+    // Assigned or closed with no sale recorded: ask who bought it and for how
+    // much. The fee lesson only counts what somebody recorded.
+    if ((stage === "assigned" || stage === "closed") && !deal.outcome) {
+      setOutcomeForm({ stage, ...outcomeDraft(deal) });
+      return;
+    }
     run(() => updateDeal(offer.id, { stage }));
+  };
+  const saveOutcome = ({ skip = false } = {}) => {
+    const f = outcomeForm;
+    setOutcomeForm(null);
+    const body = f.stage ? { stage: f.stage } : {};
+    if (!skip) body.outcome = { buyerContactId: f.buyerContactId, buyerName: f.buyerName, price: f.price, fee: f.fee, closedAt: f.closedAt };
+    if (Object.keys(body).length) run(() => updateDeal(offer.id, body));
   };
   const saveFellThrough = () => {
     const f = fellForm;
@@ -555,6 +683,48 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               <button type="button" className="underline decoration-slate-300 underline-offset-2 hover:text-slate-900" onClick={() => setFellForm({ code: deal.fellThroughCode || "other", reason: deal.fellThroughReason || "" })}>edit</button>
             </div>
           )}
+          {outcomeForm && (
+            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="mb-1.5 text-xs font-semibold text-slate-700">Who bought it, and for how much?</div>
+              <div className="flex flex-wrap gap-2">
+                <select className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm" value={outcomeForm.buyerContactId} aria-label="Buyer"
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    const name = (deal.investors || []).find((i) => i.contactId === id)?.name || "";
+                    setOutcomeForm((f) => ({ ...f, buyerContactId: id, buyerName: name }));
+                  }}>
+                  <option value="">Pick the buyer</option>
+                  {sortInvestors(deal.investors).map((i) => <option key={i.contactId} value={i.contactId}>{i.name}</option>)}
+                </select>
+                <input className="w-40 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm" placeholder="They paid, in all" aria-label="What the buyer paid"
+                  value={outcomeForm.price} onChange={(e) => setOutcomeForm((f) => ({ ...f, price: e.target.value }))} />
+                <input className="w-36 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm" placeholder="Our fee" aria-label="Our fee"
+                  value={outcomeForm.fee} onChange={(e) => setOutcomeForm((f) => ({ ...f, fee: e.target.value }))} />
+                <input type="date" className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm" aria-label="Closed on"
+                  value={outcomeForm.closedAt} onChange={(e) => setOutcomeForm((f) => ({ ...f, closedAt: e.target.value }))} />
+                <button type="button" className={BTN} onClick={() => setOutcomeForm(null)}>Cancel</button>
+                {outcomeForm.stage && (
+                  <button type="button" className={BTN} disabled={busy} onClick={() => saveOutcome({ skip: true })}>Move it, fill this in later</button>
+                )}
+                <button type="button" className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-900" disabled={busy || (!outcomeForm.buyerContactId && !outcomeForm.price && !outcomeForm.fee)}
+                  onClick={() => saveOutcome()}>{outcomeForm.stage ? `Save and mark ${STAGE[outcomeForm.stage]?.label?.toLowerCase() || outcomeForm.stage}` : "Save"}</button>
+              </div>
+              <div className="mt-1 text-[11px] text-slate-600">
+                The price is contract plus our fee.{deal.contractPrice ? ` Contract ${fmtMoney(deal.contractPrice)}.` : ""} Leave the fee blank and it's the difference.
+                The fee lesson in Lessons only counts sales recorded here, a buyer's agreed price or a fee you typed.
+              </div>
+            </div>
+          )}
+          {deal.outcome && !outcomeForm && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-900">{outcomeLine(deal)}</span>
+              <button type="button" className="underline decoration-slate-300 underline-offset-2 hover:text-slate-900"
+                onClick={() => setOutcomeForm({ stage: null, buyerContactId: deal.outcome.buyerContactId || "", buyerName: deal.outcome.buyerName || "",
+                  price: deal.outcome.price != null ? String(deal.outcome.price) : "", fee: deal.outcome.fee != null ? String(deal.outcome.fee) : "", closedAt: deal.outcome.closedAt || "" })}>
+                edit
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Three tabs (Matt, 2026-09-29): what has to happen next and who's
@@ -631,7 +801,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   </div>
                 ))}
               </div>
-              <BuyerFeedback deal={deal} />
+              <BuyerFeedback deal={deal} busy={busy} onFix={(body) => run(() => updateDealFeedback(offer.id, body))} />
               <div className="mt-2">
                 <InvestorPicker existingIds={investorIds} busy={busy}
                   onPick={(c) => run(() => addDealInvestor(offer.id, { contactId: c.id, name: c.name }))} />
@@ -748,6 +918,9 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
                   onChange={(e) => setTerms((t) => ({ ...t, closingDate: e.target.value }))} />
               </div>
             </div>
+            {datesNote(deal) && <p className="text-[11px] leading-snug text-slate-600">{datesNote(deal)}</p>}
+            <BuyerRead key={`read-${offer.id}`} deal={deal} busy={busy} labelCls={labelCls} inputCls={inputCls}
+              onSave={(buyerRead) => run(() => updateDeal(offer.id, { buyerRead }))} />
             <div>
               <span className={labelCls}>Notes</span>
               <textarea rows={3} className={inputCls} value={terms.notes} placeholder="Deal notes…"

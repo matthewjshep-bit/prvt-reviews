@@ -42,6 +42,7 @@ export const PSA_TOKENS = [
   { key: "price", label: "Purchase price", blankWidth: 14 },
   { key: "price_words", label: "Price in words", blankWidth: 40 },
   { key: "earnest_money", label: "Earnest money", blankWidth: 12 },
+  { key: "earnest_due", label: "Earnest money due", blankWidth: 30 },
   { key: "feasibility_days", label: "Feasibility days", blankWidth: 4 },
   { key: "closing_days", label: "Days to closing", blankWidth: 4 },
   { key: "closing_date", label: "Closing date", blankWidth: 18 },
@@ -57,6 +58,41 @@ export const PSA_TOKENS = [
   { key: "signer_email", label: "Signer email", blankWidth: 26 },
   { key: "signer_phone", label: "Signer phone", blankWidth: 16 },
 ];
+
+/* ======================== When the earnest money goes ===================== */
+// 2026-11-09: the letter and the bot tell agents $1,000 earnest after the
+// inspection (settings.conversationAi.writeUp), while § 4 always said three
+// business days after mutual acceptance, at the letter's old $2,500. The due
+// point is now a choice the route fills into {{earnest_due}}. Only these two
+// wordings ever print: free text from settings never reaches the agreement.
+export const PSA_EARNEST_DUE = {
+  acceptance: "within three (3) business days after Mutual Acceptance",
+  feasibility: "within three (3) business days after the Feasibility Period expires without termination",
+};
+export const PSA_EARNEST_DUE_CHOICES = [
+  { value: "acceptance", label: "3 business days after mutual acceptance" },
+  { value: "feasibility", label: "3 business days after feasibility ends" },
+];
+export const normalizePsaEarnestDue = (v) => (v === "feasibility" || v === "acceptance" ? v : "");
+
+/**
+ * psaTermsPrefill({ offer, terms }) → { earnestMoney, earnestDue, feasibilityDays }
+ *
+ * What a new agreement starts from, so it says what the letter said: the
+ * earnest money and inspection days stamped on the offer when the letter was
+ * made (`offer.terms`), then our standard terms (`terms`, shared/offer-calc.js
+ * writtenTerms). Earnest due "after inspection" in those terms is due after
+ * feasibility here. `feasibilityDays` is null when nothing names one (the PSA
+ * settings' default stands).
+ */
+export function psaTermsPrefill({ offer = {}, terms = {} } = {}) {
+  const pos = (v) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n > 0 ? n : null; };
+  const letter = offer?.terms && typeof offer.terms === "object" ? offer.terms : {};
+  const earnestMoney = pos(letter.earnestMoney) ?? pos(terms?.earnestMoney);
+  const afterInspection = Boolean(terms?.fromWriteUp) && /\bafter\b.*\b(inspection|feasibility)\b/i.test(String(terms?.earnestDue || ""));
+  const feasibilityDays = pos(letter.inspectionDays) ?? (terms?.fromWriteUp ? pos(terms.inspectionDays) : null);
+  return { earnestMoney, earnestDue: afterInspection ? "feasibility" : "acceptance", feasibilityDays };
+}
 
 /* ============================== Offer Summary ============================= */
 // Page 1. Not part of the binding terms — it exists so a listing broker or a
@@ -88,8 +124,8 @@ export function psaSummaryRows(mode, { emdExhibitNo = 0, pofExhibitNo = 0 } = {}
     ["Buyer / Vesting", "{{buyer_entity}}, a {{buyer_state}} limited liability company, and/or assigns"],
     ["Purchase Price", "{{price}} U.S. dollars, all cash at closing"],
     ["Earnest Money",
-      "{{earnest_money}}, deposited with the Closing Agent within three (3) business days of " +
-      "Mutual Acceptance." + (emdExhibitNo ? ` Copy of check attached as Exhibit ${emdExhibitNo}.` : "")],
+      "{{earnest_money}}, deposited with the Closing Agent {{earnest_due}}." +
+      (emdExhibitNo ? ` Copy of check attached as Exhibit ${emdExhibitNo}.` : "")],
     ["Proof of Funds",
       pofExhibitNo
         ? `Cash purchase funded by {{lender_name}}. Lender proof-of-funds letter attached as Exhibit ${pofExhibitNo}. No financing contingency.`
@@ -172,16 +208,17 @@ export const PSA_SECTIONS = [
   },
   {
     n: 4, id: "earnest", title: "Earnest Money",
+    // {{earnest_due}} is one of PSA_EARNEST_DUE's two wordings.
     body:
-      "Buyer will deposit earnest money of {{earnest_money}} with the Closing Agent within three (3) " +
-      "business days after Mutual Acceptance. Earnest money is held in escrow by the Closing Agent " +
+      "Buyer will deposit earnest money of {{earnest_money}} with the Closing Agent {{earnest_due}}. " +
+      "Earnest money is held in escrow by the Closing Agent " +
       "and is applied to the Purchase Price at closing. Earnest money is refundable to Buyer if this " +
       "Agreement terminates under § 6 (Feasibility) or any other termination right expressly granted " +
       "to Buyer, and becomes non-refundable only upon expiration of the Feasibility Period without " +
       "termination.",
     bodyShortSale:
-      "Buyer will deposit earnest money of {{earnest_money}} with the Closing Agent within three (3) " +
-      "business days after Mutual Acceptance. Earnest money is held in escrow by the Closing Agent " +
+      "Buyer will deposit earnest money of {{earnest_money}} with the Closing Agent {{earnest_due}}. " +
+      "Earnest money is held in escrow by the Closing Agent " +
       "and is applied to the Purchase Price at closing. Earnest money is refundable to Buyer if this " +
       "Agreement terminates under § 6 (Feasibility), Addendum B (Lienholder Approval), or any other " +
       "termination right expressly granted to Buyer, and becomes non-refundable only upon expiration " +

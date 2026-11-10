@@ -422,7 +422,8 @@ export function errorsByArea(errors = []) {
  * that evidence, kept current. It changes nothing.
  */
 export function realizedPricing({ scorecards = [], settings = {} } = {}) {
-  const rows = (scorecards || []).filter((s) => s && Number.isFinite(Number(s.allInPctOfArv)) && Number(s.arv) > 0)
+  // A sold deal nobody recorded a price for has no all-in (null), not 0%.
+  const rows = (scorecards || []).filter((s) => s && s.allInPctOfArv != null && Number.isFinite(Number(s.allInPctOfArv)) && Number(s.arv) > 0)
     .map((s) => ({ offerId: s.offerId || null, street: s.street || String(s.address || "").split(",")[0], outcome: s.outcome, allInPct: round1(Number(s.allInPctOfArv)) }));
   const sold = rows.filter((r) => ["closed", "assigned", "buyer_found"].includes(r.outcome));
   const died = rows.filter((r) => r.outcome === "fell_through");

@@ -835,6 +835,42 @@ test("a deal's most urgent closing item shows on Today when it's overdue or due 
   assert.equal(kinds(build({ offers: [deal({}, { stage: "closed" })] })).includes("closing_task_due"), false);
 });
 
+// 2026-11: an inspection period ran out with no notice. The deal's one
+// checklist row was an overdue "PSA signed", so the inspection never showed.
+test("inspection due tomorrow gets its own row even when PSA-signed is overdue", () => {
+  const r = build({ offers: [deal({}, { inspectionDate: ymd(1) })] });
+  const insp = r.actions.find((a) => a.kind === "inspection_deadline");
+  assert.ok(insp, kinds(r).join(","));
+  assert.equal(insp.title, "Extend, re-trade or cancel 12 Elm St by Sep 9");
+  assert.equal(insp.severity, "now");
+  assert.equal(insp.detail, "inspection ends tomorrow · no committed buyer yet");
+  assert.equal(insp.taskId, "inspection");
+  assert.deepEqual(insp.ops.map((o) => o.key), ["tick_task", "open_deals"]);
+  // The overdue paperwork still has its own row.
+  assert.equal(r.actions.find((a) => a.kind === "closing_task_due")?.taskId, "psa_signed");
+  // A committed buyer changes the question, not whether it's asked.
+  const sold = build({ offers: [deal({}, { stage: "buyer_found", inspectionDate: ymd(3), investors: [{ contactId: "b1", name: "Wren", status: "committed" }] })] });
+  const s = sold.actions.find((a) => a.kind === "inspection_deadline");
+  assert.equal(s.severity, "soon");
+  assert.equal(s.detail, "inspection ends in 3 days · a buyer is committed");
+  // Four days out, already done, or a closed deal: nothing to decide yet.
+  assert.equal(kinds(build({ offers: [deal({}, { inspectionDate: ymd(4) })] })).includes("inspection_deadline"), false);
+  const ticked = { items: [{ id: "inspection", gate: "under_contract", label: "Inspection", owner: "us", rule: { from: "inspection", days: 0 }, done: true }] };
+  assert.equal(kinds(build({ offers: [deal({}, { inspectionDate: ymd(1), checklist: ticked })] })).includes("inspection_deadline"), false);
+  assert.equal(kinds(build({ offers: [deal({}, { stage: "closed", inspectionDate: ymd(1) })] })).includes("inspection_deadline"), false);
+  // Ended yesterday and nobody said what happened: still the question.
+  const lapsed = build({ offers: [deal({}, { inspectionDate: ymd(-1) })] }).actions.find((a) => a.kind === "inspection_deadline");
+  assert.equal(lapsed.title, "Extend, re-trade or cancel 12 Elm St: inspection ended Sep 7");
+  assert.equal(lapsed.severity, "now");
+});
+
+test("an inspection that is the next thing to chase is one row, not two", () => {
+  const items = ["psa_signed", "open_escrow", "earnest_money", "prelim_title", "walkthrough"].map((id) => ({ id, gate: "under_contract", label: id, done: true }));
+  const checklist = { items: [...items, { id: "inspection", gate: "under_contract", label: "Inspection / feasibility done or waived", owner: "us", rule: { from: "inspection", days: 0 } }] };
+  const r = build({ offers: [deal({}, { inspectionDate: ymd(2), checklist })] });
+  assert.deepEqual(kinds(r).filter((k) => k === "inspection_deadline" || k === "closing_task_due"), ["inspection_deadline"]);
+});
+
 /* ---------- underwrites that never ran (2026-09-29) ---------- */
 
 test("an address that left the underwrite queue is on Today until the house is priced", () => {

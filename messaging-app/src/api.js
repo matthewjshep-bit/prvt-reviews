@@ -521,6 +521,9 @@ export const updateDealInvestor = (id, contactId, status) =>
   post(`/api/offers/${encodeURIComponent(id)}/deal/investors/${encodeURIComponent(contactId)}`, { status }, "PATCH");
 export const removeDealInvestor = (id, contactId) =>
   fetch(`${API_BASE}/api/offers/${encodeURIComponent(id)}/deal/investors/${encodeURIComponent(contactId)}?${locq()}`, { method: "DELETE" }).then(j);
+// Put a buyer's pass reason right: { contactId, code, to } or { contactId, code, remove: true }.
+export const updateDealFeedback = (id, body) =>
+  post(`/api/offers/${encodeURIComponent(id)}/deal/feedback`, body, "PATCH");
 // The buyer walkthrough (shared/showing.js). Windows and access ride on
 // updateDeal({ showing }); these are the ask to the listing agent and a
 // buyer's answer set by hand.

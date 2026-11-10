@@ -136,6 +136,13 @@ import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STAT
 import { mergeParties } from "../shared/deal-parties.js";
 import { mergeAccess, accessFor } from "../shared/deal-access.js";
 import { normalizeChecklist, applyChecklistEdit, addChecklistItem, tickByDoc, tickById, GATES } from "../shared/deal-checklist.js";
+// A deal keeps its deadlines and records who bought it (2026-11-09).
+import { promoteDates, checklistForTerms, pacificYmd } from "../shared/deal-checklist.js";
+import { reopenAfterBackOut, BUYER_BACKED_OUT } from "../shared/offer-status.js";
+import { normalizeDealOutcome, normalizeBuyerRead } from "../shared/post-mortem.js";
+import { writtenTerms } from "../shared/offer-calc.js";
+import { psaTermsPrefill, PSA_EARNEST_DUE, normalizePsaEarnestDue } from "../shared/wa-psa-template.js";
+import { PASS_REASONS } from "../shared/conversation-ai.js";
 import { preContractChecks, preContractRecord, openChecks, tickPreContract, normalizePreContract, houseWordsUpdate, PRE_CONTRACT_KEYS } from "../shared/pre-contract.js";
 import { normalizeMirror, TIER_TAGS } from "../shared/ghl-mirror.js";
 import { mirrorAgent, followTierStage, tierTagsToDrop, followOfferOut } from "../ghl-mirror.js";
@@ -3034,6 +3041,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const company = settings.company || {};
 
       const mode = PSA_MODES.includes(raw.mode) ? raw.mode : "standard";
+      // What the letter told them (2026-11-09): the earnest money and the
+      // inspection days the offer was made with, then our write-up terms
+      // ($1,000 after the inspection), before the PSA settings' own defaults.
+      const prefill = psaTermsPrefill({ offer, terms: writtenTerms(settings) });
       const fields = {
         mode,
         effectiveDate: str("effectiveDate"),
@@ -3045,8 +3056,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         legalDescription: str("legalDescription", 2000),
         county: str("county", 60),
         price: money("price") || Math.round(Number(offer.cashAmount) || 0),
-        earnestMoney: money("earnestMoney") || Number(settings.earnestMoney) || 0,
-        feasibilityDays: days("feasibilityDays", psaDefaults.feasibilityDays),
+        earnestMoney: money("earnestMoney") || prefill.earnestMoney || Number(settings.earnestMoney) || 0,
+        earnestDue: normalizePsaEarnestDue(raw.earnestDue) || prefill.earnestDue,
+        feasibilityDays: days("feasibilityDays", prefill.feasibilityDays || psaDefaults.feasibilityDays),
         closingDays: days("closingDays", psaDefaults.closingDays),
         closingDate: str("closingDate"),
         backstopDate: str("backstopDate"),
@@ -3078,6 +3090,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         price: fields.price ? fmtMoney(fields.price) : "",
         price_words: fields.price ? moneyInWords(fields.price) : "",
         earnest_money: fields.earnestMoney ? fmtMoney(fields.earnestMoney) : "",
+        earnest_due: PSA_EARNEST_DUE[fields.earnestDue],
         feasibility_days: String(fields.feasibilityDays),
         closing_days: String(fields.closingDays),
         closing_date: dateText(fields.closingDate),
@@ -3550,24 +3563,25 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     } catch (e) { console.error(`auto-blast on promote failed for ${offer.id}: ${e?.message}`); }
   }
 
-  async function promoteToDeal({ locationId, client, offer, body = {} }) {
+  async function promoteToDeal({ locationId, client, offer, body = {}, now = Date.now() }) {
     if (offer.status === "draft") {
       throw Object.assign(new Error("drafts can't be promoted — create the offer first"), { http: 400 });
     }
     if (offer.deal) throw Object.assign(new Error("already a deal"), { http: 409, offer });
 
     const settings = effectiveSettings(await store.getOfferSettings(locationId));
-    const ts = new Date().toISOString();
+    const ts = new Date(now).toISOString();
     const contractPrice = dealMoney(body.contractPrice)
       ?? dealMoney(offer.contract?.fields?.price)
       ?? dealMoney(offer.cashAmount);
     const assignmentFee = dealMoney(body.assignmentFee) ?? dealMoney(settings.wholesaleFee);
-    // Inspection contingency deadline: today + the contract's inspection
-    // period (local date, same yyyy-mm-dd convention as closingDate).
-    const parsedDays = parseInt(offer.contract?.fields?.inspectionDays, 10);
-    const inspEnd = new Date();
-    inspEnd.setDate(inspEnd.getDate() + (Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 10));
-    const inspectionDefault = `${inspEnd.getFullYear()}-${String(inspEnd.getMonth() + 1).padStart(2, "0")}-${String(inspEnd.getDate()).padStart(2, "0")}`;
+    // The dates off the paper (shared/deal-checklist.js promoteDates): what
+    // you typed, then the PSA we wrote, the generic contract, the letter's
+    // terms and our standard write-up terms, counted in Pacific days. Before
+    // 2026-11-09 this read the generic contract only and counted from the
+    // server's UTC day, so a promote after about 5pm Pacific ended the
+    // inspection a day late.
+    const dates = promoteDates({ offer, terms: writtenTerms(settings), body, now });
     offer.deal = {
       stage: "under_contract",
       createdAt: ts,
@@ -3575,8 +3589,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       stageHistory: [{ stage: "under_contract", ts }],
       contractPrice,
       assignmentFee,
-      closingDate: dealStr(body.closingDate, 40) || dealStr(offer.contract?.fields?.closingDate, 40),
-      inspectionDate: dealStr(body.inspectionDate, 40) || inspectionDefault,
+      closingDate: dates.closingDate,
+      inspectionDate: dates.inspectionDate,
+      ...(dates.earnestMoney ? { earnestMoney: dates.earnestMoney } : {}),
+      earnestDue: dates.earnestDue,
+      datesFrom: dates.from,
       notes: "",
       fellThroughReason: "",
       fellThroughCode: "",
@@ -3584,7 +3601,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       ghl: { tag: false, note: false },
       // What has to happen before closing (shared/deal-checklist.js), written
       // down now so a later change to the template never rewrites this deal.
-      checklist: normalizeChecklist(null),
+      // Earnest money due after the inspection is chased from the inspection.
+      checklist: checklistForTerms(null, { earnestDue: dates.earnestDue }),
     };
     // Under contract IS the accepted state — keep the two from disagreeing.
     recordStatus(offer, "accepted", "", ts);
@@ -3664,6 +3682,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     await syncAgentOfferTag(client, locationId, offer.contactId);
     return { offer, warnings };
   }
+  // For the tests: promote at a given moment (the dates count in Pacific days).
+  router.promoteToDeal = promoteToDeal;
 
   // Record an offer outcome. Body: { status, note? }. Picking "accepted" runs
   // the promote path so an acceptance can only ever be recorded one way.
@@ -4522,10 +4542,22 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (b.fellThroughCode && !fellThroughCode) {
         return res.status(400).json({ error: `fellThroughCode must be one of: ${Object.keys(FELL_THROUGH_LABEL).join(", ")}` });
       }
+      // Who bought it and for how much (shared/post-mortem.js
+      // normalizeDealOutcome), asked for when the deal is assigned or closed.
+      // `null` takes it off.
+      let outcome;
+      if (b.outcome !== undefined && b.outcome !== null) {
+        const r = normalizeDealOutcome(b.outcome, {
+          contractPrice: b.contractPrice !== undefined ? dealMoney(b.contractPrice) : deal.contractPrice,
+          today: pacificYmd(Date.now()),
+        });
+        if (r.error) return res.status(400).json({ error: r.error });
+        outcome = { ...r.outcome, by: "you", at: new Date().toISOString() };
+      }
+      if (b.stage !== undefined && !DEAL_STAGES.includes(b.stage)) {
+        return res.status(400).json({ error: `stage must be one of: ${DEAL_STAGES.join(", ")}` });
+      }
       if (b.stage !== undefined) {
-        if (!DEAL_STAGES.includes(b.stage)) {
-          return res.status(400).json({ error: `stage must be one of: ${DEAL_STAGES.join(", ")}` });
-        }
         if (b.stage !== deal.stage) {
           deal.stage = b.stage;
           deal.stageHistory.push({ stage: b.stage, ts: new Date().toISOString() });
@@ -4549,6 +4581,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // investor bot may say about the house. Starts from the walkthrough's
       // old access pick so an older deal keeps what it had.
       if (b.access && typeof b.access === "object") deal.access = mergeAccess(accessFor(deal), b.access);
+      if (outcome) deal.outcome = outcome;
+      else if (b.outcome === null) delete deal.outcome;
+      // What a buyer said it's worth, needs and would pay, by hand (KPI-04).
+      if (b.buyerRead !== undefined) {
+        const read = normalizeBuyerRead(b.buyerRead);
+        if (read) deal.buyerRead = { ...read, at: new Date().toISOString() };
+        else delete deal.buyerRead;
+      }
       deal.updatedAt = new Date().toISOString();
       await store.updateOffer(offer.id, offer);
       // Re-price the investor package off the new terms. The rest of its
@@ -4556,6 +4596,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (b.contractPrice !== undefined || b.assignmentFee !== undefined) {
         await syncDealNumbers({ store, offer });
       }
+      const sold = deal.stage === "closed" || deal.stage === "assigned";
       if (stageChanged) {
         await appendDealHistory(client, locationId, offer.contactId, "agent_deal_history",
           historyLine(deal.updatedAt, offer.address, deal.stage.replace(/_/g, " "),
@@ -4563,13 +4604,54 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           { type: deal.stage === "under_contract" ? "deal_promoted" : "deal_stage", offerId: offer.id, dealId: offer.id, source: "deal", at: deal.updatedAt,
             // The reason rides on the event too, so the location-wide event
             // stream can answer "why do our deals die" without opening each deal.
-            data: { stage: deal.stage, ...(deal.stage === "fell_through" ? { reason: deal.fellThroughReason || "", code: deal.fellThroughCode || "" } : {}) } });
+            // A sale carries what the buyer paid, when somebody said.
+            data: { stage: deal.stage, ...(deal.stage === "fell_through" ? { reason: deal.fellThroughReason || "", code: deal.fellThroughCode || "" } : {}),
+              ...(sold && deal.outcome ? { price: deal.outcome.price ?? null, fee: deal.outcome.fee ?? null } : {}) } });
         // A move into/out of closed|fell_through flips whether this deal keeps
         // its investors tagged as on a live deal.
         for (const inv of deal.investors) {
           await syncInvestorDealTag(client, locationId, inv.contactId);
         }
       }
+      // Assigned or closed with nothing recorded: the Deals page asks who
+      // bought it and for how much. Nothing is filled in for you.
+      res.json({ ok: true, offer, ...(stageChanged && sold && !deal.outcome ? { askOutcome: true } : {}) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // Put a buyer's pass reason right (2026-11-09: one deal's codes were wrong
+  // and nothing could edit them). Body: { contactId, code, to } moves that
+  // entry to another code, keeping their words; { contactId, code, remove: true }
+  // takes it off. The buyer's own reason on the deal follows.
+  router.patch("/:id/deal/feedback", async (req, res) => {
+    try {
+      const ctx = await loadDealOffer(req, res);
+      if (!ctx) return;
+      const { offer } = ctx;
+      const b = req.body || {};
+      const contactId = dealStr(b.contactId, 64);
+      const code = dealStr(b.code, 40);
+      const remove = b.remove === true;
+      const to = remove ? "" : dealStr(b.to, 40).toLowerCase();
+      if (!remove && !PASS_REASONS.includes(to)) return res.status(400).json({ error: `to must be one of: ${PASS_REASONS.join(", ")}` });
+      const rows = offer.deal.feedback || [];
+      const hit = rows.find((f) => f.contactId === contactId && f.code === code);
+      if (!hit) return res.status(404).json({ error: "no such reason on this deal" });
+      const ts = new Date().toISOString();
+      const inv = (offer.deal.investors || []).find((i) => i.contactId === contactId);
+      if (remove) {
+        offer.deal.feedback = rows.filter((f) => f !== hit);
+        if (inv?.reason?.code === code) inv.reason = null;
+      } else if (to !== code) {
+        const already = rows.find((f) => f !== hit && f.contactId === contactId && f.code === to);
+        if (already) {
+          already.note = already.note || hit.note;
+          offer.deal.feedback = rows.filter((f) => f !== hit);
+        } else Object.assign(hit, { code: to, correctedFrom: code, correctedAt: ts, by: "you" });
+        if (inv?.reason?.code === code) inv.reason = { ...inv.reason, code: to };
+      }
+      offer.deal.updatedAt = ts;
+      await store.updateOffer(offer.id, offer);
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }
   });
@@ -6230,6 +6312,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       offer.deal.investors = offer.deal.investors || [];
       const ts = new Date().toISOString();
       let inv = offer.deal.investors.find((i) => i.contactId === contactId);
+      const was = inv?.status || "";
       if (!inv) {
         let name = "";
         try { name = contactName(await getContact(client, contactId)) || contactId; } catch { name = contactId; }
@@ -6244,6 +6327,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         inv.reason = { ...said, at: ts };
         recordFeedback(offer, { contactId, name: inv.name, code: said.code, note: said.note, status, ts });
       }
+      // The last committed buyer passed or is only looking again: selling resumes.
+      const reopened = reopenAfterBackOut(offer.deal, { was, contactId, ts });
       if (status === "committed" && offer.deal.stage === "under_contract") {
         offer.deal.stage = "buyer_found";
         (offer.deal.stageHistory = offer.deal.stageHistory || []).push({ stage: "buyer_found", ts });
@@ -6271,10 +6356,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         .catch((e) => warn.push(`ledger: ${String(e?.message || e).slice(0, 80)}`));
       await syncInvestorDealTag(client, locationId, contactId)
         .catch((e) => warn.push(`tag: ${String(e?.message || e).slice(0, 80)}`));
+      if (reopened) await recordBackOut({ locationId, offer, contactId, ts, source: "conversation" });
       return {
         ok: true, address: offer.address, status,
         reasonLabel: said ? PASS_REASON_LABEL[said.code] : "",
         warning: warn.join("; "),
+        ...(reopened ? { reopened: true } : {}),
       };
     },
     // Feedback without a status change: a price gripe, a "wrong side of the
@@ -7280,9 +7367,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const inv = offer.deal.investors.find((i) => i.contactId === req.params.contactId);
       if (!inv) return res.status(404).json({ error: "investor not linked to this deal" });
       const ts = new Date().toISOString();
+      const was = inv.status;
       inv.status = status;
       inv.updatedAt = ts;
       const warnings = [];
+      // The last committed buyer passed or is only looking again: selling resumes.
+      const reopened = reopenAfterBackOut(offer.deal, { was, contactId: inv.contactId, ts });
       if (status === "committed") {
         if (offer.deal.stage === "under_contract") {
           offer.deal.stage = "buyer_found";
@@ -7304,9 +7394,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await store.updateOffer(offer.id, offer);
       await appendDealHistory(client, locationId, inv.contactId, "investor_deal_history",
         historyLine(ts, offer.address, status), { type: `investor_${status}`, offerId: offer.id, dealId: offer.id, source: "operator", at: ts });
-      res.json({ ok: true, offer, warnings });
+      if (reopened) await recordBackOut({ locationId, offer, contactId: inv.contactId, ts, source: "operator" });
+      res.json({ ok: true, offer, warnings, reopened });
     } catch (err) { fail(res, err); }
   });
+
+  // A committed buyer backed out and the deal is under contract again
+  // (shared/offer-status.js reopenAfterBackOut). The buyer's record says so;
+  // never throws.
+  async function recordBackOut({ locationId, offer, contactId, ts, source }) {
+    await recordEvent({ store, locationId, contactId, party: "investor", type: "investor_backed_out", at: ts, address: offer.address || "",
+      offerId: offer.id, dealId: offer.id, source, data: { stage: "under_contract", reason: BUYER_BACKED_OUT } }).catch(() => {});
+  }
 
   // AI-suggest disposition investors for this deal from conversation history.
   // Candidates = investors linked on OTHER deals + contacts carrying an
@@ -7391,12 +7490,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!ctx) return;
       const { locationId, client, offer } = ctx;
       const before = offer.deal.investors.length;
+      const gone = offer.deal.investors.find((i) => i.contactId === req.params.contactId);
       offer.deal.investors = offer.deal.investors.filter((i) => i.contactId !== req.params.contactId);
       if (offer.deal.investors.length === before) {
         return res.status(404).json({ error: "investor not linked to this deal" });
       }
       offer.deal.updatedAt = new Date().toISOString();
+      // The committed buyer came off the deal: selling resumes.
+      const reopened = reopenAfterBackOut(offer.deal, { was: gone?.status, contactId: req.params.contactId, ts: offer.deal.updatedAt });
       await store.updateOffer(offer.id, offer);
+      if (reopened) await recordBackOut({ locationId, offer, contactId: req.params.contactId, ts: offer.deal.updatedAt, source: "operator" });
       await syncInvestorDealTag(client, locationId, req.params.contactId);
       res.json({ ok: true, offer });
     } catch (err) { fail(res, err); }

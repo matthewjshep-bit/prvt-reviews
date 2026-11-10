@@ -45,6 +45,7 @@ const WHERE = {
   investor_price_agreed: "Deals", pre_contract: "the offer's Before you sign", closing_soon: "Deals", closing_task_due: "Deals",
   showing_no_window: "Deals", deal_no_dataroom: "Deals", referral: "their contact record", email_check: "their contact record",
   promise_owed: "their thread in GHL",
+  inspection_deadline: "Deals",
 };
 
 const clip = (s, n) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };

@@ -39,7 +39,9 @@ test("the line reports stations, an open offer with nothing scheduled, a stuck d
   await mk({ address: "2 Stuck St, Kent, WA 98031", status: "accepted", cashAmount: 250000,
     deal: { stage: "under_contract", createdAt: ago(5), stageHistory: [{ stage: "under_contract", ts: ago(5) }], investors: [], contractPrice: 250000, assignmentFee: 20000 } });
   await mk({ address: "3 Sold St, Kent, WA 98031", status: "accepted", cashAmount: 300000, arv: 500000, repairs: 50000,
-    deal: { stage: "closed", createdAt: ago(40), stageHistory: [{ stage: "under_contract", ts: ago(40) }, { stage: "closed", ts: ago(3) }], investors: [], contractPrice: 300000, assignmentFee: 5000 } });
+    // Since 2026-11-09 a sold deal counts in what buyers paid only on a price somebody recorded.
+    deal: { stage: "closed", createdAt: ago(40), stageHistory: [{ stage: "under_contract", ts: ago(40) }, { stage: "closed", ts: ago(3) }], investors: [], contractPrice: 300000, assignmentFee: 5000,
+      outcome: { price: 305000 } } });
   await store.setJobCursor(LOC, "followUp", { at: ago(0.5), doc: { last: { finishedAt: ago(0.5), status: "done" } } });
 
   const r = await (await fetch(`${B}/api/dashboard/line`)).json();
