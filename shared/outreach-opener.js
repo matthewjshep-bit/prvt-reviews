@@ -131,9 +131,12 @@ export const DAY_TWO_TEXTS = [
   "Hey {first}, no worries if {address} is spoken for. Anything else in the works that needs a lot?",
   "Hi {first}, Matt again. Anything besides {address} on your plate that needs real work?",
 ];
+// Follow-up 2 says nothing any day-2 text says: it is one fixed text with no
+// next one to walk to, so a repeat would hold it (2026-11-09 review: "Matt
+// again. Anything on your end that needs real work?" repeated the eighth).
 export const DEFAULT_FOLLOW_UP_TEXTS = [
   DAY_TWO_TEXTS[0],
-  "Hey {first}, Matt again. Anything on your end that needs real work?",
+  "Hey {first}, Matt again. Got a house coming up that's more project than the seller wants?",
 ];
 // The two follow-ups from 2026-10-26 to 2026-11-09, read as never changed.
 export const LEGACY_DEFAULT_FOLLOW_UP_TEXTS = [

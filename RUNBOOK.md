@@ -4701,8 +4701,13 @@ one check, and the later check-in branches import its words (`VOICE_RULE`,
   "buy houses". The canned replies (the counter pass, the qualify asks and
   passes, the "closed" lines in turn, "Sounds too finished for me", the desk
   first line, "Thanks for the pics.", the package invite) are Matt's voice
-  and end on the next-one question where a house closes. A buyer's deal text
-  has no dash in it. No first name: the greeting and ", {first}" come out
+  and end on the next-one question where a house closes. Our question and our
+  pass on a house go in turn, the next wording for each one already sent
+  them, so a second house never gets the first one's words (which the check
+  would hold as a repeat). The counter hold's short line for a second counter
+  is "We're still at N on <street> if anything changes on the seller's side."
+  Follow-up 2 says nothing any day-2 text says, since it has no next one to
+  walk to. A buyer's deal text has no dash in it. No first name: the greeting and ", {first}" come out
   ("Saw…", "…lately?"); a GHL name that is a role ("Agent", "Realtor") is no
   name; an ALL CAPS name reads as a name.
 - **The emails.** Intro (8 bodies) and check-in (8 bodies, lowercase

@@ -3366,6 +3366,34 @@ test("a counter within 10% of our number is a call for you, not the hold text, a
   }
 });
 
+// 2026-11-09 review: the short line for a second counter that didn't move
+// opened "Understood.", a stock opener the voice check holds, so the one
+// counter reply the machine sends waited on the Desk and the model was asked
+// to rewrite our number in its own words.
+test("a second counter that didn't move gets our number again and still sends itself", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["agent"]);
+  const offer = { ...HELD_OFFER, counterHold: { at: new Date(Date.now() - 2 * 86400000).toISOString(), ours: 300000, theirs: 335000 } };
+  const store = negotiationStore(offer);
+  let calls = 0;
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: HOLD_SAVED(), store, contactId: "c1", sendsEnabled: true,
+    message: "Seller is still at 335",
+    deps: {
+      draft: async () => { calls++; return { ...DRAFT, intent: "counter", confidence: "high", counterAmount: 335000, propertyAddress: "12 Elm St", reply: "Let me see." }; },
+      setOfferStatus: async ({ status }) => ({ ok: true, address: offer.address, status }),
+      markCounterHold: async () => ({ ok: true }),
+    },
+  });
+  await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(job.status, "done", job.error);
+  assert.match(d.reply, /still at 300,000 on 12 Elm St/, `${d.reply} | ${(d.flags || []).join(" · ")}`);
+  assert.doesNotMatch(d.reply, /^(?:Understood|Got it|Perfect|Sounds good)\b/);
+  assert.equal(d.status, "scheduled", `${d.autoSend?.reason} | ${(d.flags || []).join(" · ")}`);
+  assert.equal(calls, 1, "no second model call to rewrite our number");
+});
+
 // Matt, 2026-10-22: "Bot holds our number." Two counters sat 46 hours on
 // houses we had already closed — the band could only say "the machine never
 // goes above what we sent, your call". The bot says our number again, once.
@@ -8241,6 +8269,11 @@ test("the fixers line is never stapled after a reply that already asks a questio
   const { d } = await replyTo("It's turnkey, the sellers redid it.", { saved: STARTER_SAVED, lines: [], reply: "Makes sense. What's the seller hoping to get?" });
   assert.equal(d.reply, "Makes sense. What's the seller hoping to get?");
   assert.equal(questions(d.reply), 1);
+  // Left alone in the first place, not stapled and then written again by
+  // the voice check's redraft (which would hide a regression here).
+  assert.equal(d.redraftedFor, undefined, JSON.stringify(d.redraftedFor));
+  const { withFixersAsk } = await import("./shared/flip-read.js");
+  assert.equal(withFixersAsk("Makes sense. What's the seller hoping to get?", 0), "Makes sense. What's the seller hoping to get?");
 });
 
 test("the qualify question on a first answer carries the call ask, and still reads as our question", async () => {
@@ -8369,6 +8402,28 @@ test("a house the agent brings with nothing said about it gets our one question 
   assert.equal(uw.length, 0, "the answer decides");
   assert.equal(d.qualify?.stage, "ask");
   assert.match(d.reply, QUALIFY_ASK_RX);
+});
+
+// 2026-11-09 review: our one question went in the same words to every house
+// an agent brought (one wording per agent), so the second house's question
+// repeated the first, the voice check held it, and the model was asked to
+// rewrite our question. The next wording along goes instead.
+test("a second house an agent brings gets our question in new words, and it still sends itself", async () => {
+  const { openerVariant } = await import("./shared/outreach-opener.js");
+  const { QUALIFY_ASKS } = await import("./shared/flip-read.js");
+  const earlier = QUALIFY_ASKS[openerVariant("c1", 3) % QUALIFY_ASKS.length];
+  const OTHER = "77 Birch Ln, Everett, WA 98201";
+  const { d } = await replyTo("Have this one for you too, 4417 Somerset Ln Everett", {
+    saved: BROUGHT_SAVED, address: BROUGHT,
+    lines: [["outbound", OPENER], ["inbound", "Not that one, but I have 77 Birch Ln in Everett"], ["outbound", earlier], ["inbound", "I'll find out"]],
+    sent: [{ id: "s-ask", locationId: "LOC", contactId: "c1", status: "sent", channel: "sms", intent: "deal_available", reply: earlier, sentText: earlier,
+      qualify: { stage: "ask", address: OTHER }, createdAt: iso(3600000 * 3), sentAt: iso(3600000 * 3) }],
+  });
+  assert.equal(d.qualify?.stage, "ask");
+  assert.match(d.reply, QUALIFY_ASK_RX);
+  assert.notEqual(d.reply, earlier, "not the question we already sent them");
+  assert.equal(d.redraftedFor, undefined, JSON.stringify(d.redraftedFor));
+  assert.equal(d.autoSendable, true, JSON.stringify(d.flags));
 });
 
 test("an off-market cosmetic house the agent brings with the seller's number is still run (7034 S K St)", async () => {

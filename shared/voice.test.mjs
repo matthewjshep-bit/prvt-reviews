@@ -78,6 +78,20 @@ test("adjacent check-ins in a pool share no phrase that's spent on repeat, so wa
   }
 });
 
+// 2026-11-09 review: follow-up 2 ("Matt again. Anything on your end that
+// needs real work?") repeated the day-2 text that asks about "anything
+// besides" the house, so one agent in eight had follow-up 2 held, and a
+// fixed text with nowhere to walk went to the model or was dropped.
+test("follow-up 2 never repeats whichever day-2 text the agent got, so it goes as written", () => {
+  for (const d2 of DAY_TWO_TEXTS) {
+    for (const first of ["Brenda", ""]) {
+      const v = { ...VALUES, first, home: "Seattle", county: "King" };
+      const prior = [fillTemplate(d2, v), fillTemplate(DEFAULT_OPENER_EXAMPLES[0], v)];
+      assert.deepEqual(hard({ text: fillTemplate(DEFAULT_FOLLOW_UP_TEXTS[1], v), kind: "outreach_nudge", prior }), [], d2);
+    }
+  }
+});
+
 test("hope you're doing well, anything come across your desk is a machine tell", () => {
   const text = fillTemplate(LEGACY_CHECKIN_TEXTS[1], { first: "Brenda" });
   assert.ok(hard({ text, kind: "agent_checkin" }).includes("hope you're doing well"), text);

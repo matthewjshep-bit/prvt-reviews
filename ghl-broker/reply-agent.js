@@ -2069,6 +2069,13 @@ export function callAskFor({ events = [], transcript = "", message = "", ice = n
   return { first: !ours, ...(alreadyAsked ? { alreadyAsked: true } : {}) };
 }
 
+// Which wording of our question and our pass an agent gets: theirs by the
+// contact id, then the next along for each one we already sent them, on any
+// house (2026-11-09 review: a second house got the first one's question word
+// for word, the voice check held it as a repeat, and the model rewrote it).
+const qualifyTurn = (contactId, sent = []) =>
+  openerVariant(contactId, 3) + (sent || []).filter((d) => d?.qualify?.stage === "ask" || d?.qualify?.stage === "pass").length;
+
 /**
  * qualifyIcebreaker({ ... }) → null | { stage, address, why, reply }
  *
@@ -2095,7 +2102,7 @@ export async function qualifyIcebreaker({ store, locationId, contactId, draft, m
   const passed = ours("pass");
   // The "closed" line goes in turn, never the same one twice to them.
   const closedN = sent.filter((d) => d.qualify?.stage === "closed").length;
-  const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: openerVariant(contactId, 3), callAsk, closedN });
+  const step = qualifyStep({ words: theirWordsSince(transcript, ice.at, message), asked, passed, agentRehab, variant: qualifyTurn(contactId, sent), callAsk, closedN });
   return { stage: step.move === "underwrite" ? "qualified" : step.move, address: ice.address, why: step.read.why, reply: step.reply };
 }
 
@@ -2137,7 +2144,7 @@ export async function qualifyBrought({ store, locationId, contactId, draft, mess
   const from = asked ? Math.min(...asks.map((d) => Date.parse(d.sentAt || d.createdAt || "") || now)) : now;
   const words = theirWordsSince(transcript, from - 2 * 86400000, message);
   const step = broughtStep({
-    words, asked, passed, agentRehab, callAsk, variant: openerVariant(contactId, 3), closedN: sent.filter((d) => d.qualify?.stage === "closed").length,
+    words, asked, passed, agentRehab, callAsk, variant: qualifyTurn(contactId, sent), closedN: sent.filter((d) => d.qualify?.stage === "closed").length,
     offMarket: Boolean(offMarketCue(words)), sellerAsk: Number(draft?.propertyDetails?.sellerAsk) || 0,
   });
   return { stage: step.move === "underwrite" ? "qualified" : step.move, address, why: step.read.why, reply: step.reply };
@@ -4707,7 +4714,10 @@ async function runReply(job, ctx) {
       // carrier filters (the gates hold it), so the number goes bare.
       const n = hold.amount.toLocaleString("en-US");
       draft = { ...draft, needsHuman: false, counterHold,
-        reply: again ? `Understood. We're still at ${n} on ${where}; if anything changes on the seller's side, I'm here.`
+        // The short one without the "Understood." opener the voice check
+        // holds (2026-11-09 review): it held the one counter reply the
+        // machine sends and had the model rewrite our number.
+        reply: again ? closedHoldReply({ amount: n, where })
           : `Appreciate you working it. On ${where} we're going to hold at ${n}: that's where the numbers work for us. If the seller can get there, we're ready to go.` };
     } else if (!theirs && !comeUp && !moneyIn(job.originalMessage || job.message).length && !moneyIn(draft.reply).length
         && WILL_ASK_RX.test(job.originalMessage || job.message)) {
