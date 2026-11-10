@@ -131,6 +131,7 @@ import { normalizePricingV2 } from "../shared/price-engine.js";
 import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
 import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
+import { machineWorkday } from "../shared/follow-up-engine.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STATUSES } from "../shared/showing.js";
 import { mergeParties } from "../shared/deal-parties.js";
@@ -5382,6 +5383,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     if (!cfg.enabled || !af?.enabled || !CARD_SENDS_ENABLED) return { sent: 0, checked: 0 };
     const dueAt = nextSendTime({ now, delayMs: 0, quietHours: machineHours(cfg.autoSend) });
     if (Date.parse(dueAt) - now > 60000) return { sent: 0, checked: 0 };
+    // Not on a weekend the page keeps, or a day off (autoSend.offDays): it waits for the next working day.
+    if (!machineWorkday(now, { weekends: cfg.autoSend.weekends || "all", offDays: cfg.autoSend.offDays || [], tz: machineHours(cfg.autoSend).timeZone || "UTC" })) return { sent: 0, checked: 0 };
     const day = new Date(now).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
     const cur = await store.getJobCursor?.(locationId, PAPER_CURSOR).catch(() => null);
     let today = cur?.doc?.day === day ? Number(cur.doc.count) || 0 : 0;
@@ -6534,7 +6537,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const verdict = dialHeldReleasable(d, saved, now);
         if (!verdict.ok) { if (verdict.reason !== "not held by the dial") rows.push({ draftId: d.id, intent: d.intent, released: false, reason: verdict.reason }); continue; }
         const sendAt = STARTED_KINDS.has(d.outbound?.kind)
-          ? spreadAcrossDay({ now, quietHours: machineHours(a), hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all" })
+          ? spreadAcrossDay({ now, quietHours: machineHours(a), hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all", offDays: a.offDays || [] })
           : nextSendTime({ now, delayMs: 60000, quietHours: a.quietHours });
         if (!dryRun) {
           const ts = new Date(now).toISOString();

@@ -94,7 +94,7 @@ async function queueEmails({ client, store, locationId, saved, sendsEnabled, now
     if (!claimed.inserted) { out.rows.push({ ...row, status: "skipped", reason: "already claimed" }); continue; }
 
     const sendAt = schedule
-      ? spreadAcrossDay({ now, quietHours: machineHours(auto), hours: auto.nudgeSpreadHours ?? 8, weekends: auto.weekends || "all" })
+      ? spreadAcrossDay({ now, quietHours: machineHours(auto), hours: auto.nudgeSpreadHours ?? 8, weekends: auto.weekends || "all", offDays: auto.offDays || [] })
       : null;
     const ts = iso(now);
     const record = await store.createReplyDraft({

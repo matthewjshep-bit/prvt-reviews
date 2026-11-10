@@ -8,8 +8,8 @@
 // when due. State lives in the store, so a redeploy loses nothing and a draft
 // scheduled before a restart still goes out on time.
 
-import { answersInbound } from "./shared/follow-up.js";
-import { worksOn, machineDays } from "./shared/follow-up-engine.js";
+import { answersInbound, MACHINE_STARTED_KINDS, SERVICE_KINDS } from "./shared/follow-up.js";
+import { machineWorkday } from "./shared/follow-up-engine.js";
 
 // A send GHL refused without taking it goes again after these waits
 // (minutes), then comes back to a person like any other failure.
@@ -49,26 +49,28 @@ export function isWeekend(ms, timeZone = "UTC") {
 }
 
 /**
- * spreadAcrossDay({ now, quietHours, hours, random, weekends }) → ISO string
+ * spreadAcrossDay({ now, quietHours, hours, random, weekends, offDays }) → ISO string
  *
  * Somewhere in the first `hours` of the next open window — for the things
  * the machine STARTS (nudges, cold opens, blasts), so a sweep at 9am does
  * not put forty texts on forty phones at 9:02. With weekends "replies_only"
- * or "none", Saturday and Sunday are skipped.
+ * or "none", Saturday and Sunday are skipped, and a day on `offDays`
+ * ("YYYY-MM-DD", autoSend.offDays) is skipped whatever `weekends` says.
  */
-export function spreadAcrossDay({ now = Date.now(), quietHours = {}, hours = 8, random = Math.random, weekends = "all" } = {}) {
+// Days off can run into a weekend (Christmas Eve to the Sunday after), and
+// the list holds at most 60: this many rolls always gets past them.
+const MAX_DAYS_ROLLED = 70;
+export function spreadAcrossDay({ now = Date.now(), quietHours = {}, hours = 8, random = Math.random, weekends = "all", offDays = [] } = {}) {
   const tz = quietHours.timeZone || "UTC";
   let open = Date.parse(nextSendTime({ now, delayMs: 0, quietHours }));
-  if (weekends !== "all") {
-    // Roll to the NEXT day's opening (not the same wall time tomorrow)
-    // until it is a day the machine works ("sun_to_fri": Saturday is off).
-    const days = machineDays(weekends);
-    let guard = 0;
-    while (!worksOn(weekdayIn(open, tz), days) && guard++ < 4) {
-      const p = zonedParts(open, tz);
-      const nextMidnight = zonedToUtc({ y: p.y, m: p.m, d: p.d, hh: 0, mm: 0 }, tz) + DAY_MS + 60000;
-      open = Date.parse(nextSendTime({ now: nextMidnight, delayMs: 0, quietHours }));
-    }
+  // Roll to the NEXT day's opening (not the same wall time tomorrow) until
+  // it is a day the machine works ("sun_to_fri": Saturday is off) and not a
+  // day off.
+  let guard = 0;
+  while (!machineWorkday(open, { weekends, offDays, tz }) && guard++ < MAX_DAYS_ROLLED) {
+    const p = zonedParts(open, tz);
+    const nextMidnight = zonedToUtc({ y: p.y, m: p.m, d: p.d, hh: 0, mm: 0 }, tz) + DAY_MS + 60000;
+    open = Date.parse(nextSendTime({ now: nextMidnight, delayMs: 0, quietHours }));
   }
   const start = Math.max(open, now);
   // The spread stays inside the day's window: a noon sweep spread over eight
@@ -82,15 +84,20 @@ export function spreadAcrossDay({ now = Date.now(), quietHours = {}, hours = 8, 
 
 // When the sending window that `ms` falls in shuts (a minute early, so a
 // text placed there is still inside). Null with no window, or an overnight
-// one, where the old rolling still applies.
+// one, where the old rolling still applies. Under two minutes left (a
+// one-minute window, 08:00 to 08:01): `ms` itself, so the text goes in what
+// is left of it. Until 2026-11 that read as "no close", the spread ran past
+// the window, and the text rolled two days instead of one (the 10/12 pause).
 function windowCloseAfter(ms, quietHours = {}) {
   const tz = quietHours.timeZone || "UTC";
   const start = hhmmToMinutes(quietHours.start);
   const end = hhmmToMinutes(quietHours.end);
   if (start == null || end == null || start >= end) return null;
   const p = zonedParts(ms, tz);
-  const close = zonedToUtc({ y: p.y, m: p.m, d: p.d, hh: Math.floor(end / 60), mm: end % 60 }, tz) - 60000;
-  return close > ms ? close : null;
+  const shut = zonedToUtc({ y: p.y, m: p.m, d: p.d, hh: Math.floor(end / 60), mm: end % 60 }, tz);
+  const close = shut - 60000;
+  if (close > ms) return close;
+  return shut > ms ? ms : null;
 }
 
 /**
@@ -200,6 +207,20 @@ export const MACHINE_BURST = 5;
 export const PACE_MS = 2500;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * waitsForAWorkday(draft) → whether a queued text waits out a weekend the
+ * page keeps, or a day off: one the machine started on its own
+ * (MACHINE_STARTED_KINDS) or a deal text, that answers nothing they sent.
+ * A buyer's showing reminder and follow-up (SERVICE_KINDS) serve a time they
+ * booked, and a person's own text (a check-in you wrote, your answer to
+ * their question, the walkthrough ask) is yours, so those keep their time.
+ */
+export function waitsForAWorkday(d) {
+  const kind = d?.outbound?.kind;
+  if (!kind || answersInbound(d) || SERVICE_KINDS.has(kind)) return false;
+  return MACHINE_STARTED_KINDS.has(kind) || kind === "blast_open";
+}
+
 export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, enabledFor = null, windowFor = null, log = () => {}, maxPerTick = MAX_SENDS_PER_TICK, paceMs = PACE_MS, random = Math.random }) {
   const out = { sent: 0, failed: 0, recovered: 0, returned: 0, deferred: 0, afterHours: 0 };
   for (const { locationId, client } of locations) {
@@ -241,13 +262,27 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
       ? await windowFor(locationId).catch(() => null) : null;
     const machineWin = auto ? machineHours(auto) : null;
     const respread = new Set();
+    // A text the machine started, due on a day it doesn't work (a weekend
+    // the page keeps, a day off), goes to the next working morning. This
+    // also catches what was queued before the setting changed, and a deal
+    // wave that ran past Friday's close. Their texts' answers and a buyer's
+    // showing texts still go (2026-11: 49 weekend texts in two weekends).
+    if (machineWin && !machineWorkday(now, { weekends: auto.weekends || "all", offDays: auto.offDays || [], tz: machineWin.timeZone || "UTC" })) {
+      for (const d of scheduled) {
+        if (!waitsForAWorkday(d) || !(Date.parse(d.sendAt || "") <= now) || inFlight.has(d.id)) continue;
+        const sendAt = spreadAcrossDay({ now, quietHours: machineWin, hours: auto.nudgeSpreadHours ?? 8, random, weekends: auto.weekends || "all", offDays: auto.offDays || [] });
+        await store.updateReplyDraft(d.id, { ...d, sendAt, updatedAt: new Date(now).toISOString() }).catch(() => {});
+        respread.add(d.id);
+        out.offDay = (out.offDay || 0) + 1;
+      }
+    }
     if (machineWin) {
-      const pile = scheduled.filter((d) => !answersInbound(d) && Date.parse(d.sendAt || "") <= now && !inFlight.has(d.id))
+      const pile = scheduled.filter((d) => !answersInbound(d) && Date.parse(d.sendAt || "") <= now && !inFlight.has(d.id) && !respread.has(d.id))
         .sort((x, y) => String(x.sendAt).localeCompare(String(y.sendAt)));
       for (const d of pile.slice(MACHINE_BURST)) {
         // Outside its hours it is moved below anyway; inside, spread the rest of the day.
         if (Date.parse(nextSendTime({ now, delayMs: 0, quietHours: machineWin })) > now) continue;
-        const sendAt = spreadAcrossDay({ now, quietHours: machineWin, hours: auto.nudgeSpreadHours ?? 8, random, weekends: auto.weekends || "all" });
+        const sendAt = spreadAcrossDay({ now, quietHours: machineWin, hours: auto.nudgeSpreadHours ?? 8, random, weekends: auto.weekends || "all", offDays: auto.offDays || [] });
         await store.updateReplyDraft(d.id, { ...d, sendAt, updatedAt: new Date(now).toISOString() }).catch(() => {});
         respread.add(d.id);
         out.respread = (out.respread || 0) + 1;
@@ -257,7 +292,7 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
       const due = Date.parse(d.sendAt || "");
       if (!Number.isFinite(due) || due > now || inFlight.has(d.id) || respread.has(d.id)) continue;
       if (machineWin && !answersInbound(d) && Date.parse(nextSendTime({ now, delayMs: 0, quietHours: machineWin })) > now) {
-        const sendAt = spreadAcrossDay({ now, quietHours: machineWin, hours: auto.nudgeSpreadHours ?? 8, random, weekends: auto.weekends || "all" });
+        const sendAt = spreadAcrossDay({ now, quietHours: machineWin, hours: auto.nudgeSpreadHours ?? 8, random, weekends: auto.weekends || "all", offDays: auto.offDays || [] });
         await store.updateReplyDraft(d.id, { ...d, sendAt, updatedAt: new Date(now).toISOString() }).catch(() => {});
         out.afterHours++;
         continue;

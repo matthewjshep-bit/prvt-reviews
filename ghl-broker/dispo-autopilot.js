@@ -33,6 +33,7 @@ import { dealNumbers } from "./dataroom.js";
 import { dealOutreachPaused } from "./shared/offer-status.js";
 import { conversationConfig } from "./reply-agent.js";
 import { nextSendTime, spreadAcrossDay, machineHours } from "./conversation-scheduler.js";
+import { machineWorkday } from "./shared/follow-up-engine.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { botHold, holdLine } from "./shared/bot-hold.js";
@@ -276,7 +277,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
   // anything past the close into the next open window.
   // The first text lands at the next open minute — on a weekday, unless the
   // page allows weekends — and the rest follow it.
-  let cursor = Date.parse(spreadAcrossDay({ now: now + Math.max(0, Number(startAfterMs) || 0), quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all" }));
+  let cursor = Date.parse(spreadAcrossDay({ now: now + Math.max(0, Number(startAfterMs) || 0), quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all", offDays: config.autoSend.offDays || [] }));
   for (const inv of investors) {
     const contactId = inv.contactId;
     if (!contactId) continue;
@@ -289,6 +290,11 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const text = presell ? presellMessage({ ...facts, firstName: name, variant, intro }) : blastMessage({ ...facts, firstName: name, variant, ask, intro, templates: da.dealTexts });
     if (i > 0) cursor += da.spreadSec * 1000 + Math.round(Math.random() * 15000);
     let sendAt = nextSendTime({ now: cursor, delayMs: 0, quietHours: machineHours(config.autoSend) });
+    // A wave that runs past Friday's close carries on the next working
+    // morning, not on Saturday or a day off.
+    if (!machineWorkday(Date.parse(sendAt), { weekends: config.autoSend.weekends || "all", offDays: config.autoSend.offDays || [], tz: machineHours(config.autoSend).timeZone || "UTC" })) {
+      sendAt = spreadAcrossDay({ now: Date.parse(sendAt), quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all", offDays: config.autoSend.offDays || [] });
+    }
     cursor = Date.parse(sendAt);
     i++;
     // Their week is spent (shared/buyer-touch.js): the deal keeps its seat
@@ -301,7 +307,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     if (channels.includes("sms") && !hold.held && willSchedule && da.touchBudget.enabled && da.touchBudget.holdDealTexts) {
       const limit = await buyerTouchLimit({ store, locationId, contactId, budget: da.touchBudget, now });
       if (!limit.open) {
-        const opens = spreadAcrossDay({ now: limit.at, quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all" });
+        const opens = spreadAcrossDay({ now: limit.at, quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all", offDays: config.autoSend.offDays || [] });
         if (Date.parse(opens) > Date.parse(sendAt)) {
           sendAt = opens;
           waits = `waits for this buyer's weekly limit — goes ${slotWord(Date.parse(opens))}, with anything else new for them`;

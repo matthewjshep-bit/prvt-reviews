@@ -154,7 +154,7 @@ export async function runGatekeeperSweep({ client, locationId, saved = {}, store
     const flagged = (d.flags || []).length > 0;
     const goes = schedule && !flagged;
     const channel = next.step === "text" ? "sms" : "email";
-    const sendAt = goes ? spreadAcrossDay({ now, quietHours: machineHours(config.autoSend || {}), hours: 6, weekends: "none" }) : null;
+    const sendAt = goes ? spreadAcrossDay({ now, quietHours: machineHours(config.autoSend || {}), hours: 6, weekends: "none", offDays: config.autoSend?.offDays || [] }) : null;
     const name = gk.name || gk.firm || "";
     const record = await store.createReplyDraft({
       locationId, contactId: row.contactId, contactName: name, status: goes ? "scheduled" : "draft", channel, jobId: null,

@@ -19,7 +19,7 @@ import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive, previewProactive, markUnsubscribed } from "./reply-agent.js";
 import { getContact, smsUnsubscribed } from "./ghl.js";
-import { workHour, isWorkday } from "./outreach-sweep.js";
+import { workHour, isWorkday, WORK_TZ } from "./outreach-sweep.js";
 import { normalizeBuyerPulse, pickPulseBuyers, SLOW_EVERY_DAYS } from "./shared/buyer-pulse.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { botHold, paceOf, MAX_PACE } from "./shared/bot-hold.js";
@@ -271,7 +271,8 @@ export async function previewBuyerPulse({ client, locationId, saved = {}, store 
 export async function maybeRunBuyerPulse({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, blastsEnabled = DISPO_BLASTS_ENABLED, deps = {}, now = Date.now() }) {
   const s = pulseSettings(saved);
   if (!s.enabled || !conversationConfig(saved).enabled) return false;
-  if (s.weekdaysOnly && !isWorkday(now)) return false;
+  // Weekdays unless the page says otherwise, and never a day off Matt listed.
+  if (!isWorkday(now, WORK_TZ, s.weekdaysOnly ? "mon_fri" : "all", conversationConfig(saved).autoSend.offDays)) return false;
   const h = workHour(now);
   if (h < s.hour || h >= s.hour + RETRY_WINDOW_HOURS) return false;
   if (jobs.get(locationId)?.status === "running") return false;

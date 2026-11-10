@@ -259,3 +259,20 @@ test("the machine's letter asks for the write-up only at a number Matt approved"
   const sms2 = sent.slice(mid).find((m) => m.contactId === "agent-approved" && m.type === "SMS");
   assert.match(sms2.message, /represent us and write it up on NWMLS forms/);
 });
+
+// 2026-11: nothing the machine starts goes on a weekend the page keeps, or
+// on a day Matt lists as off. This letter goes straight out, past the send
+// clock, so it asks itself.
+test("the written offer waits out a weekend and a day off", async () => {
+  const saved = await store.getOfferSettings(LOC);
+  await store.saveOfferSettings(LOC, { ...saved, conversationAi: { enabled: true, autoSend: { offDays: ["2026-10-13"] }, parties: { agent: { sendOffer: { afterFloat: { enabled: true } } } } } });
+  const offer = await floated("agent-long-weekend");
+  const mine = () => sent.filter((m) => m.contactId === "agent-long-weekend").length;
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: Date.parse("2026-10-10T18:00:00Z"), limit: 50 });   // Saturday 11am
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: Date.parse("2026-10-13T18:00:00Z"), limit: 50 });   // the Tuesday listed
+  assert.equal(mine(), 0);
+  assert.equal((await store.getOffer(offer.id)).paperAfterFloat, undefined, "nothing claimed");
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: Date.parse("2026-10-14T18:00:00Z"), limit: 50 });
+  assert.ok(mine() > 0, "it goes the next working day");
+  await store.saveOfferSettings(LOC, saved);
+});

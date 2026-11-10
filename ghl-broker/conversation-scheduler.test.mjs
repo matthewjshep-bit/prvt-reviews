@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spreadAcrossDay, isWeekend, pickDelayMs, nextSendTime, zonedParts, sendDueDrafts, STUCK_SENDING_MS, machineHours, MACHINE_BURST } from "./conversation-scheduler.js";
+import { weekdayIn } from "./conversation-scheduler.js";
+import { scheduleFor } from "./reply-agent.js";
+import { normalizeConversationAi as normalizeAi } from "./shared/conversation-ai.js";
 
 const CFG = { autoSend: { delayMinSec: 120, delayMaxSec: 240 } };
 const QH = { start: "08:00", end: "20:00", timeZone: "America/Los_Angeles" };
@@ -332,4 +335,156 @@ test("a pile of machine texts due at the same minute goes a few at a time; the r
     const p = pacificHour(d.sendAt);
     assert.ok(Date.parse(d.sendAt) > eight && p.d === 6 && p.hh < 17, `${d.id} → ${d.sendAt}`);
   }
+});
+
+/* ---------- weekends and days off (2026-11) ---------- */
+
+// Texts the machine started on its own (pass notes, address chases, "still
+// working the numbers") went to agents on two weekends, many at 8:01am:
+// scheduleFor rolled only the spread kinds past Saturday and Sunday, and the
+// ticker looked at the hour, never the day. There was no list of days off.
+// Answers to their own texts still go, and so does a buyer's showing text.
+const offCfg = (autoSend = {}) => normalizeAi({ autoSend: { quietHours: PT, weekends: "replies_only", ...autoSend } });
+const pacificDay = (at) => ({ ...pacificHour(at), wd: weekdayIn(Date.parse(at), "America/Los_Angeles") });
+const FRI_7PM = T("2026-11-14T03:00:00Z");    // Friday 11/13, 7pm Pacific
+const SAT_10AM = T("2026-11-14T18:00:00Z");   // Saturday 11/14
+const SUN_10AM = T("2026-11-15T18:00:00Z");   // Sunday 11/15
+const THU_10AM = T("2026-11-26T18:00:00Z");   // Thanksgiving, 10am Pacific
+const machineRow = (id, kind, at, over = {}) => draft({ id, sendAt: new Date(at - 60000).toISOString(), intent: kind, outbound: { kind }, inbound: "", ...over });
+const tickAt = async (store, now, autoSend = {}) => {
+  const sent = [];
+  const r = await sendDueDrafts({
+    store, locations: [{ locationId: "LOC", client: {} }], live: true, now, paceMs: 0, random: () => 0.5,
+    send: async (args) => { sent.push(args.draftId); store.rows.set(args.draftId, { ...store.rows.get(args.draftId), status: "sent" }); },
+    windowFor: async () => offCfg(autoSend).autoSend,
+  });
+  return { r, sent };
+};
+const mondayMorning = (at, d = 16) => {
+  const p = pacificDay(at);
+  return p.wd === 1 && p.d === d && p.hh >= 8 && p.hh < 17;
+};
+
+test("a pass note queued Friday night goes Monday morning, not Saturday", () => {
+  for (const r of [0, 0.5, 0.99]) {
+    const at = scheduleFor({ config: offCfg(), now: FRI_7PM, kind: "pass_note", random: () => r });
+    assert.ok(mondayMorning(at), `${at} → ${JSON.stringify(pacificDay(at))}`);
+  }
+});
+
+test("an address chase due Sunday waits for Monday", async () => {
+  const at = scheduleFor({ config: offCfg(), now: SUN_10AM, kind: "address_chase", random: () => 0.5 });
+  assert.ok(mondayMorning(at), `scheduled ${at}`);
+  const store = fakeStore([machineRow("a1", "address_chase", SUN_10AM)]);
+  const { r, sent } = await tickAt(store, SUN_10AM);
+  assert.deepEqual(sent, []);
+  const a = store.rows.get("a1");
+  assert.equal(a.status, "scheduled");
+  assert.ok(mondayMorning(a.sendAt), `moved to ${a.sendAt}`);
+  assert.equal(r.offDay, 1);
+});
+
+test("a machine text due on Saturday is moved to Monday", async () => {
+  // Queued before the page said weekends are off, or spilled over from
+  // Friday's deal wave: the ticker catches it on the day.
+  const store = fakeStore([
+    machineRow("p1", "promise_due", SAT_10AM),
+    machineRow("b1", "blast_open", SAT_10AM, { party: "investor" }),
+    machineRow("e1", "outreach_email", SAT_10AM, { channel: "email" }),
+  ]);
+  const { r, sent } = await tickAt(store, SAT_10AM);
+  assert.deepEqual(sent, []);
+  for (const id of ["p1", "b1", "e1"]) {
+    const d = store.rows.get(id);
+    assert.equal(d.status, "scheduled", id);
+    assert.ok(mondayMorning(d.sendAt), `${id} → ${d.sendAt}`);
+  }
+  assert.equal(r.offDay, 3);
+  // Weekends worked on the page: it goes.
+  const open = fakeStore([machineRow("p2", "promise_due", SAT_10AM)]);
+  assert.deepEqual((await tickAt(open, SAT_10AM, { weekends: "all" })).sent, ["p2"]);
+});
+
+test("an answer to a text they sent Saturday still goes Saturday", async () => {
+  const reply = pacificDay(scheduleFor({ config: offCfg(), now: SAT_10AM, intent: "question", replyLength: 40, random: () => 0 }));
+  assert.ok(reply.wd === 6 && reply.d === 14, JSON.stringify(reply));
+  const answering = pacificDay(scheduleFor({ config: offCfg(), now: SAT_10AM, kind: "address_chase", answering: true, random: () => 0 }));
+  assert.ok(answering.wd === 6 && answering.d === 14, JSON.stringify(answering));
+  const store = fakeStore([draft({ id: "r1", sendAt: new Date(SAT_10AM - 60000).toISOString(), inbound: "Does the garage have power?" })]);
+  const { sent } = await tickAt(store, SAT_10AM);
+  assert.deepEqual(sent, ["r1"]);
+});
+
+test("a buyer's showing reminder still goes on Saturday", async () => {
+  for (const kind of ["showing_reminder", "showing_followup"]) {
+    const p = pacificDay(scheduleFor({ config: offCfg(), now: SAT_10AM, kind, random: () => 0 }));
+    assert.ok(p.wd === 6 && p.d === 14, `${kind} → ${JSON.stringify(p)}`);
+  }
+  const store = fakeStore([machineRow("s1", "showing_reminder", SAT_10AM, { party: "investor" })]);
+  const { sent } = await tickAt(store, SAT_10AM);
+  assert.deepEqual(sent, ["s1"]);
+});
+
+test("nothing the machine starts goes on an off day", async () => {
+  const cfg = offCfg({ offDays: ["2026-11-26"] });
+  for (const kind of ["address_chase", "pass_note", "offer_nudge", "agent_pulse", "realm_check"]) {
+    const p = pacificDay(scheduleFor({ config: cfg, now: THU_10AM, kind, random: () => 0.5 }));
+    assert.ok(p.d === 27 && p.hh >= 8 && p.hh < 17, `${kind} → ${JSON.stringify(p)}`);
+  }
+  const spread = pacificDay(spreadAcrossDay({ now: THU_10AM, quietHours: machineHours(cfg.autoSend), hours: 8, random: () => 0, weekends: "replies_only", offDays: ["2026-11-26"] }));
+  assert.ok(spread.d === 27 && spread.hh === 8 && spread.mm === 0, JSON.stringify(spread));
+  // Even with weekends worked, a day off is off.
+  const worked = pacificDay(spreadAcrossDay({ now: THU_10AM, quietHours: machineHours(cfg.autoSend), hours: 8, random: () => 0, weekends: "all", offDays: ["2026-11-26", "2026-11-27"] }));
+  assert.ok(worked.d === 28 && worked.wd === 6, JSON.stringify(worked));
+  // Their text on the day off is still answered that day.
+  const reply = pacificDay(scheduleFor({ config: cfg, now: THU_10AM, intent: "question", replyLength: 40, random: () => 0 }));
+  assert.equal(reply.d, 26);
+  const store = fakeStore([
+    machineRow("n1", "outreach_nudge", THU_10AM),
+    draft({ id: "r1", sendAt: new Date(THU_10AM - 60000).toISOString(), inbound: "Which one was this?" }),
+  ]);
+  const { r, sent } = await tickAt(store, THU_10AM, { offDays: ["2026-11-26"] });
+  assert.deepEqual(sent, ["r1"]);
+  const n = pacificDay(store.rows.get("n1").sendAt);
+  assert.ok(n.d === 27 && n.hh >= 8 && n.hh < 17, JSON.stringify(n));
+  assert.equal(r.offDay, 1);
+});
+
+test("a check-in due on Thanksgiving goes the next working day", () => {
+  const cfg = offCfg({ offDays: ["2026-11-26", "2026-11-27"] });
+  const WED_6PM = T("2026-11-26T02:00:00Z");   // Wednesday 11/25, 6pm Pacific
+  for (const kind of ["agent_pulse", "checkin_due", "buyer_pulse"]) {
+    for (const r of [0, 0.5, 0.99]) {
+      const at = scheduleFor({ config: cfg, now: WED_6PM, kind, random: () => r });
+      assert.ok(mondayMorning(at, 30), `${kind} → ${JSON.stringify(pacificDay(at))}`);
+    }
+  }
+});
+
+test("with no days off saved, nothing changes", () => {
+  for (const kind of ["agent_pulse", "address_chase", "showing_reminder"]) {
+    for (const r of [0, 0.5, 0.99]) {
+      const plain = scheduleFor({ config: offCfg(), now: THU_10AM, kind, random: () => r });
+      assert.equal(scheduleFor({ config: offCfg({ offDays: [] }), now: THU_10AM, kind, random: () => r }), plain);
+      assert.equal(pacificDay(plain).d, 26, `${kind} goes on a Thursday that isn't listed`);
+    }
+  }
+  const win = machineHours(offCfg().autoSend);
+  assert.equal(spreadAcrossDay({ now: THU_10AM, quietHours: win, hours: 8, random: () => 0.5, weekends: "replies_only" }),
+    spreadAcrossDay({ now: THU_10AM, quietHours: win, hours: 8, random: () => 0.5, weekends: "replies_only", offDays: [] }));
+});
+
+test("a one-minute machine window doesn't skip a day", async () => {
+  // The 10/12 holiday pause set machineUntil to 08:01: a nudge spread at
+  // 1:35pm went to the day after next, not the next morning.
+  const cfg = offCfg({ machineUntil: "08:01" });
+  const MON_135PM = T("2026-11-16T21:35:00Z");   // Monday 11/16, 1:35pm Pacific
+  for (const r of [0, 0.5, 0.99]) {
+    const p = pacificDay(scheduleFor({ config: cfg, now: MON_135PM, kind: "agent_pulse", random: () => r }));
+    assert.ok(p.d === 17 && p.hh === 8 && p.mm === 0, JSON.stringify(p));
+  }
+  const store = fakeStore([machineRow("c1", "agent_pulse", MON_135PM)]);
+  await tickAt(store, MON_135PM, { machineUntil: "08:01" });
+  const c = pacificDay(store.rows.get("c1").sendAt);
+  assert.ok(c.d === 17 && c.hh === 8, JSON.stringify(c));
 });

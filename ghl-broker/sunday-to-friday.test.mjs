@@ -34,6 +34,13 @@ test("the sweep runs on a Sunday when its days are Sunday to Friday, and never o
   assert.equal(isWorkday(SUN, TZ, normalizeOutreachAutopilot({}).days), false);
 });
 
+test("a day off is not a workday for the jobs that are told about it", () => {
+  assert.equal(isWorkday(MON, TZ, "mon_fri", ["2026-10-26"]), false);
+  assert.equal(isWorkday(SUN, TZ, "all", ["2026-10-25"]), false);
+  assert.equal(isWorkday(MON, TZ, "mon_fri", ["2026-10-27"]), true, "only the day listed");
+  assert.equal(isWorkday(MON, TZ, "mon_fri"), true, "no days off, as before");
+});
+
 test("the RentCast budget counts Sundays as run days", () => {
   const oct = Date.parse("2026-10-01T17:00:00Z");
   assert.ok(runsLeftInMonth(oct, { days: "sun_fri" }) > runsLeftInMonth(oct, { weekdaysOnly: true }));

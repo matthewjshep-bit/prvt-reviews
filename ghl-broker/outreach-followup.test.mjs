@@ -114,6 +114,20 @@ test("the tick: its hour, both switches, a workflow, once a day", async () => {
   assert.equal(await maybeStartOutreachFollowUp({ ...base, saved, now: NOW + 600000 }), false, "already ran today");
 });
 
+// The workflow texts from GHL, past the app's own send clock, so a day off
+// has to stop it at the door.
+test("nobody is put in the follow-up workflow on a day off", async () => {
+  _resetJobs();
+  const LOC = "loc-fu-day-off";
+  const ghl = fakeGhl();
+  const base = { locationId: LOC, client: ghl.client, store, hour: 10, now: NOW, paceMs: 0 };
+  const off = { ...saved, conversationAi: { autoSend: { offDays: ["2026-09-11"] } } };
+  assert.equal(await maybeStartOutreachFollowUp({ ...base, saved: off }), false);
+  assert.equal(await store.getJobCursor(LOC, CURSOR_NAME), null, "no run was claimed");
+  assert.equal(await maybeStartOutreachFollowUp({ ...base, saved: { ...saved, conversationAi: { autoSend: { offDays: ["2026-09-10"] } } } }), true, "another day's off doesn't count");
+  await settle();
+});
+
 test("a reply takes them out of the outreach workflows once, and the follow-up leaves them alone", async () => {
   const { leaveOutreachWorkflows } = await import("./outreach-followup.js");
   const LOC = "loc-fu-4";
