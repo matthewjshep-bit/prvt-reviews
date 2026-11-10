@@ -32,7 +32,7 @@ import { UNANSWERED_LIMIT } from "./thread-health.js";
 import { botHold, holdLine } from "./bot-hold.js";
 import { groupHouses, resolveHouse, pricedAt, houseKey } from "./current-offer.js";
 import { showingSummary } from "./showing.js";
-import { resolveChecklist, dueWords, GATE_LABEL } from "./deal-checklist.js";
+import { resolveChecklist, dueWords, GATE_LABEL, inspectionDecision } from "./deal-checklist.js";
 import { OWNER_LABEL, resolveParties, partyName } from "./deal-parties.js";
 import { accessFor } from "./deal-access.js";
 import { KIND_HOLD, RURAL_HOLD } from "./asset-type.js";
@@ -98,6 +98,7 @@ export const ACTION_KINDS = [
   { key: "investor_price_agreed", label: "Prices the machine agreed" },
   { key: "closing_soon",      label: "Closing" },
   { key: "closing_task_due",  label: "Closing checklist" },
+  { key: "inspection_deadline", label: "Inspection ending: go, re-trade or cancel" },
   { key: "hot_stalled",       label: "Price agreed, gone quiet" },
   { key: "price_it",          label: "Houses to price" },
   { key: "underwrite_held",   label: "Underwrites that need a look" },
@@ -511,10 +512,26 @@ export function buildPipeline({
           detail: dd.stage.replace(/_/g, " "),
           ops: [{ key: "mark_closed", label: "Mark closed", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }, { key: "fell_through", label: "Fell through", intent: "danger" }] }));
       }
+      // The inspection decision (shared/deal-checklist.js inspectionDecision):
+      // its own row from three days out, whatever else on the checklist is
+      // late, because it's the one date that costs the earnest money.
+      const insp = inspectionDecision(o.deal, { now });
+      if (insp) {
+        const street = String(card.address || "").split(",")[0].trim() || "the house";
+        const committed = dd.investors.some((i) => i.state === "committed");
+        const when = insp.dueDays < 0 ? `ended ${insp.dueDays === -1 ? "yesterday" : `${-insp.dueDays} days ago`}`
+          : insp.dueDays === 0 ? "ends today" : insp.dueDays === 1 ? "ends tomorrow" : `ends in ${insp.dueDays} days`;
+        card.actionIds.push(push({ ...base, kind: "inspection_deadline", severity: insp.dueDays <= 1 ? "now" : "soon",
+          title: insp.dueDays < 0 ? `Extend, re-trade or cancel ${street}: inspection ended ${insp.label}` : `Extend, re-trade or cancel ${street} by ${insp.label}`,
+          detail: `inspection ${when} · ${committed ? "a buyer is committed" : "no committed buyer yet"}`,
+          taskId: "inspection", dueYmd: insp.dueYmd,
+          ops: [{ key: "tick_task", label: "Done", intent: "primary" }, { key: "open_deals", label: "Open the deal", intent: "secondary" }] }));
+      }
       // The closing checklist (shared/deal-checklist.js): one row per deal, for
       // the thing to chase first, once it's overdue or due within two days.
+      // When that thing is the inspection, the row above already is it.
       const cl = resolveChecklist(o.deal, { now });
-      if (cl.next && (cl.next.state === "overdue" || cl.next.state === "due_soon")) {
+      if (cl.next && (cl.next.state === "overdue" || cl.next.state === "due_soon") && !(insp && cl.next.id === "inspection")) {
         const n = cl.next;
         const owner = n.owner === "us" ? "Us" : partyName(resolveParties(o, {})[n.owner]) || OWNER_LABEL[n.owner];
         const openHere = cl.open.filter((i) => i.gate === cl.currentGate).length;

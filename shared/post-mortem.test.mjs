@@ -52,7 +52,9 @@ const vashon = {
   calc: { inputs: { askingPrice: 0, arv: 900000, repairs: 250000 }, settings: snap({ wholesaleFee: 16000 }), offers: { cash: { mode: "lowball", amount: 371030.22 } } },
   deal: { stage: "closed", createdAt: "2026-08-09T18:00:00Z", contractPrice: 371030.22, assignmentFee: 15000,
     stageHistory: [{ stage: "under_contract", ts: "2026-08-09T18:00:00Z" }, { stage: "buyer_found", ts: "2026-08-10T18:00:00Z" }, { stage: "closed", ts: "2026-08-31T18:00:00Z" }],
-    investors: [inv("Todd G", "sent"), inv("Robert H", "committed"), inv("Manuel M", "sent")], feedback: [] },
+    investors: [inv("Todd G", "sent"), inv("Robert H", "committed"), inv("Manuel M", "sent")], feedback: [],
+    // Since 2026-11-09 a sold deal counts in the lessons only on a price somebody recorded.
+    outcome: { price: 386030, closedAt: "2026-08-31" } },
 };
 const snohomish = {
   id: "o-snohomish", address: "1415 2nd St, Snohomish, WA 98290", contactId: "agent-simonson", contactName: "Christian Simonson",
@@ -60,7 +62,7 @@ const snohomish = {
   calc: { inputs: { askingPrice: 0, arv: 750000, repairs: 90000 }, settings: snap({ maoPctOfArv: 72.5 }), offers: { cash: { mode: "lowball", amount: 420000, overridden: true, systemAmount: 470550 } } },
   deal: { stage: "buyer_found", createdAt: "2026-08-31T17:00:00Z", contractPrice: 430000, assignmentFee: 13000,
     stageHistory: [{ stage: "under_contract", ts: "2026-08-31T17:00:00Z" }, { stage: "buyer_found", ts: "2026-09-03T17:00:00Z" }],
-    investors: [inv("Carolyn B", "passed"), inv("Glen S", "committed"), inv("Hung P", "sent")], feedback: [] },
+    investors: [inv("Carolyn B", "passed"), { ...inv("Glen S", "committed"), agreedPrice: { amount: 443000 } }, inv("Hung P", "sent")], feedback: [] },
 };
 const SETTINGS = { underwriteMode: "lowball", maoPctOfArv: 72.5, wholesaleFee: 30000 };
 
@@ -192,6 +194,66 @@ test("an analysis is trimmed to the shape the page renders", () => {
   assert.equal(a.whatWouldHaveSold.price, 1595000);
   assert.deepEqual(a.lessons, ["Run the line first"]);
   assert.equal(a.by, "session");
+});
+
+/* ---------- what buyers actually paid (2026-11-09) ---------- */
+
+// The scorecard used contract + asked fee as "what it sold for", so the fee
+// lesson compared the setting with itself and none of the committed buyers'
+// prices ever reached it.
+const sold = (id, street, { fee = 30000, source, outcome, agreed, stage = "closed" } = {}) => ({
+  id, address: `${street}, Kent, WA 98030`, cashAmount: 300000,
+  calc: { inputs: { askingPrice: 0, arv: 520000, repairs: 60000 }, settings: snap(), offers: { cash: { mode: "lowball", amount: 300000 } } },
+  deal: { stage, createdAt: "2026-10-01T18:00:00Z", contractPrice: 300000, assignmentFee: fee, ...(source ? { assignmentFeeSource: source } : {}), ...(outcome ? { outcome } : {}),
+    stageHistory: [{ stage: "under_contract", ts: "2026-10-01T18:00:00Z" }, { stage, ts: "2026-10-20T18:00:00Z" }],
+    investors: [{ ...inv("Wren Q", "committed"), ...(agreed ? { agreedPrice: { amount: agreed } } : {}) }], feedback: [] },
+});
+
+test("a deal whose buyer paid 12K over contract shows a 12K fee", () => {
+  const agreed = dealScorecard({ offer: sold("o-a", "88 Juniper Way", { agreed: 312000, stage: "buyer_found" }), settings: SETTINGS });
+  assert.equal(agreed.buyerPrice, 312000);
+  assert.equal(agreed.realizedFee, 12000);
+  assert.equal(agreed.buyerPriceSource, "agreed");
+  assert.equal(agreed.askedPrice, 330000, "what buyers were asked stays contract + fee");
+  // What the closing recorded beats what was agreed.
+  const closed = dealScorecard({ offer: sold("o-b", "90 Juniper Way", { agreed: 312000, outcome: { buyerContactId: "c-wren-q", price: 315000, closedAt: "2026-10-30" } }), settings: SETTINGS });
+  assert.deepEqual([closed.buyerPrice, closed.realizedFee, closed.buyerPriceSource], [315000, 15000, "outcome"]);
+  // An assignment a person made names the price the buyer signed.
+  const paper = sold("o-c", "92 Juniper Way");
+  paper.assignment = { fields: { totalPrice: 318000 }, generatedAt: "2026-10-12T18:00:00Z" };
+  assert.deepEqual([dealScorecard({ offer: paper }).buyerPrice, dealScorecard({ offer: paper }).realizedFee], [318000, 18000]);
+});
+
+test("a fee filled in from the setting at promote is left out of the fee lesson", () => {
+  const fromSetting = dealScorecard({ offer: sold("o-d", "14 Larch Ct", { fee: 30000 }), settings: SETTINGS });
+  assert.equal(fromSetting.realizedFee, null);
+  assert.equal(fromSetting.buyerPrice, null, "nobody recorded what the buyer paid");
+  assert.equal(fromSetting.allInPctOfArv, null, "so it says nothing about the 70% line");
+  // The machine's own assignment draft at commit is the setting again, not a price.
+  const drafted = sold("o-e", "16 Larch Ct", { fee: 30000 });
+  drafted.deal.paperwork = { assignmentDraftedAt: "2026-10-12T18:00:00.000Z", for: "c-wren-q" };
+  drafted.assignment = { fields: { totalPrice: 330000 }, generatedAt: "2026-10-12T18:00:01.000Z" };
+  assert.equal(dealScorecard({ offer: drafted }).realizedFee, null);
+
+  const controls = [
+    fromSetting,
+    dealScorecard({ offer: drafted, settings: SETTINGS }),
+    dealScorecard({ offer: sold("o-f", "18 Larch Ct", { outcome: { price: 312000 } }), settings: SETTINGS }),
+    dealScorecard({ offer: sold("o-g", "20 Larch Ct", { fee: 14000, source: "you" }), settings: SETTINGS }),
+  ];
+  const fee = lessons({ postMortems: [], controls, settings: SETTINGS }).recommendations.find((r) => r.id === "fee_reality");
+  assert.ok(fee, "two real fees under half the setting");
+  assert.deepEqual(fee.suggestedSettings, { wholesaleFee: 13000 });
+  assert.match(fee.evidence[0], /18 Larch Ct \$12,000, 20 Larch Ct \$14,000$/);
+  assert.ok(!/14 Larch Ct|16 Larch Ct/.test(fee.evidence.join(" ")), "the setting's own fee is not evidence");
+});
+
+test("what a buyer said the house is worth rides on the scorecard beside ours", () => {
+  const o = sold("o-h", "22 Larch Ct", { stage: "fell_through" });
+  o.deal.buyerRead = { arv: 480000, rehab: 95000, price: 280000 };
+  const s = dealScorecard({ offer: o, settings: SETTINGS });
+  assert.deepEqual(s.buyerRead, { arv: 480000, rehab: 95000, price: 280000, ourArvOverPct: 8.3, ourRehabUnderPct: 36.8 });
+  assert.equal(s.buyerPrice, 330000, "a deal that died is scored on what buyers were asked");
 });
 
 test("lessons across the five deals name the line, the model, the fee and the rehab", () => {

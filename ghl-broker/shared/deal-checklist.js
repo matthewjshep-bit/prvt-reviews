@@ -146,8 +146,10 @@ export function tickById(checklist, id, now = Date.now()) {
 
 /* ---------- dates ---------- */
 
-const pacificYmd = (ms) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
-const addDays = (ymd, n) => {
+/** pacificYmd(ms) → the day it is in Seattle at that moment, as yyyy-mm-dd. */
+export const pacificYmd = (ms) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+/** addDays(ymd, n) → the calendar day n days on (a date, so daylight saving never moves it). */
+export const addDays = (ymd, n) => {
   const [y, m, d] = ymd.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d) + n * DAY_MS).toISOString().slice(0, 10);
 };
@@ -156,9 +158,12 @@ const daysBetween = (fromYmd, toYmd) => {
   return Math.round((Date.UTC(b[0], b[1] - 1, b[2]) - Date.UTC(a[0], a[1] - 1, a[2])) / DAY_MS);
 };
 
-// When the deal entered a stage, as a Pacific date — the first time it did.
+// When the deal entered a stage, as a Pacific date: the last time it did. A
+// buyer who backs out puts the deal back under contract (shared/offer-status.js
+// reopenAfterBackOut), and the next buyer's paperwork is chased from the day
+// they committed, not from the first buyer's.
 function stageEnteredYmd(deal, stage) {
-  const hit = (deal?.stageHistory || []).find((h) => h?.stage === stage && Number.isFinite(Date.parse(h.ts)));
+  const hit = (deal?.stageHistory || []).filter((h) => h?.stage === stage && Number.isFinite(Date.parse(h.ts))).at(-1);
   return hit ? pacificYmd(Date.parse(hit.ts)) : "";
 }
 
@@ -245,5 +250,146 @@ export function dueWords(i) {
   if (i.dueDays === 0) return "due today";
   if (i.dueDays <= 7) return `due in ${i.dueDays}d`;
   const [y, m, d] = i.dueYmd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+/* ---------- the paper's dates, at promote (2026-11-09) ---------- */
+
+// An inspection period lapsed with no notice and an earnest date was found by
+// phone. Promote used to read only the generic contract, fall back to ten days,
+// and count from the server's own day (UTC on Render, so a promote after about
+// 5pm Pacific ended the inspection a day late). It now reads the paper we wrote
+// and counts in Seattle days.
+
+export const DEFAULT_INSPECTION_DAYS = 10;
+// "after inspection" (the write-up terms) or "after feasibility" (the PSA's word).
+const EARNEST_AFTER_RX = /\bafter\b.*\b(inspection|feasibility)\b/i;
+const wholeDays = (v) => {
+  if (v === "" || v == null) return null;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, 365) : null;
+};
+const dateIn = (v) => String(v ?? "").trim().slice(0, 40);
+const wholeMoney = (v) => {
+  const n = Number(String(v ?? "").replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+};
+
+/** earnestDueOf(text) → "feasibility" when the words put the deposit after the inspection, else "acceptance". */
+export const earnestDueOf = (text) => (text === "feasibility" || EARNEST_AFTER_RX.test(String(text || "")) ? "feasibility" : "acceptance");
+
+/**
+ * promoteDates({ offer, terms, body, now }) → {
+ *   inspectionDate, closingDate, earnestMoney, earnestDue,
+ *   from: { inspection, closing, earnest },
+ * }
+ *
+ * The deal's dates at promote. Each comes from the first of these that has it:
+ * what you typed (`body`), the WA purchase & sale we generated (`psa.fields`),
+ * the generic contract (`contract.fields`), the letter's own terms
+ * (`offer.terms`, stamped when the offer was made), then our standard terms
+ * (`terms`, shared/offer-calc.js writtenTerms). Day counts run from today in
+ * Pacific time. `from` says where each came from ("you", "psa", "contract",
+ * "letter", "terms", "default", or "" when nothing had one).
+ *
+ * A short sale's feasibility runs from the lienholder's approval, which nobody
+ * knows at promote: its inspection date is left for you.
+ */
+export function promoteDates({ offer = {}, terms = {}, body = {}, now = Date.now() } = {}) {
+  const today = pacificYmd(now);
+  const psa = offer?.psa?.fields && typeof offer.psa.fields === "object" ? offer.psa.fields : null;
+  const contract = offer?.contract?.fields && typeof offer.contract.fields === "object" ? offer.contract.fields : null;
+  const letter = offer?.terms && typeof offer.terms === "object" ? offer.terms : null;
+  const shortSale = psa?.mode === "short_sale";
+  const b = body || {};
+
+  let inspectionDate = "", inspection = "";
+  // The letter and the write-up terms name a window ("10 to 14 day
+  // inspection"). A guess ends on its shortest day: the signed paper may say
+  // 10, and a warning dated off 14 would come after it had run out.
+  const shortest = (t) => wholeDays(t?.inspectionDaysMin) || wholeDays(t?.inspectionDays) || null;
+  const days = [
+    ["psa", shortSale ? null : wholeDays(psa?.feasibilityDays)],
+    ["contract", wholeDays(contract?.inspectionDays)],
+    ["letter", shortest(letter)],
+    ["terms", Number(terms?.inspectionDays) > 0 ? shortest(terms) : null],
+  ];
+  if (dateIn(b.inspectionDate)) { inspectionDate = dateIn(b.inspectionDate); inspection = "you"; }
+  else if (shortSale) inspection = "psa_short_sale";
+  else {
+    const hit = days.find(([, n]) => n != null);
+    if (hit) { inspectionDate = addDays(today, hit[1]); inspection = hit[0]; }
+    else { inspectionDate = addDays(today, DEFAULT_INSPECTION_DAYS); inspection = "default"; }
+  }
+
+  let closingDate = "", closing = "";
+  if (dateIn(b.closingDate)) { closingDate = dateIn(b.closingDate); closing = "you"; }
+  else if (shortSale) closing = "";
+  else if (isYmd(psa?.closingDate)) { closingDate = psa.closingDate; closing = "psa"; }
+  else if (dateIn(contract?.closingDate)) { closingDate = dateIn(contract.closingDate); closing = "contract"; }
+  // The letter's own closing days (shared/offer-status.js termsOnLetter), before today's settings.
+  else if (wholeDays(letter?.closingDays)) { closingDate = addDays(today, wholeDays(letter.closingDays)); closing = "letter"; }
+  else if (Number(terms?.closeDays) > 0) { closingDate = addDays(today, wholeDays(terms.closeDays)); closing = "terms"; }
+
+  let earnestMoney = null, earnest = "";
+  for (const [src, v] of [["you", b.earnestMoney], ["psa", psa?.earnestMoney], ["contract", contract?.earnestMoney], ["letter", letter?.earnestMoney], ["terms", terms?.earnestMoney]]) {
+    const n = wholeMoney(v);
+    if (n) { earnestMoney = n; earnest = src; break; }
+  }
+  // A PSA says when the deposit is due; one made before it could say so was
+  // due three business days after mutual acceptance. Anything else follows
+  // our standard terms.
+  const earnestDue = psa ? (psa.earnestDue === "feasibility" ? "feasibility" : "acceptance") : earnestDueOf(terms?.earnestDue);
+  return { inspectionDate, closingDate, earnestMoney, earnestDue, from: { inspection, closing, earnest } };
+}
+
+/**
+ * checklistForTerms(checklist, { earnestDue }) → checklist
+ *
+ * Matt's write-up term is earnest money after the inspection; the template
+ * chased it three days after the contract, so it went overdue on every deal.
+ * With the deposit due after feasibility, the earnest item is dated three days
+ * after the inspection ends instead. A date someone typed on it stays.
+ */
+export function checklistForTerms(checklist, { earnestDue = "acceptance" } = {}) {
+  const cur = normalizeChecklist(checklist);
+  if (earnestDueOf(earnestDue) !== "feasibility") return cur;
+  return {
+    items: cur.items.map((i) => (i.id === "earnest_money" && !i.custom
+      ? { ...i, label: "Earnest money to title, after the inspection", rule: { from: "inspection", days: 3 } }
+      : i)),
+  };
+}
+
+/* ---------- the inspection decision (2026-11-09) ---------- */
+
+// A few days before the inspection period ends the deal needs a decision: go
+// ahead, re-trade on what the inspection found, or cancel while the earnest
+// money is still refundable. Until this the inspection item only showed when
+// it was the single most urgent thing, so it hid behind an overdue "PSA
+// signed" and a period lapsed with nobody deciding (2026-11).
+export const INSPECTION_WARN_DAYS = 3;
+// After the date it still shows for two days, as ended: there may be time to
+// ask for an extension, and nobody has said what happened.
+export const INSPECTION_LAPSED_DAYS = 2;
+
+/**
+ * inspectionDecision(deal, { now }) → { dueYmd, dueDays, label } | null
+ * The deal's inspection item when it is open, dated, and INSPECTION_WARN_DAYS
+ * or fewer away (or ended up to INSPECTION_LAPSED_DAYS ago).
+ */
+export function inspectionDecision(deal = {}, { now = Date.now() } = {}) {
+  const stage = deal?.stage || "under_contract";
+  if (!GATES.includes(stage)) return null;
+  const it = resolveChecklist(deal, { now }).items.find((i) => i.id === "inspection");
+  if (!it || it.done || it.dueDays == null) return null;
+  if (it.dueDays > INSPECTION_WARN_DAYS || it.dueDays < -INSPECTION_LAPSED_DAYS) return null;
+  return { dueYmd: it.dueYmd, dueDays: it.dueDays, label: ymdLabel(it.dueYmd) };
+}
+
+/** ymdLabel("2026-11-12") → "Nov 12". */
+export function ymdLabel(ymd) {
+  if (!isYmd(ymd)) return "";
+  const [y, m, d] = ymd.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }

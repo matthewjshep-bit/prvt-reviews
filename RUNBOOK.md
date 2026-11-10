@@ -8878,6 +8878,46 @@ The Deals modal has three tabs: **Overview**, **Buyers**, and **Terms & paperwor
 
 The Deals table's **Next** column shows the same item, with its due chip and `done/total`.
 
+#### The inspection decision gets its own row (2026-11-09)
+
+An inspection period lapsed with no notice. The deal's one checklist row was an overdue "PSA signed", so the inspection never showed.
+
+- `inspection_deadline` (`shared/deal-checklist.js` `inspectionDecision`, built in `shared/pipeline.js`) fires on every live deal whose inspection item is open, dated, and 3 days or fewer away (`INSPECTION_WARN_DAYS`). It stays 2 days after the date (`INSPECTION_LAPSED_DAYS`), worded as ended.
+- It fires beside the `closing_task_due` row, whatever else is overdue. When the inspection is itself the most urgent item, only this row shows.
+- Title: "Extend, re-trade or cancel 12 Elm St by Nov 12". Detail: when it ends, and whether a buyer is committed.
+- Severity is `now` from 1 day out, `soon` at 2 to 3 days. Ops: **Done** (`tick_task`, ticks the inspection item) and **Open the deal**.
+- It sits on the Desk under Needs you, folds with the deal's other rows, and pings like a checklist row when GHL pings are on. It does not go to the Needs Matt stage. Whether it should is Matt's call (open question 22 in the 2026-11-09 audit plan).
+
+#### Deal dates come from the paper, in Pacific days (2026-11-09)
+
+Promote (`promoteToDeal`, `ghl-broker/routes/offers.js`) used to read only the generic contract, fall back to 10 days, and count from the server's UTC day, so a promote after about 5pm Pacific ended the inspection a day late.
+
+- `promoteDates` (`shared/deal-checklist.js`) takes each date from the first of: what you typed, the PSA we generated (`psa.fields`), the generic contract (`contract.fields`), the letter's stamped terms (`offer.terms`: its inspection days and closing days), our write-up terms (`writtenTerms`). The inspection falls back to 10 days. A letter or write-up window ("10 to 14 day inspection") ends on its shortest day, so the deadline row never comes after a shorter period on the signed paper has run out. Day counts start from today in Pacific time (`pacificYmd`, `addDays`, now exported).
+- A short sale's PSA leaves the inspection date blank: its feasibility starts at the lienholder's approval.
+- The deal stores `earnestMoney`, `earnestDue` (`acceptance` | `feasibility`) and `datesFrom` (`{ inspection, closing, earnest }`). The Terms tab says where each date came from and asks you to check them against the signed paper. A date you change there by hand reads as yours from then on.
+- With earnest due after feasibility, the checklist's earnest item is chased 3 days after the inspection ends (`checklistForTerms`), not 3 days after the contract.
+- The PSA (`PsaModal.jsx`, `POST /:id/psa`) starts from the letter's earnest money and inspection days, then the write-up terms (`psaTermsPrefill`, `shared/wa-psa-template.js`). § 4 and the summary row now print `{{earnest_due}}`, one of two fixed wordings (`PSA_EARNEST_DUE`): three business days after mutual acceptance, or after the Feasibility Period expires. A PSA saved before this keeps "after mutual acceptance" when regenerated.
+- Buyer found items (the assignment, the deposit) are dated from the last time the deal reached Buyer found, so a second buyer is chased from the day they committed.
+
+#### A buyer who backs out reopens selling (2026-11-09)
+
+Nothing moved a deal back when its committed buyer walked. It stayed Buyer found, other buyers heard it was spoken for, and the morning catch-up never ran.
+
+- When the last committed buyer on a Buyer found deal is set to passed, evaluating or soft commit, or is taken off the deal, the deal goes back to Under contract (`reopenAfterBackOut`, `shared/offer-status.js`).
+- The stage history entry carries `reason: "buyer_backed_out"` and the buyer's contact id. The buyer's record gets an `investor_backed_out` event.
+- All three paths do it: the Deals modal's status menu (`PATCH /:id/deal/investors/:contactId`), unlinking (`DELETE`), and the bot (`setInvestorStatus`), which can set passed or evaluating but never soft commit.
+- Another committed buyer on the deal keeps it Buyer found. A deal moved to Buyer found by hand with nobody committed is left alone.
+
+#### What a closed deal records (2026-11-09)
+
+None of the committed buyers had a price on file, and the fee lesson compared the setting with itself.
+
+- **The outcome.** Moving a deal to Assigned or Closed in the Deals modal asks who bought it, what they paid in all, our fee (blank: the difference) and the date. `PATCH /:id/deal { outcome: { buyerContactId, buyerName, price, fee, closedAt } }` stores it on the offer as `deal.outcome` (no schema change). `outcome: null` takes it off. A price under 10,000 is refused as a typo. Nothing is guessed: a stage change with no outcome returns `askOutcome: true`, and a row's Mark closed says to record it. The stage event carries `price` and `fee`.
+- **Pass codes.** `PATCH /:id/deal/feedback { contactId, code, to }` moves a buyer's reason to another code and keeps their words (`correctedFrom` says what it was). `{ contactId, code, remove: true }` takes it off. The buyer's own `reason` follows. The Buyers tab has **Fix a reason**.
+- **What buyers said it's worth.** `PATCH /:id/deal { buyerRead: { arv, rehab, price, note } }`, typed in on the Terms tab. Money reads as people type it ("95k", "$480,000"). The scorecard shows it beside our ARV and rehab (`buyerRead.ourArvOverPct`, `ourRehabUnderPct`).
+- **The scorecard** (`dealScorecard`, `shared/post-mortem.js`). `askedPrice` is contract plus the deal's fee. For a deal that sold (Buyer found, Assigned, Closed), `buyerPrice` is what the buyer paid, from `realizedSale`: the outcome, then an assignment a person generated, then the committed buyer's agreed price, then a fee a person typed (`assignmentFeeSource: "you"`, stamped by the deal-texts work). The machine's own assignment draft at commit, and a fee with no source, are not prices: `buyerPrice` is null and the deal drops out of **What buyers paid** and the 70% lesson until somebody records one. A deal that died is still scored on what buyers were asked.
+- **`fee_reality`** uses `realizedFee` from sold deals only.
+
 ### Buyer walkthrough (2026-09-29)
 
 The goal of every text to a buyer about a deal under contract is a time they

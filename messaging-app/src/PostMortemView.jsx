@@ -61,10 +61,12 @@ export function PostMortemBody({ pm }) {
   return (
     <div className="space-y-4">
       <KpiRow cols="sm:grid-cols-3 lg:grid-cols-6" items={[
-        { label: "Buyers were asked", value: fmtMoney(sc.buyerPrice), hint: `Contract ${fmtMoney(sc.contractPrice)} + fee ${fmtMoney(sc.assignmentFee)}` },
+        { label: "Buyers were asked", value: fmtMoney(sc.askedPrice ?? sc.buyerPrice), hint: `Contract ${fmtMoney(sc.contractPrice)} + fee ${fmtMoney(sc.assignmentFee)}` },
         { label: `Buyer ceiling (${ceiling.pct}% rule)`, value: ceiling.computable ? fmtMoney(ceiling.noFee) : "—", hint: `${ceiling.pct}% × ARV ${fmtMoney(sc.arv)} − repairs ${fmtMoney(sc.repairs)}` },
         { label: over ? "Over the line by" : "Under the line by", value: sc.gap == null ? "—" : fmtMoney(Math.abs(sc.gap)), hint: `${pctText(sc.gapPctOfArv)} of ARV` },
-        { label: "Buyer price / ARV", value: pctText(sc.buyerPctOfArv), hint: `All-in with repairs: ${pctText(sc.allInPctOfArv)}` },
+        { label: "Buyer price / ARV", value: pctText(sc.buyerPctOfArv), hint: sc.realizedFee != null
+          ? `Paid ${fmtMoney(sc.buyerPrice)}, a ${fmtMoney(sc.realizedFee)} fee · all-in ${pctText(sc.allInPctOfArv)}`
+          : `All-in with repairs: ${pctText(sc.allInPctOfArv)}` },
         { label: "Under contract", value: dayText(sc.days.underContract), hint: `First pass after ${dayText(sc.days.toFirstPass)}` },
         { label: "Buyers passed", value: `${sc.buyers.passed} of ${sc.buyers.contacted}`, hint: `${sc.buyers.replied} replied, ${sc.buyers.silent} silent (${sc.buyers.source})` },
       ]} />

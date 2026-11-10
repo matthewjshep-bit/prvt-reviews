@@ -13,6 +13,8 @@
 
 import React, { useState } from "react";
 import { FileSignature, Loader2, X } from "lucide-react";
+import { writtenTerms } from "@shared/offer-calc.js";
+import { psaTermsPrefill, PSA_EARNEST_DUE_CHOICES } from "@shared/wa-psa-template.js";
 import { generatePsa } from "./api.js";
 
 const INPUT_CLS =
@@ -42,6 +44,10 @@ export default function PsaModal({ offer, settings, onClose, onGenerated }) {
   // The offer's own expiry, chosen when the letter was built, so the agreement
   // and the letter can't quietly disagree about when the offer dies.
   const offerExpires = offer.snapshot?.offerExpires || offer.calc?.settings?.offerExpires || "";
+  // What the letter told them (2026-11-09): its earnest money and inspection
+  // days, then our write-up terms ($1,000 after the inspection). A PSA saved
+  // before it could say when the deposit is due said after mutual acceptance.
+  const prefill = psaTermsPrefill({ offer, terms: writtenTerms(settings || {}) });
 
   const [fields, setFields] = useState(() => ({
     mode: saved?.mode || "standard",
@@ -54,8 +60,9 @@ export default function PsaModal({ offer, settings, onClose, onGenerated }) {
     legalDescription: saved?.legalDescription || "",
     county: saved?.county || "",
     price: saved?.price || offer.cashAmount || "",
-    earnestMoney: saved?.earnestMoney ?? offer.calc?.settings?.earnestMoney ?? "",
-    feasibilityDays: saved?.feasibilityDays ?? psa.feasibilityDays ?? 10,
+    earnestMoney: saved?.earnestMoney ?? prefill.earnestMoney ?? offer.calc?.settings?.earnestMoney ?? "",
+    earnestDue: saved ? (saved.earnestDue || "acceptance") : prefill.earnestDue,
+    feasibilityDays: saved?.feasibilityDays ?? prefill.feasibilityDays ?? psa.feasibilityDays ?? 10,
     closingDays: saved?.closingDays ?? psa.closingDays ?? 21,
     closingDate: saved?.closingDate || inDays(30),
     backstopDate: saved?.backstopDate || inDays(90),
@@ -136,6 +143,15 @@ export default function PsaModal({ offer, settings, onClose, onGenerated }) {
           <Field label="County" value={fields.county} onChange={patch("county")} placeholder="Pierce" />
           <Field label="Purchase price" value={fields.price} onChange={patch("price")} placeholder="$" />
           <Field label="Earnest money" value={fields.earnestMoney} onChange={patch("earnestMoney")} placeholder="$" />
+          <div>
+            <span className={LABEL_CLS}>Earnest money due</span>
+            <select className={INPUT_CLS} value={fields.earnestDue} onChange={patch("earnestDue")}>
+              {PSA_EARNEST_DUE_CHOICES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+            {prefill.earnestDue === "feasibility" && (
+              <div className="mt-1 text-[11px] text-slate-500">Our write-up terms put it after the inspection.</div>
+            )}
+          </div>
           <Field label="Feasibility period (days)" type="number" value={fields.feasibilityDays} onChange={patch("feasibilityDays")}
             hint={shortSale ? "Runs from written lienholder approval" : "Runs from mutual acceptance"} />
           {shortSale ? (

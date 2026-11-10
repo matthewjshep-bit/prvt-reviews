@@ -13,9 +13,10 @@ import assert from "node:assert/strict";
 import {
   PSA_MODES, PSA_TOKENS, PSA_SECTIONS, ADDENDUM_A, ADDENDUM_B,
   PSA_SUMMARY_INTRO, PSA_BUYER_DISCLOSURE, PSA_CLOSING_DISCLAIMER,
-  psaSections, psaAddenda, psaSummaryRows, psaPackageList,
+  psaSections, psaAddenda, psaSummaryRows, psaPackageList, psaTermsPrefill, PSA_EARNEST_DUE,
 } from "./wa-psa-template.js";
 import { mergeTokens } from "./contract-template.js";
+import { effectiveSettings, writtenTerms } from "./offer-calc.js";
 
 const KNOWN = new Set(PSA_TOKENS.map((t) => t.key));
 const tokensIn = (text) => [...String(text || "").matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]);
@@ -131,6 +132,27 @@ test("the honesty boilerplate says what it has to say", () => {
   // that disclosure is the point of the row.
   assert.match(PSA_BUYER_DISCLOSURE, /before any party signs/);
   assert.match(PSA_SUMMARY_INTRO, /the Agreement and Addenda control/);
+});
+
+// 2026-11-09: the letter and the bot tell agents $1,000 earnest after the
+// inspection; the PSA defaulted to the letter's old $2,500 within three
+// business days of mutual acceptance, which re-trades our own terms.
+test("a PSA built after a write-up-terms letter names $1,000 due after feasibility", () => {
+  const saved = writtenTerms(effectiveSettings({ conversationAi: { enabled: false } }));
+  const pre = psaTermsPrefill({ offer: { terms: { earnestMoney: 1000, inspectionDays: 14 } }, terms: saved });
+  assert.deepEqual(pre, { earnestMoney: 1000, earnestDue: "feasibility", feasibilityDays: 14 });
+  const values = { earnest_money: "$1,000", earnest_due: PSA_EARNEST_DUE[pre.earnestDue] };
+  for (const mode of PSA_MODES) {
+    const s4 = mergeTokens(psaSections(mode).find((s) => s.id === "earnest").body, values, PSA_TOKENS);
+    assert.match(s4, /^Buyer will deposit earnest money of \$1,000 with the Closing Agent within three \(3\) business days after the Feasibility Period expires without termination\./, mode);
+    const row = Object.fromEntries(psaSummaryRows(mode).map(([l, b]) => [l, b]))["Earnest Money"];
+    assert.match(mergeTokens(row, values, PSA_TOKENS), /^\$1,000, deposited with the Closing Agent within three \(3\) business days after the Feasibility Period expires/, mode);
+  }
+  // No write-up terms saved: the letter's own earnest, after mutual acceptance, as before.
+  const plain = psaTermsPrefill({ offer: {}, terms: writtenTerms(effectiveSettings({})) });
+  assert.deepEqual(plain, { earnestMoney: 2500, earnestDue: "acceptance", feasibilityDays: null });
+  const s4 = mergeTokens(psaSections("standard").find((s) => s.id === "earnest").body, { earnest_money: "$2,500", earnest_due: PSA_EARNEST_DUE.acceptance }, PSA_TOKENS);
+  assert.match(s4, /within three \(3\) business days after Mutual Acceptance\./);
 });
 
 test("Addendum A and B clause numbers match their labels", () => {

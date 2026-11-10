@@ -53,6 +53,8 @@ export const KIND_STRENGTH = [
   // A house an agent named, drafted for him to price (draft only, 2026-10-16).
   "price_it",
   "call_first_reply", "call_gatekeeper", "call_quiet", "call_turnkey_week", "ladder_exhausted",
+  // An inspection period about to end (shared/deal-checklist.js): the deal's own decision leads its row.
+  "inspection_deadline",
   "underwrite_held", "offer_ready", "closing_soon", "closing_task_due", "texts_elsewhere", "stage_lag",
   "deal_no_buyers", "deal_no_dataroom", "showing_no_window", "underwrite_dropped",
   "call_phone_only", "call_investor", "call_partner",
@@ -64,7 +66,8 @@ const STRENGTH = Object.fromEntries(KIND_STRENGTH.map((k, i) => [k, i]));
 
 // Rows about a deal, not about the agent who listed it: they fold by deal so
 // "no buyer package" doesn't hide under the listing agent's other business.
-const DEAL_KINDS = new Set(["closing_soon", "closing_task_due", "deal_no_buyers", "blast_no_opens", "deal_interest_stalled", "deal_no_dataroom", "showing_soon", "showing_no_window", "stage_lag"]);
+const DEAL_KINDS = new Set(["closing_soon", "closing_task_due", "deal_no_buyers", "blast_no_opens", "deal_interest_stalled", "deal_no_dataroom", "showing_soon", "showing_no_window", "stage_lag",
+  "inspection_deadline"]);
 // Already moving by themselves.
 const MACHINE_KINDS = new Set(["gone_quiet", "showing_soon", "blast_no_opens", "underwrite_failed", "draft_scheduled"]);
 // Last night's findings with no remedy that only report: a float nobody
@@ -175,6 +178,8 @@ const URGENT_KINDS = new Set([
   "price_it",
   // Their yes on a house our row says is closed (shared/pipeline.js, 2026-11-09).
   "their_yes",
+  // An inspection period ending in three days or less (shared/deal-checklist.js): go, re-trade or cancel.
+  "inspection_deadline",
 ]);
 // Urgent rows that sit under Today's calls rather than Needs you.
 const URGENT_CALLS = new Set(["call_owed"]);

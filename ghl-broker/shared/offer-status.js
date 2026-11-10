@@ -350,6 +350,26 @@ export const dealSpokenFor = (deal) =>
   Boolean(deal) && (deal.stage === "buyer_found" || (deal.investors || []).some((i) => i?.status === "committed"));
 
 /**
+ * reopenAfterBackOut(deal, { was, contactId, ts }) → true when it reopened the deal
+ *
+ * The last committed buyer on a Buyer found deal passed, went back to weighing
+ * it, or came off the deal (`was` is their status before the change). Until
+ * 2026-11-09 nothing moved the deal back: it stayed Buyer found, every other
+ * buyer heard it was spoken for, and the morning catch-up never ran, all
+ * through the inspection window. Now the deal is under contract again, with a
+ * stageHistory entry saying why, so selling picks up where it stopped. Mutates
+ * `deal`; the caller saves it and records `investor_backed_out`.
+ */
+export const BUYER_BACKED_OUT = "buyer_backed_out";
+export function reopenAfterBackOut(deal, { was = "", contactId = "", ts = new Date().toISOString() } = {}) {
+  if (!deal || deal.stage !== "buyer_found" || investorStatus(was) !== "committed") return false;
+  if ((deal.investors || []).some((i) => investorStatus(i?.status) === "committed")) return false;
+  deal.stage = "under_contract";
+  (deal.stageHistory = deal.stageHistory || []).push({ stage: "under_contract", ts, reason: BUYER_BACKED_OUT, ...(contactId ? { contactId } : {}) });
+  return true;
+}
+
+/**
  * priceAgreed(offer) → { amount, at, via } | null
  *
  * The number both sides have said yes to: the agent said ours is in the realm

@@ -109,6 +109,8 @@ export function describeResult(key, r) {
   }
   if (key === "ask_agent_window") return r.status === "scheduled" ? "Asked. It goes out at the next open minute." : `Drafted for you${r.reason ? ` (${r.reason})` : ""} — check the outbox.`;
   if (key === "tick_task") return "Ticked off.";
+  // Closed or assigned from a row: who bought it is asked on the deal (2026-11-09).
+  if (r.askOutcome) return "Done. Open the deal and record who bought it and for how much.";
   if (key === "use_email") return r.unchanged ? "GHL already has it." : `Saved to GHL: ${r.email}.`;
   if (key === "presell") return r.drafted ? `Drafted for ${r.drafted} buyer${r.drafted === 1 ? "" : "s"} — they wait in the outbox for your Send.` : (r.reason || "No buyers fit this one yet.");
   if (key === "precontract_tick") return "Checked.";

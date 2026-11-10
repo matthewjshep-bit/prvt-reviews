@@ -71,6 +71,16 @@ test("realized all-in splits sold from died, beside the setting, and never touch
   assert.deepEqual(settings, { maoPctOfArv: 75 });
 });
 
+// 2026-11-09: a sold deal's scorecard has no all-in until somebody records
+// what the buyer paid (shared/post-mortem.js realizedSale).
+test("a sold deal with no recorded price stays out of what buyers paid", () => {
+  const r = realizedPricing({ settings: { maoPctOfArv: 75 }, scorecards: [
+    { offerId: "s1", street: "1 A St", outcome: "closed", arv: 500000, allInPctOfArv: 70.7 },
+    { offerId: "s2", street: "2 B St", outcome: "closed", arv: 400000, allInPctOfArv: null },
+  ] });
+  assert.deepEqual(r.sold, { n: 1, medianPct: 70.7 });
+});
+
 test("stations carry their targets and the month's pace; the method says what the offers should have made", () => {
   const month = [{ key: "offered", side: "agent", label: "Offered", count: 150, machine: 100 }, { key: "contract", side: "agent", label: "Under contract", count: 1, machine: 0 }, { key: "replied", side: "agent", label: "Replied", count: 40, machine: 0 }];
   const week = [{ key: "offered", count: 40 }];

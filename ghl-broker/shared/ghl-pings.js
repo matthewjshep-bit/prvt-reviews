@@ -50,6 +50,7 @@ const WHERE = {
   promise_owed: "their thread in GHL",
   // An agent's yes or ask for the paper (shared/hand-off.js closeSignal, 2026-11-09).
   draft_waiting: "the held reply in the outbox", their_yes: "the contact's offer", call_owed: "their thread in GHL",
+  inspection_deadline: "Deals",
 };
 
 const clip = (s, n) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
