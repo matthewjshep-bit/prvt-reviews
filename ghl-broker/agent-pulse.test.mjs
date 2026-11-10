@@ -46,11 +46,14 @@ test("the check-in ships off, and runs once a workday in its window", async () =
 test("claims each agent before drafting; a start that drafts nothing gives the day's seat back", async () => {
   _resetJobs();
   const loc = "loc-ap-claim";
+  // Noon Pacific today, not the wall clock: run between 11pm and midnight,
+  // "tomorrow + 1 hour" fell on the day after and the claim read as gone.
+  const noon = Date.parse(`${new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date())}T12:00:00-08:00`);
   await repliedAgent(loc, "ag1");
-  const before = await planAgentPulse({ locationId: loc, saved: savedWith(), store });
+  const before = await planAgentPulse({ locationId: loc, saved: savedWith(), store, now: noon });
   assert.deepEqual(before.picks.map((p) => [p.contactId, p.reason]), [["ag1", "general"]]);
 
-  const held = startAgentPulse({ client, locationId: loc, saved: savedWith(), store, sendsEnabled: false,
+  const held = startAgentPulse({ client, locationId: loc, saved: savedWith(), store, sendsEnabled: false, now: noon,
     deps: { getContact: reachable, startProactive: async () => ({ skipped: "their text is waiting on you" }) } });
   await settle();
   assert.equal(held.status, "done", held.error);
@@ -58,10 +61,10 @@ test("claims each agent before drafting; a start that drafts nothing gives the d
   const events = await store.listContactEvents(loc, "ag1", { limit: 50 });
   assert.ok(events.some((e) => e.type === "agent_pulse_sent"), "claimed before anything was drafted");
   assert.ok(events.some((e) => e.type === "agent_pulse_voided"), "and voided when nothing was");
-  const after = await planAgentPulse({ locationId: loc, saved: savedWith(), store });
+  const after = await planAgentPulse({ locationId: loc, saved: savedWith(), store, now: noon });
   assert.equal(after.claimedToday, 0, "the seat came back");
   assert.equal(after.picks.length, 0, "tried today: tomorrow, not twice today");
-  const tomorrow = Date.now() + DAY;
+  const tomorrow = noon + DAY;
   assert.deepEqual((await planAgentPulse({ locationId: loc, saved: savedWith(), store, now: tomorrow })).picks.map((p) => p.contactId), ["ag1"], "and still due");
 
   _resetJobs();
