@@ -337,6 +337,20 @@ export function leakTotal(leaks = {}) {
     + (leaks.deals?.total || 0);
 }
 
+/**
+ * passedUnpriced(offers, { since }) → [{ offerId, contactId, address, at }]
+ *
+ * Houses the Needs Matt clock passed with no price (passReason "quiet", by
+ * needs-matt) since `since`: an agent's house that waited three days for a
+ * number and went (2026-11-09 audit, KPI-06). Measures the rule; changes nothing.
+ */
+export function passedUnpriced(offers = [], { since = null } = {}) {
+  return (offers || [])
+    .filter((o) => o?.passReason?.code === "quiet" && o.passReason.by === "needs-matt" && (!since || String(o.passReason.at || "") >= since))
+    .map((o) => ({ offerId: o.id || null, contactId: o.contactId || null, address: o.address || "", at: o.passReason.at }))
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+}
+
 /** backlogTotal(leaks) → agents and buyers due a check-in, queued behind today's seats. */
 export function backlogTotal(leaks = {}) {
   return (leaks.agents?.dueNoSeat || 0) + (leaks.buyers?.dueNoSeat || 0);
@@ -363,16 +377,62 @@ export const LINE_JOBS = {
   calls: { label: "Call sweep", every: "tick" },
   uwQueue: { label: "Underwrite queue", every: "tick" },
   ghlMirror: { label: "GHL mirror", every: "tick" },
+  // 2026-11-09: the runners that carry the business now, one per line.
+  // `hours` is the Pacific window a job runs in; time outside it isn't
+  // counted against it. `soft` is a last error that isn't a failure.
+  needsMatt: { label: "Needs Matt list", every: "tick", hours: [7, 21] },
+  ghlCalls: { label: "GHL call queue", every: "workday" },
+  priceScorecard: { label: "Price scorecard", every: "day" },
+  threadReads: { label: "Thread reads", every: "day" },
+  cardSync: { label: "Card sync", every: "tick" },
+  handReplies: { label: "Texts typed in GHL", every: "tick" },
+  slack: { label: "Slack posts", every: "tick", soft: /^(rate limited|started:|off)/ },
+};
+
+// How often a healthy job runs. Late is more than twice this, counted only
+// in the job's own time: its hours, and Monday to Friday for a workday job.
+const CADENCE_MS = { tick: 15 * 60000, day: DAY_MS, workday: DAY_MS };
+const LATE_STEP_MS = 5 * 60000;
+const PT_PARTS = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short", hour: "numeric", minute: "numeric", hourCycle: "h23" });
+const ptParts = (t) => {
+  const p = Object.fromEntries(PT_PARTS.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  return { wd: p.weekday, hour: (Number(p.hour) % 24) + Number(p.minute) / 60 };
+};
+const inJobTime = (job, t) => {
+  if (job.every === "day" && !job.hours) return true;
+  const { wd, hour } = ptParts(t);
+  if (job.every === "workday" && (wd === "Sat" || wd === "Sun")) return false;
+  return !job.hours || (hour >= job.hours[0] && hour < job.hours[1]);
 };
 
 /**
- * lineJobs(cursors, { now }) → [{ name, label, every, lastRunAt, hoursAgo, failed, error, tries }]
+ * jobIsLate(job, lastRunMs, now) → whether more than two cadences of the
+ * job's own time have passed since it last ran, and now is inside that time.
+ */
+export function jobIsLate(job = {}, lastRunMs, now = Date.now()) {
+  const cadence = CADENCE_MS[job.every];
+  if (!cadence || lastRunMs == null || !(now > lastRunMs) || !inJobTime(job, now)) return false;
+  const limit = 2 * cadence;
+  if (job.every === "day" && !job.hours) return now - lastRunMs > limit;
+  // Walk back from now in small steps, counting only the job's own time;
+  // stop as soon as it's over the limit (a long-dead job costs little).
+  let counted = 0;
+  for (let t = now; t > lastRunMs && counted <= limit; t -= LATE_STEP_MS) {
+    if (inJobTime(job, t - LATE_STEP_MS / 2)) counted += Math.min(LATE_STEP_MS, t - lastRunMs);
+  }
+  return counted > limit;
+}
+
+/**
+ * lineJobs(cursors, { now, switches }) → [{ name, label, every, lastRunAt, hoursAgo, failed, late, error, tries, never }]
  *
  * One row per known job, from its cursor. A job that never ran has no row
- * in the table and says so. Whether a quiet job is switched off is the
- * Autopilot page's to say; this only reports what ran.
+ * in the table and says so. A run that ended with an error is failed (unless
+ * the job calls that error soft). `switches` ({ name: true|false }) says
+ * which jobs are switched on: only those can be late, and a job with no word
+ * on its switch never is. The Autopilot page says what's switched off.
  */
-export function lineJobs(cursors = [], { now = Date.now() } = {}) {
+export function lineJobs(cursors = [], { now = Date.now(), switches = {} } = {}) {
   const by = new Map((cursors || []).map((c) => [c.name, c]));
   return Object.entries(LINE_JOBS).map(([name, j]) => {
     const c = by.get(name);
@@ -380,10 +440,13 @@ export function lineJobs(cursors = [], { now = Date.now() } = {}) {
     const last = d.last && typeof d.last === "object" ? d.last : {};
     const lastRunAt = last.finishedAt || last.at || d.lastDaily || d.run?.startedAt || c?.at || null;
     const t = ms(lastRunAt);
+    const lastError = String(last.error || "");
+    const hardError = Boolean(lastError) && !(j.soft && j.soft.test(lastError));
     return {
       name, label: j.label, every: j.every, lastRunAt,
       hoursAgo: t != null ? round1((now - t) / HOUR_MS) : null,
-      failed: d.failed === true || last.status === "error",
+      failed: d.failed === true || last.status === "error" || hardError,
+      late: switches?.[name] === true && Boolean(c) && jobIsLate(j, t, now),
       error: String(last.error || d.error || "").slice(0, 200),
       tries: Number(d.tries) || 0,
       never: !c,

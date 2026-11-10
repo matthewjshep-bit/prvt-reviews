@@ -582,3 +582,90 @@ test("a numbered house never borrows the status of the agent's other house", asy
   assert.deepEqual(r.rows.map((x) => [x.app.emoji, x.change]), [[null, false]]);
   assert.equal(s.of("reactions.add").length, 0);
 });
+
+/* ---------- quiet failures (2026-11-09 audit) ---------- */
+
+const { postMorning, postEvening } = await import("./slack-notify.js");
+const { CURSOR_NAME: AUDIT_CURSOR } = await import("./conversation-audit.js");
+const { SPEND_CURSOR, SPEND_LOCATION } = await import("./ai-spend.js");
+const machinePosts = (s) => s.of("chat.postMessage").filter((c) => c.body.channel === CH.machine);
+const noPipeline = { pipelineFor: async () => ({ deskAll: { rows: [] }, drafts: [] }) };
+
+// #machine used to skip any error first seen more than a day ago, so one that
+// came back after a quiet spell was never told again.
+test("an error that comes back after three quiet days posts again", async () => {
+  const LOC = "loc-reopen";
+  const DAY = 86400000;
+  const s = slack();
+  const t0 = T0 - 6 * DAY;
+  await recordError(store, { locationId: LOC, area: "gmail", err: new Error("gmail token refresh: HTTP 401"), now: t0 });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: t0 + 60000 });
+  assert.equal(machinePosts(s).length, 1);
+  assert.match(said(machinePosts(s)[0]), /New error in \*gmail\*/);
+  // A day later it is still the same spell: nothing.
+  await recordError(store, { locationId: LOC, area: "gmail", err: new Error("gmail token refresh: HTTP 401"), now: t0 + DAY });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: t0 + DAY + 60000 });
+  assert.equal(machinePosts(s).length, 1);
+  // Four quiet days, then back: told again, once.
+  await recordError(store, { locationId: LOC, area: "gmail", err: new Error("gmail token refresh: HTTP 401"), now: T0 });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: T0 + 60000 });
+  assert.equal(machinePosts(s).length, 2);
+  assert.match(said(machinePosts(s)[1]), /Error back in \*gmail\*/);
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: T0 + 120000 });
+  assert.equal(machinePosts(s).length, 2);
+});
+
+test("a switched-on job that stopped running posts to #machine once; switched off, it never does", async () => {
+  const LOC = "loc-late";
+  const s = slack();
+  // T0 is 10am Pacific; the Needs Matt runner last finished at 8am.
+  await store.setJobCursor(LOC, "needsMatt", { at: new Date(T0 - 2 * 3600000).toISOString(), doc: { last: { finishedAt: new Date(T0 - 2 * 3600000).toISOString() } } });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: T0 });
+  assert.equal(machinePosts(s).length, 0, "ghlStages off: the runner is switched off, so it isn't late");
+  const STAGES = { ...ON, ghlStages: { mode: "on" } };
+  await runSlackPings({ store, locationId: LOC, saved: STAGES, deps: noPipeline, now: T0 });
+  assert.equal(machinePosts(s).length, 1);
+  assert.match(said(machinePosts(s)[0]), /Needs Matt list\* hasn't run in 2h/);
+  await runSlackPings({ store, locationId: LOC, saved: STAGES, deps: noPipeline, now: T0 + 15 * 60000 });
+  assert.equal(machinePosts(s).length, 1, "once per stall");
+});
+
+test("a tick job that keeps failing posts once a day, not every fifteen minutes", async () => {
+  const LOC = "loc-tick-fail";
+  const s = slack();
+  for (let i = 0; i < 3; i++) {
+    const t = T0 + i * 15 * 60000;
+    await store.setJobCursor(LOC, "cardSync", { at: new Date(t).toISOString(), doc: { last: { finishedAt: new Date(t).toISOString(), error: "GHL 401: not authorized" } } });
+    await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: t + 60000 });
+  }
+  assert.equal(machinePosts(s).length, 1);
+  assert.match(said(machinePosts(s)[0]), /Card sync\* failed its last run/);
+});
+
+test("the evening post carries last night's leak count and the houses passed unpriced", async () => {
+  const LOC = "loc-evening-leaks";
+  const s = slack();
+  const now = Date.parse("2026-11-10T03:05:00Z");   // 7:05pm Pacific
+  await store.setJobCursor(LOC, AUDIT_CURSOR, { at: "2026-11-09T03:00:00Z", doc: { lastDaily: "2026-11-09T03:00:00Z", last: { status: "done", finishedAt: "2026-11-09T03:30:00Z", leaks: { total: 5, offersNothing: 4, offersMissed: 1, deals: 0 } } } });
+  await store.createOffer({ locationId: LOC, contactId: "ivo", address: "4410 Larkspur Ln, Renton, WA 98056", status: "we_passed", passReason: { code: "quiet", at: "2026-11-09T22:00:00Z", by: "needs-matt" } });
+  await store.createOffer({ locationId: LOC, contactId: "uma", address: "88 Quarry Rd, Kent, WA 98032", status: "we_passed", passReason: { code: "price", at: "2026-11-09T22:00:00Z", by: "matt" } });
+  await postEvening({ store, locationId: LOC, saved: ON, now });
+  const t = said(s.of("chat.postMessage").find((c) => c.body.channel === CH.daily));
+  assert.match(t, /Leaks last night: \*5\* \(4 offers with nothing coming, 1 missed clock\)/);
+  assert.match(t, /Passed unpriced today: \*1\* — 4410 Larkspur Ln/);
+  assert.doesNotMatch(t, /Quarry/);
+});
+
+test("the morning post says what yesterday's AI cost", async () => {
+  const LOC = "loc-morning-spend";
+  const s = slack();
+  const now = Date.parse("2026-11-09T15:05:00Z");
+  const prev = await store.getJobCursor(SPEND_LOCATION, SPEND_CURSOR);
+  await store.setJobCursor(SPEND_LOCATION, SPEND_CURSOR, { doc: { days: { "2026-11-08": { draft: { calls: 12, input: 1, output: 1, usd: 3.2 } } } } });
+  try {
+    await postMorning({ store, locationId: LOC, saved: ON, now });
+  } finally {
+    await store.setJobCursor(SPEND_LOCATION, SPEND_CURSOR, prev || { doc: {} });
+  }
+  assert.match(said(s.of("chat.postMessage").find((c) => c.body.channel === CH.daily)), /AI spend Nov 8: \*\$3\.20\* over 12 calls \(draft \$3\.20\)/);
+});
