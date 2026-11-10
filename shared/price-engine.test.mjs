@@ -3,7 +3,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { priceHouse, triageOf, killersOf, normalizePricingV2, PRICING_V2_DEFAULTS } from "./price-engine.js";
-import { rehabFloor, MIN_REHAB } from "./rehab-floor.js";
+import { rehabFloor, MIN_REHAB, REHAB_FLOOR_BY_ERA, UNKNOWN_ERA_PSF, HEAVY_PER_SQFT } from "./rehab-floor.js";
+import { GUT_PER_SQFT } from "./rehab-catalog.js";
 import { effectiveSettings } from "./offer-calc.js";
 import { KC_FLIP_RATIOS } from "./kc-flip-ratios.js";
 
@@ -28,13 +29,13 @@ test("every switch ships off, and a saved partial is filled, never trusted", () 
 test("a sure read prices at 70% of ARV less rehab, opens with the $30k fee and walks away at $15k", () => {
   const r = priceHouse(HOUSE);
   assert.equal(r.grade, "A", r.reasons.join(" | "));
-  assert.equal(r.rehab, 82500, "1961 house: $55 a foot × 1,500");
-  assert.equal(r.investorPrice, 0.7 * 640000 - 82500);
-  assert.equal(r.walkAway, 350500, "investor price − $15k, to the nearest $250");
-  assert.equal(r.open, 335500, "open is the walk-away less the fee room");
+  assert.equal(r.rehab, 108000, "1961 house: $72 a foot × 1,500 (the 2026-11-10 floor)");
+  assert.equal(r.investorPrice, 0.7 * 640000 - 108000);
+  assert.equal(r.walkAway, 325000, "investor price − $15k, to the nearest $250");
+  assert.equal(r.open, 310000, "open is the walk-away less the fee room");
   assert.equal(r.walkAway - r.open, 15000);
-  assert.equal(r.triage, "no_fit", "350.5k against a 525k list is 67%");
-  assert.equal(r.spread, 0.668);
+  assert.equal(r.triage, "no_fit", "325k against a 525k list is 62%");
+  assert.equal(r.spread, 0.619);
 });
 
 test("the walk-away never tops 90% of list", () => {
@@ -67,12 +68,35 @@ test("a house nobody described and nothing graded is not sure of its rehab", () 
   assert.equal(both.grade, "C", "two misses");
 });
 
-test("a 1924 house nobody described still carries $70 a foot", () => {
+test("a 1924 house nobody described still carries $91 a foot", () => {
   const f = rehabFloor({ sqft: 1780, yearBuilt: 1924 });
-  assert.equal(f.floor, 124500);
+  assert.equal(f.floor, 162000);
   assert.equal(f.tier, "age");
   assert.equal(rehabFloor({ sqft: 700, yearBuilt: 2005 }).floor, MIN_REHAB, "never under the 60k ballpark");
   assert.equal(rehabFloor({ sqft: 0 }).floor, MIN_REHAB, "no size: the ballpark");
+});
+
+// Matt, 2026-11-10 (decision 11): against what buyers paid, our rehab ran 34% low and the age floor
+// sat 43% under them on 5 of 5 deals. His medians × 1.3; the ballpark, heavy and gut tiers stay.
+test("the rehab floor is Matt's medians times 1.3: 91, 72, 72 and 46 a foot, 72 with no year, never under 60k", () => {
+  assert.deepEqual(REHAB_FLOOR_BY_ERA.map((e) => [e.key, e.psf]), [["pre1950", 91], ["y1950", 72], ["y1980", 72], ["y2000", 46]]);
+  assert.equal(UNKNOWN_ERA_PSF, 72);
+  assert.equal(MIN_REHAB, 60000);
+  // A typical 1,800 sqft house in each era.
+  assert.equal(rehabFloor({ sqft: 1800, yearBuilt: 1940 }).floor, 164000, "was 126k");
+  assert.equal(rehabFloor({ sqft: 1800, yearBuilt: 1965 }).floor, 129500, "was 99k");
+  assert.equal(rehabFloor({ sqft: 1800, yearBuilt: 1990 }).floor, 129500, "was 99k");
+  assert.equal(rehabFloor({ sqft: 1800, yearBuilt: 2005 }).floor, 83000, "was 63k");
+  assert.equal(rehabFloor({ sqft: 1800 }).floor, 129500, "no year built: the middle of the table");
+  assert.equal(rehabFloor({ sqft: 1000, yearBuilt: 2010 }).floor, MIN_REHAB, "46k at $46 a foot: the ballpark");
+});
+
+test("the heavy tier still sits above the age floor of every era, and the gut tier above it", () => {
+  for (const e of REHAB_FLOOR_BY_ERA) assert.ok(HEAVY_PER_SQFT > e.psf, `${e.key}: heavy ${HEAVY_PER_SQFT} vs age ${e.psf}`);
+  assert.ok(HEAVY_PER_SQFT > UNKNOWN_ERA_PSF);
+  assert.ok(GUT_PER_SQFT > HEAVY_PER_SQFT);
+  // A poor grade on a pre-1950 house prices heavy, above its age floor.
+  assert.ok(rehabFloor({ sqft: 1800, yearBuilt: 1940, condition: 5 }).floor > rehabFloor({ sqft: 1800, yearBuilt: 1940 }).floor);
 });
 
 test("fire damage in the remarks prices the heavy tier; a teardown, the gut tier", () => {
@@ -86,12 +110,12 @@ test("fire damage in the remarks prices the heavy tier; a teardown, the gut tier
 
 test("their repair figure above ours replaces ours; below leaves ours", () => {
   assert.equal(priceHouse({ ...HOUSE, theirRepairs: 120000 }).rehab, 120000);
-  assert.equal(priceHouse({ ...HOUSE, theirRepairs: 30000 }).rehab, 82500);
-  const scoped = priceHouse({ ...HOUSE, scope: { total: 96000, photos: 24 } });
-  assert.equal(scoped.rehab, 96000, "a photo scope over the floor is the evidence");
-  // Before 2026-11-09 a scope from under 8 photos was dropped (82.5k here). It now raises the rehab
-  // when it reads above the floor, but is not evidence (see the thin-scope test below).
-  assert.equal(priceHouse({ ...HOUSE, scope: { total: 96000, photos: 5 } }).rehab, 96000, "under 8 photos still raises the rehab");
+  assert.equal(priceHouse({ ...HOUSE, theirRepairs: 30000 }).rehab, 108000);
+  const scoped = priceHouse({ ...HOUSE, scope: { total: 126000, photos: 24 } });
+  assert.equal(scoped.rehab, 126000, "a photo scope over the floor is the evidence");
+  // Before 2026-11-09 a scope from under 8 photos was dropped (the floor here). It now raises the
+  // rehab when it reads above the floor, but is not evidence (see the thin-scope test below).
+  assert.equal(priceHouse({ ...HOUSE, scope: { total: 126000, photos: 5 } }).rehab, 126000, "under 8 photos still raises the rehab");
 });
 
 test("rural acreage, a park home, a short sale or someone else bidding is never grade A", () => {
@@ -122,7 +146,7 @@ test("triage measures the walk-away against their number, else the list", () => 
 test("a price over what flippers paid in a busy ZIP drops the grade; a quiet ZIP doesn't bind", () => {
   const ratios = { zips: { 98001: { n: 22, median: 0.6, p25: 0.55, p75: 0.62 }, 98010: { n: 4, median: 0.5, p25: 0.5, p75: 0.5 } } };
   const busy = priceHouse({ ...HOUSE, zip: "98001", list: 800000, bricked: { ...BRICKED, asIs: 400000 } }, {}, { ratios });
-  assert.ok(!busy.misses.includes("zip"), "70% less 82.5k is 57% of ARV — under the ZIP's 62%, fine");
+  assert.ok(!busy.misses.includes("zip"), "70% less 108k is 53% of ARV — under the ZIP's 62%, fine");
   // Lower the rehab so the price runs past what flippers paid there.
   const rich = priceHouse({ ...HOUSE, zip: "98001", list: 800000, sqft: 600 }, { maoPct: 75, minRehab: 20000 }, { ratios });
   assert.ok(rich.misses.includes("zip"), rich.reasons.join(" | "));
@@ -132,11 +156,13 @@ test("a price over what flippers paid in a busy ZIP drops the grade; a quiet ZIP
 });
 
 // The two deals with numbers to check against (2026-11-04 back-test).
-test("a deal that closed prices within 5% under its contract", () => {
-  // 23706 138th Dr SE, Snohomish: ARV 825k, 1,056 sqft, built 1971; contract 515k, closed.
+test("a deal that closed prices under its contract, never over, and within 6% of it", () => {
+  // A Snohomish closed deal: ARV 825k, 1,056 sqft, built 1971; contract 515k. On the 2026-11-04 floor
+  // the $60k ballpark carried it and it walked away 2.4% under; the 2026-11-10 floor ($72 a foot,
+  // 76k) walks away 5.5% under. The higher floor costs a closed deal a little reach, never puts it over.
   const r = priceHouse({ list: 0, sqft: 1056, yearBuilt: 1971, homeType: "SINGLE_FAMILY", bricked: { arv: 825000, arvConfidence: 0.9, condition: 3, comps: BRICKED.comps } });
   const miss = (r.walkAway - 515000) / 515000;
-  assert.ok(miss <= 0 && miss >= -0.05, `walk-away ${r.walkAway} vs contract 515k (${Math.round(miss * 100)}%)`);
+  assert.ok(miss <= 0 && miss >= -0.06, `walk-away ${r.walkAway} vs contract 515k (${Math.round(miss * 100)}%)`);
 });
 
 test("a gut job that died prices well under what we signed", () => {
@@ -157,7 +183,7 @@ test("a rent read as the list price never caps the walk-away at a few thousand d
 
 /* ---------- Matt's seller cap and what the engine can't know (audit, 2026-11-09) ---------- */
 
-// An invented house: Bricked sure at 850k, a 1961 house of 1,500 sqft (82.5k floor), listed at 520k.
+// An invented house: Bricked sure at 850k, a 1961 house of 1,500 sqft (108k floor), listed at 520k.
 const RICH = { ...HOUSE, list: 520000, bricked: { ...BRICKED, arv: 850000 } };
 
 test("the machine never opens above the seller's own number", () => {
@@ -165,32 +191,32 @@ test("the machine never opens above the seller's own number", () => {
   assert.ok(r.open <= 450000, `open ${r.open}`);
   assert.ok(r.walkAway <= 450000, `walk-away ${r.walkAway}`);
   // Under the 10% line it is only a cap: their number is the most we'd go, and the grade holds.
-  const near = priceHouse({ ...RICH, sellerNumber: 460000 });
-  assert.equal(near.walkAway, 460000, "497.5k uncapped, down to their 460k");
-  assert.equal(near.open, 460000, "offering exactly their number leaves no room: Matt's rule");
+  const near = priceHouse({ ...RICH, sellerNumber: 440000 });
+  assert.equal(near.walkAway, 440000, "472k uncapped, down to their 440k");
+  assert.equal(near.open, 440000, "offering exactly their number leaves no room: Matt's rule");
   assert.equal(near.grade, "A", near.reasons.join(" | "));
-  assert.ok(near.reasons.some((x) => /capped at their 460k/.test(x)), near.reasons.join(" | "));
+  assert.ok(near.reasons.some((x) => /capped at their 440k/.test(x)), near.reasons.join(" | "));
   assert.equal(priceHouse({ ...RICH, sellerNumber: 461100 }).walkAway, 461000, "their number, down to the $250");
   assert.equal(priceHouse(RICH).walkAway, 468000, "no number from them: the list cap as before");
 });
 
 test("a walk-away more than 10% over the seller's number holds for Matt as a likely ARV error, not a hot house", () => {
-  // Off-market, ARV 700k, seller at 300k: the uncapped walk-away is 392.5k, 31% over theirs.
+  // Off-market, ARV 700k, seller at 300k: the uncapped walk-away is 367k, 22% over theirs.
   const reads = { ...HOUSE, list: 0, bricked: { ...BRICKED, arv: 700000 }, sellerNumber: 300000 };
   const r = priceHouse(reads);
   assert.equal(r.triage, "over_theirs", "never 'hot'");
   assert.equal(r.overTheirs, true);
   assert.ok(r.misses.includes("arv"));
   assert.notEqual(r.grade, "A");
-  assert.ok(r.reasons.some((x) => /our walk-away is 31% over their number: the ARV is likely high/.test(x)), r.reasons.join(" | "));
+  assert.ok(r.reasons.some((x) => /our walk-away is 22% over their number: the ARV is likely high/.test(x)), r.reasons.join(" | "));
   assert.equal(r.walkAway, 300000, "and it never offers past their number either");
   assert.equal(r.open, 300000);
-  // 7.5% over is inside the line: capped at theirs, graded as usual.
+  // Half a percent over is inside the line: capped at theirs, graded as usual.
   const close = priceHouse({ ...reads, sellerNumber: 365000 });
   assert.equal(close.triage, "hot");
   assert.equal(close.grade, "A");
   assert.equal(close.walkAway, 365000);
-  // The line is a setting: 0 holds any amount over, 50 lets 31% through to the cap.
+  // The line is a setting: 0 holds any amount over, 50 lets 22% through to the cap.
   assert.equal(priceHouse({ ...reads, sellerNumber: 365000 }, { overSellerPct: 0 }).triage, "over_theirs");
   assert.equal(priceHouse(reads, { overSellerPct: 50 }).triage, "hot");
 });
@@ -204,7 +230,7 @@ test("the seller's-number line is a setting: 10% by default, 0 to 50", () => {
 });
 
 test("a number over the list price is not a steal, it holds", () => {
-  // 70% of 640k less 82.5k less the 15k fee is 350.5k, over a 300k list: the comps or the scope are off.
+  // 70% of 640k less 108k less the 15k fee is 325k, over a 300k list: the comps or the scope are off.
   const r = priceHouse({ ...HOUSE, list: 300000 });
   assert.equal(r.overList, true);
   assert.ok(r.misses.includes("arv"));
@@ -212,9 +238,9 @@ test("a number over the list price is not a steal, it holds", () => {
   assert.ok(r.reasons.some((x) => /came out above the \$300,000 list price: the comps or the scope are off, so a person should look before it goes anywhere/.test(x)), r.reasons.join(" | "));
   assert.equal(r.walkAway, 270000, "still never past 90% of the list");
   // Between 90% and 100% of the list it is only the cap, as it was.
-  const capped = priceHouse({ ...HOUSE, list: 375000 });
+  const capped = priceHouse({ ...HOUSE, list: 350000 });
   assert.equal(capped.overList, false);
-  assert.equal(capped.walkAway, 337500);
+  assert.equal(capped.walkAway, 315000);
   assert.equal(capped.grade, "A", capped.reasons.join(" | "));
 });
 
@@ -243,30 +269,30 @@ test("a house Zillow didn't type never sends itself", () => {
 
 test("an agent's repair figure at or under the floor is not rehab evidence", () => {
   const plain = { ...HOUSE, bricked: { ...BRICKED, condition: null } }; // nothing else says how rough it is
-  for (const theirs of [82500, 82000, 60000]) {
+  for (const theirs of [108000, 107500, 60000]) {
     const r = priceHouse({ ...plain, theirRepairs: theirs });
-    assert.ok(r.misses.includes("rehab"), `their ${theirs} against the 82.5k floor`);
-    assert.equal(r.rehab, 82500);
+    assert.ok(r.misses.includes("rehab"), `their ${theirs} against the 108k floor`);
+    assert.equal(r.rehab, 108000);
   }
-  const over = priceHouse({ ...plain, theirRepairs: 90000 });
+  const over = priceHouse({ ...plain, theirRepairs: 115000 });
   assert.ok(!over.misses.includes("rehab"), "a figure above the floor is evidence");
-  assert.equal(over.rehab, 90000);
+  assert.equal(over.rehab, 115000);
 });
 
 test("a scope from under 8 photos that reads above the floor raises the rehab and holds the grade", () => {
   const plain = { ...HOUSE, bricked: { ...BRICKED, condition: null } };
-  const r = priceHouse({ ...plain, scope: { total: 96000, photos: 5 } });
-  assert.equal(r.rehab, 96000, "the higher read is kept");
+  const r = priceHouse({ ...plain, scope: { total: 126000, photos: 5 } });
+  assert.equal(r.rehab, 126000, "the higher read is kept");
   assert.ok(r.misses.includes("rehab"), "but 5 photos are not evidence");
   assert.notEqual(r.grade, "A");
   assert.match(r.rehabWhy, /5 photos/);
   const under = priceHouse({ ...plain, scope: { total: 50000, photos: 5 } });
-  assert.equal(under.rehab, 82500, "a thin scope under the floor changes nothing");
+  assert.equal(under.rehab, 108000, "a thin scope under the floor changes nothing");
   assert.ok(under.misses.includes("rehab"));
   // An earlier, heavier read of the same house (shadowPrice keeps 14 days of them) is kept too.
   const kept = priceHouse({ ...HOUSE, priorRehab: 118500 });
   assert.equal(kept.rehab, 118500);
-  assert.equal(kept.rehabOwn, 82500, "what this read alone said");
+  assert.equal(kept.rehabOwn, 108000, "what this read alone said");
 });
 
 // The engine hears the agent's earlier lines about the house (price-v2.js houseLines). Those lines

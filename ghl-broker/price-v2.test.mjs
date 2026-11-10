@@ -209,8 +209,8 @@ test("the shadow reads their mentions and counters, and keeps the house's heavie
   assert.ok(asked.types.includes("house_mentioned") && asked.types.includes("offer_countered"), JSON.stringify(asked));
   assert.equal(doc.reads.sellerNumber, 340000);
   assert.equal(doc.v2.rehab, 118500, "three days ago it read 118.5k; the 20-day-old 200k has aged out");
-  assert.equal(doc.v2.rehabOwn, 82500, "this read alone");
-  assert.equal(written.history.at(-1).rehabRead, 82500, "the next read compares against what each read itself said");
+  assert.equal(doc.v2.rehabOwn, 108000, "this read alone (1,500 sqft at the 2026-11-10 $72 floor)");
+  assert.equal(written.history.at(-1).rehabRead, 108000, "the next read compares against what each read itself said");
 });
 
 test("a failure in the shadow never reaches the run", async () => {

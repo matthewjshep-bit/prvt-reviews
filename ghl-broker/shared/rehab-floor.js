@@ -9,6 +9,11 @@
 // "by age, from your prices": a $/sqft floor per era seeded from his medians, never under his $60k
 // ballpark, that better evidence can only raise.
 //
+// Matt, 2026-11-10 (decision 11): the floor goes up about 1.3×. Against what buyers paid, our rehab
+// ran 34% low (low on 7 of 8 deals) and our ARV 11% high, and the age floor sat 43% under the
+// buyers on 5 of 5. His medians × 1.3, rounded: before 1950 70 → 91, 1950–79 and 1980–99 55 → 72,
+// 2000 on 35 → 46, no year built 55 → 72. The $60k ballpark, the heavy tier and the gut tier stay.
+//
 // Condition raises the floor: a heavy tier for a poor condition grade or distress words, the gut
 // tier ($150/sqft, shared/rehab-catalog.js) for a teardown or a gut. Nothing here lowers a figure.
 //
@@ -16,16 +21,17 @@
 
 import { gutSignal, gutRehab, GUT_PER_SQFT } from "./rehab-catalog.js";
 
-// Matt's medians, rounded (2026-11-04). `beforeYear` is exclusive; the last is any later year.
+// Matt's medians × 1.3, rounded (2026-11-04 seed, raised 2026-11-10). `beforeYear` is exclusive; the
+// last is any later year.
 export const REHAB_FLOOR_BY_ERA = [
-  { key: "pre1950", label: "built before 1950", beforeYear: 1950, psf: 70 },
-  { key: "y1950", label: "built 1950–79", beforeYear: 1980, psf: 55 },
-  { key: "y1980", label: "built 1980–99", beforeYear: 2000, psf: 55 },
-  { key: "y2000", label: "built 2000 on", beforeYear: 10000, psf: 35 },
+  { key: "pre1950", label: "built before 1950", beforeYear: 1950, psf: 91 },
+  { key: "y1950", label: "built 1950–79", beforeYear: 1980, psf: 72 },
+  { key: "y1980", label: "built 1980–99", beforeYear: 2000, psf: 72 },
+  { key: "y2000", label: "built 2000 on", beforeYear: 10000, psf: 46 },
 ];
 export const MIN_REHAB = 60000;
 // No year built: the middle of the table.
-export const UNKNOWN_ERA_PSF = 55;
+export const UNKNOWN_ERA_PSF = 72;
 // The heavy tier: a poor grade or a house the words call rough, short of a gut.
 export const HEAVY_PER_SQFT = 100;
 

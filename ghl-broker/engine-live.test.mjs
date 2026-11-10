@@ -130,20 +130,20 @@ test("the engine's number over the list price, or far over their number, stays M
 });
 
 test("a sent engine offer stops at the seller's own number and carries it", async () => {
-  await store.appendContactEvents("LOC-g5", "g5", [{ type: "property_details", at: "2026-11-08T18:00:00Z", address: "4417 Somerset Ln", data: { sellerAsk: 340000 } }]);
+  await store.appendContactEvents("LOC-g5", "g5", [{ type: "property_details", at: "2026-11-08T18:00:00Z", address: "4417 Somerset Ln", data: { sellerAsk: 320000 } }]);
   const { job, made } = await run({ contactId: "g5" });
   assert.equal(job.status, "done", job.brickedHeld || "");
   assert.equal(made.length, 1);
   const offer = await store.getOffer(made[0].offer.id);
-  assert.equal(offer.pricing.sellerNumber, 340000, "stamped for numberApproved");
-  assert.equal(offer.pricing.walkAway, 340000, "348k uncapped, down to their 340k");
-  assert.ok(offer.cashAmount <= 340000);
-  assert.equal(numberApproved({ ...offer, cashAmount: 345000 }), false, "a move past their number is nobody's approval");
+  assert.equal(offer.pricing.sellerNumber, 320000, "stamped for numberApproved");
+  assert.equal(offer.pricing.walkAway, 320000, "326.5k uncapped, down to their 320k");
+  assert.ok(offer.cashAmount <= 320000);
+  assert.equal(numberApproved({ ...offer, cashAmount: 325000 }), false, "a move past their number is nobody's approval");
 });
 
 test("a house listed under the engine's own walk-away is held, not capped and sent", async () => {
-  // 348k uncapped against a 340k list: the cap would have sent 306k; the comps or the scope are off.
-  const { job, made } = await run({ contactId: "g6", fetchOpts: { price: 340000 } });
+  // 326.5k uncapped against a 320k list: the cap would have sent 288k; the comps or the scope are off.
+  const { job, made } = await run({ contactId: "g6", fetchOpts: { price: 320000 } });
   assert.equal(made.length, 0);
   assert.equal(job.brickedHeld, "the offer engine's number is over the list price: yours to price");
 });

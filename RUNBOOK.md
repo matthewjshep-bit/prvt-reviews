@@ -388,7 +388,9 @@ it until the shadow runner lands.
   comps.
 - **Rehab.** The best evidence (a photo scope at ≥ 8 photos, Bricked's lines for described work, their
   own figure when higher), never under `rehabFloor` (shared/rehab-floor.js):
-  - by age: $70/sqft before 1950, $55 for 1950–79, $55 for 1980–99, $35 for 2000 on;
+  - by age: $91/sqft before 1950, $72 for 1950–79, $72 for 1980–99, $46 for 2000 on, $72 with no year
+    built (Matt, 2026-11-10, decision 11: his 2026-11-04 medians of 70/55/55/35 × 1.3, because against
+    what buyers paid our rehab ran 34% low and the age floor sat 43% under them on 5 of 5 deals);
   - heavy at $100/sqft for fire, water or mold words, a Bricked grade of C4 or worse, or a county
     condition of 2 or below;
   - gut at $150/sqft;
