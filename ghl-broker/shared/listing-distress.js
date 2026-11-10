@@ -20,6 +20,22 @@
 
 import { bankSaleIn } from "./flip-read.js";
 
+// "Needs" and up to three words, then what it needs (2026-11-09: "needs new
+// flooring and paint", "needs a new roof and some updating", "needs cosmetic
+// updates throughout" all read as nothing to fix, and the 11/9 sweep kept 1
+// of 108 picks). Never after a no ("doesn't need any work", "no need for
+// repairs", "nothing needs updating"), and never what a buyer needs ("room
+// for all your needs", "everything you need plus a new kitchen"). The words
+// between are never a joining word, so "needs" can't reach across "with an
+// updated kitchen"; "all it needs is paint" still counts.
+const NEED_FILLER = String.raw`(?!(?:and|or|with|for|in|on|at|from|by|but|that|this|while|are|was|met)\b)[a-z][\w'’-]*`;
+const NEED_WHAT = String.raw`(?:work|repairs?|updat(?:e|es|ing)|renovation|remodel(?:ing)?|rehab|love|attention|everything|roof(?:ing)?|floor(?:s|ing)?|paint(?:ing)?|carpet(?:s|ing)?|kitchen|bath(?:s|rooms?)?|siding|windows?|furnace|plumbing|electrical)`;
+const NOT_BEFORE_NEED = String.raw`(?<!\b(?:doesn['’]?t|does\s+not|don['’]?t|do\s+not|won['’]?t|will\s+not|no|not|nothing|never|you|we|your|their|our|his|her|my|every|family['’]?s?)\s+(?:really\s+|even\s+)?)`;
+const NEEDS_WORK_RX = new RegExp(
+  String.raw`${NOT_BEFORE_NEED}\bneeds?\s+(?:${NEED_FILLER}\s+){0,3}?${NEED_WHAT}\b|${NOT_BEFORE_NEED}\bneeds?\s+(?:to\s+be\s+)?updated\b|\bin\s+need\s+of\b`,
+  "i",
+);
+
 // Words a listing uses when the house needs work. Any one of these is enough,
 // even beside a "remodeled" ("kitchen remodeled in 1998, now needs TLC").
 const STRONG = [
@@ -30,7 +46,12 @@ const STRONG = [
   ["investor special", /\binvestors?\s+(?:special|alert|dream|opportunity)\b|\bflip(?:pers?|ping)?\b|\brehab(?:ber)?s?\b|\bbuild\s+(?:some\s+)?equity\b/i],
   ["sweat equity", /\bsweat[\s-]equity\b/i],
   ["bring your vision", /\bbring\s+your\s+(?:own\s+)?(?:vision|ideas|imagination|tools|contractor|paint\s*brush|hammer|creativity|design)\b/i],
-  ["needs work", /\bneeds?\s+(?:some\s+|a\s+lot\s+of\s+|lots\s+of\s+|significant\s+|major\s+|extensive\s+|substantial\s+|a\s+little\s+|work\s+and\s+)?(?:work|repairs?|updating|updates|renovation|remodel(?:ing)?|rehab|love|attention|everything)\b|\bin\s+need\s+of\b/i],
+  ["needs work", NEEDS_WORK_RX],
+  // "Cosmetic work" a house is waiting for, not one it has had ("recent
+  // cosmetic updates", "cosmetic updates throughout" read as done).
+  ["cosmetic work", /(?<!\b(?:recent(?:ly)?|new(?:er)?|fresh(?:ly)?|completed|with|had|has)\s+)\bcosmetic\s+(?:work|updates|updating|repairs)\b(?!\s+(?:done|completed|made|throughout|include|including|were|have\s+been))/i],
+  ["could use work", /\bcould\s+use\s+(?:some\s+|a\s+little\s+|a\s+bit\s+of\s+|a\s+few\s+)?(?:cosmetic\s+)?(?:work|updating|updates|tlc|love|repairs)\b/i],
+  ["ready for your updates", /\bready\s+for\s+your\s+(?:own\s+)?(?:updates|updating|renovation|remodel|ideas|vision)\b/i],
   ["cash buyers", /\bcash\s+(?:only|buyers?|offers?)\b|\bnot\s+(?:fha|va|conventional\s+)?(?:financeable|eligible\s+for\s+financing)\b|\bwon'?t\s+(?:qualify|appraise)\b/i],
   ["estate or probate", /\bestate\s+sale\b|\bprobate\b|\btrust\s+sale\b|\bpersonal\s+representative\b|\bexecut(?:or|rix)\b/i],
   ["deferred maintenance", /\bdeferred\s+maintenance\b|\bneglected\b|\bvacant\s+for\s+years\b/i],
@@ -43,11 +64,17 @@ const STRONG = [
 // when nothing says the house is finished.
 const SOFT = [
   ["dated", /\bdated\b|\boriginal\s+(?:condition|kitchen|baths?|bathrooms?|cabinets|carpet)\b|\btime\s+capsule\b/i],
-  ["make it your own", /\bmake\s+it\s+your\s+own\b|\bput\s+your\s+(?:own\s+)?(?:touch|stamp|finishing\s+touches)\b|\bupdate\s+(?:it\s+)?to\s+your\s+(?:taste|liking)\b|\bcustomi[sz]e\s+to\s+your\b/i],
+  // "Ready for your personal touch" is said of finished houses too, so it is
+  // soft here, not strong beside "ready for your updates".
+  ["make it your own", /\bmake\s+it\s+your\s+own\b|\bput\s+your\s+(?:own\s+)?(?:touch|stamp|finishing\s+touches)\b|\bupdate\s+(?:it\s+)?to\s+your\s+(?:taste|liking)\b|\bcustomi[sz]e\s+to\s+your\b|\bready\s+for\s+your\s+(?:own\s+|personal\s+)?touch(?:es)?\b/i],
   ["investors", /\binvestors?\b/i],
   ["potential", /\b(?:lots\s+of|tons\s+of|great|huge|endless|so\s+much)\s+potential\b/i],
   ["opportunity", /\b(?:investment|rare|great)\s+opportunity\b|\bopportunity\s+(?:knocks|awaits)\b/i],
   ["priced for condition", /\bpriced\s+(?:accordingly|to\s+reflect|for\s+(?:condition|repairs))\b|\bsold\s+in\s+(?:its\s+)?(?:present|current)\s+condition\b/i],
+  // 2026-11-09: a house nobody has put money into, or a seller who won't.
+  ["value-add", /\bvalue[\s-]add\b/i],
+  ["original owner", /\boriginal\s+owners?\b/i],
+  ["no repairs", /\b(?:seller\s+will\s+make\s+)?no\s+repairs\b/i],
 ];
 
 // The house is done. Wins over a soft word, never over a strong one.
@@ -59,9 +86,9 @@ const FINISHED = [
   ["like new", /\blike[\s-]new\b|\bshowroom\b|\bimmaculate\b|\bpristine\b/i],
 ];
 
-// "Not a fixer", "no TLC needed", "no work needed": a strong word said the
-// other way round.
-const NEGATED_SRC = /\b(?:not|no|isn'?t|never)\s+(?:a\s+)?(?:fixer|tlc|flip|handyman|project)\b|\bno\s+(?:work|repairs?|updates?)\s+(?:needed|required|to\s+do)\b|\bno\s+tlc\b|\bdone\s+for\s+you\b/.source;
+// "Not a fixer", "no TLC needed", "no work needed", "doesn't need any work":
+// a strong word said the other way round.
+const NEGATED_SRC = /\b(?:not|no|isn'?t|never)\s+(?:a\s+)?(?:fixer|tlc|flip|handyman|project)\b|\bno\s+(?:work|repairs?|updates?)\s+(?:needed|required|necessary|to\s+do)\b|\bno\s+tlc\b|\bdone\s+for\s+you\b|\b(?:doesn['’]?t|does\s+not|won['’]?t|will\s+not|don['’]?t|do\s+not)\s+need\s+(?:any\s+|much\s+)?(?:work|repairs?|updat\w*|tlc)\b/.source;
 const NEGATED_RX = new RegExp(NEGATED_SRC, "i");
 const NEGATED_ALL_RX = new RegExp(NEGATED_SRC, "gi");
 
