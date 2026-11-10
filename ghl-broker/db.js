@@ -35,21 +35,37 @@ export async function query(text, params) {
   return pool.query(text, params);
 }
 
-// Apply schema.pg.sql on boot (idempotent). Best-effort: a failure here logs
-// but does not crash the broker.
-export async function migrate() {
-  if (!pool) return false;
+// Apply schema.pg.sql on boot (idempotent). Best-effort: a failure here does
+// not crash the broker, but it is no longer only a log line (2026-11-09). The
+// schema runs as one multi-statement query, so one bad statement rolls back
+// every new column with it: the result is kept for GET / (schema=failed) and
+// handed back as { ok, error } so the boot can record it under db:migrate,
+// which #machine hears.
+let schema = { status: pool ? "pending" : "none", error: null, at: null };
+
+/** schemaState() → { status: "none" (no database) | "pending" | "ok" | "failed", error, at } */
+export function schemaState() { return { ...schema }; }
+
+export async function migrate({ pool: p = pool, readSchema = null } = {}) {
+  if (!p) return { ok: false, skipped: true, error: null };
   try {
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    const url = await import("node:url");
-    const dir = path.dirname(url.fileURLToPath(import.meta.url));
-    const sql = await fs.readFile(path.join(dir, "schema.pg.sql"), "utf8");
-    await pool.query(sql);
+    let sql;
+    if (typeof readSchema === "function") sql = await readSchema();
+    else {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const url = await import("node:url");
+      const dir = path.dirname(url.fileURLToPath(import.meta.url));
+      sql = await fs.readFile(path.join(dir, "schema.pg.sql"), "utf8");
+    }
+    await p.query(sql);
+    schema = { status: "ok", error: null, at: new Date().toISOString() };
     console.log("db: schema applied");
-    return true;
+    return { ok: true, error: null };
   } catch (err) {
-    console.error("db: migrate failed:", err.message);
-    return false;
+    const error = String(err?.message || err).slice(0, 300);
+    schema = { status: "failed", error, at: new Date().toISOString() };
+    console.error("db: migrate failed:", error);
+    return { ok: false, error };
   }
 }

@@ -195,13 +195,37 @@ export function keepNewest(newestFirst = [], limit = 5000) {
   return out;
 }
 
+// The scheduler's claim on a due draft (2026-11-09): one conditional update,
+// so of two senders (a deploy runs the old broker and the new one side by
+// side for a minute) only the first gets the row back. The other gets
+// nothing and sends nothing. `dueBy` keeps a draft whose send time moved
+// later since it was listed. Two time parameters on purpose: one bound to
+// the timestamptz column, one to the text inside the doc.
+export function claimReplyDraftQuery({ id, from = "scheduled", at, dueBy = null }) {
+  const params = [id, from, at, String(at)];
+  let due = "";
+  if (dueBy) { params.push(String(dueBy)); due = ` and (doc->>'sendAt') <= $5`; }
+  return {
+    text: `update reply_drafts
+       set status = 'sending', updated_at = $3,
+           doc = doc || jsonb_build_object('status', 'sending', 'sendingAt', $4::text, 'updatedAt', $4::text)
+     where id = $1 and status = $2${due}
+     returning doc`,
+    params,
+  };
+}
+
 /* ============================================================= *
  * Postgres backend
  * ============================================================= */
 
 const pgStore = {
-  async init() {
-    await migrate();
+  // `onSchema(result)` hears how the migration went as soon as it is known,
+  // before the slower backfills below: the broker records a failure under
+  // db:migrate (broker.js), which #machine hears.
+  async init({ onSchema = null } = {}) {
+    const schema = await migrate();
+    if (typeof onSchema === "function") await Promise.resolve(onSchema(schema)).catch(() => {});
     // Adopt pre-batch outreach rows (batch_id null) into one "Earlier pulls"
     // batch per location. Idempotent: after the first run no null rows remain.
     try {
@@ -610,6 +634,13 @@ const pgStore = {
       [id, doc, doc.status || "draft", doc.updatedAt || nowIso()]
     );
     return rowCount > 0;
+  },
+  // scheduled → sending, for the first caller only (claimReplyDraftQuery).
+  // The claimed doc, or null when someone else has it or it isn't due.
+  async claimReplyDraft(id, from = "scheduled", { at = nowIso(), dueBy = null } = {}) {
+    const { text, params } = claimReplyDraftQuery({ id, from, at, dueBy });
+    const { rows } = await query(text, params);
+    return rows[0]?.doc || null;
   },
   // Retention: settled rows older than the cutoff go. Open, scheduled and
   // in-flight rows never do — a draft nobody answered is still a draft.
@@ -2029,6 +2060,18 @@ const fileStore = (() => {
       data.replyDrafts[id] = doc;
       persist();
       return true;
+    },
+    // The same claim as Postgres: the check and the write happen with no
+    // await between them, so a second caller sees "sending" and gets null.
+    async claimReplyDraft(id, from = "scheduled", { at = nowIso(), dueBy = null } = {}) {
+      ensure();
+      const d = data.replyDrafts[id];
+      if (!d || d.status !== from) return null;
+      if (dueBy && !(String(d.sendAt || "") <= String(dueBy))) return null;
+      const next = { ...d, status: "sending", sendingAt: at, updatedAt: at };
+      data.replyDrafts[id] = next;
+      persist();
+      return next;
     },
     async pruneReplyDrafts(locationId, beforeIso) {
       ensure();

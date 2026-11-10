@@ -112,7 +112,9 @@ Token scopes: `contacts.readonly`, `contacts.write`,
 picker on the Conversation AI tab (the action itself needs just
 `contacts.write`; without the scope you can paste a workflow id).
 
-Sanity: `GET /` → `offer broker ok`, then
+Sanity: `GET /` → `offer broker ok @ <commit> db=pg schema=ok` (`db=file` or
+`schema=failed` is the thing to fix first; see "The tick" under Conversation
+AI), then
 `POST /api/offers/calculate` with `{"location_id":"...","inputs":{"askingPrice":200000}}`.
 
 ### Publishing the deals board to a public website
@@ -2286,6 +2288,67 @@ cursor's tries, whether a run is going or failed, and `last`, which is what
 the day's run did. The tier check's summary moved into `last` on its cursor,
 like the others.
 
+**A restart or a deploy drops nothing, and a crash is announced (2026-11-09).**
+The 11-09 crash was found by an audit script, not by the app. Pushes ran up
+to 14 a day in October, and each one used to cost the tick its clock, could
+send a due text twice, and dropped any reply job still in memory.
+
+- **A crash says so in #machine.** At boot the broker writes the
+  `brokerBoot` cursor with its commit (`RENDER_GIT_COMMIT`, ghl-broker/boot.js
+  `recordBoot`). A start on the same commit as the last one is a crash or a
+  restart by hand: the cursor's `last.status` is `error` with "restarted
+  without a deploy (manual or crash)", and Slack's existing job-failed line
+  posts it to #machine once ("Broker start failed its last run"). It shows on
+  Reports → Line as "Broker start" too. A crash loop posts once an hour; the
+  line counts the restarts. The next deploy clears it and says nothing. The
+  broker's memory is sampled onto the same cursor every 5 minutes, so the
+  line also says what memory was just before it went down (an out-of-memory
+  crash reads as a high number a few minutes before). A manual restart from
+  Render's dashboard also posts; it is labelled "manual or crash".
+- **`GET /` says more.** `offer broker ok @ <commit> db=pg schema=ok`.
+  `db=file` means `DATABASE_URL` is missing and the broker is on the
+  throwaway JSON file (claims and cursors won't survive a deploy).
+  `schema=failed` means `schema.pg.sql` didn't apply and every column it adds
+  is missing; `schema=pending` is the first seconds after boot.
+- **The tick never runs over itself.** The 15-minute tick skips a beat while
+  the last one is still going (boot.js `guarded`), and one tick runs 90
+  seconds after boot, so a burst of pushes no longer leaves half an hour with
+  no tick. The 30-second send loop has the same guard. A run going longer
+  than 45 minutes (5 for the send loop) is taken for stuck on a call that
+  never answered, and the next one starts beside it, with a log line.
+- **A due text is sent once.** The send loop claims a draft with one
+  conditional update (`store.claimReplyDraft`, both backends: scheduled to
+  sending, only for the first caller) and sends only a draft it got back.
+  During a deploy Render runs the old and the new broker side by side; both
+  used to be able to send the same text.
+- **A deploy finishes what it's sending.** On SIGTERM the broker stops every
+  timer, claims nothing new, waits up to 25 seconds for the texts already
+  going out, then exits. What's still scheduled stays scheduled for the new
+  broker, instead of being cut off mid-send and handed back as "auto-send was
+  interrupted".
+- **Every inbound text is written down the moment it arrives.** The text
+  webhook writes `inbound_received` (channel and GHL's message id, never the
+  words) before the reply job starts (reply-agent.js `recordInbound`). GHL
+  delivering the same text again, even after a restart, is skipped when a
+  reply was drafted since or the first is under 10 minutes old; older than
+  that with nothing drafted, the first job is gone and the text is answered.
+  "The same text" is GHL's message id when the webhook carries one
+  (`message.id`, `messageId` or `customData.message_id`), otherwise the same
+  words from the same contact inside the same or the next minute.
+  Reports → Follow-up counts a reply from it, so a text the bot skipped
+  (switched off, a cap, a hold) still counts as an answer. An auto-reply or
+  our own words echoed back don't.
+- **The boot pass (off by default).** `conversationAi.nightlyAudit.bootPass`:
+  about 5 minutes after the broker starts, every text from the last hour with
+  no draft, hold or "nothing to answer" after it is read back from GHL and
+  goes through `startReply` like a fresh webhook: the caps, the stand-down,
+  the gates and the dial all apply. Claimed on the `bootPass` cursor, once
+  per start, retried by the tick if it failed, at most 30 a day. With it off,
+  a dropped reply waits for the daytime pass or the 7pm audit, as before.
+  There is no switch on the Conversation AI page yet: it is turned on by
+  saving the config (`PUT /api/offers/automations/conversation/config`) with
+  `nightlyAudit.bootPass: true`, and a page save keeps whatever is there.
+
 ### Never more than our number (2026-09-28)
 
 Jesse, 39811 226th Ave SE, Enumclaw. Our offer was 550K, already over
@@ -4256,6 +4319,8 @@ Dismiss bins the draft) and owed promises (their Dismiss asks why, for the coach
 ### Durable errors (2026-09-17)
 
 Failures in the reply agent, proactive drafts, the underwriter, the 15-minute sweep and the coach used to live in Render's log or on an in-memory job a redeploy forgets. `recordError` (`ghl-broker/app-errors.js`) keeps them in `app_errors`, one row per distinct failure (fingerprint of area + message with ids and numbers flattened), counted. The message has phones and emails knocked out and the context is ids only. It never throws. The coach reads the night's rows; a repeated one becomes a `code_gap`.
+
+Since 2026-11-09 two boot failures are durable too. A schema migration that fails (`ghl-broker/db.js` `migrate()` now returns `{ ok, error }`) is recorded under `db:migrate` for each location, so #machine hears it, and `GET /` shows `schema=failed` until a boot applies it. A broker that started again on the same commit (a crash, or a restart by hand) is on the `brokerBoot` cursor and posts once to #machine through the job-failed line; see "The tick" above. A boot pass that throws is recorded under `boot-pass`.
 
 ### No longer available — a house that sold isn't anyone's pass (2026-10-02)
 

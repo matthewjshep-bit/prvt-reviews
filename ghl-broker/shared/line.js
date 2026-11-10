@@ -366,6 +366,9 @@ export const LINE_JOBS = {
   calls: { label: "Call sweep", every: "tick" },
   uwQueue: { label: "Underwrite queue", every: "tick" },
   ghlMirror: { label: "GHL mirror", every: "tick" },
+  // The broker's own start (ghl-broker/boot.js): "failed" when it restarted
+  // without a new commit, which is a crash or a manual restart.
+  brokerBoot: { label: "Broker start", every: "boot" },
 };
 
 /**
