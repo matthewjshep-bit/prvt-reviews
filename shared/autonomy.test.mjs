@@ -88,7 +88,7 @@ test("normal: everything the gates allow, but the offer, counters and invites st
   assert.equal(out.dispoAutopilot.autoInvite, false);
 });
 
-test("full: the offer sends itself, the band is on, invites go, booking only with a calendar", () => {
+test("full: the offer sends itself, the band is on, invites go, and booking stays off even with a calendar", () => {
   const out = applyAutonomy(starter(), "full");
   const c = out.conversationAi;
   assert.equal(c.parties.agent.sendOffer.onClearUnderwrite, true);
@@ -101,10 +101,12 @@ test("full: the offer sends itself, the band is on, invites go, booking only wit
   assert.equal(c.booking.enabled, false, "no calendar picked → booking stays off");
   assert.equal(detectAutonomy(out), "full");
 
+  // Booking is retired (Matt, 2026-11-10): a calendar picked before doesn't
+  // switch it on, and the mode still reads as full.
   const withCal = starter();
-  withCal.conversationAi.booking = { enabled: false, calendarId: "cal-1", calendarName: "Matt" };
+  withCal.conversationAi.booking = { enabled: true, calendarId: "cal-1", calendarName: "Mornings" };
   const on = applyAutonomy(withCal, "full");
-  assert.equal(on.conversationAi.booking.enabled, true);
+  assert.equal(on.conversationAi.booking.enabled, false);
   assert.equal(on.conversationAi.booking.calendarId, "cal-1");
   assert.equal(detectAutonomy(on), "full");
 });

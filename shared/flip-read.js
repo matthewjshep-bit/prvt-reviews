@@ -234,6 +234,9 @@ const closedReply = (variant, n) => QUALIFY_CLOSED[(Math.abs(Math.round(Number(v
 // fixers, and a quick call. No times — no calendar is connected, so we ask
 // what works for them. parties.agent.callAsk, off by default.
 // 2026-11-09: no "I'd love" (the voice check, shared/voice.js).
+// Retired (Matt, 2026-11-10, shared/call-words.js): the bot never asks for a
+// call, so these and the _CALL variants below are never picked; the gate
+// (callWordsFlags) holds a text that carries one anyway.
 export const FIXERS_CALL_ASKS = [
   "If you've got other fixers on your radar, a quick 5-minute call this week would be great, what time works?",
   "If anything else rough is on your radar, a quick 5-minute call this week would be easiest, what time works for you?",

@@ -185,7 +185,7 @@ test("the second look says our same number, the money guard lets exactly that th
   const store = fakeStore({ offers: [anOffer()], drafts: theirTexts() });
   const r = await startProactive({ client, locationId: "LOC", saved: SAVED, store, contactId: "c1", kind: "second_look", offer: anOffer(),
     subject: { address: anOffer().address, step: 1, steps: [], theirs: 410000, source: "counter" }, sendsEnabled: true,
-    deps: { draft: draftSaying("Hi Dana, on 1418 Alder, if the seller is still open to it we can still do 380K. Worth a quick call?"),
+    deps: { draft: draftSaying("Hi Dana, on 1418 Alder, if the seller is still open to it we can still do 380K. Would the seller take a look?"),
       releaseHeld: true, releaseReason: "the second look may send itself (followUp.secondLook)", now: () => NOW, random: () => 0 } });
   assert.equal(r.skipped, null, r.skipped);
   await settle();
@@ -207,7 +207,7 @@ test("a second look that names more than our number never goes — not even the 
     const store = fakeStore({ offers: [o], drafts: theirTexts() });
     const r = await startProactive({ client, locationId: "LOC", saved: SAVED, store, contactId: "c1", kind: "second_look", offer: o,
       subject: { address: o.address, step: 1, steps: [] }, sendsEnabled: true,
-      deps: { draft: draftSaying(`Hi Dana, on 1418 Alder ${says} if the seller is open. Worth a quick call?`), releaseHeld: true, now: () => NOW } });
+      deps: { draft: draftSaying(`Hi Dana, on 1418 Alder ${says} if the seller is open. Would they take a look?`), releaseHeld: true, now: () => NOW } });
     await settle();
     assert.equal(r.job.status, "held", `${says}: ${r.job.error || ""}`);
     assert.match(r.job.heldReason, /dropped, not sent/);
@@ -225,10 +225,10 @@ test("a too-long second look is written again, and with the switch off none is s
   const { client } = ghlStub();
   const store = fakeStore({ offers: [anOffer()], drafts: theirTexts() });
   let calls = 0;
-  const long = `Hi Dana, ${"just wanted to circle back on this one again because we really liked it ".repeat(4)}we can still do 380K. Worth a call?`;
+  const long = `Hi Dana, ${"just wanted to circle back on this one again because we really liked it ".repeat(4)}we can still do 380K. Would the seller look again?`;
   const r = await startProactive({ client, locationId: "LOC", saved: SAVED, store, contactId: "c1", kind: "second_look", offer: anOffer(),
     subject: { address: anOffer().address }, sendsEnabled: true,
-    deps: { draft: async (args) => { calls++; return (await draftSaying(args.outbound?.fix ? "Hi Dana, if the seller on 1418 Alder is still open we can still do 380K. Worth a quick call?" : long)()); },
+    deps: { draft: async (args) => { calls++; return (await draftSaying(args.outbound?.fix ? "Hi Dana, if the seller on 1418 Alder is still open we can still do 380K. Would they take a look?" : long)()); },
       releaseHeld: true, now: () => NOW, random: () => 0 } });
   await settle();
   assert.equal(calls, 2, "written once more, told why");
@@ -238,12 +238,14 @@ test("a too-long second look is written again, and with the switch off none is s
 
 /* ---------- the prompt ---------- */
 
-test("the second look prompt names the street and our same number, asks for a call, and never asks whether it sold", () => {
+test("the second look prompt names the street and our same number, never asks for a call, and never asks whether it sold", () => {
   const t = outboundOpening({ kind: "second_look", address: "1418 Alder Ln, Kent, WA 98031", street: "1418 Alder Ln", oursK: "380K", offerStatus: "passed", step: 1, maxChars: 240 });
   assert.match(t, /1418 Alder Ln/);
   assert.match(t, /we can still do 380K/);
   assert.match(t, /our same number/);
-  assert.match(t, /worth a quick call/);
+  // Matt, 2026-11-10: whether and when to call is his.
+  assert.doesNotMatch(t, /worth a quick call/);
+  assert.match(t, /ask whether the seller would take a look at it\. Never ask for a call or promise one\./);
   assert.match(t, /Do NOT ask whether it sold/);
   assert.match(t, /never hint that we'd go higher/);
   assert.match(t, /under 240 characters/);
@@ -256,7 +258,7 @@ test("the second look prompt names the street and our same number, asks for a ca
 
 const lookDraft = (over = {}) => ({
   id: "s1", locationId: "LOC", contactId: "c1", status: "scheduled", channel: "sms", party: "agent", intent: "second_look", inbound: "",
-  reply: "Hi Dana, on 1418 Alder, if the seller is still open to it we can still do 380K. Worth a quick call?",
+  reply: "Hi Dana, on 1418 Alder, if the seller is still open to it we can still do 380K. Would the seller take a look?",
   outbound: { kind: "second_look", offerId: "o1", address: "1418 Alder Ln, Kent, WA 98031", amount: 380000, offerStatus: "passed", statusAt: ago(30), step: 1 },
   propertyAddress: "1418 Alder Ln, Kent, WA 98031", createdAt: new Date(NOW - 3600000).toISOString(), sendAt: new Date(NOW).toISOString(), flags: [], ...over,
 });

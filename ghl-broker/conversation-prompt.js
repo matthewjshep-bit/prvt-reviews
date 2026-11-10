@@ -16,6 +16,7 @@ import { OUR_BOX_WORDS } from "./shared/asset-type.js";
 import { offerForms } from "./shared/us-address.js";
 import { NEXT_ONE_QUESTION } from "./shared/flip-read.js";
 import { VOICE_RULE } from "./shared/voice.js";
+import { NO_CALL_RULE, CALL_INVITE } from "./shared/call-words.js";
 import { CHECK_IN_VOICE_EXAMPLES, BUYER_VOICE_EXAMPLES } from "./shared/check-in.js";
 
 const LENGTH_RULE = {
@@ -82,7 +83,7 @@ const FACTS =
   "thread, the records listed, or the operator's standing instructions. Never invent a price, a closing " +
   "timeline, an earnest money amount, a contingency, a proof-of-funds claim, or a company detail. If they ask " +
   "something the context does not answer, do not guess, and do not invent anyone to check with (no team, no " +
-  "underwriter, no partner): say you'll go over it on a quick call, and set needsHuman. " +
+  "underwriter, no partner), and never promise a call: say they can call you whenever, and set needsHuman. " +
   "The ONE exception is your own contact details: when they are listed below under HOW THEY REACH YOU, and only " +
   "when someone ASKS for them (\"what's your email?\", \"send it over\", \"how do I reach you?\"), give exactly " +
   "what is listed, verbatim, in the same message — no \"I'll send it over\", no checking with anyone. Never " +
@@ -105,8 +106,8 @@ const COMMITMENTS = {
     "COMMITMENTS: you may NOT accept a counter, raise or lower an offer, propose or confirm a showing or " +
     "inspection time, promise proof of funds, or agree to terms other than the WRITE-UP TERMS below, which are " +
     "standing and yours to give. When the agent asks for anything else on this list, write a " +
-    "holding reply that answers it without reading their number back and says you'll go over it on a quick call " +
-    "(\"Let me give you a quick call on that\"), never a partner or a team to check with, and set needsHuman to true with the reason. " +
+    "holding reply that answers it without reading their number back and, where talking would help, says they can call you " +
+    `whenever ("${CALL_INVITE}"): never a promise to call them or a time to talk, never a partner or a team to check with, and set needsHuman to true with the reason. ` +
     // Matt, 2026-09-14: a number before a showing, always.
     "A SHOWING, TOUR OR WALKTHROUGH OFFER on a house we have no offer on yet: do not take or offer a time. Say " +
     "you'd like to run the numbers first so nobody's time gets wasted, and that you'll text them where we'd be " +
@@ -335,7 +336,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
     parts.push(
       `YOU ARE ${me}, the person they have been texting and talking to on the phone, every message. Never write about ${me} ` +
       `as someone else: no "I'll flag it to ${me}", "let me grab ${me}", "${me} will call you", "${me}'s out today", "I'll check ` +
-      `with ${me}". What only you can settle, you settle yourself, in the first person: "let me call you on that".`
+      `with ${me}". What only you can settle, you settle yourself, in the first person: "call me whenever, or text here".`
     );
   }
   parts.push(
@@ -355,18 +356,10 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
   if (CONTINUITY[party]) parts.push(CONTINUITY[party]);
   if (party === "agent") parts.push(OFF_MARKET_AGENT, AGENT_BROUGHT, NEXT_ONE_AGENT);
   parts.push(COMMITMENTS[party] || COMMITMENTS.unknown);
-  // The one commitment the calendar lets it keep. The times it may name are
-  // handed to it per message under TIMES YOU MAY PROPOSE; the guard checks
-  // the reply against that list, so the instruction and the gate agree.
-  if (config?.booking?.enabled) {
-    parts.push(
-      "BOOKING — the exception to the rule above on times: when they want a call" + (party === "investor" ? " or to see the property" : "") +
-      " and the context lists TIMES YOU MAY PROPOSE, offer two or three of them, written EXACTLY as labelled there (\"Fri Sep 11 at 10:00am\"), " +
-      "and set offeredSlots to their ISO values. Never name any other time, and never say a time from memory. If the context lists " +
-      "TIMES WE ALREADY OFFERED and this message picks one, confirm it using its exact label, set chosenSlot to its ISO value, and do " +
-      "not offer new times. If the context lists no times, fall back to the holding reply and needsHuman."
-    );
-  }
+  // The bot never books, asks for or promises a call (Matt, 2026-11-10,
+  // shared/call-words.js). The calendar's BOOKING block that used to be here
+  // is retired with it; the gate behind this rule is callWordsFlags.
+  parts.push(NO_CALL_RULE);
   if (party === "agent") {
     parts.push(playbook.showMath
       // Matt, 2026-09-17: show our work. 2026-10-07: "we usually use the
@@ -387,7 +380,7 @@ export function buildSystemPrompt({ config, party = "agent", channel = "sms" } =
         "after a no, one sentence of the method is plenty before you ask for their number. Then turn it into the useful question: if they see " +
         "a higher value or lighter work, ask for their numbers and say we'll re-run it on them. If the line says the figures don't tie, " +
         "describe the method without doing the arithmetic out loud."
-      : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and offer to walk them through it on a quick call.");
+      : "MATH: never explain how an offer number was built. If pushed, say it reflects the work the house needs and the resale we see, and that they can call you whenever to go through it (never promise a call).");
   }
   if (party === "agent") {
     // Matt's standing preference, 2026-09-12. The agent must never learn it:
@@ -1155,7 +1148,7 @@ function openingFor(outbound) {
         `ask if they can write it up on ${offerForms(o.address)} forms at the agreed number and send it over for us to sign`,
         "give them what they need to write it up (the WRITE-UP TERMS: buyer name, earnest money, inspection window) and ask what else they need",
         "ask whether the seller is still good at that number, and whether anything is holding up getting it in writing",
-        "say you want to keep this moving for their seller and ask for a quick call today to get it written",
+        "say you want to keep this moving for their seller, ask what's left to get it written, and say they can call you whenever (never promise a call or name a time)",
       ];
       return `${START} We and this agent have agreed a price on ${o.address} and nothing is in writing yet. ` +
         `In one or two lines, ${asks[Math.min(asks.length, Math.max(1, o.stepIndex || 1)) - 1]}. ` +
@@ -1433,13 +1426,14 @@ function openingFor(outbound) {
 
     // A strong past offer, asked about once more (shared/second-look.js,
     // 2026-10-16): the seller's number was close to ours and it went quiet.
-    // Our same number, never more, and a call — never "did it sell?".
+    // Our same number, never more, and a soft question — never "did it sell?",
+    // and never a call (Matt, 2026-11-10: whether and when to call is his).
     case "second_look":
       return `${START} A while back ${o.offerStatus === "no_response" ? "we put a number to this agent on" : o.offerStatus === "countered" ? "this agent countered our number on" : "this agent and their seller passed on our number on"} ` +
         `${o.street || o.address}, and it went quiet. ` +
         (o.offMarket ? "The listing just came off the market without selling: you may say you saw it come off. " : "The seller's number wasn't far from ours. ") +
         `In one or two short lines, under ${o.maxChars || 240} characters: name ${o.street || "the street"}, say that if the seller is still open to it ` +
-        `we can still do ${o.oursK} — our same number, said exactly that way — and ask whether it's worth a quick call. ` +
+        `we can still do ${o.oursK} — our same number, said exactly that way — and ask whether the seller would take a look at it. Never ask for a call or promise one. ` +
         `Do NOT name any other number: not theirs, not a range, not a new one, and never hint that we'd go higher. ` +
         `Do NOT ask whether it sold, closed, is still available or is still on the market. No dollar signs. ` +
         `${o.step > 1 ? "We asked once before: don't repeat the wording of that text. " : ""}` +

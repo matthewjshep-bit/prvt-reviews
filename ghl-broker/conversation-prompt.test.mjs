@@ -728,7 +728,7 @@ test("the bot is told it is Matt, and no rule talks about Matt as someone else",
   assert.match(p, /YOU ARE Matt, the person they have been texting/);
   const rules = [p, AGENT_GOAL_RULE, PROMISE_RULE, ...accessLines({ method: "lockbox" }), ...accessLines({ method: "matt" }),
     outboundOpening({ kind: "pass_note", houses: [{ address: "1 Elm St" }] })].join("\n")
-    .replace(/YOU ARE Matt[^\n]*?"let me call you on that"\./, "");
+    .replace(/YOU ARE Matt[^\n]*?"call me whenever, or text here"\./, "");
   assert.doesNotMatch(rules, /\bMatt (?:will|is|calls|sends|meets|looked|decide)|only Matt|and Matt\b|to Matt\b|with Matt\b/);
 });
 

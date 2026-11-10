@@ -10,6 +10,14 @@
 // Same shape as the counter band (shared/auto-accept.js): a verdict with
 // named checks, written onto the draft pass or fail. Pure — the slots and
 // the clock are passed in.
+//
+// RETIRED (Matt, 2026-11-10: "I think the bot actually booking calls has not
+// been helpful. It's up to me to really call the agent so let's not have
+// those scheduled calls."). Since 10/15 the bot offered or confirmed 24 call
+// slots and 4 connected. The normaliser keeps conversationAi.booking.enabled
+// off whatever is saved, and the reply agent never reads the calendar or
+// books (shared/call-words.js BOOKING_RETIRED). Appointments already on the
+// calendar are left alone. What's here is kept for the record and its tests.
 
 export const BOOKING_DEFAULTS = Object.freeze({
   enabled: false,

@@ -211,55 +211,21 @@ export function FollowUpCard({ config, patch }) {
   );
 }
 
-/* ---------- the calendar ---------- */
+/* ---------- the calendar (retired) ---------- */
 
-export function BookingCard({ config, patch, calendars }) {
-  const bk = config.booking || {};
-  const set = (next) => patch({ booking: { ...bk, ...next } });
-  const list = calendars?.list || [];
+// Retired (Matt, 2026-11-10: "It's up to me to really call the agent so
+// let's not have those scheduled calls."). No switch here: the settings keep
+// booking and the call ask off whatever is saved (shared/call-words.js), and
+// the calendar fields are kept as they were.
+export function BookingCard() {
   return (
-    <Section title="Booking calls"
-      intro="A request for a call or a visit is normally yours to answer. This lets the bot offer real free times from your calendar and book the one they pick — released the way a counter is released under the band: the times it names have to be on the calendar, word for word, or the reply waits for you.">
-      <Toggle checked={bk.enabled} onChange={(v) => set({ enabled: v })}>
-        Let it offer times and book them
-      </Toggle>
-      {bk.enabled && (
-        <div className="mt-3 space-y-3">
-          <Field label="Calendar" hint={calendars?.scopeMissing ? "Add calendars.readonly and calendars/events.write to the Private Integration and this list will fill — or paste a calendar id." : "Free slots come from here; the appointment lands here."}>
-            {list.length ? (
-              <Select value={bk.calendarId} onChange={(v) => set({ calendarId: v, calendarName: list.find((c) => c.id === v)?.name || "" })}
-                options={[["", "Pick a calendar…"], ...list.map((c) => [c.id, c.name])]} />
-            ) : (
-              <Text value={bk.calendarId} onChange={(v) => set({ calendarId: v })} placeholder={calendars?.loading ? "loading calendars…" : "calendar id"} />
-            )}
-          </Field>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="Look ahead" hint="days of free slots to consider">
-              <Text type="number" value={bk.daysAhead} onChange={(v) => set({ daysAhead: Number(v) })} />
-            </Field>
-            <Field label="Times per text" hint="at most; two or three reads like a person">
-              <Text type="number" value={bk.slotsToOffer} onChange={(v) => set({ slotsToOffer: Number(v) })} />
-            </Field>
-            <Field label="Length" hint="minutes on the calendar">
-              <Text type="number" value={bk.durationMin} onChange={(v) => set({ durationMin: Number(v) })} />
-            </Field>
-            <Field label="Never sooner than" hint="hours from now">
-              <Text type="number" value={bk.minLeadHours} onChange={(v) => set({ minLeadHours: Number(v) })} />
-            </Field>
-            <Field label="Earliest call" hint="hour of the day, 9 = 9am">
-              <Text type="number" value={bk.earliestHour} onChange={(v) => set({ earliestHour: Number(v) })} />
-            </Field>
-            <Field label="Appointment title" hint="{{name}} is their name">
-              <Text value={bk.title} onChange={(v) => set({ title: v })} />
-            </Field>
-          </div>
-          <ul className="space-y-1 text-xs text-slate-500">
-            <li>· It names only times handed to it from the calendar, in exactly these words: "Fri Sep 11 at 10:00am". Anything else parks the reply.</li>
-            <li>· When they pick one of those, it is booked only if it is still free; otherwise the reply waits for you.</li>
-            <li>· "Wants a call" and "scheduling" stay locked on the auto-send list. This is the one door through the lock, and it opens per message.</li>
-          </ul>
-        </div>
-      )}
+    <Section title="Booking calls (retired)"
+      intro="Retired on Nov 10. The bot never offers a time, books a call, asks for one or promises one, whatever this page used to say. Where a call would help it says &quot;Call me whenever, or text here.&quot;">
+      <ul className="space-y-1 text-xs text-slate-500">
+        <li>· When someone asks for a call or a walkthrough, or names a time, you get one Slack ping in Needs Matt: their first name, the house and the time they named. Whether and when to call is yours.</li>
+        <li>· A text of the bot's that promises a call or offers a time is held and written once more without it.</li>
+        <li>· The call ask on an agent's first answer is retired too. Appointments already on your calendar are left as they are.</li>
+      </ul>
     </Section>
   );
 }

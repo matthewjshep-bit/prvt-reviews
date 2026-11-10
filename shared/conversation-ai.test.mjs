@@ -699,13 +699,28 @@ test("a close counter's percent defaults to 10, stays in 0–30, and survives a 
   assert.equal(normalizeConversationAi(saved).parties.agent.counterHold.callWithinPct, 7);
 });
 
-// 2026-10-15: the call ask on an agent's first answer ships off, agent only.
-test("the call ask is off until switched on, agent only, and survives a save", () => {
+// 2026-10-15: the call ask on an agent's first answer shipped off. Retired
+// 2026-11-10 (Matt: whether and when to call is his): a saved `true` from
+// before can't bring it back, now or after another save.
+test("a saved call-ask switch can't bring the call ask back", () => {
   assert.equal(normalizeConversationAi({}).parties.agent.callAsk.enabled, false);
-  const on = normalizeConversationAi({ parties: { agent: { callAsk: { enabled: true } }, investor: { callAsk: { enabled: true } } } });
-  assert.equal(on.parties.agent.callAsk.enabled, true);
-  assert.equal(on.parties.investor.callAsk.enabled, false);
-  assert.equal(normalizeConversationAi(on).parties.agent.callAsk.enabled, true);
+  const saved = normalizeConversationAi({ parties: { agent: { callAsk: { enabled: true } }, investor: { callAsk: { enabled: true } } } });
+  assert.equal(saved.parties.agent.callAsk.enabled, false);
+  assert.equal(saved.parties.investor.callAsk.enabled, false);
+  assert.equal(normalizeConversationAi({ ...saved, parties: { agent: { callAsk: { enabled: true } } } }).parties.agent.callAsk.enabled, false);
+});
+
+// Matt, 2026-11-10: "I think the bot actually booking calls has not been
+// helpful." Prod may have the calendar saved on; that saved switch can't
+// bring booking back, and the calendar it named is kept as it was.
+test("a saved calendar booking switch can't bring booking back", () => {
+  const saved = normalizeConversationAi({ booking: { enabled: true, calendarId: "cal-4471", calendarName: "Afternoons", slotsToOffer: 2 } });
+  assert.equal(saved.booking.enabled, false);
+  assert.equal(saved.booking.calendarId, "cal-4471", "the calendar is kept");
+  assert.equal(saved.booking.calendarName, "Afternoons");
+  assert.equal(saved.booking.slotsToOffer, 2);
+  assert.equal(normalizeConversationAi({ ...saved, booking: { ...saved.booking, enabled: "true" } }).booking.enabled, false);
+  assert.equal(normalizeConversationAi({ ...saved, booking: { ...saved.booking, enabled: true } }).booking.enabled, false);
 });
 
 // 2026-10-15: in 37 of 58 dropped negotiations we'd promised something
@@ -723,7 +738,21 @@ test("the agent defaults never invent an underwriting team or a partner to check
   assert.match(PROMISE_RULE, /a time only for something the app does on its own/);
   assert.match(PROMISE_RULE, /never a time or a day for a number we don't have/);
   assert.match(PROMISE_RULE, /Never invent someone to check with/);
-  assert.match(PROMISE_RULE, /quick call/);
+  assert.match(PROMISE_RULE, /never promise a call or name a time to talk/);
+  assert.match(PROMISE_RULE, /Call me whenever, or text here\./);
+});
+
+// Matt, 2026-11-10: the rules fixed beside the playbook and the starter a
+// fresh account gets say "call me whenever" where they used to promise a
+// call. A saved playbook is never rewritten; only the shipped words change.
+import { promisesACall } from "./call-words.js";
+test("no rule or starter text the app ships tells the bot to promise a call or offer a time", () => {
+  const starter = starterConfig({ signer: "Matt" });
+  const shipped = [AGENT_PAPER_RULE, AGENT_GOAL_RULE, PROMISE_RULE, ...starter.rules,
+    starter.parties.agent.instructions, starter.parties.agent.mayCommit, starter.parties.investor.instructions,
+    ...starter.examples.map((e) => e.weSay)].join("\n");
+  assert.doesNotMatch(shipped, /quick call|give you a (?:quick )?call|call you on that|time slots|hop on|what time works/i);
+  for (const e of starter.examples) assert.equal(promisesACall(e.weSay), "", e.weSay);
 });
 
 // Price once (2026-10-15): two new agent switches, both off until Matt flips them.

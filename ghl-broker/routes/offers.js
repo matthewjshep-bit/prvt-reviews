@@ -6353,7 +6353,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     bookAppointment: async ({ contactId, startTime, label = "", draftId = null, party = null }) => {
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
       const bk = conversationConfig(fresh).booking;
-      if (!bk?.enabled) return { ok: false, reason: "booking is switched off" };
+      // Retired (Matt, 2026-11-10, shared/call-words.js): the settings keep
+      // booking off whatever is saved, so nothing reaches the calendar.
+      if (!bk?.enabled) return { ok: false, reason: "booking calls is retired: the bot never books a call" };
       if (!bk.calendarId) return { ok: false, reason: "no calendar is picked on the Conversation AI page" };
       const startMs = Date.parse(startTime);
       if (!Number.isFinite(startMs)) return { ok: false, reason: `not a time: ${startTime}` };

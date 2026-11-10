@@ -160,6 +160,10 @@ export function routeEvent(ev = {}) {
   else if (t === "investor_passed") dispo("buyer_passed");
   else if (t === "dataroom_viewed") dispo("viewed");
   else if (t === "call_booked" && investor) dispo("walkthrough");
+  // They asked for a call or a walkthrough, or named a time (Matt,
+  // 2026-11-10): the bot never books or promises one, so it's a ping to him
+  // in Needs Matt, a post of its own (shared/call-words.js).
+  else if (t === "call_wanted") out.push({ stream: "needsMatt", kind: "call_wanted", thread: null, ...base });
   else if (t === "underwrite_started") uw("started");
   else if (t === "underwrite_done") { uw("done", { update: true }); acq("uw_done", { replyOnly: true }); }
   // A skeleton or draft-only run only made Matt a draft (Matt, 2026-10-25:
@@ -176,7 +180,7 @@ export const SLACK_EVENT_TYPES = Object.freeze([
   "tier1_added", "ghl_stage_moved", "offer_sent", "offer_revised", "offer_countered", "realm_yes",
   "note", "offer_accepted", ...Object.keys(DEAD), "deal_promoted", "deal_stage", "investor_committed", "investor_evaluating",
   "investor_passed", "dataroom_viewed", "call_booked", "underwrite_started", "underwrite_done", "underwrite_held",
-  "underwrite_failed", "underwrite_dropped", "blast_sent",
+  "underwrite_failed", "underwrite_dropped", "blast_sent", "call_wanted",
 ]);
 
 /**
@@ -290,6 +294,7 @@ const ICON = {
   buyer_passed: ":white_circle:", viewed: ":open_file_folder:", walkthrough: ":calendar:", waves: ":mega:",
   started: ":hourglass_flowing_sand:", done: ":white_check_mark:", held: ":warning:", failed: ":x:", dropped: ":double_vertical_bar:",
   uw_done: ":white_check_mark:", uw_held: ":warning:", uw_failed: ":x:",
+  call_wanted: ":telephone_receiver:",
 };
 
 const STAGE_SAY = { under_contract: "under contract", buyer_found: "buyer found", assigned: "assigned", closed: "closed", fell_through: "fell through" };
@@ -338,6 +343,7 @@ export function renderEvent(route, ev = {}, ctx = {}) {
   const kind = route?.kind || "";
   const d = ev?.data || {};
   if (kind === "tier1") return renderTier1(ev, ctx);
+  if (kind === "call_wanted") return renderCallWanted(ev, ctx);
   const head = `${ICON[kind] || ":small_blue_diamond:"} ${headline(kind, ev, ctx)}`;
   const lines = [head];
   if (kind === "held" || kind === "uw_held") {
@@ -377,6 +383,32 @@ export function renderTier1(ev = {}, ctx = {}) {
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
   const who = ctx.firstName ? ` (${ctx.firstName})` : "";
   return { text: clip(`Tier 1 flagged: ${street(full) || "a house"}${who}`, 150), blocks };
+}
+
+/**
+ * renderCallWanted(ev, ctx) → the Needs Matt ping when someone asks for a call
+ * or a walkthrough, or names a time (Matt, 2026-11-10: the bot never books or
+ * promises one; he decides whether and when). Their first name, the house,
+ * the time they named (shared/call-words.js namedTime: the time words only),
+ * and @Matt. Never a phone, an email or what they wrote.
+ */
+export function renderCallWanted(ev = {}, ctx = {}) {
+  const d = ev?.data || {};
+  const at = ctx.mattUserId ? `<@${ctx.mattUserId}> ` : "";
+  const who = ctx.firstName || (ev?.party === "investor" ? "A buyer" : "An agent");
+  const where = street(ev?.address || ctx.address);
+  const when = clip(scrubForSlack(d.when || ""), 40);
+  const walk = d.wants === "walkthrough";
+  const what = walk ? `wants to see ${where ? `*${esc(where)}*` : "the house"}` : `wants a call${where ? ` about *${esc(where)}*` : ""}`;
+  const said = when ? ` They named ${esc(when)}.` : "";
+  const how = d.voicemail ? " (a voicemail)" : "";
+  const tail = walk ? " Nothing was booked; the time is yours to set." : " The bot didn't book or promise one: call when you choose, or text.";
+  const text = `${ICON.call_wanted} ${at}${esc(who)}${how} ${what}.${said}${tail}`;
+  const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, contactId: ev?.contactId });
+  const blocks = [{ type: "section", text: { type: "mrkdwn", text } }];
+  if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
+  const plain = `${who} ${walk ? `wants to see ${where || "the house"}` : `wants a call${where ? ` about ${where}` : ""}`}${when ? ` (${when})` : ""}`;
+  return { text: clip(plain, 150), blocks };
 }
 
 // Where the one-line summary of what they said earns its place.

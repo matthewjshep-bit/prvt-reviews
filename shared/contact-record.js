@@ -162,6 +162,10 @@ export const EVENT_TYPES = [
   "partner_terms",
   // An agent offered a showing on a live house (2026-10-15): held for Matt.
   "showing_offered",
+  // They asked for a call or a walkthrough, or named a time (2026-11-10,
+  // shared/call-words.js): data { intent, wants, when? }. The bot never books
+  // or promises one; Slack pings Matt (Needs Matt).
+  "call_wanted",
   // An email address they texted us (shared/contact-email.js). Saved: GHL's
   // email field now has it (data.email, data.previous). Offered: they gave
   // one GHL can't take as is — a different one is on file, or another
@@ -242,6 +246,7 @@ export const EVENT_LABEL = {
   texts_elsewhere: "an auto-reply says their texts go to another number",
   partner_terms: "they offered to work together",
   showing_offered: "they offered a showing",
+  call_wanted: "they asked for a call or a walkthrough",
   email_saved: "their email saved to GHL", email_offered: "they gave an email to check",
   ghl_call_queued: "a call went to GHL's Manual Actions", ghl_call_failed: "a call couldn't go to GHL", ghl_call_withdrawn: "a call was taken back out of GHL",
   second_look_sent: "we asked once more at our same number",
@@ -299,6 +304,7 @@ export const EVENT_ICON = {
   texts_elsewhere: "CircleSlash",
   partner_terms: "Handshake",
   showing_offered: "Home",
+  call_wanted: "Phone",
   email_saved: "AtSign", email_offered: "AtSign",
   ghl_call_queued: "Phone", ghl_call_failed: "CircleSlash", ghl_call_withdrawn: "Undo2",
   second_look_sent: "RefreshCw",

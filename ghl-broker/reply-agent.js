@@ -61,7 +61,8 @@ import { standardText, isShippedText } from "./shared/standard-texts.js";
 import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 // shared/voice.js's reader returns { text, at, channel } for the voice check; this file's own
 // ourLastTexts (below, the cold ladder's) returns plain text, so the voice one goes by voicePrior.
-import { voiceFlags, hardVoiceKeys, voiceLine, ourLastTexts as voicePrior, VOICE_LINE_RX } from "./shared/voice.js";
+import { voiceFlags, hardVoiceKeys, voiceLine, ourLastTexts as voicePrior, VOICE_LINE_RX, EVENT_KINDS as TIME_SET_KINDS } from "./shared/voice.js";
+import { BOOKING_RETIRED, CALL_ASK_RETIRED, callWordsFlags, CALL_WORDS_FLAG_RX, callWanted, CALL_WANTED_EVENT } from "./shared/call-words.js";
 import { checkInPack, routeCheckIn, routesCheckIn, normalizeCheckInRoute, asksIfBot, onlyAsksIfBot, botAskFlags, BOT_ASK_REASON, goesBySaid, goesByOf,
   strictNoHouse, checkInFlags, namesBookHouse, namesAHouse, composeRoute, composes, checkInStamp, openingIndex, nothingToSay, normalizeCheckInComposer, spentHookKeys } from "./shared/check-in.js";
 import { normalizeDealTexts } from "./shared/blast-text.js";
@@ -1045,6 +1046,9 @@ export function evaluateReplyGates({
   closeDaysMin = 0,
   formsState = "",
   voice = null,
+  // A text about a time already set (the walkthrough reminder) names it;
+  // every other machine text is read for a call it promises (shared/call-words.js).
+  callCheck = true,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -1057,7 +1061,7 @@ export function evaluateReplyGates({
   }
   if (talksAboutUsAsSomeoneElse(draft.reply, { selfName, contactName, signOff, botAnswer })) {
     const me = firstNameOf(selfName);
-    flags.push(`the draft talks about ${me} as someone else — you are ${me}; say it in the first person ("let me call you on that"), never "I'll flag it to ${me}"`);
+    flags.push(`the draft talks about ${me} as someone else — you are ${me}; say it in the first person ("call me whenever"), never "I'll flag it to ${me}"`);
   }
   const never = NEVER_AUTO[party] || NEVER_AUTO.agent;
   const maxSms = Number(style?.maxSmsChars) > 0 ? Number(style.maxSmsChars) : RA_MAX_SMS_CHARS;
@@ -1244,6 +1248,9 @@ export function evaluateReplyGates({
   flags.push(...(party === "agent" || party === "investor" ? inventedPeopleFlags(claimed) : []));
   flags.push(...(party === "agent" || party === "investor" ? contactClaimFlags(claimed, { connectedCallRecently, callTriedRecently }) : []));
   flags.push(...(party === "agent" ? sentOfferFlags(claimed, { offerWentOut, sendOfferDone }) : []));
+  // The bot never promises, asks for or books a call, or names a time to talk
+  // (Matt, 2026-11-10, shared/call-words.js). Every party. Only adds a hold.
+  flags.push(...(callCheck ? callWordsFlags(claimed, { party }) : []));
   // Their wholesale question is Matt's, and a reply never denies we wholesale
   // or assign; an Oregon house is written on OREF forms (shared/partner-terms.js).
   flags.push(...wholesaleFlags({ reply: draft.reply, party, asked: draft.asksWholesale }));
@@ -1309,12 +1316,16 @@ export async function redraftOnGate({ draft, gate, gateFor, config = null, redra
   if (!draft || !gate || typeof redraft !== "function" || typeof gateFor !== "function") return { draft, gate };
   if (gate.ok || (gate.locked && gate.clean)) return { draft, gate };
   const minConfidence = config?.autoSend?.minConfidence || "high";
+  const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
   // The model's own "a person should see this" is never argued with by a
-  // second draft, whether or not the page holds on it.
-  if (draft.needsHuman) return { draft, gate };
+  // second draft, whether or not the page holds on it. One exception (Matt,
+  // 2026-11-10): a call it promised or a time it offered, and nothing else.
+  // The prompt sets needsHuman exactly where it used to promise a call, so
+  // the rewrite that takes the promise out runs there too; needsHuman stays.
+  const callWordsOnly = tripped.length > 0 && tripped.every((f) => CALL_WORDS_FLAG_RX.test(f));
+  if (draft.needsHuman && !callWordsOnly) return { draft, gate };
   if ((CONFIDENCE_RANK[draft.confidence] ?? 0) < (CONFIDENCE_RANK[minConfidence] ?? 2)) return { draft, gate };
   if (!String(draft.reply || "").trim() || RELEASE_QUIET.has(draft.intent)) return { draft, gate };
-  const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
   if (!tripped.length) return { draft, gate };
   // A call we promised and never made (shared/reply-claims.js): the agent is
   // waiting on Matt's call, and a rewrite that drops the promise only hides it.
@@ -1477,7 +1488,8 @@ export function releaseUnderGuard({ base, party = "agent", intent = "other", con
   // and an agent's counter never by the investor's.
   const investorBand = party === "investor" && intent === "price_pushback";
   if (family === "band" && investorBand !== (guard.kind === "investor_band")) return { ...base, exception: null };
-  const on = family === "booking" ? config?.booking?.enabled
+  // The calendar is retired (Matt, 2026-11-10): no booking verdict releases anything.
+  const on = family === "booking" ? !BOOKING_RETIRED && config?.booking?.enabled
     : investorBand ? config?.parties?.investor?.priceBand?.enabled
       : config?.parties?.[party]?.counterBand?.enabled;
   if (!on) return { ...base, exception: null };
@@ -1521,6 +1533,9 @@ const BOOKING_LOOKBACK_MS = 7 * 86400000;
  * still resolves). One GHL read; `deps.freeSlots` replaces it in tests.
  */
 export async function prepareBooking({ client, store, locationId, contactId, party, message = "", config, now = Date.now(), deps = {} }) {
+  // Retired (Matt, 2026-11-10, shared/call-words.js): the calendar is never
+  // read and no time is offered, whatever the saved switch says.
+  if (BOOKING_RETIRED) return null;
   const bk = config?.booking;
   if (!bk?.enabled || !bk.calendarId || !BOOKING_INTENTS[party]) return null;
   let previouslyOffered = [];
@@ -4207,7 +4222,7 @@ function outboundSummary({ kind, offer, outbound }) {
     case "address_chase": return outbound.houses?.length
       ? `Asks again for the addresses of the houses they named: ${outbound.houses.join(", ")} (check-in ${outbound.rung} of ${outbound.rungs}).`
       : `Asks again for the address of the property they said was coming (check-in ${outbound.rung} of ${outbound.rungs}).`;
-    case "second_look": return `Second look at ${where}: if the seller is still open to it, we can still do ${outbound.oursK} (our same number); asks if it's worth a quick call.`;
+    case "second_look": return `Second look at ${where}: if the seller is still open to it, we can still do ${outbound.oursK} (our same number); asks whether the seller would take a look.`;
     case "price_drop": return `The list price on ${where} came down${outbound.fromK ? ` from ${outbound.fromK}` : ""} to ${outbound.toK}; asks if the seller would look at cash closer to ours now.`;
     case "promise_due": return `Keeps our word on ${where}: we said we'd come back with ${outbound.what === "number" ? "a number" : "an answer"} and nothing went out${outbound.heldReason ? " (the underwrite held)" : ""}.`;
     default: return `Starts a message about ${where}${rung}.`;
@@ -4296,7 +4311,9 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
     theirValue: party === "agent" ? Math.round(Number(dossier?.have?.arv?.value) || 0) : 0,
     ourValue: ourValueFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
     quotes: quotesFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
-    formsState: formsStateOf(d.propertyAddress, subject?.address, offer?.address) });
+    formsState: formsStateOf(d.propertyAddress, subject?.address, offer?.address),
+    // The walkthrough reminder and follow-up name a time already set.
+    callCheck: !TIME_SET_KINDS.has(kind) });
   const gate = strict ? (d) => {
     const g = baseGate(d);
     const extra = strictFlags(d);
@@ -5215,11 +5232,11 @@ async function runReply(job, ctx) {
   // The house our first text opened with (read before the draft since
   // 2026-10-15: the call ask below needs it too).
   const iceHouse = party === "agent" ? await firstTextHouse(store, locationId, job.contactId) : null;
-  // The call ask (2026-10-15): their first answer to our first text closes
-  // with one question — other fixers, and a quick call this week. Texts
-  // only, once, never to someone annoyed; parties.agent.callAsk, off.
-  // Off, their first answer still closes on the other-fixers ask alone.
-  const callOn = Boolean(config.parties?.agent?.callAsk?.enabled);
+  // The call ask (2026-10-15): their first answer to our first text closed
+  // with one question — other fixers, and a quick call this week. Retired
+  // (Matt, 2026-11-10, shared/call-words.js), whatever is saved: their first
+  // answer closes on the other-fixers ask alone.
+  const callOn = !CALL_ASK_RETIRED && Boolean(config.parties?.agent?.callAsk?.enabled);
   const firstAnswer = party === "agent" && !isCall
     ? callAskFor({ events: (await store.listContactEvents?.(locationId, job.contactId, { types: ["outreach_sent", "outreach_enrolled", "call_asked", "fixers_asked"], limit: 50 }).catch(() => [])) || [],
       transcript: a.transcript, message: job.originalMessage || job.message, ice: iceHouse })
@@ -5875,11 +5892,27 @@ async function runReply(job, ctx) {
     }
   }
 
+  // They asked for a call or a walkthrough, or named a time (Matt,
+  // 2026-11-10): the bot never books or promises one, so Matt gets one Slack
+  // ping (shared/slack-notify.js routes call_wanted to Needs Matt) with their
+  // first name, the house and any time they named, never their words. One per
+  // person a day for each time named; a redraft of the same text is the same.
+  if (!isCall || job.call?.missed) {
+    const wanted = callWanted({ party, intent: draft.intent, message: theirLatestWords(a.transcript, job.originalMessage || job.message) });
+    if (wanted) {
+      const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(now));
+      await recordEvent({ store, locationId, contactId: job.contactId, party, type: CALL_WANTED_EVENT, at: new Date(now).toISOString(),
+        address: draft.propertyAddress || "", source: "conversation", ref: job.id,
+        dedupeKey: `${CALL_WANTED_EVENT}:${job.contactId}:${day}:${String(wanted.when || "").toLowerCase()}`,
+        data: { intent: wanted.intent, wants: wanted.wants, ...(wanted.when ? { when: wanted.when } : {}), ...(job.call?.missed ? { voicemail: true } : {}) } }).catch(() => {});
+    }
+  }
+
   // A walkthrough, a call, a time: yours by design, and therefore a draft
   // that was never going to be sent. The heads-up is the useful output. The
-  // calendar is the exception — once it is wired it can answer a time for
-  // real, so the draft stands and the guard decides. So is a buyer who wants
-  // to walk a house we have under contract (Matt, 2026-09-29): getting them
+  // calendar was the exception until it was retired (2026-11-10), so
+  // `booking` is always null here. The one exception left is a buyer who
+  // wants to walk a house we have under contract (Matt, 2026-09-29): getting them
   // out there is the job, so the reply is written for a person to send —
   // wants_walkthrough stays NEVER_AUTO, so it is never sent on its own.
   const bookingCouldAnswer = Boolean(booking) && (BOOKING_INTENTS[party] || []).includes(draft.intent);

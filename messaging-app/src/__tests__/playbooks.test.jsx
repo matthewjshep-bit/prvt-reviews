@@ -14,11 +14,18 @@ test("the playbook grid offers every eligible intent as a box and every locked o
   expect(html).toContain("Never on its own");
 });
 
-test("the booking and auto-send cards render on a default config", () => {
-  const config = normalizeConversationAi({ booking: { enabled: true } });
-  const booking = renderToStaticMarkup(<BookingCard config={config} patch={() => {}} calendars={{ list: [{ id: "c1", name: "Matt" }], loading: false }} />);
-  expect(booking).toContain("Booking calls");
-  expect(booking).toContain("Matt");
+// Matt, 2026-11-10: the bot never books or promises a call. The card says so
+// and has nothing to switch, even on a config saved with booking on.
+test("the booking card shows booking as retired with nothing to switch, and the auto-send card renders", () => {
+  const config = normalizeConversationAi({ booking: { enabled: true, calendarId: "c1", calendarName: "Afternoons" } });
+  expect(config.booking.enabled).toBe(false);
+  const booking = renderToStaticMarkup(<BookingCard config={config} patch={() => {}} calendars={{ list: [{ id: "c1", name: "Afternoons" }], loading: false }} />);
+  expect(booking).toContain("Booking calls (retired)");
+  expect(booking).toContain("Call me whenever, or text here.");
+  expect(booking).toContain("Slack ping");
+  expect(booking).not.toContain("Let it offer times");
+  expect(booking).not.toContain("type=\"checkbox\"");
+  expect(booking).not.toContain("Afternoons");
   const auto = renderToStaticMarkup(<AutoSendCard config={config} patch={() => {}} />);
   expect(auto).toContain("Quick replies");
   expect(auto).toContain("Weekends");
