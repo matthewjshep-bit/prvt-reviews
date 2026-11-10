@@ -6873,14 +6873,18 @@ nothing said so. Four changes:
   roof, floors, paint, carpet, kitchen, bath, siding, windows, furnace,
   plumbing or electrical ("needs new flooring and paint", "needs a new roof
   and some updating"), but never after doesn't / does not / won't / no /
-  nothing, and never "your needs" or "you need"; "cosmetic work / updates /
-  repairs" (not "recent cosmetic updates" or "cosmetic updates throughout");
+  nothing, never "your needs", "you need" or "buyer needs to verify", and
+  the words between are never and / with / including / plus / no, so
+  "everything it needs including a new roof" isn't a need; "cosmetic work /
+  updates / repairs" (not "recent cosmetic updates", "seller has done
+  cosmetic updates" or "cosmetic updates throughout");
   "could use some updating / work / TLC / love"; "ready for your updates /
   renovation / remodel / ideas / vision". Soft now also reads value-add,
   original owner and "no repairs" (seller will make no repairs), plus
   "ready for your personal touch", which finished houses say too. A finished
   word still beats a soft one ("move-in ready with no repairs" is dropped),
-  and "doesn't need any work" or "no repairs necessary" counts as finished.
+  and "doesn't need any work", "needs no work", "needs little to no work"
+  or "no repairs necessary" counts as finished.
   No remarks is still out.
 - **Old misses are read again** (`outreach-sweep.js screenAddresses`). Each
   remembered read on the `outreachScreen` cursor carries the rules version

@@ -61,8 +61,16 @@ test("a listing that says doesn't need any work is dropped", () => {
     "This home does not need repairs.",
     "No need for updates here.",
     "Nothing needs updating.",
+    "This home needs no work.",
+    "Needs little to no work, bring your furniture.",
     // What a buyer needs isn't what the house needs.
     "Room for all your needs with an updated kitchen.",
     "Space for every need and a remodeled bath.",
+    "Has everything it needs including a new roof.",
+    "Buyer needs to verify the roof age.",
+    // Cosmetic work already done.
+    "Seller has done cosmetic updates.",
   ]) assert.equal(listingDistress({ status: "FOR_SALE", description }).ok, false, description);
+  // A no about one room doesn't hide a need in another.
+  assert.equal(listingDistress({ status: "FOR_SALE", description: "Kitchen needs no work but the bath needs updating." }).ok, true);
 });

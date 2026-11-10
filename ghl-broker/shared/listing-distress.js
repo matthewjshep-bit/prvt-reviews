@@ -26,11 +26,14 @@ import { bankSaleIn } from "./flip-read.js";
 // of 108 picks). Never after a no ("doesn't need any work", "no need for
 // repairs", "nothing needs updating"), and never what a buyer needs ("room
 // for all your needs", "everything you need plus a new kitchen"). The words
-// between are never a joining word, so "needs" can't reach across "with an
-// updated kitchen"; "all it needs is paint" still counts.
-const NEED_FILLER = String.raw`(?!(?:and|or|with|for|in|on|at|from|by|but|that|this|while|are|was|met)\b)[a-z][\w'’-]*`;
+// between are never a joining word or a no, so "needs" can't reach across
+// "with an updated kitchen", "including a new roof" or "no work"; "all it
+// needs is paint" still counts. "Needs no work" and "needs little to no
+// work" read finished (NEGATED_SRC), and what a buyer is told to check
+// ("buyer needs to verify the roof's age") isn't a need either.
+const NEED_FILLER = String.raw`(?!(?:and|or|with|for|in|on|at|from|by|but|that|this|while|are|was|met|plus|including|includes|include|like|such|except|than|no|nothing|none|zero|verify|confirm|check|inspect|investigate)\b)[a-z][\w'’-]*`;
 const NEED_WHAT = String.raw`(?:work|repairs?|updat(?:e|es|ing)|renovation|remodel(?:ing)?|rehab|love|attention|everything|roof(?:ing)?|floor(?:s|ing)?|paint(?:ing)?|carpet(?:s|ing)?|kitchen|bath(?:s|rooms?)?|siding|windows?|furnace|plumbing|electrical)`;
-const NOT_BEFORE_NEED = String.raw`(?<!\b(?:doesn['’]?t|does\s+not|don['’]?t|do\s+not|won['’]?t|will\s+not|no|not|nothing|never|you|we|your|their|our|his|her|my|every|family['’]?s?)\s+(?:really\s+|even\s+)?)`;
+const NOT_BEFORE_NEED = String.raw`(?<!\b(?:doesn['’]?t|does\s+not|don['’]?t|do\s+not|won['’]?t|will\s+not|no|not|nothing|never|you|we|your|their|our|his|her|my|every|who|buyers?|family['’]?s?)\s+(?:really\s+|even\s+)?)`;
 const NEEDS_WORK_RX = new RegExp(
   String.raw`${NOT_BEFORE_NEED}\bneeds?\s+(?:${NEED_FILLER}\s+){0,3}?${NEED_WHAT}\b|${NOT_BEFORE_NEED}\bneeds?\s+(?:to\s+be\s+)?updated\b|\bin\s+need\s+of\b`,
   "i",
@@ -49,7 +52,7 @@ const STRONG = [
   ["needs work", NEEDS_WORK_RX],
   // "Cosmetic work" a house is waiting for, not one it has had ("recent
   // cosmetic updates", "cosmetic updates throughout" read as done).
-  ["cosmetic work", /(?<!\b(?:recent(?:ly)?|new(?:er)?|fresh(?:ly)?|completed|with|had|has)\s+)\bcosmetic\s+(?:work|updates|updating|repairs)\b(?!\s+(?:done|completed|made|throughout|include|including|were|have\s+been))/i],
+  ["cosmetic work", /(?<!\b(?:recent(?:ly)?|new(?:er)?|fresh(?:ly)?|completed|done|did|made|tasteful(?:ly)?|with|had|has)\s+)\bcosmetic\s+(?:work|updates|updating|repairs)\b(?!\s+(?:done|completed|made|throughout|include|including|were|have\s+been))/i],
   ["could use work", /\bcould\s+use\s+(?:some\s+|a\s+little\s+|a\s+bit\s+of\s+|a\s+few\s+)?(?:cosmetic\s+)?(?:work|updating|updates|tlc|love|repairs)\b/i],
   ["ready for your updates", /\bready\s+for\s+your\s+(?:own\s+)?(?:updates|updating|renovation|remodel|ideas|vision)\b/i],
   ["cash buyers", /\bcash\s+(?:only|buyers?|offers?)\b|\bnot\s+(?:fha|va|conventional\s+)?(?:financeable|eligible\s+for\s+financing)\b|\bwon'?t\s+(?:qualify|appraise)\b/i],
@@ -86,9 +89,10 @@ const FINISHED = [
   ["like new", /\blike[\s-]new\b|\bshowroom\b|\bimmaculate\b|\bpristine\b/i],
 ];
 
-// "Not a fixer", "no TLC needed", "no work needed", "doesn't need any work":
-// a strong word said the other way round.
-const NEGATED_SRC = /\b(?:not|no|isn'?t|never)\s+(?:a\s+)?(?:fixer|tlc|flip|handyman|project)\b|\bno\s+(?:work|repairs?|updates?)\s+(?:needed|required|necessary|to\s+do)\b|\bno\s+tlc\b|\bdone\s+for\s+you\b|\b(?:doesn['’]?t|does\s+not|won['’]?t|will\s+not|don['’]?t|do\s+not)\s+need\s+(?:any\s+|much\s+)?(?:work|repairs?|updat\w*|tlc)\b/.source;
+// "Not a fixer", "no TLC needed", "no work needed", "doesn't need any work",
+// "needs no work", "needs little to no work": a strong word said the other
+// way round.
+const NEGATED_SRC = /\b(?:not|no|isn'?t|never)\s+(?:a\s+)?(?:fixer|tlc|flip|handyman|project)\b|\bno\s+(?:work|repairs?|updates?)\s+(?:needed|required|necessary|to\s+do)\b|\bno\s+tlc\b|\bdone\s+for\s+you\b|\b(?:doesn['’]?t|does\s+not|won['’]?t|will\s+not|don['’]?t|do\s+not)\s+need\s+(?:any\s+|much\s+)?(?:work|repairs?|updat\w*|tlc)\b|\bneeds?\s+(?:very\s+|so\s+)?(?:no|little|minimal|zero)\s+(?:(?:to|or)\s+no\s+)?(?:work|repairs?|updat\w*|tlc|attention)\b/.source;
 const NEGATED_RX = new RegExp(NEGATED_SRC, "i");
 const NEGATED_ALL_RX = new RegExp(NEGATED_SRC, "gi");
 
