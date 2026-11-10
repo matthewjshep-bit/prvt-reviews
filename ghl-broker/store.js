@@ -558,7 +558,9 @@ const pgStore = {
   // the scheduler's read. Deal texts can now wait days for a buyer's week
   // (shared/buyer-touch.js); newest-created-first would let fifty of those
   // hide a reply that is due now.
-  async listReplyDrafts(locationId, { status = null, contactId = null, since = null, dueBy = null, limit = 100 } = {}) {
+  // `intent` narrows to one intent ("opt_out": every opt-out the reply agent
+  // handled, ghl-broker/opt-out.js), so an old one isn't lost behind newer rows.
+  async listReplyDrafts(locationId, { status = null, contactId = null, since = null, dueBy = null, intent = null, limit = 100 } = {}) {
     const params = [locationId];
     let where = "";
     if (Array.isArray(status) && status.length) { params.push(status); where += ` and status = any($${params.length}::text[])`; }
@@ -566,6 +568,7 @@ const pgStore = {
     if (contactId) { params.push(contactId); where += ` and contact_id = $${params.length}`; }
     if (since) { params.push(since); where += ` and created_at >= $${params.length}`; }
     if (dueBy) { params.push(dueBy); where += ` and (doc->>'sendAt') <= $${params.length}`; }
+    if (intent) { params.push(intent); where += ` and (doc->>'intent') = $${params.length}`; }
     params.push(limit);
     const { rows } = await query(
       `select doc from reply_drafts where location_id = $1${where}
@@ -1998,7 +2001,7 @@ const fileStore = (() => {
       persist();
       return full;
     },
-    async listReplyDrafts(locationId, { status = null, contactId = null, since = null, dueBy = null, limit = 100 } = {}) {
+    async listReplyDrafts(locationId, { status = null, contactId = null, since = null, dueBy = null, intent = null, limit = 100 } = {}) {
       ensure();
       return Object.values(data.replyDrafts)
         .filter((d) => d.locationId === locationId)
@@ -2006,6 +2009,7 @@ const fileStore = (() => {
         .filter((d) => !contactId || d.contactId === contactId)
         .filter((d) => !since || (d.createdAt || "") >= since)
         .filter((d) => !dueBy || (d.sendAt && String(d.sendAt) <= dueBy))
+        .filter((d) => !intent || d.intent === intent)
         .sort(dueBy ? (a, b) => String(a.sendAt).localeCompare(String(b.sendAt)) : (a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit);
     },

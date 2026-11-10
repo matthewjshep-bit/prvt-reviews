@@ -101,8 +101,9 @@ export function fillParagraphs(text, values) {
 
 const DAY_MS = 86400000;
 // After the first text, any of these and an introduction is beside the point:
-// they answered, or we're already talking numbers.
-const ENDED_BY = new Set(["text_summary", "call_summary", "email_received", "hand_reply", "offer_sent", "realm_yes", "deal_promoted"]);
+// they answered, or we're already talking numbers, or they opted out on any
+// channel (`unsubscribed`, 2026-11-09: an SMS STOP never reached the emails).
+const ENDED_BY = new Set(["text_summary", "call_summary", "email_received", "hand_reply", "offer_sent", "realm_yes", "deal_promoted", "unsubscribed"]);
 // A text of ours claimed or sent (the follow-up, the agent check-in). An
 // email never goes the same day as one (2026-10-26: 99 follow-up texts went
 // within 12 hours of an email, and "Got your messages. Please take me off

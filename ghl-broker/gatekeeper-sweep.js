@@ -19,6 +19,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
 import { getContact, emailUnsubscribed, smsUnsubscribed } from "./ghl.js";
+import { optOutTagsOf, optedOutReason } from "./shared/opt-out.js";
+import { optedOutFor } from "./opt-out.js";
 import { callDraftModel, conversationConfig, REPLY_MODEL } from "./reply-agent.js";
 import { meterAi } from "./ai-spend.js";
 import { spreadAcrossDay, machineHours } from "./conversation-scheduler.js";
@@ -112,6 +114,7 @@ export async function runGatekeeperSweep({ client, locationId, saved = {}, store
   const write = deps.write || ((args) => writeGatekeeperDraft({ aiApiKey, saved, examples: g.voiceExamples, ...args }));
   const read = deps.getContact || ((id) => getContact(client, id));
   const config = conversationConfig(saved);
+  const optOutTags = optOutTagsOf(config);
   const schedule = !dryRun && g.autoSend && sendsEnabled && config.enabled;
   const imported = await store.listGatekeepers(locationId, { status: "imported" });
   const allHooks = (await store.listGatekeeperHooks(locationId)).map(flatHook);
@@ -125,6 +128,13 @@ export async function runGatekeeperSweep({ client, locationId, saved = {}, store
     if (!events) { out.steps.skipped++; out.rows.push({ gkKey: row.gkKey, skipped: "couldn't read their timeline" }); continue; }
     const contact = await read(row.contactId).catch(() => null);
     if (!contact) { out.steps.skipped++; out.rows.push({ gkKey: row.gkKey, skipped: "couldn't read the contact in GHL" }); continue; }
+    // An opt-out on any channel (Matt, 2026-11-09): "remove me" by email
+    // ends the texts too, and a do-not-contact tag ends both.
+    const off = await optedOutFor({ store, locationId, contactId: row.contactId, contact, events, optOutTags }).catch(() => null);
+    if (off) {
+      out.rows.push({ gkKey: row.gkKey, waiting: optedOutReason(off) });
+      continue;
+    }
     const hasEmail = Boolean(String(contact.email || "").trim()) && !emailUnsubscribed(contact);
     const hasPhone = Boolean(String(contact.phone || "").trim()) && !smsUnsubscribed(contact);
     const next = nextStep({ events, hooks, settings: g, hasEmail, hasPhone, now });

@@ -13,7 +13,8 @@
 // email draft: scheduled across the day's machine hours when it may send
 // itself, otherwise waiting in the outbox for Matt. The send itself is
 // reply-agent.js sendReplyDraft's, with every guard a text has (a stop, a
-// pass, a live thread, an email opt-out).
+// pass, a live thread, an opt-out on any channel). Nobody who opted out by
+// text or email is emailed (opt-out.js, 2026-11-09).
 
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig } from "./reply-agent.js";
@@ -25,6 +26,8 @@ import {
   checkInEmailGapHours, emailWaitReason,
 } from "./shared/outreach-email.js";
 import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
+import { optOutTagsOf, optedOutReason } from "./shared/opt-out.js";
+import { optedOutFor } from "./opt-out.js";
 
 const DAY_MS = 86400000;
 const iso = (t) => new Date(t).toISOString();
@@ -61,6 +64,7 @@ async function queueEmails({ client, store, locationId, saved, sendsEnabled, now
   const read = typeof deps.getContact === "function" ? deps.getContact : (id) => getContact(client, id);
   const touches = typeof deps.ourTouches === "function" ? deps.ourTouches : (id) => getOurLastTouches(client, locationId, id);
   const config = conversationConfig(saved);
+  const optOutTags = optOutTagsOf(config);
   const gapHours = gap ?? emailGapHours(config);
   const schedule = !dryRun && sendsEnabled && config.enabled && autoSend;
   const why = !sendsEnabled ? "sends are off on the broker (CARD_SENDS_ENABLED)"
@@ -77,6 +81,14 @@ async function queueEmails({ client, store, locationId, saved, sendsEnabled, now
     if (!contact) { out.rows.push({ ...row, status: "skipped", reason: "couldn't read the contact in GHL" }); continue; }
     if (!String(contact.email || "").trim()) { out.rows.push({ ...row, status: "skipped", reason: "no email in GHL" }); continue; }
     if (emailUnsubscribed(contact)) { out.rows.push({ ...row, status: "skipped", reason: "they opted out of email" }); continue; }
+    // An opt-out on any channel (Matt, 2026-11-09): a STOP by text, "take me
+    // off your list", a do-not-text tag. Until then an agent who texted STOP
+    // still got the intro and every check-in email.
+    const off = await optedOutFor({ store, locationId, contactId, contact, events: list, optOutTags });
+    if (off) {
+      out.rows.push({ ...row, status: "skipped", reason: optedOutReason(off) });
+      continue;
+    }
     // The thread itself: a bulk email or a text from GHL leaves no event of
     // ours. Unreadable, the app's own records above decide.
     const ours = await touches(contactId).catch(() => null);

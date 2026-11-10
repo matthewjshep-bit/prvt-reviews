@@ -598,6 +598,10 @@ export const ACTION_LABEL = {
   // Injected by the reply agent only: our reply passed on the house, so a
   // number we priced on it and never sent closes (we passed).
   retire_unsent_offer: "Close a number we never sent on a house we passed on",
+  // Injected by the reply agent only, always an ask: a held text that may be
+  // an opt-out ("Stop, not interested"). Your press makes it one, for good:
+  // no machine text or email goes to them again (shared/opt-out.js).
+  mark_opted_out: "Opt out",
   mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
   record_deal_feedback: "File what they said about the deal as feedback",
   revise_offer_to_counter: "Re-issue the offer at their number",
@@ -792,8 +796,9 @@ const PLAYBOOK = () => ({
 
 // Words that mean "stop". Matched deterministically, before any model call,
 // because a person who said STOP must not get a reply of any kind — not even
-// a polite one. A one-word keyword has to START the message ("stop", "STOP
-// texting me"); a phrase may appear anywhere ("this is the wrong number").
+// a polite one. A one-word keyword has to START a short message ("stop", "STOP
+// texting me"; a longer one is a maybe held for Matt, optOutMaybe); a phrase
+// may appear anywhere ("this is the wrong number").
 export const DEFAULT_OPT_OUT_KEYWORDS = [
   "stop", "unsubscribe", "remove", "cancel", "quit", "end",
   "do not text", "don't text", "dont text", "wrong number", "take me off", "no more texts",
@@ -1503,21 +1508,106 @@ export function normalizeConversationAi(doc, seed = {}) {
 
 /* ---------- opt-out detection ---------- */
 
+// Phrases that mean "leave me alone" wherever they sit in a message.
+// Widened 2026-11-09 (Matt: any opt-out, any channel): "please stop", "opt
+// me out", "revoke" (the FCC's own word; not "revoke the offer"), "do not
+// email", "off your mailing list". 73 of 505 real opt-outs had needed the
+// model to catch them. "Stop sending" counts only for us or our texts ("stop
+// sending me these"), not "stop sending the photos one at a time". "Revoke
+// my offer" is about a house, not us.
+const LEAVE_ME_ALONE_RX = /\b(take me off|remove me|off (?:your|the|this) (?:mailing |contact |texting |call )?list|do(?: not|n'?t) (?:text|contact|message|call|email)|stop (?:texting|contacting|messaging|calling|emailing)|stop sending (?:me|these|those|them|texts|messages|emails)|unsubscribe|no more (?:texts|messages|emails)|lose my number|please stop|opt[\s-]?(?:me[\s-]?)?out|stopall|revoke\b(?!\s+(?:the|our|their|his|her|its|that|this)\b)(?!\s+(?:my\s+|your\s+)?(?:offer|acceptance|counter(?:offer)?|bid)\b))\b/i;
+// Marketing footers pasted in from a flyer, an MLS blast or an email
+// signature: never their words to us ("Reply STOP to opt out", "STOP to
+// end", "To unsubscribe, click here"). An agent's own listing email carries
+// one too ("You are receiving this email because...", "Unsubscribe | Update
+// preferences"), and read as theirs it would silence them for good.
+const OPT_OUT_FOOTERS = [
+  /\b(?:reply|text|txt|send|respond)(?:\s+with)?\s+["'“”]?(?:stop|end|quit|cancel|unsubscribe|stopall|remove)["'“”]?\s+to\b[^.!?\n]*/gi,
+  /\bstop["'“”]?\s+to\s+(?:end|cancel|quit|stop|opt[\s-]?out|unsubscribe)\b[^.!?\n]*/gi,
+  /(^|[.!?\n]\s*)to\s+(?:unsubscribe|opt[\s-]?out)\b\s*(?:[,:-]|from\b|click\b|reply\b|text\b|visit\b|tap\b|go\b|please\b)[^.!?\n]*/gi,
+  /\b(?:click|tap)\s+here\s+to\s+(?:unsubscribe|opt[\s-]?out)\b[^.!?\n]*/gi,
+  /\bunsubscribe\s+(?:from\s+(?:this|these|our|all)\s+(?:list|emails?|mailings?|messages?)|here|link)\b[^.!?\n]*/gi,
+  /[|·•]\s*unsubscribe\b|\bunsubscribe\s*[|·•]/gi,
+];
+// Marks of a bulk email (a newsletter, a listing blast): with one of these in
+// it, a bare "Unsubscribe" is the footer's link, not their word.
+const BULK_EMAIL_RX = /\byou(?:'re|\s+are)\s+receiving\s+this\b[^.!?\n]*|\b(?:manage|update)\s+(?:your\s+)?(?:email\s+|subscription\s+|communication\s+)?(?:preferences|subscriptions?)\b[^.!?\n]*|\bif\s+you\s+(?:no\s+longer\s+)?(?:wish|want|would\s+like)\s+to\s+(?:stop\s+|no\s+longer\s+)?receiv\w*\b[^.!?\n]*|\bview\s+(?:this\s+(?:email\s+)?)?in\s+(?:your\s+)?browser\b[^.!?\n]*/gi;
+// A keyword that opens a sentence about something else: "Stop by anytime",
+// "End of the month works", "Remove the carpet", "Cancel that, they want
+// 450", a quit claim deed. And a channel they'd rather we used ("don't call,
+// just text me", "text me, don't call"): that asks for texts, it doesn't
+// stop them. These never count. "Don't text" always does.
+// Nor do someone else we shouldn't reach ("do not contact the tenants",
+// "don't call the seller"), a time to call ("don't call me before 10"), a
+// house off the list ("take 12 Wicket Ln off the list, it's pending"), a
+// thing to stop ("please stop sending the photos one at a time") or a
+// contract term ("opt out of the inspection contingency"): read as an
+// opt-out, each one would silence a working agent for good.
+const NOT_AN_OPT_OUT_RX = new RegExp([
+  String.raw`\bstop(?:ping)?\s+(?:by|in|over)\b`,
+  String.raw`\bend\s+of\s+(?:the\s+)?(?:day|week|month|year)\b`,
+  String.raw`\bend(?:s|ed)?\s+up\b`,
+  String.raw`\bcancel\s+that\b`,
+  String.raw`\bcancel\s+the\s+(?:showing|appointment)\b`,
+  String.raw`\bremove\s+the\b`,
+  String.raw`\bquit[\s-]*claim\b`,
+  String.raw`\bdo(?:\s+not|n'?t)\s+(?:call|e-?mail)(?:\s+me)?\s*[,.;:-]*\s*(?:(?:just|only|please|but)\s+)?(?:text|txt)(?:s|ing)?(?:\s+me)?\b(?!\s*(?:or|and|&)\b)`,
+  String.raw`\bdo(?:\s+not|n'?t)\s+call(?:\s+me)?\s*[,.;:-]*\s*(?:(?:just|only|please|but)\s+)?e-?mail(?:\s+me)?\b(?!\s*(?:or|and|&)\b)`,
+  String.raw`\b(?:text|txt)(?:\s+me)?(?:\s+only)?\s*[,.;:-]*\s*(?:please\s+)?do(?:\s+not|n'?t)\s+call(?:\s+me)?\b(?!\s*(?:or|and|&)\b)`,
+  String.raw`\bdo(?:\s+not|n'?t)\s+(?:contact|message|call|e-?mail)\s+(?:(?:the|my|our|his|her|their|any|that|this)\s+)?(?:tenants?|occupants?|renters?|residents?|sellers?|owners?|buyers?|clients?|neighbou?rs?|listing(?:\s+(?:agent|office|broker))?|office|brokerage|lender|hoa|family|him|her|them)\b`,
+  String.raw`\bdo(?:\s+not|n'?t)\s+(?:call|e-?mail)(?:\s+me)?\s+(?:before|after|until|till|during|between|today|tonight|tomorrow|this\s+(?:morning|afternoon|evening|week))\b`,
+  String.raw`\b(?:that\s+one|this\s+one|the\s+(?:house|home|property|listing|lot)|\d+\s+[a-z][a-z0-9']*(?:\s+(?:st|street|ave|avenue|rd|road|ln|lane|dr|drive|ct|court|pl|place|way|blvd|cir|circle|ter|terrace|hwy|ne|nw|se|sw|n|s|e|w|north|south|east|west))*)\s+off\s+(?:the|this|your|ur)\s+list\b`,
+  String.raw`\bplease\s+stop\s+(?!(?:texting|contacting|messaging|calling|emailing|sending\s+(?:me|these|those|them|texts|messages|emails))\b)\w+ing\s+(?:the|a|an|that|his|her|their|our)\b`,
+  String.raw`\bopt(?:ed|s|ing)?[\s-]?out\s+of\s+(?:(?:the|an?|that|this|his|her|their|our)\s+)?(?:\w+\s+)?(?:inspections?|contingenc(?:y|ies)|financing|appraisal|escrow|hoa|contract|feasibility|review|title)\b`,
+].join("|"), "gi");
+// The opening keyword followed by a clause of its own ("Stop, not
+// interested", "Stop! That's a great number"): a longer text, not a bare STOP.
+const CLAUSE_AFTER_RX = /^\W*[a-z']+\s*[,;:.!?-]+\s*\S+\s+\S+/;
+const escapeRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * optOutRead(message, optOut) → { read: "yes" | "maybe" | null, words }
+ *
+ * The one reading of a line of theirs. Footers and the sentences above are
+ * taken out first. Then: a phrase that means leave me alone, or a configured
+ * keyword of more than one word, anywhere ("wrong number"); or a one-word
+ * keyword that opens a text of three words or fewer ("STOP", "Stop texting
+ * me", "quit it"). A longer text that opens with one ("Stop, not
+ * interested") is a maybe: the model reads it and the draft waits for Matt.
+ */
+function optOutRead(message, optOut) {
+  if (!optOut?.enabled) return { read: null, words: 0 };
+  let text = String(message || "").toLowerCase().replace(/[‘’]/g, "'");
+  for (const rx of OPT_OUT_FOOTERS) text = text.replace(rx, (m, lead) => (typeof lead === "string" ? `${lead} ` : " "));
+  const unbulked = text.replace(BULK_EMAIL_RX, " ");
+  if (unbulked !== text) text = unbulked.replace(/\bunsubscribe\b/g, " ");
+  text = text.replace(NOT_AN_OPT_OUT_RX, " ").replace(/\s+/g, " ").trim();
+  if (!/[a-z]/.test(text)) return { read: null, words: 0 };
+  const words = text.split(/\s+/).length;
+  if (LEAVE_ME_ALONE_RX.test(text)) return { read: "yes", words };
+  const keywords = (optOut.keywords || []).map((k) => String(k || "").toLowerCase().trim()).filter(Boolean);
+  if (keywords.some((k) => k.includes(" ") && text.includes(k))) return { read: "yes", words };
+  const opens = keywords.some((k) => !k.includes(" ") && new RegExp(`^\\W*${escapeRx(k)}\\b`, "i").test(text));
+  if (!opens) return { read: null, words };
+  return { read: words <= 3 && !CLAUSE_AFTER_RX.test(text) ? "yes" : "maybe", words };
+}
+
 // True when the message is an opt-out under the configured keywords. Pure.
 export function detectOptOut(message, optOut = CONVERSATION_AI_DEFAULTS.optOut) {
-  if (!optOut?.enabled) return false;
-  const text = String(message || "").toLowerCase().replace(/[\u2018\u2019]/g, "'").trim();
-  if (!text) return false;
-  for (const raw of optOut.keywords || []) {
-    const k = String(raw || "").toLowerCase().trim();
-    if (!k) continue;
-    if (k.includes(" ")) {
-      if (text.includes(k)) return true;
-    } else if (new RegExp(`^\\W*${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text)) {
-      return true;
-    }
-  }
-  return false;
+  return optOutRead(message, optOut).read === "yes";
+}
+
+/**
+ * optOutMaybe(message, optOut) → true for a longer text that opens with a
+ * one-word keyword ("Stop, not interested")
+ *
+ * Not silenced and not tagged: the model drafts it and the draft is held for
+ * Matt with an Opt out button (reply-agent.js), never sent by itself. Until
+ * 2026-11-09 these read as opt-outs, and "Stop by anytime" silenced a warm
+ * agent for good.
+ */
+export function optOutMaybe(message, optOut = CONVERSATION_AI_DEFAULTS.optOut) {
+  return optOutRead(message, optOut).read === "maybe";
 }
 
 /**
@@ -1526,25 +1616,21 @@ export function detectOptOut(message, optOut = CONVERSATION_AI_DEFAULTS.optOut) 
  * Did they ask to be left alone earlier in the thread? For what the machine
  * STARTS (a ladder rung, a check-in): an agent who wrote "take me off your
  * list" before the bot existed carries no tag, and the ladder drafted him a
- * month later (2026-09-18). Reads only THEIR lines. Stricter than
- * detectOptOut, because an old thread is full of "Stop by the open house": a
- * single-word keyword counts only when it is nearly the whole message; a
- * phrase counts anywhere. Pure. Their newest such line wins.
+ * month later (2026-09-18). Reads only THEIR lines, with detectOptOut's
+ * footers and exemptions ("Stop by the open house" is not one). A short
+ * line that opens with a keyword counts here even with a clause after it
+ * ("Stop, not interested"): nobody is waiting on a machine text. Pure.
+ * Their newest such line wins.
  */
-const LEAVE_ME_ALONE_RX = /\b(take me off|remove me|off (?:your|the|this) list|do(?: not|n'?t) (?:text|contact|message|call)|stop (?:texting|contacting|messaging|calling)|unsubscribe|no more texts|lose my number)\b/i;
 export function optOutInTranscript(transcript = "", optOut = CONVERSATION_AI_DEFAULTS.optOut) {
   if (!optOut?.enabled) return null;
-  const words = (optOut.keywords || []).map((k) => String(k || "").toLowerCase().trim()).filter(Boolean);
   let found = null;
   for (const line of String(transcript || "").split("\n")) {
     const m = /^\[(\d{4}-\d{2}-\d{2}) \d{2}:\d{2}\] THEM \w+: (.*)$/.exec(line);
     if (!m) continue;
     const text = m[2].trim();
-    const low = text.toLowerCase().replace(/[\u2018\u2019]/g, "'");
-    const short = low.split(/\s+/).length <= 3;
-    const hit = LEAVE_ME_ALONE_RX.test(low)
-      || words.some((k) => (k.includes(" ") ? low.includes(k) : short && new RegExp(`^\\W*${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(low)));
-    if (hit) found = { at: m[1], text: text.slice(0, 120) };
+    const { read, words } = optOutRead(text, optOut);
+    if (read === "yes" || (read === "maybe" && words <= 3)) found = { at: m[1], text: text.slice(0, 120) };
   }
   return found;
 }

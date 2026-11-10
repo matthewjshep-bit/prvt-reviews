@@ -94,12 +94,15 @@ import { parseUsAddress, addressKey, lastMention, offerForms, normalizeUsAddress
 import {
   normalizeConversationAi, shadowModelFor, INTENTS, NEVER_AUTO, GUARDED_AUTO, autoEligible, PARTY_LABEL, CONFIDENCES,
   SILENT_INTENTS, OUTBOUND_INTENTS, detectOptOut, optOutInTranscript, optOutActions, normalizePassReason, normalizeDraftFeedback,
-  setupQuestionFor, EYES_QUESTION, SELLER_NUMBER_QUESTION,
+  setupQuestionFor, EYES_QUESTION, SELLER_NUMBER_QUESTION, optOutMaybe,
 } from "./shared/conversation-ai.js";
 import { numberStance, listedFit, noFitLine } from "./shared/number-stance.js";
 import {
   getContact, createContactNote, addContactTags, removeContactTags, sendSms, sendEmail, smsUnsubscribed, emailUnsubscribed, DND_TAG,
+  emailReplyText,
 } from "./ghl.js";
+import { optedOutLine, optOutTagsOf, promisesToStop, OPT_OUT_ACTION } from "./shared/opt-out.js";
+import { optedOutFor, recordOptOut, machineStarted } from "./opt-out.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { endsWithQuestionToThem } from "./shared/promise-resolver.js";
 import { keepsOurWord } from "./shared/promise-owed.js";
@@ -2110,6 +2113,11 @@ export function lastOutbound(transcript = "") {
 // they have the thread, so the bot drafts but never sends on its own.
 // Why the bot stood down, in the words the outbox and the job show.
 export const DND_REASON = "they unsubscribed (DND in GHL) — nothing is drafted";
+// An opt-out on any channel (Matt, 2026-11-09): what the machine would start
+// stands down (optedOutLine); a reply to their new text is drafted and waits
+// for you; a text that may be one waits with an Opt out button.
+export const OPTED_OUT_HOLD = "they opted out earlier: this waits for you";
+export const MAYBE_OPT_OUT_REASON = "this may be an opt-out: press Opt out if it is";
 export function handsOffReason(a) {
   if (a?.dnd) return DND_REASON;
   if (a?.botOff?.length) return `bot is off for this contact (tag: ${a.botOff[0]})`;
@@ -2410,6 +2418,10 @@ export async function assembleConversation({
   // Stop / Pause on the work pane (shared/bot-hold.js): the bot still drafts
   // for them, and nothing it writes goes by itself. A read that fails holds.
   const hold = light || !contactId ? null : await holdFor({ store, locationId, contactId, now });
+  // An opt-out on any channel (Matt, 2026-11-09: a STOP, "take me off your
+  // list" by text or email, an email unsubscribe, a do-not-text tag): the
+  // machine starts nothing for them, and a reply to them waits for you.
+  const optedOut = light || !contactId ? null : await optedOutFor({ store, locationId, contactId, contact, optOutTags: optOutTagsOf(config) }).catch(() => null);
   const typed = fakeThread ? renderFakeThread(fakeThread, channel) : "";
   const transcript = [real, typed].filter(Boolean).join("\n");
 
@@ -2491,7 +2503,7 @@ export async function assembleConversation({
     : null;
 
   return {
-    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive, hold, gatekeeper,
+    config, party, partySource, matchedTags: resolved.matched, classified, stampTag, botOff, dnd, dealHold, humanActive, hold, gatekeeper, optedOut,
     playbook, contact, contactName: name, tags, custom, transcript, context, underwriting, instructions, signer, companyContact,
   };
 }
@@ -2637,6 +2649,9 @@ export async function startReply({
       prev.job.phase = "";
       prev.job.finishedAt = new Date().toISOString();
       prev.job.supersededBy = job.id;
+      // The texts it replaces ride along for the opt-out read (2026-11-09):
+      // "please stop texting me about it" then "Thanks" is still a stop.
+      job.burst = [...(prev.job.burst || []), prev.job.originalMessage ?? prev.job.message].filter(Boolean).slice(-5);
     }
     job.phase = "waiting";
     const timer = setTimeout(() => { waiting.delete(key); launch(); }, debounceMs);
@@ -3937,6 +3952,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
   });
   const handsOff = handsOffReason(a);
   if (handsOff) return { skipped: handsOff, contactName: a.contactName };
+  if (a.optedOut) return { skipped: optedOutLine(a.optedOut), contactName: a.contactName };
   const askedOff = optOutInTranscript(a.transcript, config.optOut);
   if (askedOff) return { skipped: `they asked to be left alone on ${askedOff.at}`, contactName: a.contactName };
   const { context } = a;
@@ -3981,6 +3997,13 @@ async function runProactive(job, ctx) {
   const handsOff = handsOffReason(a);
   if (handsOff) {
     job.status = "held"; job.phase = ""; job.heldReason = handsOff; job.finishedAt = new Date().toISOString();
+    return;
+  }
+  // They opted out on any channel (Matt, 2026-11-09): nothing the machine
+  // starts is drafted, and no model call is spent finding that out. A text a
+  // person asked for (pressing Float) is still drafted, and waits for Send.
+  if (a.optedOut && ctx.machine) {
+    job.status = "held"; job.phase = ""; job.heldReason = optedOutLine(a.optedOut); job.finishedAt = new Date().toISOString();
     return;
   }
   // They asked to be left alone earlier in the thread and carry no tag (it
@@ -4066,6 +4089,11 @@ async function runProactive(job, ctx) {
   // to wait for a person — and "needs a person" is what keeps the 7pm audit
   // from releasing it later (releasableHeld).
   if (deps.holdForAPerson) auto = { send: false, code: "switch_off", reason: `needs a person: ${String(deps.holdForAPerson).slice(0, 160)}` };
+  // Asked for by a person, to someone who opted out: drafted, and yours to send.
+  if (a.optedOut) {
+    auto = { send: false, code: "switch_off", reason: `needs a person: ${optedOutLine(a.optedOut)}` };
+    gate = { ...gate, ok: false, flags: [...(gate.flags || []), OPTED_OUT_HOLD] };
+  }
 
   job.phase = "saving";
   const open = [];
@@ -4217,8 +4245,15 @@ async function runReply(job, ctx) {
   const isCall = job.inboundKind === "call";
   const inboundText = isCall ? String(job.call?.transcript || job.message || "") : job.message;
   // "Stop" said in a phone call is a sentence, not an opt-out; the keyword
-  // rule is for texts.
-  if (!isCall && detectOptOut(job.message, cfg.optOut)) {
+  // rule is for texts. The texts a burst folded into this one count as much
+  // as the last (2026-11-09): "please stop texting me about it", then
+  // "Thanks", is a stop. An email is read for their own words above the
+  // quoted thread (ghl.js emailReplyText): a footer or an old email they
+  // quoted below isn't them asking.
+  const ownWords = (t) => (job.channel === "email" ? emailReplyText(t) : String(t || ""));
+  const theirTexts = isCall ? [] : [...(job.burst || []), job.message].map(ownWords);
+  const optOutText = theirTexts.find((t) => detectOptOut(t, cfg.optOut));
+  if (optOutText != null) {
     job.phase = "reading";
     const a = await assembleConversation({
       client, locationId, saved, store, contactId: job.contactId, message: job.message, channel: job.channel,
@@ -4227,9 +4262,14 @@ async function runReply(job, ctx) {
     job.party = a.party;
     job.partySource = a.partySource;
     job.contactName = a.contactName;
-    await handleOptOut(job, { ...ctx, config: cfg, party: a.party, partySource: a.partySource, matchedTags: a.matchedTags, confidence: "high", reason: "an opt-out keyword" });
+    await handleOptOut(job, { ...ctx, config: cfg, party: a.party, partySource: a.partySource, matchedTags: a.matchedTags, confidence: "high", reason: "an opt-out keyword",
+      via: job.channel === "email" ? "email" : "sms_keyword", inbound: theirTexts.length > 1 ? theirTexts.join("\n") : job.message });
     return;
   }
+  // A longer text that opens with a keyword ("Stop, not interested"): the
+  // model reads it, and whatever it drafts waits for you with an Opt out
+  // button. No tag, no silence, never sent by itself.
+  const maybeOptOut = theirTexts.some((t) => optOutMaybe(t, cfg.optOut));
 
   /* --- 1. who and what --- */
   job.phase = "reading";
@@ -4883,7 +4923,7 @@ async function runReply(job, ctx) {
   // The model read an opt-out the keywords didn't catch ("lose my number",
   // plain anger). Same outcome as the keyword: silence and the tag.
   if (SILENT_INTENTS.has(draft.intent)) {
-    await handleOptOut(job, { ...ctx, config, party, partySource: a.partySource, matchedTags: a.matchedTags, confidence: draft.confidence, reason: draft.summary || "the model read an opt-out" });
+    await handleOptOut(job, { ...ctx, config, party, partySource: a.partySource, matchedTags: a.matchedTags, confidence: draft.confidence, reason: draft.summary || "the model read an opt-out", via: "model" });
     return;
   }
 
@@ -5124,6 +5164,22 @@ async function runReply(job, ctx) {
   if (missedCallHouse) {
     auto = { ...auto, send: false, code: "needs_you", reason: `they called about ${missedCallHouse} and left a voicemail — call them back` };
   }
+  // They opted out earlier, on any channel (Matt, 2026-11-09): their new
+  // text is answered in a draft, and it waits for you. A text that may be
+  // an opt-out ("Stop, not interested") waits the same way, with an Opt out
+  // button and no tag. Neither is released later by the audit (needsHuman).
+  // A maybe still waiting from their last text carries onto this one (it
+  // replaces that row), button and all.
+  const optedOutFirm = a.optedOut && a.optedOut.via !== "maybe";
+  const optOutAsk = !optedOutFirm && (maybeOptOut || a.optedOut?.via === "maybe");
+  const optOutHold = optedOutFirm ? OPTED_OUT_HOLD : optOutAsk ? MAYBE_OPT_OUT_REASON : "";
+  if (optOutHold) {
+    auto = { ...auto, send: false, code: "needs_you", reason: optOutHold };
+    gate = { ...gate, ok: false, flags: [...(gate.flags || []), optOutHold] };
+    draft = optOutAsk
+      ? { ...draft, needsHuman: true, humanReason: MAYBE_OPT_OUT_REASON, optOutMaybe: true }
+      : { ...draft, needsHuman: true, humanReason: draft.humanReason || optOutHold };
+  }
   const bookingVerdict = guard?.kind === "booking" ? guard : null;
   const autoWithVerdict = bookingVerdict && !auto.exception ? { ...auto, exception: bookingVerdict } : auto;
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };
@@ -5132,6 +5188,12 @@ async function runReply(job, ctx) {
   if (filedAction) {
     plan.auto = plan.auto.filter((x) => x.type !== filedAction);
     plan.suggested = plan.suggested.filter((x) => x.type !== filedAction);
+  }
+  // The Opt out button on a reply that may be one: your press writes the
+  // opt-out for good and puts the opt-out tags on (conversation-actions.js).
+  if (optOutAsk) {
+    plan.suggested.push({ id: `a-optout-${job.id}-mark`, type: OPT_OUT_ACTION, mode: "ask", status: "pending", party,
+      tags: config.optOut?.tags || [], via: "you", why: MAYBE_OPT_OUT_REASON });
   }
   // A house we already passed stays passed while its repeat waits for a
   // person: filed "countered", the next repeat would draw the goodbye again.
@@ -5682,6 +5744,9 @@ async function runReply(job, ctx) {
     // A showing they offered on a live house, held for Matt (2026-10-15).
     ...(draft.showingOffered ? { showingOffered: draft.showingOffered } : {}),
     ...(draft.deskFirst ? { deskFirst: draft.deskFirst } : {}),
+    // It may be an opt-out ("Stop, not interested"): nothing the machine
+    // makes goes to them while it waits (shared/opt-out.js "maybe").
+    ...(draft.optOutMaybe ? { optOutMaybe: true } : {}),
     // They told us it isn't our kind of house: a pass on it, which the
     // contact card reads (shared/contact-card.js).
     ...(notOurKind ? { notOurKind: true } : {}),
@@ -6297,8 +6362,11 @@ async function runReply(job, ctx) {
   // band, a booking, the dataroom invite, Tier 1 re-entry), before any runs.
   // The draft offers each one; a person presses it. The reply keeps the
   // model's own words — "sent our letter of intent over" would not be true.
-  if (a.hold?.held) {
-    const why = holdLine(a.hold);
+  // An opt-out on any channel holds them the same way (2026-11-09): a GHL
+  // drip or our letter is a machine text or email too.
+  const stoppedWhy = a.hold?.held ? holdLine(a.hold) : optedOutFirm ? optedOutLine(a.optedOut) : optOutAsk ? MAYBE_OPT_OUT_REASON : "";
+  if (stoppedWhy) {
+    const why = stoppedWhy;
     const { plan: kept, held } = holdActionsWhileStopped(plan, why);
     if (held.length || record.replyBeforeSend) {
       plan.auto = kept.auto;
@@ -6464,12 +6532,19 @@ const mediaDraft = (config) => ({
 // Silence, the tag, and a record. Any open or scheduled draft to this
 // contact is superseded — a reply that was counting down must not go out to
 // someone who just said stop.
+//
+// The record is for good (Matt, 2026-11-09): a keyword, or the model at high
+// confidence, writes the `unsubscribed` event every machine text and email
+// reads (opt-out.js), whichever channel it came on. A model read below high
+// writes none: its actions wait as asks, with an Opt out button that writes
+// it when you press it.
 async function handleOptOut(job, ctx) {
-  const { client, locationId, store, config, party, partySource, matchedTags, confidence, reason, deps = {} } = ctx;
+  const { client, locationId, store, config, party, partySource, matchedTags, confidence, reason, via = "model", inbound = null, deps = {} } = ctx;
   const warnings = job.warnings;
   job.phase = "acting";
   job.intent = "opt_out";
   job.summary = reason;
+  const high = confidence === "high";
   const open = [];
   for (const status of ["draft", "scheduled"]) {
     const rows = await store.listReplyDrafts(locationId, { contactId: job.contactId, status, limit: 5 }).catch(() => []);
@@ -6478,13 +6553,20 @@ async function handleOptOut(job, ctx) {
   for (const old of open) {
     await store.updateReplyDraft(old.id, { ...old, status: "superseded", sendAt: null, updatedAt: new Date().toISOString() }).catch(() => {});
   }
-  const planned = optOutActions(config.optOut).map((a, i) => ({
-    ...a, id: `a-optout-${job.id}-${i}`, mode: confidence === "high" ? "auto" : "ask", status: "pending", party,
-  }));
+  if (high) {
+    await recordOptOut({ store, locationId, contactId: job.contactId, party, via, channel: job.channel, confidence, now: Date.now() }).catch(() => {});
+  }
+  const planned = [
+    ...optOutActions(config.optOut).map((a, i) => ({
+      ...a, id: `a-optout-${job.id}-${i}`, mode: high ? "auto" : "ask", status: "pending", party,
+    })),
+    ...(high ? [] : [{ id: `a-optout-${job.id}-mark`, type: OPT_OUT_ACTION, mode: "ask", status: "pending", party, tags: [], via: "you",
+      why: `the model read an opt-out at ${confidence || "low"} confidence: press Opt out if it is` }]),
+  ];
   const ts = new Date().toISOString();
   let record = await store.createReplyDraft({
     locationId, contactId: job.contactId, contactName: job.contactName, status: "handled", channel: job.channel,
-    jobId: job.id, inbound: job.message, reply: "", intent: "opt_out", confidence, needsHuman: false, humanReason: "",
+    jobId: job.id, inbound: inbound ?? job.message, reply: "", intent: "opt_out", confidence, needsHuman: false, humanReason: "",
     summary: reason, propertyAddress: "", counterAmount: null, autoSendable: false,
     flags: ["an opt-out gets no reply"], party, partySource, matchedTags, autoSend: { decided: false, reason: "an opt-out gets no reply" },
     actions: planned, supersededIds: open.map((o) => o.id), warnings: warnings.slice(0, 6), promptVersion: 2, updatedAt: ts,
@@ -6501,7 +6583,7 @@ async function handleOptOut(job, ctx) {
   const did = record.actions.filter((x) => x.status === "done").map((x) => x.detail || x.type);
   const asks = record.actions.filter((x) => x.status === "pending").map((x) => x.type.replace(/_/g, " "));
   await note(client, job.contactId,
-    `Conversation AI: opt-out (${reason}). No reply was sent and none will be drafted.` +
+    `Conversation AI: opt-out (${reason}). No reply was sent. The machine starts no text or email to them again; a reply to a new text of theirs waits for you.` +
     (did.length ? `\nDone: ${did.join("; ")}.` : "") +
     (asks.length ? `\nSuggested in the app: ${asks.join("; ")}.` : "") +
     (open.length ? `\n${open.length} pending draft${open.length === 1 ? "" : "s"} to them cancelled.` : ""),
@@ -6855,12 +6937,39 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       await markUnsubscribed({ client, store, locationId, contactId: d.contactId, party: d.party || "agent", now });
       return { ok: true, skipped: "they unsubscribed" };
     }
+    const savedNow = (await store.getOfferSettings?.(locationId).catch(() => null)) || {};
+    const configNow = conversationConfig(savedNow);
+    // An opt-out on ANY channel since it was queued (Matt, 2026-11-09): a
+    // STOP by text ends the check-in emails, an email unsubscribe ends the
+    // texts, and so do a do-not-text tag and "take me off your list". What
+    // the machine started is binned; anything else (a reply to them) goes
+    // back to wait for your Send. You pressing Send is never stopped here.
+    const off = await optedOutFor({ store, locationId, contactId: d.contactId, contact, optOutTags: optOutTagsOf(configNow), exceptDraftId: d.id }).catch(() => null);
+    if (off) {
+      const ts = new Date(now).toISOString();
+      // A text of theirs that may be an opt-out is waiting for you ("maybe"):
+      // the same stand-down, said as what it is.
+      const maybe = off.via === "maybe";
+      if (machineStarted(d)) {
+        await store.updateReplyDraft(d.id, {
+          ...d, status: "dismissed", dismissedBy: "opt_out", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+          flags: [...(d.flags || []), maybe ? "they may have opted out, not sent" : "they opted out, not sent"],
+        });
+        await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+        return { ok: true, skipped: maybe ? "they may have opted out" : "they opted out" };
+      }
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), maybe ? "held: they may have opted out, it waits for you" : "held: they opted out earlier, it waits for you"],
+        autoSend: { ...(d.autoSend || {}), decided: false, reason: `needs a person: ${maybe ? MAYBE_OPT_OUT_REASON : OPTED_OUT_HOLD}` },
+      });
+      return { ok: true, skipped: maybe ? "they may have opted out" : "they opted out earlier", held: true };
+    }
     // A bot-off tag ("stop bot") put on them since their deal text was
     // queued (2026-10-21): it waits for your Send, as it would have if the
     // tag had been there when it was queued (dispo-autopilot.js).
     if (d.outbound?.kind === "blast_open") {
-      const saved = (await store.getOfferSettings?.(locationId).catch(() => null)) || {};
-      const tag = matchTagPatterns(contact?.tags || [], conversationConfig(saved).routing?.botOffTags || [])[0];
+      const tag = matchTagPatterns(contact?.tags || [], configNow.routing?.botOffTags || [])[0];
       if (tag) {
         const ts = new Date(now).toISOString();
         const line = `bot is off for this contact (tag: ${tag})`;
@@ -7040,6 +7149,12 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   };
   await store.updateReplyDraft(d.id, updated);
   await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+  // The bot told them it would leave them alone ("I won't text you again",
+  // "I'll take you off"), and it went by itself: that is their opt-out, for
+  // every machine text and email after it (2026-11-09).
+  if (auto && promisesToStop(body)) {
+    await recordOptOut({ store, locationId, contactId: d.contactId, party: d.party || null, via: "asked_left_alone", channel: d.channel, now: Date.now() }).catch(() => {});
+  }
   // The first cold text is the outreach ladder's trigger, so it goes on the
   // timeline the moment it actually leaves — not when it was drafted.
   if (d.outbound?.kind === "blast_open") {
@@ -7375,7 +7490,21 @@ export async function applyDraftAction({ client, store, locationId, draftId, act
   if (action.status !== "pending") throw Object.assign(new Error(`that action was already ${action.status}`), { http: 409 });
   const [done] = await runActions({ client, locationId, contactId: d.contactId, actions: [action], draft: d, deps: { ...deps, byPerson: true }, store });
   const applied = { ...done, status: done.status === "done" ? "applied" : done.status };
-  const updated = { ...d, actions: d.actions.map((a) => (a.id === actionId ? applied : a)), updatedAt: new Date().toISOString() };
+  let updated = { ...d, actions: d.actions.map((a) => (a.id === actionId ? applied : a)), updatedAt: new Date().toISOString() };
+  // You pressed an opt-out's own action (2026-11-09): it is an opt-out, for
+  // good, whichever button it was (Opt out, or the opt-out tag on a read the
+  // model wasn't sure of). Opt out also settles the row: their reply doesn't
+  // go, and the held opt-out leaves the outbox.
+  const optOutPress = done.status === "done" && (action.type === OPT_OUT_ACTION || String(action.id || "").startsWith("a-optout-"));
+  if (optOutPress) {
+    await recordOptOut({ store, locationId, contactId: d.contactId, party: d.party || null, via: "you", channel: d.channel, confidence: d.confidence || null }).catch(() => {});
+    if (action.type === OPT_OUT_ACTION && OPEN_STATUSES.has(d.status)) {
+      const ts = updated.updatedAt;
+      updated = d.intent === "opt_out"
+        ? { ...updated, status: "handled", sendAt: null, updatedAt: ts }
+        : { ...updated, status: "dismissed", dismissedBy: "opt_out", dismissedAt: ts, sendAt: null, sendingAt: null, flags: [...(d.flags || []), "you marked it an opt-out, not sent"] };
+    }
+  }
   await store.updateReplyDraft(d.id, updated);
   return { ok: true, action: applied, draft: updated };
 }

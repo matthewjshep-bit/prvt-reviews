@@ -90,6 +90,8 @@ import { readSpend } from "../ai-spend.js";
 import { dueStep } from "../shared/follow-up.js";
 import { holdFor, botEventsByContact } from "../bot-hold.js";
 import { holdLine, botHold, paceOf } from "../shared/bot-hold.js";
+import { optedOutFor } from "../opt-out.js";
+import { optOutTagsOf, optedOutLine } from "../shared/opt-out.js";
 import { autoAcceptCeiling } from "../shared/auto-accept.js";
 import { buyerCeiling, normalizeFellThroughCode, FELL_THROUGH_LABEL } from "../shared/post-mortem.js";
 import { buildOfferDocument, buildScopeDocument, buildScopeNotesDocument, buildCompsDocument, buildNetSheetDocument, moneyInWords } from "../offer-doc.js";
@@ -6069,6 +6071,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         if (hold.held) return { ok: false, held: true, stopped: true, reason: holdLine(hold) };
       }
       const fresh = (await store.getOfferSettings(locationId)) || saved || {};
+      // They opted out, by text or email (Matt, 2026-11-09): no letter goes
+      // by itself on either channel. A person pressing Send still sends it.
+      if (unattended) {
+        const off = await optedOutFor({ store, locationId, contactId, readContact: (id) => getContact(client, id), optOutTags: optOutTagsOf(conversationConfig(fresh)) }).catch(() => null);
+        if (off) return { ok: false, held: true, stopped: true, reason: optedOutLine(off) };
+      }
       const so = conversationConfig(fresh).parties.agent.sendOffer;
       const open = (await currentOffersFor(locationId, contactId))
         .filter((o) => o.status !== "draft" && !o.deal && o.cashAmount > 0 && OPEN_STATUSES.has(effectiveStatus(o)));
