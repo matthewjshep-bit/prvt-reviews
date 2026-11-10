@@ -8828,6 +8828,19 @@ test("a no because the house is gone never steps us up", async () => {
   assert.equal(d.intent, "rejection");
 });
 
+// OFF-08 (2026-11-09): "can't do that, they're going to rent it out" stepped our number up halfway.
+test("a seller who is going to rent it instead doesn't get a higher number", async () => {
+  const { d, order } = await walkRun({ message: "They can't do that on 12 Elm, the seller is going to rent it out instead", draft: { intent: "rejection", counterAmount: 0 } });
+  assert.deepEqual(order, [], "no step-up, no re-issued letter");
+  assert.equal(d.intent, "rejection");
+});
+
+test("'it needs more work' isn't a push on price, so it never steps us up", async () => {
+  const { d, order } = await walkRun({ message: "Not for us, it needs more work than the photos show", draft: { intent: "rejection", counterAmount: 0 } });
+  assert.deepEqual(order, []);
+  assert.equal(d.intent, "rejection");
+});
+
 test("with the walk-away switch off, too low steps nothing up", async () => {
   _resetJobs();
   const { client } = ghlStubFor(["agent"]);

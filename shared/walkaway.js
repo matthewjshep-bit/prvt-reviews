@@ -41,10 +41,14 @@ export function walkawayOffer(offer) {
   return true;
 }
 
-// Our number is too low for them, said without one of theirs.
-const TOO_LOW_RX = /\btoo low\b|\blow ?ball|\bnot (?:even )?close\b|\bway (?:off|under|below|low)\b|\bnot enough\b|\bneeds? (?:more|(?:it |to be )?higher)\b|\b(?:won'?t|wouldn'?t|will not|would not|not going to|isn'?t going to|can'?t|cannot)\s+(?:take|accept|do|go)\s+(?:that|this|it)\b|\binsult/i;
-// The house is gone or someone else is in it: not a price we can move to.
-const GONE_RX = /\bsold\b|\bpending\b|\bunder contract\b|\bin escrow\b|\b(?:another|other|an|multiple|competing|backup|higher|better) offers?\b|\baccepted (?:an?|another|their|the other)\b|\bwent (?:with|another)\b|\boff the market\b|\bwithdrawn?\b|\b(?:not|no longer) (?:selling|for sale|going to sell)\b|\bdecided (?:not|to keep|to rent)\b|\bbest and (?:final|highest)\b/i;
+// Our number is too low for them, said without one of theirs. "Needs more" is about money only
+// before "than that", "money" or "for the seller"; "it needs more work", "more repairs" or "more
+// time" is about the house or the calendar, and "not enough time" too (OFF-08, 2026-11-09).
+const TOO_LOW_RX = /\btoo low\b|\blow ?ball|\bnot (?:even )?close\b|\bway (?:off|under|below|low)\b|\bnot enough\b(?!\s+(?:time|days|notice|room|space|info(?:rmation)?|photos|pictures)\b)|\bneeds? (?:more (?:than (?:that|this|it|ours?)\b|money\b|for (?:the |my |our |her |his )?sellers?\b)|(?:it |to be )?higher\b)|\b(?:won'?t|wouldn'?t|will not|would not|not going to|isn'?t going to|can'?t|cannot)\s+(?:take|accept|do|go)\s+(?:that|this|it)\b|\binsult/i;
+// The house is gone or someone else is in it, or the seller is keeping it, renting it or waiting:
+// not a price we can move to. "Won't do that, the seller's going to rent it out" is a no about the
+// house, and stepping our number up to it is money left on the table (OFF-08, 2026-11-09).
+const GONE_RX = /\b(?:going to|gonna|plans? to|planning to) rent\b|\brent(?:ing)? it(?: out)?\b|\bhold(?:ing)? off\b|\bwait(?:ing)?\b|\b(?:not|isn'?t|aren'?t) (?:quite |really )?ready\b|\bsold\b|\bpending\b|\bunder contract\b|\bin escrow\b|\b(?:another|other|an|multiple|competing|backup|higher|better) offers?\b|\baccepted (?:an?|another|their|the other)\b|\bwent (?:with|another)\b|\boff the market\b|\bwithdrawn?\b|\b(?:not|no longer) (?:selling|for sale|going to sell)\b|\bdecided (?:not|to keep|to rent)\b|\bbest and (?:final|highest)\b/i;
 
 /** pushesOnPrice(message) → true when they say our number is too low (or ask us up) and the house isn't gone. */
 export function pushesOnPrice(message = "") {
