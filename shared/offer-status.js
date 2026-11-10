@@ -76,10 +76,28 @@ export const WE_PASS_REASONS = Object.freeze([
   // The nightly sweep's close on a house nothing came of (2026-10-22): no
   // number from us, nothing more from them. The pass note still tells them.
   // The sweep's, not a choice on the status menu (`menu: false`).
+  // `unpriced`: what it says when no underwrite ever produced a number
+  // (passWordsFor) — the 2026-11-09 audit found 45 notes saying "we couldn't
+  // get it to a number" on houses nobody priced.
   { code: "quiet", label: "Went quiet", short: "Quiet", hint: "nothing came of it", menu: false,
-    words: "we couldn't get it to a number that worked for us" },
+    words: "we couldn't get it to a number that worked for us", unpriced: "we're going to pass on this one for now" },
 ]);
 export const WE_PASS_REASON = Object.freeze(Object.fromEntries(WE_PASS_REASONS.map((r) => [r.code, r])));
+/**
+ * passWordsFor(offer, { walkAway }) → how the bot may put our pass on this house, or ""
+ *
+ * The reason's `words`, except a reason with `unpriced` words (quiet) on a
+ * house no underwrite produced a number for: no cash number on the offer, no
+ * engine walk-away on it (`pricing.walkAway`), and none on the house's record
+ * (`walkAway`, the caller's read of house_pricing). Then it's a plain pass.
+ */
+export function passWordsFor(offer, { walkAway = 0 } = {}) {
+  const r = WE_PASS_REASON[offer?.passReason?.code];
+  if (!r) return "";
+  if (!r.unpriced) return r.words;
+  const priced = Number(offer?.cashAmount) > 0 || Number(offer?.pricing?.walkAway) > 0 || Number(walkAway) > 0;
+  return priced ? r.words : r.unpriced;
+}
 /** normalizeWePassReason(v) → a WE_PASS_REASONS code, or null. */
 export const normalizeWePassReason = (v) => (Object.hasOwn(WE_PASS_REASON, String(v || "")) ? String(v) : null);
 // The status menu's key for "we passed, and why": "we_passed:rural". Every

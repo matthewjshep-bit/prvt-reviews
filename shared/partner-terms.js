@@ -16,6 +16,8 @@
 //
 // Pure.
 
+import { parseUsAddress } from "./us-address.js";
+
 // Strongest first: what the row leads with when they said more than one.
 export const PARTNER_TERMS_KINDS = ["list_back", "buyer_agent", "referral_fee", "co_wholesale", "investor_buyer"];
 
@@ -188,15 +190,19 @@ const LINE_ASK = {
 // pick up multiple properties sporadically through the year". So an agent who
 // offers to represent us gets the yes from the bot, every time, in the same
 // message. What the representation pays (a commission, a fee) is still his.
+// 2026-11-09 audit: a Bend agent heard NWMLS (an Oregon house is written on
+// OREF forms), and "confirm the compensation side today" was a time promise
+// nothing kept.
+export const OFFER_FORMS_WORDS = "NWMLS forms (OREF forms for an Oregon house)";
 export const BUYER_AGENT_RULE =
   "THE BUYER'S AGENT: we work with buyer's agents, and the agent who brings us a house often represents us on it — " +
   "that's part of how our deals get put together. When an agent offers to represent us, asks to be our buyer's agent " +
   "or broker, or says they need a buyer agency (buyer broker) agreement first, say yes plainly in that same message: " +
-  "they're welcome to represent us and write it up on NWMLS forms for our signature, with the buyer written as in the " +
-  "WRITE-UP TERMS. A buyer agency agreement is fine as long as it's property-specific or non-exclusive, since we pick " +
+  `they're welcome to represent us and write it up on ${OFFER_FORMS_WORDS} for our signature (name only the one the house's state uses), ` +
+  "with the buyer written as in the WRITE-UP TERMS. A buyer agency agreement is fine as long as it's property-specific or non-exclusive, since we pick " +
   "up houses from different agents through the year. Never \"let me check\", never a partner, never a call just to " +
   "say yes. A commission or compensation figure is not yours to settle: give the yes, say you'll confirm the " +
-  "compensation side today, and set needsHuman.";
+  "compensation side, and set needsHuman.";
 
 /**
  * answersItself(terms) → true when all they offered is to represent us: the
@@ -213,11 +219,117 @@ export function partnerTermsLine(terms) {
   if (!terms?.kind || !LINE_ASK[terms.kind]) return "";
   if (answersItself(terms)) {
     return `BUYER'S AGENT: they offered to represent us ("${terms.phrase}"). Say yes in this reply, the way THE BUYER'S ` +
-      "AGENT rule says: they can represent us and write it up on NWMLS forms for our signature, and a buyer agency " +
+      `AGENT rule says: they can represent us and write it up on ${OFFER_FORMS_WORDS} for our signature, and a buyer agency ` +
       "agreement is fine if it's property-specific or non-exclusive. Then carry on with the rest of what they said.";
   }
   return `PARTNER TERMS: ${LINE_ASK[terms.kind]} ("${terms.phrase}"). Answer that offer directly and warmly: name what they offered, ` +
     "say you'd like to work together that way and that you'll call to go over how you'd set it up. Never \"keep me in mind\", " +
     "\"keep us on the list\" or only an address request, never \"let me check with my partner\", and never agree to a fee, a " +
     "percentage or an agreement in the text. A person reads this one before it goes.";
+}
+
+/* ---------- the forms an Oregon house is written on ---------- */
+
+// Central Oregon towns with no Washington namesake (2026-10-21, the Bend
+// market): an address that names one and no state is an Oregon house.
+// Redmond is left out on purpose: it is a Washington town too.
+const OREGON_TOWNS = new Set(["bend", "sunriver", "la pine", "tumalo", "terrebonne", "sisters", "prineville", "powell butte",
+  "madras", "culver", "metolius", "crooked river ranch", "three rivers", "deschutes river woods"]);
+
+/**
+ * formsStateOf(...addresses) → "OR" | "WA" | … | ""
+ *
+ * The state of the house a reply is about: the first address whose state is
+ * written, or whose town is a Central Oregon one. "" when none says.
+ */
+export function formsStateOf(...addresses) {
+  for (const a of addresses) {
+    const p = parseUsAddress(String(a || ""));
+    if (p.state) return String(p.state).toUpperCase();
+    if (OREGON_TOWNS.has(String(p.city || "").trim().toLowerCase())) return "OR";
+  }
+  return "";
+}
+
+/**
+ * formsFlags(reply, { state }) → [flag]
+ *
+ * A reply about an Oregon house that names NWMLS (a Washington form): held,
+ * so the write-up ask never sends a Bend agent to the wrong forms.
+ */
+export function formsFlags(reply = "", { state = "" } = {}) {
+  if (String(state || "").toUpperCase() !== "OR" || !/\bNWMLS\b/i.test(String(reply || ""))) return [];
+  return ["the draft says NWMLS about an Oregon house — an Oregon offer is written on OREF forms"];
+}
+
+/* ---------- are you a wholesaler? ---------- */
+
+// The 2026-11-09 audit: agents who asked whether we wholesale or assign got
+// "we close ourselves, no assignments" and "we do the flips ourselves". How
+// we buy is Matt's to answer, so the question holds the reply for him and a
+// reply that denies it is caught. These only ever add holds.
+const CONTRACT_BUYER_RX = /\band\s*\/\s*or\s+assigns?\b/gi;
+const ASKS_WHOLESALE_RX = new RegExp([
+  "\\bwholesal\\w*",
+  "\\bassign(?:ment|ments|able|ability|ing|s)?\\b",
+  "\\bdo\\s+(?:you|u)\\s+(?:guys\\s+)?close\\s+(?:on\\s+(?:it|them)\\s+)?(?:yourselves|yourself)\\b",
+  "\\b(?:are|r)\\s+(?:you|u)\\s+(?:guys\\s+)?(?:the\\s+)?end\\s+buyers?\\b",
+  "\\bwill\\s+(?:you|u)\\s+be\\s+(?:the\\s+)?end\\s+buyers?\\b",
+  "\\bwho(?:'s|\\s+is)\\s+the\\s+end\\s+buyer\\b",
+].join("|"), "i");
+
+/**
+ * asksIfWholesaler(text) → { phrase } | null
+ *
+ * Their words ask whether we wholesale or assign, or say they won't work with
+ * wholesalers. "And/or assigns" (how the buyer is written) and "assigned"
+ * (their listing) are not it.
+ */
+export function asksIfWholesaler(text = "") {
+  const words = theirWords(text).replace(CONTRACT_BUYER_RX, " ");
+  if (!words) return null;
+  const m = words.match(ASKS_WHOLESALE_RX);
+  return m ? { phrase: phraseAround(words, m.index, m[0].length) } : null;
+}
+
+const DENIES_WHOLESALE_RX = new RegExp([
+  "\\bno\\s+assignments?\\b",
+  "\\bnot\\s+(?:a\\s+)?wholesalers?\\b",
+  "\\b(?:we|i)\\s+(?:don'?t|do\\s+not|never|won'?t|will\\s+not)\\s+(?:assign|wholesale)\\w*",
+  "\\b(?:we|i)\\s+close\\s+(?:on\\s+(?:it|them|these)\\s+)?(?:ourselves|myself)\\b",
+  "\\b(?:we|i)\\s+do\\s+(?:the|our|all\\s+the|all\\s+our)\\s+(?:flips|rehabs?|work)\\s+(?:ourselves|myself)\\b",
+  "\\bbuy\\s+(?:it\\s+)?direct(?:ly)?\\s+with\\s+(?:our|my)\\s+own\\s+(?:cash|money|funds)\\b",
+  "\\b(?:we'?re|we\\s+are|i'?m|i\\s+am)\\s+(?:the\\s+)?end\\s+buyers?\\b",
+].join("|"), "i");
+
+/** deniesWholesaling(reply) → the words that deny it, or "". */
+export function deniesWholesaling(reply = "") {
+  const m = String(reply || "").replace(CONTRACT_BUYER_RX, " ").match(DENIES_WHOLESALE_RX);
+  return m ? m[0] : "";
+}
+
+export const WHOLESALE_ASK_FLAG = "they asked if we wholesale: your answer";
+
+/**
+ * wholesaleFlags({ reply, party, asked }) → [flag]
+ *
+ * For evaluateReplyGates: their wholesale question (`asked`, the draft's
+ * asksWholesale) holds the reply for Matt, and an agent reply that denies we
+ * wholesale or assign holds whatever they asked.
+ */
+export function wholesaleFlags({ reply = "", party = "agent", asked = null } = {}) {
+  if (party !== "agent") return [];
+  const out = [];
+  if (asked) out.push(WHOLESALE_ASK_FLAG);
+  const denial = deniesWholesaling(reply);
+  if (denial) out.push(`the draft says "${denial}" — whether we wholesale or assign is yours to answer, never the bot's`);
+  return out;
+}
+
+/** wholesaleAskLine(asked) → the draft's instruction when they asked, or "". */
+export function wholesaleAskLine(asked) {
+  if (!asked?.phrase) return "";
+  return `WHOLESALE QUESTION: they asked whether we wholesale or assign ("${asked.phrase}"). That part isn't yours to answer: ` +
+    "never say we close ourselves, that we don't assign, that we aren't wholesalers or that we're the end buyer, and never say we are. " +
+    "Answer the rest of what they said, and say you'll go over how we'd buy it on a quick call. A person reads this one before it goes.";
 }

@@ -251,6 +251,65 @@ export const CALL_ASK_RX = /\b(?:quick|short|(?:5|five|10|ten|15|fifteen)[\s-]?m
 // …and asked for other houses (fixers_asked).
 export const FIXERS_ASK_RX = /\b(?:other|more)\s+(?:fixers?|fixer[\s-]uppers?|projects|flips)\b|\banything\s+else\s+(?:rough|distressed|sitting|that\s+needs\s+work|like\s+that)\b|\bon\s+your\s+radar\b/i;
 
+// Matt, 2026-10-21: "always end our response with a question as the
+// followup — have anything else that needs work or would be a good flip?"
+// A close that ends on "keep me in mind" asks nothing and gets nothing back.
+// The prompt's NEXT ONE rule and every fixed close end on it.
+export const NEXT_ONE_QUESTION = "Have anything else that needs work or would be a good flip?";
+const NEXT_ONE_RX = /\bwould\s+be\s+a\s+good\s+flip\b/i;
+const pacificDay = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(t));
+
+/**
+ * nextOneAskedToday({ transcript, now }) → boolean
+ *
+ * A text of ours earlier today (Pacific) already asked for the next one: the
+ * NEXT ONE question or the other-fixers ask. The question goes once a day, so
+ * a close later that day ends without it.
+ */
+export function nextOneAskedToday({ transcript = "", now = Date.now() } = {}) {
+  const today = pacificDay(now);
+  return String(transcript || "").split("\n").some((line) => {
+    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US \w+: (.*)$/.exec(line);
+    if (!m) return false;
+    const ts = Date.parse(`${m[1]}T${m[2]}:00Z`);
+    return Number.isFinite(ts) && ts <= now && pacificDay(ts) === today && (NEXT_ONE_RX.test(m[3]) || FIXERS_ASK_RX.test(m[3]));
+  });
+}
+
+// A figure in their text that isn't the seller's number to us (the
+// 2026-11-09 audit): a rival's offer (the last offer, another offer), the
+// band other offers came in at, what the seller owes, an appraisal, an
+// assessed or tax value, or the list price. Read as their counter, each drew
+// our too-far-apart goodbye.
+const NOT_THEIRS_RX = /\b(?:last|previous|prior|other|another|competing|highest|best|first|cash)\s+offers?\b|\boffers?\s+(?:in|around)\s+the\b|\bowe[sd]?\b|\bpay[\s-]?off\b|\bappraised?\b|\bappraisal\b|\bassess(?:ed|ment)\b|\btax(?:ed)?\s+(?:value|assess(?:ed|ment))\b|\blisted\s+(?:at|for)\b/gi;
+// Where the marked figure ends: a sentence, a clause, or the turn to their own number.
+const NOT_THEIRS_STOP_RX = /[.,;!?\n]|\b(?:but|and|so|needs?|wants?|would|will|takes?|accepts?|asking|they'?d|she'?d|he'?d)\b/i;
+const FIGURE_RX = /\$?\s?(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(?:(k|m|mil|million)|s)?\b/gi;
+
+/**
+ * notTheirNumber(text) → [dollars]
+ *
+ * The figures their text marks as someone else's or not a price to us (see
+ * NOT_THEIRS_RX). A marked figure is never their counter. Shorthand reads the
+ * way agents text it: "575" is 575,000, "the 400s" 400,000.
+ */
+export function notTheirNumber(text = "") {
+  const t = String(text || "");
+  const out = [];
+  for (const m of t.matchAll(NOT_THEIRS_RX)) {
+    let after = t.slice(m.index + m[0].length, m.index + m[0].length + 40);
+    const stop = after.search(NOT_THEIRS_STOP_RX);
+    if (stop >= 0) after = after.slice(0, stop);
+    for (const f of after.matchAll(FIGURE_RX)) {
+      const raw = Number(f[1].replace(/,/g, ""));
+      const unit = String(f[2] || "").toLowerCase();
+      const n = unit === "k" ? raw * 1000 : unit ? raw * 1e6 : /,/.test(f[1]) || raw >= 10000 ? raw : raw * 1000;
+      if (n >= 50000 && n <= 20e6) { out.push(Math.round(n)); break; }
+    }
+  }
+  return [...new Set(out)];
+}
+
 const pick = (list, variant) => list[Math.abs(Math.round(Number(variant) || 0)) % list.length];
 
 /**

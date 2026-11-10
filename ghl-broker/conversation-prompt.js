@@ -14,6 +14,7 @@ import { CARRIER_RULE } from "./shared/carrier-words.js";
 import { OPENER_MAX_CHARS, streetName } from "./shared/outreach-opener.js";
 import { OUR_BOX_WORDS } from "./shared/asset-type.js";
 import { offerForms } from "./shared/us-address.js";
+import { NEXT_ONE_QUESTION } from "./shared/flip-read.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -215,8 +216,8 @@ const SELLER_SITUATIONS = [
 // Matt, 2026-10-21: "always end our response with a question as the
 // followup — have anything else that needs work or would be a good flip?"
 // A close used to end on "keep me in mind for the next one", which asks
-// nothing and gets nothing back.
-const NEXT_ONE_QUESTION = "Have anything else that needs work or would be a good flip?";
+// nothing and gets nothing back. The question itself is shared/flip-read.js's
+// NEXT_ONE_QUESTION, so the fixed closes (the far-counter goodbye) say it too.
 const NEXT_ONE_AGENT =
   "NEXT ONE: when your text closes out a house — we pass on it, they pass or the seller went another way, or it just " +
   `didn't work out — its last sentence is one question asking for the next one, in about these words: "${NEXT_ONE_QUESTION}" ` +
@@ -896,14 +897,26 @@ function openingFor(outbound) {
         `the answer, leave nothing in it out, and do NOT say you'll check on anything else. ${CONTINUE} Set intent to partner_answer.`;
 
     // Houses the agent sent us that Matt looked at and marked "We passed"
-    // (shared/pass-note.js, 2026-10-19). One text for all of them.
+    // (shared/pass-note.js, 2026-10-19). One text for all of them. A house
+    // our own text asked them about (broughtBy "us") was never theirs to
+    // send, so it isn't thanked for as sent (the 2026-11-09 audit), and the
+    // text ends on the NEXT ONE question.
     case "pass_note": {
       const hs = o.houses || [];
-      const list = hs.map((h) => `- ${h.address}: ${h.words || "it isn't one for us"}`).join("\n");
-      return `${START} This agent sent us ${hs.length > 1 ? `${hs.length} houses` : "a house"} and you looked ${hs.length > 1 ? "at each one" : "at it"}. We're passing:\n${list}\n` +
-        `In two or three short lines: thank them for sending ${hs.length > 1 ? "these" : "it"}, say plainly we're going to pass on ` +
-        `${hs.length > 1 ? "each one, naming it by its street and giving its one reason in plain words (not a list)" : "it, naming it by its street, and give that one reason in plain words"}, ` +
-        `and ask them to keep sending fixers, on or off market — the rougher the better. ` +
+      const ours = hs.filter((h) => h.broughtBy === "us");
+      const theirs = hs.filter((h) => h.broughtBy !== "us");
+      const many = hs.length > 1;
+      const list = hs.map((h) => `- ${h.address}: ${h.words || "it isn't one for us"}${h.broughtBy === "us" && theirs.length ? " (our own text asked them about this one)" : ""}`).join("\n");
+      const opening = !ours.length ? `This agent sent us ${many ? `${hs.length} houses` : "a house"}`
+        : !theirs.length ? `Our own text asked this agent about ${many ? `${hs.length} houses of theirs` : "a house of theirs"}; they didn't send ${many ? "them" : "it"} to us`
+        : "This agent sent us some of these, and our own text asked them about the rest";
+      const thanks = !ours.length ? `thank them for sending ${many ? "these" : "it"}`
+        : !theirs.length ? `thank them for getting back to us on ${many ? "them" : "it"} (never say they sent ${many ? "them" : "it"})`
+        : "thank them for sending the ones they sent (never for the ones our own text asked about)";
+      return `${START} ${opening}, and you looked ${many ? "at each one" : "at it"}. We're passing:\n${list}\n` +
+        `In two or three short lines: ${thanks}, say plainly we're going to pass on ` +
+        `${many ? "each one, naming it by its street and giving its one reason in plain words (not a list)" : "it, naming it by its street, and give that one reason in plain words"}, ` +
+        `and end on one question asking for the next one, in about these words: "${NEXT_ONE_QUESTION}" ` +
         `Give no reason that isn't above. Do NOT name any number, do NOT apologise at length, and do NOT promise to look again. ${CONTINUE} Set intent to pass_note.`;
     }
 

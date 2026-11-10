@@ -10,8 +10,10 @@
 // Ids and addresses only in the logs, never a name or a message.
 
 import { store as defaultStore } from "./store.js";
-import { passNoteHouses, passNoteNotBefore, PASS_NOTE_KEEP_MS } from "./shared/pass-note.js";
+import { passNoteHouses, passNoteNotBefore, PASS_NOTE_KEEP_MS, broughtBy, BROUGHT_EVENT_TYPES } from "./shared/pass-note.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
+import { WE_PASS_REASON } from "./shared/offer-status.js";
+import { houseKey } from "./shared/current-offer.js";
 
 const iso = (ms) => new Date(ms).toISOString();
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -36,7 +38,22 @@ export async function startPassNote({ client, locationId, saved = {}, store = de
   if (!contactId) return { skipped: "no contact" };
   if (!switchedOn(saved)) return { skipped: "the pass note is off (Conversation AI → agent playbook)" };
   const offers = await store.listOffers(locationId, { contactId, limit: 100 }).catch(() => []);
-  const houses = passNoteHouses(offers, { now });
+  // A quiet pass says "we couldn't get it to a number" only when an
+  // underwrite made one: the offer's own, or the engine's on the house's
+  // record (house_pricing). The 2026-11-09 audit: 45 said it with none.
+  const walkAways = new Map();
+  for (const o of passNoteHouses(offers, { now })) {
+    const full = offers.find((x) => x.id === o.offerId);
+    if (!WE_PASS_REASON[o.code]?.unpriced || Number(full?.cashAmount) > 0 || typeof store.getHousePricing !== "function") continue;
+    const rec = await store.getHousePricing(locationId, houseKey(o.address)).catch(() => null);
+    const w = Math.round(Number(rec?.doc?.v2?.walkAway) || 0);
+    if (w > 0) walkAways.set(o.offerId, w);
+  }
+  // Whose house each was: one our own text asked about is never thanked
+  // for as sent (the pass_note prompt reads broughtBy).
+  const events = (await store.listContactEvents?.(locationId, contactId, { types: BROUGHT_EVENT_TYPES, limit: 200 }).catch(() => [])) || [];
+  const houses = passNoteHouses(offers, { now, walkAways })
+    .map((h) => ({ ...h, broughtBy: broughtBy({ address: h.address, events, before: offers.find((x) => x.id === h.offerId)?.createdAt || null }) }));
   if (!houses.length) return { skipped: "no house you marked is waiting on a note" };
   const newest = offers.find((o) => o.id === houses.at(-1).offerId) || null;
   const r = await startProactive({

@@ -162,4 +162,48 @@ test("the prompt names each house and its one reason, and asks for rougher ones 
   assert.match(t, /thank them for sending these/);
   assert.match(t, /Do NOT name any number/);
   assert.match(t, /Set intent to pass_note/);
+  // It ends on Matt's one closing ask (2026-10-21), not a statement.
+  assert.match(t, /Have anything else that needs work or would be a good flip\?/);
+});
+
+// The 2026-11-09 audit: a pass note thanked an agent for sending over a
+// listing our own cold text had asked her about.
+test("a pass note on the house our first text asked about doesn't thank them for sending it", async () => {
+  resetReplies();
+  const { client } = ghlStub();
+  const BIRCH = "77 Birch Ln, Kent, WA 98031";
+  const store = fakeStore({ offers: [marked("o5", BIRCH, "turnkey", 4), ALDER()] });
+  store.events.push({ type: "outreach_sent", at: min(60 * 24 * 3), address: BIRCH, contactId: "c1", data: {} });
+  const r = await startPassNote({ client, locationId: "LOC", saved: SAVED, store, contactId: "c1", sendsEnabled: true, startProactive,
+    deps: { draft: draftSaying(NOTE), now: () => NOW, random: () => 0 }, now: NOW });
+  assert.equal(r.started, true, r.skipped);
+  await pause(60);
+  const d = [...store.rows.values()][0];
+  assert.deepEqual(d.outbound.houses.map((h) => [h.address, h.broughtBy]), [[BIRCH, "us"], ["88 Alder St, Kent, WA 98031", "them"]]);
+  // Ours alone: no thanks for sending it, and never said they sent it.
+  const ours = outboundOpening({ kind: "pass_note", address: BIRCH, houses: [{ address: BIRCH, words: "it's in too good a shape for us", broughtBy: "us" }] });
+  assert.doesNotMatch(ours, /thank them for sending/);
+  assert.doesNotMatch(ours, /This agent sent us/);
+  assert.match(ours, /our own text asked this agent about a house of theirs; they didn't send it/i);
+  assert.match(ours, /good flip\?/);
+  // One of each: thanks only for the one they sent.
+  const both = outboundOpening({ kind: "pass_note", address: "x", houses: [{ address: BIRCH, words: "w", broughtBy: "us" }, { address: "88 Alder St", words: "w", broughtBy: "them" }] });
+  assert.match(both, /- 77 Birch Ln, Kent, WA 98031: w \(our own text asked them about this one\)/);
+  assert.match(both, /thank them for sending the ones they sent/);
+});
+
+test("an unpriced house the clock passed says plainly we're passing, and a house the engine priced says we couldn't get to a number", async () => {
+  resetReplies();
+  const { client } = ghlStub();
+  const quiet = (id, address) => marked(id, address, "quiet", 3, { passReason: { code: "quiet", at: min(3), by: "needs-matt" } });
+  const store = fakeStore({ offers: [quiet("o6", "5 Spruce Ct, Kent, WA 98031"), quiet("o7", "9 Larch Way, Kent, WA 98031")] });
+  // The engine priced Larch (house_pricing); nobody priced Spruce.
+  store.getHousePricing = async (_loc, key) => (/larch/i.test(key) ? { doc: { v2: { walkAway: 280000 } } } : null);
+  await startPassNote({ client, locationId: "LOC", saved: SAVED, store, contactId: "c1", sendsEnabled: true, startProactive,
+    deps: { draft: draftSaying(NOTE), now: () => NOW, random: () => 0 }, now: NOW });
+  await pause(60);
+  const d = [...store.rows.values()][0];
+  const words = Object.fromEntries(d.outbound.houses.map((h) => [h.address.split(" ")[1], h.words]));
+  assert.equal(words.Spruce, "we're going to pass on this one for now");
+  assert.match(words.Larch, /couldn't get it to a number/);
 });

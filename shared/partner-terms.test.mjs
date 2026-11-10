@@ -167,3 +167,73 @@ test("an offer to represent us answers itself; one with money or other terms bes
   assert.match(line, /say yes/i);
   assert.doesNotMatch(line, /A person reads this one before it goes/);
 });
+
+/* ---------- the forms an Oregon house is written on ---------- */
+
+// The Bend market (2026-10-21): an Oregon house is written up on OREF forms.
+// The 2026-11-09 audit: an agent in Bend who offered to represent us was told
+// NWMLS, and the rule promised the compensation answer "today".
+test("a Bend agent who offers to represent us hears OREF forms", async () => {
+  const { BUYER_AGENT_RULE, formsFlags, formsStateOf } = await import("./partner-terms.js");
+  assert.match(BUYER_AGENT_RULE, /NWMLS forms \(OREF forms for an Oregon house\)/);
+  assert.doesNotMatch(BUYER_AGENT_RULE, /\btoday\b/, "no time promised on the compensation");
+  assert.match(partnerTermsLine(partnerTerms("I can be your buyer's agent on this one")), /NWMLS forms \(OREF forms for an Oregon house\)/);
+  // A reply about an Oregon house that says NWMLS holds; OREF, or a Washington house, doesn't.
+  const nwmls = "Yes, please represent us. Write it up on NWMLS forms for our signature.";
+  assert.equal(formsFlags(nwmls, { state: "OR" }).length, 1);
+  assert.match(formsFlags(nwmls, { state: "OR" })[0], /OREF/);
+  assert.deepEqual(formsFlags(nwmls.replace("NWMLS", "OREF"), { state: "OR" }), []);
+  assert.deepEqual(formsFlags(nwmls, { state: "WA" }), []);
+  assert.deepEqual(formsFlags(nwmls, { state: "" }), []);
+  // Where the house is: the address's state, else a Bend-area town, else the next address.
+  assert.equal(formsStateOf("61 NW Juniper Ln, Bend, OR 97703"), "OR");
+  assert.equal(formsStateOf("61 NW Juniper Ln, Bend"), "OR");
+  assert.equal(formsStateOf("61 NW Juniper Ln", "61 NW Juniper Ln, Bend, OR 97703"), "OR");
+  assert.equal(formsStateOf("12 Elm St, Redmond, WA 98052"), "WA");
+  assert.equal(formsStateOf("12 Elm St, Redmond"), "", "Redmond is a Washington town too");
+  assert.equal(formsStateOf(""), "");
+});
+
+/* ---------- are you a wholesaler? ---------- */
+
+// The 2026-11-09 audit: three agents who asked whether we wholesale or
+// assign were told "we close ourselves, no assignments" or "we do the flips
+// ourselves". How we buy is Matt's to answer.
+test("an agent asking if we wholesale or assign is heard, and plain talk about the house isn't", async () => {
+  const { asksIfWholesaler } = await import("./partner-terms.js");
+  for (const said of [
+    "So are you guys wholesalers?",
+    "Just so you know, my seller won't work with wholesalers.",
+    "Do you assign your contracts?",
+    "Is this going to be an assignment?",
+    "Do you close yourselves or flip the contract?",
+    "Are you the end buyer?",
+    "We don't work with wholesalers, sorry",
+    "Is the contract assignable?",
+  ]) assert.ok(asksIfWholesaler(said), said);
+  for (const said of [
+    "Seller needs 450 on it",
+    "Buyer is Matthew Shepherd and/or assigns, right?",
+    "I was assigned this listing last week",
+    "It needs a roof and the kitchen is original",
+    "",
+  ]) assert.equal(asksIfWholesaler(said), null, said);
+});
+
+test("a reply that denies we wholesale or assign is caught", async () => {
+  const { deniesWholesaling, wholesaleFlags } = await import("./partner-terms.js");
+  for (const said of [
+    "We close ourselves, no assignments.",
+    "We're not wholesalers, we do the flips ourselves.",
+    "No assignment, we buy direct with our own cash.",
+    "We don't assign contracts.",
+    "I'm the end buyer on this one.",
+  ]) assert.ok(deniesWholesaling(said), said);
+  for (const said of ["Happy to go over how we'd buy it on a quick call.", "Buyer is Matthew Shepherd and/or assigns.", "We close in about three weeks."]) {
+    assert.equal(deniesWholesaling(said), "", said);
+  }
+  assert.deepEqual(wholesaleFlags({ reply: "Sounds good.", party: "agent" }), []);
+  assert.match(wholesaleFlags({ reply: "Sounds good.", party: "agent", asked: { phrase: "are you a wholesaler?" } }).join(" "), /they asked if we wholesale: your answer/);
+  assert.match(wholesaleFlags({ reply: "We close ourselves, no assignments.", party: "agent" }).join(" "), /we close ourselves/i);
+  assert.deepEqual(wholesaleFlags({ reply: "We close ourselves, no assignments.", party: "investor" }), [], "only an agent's reply");
+});

@@ -80,8 +80,10 @@ export function needsMattKind(row, { draftsById = new Map(), now = Date.now() } 
     if (!d || d.party === "investor") return null;
     if (row.yesAfterPass || d.yesAfterPass?.offerId || d.intent === "acceptance") return "yes";
     // A counter is the bot's: it holds our number (reply-agent.js). Only
-    // their number on a house with no offer of ours to hold is his to price.
-    if (isCounterDraft(d) && noNumberOfOurs(d)) {
+    // their number on a house with no offer of ours to hold is his to price,
+    // or one far over ours that never went out (`unsentCounter`, the
+    // 2026-11-09 audit): float ours or pass.
+    if (isCounterDraft(d) && (noNumberOfOurs(d) || d.unsentCounter?.offerId)) {
       const at = ms(waitedFrom(d));
       return at != null && now - at >= PRICE_WAIT_HOURS * HOUR_MS ? "price" : null;
     }
@@ -111,6 +113,7 @@ export function needsMattWhy(x = {}) {
     return clip(`They said yes${at}: the bot's reply is held for you`, 300);
   }
   if (x.kind === "paper") return clip(`${x.title || "Something only you can do"}${x.title && on && !String(x.title).includes(on) ? ` (${on})` : ""}`, 300);
+  if (x.kind === "price" && x.theirs && x.ours) return clip(`They named ${k$(x.theirs)}${at}, over our ${k$(x.ours)} that never went out: float ours or pass`, 300);
   if (x.kind === "price" && x.theirs) return clip(`They named ${k$(x.theirs)}${at}: price it or pass`, 300);
   if (x.kind === "price") {
     const hours = Math.max(1, Math.round(((x.now ?? Date.now()) - (ms(x.since) ?? Date.now())) / HOUR_MS));
@@ -149,7 +152,8 @@ export function needsMattByContact(rows = [], { drafts = [], now = Date.now(), s
       const since = r.owedAt || r.readyAt || r.promisedAt || waitedFrom(d) || r.at || null;
       const theirs = kind === "price" && d && isCounterDraft(d) ? Math.round(Number(d.counterAmount) || 0) || null : null;
       const item = { kind, rowKind: r.kind, offerId: r.offerId || null, address: r.address || d?.propertyAddress || "",
-        amount: r.amount || null, title: r.title || "", since, now, theirs };
+        amount: r.amount || null, title: r.title || "", since, now, theirs,
+        ours: kind === "price" && d?.unsentCounter?.ours ? Math.round(Number(d.unsentCounter.ours) || 0) || null : null };
       const prev = out.get(contactId);
       if (prev && RANK[prev.kind] <= RANK[kind]) continue;
       out.set(contactId, { kind, rowKind: r.kind, offerId: item.offerId, address: item.address, at: since,

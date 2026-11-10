@@ -195,7 +195,8 @@ test("the agent prompt says yes to a buyer's agent, on NWMLS forms, with a prope
   const sys = buildSystemPrompt({ config: normalizeConversationAi(null), party: "agent", channel: "sms" });
   assert.match(sys, /THE BUYER'S AGENT/);
   assert.match(sys, /we work with buyer's agents/i);
-  assert.match(sys, /write it up on NWMLS forms for our signature/);
+  // An Oregon house is written on OREF forms (the 2026-11-09 audit, a Bend agent who heard NWMLS).
+  assert.match(sys, /write it up on NWMLS forms \(OREF forms for an Oregon house\) for our signature/);
   assert.match(sys, /property-specific or non-exclusive/);
   assert.match(sys, /commission[^.]*not yours to settle/i);
   const inv = buildSystemPrompt({ config: normalizeConversationAi(null), party: "investor", channel: "sms" });

@@ -50,3 +50,37 @@ test("at send, a house you priced, un-passed or marked again since stops the not
   assert.match(passNoteStale(h, by(passed("a", "1412 Pine St", "rural", 1))), /marked again/);
   assert.match(passNoteStale(h, new Map()), /gone/);
 });
+
+// The 2026-11-09 audit: 45 pass notes said "we couldn't get it to a number"
+// on houses nobody ever priced (the Needs Matt clock passes drafts that
+// waited three days with no price).
+test("a clock pass with no number of ours never says we couldn't get it to a number", async () => {
+  const { passWordsFor } = await import("./offer-status.js");
+  const quiet = (over = {}) => passed("q", "77 Birch Ln", "quiet", 3, { cashAmount: null, ...over });
+  const [unpriced] = passNoteHouses([quiet()], { now: NOW });
+  assert.doesNotMatch(unpriced.words, /couldn't get it to a number/);
+  assert.equal(unpriced.words, "we're going to pass on this one for now");
+  assert.equal(passWordsFor(quiet()), "we're going to pass on this one for now");
+  // An underwrite that produced a number: the offer's cash, the engine's walk-away, or the house record's.
+  assert.match(passNoteHouses([quiet({ cashAmount: 241000 })], { now: NOW })[0].words, /couldn't get it to a number/);
+  assert.match(passWordsFor(quiet({ pricing: { walkAway: 250000 } })), /couldn't get it to a number/);
+  assert.match(passNoteHouses([quiet()], { now: NOW, walkAways: new Map([["q", 230000]]) })[0].words, /couldn't get it to a number/);
+  // Every other reason says what it always said.
+  assert.match(passWordsFor(passed("t", "1412 Pine St", "turnkey", 5)), /too good a shape/);
+  assert.equal(passWordsFor({ status: "we_passed" }), "", "no reason, no words");
+});
+
+test("a house our own text named is ours; one they sent is theirs", async () => {
+  const { broughtBy } = await import("./pass-note.js");
+  const at = (min) => ago(min);
+  const ours = [{ type: "outreach_sent", at: at(9000), address: "77 Birch Ln, Kent, WA 98031" }];
+  assert.equal(broughtBy({ address: "77 Birch Ln, Kent, WA 98031", events: ours }), "us");
+  assert.equal(broughtBy({ address: "77 Birch Ln", events: ours }), "us", "the same street, however it's spelled");
+  assert.equal(broughtBy({ address: "88 Alder St, Kent, WA 98031", events: ours }), "them");
+  // The conversation moving onto the house our text named (the `ours` stamp).
+  assert.equal(broughtBy({ address: "90 Cedar Ct", events: [{ type: "subject_property_set", at: at(60), address: "90 Cedar Ct", data: { ours: true } }] }), "us");
+  assert.equal(broughtBy({ address: "90 Cedar Ct", events: [{ type: "subject_property_set", at: at(60), address: "90 Cedar Ct", data: {} }] }), "them");
+  // A check-in about it after they'd sent it doesn't make it ours.
+  assert.equal(broughtBy({ address: "77 Birch Ln", events: [{ type: "agent_pulse_texted", at: at(10), address: "77 Birch Ln" }], before: at(600) }), "them");
+  assert.equal(broughtBy({ address: "", events: ours }), "them");
+});

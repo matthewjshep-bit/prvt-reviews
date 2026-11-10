@@ -740,3 +740,21 @@ test("a buyer asking who we are or why we texted reads as not knowing us; a ques
     assert.equal(doesntKnowUs(t), false, t);
   }
 });
+
+// The 2026-11-09 audit: 50 threads got a buy box made up on the spot.
+test("the buy box is said one fixed way, in the counties we work and nowhere else", async () => {
+  const { buyBoxRule, buyBoxMarkets, BUY_BOX_RULE } = await import("./conversation-ai.js");
+  assert.match(BUY_BOX_RULE, /^WHAT WE BUY: single-family houses that need work, under about a million\. The work has to be real/);
+  assert.doesNotMatch(BUY_BOX_RULE, /, in /, "no counties set: no area named");
+  assert.match(BUY_BOX_RULE, /mobile homes, short sales, bank-owned, wholesaler deals and condos/);
+  assert.doesNotMatch(BUY_BOX_RULE, /\bMatt\b/, "the bot is Matt; no rule names him");
+  assert.equal(buyBoxMarkets({ outreachAutopilot: { counties: [{ county: "Pierce", state: "WA" }, "Pierce, WA", "Kitsap County"] } }), "Pierce and Kitsap counties in Washington");
+  assert.equal(buyBoxMarkets({ outreachAutopilot: { counties: ["King, WA"], markets: { "Deschutes, OR": {}, "Crook, OR": {} } } }),
+    "King County in Washington and around Bend (Deschutes and Crook counties) in Oregon");
+  assert.equal(buyBoxMarkets({ outreachAutopilot: { counties: "Snohomish, WA\nNowhere, ZZZ" } }), "Snohomish County in Washington");
+  assert.equal(buyBoxMarkets({}), "");
+  assert.match(buyBoxRule({ outreachAutopilot: { counties: ["King, WA"] } }), /never name an area that isn't on that list/);
+  // Multi-family ticked on the focus: the buy box says it too, never less than the focus rule.
+  assert.match(buyBoxRule({ focusKinds: ["sfr", "multi_family"] }), /^WHAT WE BUY: single-family houses and small multi-family \(2-4 units\) that need work/);
+  assert.equal(buyBoxRule({ focusKinds: ["sfr"] }), BUY_BOX_RULE);
+});

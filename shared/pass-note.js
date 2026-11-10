@@ -22,7 +22,9 @@
 //
 // Pure. The runner is ghl-broker/pass-note.js.
 
-import { effectiveStatus, WE_PASS_REASON } from "./offer-status.js";
+import { effectiveStatus, WE_PASS_REASON, passWordsFor } from "./offer-status.js";
+import { RAISED_EVENT_TYPES } from "./lead-source.js";
+import { sameStreetLoose } from "./us-address.js";
 
 export const PASS_NOTE_WAIT_MIN = 10;
 // A mark the note never went out on in a day (the bot stopped on them, a
@@ -46,12 +48,15 @@ export function wantsPassNote({ before = null, status = "", reason = null } = {}
 }
 
 /**
- * passNoteHouses(offers, { now }) → [{ offerId, address, code, label, words, markedAt, statusAt }]
+ * passNoteHouses(offers, { now, walkAways }) → [{ offerId, address, code, label, words, markedAt, statusAt }]
  *
  * This agent's houses waiting on a pass note, oldest mark first: still "we
  * passed" with a reason, not a deal, marked within PASS_NOTE_KEEP_MS.
+ * `words` by passWordsFor: a quiet pass says we couldn't get it to a number
+ * only when an underwrite made one (`walkAways`: offerId → the house
+ * record's walk-away, which the runner reads).
  */
-export function passNoteHouses(offers = [], { now = Date.now() } = {}) {
+export function passNoteHouses(offers = [], { now = Date.now(), walkAways = new Map() } = {}) {
   const out = [];
   for (const o of offers || []) {
     const n = o?.passNote;
@@ -60,7 +65,8 @@ export function passNoteHouses(offers = [], { now = Date.now() } = {}) {
     const r = WE_PASS_REASON[o.passReason?.code];
     const at = ms(n.markedAt);
     if (!r || at == null || now - at > PASS_NOTE_KEEP_MS) continue;
-    out.push({ offerId: o.id, address: o.address, code: r.code, label: r.label, words: r.words, markedAt: n.markedAt, statusAt: o.statusAt || null });
+    out.push({ offerId: o.id, address: o.address, code: r.code, label: r.label, words: passWordsFor(o, { walkAway: walkAways?.get?.(o.id) || 0 }),
+      markedAt: n.markedAt, statusAt: o.statusAt || null });
   }
   return out.sort((a, b) => ms(a.markedAt) - ms(b.markedAt));
 }
@@ -86,4 +92,29 @@ export function passNoteStale(houses = [], offersById = new Map()) {
     if (h.statusAt && o.statusAt && h.statusAt !== o.statusAt) return `${h.address} was marked again since`;
   }
   return "";
+}
+
+// Our texts that named a house of theirs (shared/lead-source.js), and the
+// conversation moving onto the house our first text named (the `ours`
+// stamp, reply-agent.js applyProfileUpdates).
+export const BROUGHT_EVENT_TYPES = [...RAISED_EVENT_TYPES, "subject_property_set"];
+
+/**
+ * broughtBy({ address, events, before }) → "us" | "them"
+ *
+ * Whose house it was to start with: "us" when a text of ours named it (the
+ * first text, its follow-up, a check-in or ping about a listing of theirs)
+ * or the thread moved onto it as the house our text asked about; "them"
+ * otherwise. `before` (the offer's createdAt): only what came before it
+ * counts, so a check-in about a house they had already sent stays theirs.
+ * The 2026-11-09 audit: a pass note thanked an agent for sending over the
+ * house our own cold text had asked her about.
+ */
+export function broughtBy({ address = "", events = [], before = null } = {}) {
+  if (!address) return "them";
+  const by = ms(before);
+  const ours = (events || []).some((e) => e?.address && sameStreetLoose(e.address, address)
+    && (by == null || (ms(e.at) ?? Infinity) <= by + 60000)
+    && (RAISED_EVENT_TYPES.includes(e.type) || (e.type === "subject_property_set" && e.data?.ours)));
+  return ours ? "us" : "them";
 }

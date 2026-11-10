@@ -647,6 +647,26 @@ test("a house we passed on stops being asked about: the bot is told to say we pa
   assert.doesNotMatch(open.text, /WE PASSED ON 1921/);
 });
 
+// The 2026-11-09 audit: pass notes thanked agents for sending houses our own
+// first text had asked about, and a clock pass on a house nobody priced said
+// "we couldn't get it to a number".
+test("the bot's word that we passed on the house our first text asked about doesn't thank them for sending it", () => {
+  const A = "77 Birch Ln, Kent, WA 98031";
+  const passed = { id: "o1", address: A, status: "we_passed", cashAmount: null, createdAt: "2026-11-01T18:00:00Z", statusAt: "2026-11-05T18:00:00Z",
+    passReason: { code: "quiet", at: "2026-11-05T18:00:00Z", by: "needs-matt" } };
+  const ours = [{ type: "outreach_sent", at: "2026-10-30T17:00:00Z", address: A, data: {} }];
+  const custom = { subject_property: A };
+  const ctx = buildAgentContext({ offers: [passed], custom, now: Date.parse("2026-11-06T18:00:00Z"), events: ours, facts: null });
+  assert.match(ctx.text, /WE PASSED ON 77 Birch Ln/);
+  assert.doesNotMatch(ctx.text, /thank them for sending it/);
+  assert.match(ctx.text, /thank them for getting back to us on it/);
+  assert.doesNotMatch(ctx.text, /couldn't get it to a number/, "nobody priced it");
+  assert.match(ctx.text, /why: we're going to pass on this one for now/);
+  // A house they sent us is still thanked for.
+  const theirs = buildAgentContext({ offers: [passed], custom, now: Date.parse("2026-11-06T18:00:00Z"), events: [], facts: null });
+  assert.match(theirs.text, /thank them for sending it/);
+});
+
 // 2026-10-22 audit: the first reply to a house an agent names was written
 // before its draft existed, so "Matt is pricing this one himself" never
 // reached it, and it promised "I'll text you where we'd land" — 27 of 100

@@ -13,6 +13,8 @@
 import { DEFAULT_LADDERS, ON_EXHAUSTED, MAX_REPEAT_DAYS, MAX_REPEATS, PREVIOUS_OUTREACH_NUDGE_STEPS, kindsFor, normalizeSteps } from "./follow-up.js";
 import { BOOKING_DEFAULTS } from "./booking.js";
 import { CONTACT_CARD_DEFAULTS, normalizeContactCard } from "./contact-card.js";
+import { OUR_BOX_WORDS, RURAL_LOT_ACRES, normalizeFocusKinds } from "./asset-type.js";
+import { DEFAULT_HOMES, homesFrom } from "./outreach-opener.js";
 
 // The re-quote guard's defaults. They live here rather than in requote.js
 // because requote.js reaches offer-calc, and offer-calc reaches back here to
@@ -483,6 +485,65 @@ export const AGENT_GOAL_RULE =
   "don't reopen the price; (5) get the AGENT to write it up — ask them to represent us and put it on NWMLS forms for us to sign. " +
   "Every reply to a listing agent should be doing one of those five things. When the thread is at step 4 or 5, keep it short and keep it moving: " +
   "the only open question is who writes it and when. " + AGENT_REPRESENT_RULE;
+
+// What we buy, said one fixed way (the 2026-11-09 audit: 50 threads got a buy
+// box made up on the spot — any price range, every part of a county,
+// bank-owned is fine). Built from OUR_BOX_WORDS, the counties the outreach
+// sweep reads (settings.outreachAutopilot counties and markets) and what Matt
+// has ruled out: mobile homes (10-13), short sales and bank-owned (10-29),
+// wholesaler deals (11-02), condos (single-family only, 10-01), rural 2+
+// acres (10-08). Fixed beside the goal rule, so no saved playbook drifts.
+const STATE_NAMES = { WA: "Washington", OR: "Oregon", ID: "Idaho", CA: "California", MT: "Montana", NV: "Nevada" };
+const andList = (xs) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
+const countyWords = (cs) => `${andList(cs)} ${cs.length > 1 ? "counties" : "County"}`;
+
+/** buyBoxMarkets(saved) → "King and Thurston counties in Washington and around Bend (Deschutes County) in Oregon", or "". */
+export function buyBoxMarkets(saved = {}) {
+  const oa = saved?.outreachAutopilot && typeof saved.outreachAutopilot === "object" ? saved.outreachAutopilot : {};
+  const raw = [
+    ...(Array.isArray(oa.counties) ? oa.counties : String(oa.counties || "").split(/[\n;]+/)),
+    ...(oa.markets && typeof oa.markets === "object" && !Array.isArray(oa.markets) ? Object.keys(oa.markets) : []),
+  ];
+  const byState = new Map();
+  for (const x of raw) {
+    const [c, s] = x && typeof x === "object" ? [x.county, x.state] : String(x || "").split(",").map((p) => p.trim());
+    const county = String(c || "").replace(/\s+county$/i, "").trim();
+    const state = String(s || "WA").trim().toUpperCase();
+    if (!county || !/^[A-Z]{2}$/.test(state)) continue;
+    const list = byState.get(state) || [];
+    if (!list.some((k) => k.toLowerCase() === county.toLowerCase())) list.push(county);
+    byState.set(state, list);
+  }
+  const homes = oa.opener?.homes ? homesFrom(oa.opener.homes) : DEFAULT_HOMES;
+  const places = [];
+  for (const [state, counties] of byState) {
+    // A county we say we're in a town for (Deschutes → Bend) is said as that town.
+    const homeOf = (c) => homes.find((h) => h.state === state && h.county && h.county.toLowerCase() === c.toLowerCase())?.home || "";
+    const plain = counties.filter((c) => !homeOf(c));
+    const towns = new Map();
+    for (const c of counties.filter(homeOf)) towns.set(homeOf(c), [...(towns.get(homeOf(c)) || []), c]);
+    const parts = [...(plain.length ? [countyWords(plain)] : []), ...[...towns].map(([town, cs]) => `around ${town} (${countyWords(cs)})`)];
+    places.push(`${andList(parts)} in ${STATE_NAMES[state] || state}`);
+  }
+  return andList(places);
+}
+
+/**
+ * buyBoxRule(saved) → the WHAT WE BUY line every agent reply is told.
+ *
+ * Single-family unless settings.focusKinds also ticks multi-family, so it
+ * never says less than the WHAT WE BUY RIGHT NOW rule (agentFocusRule).
+ */
+export function buyBoxRule(saved = {}) {
+  const where = buyBoxMarkets(saved);
+  const multi = normalizeFocusKinds(saved?.focusKinds).includes("multi_family");
+  const what = multi ? OUR_BOX_WORDS.replace(/^single-family houses/, "single-family houses and small multi-family (2-4 units)") : OUR_BOX_WORDS;
+  return `WHAT WE BUY: ${what}${where ? `, in ${where}` : ""}. The work has to be real, more than a refresh. We pass on mobile homes, short sales, bank-owned, ` +
+    `wholesaler deals and condos; rural lots of ${RURAL_LOT_ACRES}+ acres are usually out. Never say we take anything else. ` +
+    "When they ask what we buy, our buy box, our price point or where we buy, answer with exactly that in a few plain words: " +
+    "never widen it to any price, any area or any condition" + (where ? ", and never name an area that isn't on that list." : ".");
+}
+export const BUY_BOX_RULE = buyBoxRule({});
 
 // How warm the agent's newest message is toward OUR number, read by the model
 // (dealSignal in the output schema) with a plain-text fallback. Any of these on
