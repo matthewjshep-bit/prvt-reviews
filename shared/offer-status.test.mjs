@@ -551,6 +551,37 @@ test("a number is approved when a person owns it, and a machine move takes the a
   assert.equal(asksForWriteUp({ ...agreed, approved: { amount: 410000, at: at(12), by: "today" } }), true);
 });
 
+// Audit 2026-11-09: an engine number went out 49k over what the agent said the sellers would take,
+// the agent said yes, and the yes unlocked the write-up ask. Matt: never over their number.
+test("a grade-A number above the seller's stated number isn't approved for the write-up ask", async () => {
+  const { numberApproved, asksForWriteUp } = await import("./offer-status.js");
+  const live = { id: "o2", cashAmount: 512000, autoUnderwrite: { basis: "engine" }, pricing: { live: true, grade: "A", walkAway: 512000, sellerNumber: 480000 } };
+  assert.equal(numberApproved(live), false, "512k is over their 480k");
+  assert.equal(numberApproved({ ...live, cashAmount: 480000 }), true, "at their number it is the walk-away's to approve");
+  assert.equal(numberApproved({ ...live, pricing: { ...live.pricing, sellerNumber: 0 } }), true, "no number from them: as before");
+  assert.equal(numberApproved({ ...live, approved: { amount: 480000, at: "2026-11-09T18:00:00Z", by: "send" } }), false,
+    "an approval of a lower number doesn't reach past their number");
+  const yes = { ...live, status: "accepted", statusHistory: [{ status: "accepted", ts: "2026-11-09T18:00:00Z" }] };
+  assert.equal(asksForWriteUp(yes), false);
+});
+
+// The seller cap is on the machine, not on Matt. With it ahead of his own approval, a number he
+// raised past the seller's old one (they came back higher) could never be approved: the "approve it
+// before we ask for the write-up" row came back after every press of Approve.
+test("Matt's own approval of a number above the seller's old one sticks, so the approve row clears", async () => {
+  const { numberApproved, asksForWriteUp } = await import("./offer-status.js");
+  const at = "2026-11-10T18:00:00Z";
+  const raised = { id: "o3", cashAmount: 495000, autoUnderwrite: { basis: "engine" },
+    pricing: { live: true, grade: "A", walkAway: 480000, sellerNumber: 480000 },
+    revisions: [{ ts: at, by: "you" }], approved: { amount: 495000, at, by: "revise" } };
+  assert.equal(numberApproved(raised), true, "his revision is his approval");
+  assert.equal(numberApproved({ ...raised, approved: { amount: 495000, at, by: "today" } }), true, "and so is Approve on the row");
+  const yes = { ...raised, status: "countered", realm: { answer: "yes", ts: at }, hot: { at, by: "conversation", signal: "writing_up" } };
+  assert.equal(asksForWriteUp(yes), true, "their yes gets the write-up ask at the number he approved");
+  assert.equal(asksForWriteUp({ ...yes, approved: null }), false);
+  assert.equal(numberApproved({ ...raised, approved: null }), false, "without it, the machine's walk-away still can't approve past their number");
+});
+
 import { WE_PASS_REASONS, parseStatusKey, wePassedKey, wePassReasonOf, normalizeWePassReason } from "./offer-status.js";
 
 test("why we passed: a few buckets, carried on the status menu's key", () => {

@@ -113,6 +113,106 @@ test("a record keeps at most ten answers, newest last", () => {
   assert.equal(doc.firstAt, "2026-11-01T00:00:00Z");
 });
 
+/* ---------- the seller's own number, and the words about this house (audit 2026-11-09) ---------- */
+
+const { priceHouse } = await import("./shared/price-engine.js");
+// A sure read of an invented house: Bricked at 640k, 1,500 sqft built 1961, single-family.
+const SURE = { sqft: 1500, yearBuilt: 1961, homeType: "SINGLE_FAMILY", bricked: { arv: 640000, arvConfidence: 0.9, condition: 3, comps: [
+  { use: "arv", renovated: true }, { use: "arv", renovated: true }, { use: "arv", renovated: true }] } };
+
+test("a seller's number filed under a shorter spelling of the address still caps the engine", () => {
+  const events = [
+    { type: "house_mentioned", at: "2026-11-05T10:00:00Z", address: "4417 Somerset", data: { sellerAsk: 330000, note: "" } },
+    { type: "house_mentioned", at: "2026-11-06T10:00:00Z", address: "4417 Somerset, Bothell", data: { sellerAsk: 999000, note: "" } },
+  ];
+  const r = readsFrom({ address: ADDRESS, events, listPrice: 525000 });
+  assert.equal(r.sellerNumber, 330000, "their number on this house, not the namesake in another town");
+  const v = priceHouse({ ...SURE, ...r, bricked: SURE.bricked, homeType: SURE.homeType, sqft: SURE.sqft, yearBuilt: SURE.yearBuilt });
+  assert.ok(v.open <= 330000 && v.walkAway <= 330000, `open ${v.open}, walk-away ${v.walkAway}`);
+  // The newest of their numbers on the house wins, whichever way they said it.
+  const later = readsFrom({ address: ADDRESS, events: [...events,
+    { type: "offer_countered", at: "2026-11-07T10:00:00Z", address: "4417 Somerset Ln", data: { amount: 318000 } }] });
+  assert.equal(later.sellerNumber, 318000);
+  const counter = readsFrom({ address: ADDRESS, events, offer: { address: ADDRESS, counter: { amount: 312500, at: "2026-11-08T10:00:00Z" } } });
+  assert.equal(counter.sellerNumber, 312500, "a counter on the offer itself");
+  const dossier = readsFrom({ address: ADDRESS, events, dossier: { have: { sellerAsk: { value: 305000, at: "2026-11-09T10:00:00Z" } } } });
+  assert.equal(dossier.sellerNumber, 305000, "the dossier's sellerAsk");
+});
+
+test("a payoff the agent mentions never caps the engine", () => {
+  const events = [
+    { type: "house_mentioned", at: "2026-11-05T10:00:00Z", address: ADDRESS, data: { sellerAsk: 210000, note: "owes about 210k on the mortgage" } },
+  ];
+  const r = readsFrom({ address: ADDRESS, events, message: "they still owe around 210 on it", listPrice: 525000 });
+  assert.equal(r.sellerNumber, 0, "what they owe is not what they'd take, and the list price is not their number either");
+  const asked = readsFrom({ address: ADDRESS, listPrice: 525000, events: [
+    { type: "house_mentioned", at: "2026-11-05T10:00:00Z", address: ADDRESS, data: { sellerAsk: 400000, note: "wants 400, owes 210" } }] });
+  assert.equal(asked.sellerNumber, 400000, "a note that also says what they want is their number");
+});
+
+test("a wholesaler's house named a text before the address doesn't go out grade A", () => {
+  const thread = [
+    "[2026-11-04 16:00] THEM sms: The Larkspur St one is a short sale by the way",
+    "[2026-11-05 17:01] THEM sms: Got one on Somerset for you, it's an assignment and my buyer walked",
+    "[2026-11-05 17:02] US sms: Sounds good, what's the address?",
+    "[2026-11-05 17:05] THEM sms: 4417 Somerset Ln, Everett",
+  ].join("\n");
+  const reads = readsFrom({ address: ADDRESS, message: "4417 Somerset Ln, Everett", thread, listPrice: 525000 });
+  assert.match(reads.said, /assignment/, "their earlier words about this house are read");
+  assert.doesNotMatch(reads.said, /short sale/, "another house's words are not");
+  const v = priceHouse({ ...reads, bricked: SURE.bricked, homeType: SURE.homeType, sqft: SURE.sqft, yearBuilt: SURE.yearBuilt });
+  assert.ok(v.killers.includes("wholesaler_paper"), v.reasons.join(" | "));
+  assert.ok(!v.killers.includes("short_sale"));
+  assert.equal(v.grade, "C");
+  // The latest message alone (what the engine read before) had none of it.
+  assert.equal(priceHouse({ ...readsFrom({ address: ADDRESS, message: "4417 Somerset Ln, Everett", listPrice: 525000 }), bricked: SURE.bricked,
+    homeType: SURE.homeType, sqft: SURE.sqft, yearBuilt: SURE.yearBuilt }).grade, "A");
+});
+
+test("their earlier words about the house add cost to the engine's number, not certainty", () => {
+  const thread = [
+    "[2026-11-05 17:01] THEM sms: Somerset needs everything, the tenant left it rough",
+    "[2026-11-05 17:05] THEM sms: 4417 Somerset Ln, Everett",
+  ].join("\n");
+  const reads = readsFrom({ address: ADDRESS, message: "4417 Somerset Ln, Everett", thread, listPrice: 525000 });
+  assert.equal(reads.saidNow, "4417 Somerset Ln, Everett", "the text that started the run, on its own");
+  const plain = { ...SURE.bricked, condition: null };
+  const v = priceHouse({ ...reads, bricked: plain, homeType: SURE.homeType, sqft: SURE.sqft, yearBuilt: SURE.yearBuilt });
+  assert.equal(v.rehab, 150000, "heavy work at $100 a foot");
+  assert.ok(v.misses.includes("rehab"), v.reasons.join(" | "));
+  assert.notEqual(v.grade, "A");
+});
+
+test("the engine knows what year it is, so a house built last year reads as a new build", () => {
+  const reads = readsFrom({ address: ADDRESS, facts: { sqft: 1500, yearBuilt: 2025, homeType: "SINGLE_FAMILY" }, now: Date.parse("2026-11-09T18:00:00Z") });
+  assert.equal(reads.currentYear, 2026);
+  assert.ok(priceHouse({ ...reads, bricked: SURE.bricked }).killers.includes("new_build"));
+});
+
+test("the shadow reads their mentions and counters, and keeps the house's heaviest rehab from the last two weeks", async () => {
+  const now = Date.parse("2026-11-09T18:00:00Z");
+  const day = 86400000;
+  let asked = null, written = null;
+  const prev = { houseKey: houseKey(ADDRESS), history: [
+    { at: new Date(now - 20 * day).toISOString(), rehab: 200000 },
+    { at: new Date(now - 3 * day).toISOString(), rehab: 118500, rehabRead: 118500 },
+  ] };
+  const fake = {
+    listContactEvents: async (loc, id, opts) => { asked = opts; return [
+      { type: "offer_countered", at: new Date(now - day).toISOString(), address: ADDRESS, data: { amount: 340000 } }]; },
+    getHousePricing: async () => ({ doc: prev }),
+    upsertHousePricing: async (loc, key, doc) => { written = doc; },
+  };
+  const job = { contactId: "c1", message: "", warnings: [] };
+  const doc = await shadowPrice({ store: fake, locationId: "L", saved: { pricingV2: { shadow: true } }, job, address: ADDRESS, b: null,
+    facts: { sqft: 1500, yearBuilt: 1961, homeType: "SINGLE_FAMILY" }, comps: { arv: 640000, n: 4 }, listPrice: 525000, now });
+  assert.ok(asked.types.includes("house_mentioned") && asked.types.includes("offer_countered"), JSON.stringify(asked));
+  assert.equal(doc.reads.sellerNumber, 340000);
+  assert.equal(doc.v2.rehab, 118500, "three days ago it read 118.5k; the 20-day-old 200k has aged out");
+  assert.equal(doc.v2.rehabOwn, 82500, "this read alone");
+  assert.equal(written.history.at(-1).rehabRead, 82500, "the next read compares against what each read itself said");
+});
+
 test("a failure in the shadow never reaches the run", async () => {
   const broken = { upsertHousePricing: async () => { throw new Error("db down"); }, getHousePricing: async () => null, listContactEvents: async () => [] };
   const job = { warnings: [], message: "" };

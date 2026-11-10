@@ -53,9 +53,9 @@ const row = (c, i) => {
     hdpData: { homeInfo: { zpid: `z${i}`, price: c.sqft * c.ppsf, dateSold: Date.now() - (20 + i * 10) * DAY,
       livingArea: c.sqft, bedrooms: 3, bathrooms: 2, homeType: "SINGLE_FAMILY", latitude: lat, longitude: lng } } };
 };
-const subjectRow = ({ price, status = "FOR_SALE" }) => ({
+const subjectRow = ({ price, status = "FOR_SALE", sqft = 1500 }) => ({
   address: { streetAddress: "2210 Quarry Ave N", city: "Shoreline", state: "WA", zipcode: "98133" },
-  homeType: "SINGLE_FAMILY", bedrooms: 3, bathrooms: 2, livingArea: 1500, yearBuilt: 1955, lotSize: 7200, price, homeStatus: status,
+  homeType: "SINGLE_FAMILY", bedrooms: 3, bathrooms: 2, ...(sqft ? { livingArea: sqft } : {}), yearBuilt: 1955, lotSize: 7200, price, homeStatus: status,
   listingPhotos: Array.from({ length: 12 }, (_, i) => ({ url: `https://photos.zillowstatic.com/fp/${i}abc-p_f.jpg` })),
   description: "Original kitchen, roof near the end of its life.",
 });
@@ -65,7 +65,7 @@ const BRICKED = { id: "b1", arv: 495000, arvConfidence: 0.92, cmv: 330000, total
   property: { address: { fullAddress: ADDRESS }, details: { bedrooms: 3, bathrooms: 2, squareFeet: 1500, yearBuilt: 1955, condition_rating: 3.4 } },
   comps: [1, 2, 3].map((i) => ({ compType: "arv", selected: true, is_renovated: null, renovation_score: 0.85, details: { lastSaleAmount: 490000 + i } })) };
 
-function stubFetch({ near = NEAR, price = 420000, status } = {}) {
+function stubFetch({ near = NEAR, price = 420000, status, sqft } = {}) {
   const calls = { bricked: 0 };
   const original = globalThis.fetch;
   globalThis.fetch = async (url, opts = {}) => {
@@ -80,7 +80,7 @@ function stubFetch({ near = NEAR, price = 420000, status } = {}) {
       let asked = [];
       try { asked = JSON.parse(body).addresses || []; } catch { asked = []; }
       const known = near.filter((c) => asked.some((a) => String(a).startsWith(c.street)));
-      const subj = asked.some((a) => String(a).startsWith("2210 Quarry")) ? [subjectRow({ price, status })] : [];
+      const subj = asked.some((a) => String(a).startsWith("2210 Quarry")) ? [subjectRow({ price, status, sqft })] : [];
       return ok([...subj, ...known.map(detailRow)]);
     }
     return ok({ features: [] });
@@ -92,9 +92,9 @@ const scanPhotos = async () => ({ summary: "Dated throughout.", items: [{ id: "p
 const until = async (fn, ms = 8000) => { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) return false; await new Promise((r) => setTimeout(r, 10)); } return true; };
 
 let n = 0;
-async function run({ saved = {}, near, price, status, scan = scanPhotos, locationId = `LOC-engine-${++n}`, contactId = `agent-${n}` } = {}) {
+async function run({ saved = {}, near, price, status, sqft, scan = scanPhotos, locationId = `LOC-engine-${++n}`, contactId = `agent-${n}` } = {}) {
   _resetJobs(); _resetCompsCache(); _resetSiteCache(); _resetFactsCache();
-  const { calls, restore } = stubFetch({ near, price, status });
+  const { calls, restore } = stubFetch({ near, price, status, sqft });
   const made = [];
   try {
     const createOffer = async ({ body }) => {
@@ -175,4 +175,54 @@ test("a house Zillow shows for rent at $2,900 a month is never offered $2,500", 
   assert.equal(made.length, 0, "no offer measured against a month's rent");
   assert.doesNotMatch(job.brickedHeld || "", /\$2,[0-9]{3} walk-away/);
   assert.match(job.brickedHeld || "", /no list price or seller's number/);
+});
+
+/* ---------- what Matt sees, and what the engine can't know (audit 2026-11-09) ---------- */
+
+// The Price-it draft used to open on the bare photo scope (about 0.88x Matt's rehab) with nothing
+// of the engine's on it, so Matt priced from a lighter number than the engine had.
+test("an engine draft carries the engine's rehab and walk-away for Matt", async () => {
+  const { job, locationId } = await run();
+  const draft = await store.getOffer(job.offerId);
+  const e = draft.draft.engine;
+  assert.ok(e, "the engine's answer is on the draft");
+  for (const k of ["grade", "arv", "rehab", "rehabWhy", "open", "walkAway", "triage", "reasons"]) assert.ok(k in e, k);
+  const scoped = Number(String(draft.autoUnderwrite.subjectLine.match(/rehab \$([\d,]+) from 12 photos/)?.[1] || "0").replace(/,/g, ""));
+  assert.ok(scoped > 0 && scoped < e.rehab, `the photos read ${scoped}, the engine ${e.rehab} (the 1955 house's age floor)`);
+  const row = (draft.draft.rehab?.allowance || []).find((r) => r.key === "age_floor");
+  assert.ok(row, "an allowance row carries the difference");
+  assert.ok(Math.abs(draft.draft.inputs.repairs - e.rehab) <= 1000, `the draft opens on ${draft.draft.inputs.repairs}, the engine said ${e.rehab}`);
+  assert.match(draft.autoUnderwrite.subjectLine, /engine open \$[\d,]+ \/ walk-away \$[\d,]+/);
+  // How far the comps reached is on the house's record.
+  const rec = await store.getHousePricing(locationId, houseKey(ADDRESS));
+  assert.deepEqual({ listing: rec.doc.reads.comps.listing, radius: rec.doc.reads.comps.radius, acrossInArv: rec.doc.reads.comps.acrossInArv,
+    eraGivesWay: rec.doc.reads.comps.eraGivesWay, gutCheck: rec.doc.reads.comps.gutCheck }, { listing: 4, radius: 0.5, acrossInArv: 0, eraGivesWay: false, gutCheck: false });
+});
+
+test("a size borrowed from the comps keeps the house a draft", async () => {
+  // Zillow has the beds, baths and year but no size: the run takes the comps' middle size.
+  const { job, made } = await run({ saved: { pricingV2: { liveA: true } }, price: 270000, sqft: 0 });
+  assert.equal(made.length, 0, "the same house with its own size sends (above)");
+  assert.equal(job.status, "held");
+  assert.match(job.brickedHeld || "", /the house's own size isn't on record: [\d,]+ sqft was borrowed from the comps/);
+});
+
+/* ---------- one house, one offer, in the full machine too (audit 2026-11-09) ---------- */
+
+// Two runs of one house a few seconds apart both passed the offer checks at the top of the run
+// and both made an offer. The check runs again right before the offer is made.
+test("a full run whose house got an offer from another run while it worked makes nothing", async () => {
+  const locationId = "LOC-engine-sibling", contactId = "sib-1";
+  const scan = async (...args) => {
+    // Another run of the same agent's house, under a shorter spelling, finishes while this one scans.
+    await store.createOffer({ locationId, status: "new", contactId, address: "2210 Quarry Ave N, Shoreline, WA", cashAmount: 301000 });
+    return scanPhotos(...args);
+  };
+  const { job, made } = await run({ saved: { autoUnderwriteMode: "full" }, price: 520000, scan, locationId, contactId });
+  assert.equal(made.length, 0, "no second offer");
+  assert.equal(job.status, "done");
+  assert.ok(job.duplicateOf, "pointed at the other run's offer");
+  // Without the other run, the same full run makes its offer.
+  const alone = await run({ saved: { autoUnderwriteMode: "full" }, price: 520000, locationId: "LOC-engine-alone", contactId: "sib-2" });
+  assert.equal(alone.made.length, 1);
 });

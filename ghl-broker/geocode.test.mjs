@@ -375,6 +375,22 @@ test("a resolved address is looked up once, not once per caller", async () => {
   } finally { s.restore(); }
 });
 
+// Audit 2026-11-09: a street-only answer for a house number is the providers missing the house
+// this minute; cached for a day, every run that day priced "somewhere on the street".
+test("a street-only geocode for a house number is never cached", async () => {
+  const q = "6120 Wren Hollow Dr SW, Lakewood, WA 98499";
+  const s = stubProviders({
+    photon: { [q]: [feature(47.15, -122.52, { street: "Wren Hollow Drive Southwest", city: "Lakewood", state: "Washington", postcode: "98499" })] },
+  });
+  try {
+    const geo = await geocodeAddress(q);
+    assert.equal(geo.precision, "street");
+    const before = s.calls.length;
+    await geocodeAddress(q);
+    assert.ok(s.calls.length > before, "asked again, not served from the cache");
+  } finally { s.restore(); }
+});
+
 test("a failed lookup is NOT cached — the network has bad minutes", async () => {
   const s = stubProviders({});
   try {

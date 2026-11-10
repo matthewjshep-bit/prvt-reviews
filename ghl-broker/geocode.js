@@ -72,7 +72,10 @@ export async function geocodeAddress(raw, { minPrecision = "city" } = {}) {
   let found = hit && Date.now() - hit.ts < CACHE_TTL ? hit.geo : null;
   if (!found) {
     found = await lookup(q);
-    if (found) cache.set(key, { ts: Date.now(), geo: found });
+    // An address with a house number is remembered only once the house itself was found: a
+    // street-only or centroid answer is the providers missing it this minute, and a day of runs
+    // priced "somewhere on the street" (audit 2026-11-09).
+    if (found && (found.precision === "address" || !parseUsAddress(q).houseNo)) cache.set(key, { ts: Date.now(), geo: found });
   }
   return atLeast(found, minPrecision) ? found : null;
 }

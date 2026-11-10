@@ -1206,6 +1206,15 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
               onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), walkaway: e.target.checked })} />
             Negotiate grade-A counters up to the walk-away — at most two moves, never past it; anything higher comes to you as a call
           </label>
+          <label className="mt-3 block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Hold for me when the walk-away is this % over the seller's number</span>
+            <input type="number" min={0} max={50} value={form.pricingV2?.overSellerPct ?? 10}
+              onChange={(e) => set("pricingV2")({ ...(form.pricingV2 || {}), overSellerPct: e.target.value === "" ? 10 : Number(e.target.value) })} className={INPUT_CLS} />
+          </label>
+          <p className="mt-1 text-xs text-slate-500">
+            The engine never opens or walks away above the number the seller said they'd take. A walk-away further over it than
+            this is likely a wrong ARV, so the house waits for you to price. 0 holds any amount over.
+          </p>
         </div>
         <p className="mb-3 text-xs text-slate-400">
           A draft carries the agent, the address and the listing's facts, and waits on Today as "Price it"; a skeleton
