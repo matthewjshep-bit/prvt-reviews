@@ -570,3 +570,70 @@ test("our gatekeeper email two days on with no answer is a call; not before, and
   assert.equal(callList({ events: [sent], now: Date.parse("2026-11-04T18:00:00Z"), gatekeepers: { callAfterDays: 1 } }).find((x) => x.contactId === "gk2").kind, "call_gatekeeper", "the setting moves it");
   assert.ok(CALL_KINDS.some((k) => k.key === "call_gatekeeper"));
 });
+
+/* ---------- a buyer on a live deal waiting on us (2026-11-09) ---------- */
+
+// The dispo audit: buyers on deals under contract named a number, walked the
+// house or said they'd check with a lender, and nobody answered them for
+// days. A call is how those land. Off until Matt switches it on.
+const FRI = Date.parse("2026-10-02T20:00:00Z");   // Friday 1pm Pacific
+const dealOffer = (over = {}) => ({ id: "o9", contactId: "ag9", contactName: "Lister Nine", address: "40 Juniper Ct, Tacoma, WA 98408", cashAmount: 240000, status: "accepted",
+  createdAt: ago(30), deal: { stage: "under_contract", investors: [{ contactId: "b1", name: "Bryn Quarry", status: "evaluating" }, { contactId: "b2", name: "Cole Ridge", status: "passed" }] }, ...over });
+const theirText = (over = {}) => ({ id: "bi1", contactId: "b1", contactName: "Bryn Quarry", party: "investor", status: "draft", offerId: "o9",
+  propertyAddress: "40 Juniper Ct, Tacoma, WA 98408", inbound: "Could do 285 if it pencils, checking with my lender", createdAt: "2026-10-01T17:00:00Z", ...over });
+const ON_BUYERS = { buyerCalls: true };
+const buyerRow = (rows) => rows.find((r) => r.kind === "call_buyer_live_deal");
+
+test("a buyer who named a number on a live deal and heard nothing for a workday gets a call when buyer calls are on", async () => {
+  const { ghlCallKind } = await import("./desk.js");
+  const rows = callList({ offers: [dealOffer()], drafts: [theirText()], settings: ON_BUYERS, now: FRI });
+  const r = buyerRow(rows);
+  assert.ok(r, "a call row");
+  assert.equal(r.contactId, "b1", "keyed on the buyer, never the agent");
+  assert.equal(rows.filter((x) => x.kind === "call_buyer_live_deal").length, 1, "one call, the buyer's: nothing for the listing agent");
+  assert.equal(r.offerId, "o9");
+  assert.equal(r.section, "call");
+  assert.equal(r.id, "call_buyer_live_deal:o9:b1");
+  assert.match(r.call.why, /40 Juniper Ct/);
+  assert.match(r.call.why, /285K/);
+  assert.match(r.call.why, /Oct 1/);
+  assert.doesNotMatch(JSON.stringify(r), /pencils|lender/, "never their words");
+  assert.match(r.call.opener, /^Hi Bryn, it's Matt/);
+  assert.doesNotMatch(r.call.opener, /—|!/);
+  assert.equal(ghlCallKind(r), "urgent", "it goes to GHL as it turns up");
+  assert.ok(KIND_STRENGTH.includes("call_buyer_live_deal"));
+  // We answered since: nothing to call about.
+  const answered = { id: "s1", contactId: "b1", status: "sent", reply: "Thanks, I'll pass it along.", createdAt: "2026-10-01T18:00:00Z", sentAt: "2026-10-01T18:00:00Z" };
+  assert.equal(buyerRow(callList({ offers: [dealOffer()], drafts: [theirText(), answered], settings: ON_BUYERS, now: FRI })), undefined);
+  // Not a workday yet.
+  assert.equal(buyerRow(callList({ offers: [dealOffer()], drafts: [theirText({ createdAt: "2026-10-02T15:00:00Z" })], settings: ON_BUYERS, now: FRI })), undefined);
+  // Friday afternoon's text is due Monday afternoon, not over the weekend.
+  const friText = theirText({ createdAt: "2026-10-02T22:00:00Z" });
+  assert.equal(buyerRow(callList({ offers: [dealOffer()], drafts: [friText], settings: ON_BUYERS, now: Date.parse("2026-10-05T16:00:00Z") })), undefined);
+  assert.ok(buyerRow(callList({ offers: [dealOffer()], drafts: [friText], settings: ON_BUYERS, now: Date.parse("2026-10-05T23:00:00Z") })));
+  // A walk, a lender check or a "let you know" is a call too; a thank-you isn't.
+  for (const words of ["Walked it this morning, roof is worse than the photos", "Need to run it by my partner first", "I'll let you know by Monday"]) {
+    assert.ok(buyerRow(callList({ offers: [dealOffer()], drafts: [theirText({ inbound: words })], settings: ON_BUYERS, now: FRI })), words);
+  }
+  assert.equal(buyerRow(callList({ offers: [dealOffer()], drafts: [theirText({ inbound: "Thanks for sending" })], settings: ON_BUYERS, now: FRI })), undefined);
+  assert.equal(buyerRow(callList({ offers: [dealOffer()], drafts: [theirText({ inbound: "Is it 1,450 square feet?" })], settings: ON_BUYERS, now: FRI })), undefined, "a size isn't their number");
+  // A buyer found is still live; a closed deal or a buyer who passed isn't.
+  assert.ok(buyerRow(callList({ offers: [dealOffer({ deal: { ...dealOffer().deal, stage: "buyer_found" } })], drafts: [theirText()], settings: ON_BUYERS, now: FRI })));
+  assert.equal(buyerRow(callList({ offers: [dealOffer({ deal: { ...dealOffer().deal, stage: "closed" } })], drafts: [theirText()], settings: ON_BUYERS, now: FRI })), undefined);
+  assert.equal(buyerRow(callList({ offers: [dealOffer()], drafts: [theirText({ contactId: "b2" })], settings: ON_BUYERS, now: FRI })), undefined);
+  // Their text off the timeline counts the same.
+  const summary = { type: "text_summary", contactId: "b1", party: "investor", at: "2026-10-01T17:00:00Z", address: "40 Juniper Ct, Tacoma, WA 98408", data: { inbound: "We'd go 270 as is" } };
+  assert.match(buyerRow(callList({ offers: [dealOffer()], events: [summary], settings: ON_BUYERS, now: FRI })).call.why, /270K/);
+});
+
+test("with buyer calls off nothing is queued for buyers", async () => {
+  const { ghlCallRows } = await import("./desk.js");
+  assert.equal(DESK_DEFAULTS.buyerCalls, false);
+  assert.equal(normalizeDesk({}).buyerCalls, false);
+  assert.equal(normalizeDesk({ buyerCalls: "yes" }).buyerCalls, false, "only a real true turns it on");
+  assert.equal(normalizeDesk({ buyerCalls: true }).buyerCalls, true);
+  const rows = callList({ offers: [dealOffer()], drafts: [theirText()], now: FRI });
+  assert.equal(buyerRow(rows), undefined);
+  assert.ok(!rows.some((r) => r.contactId === "b1"));
+  assert.equal(ghlCallRows(rows.map((r) => ({ ...r, also: [] })), { mode: "morning" }).filter((x) => x.contactId === "b1").length, 0);
+});

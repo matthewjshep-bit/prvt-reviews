@@ -18,7 +18,8 @@
 //
 // Pure. The route reads; this decides.
 
-import { effectiveStatus, pushesToPaper, priceAgreed, DEAD_STATUSES } from "./offer-status.js";
+import { effectiveStatus, pushesToPaper, priceAgreed, DEAD_STATUSES, dealIsOver, investorStatus } from "./offer-status.js";
+import { buyerAmounts } from "./deal-reply-match.js";
 import { callEventConnected } from "./talked-to.js";
 import { agentSegment } from "./agent-pulse.js";
 import { IRRITATED_RX } from "./thread-health.js";
@@ -71,6 +72,10 @@ export const DESK_DEFAULTS = Object.freeze({
   // The few things only Matt can do, pinged through GHL (shared/ghl-pings.js,
   // 2026-10-20): off until the workflow is built and its link pasted.
   ghlPings: GHL_PINGS_DEFAULTS,
+  // A buyer on a live deal who named a number (or walked it, or is checking
+  // with a lender) and heard nothing for a workday is a call
+  // (call_buyer_live_deal, 2026-11-09). Off until Matt switches it on.
+  buyerCalls: false,
 });
 
 /** normalizeDesk(v) → every setting, a whole number in its range (and the GHL calls block, normalised). */
@@ -89,6 +94,7 @@ export function normalizeDesk(v = {}) {
     dailyCalls: n(o.dailyCalls, d.dailyCalls, 0, 30),
     ghlCalls: normalizeGhlCalls(o.ghlCalls),
     ghlPings: normalizeGhlPings(o.ghlPings),
+    buyerCalls: o.buyerCalls === true,
   };
 }
 
@@ -118,13 +124,16 @@ export const CALL_KINDS = [
   // nothing came back — the call is the next touch (shared/gatekeeper-sequence.js).
   { key: "call_gatekeeper_replied", label: "A gatekeeper answered" },
   { key: "call_gatekeeper", label: "Gatekeeper: call after the email" },
+  // A buyer on a deal under contract waiting on us (2026-11-09, desk.buyerCalls).
+  { key: "call_buyer_live_deal", label: "A buyer on a live deal is waiting on us" },
   // A decision, not a call (2026-10-14): someone else they say has one.
   { key: "referral",         label: "Referral: someone else has one" },
   // A decision, not a call (2026-10-15): an email they texted, to check.
   { key: "email_check",      label: "An email they texted, to check" },
 ];
 // They called you: ring back first — they reached out.
-const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_turnkey_week: 50, call_investor: 45, call_partner: 30, call_partner_terms: 80, call_gatekeeper_replied: 97, call_gatekeeper: 65 };
+const BASE = { call_missed: 105, call_hot: 100, call_brought: 95, call_counter: 90, call_gap: 85, call_first_reply: 70, call_quiet: 60, call_phone_only: 55, call_turnkey_week: 50, call_investor: 45, call_partner: 30, call_partner_terms: 80, call_gatekeeper_replied: 97, call_gatekeeper: 65,
+  call_buyer_live_deal: 98 };
 // A gatekeeper's answer stays a call this long; the post-email call this long
 // after the email (then the monthly check-in is the next touch).
 const GATEKEEPER_REPLIED_DAYS = 14;
@@ -308,6 +317,27 @@ export function callList({
     add("call_missed", { contactId: c, contactName: name, offerId: card?.offerId || null, address: card?.address || "", since: e.at,
       why: "they called you and it wasn't picked up", goal: "Call them back.",
       opener: `Hi ${first(name)}, it's Matt, sorry I missed your call${card ? ` — is this about ${street(card.address)}?` : "."}` });
+  }
+
+  /* 1b. A buyer on a live deal waiting on us (2026-11-09; off unless
+   * desk.buyerCalls). They named a number, walked it, are checking with a
+   * partner or lender, or will let us know, and nothing came from us for a
+   * workday (buyersWaitingOnLiveDeals). Keyed on the buyer, never the
+   * listing agent. The brief is the street, their number and its date:
+   * never their words. A call or a text of yours since clears it. */
+  if (cfg.buyerCalls) {
+    for (const w of buyersWaitingOnLiveDeals({ offers, drafts, events, now })) {
+      if (unsubscribed.has(w.contactId) || irritated(w.contactId)) continue;
+      const where = street(w.address);
+      const when = dayWord(w.at);
+      const what = w.amount ? `their ${kText(w.amount)}` : BUYER_CUE_WORDS[w.cue];
+      const why = `${where}: ${what} (${when}), nothing back from us`;
+      add("call_buyer_live_deal", { contactId: w.contactId, contactName: w.name, offerId: w.offerId, address: w.address, since: w.at, houses: [],
+        why, goal: `A buyer on ${where} (${w.stage === "buyer_found" ? "buyer found" : "under contract"}) is waiting on us. Call: hear where they are and get a yes or a no. Any price is yours to decide.`,
+        opener: `Hi ${first(w.name)}, it's Matt, about ${where}.`,
+        extra: { id: `call_buyer_live_deal:${w.offerId}:${w.contactId}`, buyer: { offerId: w.offerId, stage: w.stage, amount: w.amount || null, at: w.at, cue: w.cue } },
+        agePenaltyFrom: ms(w.at) });
+    }
   }
 
   /* 2. Hot, not yet a deal: get it written up. */
@@ -727,6 +757,89 @@ export function callList({
   }
 
   return out.sort((a, b) => b.score - a.score);
+}
+
+/* ---------- a buyer on a live deal waiting on us (2026-11-09) ---------- */
+
+const LIVE_DEAL_STAGES = new Set(["under_contract", "buyer_found"]);
+// Their text stays a reason to call this long.
+const BUYER_CALL_DAYS = 14;
+// A buyer's own number for the house, not earnest money or a repair.
+const BUYER_PRICE_FLOOR = 50000;
+const WALK_RX = /\bwalked\b|\bwalk(?:ing)?\s+(?:it|through|the\s+(?:house|place|property))\b|\bwalk-?through\b|\btoured\b/i;
+const PARTNER_RX = /\b(?:partner|lender|hard\s+money|financing)\b|\brun\s+(?:it|this|that|the\s+numbers)\s+(?:by|past)\b|\bcheck(?:ing)?\s+with\s+(?:my|our)\b/i;
+const LET_KNOW_RX = /\blet\s+(?:you|u|ya)\s+know\b/i;
+const BUYER_CUE_WORDS = { walk: "the walk-through came up", partner: "checking with a partner or lender", let_know: "said they'd let us know" };
+const PT_DAY = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short" });
+const dayWord = (iso) => (ms(iso) == null ? "" : new Date(ms(iso)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" }));
+// One working day on: the same hour the next Mon–Fri (Pacific).
+const oneWorkdayAfter = (t) => { let x = t + DAY_MS; while (["Sat", "Sun"].includes(PT_DAY.format(new Date(x)))) x += DAY_MS; return x; };
+
+/**
+ * buyerCue(text, { near }) → { cue: "price" | "walk" | "partner" | "let_know", amount } | null
+ *
+ * What in a buyer's text is a reason to call. `near` (the deal's price, when
+ * known) keeps a figure that can't be their number for it ("1,450 sqft" read
+ * as 1.45M) from being one: a third to three times it.
+ */
+export function buyerCue(text = "", { near = 0 } = {}) {
+  const t = String(text || "");
+  const ref = Number(near) || 0;
+  const amount = Math.max(0, ...buyerAmounts(t).filter((n) => n >= BUYER_PRICE_FLOOR && (!ref || (n >= ref / 3 && n <= ref * 3))));
+  if (amount) return { cue: "price", amount };
+  if (WALK_RX.test(t)) return { cue: "walk", amount: 0 };
+  if (PARTNER_RX.test(t)) return { cue: "partner", amount: 0 };
+  if (LET_KNOW_RX.test(t)) return { cue: "let_know", amount: 0 };
+  return null;
+}
+
+/**
+ * buyersWaitingOnLiveDeals({ offers, drafts, events, now }) → [{ contactId, name, offerId, address, stage, at, cue, amount }]
+ *
+ * A buyer on a deal's list (deal.investors, not one who passed) on a deal
+ * under contract or with a buyer found, whose newest text about that deal
+ * (a draft's inbound, or a text_summary's) names a price, a walk-through, a
+ * partner or lender check, or "let you know", with no text of ours to them
+ * (a sent draft, a hand reply) since, a working day on. A text with no house
+ * on it counts for a buyer on only one live deal.
+ */
+export function buyersWaitingOnLiveDeals({ offers = [], drafts = [], events = [], now = Date.now() } = {}) {
+  const live = (offers || []).filter((o) => o?.id && o.deal && LIVE_DEAL_STAGES.has(o.deal.stage) && !dealIsOver(o.deal));
+  const dealsOf = new Map();
+  for (const o of live) {
+    for (const i of o.deal.investors || []) {
+      if (!i?.contactId || investorStatus(i.status) === "passed") continue;
+      if (!dealsOf.has(i.contactId)) dealsOf.set(i.contactId, []);
+      dealsOf.get(i.contactId).push({ o, name: String(i.name || "") });
+    }
+  }
+  const out = [];
+  for (const [c, deals] of dealsOf) {
+    const theirs = [
+      ...(drafts || []).filter((d) => d?.contactId === c && String(d.inbound || "").trim())
+        .map((d) => ({ at: d.createdAt, text: d.inbound, offerId: d.offerId || d.outbound?.offerId || null, address: d.propertyAddress || "", name: d.contactName || "" })),
+      ...(events || []).filter((e) => e?.contactId === c && e.type === "text_summary" && String(e.data?.inbound || "").trim())
+        .map((e) => ({ at: e.at, text: e.data.inbound, offerId: e.offerId || null, address: e.address || "", name: "" })),
+    ].filter((x) => ms(x.at) != null && now - ms(x.at) <= BUYER_CALL_DAYS * DAY_MS);
+    const ours = [
+      ...(drafts || []).filter((d) => d?.contactId === c && d.status === "sent").map((d) => ms(d.sentAt) ?? ms(d.updatedAt) ?? ms(d.createdAt)),
+      ...(events || []).filter((e) => e?.contactId === c && e.type === "hand_reply").map((e) => ms(e.at)),
+    ].filter((t) => t != null);
+    for (const { o, name } of deals) {
+      const onIt = (x) => x.offerId === o.id || (x.address && sameStreet(x.address, o.address)) || (!x.offerId && !x.address && deals.length === 1);
+      const newest = theirs.filter(onIt).sort((a, b) => ms(b.at) - ms(a.at))[0];
+      if (!newest) continue;
+      // The deal's price to a buyer: the contract plus our fee.
+      const near = (Number(o.deal.contractPrice) || Number(o.cashAmount) || 0) + (Number(o.deal.assignmentFee) || 0);
+      const cue = buyerCue(newest.text, { near });
+      if (!cue) continue;
+      const at = ms(newest.at);
+      if (oneWorkdayAfter(at) > now || ours.some((t) => t > at)) continue;
+      out.push({ contactId: c, name: name || newest.name || "", offerId: o.id, address: o.address || "", stage: o.deal.stage,
+        at: new Date(at).toISOString(), cue: cue.cue, amount: cue.amount || 0 });
+    }
+  }
+  return out.sort((a, b) => String(a.at).localeCompare(String(b.at)));
 }
 
 /**

@@ -608,6 +608,9 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
   // kept as typed and read down to the workflow id on save (normalizeDesk).
   const ghlCalls = { ...normalizeDesk(form.desk).ghlCalls, workflowId: form.desk?.ghlCalls?.workflowId ?? "" };
   const setGhlCalls = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, desk: { ...(f.desk || {}), ghlCalls: { ...(f.desk?.ghlCalls || {}), [k]: v } } })); };
+  // A buyer on a live deal waiting on us is a call (saved.desk.buyerCalls, 2026-11-09). Off by default.
+  const buyerCalls = normalizeDesk(form.desk).buyerCalls;
+  const setBuyerCalls = (v) => { setSaved(false); setForm((f) => ({ ...f, desk: { ...(f.desk || {}), buyerCalls: v } })); };
   // The few things only Matt can do, pinged through GHL (saved.desk.ghlPings, 2026-10-20).
   const ghlPings = { ...normalizeDesk(form.desk).ghlPings, workflowId: form.desk?.ghlPings?.workflowId ?? "" };
   const setGhlPings = (k) => (v) => { setSaved(false); setForm((f) => ({ ...f, desk: { ...(f.desk || {}), ghlPings: { ...(f.desk?.ghlPings || {}), [k]: v } } })); };
@@ -774,6 +777,10 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
           : ghlCalls.enabled && !ghlCalls.workflowId
           ? <p className="mt-1 text-xs text-amber-700">Nothing goes to GHL until the workflow link is here.</p>
           : null}
+        <label className="mt-3 flex items-center gap-2 text-sm" data-testid="buyer-calls-setting">
+          <input type="checkbox" checked={buyerCalls} onChange={(e) => setBuyerCalls(e.target.checked)} />
+          <span><span className="font-semibold">Buyers on a live deal are calls too</span>: a buyer on a deal under contract who named a number, walked it, or is checking with a lender, and heard nothing from us for a workday. The call is to them, never the listing agent.</span>
+        </label>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="ghl-pings-settings">
