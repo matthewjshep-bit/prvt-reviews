@@ -31,48 +31,116 @@
 // Pure. ghl-broker/reply-agent.js uses standardText() in place of the model
 // for these kinds when the mode is "template".
 
-import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME, withHomeBlank, COLD_LAST_RUNG_TEXTS } from "./outreach-opener.js";
+import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, LEGACY_DEFAULT_FOLLOW_UP_TEXTS, DAY_TWO_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME, withHomeBlank, COLD_LAST_RUNG_TEXTS } from "./outreach-opener.js";
+import { parseUsAddress } from "./us-address.js";
 
-// The follow-up to a first text nobody answered (outreach_nudge): Rigo's
-// two-week text, without the dollar figure (carriers read money in a cold
-// text as an ad). Each step of the ladder has its own text
-// (outreachAutopilot.opener.followUps, 2026-10-20); this pool is for a step
-// with none of its own.
+// 2026-11-09 (Matt: check-ins personable, not AI): the pools below are v2,
+// from the audit's read of the sent log. The 10-17 texts said "desk" or
+// "radar" in 40% of texts against Matt's 0.9%, "on or off market" in 31%,
+// "circling back", "hope you're doing well" and "TLC"; three texts a pool
+// meant an agent heard the same one twice in two months. Each v2 text is one
+// real thing and one question, no "once" phrase shared with the text after
+// it, and passes shared/voice.js filled in with a first name and without.
+// The 10-17 pools are kept as LEGACY_*: conversationAi.checkIns.pools "v1"
+// puts them back in one field.
+
+// The spare follow-up to a first text nobody answered (outreach_nudge): a
+// step with no text of its own. The two follow-ups (the second names no
+// house, for an agent we have no address for), then one more day-2 text.
 export const NUDGE_TEXTS = [
   ...DEFAULT_FOLLOW_UP_TEXTS,
+  DAY_TWO_TEXTS[3],
+];
+export const LEGACY_NUDGE_TEXTS = [
+  ...LEGACY_DEFAULT_FOLLOW_UP_TEXTS,
   "Hi {first}, checking back on {address}. Not sure it needs enough work for us, but if you come across any fixers, listed or off market, I'm all ears.",
 ];
 
-// The plain check-in (agent_pulse, nothing particular to name).
+// The plain check-in (agent_pulse, nothing particular to name): an engaged
+// agent (pool A).
 export const CHECKIN_TEXTS = [
+  "Hey {first}, anything new on your plate that needs real work?",
+  "Any sellers right now who'd rather not fix it up first, {first}?",
+  "{first}, seen anything rough lately, listed or not?",
+  "Hi {first}, any estates or tired rentals coming up on your end?",
+  "{first}, been a few weeks. Got anything that needs more than paint and carpet?",
+  "Hey {first}, anything off-market lately that needs work?",
+  "Any listings coming that the seller won't want to fix up, {first}?",
+  "Hi {first}, got any older houses on deck that need a full redo?",
+  "{first}, anyone you're working with who just wants it sold and done?",
+  "Honestly the uglier the better for me. Anything like that coming up, {first}?",
+];
+// …to an agent who has never written back, with an offer or a Tier card
+// (pool B): who it is in two words, and their town when we know it.
+export const CHECKIN_COLD_TEXTS = [
+  "Hi {first}, it's Matt. Anything around {town} that needs real work?",
+  "{first}, any sellers near {town} who'd rather not fix it up first?",
+  "Hey {first}, Matt here. Any older houses coming up that need a lot?",
+  "Anything off-market around {town} I should see, {first}?",
+  "Hi {first}, any estates or long-time rentals coming up near {town}?",
+  "{first}, if a listing of yours ever needs too much for retail buyers, can I take a look?",
+  "Hey {first}, it's Matt. Got anything that needs more than a coat of paint?",
+  "Any fixers around {town} lately, {first}?",
+  "Hi {first}, Matt again. Anything on your end that needs real work?",
+  "{first}, got a seller who'd rather skip the repairs and the showings?",
+];
+// …when a fresh listing of theirs came up (pool C): still a check-in, the
+// listing named in passing and never judged. The 10-21 "doesn't look like a
+// fixer" was said about listings the pull had rated distressed.
+export const LISTING_PING_TEXTS = [
+  "Hey {first}, saw your new listing on {street}. Anything else coming that needs real work?",
+  "{first}, congrats on getting {street} up. Any sellers on deck who'd rather not fix up first?",
+  "Saw {street} hit the market, {first}. Got anything behind it that needs a lot?",
+  "Hi {first}, saw you listed {street}. Anything off-market on your end that needs work?",
+  "{first}, nice to see {street} up. Any older ones coming that need a full redo?",
+  "Hey {first}, saw {street} come up. Any estates or tired rentals in the works too?",
+  "Saw your listing on {street}, {first}. If the next one needs too much for retail buyers, can I see it first?",
+  "Hi {first}, saw {street}. Anything rougher in the pipeline?",
+];
+// …the same to an agent who has never written back (pool D), under 160.
+export const LISTING_PING_COLD_TEXTS = [
+  "Hi {first}, it's Matt. Saw your listing on {street}. Anything around {town} that needs real work?",
+  "Saw {street} come up, {first}. Any sellers near {town} who'd rather not fix up first?",
+  "{first}, Matt here. Got anything rougher than your new one on {street}?",
+  "Hey {first}, nice listing on {street}. Any older houses coming that need a lot?",
+  "Any fixers coming up behind your {street} listing, {first}?",
+  "Hey {first}, Matt here. Saw your listing on {street}. Any estates or tired rentals in the works?",
+  "{first}, saw {street}. Anything off-market near {town} that needs work?",
+  "Hi {first}, saw your new listing on {street}. Any sellers who want to sell without fixing anything?",
+];
+
+// The 10-17 pools (pools "v1"). Matt, 2026-10-21, on the listing ping: "Hey I
+// saw your listing at whatever address but it doesn't look like a fixer.
+// Just wanted to check in and see if you have any other distressed
+// properties on the plate."
+export const LEGACY_CHECKIN_TEXTS = [
   "Hi {first}, circling back. Any fixers or distressed properties come across your desk lately?",
   "Hey {first}, hope you're doing well. Anything come across your desk lately that needs work, on or off market?",
   "Hi {first}, any fixers on your radar lately, listed or off market? Always happy to take a look.",
 ];
-// …to an agent who has never written back: one clause on who we are.
-export const CHECKIN_COLD_TEXTS = [
+export const LEGACY_CHECKIN_COLD_TEXTS = [
   "Hi {first}, it's Matt, I fix up houses locally. Any fixers or distressed properties come across your desk lately?",
   "Hey {first}, Matt here, local guy who fixes up houses. Anything come across your desk lately that needs work, on or off market?",
   "Hi {first}, it's Matt. I'm always after houses that need some TLC. Any fixers on your radar lately, listed or off market?",
 ];
-// …when a fresh listing of theirs came up: still a check-in, naming the
-// listing in passing. Matt, 2026-10-21, after an agent we'd checked in with a
-// week before got "saw your listing on … Is it a bit of a project?" and opted
-// out: "switch to a general check-in and maybe we can reference it: 'Hey I
-// saw your listing at whatever address but it doesn't look like a fixer. Just
-// wanted to check in and see if you have any other distressed properties on
-// the plate.'"
-export const LISTING_PING_TEXTS = [
+export const LEGACY_LISTING_PING_TEXTS = [
   "Hey {first}, saw your listing on {street}, doesn't look like a fixer. Just wanted to check in, any other distressed properties on your plate?",
   "Hi {first}, saw your listing on {street}. Not sure it needs enough work for us, but wanted to check in. Anything distressed on your plate, listed or off market?",
   "Hey {first}, noticed your listing on {street}, doesn't look like it needs much work. Just checking in, any other fixers on your plate lately?",
 ];
-// …the same to an agent who has never written back: one clause on who we are.
-export const LISTING_PING_COLD_TEXTS = [
+export const LEGACY_LISTING_PING_COLD_TEXTS = [
   "Hi {first}, it's Matt, I fix up houses locally. Saw your listing on {street}, doesn't look like a fixer, but any other distressed properties on your plate?",
   "Hey {first}, Matt here, I fix up houses locally. Saw your listing on {street}, probably not one for us, but anything on your plate that needs work?",
   "Hi {first}, it's Matt. Saw your listing on {street}, doesn't look like a fixer, but any other distressed properties on your plate, listed or off market?",
 ];
+
+export const POOL_VERSIONS = ["v1", "v2"];
+const POOLS = {
+  v2: { nudge: NUDGE_TEXTS, checkin: CHECKIN_TEXTS, checkinCold: CHECKIN_COLD_TEXTS, listing: LISTING_PING_TEXTS, listingCold: LISTING_PING_COLD_TEXTS, followUps: DEFAULT_FOLLOW_UP_TEXTS },
+  v1: { nudge: LEGACY_NUDGE_TEXTS, checkin: LEGACY_CHECKIN_TEXTS, checkinCold: LEGACY_CHECKIN_COLD_TEXTS, listing: LEGACY_LISTING_PING_TEXTS, listingCold: LEGACY_LISTING_PING_COLD_TEXTS, followUps: LEGACY_DEFAULT_FOLLOW_UP_TEXTS },
+};
+/** poolsFor("v1") → the fixed check-in texts of that version (v2 unless it says v1). */
+export const poolsFor = (version = "v2") => POOLS[version === "v1" ? "v1" : "v2"];
 
 // Pierce County's first text (2026-10-26, Matt: "switch the wording slightly
 // only for pierce"). The same plain shape as the saved ones, without "I'm in
@@ -100,10 +168,12 @@ export function countyOpener(county = "") {
 // last 60-90 days"). The house is gone, so it is named as theirs, in the
 // past, as proof we know their patch — never "came off the market" (Matt,
 // 2026-10-20) and never a question about that house. The ask is the next one.
+// 2026-11-09: the second said "I buy houses", which our own carrier gate
+// holds, so a third of these waited on the Desk; the third said "TLC".
 export const PAST_LISTING_TEXTS = [
   "Hi {first}, it's Matt, I fix up houses around {town}. Saw you had {address} recently. Anything else like it come across your desk, listed or off market?",
-  "Hey {first}, Matt here. I buy houses that need work around {town} and saw you had {address}. Any other fixers on your radar, on or off market?",
-  "Hi {first}, it's Matt. I fix up houses locally and noticed you had {address} recently. Got anything else that needs some TLC, listed or off market?",
+  "Hey {first}, Matt here. I fix up houses around {town} and saw you had {address}. Anything else coming that needs real work?",
+  "Hi {first}, it's Matt. I fix up houses locally and noticed you had {address} recently. Got anything else that needs work, listed or off market?",
 ];
 
 // "SE", "NW" as people write them; listing feeds send "Se".
@@ -122,21 +192,42 @@ export function streetLine(address = "") {
   return /[a-z]/i.test(line) ? line : "";
 }
 
-/** firstNameOf("Brenda") → "Brenda"; a company or an empty name → "". */
+/**
+ * firstNameOf("Brenda") → "Brenda"; a company, a role or an empty name → "".
+ * "BRENDA" (an ALL CAPS name in GHL) → "Brenda". 2026-11-09: 234 check-ins in
+ * 60 days opened "Hi," with no name, and a GHL name that was the role
+ * ("Agent") would have been greeted as one.
+ */
 export function firstNameOf(name = "") {
   const first = String(name || "").trim().split(/\s+/)[0] || "";
   if (!/^[a-z][a-z'’-]*$/i.test(first) || first.length < 2) return "";
-  if (/^(?:the|team|group|realty|homes?|properties|llc|inc)$/i.test(first)) return "";
-  return first[0].toUpperCase() + first.slice(1);
+  if (/^(?:llc|team|inc|the|agents?|group|realtors?|realty|brokers?|homes?|office|properties|listing)$/i.test(first)) return "";
+  const word = first === first.toUpperCase() ? first.toLowerCase() : first;
+  return word[0].toUpperCase() + word.slice(1);
+}
+
+// No first name: "Hi {first}, saw…" reads "Saw…", "{first}, seen…" reads
+// "Seen…", and "…lately, {first}?" reads "…lately?". Until 2026-11-09 they
+// read "Hi, saw…" and "…lately, ?". A text that never had the name in front
+// (a lowercase email subject) keeps its first letter as written.
+function withoutFirst(t) {
+  const s = String(t || "");
+  const front = s.replace(/^\s*(?:hi|hey|hello)\s+\{first\}\s*[,.!]?\s*/i, "").replace(/^\s*\{first\}\s*[,.!]?\s*/, "");
+  const out = front
+    .replace(/,\s*\{first\}(?=\s*[?.!,])/g, "")
+    .replace(/\s*\{first\}/g, "");
+  return front !== s ? out.replace(/^\s*([a-z])/, (_, c) => c.toUpperCase()) : out;
 }
 
 /**
  * fillTemplate(template, values) → the text, or "" when it uses a blank we
- * have nothing for. No first name: "Hi {first}," reads "Hi,".
+ * have nothing for. No first name: the greeting and the name come out, so a
+ * text never opens "Hi," or ends ", ?".
  */
 export function fillTemplate(template = "", values = {}) {
   // With a city to say we're in, a "Seattle" typed into the text is that city.
-  const t = (values.home ? withHomeBlank(template) : String(template || "")).replace(/\s*\{first\}/g, values.first ? ` ${values.first}` : "");
+  const base = values.home ? withHomeBlank(template) : String(template || "");
+  const t = values.first ? base.replace(/\s*\{first\}/g, ` ${values.first}`) : withoutFirst(base);
   let missing = false;
   const out = t.replace(/\{(\w+)\}/g, (_, k) => {
     const v = String(values[k] ?? "").trim();
@@ -181,13 +272,24 @@ function pickFilled(list, variant, values, prior = []) {
   for (let i = 0; i < n; i++) {
     const index = (start + i) % n;
     const text = fillTemplate(list[index], values);
-    if (text && !said.has(plainBody(text, values.first))) return { text, index };
+    if (text && !said.has(plainBody(text, values.first))) return { text, index, template: list[index] };
   }
   return null;
 }
 
+// The fixed texts this app ships and stands behind: a voice flag on one of
+// these holds it like any machine text. Anything else (Matt's own saved
+// texts, the v1 pools a rollback restores, the cold ladder's own check-ins)
+// is advisory: flagged on the page, never blocked (shared/voice.js).
+export const SHIPPED_TEXTS = new Set([
+  ...NUDGE_TEXTS, ...CHECKIN_TEXTS, ...CHECKIN_COLD_TEXTS, ...LISTING_PING_TEXTS, ...LISTING_PING_COLD_TEXTS,
+  ...DEFAULT_FOLLOW_UP_TEXTS, ...DAY_TWO_TEXTS, ...PAST_LISTING_TEXTS, ...Object.values(COUNTY_OPENERS).flat(),
+]);
+/** isShippedText(template) → true for one of the app's own v2 texts, as written. */
+export const isShippedText = (template = "") => SHIPPED_TEXTS.has(String(template || ""));
+
 /**
- * standardText({ kind, outbound, name, contactId }) → { text, set, index } | null
+ * standardText({ kind, outbound, name, contactId, prior, pools, shift }) → { text, set, index, template } | null
  *
  * The fixed text for a cold text to a listing agent, or null when the model
  * should write it: the mode is "ai", or it's a kind of text with something
@@ -195,11 +297,13 @@ function pickFilled(list, variant, values, prior = []) {
  * we closed together, Matt's 15).
  *
  *   outreach_open   outbound.mode "template"; one of outbound.templates
- *   outreach_nudge  outbound.mode "template"; outbound.followUps[step], else
- *                   NUDGE_TEXTS from the contact's variant plus the step; a
- *                   repeat rung past the last step, outbound.checkIns in turn
- *                   (the last one COLD_LAST_RUNG_TEXTS); none names a
- *                   house or a street
+ *   outreach_nudge  outbound.mode "template"; outbound.followUps[step], or
+ *                   with the follow-ups never changed, a day-2 text picked
+ *                   by the contact (2026-11-09), else NUDGE_TEXTS from the
+ *                   contact's variant plus the step; a repeat rung past the
+ *                   last step, outbound.checkIns in turn (the last one
+ *                   COLD_LAST_RUNG_TEXTS); none of the rungs names a house
+ *                   or a street
  *   agent_pulse     outbound.mode "template"; CHECKIN_TEXTS, CHECKIN_COLD_TEXTS,
  *                   or LISTING_PING_TEXTS / LISTING_PING_COLD_TEXTS when a
  *                   fresh listing of theirs came up; a focus listing
@@ -207,12 +311,16 @@ function pickFilled(list, variant, values, prior = []) {
  *
  * `prior`: our last texts to them, newest first. A cold check-in never says
  * what one of them said (plainBody); it walks on to the next text.
+ * `pools` is conversationAi.checkIns.pools ("v1": the 10-17 texts). `shift`
+ * walks to the next variant along, the gate's answer to a fixed text that
+ * would repeat one of ours (ghl-broker/reply-agent.js runProactive).
  */
-export function standardText({ kind, outbound = {}, name = "", contactId = "", prior = [] } = {}) {
+export function standardText({ kind, outbound = {}, name = "", contactId = "", prior = [], pools = "v2", shift = 0 } = {}) {
   const o = outbound || {};
   // The recent listers' first text and its first follow-up are these fixed
   // texts in either mode: the model has no words for a house that's gone.
   if (o.mode !== "template" && !(o.pastListing && (kind === "outreach_open" || kind === "outreach_nudge"))) return null;
+  const P = poolsFor(pools);
   const values = {
     first: firstNameOf(name),
     // "the property" is the descriptor's stand-in when there's no address.
@@ -223,9 +331,13 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
     // The city we say we're in, by the listing's market (outreach-opener.js homeFor).
     home: String(o.home || "").trim() || DEFAULT_HOME,
   };
+  // A follow-up or a check-in names the town on the address we texted them
+  // about when the listing gave none (2026-11-09: the v2 texts name it when
+  // we know it). The first text keeps to the listing's own.
+  if (kind !== "outreach_open" && !values.town) values.town = parseUsAddress(String(o.address || "")).city.trim();
   // The first text carries its variant; the others follow the contact id.
-  const v = o.variant != null ? Number(o.variant) || 0 : openerVariant(contactId, 997);
-  const done = (set, r) => (r ? { text: r.text, set, index: r.index } : null);
+  const v = (o.variant != null ? Number(o.variant) || 0 : openerVariant(contactId, 997)) + Math.max(0, Math.round(Number(shift) || 0));
+  const done = (set, r) => (r ? { text: r.text, set, index: r.index, template: r.template } : null);
   // No town on record: pickFilled moves on to the line that doesn't name one.
   if (kind === "outreach_open" && o.pastListing) return done("past_listing", pickFilled(PAST_LISTING_TEXTS, v, values));
   if (kind === "outreach_open") {
@@ -258,7 +370,7 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
       const named = values.town && list.join("\n") === DEFAULT_CHECK_IN_TEXTS.join("\n") ? list.filter((t) => /\{town\}/.test(t)) : list;
       const checkIn = () => {
         const r = pickFilled(named, v + n - 1, values, prior);
-        return r ? { text: r.text, set: "check_in", index: list.indexOf(named[r.index]) } : null;
+        return r ? { text: r.text, set: "check_in", index: list.indexOf(named[r.index]), template: r.template } : null;
       };
       if (Number(o.repeatMax) > 0 && n >= Number(o.repeatMax)) {
         return done("cold_last", pickFilled(COLD_LAST_RUNG_TEXTS, v, values, prior)) || checkIn();
@@ -275,9 +387,18 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
       const list = Array.isArray(o.checkIns) && o.checkIns.length ? o.checkIns : DEFAULT_CHECK_IN_TEXTS;
       return done("check_in", pickFilled(list, v + rung, values));
     }
-    const own = Array.isArray(o.followUps) ? fillTemplate(o.followUps[rung], values) : "";
-    if (own) return { text: own, set: "follow_up", index: rung };
-    return done("nudge", pickFilled(NUDGE_TEXTS, v + rung, values));
+    // Follow-up 1 never changed (2026-11-09): day 2 is one of eight, picked
+    // by the contact, so a day's batch doesn't read alike. Pools "v1" reads
+    // the 10-26 texts for the slots never changed, one per step, as before.
+    const list = Array.isArray(o.followUps) && o.followUps.length ? o.followUps : DEFAULT_FOLLOW_UP_TEXTS;
+    if (rung === 0 && list[0] === DEFAULT_FOLLOW_UP_TEXTS[0] && pools !== "v1") {
+      const day2 = pickFilled(DAY_TWO_TEXTS, v, values);
+      if (day2) return done("day_two", day2);
+    }
+    const text = pools === "v1" && list[rung] != null && list[rung] === DEFAULT_FOLLOW_UP_TEXTS[rung] ? P.followUps[rung] : list[rung];
+    const own = fillTemplate(text, values);
+    if (own) return { text: own, set: "follow_up", index: rung, template: text };
+    return done("nudge", pickFilled(P.nudge, v + rung, values));
   }
   if (kind === "agent_pulse") {
     if (o.forMatt || o.reason === "deal_thanks" || o.reason === "off_market_listing" || o.hook?.kind === "mentioned") return null;
@@ -291,14 +412,15 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
       const own = countyOpener(o.county);
       const ex = Array.isArray(o.templates) ? o.templates : [];
       return (own ? done("county_opener", pickFilled(own, v, values)) : null)
-        || done("opener", pickFilled(ex, v, values)) || done("checkin_cold", pickFilled(CHECKIN_COLD_TEXTS, v, values));
+        || done("opener", pickFilled(ex, v, values)) || done("checkin_cold", pickFilled(P.checkinCold, v, values));
     }
     if (o.reason === "fresh_listing") {
       // The street name, never the house number, like the first text.
       const street = streetName(o.listing?.street || "") || values.street;
-      return done(cold ? "listing_cold" : "listing", pickFilled(cold ? LISTING_PING_COLD_TEXTS : LISTING_PING_TEXTS, v, { ...values, street }));
+      const town = String(o.listing?.city || "").trim() || values.town;
+      return done(cold ? "listing_cold" : "listing", pickFilled(cold ? P.listingCold : P.listing, v, { ...values, street, town }));
     }
-    return done(cold ? "checkin_cold" : "checkin", pickFilled(cold ? CHECKIN_COLD_TEXTS : CHECKIN_TEXTS, v, values));
+    return done(cold ? "checkin_cold" : "checkin", pickFilled(cold ? P.checkinCold : P.checkin, v, values));
   }
   return null;
 }

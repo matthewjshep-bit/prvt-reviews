@@ -21,7 +21,10 @@ test("settings coerce to safe defaults", () => {
     monthlyRequests: 0, cycleDay: 1, maxListPrice: 1500000, coverage: "counties",
     zillowLookup: { enabled: false, perRun: 25 }, neverTexted: { enabled: false }, expired: { enabled: false, share: 25 }, recentListers: { enabled: false, counties: [], withinDays: 90, share: 25 }, distressCheck: { enabled: false, perRun: 200 },
     minNewAgentsPerDay: 10,
+    postalAddress: "",
   });
+  // The postal address the agent emails end on (2026-11-09): plain text, one line.
+  assert.equal(normalizeOutreachAutopilot({ postalAddress: "  PO Box 123,\n Kentwood, WA 98000 " }).postalAddress, "PO Box 123, Kentwood, WA 98000");
   assert.deepEqual(normalizeOutreachAutopilot({ expired: { enabled: true, share: "140" } }).expired, { enabled: true, share: 100 });
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: 0 }).maxListPrice, 0, "0 = no cap");
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: "900000" }).maxListPrice, 900000);

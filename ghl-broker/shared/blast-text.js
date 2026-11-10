@@ -98,13 +98,13 @@ export function blastMessage({
     // How we found them goes right after the greeting, as it does below.
     const m = /^((?:hey|hi|hello)\b[^,]{0,30}),\s*/i.exec(text);
     const rest = m ? text.slice(m[0].length) : text;
-    return `${m ? m[1] : first ? `Hey ${first}` : "Hey"} — ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
+    return `${m ? m[1] : first ? `Hey ${first}` : "Hey"}, ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
   }
   const text = blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, rehab, arv, repairs, note, variant, link, ask, kind, linkOnReply, septic, systems, lotSqft, zoning });
   if (!how) return text;
   const hi = first ? `Hey ${first}, ` : "Hey, ";
   const rest = text.slice(hi.length);
-  return `${first ? `Hey ${first}` : "Hey"} — ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
+  return `${first ? `Hey ${first}` : "Hey"}, ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
 }
 
 /* ---------- the deal text in Matt's own words (2026-10-20) ---------- */
@@ -131,16 +131,23 @@ export const DEAL_TEXT_BLANKS = {
   close: "the ending: the walkthrough question and the package link (added at the end when left out)",
 };
 // The built-in three, written with the blanks: where an edit starts.
+// 2026-11-09 (the voice audit): no dashes in a text a buyer reads; the
+// first one said "under contract — " until then (LEGACY_DEFAULT_DEAL_TEXTS).
 export const DEFAULT_DEAL_TEXTS = [
-  "Hey {first}, got {place} under contract — {house}, {work}. {numbers}. {note}. {close}",
+  "Hey {first}, got {place} under contract: {house}, {work}. {numbers}. {note}. {close}",
   "Hey {first}, new one: {place}, {house}, {work}. {numbers}. {note}. {close}",
   "Hey {first}, {place} just went under contract ({house}). {work}. {numbers}. {note}. {close}",
 ];
 
+// The first of the built-in three until 2026-11-09. A saved copy of it, word
+// for word (the editor starts from these), reads as today's.
+export const LEGACY_DEFAULT_DEAL_TEXT = "Hey {first}, got {place} under contract \u2014 {house}, {work}. {numbers}. {note}. {close}";
+
 /** normalizeDealTexts(v) → up to three trimmed texts; [] means the built-in wording. */
 export function normalizeDealTexts(v) {
   const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(/\n\s*\n/) : [];
-  return raw.map((x) => String(x || "").replace(/\s+/g, " ").trim().slice(0, DEAL_TEXT_MAX_CHARS)).filter(Boolean).slice(0, DEAL_TEXT_MAX);
+  return raw.map((x) => String(x || "").replace(/\s+/g, " ").trim().slice(0, DEAL_TEXT_MAX_CHARS)).filter(Boolean).slice(0, DEAL_TEXT_MAX)
+    .map((t) => (t === LEGACY_DEFAULT_DEAL_TEXT ? DEFAULT_DEAL_TEXTS[0] : t));
 }
 
 /** The blanks for one buyer, worked out the way the built-in text works them out. */
@@ -227,7 +234,7 @@ function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, 
   if (q) {
     const lead = ["Photos and numbers", "Full package", "Everything's here"][v];
     const opener = v === 0
-      ? `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}${workAfter}. `
+      ? `${hi}got ${street}${where} under contract${spec ? `: ${spec}` : ""}${workAfter}. `
       : v === 1
         ? `${hi}new one${where}: ${street}${spec ? `, ${spec}` : ""}${workAfter}. `
         : `${hi}${street}${where} just went under contract${spec ? ` (${spec})` : ""}. ${workLine}`;
@@ -236,7 +243,7 @@ function blastBody({ first, address, city, price, beds, baths, sqft, yearBuilt, 
     return `${opener}${money ? `${money}. ` : ""}${tail}${q}${url ? ` ${lead}: ${url}` : linkOnReply ? " Happy to send photos and numbers." : ""}`;
   }
   if (v === 0) {
-    return `${hi}got ${street}${where} under contract${spec ? ` — ${spec}` : ""}${workAfter}. ${money ? `${money}. ` : ""}${tail}${url ? `Photos and numbers: ${url}` : "Want the details?"}`;
+    return `${hi}got ${street}${where} under contract${spec ? `: ${spec}` : ""}${workAfter}. ${money ? `${money}. ` : ""}${tail}${url ? `Photos and numbers: ${url}` : "Want the details?"}`;
   }
   if (v === 1) {
     return `${hi}new one${where}: ${street}${spec ? `, ${spec}` : ""}${workAfter}. ${money ? `${money}. ` : ""}${tail}${url ? `Interested? Full package: ${url}` : "Interested?"}`;
@@ -270,7 +277,7 @@ export function presellMessage({
   ].filter(Boolean).join(", ");
   const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
   const hi = first ? `Hey ${first}` : "Hey";
-  const lead = how ? `${hi} — ${how}. ` : `${hi}, `;
+  const lead = how ? `${hi}, ${how}. ` : `${hi}, `;
   const cap = (s) => (how ? `${s.charAt(0).toUpperCase()}${s.slice(1)}` : s);
   const v = Math.abs(Math.round(Number(variant) || 0)) % 3;
   const body = v === 0
@@ -311,7 +318,7 @@ export function bundleMessage(factsList = [], { firstName = "", linkOnReply = fa
   };
   const count = deals.length === 2 ? "two" : "three";
   const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
-  const hi = `${first ? `Hey ${first}` : "Hey"}${how ? ` — ${how}. Got` : ", got"} ${count} under contract right now.`;
+  const hi = `${first ? `Hey ${first}` : "Hey"}${how ? `, ${how}. Got` : ", got"} ${count} under contract right now.`;
   const body = deals.map((f, i) => `${i ? "And " : ""}${line(f)}.`).join(" ");
   const ask = deals.length === 2 ? "Either one fit what you're buying?" : "Any of these fit what you're buying?";
   return `${hi} ${body} ${ask}${linkOnReply ? " Happy to send photos and numbers." : ""}`;
@@ -378,7 +385,7 @@ export function dealFacts(offer = {}, { price = 0, note = "" } = {}) {
 
 /**
  * blastSubject(facts) → the subject line when the deal goes by email:
- * "Mobile home in a park, Kent — under contract, 76k". A house without a
+ * "Mobile home in a park, Kent: under contract, 76k". A house without a
  * kind is named by its street. A pre-sell (`presell`) is "coming up": nothing
  * is signed yet.
  */
@@ -387,7 +394,7 @@ export function blastSubject({ address = "", city = "", price = 0, kind = "" } =
   const what = String(kind || "").trim();
   const head = what ? `${what.charAt(0).toUpperCase()}${what.slice(1)}` : street || "A new deal";
   const priceText = kText(price);
-  return `${head}${city ? `, ${city}` : ""} — ${presell ? "coming up" : "under contract"}${priceText ? `, ${priceText}` : ""}`;
+  return `${head}${city ? `, ${city}` : ""}: ${presell ? "coming up" : "under contract"}${priceText ? `, ${priceText}` : ""}`;
 }
 
 /* ---------- the deal text to a buyer who never wrote back (2026-11-09) ---------- */

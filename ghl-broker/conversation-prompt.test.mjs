@@ -428,11 +428,15 @@ test("a check-in may say we just closed one in their town, by the town only, nev
   assert.match(t, /anything off-market has come across their desk/);
 });
 
-test("a check-in offers a quick call if that's easier, with no day or time — no calendar is connected", () => {
+// 2026-11-09 (the voice audit): until then a check-in could staple on "happy
+// to jump on a quick call if that's easier", the voice check's "happy to",
+// as a second ask. One question, nothing else.
+test("a check-in asks one thing and offers no call on top", () => {
   for (const o of [{ reason: "general" }, { reason: "fresh_listing", listing: { street: "1 A St", city: "Kent", dom: 10 } }]) {
     const t = outboundOpening({ kind: "agent_pulse", segment: "engaged", ...o });
-    assert.match(t, /offer a quick call in a few words/);
-    assert.match(t, /never a day or a time, and still only one question/);
+    assert.doesNotMatch(t, /offer a quick call/);
+    assert.doesNotMatch(t, /happy to jump on a quick call/);
+    assert.match(t, /End on one easy question, and ask nothing else/);
   }
 });
 
@@ -480,7 +484,7 @@ test("a check-in never gets the days-on-market count, never names a time or date
   assert.match(t, /listing on 207th Street Ct E in Bonney Lake\./);
   assert.doesNotMatch(t, /on the market a while/, "nothing about the house: it's named in passing");
   assert.doesNotMatch(t, /about 84 days/, "no count to repeat");
-  assert.match(t, /Open with their first name/);
+  assert.match(t, /Their first name once, and not always as the first word/);
   assert.match(t, /never a count of days, a time of day or a date/i);
 });
 
@@ -500,7 +504,7 @@ test("every general check-in asks about distressed or off-market houses, whether
     const t = outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged", offMarketAskDue });
     assert.match(t, /anything distressed/);
     assert.match(t, /anything off-market has come across their desk/);
-    assert.match(t, /first look/);
+    assert.doesNotMatch(t, /love a first look/, "no 'we'd love a first look' (2026-11-09)");
   }
 });
 
@@ -538,8 +542,10 @@ test("a house they passed on rides on the live offer's nudge as one line, never 
     aside: { street: "28422 Military Road South", quiet: false } });
   // Matt, 2026-10-08: the line is about the next house, never the passed one
   // (we don't know what happened to it, and it has usually sold).
-  assert.match(t, /Then ONE short closing line: if anything else that needs work comes across their desk, on the market or off, we'd love a look/);
-  assert.match(t, /A statement, not a question\. Do NOT name 28422 Military Road South or any other house, and no number\. 10625 SE 304th Way stays the subject/);
+  // 2026-11-09: no "we'd love a look" (shared/voice.js).
+  assert.match(t, /Then ONE short closing line that you're still after anything else that needs work, on the market or off/);
+  assert.doesNotMatch(t, /love a look/);
+  assert.match(t, /A statement, not a question, and never "we'd love", "keep me in mind" or "send it my way"\. Do NOT name 28422 Military Road South or any other house, and no number\. 10625 SE 304th Way stays the subject/);
   assert.doesNotMatch(t, /shakes loose/);
   assert.match(t, /Set intent to offer_nudge\.$/);
   assert.doesNotMatch(outboundOpening({ kind: "offer_nudge", address: "12 Elm St", went: "paper" }), /closing line/);

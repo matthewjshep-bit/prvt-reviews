@@ -232,8 +232,8 @@ test("a buyer with no phone is emailed the deal as a draft that waits for you; a
   assert.equal(mail.channel, "email");
   assert.equal(mail.status, "draft", "an emailed deal waits for you");
   assert.match(mail.autoSend.reason, /emailed deals wait for you/);
-  assert.equal(mail.outbound.subject, "Mobile home in a park, Kent — under contract, 76k");
-  assert.match(mail.reply, /^Hey Gizelle — found you through the WA real estate Facebook group\. /);
+  assert.equal(mail.outbound.subject, "Mobile home in a park, Kent: under contract, 76k");
+  assert.match(mail.reply, /^Hey Gizelle, found you through the WA real estate Facebook group\. /);
   assert.equal(mail.outbound.intro, "found you through the WA real estate Facebook group");
   assert.equal(r.rows.find((x) => x.contactId === "x1").status, "skipped");
   assert.equal(r.queued, 1);

@@ -19,14 +19,20 @@ import { getConversationAi, getDashboardPipeline, getSettings, patchSettings, sa
 import { BTN, BTN_DANGER, BTN_PRIMARY, ErrorBar, SkeletonRows } from "./ui.jsx";
 import FlowChart, { emailSampleOf, sampleOf, textWarnings } from "./FlowChart.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
+import VoiceNote from "./VoiceNote.jsx";
 import SettingsView from "./SettingsView.jsx";
 
 const AREA = "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm leading-snug focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 const NUM = "w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm";
 const MAX_FOLLOW_UPS = 6;
 
+// The voice check's kind for each text on the chart (shared/voice.js,
+// 2026-11-09): its length and question rules. Shown, never blocking.
+const VOICE_KIND = { examples: "outreach_open", checkIns: "cold_ladder", pulse: "agent_checkin", introEmail: "outreach_email", checkInEmail: "checkin_email" };
+const voiceKindFor = (step) => (step.edit?.field === "followUp" ? (step.edit.index === 0 ? "day_two" : "outreach_nudge") : VOICE_KIND[step.edit?.field] ?? null);
+
 /** A text box with what it reads like filled in, and what would stop it. */
-function TextBox({ value, onChange, onRemove, label }) {
+function TextBox({ value, onChange, onRemove, label, kind = "" }) {
   const warn = textWarnings(value);
   return (
     <div className="space-y-1">
@@ -41,6 +47,7 @@ function TextBox({ value, onChange, onRemove, label }) {
       <textarea className={AREA} rows={3} value={value} onChange={(e) => onChange(e.target.value)} />
       <p className="text-xs text-slate-500">Reads: {sampleOf(value) || "—"}</p>
       {warn.map((w) => <p key={w} className="text-xs font-medium text-amber-700">{w}</p>)}
+      <VoiceNote text={value} kind={kind} />
     </div>
   );
 }
@@ -92,7 +99,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
     else if (f === "followUp") setDraft({ text: step.texts[0], day: step.day });
     else if (f === "pulse") setDraft({ enabled: settings?.outreachAutopilot?.pulse?.enabled === true, everyDays: Number(settings?.outreachAutopilot?.pulse?.everyDays) || 21 });
     else if (f === "checkIns") setDraft({ texts: [...step.texts], every: step.every });
-    else if (f === "introEmail") setDraft({ ...normalizeIntroEmail(settings?.outreachAutopilot?.introEmail) });
+    else if (f === "introEmail") setDraft({ ...normalizeIntroEmail(settings?.outreachAutopilot?.introEmail), postalAddress: settings?.outreachAutopilot?.postalAddress || "" });
     else if (f === "checkInEmail") setDraft({ ...normalizeCheckInEmail(settings?.outreachAutopilot?.checkInEmail) });
     setEditing(id);
   };
@@ -142,7 +149,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
         <div className="space-y-3">
           <p className="text-xs text-slate-500">Each new agent gets one of these, a different one per agent. {HELP}</p>
           {texts.map((t, i) => (
-            <TextBox key={i} label={`Version ${i + 1}`} value={t} onChange={(v) => set(i, v)}
+            <TextBox key={i} label={`Version ${i + 1}`} kind="outreach_open" value={t} onChange={(v) => set(i, v)}
               onRemove={texts.length > 1 ? () => setDraft({ ...draft, texts: texts.filter((_, j) => j !== i) }) : null} />
           ))}
           <div className="space-y-2 rounded-lg border border-slate-200 p-3">
@@ -180,7 +187,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
             <input type="number" className={NUM} min={lo} max={hi} value={draft?.day ?? ""} onChange={(e) => setDraft({ ...draft, day: e.target.value })} />
             <span className="text-xs text-slate-500">after the first text, if they haven't replied ({lo}–{hi})</span>
           </label>
-          <TextBox value={draft?.text || ""} onChange={(v) => setDraft({ ...draft, text: v })} />
+          <TextBox kind={i === 0 ? "day_two" : "outreach_nudge"} value={draft?.text || ""} onChange={(v) => setDraft({ ...draft, text: v })} />
           <p className="text-xs text-slate-500">{HELP}</p>
           <EditorBar busy={busy} onCancel={close}
             onSave={() => {
@@ -215,7 +222,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
           </label>
           <p className="text-xs text-slate-500">Each check-in is the next of these, in turn. {HELP}</p>
           {texts.map((t, i) => (
-            <TextBox key={i} label={`Check-in ${i + 1}`} value={t} onChange={(v) => set(i, v)}
+            <TextBox key={i} label={`Check-in ${i + 1}`} kind="cold_ladder" value={t} onChange={(v) => set(i, v)}
               onRemove={texts.length > 1 ? () => setDraft({ ...draft, texts: texts.filter((_, j) => j !== i) }) : null} />
           ))}
           <EditorBar busy={busy} onCancel={close}
@@ -260,12 +267,20 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
             <textarea className={AREA} rows={12} value={draft?.body || ""} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
           </label>
           <p className="whitespace-pre-wrap text-xs text-slate-500">Reads: {emailSampleOf(draft?.body || "") || "—"}</p>
-          <p className="text-xs text-slate-500">{"{first}"} is their first name, {"{area}"} the town of their listing (or its county) "or the surrounding areas". A blank line starts a new paragraph.</p>
+          <VoiceNote text={draft?.body || ""} kind="outreach_email" email />
+          <p className="text-xs text-slate-500">{"{first}"} is their first name, {"{street}"} the street we texted them about, {"{town}"} its town (or its county), {"{area}"} the town "or the surrounding areas". A blank line starts a new paragraph. Left as it ships, each agent gets one of eight short ones; edit it and everyone gets yours.</p>
+          <label className="block space-y-1 text-sm text-slate-700">
+            <span className="text-xs font-semibold text-slate-600">Postal address under the emails</span>
+            <input type="text" className={AREA} value={draft?.postalAddress ?? ""} placeholder="PO Box or street, town, state and zip"
+              onChange={(e) => setDraft({ ...draft, postalAddress: e.target.value })} />
+            <span className="block text-xs text-slate-500">On its own line under "If you'd rather I didn't email, just reply and say so." on the intro and check-in emails. Empty: the opt-out line alone.</span>
+          </label>
           <EditorBar busy={busy} onCancel={close}
             onSave={() => {
               if (!dayOk) { setError("The intro email goes out between day 1 and day 30."); return; }
               run(() => patchSettings({ outreachAutopilot: { introEmail: { enabled: Boolean(draft.enabled), autoSend: Boolean(draft.autoSend), day,
-                subject: String(draft.subject || "").trim(), body: String(draft.body || "").trim() } } }));
+                subject: String(draft.subject || "").trim(), body: String(draft.body || "").trim() },
+              postalAddress: String(draft.postalAddress || "").trim() } }));
             }} />
         </div>
       );
@@ -298,6 +313,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
               <input type="text" className={AREA} placeholder="Subject" value={e.subject} onChange={(ev) => set(i, "subject", ev.target.value)} />
               <textarea className={AREA} rows={7} value={e.body} onChange={(ev) => set(i, "body", ev.target.value)} />
               <p className="whitespace-pre-wrap text-xs text-slate-500">Reads: {emailSampleOf(e.body) || "—"}</p>
+              <VoiceNote text={e.body} kind="checkin_email" email />
             </div>
           ))}
           <EditorBar busy={busy} onCancel={close}
@@ -348,7 +364,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
         {error && <div className="mb-3"><ErrorBar>{error}</ErrorBar></div>}
         {!settings || !config ? <SkeletonRows rows={4} cols={2} /> : (
           <>
-            <FlowChart steps={steps} editing={editing} onEdit={open} renderEditor={renderEditor} />
+            <FlowChart steps={steps} editing={editing} onEdit={open} renderEditor={renderEditor} voiceKindFor={voiceKindFor} />
             {firstIsApp && ladder.length < MAX_FOLLOW_UPS && last < 89 && (
               editing === "follow-new" ? (
                 <div className="ml-11 mt-2 space-y-3 rounded-xl border border-blue-300 bg-white p-3 ring-2 ring-blue-100">
@@ -357,7 +373,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
                     Send on day
                     <input type="number" className={NUM} min={last + 1} max={90} value={draft?.day ?? ""} onChange={(e) => setDraft({ ...draft, day: e.target.value })} />
                   </label>
-                  <TextBox value={draft?.text || ""} onChange={(v) => setDraft({ ...draft, text: v })} />
+                  <TextBox kind="outreach_nudge" value={draft?.text || ""} onChange={(v) => setDraft({ ...draft, text: v })} />
                   <EditorBar busy={busy} onCancel={close}
                     onSave={() => {
                       const day = Number(draft?.day);

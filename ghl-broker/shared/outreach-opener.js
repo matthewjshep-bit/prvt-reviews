@@ -116,7 +116,33 @@ const LEGACY = new Set([...LEGACY_DEFAULT_OPENER_EXAMPLES, ...PREVIOUS_DEFAULT_O
 // where "circling back on {address}" drew 34% replies and none. The second
 // names none, so it is also the spare when there's no address. A step with
 // no text of its own uses shared/standard-texts.js NUDGE_TEXTS.
+// 2026-11-09 (the voice audit, Matt: check-ins that read like him): day 2
+// is one of eight texts (DAY_TWO_TEXTS), each naming the house, one picked
+// per agent by the contact id (shared/standard-texts.js standardText), as
+// long as follow-up 1 is still the first of them. "circling back" stays in
+// that first one only, the one place it earned its keep (34% replies, no
+// STOPs); "TLC" and "on or off market" are gone. Follow-up 2 names no house,
+// so it is also the spare when there's no address. Pools "v1" goes back to
+// the two below (LEGACY_DEFAULT_FOLLOW_UP_TEXTS).
+export const DAY_TWO_TEXTS = [
+  "Hey {first}, circling back on {address}. If it's not one for me, no worries. Got anything rougher?",
+  "Hi {first}, if {address} is already in good shape, no worries. Got anything around {town} that isn't?",
+  "{first}, Matt again on {address}. If that one's done already, anything coming that isn't?",
+  "Hey {first}, if {address} isn't a fit, any others coming that need work?",
+  "Hi {first}, if {address} doesn't need enough work for me, got another one that does?",
+  "{first}, if {address} isn't one for me, any older ones around {town} that are?",
+  "Hey {first}, no worries if {address} is spoken for. Anything else in the works that needs a lot?",
+  "Hi {first}, Matt again. Anything besides {address} on your plate that needs real work?",
+];
+// Follow-up 2 says nothing any day-2 text says: it is one fixed text with no
+// next one to walk to, so a repeat would hold it (2026-11-09 review: "Matt
+// again. Anything on your end that needs real work?" repeated the eighth).
 export const DEFAULT_FOLLOW_UP_TEXTS = [
+  DAY_TWO_TEXTS[0],
+  "Hey {first}, Matt again. Got a house coming up that's more project than the seller wants?",
+];
+// The two follow-ups from 2026-10-26 to 2026-11-09, read as never changed.
+export const LEGACY_DEFAULT_FOLLOW_UP_TEXTS = [
   "Hey {first}, circling back on {address}. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?",
   "Hey {first}, I'm after houses that need real work, the uglier the better. Anything like that on your end, listed or off market?",
 ];
@@ -132,6 +158,9 @@ export const PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS = [
   "Hi {first}, following up on your listing at {address}. We're usually after houses that need real work, the uglier the better. Anything like that on your end?",
   "Hey {first}, circling back on {address}. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?",
 ];
+
+// Each slot's old defaults, read as never changed (normalizeOpener).
+const OLD_FOLLOW_UPS = [0, 1].map((i) => new Set([PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS, DAY_TWO_DEFAULT_FOLLOW_UP_TEXTS, LEGACY_DEFAULT_FOLLOW_UP_TEXTS].map((l) => l[i])));
 
 // The check-ins after the follow-ups, every `repeatEvery` days until they
 // answer (2026-10-20, Matt: "check in every 14 days after that"). Until
@@ -207,7 +236,10 @@ export function normalizeOpener(v = {}) {
   // first texts (2026-10-15).
   const examples = cleanTexts(o.examples, LEGACY).map((x) => SEATTLE_DEFAULTS.get(x) || x);
   let followUps = cleanTexts(o.followUps);
-  if ([PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS, DAY_TWO_DEFAULT_FOLLOW_UP_TEXTS].some((old) => followUps.join("\n") === old.join("\n"))) followUps = [];
+  if ([PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS, DAY_TWO_DEFAULT_FOLLOW_UP_TEXTS, LEGACY_DEFAULT_FOLLOW_UP_TEXTS].some((old) => followUps.join("\n") === old.join("\n"))) followUps = [];
+  // 2026-11-09: the chart saves one text per step, so a stored follow-up
+  // that is one of the old defaults in its own slot is read as never changed.
+  followUps = followUps.map((t, i) => (OLD_FOLLOW_UPS[i]?.has(t) ? DEFAULT_FOLLOW_UP_TEXTS[i] : t));
   // As many as the defaults, so a saved copy of all ten isn't cut to eight.
   let checkIns = cleanTexts(o.checkIns, new Set(), Math.max(OPENER_MAX_EXAMPLES, DEFAULT_CHECK_IN_TEXTS.length));
   if (checkIns.join("\n") === cleanTexts(PREVIOUS_DEFAULT_CHECK_IN_TEXTS).join("\n")) checkIns = [];

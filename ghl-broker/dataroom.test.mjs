@@ -905,7 +905,7 @@ r = await jget(`${B}/api/datarooms/${room.id}/invites`, {
 });
 ok("dry run previews the text", r.body?.send?.dryRun === true && r.body.send.preview.message.includes("/d/"), JSON.stringify(r.body?.send || {}).slice(0, 300));
 ok("dry run sends nothing", r.body.send.sent === undefined);
-ok("text warns against forwarding", /don't forward/.test(r.body.send.preview.message));
+ok("text asks them to keep it to themselves, in Matt's voice", /keep it to yourself/.test(r.body.send.preview.message) && !/[—–]/.test(r.body.send.preview.message));
 
 console.log("\n== the price follows the deal's terms ==");
 const { syncDealNumbers } = await import("./dataroom.js");

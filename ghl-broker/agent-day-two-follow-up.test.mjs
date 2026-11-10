@@ -25,8 +25,8 @@ after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 const { store } = await import("./store.js");
 const { recordEvent } = await import("./contact-record.js");
-const { standardText } = await import("./shared/standard-texts.js");
-const { normalizeOpener, DEFAULT_FOLLOW_UP_TEXTS, PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS } = await import("./shared/outreach-opener.js");
+const { standardText, fillTemplate } = await import("./shared/standard-texts.js");
+const { normalizeOpener, DEFAULT_FOLLOW_UP_TEXTS, PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DAY_TWO_TEXTS } = await import("./shared/outreach-opener.js");
 const { normalizeConversationAi } = await import("./shared/conversation-ai.js");
 const { DEFAULT_LADDERS, dueStep } = await import("./shared/follow-up.js");
 const { outboundDescriptor } = await import("./reply-agent.js");
@@ -63,10 +63,15 @@ test("the old six-step default saved verbatim reads as day 2 and every 14, repea
 });
 
 // Since 2026-10-26 it names the house (fewer-stops.test.mjs): "Not sure if
-// that listing needs work" drew a STOP for every 4 replies.
+// that listing needs work" drew a STOP for every 4 replies. Since 2026-11-09
+// it is one of eight, picked by the contact, none with "TLC" or "on or off
+// market" in it.
 test("the day-2 follow-up names their house", () => {
-  assert.equal(textOn(2), "Hey Brenda, circling back on 14820 SE 172nd St. If it's not a fit, no worries. Any fixers or houses that need some TLC on your radar, on or off market?");
-  assert.deepEqual(carrierFlags(DEFAULT_FOLLOW_UP_TEXTS[0]), []);
+  const filled = DAY_TWO_TEXTS.map((t) => fillTemplate(t, { first: "Brenda", address: "14820 SE 172nd St", town: "Renton" }));
+  assert.ok(filled.includes(textOn(2)), textOn(2));
+  assert.match(textOn(2), /14820 SE 172nd St/);
+  for (const t of DAY_TWO_TEXTS) assert.deepEqual(carrierFlags(t), [], t);
+  assert.equal(DEFAULT_FOLLOW_UP_TEXTS[0], DAY_TWO_TEXTS[0], "follow-up 1 left as it ships is the pool");
 });
 
 test("the old pair of default follow-ups, saved by the chart, reads as today's", () => {
@@ -113,15 +118,17 @@ test("the intro email is off and waits for Matt until he says otherwise, on day 
   assert.deepEqual([ie.enabled, ie.autoSend, ie.day], [false, false, 2]);
 });
 
-test("the intro email says who we are, what we buy, the website, and asks for distressed properties", () => {
-  const e = introEmailFor({ introEmail: {}, name: "Brenda Jones", address: "14820 SE 172nd St, Renton, WA 98058" });
+// 2026-11-09 (the voice audit): one short body in Matt's voice naming their
+// street and town, the website under his name, and the opt-out line last.
+test("the intro email says who we are, the website, and asks for a house that needs work", () => {
+  const e = introEmailFor({ introEmail: {}, name: "Brenda Jones", address: "14820 SE 172nd St, Renton, WA 98058", contactId: "c-brenda" });
   assert.match(e.body, /^Hi Brenda,\n\n/);
   assert.match(e.body, /Shep Flips/);
-  assert.match(e.body, /https:\/\/shepflips\.com/);
-  assert.match(e.body, /distressed/);
-  assert.match(e.body, /\n\nThanks,\nMatt Shepherd\nShep Flips$/, "the paragraphs and the sign-off lines keep their shape");
+  assert.match(e.body, /shepflips\.com/);
+  assert.match(e.body, /SE 172nd St/);
+  assert.match(e.body, /\?\n\nMatt\nShep Flips · shepflips\.com\n\nIf you'd rather I didn't email, just reply and say so\.$/, "the paragraphs and the sign-off lines keep their shape");
   assert.ok(e.subject.length > 0);
-  assert.match(introEmailFor({ introEmail: {}, name: "", address: "" }).body, /^Hi,\n\n/);
+  assert.doesNotMatch(introEmailFor({ introEmail: {}, name: "", address: "" }).body, /^Hi/, "no name, no bare greeting");
 });
 
 test("the intro email goes from day 2, once, only to an agent who hasn't answered", () => {

@@ -12,7 +12,7 @@
 // (shared/graduation.js autopilotSummary), passed in as `switches`, so the
 // chart and the switch list can never disagree.
 
-import { normalizeOpener } from "./outreach-opener.js";
+import { normalizeOpener, DEFAULT_FOLLOW_UP_TEXTS, DAY_TWO_TEXTS } from "./outreach-opener.js";
 import { normalizeAgentPulse } from "./agent-pulse.js";
 import { normalizeBuyerPulse } from "./buyer-pulse.js";
 import { NUDGE_TEXTS, CHECKIN_TEXTS } from "./standard-texts.js";
@@ -66,7 +66,7 @@ export function agentFlow({ settings = {}, config = {}, switches = [] } = {}) {
   // the follow-up on that day or before (shared/outreach-email.js).
   const ie = normalizeIntroEmail(oa.introEmail);
   const email = firstTouch === "app" ? { id: "email", type: "email", title: `Intro email, day ${ie.day}`,
-    detail: `Once, to agents with an email in GHL who haven't replied: who we are, what we buy, the website, and the ask.${ie.enabled && !ie.autoSend ? " Each one waits in the outbox for you." : ""}`,
+    detail: `Once, to agents with an email in GHL who haven't replied: who we are, the house we texted about, and one ask, ending on the opt-out line. Left as it ships, one of eight, a different one per agent.${ie.enabled && !ie.autoSend ? " Each one waits in the outbox for you." : ""}`,
     status: ownState(ie.enabled, ie.autoSend, switches), texts: [`Subject: ${ie.subject}\n\n${ie.body}`], day: ie.day, edit: { field: "introEmail" } } : null;
   const pushEmail = (wait) => {
     if (wait) steps.push({ id: "wait-email", type: "wait", title: `Wait until day ${email.day}`, detail: "if they haven't replied", day: email.day });
@@ -77,9 +77,12 @@ export function agentFlow({ settings = {}, config = {}, switches = [] } = {}) {
   days.forEach((day, i) => {
     steps.push({ id: `wait-${i}`, type: "wait", title: `Wait until day ${day}`, detail: "if they haven't replied", day });
     const own = opener.followUps[i];
+    // Follow-up 1 never changed (2026-11-09): one of the eight day-2 texts,
+    // picked per agent (shared/standard-texts.js standardText).
+    const pool = i === 0 && own === DEFAULT_FOLLOW_UP_TEXTS[0];
     steps.push({ id: `follow-${i}`, type: "text", title: `Follow-up ${i + 1}`,
-      detail: own ? "" : "No text of its own: one of the spare follow-ups", status: ladderOn,
-      texts: [own || NUDGE_TEXTS[i % NUDGE_TEXTS.length]], day, edit: { field: "followUp", index: i } });
+      detail: pool ? `One of these ${DAY_TWO_TEXTS.length}, a different one per agent. Edit it to send your own to everyone instead.` : own ? "" : "No text of its own: one of the spare follow-ups", status: ladderOn,
+      texts: pool ? [...DAY_TWO_TEXTS] : [own || NUDGE_TEXTS[i % NUDGE_TEXTS.length]], day, edit: { field: "followUp", index: i }, ...(pool ? { pooled: true } : {}) });
     if (email && day <= email.day && !(days[i + 1] <= email.day)) pushEmail(day !== email.day);
   });
   // Past the last follow-up: a check-in every `repeatEvery` days until they
@@ -105,7 +108,7 @@ export function agentFlow({ settings = {}, config = {}, switches = [] } = {}) {
     status: stateOf(switches, "autosend:agent") });
 
   steps.push({ id: "checkin", type: "loop", title: `Check in every ${pulse.everyDays} days`,
-    detail: `Agents who've talked to us get one of these. One who never wrote back hears from us only about a fresh listing of theirs that needs work, every ${pulse.coldEveryDays} days at most, starting "it's Matt, I fix up houses locally".`,
+    detail: `Agents who've talked to us get one of these. One who never wrote back hears from us only about a fresh listing of theirs that needs work, every ${pulse.coldEveryDays} days at most, and a cold one names their town when we know it.`,
     status: ownState(pulse.enabled, pulse.autoSend, switches),
     texts: pulse.mode === "ai" ? [] : [...CHECKIN_TEXTS], edit: { field: "pulse" } });
   return steps;

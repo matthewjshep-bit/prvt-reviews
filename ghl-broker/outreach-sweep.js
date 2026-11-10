@@ -341,6 +341,9 @@ export function normalizeOutreachAutopilot(v = {}) {
     // nothing said so). Counts only, never a contact. 0 = never.
     minNewAgentsPerDay: o.minNewAgentsPerDay === 0 || o.minNewAgentsPerDay === "0" ? 0
       : Number.isFinite(minNew) && minNew > 0 ? Math.min(500, minNew) : DEFAULT_MIN_NEW_AGENTS_PER_DAY,
+    // The postal address the agent emails end on, under the opt-out line
+    // (CAN-SPAM, 2026-11-09; a PO box is fine). Empty: the opt-out line alone.
+    postalAddress: String(o.postalAddress ?? "").replace(/[<>{}]/g, "").replace(/\s+/g, " ").trim().slice(0, 200),
   };
 }
 

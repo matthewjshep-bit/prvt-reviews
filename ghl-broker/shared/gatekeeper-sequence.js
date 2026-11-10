@@ -17,6 +17,7 @@
 
 import { carrierFlags } from "./carrier-words.js";
 import { hookLine } from "./gatekeeper.js";
+import { TELLS } from "./voice.js";
 
 export const GATEKEEPER_OUT_KINDS = ["gatekeeper_email", "gatekeeper_text", "gatekeeper_checkin"];
 export const GATEKEEPER_EVENTS = { queued: "gatekeeper_queued", sent: "gatekeeper_sent", replied: "gatekeeper_replied" };
@@ -116,7 +117,7 @@ export function factsFor({ gk = {}, hook = null, step, priorHook = null }) {
 const VOICE_RULES = [
   "Write as Matt himself: a local guy who buys and fixes up houses, writing one person he'd like to know. Plain, warm, short sentences. Contractions.",
   "Use only the facts below. Never guess the house's condition, value, or the family's situation. Never say how you found the estate.",
-  "No filler: never \"I hope this finds you well\", \"I wanted to reach out\", \"I came across\", \"touch base\", \"circle back\", \"rest assured\", \"don't hesitate\", \"I'd love to\", \"at your earliest convenience\". No em dashes. No exclamation marks. No bullet points.",
+  "No filler: never \"I hope this finds you well\", \"I wanted to reach out\", \"I came across\", \"touch base\", \"circle back\", \"following up\", \"checking in\", \"rest assured\", \"don't hesitate\", \"feel free\", \"I'd love to\", \"at your earliest convenience\". No dashes of any kind. No exclamation marks. No bullet points.",
   "Never mention a referral fee, a finder's fee, or paying them for anything — they can't take it and asking insults them.",
   "Never say cash, as-is, investor, wholesale, \"we buy houses\", \"quick close\" or \"any condition\".",
 ];
@@ -185,6 +186,7 @@ export const DRAFT_SCHEMA = {
   additionalProperties: false,
 };
 
+const SAID_ABOVE = new Set(["an exclamation mark", "hope you're doing well"]);
 const MACHINE_TELLS = [
   ["hope this finds you", /\bhope (?:this|you)\b.{0,20}\bwell\b/i],
   ["reach out", /\b(?:wanted|want) to reach out\b|\breaching out\b/i],
@@ -199,6 +201,9 @@ const MACHINE_TELLS = [
   ["referral fee", /\b(?:referral|finder'?s)\s+fee\b|\bcompensate you\b|\bpay you\b/i],
   ["a placeholder", /\[[A-Z][^\]]*\]|\{[a-z_]+\}/],
   ["public records", /\bpublic records?\b|\bnotice to creditors\b|\bcourt filings?\b/i],
+  // The one voice check's phrases (shared/voice.js, 2026-11-09), less the
+  // ones named above in this list's own words.
+  ...TELLS.filter(([key, , level]) => level === "hard" && !SAID_ABOVE.has(key)).map(([key, rx]) => [key, rx]),
 ];
 
 /**

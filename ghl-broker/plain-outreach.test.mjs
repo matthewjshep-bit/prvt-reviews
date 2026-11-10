@@ -21,7 +21,7 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "plain-outreach-tes
 
 const { listingDistress } = await import("./shared/listing-distress.js");
 const { standardText, COUNTY_OPENERS, streetLine, firstNameOf, fillTemplate, NUDGE_TEXTS, CHECKIN_TEXTS, CHECKIN_COLD_TEXTS, LISTING_PING_TEXTS, LISTING_PING_COLD_TEXTS } = await import("./shared/standard-texts.js");
-const { normalizeOpener, DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, PLAIN_DEFAULT_OPENER_EXAMPLES, DEFAULT_HOME, DEFAULT_HOMES } = await import("./shared/outreach-opener.js");
+const { normalizeOpener, DEFAULT_OPENER_EXAMPLES, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, PLAIN_DEFAULT_OPENER_EXAMPLES, DEFAULT_HOME, DEFAULT_HOMES, DAY_TWO_TEXTS } = await import("./shared/outreach-opener.js");
 const { normalizeAgentPulse } = await import("./shared/agent-pulse.js");
 const { QUALIFY_PASSES, ourReplyPasses, qualifyStep } = await import("./shared/flip-read.js");
 const { carrierFlags } = await import("./shared/carrier-words.js");
@@ -256,7 +256,9 @@ test("Settings' saved copy of the 10/16 model examples is kept as Matt's texts, 
 
 test("a first text with no first name still reads like a person wrote it", () => {
   const s = standardText({ kind: "outreach_open", outbound: { mode: "template", address: "12 Elm St, Kent, WA", templates: DEFAULT_OPENER_EXAMPLES, variant: 1 }, name: "" });
-  assert.match(s.text, /^Hi, came across your listing at 12 Elm St\./);
+  // 2026-11-09: "Hi," with no name after it was a tell (234 check-ins in 60
+  // days); the greeting comes out and the text opens on its first word.
+  assert.match(s.text, /^Came across your listing at 12 Elm St\./);
   assert.equal(firstNameOf("brenda smith"), "Brenda");
   assert.equal(streetLine("8221 S 121st St Unit 4, Seattle, WA"), "8221 S 121st St");
 });
@@ -271,16 +273,21 @@ test("the 14-day follow-up is Rigo's two-week text, about the same listing", () 
   const o = outboundDescriptor({ kind: "outreach_nudge", offer: null, saved: {}, subject: { address: "2210 Pine Ave, Seattle, WA" } });
   assert.equal(o.mode, "template");
   const s = standardText({ kind: "outreach_nudge", outbound: o, name: "Rigo Smith", contactId: "c-rigo" });
-  assert.ok(NUDGE_TEXTS.map((t) => fillTemplate(t, { first: "Rigo", address: "2210 Pine Ave" })).includes(s.text), s.text);
+  assert.ok([...DAY_TWO_TEXTS, ...NUDGE_TEXTS].map((t) => fillTemplate(t, { first: "Rigo", address: "2210 Pine Ave", town: "Seattle" })).includes(s.text), s.text);
   assert.equal(standardText({ kind: "outreach_nudge", outbound: o, name: "Rigo", contactId: "c-rigo" }).text, s.text, "the same agent always gets the same one");
 });
 
-test("the plain check-in asks for their fixers in a line, and one who never wrote back hears who we are", () => {
+// 2026-11-09 (the voice audit): one real thing and one question, in place of
+// "circling back … come across your desk" and "it's Matt, I fix up houses
+// locally" (pools A and B).
+test("the plain check-in asks one thing in a line, and one who never wrote back hears it's Matt", () => {
   const pulse = (subject) => outboundDescriptor({ kind: "agent_pulse", offer: null, saved: {}, subject: { reason: "general", variant: 0, ...subject } });
   assert.equal(normalizeAgentPulse({}).mode, "template");
   assert.equal(standardText({ kind: "agent_pulse", outbound: pulse({ segment: "engaged" }), name: "Rigo" }).text,
-    "Hi Rigo, circling back. Any fixers or distressed properties come across your desk lately?");
-  assert.match(standardText({ kind: "agent_pulse", outbound: pulse({ segment: "cold" }), name: "Rigo" }).text, /^Hi Rigo, it's Matt, I fix up houses locally\./);
+    "Hey Rigo, anything new on your plate that needs real work?");
+  const cold = standardText({ kind: "agent_pulse", outbound: pulse({ segment: "cold" }), name: "Rigo" }).text;
+  assert.ok(CHECKIN_COLD_TEXTS.map((t) => fillTemplate(t, { first: "Rigo" })).includes(cold), cold);
+  assert.match(cold, /\bMatt\b/);
 });
 
 // 2026-10-21: "saw your listing on <number> <street>. Is it a bit of a
@@ -291,17 +298,18 @@ test("a check-in when their listing comes up asks about their other distressed p
   for (let variant = 0; variant < LISTING_PING_TEXTS.length; variant++) {
     for (const segment of ["engaged", "cold"]) {
       const t = standardText({ kind: "agent_pulse", outbound: pulse({ segment, variant }), name: "Pete" }).text;
-      assert.match(t, /^(Hi|Hey) Pete, /, t);
-      assert.match(t, /listing on 18th Ave Ct NW/, t);
+      assert.match(t, /\bPete\b/, t);
+      assert.match(t, /18th Ave Ct NW/, t);
       assert.doesNotMatch(t, /4521/, t);
-      assert.match(t, /(doesn't look like|not sure it needs enough work|probably not one for us)/i, t);
-      assert.match(t, /(other distressed|anything distressed|other fixers|anything on your plate that needs work)/i, t);
-      assert.doesNotMatch(t, /bit of a project|turnkey|does it need much work/i, t);
+      // 2026-11-09: named in passing, never judged. "Doesn't look like a
+      // fixer" was said about listings the pull had rated distressed.
+      assert.doesNotMatch(t, /doesn't look like|bit of a project|turnkey|does it need much work/i, t);
+      assert.equal((t.match(/\?/g) || []).length, 1, t);
+      assert.match(t, /\?$/, t);
     }
   }
-  assert.match(standardText({ kind: "agent_pulse", outbound: pulse({ segment: "cold", variant: 0 }), name: "Pete" }).text, /it's Matt, I fix up houses locally/, "one who never wrote back hears who we are");
   assert.equal(standardText({ kind: "agent_pulse", outbound: pulse({ segment: "engaged", variant: 0 }), name: "Pete" }).text,
-    "Hey Pete, saw your listing on 18th Ave Ct NW, doesn't look like a fixer. Just wanted to check in, any other distressed properties on your plate?");
+    "Hey Pete, saw your new listing on 18th Ave Ct NW. Anything else coming that needs real work?");
 });
 
 // 2026-10-26 (Pierce): a cold agent's distressed listing that has been up a

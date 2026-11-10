@@ -15,6 +15,7 @@ import { OPENER_MAX_CHARS, streetName } from "./shared/outreach-opener.js";
 import { OUR_BOX_WORDS } from "./shared/asset-type.js";
 import { offerForms } from "./shared/us-address.js";
 import { NEXT_ONE_QUESTION } from "./shared/flip-read.js";
+import { VOICE_RULE } from "./shared/voice.js";
 
 const LENGTH_RULE = {
   short: "One to three sentences.",
@@ -61,9 +62,12 @@ const HUMAN =
   // 27 drafts promised to send something later, and what a person deleted
   // before sending was nearly always a filler opener or a stapled-on second
   // question.
-  "- Never reuse a line. The thread so far is above you: if you have already asked this person whether anything " +
-  "else needs work — in any wording — do not ask it again. A stock closing ask repeated down a thread is the " +
-  "clearest tell of a bot. The one exception is the NEXT ONE question when a house closes (below).\n" +
+  // 2026-11-09: the never-ask-again half is for an answer to them. A
+  // check-in we start exists to ask it, in new words (VOICE_RULE).
+  "- Never reuse a line. The thread so far is above you: when you are answering something they sent and you have " +
+  "already asked this person whether anything else needs work, in any wording, do not ask it again. A stock closing " +
+  "ask repeated down a thread is the clearest tell of a bot. The one exception is the NEXT ONE question when a house " +
+  "closes (below).\n" +
   "- No warm-up clause before the substance. \"Ha, fair.\", \"Great news, thanks Rigo.\", \"Makes sense, that's a " +
   "real hurdle.\" — cut them and start at the point.\n" +
   "- ONE question, and only if you need the answer. When you have just acknowledged something real, do not staple " +
@@ -227,8 +231,8 @@ const NEXT_ONE_AGENT =
 const OFF_MARKET_AGENT =
   "OFF-MARKET: our best deals are off-market houses agents bring us — pocket listings, or a seller who hasn't listed. " +
   "Where it fits naturally — a house of theirs wasn't a fit, an offer of ours didn't work out, they just sent us one, or the " +
-  "thread is winding down warmly — you may ask once, lightly, whether any off-market opportunities have come across their desk, " +
-  `and say we'd love a first look. ${OFF_MARKET_ASK_WORDS} Only when the context's OFF-MARKET ASK line says you may; never ` +
+  "thread is winding down warmly — you may ask once, lightly, whether any off-market opportunities have come across their desk. " +
+  `${OFF_MARKET_ASK_WORDS} Only when the context's OFF-MARKET ASK line says you may; never ` +
   "mid-negotiation, never twice in a row, never as a pitch, and never claim we have off-market deals ourselves. What we buy " +
   "is still houses that need work.";
 
@@ -624,8 +628,8 @@ function nudgeAside(o) {
   if (!o?.aside?.street) return "";
   // Not the old house itself (Matt, 2026-10-08: we don't know what happened
   // to it, and it has usually sold) — the next one.
-  return `Then ONE short closing line: if anything else that needs work comes across their desk, on the market or off, we'd love a look. ` +
-    `A statement, not a question. Do NOT name ${o.aside.street} or any other house, and no number. ` +
+  return `Then ONE short closing line that you're still after anything else that needs work, on the market or off, in a few plain words. ` +
+    `A statement, not a question, and never "we'd love", "keep me in mind" or "send it my way". Do NOT name ${o.aside.street} or any other house, and no number. ` +
     `${o.address} stays the subject; that line is an afterthought. `;
 }
 
@@ -644,8 +648,11 @@ export function outboundOpening(outbound) {
   const base = openingFor(outbound);
   // A machine-started draft a gate held, written once more (runProactive):
   // what tripped it, said plainly.
+  // Held for how it read (shared/voice.js): our last text to them, so the
+  // new one opens and says it another way (2026-11-09).
   const fix = Array.isArray(outbound?.fix) && outbound.fix.length
-    ? ` YOUR LAST DRAFT OF THIS WAS HELD: ${outbound.fix.map((f) => `"${String(f).slice(0, 160)}"`).join("; ")}. Write it again so none of that is true.`
+    ? ` YOUR LAST DRAFT OF THIS WAS HELD: ${outbound.fix.map((f) => `"${String(f).slice(0, 160)}"`).join("; ")}. Write it again so none of that is true.` +
+      (outbound.ourLast ? ` OUR LAST TEXT TO THEM SAID: "${String(outbound.ourLast).slice(0, 300)}". Open differently and say it another way.` : "")
     : "";
   const text = base && fix ? `${base}${fix}` : base;
   if (!text || !CARRIER_CHECKED_KINDS.has(outbound.kind)) return text;
@@ -848,8 +855,8 @@ function openingFor(outbound) {
           : "") +
         `End on your question or one short line after it: NO sign-off, no name, no thanks, and no opt-out line — the phone ` +
         `system adds "Thanks, Matt" and "No worries if not can stop" on the end by itself. ` +
-        `It must not read like AI: no dashes (— or –), no exclamation marks, no emoji, no "I hope this finds you well", ` +
-        `"quick question", "I'm reaching out", "touching base", "came across" or "hunting". ` +
+        `It must not read like AI (HOW MATT TEXTS below): no dashes, no exclamation marks, and never "I'm reaching out", ` +
+        `"touching base", "came across" or "hunting". ` +
         `Do NOT name a price, how many days it's been listed, a percentage, or a link. Do NOT ask about this listing's ` +
         `price. Set intent to outreach_open.`;
     }
@@ -858,10 +865,12 @@ function openingFor(outbound) {
       // Past the follow-ups: the every-14-days check-in, not about the listing.
       if (o.repeats && !Number(o.stepIndex)) {
         return `${START} We texted this agent about their listing at ${o.address} weeks ago and they never answered. ` +
-          `${nudgePressure(o)} One short line checking in: has anything that needs work, distressed or value-add, come ` +
-          `across their desk, listed or off market? Don't mention the old listing and don't name a number. ` +
+          // In words the voice check lets through (2026-11-09 review): it held
+          // "checking in", "value-add" and a spent "desk" this used to quote.
+          `${nudgePressure(o)} One short line asking whether anything that needs real work has come up on their end, ` +
+          `listed or not. Don't mention the old listing and don't name a number. ` +
           (o.home ? `If you say where you're based, it's ${o.home}, nowhere else. ` : "") +
-          `No sign-off and no opt-out line. No dashes (— or –) and no exclamation marks. Set intent to outreach_nudge.`;
+          `No sign-off and no opt-out line. Set intent to outreach_nudge.`;
       }
       return `${START} We texted this agent about their listing at ${o.address} and they never answered. ` +
         `${nudgePressure(o)} One or two short lines in the same plain voice as the first text. You may mention the listing ` +
@@ -870,7 +879,7 @@ function openingFor(outbound) {
         (o.county ? `If you say where we're looking, it's ${o.county} County and nowhere else. ` : "") +
         // The first text's city, by the listing's market: a Bend agent hears Bend.
         (o.home ? `If you say where you're based, it's ${o.home}, nowhere else. ` : "") +
-        `No sign-off and no opt-out line. No dashes (— or –) and no exclamation marks. Set intent to outreach_nudge.`;
+        `No sign-off and no opt-out line. Set intent to outreach_nudge.`;
 
     // They countered, we went quiet. Keep it alive without moving: ask for
     // room, never a number of ours, never theirs read back.
@@ -1033,7 +1042,7 @@ function openingFor(outbound) {
         `on the market or off. ${OFF_MARKET_ASK_WORDS} ` +
         `${CHECKIN_PERSONALITY} ` +
         `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters, ending on one easy question. Open with their first name, once. ` +
-        `No exclamation-mark cheer, no emojis, no flattery. Do NOT say "I'm reaching out", "touching base", "just checking in", "circling back" or "last nudge". ` +
+        `No flattery, and never "last nudge". ` +
         `${o.stepIndex > 1 ? "We've checked in before: don't repeat the wording or the joke of the last one, and don't apologise for checking in again. " : ""}` +
         `${CONTINUE} Set intent to passed_checkin.`;
 
@@ -1100,8 +1109,7 @@ function openingFor(outbound) {
         `never mention records, lenders, prices or how many properties they own. If the thread shows they ` +
         `already told us what they buy, confirm it instead of asking again. ` +
         `Do NOT name a price, a number, a percentage or a link, and no street address except the house we sent them. Do NOT pitch a deal or promise one is coming. ` +
-        `Do NOT say "I'm reaching out", "I hope this finds you well", "touching base" or "just checking in". ` +
-        `No exclamation-mark cheer. Easy to ignore, easy to answer in a line. Set intent to buyer_pulse.`;
+        `Easy to ignore, easy to answer in a line. Set intent to buyer_pulse.`;
     }
 
     // The agent's own clock (shared/agent-pulse.js). Matt, 2026-09-29:
@@ -1124,7 +1132,7 @@ function openingFor(outbound) {
       const situationLine = `name one kind of seller we're good for, in a few words: ${situation}. One, never a list.`;
       const what = !o.offersWithUs && !o.dealsWithUs ? ` Say once, in a clause, what we buy: ${OUR_BOX_WORDS}.` : "";
       const askFor = (extra) => `ask whether anything distressed — a house that needs work, listed or not — or anything off-market has come across their desk lately. ` +
-        `${OFF_MARKET_ASK_WORDS} We'd love a first look — ask it lightly, as a favor, never as a pitch.${extra}`;
+        `${OFF_MARKET_ASK_WORDS} Ask it lightly, as a favor, never as a pitch.${extra}`;
       const offAsk = askFor(` If it fits naturally, ${situationLine}${what}`);
       const listingText = (o.reason === "fresh_listing" || o.reason === "off_market_listing") && l;
       // 2026-10-15 (the funnel review): Matt's own specific texts got 70%
@@ -1151,7 +1159,7 @@ function openingFor(outbound) {
         : mentioned
         ? `They mentioned a house${mentioned.street ? ` on ${mentioned.street}` : ` (${mentioned.label})`}${mentioned.town ? ` in ${mentioned.town}` : ""} ` +
           `${mentioned.daysAgo <= 14 ? "recently" : "a few weeks back"}, and we never got to look at it properly. That house is the one thing this text is about: ` +
-          `ask lightly how it's coming along, or whether the seller is still thinking about selling, and say we'd love a look. ` +
+          `ask lightly how it's coming along, or whether the seller is still thinking about selling. ` +
           `Name it the way they did, never with a price or any number.${what}`
         : closedNear
         ? `We just closed on a house in ${closedNear.town}, a town they work. Say so in a clause, by the town only — never a street or which house — then ${askFor(what)}`
@@ -1176,11 +1184,11 @@ function openingFor(outbound) {
         // the first text since 2026-10-16: no remark about the house, no joke.
         (cold && listingText
           ? `WHAT TO WRITE: the short first-text voice — two short sentences, under ${OPENER_MAX_CHARS} characters, plain, the way a person texts someone they haven't met; the PERSONALITY line above doesn't apply to this one. Open with their first name, once; ` +
-            `name the street in a clause (the street name, never the house number), as one that doesn't look like a fixer for us; ONE question, whether they have any other distressed properties on their plate. Say nothing else about the house (its age, lot, look, or how long it has been listed). Nothing else: no other ask, no call offer, no kind of seller. No exclamation-mark cheer, no emojis, no flattery. ` +
+            `name the street in a clause (the street name, never the house number), as one that doesn't look like a fixer for us; ONE question, whether they have any other distressed properties on their plate. Say nothing else about the house (its age, lot, look, or how long it has been listed). Nothing else: no other ask, no call offer, no kind of seller. No flattery. ` +
             (o.tooLong ? `YOUR LAST DRAFT WAS ${o.tooLong} CHARACTERS: write it again under ${OPENER_MAX_CHARS}, keeping the street and the question. ` : "")
-          : `WHAT TO WRITE: one text, one or two short sentences, under about 240 characters. Open with their first name, once. End on one easy question. No exclamation-mark cheer, no emojis, no flattery. ` +
-            // No calendar is connected (2026-10-15): a call is offered, never a time.
-            `If it fits, offer a quick call in a few words, as an easier way to talk ("happy to jump on a quick call if that's easier") — never a day or a time, and still only one question. `) +
+          // 2026-11-09: no call offer stapled on ("happy to jump on a quick
+          // call if that's easier" is the voice check's "happy to"); one ask.
+          : `WHAT TO WRITE: one text, one or two short sentences, under about 200 characters. Their first name once, and not always as the first word. End on one easy question, and ask nothing else. No flattery. `) +
         // No who-we-are line, cold or not (2026-10-19, Matt): "I'm local and
         // always looking for the next project house" read as filler. The phone
         // system signs it "Thanks, Matt".
@@ -1188,7 +1196,7 @@ function openingFor(outbound) {
         `${shapes[(Number(o.variant) || 0) % shapes.length]} ` +
         `${o.voice ? `HOW MATT WANTS THESE TO SOUND (follow it unless it breaks a rule here): "${String(o.voice).slice(0, 600)}" ` : ""}` +
         `Do NOT name a price, a number, a percentage, an ARV or a link${listingText ? " — the listing's street is fine, but never a dollar figure" : ""}, and never a count of days, a time of day or a date ("sitting a while", not "84 days"). Do NOT promise an offer or say what we'd pay. ` +
-        `Do NOT say "I'm reaching out", "touching base" or "just checking in". Easy to ignore, easy to answer in a line. ` +
+        `Easy to ignore, easy to answer in a line. ` +
         `Set intent to agent_pulse.`;
     }
 
@@ -1307,9 +1315,9 @@ function openingFor(outbound) {
               (o.lead?.what
                 ? `Ask about that lead specifically, in a line, the way a person who remembered would — e.g. "Did the family decide on the probate house?" ` +
                   `or "Did that one end up relisting?" Do NOT ask the generic "anything distressed or off-market come across your desk?" question. `
-                : `Mention it naturally ("you'd mentioned ${o.phrase || "circling back"}") and ask whether anything landed that needs work. `)
+                : `Mention it naturally ("you'd mentioned ${o.phrase || "checking back"}") and ask whether anything landed that needs work. `)
           : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally ` +
-            `("you'd mentioned ${o.phrase || "circling back"}"). Ask whether anything landed that needs work. `) +
+            `("you'd mentioned ${o.phrase || "checking back"}"). Ask whether anything landed that needs work. `) +
         // Never the same question twice: 1010 Bellevue's agent was asked for
         // "a real number" after saying three times where the sellers were.
         `Never ask anything they already answered in the thread: if they told us where the seller is, or that they won't move, ` +
@@ -1385,6 +1393,9 @@ export function buildUserContext({
       ? `THE THREAD SO FAR (US = our team, THEM = ${them}):\n${String(transcript).slice(-14000)}`
       : "THE THREAD SO FAR: (no earlier messages available)",
     opening || `NEWEST INBOUND MESSAGE FROM ${label === "CONTACT" ? "THEM" : `THE ${label}`} (this is what you are replying to):\n"${String(message || "").slice(0, 2000)}"`,
+    // Every text the machine starts (2026-11-09): one voice rule in place of
+    // each kind's own list (shared/voice.js checks the result).
+    outbound && outboundOpening(outbound) ? VOICE_RULE : "",
     // A reply a gate held, written once more (redraftOnGate): what held it,
     // said plainly, as corrections.
     !outbound && Array.isArray(fix) && fix.length

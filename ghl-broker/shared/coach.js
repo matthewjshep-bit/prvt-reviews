@@ -27,6 +27,7 @@ import { PROMISE_DISMISS_LABEL } from "./promise-resolver.js";
 import { ROW_FEEDBACK_EVENT, ROW_FEEDBACK_LABEL, LEARNABLE_FEEDBACK, feedbackEvidenceId } from "./row-feedback.js";
 import { ACTION_KINDS } from "./pipeline.js";
 import { AUDIT_KINDS } from "./conversation-audit.js";
+import { voiceFlags, hardVoiceKeys, savedTextFlags } from "./voice.js";
 
 export const COACH_KINDS = ["example", "rule", "instruction", "code_gap"];
 export const COACH_KIND_LABEL = {
@@ -287,9 +288,17 @@ export function validateProposal(raw, { config = {}, knownIds = [] } = {}) {
     if (raw.kind === "example") {
       p.theySaid = clip(raw.theySaid, CAPS.exampleChars); p.weSay = clip(raw.weSay, CAPS.exampleChars);
       if (!p.theySaid || !p.weSay) return no("an example needs both sides");
+      // 2026-11-09: an example teaches the bot its voice word for word, so
+      // one that reads like a machine (a dash, "Got it", "I'd love") would
+      // teach the very tell the voice check holds (shared/voice.js).
+      const tells = hardVoiceKeys(voiceFlags({ text: p.weSay, kind: "reply" }));
+      if (tells.length) return no(`the example reads like a machine: ${tells.join(", ")}`);
     } else {
       p.text = clip(raw.text, raw.kind === "rule" ? CAPS.ruleChars : 600);
       if (!p.text) return no("no text");
+      // The same for a line a rule or an instruction quotes for the bot to say.
+      const said = savedTextFlags(p.text);
+      if (said.length) return no(`it teaches a line that reads like a machine: ${said[0]}`);
       if (raw.kind === "instruction" && !PARTIES.includes(party)) return no("an instruction is for one party");
     }
     const text = proposalText(p);
