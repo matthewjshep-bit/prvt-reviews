@@ -48,6 +48,10 @@ const LEDGER_CEILING = 100000;
 // otherwise read as every reason gone at once; the rest wait a tick. The
 // first run on the whole ledger spreads the backlog this way.
 const MAX_WITHDRAW_PER_RUN = 10;
+// Take-backs tried in one run, at most, refused ones included. Off the whole
+// ledger, a GHL that refuses every one (down, or a token gone bad) would
+// otherwise be asked about every old call each tick, each refusal an error row.
+const MAX_WITHDRAW_TRIES_PER_RUN = 2 * MAX_WITHDRAW_PER_RUN;
 const iso = (ms) => new Date(ms).toISOString();
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 export const pacificDay = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(t));
@@ -116,11 +120,13 @@ export async function runGhlCalls({ store = defaultStore, locationId, client, sa
   // isn't whole either: a reason missing from it is unknown, not gone.
   const due = ghlCallsDue([...(read.shownActions || []), ...(read.shownCalls || [])], { drafts });
   const wholeRead = (read.events || []).length > 0 && !read.capped?.held;
+  let withdrawTries = 0;
   for (const [contactId, q] of wholeRead ? live : []) {
     if (due.has(contactId) || calledSince(read.events, contactId, q.at)) continue;
-    if (out.withdrawn.length >= MAX_WITHDRAW_PER_RUN) break;
+    if (out.withdrawn.length >= MAX_WITHDRAW_PER_RUN || withdrawTries >= MAX_WITHDRAW_TRIES_PER_RUN) break;
     const row = { contactId, kind: q.kind, queuedAt: q.at };
     if (dryRun) { out.withdrawn.push({ ...row, status: "would take back" }); continue; }
+    withdrawTries++;
     try {
       await removeContactFromWorkflow(client, contactId, q.workflowId || cfg.workflowId);
     } catch (e) {

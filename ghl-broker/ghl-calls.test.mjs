@@ -236,6 +236,28 @@ test("the first run after a backlog takes back ten at a time", async () => {
   assert.equal(second.withdrawn.length, 4);
 });
 
+// With the whole ledger read, a GHL that refuses every take-back (down, or a
+// token gone bad) would be asked about every old call on every tick, and each
+// refusal written to the error log.
+test("a GHL that refuses every take-back is asked at most twenty times a run", async () => {
+  const LOC = "loc-withdraw-refused";
+  const { recordEvent } = await import("./contact-record.js");
+  for (let i = 0; i < 30; i++) {
+    await recordEvent({ store, locationId: LOC, contactId: `stuck${i}`, type: "ghl_call_queued", at: new Date(NOW - (12 + i) * 24 * H).toISOString(), source: "sweep",
+      dedupeKey: `ghl_call:stuck${i}:2026-09-${String(30 - (i % 28)).padStart(2, "0")}-${i}`, data: { kind: "call_quiet", workflowId: WF } });
+  }
+  const down = ghl();
+  const call = down.call;
+  down.call = async (p, opts = {}) => {
+    if (opts.method === "DELETE" && /\/workflow\//.test(p)) { down.calls.push({ method: "DELETE", path: p }); throw Object.assign(new Error("GHL DELETE -> 503"), { status: 503 }); }
+    return call(p, opts);
+  };
+  const r = await runGhlCalls({ store, locationId: LOC, client: down, saved: ON, deps: { pipelineFor: pipelineFor({ who: [] }) }, mode: "urgent", now: NOW });
+  assert.equal(r.withdrawn.length, 0);
+  assert.equal(down.of("DELETE", /\/workflow\//).length, 20, "twenty tries, then the rest wait a tick");
+  assert.equal(r.failed.filter((f) => f.stage === "withdraw").length, 20);
+});
+
 test("a call still standing, only pushed down the list, stays in GHL", async () => {
   const LOC = "loc-outranked";
   await runGhlCalls({ store, locationId: LOC, client: ghl(), saved: ON, deps: { pipelineFor: pipelineFor({ who: ["eli"] }) }, mode: "morning", now: NOW });

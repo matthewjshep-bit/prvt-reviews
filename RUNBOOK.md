@@ -3289,7 +3289,10 @@ the call back.
   A call queued ten days ago is taken back once its reason ends. Still at
   most ten take-backs a run (`MAX_WITHDRAW_PER_RUN`), so the first runs
   after this deploy spread the old backlog over the morning; a contact GHL
-  says isn't in the workflow any more is written down as taken back.
+  says isn't in the workflow any more is written down as taken back. At
+  most twenty tries a run, refused ones included
+  (`MAX_WITHDRAW_TRIES_PER_RUN`), so a GHL that refuses every take-back
+  isn't asked about the whole backlog on every tick.
 - **Held drafts read on their own** (`routes/dashboard.js` `pipelineFor`,
   and `today-timers.js`): `status: draft` up to 5,000, `status: scheduled`
   up to 500, merged newest first. The read says when either list filled
