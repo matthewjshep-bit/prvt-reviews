@@ -458,6 +458,66 @@ deals.json`. On 2026-11-04:
 - the deals that died on price or rehab landed 17–45% under;
 - rehab by age alone was under Matt's on 46% of houses, which is why grade A needs evidence.
 
+#### Never over the seller's number, and what the engine can't know (2026-11-09)
+
+The audit found the engine floating $899k on a Bend house two minutes after the agent said the
+sellers would take anything over $850k. It was an unfinished 2024 build with an ARV 1.9× its list,
+graded A, and the agent's yes unlocked the write-up ask. 8 live grade-A numbers in 5 days had no
+seller check. Matt (2026-11-09, binding): cap both the open and the walk-away at the seller's or
+agent's stated number, and hold a walk-away far above it as a likely ARV error. These rules add to
+the ones above; each only lowers a number or adds a hold.
+
+- **The seller's number caps both numbers** (`priceHouse`, shared/price-engine.js).
+  - `rawWalk` = investor price − `minFee`, before any cap.
+  - With a seller number, the walk-away is at most their number (down to the $250) and the open is at
+    most the walk-away. Offering exactly their number leaves no room; that is Matt's rule.
+  - When `rawWalk` is more than `pricingV2.overSellerPct` (default 10, 0–50, 0 = any amount over)
+    over their number: an `arv` miss, the reason "our walk-away is N% over their number: the ARV is
+    likely high", `triage: "over_theirs"` and `overTheirs: true`. Never "hot".
+  - This lowers the counter band's ceiling (it reads the walk-away); it never raises it.
+- **Where their number comes from** (`readsFrom` / `sellerNumberFor`, ghl-broker/price-v2.js): the
+  newest seller-sourced figure on the house. That is a `property_details` or `house_mentioned` sellerAsk,
+  an `offer_countered` amount, a counter on the offer, or the dossier's sellerAsk. Events match on the
+  house key or the agent's own shorter spelling (`oneAgentsHouse`), never a namesake in another town.
+  Never the list price, and never a `house_mentioned` whose note only says what they owe.
+- **Over the list price** (`overList`): `rawWalk` above the list is an `arv` miss with the full run's
+  `overListHold` words ("…came out above the $X list price: the comps or the scope are off, so a person
+  should look before it goes anywhere", clear of VALUE_HOLD). Between 90% and 100% of the list it is
+  still only the `maxPctOfList` cap.
+- **A new build** is a killer (`new_build`): built in the last two years (`readsFrom` passes
+  `currentYear`), or words like "new construction", "85% done/complete", "under construction", "the
+  builder walked/went under", "unfinished new build". Never a bare "unfinished", and never "new
+  construction windows".
+- **An untyped house** (no `homeType` from Zillow) is a `kind` miss: "Zillow didn't say what kind of
+  house this is".
+- **Rehab evidence:**
+  - their repair figure counts as evidence only above the floor;
+  - a scope from under 8 photos that reads above the floor raises the rehab (`rehabWhy` says it was too
+    few photos) but is not evidence;
+  - `shadowPrice` keeps the house's heaviest rehab read in the last 14 days (`priorRehab`; each history
+    point keeps its own `rehabRead`, so an old heavy read ages out). `rehabOwn` is what this read alone
+    said.
+- **Comp reach** (`reads.comps { listing, radius, acrossInArv, eraGivesWay, gutCheck }`, from
+  `engineFinish`): an ARV carried only by price-guessed comps is not sure once the comps reached past
+  0.5 mi, took one from across a main road, or needed the era band to give way. Price-guessed means
+  fewer than 3 of the comps say remodeled in their own listings. A gut check never counts as sure.
+  A miss means Bricked is asked under the day's allowance, which is unchanged.
+- **Killers hear the thread** (`houseLines`): the agent's own lines about this house since it was first
+  named by its street, until another street is named. Before, only the text that started the run
+  counted, so "it's an assignment" said a text before the address never reached them.
+- **Send gate** (`engineSendGate`, auto-underwrite.js): `overList` → "the offer engine's number is over
+  the list price: yours to price"; `over_theirs` → "our walk-away is far over their number, likely an
+  ARV error: yours to price".
+- **The write-up ask:** `sendEngine` stamps `offer.pricing.sellerNumber`. `numberApproved` is false for
+  any amount above it, so a yes there never gets the write-up ask.
+- **Golden set:** `shared/fixtures/price-golden.json` and `shared/price-golden.test.mjs` (17 deals, 38
+  hand-priced houses, 3 live engine numbers; ZIP, size, age and numbers only, every text line
+  invented). The fixes that need Matt stay `todo` with the fix named: re-seed the rehab floor and read
+  the county's condition code, a second ARV (the agent's own), room under a binding cap, and a
+  verified-evidence `maoPct`.
+- Tests: `shared/price-engine.test.mjs`, `ghl-broker/price-v2.test.mjs`, `ghl-broker/engine-live.test.mjs`,
+  `shared/offer-status.test.mjs`.
+
 ### Our own underwrite: engine mode (2026-11-04)
 
 Matt (2026-11-04): Bricked has about 300 lookups left and is expensive. "Can we use our auto underwrite
@@ -520,6 +580,29 @@ code from before the listing-description fix; scratchpad `scripts/analyze-backte
 - The engine's walk-away against Matt's own ARV and rehab at the same formula: median 0.885×.
 - 7 of 51 would send by themselves with grade A live; none more than 10% over Matt's number at the
   same formula.
+
+#### Engine drafts, one house one underwrite (2026-11-09)
+
+- **What Matt sees on a Price-it draft.** `engineOnDraft` puts `draft.engine { grade, arv, rehab,
+  rehabWhy, open, walkAway, triage, reasons }` on the draft for the offer editor. When the engine's
+  rehab is above the photo scope, an `age_floor` allowance row carries the difference, so the draft
+  opens on the engine's rehab, not the bare scope (which runs about 0.88× Matt's). The subject line adds
+  "engine open $X / walk-away $Y".
+- **A size borrowed from the comps** (no size on the listing, so the comps' middle size was used) is a
+  data hold in engine mode: "the house's own size isn't on record: N sqft was borrowed from the comps".
+  The house stays a draft however sure the engine is.
+- **One house, one underwrite.** The audit found two live engine offers 30 s apart on one house, and 10
+  houses with a second run within 2–151 s.
+  - The start guard matches the agent's own shorter spelling (`oneAgentsHouse`), not only the exact key.
+  - Once the address resolves, a run that finds an earlier, still-running run of the same agent's same
+    house (`siblingRun`) stops before anything is bought or announced.
+  - `sendEngine` asks `findOfferOut` and `findRecent` again right before the offer is made
+    (`siblingFinished`).
+- **Geocodes.** `addressToWorkFrom` adopts the geocoder's label only when it keeps the house number the
+  agent typed; a street-only fix or the house next door is not this house. `geocodeAddress` caches a
+  house-numbered query only when the house itself was found, never a street-only or centroid answer.
+- Tests: `ghl-broker/engine-mode.test.mjs`, `ghl-broker/engine-live.test.mjs`,
+  `ghl-broker/auto-underwrite.test.mjs`, `ghl-broker/geocode.test.mjs`.
 
 
 ### Draft only: the app makes the draft, you price it (2026-10-16)
