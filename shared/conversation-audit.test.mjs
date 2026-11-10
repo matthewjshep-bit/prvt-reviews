@@ -87,6 +87,42 @@ test("a held draft with no clock books one with reply-agent's exact key; one wit
   assert.equal(r3.findings[0].action, null);
 });
 
+// 2026-11-09, Bend: an agent texted when she could take a call. The reply
+// was held for Matt (a scheduling is a person's call). Two days later the
+// check-in sent her text back through the reply path, it held again, and
+// that night the audit booked another check-in. Twelve days, four
+// re-answers of the same text, every one waiting on Matt.
+test("a reply held again after the check-in answered their text a second time books no third go", () => {
+  const words = "Free for a call Tuesday morning, or any time after lunch";
+  const held = (over = {}) => draft({ id: "h1", status: "draft", intent: "scheduling", inbound: words, createdAt: ago(50), sentAt: null,
+    autoSend: { decided: false, reason: "needs a person: the reply does not say the time as written" }, flags: ["a scheduling is a person's call"], ...over });
+  const read = (h, w = words) => ({ contactId: "c1", type: "text_summary", at: ago(h), data: { intent: "scheduling", inbound: w } });
+  const again = (h, req) => ({ contactId: "c1", type: "checkin_sent", at: ago(h), data: { requestAt: ago(req), kind: "unanswered", answered: "their text, again" } });
+  const history = [
+    read(130, "Back in town now, can we talk this week?"),
+    read(126),
+    { contactId: "c1", type: "checkin_requested", at: ago(100), data: { kind: "unanswered", dueAt: ago(50.1), draftId: "h0" } },
+    again(50.1, 100),
+    read(50),
+  ];
+  // A draft the check-in wrote says so.
+  const stamped = audit({ drafts: [held({ fromCheckIn: true })], events: [], offers: [] });
+  assert.equal(stamped.findings[0].action, null, JSON.stringify(stamped.findings[0]));
+  assert.match(stamped.findings[0].why, /held again/);
+  // One from before the stamp: their same words, read again after the check-in.
+  const legacy = audit({ drafts: [held()], events: history, offers: [] });
+  assert.equal(legacy.findings[0].action, null, JSON.stringify(legacy.findings[0]));
+  // The first hold still gets its one go.
+  const first = audit({ drafts: [held({ createdAt: ago(126) })], events: history.slice(0, 2), offers: [] });
+  assert.equal(first.findings[0].action?.type, "book_checkin");
+  // New words from them since are a new text: they get their go.
+  const newer = audit({ drafts: [held({ inbound: "Actually Thursday works better", createdAt: ago(5) })], events: [...history, read(5, "Actually Thursday works better")], offers: [] });
+  assert.equal(newer.findings[0].action?.type, "book_checkin");
+  // So does the same text after a call with them: the call was the conversation.
+  const called = [...history.slice(0, 2), { contactId: "c1", type: "call_summary", at: ago(110), data: {} }, ...history.slice(2)];
+  assert.equal(audit({ drafts: [held()], events: called, offers: [] }).findings[0].action?.type, "book_checkin");
+});
+
 test("a held draft over a day old is aging; a handled wants_call is yours, never redrafted", () => {
   const old = draft({ id: "o", status: "draft", createdAt: ago(30), sentAt: null, autoSend: { decided: false, reason: "a other is a person's call" } });
   const r = audit({ drafts: [old], events: [], offers: [] });

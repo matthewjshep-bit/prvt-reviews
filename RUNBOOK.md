@@ -2447,7 +2447,17 @@ that produced no draft row at all. Every finding names ONE existing mechanism:
 - **Texts we never answered** — no row at all, or only rows a burst replaced →
   redraft via `startReply` (the redraft button's own path); a held draft →
   make sure the reply agent's "unanswered" check-in clock exists (same dedupe
-  key, so never two); a `handled` wants-a-call → yours.
+  key, so never two); a `handled` wants-a-call → yours. When that check-in
+  comes due it sends their text back through the reply path once ("their
+  text, again"), and the draft it writes carries `fromCheckIn`. If that
+  reply holds for a person too, it's yours (`heldAgain`,
+  `shared/conversation-audit.js`): the audit books no more clocks, and a
+  check-in still standing settles as `heldAgain` without a third go.
+  Before this (2026-11-09, Bend), one text about when an agent could take a
+  call was re-answered four times in twelve days, each draft waiting on
+  Matt; 11 threads had the same shape. Drafts from before the stamp are
+  matched by their same words, read before a "their text, again" with no
+  other text or call of theirs since.
 - **They said the number works, no offer went** → queued as `autoSendPending`
   (`by: "audit"`) so the morning tick sends it (`retryPendingOfferSends`
   honours that without the clean-underwrite switch). Never sends at night.

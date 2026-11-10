@@ -149,6 +149,41 @@ const k = (n) => (Number(n) > 0 ? `${Math.round(Number(n) / 1000)}k` : "");
 const QUIET_INTENTS = new Set(["opt_out", "small_talk", "media"]);
 const HUMAN_TOOK_IT = /answered it yourself/i;
 
+// The words of a text, however it was spaced or cased.
+const sameWords = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * heldAgain(draft, events) → whether this held reply is our second go at
+ * their same text. The "unanswered" check-in already sent the text back
+ * through the reply path once (ghl-broker/promise-sweep.js, "their text,
+ * again"), and the reply held for a person again. Then it's a person's:
+ * no clock books a third go (2026-11-09, Bend: a text about when she could
+ * take a call, re-answered four times in twelve days, each one waiting on
+ * Matt). `events` are the contact's text_summary, call_summary and
+ * checkin_sent. A draft the check-in wrote says so (`fromCheckIn`). One
+ * from before that stamp counts when their same words were read before a
+ * "their text, again" check-in, with no other text or call of theirs since.
+ */
+export function heldAgain(draft, events = []) {
+  if (!draft) return false;
+  if (draft.fromCheckIn) return true;
+  const words = sameWords(draft.inbound);
+  if (!words) return false;
+  const made = (ms(draft.createdAt) ?? 0) + 60000;
+  const evs = (events || []).filter((e) => ms(e?.at) != null && ms(e.at) <= made).sort((a, b) => ms(a.at) - ms(b.at));
+  // Back from the draft while their last words were these.
+  let since = null;
+  for (let i = evs.length - 1; i >= 0; i--) {
+    const e = evs[i];
+    if (e.type === "call_summary") break;
+    if (e.type !== "text_summary") continue;
+    if (sameWords(e.data?.inbound) !== words) break;
+    since = ms(e.at);
+  }
+  if (since == null) return false;
+  return evs.some((e) => e.type === "checkin_sent" && e.data?.answered === "their text, again" && ms(e.at) >= since);
+}
+
 // One key per finding, stable across two runs on the same state and new
 // when the thread moves: the anchor is the timestamp of the thing the
 // finding is about (their text, their counter, our float).
@@ -328,12 +363,16 @@ export function auditConversations({
       // is a decision they may be about to make. And a person's call (a
       // counter, an acceptance) is never released by day at all.
       const releasable = releasableHeld(newest, { loose, mode, releaseMinAgeMin, releaseOther: config.driver?.daytime?.releaseOther === true, now });
+      // Our second go at their same text held too: it's yours, no third go.
+      const again = !releasable && !clock && heldAgain(newest, [...ev(c, "text_summary"), ...ev(c, "call_summary"), ...ev(c, "checkin_sent")]);
       add({ kind: age >= HELD_AGING_HOURS ? "held_aging" : "unanswered_inbound", contactId: c, contactName: who(c), party: newest.party,
         address: newest.propertyAddress || "", anchorAt: newest.createdAt, draftId: newest.id,
         dueAt: releasable ? iso(now) : clock?.data?.dueAt || unansweredCheckIn(now).dueAt,
         action: releasable ? { type: "release", draftId: newest.id }
-          : clock || checkInPending(c) ? null : { type: "book_checkin", kind: "unanswered", dueAt: unansweredCheckIn(now).dueAt, draftId: newest.id },
-        why: releasable ? `${reason} — a holding reply the guard passed; sending it` : clock ? `${reason} · check-in set for ${String(clock.data?.dueAt || "").slice(0, 10)}` : reason,
+          : clock || again || checkInPending(c) ? null : { type: "book_checkin", kind: "unanswered", dueAt: unansweredCheckIn(now).dueAt, draftId: newest.id },
+        why: releasable ? `${reason} — a holding reply the guard passed; sending it`
+          : clock ? `${reason} · check-in set for ${String(clock.data?.dueAt || "").slice(0, 10)}`
+          : again ? `${reason} · held again when we answered it a second time — yours, no more goes` : reason,
         evidence: { inbound: clip(newest.inbound), reply: clip(newest.reply, 100), age } });
     }
   }

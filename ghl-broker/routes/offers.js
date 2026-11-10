@@ -6359,8 +6359,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (draft) return draft;
       const closed = pickDealByAddress(live, hint);
       // A counter reopens a house they passed on, never one we walked away
-      // from (Matt, 2026-11-09: Mary S.'s "lowering it to 899 today" and Ed
-      // K.'s "you can try under 595" each turned our pass back into a
+      // from (Matt, 2026-11-09: Mary S.'s price drop and Ed K.'s lower
+      // number each turned our pass back into a
       // counter, and the card bounced Tier 2 → Offer Out → Needs Matt). The
       // one exception is the held sweep's quiet pass with no number of ours
       // out, which stays open to their numbers (reopensOnTheirNumbers).

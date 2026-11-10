@@ -38,6 +38,7 @@ import { leadCheckInPending, LEAD_MAX_DAYS, LEAD_STALE_DAYS } from "./shared/fol
 import { offerOwner } from "./shared/agent-pulse.js";
 import { annotateCurrent } from "./shared/current-offer.js";
 import { allEventsSince } from "./contact-events.js";
+import { heldAgain } from "./shared/conversation-audit.js";
 
 const HOUR_MS = 3600000;
 
@@ -398,6 +399,20 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     if (req.data?.kind === "unanswered" && req.data?.draftId) {
       const held = await store.getReplyDraft?.(req.data.draftId).catch(() => null);
       if (held && held.contactId === contactId && String(held.inbound || "").trim() && held.dismissedBy !== "you" && held.status !== "sent") {
+        // Already our second go at their same text, and it held for a person
+        // again: it's yours (2026-11-09, Bend: one text re-answered four
+        // times in twelve days). Claimed, so no tick asks again; neither a
+        // third go nor a "where do things stand?" goes over it.
+        const theirs = (await store.listContactEvents?.(locationId, contactId, { types: ["text_summary", "call_summary", "checkin_sent"], limit: 200 }).catch(() => null)) || list;
+        if (heldAgain(held, theirs)) {
+          await recordEvent({
+            store, locationId, contactId, party: held.party || "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
+            source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,
+            data: { requestAt: req.at, kind: "unanswered", heldAgain: true },
+          });
+          out.results.push({ contactId, status: "yours", reason: "held again when we answered it a second time" });
+          continue;
+        }
         const claim = await recordEvent({
           store, locationId, contactId, party: held.party || "agent", type: "checkin_sent", at: iso(now), address: req.address || "",
           source: "conversation", dedupeKey: `checkin_sent:${contactId}:${req.at}`,

@@ -626,6 +626,43 @@ test("a check-in never goes out over a reply we still owe them", async () => {
   assert.equal(tr.results[0].status, "covered");
 });
 
+// 2026-11-09, Bend: an agent texted when she could take a call, and the
+// reply held for Matt. The check-in sent her text back through the reply
+// path; it held again, the audit booked another check-in, and the same text
+// was re-answered four times in twelve days.
+test("their text goes back through the reply path once; held again, the check-in leaves it with you", async () => {
+  const words = "Free for a call Tuesday morning, or any time after lunch";
+  const heldDraft = (id, over = {}) => ({ id, contactId: "c9", party: "agent", status: "draft", intent: "scheduling", inbound: words, reply: "Does Mon at 9am work?", ...over });
+  // The held reply the check-in wrote says so.
+  const store = fakeStore({
+    events: [request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-again" })],
+    drafts: [heldDraft("d-again", { fromCheckIn: true, createdAt: at(49) })],
+  });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(s.calls.length + s.replies.length, 0, "no third go, and no 'where do things stand?' over it");
+  assert.equal(r.results[0].status, "yours", JSON.stringify(r.results));
+  assert.ok(store.events.some((e) => e.type === "checkin_sent" && e.data?.heldAgain === true), "claimed, so no tick asks again");
+  const next = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW + HOUR, deps: s });
+  assert.equal(next.considered, 0);
+  // From before the stamp: their same words were read before an earlier
+  // "their text, again", and nothing else from them since.
+  const legacy = fakeStore({
+    events: [
+      { contactId: "c9", type: "text_summary", at: at(150), data: { intent: "scheduling", inbound: words } },
+      { contactId: "c9", type: "checkin_sent", at: at(100), data: { requestAt: at(140), kind: "unanswered", answered: "their text, again" } },
+      { contactId: "c9", type: "text_summary", at: at(99.9), data: { intent: "scheduling", inbound: words } },
+      request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-old" }),
+    ],
+    drafts: [heldDraft("d-old", { createdAt: at(99.9) })],
+  });
+  legacy.listContactEvents = async (_l, id, { types } = {}) => legacy.events.filter((e) => e.contactId === id && (!types || types.includes(e.type)));
+  const t = starter();
+  const lr = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store: legacy, now: NOW, deps: t });
+  assert.equal(t.calls.length + t.replies.length, 0);
+  assert.equal(lr.results[0].status, "yours");
+});
+
 test("a check-in waits, unclaimed, while a different text of theirs is waiting on you", async () => {
   const store = fakeStore({
     events: [request(48, { kind: "unanswered", phrase: "", dueAt: at(1), draftId: "d-held" })],

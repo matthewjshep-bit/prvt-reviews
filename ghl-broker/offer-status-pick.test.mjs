@@ -72,8 +72,8 @@ test("a counter on a house they passed on reopens it, but only by address", asyn
 });
 
 // Matt, 2026-11-09 (195 SE Roosevelt, Bend; 624 NW Hill St, Bend): we passed,
-// and the agent's next text named a price — "I'm lowering it to 899 today",
-// "you can try under 595 but not sure what she will say". Each one reopened
+// and the agent's next text named a price: one a list-price drop, the other
+// a lower number the seller might take. Each one reopened
 // our pass as "countered", so the card went Tier 2 → Offer Out → Needs Matt →
 // Offer Out, and every redraft of the same old text did it again.
 test("a price an agent names after we passed doesn't reopen the house we walked away from", async () => {

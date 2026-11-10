@@ -71,7 +71,7 @@ test("their number on a house we never priced is a house to price, after the sam
 });
 
 // Matt, 2026-11-09 (Mary S., 195 SE Roosevelt): the audit redrafted her one
-// "lowering it to 899" text every couple of days. Each redraft was a new
+// price-drop text every couple of days. Each redraft was a new
 // draft with a new clock, so the card left Needs Matt for Offer Out at the
 // next 7am sweep and came back a day later — three round trips on one text.
 test("a redraft of the same text keeps the wait it had, so the card doesn't leave Needs Matt and come back", () => {
