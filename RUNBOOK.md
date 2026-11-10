@@ -4029,8 +4029,13 @@ isn't a date shows under the box and is dropped.
   gatekeepers).
 - The agent check-in and the buyer pulse don't run, so no seats are claimed
   (`isWorkday(now, tz, days, offDays)`). Neither does the GHL follow-up
-  workflow enrolment, whose texts come from GHL past our clock. The written
-  offer after a quiet float waits for the next working day.
+  workflow enrolment, whose texts come from GHL past our clock, nor the
+  audit's daytime pass (`maybeRunDaytimeDriver`), which skips a day off as
+  it skips a weekend. The written offer the machine sends by itself waits
+  for the next working day: after a quiet float (`sendPaperAfterSilence`),
+  after a clean underwrite (marked pending, "a weekend or a day off"), and
+  the pending retry on the tick (`retryPendingOfferSends`, which also
+  carries the nightly audit's send after a yes).
 
 **What still goes.** Answers to their texts (a reply draft, or any draft
 that carries their text), on a weekend or a day off. A buyer's showing

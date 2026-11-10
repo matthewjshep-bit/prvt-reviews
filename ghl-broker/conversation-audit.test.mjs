@@ -394,6 +394,20 @@ test("the daytime pass: off by default, every two hours inside its window, never
   assert.equal(await maybeRunDaytimeDriver({ client: {}, locationId: "LD", saved: DAY_SAVED, store, deps: d, now: Date.parse("2026-09-19T18:05:00Z") }), false, "Saturday: what it starts is machine-started, and weekends are replies only");
 });
 
+// 2026-11: a day off Matt lists is a day the machine doesn't work, like a
+// Saturday, so the pass that starts machine texts by day doesn't run on it.
+test("the daytime pass doesn't run on a day off", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const d = deps({ ghlLastMessages: async () => new Map() });
+  const off = { ...DAY_SAVED, conversationAi: { ...DAY_SAVED.conversationAi, autoSend: { offDays: ["2026-09-17"] } } };
+  assert.equal(await maybeRunDaytimeDriver({ client: {}, locationId: "LO", saved: off, store, deps: d, now: ELEVEN }), false);
+  assert.equal(store.cursors.get(`LO|${DAY_CURSOR_NAME}`), undefined, "no run was claimed");
+  const another = { ...DAY_SAVED, conversationAi: { ...DAY_SAVED.conversationAi, autoSend: { offDays: ["2026-09-18"] } } };
+  assert.equal(await maybeRunDaytimeDriver({ client: {}, locationId: "LO", saved: another, store, deps: d, now: ELEVEN }), true, "another day's off doesn't count");
+  await settle(); _resetJobs();
+});
+
 test("a daytime run that died is retried once it is stale, not before", async () => {
   _resetJobs();
   const store = fakeStore();

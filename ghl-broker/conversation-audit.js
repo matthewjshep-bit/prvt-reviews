@@ -29,6 +29,7 @@ import { threadHealth, STOP_LABEL } from "./shared/thread-health.js";
 import { runTodayTimers } from "./today-timers.js";
 import { waitingReason } from "./outbox-guard.js";
 import { worksOn, machineDays, pacificParts } from "./shared/follow-up-engine.js";
+import { isOffDay } from "./shared/follow-up-engine.js";
 
 // The remedies that end in a text the machine writes itself (not a reply to
 // their text): each waits while a reply or a person's draft is in the outbox.
@@ -492,7 +493,8 @@ export async function maybeRunConversationAudit({ client, locationId, saved = {}
  * cursor is written before the run, a run that died is retried once it is
  * stale, and the day's tries are capped. Weekends are skipped unless the
  * auto-send setting says machine-started texts may go then, because
- * everything this starts is machine-started.
+ * everything this starts is machine-started. A day off Matt lists
+ * (autoSend.offDays) is skipped the same way.
  */
 export async function maybeRunDaytimeDriver({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now() }) {
   const config = conversationConfig(saved);
@@ -501,6 +503,7 @@ export async function maybeRunDaytimeDriver({ client, locationId, saved = {}, st
   const h = workHour(now);
   if (h < dt.startHour || h >= dt.endHour) return false;
   if (!worksOn(pacificParts(now).wd, machineDays(config.autoSend?.weekends))) return false;
+  if (isOffDay(now, config.autoSend?.offDays)) return false;
   if (jobs.get(jobKey(locationId, "day"))?.status === "running" || jobs.get(jobKey(locationId, "night"))?.status === "running") return false;
 
   const cursor = await store.getJobCursor?.(locationId, DAY_CURSOR_NAME).catch(() => null);
