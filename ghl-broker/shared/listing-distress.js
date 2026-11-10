@@ -50,9 +50,6 @@ const STRONG = [
   ["sweat equity", /\bsweat[\s-]equity\b/i],
   ["bring your vision", /\bbring\s+your\s+(?:own\s+)?(?:vision|ideas|imagination|tools|contractor|paint\s*brush|hammer|creativity|design)\b/i],
   ["needs work", NEEDS_WORK_RX],
-  // "Cosmetic work" a house is waiting for, not one it has had ("recent
-  // cosmetic updates", "cosmetic updates throughout" read as done).
-  ["cosmetic work", /(?<!\b(?:recent(?:ly)?|new(?:er)?|fresh(?:ly)?|completed|done|did|made|tasteful(?:ly)?|with|had|has)\s+)\bcosmetic\s+(?:work|updates|updating|repairs)\b(?!\s+(?:done|completed|made|throughout|include|including|were|have\s+been))/i],
   ["could use work", /\bcould\s+use\s+(?:some\s+|a\s+little\s+|a\s+bit\s+of\s+|a\s+few\s+)?(?:cosmetic\s+)?(?:work|updating|updates|tlc|love|repairs)\b/i],
   ["ready for your updates", /\bready\s+for\s+your\s+(?:own\s+)?(?:updates|updating|renovation|remodel|ideas|vision)\b/i],
   ["cash buyers", /\bcash\s+(?:only|buyers?|offers?)\b|\bnot\s+(?:fha|va|conventional\s+)?(?:financeable|eligible\s+for\s+financing)\b|\bwon'?t\s+(?:qualify|appraise)\b/i],
@@ -74,6 +71,12 @@ const SOFT = [
   ["potential", /\b(?:lots\s+of|tons\s+of|great|huge|endless|so\s+much)\s+potential\b/i],
   ["opportunity", /\b(?:investment|rare|great)\s+opportunity\b|\bopportunity\s+(?:knocks|awaits)\b/i],
   ["priced for condition", /\bpriced\s+(?:accordingly|to\s+reflect|for\s+(?:condition|repairs))\b|\bsold\s+in\s+(?:its\s+)?(?:present|current)\s+condition\b/i],
+  // "Cosmetic work" a house is waiting for, not one it has had ("recent
+  // cosmetic updates", "cosmetic updates throughout" read as done). Soft,
+  // not strong: "gorgeous cosmetic updates, move-in ready" is work it has
+  // had, so a finished word beside it wins. "Needs cosmetic updates" is
+  // strong through "needs work".
+  ["cosmetic work", /(?<!\b(?:recent(?:ly)?|new(?:er)?|fresh(?:ly)?|completed|done|did|made|tasteful(?:ly)?|with|had|has)\s+)\bcosmetic\s+(?:work|updates|updating|repairs)\b(?!\s+(?:done|completed|made|throughout|include|including|were|have\s+been))/i],
   // 2026-11-09: a house nobody has put money into, or a seller who won't.
   ["value-add", /\bvalue[\s-]add\b/i],
   ["original owner", /\boriginal\s+owners?\b/i],
@@ -89,10 +92,10 @@ const FINISHED = [
   ["like new", /\blike[\s-]new\b|\bshowroom\b|\bimmaculate\b|\bpristine\b/i],
 ];
 
-// "Not a fixer", "no TLC needed", "no work needed", "doesn't need any work",
-// "needs no work", "needs little to no work": a strong word said the other
-// way round.
-const NEGATED_SRC = /\b(?:not|no|isn'?t|never)\s+(?:a\s+)?(?:fixer|tlc|flip|handyman|project)\b|\bno\s+(?:work|repairs?|updates?)\s+(?:needed|required|necessary|to\s+do)\b|\bno\s+tlc\b|\bdone\s+for\s+you\b|\b(?:doesn['’]?t|does\s+not|won['’]?t|will\s+not|don['’]?t|do\s+not)\s+need\s+(?:any\s+|much\s+)?(?:work|repairs?|updat\w*|tlc)\b|\bneeds?\s+(?:very\s+|so\s+)?(?:no|little|minimal|zero)\s+(?:(?:to|or)\s+no\s+)?(?:work|repairs?|updat\w*|tlc|attention)\b/.source;
+// "Not a fixer", "no TLC needed", "no work needed", "no repairs or updates
+// needed", "doesn't need any work", "needs no work", "needs little to no
+// work", "requires no repairs": a strong word said the other way round.
+const NEGATED_SRC = /\b(?:not|no|isn'?t|never)\s+(?:a\s+)?(?:fixer|tlc|flip|handyman|project)\b|\bno\s+(?:cosmetic\s+|major\s+)?(?:work|repairs?|updates?)\s+(?:(?:or|and)\s+(?:work|repairs?|updates?|updating)\s+)?(?:needed|required|necessary|to\s+do)\b|\bno\s+tlc\b|\bdone\s+for\s+you\b|\b(?:doesn['’]?t|does\s+not|won['’]?t|will\s+not|don['’]?t|do\s+not)\s+need\s+(?:any\s+|much\s+)?(?:work|repairs?|updat\w*|tlc)\b|\b(?:needs?|requires?)\s+(?:very\s+|so\s+)?(?:no|little|minimal|zero)\s+(?:(?:to|or)\s+no\s+)?(?:cosmetic\s+|major\s+)?(?:work|repairs?|updat\w*|tlc|attention)\b/.source;
 const NEGATED_RX = new RegExp(NEGATED_SRC, "i");
 const NEGATED_ALL_RX = new RegExp(NEGATED_SRC, "gi");
 

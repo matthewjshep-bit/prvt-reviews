@@ -74,3 +74,26 @@ test("a listing that says doesn't need any work is dropped", () => {
   // A no about one room doesn't hide a need in another.
   assert.equal(listingDistress({ status: "FOR_SALE", description: "Kitchen needs no work but the bath needs updating." }).ok, true);
 });
+
+// Review, 2026-11-09: "cosmetic updates" on its own is as often work a house
+// has had as work it needs, and "requires no repairs" or "no repairs or
+// updates needed" says it's done. Read as fixers, these would bring back the
+// turnkey asks behind the 10/26 opt-outs. The remarks below are made up.
+test("a turnkey listing that mentions cosmetic updates or needing no repairs is dropped", () => {
+  for (const description of [
+    "Gorgeous cosmetic updates, move-in ready.",
+    "Some cosmetic updates in 2021, turnkey.",
+    "Many cosmetic updates over the years. Immaculate.",
+    "Owner did some cosmetic updates and it's move-in ready.",
+    "Requires no repairs.",
+    "No repairs or updates needed.",
+    "Requires no work, just move in.",
+    "No cosmetic work needed.",
+  ]) assert.equal(listingDistress({ status: "FOR_SALE", description }).ok, false, description);
+  // With nothing finished beside it, cosmetic work still keeps the house.
+  for (const description of ["Light cosmetic work will make it shine.", "Cosmetic updates needed throughout.", "Needs cosmetic updates."]) {
+    assert.equal(listingDistress({ status: "FOR_SALE", description }).ok, true, description);
+  }
+  // And a seller who won't fix anything is still a soft yes.
+  assert.equal(listingDistress({ status: "FOR_SALE", description: "Seller will make no repairs." }).ok, true);
+});
