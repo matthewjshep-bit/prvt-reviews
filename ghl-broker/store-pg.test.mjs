@@ -35,8 +35,12 @@ test("the schema still applies twice: every statement is a no-op the second time
 
 test("the schema still applies twice on a fresh Postgres", { skip }, async () => {
   const { migrate, query } = await import("./db.js");
-  assert.equal(await migrate(), true, "first apply");
-  assert.equal(await migrate(), true, "second apply");
+  // migrate() answers { ok, error } since the boot started recording a failed
+  // schema under db:migrate (fix/a-restart-or-deploy-drops-nothing-and-is-announced).
+  const first = await migrate();
+  assert.equal(first.ok, true, `first apply: ${first.error}`);
+  const second = await migrate();
+  assert.equal(second.ok, true, `second apply: ${second.error}`);
   const { rows } = await query(`select indexname from pg_indexes where tablename = 'contact_events' and indexname = 'contact_events_loc_type_at_idx'`);
   assert.equal(rows.length, 1);
 });
