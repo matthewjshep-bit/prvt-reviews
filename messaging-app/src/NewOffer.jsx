@@ -37,7 +37,7 @@ import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
 import { CurrentPill, PaperHeldBanner, StatusMenu, StatusPill } from "./ui.jsx";
 import { annotateCurrent, houseKey, rowOnHouse } from "@shared/current-offer.js";
-import { DRAFT_DELAY_MS, createAutosaver, hasPaper, namesAHouse, saveKindFor, restoredInputs, pricedSettings, editorSettings, restoredUnderwriteMode } from "./offer-autosave.js";
+import { DRAFT_DELAY_MS, createAutosaver, hasPaper, namesAHouse, saveKindFor, restoredInputs, pricedSettings, editorSettings, restoredUnderwriteMode, engineOf } from "./offer-autosave.js";
 import { onOfferChanged } from "./offer-sync.js";
 
 // Pick the best address from a contact's custom fields: prefer a
@@ -755,6 +755,20 @@ const moneyNum = (v) => Number(String(v ?? "").replace(/[^\d]/g, "")) || 0;
 // Said beside the field being typed in, with the one button that fixes it.
 // Where the save as you type stands (offer-autosave.js). Quiet on purpose:
 // it's there to be glanced at, not read.
+// The offer engine's read on a held draft, one line: "Engine: grade B · open
+// 238k · walk-away 249k · rehab 62k (1950s house: age floor) · comps thin".
+const kAmt = (n) => (Number(n) > 0 ? (Number(n) % 1000 === 0 ? `${Number(n) / 1000}k` : Number(n).toLocaleString("en-US")) : "");
+export function engineLine(e) {
+  const bits = [
+    `Engine: grade ${e.grade || "?"}`,
+    kAmt(e.open) && `open ${kAmt(e.open)}`,
+    kAmt(e.walkAway) && `walk-away ${kAmt(e.walkAway)}`,
+    kAmt(e.rehab) && `rehab ${kAmt(e.rehab)}${e.rehabWhy ? ` (${e.rehabWhy})` : ""}`,
+    ...(Array.isArray(e.reasons) ? e.reasons.slice(0, 3).map(String) : []),
+  ].filter(Boolean);
+  return bits.join(" · ");
+}
+
 export function SaveStatus({ state, row }) {
   const at = state?.at ? new Date(state.at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "";
   const text = state?.phase === "pending" || state?.phase === "saving" ? "Saving…"
@@ -849,6 +863,10 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   // a term never re-prices it (2026-11-09, offer-autosave.js restoredInputs).
   const [inputs, setInputs] = useState(() => restoredInputs({ restore, snap, initialAddress }));
   const [priced] = useState(() => pricedSettings(restore));
+  // The offer engine's read on a held draft (draft.engine, set by the engine
+  // run; absent on everything else). Shown beside your numbers, and kept on
+  // the form copy with engineApplied once you save, so reopening keeps yours.
+  const [engine] = useState(() => engineOf({ restore, snap }));
   // Per-offer fee/spread override ("" → use the settings default).
   const [feeOverride, setFeeOverride] = useState(snap?.feeOverride ?? "");
   // Per-offer letter terms: a fully flexible row list (label + printed text).
@@ -1307,6 +1325,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
     checks: combineChecks(compsStateRef.current?.checks || null, rehabStateRef.current?.checks || null),
     // Bricked.ai's read, so it is still beside the numbers when this reopens.
     ...(bricked ? { bricked } : {}),
+    // The engine's read stays beside the numbers; you've saved over its figures.
+    ...(engine ? { engine, engineApplied: true } : {}),
   });
   const draftBody = () => ({ ...formSnapshot(), cashPreview: calc?.offers?.cash?.amount ?? null });
 
@@ -1628,6 +1648,12 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
           <span className="min-w-0 flex-1">This offer changed in your other window. What you type here still saves over it.</span>
           <button type="button" onClick={loadOtherWindow} className="font-semibold underline">Load it</button>
         </div>
+      )}
+
+      {engine && !fromOffer && (
+        <p role="note" className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          {engineLine(engine)}
+        </p>
       )}
 
       <AgentOfferTabs offers={agentBook} currentId={fromOffer?.id}

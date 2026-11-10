@@ -80,6 +80,16 @@ export function pricedSettings(row) {
   return Object.keys(out).length ? out : null;
 }
 
+/**
+ * engineOf({ restore, snap }) → the offer engine's read on a draft ({ grade, arv, rehab, rehabWhy,
+ * open, walkAway, triage, reasons }), or null. The engine branch puts it on the held draft's form
+ * copy (draft.engine); absent, nothing here changes.
+ */
+export function engineOf({ restore = null, snap = null } = {}) {
+  const e = snap?.engine || restore?.draft?.engine || null;
+  return e && typeof e === "object" ? e : null;
+}
+
 /** restoredInputs({ restore, snap, initialAddress }) → the form's first inputs. */
 export function restoredInputs({ restore = null, snap = null, initialAddress = "" } = {}) {
   const r = pricedRow(restore);
@@ -89,7 +99,15 @@ export function restoredInputs({ restore = null, snap = null, initialAddress = "
     repairs: fmtN(r.calc.inputs.repairs),
     priceOverride: fmtN(r.calc.inputs.priceOverride),
   } : null;
-  if (snap?.inputs) return { ...BLANK_INPUTS, ...snap.inputs, ...(figures || {}) };
+  // A held engine draft nobody has saved yet opens on the engine's ARV and its rehab (the age
+  // floor, never the bare scope). Once a person saves it, the form copy says so (engineApplied)
+  // and it opens on what they typed. The price stays theirs to set.
+  const engine = !r && restore?.status === "draft" && !snap?.engineApplied ? engineOf({ restore, snap }) : null;
+  const fromEngine = engine ? {
+    ...(Number(engine.arv) > 0 ? { arv: fmtN(engine.arv) } : {}),
+    ...(Number(engine.rehab) > 0 ? { repairs: fmtN(engine.rehab) } : {}),
+  } : null;
+  if (snap?.inputs) return { ...BLANK_INPUTS, ...snap.inputs, ...(figures || fromEngine || {}) };
   if (!restore && /,/.test(initialAddress)) return { ...BLANK_INPUTS, address: initialAddress };
   if (r) return { ...BLANK_INPUTS, address: r.calc.inputs.address || "", ...figures };
   return { ...BLANK_INPUTS };

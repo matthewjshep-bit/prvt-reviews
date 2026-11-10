@@ -194,6 +194,29 @@ test("opening an engine offer and editing a term keeps its price", async () => {
   expect(html).not.toContain("300,000");
 });
 
+// The engine branch puts draft.engine on the held draft's form copy (null-safe: absent, nothing changes).
+const ENGINE_DRAFT = {
+  id: "d-eng", status: "draft", contactId: "c1", contactName: "Robin", address: "515 Bramblewood Dr, Tacoma, WA 98404", autoUnderwrite: { held: ["grade B"] },
+  draft: { mode: "existing", inputs: { address: "515 Bramblewood Dr, Tacoma, WA 98404", arv: 480000, repairs: 41000, askingPrice: 365000 },
+    engine: { grade: "B", arv: 470000, rehab: 62000, rehabWhy: "1950s house: age floor", open: 238000, walkAway: 249000, triage: "workable", reasons: ["comps thin"] } },
+};
+
+test("an engine draft opens on the engine's rehab, not the bare scope", async () => {
+  const inputs = restoredInputs({ restore: ENGINE_DRAFT, snap: ENGINE_DRAFT.draft });
+  expect(inputs.repairs).toBe("62,000");
+  expect(inputs.arv).toBe("470,000");
+  expect(inputs.priceOverride).toBe("", "the price is still yours to set");
+  // Once you've saved the draft, what you typed is what it opens on.
+  const yours = { ...ENGINE_DRAFT, draft: { ...ENGINE_DRAFT.draft, engineApplied: true, inputs: { ...ENGINE_DRAFT.draft.inputs, repairs: "75,000" } } };
+  expect(restoredInputs({ restore: yours, snap: yours.draft }).repairs).toBe("75,000");
+  // The editor shows the engine's numbers beside yours.
+  const NewOffer = await editor();
+  const html = renderToStaticMarkup(<NewOffer settings={LOCATION} restore={ENGINE_DRAFT} />);
+  expect(html).toContain("Engine: grade B");
+  expect(html).toContain("walk-away 249k");
+  expect(html).toContain("rehab 62k (1950s house: age floor)");
+});
+
 test("a draft still opens on its own form, and a new offer on today's settings", () => {
   const draft = { id: "d1", status: "draft", calc: { inputs: { arv: 1 }, settings: { maoPctOfArv: 60 } }, draft: { inputs: { address: "1 Pine St", arv: "410,000" } } };
   expect(restoredInputs({ restore: draft, snap: draft.draft }).arv).toBe("410,000");

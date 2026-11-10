@@ -321,6 +321,14 @@ things changed:
 - **A deal's letter is the contract price.** A save on an offer with a
   `deal` pins `priceOverride` to `deal.contractPrice`, so the letter and the
   agent's link never move off it. The figures you typed are kept beside it.
+- **A held engine draft opens on the engine's numbers.** When the engine run
+  puts `draft.engine` (`{ grade, arv, rehab, rehabWhy, open, walkAway,
+  triage, reasons }`) on a held draft's form copy, the editor opens it on the
+  engine's ARV and rehab (the age floor, not the bare scope) and shows
+  "Engine: grade B · open 238k · walk-away 249k · rehab 62k (…)" above the
+  offer tabs. The price stays yours to set. Your first save writes
+  `engineApplied` on the form copy, so reopening keeps what you typed.
+  Without `draft.engine` nothing changes.
 
 Offer saves as you type still holds. Terms, the expiry and a lower number
 save on the pause, as before.
