@@ -85,7 +85,7 @@ test("a draft that names a number not in the offer book is flagged — the rule 
 
 test("echoing a number the agent themselves said is allowed", () => {
   const g = gate(
-    { intent: "question", reply: "I hear you on 425k — let me run it by my partner and get back to you today." },
+    { intent: "question", reply: "I hear you on 425k — let me look at it and get back to you today." },
     { inboundMessage: "any chance you'd do 425k?" }
   );
   assert.deepEqual(g.flags, []);
@@ -310,7 +310,7 @@ test("a counter is saved flagged, and the note says why", async () => {
   const { job } = await startReply({
     client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "would you do 425k?",
     deps: { draft: async () => ({ ...DRAFT, intent: "counter", needsHuman: true, humanReason: "the agent named a higher number", counterAmount: 425000,
-      reply: "Let me run 425k by my partner and get back to you this afternoon." }) },
+      reply: "Got it on 425k, let me look at it and get back to you this afternoon." }) },
   });
   await settle();
   assert.equal(job.status, "done", job.error);
@@ -2808,7 +2808,7 @@ test("a counter under the ceiling is never taken by itself: nothing re-issued, n
     message: `seller would do ${amount / 1000}k on 12 Elm`,
     deps: {
       draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: amount,
-        reply: "Let me run that by my partner and get back to you this afternoon.", propertyAddress: "12 Elm St" }),
+        reply: "Got it, let me look at that and get back to you this afternoon.", propertyAddress: "12 Elm St" }),
       reviseOfferToCounter: async ({ amount: a }) => { order.push(["revise", a]); return { ok: true, address: "12 Elm St", amount: a }; },
       sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
     },
@@ -2837,7 +2837,7 @@ test("a counter just over the ceiling no longer goes out at our max by itself �
     message: `seller would do ${theirs / 1000}k on 12 Elm`,
     deps: {
       draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false, counterAmount: theirs,
-        reply: "Let me run that by my partner and get back to you this afternoon.", propertyAddress: "12 Elm St" }),
+        reply: "Got it, let me look at that and get back to you this afternoon.", propertyAddress: "12 Elm St" }),
       reviseOfferToCounter: async ({ amount: a }) => { order.push(["revise", a]); return { ok: true, address: "12 Elm St", amount: a }; },
       sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
     },
@@ -3758,14 +3758,16 @@ test("a draft waiting on Matt's number stays known for 60 days, under any spelli
   assert.equal(knownOfferFor(rows, "14 SE Oak-Hill Lp, Shelton, WA 98584", now), null, "the house next door is another house");
 });
 
-test("the offer book says a held draft is with the team, and a sent offer shows no expiry", () => {
+// 2026-11-09: "held for our team's review" taught the bot a team we don't have; it's "a second look on our side".
+test("the offer book says a held draft is getting a second look, and a sent offer shows no expiry", () => {
   const now = Date.now();
   const book = summarizeOffers([
     { address: "7 Pine Ave", status: "draft", createdAt: new Date(now).toISOString(), autoUnderwrite: { held: ["fewer than 3 comps"] } },
     { address: "12 Elm St", status: "sent", cashAmount: 410000, createdAt: new Date(now - 1000).toISOString(),
       sends: [{ ts: new Date(now - 1000).toISOString(), channels: ["sms"], results: { sms: { ok: true } } }], expiresAt: new Date(now + 5 * 86400000).toISOString() },
   ], { now });
-  assert.match(book.text, /7 Pine Ave: numbers held for our team's review/);
+  assert.match(book.text, /7 Pine Ave: numbers held for a second look on our side/);
+  assert.doesNotMatch(book.text, /team/);
   assert.match(book.text, /12 Elm St: our cash offer \$410,000/);
   assert.doesNotMatch(book.text, /expires/);
   assert.ok(book.amounts.includes(410000));
@@ -4102,7 +4104,7 @@ test("a shorthand counter inside the ceiling still passes 'their own words'", as
     message: "She'd go to 350 on 12 Elm",
     deps: {
       draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", needsHuman: false,
-        counterAmount: 350, reply: "Let me run that by my partner.", propertyAddress: "12 Elm St" }),
+        counterAmount: 350, reply: "Let me look at that.", propertyAddress: "12 Elm St" }),
       reviseOfferToCounter: async ({ amount }) => { order.push(["revise", amount]); return { ok: true, address: "12 Elm St", amount }; },
       sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
     },
@@ -7661,7 +7663,7 @@ test("a held reply the float doesn't answer still holds the float", async () => 
 });
 
 test("a draft held only because it is a person's call, or that the model sent to a person, costs no second call", async () => {
-  const counter = await replyWithRedraft([{ ...DRAFT, intent: "counter", reply: "Thanks — let me look at it with my partner." }]);
+  const counter = await replyWithRedraft([{ ...DRAFT, intent: "counter", reply: "Thanks — let me look at it." }]);
   assert.equal(counter.calls.length, 1);
   const human = await replyWithRedraft([{ ...DRAFT, needsHuman: true, humanReason: "they asked about terms", reply: "We can do $430,000." }]);
   assert.equal(human.calls.length, 1);
@@ -8765,7 +8767,7 @@ const walkRun = async ({ offer = WALK_OFFER, message, draft }) => {
   const { job } = await startReply({
     client, locationId: "LOC", saved: walkSaved(), store, contactId: "c1", sendsEnabled: true, message,
     deps: {
-      draft: async () => ({ ...DRAFT, confidence: "high", needsHuman: false, propertyAddress: "12 Elm St", reply: "Let me run that by my partner.", ...draft }),
+      draft: async () => ({ ...DRAFT, confidence: "high", needsHuman: false, propertyAddress: "12 Elm St", reply: "Let me look at that.", ...draft }),
       reviseOfferToCounter: async ({ amount }) => { order.push(["revise", amount]); return { ok: true, address: "12 Elm St", amount }; },
       sendOfferDocs: async ({ afterCounter }) => { order.push(["send", afterCounter]); return { ok: true, address: "12 Elm St", channels: ["sms"] }; },
     },
@@ -8846,4 +8848,152 @@ test("with the walk-away switch off, too low steps nothing up", async () => {
   const d = await store.getReplyDraft(job.draftId);
   assert.ok(!order.some(([k]) => k === "revise"), JSON.stringify(order));
   assert.equal(d.intent, "rejection");
+});
+
+/* ---------- promises and claims the bot can't keep (2026-11-09 audit) ---------- */
+
+// After the 10/22 prompt fix the bot still told agents "I'll get back to you
+// today with a number" about houses only Matt prices, promised calls that never
+// happened, checked with partners and teams we don't have, and said it had
+// talked to people it hadn't. Names, streets and words are invented.
+const LARKSPUR = { id: "lk1", contactId: "c1", address: "88 Larkspur Ln, Tacoma, WA 98404", status: "draft", cashAmount: null,
+  createdAt: new Date(NOW - 86400000).toISOString(), autoUnderwrite: { draftOnly: true, held: ["ready for your comps — the app made the draft, you price it"] } };
+const claimRun = async (drafts, { offers = [LARKSPUR], events = [], message = "any update on Larkspur?", saved = AUTO_SAVED, tags = ["agent"], deals = null } = {}) => {
+  _resetJobs();
+  const { client } = ghlStubFor(tags);
+  const store = fakeStore();
+  store.listOffers = async () => offers;
+  if (deals) store.listDeals = async () => deals;
+  store.events.set("LOC|c1", events.map((e, i) => ({ contactId: "c1", dedupeKey: `seed:${i}`, ...e })));
+  const calls = [];
+  const { job } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message, sendsEnabled: true,
+    deps: { draft: async (args) => { calls.push(args); return drafts[Math.min(calls.length, drafts.length) - 1]; }, now: () => NOW, random: () => 0 },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  return { d: await store.getReplyDraft(job.draftId), calls };
+};
+const onLarkspur = (reply) => ({ ...DRAFT, propertyAddress: "88 Larkspur Ln", reply });
+const daysAgo = (n) => new Date(NOW - n * 86400000).toISOString();
+
+test("a reply that says I'll get back to you today with a number on a house Matt hasn't priced is rewritten", async () => {
+  const { d, calls } = await claimRun([
+    onLarkspur("Thanks Rory, I'll get back to you today with a number on Larkspur."),
+    onLarkspur("Thanks Rory. What would the seller take, and how soon do they need to move?"),
+  ]);
+  assert.equal(calls.length, 2, "one redraft");
+  assert.match(calls[1].fix.join(" · "), /no number yet \(priced by hand\)/);
+  assert.equal(d.reply, "Thanks Rory. What would the seller take, and how soon do they need to move?");
+  assert.equal(d.status, "scheduled", d.autoSend.reason);
+});
+
+test("the bot doesn't promise a number today on a house Matt is pricing, even after one redraft", async () => {
+  const { d, calls } = await claimRun([
+    onLarkspur("Should have something for you today on Larkspur."),
+    onLarkspur("Still working through the numbers, I'll text you where we'd land this afternoon."),
+  ]);
+  assert.equal(calls.length, 2);
+  assert.equal(d.status, "draft");
+  assert.equal(d.reply, "Should have something for you today on Larkspur.", "the first draft stands for Matt");
+  assert.match(d.autoSend.reason, /^needs a person: the draft promises a number/);
+});
+
+test("a reply that asks what the seller would take on an unpriced house sends", async () => {
+  const { d, calls } = await claimRun([onLarkspur("Got it. What would the seller take on Larkspur, and how soon do they need to move?")]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(d.flags, []);
+  assert.equal(d.status, "scheduled", d.autoSend.reason);
+});
+
+test("a reply on a house whose number went out may say we're at that number", async () => {
+  const { d } = await claimRun([{ ...DRAFT, reply: "We're at 410k on 12 Elm. I can text you where it stands on our side by Friday." }],
+    { offers: OFFERS, message: "where are you on 12 Elm?", saved: { ...AUTO_SAVED, autoUnderwriteMode: "draft" } });
+  assert.deepEqual(d.flags, []);
+  assert.equal(d.status, "scheduled", d.autoSend.reason);
+});
+
+test("after a call we promised never happened, the next 'calling you shortly' waits for Matt", async () => {
+  const promised = { type: "promise_made", at: daysAgo(3), data: { what: "call", draftId: "x1" } };
+  const { d, calls } = await claimRun([{ ...DRAFT, reply: "Sorry for the wait, I'll be calling you shortly." }], { offers: OFFERS, events: [promised], message: "still there?" });
+  assert.equal(calls.length, 1, "a call we owe is never rewritten away");
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /promised them a call that didn't happen/);
+});
+
+test("after the call connected, a new call promise sends as before", async () => {
+  const events = [
+    { type: "promise_made", at: daysAgo(3), data: { what: "call", draftId: "x1" } },
+    { type: "call_summary", at: daysAgo(2), data: { durationSec: 300, transcribed: true, summary: "talked through the house" } },
+  ];
+  const { d } = await claimRun([{ ...DRAFT, reply: "Good talking Tuesday. I'll give you a call tomorrow on 12 Elm." }], { offers: OFFERS, events, message: "still there?" });
+  assert.deepEqual(d.flags, []);
+  assert.equal(d.status, "scheduled", d.autoSend.reason);
+});
+
+test("a reply that says let me run it by my partner is rewritten", async () => {
+  const { d, calls } = await claimRun([
+    { ...DRAFT, reply: "Good question on 12 Elm. Let me run it by my partner and circle back." },
+    { ...DRAFT, reply: "Good question on 12 Elm. Our 410k stands as-is; what would the seller need?" },
+  ], { offers: OFFERS, message: "any flexibility on 12 Elm?" });
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].fix.join(" · "), /"my partner" — there's no partner, team or underwriter/);
+  assert.equal(d.status, "scheduled", d.autoSend.reason);
+});
+
+test("a reply that says we connected with the owner when no call was made is held", async () => {
+  const claim = { ...DRAFT, reply: "Glad we connected with the owner. Our 410k on 12 Elm stands." };
+  const { d, calls } = await claimRun([claim, { ...claim, reply: "Like we talked about, our 410k on 12 Elm stands." }], { offers: OFFERS, message: "still at 410?" });
+  assert.equal(calls.length, 2, "one redraft");
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /"we connected" — no call with them on record/);
+});
+
+test("a reply that mentions the investor's own partner sends", async () => {
+  const { d } = await claimRun([{ ...INVESTOR_DRAFT, reply: "Sure, bring your partner. It's at 445k." }],
+    { offers: [], tags: ["investor-active"], deals: [DEAL], saved: SAVED, message: "can my partner see it too?" });
+  assert.equal(d.party, "investor");
+  assert.deepEqual(d.flags, [], d.flags.join(" · "));
+  assert.equal(d.autoSendable, true);
+});
+
+test("a reply that says it emailed the offer holds when no action ran", async () => {
+  const { d } = await claimRun([onLarkspur("Just emailed it over, check your inbox.")], { message: "did you send it?" });
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /^needs a person: the draft says something was emailed, and nothing was/);
+});
+
+test("a reply that says our offer went over holds when it never went, and stands on a house where it did", async () => {
+  const never = await claimRun([onLarkspur("Just sent our offer over on Larkspur, let me know what the seller thinks.")], { message: "did you send it?" });
+  assert.equal(never.d.status, "draft");
+  assert.match(never.d.autoSend.reason, /^needs a person: the draft says "Just sent our offer" — nothing went out on it/);
+  const went = await claimRun([{ ...DRAFT, reply: "We sent our offer over on 12 Elm last month at 410k. Any word from the seller?" }],
+    { offers: OFFERS, message: "remind me where you were on 12 Elm?" });
+  assert.deepEqual(went.d.flags, [], went.d.flags.join(" · "));
+  assert.equal(went.d.status, "scheduled", went.d.autoSend.reason);
+});
+
+// The written offer went out by text last month; that doesn't make "just
+// emailed it" true today. Only an email in this run does (the model can't send mail).
+test("a reply that says it emailed something holds when no action ran, even on a house whose offer went before", async () => {
+  const { d } = await claimRun([{ ...DRAFT, reply: "Just emailed it over, check your inbox." }], { offers: OFFERS, message: "can you send it again?" });
+  assert.equal(d.status, "draft");
+  assert.match(d.autoSend.reason, /^needs a person: the draft says something was emailed, and nothing was/);
+});
+
+test("an investor reply that says the deal was emailed holds when nothing was", async () => {
+  const { d } = await claimRun([{ ...INVESTOR_DRAFT, reply: "Emailed you the package on 54th, check your inbox." }],
+    { offers: [], tags: ["investor-active"], deals: [DEAL], saved: SAVED, message: "can you email me the package?" });
+  assert.equal(d.party, "investor");
+  assert.equal(d.status, "draft");
+  assert.match(d.flags.join(" · "), /the draft says something was emailed, and nothing was/);
+  assert.match(d.autoSend.reason, /^needs a person: the draft says something was emailed, and nothing was/);
+});
+
+test("the gate's new checks flag nothing a caller doesn't pass in", () => {
+  // Matt's own canned replies (the desk-first showing answer) are his words.
+  const g = gate({ reply: "Let me get you a number on 88 Larkspur Ln and we'll see if it's worth going further.", deskFirst: "unpriced" }, { numberUnpriced: true });
+  assert.deepEqual(g.flags, []);
+  assert.deepEqual(gate({ reply: "Should have something for you today." }).flags, [], "no inputs, no new flag");
+  assert.match(gate({ reply: "Should have something for you today." }, { numberUnpriced: true }).flags.join(" · "), /no number yet/);
 });

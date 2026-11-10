@@ -126,6 +126,7 @@ import { walkawayOffer, evaluateWalkaway, walkawayReply, pushesOnPrice, WALKAWAY
 import { normalizePricingV2 } from "./shared/price-engine.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
 import { followWithCard, defaultCardBaseUrl, mintCardToken } from "./contact-card.js";
+import { numberTimeFlags, callPromiseFlags, inventedPeopleFlags, contactClaimFlags, sentOfferFlags, claimGateInputs, CALL_OWED_FLAG, CLAIMS_EMAIL_RX } from "./shared/reply-claims.js";
 
 // Skeleton and engine modes both take every house an agent names, not only the one the rule picks.
 const everyNamedHouse = (saved) => ["skeleton", "engine"].includes(underwriteMode(saved));
@@ -969,6 +970,7 @@ export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], hiddenAmounts = [], ranges = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", botAnswer = "", ourAmount = 0,
   vacantOk = false, carrierCheck = false, houseWords = "", writeUpOk = true, theirValue = 0, ourValue = 0,
+  numberUnpriced = false, callOwedUnkept = false, connectedCallRecently = true, callTriedRecently = connectedCallRecently, offerWentOut = true, sendOfferDone = false,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -1150,6 +1152,16 @@ export function evaluateReplyGates({
         "when their value is under ours we price on theirs, never argue it up");
     }
   }
+  // What the reply says we did or will do, against what's true (shared/reply-claims.js, 2026-11-09
+  // audit): a number or a time on a house nobody priced, a call after one that never happened, a
+  // partner or team we don't have, a talk that didn't happen, an offer that never went. Matt's own
+  // canned replies (desk first, number first) are his words. These only add holds.
+  const claimed = draft.deskFirst || draft.numberFirst ? "" : draft.reply;
+  flags.push(...(party === "agent" ? numberTimeFlags(claimed, { numberUnpriced }) : []));
+  flags.push(...(party === "agent" ? callPromiseFlags(claimed, { callOwedUnkept }) : []));
+  flags.push(...(party === "agent" || party === "investor" ? inventedPeopleFlags(claimed) : []));
+  flags.push(...(party === "agent" || party === "investor" ? contactClaimFlags(claimed, { connectedCallRecently, callTriedRecently }) : []));
+  flags.push(...(party === "agent" ? sentOfferFlags(claimed, { offerWentOut, sendOfferDone }) : []));
   // `ok` is the row's word — a counter is not auto-sendable, full stop. But
   // the lock is the ONE flag a guard may overturn, so it is named apart from
   // the rest: `clean` says every OTHER gate passed. decideAutoSend lets a
@@ -1214,6 +1226,9 @@ export async function redraftOnGate({ draft, gate, gateFor, config = null, redra
   if (!String(draft.reply || "").trim() || RELEASE_QUIET.has(draft.intent)) return { draft, gate };
   const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
   if (!tripped.length) return { draft, gate };
+  // A call we promised and never made (shared/reply-claims.js): the agent is
+  // waiting on Matt's call, and a rewrite that drops the promise only hides it.
+  if (tripped.includes(CALL_OWED_FLAG)) return { draft, gate };
   const again = await Promise.resolve().then(() => redraft(tripped)).catch(() => null);
   if (!String(again?.reply || "").trim()) return { draft: { ...draft, redraftHeld: { for: tripped, flags: ["the redraft came back empty"] } }, gate };
   const next = { ...draft, reply: again.reply, redraftedFor: tripped, replyBeforeRedraft: draft.reply };
@@ -2138,9 +2153,9 @@ export async function markUnsubscribed({ client, store, locationId, contactId, p
   }).catch(() => {});
 }
 
-// A reply that says an email has gone: "emailed it", "sent it to x@y.com",
-// "it went to …@…", "check your inbox". Future tense ("I'll email it") is fine.
-export const CLAIMS_EMAIL_RX = /\b(just |already )?e-?mailed\b|\b(sent|went|resent|forwarded)\b[^.?!]{0,60}\b(to\s+\S+@\S+|by e-?mail|via e-?mail|to your e-?mail|to your inbox)|\bcheck your (inbox|e-?mail|spam)\b/i;
+// A reply that says an email has gone (shared/reply-claims.js, beside the
+// other claims a reply can't make unless they're true).
+export { CLAIMS_EMAIL_RX };
 
 const EMAIL_RX = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
 /**
@@ -3756,6 +3771,8 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   // the list (shared/agent-pulse.js pastHouses).
   const pastHouses = kind === "agent_pulse" ? (Array.isArray(subject?.pastHouses) ? subject.pastHouses : []).filter(Boolean) : [];
   const gate = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman, draft: d, party, allowedAmounts: allowed, forbiddenAmounts, hiddenAmounts: hidden, ranges, inboundMessage: "", channel: "sms", style: styleFor(kind, outbound, config.style), selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
+    // A text we start sends nothing with it: what it claims went, went before (shared/reply-claims.js).
+    ...claimGateInputs(context.claims, { address: d.propertyAddress || subject?.address || offer?.address }),
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
@@ -5021,10 +5038,17 @@ async function runReply(job, ctx) {
   if (terms && !answersItself(terms)) {
     draft = { ...draft, partnerTerms: terms, needsHuman: true, humanReason: `they ${PARTNER_TERMS_LABEL[terms.kind]} — the terms are yours to answer` };
   }
+  // The call this text follows is a call that happened (it is on the
+  // timeline only after the draft is saved, 4a below); a voicemail they left
+  // is a call we missed, not a talk.
+  const thisCall = isCall && job.call ? { callTriedRecently: true, ...(job.call.missed ? {} : { connectedCallRecently: true, callOwedUnkept: false }) } : {};
   const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft: d, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
     hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: inboundText, channel: job.channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
+    // What went out and which calls happened (shared/reply-claims.js). Whether an offer went
+    // with this reply is known only once its actions ran: step 5 checks that claim.
+    ...claimGateInputs(context.claims, { address: d.propertyAddress }), ...thisCall, offerWentOut: true,
     ourAmount: ourNumberFor(context.offers?.numbers, d.propertyAddress),
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
@@ -6347,6 +6371,9 @@ async function runReply(job, ctx) {
 
   /* --- 5. the automatic actions --- */
   let holdForBooking = "";
+  // What this run sent, for the "it was emailed / the offer went over" check after the block.
+  let emailWent = false;
+  let offerSentNow = false;
   if (plan.auto.length) {
     job.phase = "acting";
     const done = await runActions({
@@ -6379,20 +6406,16 @@ async function runReply(job, ctx) {
     // line, held for a person: they are waiting on a document.
     const SENT_OK = /^(sent the offer|offer on .* already went out)/;
     const emailSend = done.find((x) => x.type === "send_offer" && x.emailTo);
-    const emailWent = emailSend && emailSend.status === "done" && SENT_OK.test(String(emailSend.detail || ""));
+    emailWent = Boolean(emailSend && emailSend.status === "done" && SENT_OK.test(String(emailSend.detail || "")));
+    offerSentNow = done.some((x) => x.type === "send_offer" && x.status === "done" && SENT_OK.test(String(x.detail || "")));
     if (emailSend && !emailWent && emailSend.via === "to their email") {
       const why = `the email to ${emailSend.emailTo} didn't go: ${emailSend.error || emailSend.detail || "unknown"}`;
       record = { ...record, reply: "Having trouble getting that email out on my end. I'll get it over to you shortly and confirm once it's sent.",
         flags: [...(record.flags || []), why], autoSend: { decided: false, reason: `needs a person: ${why}` } };
       holdForBooking = holdForBooking || why;
     }
-    // And the general rule: no text claims an email went unless one did, in
-    // this run. The model has no way to send mail; only the action above does.
-    if (!emailWent && CLAIMS_EMAIL_RX.test(String(record.reply || "")) && !holdForBooking) {
-      const why = "the draft says something was emailed, and nothing was";
-      record = { ...record, flags: [...(record.flags || []), why], autoSend: { decided: false, reason: `needs a person: ${why}` } };
-      holdForBooking = why;
-    }
+    // The general rule that no text claims an email went unless one did runs
+    // after this block, whether or not any action ran.
     // "I'll send our written offer over anyway" stands only if it went; a
     // miss puts the model's words back and never holds the reply to a no.
     const recordSend = done.find((x) => x.type === "send_offer" && x.via === "for record");
@@ -6420,6 +6443,27 @@ async function runReply(job, ctx) {
       record = { ...record, flags: [...(record.flags || []), holdForBooking], autoSend: { decided: false, reason: `needs a person: ${holdForBooking}` } };
     }
     await store.updateReplyDraft(record.id, record).catch(() => {});
+  }
+  // The general rule, whether or not any action ran (2026-11-09 audit: a plan
+  // is often empty after 4e° strips the tier actions, and "just emailed it
+  // over" went out with nothing sent). No text claims an email went unless one
+  // did, in this run: the model has no way to send mail; only the action does.
+  if (!emailWent && !holdForBooking && CLAIMS_EMAIL_RX.test(String(record.reply || ""))) {
+    const why = "the draft says something was emailed, and nothing was";
+    record = { ...record, flags: [...(record.flags || []), why], autoSend: { decided: false, reason: `needs a person: ${why}` } };
+    holdForBooking = why;
+    await store.updateReplyDraft(record.id, record).catch(() => {});
+  }
+  // And "sent our offer over" on an agent's house: it holds unless the written
+  // offer went on that house before, or went in this run
+  // (shared/reply-claims.js claimsSentOffer).
+  if (party === "agent" && !holdForBooking) {
+    const [why] = sentOfferFlags(record.reply, { offerWentOut: claimGateInputs(context.claims, { address: draft.propertyAddress }).offerWentOut, sendOfferDone: offerSentNow || emailWent });
+    if (why) {
+      record = { ...record, flags: [...(record.flags || []), why], autoSend: { decided: false, reason: `needs a person: ${why}` } };
+      holdForBooking = why;
+      await store.updateReplyDraft(record.id, record).catch(() => {});
+    }
   }
 
   // Nothing to say back ("that was an auto dial") and nothing left for a
@@ -6624,6 +6668,7 @@ export async function previewConversation({
   const gate = evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [], hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: message, channel, style: config.style,
     selfName: a.signer, contactName: a.contactName, signOff: config.persona?.signOff, botAnswer: config.persona?.ifAskedIfBot,
+    ...claimGateInputs(context.claims, { address: draft.propertyAddress }), offerWentOut: true,
     ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
     writeUpOk: writeUpOkFor(context.offers?.numbers, draft.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),

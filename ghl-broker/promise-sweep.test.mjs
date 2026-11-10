@@ -235,6 +235,28 @@ test("a held underwrite on that house rides into the text, so it asks for their 
   assert.match(s.calls[0].subject.heldReason, /only 0 priced comps/);
 });
 
+// 2026-11-09 audit: the follow-through text told the bot "say you'll have them
+// shortly" while an underwrite ran, a second promise of a time nothing kept.
+import { outboundOpening } from "./conversation-prompt.js";
+test("the follow-through text on a held house never says shortly", async () => {
+  const store = fakeStore({
+    events: [{ ...promise(20), address: "88 Larkspur Ln, Tacoma, WA 98404" }],
+    offers: [{ id: "o1", contactId: "c1", address: "88 Larkspur Ln, Tacoma, WA 98404", status: "draft",
+      autoUnderwrite: { draftOnly: true, held: ["ready for your comps — the app made the draft, you price it"] } }],
+  });
+  const s = starter();
+  await runPromiseSweep({ locationId: "LOC", saved: SAVED, store, now: NOW,
+    deps: { ...s, listUnderwriteJobs: () => [{ id: "uw1", status: "running", contactId: "c1" }] } });
+  assert.equal(s.calls.length, 1);
+  assert.equal(s.calls[0].subject.running, true, "an underwrite is still running past its grace");
+  for (const subject of [s.calls[0].subject, { ...s.calls[0].subject, heldReason: "" }]) {
+    // What we said before is quoted back; the instruction around it is what's read here.
+    const p = outboundOpening({ kind: "promise_due", ...subject }).replace(/\("[^"]*"\)/, "");
+    assert.doesNotMatch(p, /shortly|soon|today/i, p);
+    assert.match(p, /do NOT promise a new time/);
+  }
+});
+
 test("the sweep doesn't text at night", async () => {
   const night = Date.parse("2026-09-15T10:00:00Z");   // 3am Pacific
   assert.equal(localHour(night), 3);
