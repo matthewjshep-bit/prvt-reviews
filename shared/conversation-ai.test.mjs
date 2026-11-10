@@ -740,3 +740,57 @@ test("a buyer asking who we are or why we texted reads as not knowing us; a ques
     assert.equal(doesntKnowUs(t), false, t);
   }
 });
+
+/* ---------- opt-outs: what counts, read the same way everywhere (2026-11-09) ---------- */
+
+test("please remove me is an opt-out without the model", async () => {
+  const { detectOptOut, starterConfig: starter } = await import("./conversation-ai.js");
+  const o = starter().optOut;
+  for (const t of ["Please remove me from your list", "please stop", "Do not contact me again", "Take me off your mailing list", "opt me out", "I revoke consent to texts", "Revoke"]) {
+    assert.equal(detectOptOut(t, o), true, t);
+  }
+});
+
+test("an agent who says stop by anytime it's vacant gets an answer, not an opt-out", async () => {
+  const { detectOptOut, optOutMaybe, optOutInTranscript, starterConfig: starter } = await import("./conversation-ai.js");
+  const o = starter().optOut;
+  for (const t of ["Stop by anytime, it's vacant and on a lockbox", "Stop by tomorrow", "End of the month works for the seller", "End of month",
+    "Remove the carpet and it's fine", "Cancel that, they want 450 now", "Cancel the showing please", "Quit claim deed, estate sale", "Please stop in after 3"]) {
+    assert.equal(detectOptOut(t, o), false, t);
+    assert.equal(optOutMaybe(t, o), false, t);
+    assert.equal(optOutInTranscript(`[2026-11-02 17:05] THEM sms: ${t}`, o), null, t);
+  }
+});
+
+test("an agent who says stop, not interested is a maybe, held for Matt, not an opt-out", async () => {
+  const { detectOptOut, optOutMaybe, optOutInTranscript, starterConfig: starter } = await import("./conversation-ai.js");
+  const o = starter().optOut;
+  for (const t of ["Stop, not interested", "Stop! That's a great number for my seller, send it over", "End, we're done here for now"]) {
+    assert.equal(detectOptOut(t, o), false, t);
+    assert.equal(optOutMaybe(t, o), true, t);
+  }
+  assert.equal(optOutMaybe("STOP", o), false, "an opt-out is not a maybe");
+  assert.equal(optOutMaybe("Is it still available?", o), false);
+  // An old thread holds a short one as before: three words or fewer.
+  assert.deepEqual(optOutInTranscript("[2026-11-02 17:05] THEM sms: Stop, not interested", o), { at: "2026-11-02", text: "Stop, not interested" });
+});
+
+test("a reply STOP to opt out footer pasted from a flyer isn't an opt-out", async () => {
+  const { detectOptOut, optOutMaybe, starterConfig: starter } = await import("./conversation-ai.js");
+  const o = starter().optOut;
+  for (const t of ["Open house Saturday 1 to 3 at 41 Lantern Way. Reply STOP to opt out.", "New price on Quarry Rd. Msg and data rates may apply. STOP to end.",
+    "Here's the flyer. To unsubscribe, click here.", "Text STOP to 55501 to unsubscribe"]) {
+    assert.equal(detectOptOut(t, o), false, t);
+    assert.equal(optOutMaybe(t, o), false, t);
+  }
+  assert.equal(detectOptOut("Reply STOP to opt out. Also please stop texting me", o), true, "their own words after a footer still count");
+});
+
+test("STOP on its own is still an opt-out", async () => {
+  const { detectOptOut, starterConfig: starter } = await import("./conversation-ai.js");
+  const o = starter().optOut;
+  for (const t of ["STOP", "stop.", "Stop texting me", "Unsubscribe", "END", "quit it", "Wrong number", "this is the wrong number", "STOPALL"]) {
+    assert.equal(detectOptOut(t, o), true, t);
+  }
+  assert.equal(detectOptOut("STOP", { ...o, enabled: false }), false);
+});

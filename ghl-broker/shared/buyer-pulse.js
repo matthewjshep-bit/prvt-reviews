@@ -16,6 +16,7 @@
 // The runner (ghl-broker/buyer-pulse.js) does the reading and the sending.
 
 import { paceScale } from "./bot-hold.js";
+import { BLOCK_TAG_RX } from "./opt-out.js";
 
 export const DEFAULT_DAILY_CAP = 10;
 export const MAX_DAILY_CAP = 50;
@@ -69,10 +70,10 @@ export function normalizeBuyerPulse(v = {}) {
   };
 }
 
-// Tags that mean "do not text", however they were spelled.
-const BLOCK_TAG_RX = /^(?:dnc|dnd|do[-\s]?not[-\s]?(?:contact|text|call)|opt(?:ed)?[-\s]?out|unsubscribed?|stop|wrong[-\s]?number)$/i;
-// Unsubscribed in GHL (synced onto the row as `dnd`) or tagged off. The pulse
-// and the deal sends both ask (shared/buyer-score.js pickDealBuyers).
+// Opted out on any channel (synced onto the row as `dnd`: SMS DND, Email DND
+// or an `unsubscribed` event, since 2026-11-09) or tagged do-not-text
+// (shared/opt-out.js BLOCK_TAG_RX). The pulse and the deal sends both ask
+// (shared/buyer-score.js pickDealBuyers, ghl-broker/dispo-autopilot.js).
 export const isBlockedBuyer = (inv = {}) => Boolean(inv?.dnd) || (inv?.tags || []).some((t) => BLOCK_TAG_RX.test(String(t).trim()));
 
 // Market tags are slugs: "federal-way" → "Federal Way".

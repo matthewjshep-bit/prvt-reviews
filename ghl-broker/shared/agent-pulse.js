@@ -54,6 +54,7 @@ import { cadenceDays, requestStands, isAutoReply } from "./brush-offs.js";
 import { optOutInTranscript, CONVERSATION_AI_DEFAULTS } from "./conversation-ai.js";
 import { CHECK_IN_GAP_DAYS } from "./agent-focus.js";
 import { worksOn, runDaysFrom, pacificParts } from "./follow-up-engine.js";
+import { BLOCK_TAG_RX } from "./opt-out.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -204,8 +205,9 @@ export const INBOUND_EVENT_TYPES = [
 // waits its days after it instead of landing the next morning.
 const OUR_TEXT_TYPES = new Set(["follow_up_sent", "agent_pulse_texted", "outreach_enrolled", "outreach_sent", "hand_reply", "checkin_sent", "address_chase_sent", "pass_texted"]);
 
-// Tags that mean "do not text", however spelled, and the bot-off tags.
-const BLOCK_TAG_RX = /^(?:dnc|dnd|do[-\s]?not[-\s]?(?:contact|text|call)|opt(?:ed)?[-\s]?out|unsubscribed?|stop|wrong[-\s]?number)$/i;
+// Tags that mean "do not text", however spelled (shared/opt-out.js, one rule
+// for every machine send since 2026-11-09), and the bot-off tags.
+export { BLOCK_TAG_RX };
 export function blockedByTags(tags = [], botOffTags = []) {
   const off = new Set((botOffTags || []).map((t) => String(t).toLowerCase()));
   return (tags || []).map((t) => String(t).trim()).find((t) => BLOCK_TAG_RX.test(t) || off.has(t.toLowerCase())) || null;
