@@ -39,8 +39,12 @@ const locq = () => {
 async function j(res) {
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
+    let ask = null;
     try {
       const b = await res.json();
+      // A save that would raise a sent offer (409): what it asks, so the
+      // editor can say it and wait for a confirm (offer-autosave.js).
+      if (b?.needsConfirm) ask = { needsConfirm: b.needsConfirm, from: b.from, to: b.to };
       const detail = Array.isArray(b.detail)
         ? b.detail.join("; ")
         : b.detail && typeof b.detail === "object"
@@ -50,6 +54,7 @@ async function j(res) {
     } catch { /* ignore */ }
     const err = new Error(msg);
     err.status = res.status;
+    if (ask) Object.assign(err, ask);
     throw err;
   }
   return res.json();
@@ -219,8 +224,10 @@ export const publishOffer = (id, form, { handToBot = false } = {}) =>
 // property and ending up owning four offers on it.
 // `live`: a save as you type — one revision and one history line per sitting;
 // `final` with it: you're leaving, write where you stopped.
-export const updateOffer = (id, { inputs, settings, scope, snapshot, asset, underwrite, live, final }) =>
-  announced(post(`/api/offers/${encodeURIComponent(id)}`, { inputs, settings, scope, snapshot, ...(asset ? { asset } : {}), ...(underwrite ? { underwrite } : {}), ...(live ? { live: true } : {}), ...(final ? { final: true } : {}) }, "PUT"));
+// `confirmRaise`: you confirmed a save that raises a sent offer; without it
+// the server answers 409 { needsConfirm: "raise", from, to } (2026-11-09).
+export const updateOffer = (id, { inputs, settings, scope, snapshot, asset, underwrite, live, final, confirmRaise }) =>
+  announced(post(`/api/offers/${encodeURIComponent(id)}`, { inputs, settings, scope, snapshot, ...(asset ? { asset } : {}), ...(underwrite ? { underwrite } : {}), ...(live ? { live: true } : {}), ...(final ? { final: true } : {}), ...(confirmRaise ? { confirmRaise: true } : {}) }, "PUT"));
 // The editor's autosave for an offer that already exists: workspace only. It
 // never renders a document, never touches the CRM, and can't move the offer's
 // money — which is what makes it safe on a debounce and on unmount.

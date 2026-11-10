@@ -124,6 +124,7 @@ import {
 import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
 import { publishedFromOf } from "../shared/calibration.js";
+import { raiseNeedsConfirm, raiseLine } from "../shared/offer-raise.js";
 import { buildScorecard, maybeRunPriceScorecard } from "../price-scorecard.js";
 import { importThreadReads, startThreadReads, getThreadReadJob, CURSOR_NAME as THREAD_READS_CURSOR } from "../thread-reads.js";
 import { questionTopics } from "../shared/thread-read.js";
@@ -2302,7 +2303,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // /:id/publish). It is a create in every way the CRM sees — note, tag,
   // "we offered" — that keeps the draft's id, so the house never holds two
   // rows. Otherwise `existing` is a revision of an offer.
-  async function createOfferFromRequest({ locationId, client, body = {}, existing = null, revisedBy = "you", promote = false }) {
+  async function createOfferFromRequest({ locationId, client, body = {}, existing = null, revisedBy = "you", promote = false, raiseGuard = false }) {
     const revising = Boolean(existing) && !promote;
     const { contactId: bodyContactId, newContact, inputs, settings: settingsOverride } = body || {};
     // Rehab scope of work (internal — saved + noted, never on the letter).
@@ -2365,6 +2366,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const calc = model === "comps"
       ? calculateOffers(inputs || {}, { ...(saved || {}), ...(settingsOverride || {}) })
       : buildUnderwriteCalc({ model, deal: uw?.deal, inputs: inputs || {}, settings: { ...(saved || {}), ...(settingsOverride || {}) } });
+
+    // A person's save on a sent offer that comes out above what the agent was
+    // last sent (or the engine's walk-away) waits for them to say so
+    // (shared/offer-raise.js, 2026-11-09): nothing is rendered or written.
+    if (raiseGuard && revising) {
+      const ask = raiseNeedsConfirm({ offer: existing, to: calc.offers.cash.amount });
+      if (ask) throw Object.assign(new Error(raiseLine(ask)), { http: 409, needsConfirm: "raise", from: ask.from, to: ask.to });
+    }
 
     // 3. Render the document, wrap as PDF, store both.
     const created = new Date();
@@ -2751,7 +2760,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!body.inputs || typeof body.inputs !== "object") {
         return res.status(400).json({ error: "inputs required" });
       }
-      const out = await createOfferFromRequest({ locationId, client, body, existing });
+      // A deal's letter is the contract (2026-11-09): typing on it keeps the
+      // figures you typed beside it, and the price stays the contract price.
+      // On a deal the contract is the number, so there is no raise to ask about.
+      const contract = existing.deal ? Math.round(Number(existing.deal.contractPrice) || Number(existing.cashAmount) || 0) : 0;
+      const saveBody = contract > 0 ? { ...body, inputs: { ...body.inputs, priceOverride: contract } } : body;
+      let out;
+      try {
+        out = await createOfferFromRequest({ locationId, client, body: saveBody, existing, raiseGuard: !contract && !body.confirmRaise });
+      } catch (e) {
+        if (e.needsConfirm) return res.status(409).json({ error: e.message, needsConfirm: e.needsConfirm, from: e.from, to: e.to });
+        throw e;
+      }
       // The client asks before overwriting a document that already went out;
       // it needs to know there was one.
       out.revisedAfterSend = (existing.sends || []).length > 0;

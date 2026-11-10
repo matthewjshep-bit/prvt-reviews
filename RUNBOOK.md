@@ -289,6 +289,42 @@ Old duplicates aren't merged automatically. `node
 scripts/report-house-duplicates.mjs` (Render Shell) lists houses with more
 than one row per agent and changes nothing.
 
+### A sent offer's price moves only when you say so (2026-11-09)
+
+The engine sent 254k. Opening it to fix a term re-priced the letter to 300k
+on the first keystroke (audit UWM-03). The editor rebuilt the form from the
+saved workspace, which holds our comps' ARV and the bare scope with no
+override, and priced it at today's settings (75%, the 30k fee) instead of
+what the engine used (70%, the 15k fee, the override at its open). Three
+things changed:
+
+- **The editor reopens a row with paper at what priced its letter.**
+  `offer-autosave.js` `restoredInputs` takes the figures from `calc.inputs`,
+  the override included, over the workspace's. `pricedSettings` takes the
+  price settings from `calc.settings`: the mode, the percentages, the carry,
+  the repair multipliers and the fee. The terms, the company and the expiry
+  stay today's. `editorSettings` stacks today's settings, then those, then
+  what you set on the offer. A draft or a blank form opens as before, and so
+  does an income or land row, which is priced from its deal.
+- **A save that raises a sent offer waits for you.** `PUT /api/offers/:id`
+  runs the numbers before it renders anything. When the result is above the
+  ceiling it answers 409 `{ needsConfirm: "raise", from, to }` and writes
+  nothing, unless the body carries `confirmRaise`. The ceiling is the higher
+  of what the agent was last sent and the engine's walk-away on a live engine
+  offer (`shared/offer-raise.js`). "Last sent" is the amount in effect at the
+  newest send that went, read off `revisions[]`. With no send on the ledger
+  (marked sent by hand, floated) it is today's number. An offer that never
+  went out has no ceiling. The editor keeps what you typed, stops retrying,
+  and shows "This raises a sent offer from X to Y: confirm?" with **Confirm
+  the raise**. The next edit tries again, so bringing the number back down
+  saves without a confirm.
+- **A deal's letter is the contract price.** A save on an offer with a
+  `deal` pins `priceOverride` to `deal.contractPrice`, so the letter and the
+  agent's link never move off it. The figures you typed are kept beside it.
+
+Offer saves as you type still holds. Terms, the expiry and a lower number
+save on the pause, as before.
+
 DB note: the schema (`ghl-broker/schema.pg.sql`) is applied idempotently on
 boot. Tables from the pre-overhaul card-studio era are left untouched; the file
 ends with a commented `drop` block to run manually when that history is no

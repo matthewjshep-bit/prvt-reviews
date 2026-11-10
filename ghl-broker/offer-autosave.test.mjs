@@ -253,8 +253,9 @@ test("typing on a sent offer writes one history line, not one per pause", async 
   row.sends = [{ ts: new Date().toISOString(), channel: "sms" }];
   await store.updateOffer(id, row);
 
+  // Each step raises a sent offer, which a person confirms (2026-11-09: the raise guard below).
   const live = (arv, over = {}) => req("PUT", `/api/offers/${id}`, {
-    contactId: "contact-1", inputs: inputsAt("6012 N 46th St, Tacoma, WA 98407", { arv }), settings: SETTINGS, live: true, ...over,
+    contactId: "contact-1", inputs: inputsAt("6012 N 46th St, Tacoma, WA 98407", { arv }), settings: SETTINGS, live: true, confirmRaise: true, ...over,
   });
   calls = [];
   const first = await live(560000);
@@ -276,6 +277,82 @@ test("typing on a sent offer writes one history line, not one per pause", async 
   assert.equal(historyWrites(), 2);
   await live(575000, { final: true });
   assert.equal(historyWrites(), 2, "nothing moved, nothing written");
+});
+
+/* ---------- a sent offer's price moves only when a person says so (2026-11-09) ---------- */
+// UWM-03: the engine sent 254k; opening it to fix a term re-priced the letter to 300k on the first
+// keystroke. The server is the backstop: a live save that comes out above what the agent was last
+// sent (or the engine's walk-away) is refused until the person confirms the raise.
+
+const sentOffer = async (address, over = {}) => {
+  const made = await req("POST", "/api/offers", { contactId: "contact-1", inputs: inputsAt(address), settings: SETTINGS });
+  assert.equal(made.status, 200, JSON.stringify(made.json).slice(0, 300));
+  const row = await store.getOffer(made.json.offer.id);
+  Object.assign(row, { status: "sent", sends: [{ ts: new Date().toISOString(), channels: ["sms"], results: { sms: { ok: true } } }] }, over);
+  await store.updateOffer(row.id, row);
+  return row;
+};
+
+test("a live save that raises a sent offer needs confirmRaise", async () => {
+  const row = await sentOffer("3307 Tamarack Bend, Tacoma, WA 98404");
+  const sent = row.cashAmount;
+  const put = (inputs, over = {}) => req("PUT", `/api/offers/${row.id}`, { contactId: "contact-1", inputs, settings: SETTINGS, live: true, ...over });
+
+  // A term or a lower number saves as it always did.
+  const lower = await put(inputsAt("3307 Tamarack Bend, Tacoma, WA 98404", { repairs: 70000 }));
+  assert.equal(lower.status, 200, JSON.stringify(lower.json).slice(0, 300));
+  assert.ok(lower.json.offer.cashAmount < sent);
+  // Back up to the number that went out: no raise over what they were sent.
+  const back = await put(inputsAt("3307 Tamarack Bend, Tacoma, WA 98404"));
+  assert.equal(back.status, 200, JSON.stringify(back.json).slice(0, 300));
+  assert.equal(back.json.offer.cashAmount, sent);
+
+  // Above what went out: refused, with nothing written, until a person confirms.
+  const raise = await put(inputsAt("3307 Tamarack Bend, Tacoma, WA 98404", { arv: 600000 }));
+  assert.equal(raise.status, 409);
+  assert.equal(raise.json.needsConfirm, "raise");
+  assert.equal(raise.json.from, sent);
+  assert.ok(raise.json.to > sent, JSON.stringify(raise.json));
+  assert.match(raise.json.error, /raises a sent offer from/);
+  assert.equal((await store.getOffer(row.id)).cashAmount, sent, "the letter, the link and the bot's number stay put");
+
+  const confirmed = await put(inputsAt("3307 Tamarack Bend, Tacoma, WA 98404", { arv: 600000 }), { confirmRaise: true });
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.json).slice(0, 300));
+  assert.equal(confirmed.json.offer.cashAmount, raise.json.to);
+});
+
+test("an engine offer's walk-away is room a person can save into without a confirm, and nothing past it", async () => {
+  const row = await sentOffer("5150 Brackenridge Pl, Tacoma, WA 98404");
+  const sent = row.cashAmount;
+  const walkAway = sent + 20000;
+  Object.assign(row, { autoUnderwrite: { basis: "engine" }, pricing: { live: true, grade: "A", open: sent, walkAway, moves: 0 } });
+  await store.updateOffer(row.id, row);
+  const put = (override) => req("PUT", `/api/offers/${row.id}`, { contactId: "contact-1", settings: SETTINGS, live: true,
+    inputs: inputsAt("5150 Brackenridge Pl, Tacoma, WA 98404", { priceOverride: override }) });
+  assert.equal((await put(walkAway)).status, 200);
+  const past = await put(walkAway + 5000);
+  assert.equal(past.status, 409);
+  assert.equal(past.json.from, walkAway, "the ceiling is the higher of the number sent and the walk-away");
+});
+
+test("an offer that never went out saves as you type, raise or not", async () => {
+  const made = await req("POST", "/api/offers", { contactId: "contact-1", inputs: inputsAt("940 Wintergreen Ave, Tacoma, WA 98405"), settings: SETTINGS });
+  const r = await req("PUT", `/api/offers/${made.json.offer.id}`, { contactId: "contact-1", inputs: inputsAt("940 Wintergreen Ave, Tacoma, WA 98405", { arv: 600000 }), settings: SETTINGS, live: true });
+  assert.equal(r.status, 200, JSON.stringify(r.json).slice(0, 300));
+});
+
+test("typing on a deal's offer never moves the letter off the contract price", async () => {
+  const row = await sentOffer("1218 Juniper Hollow Dr, Tacoma, WA 98405", { status: "accepted" });
+  row.deal = { stage: "under_contract", contractPrice: 287500, createdAt: new Date().toISOString() };
+  await store.updateOffer(row.id, row);
+  const r = await req("PUT", `/api/offers/${row.id}`, { contactId: "contact-1", settings: SETTINGS, live: true,
+    inputs: inputsAt("1218 Juniper Hollow Dr, Tacoma, WA 98405", { arv: 610000, repairs: 40000 }) });
+  assert.equal(r.status, 200, JSON.stringify(r.json).slice(0, 300));
+  assert.equal(r.json.offer.cashAmount, 287500, "the letter stays at the contract price");
+  const after = await store.getOffer(row.id);
+  assert.equal(after.cashAmount, 287500);
+  assert.equal(after.deal.contractPrice, 287500);
+  assert.equal(after.calc.inputs.arv, 610000, "the figures you typed are kept beside it");
 });
 
 test.after(() => { server.close(); cardServer.close(); });

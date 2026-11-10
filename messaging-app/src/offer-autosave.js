@@ -48,22 +48,117 @@ export function saveKindFor({ row = null, letterChanged = false } = {}) {
 /** Delay before a save of this kind runs. */
 export const delayFor = (kind) => (kind === "live" ? LIVE_DELAY_MS : DRAFT_DELAY_MS);
 
+/* ---------- a sent offer reopens at the price it went out at (2026-11-09) ---------- */
+// The engine sent 254k; opening it to fix a term re-priced the letter to 300k on the first
+// keystroke (UWM-03). The form was rebuilt from the saved workspace — whose figures are our comps'
+// ARV and the bare scope, with no override — and today's location settings. A row with paper now
+// reopens from what priced its letter: calc.inputs (the override included) and the price settings
+// in calc.settings. A draft, or a blank form, is unchanged.
+
+// The settings that set a comps price (shared/offer-calc.js calculateOffers). Presentation (the
+// terms, the company, the expiry) stays today's.
+export const PRICE_SETTING_KEYS = [
+  "underwriteMode", "sellingCostPct", "flipProfitPct", "holdMonths", "holdingModel", "holdMonthlyCost",
+  "loanToCostPct", "loanRatePct", "loanPointsPct", "taxRatePct", "insuranceRatePct", "utilitiesMonthly",
+  "maoPctOfArv", "cashPctOfArv", "repairBuffer", "repairHeavyPctOfArv", "repairBaseMult", "repairHeavyMult",
+  "wholesaleFee", "precisionJitter",
+];
+const BLANK_INPUTS = { address: "", askingPrice: "", arv: "", repairs: "", priceOverride: "" };
+const fmtN = (n) => (Number(n) ? Number(n).toLocaleString("en-US") : "");
+// A row with paper priced by comps: income and land rows are priced from their deal, which the
+// form restores as it always has.
+const pricedRow = (row) => (row && row.status !== "draft" && row.calc?.inputs
+  && (!row.calc.model || row.calc.model === "comps") ? row : null);
+
+/** pricedSettings(row) → the price settings a sent offer was priced at, or null (a draft, a blank form). */
+export function pricedSettings(row) {
+  const r = pricedRow(row);
+  const s = r?.calc?.settings;
+  if (!s) return null;
+  const out = {};
+  for (const k of PRICE_SETTING_KEYS) if (s[k] !== undefined && s[k] !== null && s[k] !== "") out[k] = s[k];
+  return Object.keys(out).length ? out : null;
+}
+
+/** restoredInputs({ restore, snap, initialAddress }) → the form's first inputs. */
+export function restoredInputs({ restore = null, snap = null, initialAddress = "" } = {}) {
+  const r = pricedRow(restore);
+  const figures = r ? {
+    askingPrice: fmtN(r.calc.inputs.askingPrice),
+    arv: fmtN(r.calc.inputs.arv),
+    repairs: fmtN(r.calc.inputs.repairs),
+    priceOverride: fmtN(r.calc.inputs.priceOverride),
+  } : null;
+  if (snap?.inputs) return { ...BLANK_INPUTS, ...snap.inputs, ...(figures || {}) };
+  if (!restore && /,/.test(initialAddress)) return { ...BLANK_INPUTS, address: initialAddress };
+  if (r) return { ...BLANK_INPUTS, address: r.calc.inputs.address || "", ...figures };
+  return { ...BLANK_INPUTS };
+}
+
+/** restoredUnderwriteMode({ restore, snap, settings }) → the mode the form opens on. */
+export function restoredUnderwriteMode({ restore = null, snap = null, settings = null, fallback = "" } = {}) {
+  const priced = pricedSettings(restore)?.underwriteMode;
+  return priced || snap?.underwriteMode || (restore && restore.status !== "draft" ? restore.calc?.settings?.underwriteMode : "")
+    || settings?.underwriteMode || fallback;
+}
+
+/**
+ * editorSettings({ settings, priced, underwriteMode, feeOverride, uwOverrides, offerExpires, letterTerms })
+ *   → what the preview, the letter and every save price with: today's settings, the price settings
+ *     a sent offer went out at over them, and what you set on this offer over both.
+ */
+export function editorSettings({ settings = null, priced = null, underwriteMode = "", feeOverride = "", uwOverrides = {}, offerExpires = "", letterTerms = [] } = {}) {
+  const s = { ...(settings || {}), ...(priced || {}), ...(underwriteMode ? { underwriteMode } : {}) };
+  if (String(feeOverride).trim() !== "") {
+    s.wholesaleFee = Number(String(feeOverride).replace(/[^\d]/g, "")) || 0;
+  }
+  for (const [k, v] of Object.entries(uwOverrides || {})) {
+    const raw = String(v).trim();
+    if (raw === "") continue;            // blank means "use the saved default"
+    // Mid-typing garbage ("7." is fine, "7.5.5" isn't) keeps the default
+    // rather than silently underwriting at zero.
+    const n = Number(raw);
+    if (Number.isFinite(n)) s[k] = n;
+  }
+  if (offerExpires) s.offerExpires = offerExpires;
+  // The letter prints exactly these rows (after Purchase Price) — an empty
+  // list is honored, so deleted rows stay deleted.
+  s.letterTerms = (letterTerms || [])
+    .map((r) => ({ label: String(r.label || "").trim(), value: String(r.value || "").trim() }))
+    .filter((r) => r.label && r.value);
+  return s;
+}
+
+/** raiseAskFrom(error) → { from, to, line } when the server refused a save as a raise on a sent offer. */
+export function raiseAskFrom(error) {
+  if (!error || error.needsConfirm !== "raise") return null;
+  return { from: Number(error.from) || 0, to: Number(error.to) || 0, line: String(error.message || "") };
+}
+
 // A workspace write is inside a live one (the PUT carries the snapshot), so
 // the bigger save absorbs the smaller.
 const RANK = { workspace: 1, draft: 2, live: 3 };
 const merge = (a, b) => (!a ? b : !b ? a : RANK[b] >= RANK[a] ? b : a);
 
 /**
- * createAutosaver({ run, onState, timers }) → { schedule, flush, cancel, idle }
- *   run(kind, { final })  does the save; reads the form at call time, so a
- *                         save queued behind a slow one sends the latest
- *   onState({ phase, at?, error? })  "pending" | "saving" | "saved" | "error"
+ * createAutosaver({ run, onState, timers }) → { schedule, flush, confirm, cancel, idle }
+ *   run(kind, { final, confirmRaise? })  does the save; reads the form at call
+ *                         time, so a save queued behind a slow one sends the latest
+ *   onState({ phase, at?, error?, ask? })  "pending" | "saving" | "saved" |
+ *                         "error" | "confirm" (the save would raise a sent
+ *                         offer: `ask` is { from, to, line })
  *   timers                { setTimeout, clearTimeout } (tests pass fakes)
  *
  *   schedule(kind)        debounce a save of this kind
  *   flush({ final })      run what's pending now; final: you're leaving
+ *   confirm()             you said yes to the raise: send it, marked confirmed
  *   cancel()              drop what's pending (the form is moving to another row)
  *   idle()                nothing pending, nothing running
+ *
+ * A save the server refuses as a raise on a sent offer (409 needsConfirm,
+ * 2026-11-09) is not retried: what you typed stays in the form and pending,
+ * and the next edit tries again (a lower number goes through). Only confirm()
+ * sends the raise.
  */
 export function createAutosaver({ run, onState = () => {}, timers = globalThis } = {}) {
   let timer = null;
@@ -72,6 +167,7 @@ export function createAutosaver({ run, onState = () => {}, timers = globalThis }
   let tries = 0;
   let chain = Promise.resolve();
   let dead = false;
+  let held = null;   // the raise the server asked about, until you confirm or a save goes through
 
   function arm(ms) {
     if (timer) timers.clearTimeout(timer);
@@ -86,7 +182,7 @@ export function createAutosaver({ run, onState = () => {}, timers = globalThis }
     arm(delayFor(pending));
   }
 
-  function flush({ final = false } = {}) {
+  function flush({ final = false, confirmRaise = false } = {}) {
     if (timer) { timers.clearTimeout(timer); timer = null; }
     const kind = pending;
     pending = null;
@@ -95,20 +191,34 @@ export function createAutosaver({ run, onState = () => {}, timers = globalThis }
     chain = chain.then(async () => {
       onState({ phase: "saving" });
       try {
-        await run(kind, { final });
+        await run(kind, confirmRaise ? { final, confirmRaise: true } : { final });
         tries = 0;
+        held = null;
         onState(pending ? { phase: "pending" } : { phase: "saved", at: Date.now() });
       } catch (error) {
         // Put it back and try again shortly — unless the next edit already did.
         pending = merge(pending, kind);
-        tries += 1;
-        onState({ phase: "error", error });
-        if (tries < MAX_RETRIES && !final) arm(RETRY_MS);
+        const ask = raiseAskFrom(error);
+        if (ask) {
+          // A raise on a sent offer waits for you: no retry.
+          held = ask;
+          onState({ phase: "confirm", ask, error });
+        } else {
+          tries += 1;
+          onState({ phase: "error", error });
+          if (tries < MAX_RETRIES && !final) arm(RETRY_MS);
+        }
       } finally {
         running -= 1;
       }
     });
     return chain;
+  }
+
+  function confirm() {
+    if (dead || !held) return chain;
+    held = null;
+    return flush({ confirmRaise: true });
   }
 
   function cancel() {
@@ -118,5 +228,5 @@ export function createAutosaver({ run, onState = () => {}, timers = globalThis }
     dead = true;
   }
 
-  return { schedule, flush, cancel, idle: () => !pending && !timer && running === 0 };
+  return { schedule, flush, confirm, cancel, idle: () => !pending && !timer && running === 0 };
 }
