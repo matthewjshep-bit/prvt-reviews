@@ -288,6 +288,51 @@ test("an agent we told we'd check back in a couple months hears nothing for 60 d
   assert.match(hand.data.phrase, /new year/);
 });
 
+test("the check-in that keeps our word never names a house from before", async () => {
+  const loc = "loc-our-word-house";
+  const FU = { ...SAVED, conversationAi: { ...AI, parties: { ...AI.parties, agent: { ...AI.parties.agent, followUp: { ...(AI.parties.agent.followUp || {}), enabled: true } } } } };
+  const thread = { "c-ash": [[70, "US", "Any chance the seller on Tamsin Way would look at 410?"], [69, "THEM", "Not right now, maybe after the holidays"],
+    [68, "US", "All good, I'll check back after the new year."]] };
+  const subject = { address: "", phrase: "after the new year", sourceKind: "date", ours: true };
+  const run = async (reply) => {
+    _resetJobs();
+    const { client, sent } = ghl({ "c-ash": { firstName: "Ash", tags: ["agent"] } }, thread);
+    const writes = [];
+    const draft = async () => { writes.push(1); return { intent: "checkin_due", confidence: "high", needsHuman: false, humanReason: "", summary: "Our word, kept.", reply, propertyAddress: "", counterAmount: 0 }; };
+    const r = await startProactive({ client, locationId: loc, saved: FU, store, contactId: "c-ash", kind: "checkin_due", sendsEnabled: false, subject, deps: { draft } });
+    await done(r.job);
+    return { job: r.job, sent, writes };
+  };
+  // Named, and named again on the one redraft: dropped, nothing sent, nothing on the Desk.
+  const held = await run("Said I'd check back after the new year. Did the Tamsin Way one ever move?");
+  assert.equal(held.writes.length, 2, "written once more, told why");
+  assert.match(held.job.heldReason || "", /named a house \(Tamsin Way/);
+  assert.equal(held.sent.length, 0);
+  assert.equal((await draftsOf(loc, "c-ash")).length, 0, "nothing waits on the Desk");
+  // No house: it's drafted.
+  const clean = await run("Said I'd be back around now. Anything come up that needs work?");
+  assert.equal(clean.job.status, "done", clean.job.heldReason || clean.job.error || "");
+  assert.equal((await draftsOf(loc, "c-ash")).length, 1);
+  // The prompt never hands the model our old line to say again: the voice
+  // check would hold it as a repeat of the text it keeps.
+  const { outboundOpening } = await import("./conversation-prompt.js");
+  const brief = outboundOpening({ kind: "checkin_due", address: "", sourceKind: "date", phrase: "after the new year", ours: true });
+  assert.match(brief, /never the wording of that text/);
+  assert.match(brief, /Never name a house, a street or an address/);
+  assert.doesNotMatch(brief, /said I'd check back after the new year/i);
+});
+
+test("a buyer Matt tells he'll check back after the new year isn't filed as an agent or booked an agent's check-in", async () => {
+  const loc = "loc-our-word-buyer";
+  await recordEvent({ store, locationId: loc, contactId: "c-wren", party: "investor", type: "note", at: ago(3), source: "operator", data: { note: "buys in the north end" } });
+  assert.equal((await store.getContactProfile(loc, "c-wren")).party, "investor");
+  await notePromiseInHandText({ store, locationId: loc, contactId: "c-wren", text: "No rush, I'll check back after the new year.", at: new Date(NOW).toISOString() });
+  const profile = await store.getContactProfile(loc, "c-wren");
+  assert.equal(profile.party, "investor", "still a buyer");
+  assert.deepEqual(profile.facts?.checkinEvery || [], []);
+  assert.deepEqual(await store.listContactEvents(loc, "c-wren", { types: ["checkin_requested"], limit: 5 }), [], "no agent check-in booked for a buyer");
+});
+
 /* ---------- the name they go by ---------- */
 
 test("an agent who signs her texts with a short form of her name is texted by that name", async () => {

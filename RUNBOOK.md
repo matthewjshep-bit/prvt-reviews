@@ -7652,13 +7652,17 @@ months" is that far out; "after the new year", "after the holidays", "in
 January", "in a few weeks" are the day they name. Anything sooner than two
 weeks is the conversation's next turn, not a clock. It runs on every agent
 text that goes from the app (`sendReplyDraft`, `noteOurCheckBack`) and on
-your own hand texts (`notePromiseInHandText`):
+your own hand texts (`notePromiseInHandText`), for agents only: a contact the
+record files as a buyer (or anything but an agent) is left alone, and the
+write never files anyone as an agent:
 - a wait of a month or more is the `checkinEvery` fact with source "our word"
   (shown as "from our own text"), which the agent check-in already waits at
   least;
 - a day is a `checkin_requested` (kind `date`, `ours: true`) on it, so the
-  check-in that goes is the one that keeps our word ("said I'd check back
-  after the new year…"), never a house from before;
+  check-in that goes is the one that keeps our word, in new words (never the
+  wording of our old text, which the voice check would hold as a repeat).
+  It never names a house from before: the gate holds any street, address or
+  house of theirs in it, writes it once more, then drops it (no Desk row);
 - the routine check-ins (the agent check-in, the cold ladder, the deal-source
   week, the buyer pulse) read the same words off the thread and wait until
   then (`shared/check-in.js` rule 5). A live offer's nudges, the hot push and

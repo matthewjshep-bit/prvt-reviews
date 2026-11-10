@@ -127,6 +127,14 @@ test("a number only an auto-reply has answered in 90 days is parked, not texted"
   assert.equal(route([[30, "US", "Anything new?"]]).pack.autoOnly, false);
 });
 
+test("an agent whose phone auto-replies but who answers by email is not parked", () => {
+  const lines = [[30, "US", "Anything new?"], [30, "THEM", "Thank you for your message, we will get back to you shortly."],
+    [27, "THEM", "Saw your text, nothing on my end this month but I'll keep you in mind", "email"]];
+  const { pack, r } = route(lines);
+  assert.equal(pack.autoOnly, false);
+  assert.equal(r.route, "send");
+});
+
 test("a homeowner never gets the agent check-in", () => {
   const { pack, r } = route([[200, "US", "Hi Pim, do you still own the house on Birch Ln? Would you consider selling?"], [199, "THEM", "Not right now"]]);
   assert.equal(pack.homeowner, true);
@@ -165,6 +173,10 @@ test("a reply that only asks are you a bot is a question for Matt, never an opt-
   }
   assert.equal(onlyAsksIfBot("Is this a bot? Stop texting me"), false);
   assert.equal(onlyAsksIfBot("are you a bot, take me off your list"), false);
+  // Anything past the bare question leaves the model's opt-out read standing.
+  for (const t of ["is this a bot? not interested", "Are you a bot? f off", "is this automated? go away", "is this AI? leave us alone", "are you a robot, this is spam"]) {
+    assert.equal(onlyAsksIfBot(t), false, t);
+  }
   assert.equal(asksIfBot("Thanks, A.I. Nolan here"), false, "initials are not a complaint");
   assert.deepEqual(botAskFlags({ asked: true }).length, 1);
   assert.deepEqual(botAskFlags({}), []);
@@ -230,8 +242,21 @@ test("an agent who signs her texts with a short form of her name goes by it", ()
   assert.equal(goesBySaid("Nothing new\nThanks", { first: "Theo" }), "");
   assert.equal(goesBySaid("Nothing new\nKatherine", { first: "Katherine" }), "");
   assert.equal(goesByOf({ goes_by: [{ value: "Kat", at: ago(30) }, { value: "Kate", at: ago(2) }] }), "Kate");
+  // "Call me Kate" opens the text as often as not.
+  assert.equal(goesBySaid("Call me Kate, everyone does", { first: "Katherine" }), "Kate");
+  assert.equal(goesBySaid("Call me\nIf anything comes up", { first: "Ian" }), "");
   // The fixed texts use it.
   const s = standardText({ kind: "agent_pulse", outbound: { mode: "template", reason: "general", segment: "engaged", touch: 0 }, name: "Katherine Vale", contactId: "a9", goesBy: "Kate" });
   assert.match(s.text, /\bKate\b/);
   assert.doesNotMatch(s.text, /Katherine/);
+});
+
+test("a town after a dash or a teammate signing her phone is never the name she goes by", () => {
+  // Every fixed text would open on it ("Kirkland, any fixers…").
+  assert.equal(goesBySaid("Showing went fine - Kirkland.", { first: "Katherine" }), "");
+  assert.equal(goesBySaid("Busy week up here - Tacoma.", { first: "Tim" }), "");
+  assert.equal(goesBySaid("Nothing new yet\nKevin", { first: "Kristin" }), "");
+  // A short form still is.
+  assert.equal(goesBySaid("Thx\nSteve", { first: "Steven" }), "Steve");
+  assert.equal(goesBySaid("Sounds good\nJen", { first: "Jennifer" }), "Jen");
 });

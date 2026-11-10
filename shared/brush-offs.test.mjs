@@ -198,6 +198,8 @@ test("our I'll check back after the new year is a date", () => {
   // A couple months is that far out; every few months is a cadence with no date.
   const couple = ourCheckBack("No problem, I'll check back in a couple months.", mid);
   assert.deepEqual([couple.days, couple.dueAt.slice(0, 10)], [60, "2027-01-09"]);
+  // Said the way we said it, so the check-in's brief and its wait read right.
+  assert.deepEqual([couple.phrase, couple.why], ["in a couple months", "we said we'd check back in a couple months"]);
   const every = ourCheckBack("Will check in every few months then.", mid);
   assert.deepEqual([every.days, every.dueAt], [90, null]);
   assert.match(ourCheckBack("I'll reach out after the holidays", mid).dueAt, /^2027-01-0\d/);

@@ -78,7 +78,7 @@ import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-und
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages, validAddress, sameRaisedHouse, namesOurHouse, OUR_TEXT_EVENT_TYPES } from "./shared/ghl-stages.js";
 import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, pointsToThePhotos, photosPassReply, bankSaleIn, BANK_SALE_PASS, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
-import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber } from "./shared/mentioned-houses.js";
+import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber, streetMentions } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
@@ -4104,6 +4104,13 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   // houses we've had with them. A fresh listing of theirs is left out of
   // the list (shared/agent-pulse.js pastHouses).
   const pastHouses = kind === "agent_pulse" ? (Array.isArray(subject?.pastHouses) ? subject.pastHouses : []).filter(Boolean) : [];
+  // The check-in that keeps our own "I'll check back after the new year"
+  // (shared/brush-offs.js ourCheckBack, 2026-11-09) is a check-in, and a
+  // check-in never names a house from before (Matt, 2026-11-09): any street
+  // or address in it, or any house in their book, holds it. runProactive
+  // writes it once more, then drops it.
+  const noHouse = kind === "checkin_due" && Boolean(outbound?.ours);
+  const bookHouses = noHouse ? [...(context.offers?.numbers || []).map((n) => n?.address), subject?.address, offer?.address].filter(Boolean) : [];
   // The voice check against our last texts to them (2026-11-09). A fixed
   // text of Matt's own is flagged, never held (shared/standard-texts.js
   // isShippedText); the app's own texts and the model's are machine.
@@ -4149,6 +4156,13 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
       const g = gate(d);
       const named = pastHouses.map((h) => namesHouse(d?.reply, h)).find(Boolean);
       return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named a house from before (${named}): the check-in is generic — ask about distressed or off-market houses, never one we've had with them`] } : g;
+    });
+  }
+  if (noHouse) {
+    return voiceLast((d) => {
+      const g = gate(d);
+      const named = streetMentions(d?.reply || "")[0]?.address || bookHouses.map((h) => namesHouse(d?.reply, h)).find(Boolean);
+      return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named a house (${named}): a check-in never names a house, a street or an address from before`] } : g;
     });
   }
   if (!oldHouse) return gate;
@@ -8077,7 +8091,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // later anyway). "I'll check back in a couple months", "after the new
   // year": how long (checkinEvery, source "our word"), and for a day, the
   // dated check-in that keeps it. A live offer's nudges aren't this clock.
-  if (d.party === "agent") await noteOurCheckBack({ store, locationId, contactId: d.contactId, text: body, at: ts, ref: d.id });
+  if (d.party === "agent") await noteOurCheckBack({ store, locationId, contactId: d.contactId, text: body, at: ts, ref: d.id, party: "agent" });
   // Matt's contact card, in its own text right behind this one, when they
   // asked who we are or an agent's house didn't work (shared/contact-card.js).
   const card = await followWithCard({ client, store, locationId, draft: updated, body, auto, baseUrl: cardBaseUrl, now });
@@ -8098,17 +8112,24 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
  * on it, so the check-in that keeps our word is the one that goes. Used by
  * sendReplyDraft and, for Matt's own texts, promise-sweep.js
  * notePromiseInHandText.
+ *
+ * Agents only. Matt's hand texts reach it for every contact, so the record
+ * decides: a buyer or anyone else the record files as not an agent is left
+ * alone (no agent check-in is booked for them, and the write never files
+ * them as an agent). A contact with no party yet keeps none.
  */
-export async function noteOurCheckBack({ store, locationId, contactId, text = "", at = new Date().toISOString(), ref = null }) {
+export async function noteOurCheckBack({ store, locationId, contactId, text = "", at = new Date().toISOString(), ref = null, party = null }) {
   if (!contactId || !String(text || "").trim()) return null;
   const back = ourCheckBack(text, Date.parse(at) || Date.now());
   if (!back) return null;
+  const filed = party || (await store?.getContactProfile?.(locationId, contactId)?.catch?.(() => null))?.party || null;
+  if (filed && filed !== "agent") return null;
   if (back.days >= CADENCE_MIN_DAYS) {
-    await learnFacts({ store, locationId, contactId, party: "agent",
+    await learnFacts({ store, locationId, contactId, party: filed,
       facts: [{ key: "checkinEvery", value: String(back.days), source: "our word", at, ref }] }).catch(() => {});
   }
   if (back.dueAt) {
-    await recordEvent({ store, locationId, contactId, party: "agent", type: "checkin_requested", at, address: "", source: "our word", ref,
+    await recordEvent({ store, locationId, contactId, party: filed, type: "checkin_requested", at, address: "", source: "our word", ref,
       dedupeKey: `checkin_requested:${contactId}:${back.dueAt.slice(0, 10)}`,
       data: { kind: "date", phrase: back.phrase, dueAt: back.dueAt, ours: true } }).catch(() => {});
   }

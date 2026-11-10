@@ -185,10 +185,13 @@ export function checkInPack(transcript = "", subject = {}, context = {}, now = D
     if (back?.dueAt) keep({ until: back.dueAt, phrase: back.phrase }, "us");
   }
 
-  // Only an auto-reply has answered this number in 90 days. A call from them is a person.
+  // Only an auto-reply has answered this number in 90 days. A call from them
+  // is a person, and so is an email of theirs that isn't one (an agent whose
+  // phone answers every text for her, and who writes back by email).
   const recent = theirs.filter((l) => now - (ms(l.at) ?? 0) <= AUTO_ONLY_DAYS * DAY_MS);
   const recentTexts = recent.filter((l) => l.channel === "sms" && l.text && !isTapback(l.text));
-  const autoOnly = recentTexts.length > 0 && recentTexts.every((l) => isAutoReply(l.text)) && !recent.some((l) => l.channel === "call");
+  const wroteByEmail = recent.some((l) => l.channel === "email" && l.text && !isAutoReply(l.text));
+  const autoOnly = recentTexts.length > 0 && recentTexts.every((l) => isAutoReply(l.text)) && !recent.some((l) => l.channel === "call") && !wroteByEmail;
   const autoAt = autoOnly ? recentTexts.at(-1).at : null;
 
   // They asked whether this is a bot (a person did: an auto-reply's own
@@ -348,8 +351,10 @@ export function pickVariant(pool = [], prior = [], seed = "", touch = 0, { fill 
 
 export const BOT_ASK_REASON = "they asked if this is a bot";
 export const BOT_ASK_FLAG = `${BOT_ASK_REASON}: yours to answer in your own words, the bot never does`;
-// What else in the same text would make it an opt-out after all.
-const LEAVE_ALONE_RX = /\b(?:stop|remove|unsubscribe|leave\s+me\s+alone|lose\s+my\s+number|take\s+me\s+off|wrong\s+number|no\s+more|do\s*n[o']?t\s+(?:text|contact|message|call)|quit\s+(?:texting|messaging))\b/i;
+// What else in the same text would make it an opt-out after all. Wide on
+// purpose: this only decides whether the model's own opt-out read stands, so
+// anything past the bare question leaves it standing.
+const LEAVE_ALONE_RX = /\b(?:stop|remove|unsubscribe|leave\s+(?:me|us)\s+alone|lose\s+(?:my|this)\s+number|take\s+me\s+off|wrong\s+number|no\s+more|do\s*n[o']?t\s+(?:text|contact|message|call)|quit\s+(?:texting|messaging)|not\s+interested|go\s+away|(?:f+|fuck|piss|back|buzz)\s*off|f\W{0,3}k\s+off|harass\w*|spam(?:ming|mer)?|block(?:ed|ing)?|report(?:ed|ing)?)\b/i;
 
 /** asksIfBot(text) → true when they ask whether this is a bot or AI, or say it sounds like one. */
 export const asksIfBot = (text = "") => AI_COMPLAINT_RX.test(String(text || ""));
@@ -374,13 +379,16 @@ export const botAskFlags = ({ asked = false } = {}) => (asked ? [BOT_ASK_FLAG] :
 const NOT_A_NAME = new Set(["thanks", "thank", "thx", "ty", "best", "cheers", "regards", "sincerely", "sent", "sorry", "ok", "okay", "yes", "yep",
   "no", "nope", "sure", "great", "perfect", "sounds", "cool", "awesome", "later", "talk", "soon", "back", "anytime", "tomorrow", "today", "tonight",
   "asap", "when", "then", "now", "please", "pls", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "realtor", "broker",
-  "agent", "team", "the", "and", "matt", "matthew", "maybe", "again", "first", "after", "before", "directly", "instead", "here"]);
+  "agent", "team", "the", "and", "matt", "matthew", "maybe", "again", "first", "after", "before", "directly", "instead", "here",
+  "if", "whenever", "sometime", "this", "next", "around", "about", "quick", "my", "at", "on", "in", "or", "so"]);
 const nameWord = (w) => {
   const s = String(w || "").trim();
   if (!/^[A-Z][a-z'’-]{1,14}$/.test(s)) return "";
   return NOT_A_NAME.has(s.toLowerCase()) ? "" : s;
 };
-const CALL_ME_RX = /\b(?:please\s+)?(?:call|text)\s+me\s+([A-Z][a-z'’-]{1,14})\b(?!\s+(?:at|on|back|tomorrow|later|when))|\b(?:I|i)\s+go\s+by\s+([A-Z][a-z'’-]{1,14})\b|\b(?:goes|go)\s+by\s+([A-Z][a-z'’-]{1,14})\s*(?:[.!,]|$)/;
+// "Call me Kate" opens a sentence as often as not: the verbs take either case,
+// the name must be capitalised.
+const CALL_ME_RX = /\b(?:[Pp]lease\s+)?(?:[Cc]all|[Tt]ext)\s+me\s+([A-Z][a-z'’-]{1,14})\b(?!\s+(?:at|on|back|tomorrow|later|when))|\b(?:I|i)\s+go\s+by\s+([A-Z][a-z'’-]{1,14})\b|\b(?:[Gg]oes|[Gg]o)\s+by\s+([A-Z][a-z'’-]{1,14})\s*(?:[.!,]|$)/;
 // Their name alone on the text's last line, or after a dash or a tilde.
 const SIGN_OFF_RX = /(?:\n\s*|\s[-–—~]\s*|^[-–—~]\s*|\s~)([A-Z][a-z'’-]{1,14})\s*[.!]?\s*$/;
 
@@ -388,8 +396,10 @@ const SIGN_OFF_RX = /(?:\n\s*|\s[-–—~]\s*|^[-–—~]\s*|\s~)([A-Z][a-z'’-
  * goesBySaid(text, { first, ours }) → the name they go by | ""
  *
  * "call me Kate", "I go by Kate", or a text signed with a short form of their
- * GHL first name ("…\nKate" from Katherine: the same first letter, not the
- * same name). Never our own name: "Thanks, Matt" is them talking to us.
+ * GHL first name ("…\nKate" from Katherine: shorter, and the same first two
+ * letters, not the same name). Never our own name: "Thanks, Matt" is them
+ * talking to us. A town after a dash ("- Kirkland.") or a teammate signing
+ * from her phone ("Kevin" on Kristin's) is not a short form of hers.
  */
 export function goesBySaid(text = "", { first = "", ours = "" } = {}) {
   const t = String(text || "").replace(/[’‘]/g, "'").trim();
@@ -403,7 +413,7 @@ export function goesBySaid(text = "", { first = "", ours = "" } = {}) {
   if (!own) return "";
   const signed = SIGN_OFF_RX.exec(t);
   const sig = signed ? nameWord(signed[1]) : "";
-  if (!sig || sig[0].toLowerCase() !== own[0].toLowerCase()) return "";
+  if (!sig || sig.length >= own.length || sig.slice(0, 2).toLowerCase() !== own.slice(0, 2).toLowerCase()) return "";
   return ok(sig);
 }
 

@@ -114,7 +114,7 @@ export function cadenceRequest(text = "") {
 // after the new year", "we'll reach out in a couple months", "will check in
 // every few months".
 const OUR_CUE_RX = /(?:\b(?:i'?ll|i\s+will|we'?ll|we\s+will|let\s+me|i'?m\s+going\s+to|we'?re\s+going\s+to|i'?m\s+gonna|i\s+can|we\s+can)|(?:^|[.!?,]\s*)will)\s+(?:\w+\s+){0,2}?(check(?:ing)?\s+(?:back|in)|circle\s+back|reach\s+(?:back\s+)?out|touch\s+base|follow\s+up|text\s+you|hit\s+you\s+up|be\s+in\s+touch|try\s+you\s+again|ping\s+you|get\s+back\s+in\s+touch)\b/i;
-const OUR_MONTHS_RX = /\b(?:in|after)\s+(?:about\s+|another\s+|a\s+good\s+)?(a\s+couple(?:\s+of)?|couple(?:\s+of)?|a\s+few|few|several|two|three|four|six|\d+)\s+months?\b/i;
+const OUR_MONTHS_RX = /\b(in|after)\s+(?:about\s+|another\s+|a\s+good\s+)?(a\s+couple(?:\s+of)?|couple(?:\s+of)?|a\s+few|few|several|two|three|four|six|\d+)\s+months?\b/i;
 // The shortest wait our word makes: anything sooner is the conversation's
 // next turn, not a clock.
 export const OUR_CHECK_BACK_MIN_DAYS = 14;
@@ -145,11 +145,11 @@ export function ourCheckBack(text = "", now = Date.now()) {
     }
     const months = OUR_MONTHS_RX.exec(rest);
     if (months) {
-      const n = count(months[1]);
+      const n = count(months[2]);
       if (n) {
         const d = days(n);
-        const phrase = `${months[1].toLowerCase().replace(/\s+/g, " ")} months`;
-        return { days: d, dueAt: cadenceDueAt(now, d), phrase, why: `we said we'd check back in ${phrase}` };
+        const phrase = `${months[1].toLowerCase()} ${months[2].toLowerCase().replace(/\s+/g, " ")} months`;
+        return { days: d, dueAt: cadenceDueAt(now, d), phrase, why: `we said we'd check back ${phrase}` };
       }
     }
     // A day: our cue read as the "check back" detectLeadTiming knows.

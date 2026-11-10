@@ -1323,9 +1323,11 @@ function openingFor(outbound) {
                 : `Mention it naturally ("you'd mentioned ${o.phrase || "checking back"}") and ask whether anything landed that needs work. `)
           : o.ours
             // We said when (shared/brush-offs.js ourCheckBack, 2026-11-09): the
-            // day we named came, and this keeps our word. Never a house from before.
-            ? `We told this agent we'd check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Keep our word in a line ` +
-              `("said I'd check back ${o.phrase || "about now"}") and ask whether anything landed that needs work. Never name a house, a street or an address. `
+            // day we named came, and this keeps our word. Never a house from before,
+            // and never our old line again: they read it, and the voice check
+            // holds a sentence we already sent them.
+            ? `We told this agent we'd check back${o.phrase ? ` (${o.phrase})` : ""} and it's that time. Keep our word in a few words of your own, ` +
+              `never the wording of that text: they've read it. Then ask whether anything landed that needs work. Never name a house, a street or an address. `
           : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally ` +
             `("you'd mentioned ${o.phrase || "checking back"}"). Ask whether anything landed that needs work. `) +
         // Never the same question twice: 1010 Bellevue's agent was asked for
