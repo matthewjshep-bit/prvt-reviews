@@ -27,7 +27,8 @@
 
 import { store as defaultStore } from "./store.js";
 import { recordError, scrubMessage } from "./app-errors.js";
-import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
+import { claimDailyRun, closeDailyRun, pacificDay } from "./daily-gate.js";
+import { CURSOR_NAME as OUTREACH_CURSOR } from "./outreach-sweep.js";
 import { pingReasons } from "./shared/hand-off.js";
 import { pingClaimKey } from "./shared/ghl-pings.js";
 import { buildDigest } from "./shared/digest.js";
@@ -552,6 +553,16 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
       const key = slackClaimKey("job", `${j.name}:${j.lastRunAt}`);
       if (!claimed[key]) owed.push({ key, stream: "machine", kind: "job", msg: renderJobFailed(j) });
     }
+    // A sending day whose outreach sweep opened fewer new agents than
+    // outreachAutopilot.minNewAgentsPerDay (outreach-sweep.js emptyDayFor),
+    // once a Pacific day, marked on the sweep's cursor as told.
+    const sweep = await store.getJobCursor?.(locationId, OUTREACH_CURSOR).catch(() => null);
+    const empty = sweep?.doc?.emptyDay;
+    const today = pacificDay(now);
+    if (empty?.day === today && empty.text && sweep.doc.lastEmptyAlertDay !== today) {
+      const key = slackClaimKey("empty", `${OUTREACH_CURSOR}:${today}`);
+      if (!claimed[key]) owed.push({ key, stream: "machine", kind: "empty_day", msg: renderEmptyDay(empty), after: () => markEmptyDayTold(store, locationId, today) });
+    }
   }
 
   for (const o of owed) {
@@ -574,8 +585,25 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
       await recordError(store, { locationId, area: "slack", err: e, context: { contactId: row.contactId, stage: `${row.stream}:${row.kind}` } });
       out.failed.push({ ...row, error: scrubMessage(e).slice(0, 160) });
     }
+    if (o.after) await o.after();
   }
   return done();
+}
+
+// The outreach sweep's short day: its own line of counts and reason words
+// (outreach-sweep.js emptyDayFor), which never names a contact.
+function renderEmptyDay(e = {}) {
+  const text = `:warning: ${String(e.text || "").slice(0, 400)}`;
+  return { text: text.slice(0, 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
+}
+
+// Told: the day goes on the sweep's cursor, beside the claim on ours. Its
+// `at` is when the day's run was claimed, which the sweep's gate reads, so
+// it is left as it was.
+async function markEmptyDayTold(store, locationId, day) {
+  const cur = await store.getJobCursor?.(locationId, OUTREACH_CURSOR).catch(() => null);
+  if (!cur) return;
+  await store.setJobCursor?.(locationId, OUTREACH_CURSOR, { at: cur.at, doc: { ...(cur.doc || {}), lastEmptyAlertDay: day } }).catch(() => {});
 }
 
 /* ---------- the day: morning numbers, evening loose ends ---------- */

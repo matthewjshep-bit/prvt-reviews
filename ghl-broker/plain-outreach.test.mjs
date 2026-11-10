@@ -150,21 +150,24 @@ test("with the listing check on, only agents whose listing says it needs work ar
   assert.equal(again.screen.remembered, 6);
 });
 
+// Since 2026-11-09 the run also fails, so the tick tries the day again
+// (listing-check-rereads.test.mjs); before, it ended "done" with nobody texted.
 test("when Zillow can't be read, nobody it would have checked is texted that day", async () => {
   _resetJobs();
   let imported = false;
+  let pulled = false;
   const deps = {
-    runPull: async () => ({ batchId: "b1", warnings: [] }),
+    runPull: async () => { pulled = true; return { batchId: "b1", warnings: [] }; },
     importAgents: async () => { imported = true; return { results: [], imported: 0 }; },
     screenListings: async () => { throw new Error("Zillow listing lookup failed (Apify 502)"); },
   };
   const job = startOutreachSweep({ locationId: "loc-screen-down", client: {}, store: sweepFake(rows), deps, now: NOW,
     saved: { outreachAutopilot: { enabled: true, dailyCap: 10, firstTouch: "ghl", distressCheck: { enabled: true } } } });
   await wait(job);
-  assert.equal(job.status, "done", job.error);
+  assert.equal(job.status, "error");
+  assert.match(job.error, /listing check can't run \(Zillow listing lookup failed \(Apify 502\)\)/);
   assert.equal(imported, false);
-  assert.ok(job.warnings.some((w) => /Apify 502.*wait for the next run/.test(w)), job.warnings.join(" · "));
-  assert.ok(job.warnings.includes("no picked listing read as needing work today"));
+  assert.equal(pulled, false, "no RentCast request spent on a day nobody can be checked");
 });
 
 // 2026-10-26 dry run: the listing check left Pierce with 3 of 29 picks and

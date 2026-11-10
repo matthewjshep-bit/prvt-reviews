@@ -1898,7 +1898,9 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     runPull: (...args) => router.runPull(...args), importAgents, retryFirstTexts,
     firstTextRoom: ({ locationId, saved }) => machineRoomToday({ store, locationId, saved }),
     // The listing check (outreachAutopilot.distressCheck): Zillow's page
-    // for each listing, 40 to an actor run, two runs at a time.
+    // for each listing, 40 to an actor run, two runs at a time. An empty
+    // list only checks the token, for free: the sweep asks that before its
+    // pull (outreach-sweep.js listingCheckDown), so keep it free.
     screenListings: async ({ locationId, addresses }) => {
       const token = String((await getSettings(locationId)).apifyToken || "").trim();
       if (!token) throw new Error("no Apify token in Settings");

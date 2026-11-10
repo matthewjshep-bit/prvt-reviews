@@ -6862,6 +6862,72 @@ never answered; the tick saw a run in progress and never retried, and the
   twenty minutes apart at least, 10am–5pm Pacific (`MAX_DAILY_TRIES`,
   `RETRY_WINDOW_HOURS`), not three tries by lunch.
 
+**The listing check keeps fixers, and Slack says when a day opens few
+(2026-11-09).** First texts to new agents fell from about 58 a sending day
+(10/19–10/27) to about 2 a weekday. On 11/9 the sweep picked 108 agents,
+102 were dropped from the check's memory, 6 were read, 1 was kept, and
+nothing said so. Four changes:
+
+- **More "needs work" wording** (`shared/listing-distress.js`). Strong now
+  also reads "needs" plus up to three words plus work, repairs, updating,
+  roof, floors, paint, carpet, kitchen, bath, siding, windows, furnace,
+  plumbing or electrical ("needs new flooring and paint", "needs a new roof
+  and some updating"), but never after doesn't / does not / won't / no /
+  nothing, and never "your needs" or "you need"; "cosmetic work / updates /
+  repairs" (not "recent cosmetic updates" or "cosmetic updates throughout");
+  "could use some updating / work / TLC / love"; "ready for your updates /
+  renovation / remodel / ideas / vision". Soft now also reads value-add,
+  original owner and "no repairs" (seller will make no repairs), plus
+  "ready for your personal touch", which finished houses say too. A finished
+  word still beats a soft one ("move-in ready with no repairs" is dropped),
+  and "doesn't need any work" or "no repairs necessary" counts as finished.
+  No remarks is still out.
+- **Old misses are read again** (`outreach-sweep.js screenAddresses`). Each
+  remembered read on the `outreachScreen` cursor carries the rules version
+  it was made by (`v`, `SCREEN_RULES_VERSION` = 2). A "nothing says it needs
+  work" drop made by older rules is read again; a "reads finished", pending
+  or new-build drop still stands for 30 days (`SCREEN_REMEMBER_DAYS`). A
+  "still for sale and needs work" read is trusted 3 days
+  (`SCREEN_KEEP_OK_DAYS`), so a ping doesn't name a listing that went
+  pending since. Re-reads count against `distressCheck.perRun` (about a
+  fifth of a cent each). `last.screen` adds `reread` and `rememberedDrops`.
+- **A check that can't run fails the day.** With the check on, the sweep
+  asks `screenListings` with an empty list before the pull (free: it only
+  checks the Apify token). No token, or a broker that can't read Zillow,
+  fails the run before a RentCast request is spent. A lookup that breaks
+  partway keeps the agents it already kept, imports them, and then fails
+  the run. Either way the tick tries the day again inside the window, and
+  #machine gets the usual "failed its last run" line.
+- **An empty day says so** (`outreachAutopilot.minNewAgentsPerDay`, default
+  10, 0 = never; no Settings field yet, set it in the saved settings). When
+  the day's run (not Run now, not a dry run, not a failed run) opens fewer
+  new agents than that, or than the daily cap if that is lower, the run
+  writes `emptyDay` on the `outreach` cursor and the next tick posts one line
+  to Slack #machine (`slack-notify.js runSlackPings`, machine stream on):
+  "Agent sweep opened 1 new agent today (alert below 10): picked 108,
+  remembered drops 101, read 6, kept 2, budget 12 RentCast requests,
+  counties with nobody new 1. Biggest reason: no sign it needs work (50)."
+  New agents are the first texts the app drafted (first touch "app"), or
+  the contacts the import made (first touch "ghl" or "workflow"). The
+  reason is the RentCast budget, a missing workflow, no room under the
+  Conversation AI's cap, nobody new, or the biggest of the check's drops,
+  already-in-GHL skips and agents the check didn't reach. Once a Pacific
+  day: claimed on the `slackPings` cursor and marked `lastEmptyAlertDay` on
+  the `outreach` cursor; a record from an earlier day is never posted.
+  Counts and reason words only, never a contact; it sends nobody anything.
+- **The day is the Pacific date** (`daily-gate.js ranThisDay`). "Ran today"
+  used to be "under 20 hours ago", so a retry at 2:30pm left the next 9am
+  or 10am run under 20 hours and, since a fresh day may only start in its
+  own hour, cost the whole next day. The outreach sweep, the gatekeeper
+  sweep and every `claimDailyRun` job (follow-up, the agent check-in and
+  Matt's 15, dispo, price watch, tier check, thread reads, price scorecard,
+  nightly enrich, outreach follow-up, the Slack morning and evening posts)
+  now compare Pacific dates; a UTC job whose window runs over midnight
+  Pacific is still one run. The outreach cursor now carries `lastDaily` like
+  the others. Callers' `minGapMs` is no longer read. The buyer check-in,
+  investor reads and sync, the nightly audit and the coach keep their own
+  20-hour gates for now.
+
 **Who says hello** is a setting. `app`: the bot drafts the first text from
 the hook listing (`outreach_open` on the agent playbook — turn on "First text
 to new agents" there) and the GHL trigger tag is *not* applied, so the

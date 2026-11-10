@@ -22,8 +22,11 @@ import { workflowIdFrom } from "./shared/ghl-calls.js";
 import { listingDistress } from "./shared/listing-distress.js";
 import { streetKey } from "./comps-zillow.js";
 import { worksOn, runDaysFrom } from "./shared/follow-up-engine.js";
+import { ranThisDay, pacificDay } from "./daily-gate.js";
 
 export const CURSOR_NAME = "outreach";
+// Was "the day already ran" until 2026-11-09; the Pacific date decides now
+// (maybeStartOutreachSweep). Kept for anything that still reads it.
 export const MIN_GAP_MS = 20 * 3600 * 1000;
 // A daily run that failed (RentCast slow, GHL down) is tried again that
 // morning rather than costing the whole day: up to three tries, 20+ minutes
@@ -52,6 +55,9 @@ export const MAX_DAILY_CAP = 5000;
 // budget is the only thing that stops it. A paid plan's number goes in
 // Settings (`outreachAutopilot.monthlyRequests`).
 export const RENTCAST_MONTHLY_BUDGET = 48;
+// A daily run that opens fewer new agents than this says so in Slack
+// #machine (outreachAutopilot.minNewAgentsPerDay; 0 = never).
+export const DEFAULT_MIN_NEW_AGENTS_PER_DAY = 10;
 const OUTREACH_IMPORTS_ENABLED = process.env.OUTREACH_IMPORTS_ENABLED === "true";
 
 const iso = (ms) => new Date(ms).toISOString();
@@ -242,6 +248,7 @@ export function normalizeOutreachAutopilot(v = {}) {
   const maxPrice = Math.round(Number(o.maxListPrice));
   const monthly = Math.round(Number(o.monthlyRequests));
   const cycleDay = Math.round(Number(o.cycleDay));
+  const minNew = Math.round(Number(o.minNewAgentsPerDay));
   const types = (Array.isArray(o.propertyTypes) ? o.propertyTypes : String(o.propertyTypes ?? "").split("|"))
     .map((t) => PROPERTY_TYPES.find((p) => p.toLowerCase() === String(t).trim().toLowerCase())).filter((t) => t && t !== "Manufactured");
   return {
@@ -326,6 +333,12 @@ export function normalizeOutreachAutopilot(v = {}) {
       enabled: o.distressCheck?.enabled === true,
       perRun: Math.min(MAX_SCREEN_PER_RUN, Math.max(SCREEN_CHUNK, Math.round(Number(o.distressCheck?.perRun)) || DEFAULT_SCREEN_PER_RUN)),
     },
+    // A daily run that opens fewer new agents than this (or than the daily
+    // cap, if that is lower) posts the day's counts to Slack #machine, once a
+    // Pacific day (2026-11-09: first texts fell from about 58 a day to 2 and
+    // nothing said so). Counts only, never a contact. 0 = never.
+    minNewAgentsPerDay: o.minNewAgentsPerDay === 0 || o.minNewAgentsPerDay === "0" ? 0
+      : Number.isFinite(minNew) && minNew > 0 ? Math.min(500, minNew) : DEFAULT_MIN_NEW_AGENTS_PER_DAY,
   };
 }
 
@@ -351,6 +364,14 @@ export const DEFAULT_SCREEN_PER_RUN = 200;
 export const MAX_SCREEN_PER_RUN = 600;
 export const SCREEN_CURSOR = "outreachScreen";
 export const SCREEN_REMEMBER_DAYS = 30;
+// A "still for sale and needs work" read is trusted this long, not a month: a
+// listing that went pending since would be named in a ping (2026-11-09).
+export const SCREEN_KEEP_OK_DAYS = 3;
+// The rules each remembered read was made by (shared/listing-distress.js),
+// stamped as `v`. A "nothing says it needs work" drop made by older rules is
+// read again: version 2 (2026-11-09) reads "needs new flooring and paint",
+// "could use some updating" and the like, which version 1 dropped.
+export const SCREEN_RULES_VERSION = 2;
 const SCREEN_REMEMBER_MAX = 6000;
 
 // Why a listing didn't pass, grouped for the run's summary.
@@ -375,29 +396,40 @@ function screenBucket(why = "") {
  * shared/listing-distress.js) or false. An id with no verdict wasn't reached:
  * the run's `perRun` lookups were spent, `want` were already kept, or a
  * lookup failed — and nobody it would have checked is texted. What Zillow
- * said about an address is remembered SCREEN_REMEMBER_DAYS on the
- * `outreachScreen` cursor (unless `remember` is false, a dry run), so it
- * isn't paid for twice.
+ * said about an address is remembered on the `outreachScreen` cursor (unless
+ * `remember` is false, a dry run), so it isn't paid for twice: a drop for
+ * SCREEN_REMEMBER_DAYS, a keep for SCREEN_KEEP_OK_DAYS, and a "nothing says
+ * it needs work" drop only while the rules that made it are today's
+ * (SCREEN_RULES_VERSION). Those re-reads count against `perRun`.
+ * `error` says why a lookup failed, when one did.
  */
 export async function screenAddresses({ items = [], locationId, store = defaultStore, deps = {}, now = Date.now(), perRun = DEFAULT_SCREEN_PER_RUN, want = Infinity, remember = true, beat = async () => {} } = {}) {
-  const stats = { checked: 0, remembered: 0, kept: 0, dropped: {}, waiting: 0 };
+  const stats = { checked: 0, remembered: 0, rememberedDrops: 0, reread: 0, kept: 0, dropped: {}, waiting: 0 };
   const verdict = new Map();
   const warnings = [];
+  let error = null;
   const cursor = (await store.getJobCursor?.(locationId, SCREEN_CURSOR).catch(() => null))?.doc || {};
   const seen = { ...(cursor.seen || {}) };
   const recent = (e) => e && Date.parse(e.at) > now - SCREEN_REMEMBER_DAYS * DAY_MS;
+  // Whether a remembered read still stands, or the listing is read again.
+  const trusted = (e) => {
+    if (!recent(e)) return false;
+    if (e.ok) return Date.parse(e.at) > now - SCREEN_KEEP_OK_DAYS * DAY_MS;
+    return !(screenBucket(e.why) === "no sign it needs work" && (Number(e.v) || 1) < SCREEN_RULES_VERSION);
+  };
   const drop = (why) => { const b = screenBucket(why); stats.dropped[b] = (stats.dropped[b] || 0) + 1; };
   const keyOf = (it) => streetKey(it.address || "");
   const toRead = [];
   for (const it of items) {
     const k = keyOf(it);
     if (!k) { verdict.set(it.id, false); drop("no address"); continue; }
-    if (recent(seen[k])) {
+    if (trusted(seen[k])) {
       verdict.set(it.id, seen[k].ok === true);
       stats.remembered++;
-      if (seen[k].ok) stats.kept++; else drop(seen[k].why);
+      if (seen[k].ok) stats.kept++; else { stats.rememberedDrops++; drop(seen[k].why); }
       continue;
     }
+    if (recent(seen[k])) stats.reread++;
     toRead.push(it);
   }
   let i = 0;
@@ -408,7 +440,8 @@ export async function screenAddresses({ items = [], locationId, store = defaultS
     try {
       found = await deps.screenListings({ locationId, addresses: chunk.map((it) => it.address) });
     } catch (e) {
-      warnings.push(`listing check: ${String(e?.message || e).slice(0, 120)} — the agents it didn't get to wait for the next run`);
+      error = String(e?.message || e).slice(0, 120);
+      warnings.push(`listing check: ${error} — the agents it didn't get to wait for the next run`);
       break;
     }
     stats.checked += chunk.length;
@@ -418,7 +451,7 @@ export async function screenAddresses({ items = [], locationId, store = defaultS
         ? listingDistress({ status: z.status, description: z.description, yearBuilt: z.yearBuilt || it.yearBuilt }, { now })
         : { ok: false, why: "Zillow couldn't find the listing", signals: [] };
       verdict.set(it.id, v.ok);
-      seen[keyOf(it)] = { at: iso(now), ok: v.ok, ...(v.why ? { why: v.why } : {}), ...(v.signals?.length ? { signals: v.signals.slice(0, 3) } : {}) };
+      seen[keyOf(it)] = { at: iso(now), ok: v.ok, v: SCREEN_RULES_VERSION, ...(v.why ? { why: v.why } : {}), ...(v.signals?.length ? { signals: v.signals.slice(0, 3) } : {}) };
       if (v.ok) stats.kept++; else drop(v.why);
     }
     await beat();
@@ -430,7 +463,24 @@ export async function screenAddresses({ items = [], locationId, store = defaultS
     await store.setJobCursor?.(locationId, SCREEN_CURSOR, { at: iso(now), doc: { seen: Object.fromEntries(keep) } })
       .catch((e) => warnings.push(`listing check memory: ${String(e?.message || e).slice(0, 120)}`));
   }
-  return { verdict, stats, warnings };
+  return { verdict, stats, warnings, error };
+}
+
+/**
+ * listingCheckDown(deps, locationId) → why the listing check can't run, or ""
+ *
+ * Asked before the day's pull, so a day nobody can be checked spends no
+ * RentCast request. An empty list costs nothing: the router's screenListings
+ * (routes/outreach.js sweepDeps) only checks there is an Apify token.
+ */
+export async function listingCheckDown(deps = {}, locationId) {
+  if (typeof deps.screenListings !== "function") return "this broker can't read Zillow";
+  try {
+    await deps.screenListings({ locationId, addresses: [] });
+    return "";
+  } catch (e) {
+    return String(e?.message || e).slice(0, 120) || "the listing check failed";
+  }
 }
 
 // "12 of 40 listings read as needing work (left out: 20 reads finished, …)"
@@ -452,7 +502,8 @@ export function screenSummary(stats) {
  * import finds already in GHL) or the run's lookups are spent; only those
  * whose listing is still for sale and says it needs work stay picked. One the
  * run didn't get to waits for the next. A failed lookup texts nobody it would
- * have checked. The off-market seats have their own Zillow check
+ * have checked, and marks the run (`job.screenFailed`) so the day is tried
+ * again. The off-market seats have their own Zillow check
  * (routes/outreach.js keepOffMarket) and are left alone.
  */
 async function screenPicked({ groups, oa, job, locationId, store, deps, now, beat = async () => {} }) {
@@ -460,17 +511,19 @@ async function screenPicked({ groups, oa, job, locationId, store, deps, now, bea
   // is gone by definition: neither is for sale to read.
   const screened = (g) => !g.offMarket && !g.pastListing;
   if (typeof deps.screenListings !== "function") {
-    job.screen = { checked: 0, remembered: 0, kept: 0, dropped: {}, waiting: 0 };
+    job.screen = { checked: 0, remembered: 0, rememberedDrops: 0, reread: 0, kept: 0, dropped: {}, waiting: 0 };
     job.warnings.push("listing check is on but this broker can't read Zillow — nobody is texted today");
+    job.screenFailed = "this broker can't read Zillow";
     for (const g of groups) if (screened(g)) g.picked = [];
     return;
   }
   const rows = groups.filter(screened).flatMap((g) => g.picked);
-  const { verdict, stats, warnings } = await screenAddresses({
+  const { verdict, stats, warnings, error } = await screenAddresses({
     items: rows.map((r) => ({ id: r.agentKey, address: r.doc?.hook?.address || "", yearBuilt: r.doc?.hook?.yearBuilt })),
     locationId, store, deps, now, perRun: oa.distressCheck.perRun, want: Math.ceil(oa.dailyCap * 1.2), remember: !job.dryRun, beat,
   });
   job.screen = stats;
+  if (error) job.screenFailed = error;
   job.warnings.push(...warnings);
   for (const g of groups) if (screened(g)) g.picked = g.picked.filter((r) => verdict.get(r.agentKey) === true);
   if (stats.checked) job.warnings.push(`listing check: ${screenSummary(stats)}`);
@@ -690,7 +743,12 @@ export function startOutreachSweep({ locationId, client, saved = {}, store = def
   const beat = () => stamp({ run: { ...runDoc, beatAt: new Date().toISOString() } });
   stamp({ run: runDoc })
     .then(() => run(job, { locationId, client, saved, store, deps, now, beat }))
-    .then(async () => { await stamp({ run: null, last: summary() }); })
+    .then(async () => {
+      // A day's run that opened fewer new agents than minNewAgentsPerDay:
+      // what it found, for Slack #machine (slack-notify.js runSlackPings).
+      const emptyDay = trigger === "daily" ? emptyDayFor(job, saved, now) : null;
+      await stamp({ run: null, last: summary(), ...(emptyDay ? { emptyDay } : {}) });
+    })
     .catch(async (e) => {
       job.status = "error";
       job.error = String(e?.message || e).slice(0, 300);
@@ -721,6 +779,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     job.budget = { used, budget, reserve, runsLeft, perRun };
     if (perRun <= 0) {
       job.warnings.push(`RentCast budget: ${used} of ${budget} requests used this month (${reserve} kept for the Pull button) — the sweep is standing down until the plan renews`);
+      job.standDown = "budget";
       job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
       return;
     }
@@ -730,6 +789,7 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
   // Stop before the pull spends a request; never fall back to the tag.
   if (oa.firstTouch === "workflow" && !oa.workflowId) {
     job.warnings.push("first touch is a GHL workflow but none is picked — pick it in Settings");
+    job.standDown = "workflow";
     job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
     return;
   }
@@ -760,11 +820,23 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
       const fit = Math.max(0, Math.floor(room));
       job.warnings.push(`the Conversation AI's daily cap leaves room for ${fit} first text${fit === 1 ? "" : "s"} today (the rest is kept for people who text us) — importing ${fit}, not ${Number.isFinite(oa.dailyCap) ? oa.dailyCap : "everyone found"}`);
       oa.dailyCap = fit;
+      job.roomFit = fit;
     }
     if (oa.dailyCap <= 0) {
+      job.standDown = "room";
       job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
       return;
     }
+  }
+
+  // The listing check has to be able to run before the day's requests are
+  // spent on agents nobody could check (2026-11-09: a missing Apify token or
+  // a down actor used to end the day "done" with nobody texted). A run that
+  // can't is failed, so the tick tries the day again.
+  if (oa.distressCheck.enabled) {
+    job.phase = "checking the listing check";
+    const down = await listingCheckDown(deps, locationId);
+    if (down) throw new Error(`the listing check can't run (${down}), so the day is tried again`);
   }
 
   // 1. The pull, filtered at RentCast so a page is mostly stale listings.
@@ -1039,17 +1111,24 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     if (!county) break;
   }
   job.county = groups.map((g) => g.key).filter(Boolean).join(" · ") || job.county;
+  job.pickedBeforeCheck = pickedTotal;
   // 2b. The listing itself says it needs work (outreachAutopilot.distressCheck).
   if (oa.distressCheck.enabled && groups.length) {
     job.phase = "checking listings";
     await screenPicked({ groups, oa, job, locationId, store, deps, now, beat });
     job.picked = groups.reduce((n, g) => n + g.picked.length, 0);
   }
+  // A listing check that broke partway: the agents it kept are imported, and
+  // the run then fails, so the tick tries the day again for the rest.
+  const finish = () => {
+    if (job.screenFailed) throw new Error(`the listing check failed partway (${job.screenFailed}), so the day is tried again`);
+    job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
+  };
   const picked = groups.flatMap((g) => g.picked);
   job.results = picked.map((r) => ({ agentKey: r.agentKey, name: r.doc?.name || "", hook: r.doc?.hook?.address || "", distressed: r.doc?.distressedCount || 0 }));
   if (!picked.length) {
     job.warnings.push(job.screen ? "no picked listing read as needing work today" : "no county had anyone new to text today");
-    job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
+    finish();
     return;
   }
 
@@ -1092,6 +1171,9 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
     outcomes.push(...results);
   }
   job.dryRun = dry;
+  // Brand-new contacts the import made: the day's new agents when GHL, not
+  // the app, says hello.
+  job.created = made;
   const byKey = new Map(outcomes.map((x) => [x.agentKey, x]));
   // Only the agents the import actually reached and didn't skip as existing.
   const reached = byKey.size
@@ -1103,7 +1185,58 @@ async function run(job, { locationId, client, saved, store, deps, now, beat = as
       contactId: y.contactId || null, opened: y.opened || null, enrolled: y.enrolled || (y.wouldEnroll ? { would: true } : null), error: y.error || null };
   });
 
-  job.status = "done"; job.phase = ""; job.finishedAt = new Date().toISOString();
+  finish();
+}
+
+/**
+ * emptyDayFor(job, saved, now) → { day, at, opened, target, picked, rememberedDrops, read, kept, budget, nobodyNew, reason, text } | null
+ *
+ * A day's run that opened fewer new agents than outreachAutopilot
+ * minNewAgentsPerDay (or the daily cap, if lower): what it found, in counts,
+ * and the biggest reason, for Slack #machine. Null for a run that opened its
+ * number, a dry run, a run that failed (the tick retries it, and a failed job
+ * has its own #machine line), or with the alert off (0). Counts and reason
+ * words only: never a name, a street or a phone.
+ */
+export function emptyDayFor(job = {}, saved = {}, now = Date.now()) {
+  const oa = normalizeOutreachAutopilot(saved?.outreachAutopilot);
+  if (job.dryRun || job.status !== "done") return null;
+  const target = Math.min(oa.minNewAgentsPerDay, oa.dailyCap > 0 ? oa.dailyCap : Infinity);
+  if (!(target > 0)) return null;
+  // The app says hello: the first texts it drafted, today's new agents and
+  // the earlier ones whose first text hadn't gone. GHL says hello: the
+  // contacts the import made.
+  const opened = oa.firstTouch === "app" ? (Number(job.opened) || 0) + (Number(job.reopened) || 0) : Number(job.created) || 0;
+  if (opened >= target) return null;
+  const s = job.screen || {};
+  const counts = {
+    opened, target,
+    picked: Number(job.pickedBeforeCheck ?? job.picked) || 0,
+    rememberedDrops: Number(s.rememberedDrops) || 0,
+    read: Number(s.checked) || 0,
+    kept: Number(s.kept) || 0,
+    budget: job.budget?.perRun ?? null,
+    nobodyNew: (job.tried || []).filter((t) => !t.error && Number(t.picked) === 0).length,
+  };
+  const reason = emptyDayReason(job, counts);
+  const text = `Agent sweep opened ${opened} new agent${opened === 1 ? "" : "s"} today (alert below ${target}): `
+    + `picked ${counts.picked}, remembered drops ${counts.rememberedDrops}, read ${counts.read}, kept ${counts.kept}, `
+    + `budget ${counts.budget ?? "unknown"} RentCast requests, counties with nobody new ${counts.nobodyNew}. Biggest reason: ${reason}.`;
+  return { day: pacificDay(now), at: iso(now), ...counts, reason, text };
+}
+
+// The one thing that most kept the day short, in a few words.
+function emptyDayReason(job = {}, counts = {}) {
+  if (job.standDown === "budget") return "the RentCast budget is spent until the plan renews";
+  if (job.standDown === "workflow") return "first touch is a GHL workflow but none is picked";
+  if (job.standDown === "room") return "the Conversation AI's daily cap left no room for first texts";
+  if (job.roomFit != null && counts.opened >= job.roomFit) return `the Conversation AI's daily cap left room for ${job.roomFit}`;
+  if (!(counts.picked > 0)) return "nobody new in the counties read";
+  const why = Object.entries(job.screen?.dropped || {}).map(([bucket, n]) => [bucket, Number(n) || 0]);
+  if (job.skippedExisting) why.push(["already in GHL", Number(job.skippedExisting) || 0]);
+  if (job.screen?.waiting) why.push(["the listing check didn't get to them", Number(job.screen.waiting) || 0]);
+  const [top] = why.filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+  return top ? `${top[0]} (${top[1]})` : "fewer new agents than the day's number";
 }
 
 /**
@@ -1259,7 +1392,9 @@ export async function autopilotBatchId({ store, locationId, market }) {
  * 2026-10-21 by Matt's ask; the env default 10 until it is set).
  *
  * The tick's decision. Gates: the hour, the toggle, a RentCast key, no run
- * in progress, and the durable cursor at least MIN_GAP_MS old.
+ * in progress, and no day's run yet this Pacific date (daily-gate.js
+ * ranThisDay; until 2026-11-09 "under MIN_GAP_MS ago", so a 2:30pm retry
+ * cost the next morning's run).
  */
 export async function maybeStartOutreachSweep({ locationId, client, saved = {}, store = defaultStore, deps = {}, hour = null, now = Date.now() }) {
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
@@ -1273,7 +1408,10 @@ export async function maybeStartOutreachSweep({ locationId, client, saved = {}, 
   if (jobs.get(locationId)?.status === "running") return false;
   const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
   const doc = cursor?.doc || {};
-  const ranToday = cursor?.at && now - Date.parse(cursor.at) < MIN_GAP_MS;
+  // When the day's run was claimed: `lastDaily`, or, on a cursor from before
+  // it was written, `at` (which the run's own stamps leave alone).
+  const dailyAt = Date.parse(doc.lastDaily || cursor?.at || "");
+  const ranToday = ranThisDay({ dailyAt: Number.isFinite(dailyAt) ? dailyAt : null, now, hourNow: h, startHour: hour });
   // The cursor says a run is going, and nothing in memory is: it hung, or
   // the process restarted under it. Either way the day isn't done.
   // Measured from the run's last sign of life, not its start: a run that
@@ -1283,12 +1421,16 @@ export async function maybeStartOutreachSweep({ locationId, client, saved = {}, 
   if (ranToday) {
     // Only a failed (or vanished) run comes back, spaced out and a few times at most.
     const triedSoFar = Number(doc.tries) || 1;
-    if (!(doc.failed || stale) || triedSoFar >= MAX_DAILY_TRIES || now - Date.parse(cursor.at) < RETRY_GAP_MS) return false;
+    if (!(doc.failed || stale) || triedSoFar >= MAX_DAILY_TRIES || now - dailyAt < RETRY_GAP_MS) return false;
     tries = triedSoFar + 1;
   } else if (h !== hour) {
     return false;   // a fresh day starts in its own hour; the window is for retries
   }
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: { tries, last: doc.last || null, ...(stale ? { staleRun: doc.run } : {}) } }).catch(() => {});
+  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: {
+    tries, lastDaily: iso(now), last: doc.last || null, ...(stale ? { staleRun: doc.run } : {}),
+    // The empty-day alert already told today stays told across a retry.
+    ...(doc.lastEmptyAlertDay ? { lastEmptyAlertDay: doc.lastEmptyAlertDay } : {}),
+  } }).catch(() => {});
   startOutreachSweep({ locationId, client, saved, store, deps, trigger: "daily", now });
   return true;
 }

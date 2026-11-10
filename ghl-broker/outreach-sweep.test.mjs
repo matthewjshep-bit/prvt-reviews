@@ -20,6 +20,7 @@ test("settings coerce to safe defaults", () => {
     minDaysOnMarket: 45, propertyTypes: ["Single Family"], maxYearBuilt: 0, reserveRequests: 2,
     monthlyRequests: 0, cycleDay: 1, maxListPrice: 1500000, coverage: "counties",
     zillowLookup: { enabled: false, perRun: 25 }, neverTexted: { enabled: false }, expired: { enabled: false, share: 25 }, recentListers: { enabled: false, counties: [], withinDays: 90, share: 25 }, distressCheck: { enabled: false, perRun: 200 },
+    minNewAgentsPerDay: 10,
   });
   assert.deepEqual(normalizeOutreachAutopilot({ expired: { enabled: true, share: "140" } }).expired, { enabled: true, share: 100 });
   assert.equal(normalizeOutreachAutopilot({ maxListPrice: 0 }).maxListPrice, 0, "0 = no cap");
