@@ -370,10 +370,12 @@ test("a buyer who unsubscribed from email doesn't get the deal by text", async (
   assert.equal(bookDnd({ dndSettings: { SMS: { status: "permanent" } } }), true);
   assert.equal(bookDnd({ id: "b-1" }, new Set(["b-1"])), true, "an unsubscribed event counts");
   assert.equal(bookDnd({ id: "b-2" }, new Set(["b-1"])), false);
-  // A deal text already counting down when they unsubscribed: binned at the send.
+  // A deal text already counting down when they unsubscribed: binned at the send. The deal is
+  // live on the store: a deal text whose offer is gone reads as a deal taken back instead.
+  await store.createOffer({ ...OFFER, id: "o-lantern-email", locationId: loc });
   const { client, sent } = ghl({ "b-ferro": { firstName: "Ferro", tags: ["investor"], dndSettings: { Email: { status: "active" } } } });
   const d = await store.createReplyDraft({ locationId: loc, contactId: "b-ferro", status: "scheduled", channel: "sms", inbound: "", party: "investor",
-    outbound: { kind: "blast_open", offerId: "o-lantern", address: "41 Lantern Way" }, reply: "Hey Ferro, got 41 Lantern Way in Kent under contract.", intent: "blast_open", flags: [], sendAt: ago(0.01) });
+    outbound: { kind: "blast_open", offerId: "o-lantern-email", address: "41 Lantern Way" }, reply: "Hey Ferro, got 41 Lantern Way in Kent under contract.", intent: "blast_open", flags: [], sendAt: ago(0.01) });
   const r = await sendReplyDraft({ client, store, locationId: loc, draftId: d.id, live: true, auto: true, readThread: async () => "", now: NOW });
   assert.equal(sent.length, 0);
   assert.match(String(r.skipped), /opted out/);
