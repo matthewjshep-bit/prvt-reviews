@@ -9,6 +9,7 @@ import {
   INTERNAL_ACTIONS, INTERNAL_ACTIONS_FOR, ASK_ONLY_ACTIONS, TOKENS, OUTBOUND_INTENTS, autoEligible,
   SETUP_QUESTIONS, SETUP_QUESTION_KEYS,
 } from "@shared/conversation-ai.js";
+import { isIsoDate, normalizeOffDays } from "@shared/conversation-ai.js";
 import { FOLLOW_UP_KINDS, kindsFor } from "@shared/follow-up.js";
 import { BTN } from "./ui.jsx";
 import { isVcard } from "@shared/contact-card.js";
@@ -625,7 +626,45 @@ export function RoutingCard({ config, patch, version }) {
 
 /* ---------- auto-send timing ---------- */
 
-export function AutoSendCard({ config, patch }) {
+/**
+ * readOffDays(text) → { days, dropped }
+ *
+ * The days-off box: one date per line, 2026-11-26 or 11/26/2026. `days` is
+ * what gets saved (real dates, once each, in order); `dropped` is every line
+ * that isn't a date, shown under the box so a typo doesn't vanish quietly.
+ */
+export function readOffDays(text = "") {
+  const days = [];
+  const dropped = [];
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(line);
+    const iso = us ? `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}` : line;
+    if (isIsoDate(iso)) days.push(iso);
+    else dropped.push(line);
+  }
+  return { days: normalizeOffDays(days), dropped };
+}
+
+// The text is local so a half-typed date survives the keystroke; `version`
+// bumps when the config is replaced from the server.
+function OffDaysBox({ value = [], onChange, version }) {
+  const [text, setText] = useState((value || []).join("\n"));
+  useEffect(() => { setText((value || []).join("\n")); }, [version]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { dropped } = readOffDays(text);
+  return (
+    <>
+      <textarea className={`${INPUT_CLS} resize-y`} rows={4} value={text} placeholder={"2026-11-26\n2026-12-25"}
+        onChange={(e) => { setText(e.target.value); onChange(readOffDays(e.target.value).days); }} />
+      {dropped.length > 0 && (
+        <p className="mt-1 text-xs text-amber-700">Not a date, so it won't be saved: {dropped.join(", ")}</p>
+      )}
+    </>
+  );
+}
+
+export function AutoSendCard({ config, patch, version }) {
   const a = config.autoSend;
   const set = (k) => (v) => patch({ autoSend: { ...a, [k]: v } });
   const setQh = (k) => (v) => patch({ autoSend: { ...a, quietHours: { ...a.quietHours, [k]: v } } });
@@ -659,6 +698,9 @@ export function AutoSendCard({ config, patch }) {
         <Field label="Weekends" hint="What the machine starts (nudges, cold opens, blasts) waits for Monday unless you allow it — or for Sunday, on Sunday to Friday.">
           <Select value={a.weekends || "replies_only"} onChange={set("weekends")}
             options={[["replies_only", "answer what comes in, start nothing"], ["sun_to_fri", "Sunday like a weekday, Saturday answers only"], ["all", "like a weekday"], ["none", "send nothing until Monday"]]} />
+        </Field>
+        <Field label="Days off (no machine texts; replies still go)" hint="One date per line, like 2026-11-26, Pacific time. Nothing the machine starts goes out that day (first texts, check-ins, nudges, pass notes, deal texts); it waits for the next working morning, and the check-ins don't run. Replies to their texts and a buyer's showing texts still go. Saved with the page.">
+          <OffDaysBox value={a.offDays || []} onChange={set("offDays")} version={version} />
         </Field>
         <Field label="Spread nudges over (hours)" hint="Follow-ups, cold opens and blasts land somewhere in the first N hours of the day, not all at the opening bell.">
           <Text type="number" value={a.nudgeSpreadHours ?? 8} onChange={(v) => set("nudgeSpreadHours")(Number(v))} />
