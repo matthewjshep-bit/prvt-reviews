@@ -303,6 +303,10 @@ export const CHECKIN_LONGEST_DAYS = CADENCE_MAX_DAYS + 21;
 // A deal source hears from us weekly, this many times, until they reply.
 export const SOURCE_REPEAT_DAYS = 7;
 export const SOURCE_TOUCHES = 6;
+// What tells us they (or we, by hand) spoke since a request, and how much of
+// one contact's window is read for it.
+const TALK_TYPES = ["text_summary", "call_summary", "hand_reply"];
+const TALK_LIMIT = 500;
 
 /**
  * runCheckInSweep({ client, locationId, saved, store, sendsEnabled, deps, now })
@@ -320,26 +324,59 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
   const start = typeof deps.startProactive === "function" ? deps.startProactive : startProactive;
 
   const reply = typeof deps.startReply === "function" ? deps.startReply : startReply;
-  const events = await store.listContactEventsSince(locationId, iso(now - CHECKIN_WINDOW_DAYS * 86400000), {
-    types: ["checkin_requested", "checkin_sent", "text_summary", "call_summary", "hand_reply"], limit: 5000,
-  }).catch(() => []);
+  // The requests and their claims, the whole window (they are few). Until
+  // 2026-11-09 one read capped at 5,000 rows carried these with every text
+  // and call on the line, kept the newest, and a "check back in a month"
+  // three weeks old fell out of it. Their texts and calls are read per
+  // contact below (talkOf), only for a request that is due.
+  const windowStart = iso(now - CHECKIN_WINDOW_DAYS * 86400000);
+  const reqRead = await allEventsSince(store, locationId, windowStart, { types: ["checkin_requested", "checkin_sent"] }, { ceiling: 100000 })
+    .catch(() => ({ events: [], truncated: false }));
+  if (reqRead.truncated) out.truncated = true;
   const byContact = new Map();
-  for (const e of events) {
+  for (const e of reqRead.events || []) {
     if (!e?.contactId) continue;
     if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
     byContact.get(e.contactId).push(e);
   }
+  // Their texts, calls and our hand replies since the window opened: one
+  // contact's own read (a store without it, a test double, answers from one
+  // read of the window). A read that hit its cap still decides, so it says so.
+  let windowTalk = null;
+  const talked = new Set();
+  const talkOf = async (contactId) => {
+    talked.add(contactId);
+    if (typeof store.listContactEvents === "function") {
+      const rows = (await store.listContactEvents(locationId, contactId, { since: windowStart, types: TALK_TYPES, limit: TALK_LIMIT }).catch(() => [])) || [];
+      if (rows.length >= TALK_LIMIT) out.truncated = true;
+      return rows;
+    }
+    windowTalk ??= (await store.listContactEventsSince(locationId, windowStart, { types: TALK_TYPES, limit: 5000 }).catch(() => [])) || [];
+    if (windowTalk.truncated) out.truncated = true;
+    return windowTalk.filter((e) => e?.contactId === contactId);
+  };
+  const withTalk = async (contactId) => {
+    if (talked.has(contactId)) return byContact.get(contactId) || [];
+    const list = [...(byContact.get(contactId) || []), ...await talkOf(contactId)];
+    byContact.set(contactId, list);
+    return list;
+  };
   // A request older than the window that still stands — "check back in a
   // couple months" is due at day 60 (shared/brush-offs.js requestStands) —
   // brings that contact's own events since it was made.
-  const windowStart = iso(now - CHECKIN_WINDOW_DAYS * 86400000);
-  const longReqs = await store.listContactEventsSince(locationId, iso(now - CHECKIN_LONGEST_DAYS * 86400000), { types: ["checkin_requested"], limit: 5000 }).catch(() => []);
+  const longRead = await allEventsSince(store, locationId, iso(now - CHECKIN_LONGEST_DAYS * 86400000), { types: ["checkin_requested"] }, { ceiling: 100000 })
+    .catch(() => ({ events: [], truncated: false }));
+  if (longRead.truncated) out.truncated = true;
+  const longReqs = longRead.events || [];
   const newestReq = new Map();
   // (A lead with a date reads its own thirteen months, below.)
   for (const e of longReqs) if (e?.contactId && e.data?.kind !== "lead" && String(e.at) > String(newestReq.get(e.contactId)?.at || "")) newestReq.set(e.contactId, e);
   for (const [contactId, req] of newestReq) {
     if (String(req.at) >= windowStart || !requestStands(req, now)) continue;
-    const since = await store.listContactEvents?.(locationId, contactId, { since: req.at, types: ["checkin_sent", "text_summary", "call_summary", "hand_reply"], limit: 500 }).catch(() => []) || [];
+    const since = await store.listContactEvents?.(locationId, contactId, { since: req.at, types: ["checkin_sent", ...TALK_TYPES], limit: 500 }).catch(() => []) || [];
+    if (since.length >= 500) out.truncated = true;
+    // Read from the request on: everything since the window opened is in it.
+    if (typeof store.listContactEvents === "function") talked.add(contactId);
     const seen = new Set();
     byContact.set(contactId, [req, ...since, ...(byContact.get(contactId) || [])].filter((e) => {
       const k = e?.id || e?.dedupeKey || `${e?.type}:${e?.at}`;
@@ -347,7 +384,8 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     }));
   }
 
-  for (const [contactId, list] of byContact) {
+  for (const [contactId, requests] of byContact) {
+    let list = requests;
     list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
     // A lead with a date has its own track, below: it neither replaces this
     // one nor is replaced by it.
@@ -355,6 +393,7 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     if (!req) continue;
     if (list.some((e) => e.type === "checkin_sent" && e.data?.requestAt === req.at)) continue;
     if (Date.parse(req.data?.dueAt || "") > now) continue;
+    list = (await withTalk(contactId)).sort((a, b) => String(a.at).localeCompare(String(b.at)));
     out.considered++;
     // They came back on their own after asking: nothing to chase.
     if (list.some((e) => (e.type === "text_summary" || e.type === "call_summary") && String(e.at) > String(req.at))) {
@@ -447,6 +486,7 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
   // read that far back; their texts and calls come from the window above.
   const leadRead = await allEventsSince(store, locationId, iso(now - (LEAD_MAX_DAYS + LEAD_STALE_DAYS) * 86400000),
     { types: ["checkin_requested", "checkin_sent"] }, { ceiling: 100000 }).catch(() => ({ events: [] }));
+  if (leadRead.truncated) out.truncated = true;
   const leadsBy = new Map();
   for (const e of leadRead.events || []) {
     if (!e?.contactId) continue;
@@ -455,7 +495,10 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
   }
   for (const [contactId, mine] of leadsBy) {
     if (!mine.some((e) => e.type === "checkin_requested" && e.data?.kind === "lead")) continue;
-    const talk = (byContact.get(contactId) || []).filter((e) => ["text_summary", "call_summary", "hand_reply"].includes(e.type));
+    // Not pending, or not due yet, on its own events: their talk isn't read.
+    const pending = leadCheckInPending(mine, now);
+    if (!pending || Date.parse(pending.data?.dueAt || "") > now) continue;
+    const talk = (await withTalk(contactId)).filter((e) => TALK_TYPES.includes(e.type));
     const all = [...mine, ...talk];
     const req = leadCheckInPending(all, now);
     if (!req || Date.parse(req.data?.dueAt || "") > now) continue;
