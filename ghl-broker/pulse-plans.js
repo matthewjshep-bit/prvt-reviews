@@ -28,7 +28,8 @@ const buyerPlans = createMemo({ ttlMs: PULSE_PLAN_MS, gate: heavyGate });
  */
 export function agentPulsePlanFor({ store, locationId, saved = {}, client = null, now = Date.now(), deps = {} }) {
   const withGhl = Boolean(client || typeof deps.listWorkflows === "function" || typeof deps.tierCards === "function");
-  return agentPlans.get(locationId, async () => planAgentPulse({
+  // Its own key, so the audit's plan never pushes out the one the pages share.
+  return agentPlans.get(`${locationId}|${withGhl ? "ghl" : "local"}`, async () => planAgentPulse({
     locationId, saved, store, now,
     workflows: withGhl ? await pulseWorkflows(client, locationId, deps).catch(() => null) : null,
     tierCards: withGhl ? await pulseTierCards(client, locationId, deps).catch(() => null) : null,

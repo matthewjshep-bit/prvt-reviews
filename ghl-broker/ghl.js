@@ -347,8 +347,11 @@ export function emailUnsubscribed(contact) {
   return status === "active" || status === "permanent";
 }
 
-export async function getContact(client, contactId) {
-  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}`);
+// `opts` (optional) goes to client.call: { retry: false, timeoutMs } for a
+// read that's only nice to have.
+export async function getContact(client, contactId, opts = null) {
+  const path = `/contacts/${encodeURIComponent(contactId)}`;
+  const data = await (opts ? client.call(path, opts) : client.call(path));
   return data.contact || data;
 }
 

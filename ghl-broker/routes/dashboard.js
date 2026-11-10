@@ -528,22 +528,31 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     const out = {};
     const need = [];
     for (const id of missing) {
-      const k = `${locationId}|${id}`;
-      const hit = nameCache.get(k);
-      if (hit) out[id] = hit;
-      else if (now - (nameMisses.get(k) ?? -Infinity) < NAME_MISS_MS) continue;
-      else need.push(id);
+      const hit = nameCache.get(`${locationId}|${id}`);
+      if (hit) out[id] = hit; else need.push(id);
     }
     if (!need.length) return out;
     const known = typeof store.contactNamesByIds === "function" ? await store.contactNamesByIds(locationId, need).catch(() => ({})) : {};
     const ask = [];
     for (const id of need) {
-      if (known[id]) { out[id] = known[id]; nameCache.set(`${locationId}|${id}`, out[id]); } else ask.push(id);
+      const k = `${locationId}|${id}`;
+      if (known[id]) { out[id] = known[id]; nameCache.set(k, out[id]); }
+      // GHL had no name for them in the last day: the record may have one
+      // since (read above), but GHL isn't asked again yet.
+      else if (now - (nameMisses.get(k) ?? -Infinity) >= NAME_MISS_MS) ask.push(id);
     }
     await mapPool(ask.slice(0, 25), 3, async (id) => {
       const k = `${locationId}|${id}`;
       let c = null;
-      try { c = await getContact(client, id); } catch { return; } // a failed read is asked again next time
+      // A name is cosmetic: one try and ten seconds, never the client's
+      // retries, so a GHL outage can't hold the tick's Today read for minutes.
+      try { c = await getContact(client, id, { retry: false, timeoutMs: 10000 }); }
+      catch (e) {
+        // GHL's "no such contact" is an answer: no name, for a day. Anything
+        // else (a timeout, a 5xx) is asked again next time.
+        if ([400, 404, 422].includes(Number(e?.status))) nameMisses.set(k, now);
+        return;
+      }
       const name = contactName(c) || "";
       if (name) { out[id] = name; nameCache.set(k, name); nameMisses.delete(k); }
       else nameMisses.set(k, now);

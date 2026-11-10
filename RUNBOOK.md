@@ -5179,8 +5179,12 @@ at all. Two faults, both fixed:
     shared/pipeline.js), and doesn't poll a past day at all.
   - The tick's jobs (GHL calls, GHL pings, Needs Matt, Slack) share one
     Today read for 75 seconds (`pipelineForTick`); `GET /pipeline` is still
-    fresh on every poll. A contact GHL has no name for is asked again a day
-    later, not every read. The Activity tab's GHL scan runs 3 at a time.
+    fresh on every poll. A contact GHL has no name for, or no record of (a
+    404), is asked again a day later, not every read; each ask is one try of
+    ten seconds, never the client's retries, so a GHL outage can't hold the
+    tick's Today read. The agent check-in plan the nightly audit makes
+    without GHL is kept apart from the one the pages share. The Activity
+    tab's GHL scan runs 3 at a time.
   - Check after a deploy: open Reports → Line twice quickly; the broker's
     log shows no error and `GET /` keeps answering.
 - **One retry and one rate limit for every GHL call (2026-11-09,

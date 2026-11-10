@@ -126,6 +126,27 @@ test("the tick's jobs share one Today read", async () => {
   assert.equal(fresh.listInvestors, 1, "GET /pipeline stays fresh on every poll");
 });
 
+test("a contact GHL has no record of isn't asked about again on every Today read, and the ask is one quick try", async () => {
+  // Last night's audit names a contact nobody has a name for, and GHL says
+  // there's no such contact (a deleted one).
+  await store.setJobCursor(LOC, "conversationAudit", { doc: { last: { findings: [{ contactId: "gone-contact-1", kind: "invented_kind" }] } } });
+  const asked = [];
+  const real = client.call;
+  client.call = async (p, opts) => {
+    if (String(p).startsWith("/contacts/gone-contact-1")) {
+      asked.push(opts || null);
+      throw Object.assign(new Error("GHL GET /contacts/gone-contact-1 -> 404"), { status: 404 });
+    }
+    return {};
+  };
+  try {
+    await get("/api/dashboard/pipeline");
+    await get("/api/dashboard/pipeline");
+  } finally { client.call = real; await store.setJobCursor(LOC, "conversationAudit", { doc: {} }); }
+  assert.equal(asked.length, 1, "GHL's no-such-contact is kept a day, like a contact with no name");
+  assert.equal(asked[0]?.retry, false, "a name is never worth the client's retries");
+});
+
 /* ---------- the pieces ---------- */
 
 test("the heavy computes run one at a time, and one inside another doesn't wait on itself", async () => {
@@ -148,6 +169,8 @@ test("a memo joins a compute in flight, keeps a result, forgets a failure, and a
   assert.equal(await memo.get("k", run, { sig: "s2", now: 1500 }), 3, "settings changed");
   await assert.rejects(memo.get("bad", async () => { throw new Error("no"); }, { now: 0 }));
   assert.equal(await memo.get("bad", async () => "ok", { now: 0 }), "ok", "a failure isn't kept");
+  await memo.get("other", async () => "x", { now: 5000 });
+  assert.equal(memo.peek("bad"), null, "a page past its time isn't held once another is made");
   assert.notEqual(settingsSig({ a: 1 }), settingsSig({ a: 2 }));
   assert.equal(settingsSig(null), settingsSig({}));
 });

@@ -71,6 +71,9 @@ export function createMemo({ ttlMs, gate = null, maxKeys = 64 } = {}) {
   function start(key, sig, now, run) {
     const promise = Promise.resolve().then(run).then((value) => {
       done.delete(key);
+      // A page nobody asked for again (a past day on Flow, a period chip)
+      // isn't held in memory past its time.
+      for (const [k, hit] of done) if (Math.abs(now - hit.at) >= ttlMs) done.delete(k);
       done.set(key, { at: now, sig, value });
       while (done.size > maxKeys) done.delete(done.keys().next().value);
       return value;
