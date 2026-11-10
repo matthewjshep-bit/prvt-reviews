@@ -37,7 +37,7 @@ import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
 import { CurrentPill, PaperHeldBanner, StatusMenu, StatusPill } from "./ui.jsx";
 import { annotateCurrent, houseKey, rowOnHouse } from "@shared/current-offer.js";
-import { DRAFT_DELAY_MS, createAutosaver, hasPaper, namesAHouse, saveKindFor, restoredInputs, pricedSettings, editorSettings, restoredUnderwriteMode, engineOf } from "./offer-autosave.js";
+import { DRAFT_DELAY_MS, createAutosaver, hasPaper, namesAHouse, saveKindFor, restoredInputs, pricedSettings, editorSettings, restoredUnderwriteMode, engineOf, sendWaitsLine } from "./offer-autosave.js";
 import { onOfferChanged } from "./offer-sync.js";
 
 // Pick the best address from a contact's custom fields: prefer a
@@ -842,6 +842,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   rowRef.current = row;
   useEffect(() => { if (restore?.id && restore.id === rowRef.current?.id) setRow(restore); }, [restore]);
   const fromOffer = row && row.status !== "draft" ? row : null;
+  // On a deal the contract is the letter's price (the live save pins it).
+  const dealPrice = fromOffer?.deal ? Math.round(Number(fromOffer.deal.contractPrice) || 0) : 0;
   const fmtN = (n) => (Number(n) ? Number(n).toLocaleString("en-US") : "");
 
   const [mode, setMode] = useState(snap?.mode || "existing");
@@ -1581,6 +1583,10 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
     if (!hasPaper(rowRef.current)) return publish();
     setError("");
     await saver.current.flush();   // the agent gets the number on screen
+    // A raise waiting on your confirm never saved: the letter is still the old
+    // one, so the send waits for the confirm (or a lower number) too.
+    const waits = sendWaitsLine(saver.current.asking());
+    if (waits) { setError(waits); return; }
     setSendOpen(true);
   }
 
@@ -1642,6 +1648,14 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
           </span>
           <button type="button" onClick={() => saver.current.confirm()} className="font-semibold underline">Confirm the raise</button>
         </div>
+      )}
+      {/* A deal's letter stays at the contract price whatever is typed (the
+          live save pins it, 2026-11-09); said when the screen comes out at
+          something else, so the preview isn't taken for the letter. */}
+      {dealPrice > 0 && Math.round(Number(calc?.offers?.cash?.amount) || 0) !== dealPrice && (
+        <p role="note" className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          Under contract: the letter stays at the contract price, {fmtMoney(dealPrice)}. The figures you type are kept beside it.
+        </p>
       )}
       {otherWindow && (
         <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -1835,7 +1849,10 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       <OfferCards calc={calc} underwriteMode={underwriteMode} setUnderwriteMode={setUnderwriteMode}
         priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
         feeOverride={feeOverride} setFeeOverride={setFeeOverride}
-        uwOverrides={uwOverrides} setUw={setUw} settings={settings} fmtTyped={fmtTyped} />
+        uwOverrides={uwOverrides} setUw={setUw} fmtTyped={fmtTyped}
+        // A sent offer's blanks mean the settings it went out at, so its
+        // placeholders say those, not today's.
+        settings={priced ? { ...(settings || {}), ...priced } : settings} />
       </>}
 
       <div className="rounded-xl border border-slate-200 bg-white p-4">

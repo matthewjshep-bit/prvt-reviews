@@ -9,7 +9,7 @@ vi.mock("react-leaflet", () => { const C = () => null; return { MapContainer: C,
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createAutosaver, namesAHouse, saveKindFor, DRAFT_DELAY_MS, LIVE_DELAY_MS, RETRY_MS, MAX_RETRIES,
-  restoredInputs, pricedSettings, editorSettings, restoredUnderwriteMode, raiseAskFrom } from "../offer-autosave.js";
+  restoredInputs, pricedSettings, editorSettings, restoredUnderwriteMode, raiseAskFrom, sendWaitsLine } from "../offer-autosave.js";
 import { calculateOffers } from "@shared/offer-calc.js";
 
 beforeEach(() => { vi.useFakeTimers(); });
@@ -250,4 +250,47 @@ test("a save the server says raises a sent offer stops and asks, keeping what yo
   expect(confirmed).toBe(true);
   expect(run).toHaveBeenLastCalledWith("live", { final: false, confirmRaise: true });
   expect(states.at(-1).phase).toBe("saved");
+});
+
+// Send flushes the save first, so the agent gets the number on screen. A raise waiting on your
+// confirm never saved: the letter is still the old one, so Send waits too.
+test("a raise waiting on your confirm keeps Send from going out on the old letter", async () => {
+  const ask = Object.assign(new Error("This raises a sent offer from 254k to 300k: confirm?"), { status: 409, needsConfirm: "raise", from: 254000, to: 300000 });
+  let raise = true;
+  const run = vi.fn(async (kind, opts) => { if (raise && !opts.confirmRaise) throw ask; });
+  const saver = createAutosaver({ run, onState: () => {}, timers: { setTimeout, clearTimeout } });
+  expect(saver.asking()).toBe(null);
+  saver.schedule("live");
+  await saver.flush();
+  expect(saver.asking()).toEqual({ from: 254000, to: 300000, line: "This raises a sent offer from 254k to 300k: confirm?" });
+  expect(sendWaitsLine(saver.asking())).toBe("Not sent: this raises a sent offer from 254k to 300k. Confirm the raise above, or bring the number back down, then send.");
+  // Bring it back down: the save goes through and Send is free again.
+  raise = false;
+  saver.schedule("live");
+  await saver.flush();
+  expect(saver.asking()).toBe(null);
+  expect(sendWaitsLine(null)).toBe("");
+});
+
+// The server keeps a deal's letter at the contract price whatever is typed; the editor says so
+// when what's on screen comes out at something else, so the preview isn't mistaken for the letter.
+test("typing on a deal's offer says the letter stays at the contract price", async () => {
+  const DEAL_ROW = { ...ENGINE_ROW, id: "o-deal", status: "accepted", deal: { stage: "under_contract", contractPrice: 249500 },
+    calc: { ...ENGINE_ROW.calc, inputs: { ...ENGINE_ROW.calc.inputs, priceOverride: 0 } } };
+  const NewOffer = await editor();
+  const html = renderToStaticMarkup(<NewOffer settings={LOCATION} restore={DEAL_ROW} />);
+  expect(html).toContain("Under contract: the letter stays at the contract price, $249,500.");
+  const atContract = { ...DEAL_ROW, calc: { ...DEAL_ROW.calc, inputs: { ...DEAL_ROW.calc.inputs, priceOverride: 249500 } } };
+  expect(renderToStaticMarkup(<NewOffer settings={LOCATION} restore={atContract} />)).not.toContain("Under contract:");
+});
+
+// The engine branch marks a walk-away far over the seller's number "over_theirs": its ARV is likely
+// high. That draft opens on the lower of the engine's ARV and our own comps ARV, never the high one.
+test("an engine draft whose ARV is likely high never opens above our own comps ARV", () => {
+  const high = { ...ENGINE_DRAFT, draft: { ...ENGINE_DRAFT.draft, engine: { ...ENGINE_DRAFT.draft.engine, arv: 910000, triage: "over_theirs" } } };
+  const inputs = restoredInputs({ restore: high, snap: high.draft });
+  expect(inputs.arv).toBe("480,000");
+  expect(inputs.repairs).toBe("62,000");
+  const lower = { ...ENGINE_DRAFT, draft: { ...ENGINE_DRAFT.draft, engine: { ...ENGINE_DRAFT.draft.engine, arv: 455000, triage: "over_theirs" } } };
+  expect(restoredInputs({ restore: lower, snap: lower.draft }).arv).toBe("455,000");
 });

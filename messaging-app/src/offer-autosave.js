@@ -55,8 +55,8 @@ export const delayFor = (kind) => (kind === "live" ? LIVE_DELAY_MS : DRAFT_DELAY
 // reopens from what priced its letter: calc.inputs (the override included) and the price settings
 // in calc.settings. A draft, or a blank form, is unchanged.
 
-// The settings that set a comps price (shared/offer-calc.js calculateOffers). Presentation (the
-// terms, the company, the expiry) stays today's.
+// The settings that set a comps price (shared/offer-calc.js calculateOffers). What the letter
+// prints besides the price (its rows, letterhead and expiry) is today's.
 export const PRICE_SETTING_KEYS = [
   "underwriteMode", "sellingCostPct", "flipProfitPct", "holdMonths", "holdingModel", "holdMonthlyCost",
   "loanToCostPct", "loanRatePct", "loanPointsPct", "taxRatePct", "insuranceRatePct", "utilitiesMonthly",
@@ -103,8 +103,13 @@ export function restoredInputs({ restore = null, snap = null, initialAddress = "
   // floor, never the bare scope). Once a person saves it, the form copy says so (engineApplied)
   // and it opens on what they typed. The price stays theirs to set.
   const engine = !r && restore?.status === "draft" && !snap?.engineApplied ? engineOf({ restore, snap }) : null;
+  // A walk-away far over the seller's number ("over_theirs") says the engine's ARV is likely high:
+  // that draft opens on the lower of it and our own comps ARV, never the high one.
+  const ownArv = Number(String(snap?.inputs?.arv ?? "").replace(/[^\d.]/g, "")) || 0;
+  const engineArv = engine && engine.triage === "over_theirs" && ownArv > 0
+    ? Math.min(ownArv, Number(engine.arv) || ownArv) : Number(engine?.arv) || 0;
   const fromEngine = engine ? {
-    ...(Number(engine.arv) > 0 ? { arv: fmtN(engine.arv) } : {}),
+    ...(engineArv > 0 ? { arv: fmtN(engineArv) } : {}),
     ...(Number(engine.rehab) > 0 ? { repairs: fmtN(engine.rehab) } : {}),
   } : null;
   if (snap?.inputs) return { ...BLANK_INPUTS, ...snap.inputs, ...(figures || fromEngine || {}) };
@@ -153,13 +158,24 @@ export function raiseAskFrom(error) {
   return { from: Number(error.from) || 0, to: Number(error.to) || 0, line: String(error.message || "") };
 }
 
+/**
+ * sendWaitsLine(ask) → why Send waits while a raise is held, or "". Send saves first so the agent
+ * gets the number on screen; a held raise never saved, so the letter they'd get is the old one.
+ */
+export function sendWaitsLine(ask) {
+  if (!ask) return "";
+  const k = (n) => (n % 1000 === 0 ? `${n / 1000}k` : Number(n).toLocaleString("en-US"));
+  return `Not sent: this raises a sent offer from ${k(Math.round(Number(ask.from) || 0))} to ${k(Math.round(Number(ask.to) || 0))}. ` +
+    "Confirm the raise above, or bring the number back down, then send.";
+}
+
 // A workspace write is inside a live one (the PUT carries the snapshot), so
 // the bigger save absorbs the smaller.
 const RANK = { workspace: 1, draft: 2, live: 3 };
 const merge = (a, b) => (!a ? b : !b ? a : RANK[b] >= RANK[a] ? b : a);
 
 /**
- * createAutosaver({ run, onState, timers }) → { schedule, flush, confirm, cancel, idle }
+ * createAutosaver({ run, onState, timers }) → { schedule, flush, confirm, asking, cancel, idle }
  *   run(kind, { final, confirmRaise? })  does the save; reads the form at call
  *                         time, so a save queued behind a slow one sends the latest
  *   onState({ phase, at?, error?, ask? })  "pending" | "saving" | "saved" |
@@ -170,6 +186,7 @@ const merge = (a, b) => (!a ? b : !b ? a : RANK[b] >= RANK[a] ? b : a);
  *   schedule(kind)        debounce a save of this kind
  *   flush({ final })      run what's pending now; final: you're leaving
  *   confirm()             you said yes to the raise: send it, marked confirmed
+ *   asking()              the raise waiting on your confirm ({ from, to, line }), or null
  *   cancel()              drop what's pending (the form is moving to another row)
  *   idle()                nothing pending, nothing running
  *
@@ -246,5 +263,5 @@ export function createAutosaver({ run, onState = () => {}, timers = globalThis }
     dead = true;
   }
 
-  return { schedule, flush, confirm, cancel, idle: () => !pending && !timer && running === 0 };
+  return { schedule, flush, confirm, asking: () => held, cancel, idle: () => !pending && !timer && running === 0 };
 }
