@@ -2287,11 +2287,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // one is the same revision: it keeps where you started and moves where you
   // stopped, so Lessons sees one ARV 520k → 570k, not five steps of it.
   const LIVE_SITTING_MS = 15 * 60 * 1000;
+  // A send since the last live save ends the sitting: the number that went out stays on the
+  // ledger, which is where "what the agent was last sent" is read (shared/offer-raise.js).
   const reviseLedger = (existing, fresh, { ts, by, live }) => {
     const list = existing.revisions || [];
     const last = list.at(-1);
     const entry = { ts, from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount, by, ...revisionInputs(existing, fresh), ...(live ? { live: true } : {}) };
-    if (live && last?.live && last.by === by && Date.parse(ts) - (Date.parse(last.ts) || 0) < LIVE_SITTING_MS) {
+    const sentSince = (existing.sends || []).some((s) => String(s?.ts || s?.at || "") > String(last?.ts || ""));
+    if (live && last?.live && last.by === by && !sentSince && Date.parse(ts) - (Date.parse(last.ts) || 0) < LIVE_SITTING_MS) {
       const kept = Object.fromEntries(["arv", "repairs"].filter((k) => last[k] && entry[k]).map((k) => [k, [last[k][0], entry[k][1]]]));
       return [...list.slice(0, -1), { ...entry, ...kept, from: last.from, startedAt: last.startedAt || last.ts }].slice(-20);
     }

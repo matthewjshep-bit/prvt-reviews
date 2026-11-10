@@ -313,7 +313,9 @@ things changed:
   nothing, unless the body carries `confirmRaise`. The ceiling is the higher
   of what the agent was last sent and the engine's walk-away on a live engine
   offer (`shared/offer-raise.js`). "Last sent" is the amount in effect at the
-  newest send that went, read off `revisions[]`. With no send on the ledger
+  newest send that went, read off `revisions[]`. A send ends a typing
+  sitting on that ledger, so the number that went out mid-sitting stays on
+  it. With no send on the ledger
   (marked sent by hand, floated) it is today's number. An offer that never
   went out has no ceiling. The editor keeps what you typed, stops retrying,
   and shows "This raises a sent offer from X to Y: confirm?" with **Confirm

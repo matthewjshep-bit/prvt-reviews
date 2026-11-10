@@ -335,6 +335,33 @@ test("an engine offer's walk-away is room a person can save into without a confi
   assert.equal(past.json.from, walkAway, "the ceiling is the higher of the number sent and the walk-away");
 });
 
+// The send ledger carries no amount, so "last sent" is read off revisions[]. Typing before and after
+// a send in one sitting folded both into one revision stamped after the send, and the number that
+// went out (the lower one) dropped off the ledger: raising back over it saved without a confirm.
+test("a raise over a lower number you sent mid-sitting still asks", async () => {
+  const row = await sentOffer("62 Sorrelwood Ct, Tacoma, WA 98404");
+  const first = row.cashAmount;
+  const put = (inputs, over = {}) => req("PUT", `/api/offers/${row.id}`, { contactId: "contact-1", inputs, settings: SETTINGS, live: true, ...over });
+  const lower = await put(inputsAt("62 Sorrelwood Ct, Tacoma, WA 98404", { repairs: 70000 }));
+  assert.equal(lower.status, 200, JSON.stringify(lower.json).slice(0, 300));
+  const lowered = lower.json.offer.cashAmount;
+  assert.ok(lowered < first);
+  // The lower letter goes out a moment later, in the same sitting.
+  await new Promise((r) => setTimeout(r, 5));
+  const sentRow = await store.getOffer(row.id);
+  sentRow.sends = [...(sentRow.sends || []), { ts: new Date().toISOString(), channels: ["sms"], results: { sms: { ok: true } } }];
+  await store.updateOffer(row.id, sentRow);
+  await new Promise((r) => setTimeout(r, 5));
+  // Still typing: a save at the same number (a term, the expiry) after the send.
+  const term = await put(inputsAt("62 Sorrelwood Ct, Tacoma, WA 98404", { repairs: 70000 }));
+  assert.equal(term.status, 200, JSON.stringify(term.json).slice(0, 300));
+  assert.equal(term.json.offer.cashAmount, lowered);
+  const back = await put(inputsAt("62 Sorrelwood Ct, Tacoma, WA 98404"));
+  assert.equal(back.status, 409, "the agent was last sent the lower number");
+  assert.equal(back.json.from, lowered);
+  assert.equal(back.json.to, first);
+});
+
 test("an offer that never went out saves as you type, raise or not", async () => {
   const made = await req("POST", "/api/offers", { contactId: "contact-1", inputs: inputsAt("940 Wintergreen Ave, Tacoma, WA 98405"), settings: SETTINGS });
   const r = await req("PUT", `/api/offers/${made.json.offer.id}`, { contactId: "contact-1", inputs: inputsAt("940 Wintergreen Ave, Tacoma, WA 98405", { arv: 600000 }), settings: SETTINGS, live: true });
