@@ -5072,6 +5072,42 @@ reply-agent.js (`WALK_AWAY_GAP`, `listPriceFloor`):
   workflow + `mark_offer_passed`) and the passed-offer check-in ladder
   (every 10 days) — that is the "stay in touch".
 
+#### A walk-away step-up is not their yes (2026-11-09)
+
+The walk-away (`shared/walkaway.js`) has been on since 11-04. Each step-up
+re-issued the letter through `reviseOfferToCounter`, which stamped
+`counterBand.acceptedAt`, and `priceAgreed` read that as their yes. So a
+move made the offer Hot and locked the price. The hot push could ask them
+to write it up "at" a number nobody agreed to, and Matt's own typed "we'll
+pass" no longer closed the offer (`counteredAboveUs` skips agreed and hot
+offers).
+
+- **A move is stamped `counterBand.movedAt`**, never `acceptedAt`, and
+  writes no `agreed`. `pricing.moves` and `lastMoveAt` count it as before.
+  Their number taken at or under the walk-away is still their yes:
+  `acceptedAt` plus `agreed`.
+- **Moves from 11-04 to now** were stamped accepted at their own
+  `pricing.lastMoveAt` with nothing agreed. `priceAgreed` reads that as the
+  move it was, and the next move drops the stamp.
+- **The readers that mean "we moved on price"** read either stamp: the
+  counter pass line and the first-no rule in `reply-agent.js`, the stalled
+  counter in `shared/conversation-audit.js`, the Flow tab's machine share,
+  `offerStageAt`, and the hot clock in `next-follow-up.js` and
+  `follow-up-sweep.js`. So a move still counts for the first-no rule.
+  `send_offer` after a move (`afterCounter`) counts only a send after the
+  newer stamp. `numberApproved` treats a move as the machine moving the
+  number.
+- **A no that isn't about price never steps us up.** `TOO_LOW_RX` reads
+  "needs more" as price only before "than that", "money" or "for the
+  seller". "It needs more work", "more repairs" and "more time" are about
+  the house, and so is "not enough time". `GONE_RX` adds going to rent, rent
+  it out, hold off, wait and not ready, so "can't do that, the seller's going
+  to rent it out" is their no, closed the usual way.
+
+Check: an engine offer that moved shows `counterBand.movedAt` and no
+`agreed`, stays out of the Hot lane, and a typed "we'll pass" on it marks it
+we_passed.
+
 ### The machine stays out of a live thread, and never walks away from a yes (2026-10-15)
 
 **Why.** The funnel review (485 threads, Jul–Oct) found machine texts landing
