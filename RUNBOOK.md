@@ -473,7 +473,9 @@ the ones above; each only lowers a number or adds a hold.
     most the walk-away. Offering exactly their number leaves no room; that is Matt's rule.
   - When `rawWalk` is more than `pricingV2.overSellerPct` (default 10, 0–50, 0 = any amount over)
     over their number: an `arv` miss, the reason "our walk-away is N% over their number: the ARV is
-    likely high", `triage: "over_theirs"` and `overTheirs: true`. Never "hot".
+    likely high", `triage: "over_theirs"` and `overTheirs: true`. Never "hot". Matt changes the line
+    in Settings → the offer engine (v2) → "Hold for me when the walk-away is this % over the seller's
+    number".
   - This lowers the counter band's ceiling (it reads the walk-away); it never raises it.
 - **Where their number comes from** (`readsFrom` / `sellerNumberFor`, ghl-broker/price-v2.js): the
   newest seller-sourced figure on the house. That is a `property_details` or `house_mentioned` sellerAsk,
