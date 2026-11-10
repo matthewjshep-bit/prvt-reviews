@@ -599,6 +599,11 @@ const LEAD_AHEAD_RX = /\b(?:have|got|has|may|might|will|'ll|gonna|going\s+to|get
 const LEAD_NOT_RX = /\b(?:no|not|nothing|none|never|don'?t|doesn'?t|haven'?t|hasn'?t|won'?t|isn'?t|aren'?t|wasn'?t|didn'?t)\s+(?:\w+\s+){0,3}$/i;
 // "Sold a fixer last spring": behind us.
 const LEAD_PAST_RX = /\b(?:sold|closed|had|bought|did|was|were|last\s+(?:year|month|week|spring|summer|fall|winter))\b/i;
+// "I'll let you know if I have one", "if I get a fixer I'll send it": an
+// offer to send, not a lead (the weekly deal-source check-in's, if anything).
+const LEAD_IF_RX = /\b(?:if|in\s+case|whenever)\b[^.!?,;]{0,30}$/i;
+// "had one coming up but it fell through": gone.
+const LEAD_GONE_RX = /\b(?:fell\s+(?:through|apart)|didn'?t\s+(?:happen|work\s+out|pan\s+out)|backed\s+out|went\s+(?:away|elsewhere)|no\s+longer)\b/i;
 
 /**
  * detectLead(text, now) → { when, what, phrase, said, confidence } | null
@@ -625,9 +630,10 @@ export function detectLead(text = "", now = Date.now()) {
       if (/\b(?:your|our)\s+offer\b/i.test(t.slice(Math.max(0, m.index - 14), m.index + m[0].length))) continue;
       if (/\b(?:if\s+you|you\s+(?:could|would|can|'d|might|fix\w*|flip\w*|bought|buy))\b[^.!?]{0,40}$/i.test(t.slice(Math.max(0, m.index - 60), m.index))) continue;
       if (LEAD_NOT_RX.test(t.slice(Math.max(0, m.index - 40), m.index))) continue;
+      if (LEAD_IF_RX.test(t.slice(Math.max(0, m.index - 40), m.index))) continue;
       const said = sentenceAround(t, m.index, m.index + m[0].length);
       if (!LEAD_AHEAD_RX.test(said) || (LEAD_PAST_RX.test(said) && !/\b(?:will|'ll|may|might|soon|coming|upcoming|gonna|going\s+to)\b/i.test(said))) continue;
-      if (bankSaleIn(said)) continue;
+      if (LEAD_GONE_RX.test(said) || bankSaleIn(said)) continue;
       return { when: null, what, phrase: m[0].trim(), said, confidence: "low" };
     }
   }

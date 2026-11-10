@@ -1005,13 +1005,18 @@ export function checkInHook({ verdict = {} } = {}) {
  * A lead they told us about with no day on it ("I may have one coming up",
  * shared/follow-up.js detectLead): the next regular check-in asks about it,
  * never sooner than LEAD_WAIT_DAYS after they said it and never after
- * LEAD_HOOK_DAYS, once (a check-in that asked carries its `leadAt`).
+ * LEAD_HOOK_DAYS, once (a check-in that asked carries its `leadAt`). Asked
+ * once is asked for every time they said it before then, and a house of
+ * theirs that came in after it (one they named, an address we're chasing,
+ * the house a reply was about) is the lead come in: never asked about.
  */
+const LEAD_CAME_IN = (e) => e?.type === "house_mentioned" || e?.type === "address_pending" || (e?.type === "subject_property_set" && !e.data?.ours);
 export function undatedLeadFor({ events = [], ledger = [], now = Date.now() } = {}) {
-  const asked = new Set((ledger || []).filter((e) => e?.type === "agent_pulse_texted" && e.data?.leadAt).map((e) => String(e.data.leadAt)));
+  const lastAsked = (ledger || []).filter((e) => e?.type === "agent_pulse_texted" && e.data?.leadAt).map((e) => String(e.data.leadAt)).sort().at(-1) || "";
+  const cameIn = (events || []).filter(LEAD_CAME_IN).map((e) => String(e.at || "")).sort().at(-1) || "";
   const e = (events || []).filter(isUndatedLead)
     .filter((x) => { const t = ms(x.at); return t != null && now - t >= LEAD_WAIT_DAYS * DAY_MS && now - t <= LEAD_HOOK_DAYS * DAY_MS; })
-    .filter((x) => !asked.has(String(x.at)))
+    .filter((x) => String(x.at) > lastAsked && String(x.at) > cameIn)
     .sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
   if (!e) return null;
   return { what: String(e.data?.lead?.what || "").slice(0, 80), said: String(e.data?.lead?.said || "").slice(0, 200), at: e.at, undated: true };

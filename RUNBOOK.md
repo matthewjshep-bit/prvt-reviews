@@ -7512,8 +7512,13 @@ and none of those is a house.
   address, a house number, a house in their book, or point at one ("the
   place you called about", "the deal we did together", "that last one").
   Not even a deal we closed together, not even by its town. Their town or the
-  area they work is fine. A held one is written once more, told why, then
-  dropped with a timeline note; never on the Desk. Out of it: the listing
+  area they work is fine (a town of two words, "Lake Stevens", is read as the
+  town before any street word, so a house on a "Lake ..." road doesn't hold
+  it). A held one is written once more, told why, then dropped with a
+  timeline note; never on the Desk. An agent check-in or buyer pulse dropped
+  that way also waits `skipDays` (`checkin_skipped`, "it named a house from
+  before, twice") so the same person isn't tried again the next morning.
+  Out of it: the listing
   ping about a listing they just posted, a relisted house, the net under a
   text of theirs we never answered, and a live offer's nudges (they name
   their house). The old `pastHouses` gate still holds any house we've had
@@ -7531,8 +7536,12 @@ and none of those is a house.
   60, asks about it with no address (`undatedLeadFor`): with the composer
   off, one fixed line ("{first}, any word on the one you said was coming
   up?", `LEAD_CHECKIN_TEXTS`), in either mode. Asked once: the texted
-  event carries its `leadAt`. Not booked when the address chase already
-  asks, or when the text was about a house we know.
+  event carries its `leadAt`, and asking once covers every time they said
+  it before. Never asked once a house of theirs came in after it (one they
+  named, an address chase, the house a reply was about). Not booked when
+  the address chase already asks, when the text was about a house we know,
+  when it was an "if" ("I'll let you know if I have one"), or when it fell
+  through.
 - **The weekly deal-source check-in** carries "check-in N of 6" and the words
   they offered in ("I'll keep you in mind for any fixers", `dealSourceWords`).
 - **Referrals to reach** in the morning post (#daily): someone an agent named
@@ -7549,8 +7558,11 @@ and none of those is a house.
   - buyers: their own words › their read's quotes (`investor_reads`, 180
     days) › the town they bought in › a detail they shared.
 
-  Nothing that names a house is ever a hook, and a hook one of our check-ins
-  already used (`checkIn.key` on the texted event) is never used twice.
+  Nothing that names a house is ever a hook, and a hook one of the model's
+  check-ins already used (`checkIn.key` on a texted event in the model's
+  arm, `spentHookKeys`) is never used twice; the hook stamped on a shadow or
+  control text was never said, so it isn't spent, and the report counts a
+  hook only where the model said it.
   "Shadow": today's text goes; the model's, written from the one thing with
   our last three texts and the spent phrases in front of it, is kept beside
   it on the draft (`checkInShadow`), never sent. "On": `composerShare` percent

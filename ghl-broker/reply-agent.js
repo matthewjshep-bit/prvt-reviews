@@ -62,7 +62,7 @@ import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 // ourLastTexts (below, the cold ladder's) returns plain text, so the voice one goes by voicePrior.
 import { voiceFlags, hardVoiceKeys, voiceLine, ourLastTexts as voicePrior, VOICE_LINE_RX } from "./shared/voice.js";
 import { checkInPack, routeCheckIn, routesCheckIn, normalizeCheckInRoute, asksIfBot, onlyAsksIfBot, botAskFlags, BOT_ASK_REASON, goesBySaid, goesByOf,
-  strictNoHouse, checkInFlags, namesBookHouse, namesAHouse, composeRoute, composes, checkInStamp, openingIndex, nothingToSay, normalizeCheckInComposer } from "./shared/check-in.js";
+  strictNoHouse, checkInFlags, namesBookHouse, namesAHouse, composeRoute, composes, checkInStamp, openingIndex, nothingToSay, normalizeCheckInComposer, spentHookKeys } from "./shared/check-in.js";
 import { normalizeDealTexts } from "./shared/blast-text.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
@@ -4379,7 +4379,8 @@ async function composeFor({ store, locationId, contactId, kind, subject, outboun
     party, composer: normalizeCheckInComposer(config.checkIns), facts: profile?.facts || {},
     calls: events.filter((e) => e?.type === "call_summary"),
     quotes: Array.isArray(read?.doc?.quotes) ? read.doc.quotes : [],
-    spent: events.filter((e) => (e?.type === "agent_pulse_texted" || e?.type === "pulse_texted") && e.data?.checkIn?.key).map((e) => e.data.checkIn.key),
+    // Only what the model's own texts said (spentHookKeys): a hook the shadow or the control carried was never said.
+    spent: spentHookKeys(events),
     // The weekly deal-source check-in: something new since last week's, or nothing.
     newerThan: kind === "checkin_due" && sourceKind === "source" ? ourLast[0]?.at || null : null,
     lead: kind === "checkin_due" && sourceKind === "lead" && subject?.lead ? subject.lead : (outbound?.lead || null),
@@ -4691,6 +4692,16 @@ async function runProactive(job, ctx) {
       const why = String(tripped[0] || gate.flags?.[0] || "a gate held it").replace(/^needs a person:\s*/, "").slice(0, 160);
       await recordEvent({ store, locationId, contactId: job.contactId, party, type: "note", at: new Date(now).toISOString(), source: "conversation",
         dedupeKey: `machine_text_dropped:${job.id}`, data: { note: `${kind.replace(/_/g, " ")} not sent — ${why}`, phrase: "the machine dropped its own text" } }).catch(() => {});
+      // A check-in that named a house from before twice waits, the way one
+      // with nothing to say does (redraft once, then skip: Matt, 2026-11-09).
+      // Without it the agent and buyer check-ins void their claim and pick
+      // the same person again the next morning, two model calls a day.
+      if ((kind === "agent_pulse" || kind === "buyer_pulse") && strictNoHouse(kind, writeOut)
+          && [...tripped, ...(gate.flags || [])].some((f) => /^named (?:a house|the house we passed on)/.test(String(f)))) {
+        await recordEvent({ store, locationId, contactId: job.contactId, party, type: "checkin_skipped", at: new Date(now).toISOString(), source: "sweep",
+          dedupeKey: `checkin_skipped:${job.contactId}:${kind}:${new Date(now).toISOString().slice(0, 10)}`,
+          data: { kind, why: "it named a house from before, twice", until: new Date(now + skipDaysFor() * 86400000).toISOString(), route: "skip" } }).catch(() => {});
+      }
       job.status = "held"; job.phase = ""; job.heldReason = `dropped, not sent: ${why}`; job.finishedAt = new Date().toISOString();
       return;
     }

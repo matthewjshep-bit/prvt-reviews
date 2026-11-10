@@ -358,3 +358,12 @@ test("I may have one coming up is a lead with no date", async () => {
   assert.equal(leadCheckInPending([dated, undated], now)?.at, dated.at);
   assert.equal(dealSourceWords("Thanks. I'll keep you in mind for any fixers. Have a good one"), "I'll keep you in mind for any fixers.");
 });
+
+test("I'll let you know if I have one is no lead, and neither is one that fell through", async () => {
+  const { detectLead } = await import("./follow-up.js");
+  const now = Date.parse("2026-11-10T19:00:00Z");
+  for (const t of ["Will let you know if I have one coming up", "Nothing now. If I get a fixer I will send it your way", "In case I have one coming up I'll text you",
+    "I had one coming up but it fell through", "Had an estate coming up, the family backed out"]) assert.equal(detectLead(t, now), null, t);
+  // Said plainly, still a lead.
+  assert.equal(detectLead("Not at the moment but I might have one coming up", now)?.what, "the one coming up");
+});

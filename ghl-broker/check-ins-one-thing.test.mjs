@@ -330,3 +330,21 @@ test("the check-in after an undated lead asks about that lead, once", async () =
   const next = await planAgentPulse({ locationId: loc, saved, store, now: NOW + 30 * DAY });
   assert.equal(next.picks.find((p) => p.contactId === "c-teal")?.subject?.lead, undefined);
 });
+
+/* ---------- review fixes (2026-11-10) ---------- */
+
+test("a check-in that named a house twice waits two weeks instead of trying the same person again tomorrow", async () => {
+  const loc = "loc-house-twice";
+  _resetJobs();
+  const { client, sent } = ghl({ "c-sage": { firstName: "Sage", tags: ["agent"] } }, { "c-sage": [[40, "US", "Hey Sage, anything off-market lately that needs work?"]] });
+  const r = await startProactive({ client, locationId: loc, saved: withCheckIns({ composer: "off" }, { outreachAutopilot: { pulse: { mode: "ai" } } }), store, contactId: "c-sage", kind: "agent_pulse",
+    sendsEnabled: true, subject: { ...GENERAL, touch: 0 }, deps: { draft: async () => said("Hey Sage, still thinking about the house on Corvid. Got another like it?") } });
+  await done(r.job);
+  assert.match(r.job.heldReason, /^dropped, not sent: named a house/);
+  assert.equal(sent.length, 0);
+  const [skip] = await skipsOf(loc, "c-sage");
+  assert.ok(skip, "the check-in waits");
+  assert.equal(skip.data.why, "it named a house from before, twice");
+  assert.doesNotMatch(JSON.stringify(skip.data), /Corvid/, "the wait never says the street");
+  assert.equal(Math.round((Date.parse(skip.data.until) - Date.parse(skip.at)) / DAY), 14);
+});

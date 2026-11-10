@@ -975,3 +975,24 @@ test("a lead older than 60 days is dropped", async () => {
   const req = { type: "checkin_requested", at: ago(61), data: { kind: "lead", dueAt: null, undated: true, lead: { what: "the one coming up" } } };
   assert.equal(undatedLeadFor({ events: [req], now: NOW }), null);
 });
+
+/* ---------- review fixes (2026-11-10) ---------- */
+
+test("an agent who said twice that one might be coming is asked about it once", async () => {
+  const { undatedLeadFor } = await import("./agent-pulse.js");
+  const req = (d) => ({ type: "checkin_requested", at: ago(d), address: "", data: { kind: "lead", dueAt: null, undated: true, lead: { what: "the one coming up" } } });
+  // Asked at day 20 about the newer one; the older one is the same lead.
+  const ledger = [{ type: "agent_pulse_texted", at: ago(15), data: { leadAt: ago(30) } }];
+  assert.equal(undatedLeadFor({ events: [req(33), req(30)], ledger, now: NOW }), null);
+});
+
+test("a lead whose house came in afterwards is never asked about", async () => {
+  const { undatedLeadFor } = await import("./agent-pulse.js");
+  const req = { type: "checkin_requested", at: ago(25), address: "", data: { kind: "lead", dueAt: null, undated: true, lead: { what: "the one coming up" } } };
+  for (const came of [{ type: "house_mentioned", at: ago(20), address: "12 Wren Ct, Halden, WA" }, { type: "address_pending", at: ago(20), data: {} },
+    { type: "subject_property_set", at: ago(20), address: "12 Wren Ct, Halden, WA", data: {} }]) {
+    assert.equal(undatedLeadFor({ events: [req, came], now: NOW }), null, came.type);
+  }
+  // Our own first text's house is not theirs coming in.
+  assert.ok(undatedLeadFor({ events: [req, { type: "subject_property_set", at: ago(20), address: "12 Wren Ct, Halden, WA", data: { ours: true } }], now: NOW }));
+});

@@ -527,12 +527,18 @@ const DIRECTION_WORD_RX = /^(?:n|s|e|w|ne|nw|se|sw|north|south|east|west|northea
  * street's own word ("1412", "Tamsin", "163rd"), without the suffix
  * namesAHouse needs. A street word that is also a town ("Auburn" of Auburn
  * Way) is their area, not the house; a word is matched as the street
- * writes it, so "the main thing" is never Main St.
+ * writes it, so "the main thing" is never Main St. A town of more than one
+ * word, and the town each house is in, are read as towns first: "anything
+ * around Lake Stevens?" never names a house on Lake Something Rd (the cold
+ * ladder names the town of the listing we first texted about).
  */
+const TOWN_PHRASES = Object.keys(WA_CITY_COORDS).filter((k) => k.includes("-")).map((k) => k.split("-"));
 export function namesBookHouse(text = "", addresses = []) {
-  const t = String(text || "");
-  if (!t.trim()) return "";
+  if (!String(text || "").trim()) return "";
   const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const ownTowns = (addresses || []).map((a) => String(parseUsAddress(String(a || "")).city || "").trim().split(/[\s-]+/).filter(Boolean)).filter((w) => w.length);
+  let t = String(text || "");
+  for (const words of [...TOWN_PHRASES, ...ownTowns]) t = t.replace(new RegExp(`\\b${words.map(esc).join("[\\s-]+")}\\b`, "gi"), " ");
   for (const a of addresses || []) {
     const { houseNo, street } = parseUsAddress(String(a || ""));
     if (houseNo && houseNo.length >= 3 && new RegExp(`\\b${esc(houseNo)}\\b`).test(t)) return houseNo;
@@ -799,15 +805,17 @@ export const nothingToSay = (draft) => !String(draft?.reply || "").trim() && /\b
 // conversation-prompt.js CHECKIN_VOICE): invented lines in the shape his own
 // answered texts take, never a real thread's words, and none names a house.
 // The voice, never the words: a check-in that copies one is held.
+// One question each: the voice check holds two (shared/voice.js), so an
+// example with two would teach the model a shape that never sends.
 export const CHECK_IN_VOICE_EXAMPLES = Object.freeze([
-  "how was the trip? anything new come up while you were out?",
+  "hope the trip was a good one. anything new come up while you were out?",
   "you said spring is when your sellers start moving. seeing any of that yet?",
-  "still slammed with the new team? anything rough land on your end lately?",
+  "sounds like the new team has you slammed. anything rough land on your end lately?",
   "any word on the one you said was coming up?",
-  "how's Kentwood treating you this fall? any older ones sitting that the sellers are tired of?",
+  "how's Kentwood treating you this fall, any older ones sitting that the sellers are tired of?",
 ]);
 export const BUYER_VOICE_EXAMPLES = Object.freeze([
-  "still buying flips right now? got you down for heavy rehab around Kentwood, still right?",
+  "got you down for heavy rehab flips around Kentwood. still right?",
   "you said you were done with rentals for a while. still the case, or open to one again?",
   "still looking north of the lake, or has that moved?",
 ]);
@@ -840,13 +848,27 @@ export function checkInFlags({ text = "", hook = null } = {}) {
 }
 
 /**
+ * spentHookKeys(events) → the one things our check-ins already said
+ *
+ * From agent_pulse_texted and pulse_texted rows: only a text the model wrote
+ * around its hook said it. The shadow's text never went, and the control's
+ * was today's fixed line, so the hook stamped on those is still unused.
+ */
+export function spentHookKeys(events = []) {
+  return (events || []).filter((e) => (e?.type === "agent_pulse_texted" || e?.type === "pulse_texted") && e.data?.checkIn?.arm === "model" && e.data.checkIn.key)
+    .map((e) => String(e.data.checkIn.key));
+}
+
+/**
  * checkInReport(events, { days, now }) → { days, arms, hooks, skips }
  *
  * What the check-ins did: per arm (model, control, shadow, and "none" for
  * the ones before the composer), how many went, how many got a reply within
- * a week and how many an opt-out; per hook kind the same; and why the ones
- * that waited, waited. `events` are agent_pulse_texted, pulse_texted,
- * checkin_skipped, text_summary and unsubscribed rows. Counts only.
+ * a week and how many an opt-out; per hook kind the same, for the texts
+ * the model wrote around it (a control or shadow text carries the hook it
+ * could have used, but never said it); and why the ones that waited,
+ * waited. `events` are agent_pulse_texted, pulse_texted, checkin_skipped,
+ * text_summary and unsubscribed rows. Counts only.
  */
 export const CHECK_IN_REPORT_TYPES = Object.freeze(["agent_pulse_texted", "pulse_texted", "checkin_skipped", "text_summary", "unsubscribed"]);
 export function checkInReport(events = [], { days = 30, now = Date.now() } = {}) {
@@ -870,7 +892,7 @@ export function checkInReport(events = [], { days = 30, now = Date.now() } = {})
     if (e.type !== "agent_pulse_texted" && e.type !== "pulse_texted") continue;
     const ci = e.data?.checkIn || null;
     const arm = ci?.arm || "none";
-    const hook = ci?.hook || (ci ? "none" : "");
+    const hook = arm !== "model" ? "" : ci?.hook || "none";
     bump(arms, arm, "sent");
     if (hook) bump(hooks, hook, "sent");
     if (after(replies, e.contactId, t)) { arms[arm].replied++; if (hook) hooks[hook].replied++; }

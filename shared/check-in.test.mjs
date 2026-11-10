@@ -356,7 +356,7 @@ test("a model check-in written around their trip has to say it", () => {
   const hook = { kind: "personal", anchor: "Maui", line: "heading to Maui" };
   assert.deepEqual(checkInFlags({ text: "Hope Maui treated you well. Did any sellers call while you were gone?", hook }), []);
   assert.match(checkInFlags({ text: "Did any sellers call while you were gone?", hook })[0], /doesn't say the one thing \(Maui\)/);
-  assert.match(checkInFlags({ text: "how was the trip? anything new come up while you were out?", hook: { kind: "personal" } })[0], /copied a voice example/);
+  assert.match(checkInFlags({ text: "hope the trip was a good one. anything new come up while you were out?", hook: { kind: "personal" } })[0], /copied a voice example/);
 });
 
 test("composer on at share 50 splits agents by contact id", () => {
@@ -453,4 +453,40 @@ test("the check-ins report counts each arm's texts, replies within a week and op
   assert.equal(r.hooks.personal.replied, 1);
   assert.equal(r.skips["nothing real to say"], 1);
   assert.doesNotMatch(JSON.stringify(r), /nice, thanks/);
+});
+
+/* ---------- review fixes (2026-11-10) ---------- */
+
+test("the cold check-in that names a town of two words is not held for a street that shares a word with it", () => {
+  // The cold ladder names the town of the listing we first texted about. A
+  // listing on a "Lake ..." street made "Lake" in "Lake Stevens" read as it.
+  // (Streets and numbers invented; the towns are towns.)
+  const cases = [
+    ["Hey Jo, anything around Lake Stevens that needs real work?", ["1820 Lake Quillback Rd, Lake Stevens, WA 98000"]],
+    ["Jo, how is Maple Valley treating you?", ["2201 Maple Fernhill Ln, Maple Valley, WA 98000"]],
+    ["anything around Bonney Lake sitting?", ["9004 Lake Corvid Pkwy, Bonney Lake, WA 98000"]],
+    ["anything around Fernhollow Bay that needs work?", ["41 Fernhollow Bay Rd, Fernhollow Bay, WA 98000"]],
+  ];
+  for (const [text, book] of cases) assert.equal(namesBookHouse(text, book), "", text);
+  // The street itself still holds.
+  assert.equal(namesBookHouse("any word on the Maple place?", ["2201 Maple Fernhill Ln, Maple Valley, WA 98000"]), "Maple");
+  assert.equal(namesBookHouse("still thinking about 1820?", ["1820 Lake Quillback Rd, Lake Stevens, WA 98000"]), "1820");
+});
+
+test("every way of sounding the composer is shown asks one question, so the voice check never holds the shape it was taught", async () => {
+  const { voiceFlags, hardVoiceKeys } = await import("./voice.js");
+  const { CHECK_IN_VOICE_EXAMPLES, BUYER_VOICE_EXAMPLES } = await import("./check-in.js");
+  for (const x of CHECK_IN_VOICE_EXAMPLES) assert.deepEqual(hardVoiceKeys(voiceFlags({ text: x, kind: "agent_pulse", channel: "sms", prior: [] })), [], x);
+  for (const x of BUYER_VOICE_EXAMPLES) assert.deepEqual(hardVoiceKeys(voiceFlags({ text: x, kind: "buyer_pulse", channel: "sms", prior: [] })), [], x);
+});
+
+test("a one thing only the shadow or the control arm saw is still there for the model", async () => {
+  const { spentHookKeys } = await import("./check-in.js");
+  const texted = (arm, key) => ({ type: "agent_pulse_texted", at: ago(20), data: { checkIn: { arm, hook: "personal", key } } });
+  assert.deepEqual(spentHookKeys([texted("shadow", "personal:a"), texted("control", "personal:b"), texted("model", "personal:c"), { type: "pulse_texted", data: { checkIn: { arm: "model", key: "quotes:d" } } }]),
+    ["personal:c", "quotes:d"]);
+  // And the report counts a one thing only where the model said it.
+  const r = checkInReport([texted("shadow", "personal:a"), texted("model", "personal:c")].map((e, i) => ({ ...e, contactId: `c${i}` })), { days: 30, now: NOW });
+  assert.equal(r.hooks.personal.sent, 1);
+  assert.equal(r.arms.shadow.sent, 1);
 });
