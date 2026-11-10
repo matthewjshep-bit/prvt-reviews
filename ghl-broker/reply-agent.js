@@ -992,6 +992,7 @@ export function evaluateReplyGates({
   vacantOk = false, carrierCheck = false, houseWords = "", writeUpOk = true, theirValue = 0, ourValue = 0,
   quotes = null,
   numberUnpriced = false, callOwedUnkept = false, connectedCallRecently = true, callTriedRecently = connectedCallRecently, offerWentOut = true, sendOfferDone = false,
+  closeDaysMin = 0,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -1079,7 +1080,8 @@ export function evaluateReplyGates({
       flags.push("the draft asks them to write it up (NWMLS, represent us) at a number you haven't approved — approve it on the offer first (Offers → Hot)");
     }
     // 10917 48th St E, 2026-09-27: "cash means no lender". We use hard money.
-    const cash = claimsAllCash(draft.reply);
+    // "With cash" by a close window, or a close faster than our soonest, says the same (2026-11-09).
+    const cash = claimsAllCash(draft.reply, { closeDaysMin });
     if (cash) flags.push(`the draft says "${cash}" — we buy with a hard money loan, not all cash`);
     // Showing our work names the costs; what's left is never given a figure.
     const margin = namesHidden(draft.reply, hiddenAmounts);
@@ -3928,6 +3930,7 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
     ...claimGateInputs(context.claims, { address: d.propertyAddress || subject?.address || offer?.address }),
     ourAmount: Math.max(ourNumberFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address), ...floats.map((n) => Number(n) || 0)),
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
+    closeDaysMin: config.writeUp?.closeDaysMin,
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
     houseWords: houseWordsFor(context?.deals, a.transcript),
     theirValue: party === "agent" ? Math.round(Number(dossier?.have?.arv?.value) || 0) : 0,
@@ -4697,7 +4700,7 @@ async function runReply(job, ctx) {
         // Once we've already come back with a number (the band countered or
         // accepted, or a re-quote went out), any counter above what we'd pay is
         // their answer to it — no margin, no second round.
-        const weMovedOnPrice = Boolean(full.counterBand?.acceptedAt || (full.requotes || []).length);
+        const weMovedOnPrice = Boolean(full.counterBand?.acceptedAt || full.counterBand?.movedAt || (full.requotes || []).length);
         const passLine = weMovedOnPrice ? reference : reference * (1 + COUNTER_PASS_MARGIN);
         const firmness = floorFirmness(job.message);
         // Matt, 2026-09-16: "be quicker to pass on ones that aren't in our
@@ -5248,6 +5251,7 @@ async function runReply(job, ctx) {
     ...claimGateInputs(context.claims, { address: d.propertyAddress }), ...thisCall, offerWentOut: true,
     ourAmount: ourNumberFor(context.offers?.numbers, d.propertyAddress),
     writeUpOk: writeUpOkFor(context.offers?.numbers, d.propertyAddress),
+    closeDaysMin: config.writeUp?.closeDaysMin,
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, inboundText),
     theirValue: party === "agent" ? theirValueFor({ draft: d, message: isCall ? "" : job.message, events: agentEvents, address: d.propertyAddress }) : 0,
@@ -5707,7 +5711,7 @@ async function runReply(job, ctx) {
     // passed." We've moved when the offer was re-quoted on their numbers,
     // re-issued under the counter band, revised, or already heard one no.
     const weMoved = Boolean(full && (
-      full.declinedOnce?.at || (full.requotes || []).length || full.counterBand?.acceptedAt || (full.revisions || []).length
+      full.declinedOnce?.at || (full.requotes || []).length || full.counterBand?.acceptedAt || full.counterBand?.movedAt || (full.revisions || []).length
     ));
     // A counter too far over to negotiate already told us their number — there
     // is nothing left to ask for, so it closes on the first message. And the
@@ -6917,6 +6921,7 @@ export async function previewConversation({
     ...claimGateInputs(context.claims, { address: draft.propertyAddress }), offerWentOut: true,
     ourAmount: ourNumberFor(context.offers?.numbers, draft.propertyAddress),
     writeUpOk: writeUpOkFor(context.offers?.numbers, draft.propertyAddress),
+    closeDaysMin: config.writeUp?.closeDaysMin,
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, message),
     quotes: quotesFor(context.offers?.numbers, draft.propertyAddress, { sellerAsk: sellerAskIn(draft) }),

@@ -37,7 +37,7 @@ import OfferPageModal from "./OfferPageModal.jsx";
 import OfferDetailModal from "./OfferDetailModal.jsx";
 import { CurrentPill, PaperHeldBanner, StatusMenu, StatusPill } from "./ui.jsx";
 import { annotateCurrent, houseKey, rowOnHouse } from "@shared/current-offer.js";
-import { DRAFT_DELAY_MS, createAutosaver, hasPaper, namesAHouse, saveKindFor } from "./offer-autosave.js";
+import { DRAFT_DELAY_MS, createAutosaver, hasPaper, namesAHouse, saveKindFor, restoredInputs, pricedSettings, editorSettings, restoredUnderwriteMode, engineOf, sendWaitsLine } from "./offer-autosave.js";
 import { onOfferChanged } from "./offer-sync.js";
 
 // Pick the best address from a contact's custom fields: prefer a
@@ -755,13 +755,28 @@ const moneyNum = (v) => Number(String(v ?? "").replace(/[^\d]/g, "")) || 0;
 // Said beside the field being typed in, with the one button that fixes it.
 // Where the save as you type stands (offer-autosave.js). Quiet on purpose:
 // it's there to be glanced at, not read.
+// The offer engine's read on a held draft, one line: "Engine: grade B · open
+// 238k · walk-away 249k · rehab 62k (1950s house: age floor) · comps thin".
+const kAmt = (n) => (Number(n) > 0 ? (Number(n) % 1000 === 0 ? `${Number(n) / 1000}k` : Number(n).toLocaleString("en-US")) : "");
+export function engineLine(e) {
+  const bits = [
+    `Engine: grade ${e.grade || "?"}`,
+    kAmt(e.open) && `open ${kAmt(e.open)}`,
+    kAmt(e.walkAway) && `walk-away ${kAmt(e.walkAway)}`,
+    kAmt(e.rehab) && `rehab ${kAmt(e.rehab)}${e.rehabWhy ? ` (${e.rehabWhy})` : ""}`,
+    ...(Array.isArray(e.reasons) ? e.reasons.slice(0, 3).map(String) : []),
+  ].filter(Boolean);
+  return bits.join(" · ");
+}
+
 export function SaveStatus({ state, row }) {
   const at = state?.at ? new Date(state.at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "";
   const text = state?.phase === "pending" || state?.phase === "saving" ? "Saving…"
     : state?.phase === "error" ? `Couldn't save${state.error?.message ? ` (${state.error.message})` : ""} — trying again`
     : state?.phase === "saved" ? `Saved ${at}`
+    : state?.phase === "confirm" ? "Not saved yet: it raises a sent offer"
     : row ? "Saved" : "Saves as you type";
-  const tone = state?.phase === "error" ? "text-red-700" : "text-slate-400";
+  const tone = state?.phase === "error" ? "text-red-700" : state?.phase === "confirm" ? "text-amber-700" : "text-slate-400";
   return <p role="status" aria-live="polite" className={`mt-0.5 text-xs ${tone}`}>{text}</p>;
 }
 
@@ -827,6 +842,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   rowRef.current = row;
   useEffect(() => { if (restore?.id && restore.id === rowRef.current?.id) setRow(restore); }, [restore]);
   const fromOffer = row && row.status !== "draft" ? row : null;
+  // On a deal the contract is the letter's price (the live save pins it).
+  const dealPrice = fromOffer?.deal ? Math.round(Number(fromOffer.deal.contractPrice) || 0) : 0;
   const fmtN = (n) => (Number(n) ? Number(n).toLocaleString("en-US") : "");
 
   const [mode, setMode] = useState(snap?.mode || "existing");
@@ -842,21 +859,16 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       : null)
   );
   const [newContact, setNewContact] = useState(snap?.newContact || { name: "", phone: "" });
-  const BLANK_INPUTS = { address: "", askingPrice: "", arv: "", repairs: "", priceOverride: "" };
-  const [inputs, setInputs] = useState(
-    snap?.inputs ? { ...BLANK_INPUTS, ...snap.inputs } :
-    !restore && /,/.test(initialAddress) ? { ...BLANK_INPUTS, address: initialAddress } :
-    (fromOffer?.calc
-      ? {
-          ...BLANK_INPUTS,
-          address: fromOffer.calc.inputs.address || "",
-          askingPrice: fmtN(fromOffer.calc.inputs.askingPrice),
-          arv: fmtN(fromOffer.calc.inputs.arv),
-          repairs: fmtN(fromOffer.calc.inputs.repairs),
-          priceOverride: fmtN(fromOffer.calc.inputs.priceOverride),
-        }
-      : BLANK_INPUTS)
-  );
+  // A row with paper reopens at the figures and the price settings that
+  // priced its letter (calc.inputs with its override, calc.settings), not the
+  // workspace's comps figures and today's settings: opening a sent offer to fix
+  // a term never re-prices it (2026-11-09, offer-autosave.js restoredInputs).
+  const [inputs, setInputs] = useState(() => restoredInputs({ restore, snap, initialAddress }));
+  const [priced] = useState(() => pricedSettings(restore));
+  // The offer engine's read on a held draft (draft.engine, set by the engine
+  // run; absent on everything else). Shown beside your numbers, and kept on
+  // the form copy with engineApplied once you save, so reopening keeps yours.
+  const [engine] = useState(() => engineOf({ restore, snap }));
   // Per-offer fee/spread override ("" → use the settings default).
   const [feeOverride, setFeeOverride] = useState(snap?.feeOverride ?? "");
   // Per-offer letter terms: a fully flexible row list (label + printed text).
@@ -921,11 +933,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
     setLetterTerms(defaultTermRows(settings));
   };
   const [contactNotes, setContactNotes] = useState([]); // recent GHL notes on the selected contact
-  const [underwriteMode, setUnderwriteMode] = useState(
-    snap?.underwriteMode ||
-    fromOffer?.calc?.settings?.underwriteMode ||
-    settings?.underwriteMode ||
-    DEFAULT_OFFER_SETTINGS.underwriteMode
+  const [underwriteMode, setUnderwriteMode] = useState(() =>
+    restoredUnderwriteMode({ restore, snap, settings, fallback: DEFAULT_OFFER_SETTINGS.underwriteMode })
   );
   // Per-offer back-stack overrides ("" → fall through to the saved setting).
   // Profit expectations and carry vary deal to deal — a rural flip carried
@@ -1257,30 +1266,14 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   // The per-offer underwrite toggle + fee override ride on top of the saved
   // settings for the live preview, the rendered document, and the created
   // offer alike.
-  const effSettings = useMemo(() => {
-    const s = { ...(settings || {}), underwriteMode };
-    if (String(feeOverride).trim() !== "") {
-      s.wholesaleFee = Number(String(feeOverride).replace(/[^\d]/g, "")) || 0;
-    }
-    for (const [k, v] of Object.entries(uwOverrides)) {
-      const raw = String(v).trim();
-      if (raw === "") continue;            // blank means "use the saved default"
-      // Mid-typing garbage ("7." is fine, "7.5.5" isn't) keeps the default
-      // rather than silently underwriting at zero.
-      const n = Number(raw);
-      if (Number.isFinite(n)) s[k] = n;
-    }
-    if (offerExpires) s.offerExpires = offerExpires;
-    // The letter prints exactly these rows (after Purchase Price) — an empty
-    // list is honored, so deleted rows stay deleted.
-    s.letterTerms = letterTerms
-      .map((r) => ({ label: r.label.trim(), value: r.value.trim() }))
-      .filter((r) => r.label && r.value);
-    return s;
+  // A sent offer's price settings (`priced`) sit between today's settings and
+  // what you set here, so it stays at the price it went out at (2026-11-09).
+  const effSettings = useMemo(
+    () => editorSettings({ settings, priced, underwriteMode, feeOverride, uwOverrides, offerExpires, letterTerms }),
     // uwOverrides belongs here as much as feeOverride does: leaving it out
     // froze the whole stack — you could type a new selling-cost or profit
     // percentage, watch the field change, and the offer never moved.
-  }, [settings, underwriteMode, feeOverride, uwOverrides, offerExpires, letterTerms]);
+    [settings, priced, underwriteMode, feeOverride, uwOverrides, offerExpires, letterTerms]);
 
   const calc = useMemo(() => {
     try {
@@ -1334,6 +1327,8 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
     checks: combineChecks(compsStateRef.current?.checks || null, rehabStateRef.current?.checks || null),
     // Bricked.ai's read, so it is still beside the numbers when this reopens.
     ...(bricked ? { bricked } : {}),
+    // The engine's read stays beside the numbers; you've saved over its figures.
+    ...(engine ? { engine, engineApplied: true } : {}),
   });
   const draftBody = () => ({ ...formSnapshot(), cashPreview: calc?.offers?.cash?.amount ?? null });
 
@@ -1418,7 +1413,7 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
   const worthARow = (body) => namesAHouse(body.inputs?.address) && (hasWorkToLose(body)
     || ["arv", "repairs", "askingPrice", "priceOverride"].some((k) => String(body.inputs?.[k] || "").trim()));
 
-  async function runSave(kind, { final = false } = {}) {
+  async function runSave(kind, { final = false, confirmRaise = false } = {}) {
     if (leavingRef.current) return;
     // Send is turning the draft into the offer: a save now would race it. The
     // work is in what Send sends; anything later is saved once it's done.
@@ -1438,7 +1433,9 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       return;
     }
     if (kind === "live" || (final && historyBehindRef.current)) {
-      const r = await updateOffer(cur.id, { ...offerBodyRef.current(), live: true, final });
+      // A save that would raise a sent offer comes back 409 and waits for
+      // your confirm (offer-autosave.js); confirmRaise is that confirm.
+      const r = await updateOffer(cur.id, { ...offerBodyRef.current(), live: true, final, confirmRaise });
       historyBehindRef.current = Boolean(r?.historyBehind);
       adopt(r?.offer);
       if (mountedRef.current && r?.offer) {
@@ -1586,6 +1583,10 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
     if (!hasPaper(rowRef.current)) return publish();
     setError("");
     await saver.current.flush();   // the agent gets the number on screen
+    // A raise waiting on your confirm never saved: the letter is still the old
+    // one, so the send waits for the confirm (or a lower number) too.
+    const waits = sendWaitsLine(saver.current.asking());
+    if (waits) { setError(waits); return; }
     setSendOpen(true);
   }
 
@@ -1640,11 +1641,33 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
           <button type="button" onClick={() => openRow(houseHasRow, "Opened the offer you already have on this house.")} className="font-semibold underline">Open it</button>
         </div>
       )}
+      {saveState.phase === "confirm" && saveState.ask && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span className="min-w-0 flex-1">
+            {saveState.ask.line} Until you confirm, the letter, the agent's link and the bot's number stay where they are. What you typed is kept.
+          </span>
+          <button type="button" onClick={() => saver.current.confirm()} className="font-semibold underline">Confirm the raise</button>
+        </div>
+      )}
+      {/* A deal's letter stays at the contract price whatever is typed (the
+          live save pins it, 2026-11-09); said when the screen comes out at
+          something else, so the preview isn't taken for the letter. */}
+      {dealPrice > 0 && Math.round(Number(calc?.offers?.cash?.amount) || 0) !== dealPrice && (
+        <p role="note" className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          Under contract: the letter stays at the contract price, {fmtMoney(dealPrice)}. The figures you type are kept beside it.
+        </p>
+      )}
       {otherWindow && (
         <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           <span className="min-w-0 flex-1">This offer changed in your other window. What you type here still saves over it.</span>
           <button type="button" onClick={loadOtherWindow} className="font-semibold underline">Load it</button>
         </div>
+      )}
+
+      {engine && !fromOffer && (
+        <p role="note" className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          {engineLine(engine)}
+        </p>
       )}
 
       <AgentOfferTabs offers={agentBook} currentId={fromOffer?.id}
@@ -1826,7 +1849,10 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       <OfferCards calc={calc} underwriteMode={underwriteMode} setUnderwriteMode={setUnderwriteMode}
         priceOverride={inputs.priceOverride || ""} setPriceOverride={(v) => setInputs((s) => ({ ...s, priceOverride: v }))}
         feeOverride={feeOverride} setFeeOverride={setFeeOverride}
-        uwOverrides={uwOverrides} setUw={setUw} settings={settings} fmtTyped={fmtTyped} />
+        uwOverrides={uwOverrides} setUw={setUw} fmtTyped={fmtTyped}
+        // A sent offer's blanks mean the settings it went out at, so its
+        // placeholders say those, not today's.
+        settings={priced ? { ...(settings || {}), ...priced } : settings} />
       </>}
 
       <div className="rounded-xl border border-slate-200 bg-white p-4">

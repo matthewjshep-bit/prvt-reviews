@@ -2063,9 +2063,44 @@ export function writeUpTermsText(w = CONVERSATION_AI_DEFAULTS.writeUp) {
 // cash" in an outreach opener is how we describe ourselves, not a funding
 // claim, and is left alone.
 export const ALL_CASH_CLAIM_RX = /\b(?:no|without(?: a| any)?|don'?t need(?: a)?|zero) lenders?\b|\ball[- ]cash\b|\bcash (?:means|purchase|close|closing|buyers? like us)\b|\b(?:pay(?:ing)?|close|closing)\b[^.?!\n]{0,24}?,?\s*(?:with |in |all )?(?<!for )cash\b(?! offer)/i;
-export function claimsAllCash(reply = "") {
-  const m = String(reply || "").match(ALL_CASH_CLAIM_RX);
-  return m ? m[0] : null;
+// 2026-11-09 (10-27: a 10 to 14 day close "with cash" against our 10 to 21 day terms). "With cash"
+// within 30 characters of a close window says the same thing, and so does a close we promise
+// faster than the write-up terms' soonest (writeUp.closeDaysMin): only a cash buyer closes that
+// fast. A question, or a sentence about their side ("they want to close in 5 days"), promises nothing.
+const CLOSE_WINDOW_RX = /\b\d{1,2}\s*(?:(?:-|–|to)\s*\d{1,2}\s*)?[- ]?(?:days?|weeks?)\b|\bclos(?:e|es|ing)\b/i;
+const FAST_CLOSE_RXS = [
+  /\bclos(?:e|ing)\s+(?:in|within)\s+(?:as (?:little|few) as\s+|about\s+|around\s+|roughly\s+|just\s+|under\s+|less than\s+)?(\d{1,2}|a|one|two|three)\s*(?:(?:-|–|to)\s*\d{1,2}\s*)?(days?|weeks?)\b/gi,
+  /\b(\d{1,2}|a|one|two|three)\s*(?:(?:-|–|to)\s*\d{1,2}\s*)?[- ]?(days?|weeks?)\s+clos(?:e|es|ing)\b/gi,
+];
+const WORD_NUM = { a: 1, one: 1, two: 2, three: 3 };
+const WE_RX = /\b(?:we|we'?d|we'?ll|we'?re|i|i'?d|i'?ll|i'?m|us|our)\b/i;
+function withCashNearClose(text) {
+  for (const m of text.matchAll(/\bwith cash\b/gi)) {
+    const from = Math.max(0, m.index - 30);
+    const near = text.slice(from, m.index + m[0].length + 30);
+    if (CLOSE_WINDOW_RX.test(near.replace(/with cash/i, ""))) return near.trim();
+  }
+  return null;
+}
+function fastClose(text, closeDaysMin) {
+  for (const sentence of text.split(/(?<=[.!?\n])/)) {
+    if (/\?\s*$/.test(sentence) || !WE_RX.test(sentence)) continue;
+    for (const rx of FAST_CLOSE_RXS) {
+      for (const m of sentence.matchAll(rx)) {
+        const n = WORD_NUM[String(m[1]).toLowerCase()] ?? Number(m[1]);
+        const days = /^week/i.test(m[2]) ? n * 7 : n;
+        if (days > 0 && days < closeDaysMin) return m[0].trim();
+      }
+    }
+  }
+  return null;
+}
+export function claimsAllCash(reply = "", { closeDaysMin = 0 } = {}) {
+  const text = String(reply || "");
+  const m = text.match(ALL_CASH_CLAIM_RX);
+  if (m) return m[0];
+  const soonest = Number(closeDaysMin) > 0 ? Number(closeDaysMin) : CONVERSATION_AI_DEFAULTS.writeUp.closeDaysMin;
+  return withCashNearClose(text) || fastClose(text, soonest);
 }
 
 // Words about what state a house is in. 3511 NE 153rd St, 2026-09-29: buyers

@@ -126,6 +126,8 @@ import {
 import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
 import { publishedFromOf } from "../shared/calibration.js";
+import { raiseNeedsConfirm, raiseLine } from "../shared/offer-raise.js";
+import { offerSendText, forRecordText } from "../shared/offer-send-text.js";
 import { buildScorecard, maybeRunPriceScorecard } from "../price-scorecard.js";
 import { importThreadReads, startThreadReads, getThreadReadJob, CURSOR_NAME as THREAD_READS_CURSOR } from "../thread-reads.js";
 import { questionTopics } from "../shared/thread-read.js";
@@ -2288,11 +2290,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // one is the same revision: it keeps where you started and moves where you
   // stopped, so Lessons sees one ARV 520k → 570k, not five steps of it.
   const LIVE_SITTING_MS = 15 * 60 * 1000;
+  // A send since the last live save ends the sitting: the number that went out stays on the
+  // ledger, which is where "what the agent was last sent" is read (shared/offer-raise.js).
   const reviseLedger = (existing, fresh, { ts, by, live }) => {
     const list = existing.revisions || [];
     const last = list.at(-1);
     const entry = { ts, from: Math.round(Number(existing.cashAmount) || 0), to: fresh.cashAmount, by, ...revisionInputs(existing, fresh), ...(live ? { live: true } : {}) };
-    if (live && last?.live && last.by === by && Date.parse(ts) - (Date.parse(last.ts) || 0) < LIVE_SITTING_MS) {
+    const sentSince = (existing.sends || []).some((s) => String(s?.ts || s?.at || "") > String(last?.ts || ""));
+    if (live && last?.live && last.by === by && !sentSince && Date.parse(ts) - (Date.parse(last.ts) || 0) < LIVE_SITTING_MS) {
       const kept = Object.fromEntries(["arv", "repairs"].filter((k) => last[k] && entry[k]).map((k) => [k, [last[k][0], entry[k][1]]]));
       return [...list.slice(0, -1), { ...entry, ...kept, from: last.from, startedAt: last.startedAt || last.ts }].slice(-20);
     }
@@ -2305,7 +2310,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // /:id/publish). It is a create in every way the CRM sees — note, tag,
   // "we offered" — that keeps the draft's id, so the house never holds two
   // rows. Otherwise `existing` is a revision of an offer.
-  async function createOfferFromRequest({ locationId, client, body = {}, existing = null, revisedBy = "you", promote = false }) {
+  async function createOfferFromRequest({ locationId, client, body = {}, existing = null, revisedBy = "you", promote = false, raiseGuard = false }) {
     const revising = Boolean(existing) && !promote;
     const { contactId: bodyContactId, newContact, inputs, settings: settingsOverride } = body || {};
     // Rehab scope of work (internal — saved + noted, never on the letter).
@@ -2368,6 +2373,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const calc = model === "comps"
       ? calculateOffers(inputs || {}, { ...(saved || {}), ...(settingsOverride || {}) })
       : buildUnderwriteCalc({ model, deal: uw?.deal, inputs: inputs || {}, settings: { ...(saved || {}), ...(settingsOverride || {}) } });
+
+    // A person's save on a sent offer that comes out above what the agent was
+    // last sent (or the engine's walk-away) waits for them to say so
+    // (shared/offer-raise.js, 2026-11-09): nothing is rendered or written.
+    if (raiseGuard && revising) {
+      const ask = raiseNeedsConfirm({ offer: existing, to: calc.offers.cash.amount });
+      if (ask) throw Object.assign(new Error(raiseLine(ask)), { http: 409, needsConfirm: "raise", from: ask.from, to: ask.to });
+    }
 
     // 3. Render the document, wrap as PDF, store both.
     const created = new Date();
@@ -2754,7 +2767,18 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (!body.inputs || typeof body.inputs !== "object") {
         return res.status(400).json({ error: "inputs required" });
       }
-      const out = await createOfferFromRequest({ locationId, client, body, existing });
+      // A deal's letter is the contract (2026-11-09): typing on it keeps the
+      // figures you typed beside it, and the price stays the contract price.
+      // On a deal the contract is the number, so there is no raise to ask about.
+      const contract = existing.deal ? Math.round(Number(existing.deal.contractPrice) || Number(existing.cashAmount) || 0) : 0;
+      const saveBody = contract > 0 ? { ...body, inputs: { ...body.inputs, priceOverride: contract } } : body;
+      let out;
+      try {
+        out = await createOfferFromRequest({ locationId, client, body: saveBody, existing, raiseGuard: !contract && !body.confirmRaise });
+      } catch (e) {
+        if (e.needsConfirm) return res.status(409).json({ error: e.message, needsConfirm: e.needsConfirm, from: e.from, to: e.to });
+        throw e;
+      }
       // The client asks before overwriting a document that already went out;
       // it needs to know there was one.
       out.revisedAfterSend = (existing.sends || []).length > 0;
@@ -5748,14 +5772,24 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       });
       const revised = out?.offer || (await store.getOffer(full.id));
       const acceptedAt = new Date().toISOString();
-      // `at` is what the band's once-per-offer check reads.
-      revised.counterBand = { ...(revised.counterBand || {}), at: revised.counterBand?.at || acceptedAt, acceptedAt, amount: price, draftId };
-      // Both sides said yes to this number: the price is locked from here
-      // (priceLocked in shared/offer-status.js) — no re-quote, no re-run.
-      // A walk-away MOVE is our number going up toward theirs (shared/walkaway.js): nothing is
-      // agreed yet, and the move counts against its two.
-      if (move) revised.pricing = { ...(revised.pricing || {}), moves: (Number(revised.pricing?.moves) || 0) + 1, lastMoveAt: acceptedAt, lastMove: price };
-      else revised.agreed = { amount: price, at: acceptedAt, via: by === "walkaway" ? "walkaway" : "counter_band" };
+      if (move) {
+        // A walk-away MOVE is our number going up toward theirs (shared/walkaway.js): nothing is
+        // agreed yet, and the move counts against its two. It is stamped `movedAt`, never
+        // `acceptedAt`, which priceAgreed reads as their yes (2026-11-09: each step-up went Hot,
+        // locked the price and stopped our own typed pass from closing it). A step-up from before
+        // that fix was stamped accepted at its own lastMoveAt with nothing agreed: that stamp was a
+        // move too, and goes now. `at` is what the band's once-per-offer check reads.
+        const { acceptedAt: was, ...band } = revised.counterBand || {};
+        const wasMove = was && !revised.agreed && was === revised.pricing?.lastMoveAt;
+        revised.counterBand = { ...band, ...(was && !wasMove ? { acceptedAt: was } : {}), at: band.at || acceptedAt, movedAt: acceptedAt, amount: price, draftId };
+        revised.pricing = { ...(revised.pricing || {}), moves: (Number(revised.pricing?.moves) || 0) + 1, lastMoveAt: acceptedAt, lastMove: price };
+      } else {
+        // `at` is what the band's once-per-offer check reads.
+        revised.counterBand = { ...(revised.counterBand || {}), at: revised.counterBand?.at || acceptedAt, acceptedAt, amount: price, draftId };
+        // Both sides said yes to this number: the price is locked from here
+        // (priceLocked in shared/offer-status.js) — no re-quote, no re-run.
+        revised.agreed = { amount: price, at: acceptedAt, via: by === "walkaway" ? "walkaway" : "counter_band" };
+      }
       // A revived offer is open again from here, so the paper can go
       // (sendOfferDocs reads open offers only) and the ladders see it live.
       if (revived) recordStatus(revised, "countered", "revived by their counter", acceptedAt, { amount: price, source: "conversation" });
@@ -6139,7 +6173,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           return { ok: false, held: true, address: offer.address, reason: why.reason };
         }
       }
-      const since = afterCounter ? offer.counterBand?.acceptedAt : null;
+      // Re-issued at their number (acceptedAt) or moved toward it by the walk-away (movedAt):
+      // only a send after the newer of the two counts as already sent.
+      const since = afterCounter ? [offer.counterBand?.acceptedAt, offer.counterBand?.movedAt].filter(Boolean).sort().at(-1) || null : null;
       if (afterCounter && !since) return { ok: false, reason: "the offer was not re-issued at their number" };
       // Already out — per CHANNEL. A text that went is not an email that went
       // (Lee Dedinsky, 2026-09-17: she asked for it by email, the earlier text
@@ -7633,14 +7669,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // carries the terms.
       // The write-up ask goes only at a number Matt approved (numberApproved,
       // 2026-10-15); the machine's own words leave it off otherwise.
+      // The same words the app's Send box starts from (shared/offer-send-text.js,
+      // 2026-11-09): no dash, no dollar sign, the street not the full address.
       const askWriteUp = numberApproved(offer);
-      const text = message || (template === "for_record"
-        ? `Hi ${firstName}, sending our written offer on ${offer.address || "your property"} over so you have it on file — ` +
-          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          (askWriteUp ? ` If the seller's open to it, we'd be glad to have you represent us and write it up on ${offerForms(offer.address)} forms.` : ` Happy to answer any questions.`)
-        : `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
-          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          (askWriteUp ? ` If the seller's open to it, could you represent us and write it up on ${offerForms(offer.address)} forms for us to sign?` : ` Let me know what the seller thinks.`));
+      const words = { first: offer.contactName || "", address: offer.address || "", amount: offer.cashAmount, math: pricing, askWriteUp };
+      const text = message || (template === "for_record" ? forRecordText(words) : offerSendText(words));
 
       // The agent page — our arithmetic, the comps, the scope and what the
       // seller nets, at one link. An operator's message already carries it

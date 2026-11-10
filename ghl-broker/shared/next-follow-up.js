@@ -195,7 +195,7 @@ export function nextFollowUp({ offer, drafts = [], events = [], config = {}, now
     if (hotOn && pushesToPaper(offer) && !asksForWriteUp(offer)) ladderNote = "the price is agreed — waiting on your approval of the number (Needs Matt)";
     else if (hotOn && asksForWriteUp(offer)) {
       const heat = offerHeat(offer);
-      const hotAt = heat?.at || offer.counterBand?.acceptedAt || offer.realm?.ts || offer.statusAt || offer.createdAt;
+      const hotAt = heat?.at || offer.counterBand?.acceptedAt || offer.counterBand?.movedAt || offer.realm?.ts || offer.statusAt || offer.createdAt;
       const anchor = latest([hotAt, times.lastInboundAt]);
       const sent = (offer.followUps || []).filter((f) => f?.kind === "hot_push" && String(f.at || "") > anchor).map((f) => f.step);
       const r = nextRungAt({ steps: ladders.hot_push.steps, repeatEvery: ladders.hot_push.repeatEvery, startedAt: anchor, sentSteps: sent, now, pace });

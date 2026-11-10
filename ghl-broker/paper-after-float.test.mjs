@@ -273,7 +273,8 @@ test("the machine's letter asks for the write-up only at a number Matt approved"
   const mid = sent.length;
   await deps.sendOfferDocs({ contactId: "agent-approved", offerId: ok.id, unattended: true, forRecord: true, by: "after_float", transcript: "" });
   const sms2 = sent.slice(mid).find((m) => m.contactId === "agent-approved" && m.type === "SMS");
-  assert.match(sms2.message, /represent us and write it up on NWMLS forms/);
+  // The offer text's words since 2026-11-09 (shared/offer-send-text.js).
+  assert.match(sms2.message, /write it up on NWMLS forms and represent us/);
 });
 
 // 2026-11: nothing the machine starts goes on a weekend the page keeps, or

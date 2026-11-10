@@ -122,6 +122,21 @@ test("an operator's own message goes out as written — the link is theirs to le
   assert.ok(!r.json.previews.email.html.includes(link), "no link the operator didn't put there");
 });
 
+// 2026-11-09: the app's Send box still said "$412,000 cash, as-is" with an em dash after the server
+// dropped it (carriers blocked 13 of 67). Both now come from shared/offer-send-text.js.
+test("the app's send box and the server fall back to the same words", async () => {
+  const { offerSendText } = await import("./shared/offer-send-text.js");
+  const { OUR_OFFER_TEXT_RX } = await import("./reply-agent.js");
+  const o = await mkOffer({ address: "27 Wrenfield Ct, Renton, WA 98055" });
+  const r = await req("POST", `/api/offers/${o.id}/send`, { channels: ["sms"], docs: ["image"] });
+  assert.equal(r.status, 200);
+  const sms = r.json.previews.sms.message;
+  assert.equal(sms, offerSendText({ first: "Dana", address: o.address, amount: 412000 }));
+  assert.equal(sms, "Hi Dana, here's our letter of intent on 27 Wrenfield Ct: 412k, close on your timeline. Letter's attached. If the seller's open to it, could you write it up on NWMLS forms and represent us?");
+  assert.doesNotMatch(sms, /\bcash\b|as-is|\$|—/i);
+  assert.match(sms, OUR_OFFER_TEXT_RX, "the bot still knows it for our own letter");
+});
+
 test("no page, no link — the send still goes", async () => {
   const o = await mkOffer();
   const r = await req("POST", `/api/offers/${o.id}/send`, { channels: ["sms"], docs: ["image"] });

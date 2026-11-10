@@ -107,3 +107,24 @@ test("too low, come up, not enough is a push on price; sold, pending or another 
     assert.equal(pushesOnPrice(m), false, m);
   }
 });
+
+// OFF-08 (2026-11-09): a no that isn't about price stepped our number up. "They won't do that, the
+// seller's going to rent it out" and "it needs more work than the photos show" read as pushes.
+test("a seller who is going to rent it instead doesn't get a higher number", () => {
+  for (const m of ["They can't do that, the seller is going to rent it out instead", "Seller's going to rent it for now",
+    "They'd rather rent it out than take that", "won't do that, they want to hold off until spring", "Seller wants to wait on it",
+    "They're waiting until the spring market", "not ready to sell at that number yet", "Seller isn't ready to let it go"]) {
+    assert.equal(pushesOnPrice(m), false, m);
+  }
+});
+
+test("'it needs more work' isn't a push on price", () => {
+  for (const m of ["it needs more work than the photos show", "honestly it needs more repairs than that", "seller needs more time to move out",
+    "needs more work before anyone could live there", "Not enough time for an inspection before the holidays"]) {
+    assert.equal(pushesOnPrice(m), false, m);
+  }
+  for (const m of ["Seller needs more than that", "they need more money to make it work", "needs more for the seller to say yes",
+    "That's not enough", "not enough for them unfortunately"]) {
+    assert.equal(pushesOnPrice(m), true, m);
+  }
+});

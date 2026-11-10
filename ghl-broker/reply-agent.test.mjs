@@ -4910,6 +4910,19 @@ test("telling a listing agent we pay cash with no lender is held — we buy with
   assert.deepEqual(gate({ reply: "Saw your listing on Main St. We buy houses as-is for cash and close fast. Got anything that needs work?" }, {}).flags, []);
 });
 
+// 2026-11-09: a 10 to 14 day close "with cash" went out against our 10 to 21 day hard money terms.
+test("a reply that says we close in 10 to 14 days with cash is caught", () => {
+  for (const reply of ["We buy with cash, 10-14 day closes, so the seller isn't waiting on a bank.", "With cash we can do a 10 to 14 day close on Elm.",
+    "We can close in 7 days if the seller needs it."]) {
+    const g = gate({ reply }, { inboundMessage: "How fast can you close?" });
+    assert.equal(g.ok, false, reply);
+    assert.match(g.flags.join(" · "), /hard money/i, reply);
+  }
+  // Our own soonest close is the setting's: at 7 days, a 7 day close is a promise we keep.
+  assert.deepEqual(gate({ reply: "We can close in 7 days if the seller needs it." }, { inboundMessage: "How fast can you close?", closeDaysMin: 7 }).flags, []);
+  assert.deepEqual(gate({ reply: "Funded with a hard money loan, we close in roughly 10 to 21 days from acceptance." }, { inboundMessage: "How fast can you close?" }).flags, []);
+});
+
 /* ---------- the number we came down to, and the terms we always write (Kimberly Pettie, 2026-09-18) ---------- */
 
 test("restating the offer-book number after we came down to a lower one is held", () => {
@@ -8848,6 +8861,19 @@ test("after the walk-away, a push with no number moves nothing: their no closes 
 
 test("a no because the house is gone never steps us up", async () => {
   const { d, order } = await walkRun({ message: "Too low, and the seller accepted another offer this morning", draft: { intent: "rejection", counterAmount: 0 } });
+  assert.deepEqual(order, []);
+  assert.equal(d.intent, "rejection");
+});
+
+// OFF-08 (2026-11-09): "can't do that, they're going to rent it out" stepped our number up halfway.
+test("a seller who is going to rent it instead doesn't get a higher number", async () => {
+  const { d, order } = await walkRun({ message: "They can't do that on 12 Elm, the seller is going to rent it out instead", draft: { intent: "rejection", counterAmount: 0 } });
+  assert.deepEqual(order, [], "no step-up, no re-issued letter");
+  assert.equal(d.intent, "rejection");
+});
+
+test("'it needs more work' isn't a push on price, so it never steps us up", async () => {
+  const { d, order } = await walkRun({ message: "Not for us, it needs more work than the photos show", draft: { intent: "rejection", counterAmount: 0 } });
   assert.deepEqual(order, []);
   assert.equal(d.intent, "rejection");
 });

@@ -289,6 +289,64 @@ Old duplicates aren't merged automatically. `node
 scripts/report-house-duplicates.mjs` (Render Shell) lists houses with more
 than one row per agent and changes nothing.
 
+### A sent offer's price moves only when you say so (2026-11-09)
+
+The engine sent 254k. Opening it to fix a term re-priced the letter to 300k
+on the first keystroke (audit UWM-03). The editor rebuilt the form from the
+saved workspace, which holds our comps' ARV and the bare scope with no
+override, and priced it at today's settings (75%, the 30k fee) instead of
+what the engine used (70%, the 15k fee, the override at its open). Three
+things changed:
+
+- **The editor reopens a row with paper at what priced its letter.**
+  `offer-autosave.js` `restoredInputs` takes the figures from `calc.inputs`,
+  the override included, over the workspace's. `pricedSettings` takes the
+  price settings from `calc.settings`: the mode, the percentages, the carry,
+  the repair multipliers and the fee. What the letter prints besides the
+  price (its rows, letterhead and expiry) is today's. `editorSettings` stacks
+  today's settings, then those, then
+  what you set on the offer. A draft or a blank form opens as before, and so
+  does an income or land row, which is priced from its deal.
+- **A save that raises a sent offer waits for you.** `PUT /api/offers/:id`
+  runs the numbers before it renders anything. When the result is above the
+  ceiling it answers 409 `{ needsConfirm: "raise", from, to }` and writes
+  nothing, unless the body carries `confirmRaise`. The ceiling is the highest
+  of what the agent was last sent, the engine's walk-away on a live engine
+  offer, and the number the letter is at now (`shared/offer-raise.js`): a
+  raise you confirmed is the letter until it goes out, so fixing a term on it
+  before you send doesn't ask again. "Last sent" is the amount in effect at the
+  newest send that went, read off `revisions[]`. A send ends a typing
+  sitting on that ledger, so the number that went out mid-sitting stays on
+  it. With no send on the ledger
+  (marked sent by hand, floated) it is today's number. An offer that never
+  went out has no ceiling. The editor keeps what you typed, stops retrying,
+  and shows "This raises a sent offer from X to Y: confirm?" with **Confirm
+  the raise**. The next edit tries again, so bringing the number back down
+  saves without a confirm. While a raise waits, **Send** waits too: the
+  save never happened, so the letter is still the old one. It says "Not
+  sent: this raises a sent offer from X to Y" until you confirm or come back
+  down (`sendWaitsLine`). The placeholders on the price settings show what
+  the offer went out at, not today's.
+- **A deal's letter is the contract price.** A save on an offer with a
+  `deal` pins `priceOverride` to `deal.contractPrice`, so the letter and the
+  agent's link never move off it. The figures you typed are kept beside it.
+  When the screen comes out at another number, the editor says "Under
+  contract: the letter stays at the contract price".
+- **A held engine draft opens on the engine's numbers.** When the engine run
+  puts `draft.engine` (`{ grade, arv, rehab, rehabWhy, open, walkAway,
+  triage, reasons }`) on a held draft's form copy, the editor opens it on the
+  engine's ARV and rehab (the age floor, not the bare scope) and shows
+  "Engine: grade B · open 238k · walk-away 249k · rehab 62k (…)" above the
+  offer tabs. When the engine marked it `over_theirs` (its walk-away far
+  over the seller's number, so its ARV is likely high), the draft opens on
+  the lower of the engine's ARV and our own comps ARV. The price stays
+  yours to set. Your first save writes
+  `engineApplied` on the form copy, so reopening keeps what you typed.
+  Without `draft.engine` nothing changes.
+
+Offer saves as you type still holds. Terms, the expiry and a lower number
+save on the pause, as before.
+
 DB note: the schema (`ghl-broker/schema.pg.sql`) is applied idempotently on
 boot. Tables from the pre-overhaul card-studio era are left untouched; the file
 ends with a commented `drop` block to run manually when that history is no
@@ -5311,6 +5369,62 @@ each conversation's messages, and group outbound `TYPE_SMS` by the `Error
 NNNNN` in `error` — read gently (two at a time, back off on 429), the broker
 shares GHL's rate limit.
 
+#### The offer text, one set of words (2026-11-09)
+
+The server dropped "cash, as-is" on 10-02, but the app's Send box kept
+"$525,000 cash, as-is" with an em dash. From 9-20 to 11-03, 13 of the 67
+offer texts that said it were blocked (19%), so those agents never got our
+number. Of the 9 without "cash", 1 was blocked.
+
+- **One module.** `shared/offer-send-text.js` `offerSendText` writes the
+  Send box's starting text (`SendModal.jsx` `defaultSendMessage`) and the
+  server's fallback when nothing is handed in (`sendOfferDocs`). It reads:
+  "Hi Dana, here's our letter of intent on 4417 Somerset Ln: 525k, close on
+  your timeline. Letter's attached. If the seller's open to it, could you
+  write it up on NWMLS forms and represent us?" With no first name it opens
+  "Here's our letter of intent on…". An Oregon house says OREF forms. The
+  rules: no "cash", no "as-is", no dash, no "$", the street not the full
+  address, and money as "525k" (round thousands under a million) or
+  "451,750" (anything else; "1.25M" doesn't read back as our number). How we
+  got the number rides after "Letter's attached." when it's on. A number
+  nobody approved (`numberApproved`) ends "Let me know what the seller
+  thinks." instead of the write-up ask, as before.
+- **For the record.** `forRecordText` is the letter after a quiet float or
+  with the reply to a no: "Hi Dana, sending our written offer on 12 Elm St
+  over so you have it on file: 300k, close on your timeline. Letter's
+  attached." It ends "Happy to answer any questions." when nobody approved
+  the number.
+- **The readers still know it.** Both keep "here's our letter of intent on"
+  and "sending our written offer on", so `OUR_OFFER_TEXT_RX` (our own echo,
+  the thread reader) and `OFFER_DOC_TEXT_RX` (the current-offer readers)
+  match. `shared/offer-send-text.test.mjs` pins both and `carrierFlags`.
+- **Text you type is yours.** The Send box starts from these words and
+  sends what you leave there.
+- **Two prompts.** `price_drop` and a relisted `passed_checkin` ask whether
+  the seller would look at "an offer closer to where we were", not "a cash,
+  as-is offer".
+- **The all-cash gate** (`claimsAllCash`, `evaluateReplyGates`) also holds a
+  draft that says "with cash" within 30 characters of a close window ("we buy
+  with cash, 10-14 day closes"), or that promises a close sooner than
+  `writeUp.closeDaysMin` days (10 by default), as in "we can close in 7
+  days" or "within a week". A question, or a sentence with no "we" or "I" in
+  it, promises nothing. This only adds holds.
+
+Waits for Matt, not built: the email subject "Cash offer — {address}", the
+email body's "Please find … attached —", the letter's financing row "Funded
+with cash or private loan", and the net sheet's "Our cash offer". The
+memory says the letters are his call.
+
+The seller's net, on the agent page ("What the seller nets",
+`ghl-broker/offer-page.js`) and in the Net sheet's draft message
+(`NetSheetModal.jsx`), now says it is before excise tax and closing costs.
+Nothing in the math takes off WA excise tax yet, so the net runs about 6k
+high on a 300k offer (audit UWM-16). The wording changed and the math did
+not. That draft message is pasted to the agent, often as a text, so it now
+opens the way the offer text does ("Hi Dana, here's our letter of intent on
+27 Wrenfield Ct: 412k, close on your timeline. Letter's attached."), with no
+"as-is" and no dash.
+
 ### Matt's contact card (2026-10-09)
 
 Matt: share my contact card "when people ask or if an initial deal doesn't work,
@@ -5446,6 +5560,42 @@ reply-agent.js (`WALK_AWAY_GAP`, `listPriceFloor`):
 - **What follows** is the rejection rule as configured (prod: tier-3 + TIER 3
   workflow + `mark_offer_passed`) and the passed-offer check-in ladder
   (every 10 days) — that is the "stay in touch".
+
+#### A walk-away step-up is not their yes (2026-11-09)
+
+The walk-away (`shared/walkaway.js`) has been on since 11-04. Each step-up
+re-issued the letter through `reviseOfferToCounter`, which stamped
+`counterBand.acceptedAt`, and `priceAgreed` read that as their yes. So a
+move made the offer Hot and locked the price. The hot push could ask them
+to write it up "at" a number nobody agreed to, and Matt's own typed "we'll
+pass" no longer closed the offer (`counteredAboveUs` skips agreed and hot
+offers).
+
+- **A move is stamped `counterBand.movedAt`**, never `acceptedAt`, and
+  writes no `agreed`. `pricing.moves` and `lastMoveAt` count it as before.
+  Their number taken at or under the walk-away is still their yes:
+  `acceptedAt` plus `agreed`.
+- **Moves from 11-04 to now** were stamped accepted at their own
+  `pricing.lastMoveAt` with nothing agreed. `priceAgreed` reads that as the
+  move it was, and the next move drops the stamp.
+- **The readers that mean "we moved on price"** read either stamp: the
+  counter pass line and the first-no rule in `reply-agent.js`, the stalled
+  counter in `shared/conversation-audit.js`, the Flow tab's machine share,
+  `offerStageAt`, and the hot clock in `next-follow-up.js` and
+  `follow-up-sweep.js`. So a move still counts for the first-no rule.
+  `send_offer` after a move (`afterCounter`) counts only a send after the
+  newer stamp. `numberApproved` treats a move as the machine moving the
+  number.
+- **A no that isn't about price never steps us up.** `TOO_LOW_RX` reads
+  "needs more" as price only before "than that", "money" or "for the
+  seller". "It needs more work", "more repairs" and "more time" are about
+  the house, and so is "not enough time". `GONE_RX` adds going to rent, rent
+  it out, hold off, wait and not ready, so "can't do that, the seller's going
+  to rent it out" is their no, closed the usual way.
+
+Check: an engine offer that moved shows `counterBand.movedAt` and no
+`agreed`, stays out of the Hot lane, and a typed "we'll pass" on it marks it
+we_passed.
 
 ### The machine stays out of a live thread, and never walks away from a yes (2026-10-15)
 

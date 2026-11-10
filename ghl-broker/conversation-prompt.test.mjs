@@ -249,6 +249,16 @@ test("a passed house back on the market is still the news, by name", () => {
   assert.match(t, /3817 Bells Beach Rd/);
 });
 
+// 2026-11-09: these two told the model to ask about "a cash, as-is offer". Both are carrier words
+// (shared/carrier-words.js), and we fund with a hard money loan.
+test("a price drop or a relisted pass asks about an offer closer to where we were, never a cash, as-is one", () => {
+  const relisted = outboundOpening({ kind: "passed_checkin", address: "62 Thistledown Ln, Kent, WA", relisted: true });
+  const drop = outboundOpening({ kind: "price_drop", address: "62 Thistledown Ln, Kent, WA", fromK: "510k", toK: "489k", ourK: "402k", went: "number" });
+  for (const t of [relisted, drop]) assert.doesNotMatch(t, /cash|as-is/i, t);
+  assert.match(relisted, /would look at an offer closer to where we were now/);
+  assert.match(drop, /would look at an offer closer to where we were now/);
+});
+
 test("the agent check-in sounds personable, professional and a little funny", () => {
   const t = outboundOpening({ kind: "agent_pulse", reason: "nothing", segment: "engaged" });
   assert.match(t, /PERSONALITY: personable and professional, and a little funny/);

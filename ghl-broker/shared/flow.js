@@ -261,7 +261,7 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
       const cAt = (o.statusHistory || []).filter((h) => h.status === "countered" && inWin(ms(h.ts), a, b)).map((h) => h.ts).sort().at(-1) || o.counter?.at;
       // Their number is their act; the machine's share is the counter band
       // answering it (taking it, or countering back at our max) on its own.
-      const band = inWin(ms(o.counterBand?.acceptedAt), a, b);
+      const band = inWin(ms(o.counterBand?.acceptedAt), a, b) || inWin(ms(o.counterBand?.movedAt), a, b);
       bump("countered", band, offerItem(o, cAt, band));
     }
     void created;

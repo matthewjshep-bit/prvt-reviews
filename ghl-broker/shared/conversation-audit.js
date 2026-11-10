@@ -437,7 +437,7 @@ export function auditConversations({
     if (status === "countered") {
       const counterAt = o.counter?.at || (o.statusHistory || []).filter((h) => h.status === "countered").map((h) => h.ts).pop();
       const at = ms(counterAt) ?? 0;
-      const moved = Boolean(o.counterBand?.acceptedAt || (o.requotes || []).length || o.declinedOnce?.at) || sentAt > at;
+      const moved = Boolean(o.counterBand?.acceptedAt || o.counterBand?.movedAt || (o.requotes || []).length || o.declinedOnce?.at) || sentAt > at;
       if (at && !moved && now - at >= COUNTER_STALL_HOURS * 3600000) {
         const take = ev(c, "agent_estimate").some((e) => (ms(e.at) ?? 0) >= at - 7 * 86400000);
         const theirs = o.counter?.amount || 0;
