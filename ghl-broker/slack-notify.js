@@ -700,7 +700,7 @@ const usd = (v) => {
   const cents = Math.round(x * 100) % 100 !== 0;
   return `$${x.toLocaleString("en-US", { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0 })}`;
 };
-const pacificDay = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(t));
+// pacificDay (the Pacific calendar date, "2026-11-09") is daily-gate.js's, imported above.
 /** whenText(iso | ms, now) → "1:23pm", or "Tue 8:00am" when it isn't today in Pacific time. */
 export function whenText(at, now = Date.now()) {
   const t = typeof at === "number" ? (Number.isFinite(at) ? at : null) : ms(at);
