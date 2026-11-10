@@ -3484,10 +3484,30 @@ export function ourLastTexts(transcript = "", n = 6) {
   return out.reverse().slice(0, Math.max(0, n));
 }
 
-// "federal way" → "Federal Way"; a town already capitalised stays as written.
+/**
+ * streetInThread(transcript, street) → boolean
+ *
+ * A line of ours or theirs names the street ("Larch Ave"), with or without
+ * the house number. A cold check-in names a new listing by its street alone,
+ * so the house-number check (listingAlreadyRaised) never sees it again, and
+ * two weeks on the same listing could be named twice.
+ */
+export function streetInThread(transcript = "", street = "") {
+  const words = String(street || "").trim().split(/\s+/).filter(Boolean).map(escapeRe);
+  if (!words.length) return false;
+  const rx = new RegExp(`(?<![a-z0-9])${words.join("\\s+")}(?![a-z0-9])`, "i");
+  return String(transcript || "").split("\n").some((line) => {
+    const m = /^\[[^\]]*\]\s+(?:US|THEM) \w+: (.*)$/.exec(line);
+    return Boolean(m && rx.test(m[1]));
+  });
+}
+
+// "federal way" or "FEDERAL WAY" (a county list's capitals) → "Federal Way";
+// a town already written properly ("McHalden") stays as written.
 const titleWords = (s) => {
   const t = String(s || "").replace(/\s+/g, " ").trim();
-  return t && t === t.toLowerCase() ? t.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : t;
+  if (!t || (t !== t.toLowerCase() && t !== t.toUpperCase())) return t;
+  return t.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
 };
 
 // A new listing of theirs for a cold check-in to name (the follow-up sweep
@@ -3496,7 +3516,7 @@ function freshListingOf(subject) {
   const l = subject?.freshListing;
   const street = streetName(l?.street || l?.address || "");
   if (!street) return null;
-  return { street, address: String(l.address || ""), city: String(l.city || "") };
+  return { street, address: String(l.address || ""), city: titleWords(l.city || "") };
 }
 
 export function outboundDescriptor({ kind, offer, subject, saved, dossier, stance = null }) {
@@ -3925,7 +3945,8 @@ function focusOpener({ listing = {}, address = "", saved = {} }) {
 // thread already has in it, in our words or theirs (2026-11-09).
 function standardDraft({ kind, offer, outbound, name, contactId, transcript = "" }) {
   const prior = kind === "outreach_nudge" ? ourLastTexts(transcript, 6) : [];
-  if (kind === "outreach_nudge" && outbound?.freshListing?.address && listingAlreadyRaised(transcript, outbound.freshListing.address)) {
+  const fresh = kind === "outreach_nudge" ? outbound?.freshListing : null;
+  if (fresh && ((fresh.address && listingAlreadyRaised(transcript, fresh.address)) || streetInThread(transcript, fresh.street))) {
     outbound = { ...outbound, freshListing: null };
   }
   const s = standardText({ kind, outbound, name, contactId, prior });

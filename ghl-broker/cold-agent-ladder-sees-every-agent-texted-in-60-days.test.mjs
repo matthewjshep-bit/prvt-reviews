@@ -190,6 +190,16 @@ test("a cold agent's day 30 names their town, day 58 says it's the last, and non
   assert.equal(rungDescriptor(58).repeatMax, 4, "day 58 is the fourth and last repeat inside the 60-day window");
 });
 
+test("a town written in capitals or lower case reads the way people write it in the check-in", () => {
+  const caps = rungDescriptor(30, { address: "4410 QUARRY RD, NORTH HALDEN, WA 98011" });
+  assert.equal(caps.city, "North Halden");
+  const low = rungDescriptor(30, { address: "4410 quarry rd, north halden, wa 98011" });
+  assert.equal(low.city, "North Halden");
+  assert.equal(rungDescriptor(30, { address: "4410 Quarry Rd, McHalden, WA 98011" }).city, "McHalden", "a town already written properly stays as written");
+  const t = standardText({ kind: "outreach_nudge", outbound: caps, name: "Wendell", contactId: "c-a1" });
+  assert.doesNotMatch(t.text, /NORTH HALDEN/, t.text);
+});
+
 test("a new listing of theirs rides into the check-in by its street; one we've already talked about doesn't", () => {
   const fresh = { street: "Larch Ave", address: "88 Larch Ave, Halden, WA 98011", city: "Halden" };
   const o = rungDescriptor(30, { freshListing: fresh });
@@ -242,6 +252,33 @@ test("the check-in never sends the text our thread already has, and drops a list
     subject: { address: HOUSE, step: 30, steps: [2], repeatEvery: 14, freshListing: fresh }, deps: { draft } });
   assert.match(r3.reply, /Larch Ave/, r3.reply);
   assert.ok(DEFAULT_CHECK_IN_TEXTS.length >= 6 && COLD_LAST_RUNG_TEXTS.length >= 2);
+});
+
+test("a new listing our last check-in named by its street isn't named again two weeks later", async () => {
+  // Day 30 named their new one by street alone ("saw you've got Larch Ave up
+  // now"), so the house-number check never sees it. Freshness set wide
+  // (Settings → pulse.freshDays), the same listing is still new on day 44.
+  const contactId = "c-street-twice";
+  const fresh = { street: "Larch Ave", address: "88 Larch Ave, Halden, WA 98011", city: "Halden" };
+  const day30 = standardText({ kind: "outreach_nudge", outbound: rungDescriptor(30, { freshListing: fresh }), name: "Wendell", contactId }).text;
+  assert.match(day30, /Larch Ave/, day30);
+  const recent = (daysAgo) => new Date(Date.now() - daysAgo * DAY).toISOString();
+  const messages = [
+    { id: "s1", direction: "outbound", messageType: "TYPE_SMS", body: "Hi Wendell, saw your listing at 4410 Quarry Rd. Does it need much work?", dateAdded: recent(44) },
+    { id: "s2", direction: "outbound", messageType: "TYPE_SMS", body: day30, dateAdded: recent(14) },
+  ];
+  const client = { call: async (p) => {
+    if (p.startsWith(`/contacts/${contactId}`)) return { contact: { id: contactId, firstName: "Wendell", lastName: "Okafor", tags: ["agent"] } };
+    if (p.startsWith("/conversations/search")) return { conversations: [{ id: "cv2" }] };
+    if (p.startsWith("/conversations/cv2/messages")) return { messages: { messages, nextPage: false } };
+    return {};
+  } };
+  const r = await previewProactive({ client, locationId: "loc-preview", saved: { aiApiKey: "k", conversationAi: AI }, store, contactId, kind: "outreach_nudge",
+    subject: { address: HOUSE, step: 44, steps: [2], repeatEvery: 14, freshListing: fresh },
+    deps: { draft: async () => { throw new Error("no model call for a fixed text"); } } });
+  assert.ok(r.reply, JSON.stringify(r));
+  assert.doesNotMatch(r.reply, /Larch/, r.reply);
+  assert.match(r.reply, /Halden/, "the plain check-in, by their town");
 });
 
 test("every cold check-in text gets past the reply agent's gates as it would go", async () => {

@@ -6797,7 +6797,9 @@ spread themselves through the morning's machine queue (`MACHINE_BURST`,
   work, not a house we have live or walked from, never the first-text
   house) and passes it as `subject.freshListing`. The text names its street,
   never the number. A listing the thread already names, in our words or
-  theirs, is dropped and the plain check-in goes.
+  theirs, is dropped and the plain check-in goes: by number and street
+  (`listingAlreadyRaised`), or by its street alone (`streetInThread`), so
+  the street a check-in named isn't named again two weeks on.
 - The last rung (`COLD_LAST_RUNG_TEXTS`, `repeatMax` on the descriptor: the
   last repeat inside the 60-day window, day 58 on `[2]` every 14, or the
   ladder's `maxRepeats` when lower) says it is the last one.
