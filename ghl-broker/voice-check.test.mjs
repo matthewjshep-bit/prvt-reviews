@@ -204,6 +204,20 @@ test("every text the machine starts carries the one voice rule, and a redraft is
   assert.doesNotMatch(outboundOpening({ kind: "agent_pulse", reason: "general", segment: "engaged" }), /OUR LAST TEXT/);
 });
 
+// 2026-11-09 review: two prompts still handed the model a phrase the voice
+// check holds: the cold ladder's "checking in … distressed or value-add …
+// come across their desk", and a check-in they asked for with no phrase of
+// theirs, "you'd mentioned circling back". The model said it, the check held
+// it, and the redraft could drop the text.
+test("no machine prompt hands the model a phrase the voice check holds", () => {
+  const ladder = outboundOpening({ kind: "outreach_nudge", repeats: true, stepIndex: 0, address: "1820 Alder Way", home: "Seattle" });
+  assert.doesNotMatch(ladder, /value-add|checking in|across their desk/i, ladder);
+  for (const sourceKind of ["lead", "asked"]) {
+    const due = outboundOpening({ kind: "checkin_due", sourceKind, phrase: "", lead: null });
+    assert.doesNotMatch(due, /circling back/i, due);
+  }
+});
+
 /* ---------- the first reply ---------- */
 
 test("our first text's ask for other fixers, recorded or in the thread, means the first reply doesn't ask again", () => {

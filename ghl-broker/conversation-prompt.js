@@ -864,8 +864,10 @@ function openingFor(outbound) {
       // Past the follow-ups: the every-14-days check-in, not about the listing.
       if (o.repeats && !Number(o.stepIndex)) {
         return `${START} We texted this agent about their listing at ${o.address} weeks ago and they never answered. ` +
-          `${nudgePressure(o)} One short line checking in: has anything that needs work, distressed or value-add, come ` +
-          `across their desk, listed or off market? Don't mention the old listing and don't name a number. ` +
+          // In words the voice check lets through (2026-11-09 review): it held
+          // "checking in", "value-add" and a spent "desk" this used to quote.
+          `${nudgePressure(o)} One short line asking whether anything that needs real work has come up on their end, ` +
+          `listed or not. Don't mention the old listing and don't name a number. ` +
           (o.home ? `If you say where you're based, it's ${o.home}, nowhere else. ` : "") +
           `No sign-off and no opt-out line. Set intent to outreach_nudge.`;
       }
@@ -1297,9 +1299,9 @@ function openingFor(outbound) {
               (o.lead?.what
                 ? `Ask about that lead specifically, in a line, the way a person who remembered would — e.g. "Did the family decide on the probate house?" ` +
                   `or "Did that one end up relisting?" Do NOT ask the generic "anything distressed or off-market come across your desk?" question. `
-                : `Mention it naturally ("you'd mentioned ${o.phrase || "circling back"}") and ask whether anything landed that needs work. `)
+                : `Mention it naturally ("you'd mentioned ${o.phrase || "checking back"}") and ask whether anything landed that needs work. `)
           : `This agent told us to check back${o.phrase ? ` ("${o.phrase}")` : ""} and it's that time. Mention it naturally ` +
-            `("you'd mentioned ${o.phrase || "circling back"}"). Ask whether anything landed that needs work. `) +
+            `("you'd mentioned ${o.phrase || "checking back"}"). Ask whether anything landed that needs work. `) +
         // Never the same question twice: 1010 Bellevue's agent was asked for
         // "a real number" after saying three times where the sellers were.
         `Never ask anything they already answered in the thread: if they told us where the seller is, or that they won't move, ` +
