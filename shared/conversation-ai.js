@@ -953,7 +953,12 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // The nightly audit (shared/conversation-audit.js): every thread touched
   // today, checked at `hour` Pacific — answered where the dial allows, owed
   // where it isn't, on Today either way. Matt, 2026-09-16.
-  nightlyAudit: { enabled: true, hour: 19, loose: true, heldSweep: true },
+  nightlyAudit: { enabled: true, hour: 19, loose: true, heldSweep: true,
+    // The boot pass (ghl-broker/conversation-audit.js maybeRunBootPass,
+    // 2026-11-09): about five minutes after the broker starts, a text from
+    // the last hour that a restart left with no reply goes back through the
+    // normal pipeline, every gate on. Off until switched on.
+    bootPass: false },
   // The held-underwrite sweep closing out a house we promised the agent a
   // number on (2026-10-14): `passOnRetire` lets the "we're out, send the next
   // one" text send itself. Off, it is drafted and waits for you.
@@ -1350,7 +1355,9 @@ export function normalizeConversationAi(doc, seed = {}) {
       // numbers to re-run on is nudged; a realm-yes queues the send.
       return { enabled: bool(a.enabled, D.nightlyAudit.enabled), hour: int(a.hour, D.nightlyAudit.hour, 17, 23), loose: bool(a.loose, D.nightlyAudit.loose),
         // The held-underwrite pass (shared/held-underwrites.js) rides on the audit.
-        heldSweep: bool(a.heldSweep, D.nightlyAudit.heldSweep) };
+        heldSweep: bool(a.heldSweep, D.nightlyAudit.heldSweep),
+        // A restart's lost replies, picked up after boot. Ships off.
+        bootPass: bool(a.bootPass, D.nightlyAudit.bootPass) };
     })(),
     heldTriage: (() => {
       const h = d.heldTriage && typeof d.heldTriage === "object" ? d.heldTriage : {};

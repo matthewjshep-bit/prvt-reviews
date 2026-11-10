@@ -166,6 +166,11 @@ export const EVENT_TYPES = [
   // A second look at a strong past offer actually went (shared/second-look.js):
   // our same number, once more. How many a house has had reads these.
   "second_look_sent",
+  // A text or email of theirs reached the webhook (ghl-broker/reply-agent.js
+  // recordInbound, 2026-11-09), written before any reply job starts: the
+  // channel and GHL's message id, never the words. The duplicate check across
+  // a restart, the boot pass and the reply counts read it.
+  "inbound_received",
 ];
 
 export const EVENT_LABEL = {
@@ -217,6 +222,7 @@ export const EVENT_LABEL = {
   email_saved: "their email saved to GHL", email_offered: "they gave an email to check",
   ghl_call_queued: "a call went to GHL's Manual Actions", ghl_call_failed: "a call couldn't go to GHL", ghl_call_withdrawn: "a call was taken back out of GHL",
   second_look_sent: "we asked once more at our same number",
+  inbound_received: "their message came in",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -267,6 +273,7 @@ export const EVENT_ICON = {
   email_saved: "AtSign", email_offered: "AtSign",
   ghl_call_queued: "Phone", ghl_call_failed: "CircleSlash", ghl_call_withdrawn: "Undo2",
   second_look_sent: "RefreshCw",
+  inbound_received: "MessageCircle",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

@@ -33,7 +33,7 @@ import { planBuyerPulse, pulseSettings as buyerPulseSettings } from "./buyer-pul
 import {
   outreachCandidates, investorCandidates, secondLookCandidates, FOLLOW_UP_UTC_HOUR, CURSOR_NAME as FOLLOW_UP_CURSOR,
 } from "./follow-up-sweep.js";
-import { conversationConfig, OUTBOUND_KINDS } from "./reply-agent.js";
+import { conversationConfig, OUTBOUND_KINDS, INBOUND_RECEIVED } from "./reply-agent.js";
 import { machineHours, nextSendTime } from "./conversation-scheduler.js";
 import { allEventsSince } from "./contact-events.js";
 import { normalizeDispoAutopilot, catchUpDue, DISPO_SWEEP_UTC_HOUR } from "./dispo-autopilot.js";
@@ -274,6 +274,27 @@ export function addressChases({ events = [], now = Date.now() }) {
   return out;
 }
 
+/**
+ * repliesFrom(events) → [{ contactId, at }] their texts and calls
+ *
+ * Until 2026-11-09 a reply counted only when the drafter wrote a
+ * text_summary for it, so a text the bot skipped (switched off, a cap, a
+ * stand-down, a hold before the draft) never counted as an answer to the
+ * text before it. The webhook now writes `inbound_received` for every text
+ * as it arrives, and those count (an auto-reply or our own words echoed
+ * back are not a reply), beside the drafter's summaries (texts from before
+ * the record, or re-answered without the webhook) and calls. One text read
+ * twice is still one answer: attributeReplies credits each send once.
+ */
+export function repliesFrom(events = []) {
+  return events.filter((e) => {
+    if (!e?.contactId) return false;
+    if (e.type === "call_summary") return true;
+    if (e.type === INBOUND_RECEIVED) return !e.data?.noise;
+    return e.type === "text_summary" && Boolean(String(e.data?.inbound || "").trim());
+  }).map((e) => ({ contactId: e.contactId, at: e.at }));
+}
+
 /* ---------- the read ---------- */
 
 // The plan doesn't depend on the period: switching chips reuses it.
@@ -337,9 +358,10 @@ export async function followUpEngineFor({ store, locationId, saved = {}, period 
     (typeof store.listReplyDraftLedger === "function"
       ? store.listReplyDraftLedger(locationId, { status: "sent", since: iso(win.start - LEDGER_SLACK_DAYS * DAY_MS), limit: 50000 })
       : store.listReplyDrafts(locationId, { status: "sent", since: iso(win.start - LEDGER_SLACK_DAYS * DAY_MS), limit: 20000 })).catch(() => []),
-    allEventsSince(store, locationId, startIso, { types: [...SEND_EVENT_TYPES, ...INBOUND_TYPES, "import"] }, { ceiling: 100000 }).catch(() => ({ events: [], truncated: false })),
+    allEventsSince(store, locationId, startIso, { types: [...SEND_EVENT_TYPES, ...INBOUND_TYPES, INBOUND_RECEIVED, "import"] }, { ceiling: 100000 }).catch(() => ({ events: [], truncated: false })),
   ]);
-  const periodEvents = periodRead.events || [];
+  const periodEvents = (periodRead.events || []).filter((e) => e?.type !== INBOUND_RECEIVED);
+  const receivedEvents = (periodRead.events || []).filter((e) => e?.type === INBOUND_RECEIVED);
 
   // Names, from the offers and the outbox. Never logged.
   const names = new Map();
@@ -386,8 +408,7 @@ export async function followUpEngineFor({ store, locationId, saved = {}, period 
     sent.push({ mech, src: "draft", at: d.sentAt || d.createdAt, contactId: d.contactId, name: d.contactName || nameOf(d.contactId),
       offerId: d.outbound?.offerId || null, address: d.outbound?.address || "", who: d.autoSent ? "machine" : "you" });
   }
-  const inbound = periodEvents.filter((e) => e.type === "call_summary" || (e.type === "text_summary" && String(e.data?.inbound || "").trim()))
-    .map((e) => ({ contactId: e.contactId, at: e.at }));
+  const inbound = repliesFrom([...periodEvents, ...receivedEvents]);
 
   /* --- what's written --- */
   const queued = [], held = [];
