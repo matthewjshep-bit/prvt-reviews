@@ -186,7 +186,11 @@ test("the listing check leaves a recent lister alone: the house isn't for sale t
   const store2 = fakeStore({ [RECENT]: [row("sold-1962")] });
   const saved = savedWith({ enabled: true, counties: ["Pierce, WA"] });
   saved.outreachAutopilot.distressCheck = { enabled: true };
-  startOutreachSweep({ locationId: "loc-rl-screen", client: {}, saved, store: store2, deps: depsFor([], calls), now: oct27 });
+  // A Zillow that finds nothing: a screened pick would be dropped. (Since
+  // 2026-11-09 a broker with no listing check at all fails the day before
+  // its pull, so the check is here.)
+  const deps = { ...depsFor([], calls), screenListings: async () => new Map() };
+  startOutreachSweep({ locationId: "loc-rl-screen", client: {}, saved, store: store2, deps, now: oct27 });
   await settle();
   assert.deepEqual(calls.map((c) => c.agentKeys), [["sold-1962"]]);
 });

@@ -73,6 +73,18 @@ test("switched on, it runs once a weekday morning and writes the cursor before i
   assert.equal(await maybeRunGatekeeperSweep({ locationId: LOC, saved: ON({ dryRun: true }), store, deps, now: T0 + 3600000 }), false, "once a day");
 });
 
+// 2026-11-09 audit: "ran today" was "under 20 hours ago", and a new day may
+// only start at 9, so a retry after 1pm cost the whole next morning.
+test("a retry at 2:30pm doesn't cost tomorrow's sweep", async () => {
+  _resetJobs();
+  const LOC = "loc-gate-late";
+  const retried = T0 - DAY + 5.5 * 3600000;   // Monday 2:35pm Pacific
+  await store.setJobCursor(LOC, CURSOR_NAME, { at: new Date(retried).toISOString(), doc: { tries: 2, lastDaily: new Date(retried).toISOString(), last: { status: "done" } } });
+  assert.equal(await maybeRunGatekeeperSweep({ locationId: LOC, saved: ON({ dryRun: true }), store, deps, now: T0 }), true, "Tuesday 9:05am is Tuesday's run");
+  await getGatekeeperJob(LOC).done;
+  assert.equal((await store.getJobCursor(LOC, CURSOR_NAME)).doc.tries, 1);
+});
+
 test("a dry run says what it would write and writes nothing", async () => {
   const LOC = "loc-dry";
   await seed(LOC);

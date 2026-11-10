@@ -13,3 +13,87 @@ test("a short sale or bank-owned listing is never texted about, even as a fixer"
   assert.match(reo.why, /bank-owned/);
   assert.equal(listingDistress({ status: "FOR_SALE", description: "Fixer, not a short sale. Bring your contractor." }).ok, true);
 });
+
+// 2026-11-09 audit: on 11/9 the sweep picked 108 agents and the listing check
+// kept 1. Plain "needs work" wording was read as "nothing in the remarks says
+// it needs work". The remarks below are made up.
+test("a listing that says needs new flooring and paint is kept", () => {
+  for (const description of [
+    "Needs new flooring and paint. Big yard.",
+    "Needs a new roof and some updating.",
+    "Needs cosmetic updates throughout.",
+    "This one needs a little kitchen work.",
+    "Home needs to be updated.",
+  ]) {
+    const r = listingDistress({ status: "FOR_SALE", description });
+    assert.equal(r.ok, true, description);
+    assert.ok(r.signals.includes("needs work"), description);
+  }
+});
+
+test("a listing that says could use some updating is kept", () => {
+  for (const description of [
+    "Solid rambler that could use some updating.",
+    "Could use a little love.",
+    "Ready for your renovation ideas.",
+    "Great bones and ready for your updates.",
+    "Light cosmetic work will make it shine.",
+  ]) assert.equal(listingDistress({ status: "FOR_SALE", description }).ok, true, description);
+  // Softer words: kept only when nothing says the house is finished.
+  for (const description of ["Value-add opportunity on a big lot.", "Original owner, first time on the market.", "Seller will make no repairs."]) {
+    assert.equal(listingDistress({ status: "FOR_SALE", description }).ok, true, description);
+  }
+});
+
+test("a listing that says move-in ready with no repairs is dropped", () => {
+  for (const description of [
+    "Move-in ready with no repairs.",
+    "Original owner kept it immaculate, move-in ready.",
+    "Recent cosmetic updates throughout. Turnkey.",
+    "No repairs necessary.",
+    "Move-in ready and ready for your personal touch.",
+  ]) assert.equal(listingDistress({ status: "FOR_SALE", description }).ok, false, description);
+});
+
+test("a listing that says doesn't need any work is dropped", () => {
+  for (const description of [
+    "Doesn't need any work, just bring your furniture.",
+    "This home does not need repairs.",
+    "No need for updates here.",
+    "Nothing needs updating.",
+    "This home needs no work.",
+    "Needs little to no work, bring your furniture.",
+    // What a buyer needs isn't what the house needs.
+    "Room for all your needs with an updated kitchen.",
+    "Space for every need and a remodeled bath.",
+    "Has everything it needs including a new roof.",
+    "Buyer needs to verify the roof age.",
+    // Cosmetic work already done.
+    "Seller has done cosmetic updates.",
+  ]) assert.equal(listingDistress({ status: "FOR_SALE", description }).ok, false, description);
+  // A no about one room doesn't hide a need in another.
+  assert.equal(listingDistress({ status: "FOR_SALE", description: "Kitchen needs no work but the bath needs updating." }).ok, true);
+});
+
+// Review, 2026-11-09: "cosmetic updates" on its own is as often work a house
+// has had as work it needs, and "requires no repairs" or "no repairs or
+// updates needed" says it's done. Read as fixers, these would bring back the
+// turnkey asks behind the 10/26 opt-outs. The remarks below are made up.
+test("a turnkey listing that mentions cosmetic updates or needing no repairs is dropped", () => {
+  for (const description of [
+    "Gorgeous cosmetic updates, move-in ready.",
+    "Some cosmetic updates in 2021, turnkey.",
+    "Many cosmetic updates over the years. Immaculate.",
+    "Owner did some cosmetic updates and it's move-in ready.",
+    "Requires no repairs.",
+    "No repairs or updates needed.",
+    "Requires no work, just move in.",
+    "No cosmetic work needed.",
+  ]) assert.equal(listingDistress({ status: "FOR_SALE", description }).ok, false, description);
+  // With nothing finished beside it, cosmetic work still keeps the house.
+  for (const description of ["Light cosmetic work will make it shine.", "Cosmetic updates needed throughout.", "Needs cosmetic updates."]) {
+    assert.equal(listingDistress({ status: "FOR_SALE", description }).ok, true, description);
+  }
+  // And a seller who won't fix anything is still a soft yes.
+  assert.equal(listingDistress({ status: "FOR_SALE", description: "Seller will make no repairs." }).ok, true);
+});
