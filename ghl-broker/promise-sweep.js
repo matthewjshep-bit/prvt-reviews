@@ -22,7 +22,7 @@
 // second broker or a second tick can never send it twice.
 
 import { recordEvent } from "./contact-record.js";
-import { conversationConfig, startProactive, startReply, machineMayStartFor } from "./reply-agent.js";
+import { conversationConfig, startProactive, startReply, machineMayStartFor, noteOurCheckBack } from "./reply-agent.js";
 import { listJobs as listUnderwriteJobs } from "./auto-underwrite.js";
 import { addressKey } from "./shared/us-address.js";
 import { aiHoldReasons, effectiveStatus } from "./shared/offer-status.js";
@@ -97,6 +97,9 @@ export async function settlePromise({ store, locationId, contactId, address = ""
 export async function notePromiseInHandText({ store, locationId, contactId, text, at = new Date().toISOString(), channel = "sms" }) {
   const body = String(text || "");
   if (!contactId || channel !== "sms" || !body.trim()) return { made: false, kept: false };
+  // "I'll check back after the new year" is our word too (2026-11-09): the
+  // check-in waits for it, and keeps it on the day (reply-agent.js noteOurCheckBack).
+  await noteOurCheckBack({ store, locationId, contactId, text: body, at, ref: null }).catch(() => null);
   const keeps = keepsOurWord(body);
   let kept = false;
   if (keeps) {
@@ -475,7 +478,7 @@ export async function runCheckInSweep({ client, locationId, saved = {}, store, s
     if (!claim.inserted) continue;
     const r = await start({
       client, locationId, saved, store, contactId, kind: "checkin_due", offer: null, continues,
-      subject: { address: req.address || "", phrase: req.data?.phrase || "", sourceKind: req.data?.kind || "date" },
+      subject: { address: req.address || "", phrase: req.data?.phrase || "", sourceKind: req.data?.kind || "date", ...(req.data?.ours ? { ours: true } : {}) },
       sendsEnabled, deps,
     }).catch((e) => ({ skipped: String(e?.message || e).slice(0, 160) }));
     if (r?.skipped) out.results.push({ contactId, status: "skipped", reason: r.skipped });

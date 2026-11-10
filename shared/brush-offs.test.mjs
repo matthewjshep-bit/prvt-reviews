@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cadenceRequest, cadenceDays, refusesAddress, notAHouse, isAutoReply, autoReplyNumber, requestStands } from "./brush-offs.js";
+import { cadenceRequest, cadenceDays, refusesAddress, notAHouse, isAutoReply, autoReplyNumber, requestStands, ourCheckBack } from "./brush-offs.js";
 import { evaluateAgent, normalizeAgentPulse, agentOwner } from "./agent-pulse.js";
 import { addFact, FACT_KEYS, factsFromCustom } from "./contact-record.js";
 import { buildPipeline } from "./pipeline.js";
@@ -182,4 +182,30 @@ test("an office number two agents' auto-replies both name is nobody's number to 
   const ev = (contactId) => ({ contactId, type: "texts_elsewhere", at: ago(1), data: { otherNumber: "(206) 555-0100" } });
   const { actions } = buildPipeline({ events: [ev("a1"), ev("a2"), { ...ev("a3"), data: { otherNumber: "(425) 555-0199" } }], now: NOW });
   assert.deepEqual(actions.filter((a) => a.kind === "texts_elsewhere").map((a) => a.contactId), ["a3"]);
+});
+
+/* ---------- our own word (2026-11-09) ---------- */
+
+// 25 threads where we said we'd back off and a check-in went two weeks later
+// anyway. Our words are read like theirs. Invented wording throughout.
+test("our I'll check back after the new year is a date", () => {
+  const mid = Date.parse("2026-11-10T19:00:00Z");
+  const back = ourCheckBack("Totally get it, I'll check back after the new year.", mid);
+  assert.ok(back, "read as a date");
+  assert.match(back.dueAt, /^2027-01-0\d/);
+  assert.equal(back.phrase, "after the new year");
+  assert.ok(back.days >= 50 && back.days <= 60, String(back.days));
+  // A couple months is that far out; every few months is a cadence with no date.
+  const couple = ourCheckBack("No problem, I'll check back in a couple months.", mid);
+  assert.deepEqual([couple.days, couple.dueAt.slice(0, 10)], [60, "2027-01-09"]);
+  // Said the way we said it, so the check-in's brief and its wait read right.
+  assert.deepEqual([couple.phrase, couple.why], ["in a couple months", "we said we'd check back in a couple months"]);
+  const every = ourCheckBack("Will check in every few months then.", mid);
+  assert.deepEqual([every.days, every.dueAt], [90, null]);
+  assert.match(ourCheckBack("I'll reach out after the holidays", mid).dueAt, /^2027-01-0\d/);
+  // The next turn of a conversation is not a clock, and their words aren't ours.
+  assert.equal(ourCheckBack("I'll check back tomorrow with a number", mid), null);
+  assert.equal(ourCheckBack("Let me check in with the seller and get back to you Friday", mid), null);
+  assert.equal(ourCheckBack("Check back after the new year", mid), null, "an agent's ask, not our word");
+  assert.equal(ourCheckBack("", mid), null);
 });

@@ -25,6 +25,7 @@
 // hit quiets an agent who wanted to hear from us.
 
 import { isPlainNo } from "./conversation-audit.js";
+import { detectLeadTiming, timeNamed } from "./follow-up.js";
 
 const DAY_MS = 86400000;
 // The longest an agent's own cadence holds the check-in off, and the least.
@@ -102,6 +103,65 @@ export function cadenceRequest(text = "") {
   for (const [rx, why] of BRUSH_OFF) if (rx.test(t)) return { days: CADENCE_DAYS.brushOff, why, checkBack: false };
   if (NO_NEED_RX.test(t)) return { days: CADENCE_DAYS.noNeed, why: "said we don't need to check in", checkBack: false };
   if (ON_MY_LIST_RX.test(t)) return { days: CADENCE_DAYS.noNeed, why: "said we're on their list", checkBack: false };
+  return null;
+}
+
+/* ---------- our own word ---------- */
+
+// 2026-11-09 audit: 25 threads where we told an agent we'd check back in a
+// couple of months, or after the new year, and a check-in went two weeks
+// later anyway. Our word is a clock too. First person, ours: "I'll check back
+// after the new year", "we'll reach out in a couple months", "will check in
+// every few months".
+const OUR_CUE_RX = /(?:\b(?:i'?ll|i\s+will|we'?ll|we\s+will|let\s+me|i'?m\s+going\s+to|we'?re\s+going\s+to|i'?m\s+gonna|i\s+can|we\s+can)|(?:^|[.!?,]\s*)will)\s+(?:\w+\s+){0,2}?(check(?:ing)?\s+(?:back|in)|circle\s+back|reach\s+(?:back\s+)?out|touch\s+base|follow\s+up|text\s+you|hit\s+you\s+up|be\s+in\s+touch|try\s+you\s+again|ping\s+you|get\s+back\s+in\s+touch)\b/i;
+const OUR_MONTHS_RX = /\b(in|after)\s+(?:about\s+|another\s+|a\s+good\s+)?(a\s+couple(?:\s+of)?|couple(?:\s+of)?|a\s+few|few|several|two|three|four|six|\d+)\s+months?\b/i;
+// The shortest wait our word makes: anything sooner is the conversation's
+// next turn, not a clock.
+export const OUR_CHECK_BACK_MIN_DAYS = 14;
+
+/**
+ * ourCheckBack(text, now) → { days, dueAt, phrase, why } | null
+ *
+ * When OUR text said we'd come back: "every 2–3 months" (CHECK_BACK_RX's
+ * cousin INTERVAL_RX) is a cadence with no date; "in a couple months" is
+ * that far out; "after the new year", "after the holidays", "in January",
+ * "next week" are the day they name (shared/follow-up.js detectLeadTiming,
+ * timeNamed). `days` is how long that is from `now`, at least
+ * OUR_CHECK_BACK_MIN_DAYS; `dueAt` the morning it falls on (null for a
+ * cadence). Read sentence by sentence: the cue and its time in one.
+ */
+export function ourCheckBack(text = "", now = Date.now()) {
+  const t = clean(text);
+  if (!t.trim() || isTapback(t)) return null;
+  for (const sentence of t.split(/(?<=[.?!])\s+|\n+/)) {
+    const cue = OUR_CUE_RX.exec(sentence);
+    if (!cue) continue;
+    const rest = sentence.slice(cue.index);
+    const iv = INTERVAL_RX.exec(rest);
+    if (iv) {
+      const unit = /^quarter/i.test(iv[4]) ? 3 : 1;
+      const n = iv[1] ? (Number(iv[1]) + Number(iv[2])) / 2 : iv[3] ? count(iv[3]) : 1;
+      if (n) return { days: days(n * unit), dueAt: null, phrase: iv[0].trim().toLowerCase(), why: `we said we'd check in ${iv[0].trim().toLowerCase()}` };
+    }
+    const months = OUR_MONTHS_RX.exec(rest);
+    if (months) {
+      const n = count(months[2]);
+      if (n) {
+        const d = days(n);
+        const phrase = `${months[1].toLowerCase()} ${months[2].toLowerCase().replace(/\s+/g, " ")} months`;
+        return { days: d, dueAt: cadenceDueAt(now, d), phrase, why: `we said we'd check back ${phrase}` };
+      }
+    }
+    // A day: our cue read as the "check back" detectLeadTiming knows.
+    const asCheckBack = sentence.slice(0, cue.index) + " I'll check back " + sentence.slice(cue.index + cue[0].length);
+    const lead = detectLeadTiming(asCheckBack, now);
+    const named = lead?.when ? { dueAt: lead.when, phrase: lead.phrase } : timeNamed(rest, now);
+    const at = Date.parse(named?.dueAt || "");
+    if (!Number.isFinite(at)) continue;
+    const d = Math.round((at - now) / DAY_MS);
+    if (d < OUR_CHECK_BACK_MIN_DAYS) continue;
+    return { days: Math.min(CADENCE_MAX_DAYS, d), dueAt: new Date(at).toISOString(), phrase: String(named.phrase || "").toLowerCase(), why: `we said we'd check back ${String(named.phrase || "").toLowerCase()}`.trim() };
+  }
   return null;
 }
 

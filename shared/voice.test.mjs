@@ -239,10 +239,12 @@ test("Matt's own saved first text with a tell is flagged on the page but still s
 });
 
 test("with check-ins unset, the settings normalise to lint on and the v2 pools", () => {
-  assert.deepEqual(normalizeConversationAi({}).checkIns, { lint: true, pools: "v2" });
-  assert.deepEqual(normalizeConversationAi({ checkIns: { lint: false, pools: "v1" } }).checkIns, { lint: false, pools: "v1" });
-  assert.deepEqual(normalizeConversationAi({ checkIns: { pools: "v9" } }).checkIns, { lint: true, pools: "v2" });
-  assert.deepEqual(normalizeConversationAi(normalizeConversationAi({ checkIns: { pools: "v1" } })).checkIns, { lint: true, pools: "v1" }, "survives a save");
+  // The check-in branch's keys (shared/check-in.js) ride in the same block.
+  const voice = (c) => ({ lint: c.lint, pools: c.pools });
+  assert.deepEqual(voice(normalizeConversationAi({}).checkIns), { lint: true, pools: "v2" });
+  assert.deepEqual(voice(normalizeConversationAi({ checkIns: { lint: false, pools: "v1" } }).checkIns), { lint: false, pools: "v1" });
+  assert.deepEqual(voice(normalizeConversationAi({ checkIns: { pools: "v9" } }).checkIns), { lint: true, pools: "v2" });
+  assert.deepEqual(voice(normalizeConversationAi(normalizeConversationAi({ checkIns: { pools: "v1" } })).checkIns), { lint: true, pools: "v1" }, "survives a save");
 });
 
 /* ---------- the emails ---------- */

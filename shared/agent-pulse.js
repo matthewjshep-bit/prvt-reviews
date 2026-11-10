@@ -53,6 +53,7 @@ import { CHECK_IN_GAP_DAYS } from "./agent-focus.js";
 import { callOwedWait } from "./promise-owed.js";
 import { worksOn, runDaysFrom, pacificParts } from "./follow-up-engine.js";
 import { BLOCK_TAG_RX } from "./opt-out.js";
+import { checkInWait } from "./check-in.js";
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -194,7 +195,9 @@ export const AGENT_PULSE_EVENT_TYPES = [
   // booked call and the calls we tried read with promise_made and call_summary.
   "call_booked", "call_attempt",
 ];
-export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided", "agent_pulse_joined"];
+export const AGENT_PULSE_LEDGER_TYPES = ["agent_pulse_sent", "agent_pulse_texted", "agent_pulse_voided", "listing_pinged", "listing_ping_voided", "agent_pulse_joined",
+  // A check-in that waited (shared/check-in.js routeCheckIn): not due again before its date.
+  "checkin_skipped"];
 // What counts as them having written back (store.lastContactActivity with
 // inboundOnly — a text summary only when it summarises THEIR text).
 export const INBOUND_EVENT_TYPES = [
@@ -668,6 +671,15 @@ export function evaluateAgent(agent = {}, { settings = {}, config = {}, houses =
   // (shared/promise-owed.js callOwedWait; agent-focus.js asks it at the door).
   const owedCall = callOwedWait({ events, now });
   if (owedCall) return out("not_due", `${owedCall.reason}: the call goes first`, { segment, dueAt: owedCall.until });
+  // A check-in that read the thread and waited (shared/check-in.js, 2026-11-09:
+  // their plain no, their "after the holidays", our "I'll check back in a
+  // couple months", an auto-reply-only number, "are you a bot?"): not due
+  // before its date, so the day's seat goes to the next agent instead of
+  // being claimed and voided every morning. A homeowner's never ends. A
+  // word from them since lifts it.
+  const wait = checkInWait(ledger, { lastInboundAt: agent.lastInboundAt, now });
+  if (wait?.permanent) return out("stopped", wait.why);
+  if (wait) return out("not_due", `the check-in waits: ${wait.why}`, { segment, dueAt: wait.until });
   const voided = new Set(ledger.filter((e) => e.type === "agent_pulse_voided").map((e) => e.data?.claimKey || e.ref).filter(Boolean));
   const texted = ledger.filter((e) => e.type === "agent_pulse_texted" && (!agent.lastInboundAt || String(e.at) > String(agent.lastInboundAt)));
   const unanswered = texted.length;
@@ -819,6 +831,9 @@ export function pickPulseAgents({ agents = [], settings = {}, config = {}, house
   const toPick = ({ agent, verdict }) => ({
     contactId: agent.contactId, name: agent.name || "", segment: verdict.segment, reason: verdict.pulseReason,
     listingKey: verdict.listing?.listingKey || null,
+    // Their own count of check-ins that went: which fixed text is next
+    // follows it, never their place in today's run (2026-11-09).
+    touch: (agent.ledger || []).filter((e) => e?.type === "agent_pulse_texted").length,
     // A focus county's listing that has been up a while: Zillow reads it before the claim.
     ...(verdict.focus ? { focus: true } : {}),
     subject: agentPulseSubject({ agent, verdict, houses, now }),

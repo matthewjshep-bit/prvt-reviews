@@ -7773,6 +7773,64 @@ clock that is firing still holds them. Found on an agent texted 377K in a plain
 reply: "that won't work", our ask for their number, then 15 days of nothing
 while "an open offer" held him and no nudge ever went.
 
+**Check-ins wait when they should and never repeat (2026-11-09).** Matt: check-ins
+have to sound like him texting someone he knows. The audit found 63
+word-for-word repeats in 60 days (34 on 11-09, two STOPs within minutes),
+1,319 of 4,915 bot check-ins right after a no, a "later" or a house they gave
+us, 56 to homeowners, 25 threads where we said we'd back off and texted
+anyway, and the saved "I'm an assistant on Matt's team" in 9 threads.
+`shared/check-in.js` reads the thread before a check-in is written
+(`runProactive`, for every recurring check-in and the kinds about something
+open):
+- **The route** (`routeCheckIn`, first match wins):
+  1. every text from them in 90 days is an auto-reply: **skip** 90 days;
+  2. they asked whether this is a bot or AI in the last `aiComplaintDays`
+     (30): **Matt's**. The text is drafted once and waits on the Desk with
+     "they asked if this is a bot"; after that, nothing goes by machine until
+     the 30 days are up;
+  3. a homeowner's thread (our first text asked about their own house, no
+     agent tag) on an agent check-in: **skip** for good;
+  4. their last word was a plain no under `afterNoDays` (30) ago: **skip**
+     to day 30;
+  5. they said when to come back ("check back after the holidays", "every
+     couple of months"), or WE did ("I'll check back after the new year"):
+     **skip** until then;
+  6. our last text took our number back (sent, then we passed within a day)
+     and they haven't written since: **Matt's**, once.
+
+  The kinds about something open (a live offer's nudge, the hot push, a
+  counter, the second look, a promise, a price drop, the address chase, a
+  deal follow-up, a walkthrough, and a dated, lead or unanswered
+  `checkin_due`) are never held back by 4 or 5; 1, 2, 3 and 6 still apply.
+- **A skip** sends nothing, writes no draft and never reaches the Desk. It
+  writes `checkin_skipped { kind, why, until, route }` on the timeline. The
+  agent check-in reads it (`AGENT_PULSE_LEDGER_TYPES`) and answers
+  "not due: the check-in waits: …" until `until` (`evaluateAgent`), so the
+  day's seat goes to the next agent; the buyer pulse does the same
+  (`planBuyerPulse`). A word from them since lifts it.
+- **Never the same text twice.** The agent check-in's fixed text follows the
+  agent's own count of check-ins that went (`touch`, their
+  `agent_pulse_texted` rows), from their contact's variant, never their place
+  in the day's run (until now an agent third in line twice running got the
+  same text twice). `pickVariant` walks past any text that repeats one of our
+  last `repeatTouches` (6) texts, or spends a "once" phrase (desk, fixers,
+  rentals…) one of our last three used. The buyer pulse's shape follows the
+  buyer's own count of pulses the same way. The voice check's last look at
+  send still holds a check-in that sat queued while another text of ours
+  went and now repeats it, even with the voice check switched off.
+- **The name they go by.** "Call me Kate", "I go by Rob", or texts signed with
+  a short form of their GHL first name (the same first letter, never our own
+  name) file the `goes_by` fact (both parties, app-only). Every fixed text
+  and every prompt's name line uses it before the GHL name.
+- **Settings** (`conversationAi.checkIns`): `noRepeat` (on), `repeatTouches`
+  (6, 2 to 12), `respectLastWord` (on; rules 1, 3, 4, 5), `afterNoDays` (30,
+  7 to 120), `aiComplaintDays` (30, 7 to 120). They only hold texts back, so
+  they ship on. A misread no ("no, not yet") delays one check-in by up to 30
+  days; expect about a third fewer agent check-ins in the first week.
+- **Check.** `GET /api/outreach/pulse?agents=1`: agents waiting read "the
+  check-in waits: …" with their `dueAt`. A contact's timeline shows "a
+  check-in waited" with why and until when.
+
 ### How often they asked, and when to stop asking (2026-10-14)
 
 Reading 2,014 threads turned up agents who told us how often to check in,
@@ -7918,6 +7976,43 @@ went months without a touch.
   asked.
 - **Check.** `GET /api/outreach/pulse?agents=1`: the engaged count up by
   about `written.markers`, their `dueAt` spread over the next `everyDays`.
+
+**Our own word is a clock (2026-11-09).** In 25 threads we told an agent we'd
+back off ("I'll check back in a couple months", "after the new year") and a
+check-in went two weeks later anyway. `ourCheckBack(text, now)`
+(`shared/brush-offs.js`) reads our own texts the way `cadenceRequest` reads
+theirs, first person only: "every few months" is a cadence; "in a couple
+months" is that far out; "after the new year", "after the holidays", "in
+January", "in a few weeks" are the day they name. Anything sooner than two
+weeks is the conversation's next turn, not a clock. It runs on every agent
+text that goes from the app (`sendReplyDraft`, `noteOurCheckBack`) and on
+your own hand texts (`notePromiseInHandText`), for agents only: a contact the
+record files as a buyer (or anything but an agent) is left alone, and the
+write never files anyone as an agent:
+- a wait of a month or more is the `checkinEvery` fact with source "our word"
+  (shown as "from our own text"), which the agent check-in already waits at
+  least;
+- a day is a `checkin_requested` (kind `date`, `ours: true`) on it, so the
+  check-in that goes is the one that keeps our word, in new words (never the
+  wording of our old text, which the voice check would hold as a repeat).
+  It never names a house from before: the gate holds any street, address or
+  house of theirs in it, writes it once more, then drops it (no Desk row);
+- the routine check-ins (the agent check-in, the cold ladder, the deal-source
+  week, the buyer pulse) read the same words off the thread and wait until
+  then (`shared/check-in.js` rule 5). A live offer's nudges, the hot push and
+  the other kinds about something open are untouched.
+
+**"Are you a bot?" is Matt's (2026-11-09).** A reply to a text that asks whether
+this is a bot or AI (`AI_COMPLAINT_RX`, shared/voice.js) never goes by itself:
+the draft waits with "they asked if this is a bot", needs a person, and the
+gate holds it (`botAskFlags`), so no audit releases it. The prompt's IDENTITY
+line no longer recites `persona.ifAskedIfBot`; it tells the model to leave the
+reply empty, and never to claim to be a person or a bot. What you saved there
+stays for you to send by hand (Settings > Conversation AI). A text that only
+asks ("are you a bot?") is never read as an opt-out: the model's read of one
+is overruled and nobody is tagged for asking. "Is this a bot? stop texting
+me" is still a stop. Every machine check-in to them waits 30 days
+(`aiComplaintDays`).
 
 ### The daily sweep (outreach autopilot)
 

@@ -9675,3 +9675,59 @@ test("an agent who says she won't work with wholesalers gets no 'we close oursel
   assert.ok(d.asksWholesale?.phrase);
   assert.ok(!calls.some(([m, p]) => m === "POST" && p === "/conversations/messages"), "nothing went to them");
 });
+
+/* ---------- "are you a bot?" (shared/check-in.js, 2026-11-09) ---------- */
+
+// The saved "I'm an assistant on Matt's team" went out in 9 threads. Matt
+// answers this himself: the reply waits for him, and a text that only asks
+// is never read as an opt-out. Invented wording.
+import { buildSystemPrompt } from "./conversation-prompt.js";
+import { BOT_ASK_FLAG } from "./shared/check-in.js";
+
+test("a reply that only asks are you a bot doesn't tag them as an opt-out", async () => {
+  _resetJobs();
+  const { client, tags } = ghlStub();
+  const store = fakeStore();
+  const { job } = await startReply({ client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "Are you a bot?", sendsEnabled: true,
+    deps: { draft: async () => ({ intent: "opt_out", confidence: "high", needsHuman: false, humanReason: "", reply: "", summary: "They asked if this is a bot.", propertyAddress: "", counterAmount: 0 }) } });
+  await settle(); await settle();
+  assert.notEqual(job.intent, "opt_out", job.heldReason || job.error || "");
+  assert.equal(tags.filter(([m, t]) => m === "POST" && (t || []).some((x) => /dnc|stop/i.test(x))).length, 0, JSON.stringify(tags));
+  const events = await store.listContactEvents("LOC", "c1", {});
+  assert.equal(events.some((e) => e.type === "unsubscribed"), false);
+  const d = [...store.rows.values()].find((x) => x.contactId === "c1");
+  assert.ok(d, "a draft waits for Matt");
+  assert.equal(d.needsHuman, true);
+  assert.ok((d.flags || []).includes(BOT_ASK_FLAG), (d.flags || []).join(" · "));
+  // "Is this a bot? stop texting me" is still a stop.
+  _resetJobs();
+  const { client: c2, tags: t2 } = ghlStub();
+  const { job: j2 } = await startReply({ client: c2, locationId: "LOC", saved: SAVED, store: fakeStore(), contactId: "c1", message: "Is this a bot? stop texting me", sendsEnabled: true,
+    deps: { draft: async () => ({ intent: "opt_out", confidence: "high", needsHuman: false, humanReason: "", reply: "", summary: "Asked us to stop.", propertyAddress: "", counterAmount: 0 }) } });
+  await settle(); await settle();
+  assert.equal(j2.intent, "opt_out");
+  assert.ok(t2.some(([m]) => m === "POST"), "tagged as before");
+});
+
+test("they asked whether this is a bot: no machine reply goes, the draft waits for Matt", async () => {
+  _resetJobs();
+  const { client } = ghlStub();
+  const store = fakeStore();
+  const { job } = await startReply({ client, locationId: "LOC", saved: SAVED, store, contactId: "c1", message: "lol is this AI", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", reply: "Ha, nope, it's me. Anything new on your end?", propertyAddress: "" }) } });
+  await settle(); await settle();
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "draft", "never scheduled");
+  assert.equal(d.autoSendable, false);
+  assert.equal(d.needsHuman, true);
+  assert.equal(d.humanReason, "they asked if this is a bot");
+  assert.ok(d.flags.includes(BOT_ASK_FLAG));
+});
+
+test("the bot never recites the saved answer to are you a bot", () => {
+  const saved = "I'm an assistant who keeps up with these texts.";
+  const p = buildSystemPrompt({ config: { persona: { name: "Matt", ifAskedIfBot: saved } }, party: "agent" });
+  assert.equal(p.includes(saved), false);
+  assert.match(p, /IDENTITY: if they ask whether you are a bot.*return an EMPTY reply, needsHuman true, humanReason "they asked if this is a bot"/);
+  assert.match(p, /Never claim to be a person, never claim to be a bot/);
+});

@@ -55,13 +55,14 @@ import { normalizeAgentPulse, listingAlreadyRaised, LISTING_REASONS } from "./sh
 import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_STATUSES } from "./shared/second-look.js";
 import { passNoteStale } from "./shared/pass-note.js";
 import { numberDead, PHONE_EVENT_TYPES, DEAD_NUMBER_LINE, RETRY_KINDS } from "./shared/delivery.js";
-import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
+import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber, ourCheckBack, CADENCE_MIN_DAYS } from "./shared/brush-offs.js";
 import { normalizeOpener, openerVoice, countyName, homeFor, withHomeBlank, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { standardText, isShippedText } from "./shared/standard-texts.js";
 import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 // shared/voice.js's reader returns { text, at, channel } for the voice check; this file's own
 // ourLastTexts (below, the cold ladder's) returns plain text, so the voice one goes by voicePrior.
 import { voiceFlags, hardVoiceKeys, voiceLine, ourLastTexts as voicePrior, VOICE_LINE_RX } from "./shared/voice.js";
+import { checkInPack, routeCheckIn, routesCheckIn, normalizeCheckInRoute, asksIfBot, onlyAsksIfBot, botAskFlags, BOT_ASK_REASON, goesBySaid, goesByOf } from "./shared/check-in.js";
 import { normalizeDealTexts } from "./shared/blast-text.js";
 import { templateHash } from "./shared/outreach-scorecard.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
@@ -79,7 +80,7 @@ import { houseGone, saysTurnkey, reopensOnTheirNumbers } from "./shared/held-und
 import { passedOnHouse, isTierOneAction, isLowerTierAction, isTierOneCardAction, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
 import { normalizeGhlStages, validAddress, sameRaisedHouse, namesOurHouse, OUR_TEXT_EVENT_TYPES } from "./shared/ghl-stages.js";
 import { qualifyStep, broughtStep, isPastWork, QUALIFY_ASK_RX, ourReplyPasses, pointsToThePhotos, photosPassReply, bankSaleIn, BANK_SALE_PASS, withCallAsk, withFixersAsk, CALL_ASK_RX, FIXERS_ASK_RX, asksTheirRehab } from "./shared/flip-read.js";
-import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber } from "./shared/mentioned-houses.js";
+import { housesInText, normalizeMentionedHouses, addressAsk, asksForAddress, addressHint, HOUSE_LEAD_INTENTS, callWords, saidIn, referralMention, referralKey, hasHouseNumber, streetMentions } from "./shared/mentioned-houses.js";
 import { currentOffers, currentOfferFor, walkedAwayFrom, paperCheck, ourComeDown, ourMoveUp, machineRaise, machineCut, shorthandPrices, pricesWeName, valuesWeName, lastQuoteOnHouse, holdNumber, floatRange, rangeWords, rangeLows, liveRange, namedInRange } from "./shared/current-offer.js";
 import { offerMath, compactMath, mathAllowedAmounts, mathFigures } from "./shared/offer-breakdown.js";
 import { usageOf } from "./shared/ai-cost.js";
@@ -1246,6 +1247,9 @@ export function evaluateReplyGates({
   // or assign; an Oregon house is written on OREF forms (shared/partner-terms.js).
   flags.push(...wholesaleFlags({ reply: draft.reply, party, asked: draft.asksWholesale }));
   flags.push(...formsFlags(draft.reply, { state: formsState }));
+  // They asked whether this is a bot (shared/check-in.js, 2026-11-09): Matt
+  // answers that, never the machine. Only adds a hold.
+  flags.push(...botAskFlags({ asked: draft.botAsked }));
   flags.push(...voiceGateFlags(draft.reply, voice));
   // `ok` is the row's word — a counter is not auto-sendable, full stop. But
   // the lock is the ONE flag a guard may overturn, so it is named apart from
@@ -4031,7 +4035,10 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       // A focus county's listing (pulse.focusListings): texted in Matt's
       // first-text words, so it carries what those name.
       ...(p.listing?.focus ? focusOpener({ listing: p.listing, address: p.address, saved }) : {}),
-      variant: Number(p.variant) || 0 };
+      variant: Number(p.variant) || 0,
+      // Their own count of check-ins that went (agent-pulse.js): which fixed
+      // text is next (shared/check-in.js pickVariant).
+      ...(p.touch != null ? { touch: Number(p.touch) || 0 } : {}) };
   }
   if (kind === "second_look") {
     // Our same number, said in thousands rounded down, and nothing else.
@@ -4115,6 +4122,8 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       fromK: Number(subject?.from) > 0 ? kText(Number(subject.from)) : "", toK: Number(subject?.to) > 0 ? kText(Number(subject.to)) : "",
       offerStatus: subject?.status || "", ourK: Number(offer?.cashAmount) > 0 ? kText(Number(offer.cashAmount)) : "" } : {}),
     ...(kind === "checkin_due" ? { phrase: subject?.phrase || "", sourceKind: subject?.sourceKind || "date",
+      // We said when (shared/brush-offs.js ourCheckBack): keeping our word, not theirs.
+      ...(subject?.ours ? { ours: true } : {}),
       // The lead they told us about, in their words (promise-sweep.js).
       ...(subject?.lead ? { lead: { what: String(subject.lead.what || "").slice(0, 80), said: String(subject.lead.said || "").slice(0, 200),
         toldAt: subject.lead.toldAt || null, via: subject.lead.via || "text" } } : {}) } : {}),
@@ -4226,6 +4235,13 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
   // houses we've had with them. A fresh listing of theirs is left out of
   // the list (shared/agent-pulse.js pastHouses).
   const pastHouses = kind === "agent_pulse" ? (Array.isArray(subject?.pastHouses) ? subject.pastHouses : []).filter(Boolean) : [];
+  // The check-in that keeps our own "I'll check back after the new year"
+  // (shared/brush-offs.js ourCheckBack, 2026-11-09) is a check-in, and a
+  // check-in never names a house from before (Matt, 2026-11-09): any street
+  // or address in it, or any house in their book, holds it. runProactive
+  // writes it once more, then drops it.
+  const noHouse = kind === "checkin_due" && Boolean(outbound?.ours);
+  const bookHouses = noHouse ? [...(context.offers?.numbers || []).map((n) => n?.address), subject?.address, offer?.address].filter(Boolean) : [];
   // The voice check against our last texts to them (2026-11-09). A fixed
   // text of Matt's own is flagged, never held (shared/standard-texts.js
   // isShippedText); the app's own texts and the model's are machine.
@@ -4271,6 +4287,13 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
       const g = gate(d);
       const named = pastHouses.map((h) => namesHouse(d?.reply, h)).find(Boolean);
       return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named a house from before (${named}): the check-in is generic — ask about distressed or off-market houses, never one we've had with them`] } : g;
+    });
+  }
+  if (noHouse) {
+    return voiceLast((d) => {
+      const g = gate(d);
+      const named = streetMentions(d?.reply || "")[0]?.address || bookHouses.map((h) => namesHouse(d?.reply, h)).find(Boolean);
+      return named ? { ...g, ok: false, clean: false, flags: [...(g.flags || []), `named a house (${named}): a check-in never names a house, a street or an address from before`] } : g;
     });
   }
   if (!oldHouse) return gate;
@@ -4369,9 +4392,13 @@ function focusOpener({ listing = {}, address = "", saved = {} }) {
 // A cold check-in reads our last six texts off the thread (ourLastTexts) so
 // it never says one of them again (2026-11-09). `pools` and `shift` are the
 // voice check's (conversationAi.checkIns.pools, and the next variant along).
-function standardDraft({ kind, offer, outbound, name, contactId, transcript = "", pools = "v2", shift = 0 }) {
-  const prior = kind === "outreach_nudge" ? ourLastTexts(transcript, 6) : [];
-  const s = standardText({ kind, outbound, name, contactId, prior, pools, shift });
+// The agent check-in reads our last `repeatTouches` texts, dated, so it says
+// none of them again and spends no "once" phrase our last three used
+// (shared/check-in.js pickVariant). `goesBy`: the name they go by.
+function standardDraft({ kind, offer, outbound, name, contactId, transcript = "", pools = "v2", shift = 0, goesBy = "", checkIns = null }) {
+  const r = normalizeCheckInRoute(checkIns || {});
+  const prior = kind === "outreach_nudge" ? ourLastTexts(transcript, 6) : kind === "agent_pulse" ? voicePrior(transcript, { limit: r.repeatTouches }) : [];
+  const s = standardText({ kind, outbound, name, contactId, prior, pools, shift, goesBy, noRepeat: r.noRepeat });
   if (!s) return null;
   return { reply: s.text, summary: outboundSummary({ kind, offer, outbound }), confidence: "high", needsHuman: false, usage: null,
     // Which fixed text, and a fingerprint of it unfilled, so a rewritten one
@@ -4386,11 +4413,11 @@ function standardDraft({ kind, offer, outbound, name, contactId, transcript = ""
  * phrase our last texts already spent): the next variant along, then the
  * next, until one passes every gate. null when none does. No model call.
  */
-export function walkStandard({ draft, kind, offer, outbound, name, contactId, transcript = "", pools = "v2", gateFor, tries = 12 }) {
+export function walkStandard({ draft, kind, offer, outbound, name, contactId, transcript = "", pools = "v2", gateFor, tries = 12, goesBy = "", checkIns = null }) {
   if (!draft?.standard || typeof gateFor !== "function") return null;
   const seen = new Set([draft.reply]);
   for (let shift = 1; shift < tries; shift++) {
-    const next = standardDraft({ kind, offer, outbound, name, contactId, transcript, pools, shift });
+    const next = standardDraft({ kind, offer, outbound, name, contactId, transcript, pools, shift, goesBy, checkIns });
     if (!next || seen.has(next.reply)) continue;
     seen.add(next.reply);
     next.intent = kind;
@@ -4413,6 +4440,13 @@ export function listingCheckInFor({ kind, outbound, transcript = "" }) {
   const street = String(outbound.listing?.street || outbound.address).split(",")[0];
   if (cold) return { skip: `their listing at ${street} came up with them on ${seen.at} — a cold agent hears from us only about a new one` };
   return { outbound: { ...outbound, reason: "general", listing: null, address: "", coldOpen: false, hook: { kind: "situation" } } };
+}
+
+// The name they go by (the goes_by fact, shared/check-in.js goesBySaid), or "".
+async function goesByFor({ store, locationId, contactId }) {
+  if (typeof store?.getContactProfile !== "function" || !contactId) return "";
+  const p = await store.getContactProfile(locationId, contactId).catch(() => null);
+  return goesByOf(p?.facts);
 }
 
 function withoutSignOff(draft, kind, signer = "") {
@@ -4460,13 +4494,22 @@ export async function previewProactive({ client, locationId, saved, store, conta
   const listingCheck = listingCheckInFor({ kind, outbound: outboundDescriptor({ kind, offer, subject, saved, dossier, stance }), transcript: a.transcript });
   if (listingCheck.skip) return { skipped: listingCheck.skip, contactName: a.contactName };
   const { outbound } = listingCheck;
+  // The same wait the real one reads (shared/check-in.js), written nowhere.
+  const goesBy = await goesByFor({ store, locationId, contactId });
+  if (routesCheckIn(kind) && !subject?.forMatt) {
+    const ci = normalizeCheckInRoute(config.checkIns);
+    const book = party === "agent" ? await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => []) : [];
+    const route = routeCheckIn(checkInPack(a.transcript, { kind }, { offers: book || [], agentTagged: (a.matchedTags?.agent || []).length > 0,
+      repeatTouches: ci.repeatTouches, aiComplaintDays: ci.aiComplaintDays }), kind, ci, { party, sourceKind: subject?.sourceKind || "" });
+    if (route.route !== "send") return { skipped: `${route.route === "matt" ? "waits for you" : "waits"}: ${route.why}`, contactName: a.contactName };
+  }
   const previewArgs = {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
-    contact: { name: a.contactName || name, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
+    contact: { name: a.contactName || name, tags: a.tags, ...(goesBy ? { goesBy } : {}) }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
     aiApiKey, party, config, context, channel: "sms", outbound, batch: null,
   };
   const draftWith = deps.draft || draftReply;
-  const draft = standardDraft({ kind, offer, outbound, name: a.contactName || name, contactId, transcript: a.transcript, pools: config.checkIns?.pools || "v2" }) || await writeShorterFirstText({
+  const draft = standardDraft({ kind, offer, outbound, name: a.contactName || name, contactId, transcript: a.transcript, pools: config.checkIns?.pools || "v2", goesBy, checkIns: config.checkIns }) || await writeShorterFirstText({
     draft: withoutSignOff(await writeAgainWithoutCarrierWords({
       draft: await draftWith(previewArgs), kind,
       redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
@@ -4531,10 +4574,38 @@ async function runProactive(job, ctx) {
   }
   const { outbound } = listingCheck;
 
+  // When a check-in waits (shared/check-in.js, 2026-11-09: 79 of 211 picks
+  // that morning went to an auto-reply, a homeowner, a fresh no, a "later" or
+  // a repeat). The thread is read before anything is written. A skip sends
+  // nothing and never reaches the Desk: the timeline says why and until when
+  // (`checkin_skipped`), and the agent check-in isn't due before it. "matt"
+  // (they asked if this is a bot; our last text took our number back) is
+  // drafted once and waits for him; after that it's a skip too. Matt's 15 is
+  // his already.
+  const goesBy = await goesByFor({ store, locationId, contactId: job.contactId });
+  let forMatt = null;
+  if (ctx.machine && routesCheckIn(kind) && !subject?.forMatt) {
+    const ci = normalizeCheckInRoute(config.checkIns);
+    const book = party === "agent" ? await store.listOffers(locationId, { contactId: job.contactId, limit: 50, lean: true }).catch(() => []) : [];
+    const pack = checkInPack(a.transcript, { kind }, { offers: book || [], agentTagged: (a.matchedTags?.agent || []).length > 0,
+      repeatTouches: ci.repeatTouches, aiComplaintDays: ci.aiComplaintDays }, now);
+    const route = routeCheckIn(pack, kind, ci, { party, sourceKind: subject?.sourceKind || "", now });
+    const handed = route.route === "matt" && ((await store.listContactEvents(locationId, job.contactId, { types: ["checkin_skipped"], limit: 100 }).catch(() => [])) || [])
+      .some((e) => e?.type === "checkin_skipped" && e.data?.route === "matt" && e.data?.key === route.key);
+    if (route.route === "skip" || handed) {
+      await recordEvent({ store, locationId, contactId: job.contactId, party, type: "checkin_skipped", at: new Date(now).toISOString(), source: "sweep",
+        dedupeKey: `checkin_skipped:${job.contactId}:${kind}:${new Date(now).toISOString().slice(0, 10)}`,
+        data: { kind, why: route.why, until: route.until || null, route: route.route, ...(route.permanent ? { permanent: true } : {}), ...(route.key ? { key: route.key } : {}) } }).catch(() => {});
+      job.status = "held"; job.phase = ""; job.heldReason = `waits, not sent: ${route.why}`; job.finishedAt = new Date().toISOString();
+      return;
+    }
+    if (route.route === "matt") forMatt = route;
+  }
+
   job.phase = "drafting";
   const draftArgs = {
     message: "", transcript: a.transcript, offers: context.offers || { text: "", amounts: [], count: 0 },
-    contact: { name: a.contactName, tags: a.tags }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
+    contact: { name: a.contactName, tags: a.tags, ...(goesBy ? { goesBy } : {}) }, underwriting: [], instructions: a.instructions, signer: a.signer, companyContact: a.companyContact,
     aiApiKey, party, config, context, channel: "sms", outbound,
     // Nobody is waiting on a sweep's text: half price through the Batch API,
     // falling back to a direct call (draft-batch.js). `subject.direct`: a
@@ -4544,7 +4615,7 @@ async function runProactive(job, ctx) {
   };
   // Still reads like an ad the carriers block: written once more without it.
   const pools = config.checkIns?.pools || "v2";
-  let draft = standardDraft({ kind, offer, outbound, name: a.contactName, contactId: job.contactId, transcript: a.transcript, pools }) || await writeShorterFirstText({
+  let draft = standardDraft({ kind, offer, outbound, name: a.contactName, contactId: job.contactId, transcript: a.transcript, pools, goesBy, checkIns: config.checkIns }) || await writeShorterFirstText({
     draft: withoutSignOff(await writeAgainWithoutCarrierWords({
       draft: await deps.draft(draftArgs), kind,
       redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),
@@ -4567,7 +4638,7 @@ async function runProactive(job, ctx) {
   // A fixed text the voice check held (2026-11-09): the next variant along
   // instead, before any model call.
   if (draft.standard && !passes(gate) && (gate.flags || []).some((f) => /^reads like a machine: /.test(f))) {
-    const walked = walkStandard({ draft, kind, offer, outbound, name: a.contactName, contactId: job.contactId, transcript: a.transcript, pools, gateFor });
+    const walked = walkStandard({ draft, kind, offer, outbound, name: a.contactName, contactId: job.contactId, transcript: a.transcript, pools, gateFor, goesBy, checkIns: config.checkIns });
     if (walked) { draft = walked.draft; gate = walked.gate; job.summary = draft.summary; }
   }
   // Not a float or a first text, though: those are marked as gone the
@@ -4575,7 +4646,7 @@ async function runProactive(job, ctx) {
   // so a dropped one would read as sent and never be tried again. They still
   // wait for you, as before (review, 2026-10-04).
   // Matt's 15 is his to fix and send, like these (subject.forMatt).
-  if (ctx.machine && !passes(gate) && !KEEP_FOR_A_PERSON.has(kind) && !subject?.forMatt) {
+  if (ctx.machine && !passes(gate) && !KEEP_FOR_A_PERSON.has(kind) && !subject?.forMatt && !forMatt) {
     const tripped = (gate.flags || []).filter((f) => f !== gate.locked);
     // Held for how it reads: the redraft sees what our last text said, so it
     // opens and says it another way.
@@ -4605,6 +4676,13 @@ async function runProactive(job, ctx) {
   // to wait for a person — and "needs a person" is what keeps the 7pm audit
   // from releasing it later (releasableHeld).
   if (deps.holdForAPerson) auto = { send: false, code: "switch_off", reason: `needs a person: ${String(deps.holdForAPerson).slice(0, 160)}` };
+  // The check-in's route said this one is Matt's (shared/check-in.js): it
+  // waits for him, and "needs a person" keeps the 7pm audit off it.
+  if (forMatt) {
+    auto = { send: false, code: "switch_off", reason: `needs a person: ${forMatt.why}` };
+    draft.needsHuman = true;
+    draft.humanReason = forMatt.why;
+  }
   // Asked for by a person, to someone who opted out: drafted, and yours to send.
   if (a.optedOut) {
     auto = { send: false, code: "switch_off", reason: `needs a person: ${optedOutLine(a.optedOut)}` };
@@ -4676,6 +4754,12 @@ async function runProactive(job, ctx) {
     promptVersion: 3, updatedAt: ts,
   });
   job.draftId = record.id;
+  // Handed to Matt once: the next check-in in that window is a skip.
+  if (forMatt) {
+    await recordEvent({ store, locationId, contactId: job.contactId, party, type: "checkin_skipped", at: new Date(now).toISOString(), source: "sweep",
+      dedupeKey: `checkin_skipped:${job.contactId}:${kind}:${new Date(now).toISOString().slice(0, 10)}`,
+      data: { kind, why: forMatt.why, until: forMatt.until || null, route: "matt", key: forMatt.key || null, draftId: record.id } }).catch(() => {});
+  }
   try { await addContactTags(client, job.contactId, [RA_TAGS.draft]); } catch (e) { warnings.push(`tag: ${e.message}`); }
   if (auto.send && draft.reply) {
     job.phase = "scheduling";
@@ -4811,8 +4895,18 @@ async function runReply(job, ctx) {
   // A buyer asking for deals by email is filed the same way. Neither sends
   // anything, so both run whoever has the thread; a call's transcript is
   // never read for an address (shared/contact-email.js).
+  let goesBy = "";
   if (party !== "unknown" && !isCall) {
     const words = job.originalMessage || job.message;
+    // The name they go by (2026-11-09): "call me Kate", or a text signed with
+    // a short form of their GHL first name. Every fixed text and the reply's
+    // name line use it from here on (shared/check-in.js goesBySaid).
+    const goes = goesBySaid(words, { first: firstNameOf(a.contactName), ours: a.signer });
+    if (goes) {
+      await learnFacts({ store, locationId, contactId: job.contactId, party,
+        facts: [{ key: "goes_by", value: goes, source: "conversation", at: new Date(now).toISOString(), ref: job.id }] }).catch(() => {});
+    }
+    goesBy = goes || await goesByFor({ store, locationId, contactId: job.contactId });
     const mail = await saveTextedEmail({ client, store, locationId, contactId: job.contactId, party, message: words,
       current: a.contact ? a.contact.email || "" : undefined, ref: job.id, now }).catch(() => null);
     if (mail && mail.action !== "none") job.emailSave = { action: mail.action, ok: mail.ok ?? null, reason: mail.reason || "" };
@@ -4955,7 +5049,7 @@ async function runReply(job, ctx) {
       message: inboundText,
       transcript: a.transcript,
       offers: context.offers || { text: "", amounts: [], count: 0 },
-      contact: { name: a.contactName, tags: a.tags },
+      contact: { name: a.contactName, tags: a.tags, ...(goesBy ? { goesBy } : {}) },
       underwriting: a.underwriting,
       instructions: a.instructions,
       signer: a.signer, companyContact: a.companyContact,
@@ -5516,6 +5610,21 @@ async function runReply(job, ctx) {
       && String(draft.reply || "").trim() && !FIXERS_ASK_RX.test(draft.reply)) {
     const reply = withFixersAsk(draft.reply, openerVariant(job.contactId, 3));
     if (reply !== draft.reply) draft = { ...draft, reply, fixersAskAdded: true };
+  }
+
+  // They asked whether this is a bot (2026-11-09: the canned "I'm an
+  // assistant on Matt's team" went out in 9 threads). No machine reply goes:
+  // whatever was drafted waits for Matt, and the bot never claims to be a
+  // person or a bot. A text that only asks is a question for him, never an
+  // opt-out: the model's read of one as a stop is overruled, so nobody is
+  // tagged do-not-text for asking (shared/check-in.js onlyAsksIfBot).
+  const askedIfBot = !isCall ? theirLatestWords(a.transcript, job.originalMessage || job.message).split("\n").filter((l) => !isAutoReply(l)).join("\n") : "";
+  if (askedIfBot && asksIfBot(askedIfBot)) {
+    if ((SILENT_INTENTS.has(draft.intent) && onlyAsksIfBot(askedIfBot)) || draft.intent === "small_talk") {
+      draft = { ...draft, intent: "other", reclassifiedFrom: draft.intent };
+      job.intent = draft.intent;
+    }
+    draft = { ...draft, botAsked: true, needsHuman: true, humanReason: BOT_ASK_REASON };
   }
 
   // The model read an opt-out the keywords didn't catch ("lose my number",
@@ -7446,7 +7555,10 @@ const readRecentThread = async (client, locationId, contactId) => {
 export async function voiceLastLook({ store, locationId, d, body, liveThread = null, readThread = null, now = Date.now() }) {
   const saved = (await store.getOfferSettings?.(locationId).catch(() => null)) || {};
   const config = conversationConfig(saved);
-  if (config.checkIns?.lint === false || !String(body || "").trim()) return [];
+  // With the voice check off, a repeat of our last text still waits
+  // (checkIns.noRepeat, shared/check-in.js): only both off let it go.
+  const lintOff = config.checkIns?.lint === false;
+  if ((lintOff && config.checkIns?.noRepeat === false) || !String(body || "").trim()) return [];
   const kind = d.outbound?.kind || "";
   const email = d.channel === "email";
   const deal = kind === "blast_open";
@@ -7469,8 +7581,8 @@ export async function voiceLastLook({ store, locationId, d, body, liveThread = n
     .filter((k) => k !== "a dollar sign" && k !== "a link");
   // A deal text is the built-in wording filled with the deal's facts, and
   // its one line is Matt's own headline: only a blank left empty holds it.
-  if (deal) return keys.filter((k) => DEAL_TEXT_VOICE_KEYS.has(k));
-  return d.voiceKind ? keys : keys.filter((k) => /^repeats us/.test(k));
+  if (deal) return lintOff ? [] : keys.filter((k) => DEAL_TEXT_VOICE_KEYS.has(k));
+  return d.voiceKind && !lintOff ? keys : keys.filter((k) => /^repeats us/.test(k));
 }
 const DEAL_TEXT_VOICE_KEYS = new Set(["a blank nobody filled"]);
 
@@ -8152,6 +8264,12 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       }).catch(() => {});
     }
   }
+  // Our own word is a clock (shared/brush-offs.js ourCheckBack, 2026-11-09:
+  // 25 threads where we told an agent we'd back off and texted two weeks
+  // later anyway). "I'll check back in a couple months", "after the new
+  // year": how long (checkinEvery, source "our word"), and for a day, the
+  // dated check-in that keeps it. A live offer's nudges aren't this clock.
+  if (d.party === "agent") await noteOurCheckBack({ store, locationId, contactId: d.contactId, text: body, at: ts, ref: d.id, party: "agent" });
   // Matt's contact card, in its own text right behind this one, when they
   // asked who we are or an agent's house didn't work (shared/contact-card.js).
   const card = await followWithCard({ client, store, locationId, draft: updated, body, auto, baseUrl: cardBaseUrl, now });
@@ -8161,6 +8279,39 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     }).catch(() => {});
   }
   return { ok: true, dryRun: false, draft: updated, ...(card.sent ? { contactCard: card.why } : {}) };
+}
+
+/**
+ * noteOurCheckBack({ store, locationId, contactId, text, at, ref }) → { days, dueAt } | null
+ *
+ * A text of ours that says when we'll be back (shared/brush-offs.js
+ * ourCheckBack): the checkinEvery fact with source "our word" when it's a
+ * month or more, and for a day, a `checkin_requested` (kind "date", `ours`)
+ * on it, so the check-in that keeps our word is the one that goes. Used by
+ * sendReplyDraft and, for Matt's own texts, promise-sweep.js
+ * notePromiseInHandText.
+ *
+ * Agents only. Matt's hand texts reach it for every contact, so the record
+ * decides: a buyer or anyone else the record files as not an agent is left
+ * alone (no agent check-in is booked for them, and the write never files
+ * them as an agent). A contact with no party yet keeps none.
+ */
+export async function noteOurCheckBack({ store, locationId, contactId, text = "", at = new Date().toISOString(), ref = null, party = null }) {
+  if (!contactId || !String(text || "").trim()) return null;
+  const back = ourCheckBack(text, Date.parse(at) || Date.now());
+  if (!back) return null;
+  const filed = party || (await store?.getContactProfile?.(locationId, contactId)?.catch?.(() => null))?.party || null;
+  if (filed && filed !== "agent") return null;
+  if (back.days >= CADENCE_MIN_DAYS) {
+    await learnFacts({ store, locationId, contactId, party: filed,
+      facts: [{ key: "checkinEvery", value: String(back.days), source: "our word", at, ref }] }).catch(() => {});
+  }
+  if (back.dueAt) {
+    await recordEvent({ store, locationId, contactId, party: filed, type: "checkin_requested", at, address: "", source: "our word", ref,
+      dedupeKey: `checkin_requested:${contactId}:${back.dueAt.slice(0, 10)}`,
+      data: { kind: "date", phrase: back.phrase, dueAt: back.dueAt, ours: true } }).catch(() => {});
+  }
+  return { days: back.days, dueAt: back.dueAt };
 }
 
 /**
