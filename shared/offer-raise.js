@@ -8,7 +8,7 @@
 //
 // The ceiling is the highest of:
 //   - the number the agent was last sent: the amount in effect at the newest send that went;
-//   - the engine's walk-away, on an offer the engine made live (pricing.live). The machine may
+//   - the engine's walk-away, on a grade-A offer the engine made live (pricing.live). The machine may
 //     already step up to it (shared/walkaway.js), so a person may too;
 //   - the number the letter is at now. A raise you confirmed is the letter until it goes out, and
 //     fixing a term on it before you send isn't a second raise.
@@ -58,7 +58,9 @@ export function lastSentAmount(offer) {
 export function raiseCeiling(offer) {
   const sent = lastSentAmount(offer);
   if (!sent) return 0;
-  const walk = offer?.pricing?.live ? num(offer.pricing.walkAway) : 0;
+  // Grade A only: the machine never steps a grade-B number up (2026-11-10), so a person's raise on
+  // one past what went out asks first, like any other offer.
+  const walk = offer?.pricing?.live && offer.pricing.grade === "A" ? num(offer.pricing.walkAway) : 0;
   return Math.max(sent, walk, num(offer?.cashAmount));
 }
 

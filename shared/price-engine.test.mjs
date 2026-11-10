@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { priceHouse, triageOf, killersOf, normalizePricingV2, PRICING_V2_DEFAULTS } from "./price-engine.js";
+import { priceHouse, triageOf, killersOf, normalizePricingV2, PRICING_V2_DEFAULTS, gradeBOpen } from "./price-engine.js";
 import { rehabFloor, MIN_REHAB, REHAB_FLOOR_BY_ERA, UNKNOWN_ERA_PSF, HEAVY_PER_SQFT } from "./rehab-floor.js";
 import { GUT_PER_SQFT } from "./rehab-catalog.js";
 import { effectiveSettings } from "./offer-calc.js";
@@ -24,6 +24,38 @@ test("every switch ships off, and a saved partial is filled, never trusted", () 
   assert.equal(normalizePricingV2({ minFee: 40000 }).minFee, 30000, "the minimum fee never tops the target");
   assert.equal(effectiveSettings({}).pricingV2.shadow, false);
   assert.equal(effectiveSettings({ pricingV2: { shadow: true } }).pricingV2.maoPct, PRICING_V2_DEFAULTS.maoPct);
+});
+
+// Matt, 2026-11-10: "every house the engine can price gets a number"; the less sure it is, the
+// lower it opens. Grade B ships off, runs a week in the shadow, then goes live.
+test("grade B ships off, opens 10% lower by default, and the 10% is a setting from 0 to 25", () => {
+  const d = normalizePricingV2(undefined);
+  assert.equal(d.liveB, "off");
+  assert.equal(d.gradeBOpenPct, 10);
+  assert.equal(PRICING_V2_DEFAULTS.liveB, "off");
+  assert.equal(normalizePricingV2({ liveB: "shadow" }).liveB, "shadow");
+  assert.equal(normalizePricingV2({ liveB: "live" }).liveB, "live");
+  for (const v of [true, "on", "LIVE", 1, null]) assert.equal(normalizePricingV2({ liveB: v }).liveB, "off", `${v} is not a mode`);
+  assert.equal(normalizePricingV2({ gradeBOpenPct: 0 }).gradeBOpenPct, 0);
+  assert.equal(normalizePricingV2({ gradeBOpenPct: "25" }).gradeBOpenPct, 25);
+  assert.equal(normalizePricingV2({ gradeBOpenPct: 30 }).gradeBOpenPct, 10, "out of range reads as the default");
+  assert.equal(normalizePricingV2({ gradeBOpenPct: -5 }).gradeBOpenPct, 10);
+  assert.equal(effectiveSettings({ pricingV2: { liveB: "shadow", gradeBOpenPct: 15 } }).pricingV2.liveB, "shadow", "kept on save");
+  assert.equal(effectiveSettings({ pricingV2: { liveB: "shadow", gradeBOpenPct: 15 } }).pricingV2.gradeBOpenPct, 15);
+});
+
+test("a grade-B house opens the engine's open less the setting's %, to the $250, and nothing else does", () => {
+  const b = priceHouse({ ...HOUSE, comps: { arv: 571000, n: 5 } });
+  assert.equal(b.grade, "B");
+  assert.equal(gradeBOpen(b), Math.round((b.open * 0.9) / 250) * 250);
+  assert.ok(gradeBOpen(b) < b.open && gradeBOpen(b) < b.walkAway);
+  assert.equal(gradeBOpen(b, { gradeBOpenPct: 20 }), Math.round((b.open * 0.8) / 250) * 250);
+  assert.equal(gradeBOpen(b, { gradeBOpenPct: 0 }), b.open, "0% opens at the engine's own number");
+  assert.equal(gradeBOpen({ ...b, open: 310100 }), 279000, "279,090 to the $250");
+  assert.equal(gradeBOpen(priceHouse(HOUSE)), 0, "grade A opens at its own number");
+  assert.equal(gradeBOpen({ grade: "C", open: 300000 }), 0);
+  assert.equal(gradeBOpen({ grade: "B", open: 0 }), 0);
+  assert.equal(gradeBOpen(null), 0);
 });
 
 test("a sure read prices at 70% of ARV less rehab, opens with the $30k fee and walks away at $15k", () => {

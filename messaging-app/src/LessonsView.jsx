@@ -37,6 +37,18 @@ const pct1 = (x) => (x == null ? "—" : `${Math.round(x * 1000) / 10}%`);
 // A ratio (1.1) as how far over or under (+10%).
 const offBy = (x) => (x == null ? "—" : `${x >= 1 ? "+" : "−"}${Math.round(Math.abs(x - 1) * 1000) / 10}%`);
 const keptAt = (iso) => (iso ? new Date(iso).toLocaleString("en-US", { timeZone: "America/Los_Angeles", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
+// Grade B's lower open (2026-11-10): a week in the shadow, then live. How many it priced, would
+// have sent, sent, and where it opened against the number you stood behind.
+function gradeBLine(b) {
+  if (!b?.priced) return null;
+  const vs = b.openVsMatt == null ? "" : `, opening at ${Math.round(b.openVsMatt * 100)}% of your number (${b.withMatt} with yours)`;
+  return (
+    <p className="mt-1 text-sm text-slate-600">
+      {`Grade B at the lower open: ${b.priced} priced, ${b.wouldSend} would have gone out, ${b.sent} went${vs}.`}
+    </p>
+  );
+}
+
 export function EngineScorecard({ data, onFresh = null, busy = false }) {
   if (!data) return null;
   const { card, switches, records } = data;
@@ -83,6 +95,7 @@ export function EngineScorecard({ data, onFresh = null, busy = false }) {
       <p className={`mt-3 text-sm ${ready.ready ? "text-emerald-700" : "text-slate-600"}`}>
         {ready.ready ? "Grade A has cleared the bars: ready for your switch." : `Grade A isn't ready: ${(ready.missing || []).join("; ") || "—"}.`}
       </p>
+      {gradeBLine(row("B").gradeB)}
       {card.trend?.prior30?.n ? (
         <p className="mt-1 text-xs text-slate-500">ARV off yours: {pct1(card.trend.last30.arvGap)} the last 30 days, {pct1(card.trend.prior30.arvGap)} the 30 before.</p>
       ) : null}

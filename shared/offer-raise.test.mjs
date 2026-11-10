@@ -44,6 +44,14 @@ test("an engine offer's walk-away is room up to it, and the line says what moves
   assert.equal(raiseLine({ from: 254000, to: 301750 }), "This raises a sent offer from 254k to 301,750: confirm?");
 });
 
+// Grade B (2026-11-10) opens lower and the machine never steps it up, so its walk-away is no room.
+test("a grade-B engine offer gives no room up to its walk-away: raising it past what went out asks first", () => {
+  const o = { status: "sent", cashAmount: 228750, sends: [went("2026-11-05T18:00:00Z")], pricing: { live: true, grade: "B", open: 228750, engineOpen: 254000, walkAway: 268000 } };
+  assert.equal(raiseCeiling(o), 228750);
+  assert.deepEqual(raiseNeedsConfirm({ offer: o, to: 254000 }), { from: 228750, to: 254000 });
+  assert.equal(raiseNeedsConfirm({ offer: o, to: 228750 }), null, "saving at what went out is no raise");
+});
+
 test("a raise you confirmed is the letter until it goes out: saving at it again is no raise", () => {
   const o = { status: "sent", cashAmount: 300000, sends: [went("2026-11-05T18:00:00Z")],
     revisions: [{ ts: "2026-11-06T18:00:00Z", from: 254000, to: 300000, by: "you", live: true }] };

@@ -69,10 +69,10 @@ import { usageOf } from "./shared/ai-cost.js";
 import { meterAi } from "./ai-spend.js";
 import { pricedByHand, underwriteModel } from "./shared/underwrite-model.js";
 import { brickedProperty, isRenovatedComp } from "./price-bricked.js";
-import { shadowPrice, engineLive } from "./price-v2.js";
+import { shadowPrice, engineLive, recordGradeB } from "./price-v2.js";
 import { ENGINE_HOLD } from "./shared/offer-status.js";
 import { houseKey } from "./shared/current-offer.js";
-import { normalizePricingV2 } from "./shared/price-engine.js";
+import { normalizePricingV2, gradeBOpen } from "./shared/price-engine.js";
 
 /* ---------- the dials ---------- */
 
@@ -1861,6 +1861,8 @@ async function runUnderwrite(job, ctx) {
       job.brickedHeld = why;
     }
     if (b) job.subjectLine = [subjectLineOf(subject, job.listPrice || b.subject.listPrice), brickedLine(b)].filter(Boolean).join(" · ");
+    // Grade B in the shadow or held live (2026-11-10): its number goes on the record and the timeline.
+    await noteGradeB(job, ctx, { engine, partial, dataHeld: zillowWhy, sendWhy: engineLive(saved) ? job.brickedHeld || "" : "" });
     return finishHeld(job, ctx, { extraction, held: [SKELETON_HOLD], partial });
   }
 
@@ -1964,6 +1966,7 @@ async function runUnderwrite(job, ctx) {
       job.brickedHeld = why;
     }
     job.subjectLine = [subjectLineOf(subjectOnly, job.listPrice), b ? brickedLine(b) : ""].filter(Boolean).join(" · ");
+    await noteGradeB(job, ctx, { engine, partial, sendWhy: engineLive(saved) ? job.brickedHeld || "" : "" });
     return finishHeld(job, ctx, { extraction: { ...extraction, askingPrice: asking }, held: [DRAFT_ONLY_HOLD], partial });
   }
 
@@ -2887,7 +2890,9 @@ async function finishHeld(job, ctx, { extraction, held, partial, cleared = false
     await setTag(client, job.contactId, UW_TAGS.review, warnings);
     await note(client, job.contactId, heldNote(job, held), warnings);
   }
-  await recordRun(job, ctx, "underwrite_held", { held: (held || []).map(String).slice(0, 6), arv: job.arv, repairs: job.repairs, ...(job.draftOnly ? { draftOnly: true } : {}) });
+  await recordRun(job, ctx, "underwrite_held", { held: (held || []).map(String).slice(0, 6), arv: job.arv, repairs: job.repairs, ...(job.draftOnly ? { draftOnly: true } : {}),
+    // Grade B (2026-11-10): the number it would have sent, or held at, on the timeline.
+    ...(job.gradeB ? { gradeB: { mode: job.gradeB.mode, open: job.gradeB.open, wouldSend: job.gradeB.wouldSend }, note: job.gradeBLine } : {}) });
 
   // Held, and an agent may be waiting on the number this run was for. The
   // route decides what to do about that (promise-driver.js: ask for their
@@ -3339,9 +3344,9 @@ async function engineFinish(job, ctx, { extraction, partial, listing, subject, a
       job.warnings.push("Bricked.ai asked: our own comps couldn't carry the ARV on their own");
     }
   }
+  const dataWhy = dataHeld.length ? `the underwrite's own checks held it: ${dataHeld.join("; ")}` : "";
   if (engineLive(saved)) {
-    const why = await sendEngine(job, ctx, { extraction, partial, engine, b,
-      zillowWhy: dataHeld.length ? `the underwrite's own checks held it: ${dataHeld.join("; ")}` : "" });
+    const why = await sendEngine(job, ctx, { extraction, partial, engine, b, zillowWhy: dataWhy });
     if (!why) return;
     job.brickedHeld = why;
   } else if (engine?.v2) {
@@ -3354,6 +3359,8 @@ async function engineFinish(job, ctx, { extraction, partial, listing, subject, a
     scan ? `rehab ${fmtMoney(repairs)} from ${(photos || []).length} photos` : "",
     v?.walkAway > 0 ? `engine open ${fmtMoney(v.open)} / walk-away ${fmtMoney(v.walkAway)}` : ""].filter(Boolean).join(" · ");
   if (v) engineOnDraft(partial, v);
+  // Grade B in the shadow, or held live (2026-11-10): the Price-it draft shows its lower number.
+  await noteGradeB(job, ctx, { engine, partial, dataHeld: dataWhy, sendWhy: engineLive(saved) ? job.brickedHeld || "" : "" });
   return finishHeld(job, ctx, { extraction, held: [ENGINE_HOLD], partial });
 }
 
@@ -3384,24 +3391,83 @@ export function engineOnDraft(partial, v = {}) {
 }
 
 /**
- * engineSendGate({ engine }) → "" | why the engine's number stays a draft
- * Live on grade A only (Matt, 2026-11-04). A house it can't measure against a seller's number or
- * a list price, a no-fit, a turnkey, or a killer fact stays Matt's, with the reason on it.
+ * engineSendGate({ engine, liveB }) → "" | why the engine's number stays a draft
+ * Live on grade A (Matt, 2026-11-04), and on grade B when `liveB` is "live" (2026-11-10: it then
+ * opens lower, gradeBOpen). A house it can't measure against a seller's number or a list price, a
+ * no-fit, a turnkey, or a killer fact stays Matt's, with the reason on it. Grade B passes exactly
+ * the checks grade A does; only the grade check lets it through.
  */
 export const ENGINE_SENDS_TRIAGE = new Set(["hot", "workable", "long_shot"]);
-export function engineSendGate({ engine = null } = {}) {
+export function engineSendGate({ engine = null, liveB = "off" } = {}) {
   const v = engine?.v2;
   if (!v) return "the offer engine had nothing to price (no ARV from any read)";
   // What the engine can't know (audit 2026-11-09), said plainly ahead of the grade it also costs:
   // an uncapped walk-away over the list price, or far over the seller's own number.
   if (v.overList) return "the offer engine's number is over the list price: yours to price";
   if (v.triage === "over_theirs") return "our walk-away is far over their number, likely an ARV error: yours to price";
-  if (v.grade !== "A") return `the offer engine graded it ${v.grade || "C"}${(v.misses || []).length ? ` (not sure of: ${v.misses.join(", ")})` : ""}${(v.killers || []).length ? ` — ${v.killers.join(", ")}` : ""} — yours to price`;
+  const bGoes = v.grade === "B" && liveB === "live";
+  if (v.grade !== "A" && !bGoes) return `the offer engine graded it ${v.grade || "C"}${(v.misses || []).length ? ` (not sure of: ${v.misses.join(", ")})` : ""}${(v.killers || []).length ? ` — ${v.killers.join(", ")}` : ""} — yours to price`;
   if (!(v.walkAway > 0) || !(v.open > 0)) return "the offer engine's number came out at nothing";
   if (v.triage === "turnkey") return "turnkey by the offer engine's read — nothing for a flipper to add";
   if (v.triage === "unknown") return "no list price or seller's number to measure the offer engine's number against";
   if (!ENGINE_SENDS_TRIAGE.has(v.triage)) return `no fit: the offer engine's ${fmtMoney(v.walkAway)} walk-away is ${Math.round((v.spread || 0) * 100)}% of ${v.against || "their number"}`;
   return "";
+}
+
+/**
+ * gradeBPlan({ engine, saved, dataHeld, sendWhy }) → null | { mode, open, engineOpen, walkAway, pct, wouldSend, sent, held }
+ *
+ * What grade B does with a house the engine graded B (Matt, 2026-11-10), for its record, the draft
+ * and the timeline. Null with pricingV2.liveB "off", or for any grade but B: those houses are
+ * exactly as before.
+ *   shadow  `wouldSend`: what the send gates would have said had grade B been live (the run's own
+ *           data holds, `dataHeld`, then engineSendGate). Nothing is sent.
+ *   live    `held`: why it stayed a draft (sendEngine's own reason, `sendWhy`), shown with the
+ *           lowered number. Grade B goes live only beside grade A (liveA).
+ */
+export function gradeBPlan({ engine = null, saved = {}, dataHeld = "", sendWhy = "" } = {}) {
+  const v = engine?.v2;
+  const s = normalizePricingV2(saved?.pricingV2);
+  if (s.liveB === "off" || v?.grade !== "B") return null;
+  const open = gradeBOpen(v, s);
+  const why = s.liveB === "shadow"
+    ? dataHeld || engineSendGate({ engine, liveB: "live" })
+    : sendWhy || dataHeld || (s.liveA ? "" : "grade-A numbers aren't live, so grade B waits too");
+  const stop = why || (open > 0 ? "" : "the lower open came out at nothing");
+  return { mode: s.liveB, open, engineOpen: Math.round(Number(v.open) || 0), walkAway: Math.round(Number(v.walkAway) || 0), pct: s.gradeBOpenPct,
+    wouldSend: !stop, sent: false, held: stop };
+}
+
+/** gradeBLine(plan) → "Engine (B): would send $280,250 (10% under its $311,500 open)…", or "" for none. */
+export function gradeBLine(plan = null) {
+  if (!plan || !(plan.open > 0)) return "";
+  const under = `${plan.pct}% under its ${fmtMoney(plan.engineOpen)} open`;
+  if (plan.sent) return `Grade B: opened at ${fmtMoney(plan.open)}, ${plan.pct}% under the engine's ${fmtMoney(plan.engineOpen)} (walk-away ${fmtMoney(plan.walkAway)}).`;
+  if (plan.mode === "shadow") {
+    return plan.wouldSend
+      ? `Engine (B): would send ${fmtMoney(plan.open)} (${under}). In the shadow, so nothing was sent.`
+      : `Engine (B): would open at ${fmtMoney(plan.open)} (${under}), but it would have been held: ${plan.held}. In the shadow, so nothing was sent.`;
+  }
+  return `Engine (B): opens at ${fmtMoney(plan.open)} (${under}), held for you: ${plan.held}.`;
+}
+
+/**
+ * noteGradeB(job, ctx, { engine, partial, dataHeld, sendWhy }) → the plan, or null
+ * A grade-B house that stayed a draft: the plan goes on the house's record, on the draft's engine
+ * read (engine mode's Price-it draft) and the run's subject line, and finishHeld puts its line in
+ * the held note and on the timeline.
+ */
+async function noteGradeB(job, ctx, { engine = null, partial = null, dataHeld = "", sendWhy = "" } = {}) {
+  const plan = gradeBPlan({ engine, saved: ctx.saved, dataHeld, sendWhy });
+  if (!plan) return null;
+  job.gradeB = plan;
+  job.gradeBLine = gradeBLine(plan);
+  if (partial?.engine) partial.engine.gradeB = plan;
+  if (job.gradeBLine && job.subjectLine) {
+    job.subjectLine = `${job.subjectLine} · grade B ${plan.mode === "shadow" ? (plan.wouldSend ? "would send" : "would open at") : "opens at"} ${fmtMoney(plan.open)}`;
+  }
+  await recordGradeB({ store: ctx.store, locationId: ctx.locationId, address: engine?.address || job.address || "", gradeB: plan });
+  return plan;
 }
 
 /**
@@ -3432,12 +3498,20 @@ async function siblingFinished(job, ctx, address) {
 // Publishes the offer engine's grade-A number (pricingV2.liveA). The offer opens at the engine's
 // `open`, carries its walk-away and grade on `offer.pricing` (the counter band, numberApproved and
 // the walk-away negotiation read it), and goes to the agent the way a clean underwrite does.
+// With pricingV2.liveB "live" (Matt, 2026-11-10) a grade-B house goes the same way under every
+// same guard, opening gradeBOpenPct lower (gradeBOpen); `pricing.engineOpen` keeps the engine's
+// own open. It never walks up on a counter by itself (walkawayOffer is grade A only) and its yes
+// waits for Matt's approval (numberApproved reads the walk-away on grade A only).
 // → "" when the offer was made (or the thread's pass finished the run), else why it stays a draft.
 async function sendEngine(job, ctx, { extraction, partial, engine, b = null, zillowWhy = "" }) {
   const { client, locationId, saved, store, deps } = ctx;
   if (zillowWhy) return zillowWhy;
-  const why = engineSendGate({ engine });
+  const s = normalizePricingV2(saved?.pricingV2);
+  const why = engineSendGate({ engine, liveB: s.liveB });
   if (why) return why;
+  const gradeB = engine.v2.grade === "B";
+  const open = gradeB ? gradeBOpen(engine.v2, s) : engine.v2.open;
+  if (!(open > 0)) return "the offer engine's number came out at nothing";
   if (job.dryRun) return "dry run — nothing was published";
   if (!AUTO_UNDERWRITE_ENABLED) return "AUTO_UNDERWRITE_ENABLED is not set on the broker";
   if (typeof deps?.createOffer !== "function") return "no offer maker wired here";
@@ -3447,7 +3521,6 @@ async function sendEngine(job, ctx, { extraction, partial, engine, b = null, zil
   if (await siblingFinished(job, ctx, extraction.address)) return "";
   const v = engine.v2;
   const listPrice = Number(engine.reads?.list) || 0;
-  const s = normalizePricingV2(saved?.pricingV2);
   job.phase = "creating";
   job.draftOnly = false;
   job.skeleton = false;
@@ -3456,7 +3529,7 @@ async function sendEngine(job, ctx, { extraction, partial, engine, b = null, zil
     locationId, client,
     body: {
       contactId: job.contactId,
-      inputs: { address: extraction.address, arv: v.arv, repairs: v.rehab, askingPrice: listPrice, priceOverride: v.open },
+      inputs: { address: extraction.address, arv: v.arv, repairs: v.rehab, askingPrice: listPrice, priceOverride: open },
       settings: { ...(saved || {}), underwriteMode: UW_MODE, maoPctOfArv: s.maoPct, wholesaleFee: s.targetFee },
       scope: [],
       snapshot: buildSnapshot({ extraction, partial, contact: { id: job.contactId, name: job.contactName || "", phone: "", email: "" } }),
@@ -3465,10 +3538,14 @@ async function sendEngine(job, ctx, { extraction, partial, engine, b = null, zil
   const offer = result.offer;
   // sellerNumber: what they said they'd take, which capped the engine; numberApproved never
   // approves an amount above it (Matt, 2026-11-09).
-  offer.pricing = { live: true, grade: v.grade, open: v.open, walkAway: v.walkAway, investorPrice: v.investorPrice, arv: v.arv, rehab: v.rehab,
+  // A grade-B send says so: `engineOpen` is the engine's own open, `open` the lower one it went at.
+  const plan = gradeB ? { ...gradeBPlan({ engine, saved }), open, wouldSend: true, sent: true, held: "", offerId: offer.id } : null;
+  offer.pricing = { live: true, grade: v.grade, open, walkAway: v.walkAway, investorPrice: v.investorPrice, arv: v.arv, rehab: v.rehab,
     rehabWhy: v.rehabWhy, triage: v.triage, spread: v.spread, version: v.version, at: v.at, moves: 0,
-    sellerNumber: Math.round(Number(engine.reads?.sellerNumber) || 0) };
-  offer.autoUnderwrite = { ...auditTrail(job, extraction, { ok: true }), basis: "engine", grade: v.grade };
+    sellerNumber: Math.round(Number(engine.reads?.sellerNumber) || 0),
+    ...(plan ? { engineOpen: plan.engineOpen, lowerOpenPct: plan.pct } : {}) };
+  offer.autoUnderwrite = { ...auditTrail(job, extraction, { ok: true }), basis: "engine", grade: v.grade,
+    ...(plan ? { gradeB: { open, engineOpen: plan.engineOpen, pct: plan.pct } } : {}) };
   const lead = await leadFor(job, ctx, offer.address || extraction.address);
   if (lead) offer.autoUnderwrite.leadSource = lead.source;
   await store.updateOffer(offer.id, offer).catch(() => {});
@@ -3492,7 +3569,8 @@ async function sendEngine(job, ctx, { extraction, partial, engine, b = null, zil
   }
   await setTag(client, job.contactId, UW_TAGS.done, job.warnings);
   await note(client, job.contactId, [
-    `Offer made by the offer engine on ${extraction.address}: ${fmtMoney(job.cashAmount || 0)} (grade A, walk-away ${fmtMoney(v.walkAway)}).`,
+    `Offer made by the offer engine on ${extraction.address}: ${fmtMoney(job.cashAmount || 0)} (grade ${v.grade}, walk-away ${fmtMoney(v.walkAway)}).`,
+    ...(plan ? [gradeBLine(plan), `Grade B never comes up on a counter by itself, and a yes on it waits for your approval.`] : []),
     ``,
     `${s.maoPct}% of the ${fmtMoney(v.arv)} ARV, less ${fmtMoney(v.rehab)} rehab (${v.rehabWhy}), less the fee.`,
     ...(v.reasons || []).map((r) => `• ${r}`),
@@ -3500,7 +3578,12 @@ async function sendEngine(job, ctx, { extraction, partial, engine, b = null, zil
     ``,
     `It goes to the agent the way any clean underwrite does (Conversation AI → send offer).`,
   ].filter((l) => l !== null).join("\n"), job.warnings);
-  await recordRun(job, ctx, "underwrite_done", { cashAmount: job.cashAmount, arv: v.arv, repairs: v.rehab, basis: "engine" });
+  await recordRun(job, ctx, "underwrite_done", { cashAmount: job.cashAmount, arv: v.arv, repairs: v.rehab, basis: "engine", grade: v.grade,
+    ...(plan ? { engineOpen: plan.engineOpen, note: gradeBLine(plan) } : {}) });
+  if (plan) {
+    job.gradeB = plan;
+    await recordGradeB({ store, locationId, address: engine.address || extraction.address, gradeB: plan });
+  }
   if (typeof deps?.onOfferCreated === "function") {
     try { await deps.onOfferCreated({ offer, job }); }
     catch (e) { job.warnings.push(`realm check: ${String(e?.message || e).slice(0, 120)}`); }
@@ -3685,6 +3768,7 @@ function heldNote(job, held) {
         : `No comps were pulled and nothing was priced or sent. Open the draft in the app to price it.`,
       ...(job.bricked?.link ? [`Bricked report: ${job.bricked.link}`] : []),
       ...(job.brickedHeld ? [`Didn't send itself: ${job.brickedHeld}.`] : []),
+      ...(job.gradeBLine ? [job.gradeBLine] : []),
     ].join("\n");
   }
   return [

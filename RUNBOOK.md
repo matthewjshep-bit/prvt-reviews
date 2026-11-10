@@ -607,6 +607,61 @@ the ones above; each only lowers a number or adds a hold.
 - Tests: `shared/price-engine.test.mjs`, `ghl-broker/price-v2.test.mjs`, `ghl-broker/engine-live.test.mjs`,
   `shared/offer-status.test.mjs`.
 
+#### Every house gets a number: grade B opens lower (Matt, 2026-11-10, decision 11)
+
+Matt asked: "is there a way we can get a price to every agent through the app, to automate it
+entirely". The audit behind it: 11-04 to 11-09, 39 engine runs, 8 sent themselves at grade A and about
+19 went to Matt (10 of them grade B: 7 held on ARV, 3 on rehab); 134 of 229 named houses never got a
+number; the 72-hour clock passed 43 houses unpriced in 16 days, 18 of them on weekends. His decision:
+
+1. **The rehab floor goes up 1.3×** (`shared/rehab-floor.js`, see the by-age line above). On a 1,800
+   sqft house: built 1940 126k → 164k, 1965 or 1990 99k → 129.5k, 2005 63k → 83k. The walk-away and the
+   open drop by the same amount. King County's condition code is not part of this.
+2. **Grade B gets a number, opening lower.** The less sure the engine is, the lower it opens: grade A
+   at today's number, grade B `pricingV2.gradeBOpenPct` (default 10, 0–25) under the engine's open,
+   to the $250 (`gradeBOpen`, shared/price-engine.js). Too low costs a no or a counter; too high costs a
+   re-trade after the yes.
+3. **Every guard stays.** Never over the seller's number (the `overSellerPct` hold), never over the list
+   cap (`maxPctOfList`), the killers and the data holds, the machine never raises a number, the
+   walk-away stays capped and grade A's.
+4. **The 72-hour clock no longer passes a house the engine priced** (below, under Needs Matt).
+
+**Switch: `pricingV2.liveB`**, "off" (default) | "shadow" | "live". Settings → Auto-underwrite → The
+offer engine (v2) → "Grade B: Off / Shadow / Live" and "Grade B opens this % lower". Matt's rollout:
+shadow for a week after deploy, then live. Live needs `liveA` on too.
+- **Off:** grade B is held for Matt exactly as before, and nothing new is written.
+- **Shadow:** nothing extra is sent. `gradeBPlan` (ghl-broker/auto-underwrite.js) works out the number
+  it would have sent and whether the send gates would have let it go (the run's data holds, then
+  `engineSendGate` as if grade B were live). It goes:
+  - on the house's record, `house_pricing` `v2.gradeB` { mode, open, engineOpen, walkAway, pct,
+    wouldSend, sent, held } and `bOpen` on the newest history point (`recordGradeB`, price-v2.js);
+  - on engine mode's Price-it draft, `draft.engine.gradeB`, where the editor's engine line starts
+    "Engine (B): would send $X", and on the run's subject line ("grade B would send $X");
+  - on the timeline, as the `underwrite_held` event's `note` ("Engine (B): would send $X (10% under its
+    $Y open). In the shadow, so nothing was sent."), and in the held note on the contact.
+- **Live:** `sendEngine` sends a grade-B house on grade A's own path, through the same gate
+  (`engineSendGate({ liveB })` passes B only when live; every other check is grade A's), the same
+  `stopForThread` and one-house checks, `createOffer` with `priceOverride` at the lower open, then
+  `onOfferCreated` (float or letter, send hours, off days, the voice and claim gates, holds).
+  - The offer carries `pricing { grade: "B", open: <lower>, engineOpen, lowerOpenPct, walkAway }` and
+    `autoUnderwrite { grade: "B", gradeB { open, engineOpen, pct } }`; the `underwrite_done` event
+    carries `grade` and a note; the house record's `v2.gradeB.sent` is true.
+  - **It never comes up on a counter by itself:** `walkawayOffer` is grade A only, so a counter on a B
+    goes to the counter band (capped at the walk-away) or Matt, as before.
+  - **A yes on it waits for Matt:** `numberApproved` reads the walk-away on grade A only, so the
+    write-up ask needs his approval.
+  - **A person's raise past what went out asks first:** `raiseCeiling` (shared/offer-raise.js) counts
+    the walk-away as room on grade A only.
+  - A B that any guard holds goes to Matt as before, with the lower number on the draft ("Engine (B):
+    opens at $X, held for you: …") and the timeline.
+- Grade C and houses the engine couldn't price are exactly as before.
+- **Scorecard:** `outcomeOf` adds `machineGrade` (A or B on an engine send); each grade's summary has
+  `gradeB { priced, wouldSend, sent, withMatt, openVsMatt }` and `sentByGrade`. Lessons (under the
+  table) and the evening Slack line add "Grade B at the lower open: N priced, N would have gone out, N
+  went", and where it opened against the number Matt stood behind, once there is one.
+- Tests: `ghl-broker/engine-live.test.mjs` (grade B), `ghl-broker/engine-mode.test.mjs`,
+  `shared/price-engine.test.mjs`, `shared/price-scorecard.test.mjs`, `shared/offer-raise.test.mjs`.
+
 ### Our own underwrite: engine mode (2026-11-04)
 
 Matt (2026-11-04): Bricked has about 300 lookups left and is expensive. "Can we use our auto underwrite

@@ -26,8 +26,9 @@ const SAID_MAX = 4000;
 export const PRIOR_REHAB_DAYS = 14;
 const DAY = 86400000;
 
-// The engine prices a house whenever it is on at all: in the shadow, or live on grade A.
-export const shadowOn = (saved) => { const s = normalizePricingV2(saved?.pricingV2); return s.shadow || s.liveA; };
+// The engine prices a house whenever it is on at all: in the shadow, live on grade A, or with
+// grade B in the shadow or live (2026-11-10).
+export const shadowOn = (saved) => { const s = normalizePricingV2(saved?.pricingV2); return s.shadow || s.liveA || s.liveB !== "off"; };
 export const engineLive = (saved) => normalizePricingV2(saved?.pricingV2).liveA;
 
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
@@ -185,6 +186,33 @@ export function nextRecord(prev = null, { address = "", contactId = null, offerI
     outcome: p.outcome || null,
     evidence: p.evidence || [],
   };
+}
+
+/**
+ * recordGradeB({ store, locationId, address, gradeB }) → the record written, or null
+ *
+ * Grade B (Matt, 2026-11-10): what the engine did with a grade-B house goes on the house's record
+ * beside its answer, `v2.gradeB` { mode: "shadow" | "live", open, engineOpen, walkAway, pct,
+ * wouldSend, sent, held, offerId }, and on the newest history point as `bOpen`, so a week of
+ * shadow numbers can be read against what Matt did. The next pricing of the house replaces `v2`
+ * and with it this verdict. Never throws.
+ */
+export async function recordGradeB({ store, locationId, address = "", gradeB = null } = {}) {
+  if (!gradeB || !address || !store?.upsertHousePricing) return null;
+  try {
+    const key = houseKey(address);
+    const prev = key ? await store.getHousePricing(locationId, key).catch(() => null) : null;
+    const doc = prev?.doc;
+    if (!doc?.v2) return null;
+    const history = [...(doc.history || [])];
+    const last = history.at(-1);
+    if (last && last.at === doc.v2.at) history[history.length - 1] = { ...last, bOpen: Math.round(Number(gradeB.open) || 0) };
+    const next = { ...doc, v2: { ...doc.v2, gradeB }, history };
+    await store.upsertHousePricing(locationId, key, next);
+    return next;
+  } catch {
+    return null;
+  }
 }
 
 /**

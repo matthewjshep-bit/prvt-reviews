@@ -138,3 +138,27 @@ test("the deals and the buyers' answer key are a second bar", async () => {
   assert.deepEqual(bar.dead, { n: 1, stayedOut: 1 }, "on the buyers' numbers the walk-away sits 10% or more under a deal that died");
   assert.equal(bar.rows.length, 2, "an open deal isn't scored");
 });
+
+// Grade B (Matt, 2026-11-10) runs a week in the shadow before it goes live: the card counts the
+// numbers it would have sent, tells a B send from an A send, and sets the lower open beside Matt's.
+test("the scorecard tells a grade-B send from a grade-A one and counts the numbers it would have sent", () => {
+  const sentB = { id: "b", address: "12 Alder Ct, Kent, WA 98030", status: "sent", cashAmount: 252000, sends: [{ ts: day(3) }], autoUnderwrite: { basis: "engine", grade: "B" },
+    pricing: { live: true, grade: "B", open: 252000, engineOpen: 280000, walkAway: 295000 }, createdAt: day(4), updatedAt: day(3) };
+  assert.equal(outcomeOf({ address: sentB.address, offers: [sentB] }).machineGrade, "B");
+  const sentA = { ...sentB, id: "a", pricing: { ...sentB.pricing, grade: "A", open: 280000 }, cashAmount: 280000 };
+  assert.equal(outcomeOf({ address: sentA.address, offers: [sentA] }).machineGrade, "A");
+  assert.equal(outcomeOf({ address: sentA.address, offers: [{ ...sentA, pricing: undefined }] }).machineGrade, null, "an old machine send has no grade");
+
+  const rec = (gradeB, outcome = {}) => ({ v2: { grade: "B", arv: 500000, rehab: 80000, walkAway: 255000, open: 240000, at: day(2), gradeB }, outcome });
+  const records = [
+    rec({ mode: "shadow", open: 216000, wouldSend: true }, { mattNumber: 240000 }),
+    rec({ mode: "shadow", open: 216000, wouldSend: false, held: "no fit" }),
+    rec({ mode: "live", open: 216000, sent: true }, { machineSent: 216000, machineGrade: "B" }),
+    rec(undefined),
+  ];
+  const card = scorecard(records, { now: NOW });
+  assert.deepEqual(card.byGrade.B.gradeB, { priced: 3, wouldSend: 1, sent: 1, withMatt: 1, openVsMatt: 0.9 });
+  assert.deepEqual(card.byGrade.B.sentByGrade, { A: 0, B: 1 });
+  assert.match(scorecardLine(card), /Grade B at the lower open: 3 priced, 1 would have gone out in the shadow, 1 went; it opened at 90% of yours \(1\)\./);
+  assert.doesNotMatch(scorecardLine(scorecard([rec(undefined)], { now: NOW })), /Grade B at the lower open/, "nothing said with grade B off");
+});

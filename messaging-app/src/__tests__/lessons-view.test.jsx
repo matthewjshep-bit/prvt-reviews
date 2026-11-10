@@ -88,3 +88,14 @@ test("the engine's scorecard counts walk-aways over the seller's number, reads t
   expect(html).toContain("From the evening run");
   expect(html).toContain("Work it out now");
 });
+
+// Grade B's week in the shadow (2026-11-10): what it would have sent, beside Matt's own numbers.
+test("the engine's scorecard says how many grade-B numbers would have gone out and where they opened against yours", () => {
+  const now = Date.parse("2026-11-20T03:00:00Z");
+  const b = (i, gradeB, outcome = {}) => ({ v2: { arv: 500000, rehab: 80000, walkAway: 255000, open: 240000, grade: "B", at: new Date(now - i * 86400000).toISOString(), gradeB }, outcome });
+  const recs = [b(1, { mode: "shadow", open: 216000, wouldSend: true }, { mattNumber: 240000 }), b(2, { mode: "shadow", open: 216000, wouldSend: false })];
+  const html = renderToStaticMarkup(<EngineScorecard data={{ switches: { shadow: true, liveB: "shadow" }, records: 2, card: scorecard(recs, { now }) }} />);
+  expect(html).toContain("Grade B at the lower open: 2 priced, 1 would have gone out, 0 went, opening at 90% of your number (1 with yours).");
+  const none = renderToStaticMarkup(<EngineScorecard data={{ switches: { shadow: true }, records: 1, card: scorecard([b(1, undefined)], { now }) }} />);
+  expect(none).not.toContain("Grade B at the lower open");
+});
