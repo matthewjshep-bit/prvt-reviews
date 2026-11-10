@@ -1118,6 +1118,11 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // back in one field. Both only hold or reword a text, so they ship on.
   // Later check-in branches add their keys to this block.
   checkIns: { lint: true, pools: "v2" },
+  // The delivery check (ghl-broker/delivery-watch.js, 2026-11-09): reads back
+  // whether each app text arrived. A blocked answer goes on Needs Matt and
+  // Slack #machine, a dead number stops getting machine texts. Off until Matt
+  // switches it on; it reads GHL and never sends anything.
+  deliveryWatch: { enabled: false },
 });
 
 // The photo-only reply until 2026-11-09, read as never changed.
@@ -1669,6 +1674,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       otherNow: bool(auto.otherNow, D.autoSend.otherNow),
       offDays: normalizeOffDays(auto.offDays),
     },
+    deliveryWatch: { enabled: bool(d.deliveryWatch?.enabled, D.deliveryWatch.enabled) },
   };
   // Version 1 → 2, once. A deploy never edits a saved setting — except this
   // once, at Matt's explicit ask on 2026-09-07 ("can you enable these"):

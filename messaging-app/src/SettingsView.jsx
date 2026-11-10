@@ -1815,6 +1815,11 @@ export default function SettingsView({ settings, onSaved, mode = "offers" }) {
             <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.paperworkOnCommit)} onChange={(e) => setDispoAuto("paperworkOnCommit")(e.target.checked)} />
             <span><span className="font-semibold">Draft the assignment when a buyer commits</span><span className="block text-xs text-slate-500">The assignment PDF is generated from the deal and the buyer for you to review. Nothing is sent.</span></span>
           </label>
+          {/* The delivery check's one retry (delivery-watch.js, 2026-11-09). */}
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.dispoAutopilot?.retryBlocked)} onChange={(e) => setDispoAuto("retryBlocked")(e.target.checked)} />
+            <span><span className="font-semibold">Send a blocked deal text once more without the link</span><span className="block text-xs text-slate-500">When the carrier blocks a deal text, the same text goes once more with no link, to that buyer for that deal, never a third time. It goes by itself only if the first one did. Needs the delivery check on (Conversation AI).</span></span>
+          </label>
         </div>
 
         {/* Between deals. The pool only ever hears from us when we're selling;

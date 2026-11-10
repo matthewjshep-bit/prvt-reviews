@@ -54,6 +54,7 @@ import { stepLabel, normalizeSteps, MACHINE_STARTED_KINDS, blockingDraft, blocki
 import { normalizeAgentPulse, listingAlreadyRaised, LISTING_REASONS } from "./shared/agent-pulse.js";
 import { secondLookNumber, SECOND_LOOK_MAX_CHARS, SECOND_LOOK_SENT, SECOND_LOOK_STATUSES } from "./shared/second-look.js";
 import { passNoteStale } from "./shared/pass-note.js";
+import { numberDead, PHONE_EVENT_TYPES, DEAD_NUMBER_LINE, RETRY_KINDS } from "./shared/delivery.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
 import { normalizeOpener, openerVoice, countyName, homeFor, withHomeBlank, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { standardText, isShippedText } from "./shared/standard-texts.js";
@@ -2311,8 +2312,13 @@ export const DND_REASON = "they unsubscribed (DND in GHL) — nothing is drafted
 // for you; a text that may be one waits with an Opt out button.
 export const OPTED_OUT_HOLD = "they opted out earlier: this waits for you";
 export const MAYBE_OPT_OUT_REASON = "this may be an opt-out: press Opt out if it is";
+// Their phone came back dead (delivery-watch.js, 2026-11-09). Only what the
+// machine starts asks: runProactive and the preview pass `deadNumber`, a
+// reply to their own text never does, and an email still goes.
+export const DEAD_NUMBER_REASON = `${DEAD_NUMBER_LINE} — nothing the machine starts is texted to them`;
 export function handsOffReason(a) {
   if (a?.dnd) return DND_REASON;
+  if (a?.deadNumber) return DEAD_NUMBER_REASON;
   if (a?.botOff?.length) return `bot is off for this contact (tag: ${a.botOff[0]})`;
   // An estate attorney, a title or escrow officer (2026-10-26): a
   // relationship Matt runs himself. The bot never answers one and never
@@ -2325,6 +2331,19 @@ export function handsOffReason(a) {
       : `you have ${a.dealHold.address} under contract with them — the bot stays out of a live deal`;
   }
   return "";
+}
+
+/**
+ * deadNumberFor({ store, locationId, contactId }) → boolean
+ *
+ * The delivery check's word on their phone (shared/delivery.js numberDead:
+ * one dead number or landline, or two unreachables). Only exists once the
+ * check has run; a read that fails is "not dead", as before it existed.
+ */
+export async function deadNumberFor({ store, locationId, contactId }) {
+  if (!contactId || typeof store?.listContactEvents !== "function") return false;
+  const events = await Promise.resolve().then(() => store.listContactEvents(locationId, contactId, { types: [...PHONE_EVENT_TYPES], limit: 50 })).catch(() => []);
+  return numberDead(Array.isArray(events) ? events : []);
 }
 
 // The flag Matt asked for (2026-09-16): an unsubscribed contact wears the
@@ -3317,6 +3336,9 @@ export async function startProactive({
     // person pressing Float has decided — that drafts, and waits for Send.
     const hold = await holdFor({ store, locationId, contactId, offerId: offer?.id || null, now: typeof deps.now === "function" ? deps.now() : Date.now() });
     if (hold.held) return { skipped: holdLine(hold), held: { kind: hold.kind, until: hold.until }, job: null };
+    // Their phone came back dead (delivery-watch.js): no text the machine
+    // starts goes to it, and no model call is spent writing one.
+    if (await deadNumberFor({ store, locationId, contactId })) return { skipped: DEAD_NUMBER_REASON, deadNumber: true, job: null };
     // A deal that fell through is not checked in on with anybody — the
     // listing agent, their TC, a buyer (5232 S Yakima, 2026-10-03).
     const gone = await fellThroughFor({ store, locationId, addresses: [offer?.address, subject?.address] });
@@ -4318,7 +4340,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
   const a = await assembleConversation({
     client, locationId, saved, store, contactId, message: "", channel: "sms", explicitParty: party, now: Date.now(), warnings: [], aiApiKey,
   });
-  const handsOff = handsOffReason(a);
+  const handsOff = handsOffReason({ ...a, deadNumber: MACHINE_STARTED_KINDS.has(kind) && await deadNumberFor({ store, locationId, contactId }) });
   if (handsOff) return { skipped: handsOff, contactName: a.contactName };
   if (a.optedOut) return { skipped: optedOutLine(a.optedOut), contactName: a.contactName };
   const askedOff = optOutInTranscript(a.transcript, config.optOut);
@@ -4362,7 +4384,8 @@ async function runProactive(job, ctx) {
     explicitParty: party, now, warnings, aiApiKey,
   });
   job.contactName = a.contactName;
-  const handsOff = handsOffReason(a);
+  // A dead number found while this waited on its lane stands it down too.
+  const handsOff = handsOffReason({ ...a, deadNumber: ctx.machine && await deadNumberFor({ store, locationId, contactId: job.contactId }) });
   if (handsOff) {
     job.status = "held"; job.phase = ""; job.heldReason = handsOff; job.finishedAt = new Date().toISOString();
     return;
@@ -7380,6 +7403,30 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       }
       return { ok: true, skipped: line };
     }
+  }
+
+  // Their number came back dead (delivery-watch.js, 2026-11-09: 160 machine
+  // texts went to numbers that had already failed). A text the machine
+  // started, or a deal text, is binned; any other text going by itself goes
+  // back to wait for your Send, like a bot stop. An email still goes, and so
+  // does an answer to something they sent. Only the auto path: a person
+  // pressing Send decides.
+  if (auto && d.channel !== "email" && !answersInbound(d) && await deadNumberFor({ store, locationId, contactId: d.contactId })) {
+    const ts = new Date(now).toISOString();
+    if (MACHINE_STARTED_KINDS.has(d.outbound?.kind) || RETRY_KINDS.has(d.outbound?.kind)) {
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `${DEAD_NUMBER_LINE} — not sent`],
+      });
+      await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+    } else {
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `held: ${DEAD_NUMBER_LINE}`],
+        autoSend: { ...(d.autoSend || {}), decided: false, reason: `${DEAD_NUMBER_LINE} — it waits for you` },
+      });
+    }
+    return { ok: true, skipped: DEAD_NUMBER_LINE };
   }
 
   // A text the machine started, to anybody, about a house whose deal fell

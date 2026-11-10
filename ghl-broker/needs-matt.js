@@ -22,6 +22,9 @@
 //     botTakesHouse): the agent called it cosmetic or done (passed at once,
 //     "too turnkey", pass note due), or it has no house number (the address
 //     chase's).
+//   - Our answer to an agent's text that never arrived (the delivery check,
+//     delivery-watch.js, while conversationAi.deliveryWatch is on) lands as
+//     paper until a call, an email, a hand text or a new text from them.
 //
 // Never sends a text itself: the pass note goes through pass-note.js. Ids and
 // kinds in the cursor and logs, no names.
@@ -38,6 +41,8 @@ import { needsMattByContact, needsMattFromCursor, needsMattPassDue, botTakesHous
 import { effectiveStatus } from "./shared/offer-status.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
 import { ghlPingNote } from "./shared/ghl-pings.js";
+import { normalizeConversationAi } from "./shared/conversation-ai.js";
+import { undeliveredAnswers, SEND_FAILED, UNDELIVERED_REACHED_TYPES, UNDELIVERED_ANSWER_DAYS } from "./shared/delivery.js";
 
 export const STALE_RUN_MS = 30 * 60 * 1000;
 export const MAX_SYNCS_PER_RUN = 40;
@@ -46,6 +51,30 @@ export const NEEDS_MATT_FROM = 7;
 export const NEEDS_MATT_UNTIL = 21;
 const iso = (ms) => new Date(ms).toISOString();
 const sleep = (n) => new Promise((r) => setTimeout(r, n));
+// Agents whose failed answer is read through to their own timeline per run.
+export const MAX_UNDELIVERED_READS = 50;
+
+/**
+ * undeliveredRows({ store, locationId, now }) → shared/delivery.js undeliveredAnswers rows
+ *
+ * Our answers that never arrived (delivery-watch.js), in two light reads:
+ * the week's send_failed events, then only those agents' own timelines for
+ * anything that reached them since. Not the whole location's summaries
+ * every fifteen minutes (memory prod-heavy-reads-crash).
+ */
+export async function undeliveredRows({ store, locationId, now = Date.now() }) {
+  const since = iso(now - UNDELIVERED_ANSWER_DAYS * 86400000);
+  const fails = (await Promise.resolve().then(() => store.listContactEventsSince?.(locationId, since, { types: [SEND_FAILED], limit: 2000 })).catch(() => null)) || [];
+  const answers = fails.filter((e) => e?.contactId && e.data?.answer === true && e.party !== "investor");
+  const ids = [...new Set(answers.map((e) => e.contactId))].slice(0, MAX_UNDELIVERED_READS);
+  const keep = new Set(ids);
+  const events = answers.filter((e) => keep.has(e.contactId));
+  for (const contactId of ids) {
+    const theirs = (await Promise.resolve().then(() => store.listContactEvents?.(locationId, contactId, { since, types: [...UNDELIVERED_REACHED_TYPES], limit: 100 })).catch(() => null)) || [];
+    for (const e of theirs) events.push({ ...e, contactId });
+  }
+  return undeliveredAnswers(events, { now });
+}
 
 async function patchCursor(store, locationId, patch) {
   const cur = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
@@ -75,7 +104,12 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   out.stage = Boolean(acq && stageKeys(acq).needsMatt);
 
   const read = await deps.pipelineFor({ locationId, client, now });
-  const rows = [...(read.shownActions || []), ...(read.shownCalls || [])];
+  // An answer of ours that never arrived (delivery-watch.js), while the
+  // delivery check is on: a paper row until something reaches them.
+  const undelivered = normalizeConversationAi(saved?.conversationAi).deliveryWatch?.enabled
+    ? await undeliveredRows({ store, locationId, now })
+    : [];
+  const rows = [...(read.shownActions || []), ...(read.shownCalls || []), ...undelivered];
   // The houses waiting on his price, read first: one the bot settles itself
   // (botTakesHouse) never lands.
   const screened = new Map();

@@ -363,6 +363,7 @@ export const LINE_JOBS = {
   calls: { label: "Call sweep", every: "tick" },
   uwQueue: { label: "Underwrite queue", every: "tick" },
   ghlMirror: { label: "GHL mirror", every: "tick" },
+  deliveryWatch: { label: "Delivery check (only while on)", every: "tick" },
 };
 
 /**

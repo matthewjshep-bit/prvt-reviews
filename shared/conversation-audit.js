@@ -21,6 +21,7 @@ import { NEVER_AUTO } from "./conversation-ai.js";
 import { botHold, holdLine } from "./bot-hold.js";
 import { callEventConnected } from "./talked-to.js";
 import { isAutoReply } from "./brush-offs.js";
+import { deliveryFailed, classifyFailure, failureWords } from "./delivery.js";
 
 // What the audit may not do for someone you stopped the bot on
 // (shared/bot-hold.js): send, release, re-quote, queue a letter, or set a
@@ -249,12 +250,16 @@ export function auditConversations({
     const all = [...ds, ...es].filter((t) => t != null);
     return all.length ? Math.max(...all) : null;
   };
-  const lastSent = (c) => {
-    const ds = (draftsBy.get(c) || []).filter((d) => d.status === "sent").map((d) => ms(d.sentAt || d.updatedAt));
+  const lastSent = (c, { arrived = false } = {}) => {
+    const ds = (draftsBy.get(c) || []).filter((d) => d.status === "sent" && !(arrived && deliveryFailed(d))).map((d) => ms(d.sentAt || d.updatedAt));
     const es = [...ev(c, "offer_sent"), ...ev(c, "follow_up_sent")].map((e) => ms(e.at));
     const all = [...ds, ...es].filter((t) => t != null);
     return all.length ? Math.max(...all) : null;
   };
+  // What we sent that reached them: a send the delivery check read back as
+  // failed (shared/delivery.js deliveryFailed, 2026-11-09) answered nothing.
+  // It is still ours in GHL's list, so humanOwns keeps reading lastSent.
+  const lastArrived = (c) => lastSent(c, { arrived: true });
   const scheduledAfter = (c, t) => (draftsBy.get(c) || []).some((d) => d.status === "scheduled" && (ms(d.createdAt) ?? 0) >= t);
   // The reply agent read the text and decided there was nothing to say.
   const letGoAfter = (c, t) => ev(c, "reply_not_needed").some((e) => (ms(e.at) ?? 0) >= t);
@@ -320,7 +325,7 @@ export function auditConversations({
     // A let-go answers only the text it read: one written after it is new.
     // So does a reply you typed yourself, and a call that connected after it
     // (the call was the conversation) unless the call left a draft open.
-    const answered = (lastSent(c) ?? 0) >= inAt || scheduledAfter(c, inAt - 5 * 60000) || letGoAfter(c, inAt)
+    const answered = (lastArrived(c) ?? 0) >= inAt || scheduledAfter(c, inAt - 5 * 60000) || letGoAfter(c, inAt)
       || handRepliedAfter(c, inAt) || (talkedAfter(c, inAt) && !list.some((d) => d.status === "draft" && (ms(d.createdAt) ?? 0) >= inAt - 5 * 60000));
     if (answered) continue;
     const newest = after[0] || null;
@@ -371,6 +376,21 @@ export function auditConversations({
           : clock ? `${reason} · check-in set for ${String(clock.data?.dueAt || "").slice(0, 10)}`
           : again ? `${reason} · held again when we answered it a second time — yours, no more goes` : reason,
         evidence: { inbound: clip(newest.inbound), reply: clip(newest.reply, 100), age } });
+      continue;
+    }
+    // (d) our answer went and never arrived: the delivery check read it back
+    // failed (2026-11-09: two answers to "who is this?" blocked by the
+    // carrier, both read as answered). The machine never resends an answer,
+    // so there is no action: a call or an email is Matt's (Needs Matt has it).
+    // The sent draft is named in the evidence, not as `draftId`: a row naming
+    // a draft that is no longer open steps aside in stillOwed (and its button
+    // would open the outbox), so the morning row went the moment it landed.
+    if (newest.status === "sent" && deliveryFailed(newest)) {
+      const cls = classifyFailure(newest.delivery?.code, newest.channel === "email" ? "email" : "sms");
+      add({ kind: "unanswered_inbound", contactId: c, contactName: who(c), party: newest.party, address: newest.propertyAddress || "",
+        anchorAt: iso(inAt), dueAt: iso(now),
+        why: `our answer never arrived (${failureWords(cls)}): call or email`,
+        evidence: { inbound: clip(newest.inbound), code: newest.delivery?.code || null, sentDraftId: newest.id } });
     }
   }
 
@@ -651,7 +671,8 @@ export function stillOwed(rows = [], { drafts = [], unsubscribed = new Set(), ev
     const t = ms(at);
     if (t == null || !contactId) return false;
     return (drafts || []).some((d) => d?.contactId === contactId && (
-      (d.status === "sent" && (ms(d.sentAt || d.updatedAt) ?? 0) > t) ||
+      // A send that never arrived (shared/delivery.js) answered nothing.
+      (d.status === "sent" && !deliveryFailed(d) && (ms(d.sentAt || d.updatedAt) ?? 0) > t) ||
       (d.status === "scheduled" && (ms(d.createdAt) ?? 0) > t)))
       // A reply you typed (in the app or in GHL), or a call that connected.
       || (events || []).some((e) => e?.contactId === contactId && (ms(e.at) ?? 0) > t

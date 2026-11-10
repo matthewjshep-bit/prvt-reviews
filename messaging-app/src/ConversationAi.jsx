@@ -18,7 +18,7 @@ import { fmtMoney } from "@shared/offer-calc.js";
 import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, Pill, SkeletonRows, TableCard } from "./ui.jsx";
 import {
   AnswersEditor, WriteUpTermsEditor, AutoSendCard, BookingCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, InvestorBandCard, MediaCard, ContactCardCard, OptOutCard, PartyPlaybooks,
-  CoachSettingsCard, GmailCard, PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
+  CoachSettingsCard, GmailCard, DeliveryWatchCard, PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
 } from "./ConversationPlaybooks.jsx";
 import { IntentPill, PartyPill, ago } from "./ConversationOutbox.jsx";
 
@@ -261,6 +261,7 @@ export default function ConversationAi({ settings }) {
           <ProfileCard config={form} patch={patch} />
           <CoachSettingsCard config={form} patch={patch} />
           <GmailCard config={form} patch={patch} />
+          <DeliveryWatchCard config={form} patch={patch} />
           <OptOutCard config={form} patch={patch} version={version} workflows={workflows} />
           <MediaCard config={form} patch={patch} />
           <ContactCardCard config={form} patch={patch} />

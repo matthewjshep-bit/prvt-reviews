@@ -546,3 +546,50 @@ test("a held office auto-reply closes itself after a day like a thanks", () => {
   assert.deepEqual(found.map((f) => f.draftId), ["desk", "agents"]);
   assert.match(found[0].why, /an auto-reply/);
 });
+
+// 2026-11-09 audit: two of our answers to someone asking who we were were
+// blocked by the carrier, and the nightly audit read both threads as answered
+// because the draft said "sent". The delivery check (ghl-broker/delivery-
+// watch.js) now writes what GHL said on the draft. Names and words are made up.
+test("a blocked answer counts as unanswered in the nightly audit", () => {
+  const ghlLast = new Map([["c7", { at: ago(2.9), dir: "out" }]]);
+  const blocked = draft({ id: "d-blocked", contactId: "c7", contactName: "Robin Vale", inbound: "Sorry, do I know you?", reply: "Matt here, I fix up houses locally.",
+    createdAt: ago(3), sentAt: ago(2.9), channel: "sms", propertyAddress: "12 Alder Ln, Kent, WA 98030",
+    delivery: { status: "undelivered", code: "30007", checkedAt: ago(0.5) } });
+  const r = audit({ drafts: [blocked], events: [], offers: [], ghlLast });
+  assert.equal(r.findings.length, 1);
+  const f = r.findings[0];
+  assert.equal(f.kind, "unanswered_inbound");
+  assert.equal(f.evidence.sentDraftId, "d-blocked");
+  assert.equal(f.action, null, "the machine never resends an answer by itself");
+  assert.equal(f.why, "our answer never arrived (the carrier blocked it): call or email");
+  assert.equal(r.counts.answered, 0);
+  // One that arrived, or one the check hasn't read yet, answered it, as before.
+  assert.equal(audit({ drafts: [{ ...blocked, delivery: { status: "delivered", code: null } }], events: [], offers: [], ghlLast }).findings.length, 0);
+  assert.equal(audit({ drafts: [{ ...blocked, delivery: undefined }], events: [], offers: [], ghlLast }).findings.length, 0);
+  // The morning's row stays until something reaches them.
+  const row = { kind: "audit_owed", findingKind: "unanswered_inbound", contactId: "c7", anchorAt: ago(3) };
+  assert.equal(stillOwed([row], { drafts: [blocked], now: NOW }).length, 1);
+  assert.equal(stillOwed([row], { drafts: [blocked], events: [{ contactId: "c7", type: "hand_reply", at: ago(1) }], now: NOW }).length, 0);
+});
+
+// The row the dashboard actually reads goes through auditActions, and a row
+// naming a draft that is no longer open steps aside in stillOwed. The blocked
+// answer is a sent draft, so naming it dropped the row the morning it landed.
+test("the morning row for a blocked answer isn't dropped because the blocked answer was sent", () => {
+  const ghlLast = new Map([["c8", { at: ago(2.9), dir: "out" }]]);
+  const blocked = draft({ id: "d-blocked-2", contactId: "c8", contactName: "Robin Vale", inbound: "Sorry, who is this?", reply: "Matt here, I fix up houses locally.",
+    createdAt: ago(3), sentAt: ago(2.9), channel: "sms", propertyAddress: "12 Alder Ln, Kent, WA 98030",
+    delivery: { status: "undelivered", code: "30007", checkedAt: ago(0.5) } });
+  const r = audit({ drafts: [blocked], events: [], offers: [], ghlLast });
+  const rows = auditActions(r, { now: NOW });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].findingKind, "unanswered_inbound");
+  assert.notEqual(rows[0].ops[0].key, "open_outbox", "nothing in the outbox to open: the answer already went");
+  const morning = NOW + 12 * 3600000;
+  assert.equal(stillOwed(rows, { drafts: [blocked], now: morning }).length, 1, "still owed the next morning");
+  // A hand text, or a later answer that arrived, takes it off.
+  assert.equal(stillOwed(rows, { drafts: [blocked], events: [{ contactId: "c8", type: "hand_reply", at: ago(1) }], now: morning }).length, 0);
+  const arrived = draft({ id: "d-arrived", contactId: "c8", createdAt: ago(1), sentAt: ago(1), delivery: { status: "delivered", code: null } });
+  assert.equal(stillOwed(rows, { drafts: [blocked, arrived], now: morning }).length, 0);
+});

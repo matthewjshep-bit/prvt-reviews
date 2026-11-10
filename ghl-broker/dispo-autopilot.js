@@ -92,6 +92,10 @@ export function normalizeDispoAutopilot(v = {}) {
     // The deal text for a buyer who has never written back (2026-11-09):
     // Matt's no-"under contract" wording, his own when he's saved some.
     coldDealText: normalizeColdDealText(o.coldDealText),
+    // A deal text the carrier blocked (30007) is drafted once more without
+    // its link, per buyer per deal, by the delivery check (delivery-watch.js,
+    // 2026-11-09). A retry blocked again hurts the number, so never twice. Off.
+    retryBlocked: o.retryBlocked === true,
   };
 }
 

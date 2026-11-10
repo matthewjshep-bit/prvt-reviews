@@ -176,6 +176,13 @@ export const EVENT_TYPES = [
   // The committed buyer passed, went back to looking, or came off the deal,
   // and the deal is under contract again (shared/offer-status.js reopenAfterBackOut).
   "investor_backed_out",
+  // A text or email of ours GHL marked failed (ghl-broker/delivery-watch.js,
+  // shared/delivery.js): data.code, class, kind, channel, draftId, answer.
+  // A blocked deal text's one retry, claimed per buyer per deal.
+  "send_failed", "send_retried",
+  // A text to a number we had as dead arrived after all: the strikes before
+  // it stop counting (shared/delivery.js numberDead).
+  "phone_ok",
 ];
 
 export const EVENT_LABEL = {
@@ -229,6 +236,8 @@ export const EVENT_LABEL = {
   ghl_call_queued: "a call went to GHL's Manual Actions", ghl_call_failed: "a call couldn't go to GHL", ghl_call_withdrawn: "a call was taken back out of GHL",
   second_look_sent: "we asked once more at our same number",
   investor_backed_out: "backed out as the buyer, so the deal is selling again",
+  send_failed: "our message didn't arrive", send_retried: "the blocked deal text was queued once more without the link",
+  phone_ok: "a text reached their phone again",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -281,6 +290,8 @@ export const EVENT_ICON = {
   ghl_call_queued: "Phone", ghl_call_failed: "CircleSlash", ghl_call_withdrawn: "Undo2",
   second_look_sent: "RefreshCw",
   investor_backed_out: "Undo2",
+  send_failed: "CircleSlash", send_retried: "RefreshCw",
+  phone_ok: "CheckCircle2",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

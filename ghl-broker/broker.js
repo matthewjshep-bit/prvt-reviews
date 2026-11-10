@@ -46,6 +46,7 @@ import { maybeRunGhlCalls } from "./ghl-calls.js";
 import { maybeRunGhlPings } from "./ghl-pings.js";
 import { maybeRunSlack, maybeRunSlackEvents } from "./slack-notify.js";
 import { maybeRunNeedsMatt } from "./needs-matt.js";
+import { maybeRunDeliveryWatch } from "./delivery-watch.js";
 import { recordError } from "./app-errors.js";
 import { maybeRunCoach } from "./coach.js";
 import { runLocationTick } from "./tick.js";
@@ -439,6 +440,14 @@ const TICK_JOBS = [
   // 2026-10-20). Off until desk.ghlPings is on with a workflow; never texts anyone.
   { area: "ghl-pings", run: async ({ client, locationId, saved }) => {
     await maybeRunGhlPings({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineForTick } });
+  } },
+  // Whether the app's texts arrived (delivery-watch.js, 2026-11-09): every two
+  // hours, the last day's sends read back from GHL. A blocked answer goes to
+  // Needs Matt and Slack, a dead number stops getting machine texts. Off
+  // until conversationAi.deliveryWatch is on; reads GHL, never sends.
+  { area: "delivery-watch", run: async ({ client, locationId, saved }) => {
+    const r = await maybeRunDeliveryWatch({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE });
+    if (r?.started) console.log(`delivery check started for ${locationId} (try ${r.tries} today)`);
   } },
   // What only Matt can do moves the agent's card to GHL's "Needs Matt" stage
   // and back when it's done (needs-matt.js, 2026-10-22: "instead of ping to

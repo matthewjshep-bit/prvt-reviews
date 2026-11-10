@@ -396,6 +396,10 @@ create table if not exists reply_drafts (
 );
 create index if not exists reply_drafts_loc_idx on reply_drafts (location_id, status, created_at desc);
 create index if not exists reply_drafts_contact_idx on reply_drafts (location_id, contact_id, created_at desc);
+-- The delivery check's read (store.js sentDraftsBetweenQuery, 2026-11-09):
+-- sent drafts by when they went, so its two-hourly window doesn't open every
+-- sent draft's doc to find the last day's.
+create index if not exists reply_drafts_sent_at_idx on reply_drafts (location_id, (doc->>'sentAt')) where status = 'sent';
 
 -- Contact record: the app's own memory of every agent and investor — what
 -- they like, what they buy, every deal and offer worked, why they said no.

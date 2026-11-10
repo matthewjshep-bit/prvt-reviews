@@ -843,6 +843,18 @@ export function GmailCard({ config, patch }) {
   );
 }
 
+// The delivery check (ghl-broker/delivery-watch.js, 2026-11-09). Reads GHL,
+// sends nothing.
+export function DeliveryWatchCard({ config, patch }) {
+  const w = config.deliveryWatch || { enabled: false };
+  return (
+    <Section title="Delivery check"
+      intro="Every two hours it asks GHL whether the texts the app sent in the last day arrived. An answer to someone's text that the carrier blocked goes on Needs Matt and Slack #machine for a call or an email; it is never resent by itself. A number that came back dead or a landline (or unreachable twice) gets no more texts the machine starts; email and answers to their own texts still go. A buyer's dead number is tagged phone-dead in GHL. About one GHL read per text sent.">
+      <Toggle checked={w.enabled} onChange={(v) => patch({ deliveryWatch: { ...w, enabled: v } })}>Check that our texts arrived</Toggle>
+    </Section>
+  );
+}
+
 export function OptOutCard({ config, patch, version, workflows }) {
   const o = config.optOut;
   const set = (k) => (v) => patch({ optOut: { ...o, [k]: v } });

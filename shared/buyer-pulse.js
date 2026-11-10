@@ -69,8 +69,10 @@ export function normalizeBuyerPulse(v = {}) {
 
 // Opted out on any channel (synced onto the row as `dnd`: SMS DND, Email DND
 // or an `unsubscribed` event, since 2026-11-09) or tagged do-not-text
-// (shared/opt-out.js BLOCK_TAG_RX). The pulse and the deal sends both ask
-// (shared/buyer-score.js pickDealBuyers, ghl-broker/dispo-autopilot.js).
+// (shared/opt-out.js BLOCK_TAG_RX, which also reads "phone-dead": the delivery
+// check found their number dead, ghl-broker/delivery-watch.js). The pulse and
+// the deal sends both ask (shared/buyer-score.js pickDealBuyers,
+// ghl-broker/dispo-autopilot.js).
 export const isBlockedBuyer = (inv = {}) => Boolean(inv?.dnd) || (inv?.tags || []).some((t) => BLOCK_TAG_RX.test(String(t).trim()));
 
 // Market tags are slugs: "federal-way" → "Federal Way".
