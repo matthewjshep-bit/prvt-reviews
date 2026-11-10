@@ -1433,7 +1433,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
       // (outreach-sweep.js rentcastBudget), from the billing day in Settings
       // against the plan in Settings. It used to count from the 1st against
       // a hard-coded 50 (2026-11-09 audit).
-      const saved = (await store.getOfferSettings(locationId)) || {};
+      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
       const budget = await rentcastBudget({ store, locationId, saved }).catch(() => null);
 
       res.json({

@@ -642,6 +642,24 @@ test("a tick job that keeps failing posts once a day, not every fifteen minutes"
   assert.match(said(machinePosts(s)[0]), /Card sync\* failed its last run/);
 });
 
+// A 15-minute job whose last run failed and then stopped running (its hours
+// ended, or it was switched off) kept the same failed run on its cursor, and a
+// claim keyed on today's date told that one run again every day.
+test("a tick job's one failed run is told once, not again every day after", async () => {
+  const LOC = "loc-tick-fail-stale";
+  const s = slack();
+  const DAY = 86400000;
+  // The Needs Matt runner failed at 8:45pm Pacific and hasn't run since.
+  const failedAt = Date.parse("2026-10-25T03:45:00Z");
+  await store.setJobCursor(LOC, "needsMatt", { at: new Date(failedAt).toISOString(), doc: { last: { finishedAt: new Date(failedAt).toISOString(), error: "GHL 401: not authorized" } } });
+  await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: failedAt + 60000 });
+  assert.equal(machinePosts(s).length, 1);
+  for (const later of [failedAt + 4 * 3600000, failedAt + DAY, failedAt + 3 * DAY]) {
+    await runSlackPings({ store, locationId: LOC, saved: ON, deps: noPipeline, now: later });
+  }
+  assert.equal(machinePosts(s).length, 1, "the same failed run, told once");
+});
+
 test("the evening post carries last night's leak count and the houses passed unpriced", async () => {
   const LOC = "loc-evening-leaks";
   const s = slack();

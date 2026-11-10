@@ -562,8 +562,11 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
       // Slack's own job told to Slack goes nowhere useful; the evening post and the Line list it.
       if (j.name === "slack" || !j.lastRunAt) continue;
       if (j.failed) {
-        // A job that runs every tick says so once a day, not every 15 minutes.
-        const key = slackClaimKey("job", j.every === "tick" ? `${j.name}:${pacificDay(now)}` : `${j.name}:${j.lastRunAt}`);
+        // A job that runs every tick says so once a day, not every 15 minutes:
+        // the day of the failed run, so a failure that stays on a cursor that
+        // stopped moving (its hours ended, or it was switched off) isn't told
+        // again each day.
+        const key = slackClaimKey("job", j.every === "tick" ? `${j.name}:${pacificDay(ms(j.lastRunAt) ?? now)}` : `${j.name}:${j.lastRunAt}`);
         if (!claimed[key]) owed.push({ key, stream: "machine", kind: "job", msg: renderJobFailed(j) });
       } else if (j.late) {
         // Switched on and stopped: once per stall (its last run is the stall's name).
