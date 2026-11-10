@@ -27,7 +27,7 @@
 // words the broker recorded it under.
 
 import { STATUS_HISTORY_PHRASE } from "./offer-status.js";
-import { PROPERTY_TYPES } from "./buybox.js";
+import { PROPERTY_TYPES, BUYER_FUNDING } from "./buybox.js";
 import { PASS_REASON_LABEL } from "./conversation-ai.js";
 // USPS-normalised ("Avenue" is "Ave"): the dossier's notion of "same property".
 // Deliberately NOT the event dedupe key, which must stay byte-compatible with
@@ -314,6 +314,10 @@ export const FACT_KEYS = {
   // dispo-deals-by-email mirrors it. Turned off by writing "text", never by
   // removing it, so a tombstone can't stop them asking again.
   deals_by:              { kind: "scalar", party: "investor", cap: 20, ghl: false, label: "Deals go by", values: ["email", "text"] },
+  // How a buyer pays (2026-11-09): what they said, filed by the reply when a
+  // buyer names it (shared/buybox.js fundingSaid) and by Add to buy box from
+  // a read. Shown on the deal's buyer row. App-only: no GHL field.
+  buyer_funding:         { kind: "scalar", party: "investor", cap: 20, ghl: false, label: "How they pay", values: BUYER_FUNDING },
 };
 export const factKeysFor = (party) =>
   Object.keys(FACT_KEYS).filter((k) => FACT_KEYS[k].party === "both" || FACT_KEYS[k].party === party);

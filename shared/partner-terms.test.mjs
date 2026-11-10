@@ -73,6 +73,32 @@ test("someone who says they buy or pays assignment fees is an investor buyer", (
   ]) assert.equal(kindOf(said), "investor_buyer", said);
 });
 
+// 2026-11-09: an agent asked for our deals four times over two months; the
+// fourth time the bot answered that it had nothing, with three deals live.
+// Asking for our deals is buying: Matt answers it, and adds them to buyers.
+test("an agent who asks if we have deals to assign is an investor buyer", () => {
+  for (const said of [
+    "No luck on that one. Do you have any other deals you're looking to assign?",
+    "Do you have any pending deals?",
+    "You guys have any deals right now?",
+    "Anything you're looking to assign this month?",
+    "Got any deals you're trying to move? I buy around Puyallup",
+    "Send me your deals, I close fast",
+    "Add me to your list please",
+    "add me to your buyers list",
+  ]) {
+    const t = partnerTerms(said);
+    assert.equal(t?.kind, "investor_buyer", said);
+    assert.equal(t.addToBuyers, true, said);
+    assert.equal(answersItself(t), false, `${said}: held for Matt`);
+  }
+  for (const said of [
+    "I can send you deals when I find them",
+    "Do you have any other properties you're interested in?",
+    "That deal fell through on our side",
+  ]) assert.equal(partnerTerms(said)?.kind === "investor_buyer", false, said);
+});
+
 test("a plain 'I'll keep you in mind' raises nothing", () => {
   for (const said of [
     "I'll keep you in mind!", "Thanks, will keep you on the list", "Not at this time, but I'll reach out if something comes up",

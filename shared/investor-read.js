@@ -51,7 +51,8 @@ export const READ_FIELDS = {
   price_min:      { kind: "number", label: "Price min", fact: "buybox_price_min", money: true },
   price_max:      { kind: "number", label: "Price max", fact: "buybox_price_max", money: true },
   rehab:          { kind: "enum",   label: "Rehab", values: REHAB_APPETITES, labels: REHAB_APPETITE_LABELS, fact: "rehab_appetite" },
-  funding:        { kind: "list",   label: "How they pay", values: FUNDING, labels: FUNDING_LABELS },
+  // One fact, the first way they named (buyer_funding is a scalar).
+  funding:        { kind: "list",   label: "How they pay", values: FUNDING, labels: FUNDING_LABELS, fact: "buyer_funding", factFirst: true },
   beds_min:       { kind: "number", label: "Beds min" },
   baths_min:      { kind: "number", label: "Baths min" },
   sqft_min:       { kind: "number", label: "Sq ft min" },
@@ -390,10 +391,18 @@ export function cleanRead(r = {}) {
 export const lastSaidAt = (read) => (read?.quotes || []).reduce((max, q) => (q.at && q.at > (max || "") ? q.at : max), null);
 
 // A read is out of date when their thread has moved past what it covered.
+// A time from the store or GHL: an ISO string, or a Date as Postgres hands
+// back timestamptz (Date.parse on a Date drops its milliseconds).
+const timeOf = (v) => (v instanceof Date ? v.getTime() : Date.parse(v || ""));
+// GHL stamps a conversation's last message a few seconds after the message
+// (seen up to 36s, 2026-11-02); a message past this is a new one.
+export const READ_STALE_SLACK_MS = 60_000;
 export function readIsStale(read, lastMessageAt) {
   if (!read) return true;
-  if (!lastMessageAt) return false;
-  return !read.through || Date.parse(lastMessageAt) > Date.parse(read.through) + 1000;
+  const last = timeOf(lastMessageAt);
+  if (!Number.isFinite(last)) return false;
+  const through = timeOf(read.through);
+  return !Number.isFinite(through) || last > through + READ_STALE_SLACK_MS;
 }
 
 /* ---------- what the table and the export show ---------- */
@@ -464,7 +473,7 @@ export function readFacts(read, { have = {} } = {}) {
   for (const [key, def] of Object.entries(READ_FIELDS)) {
     if (!def.fact) continue;
     const v = f[key];
-    for (const one of asList(v)) {
+    for (const one of asList(v).slice(0, def.factFirst ? 1 : undefined)) {
       if (one == null || one === "") continue;
       const value = key === "must_haves" ? `must have: ${one}` : String(one);
       if (already(def.fact, value)) continue;

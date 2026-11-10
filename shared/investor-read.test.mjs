@@ -148,6 +148,19 @@ test("a read is due again only when their thread has moved past it", () => {
   assert.equal(readIsStale(read, null), false);
 });
 
+// What went wrong (2026-11-02, after the backfill loaded): 337 of 681 reads
+// showed as due again an hour after they were made. Postgres hands back the
+// saved time as a Date, which lost its milliseconds on the way through
+// Date.parse, and GHL stamps a conversation's last message a few seconds
+// after the message itself. Switched on, the nightly read would have spent a
+// model call on each of those unchanged threads.
+test("a read made this morning isn't due again over a fraction of a second or GHL's few seconds of lag", () => {
+  assert.equal(readIsStale({ through: new Date("2026-08-20T16:00:00.999Z") }, "2026-08-20T16:00:01.299Z"), false, "the database's Date keeps its milliseconds");
+  assert.equal(readIsStale({ through: "2026-08-20T16:00:00.000Z" }, "2026-08-20T16:00:20.000Z"), false, "the conversation stamped 20 seconds after the message");
+  assert.equal(readIsStale({ through: new Date("2026-08-20T16:00:00.000Z") }, "2026-08-20T16:05:00.000Z"), true, "a message five minutes on is a new message");
+  assert.equal(readIsStale({ through: "not a date" }, "2026-08-20T16:05:00.000Z"), true);
+});
+
 test("Add to buy box files list values the record lacks and never overwrites a scalar a person set", () => {
   const read = { fields: normalizeFields({ areas: ["Tacoma", "Lakewood"], price_max: 450000, price_min: 150000, must_haves: ["garage"], dealbreakers: ["no septic"], volume: "3 a year" }) };
   const facts = readFacts(read, { have: { buybox_areas: ["tacoma"], buybox_price_max: "500000" } });
@@ -157,6 +170,15 @@ test("Add to buy box files list values the record lacks and never overwrites a s
     { key: "buybox_exclusions", value: "must have: garage" },
     { key: "buybox_exclusions", value: "no septic" },
   ]);
+});
+
+// 2026-11-09: how a buyer pays was read but never filed, so it never reached
+// their record or the deal row. Add to buy box files the first way they
+// named, and never over one a person set.
+test("Add to buy box files how they pay as their funding, once", () => {
+  const read = { fields: normalizeFields({ funding: ["hard money", "cash"] }) };
+  assert.deepEqual(readFacts(read), [{ key: "buyer_funding", value: "hard_money" }]);
+  assert.deepEqual(readFacts(read, { have: { buyer_funding: "cash" } }), []);
 });
 
 test("the table's columns and the search read the same words", () => {

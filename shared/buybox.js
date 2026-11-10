@@ -1,7 +1,8 @@
 // buybox.js — the investor buy box: normalize it out of GHL custom fields,
 // flatten it to a profile string, and decide whether a property (or a search
-// query) fits it. Pure functions, no I/O, no deps. Shared by the broker
-// (dispositions search) and the frontend (chips, filters, badges).
+// query) fits it. Pure functions, no I/O; the one import is the area reader
+// (shared/dispo-regions.js). Shared by the broker (dispositions search) and
+// the frontend (chips, filters, badges).
 //
 // The field vocabulary is NOT defined here — it lives in ghl-broker/enrich.js
 // (INVESTOR_ENRICH_FIELDS), which is what the AI enrichment sweep writes into
@@ -25,6 +26,8 @@
 // So a criterion only removes an investor when their buy box actively
 // CONTRADICTS the query. Everything else survives to the ranking stage, where
 // the model can weigh it against the conversation history.
+
+import { areaVerdict } from "./dispo-regions.js";
 
 /* ---------- vocabularies ---------- */
 
@@ -126,7 +129,135 @@ export function normalizeBuybox(custom = {}) {
     lotMin: num(c.buybox_lot_min),
     rehabAppetite: REHAB_APPETITES.includes(appetite) ? appetite : null,
     exclusions: String(c.buybox_exclusions || "").trim(),
+    // How they pay (the buyer_funding fact). Not a buy box criterion: no
+    // deal is matched or ruled out on it.
+    funding: BUYER_FUNDING.includes(String(c.buyer_funding || "").trim()) ? String(c.buyer_funding).trim() : null,
   };
+}
+
+/* ---------- how they pay ---------- */
+
+// 2026-11-09: how a buyer pays was unknown in 283 of 307 buyer threads, and
+// a buyer who took a contract was still lining up money days later. What
+// they say is filed as the `buyer_funding` fact (shared/contact-record.js)
+// and shown on the deal's buyer row. The words match the read's "How they
+// pay" column (shared/investor-read.js FUNDING) plus a HELOC.
+export const BUYER_FUNDING = ["cash", "hard_money", "private_money", "heloc", "conventional", "dscr", "partners"];
+export const BUYER_FUNDING_LABELS = {
+  cash: "cash", hard_money: "hard money", private_money: "private money", heloc: "HELOC",
+  conventional: "conventional loan", dscr: "DSCR loan", partners: "partners",
+};
+const FUNDING_CUES = [
+  ["hard_money", /\bhard[\s-]?money\b|\bhml\b/gi],
+  ["private_money", /\bprivate\s+(?:money|lenders?|capital|funds?|investors?)\b/gi],
+  ["heloc", /\bheloc\b|\bhome\s+equity\s+line\b/gi],
+  ["dscr", /\bdscr\b/gi],
+  ["conventional", /\bconventional\s+(?:loans?|financing|mortgages?|lenders?)\b|\bfha\b|\bva\s+loans?\b/gi],
+  ["partners", /\b(?:my|our)\s+(?:money\s+|capital\s+|equity\s+)?partners?\s+(?:fund|funds|put\s+up|bring|brings|cover|covers|finance|finances)\b|\bfunded\s+by\s+(?:my|our)\s+(?:partners?|investors?)\b|\bpartner\s+money\b/gi],
+  ["cash", /\bcash\s*(?:or|and|\/|&)\s*(?:hard|private|heloc|dscr|conventional|a\s+loan|financing)\b|\ball[\s-]cash\b|\bpay(?:ing)?\s+(?:all\s+)?cash\b|\bpaid\s+(?:all\s+)?cash\b|\b(?:buy|buying|close|closing|purchase|purchasing)\s+(?:with\s+|in\s+|all\s+)?cash\b|\bcash\s+buyers?\b|\b(?:i'?m|we'?re|i\s+am|we\s+are)\s+(?:a\s+)?cash\b|\b(?:my|our)\s+own\s+cash\b|\bcash\s+on\s+hand\b/gi],
+];
+// "not a cash buyer", "no hard money", "don't use a HELOC": a no, not a yes.
+const NOT_BEFORE = /\b(?:not|no|don'?t|do\s+not|never|isn'?t|aren'?t|without|won'?t)\b(?:\s+\w+){0,2}\s*$/i;
+// "Would the seller take hard money?" is a question, not how they pay.
+const inQuestion = (t, to) => {
+  const end = t.slice(to).search(/[.!?\n]/);
+  return end >= 0 && t[to + end] === "?";
+};
+
+/**
+ * fundingSaid(text) → one of BUYER_FUNDING, or null
+ *
+ * How a buyer said they pay, in their own words: the first way they named,
+ * outside a question and not after a no.
+ */
+export function fundingSaid(text = "") {
+  const t = String(text || "");
+  let best = null;
+  for (const [value, rx] of FUNDING_CUES) {
+    for (const m of t.matchAll(rx)) {
+      if (NOT_BEFORE.test(t.slice(Math.max(0, m.index - 30), m.index))) continue;
+      if (inQuestion(t, m.index + m[0].length)) continue;
+      if (!best || m.index < best.at) best = { value, at: m.index };
+      break;
+    }
+  }
+  return best?.value || null;
+}
+
+// The day they said it, in Pacific time wherever this runs.
+const saidDay = (at) => {
+  const d = at ? new Date(at) : null;
+  if (!d || !Number.isFinite(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", timeZone: "America/Los_Angeles" });
+};
+
+/** paysLine({ value, at }) → "pays: hard money (said 10/30)" | "pays: unknown" */
+export function paysLine(fact) {
+  const label = BUYER_FUNDING_LABELS[fact?.value];
+  if (!label) return "pays: unknown";
+  const day = saidDay(fact.at);
+  return `pays: ${label}${day ? ` (said ${day})` : ""}`;
+}
+
+/**
+ * buyerMoneyLine(fact, { committed, proofOnFile }) → the deal's buyer row line
+ *
+ * How they pay, and for the buyer who committed, "no proof of funds on file"
+ * until the checklist's proof of funds item (shared/deal-checklist.js
+ * assignee_funds) is ticked.
+ */
+export function buyerMoneyLine(fact, { committed = false, proofOnFile = false } = {}) {
+  const pays = paysLine(fact);
+  return committed && !proofOnFile ? `${pays} · no proof of funds on file` : pays;
+}
+
+/* ---------- what their own words refuse ---------- */
+
+// 2026-11-09: a builder whose buy box said "land only, no rehabs" was sent
+// three fixers, and buyers whose box said "not buying right now" got every
+// deal. These are their own words in the must-haves / dealbreakers field
+// (buybox_exclusions), the same field the street and island rules read
+// (shared/buyer-score.js buyerDealbreakers). Each only ever narrows.
+//
+// "no rehabs over 100k" is a limit, not a no; "not buying condos" is a kind
+// of house, not a pause; "not in the market for land" is a kind too.
+const NO_REHAB_RX = /\b(?:no|not|no\s+more|not\s+doing|not\s+interested\s+in|(?:don'?t|doesn'?t|won'?t|do\s+not)\s+(?:do|want))\s+(?:any\s+)?(?:rehabs?|flips?|fix[\s-]?ups?|fix[\s-]?and[\s-]?flips?|fixers?|remodels?|renovations?)\b(?!\s+(?:over|above|under|below|more|less|bigger|larger|in|on|with|that|where|unless|past|beyond)\b)/i;
+const GROUND_UP_RX = /\b(?:ground[\s-]?up|new[\s-]construction|infill|land|lots?|build(?:s|ing)?|new\s+builds?)\s+only\b|\bonly\s+(?:do\s+|does\s+|doing\s+|want\s+)?(?:ground[\s-]?up|new[\s-]construction|infill|land|lots?|new\s+builds?)\b/i;
+const NOT_BUYING_RX = [
+  /\bnot\s+(?:currently\s+)?buying(?:\s+(?:right\s+now|now|at\s+the\s+moment|currently|this\s+(?:year|month|quarter)|for\s+(?:a|the)\s+while|anything|anymore|any\s+more|until\b[^.;,!]*))?\s*(?:[.;,!)]|$)/im,
+  /\b(?:buying\s+(?:is\s+)?)?on\s+hold\b/i,
+  /\bpaus(?:ed|ing)\b/i,
+  /\btaking\s+a\s+break\b/i,
+  /\b(?:not|out\s+of)\s+(?:in\s+)?the\s+market\b(?!\s+for\b)/i,
+];
+
+/**
+ * ownWords(text) → { noRehabs, groundUpOnly, notBuying }
+ *
+ * What a buyer's saved dealbreakers say no to beyond the street: any rehab,
+ * anything but ground-up, or any deal at all right now.
+ */
+export function ownWords(text = "") {
+  const t = String(Array.isArray(text) ? text.join("; ") : text || "");
+  return {
+    noRehabs: NO_REHAB_RX.test(t),
+    groundUpOnly: GROUND_UP_RX.test(t),
+    notBuying: NOT_BUYING_RX.some((rx) => rx.test(t)),
+  };
+}
+
+/**
+ * ownWordsRefuse(words, { rehabDeal }) → why, or null
+ *
+ * `rehabDeal` is true when the deal is a house to fix (shared/buyer-score.js
+ * dealTarget), false for land, null when nothing says which: an unknown
+ * deal abstains.
+ */
+export function ownWordsRefuse(words = {}, { rehabDeal = null } = {}) {
+  if (words.notBuying) return "they're not buying right now";
+  if (rehabDeal === true && words.groundUpOnly) return "they only build ground-up";
+  if (rehabDeal === true && words.noRehabs) return "they said no rehabs";
+  return null;
 }
 
 // True when the buy box has nothing to match on — the UI flags these as
@@ -257,10 +388,11 @@ const bandsOverlap = (aLo, aHi, bLo, bHi) =>
 //
 // `score` is a deterministic 0-100 used to order results when the model isn't
 // involved (no API key, a ranking failure, or plain browsing with filters).
-export function matchBuybox(buybox = {}, query = {}, { strict = false, fallbackAreas = [] } = {}) {
+export function matchBuybox(buybox = {}, query = {}, { strict = false, fallbackAreas = [], deal = null } = {}) {
   // No areas on file, but we know where they have actually bought (a borrower
   // list): answer the areas question from that rather than abstaining.
-  const b = (buybox?.areas?.length || !fallbackAreas?.length) ? (buybox || {}) : { ...buybox, areas: fallbackAreas };
+  const fallback = !buybox?.areas?.length && fallbackAreas?.length > 0;
+  const b = fallback ? { ...buybox, areas: fallbackAreas, areasRaw: "" } : (buybox || {});
   const q = query || {};
   const matched = [];
   const missed = [];
@@ -276,7 +408,16 @@ export function matchBuybox(buybox = {}, query = {}, { strict = false, fallbackA
     else missed.push(name);
   };
 
-  verdict("areas", q.areas?.length > 0, b.areas?.length > 0, areasOverlap(b.areas || [], q.areas || []));
+  // Against a deal (Find buyers, 2026-11-09), areas are read the way the
+  // deal sends read them (shared/dispo-regions.js areaVerdict): "Eastside"
+  // holds Bellevue, "West Seattle" doesn't hold Green Lake, "not Bellevue"
+  // rules it out. A phrase it can't place falls back to the text match.
+  const said = deal && q.areas?.length && b.areas?.length ? areaVerdict(String(b.areasRaw || "").trim() || b.areas, deal) : null;
+  if (said?.refused || said?.elsewhere) missed.push("areas");
+  else if (said?.fit) matched.push("areas");
+  else verdict("areas", q.areas?.length > 0, b.areas?.length > 0, areasOverlap(b.areas || [], q.areas || []));
+  // Their own words against the deal: not buying, or no rehabs on a fixer.
+  if (deal && ownWordsRefuse(ownWords(b.exclusions), { rehabDeal: deal.rehabDeal ?? null })) missed.push("their words");
 
   verdict(
     "price",
@@ -311,11 +452,11 @@ export function matchBuybox(buybox = {}, query = {}, { strict = false, fallbackA
 // Filter + pre-score a list of investors. Each investor needs `.buybox`;
 // everything else is carried through untouched. Returns the survivors, already
 // ordered best-first, each annotated with `.match`.
-export function applyBuyboxFilters(investors = [], query = {}, { strict = false } = {}) {
+export function applyBuyboxFilters(investors = [], query = {}, { strict = false, deal = null } = {}) {
   const q = normalizeQuery(query);
   const out = [];
   for (const inv of investors) {
-    const match = matchBuybox(inv.buybox, q, { strict, fallbackAreas: inv.fallbackAreas || [] });
+    const match = matchBuybox(inv.buybox, q, { strict, fallbackAreas: inv.fallbackAreas || [], deal });
     if (match.pass) out.push({ ...inv, match });
   }
   // Score first, then more matched criteria (a 100 from one criterion is a

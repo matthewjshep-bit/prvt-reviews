@@ -21,9 +21,12 @@
 import { siteFlagsOf } from "../shared/site-check.js";
 import { FERRY_ONLY_ZIPS } from "../shared/underwrite-checks.js";
 import express from "express";
-import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
-import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickDealBuyers, blastedTo, isManufacturedTarget, isLandTarget, DEAL_SENT_TYPES, sentTo } from "../shared/buyer-score.js";
+import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl, ensureProfile } from "../contact-record.js";
+import { marketsFromTags, regionFor, citySlug, AGENT_BUYER_TAG } from "../shared/dispo-regions.js";
+import { resolveParty, matchTagPatterns } from "../conversation-party.js";
+import { normalizeConversationAi } from "../shared/conversation-ai.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickDealBuyers, leftOffDealBuyers, blastedTo, isManufacturedTarget, isLandTarget, DEAL_SENT_TYPES, sentTo } from "../shared/buyer-score.js";
+import { parseUsAddress } from "../shared/us-address.js";
 import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
 import { buyersInPlay } from "../shared/offer-status.js";
 import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
@@ -67,7 +70,11 @@ const DISPO_TAG = process.env.DISPO_TAG || "dispo-blast";
 
 // Contacts carrying any of these tags are investors. Overridable per location
 // in Settings (dispoTags) — some locations tag their buyers differently.
-const DEFAULT_DISPO_TAGS = ["investor", "investor-active", "investor-stale", "on-deal"];
+// dispo-agent-buyer (2026-11-09) is an agent Matt added with Add to buyers:
+// in the book, still an agent in their own thread.
+const DEFAULT_DISPO_TAGS = ["investor", "investor-active", "investor-stale", "on-deal", AGENT_BUYER_TAG];
+// The most buyer records one deal's money lines read (GET /buyers/funding).
+const FUNDING_READ_MAX = 60;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -816,6 +823,90 @@ export default function createDispoRouter({ resolveLocation }) {
     } catch (err) { fail(res, err); }
   });
 
+  /* ---------- an agent who buys, into the book (2026-11-09) ---------- */
+
+  // POST /investors/:contactId/add-to-buyers { areas } — Matt's one press on
+  // an agent who said they buy or asked for our deals (his call on 10/09:
+  // never automatic). Tags them dispo-agent-buyer, which is in the book's
+  // default tags and joins his saved Investor tags when he has set them;
+  // files the areas they named as their buy box; and puts their row in the
+  // book now, not at the next sync. Their own thread stays an agent's: the
+  // tag isn't a routing investor tag, and when his routing would read it as
+  // one (a "dispo-*" pattern), they're tagged agent as well. The record's
+  // party stays "agent" (contact-record.js staysAgent). Pressing it twice
+  // writes nothing new.
+  router.post("/investors/:contactId/add-to-buyers", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = String(req.params.contactId || "").trim().slice(0, 64);
+      if (!contactId) return res.status(400).json({ error: "contact id is required" });
+      const saved = await getSettings(locationId);
+      let contact;
+      try { contact = await withRetry(() => getContact(client, contactId)); }
+      catch (e) {
+        if (e.status === 404 || e.status === 400) return res.status(404).json({ error: "GHL has no contact by that id" });
+        throw e;
+      }
+      const had = (Array.isArray(contact?.tags) ? contact.tags : []).map((t) => String(t || "").trim().toLowerCase()).filter(Boolean);
+      const routing = normalizeConversationAi(saved?.conversationAi).routing;
+      const before = resolveParty({ tags: had, routing }).party;
+      const after = resolveParty({ tags: [...had, AGENT_BUYER_TAG], routing }).party;
+      const add = [AGENT_BUYER_TAG, ...(after === "investor" && before !== "investor" ? ["agent"] : [])].filter((t) => !had.includes(t));
+      if (add.length) await withRetry(() => addContactTags(client, contactId, add));
+      const tags = [...had, ...add];
+
+      // Saved Investor tags replace the defaults, so the tag joins them.
+      const configured = String(saved?.dispoTags || "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+      let dispoTags = "default";
+      if (configured.length) {
+        if (matchTagPatterns([AGENT_BUYER_TAG], configured).length) dispoTags = "already";
+        else {
+          await store.saveOfferSettings(locationId, { ...((await store.getOfferSettings(locationId)) || {}), dispoTags: [...configured, AGENT_BUYER_TAG].join(", ") });
+          dispoTags = "added";
+        }
+      }
+
+      // Their record stays an agent's; the areas they buy in are their buy box.
+      const prev = await store.getContactProfile(locationId, contactId).catch(() => null);
+      const name = contactName(contact);
+      await ensureProfile({ store, locationId, contactId, party: prev?.party || "agent", name: name || null, email: contact?.email || null, phone: contact?.phone || null, tags });
+      const rawAreas = Array.isArray(req.body?.areas) ? req.body.areas : String(req.body?.areas || "").split(/[,;\n]/);
+      const areas = rawAreas.map((a) => String(a || "").trim().slice(0, 80)).filter(Boolean).slice(0, 20);
+      // No party: the facts are filed without moving the record off "agent".
+      if (areas.length) await learnFacts({ store, locationId, contactId, party: null, facts: areas.map((value) => ({ key: "buybox_areas", value, source: "operator", ref: "add-to-buyers" })) });
+      const facts = (await store.getContactProfile(locationId, contactId))?.facts || {};
+
+      // Their row in the book, now. A row already there keeps what the sync read.
+      const existing = await store.getInvestor(locationId, contactId);
+      const doc = {
+        ...(existing?.doc || {}),
+        name, email: contact?.email || "", phone: contact?.phone || "", tags,
+        dnd: smsUnsubscribed(contact), custom: existing?.doc?.custom || {}, record: factsAsCustom(facts),
+      };
+      await store.upsertInvestors(locationId, [{ contactId, name, doc, buyboxText: investorProfileText(doc) }]);
+      const row = await store.getInvestor(locationId, contactId);
+      res.json({ ok: true, contactId, tagged: add, dispoTags, areas, party: (await store.getContactProfile(locationId, contactId))?.party || null, investor: slim(hydrate(row)) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // GET /buyers/funding?ids=a,b — how each buyer said they pay (the
+  // `buyer_funding` fact: its newest value, when and where we heard it), for
+  // the deal's buyer rows (2026-11-09). One record read per id, at most
+  // FUNDING_READ_MAX, never the whole book. A buyer who never said is absent.
+  router.get("/buyers/funding", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      const ids = [...new Set(String(req.query.ids || "").split(",").map((s) => s.trim().slice(0, 64)).filter(Boolean))].slice(0, FUNDING_READ_MAX);
+      const funding = {};
+      await mapPool(ids, 6, async (contactId) => {
+        const said = (await store.getContactProfile(locationId, contactId).catch(() => null))?.facts?.buyer_funding;
+        const last = Array.isArray(said) && said.length ? said[said.length - 1] : null;
+        if (last?.value) funding[contactId] = { value: last.value, at: last.at || null, source: last.source || null };
+      });
+      res.json({ ok: true, read: ids.length, funding });
+    } catch (err) { fail(res, err); }
+  });
+
   router.post("/investors/:contactId/status", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -855,7 +946,9 @@ export default function createDispoRouter({ resolveLocation }) {
 
   // GET /waves/preview?offerId= — who the deal has gone to, whether the
   // morning catch-up still looks at it (or why not), and who it would go to
-  // now: everyone who fits and hasn't had it. Reads only.
+  // now: everyone who fits and hasn't had it. `leftOff` (2026-11-09) is who
+  // buys there and still won't get it, and why: their own words, a STOP, no
+  // phone. Reads only.
   router.get("/waves/preview", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -867,13 +960,14 @@ export default function createDispoRouter({ resolveLocation }) {
       const { ranked, target } = await rankedForDeal(locationId, offer);
       const wouldGet = pickDealBuyers(ranked, { exclude: "blasted", ...dealOptions(target, da) })
         .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, areaFit: i.rankParts?.areaFit || null, reasons: i.rankReasons, channel: blastChannel(i, da), channels: blastChannels(i, da) }));
+      const leftOff = leftOffDealBuyers(ranked, { exclude: "blasted", ...dealOptions(target, da) });
       res.json({
         ok: true, offerId: offer.id, address: offer.address, city: target.city || "", stage: offer.deal.stage || null, asset: target.asset || null,
         autoBlastOnPromote: da.autoBlastOnPromote,
         sends: (offer.deal.blasts || []).map((b, i) => ({ send: b.wave || i + 1, at: b.at, ...(b.resumedAt ? { resumedAt: b.resumedAt } : {}), count: b.count ?? (b.contactIds || []).length, via: b.via || "app" })),
         ghlTags: offer.deal.blastTags || [],
         alreadySent: ranked.filter((i) => i.alreadyBlasted).length,
-        catchUp, wouldGet,
+        catchUp, wouldGet, leftOff,
         // The deal text as it would read now, each phrasing, and what it was
         // built from (Autopilot → Investors).
         ...(await sampleBlastTexts({ store, locationId, offer, saved }).catch(() => ({ samples: [], input: null }))),
@@ -1019,7 +1113,7 @@ export default function createDispoRouter({ resolveLocation }) {
   // `parsed` is an already-normalized query; `target` is what the ranker is
   // told we're placing.
   async function shortlist({
-    locationId, parsed, target, aiApiKey, extraInstructions, strict, excludeIds, filters = {},
+    locationId, parsed, target, aiApiKey, extraInstructions, strict, excludeIds, filters = {}, deal = null,
   }) {
     const rows = await store.listInvestors(locationId, { status: "active" });
     let pool = rows.map(hydrate).filter((i) => !excludeIds?.has(i.contactId));
@@ -1045,7 +1139,9 @@ export default function createDispoRouter({ resolveLocation }) {
     // so a Kirkland deal finds Kirkland flippers who never filled one in.
     pool = pool.map((i) => ({ ...i, fallbackAreas: marketsFromTags(i.tags).cities.map((c) => c.replace(/-/g, " ")) }));
 
-    const survivors = applyBuyboxFilters(pool, parsed, { strict });
+    // Against a deal, areas and their own words are read the way the deal's
+    // sends read them (shared/buybox.js matchBuybox `deal`).
+    const survivors = applyBuyboxFilters(pool, parsed, { strict, deal });
 
     // Only investors with something on file are worth paying to rank. Sending
     // the blanks too costs real money to be told "no buy box" once per row,
@@ -1167,6 +1263,13 @@ export default function createDispoRouter({ resolveLocation }) {
       // question this answers is "who else", and the linked ones come back
       // separately so the UI can show them as already-linked.
       const linked = (offer.deal.investors || []).map((i) => ({ contactId: i.contactId, name: i.name, status: i.status }));
+      // The deal as the deal sends read it: "Eastside" holds a Bellevue deal,
+      // "West Seattle" doesn't hold Green Lake (2026-11-09).
+      const areas = addressAreas(offer.address);
+      const deal = dealTarget({
+        city: areas.find((a) => !/^\d{5}$/.test(a)) || "", zip: areas.find((a) => /^\d{5}$/.test(a)) || "",
+        state: parseUsAddress(offer.address).state, rehabAppetite: target.query.rehabAppetite, asset: target.asset,
+      });
 
       const out = await shortlist({
         locationId,
@@ -1177,6 +1280,7 @@ export default function createDispoRouter({ resolveLocation }) {
         strict: req.body?.strict === true,
         excludeIds: new Set(linked.map((i) => i.contactId)),
         filters: readFilters(req.body),
+        deal,
       });
 
       res.json({
@@ -1463,7 +1567,7 @@ export default function createDispoRouter({ resolveLocation }) {
     // (the buyer-view checks or a hand-ticked chip), a ferry-only island, a
     // house buyers can already see on the MLS.
     const checkFlags = (offer.snapshot?.checks?.flags || []).map((f) => f?.key);
-    const target = dealTarget({ city, zip, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite,
+    const target = dealTarget({ city, zip, state: parseUsAddress(offer.address).state, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite,
       propertyTypes: q.propertyTypes || [], lotMin: q.lotMin ?? null, asset: dq.asset,
       site: siteFlagsOf(offer), island: FERRY_ONLY_ZIPS.has(zip) || checkFlags.includes("thin_island"), onMarket: checkFlags.includes("exposure") });
     const linked = new Set((offer.deal?.investors || []).map((i) => i.contactId));

@@ -119,7 +119,7 @@ export async function planReads({ store = defaultStore, locationId, contactIds =
       .filter((r) => r.status !== "archived" && hasTalked(r))
       .map((r) => {
         const read = reads.get(r.contactId);
-        return { row: r, why: !read ? "never_read" : readIsStale({ through: read.throughAt || read.doc?.through }, r.doc?.lastMessageAt) ? "moved" : null };
+        return { row: r, why: !read ? "never_read" : readIsStale({ through: read.doc?.through || read.throughAt }, r.doc?.lastMessageAt) ? "moved" : null };
       })
       .filter((x) => x.why)
       .sort((a, b) => String(b.row.doc?.lastMessageAt || "").localeCompare(String(a.row.doc?.lastMessageAt || "")));

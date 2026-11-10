@@ -853,6 +853,19 @@ test("an agent who says they'd pay an assignment fee is investor-minded and flag
   assert.equal(minded.dedupeKey, "investor_minded:c1", "once per agent, the same key the reply's own read uses");
 });
 
+// 2026-11-09: an agent asked for our deals for the fourth time and the bot
+// told him there was nothing, with three deals live. Asking for our deals is
+// buying, and Matt answers it.
+test("an agent who asks if we have deals to assign is held for Matt, not told nothing's on the shelf", async () => {
+  const { d, events } = await runPartner("No luck on that one. Do you have any other deals you're looking to assign?",
+    { ...DRAFT, reply: "All quiet on our end for now, I'll keep you posted." });
+  assert.equal(d.status, "draft", "held, never scheduled");
+  assert.equal(d.needsHuman, true);
+  assert.equal(d.partnerTerms.kind, "investor_buyer");
+  assert.match(d.autoSend.reason, /they said they buy/);
+  assert.equal(events.find((e) => e.type === "partner_terms").data.addToBuyers, true);
+});
+
 test("a plain 'I'll keep you in mind' raises nothing", async () => {
   const { d, events, asked } = await runPartner("Nothing right now but I'll keep you in mind!", { ...DRAFT, reply: "Thanks, talk soon." });
   assert.equal(d.status, "scheduled", "an ordinary reply still sends itself");
@@ -1835,6 +1848,43 @@ test("a real run leaves the conversation on the timeline", async () => {
   assert.equal(summary.ref, job.draftId, "keyed to the draft that was written");
   assert.ok(events.some((e) => e.type === "tag_added" && e.data.tag === "investor-active"), "the tier tag the rule applied is on the timeline");
   assert.deepEqual((await store.getContactProfile("LOC", "c1")).facts.buybox_areas.map((e) => e.value), ["Everett"]);
+});
+
+// What went wrong (2026-11-09 audit): how a buyer pays was unknown in 283 of
+// 307 buyer threads though many had said it, and a buyer who took a contract
+// was still lining up money three days later. What they say is filed.
+test("a buyer who says they use hard money has it on their record", async () => {
+  _resetJobs();
+  const { client } = ghlStubFor(["investor"]);
+  const store = fakeStore();
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store, contactId: "c1", message: "Could work. We use hard money on these, close in about 3 weeks",
+    deps: { draft: async () => ({ ...DRAFT, intent: "interested", summary: "Might want it.", reply: "Sounds good, I'll send the details." }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const funding = (await store.getContactProfile("LOC", "c1")).facts.buyer_funding;
+  assert.deepEqual(funding.map((e) => [e.value, e.source, e.ref]), [["hard_money", "conversation", job.id]]);
+
+  // A question about money isn't how they pay, and an agent's words are never a buyer's funding.
+  _resetJobs();
+  const asks = fakeStore();
+  const r2 = await startReply({
+    client, locationId: "LOC", saved: STARTER_NOW, store: asks, contactId: "c1", message: "Would the seller take hard money?",
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", summary: "Asked about terms." }) },
+  });
+  await settle();
+  assert.equal(r2.job.status, "done", r2.job.error);
+  assert.equal((await asks.getContactProfile("LOC", "c1"))?.facts?.buyer_funding, undefined);
+  _resetJobs();
+  const agentStore = fakeStore();
+  const r3 = await startReply({
+    client: ghlStubFor(["agent"]).client, locationId: "LOC", saved: STARTER_NOW, store: agentStore, contactId: "c1", message: "Seller wants all cash, no financing",
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", summary: "Cash only." }) },
+  });
+  await settle();
+  assert.equal(r3.job.status, "done", r3.job.error);
+  assert.equal((await agentStore.getContactProfile("LOC", "c1"))?.facts?.buyer_funding, undefined);
 });
 
 test("an agent's own ARV and rehab are kept as theirs, recorded on the property, and never become ours", async () => {
