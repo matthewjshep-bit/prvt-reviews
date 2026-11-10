@@ -8,6 +8,7 @@ import React, { useEffect, useState } from "react";
 import { Check, Copy, FileText, Loader2, X } from "lucide-react";
 import { fmtMoney, netComparison } from "@shared/offer-calc.js";
 import { generateNetSheet } from "./api.js";
+import { offerSendText } from "@shared/offer-send-text.js";
 
 const INPUT_CLS =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
@@ -17,16 +18,17 @@ const round100 = (v) => Math.round(v / 100) * 100;
 
 // Exported for its test. The seller's net leaves out WA excise tax and closing costs
 // (audit UWM-16, 2026-11-09): the math is unchanged, and the message says what it's before.
+// It's pasted to the agent, often as a text, so it opens the way the offer text does
+// (shared/offer-send-text.js): no "cash", no "as-is", no dash, the street (2026-11-09).
 export function buildMessage(offer, net) {
-  const first = (offer.contactName || "").split(" ")[0] || "there";
-  const addr = offer.address || "the property";
+  const opener = offerSendText({ first: offer.contactName || "", address: offer.address || "", amount: offer.cashAmount })
+    .split("Letter's attached.")[0] + "Letter's attached.";
   return (
-    `Hi ${first} — here's our letter of intent on ${addr}: ${fmtMoney(offer.cashAmount)}, ` +
-    `as-is, closing on your timeline (attached).\n\n` +
-    `Worth framing it this way: we're buying directly, so no buyer's-agent commission comes off the top. ` +
+    `${opener}\n\n` +
+    `Worth framing it this way: we're buying directly, so no buyer's agent commission comes off the top. ` +
     `At our offer the seller nets about ${fmtMoney(Math.round(net.netA))} after the listing side's ${net.sellerPct}% and before excise tax and closing costs. ` +
     `To net that same amount through a traditional sale paying both agents (${net.sellerPct}% + ${net.buyerPct}%), ` +
-    `it would need to sell at roughly ${fmtMoney(round100(net.listPrice))} — and that's before repairs, ` +
+    `it would need to sell at roughly ${fmtMoney(round100(net.listPrice))}, and that's before repairs, ` +
     `holding costs, or time on market.\n\n` +
     `Happy to walk through any of it.`
   );

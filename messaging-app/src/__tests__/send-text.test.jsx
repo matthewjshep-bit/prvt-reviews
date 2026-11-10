@@ -29,3 +29,13 @@ test("the net sheet message says the seller's net is before excise tax and closi
   const m = netSheetMessage(OFFER, net);
   expect(m).toMatch(/the seller nets about \$[\d,]+ after the listing side's 3% and before excise tax and closing costs\./);
 });
+
+// The net sheet's message is pasted to the agent, often as a text: it opened on "$412,000, as-is"
+// with an em dash, the words the carriers block. It opens the way the offer text does now.
+test("the net sheet message opens like the offer text, with no as-is and no dash", () => {
+  const net = netComparison(412000, { sellerAgentPct: 3, buyerAgentPct: 3 });
+  const m = netSheetMessage(OFFER, net);
+  expect(m.startsWith("Hi Dana, here's our letter of intent on 27 Wrenfield Ct: 412k, close on your timeline. Letter's attached.\n\n")).toBe(true);
+  expect(m).not.toMatch(/\bcash\b|as-is|—|–/i);
+  expect(m).toMatch(/Happy to walk through any of it\.$/);
+});
