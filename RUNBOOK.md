@@ -510,8 +510,10 @@ the ones above; each only lowers a number or adds a hold.
 - **Send gate** (`engineSendGate`, auto-underwrite.js): `overList` → "the offer engine's number is over
   the list price: yours to price"; `over_theirs` → "our walk-away is far over their number, likely an
   ARV error: yours to price".
-- **The write-up ask:** `sendEngine` stamps `offer.pricing.sellerNumber`. `numberApproved` is false for
-  any amount above it, so a yes there never gets the write-up ask.
+- **The write-up ask:** `sendEngine` stamps `offer.pricing.sellerNumber`. No machine approval (the
+  engine's walk-away) reaches above it, so a yes there never gets the write-up ask on the machine's
+  word. Matt approving that amount himself (a revision, Send, a pin, Approve on the row) still counts:
+  the rule is on the machine, and his Approve has to clear the row it answers.
 - **Golden set:** `shared/fixtures/price-golden.json` and `shared/price-golden.test.mjs` (17 deals, 38
   hand-priced houses, 3 live engine numbers; ZIP, size, age and numbers only, every text line
   invented). The fixes that need Matt stay `todo` with the fix named: re-seed the rehab floor and read
