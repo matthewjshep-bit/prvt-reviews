@@ -1,0 +1,1128 @@
+{
+ "_what": "Golden set for the offer engine (shared/price-engine.js), from prod 2026-11-09. No addresses or names: ZIP, size, age, Matt's inputs, buyers' numbers and outcomes. Deals: 17 (5 won, 1 open, 11 dead, see outcome). Pairs: Matt's hand price beside the machine's read on the same house. Live: engine numbers that reached agents. Every said and killerWords line is invented words of the same meaning, never a contact's own (memory no-contact-words-in-fixtures).",
+ "asOf": "2026-11-09",
+ "deals": [
+  {
+   "id": "won-01",
+   "zip": "98133",
+   "homeType": null,
+   "sqft": 770,
+   "yearBuilt": 1950,
+   "outcome": "won",
+   "contract": 325000,
+   "fee": 11000,
+   "buyerPaid": 336000,
+   "matt": {
+    "arv": 530000,
+    "rehab": 60000
+   },
+   "buyers": null,
+   "compsToolArv": 493000,
+   "killer": null,
+   "killerWords": ""
+  },
+  {
+   "id": "open-01",
+   "zip": "98103",
+   "homeType": null,
+   "sqft": null,
+   "yearBuilt": null,
+   "outcome": "open",
+   "contract": 815000,
+   "fee": 16000,
+   "buyerPaid": null,
+   "matt": {
+    "arv": 1200000,
+    "rehab": 100000
+   },
+   "buyers": null,
+   "compsToolArv": 1256000,
+   "killer": null,
+   "killerWords": ""
+  },
+  {
+   "id": "dead-01",
+   "zip": "98229",
+   "homeType": null,
+   "sqft": null,
+   "yearBuilt": null,
+   "outcome": "dead",
+   "contract": 295000,
+   "fee": 14000,
+   "buyerPaid": null,
+   "matt": {
+    "arv": 700000,
+    "rehab": 200000
+   },
+   "buyers": null,
+   "compsToolArv": null,
+   "killer": "buyers_passed_area",
+   "killerWords": ""
+  },
+  {
+   "id": "dead-02",
+   "zip": "98107",
+   "homeType": "SINGLE_FAMILY",
+   "sqft": 2090,
+   "yearBuilt": 1919,
+   "outcome": "dead",
+   "contract": 890000,
+   "fee": 21000,
+   "buyerPaid": null,
+   "matt": {
+    "arv": 925000,
+    "rehab": 0
+   },
+   "buyers": null,
+   "compsToolArv": null,
+   "killer": "buyers_passed_price",
+   "killerWords": ""
+  },
+  {
+   "id": "dead-03",
+   "zip": "98103",
+   "homeType": "SINGLE_FAMILY",
+   "sqft": 1780,
+   "yearBuilt": 1924,
+   "outcome": "dead",
+   "contract": 740000,
+   "fee": 8000,
+   "buyerPaid": null,
+   "matt": {
+    "arv": 1161000,
+    "rehab": 102000
+   },
+   "buyers": null,
+   "compsToolArv": 1214000,
+   "killer": "buyers_passed_rehab",
+   "killerWords": ""
+  },
+  {
+   "id": "dead-04",
+   "zip": "98258",
+   "homeType": "MANUFACTURED",
+   "sqft": 972,
+   "yearBuilt": 1986,
+   "outcome": "dead",
+   "contract": 200000,
+   "fee": 18000,
+   "buyerPaid": null,
+   "matt": {
+    "arv": 370000,
+    "rehab": 50000
+   },
+   "buyers": null,
+   "compsToolArv": 390000,
+   "killer": "other",
+   "killerWords": "a manufactured home that has been moved before"
+  },
+  {
+   "id": "dead-05",
+   "zip": "98408",
+   "homeType": null,
+   "sqft": null,
+   "yearBuilt": null,
+   "outcome": "dead",
+   "contract": 215000,
+   "fee": 20000,
+   "buyerPaid": null,
+   "matt": {
+    "arv": 415000,
+    "rehab": 50000
+   },
+   "buyers": {
+    "arv": 362000,
+    "rehab": 100000
+   },
+   "compsToolArv": null,
+   "killer": "buyers_passed_price",
+   "killerWords": ""
+  },
+  {
+   "id": "dead-06",
+   "zip": "98030",
+   "homeType": "MANUFACTURED",
+   "sqft": 1440,
+   "yearBuilt": 2026,
+   "outcome": "dead",
+   "contract": 68000,
+   "fee": 9000,
+   "buyerPaid": null,
+   "matt": {
+    "arv": 183700,
+    "rehab": 40000
+   },
+   "buyers": null,
+   "compsToolArv": 167000,
+   "killer": "other",
+   "killerWords": "sits in a 55+ community with monthly space rent"
+  },
+  {
+   "id": "dead-07",
+   "zip": "98155",
+   "homeType": null,
+   "sqft": null,
+   "yearBuilt": null,
+   "outcome": "dead",
+   "contract": 400000,
+   "fee": 21000,
+   "buyerPaid": null,
+   "matt": {
+    "arv": 849000,
+    "rehab": 200000
+   },
+   "buyers": {
+    "arv": null,
+    "rehab": 200000
+   },
+   "compsToolArv": 942000,
+   "killer": "buyers_passed_rehab",
+   "killerWords": "more of a tear-down than a flip"
+  },
+  {
+   "id": "won-02",
+   "zip": "98408",
+   "homeType": null,
+   "sqft": null,
+   "yearBuilt": null,
+   "outcome": "won",
+   "contract": 318000,
+   "fee": 11000,
+   "buyerPaid": 329000,
+   "matt": {
+    "arv": 499000,
+    "rehab": 45000
+   },
+   "buyers": {
+    "arv": 450000,
+    "rehab": null
+   },
+   "compsToolArv": 490000,
+   "killer": null,
+   "killerWords": ""
+  },
+  {
+   "id": "won-03",
+   "zip": "98296",
+   "homeType": "SINGLE_FAMILY",
+   "sqft": 1056,
+   "yearBuilt": 1971,
+   "outcome": "won",
+   "contract": 515000,
+   "fee": 10000,
+   "buyerPaid": 525000,
+   "matt": {
+    "arv": 825000,
+    "rehab": 73000
+   },
+   "buyers": {
+    "arv": 700000,
+    "rehab": null
+   },
+   "compsToolArv": null,
+   "killer": null,
+   "killerWords": ""
+  },
+  {
+   "id": "won-04",
+   "zip": "98029",
+   "homeType": "SINGLE_FAMILY",
+   "sqft": 3590,
+   "yearBuilt": 1960,
+   "outcome": "won",
+   "contract": 1100000,
+   "fee": 40000,
+   "buyerPaid": 1140000,
+   "matt": {
+    "arv": 1850000,
+    "rehab": 275000
+   },
+   "buyers": {
+    "arv": 1850000,
+    "rehab": 350000
+   },
+   "compsToolArv": null,
+   "killer": null,
+   "killerWords": ""
+  },
+  {
+   "id": "dead-08",
+   "zip": "98026",
+   "homeType": null,
+   "sqft": 960,
+   "yearBuilt": null,
+   "outcome": "dead",
+   "contract": 480000,
+   "fee": 9000,
+   "buyerPaid": 489000,
+   "matt": {
+    "arv": 700000,
+    "rehab": 30000
+   },
+   "buyers": {
+    "arv": 667000,
+    "rehab": 75000
+   },
+   "compsToolArv": 709000,
+   "killer": "buyers_passed_rehab",
+   "killerWords": ""
+  },
+  {
+   "id": "dead-09",
+   "zip": "98290",
+   "homeType": null,
+   "sqft": 1600,
+   "yearBuilt": null,
+   "outcome": "dead",
+   "contract": 430000,
+   "fee": 5000,
+   "buyerPaid": 435000,
+   "matt": {
+    "arv": 750000,
+    "rehab": 90000
+   },
+   "buyers": {
+    "arv": 650000,
+    "rehab": 155000
+   },
+   "compsToolArv": null,
+   "killer": "title_or_financing",
+   "killerWords": ""
+  },
+  {
+   "id": "dead-10",
+   "zip": "98004",
+   "homeType": null,
+   "sqft": null,
+   "yearBuilt": null,
+   "outcome": "dead",
+   "contract": 1850000,
+   "fee": 45000,
+   "buyerPaid": null,
+   "matt": {
+    "arv": 2450000,
+    "rehab": 120000
+   },
+   "buyers": {
+    "arv": 1850000,
+    "rehab": 175000
+   },
+   "compsToolArv": null,
+   "killer": "buyers_passed_price",
+   "killerWords": ""
+  },
+  {
+   "id": "won-05",
+   "zip": "98070",
+   "homeType": null,
+   "sqft": 2190,
+   "yearBuilt": 1994,
+   "outcome": "won",
+   "contract": 371030,
+   "fee": 15000,
+   "buyerPaid": 387030,
+   "matt": {
+    "arv": 900000,
+    "rehab": 250000
+   },
+   "buyers": {
+    "arv": 900000,
+    "rehab": 275000
+   },
+   "compsToolArv": 1481000,
+   "killer": null,
+   "killerWords": ""
+  },
+  {
+   "id": "dead-11",
+   "zip": "98105",
+   "homeType": null,
+   "sqft": 1940,
+   "yearBuilt": 1912,
+   "outcome": "dead",
+   "contract": 833121,
+   "fee": 10000,
+   "buyerPaid": null,
+   "matt": {
+    "arv": 1200000,
+    "rehab": 110000
+   },
+   "buyers": {
+    "arv": 1200000,
+    "rehab": 175000
+   },
+   "compsToolArv": 1320000,
+   "killer": "buyers_passed_price",
+   "killerWords": ""
+  }
+ ],
+ "pairs": [
+  {
+   "id": "pair-01",
+   "source": "engine-draft",
+   "zip": "98133",
+   "sqft": 2720,
+   "yearBuilt": 1949,
+   "list": 812900,
+   "machine": {
+    "arv": 1061000,
+    "rehab": 108000
+   },
+   "matt": {
+    "arv": 1000000,
+    "rehab": 100000,
+    "cash": 600000
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-02",
+   "source": "bricked",
+   "zip": "98133",
+   "sqft": 2720,
+   "yearBuilt": 1949,
+   "list": 812900,
+   "machine": {
+    "arv": 965557,
+    "rehab": 44455
+   },
+   "matt": {
+    "arv": 1000000,
+    "rehab": 100000,
+    "cash": 600000
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-03",
+   "source": "bricked",
+   "zip": "",
+   "sqft": 1416,
+   "yearBuilt": 2001,
+   "list": 502800,
+   "machine": {
+    "arv": 529207,
+    "rehab": 47560
+   },
+   "matt": {
+    "arv": 529207,
+    "rehab": 50000,
+    "cash": 316905
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-04",
+   "source": "bricked",
+   "zip": "98178",
+   "sqft": 1580,
+   "yearBuilt": 1945,
+   "list": 375000,
+   "machine": {
+    "arv": 587012,
+    "rehab": 90000
+   },
+   "matt": {
+    "arv": 600000,
+    "rehab": 125000,
+    "cash": 295000
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-05",
+   "source": "bricked",
+   "zip": "98374",
+   "sqft": 1782,
+   "yearBuilt": 1979,
+   "list": 502100,
+   "machine": {
+    "arv": 574774,
+    "rehab": 90000
+   },
+   "matt": {
+    "arv": 550000,
+    "rehab": 60000,
+    "cash": 340500
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-06",
+   "source": "bricked",
+   "zip": "98144",
+   "sqft": 1880,
+   "yearBuilt": 1918,
+   "list": 650000,
+   "machine": {
+    "arv": 872736,
+    "rehab": 90000
+   },
+   "matt": {
+    "arv": 872736,
+    "rehab": 300000,
+    "cash": 324552
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-07",
+   "source": "bricked",
+   "zip": "98115",
+   "sqft": 1070,
+   "yearBuilt": 1942,
+   "list": 899950,
+   "machine": {
+    "arv": 950910,
+    "rehab": 70000
+   },
+   "matt": {
+    "arv": 950910,
+    "rehab": 90000,
+    "cash": 593182
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-08",
+   "source": "bricked",
+   "zip": "98226",
+   "sqft": 2690,
+   "yearBuilt": null,
+   "list": 549000,
+   "machine": {
+    "arv": 445112,
+    "rehab": null
+   },
+   "matt": {
+    "arv": 639330,
+    "rehab": 37616,
+    "cash": 379915
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-09",
+   "source": "bricked",
+   "zip": "99218",
+   "sqft": 1398,
+   "yearBuilt": 1965,
+   "list": 396000,
+   "machine": {
+    "arv": 364220,
+    "rehab": 70000
+   },
+   "matt": {
+    "arv": 425000,
+    "rehab": 50000,
+    "cash": 238750
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-10",
+   "source": "bricked",
+   "zip": "98126",
+   "sqft": 730,
+   "yearBuilt": 1951,
+   "list": 445000,
+   "machine": {
+    "arv": 524617,
+    "rehab": 50000
+   },
+   "matt": {
+    "arv": 524617,
+    "rehab": 50000,
+    "cash": 313463
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-11",
+   "source": "bricked",
+   "zip": "98106",
+   "sqft": 1690,
+   "yearBuilt": 1942,
+   "list": 587400,
+   "machine": {
+    "arv": 729252,
+    "rehab": 90000
+   },
+   "matt": {
+    "arv": 729252,
+    "rehab": 90000,
+    "cash": 426939
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-12",
+   "source": "bricked",
+   "zip": "98052",
+   "sqft": 1930,
+   "yearBuilt": 1972,
+   "list": 1200000,
+   "machine": {
+    "arv": 1378457,
+    "rehab": 90000
+   },
+   "matt": {
+    "arv": 1378457,
+    "rehab": 200000,
+    "cash": 803843
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-13",
+   "source": "bricked",
+   "zip": "98118",
+   "sqft": 2240,
+   "yearBuilt": 1953,
+   "list": 889000,
+   "machine": {
+    "arv": 1085803,
+    "rehab": 100000
+   },
+   "matt": {
+    "arv": 1085803,
+    "rehab": 100000,
+    "cash": 684352
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-14",
+   "source": "bricked",
+   "zip": "98223",
+   "sqft": 1183,
+   "yearBuilt": 2000,
+   "list": 524995,
+   "machine": {
+    "arv": 538885,
+    "rehab": null
+   },
+   "matt": {
+    "arv": 538885,
+    "rehab": 70000,
+    "cash": 277220
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-15",
+   "source": "bricked",
+   "zip": "98107",
+   "sqft": 1890,
+   "yearBuilt": 1909,
+   "list": 795000,
+   "machine": {
+    "arv": 1184724,
+    "rehab": null
+   },
+   "matt": {
+    "arv": 1184723,
+    "rehab": 175000,
+    "cash": 683542
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-16",
+   "source": "bricked",
+   "zip": "98406",
+   "sqft": 2416,
+   "yearBuilt": 1986,
+   "list": 630200,
+   "machine": {
+    "arv": 781993,
+    "rehab": 100000
+   },
+   "matt": {
+    "arv": 725000,
+    "rehab": 80000,
+    "cash": 451750
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-17",
+   "source": "bricked",
+   "zip": "98108",
+   "sqft": 2750,
+   "yearBuilt": 1961,
+   "list": 793600,
+   "machine": {
+    "arv": 961063,
+    "rehab": 110000
+   },
+   "matt": {
+    "arv": 961062,
+    "rehab": 80000,
+    "cash": 620797
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-18",
+   "source": "bricked",
+   "zip": "97702",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": 549900,
+   "machine": {
+    "arv": 558529,
+    "rehab": null
+   },
+   "matt": {
+    "arv": 558529,
+    "rehab": 70000,
+    "cash": 290970
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-19",
+   "source": "bricked",
+   "zip": "98198",
+   "sqft": 1140,
+   "yearBuilt": 1978,
+   "list": 441680,
+   "machine": {
+    "arv": 551745,
+    "rehab": null
+   },
+   "matt": {
+    "arv": 551745,
+    "rehab": 70000,
+    "cash": 286222
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-20",
+   "source": "comps",
+   "zip": "98168",
+   "sqft": 940,
+   "yearBuilt": 1942,
+   "list": null,
+   "machine": {
+    "arv": 570000,
+    "rehab": 100000
+   },
+   "matt": {
+    "arv": 570000,
+    "rehab": 100000,
+    "cash": 307500
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-21",
+   "source": "comps",
+   "zip": "98039",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": 3750000,
+   "machine": {
+    "arv": 3482000,
+    "rehab": 51500
+   },
+   "matt": {
+    "arv": 4500000,
+    "rehab": 300000,
+    "cash": 3131644
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-22",
+   "source": "rough",
+   "zip": "98422",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": 477400,
+   "machine": {
+    "arv": 546000,
+    "rehab": 50000
+   },
+   "matt": {
+    "arv": 600000,
+    "rehab": 70000,
+    "cash": 365000
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-23",
+   "source": "comps",
+   "zip": "98166",
+   "sqft": 2330,
+   "yearBuilt": 1984,
+   "list": 762900,
+   "machine": {
+    "arv": 1114000,
+    "rehab": 79500
+   },
+   "matt": {
+    "arv": 900000,
+    "rehab": 120000,
+    "cash": 567481
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-24",
+   "source": "rough",
+   "zip": "98375",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": 340000,
+   "machine": {
+    "arv": 481000,
+    "rehab": 154000
+   },
+   "matt": {
+    "arv": 507000,
+    "rehab": 110000,
+    "cash": 259600
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-25",
+   "source": "comps",
+   "zip": "98059",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": 375000,
+   "machine": {
+    "arv": 531000,
+    "rehab": 98000
+   },
+   "matt": {
+    "arv": 582000,
+    "rehab": 160000,
+    "cash": 242198
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-26",
+   "source": "rough",
+   "zip": "98103",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": 1294400,
+   "machine": {
+    "arv": 1352000,
+    "rehab": 80000
+   },
+   "matt": {
+    "arv": 1450000,
+    "rehab": 200000,
+    "cash": 870250
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-27",
+   "source": "comps",
+   "zip": "98225",
+   "sqft": 1292,
+   "yearBuilt": null,
+   "list": null,
+   "machine": {
+    "arv": 552000,
+    "rehab": 47000
+   },
+   "matt": {
+    "arv": 552000,
+    "rehab": 70000,
+    "cash": 314000
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-28",
+   "source": "comps",
+   "zip": "98003",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": null,
+   "machine": {
+    "arv": 614000,
+    "rehab": 80000
+   },
+   "matt": {
+    "arv": 614000,
+    "rehab": 75000,
+    "cash": 370500
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-29",
+   "source": "comps",
+   "zip": "98188",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": null,
+   "machine": {
+    "arv": 550000,
+    "rehab": 60000
+   },
+   "matt": {
+    "arv": 550000,
+    "rehab": 60000,
+    "cash": 322500
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-30",
+   "source": "comps",
+   "zip": "98290",
+   "sqft": 1600,
+   "yearBuilt": null,
+   "list": null,
+   "machine": {
+    "arv": 1003000,
+    "rehab": 72500
+   },
+   "matt": {
+    "arv": 750000,
+    "rehab": 90000,
+    "cash": 420000
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-31",
+   "source": "comps",
+   "zip": "98010",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": null,
+   "machine": {
+    "arv": 900000,
+    "rehab": 175000
+   },
+   "matt": {
+    "arv": 448000,
+    "rehab": 175000,
+    "cash": 112996
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-32",
+   "source": "comps",
+   "zip": "98036",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": null,
+   "machine": {
+    "arv": 694000,
+    "rehab": 71500
+   },
+   "matt": {
+    "arv": 694000,
+    "rehab": 71500,
+    "cash": 429000
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-33",
+   "source": "comps",
+   "zip": "98074",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": 1450000,
+   "machine": {
+    "arv": 1626000,
+    "rehab": 45000
+   },
+   "matt": {
+    "arv": 1626000,
+    "rehab": 60000,
+    "cash": 1129500
+   },
+   "keptMachineArv": true
+  },
+  {
+   "id": "pair-34",
+   "source": "comps",
+   "zip": "98024",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": 549950,
+   "machine": {
+    "arv": 808000,
+    "rehab": 103500
+   },
+   "matt": {
+    "arv": 749000,
+    "rehab": 120000,
+    "cash": 425750
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-35",
+   "source": "comps",
+   "zip": "98178",
+   "sqft": 2000,
+   "yearBuilt": 1960,
+   "list": 631100,
+   "machine": {
+    "arv": 841000,
+    "rehab": 45000
+   },
+   "matt": {
+    "arv": 720000,
+    "rehab": 70000,
+    "cash": 404000
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-36",
+   "source": "comps",
+   "zip": "98023",
+   "sqft": 3280,
+   "yearBuilt": 1988,
+   "list": null,
+   "machine": {
+    "arv": 1242000,
+    "rehab": 175000
+   },
+   "matt": {
+    "arv": 1200000,
+    "rehab": 120000,
+    "cash": 825240
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-37",
+   "source": "comps-blended",
+   "zip": "98408",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": null,
+   "machine": {
+    "arv": 466000,
+    "rehab": 80000
+   },
+   "matt": {
+    "arv": 400000,
+    "rehab": 129500,
+    "cash": 126270
+   },
+   "keptMachineArv": false
+  },
+  {
+   "id": "pair-38",
+   "source": "comps-blended",
+   "zip": "98290",
+   "sqft": null,
+   "yearBuilt": null,
+   "list": null,
+   "machine": {
+    "arv": 780000,
+    "rehab": 48000
+   },
+   "matt": {
+    "arv": 825000,
+    "rehab": 50000,
+    "cash": 571061
+   },
+   "keptMachineArv": false
+  }
+ ],
+ "live": [
+  {
+   "id": "cap-bound-unfinished-new-build",
+   "note": "engine live 11-06 (Bend): ARV 1.91x list on a house about 85% built; the seller's 850k floor came after pricing; 899k was floated and accepted",
+   "reads": {
+    "list": 999000,
+    "sqft": 3250,
+    "yearBuilt": 2024,
+    "zip": "97701",
+    "homeType": "SINGLE_FAMILY",
+    "lotSqft": 20038,
+    "comps": {
+     "arv": 1912000,
+     "n": 4
+    },
+    "scope": {
+     "total": 103000,
+     "photos": 40
+    }
+   },
+   "later": {
+    "sellerNumber": 850000,
+    "theirRepairs": 400000,
+    "said": "the build is maybe 85% done and the rest will cost around 400k"
+   },
+   "priced": {
+    "open": 899000,
+    "walkAway": 899000,
+    "grade": "A"
+   }
+  },
+  {
+   "id": "thin-photos-agent-figure",
+   "note": "engine live 11-07 (Bend): 1 photo (its 84k scan dropped), the agent's own 60k repair figure, the agent's ARV 475k; about 305k floated. The same house's other runs read 84-118.5k",
+   "reads": {
+    "list": 425000,
+    "sqft": 1494,
+    "yearBuilt": 2004,
+    "zip": "97702",
+    "homeType": "SINGLE_FAMILY",
+    "comps": {
+     "arv": 565000,
+     "n": 4
+    },
+    "scope": {
+     "total": 84000,
+     "photos": 1
+    },
+    "theirRepairs": 60000
+   },
+   "agentArv": 475000,
+   "otherRunsRehab": [
+    118500,
+    96500,
+    86500
+   ],
+   "priced": {
+    "open": 305500,
+    "walkAway": 320500,
+    "grade": "A"
+   }
+  },
+  {
+   "id": "off-market-inflated-comps",
+   "note": "replay: a closed deal's comps-tool ARV (+65% over Matt's) with a scope and the seller's number",
+   "reads": {
+    "sqft": 2190,
+    "yearBuilt": 1994,
+    "zip": "98070",
+    "comps": {
+     "arv": 1481000,
+     "n": 4
+    },
+    "scope": {
+     "total": 90000,
+     "photos": 20
+    },
+    "sellerNumber": 380000
+   },
+   "contract": 371030,
+   "buyerPaid": 387030
+  }
+ ]
+}
