@@ -111,3 +111,54 @@ test("an off-market house is never listed, and a house with no list price or hoo
   assert.equal(listedFit({ offer: machine() }).listed, false);
   assert.equal(listedFit({ offer: machine({ autoUnderwrite: { passed: true, leadSource: "hook" } }) }).move, "ask_number", "the listing we opened with");
 });
+
+/* ---------- the seller's number caps ours (Matt, 2026-11-09) ---------- */
+
+test("a seller's number under our engine number is answered with theirs or a hold, never by floating ours", async () => {
+  const { sellerOwnNumber } = await import("./number-stance.js");
+  const ours = listed({ cashAmount: 655000, askingPrice: 725000, createdAt: "2026-11-06T23:15:00Z" });
+  const said = { have: { sellerAsk: { value: 609900, at: "2026-11-06T23:58:00Z" } } };
+  // Before our first quote: re-quoted down to theirs, floored to 250.
+  const f = listedFit({ offer: ours, dossier: said });
+  assert.equal(f.move, "requote_down");
+  assert.equal(f.cap, 609900);
+  assert.equal(f.to, 609750);
+  assert.equal(f.reason, "capped at the seller's number");
+  // The engine already flagged it far over theirs: a hold, not a re-quote.
+  assert.equal(listedFit({ offer: { ...ours, pricing: { live: true, triage: "over_theirs" } }, dossier: said }).move, "hold");
+  // After a number of ours went out: a hold. We never cut a number we gave.
+  assert.equal(listedFit({ offer: ours, dossier: said, quoted: true }).move, "hold");
+  assert.equal(listedFit({ offer: { ...ours, proactive: { realmCheckAt: "2026-11-07T00:00:00Z" } }, dossier: said }).move, "hold");
+  assert.equal(listedFit({ offer: { ...ours, floatSentAt: "2026-11-07T00:00:00Z" }, dossier: said }).move, "hold");
+  // Off-market too: the cap is the seller's, not the listing's.
+  assert.equal(listedFit({ offer: { ...ours, offMarket: { value: true } }, dossier: said }).move, "requote_down");
+  // Never the list price: a list price under ours is the no-fit and ask rules' business.
+  assert.equal(listedFit({ offer: listed({ cashAmount: 540000, askingPrice: 525000 }) }).move, "ask_number");
+  // The newest of their words wins: a counter after an older ask.
+  const counter = { amount: 630000, at: "2026-11-08T00:00:00Z" };
+  assert.equal(sellerOwnNumber({ offer: { ...ours, counter }, dossier: said }).amount, 630000);
+  assert.equal(sellerOwnNumber({ offer: ours, dossier: said }).amount, 609900);
+  assert.equal(sellerOwnNumber({ offer: listed() }), null, "the list price is not the seller's own number");
+});
+
+test("an agent's repair figure that lands after we priced, above our rehab, holds the float", () => {
+  const priced = listed({ repairs: 60000, createdAt: "2026-11-06T23:15:00Z", proactive: { takeCheckAt: "2026-11-06T23:20:00Z" } });
+  const later = { have: { rehab: { value: 400000, at: "2026-11-06T23:16:00Z" } } };
+  const f = listedFit({ offer: priced, dossier: later });
+  assert.equal(f.move, "hold");
+  assert.match(f.line, /put the work at 400K after we priced it on 60K/);
+  assert.equal(listedFit({ offer: priced, dossier: { have: { rehab: { value: 400000, at: "2026-11-06T22:00:00Z" } } } }).move, "float", "before we priced it: already in our number");
+  assert.equal(listedFit({ offer: priced, dossier: { have: { rehab: { value: 55000, at: "2026-11-06T23:16:00Z" } } } }).move, "float", "under ours");
+});
+
+test("the repair figure check stands on its own for the float's other doors", async () => {
+  const { workAfterPricing } = await import("./number-stance.js");
+  const engine = { address: "61 Teal Ct, Olympia, WA 98501", cashAmount: 300000, createdAt: "2026-11-06T18:00:00Z", pricing: { live: true, rehab: 45000 } };
+  const later = { have: { rehab: { value: 90000, at: "2026-11-06T19:00:00Z" } } };
+  const w = workAfterPricing({ offer: engine, dossier: later });
+  assert.equal(w.theirs, 90000);
+  assert.equal(w.ours, 45000, "the engine's rehab, not the row's");
+  assert.match(w.line, /^61 Teal Ct: the agent put the work at 90K after we priced it on 45K/);
+  assert.equal(workAfterPricing({ offer: engine, dossier: { have: {} } }), null);
+  assert.equal(workAfterPricing({ offer: { ...engine, pricing: undefined }, dossier: later }), null, "no rehab of ours to measure against");
+});

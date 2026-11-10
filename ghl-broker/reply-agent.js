@@ -126,6 +126,10 @@ import { walkawayOffer, evaluateWalkaway, walkawayReply, pushesOnPrice, WALKAWAY
 import { normalizePricingV2 } from "./shared/price-engine.js";
 import { agentRuledOut } from "./shared/held-underwrites.js";
 import { followWithCard, defaultCardBaseUrl, mintCardToken } from "./contact-card.js";
+// One number per house, and never above the seller's (2026-11-09).
+import { quoteGateFlags, awaitingReprice, otherAgentsNumber, typedAboveBook } from "./shared/current-offer.js";
+import { sellerOwnNumber, workAfterPricing } from "./shared/number-stance.js";
+import { repriceStaleRow } from "./price-v2.js";
 
 // Skeleton and engine modes both take every house an agent names, not only the one the rule picks.
 const everyNamedHouse = (saved) => ["skeleton", "engine"].includes(underwriteMode(saved));
@@ -969,6 +973,7 @@ export function evaluateReplyGates({
   draft, party = "agent", allowedAmounts = [], forbiddenAmounts = [], staleAmounts = [], hiddenAmounts = [], ranges = [], inboundMessage = "", channel = "sms", style = null,
   minConfidence = "high", holdOnNeedsHuman = true, selfName = "", contactName = "", signOff = "", botAnswer = "", ourAmount = 0,
   vacantOk = false, carrierCheck = false, houseWords = "", writeUpOk = true, theirValue = 0, ourValue = 0,
+  quotes = null,
 }) {
   const flags = [];
   if (!draft) return { ok: false, flags: ["no draft was produced"] };
@@ -1150,6 +1155,10 @@ export function evaluateReplyGates({
         "when their value is under ours we price on theirs, never argue it up");
     }
   }
+  // One number per house, and never above the seller's (2026-11-09): a price
+  // off the last one we texted on the house with no person behind the move,
+  // or above the seller's own number (shared/current-offer.js quoteGateFlags).
+  if (party === "agent") flags.push(...quoteGateFlags({ reply: draft.reply, intent: draft.intent, quotes }));
   // `ok` is the row's word — a counter is not auto-sendable, full stop. But
   // the lock is the ONE flag a guard may overturn, so it is named apart from
   // the rest: `clean` says every OTHER gate passed. decideAutoSend lets a
@@ -1581,6 +1590,32 @@ export function ourNumberFor(numbers = [], address = "") {
   return Math.round(Math.max(...list.map((n) => n.amount)));
 }
 
+/**
+ * quotesFor(numbers, address, { sellerAsk }) → the reply gate's `quotes` | null
+ *
+ * What the book says about the house a draft is about (2026-11-09): the last
+ * price we texted on it, whether a person stood behind the book's number
+ * since, and the seller's own number — `sellerAsk` (the seller's number in
+ * the message being answered, or their counter in it) is newer than anything
+ * on file. No house named: the agent's only house, else nothing to measure.
+ */
+// The seller's number in the message a draft answers: the model's read of it
+// (propertyDetails.sellerAsk), or their counter. Under 10K is a misread, not a number.
+export const sellerAskIn = (d) => [Number(d?.propertyDetails?.sellerAsk) || 0, d?.intent === "counter" ? Number(d?.counterAmount) || 0 : 0]
+  .map((n) => Math.round(n)).find((n) => n >= 10000) || 0;
+export function quotesFor(numbers = [], address = "", { sellerAsk = 0 } = {}) {
+  const list = (numbers || []).filter((n) => n && n.address);
+  const named = address ? list.find((n) => sameStreet(n.address, address)) : list.length === 1 ? list[0] : null;
+  const said = Math.round(Number(sellerAsk) || 0);
+  if (!named && !(said > 0)) return null;
+  return {
+    lastOnHouse: named?.lastQuote || null,
+    personBehindChange: Boolean(named?.personBehind),
+    sellerNumber: said > 0 ? said : Math.round(Number(named?.sellerNumber) || 0),
+    street: String(named?.address || address || "").split(",")[0].trim(),
+  };
+}
+
 // Our value fixed up on the house a draft is about, from the same book.
 export function ourValueFor(numbers = [], address = "") {
   const list = (numbers || []).filter((n) => n && Number(n.arv) > 0);
@@ -1616,7 +1651,8 @@ export function theirValueFor({ draft = null, message = "", events = [], address
  * named, it's fine while any house in the book is approved.
  */
 export function writeUpOkFor(numbers = [], address = "") {
-  const list = (numbers || []).filter((n) => n && Number(n.amount) > 0);
+  // A house being re-priced (no number yet, 2026-11-09) is never written up.
+  const list = (numbers || []).filter((n) => n && (Number(n.amount) > 0 || n.repricing));
   if (!list.length) return true;
   if (address) {
     const named = list.find((n) => sameStreet(n.address, address));
@@ -2455,7 +2491,8 @@ export async function assembleConversation({
     /* an opt-out needs the party and nothing else */
   } else if (party === "agent") {
     context = await loadAgentContext({ store, locationId, contactId, custom, now, showMath: Boolean(config.parties.agent?.showMath), transcript: real, focusKinds: saved?.focusKinds,
-      highStakes: config.parties.agent?.realmCheck?.highStakes, mattPrices: underwriteMode(saved) !== "full" });
+      highStakes: config.parties.agent?.realmCheck?.highStakes, mattPrices: underwriteMode(saved) !== "full",
+      engineMode: underwriteMode(saved) === "engine" });
     // The write-up terms' earnest money is a number the bot may say.
     if (config.writeUp?.earnestMoney) context = { ...context, amounts: [...new Set([...context.amounts, Math.round(config.writeUp.earnestMoney)])] };
     // The post-mortem digest rides along only when the switch is on AND a
@@ -3068,17 +3105,27 @@ export async function startProactive({
   // only; a person pressing Float has decided, and a re-quote is past it.
   if (!personAsked && playbook?.listedFirst?.enabled && FLOAT_KINDS.has(kind) && !subject?.requote && !subject?.askSeller && offer?.address && offer?.cashAmount) {
     const events = await store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []);
-    let fit = listedFit({ offer, dossier: propertyDossier(events, offer.address), events, pct: playbook.listedFirst.minPctOfTheirs });
+    const fitArgs = { offer, dossier: propertyDossier(events, offer.address), events, pct: playbook.listedFirst.minPctOfTheirs };
+    let fit = listedFit(fitArgs);
     if (fit.move !== "float") {
-      // Only before our first quote on the house, whichever row it came off.
+      // Only before our first quote on the house, whichever row it came off;
+      // after it, the seller's cap and their repair figure still hold (2026-11-09).
       let thread = null;
       try { thread = (await buildTranscript(client, locationId, contactId, { maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 60, maxChars: 16000, maxCallTranscripts: 0 })).text || ""; }
       catch { thread = null; }
-      if (thread == null || paperWent(offer) || lastQuoteOnHouse(offer, thread)) fit = { ...fit, move: "float" };
+      const book = thread ? await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => null) : null;
+      if (thread == null || paperWent(offer) || lastQuoteOnHouse(offer, thread, { offers: book })) fit = listedFit({ ...fitArgs, quoted: true });
     }
     if (fit.move === "no_fit") {
       return { skipped: `${offer.address}: ${noFitLine(fit)} — too far apart to text a number; a polite no-fit instead, yours to price by hand`, noFit: fit, job: null };
     }
+    // Over the seller's own number (Matt, 2026-11-09): never floated. Before
+    // a quote the most we'd say is theirs (`requote_down`); the machine doesn't
+    // re-price the row by itself, so it waits for Matt with that number on it.
+    if (fit.move === "requote_down") {
+      return { skipped: `${String(offer.address).split(",")[0].trim()}: the seller's number is ${kText(fit.cap)}, under our ${kText(Number(offer.cashAmount))} — re-quote it at ${fit.to.toLocaleString("en-US")} (${fit.reason}) or price it; the machine never floats above the seller's number`, sellerCap: fit, job: null };
+    }
+    if (fit.move === "hold") return { skipped: fit.line, sellerCap: fit, job: null };
     if (fit.move === "ask_number") {
       return startProactive({ client, locationId, saved, store, contactId, kind: "take_check", offer,
         subject: { ...(subject || {}), address: offer.address, askSeller: true }, sendsEnabled, deps, personAsked, continues });
@@ -3170,21 +3217,57 @@ export async function startProactive({
   // texted on that house (shared/current-offer.js machineRaise). A person
   // pressing Float has decided; nothing else has. The thread is read here,
   // before a job exists, so the caller can say why nothing went.
-  if (NUMBER_FLOATS.has(kind) && offer?.cashAmount && !personAsked) {
-    let thread = "";
+  // 2026-11-09: a float that names the house's price (the realm check, the
+  // hot push, a take check that isn't only asking the seller's number) holds
+  // on a row the old machine priced before engine mode, and when another
+  // agent on the same house has a number a person gave them that this one
+  // isn't. Read off the thread and the books before any job exists.
+  const priceFloat = !personAsked && offer?.cashAmount && offer?.address && (NUMBER_FLOATS.has(kind) || (kind === "take_check" && !subject?.askSeller));
+  let thread = "";
+  let book = null;
+  if (priceFloat) {
     try { thread = (await buildTranscript(client, locationId, contactId, { maxConversations: 2, maxPagesPerConvo: 1, maxMessages: 60, maxChars: 16000, maxCallTranscripts: 0 })).text || ""; }
     catch (e) { return { skipped: `couldn't read the thread to check the number (${String(e?.message || e).slice(0, 80)})`, job: null }; }
-    const raise = machineRaise(offer, thread);
+    book = await store.listOffers(locationId, { contactId, limit: 50, lean: true }).catch(() => null);
+    const street = String(offer.address).split(",")[0].trim();
+    if (underwriteMode(saved) === "engine" && awaitingReprice(offer) && !lastQuoteOnHouse(offer, thread, { offers: book })) {
+      // The next touch prices the house in the engine (price-v2.js); the row itself waits.
+      await repriceStaleRow({ store, locationId, saved, offer, now: typeof deps.now === "function" ? deps.now() : Date.now() }).catch(() => null);
+      return { skipped: `${street}: a number the old machine priced before engine mode, never sent — it's being re-priced; nothing floats on it`, repricing: true, job: null };
+    }
+    const everyone = await store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []);
+    const other = otherAgentsNumber({ offer, offers: everyone || [], now: typeof deps.now === "function" ? deps.now() : Date.now() });
+    if (other) {
+      return { skipped: `you gave another agent ${kText(other.amount)} on ${street} and this number is ${kText(Number(offer.cashAmount))} — one number per house; yours to settle before it floats`, otherAgent: other, job: null };
+    }
+  }
+
+  if (NUMBER_FLOATS.has(kind) && offer?.cashAmount && !personAsked) {
+    const raise = machineRaise(offer, thread, { offers: book });
     if (raise) {
       return { skipped: `we last texted ${kText(raise.amount)} on ${offer.address} and this number is ${kText(Number(offer.cashAmount))} — the machine never raises our own number; a person decides to go up`, raise, job: null };
     }
     // A house the agent said is not a project (shared/held-underwrites.js):
     // no number floats on it by itself.
-    const ruledOut = agentRuledOut(await store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []), offer.address);
+    const timeline = await store.listContactEvents(locationId, contactId, { limit: 200 }).catch(() => []);
+    const ruledOut = agentRuledOut(timeline, offer.address);
     if (ruledOut) return { skipped: `${offer.address}: ${ruledOut.why} — no number goes out on it by itself`, ruledOut, job: null };
-    const cut = machineCut(offer, thread);
+    const cut = machineCut(offer, thread, { offers: book });
     if (cut) {
       return { skipped: `we last texted ${kText(cut.amount)} on ${offer.address} and this number is ${kText(Number(offer.cashAmount))} — the machine never takes our number back; a person decides to go down`, cut, job: null };
+    }
+    // Never above the seller's own number (Matt, 2026-11-09), whatever the
+    // listed-house switch says: their words, a house_mentioned ask, their counter.
+    const cap = sellerOwnNumber({ offer, dossier: propertyDossier(timeline || [], offer.address), events: timeline || [] });
+    if (cap && Number(offer.cashAmount) > cap.amount) {
+      return { skipped: `${String(offer.address).split(",")[0].trim()}: the seller's number is ${kText(cap.amount)}, under our ${kText(Number(offer.cashAmount))} — we never offer above it; yours to re-quote at theirs or price it`, sellerCap: cap, job: null };
+    }
+    // An engine number whose rehab the agent has since put higher (2026-11-09):
+    // a person re-prices it before it floats. (The listed-house switch asks
+    // the same of every row, above.)
+    if (offer.pricing?.live) {
+      const work = workAfterPricing({ offer, dossier: propertyDossier(timeline || [], offer.address) });
+      if (work) return { skipped: work.line, theirWork: work, job: null };
     }
   }
 
@@ -3366,12 +3449,13 @@ export function styleFor(kind, outbound, style) {
 
 // The realm check's gate on its own (tests, previews): its floats and allows
 // on top of the book, the float's length.
-export function floatGate({ offer, outbound, style = null, amounts = [], party = "agent" }) {
+export function floatGate({ offer, outbound, style = null, amounts = [], party = "agent", quotes = null }) {
   const spec = OUTBOUND_KINDS.realm_check;
   const allowed = [...new Set([...amounts, ...spec.floats({ offer, outbound }), ...spec.allows({ offer, outbound })].filter(Boolean))];
   return (d) => evaluateReplyGates({ draft: d, party, allowedAmounts: allowed, hiddenAmounts: outbound?.math?.hidden ? [outbound.math.hidden] : [],
     ranges: outbound?.range ? [outbound.range] : [], channel: "sms", style: styleFor("realm_check", outbound, style),
-    ourAmount: Math.max(Number(offer?.cashAmount) || 0, ...realmFloats({ offer, outbound })) });
+    ourAmount: Math.max(Number(offer?.cashAmount) || 0, ...realmFloats({ offer, outbound })),
+    quotes });
 }
 
 // What a realm check may say about our number: the exact figure, its rough
@@ -3761,7 +3845,8 @@ function outboundGateFor({ spec, offer, subject, context, config, party, a, kind
     vacantOk: vacantPerRecord(context?.deals, d.propertyAddress || offer?.address), carrierCheck: CARRIER_CHECKED_KINDS.has(kind),
     houseWords: houseWordsFor(context?.deals, a.transcript),
     theirValue: party === "agent" ? Math.round(Number(dossier?.have?.arv?.value) || 0) : 0,
-    ourValue: ourValueFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address) });
+    ourValue: ourValueFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address),
+    quotes: quotesFor(context.offers?.numbers, d.propertyAddress || subject?.address || offer?.address) });
   // The second look is one or two short lines (shared/second-look.js), and
   // says our same number and nothing above it — not even the book's own
   // rounding up ("378K" on 377,552).
@@ -4560,7 +4645,12 @@ async function runReply(job, ctx) {
     const open = currentOffers(book).filter(isNegotiable);
     const picked = pickOfferByAddress(open, draft.propertyAddress) || (open.length === 1 ? open[0] : null);
     const full = picked && typeof store.getOffer === "function" ? (await store.getOffer(picked.id).catch(() => null)) || picked : picked;
-    const hold = full ? holdNumber({ offer: full, transcript: a.transcript || "" }) : null;
+    // Never under a number Matt typed himself on the house (2026-11-09): no
+    // hold, and the why says both numbers.
+    const typedEvents = full ? await store.listContactEvents(locationId, job.contactId, { limit: 200, types: ["hand_reply"] }).catch(() => []) : [];
+    const hold = full ? holdNumber({ offer: full, transcript: a.transcript || "", offers: book, events: typedEvents }) : null;
+    const typed = full && !hold ? typedAboveBook({ offer: full, transcript: a.transcript || "", offers: book, events: typedEvents }) : null;
+    if (typed) draft = { ...draft, needsHuman: true, humanReason: `${typed.line} — the machine won't hold under your own number; yours to hold or re-quote` };
     const theirs = Math.round(Number(draft.counterAmount) || 0);
     const comeUp = asksUsToComeUp(job.originalMessage || job.message);
     // Close to our number: a phone call lands these and the hold text loses
@@ -4609,7 +4699,10 @@ async function runReply(job, ctx) {
       || (offerStatus(o) === "passed" && draft.passHeld?.passed)));
     const pick = pickOfferByAddress(shut, draft.propertyAddress) || (shut.length === 1 && !draft.propertyAddress ? shut[0] : null);
     const closed = pick && typeof store.getOffer === "function" ? (await store.getOffer(pick.id).catch(() => null)) || pick : pick;
-    const hold = closed ? holdNumber({ offer: closed, transcript: a.transcript || "" }) : null;
+    const typedEvents = closed ? await store.listContactEvents(locationId, job.contactId, { limit: 200, types: ["hand_reply"] }).catch(() => []) : [];
+    const hold = closed ? holdNumber({ offer: closed, transcript: a.transcript || "", offers: book, events: typedEvents }) : null;
+    const typed = closed && !hold ? typedAboveBook({ offer: closed, transcript: a.transcript || "", offers: book, events: typedEvents }) : null;
+    if (typed) draft = { ...draft, needsHuman: true, humanReason: `${typed.line} — the machine won't hold under your own number; yours to hold or re-quote` };
     const theirs = Math.round(Number(draft.counterAmount) || 0);
     const aboutThisOnly = !asksOurNumber(msg) && !housesInText({ message: msg, except: [closed?.address || ""] }).length;
     if (hold && aboutThisOnly && (theirs > hold.amount || (!theirs && asksUsToComeUp(msg)))) {
@@ -5031,6 +5124,7 @@ async function runReply(job, ctx) {
     houseWords: houseWordsFor(context?.deals, a.transcript, inboundText),
     theirValue: party === "agent" ? theirValueFor({ draft: d, message: isCall ? "" : job.message, events: agentEvents, address: d.propertyAddress }) : 0,
     ourValue: ourValueFor(context.offers?.numbers, d.propertyAddress),
+    quotes: quotesFor(context.offers?.numbers, d.propertyAddress, { sellerAsk: sellerAskIn(d) }),
   });
   let gate = gateFor(draft);
   // A draft a content gate caught — a number not in the book, "cash close",
@@ -6628,6 +6722,7 @@ export async function previewConversation({
     writeUpOk: writeUpOkFor(context.offers?.numbers, draft.propertyAddress),
     vacantOk: vacantPerRecord(context?.deals, draft.propertyAddress),
     houseWords: houseWordsFor(context?.deals, a.transcript, message),
+    quotes: quotesFor(context.offers?.numbers, draft.propertyAddress, { sellerAsk: sellerAskIn(draft) }),
   });
   const auto = decideAutoSend({ gate, party, intent: draft.intent, channel, config, sendsEnabled, humanActive: a.humanActive, hold: a.hold });
   const plan = playbook ? planActions({ party, intent: draft.intent, confidence: draft.confidence, playbook, minConfidence: config.autoSend?.minConfidence }) : { auto: [], suggested: [] };

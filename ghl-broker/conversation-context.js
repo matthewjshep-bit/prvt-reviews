@@ -22,7 +22,7 @@ import { enrichFieldDefs } from "./enrich.js";
 import { OUTREACH_FIELDS } from "./field-registry.js";
 import { PASS_REASON_LABEL } from "./shared/conversation-ai.js";
 import { offerForms } from "./shared/us-address.js";
-import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor, walkedAwayFrom, liveRange, rangeWords } from "./shared/current-offer.js";
+import { ourComeDown, ourMoveUp, resolveHouse, groupHouses, pricedAt, isDraftOffer, currentOfferFor, walkedAwayFrom, liveRange, rangeWords, awaitingReprice, lastQuoteOnHouse, personSettledAt } from "./shared/current-offer.js";
 import { ledgerEvents, eventToHistoryLine, factsAsCustom, factsEmpty, addressKey, propertyDossier, PROPERTY_DETAIL_FIELDS, CORE_DETAIL_FIELDS } from "./shared/contact-record.js";
 import { emailContextText } from "./shared/gmail.js";
 import { housesAwaitingAddress } from "./shared/mentioned-houses.js";
@@ -33,7 +33,7 @@ import { pricedByHand } from "./shared/underwrite-model.js";
 import { buyerFacts } from "./shared/underwrite-checks.js";
 import { blastNote, pickedRehabLevel } from "./shared/blast-text.js";
 import { reopensOnTheirNumbers } from "./shared/held-underwrites.js";
-import { numberStance, stanceWaitingFor } from "./shared/number-stance.js";
+import { numberStance, stanceWaitingFor, sellerOwnNumber } from "./shared/number-stance.js";
 import { customFieldIdKeyMapForDefs, contactCustomRecord } from "./ghl.js";
 
 export const RA_OFFERS_IN_CONTEXT = 8;    // the agent's most recent offers, newest first
@@ -98,7 +98,8 @@ export function roughAmounts(amount) {
   const a = Math.round(Number(amount) || 0);
   if (!(a > 0)) return [];
   const out = new Set([a, Math.round(a / 1000) * 1000]);
-  for (const step of [5000, 10000, 25000]) out.add(Math.floor(a / step) * step);
+  // Down to the thousand too: a hold text says "412,000" for 412,863 (2026-11-09).
+  for (const step of [1000, 5000, 10000, 25000]) out.add(Math.floor(a / step) * step);
   const near5 = Math.round(a / 5000) * 5000;
   if (near5 <= a + 1000) out.add(near5);
   return [...out].filter((n) => n > 0);
@@ -120,7 +121,12 @@ const theirs = (note) => note.replace(/^countered at\b/i, "they countered at");
 
 // `stanceOf(offer)`: the house's number stance (shared/number-stance.js), when
 // the playbook has the high-stakes switch on.
-export function summarizeOffers(offers = [], { now = Date.now(), showMath = false, transcript = "", stanceOf = null } = {}) {
+// `engineMode` (autoUnderwriteMode "engine", 2026-11-09): a row the old
+// machine priced that nobody stood behind and nothing of ours carried
+// (awaitingReprice, and no quote of it in the thread) is being re-priced —
+// the bot is told there is no number yet, and its number is not one it may say.
+// `sellerOf(offer)`: the seller's own number on the house, for the gate.
+export function summarizeOffers(offers = [], { now = Date.now(), showMath = false, transcript = "", stanceOf = null, engineMode = false, sellerOf = null } = {}) {
   const stale = new Set();
   // One line per house: its current offer (shared/current-offer.js), or its
   // newest draft when nothing on it is priced yet. The rows it superseded are
@@ -149,7 +155,9 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
   for (const { row: o, superseded } of houses) {
     for (const s of superseded) if (Number(s.cashAmount) > 0) older.add(Math.round(Number(s.cashAmount)));
     const status = effectiveStatus(o);
-    const amount = Number(o.cashAmount) || 0;
+    const lastQuote = Number(o.cashAmount) > 0 ? lastQuoteOnHouse(o, transcript, { offers }) : null;
+    const repricing = engineMode && awaitingReprice(o) && !lastQuote;
+    const amount = repricing ? 0 : Number(o.cashAmount) || 0;
     const down = amount && !["passed", "expired", "withdrawn", "accepted", "agreed"].includes(status) ? ourComeDown(o, transcript) : null;
     if (down) {
       for (const n of roughAmounts(down.amount)) amounts.add(n);
@@ -158,8 +166,16 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     // `approved`: Matt stands behind the number (2026-10-15) — the gate holds
     // a write-up ask at one he hasn't.
     // `arv`: our value on it, for the gate that never argues a value up past theirs.
-    if (amount) numbers.push({ address: o.address, amount: Math.round(down ? down.amount : amount), approved: !down && numberApproved(o),
-      arv: Math.round(Number(o.arv ?? o.calc?.inputs?.arv) || 0) });
+    // `lastQuote`, `personBehind`, `sellerNumber` (2026-11-09): the gate holds
+    // a price off the last one we texted on the house when no person stood
+    // behind the book since, and any price above the seller's own number.
+    // A house being re-priced has no number of ours (amount 0).
+    const sellerNumber = typeof sellerOf === "function" ? Math.round(Number(sellerOf(o)) || 0) : 0;
+    if (amount || repricing) numbers.push({ address: o.address, amount: Math.round(down ? down.amount : amount), approved: !repricing && !down && numberApproved(o),
+      arv: repricing ? 0 : Math.round(Number(o.arv ?? o.calc?.inputs?.arv) || 0),
+      lastQuote: lastQuote ? { amount: lastQuote.amount, ts: lastQuote.ts, ...(lastQuote.low ? { low: lastQuote.low } : {}) } : null,
+      personBehind: Boolean(lastQuote) && personSettledAt(o) > lastQuote.ts, sellerNumber,
+      ...(repricing ? { repricing: true } : {}) });
     // A higher number we texted that the offer never moved to (Jesse,
     // 2026-09-25: "workable for us at 650" on a 550K offer). Not allowed, and
     // the model is told plainly so it neither repeats nor confirms it.
@@ -191,7 +207,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
     if (range) { amounts.add(Math.round(range.low)); ranges.push({ low: range.low, high: range.high }); }
     const math = showMath && amount ? (o.math || compactMath(offerMath(o))) : null;
     const ties = Boolean(math) && !down && !(math.premium > 0) && Math.abs(math.total - amount) < 1000;
-    if (showMath) {
+    if (showMath && !repricing) {
       for (const n of [arv, repairs]) if (n > 0) amounts.add(n);
       if (ties) {
         for (const n of mathAllowedAmounts(math)) amounts.add(n);
@@ -216,7 +232,9 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
       : o.realm?.answer === "yes" ? "agent said the number is in the realm" : "";
     const parts = [
       `${o.address}:`,
-      down
+      repricing
+        ? "not sent: being re-priced (no number yet) — we never sent or texted a number on it, so never give one, never say \"the number we sent\", and never promise a time for it"
+        : down
         ? `our cash offer was ${fmtMoney(amount)}, then WE CAME DOWN TO ${fmtMoney(down.amount)} ${dateWord(down.ts)} ("${down.text}") and the seller is deciding on that — ` +
           `${fmtMoney(down.amount)} is our number on this house. Never say ${fmtMoney(amount)} again, and never say the offer is "still good" at it`
         : amount ? `our cash offer ${fmtMoney(amount)}`
@@ -242,7 +260,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
           `closing to buy and resell about ${fmtMoney(math.closing)} (agents' commissions and closing); ` +
           `holding about ${fmtMoney(math.holding)} for ${math.months} months (loan interest and points, taxes, insurance, utilities); ` +
           `rehab ${math.repairs ? fmtMoney(math.repairs) : "none"}; what's left is our profit and risk (never give it a figure) = the offer]`
-        : showMath && (arv || repairs)
+        : showMath && !repricing && (arv || repairs)
           ? `[our math: ARV ${arv ? fmtMoney(arv) : "n/a"}; rehab ${repairs ? fmtMoney(repairs) : "n/a"}; less closing, holding and our profit and risk = the offer` +
             ` — the figures don't tie to the number in play (it was capped, set by hand, or we came down since): describe the method, don't do the arithmetic out loud]`
           : "",
@@ -260,7 +278,7 @@ export function summarizeOffers(offers = [], { now = Date.now(), showMath = fals
           // Why, when Matt said (WE_PASS_REASONS): the one reason the bot may give.
           (wePassReasonOf(o) ? `. WHY WE PASSED (${wePassReasonOf(o).label.toLowerCase()}): ${wePassReasonOf(o).words}` : "") : "",
       status === "unavailable" ? "THE HOUSE IS GONE (sold or off the market, per the agent): do not chase it or name its number; if it comes back, a person re-offers" : "",
-      lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" ? "" : "not sent yet",
+      lastSend ? `sent ${agoWord(age)} by ${(lastSend.channels || []).join("+") || "message"}` : status === "draft" || repricing ? "" : "not sent yet",
       // No expiry date: the offer stands until they answer, and a date here
       // is what had the bot telling agents an offer had lapsed.
       counters.length ? `history: ${counters.join("; ")}` : "",
@@ -336,10 +354,12 @@ function offMarketLines({ offers = [], events = [], now = Date.now() }) {
 // hand… never give a figure", against our own offer on the book.
 export const MATT_PRICES_LINE = "PRICING A NEW HOUSE: a house with no number in OUR OFFERS yet is priced by hand. When they name one, never say you'll run the numbers or text them where we'd land, and never give a figure, a range or a time for it. Say you'll take a look at it, and ask what the seller would take and how soon they need to move. A house already in OUR OFFERS is not new: follow the book for it.";
 
-export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "", highStakes = null, mattPrices = false }) {
+export function buildAgentContext({ offers, custom: rawCustom = {}, now = Date.now(), showMath = false, events = [], facts = null, transcript = "", highStakes = null, mattPrices = false,
+  engineMode = false }) {
   const custom = recordOverCustom(rawCustom, facts);
   const stanceOf = highStakes?.enabled ? (o) => numberStance({ offer: o, dossier: propertyDossier(events, o.address), highStakes }) : null;
-  const book = summarizeOffers(offers, { now, showMath, transcript, stanceOf });
+  const sellerOf = (o) => sellerOwnNumber({ offer: o, dossier: propertyDossier(events, o.address), events })?.amount || 0;
+  const book = summarizeOffers(offers, { now, showMath, transcript, stanceOf, engineMode, sellerOf });
   const amounts = new Set(book.amounts);
 
   // The listing that made us reach out in the first place. Its list price
@@ -485,10 +505,11 @@ export function lessonsContextText(digest = "") {
     d.split(/(?<=[.!?])\s+/).filter(Boolean).map((l) => `- ${l.trim()}`).join("\n");
 }
 
-export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined, highStakes = null, mattPrices = false }) {
+export async function loadAgentContext({ store, locationId, contactId, custom = {}, now = Date.now(), showMath = false, transcript = "", focusKinds = undefined, highStakes = null, mattPrices = false,
+  engineMode = false }) {
   const rows = await store.listOffers(locationId, { contactId, limit: 25, lean: true }).catch(() => []);
   const { facts, events } = await loadRecord(store, locationId, contactId);
-  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript, highStakes, mattPrices }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds) };
+  return { ...buildAgentContext({ offers: rows, custom, now, showMath, facts, events, transcript, highStakes, mattPrices, engineMode }), pricedOutsideFocus: pricedOutsideFocus(rows, focusKinds) };
 }
 
 // Zillow's word for the house: the kind a person set on the offer first, then

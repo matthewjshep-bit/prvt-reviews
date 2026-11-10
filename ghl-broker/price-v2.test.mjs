@@ -120,3 +120,22 @@ test("a failure in the shadow never reaches the run", async () => {
   assert.equal(out, null);
   assert.match(job.warnings[0], /shadow price: db down/);
 });
+
+// Engine mode's touch on a row the old machine priced (2026-11-09): the house
+// record gets the engine's answer on what the row holds, and only when the
+// house has no newer engine answer; the offer row itself is never touched.
+test("a pre-engine row's next touch prices its house in the engine, once, and leaves the row alone", async () => {
+  const { repriceStaleRow } = await import("./price-v2.js");
+  const OLD = { id: "pre1", contactId: "c-pre", address: "18 Juniper Ct, Lacey, WA 98503", cashAmount: 214000, arv: 365000, repairs: 6000,
+    askingPrice: 329000, status: "new", createdAt: "2026-11-01T18:00:00Z", autoUnderwrite: { passed: true, compsUsedCount: 4 },
+    snapshot: { subjectInfo: { sqft: 1400, yearBuilt: 1958, homeType: "SINGLE_FAMILY" } } };
+  const before = JSON.stringify(OLD);
+  const doc = await repriceStaleRow({ store, locationId: "LOC-pre", saved: {}, offer: OLD, now: Date.parse("2026-11-09T18:00:00Z") });
+  assert.ok(doc, "priced, with the engine switch off: engine mode prices every house it reads");
+  assert.equal(doc.houseKey, houseKey(OLD.address));
+  assert.equal(doc.reads.comps.arv, 365000);
+  assert.equal(doc.reads.list, 329000);
+  assert.equal(JSON.stringify(OLD), before, "the row is untouched");
+  // The house already has an answer newer than the row: nothing is replaced.
+  assert.equal(await repriceStaleRow({ store, locationId: "LOC-pre", saved: {}, offer: OLD, now: Date.parse("2026-11-09T19:00:00Z") }), null);
+});
