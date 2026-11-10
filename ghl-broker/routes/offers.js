@@ -133,6 +133,7 @@ import { normalizePricingV2 } from "../shared/price-engine.js";
 import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
 import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
+import { machineWorkday } from "../shared/follow-up-engine.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
 import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STATUSES } from "../shared/showing.js";
 import { mergeParties } from "../shared/deal-parties.js";
@@ -5179,6 +5180,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           if (!drafts.some((d) => d.inbound)) return "they have never replied to us";
           const dueAt = nextSendTime({ now: Date.now(), delayMs: 0, quietHours: machineHours(cfg.autoSend) });
           if (Date.parse(dueAt) - Date.now() > 60000) return `outside the auto-send hours (next window ${dueAt})`;
+          if (!machineWorksOn(cfg, Date.now())) return "a weekend or a day off";
           return null;
         })();
         if (!why) {
@@ -5308,8 +5310,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     return byContact;
   }
 
+  // Whether the machine sends on its own today: not a weekend the page
+  // keeps, not a day off (autoSend.offDays). A written offer it sends by
+  // itself waits for the next working day like its texts (2026-11).
+  function machineWorksOn(cfg, t) {
+    return machineWorkday(t, { weekends: cfg.autoSend.weekends || "all", offDays: cfg.autoSend.offDays || [], tz: machineHours(cfg.autoSend).timeZone || "UTC" });
+  }
+
   // A clean offer that couldn't send itself yet (after hours, sends paused,
-  // no reply on record) — remembered so the tick can try again.
+  // no reply on record, a weekend or a day off) — remembered so the tick can
+  // try again.
   async function markSendPending(offerId, reason, { by = "underwrite" } = {}) {
     try {
       const full = await store.getOffer(offerId);
@@ -5330,9 +5340,12 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     if (!cfg.enabled || !CARD_SENDS_ENABLED) return { sent: 0, checked: 0 };
     const dueAt = nextSendTime({ now, delayMs: 0, quietHours: machineHours(cfg.autoSend) });
     if (Date.parse(dueAt) - now > 60000) return { sent: 0, checked: 0 };
+    // Not on a weekend the page keeps, or a day off: it waits for the next working day.
+    if (!machineWorksOn(cfg, now)) return { sent: 0, checked: 0 };
     const pending = (await store.listOffers(locationId, { limit: 300 })).filter((o) => o?.autoSendPending?.at && !o.deal).slice(0, limit);
     let sent = 0;
     for (const offer of pending) {
+      const heldFor = offer.autoSendPending.reason;
       const clear = async (patch = {}) => {
         const full = await store.getOffer(offer.id);
         if (!full) return;
@@ -5356,7 +5369,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         if (!r.unchanged) {
           sent++;
           console.log(`offer ${offer.id} sent itself on retry (${(r.channels || []).join("+")})`);
-          await createContactNote(client, offer.contactId, { body: `Sent our offer on ${offer.address} (${fmtMoney(offer.cashAmount)}) automatically — it was held earlier (${offer.autoSendPending.reason}).` }).catch(() => {});
+          await createContactNote(client, offer.contactId, { body: `Sent our offer on ${offer.address} (${fmtMoney(offer.cashAmount)}) automatically — it was held earlier (${heldFor}).` }).catch(() => {});
         }
       } else {
         await clear({ autoSendGaveUp: { reason: dealStr(r.reason, 160), at: new Date(now).toISOString() } });
@@ -5385,6 +5398,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     if (!cfg.enabled || !af?.enabled || !CARD_SENDS_ENABLED) return { sent: 0, checked: 0 };
     const dueAt = nextSendTime({ now, delayMs: 0, quietHours: machineHours(cfg.autoSend) });
     if (Date.parse(dueAt) - now > 60000) return { sent: 0, checked: 0 };
+    // Not on a weekend the page keeps, or a day off (autoSend.offDays): it waits for the next working day.
+    if (!machineWorksOn(cfg, now)) return { sent: 0, checked: 0 };
     const day = new Date(now).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
     const cur = await store.getJobCursor?.(locationId, PAPER_CURSOR).catch(() => null);
     let today = cur?.doc?.day === day ? Number(cur.doc.count) || 0 : 0;
@@ -6543,7 +6558,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         const verdict = dialHeldReleasable(d, saved, now);
         if (!verdict.ok) { if (verdict.reason !== "not held by the dial") rows.push({ draftId: d.id, intent: d.intent, released: false, reason: verdict.reason }); continue; }
         const sendAt = STARTED_KINDS.has(d.outbound?.kind)
-          ? spreadAcrossDay({ now, quietHours: machineHours(a), hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all" })
+          ? spreadAcrossDay({ now, quietHours: machineHours(a), hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all", offDays: a.offDays || [] })
           : nextSendTime({ now, delayMs: 60000, quietHours: a.quietHours });
         if (!dryRun) {
           const ts = new Date(now).toISOString();

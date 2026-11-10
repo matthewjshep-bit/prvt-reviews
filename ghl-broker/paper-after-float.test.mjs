@@ -275,3 +275,43 @@ test("the machine's letter asks for the write-up only at a number Matt approved"
   const sms2 = sent.slice(mid).find((m) => m.contactId === "agent-approved" && m.type === "SMS");
   assert.match(sms2.message, /represent us and write it up on NWMLS forms/);
 });
+
+// 2026-11: nothing the machine starts goes on a weekend the page keeps, or
+// on a day Matt lists as off. This letter goes straight out, past the send
+// clock, so it asks itself.
+test("the written offer waits out a weekend and a day off", async () => {
+  const saved = await store.getOfferSettings(LOC);
+  await store.saveOfferSettings(LOC, { ...saved, conversationAi: { enabled: true, autoSend: { offDays: ["2026-10-13"] }, parties: { agent: { sendOffer: { afterFloat: { enabled: true } } } } } });
+  const offer = await floated("agent-long-weekend");
+  const mine = () => sent.filter((m) => m.contactId === "agent-long-weekend").length;
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: Date.parse("2026-10-10T18:00:00Z"), limit: 50 });   // Saturday 11am
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: Date.parse("2026-10-13T18:00:00Z"), limit: 50 });   // the Tuesday listed
+  assert.equal(mine(), 0);
+  assert.equal((await store.getOffer(offer.id)).paperAfterFloat, undefined, "nothing claimed");
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: Date.parse("2026-10-14T18:00:00Z"), limit: 50 });
+  assert.ok(mine() > 0, "it goes the next working day");
+  await store.saveOfferSettings(LOC, saved);
+});
+
+// The written offer the machine put off to the next open minute (a clean
+// underwrite after hours, or the nightly audit after a yes) goes on the
+// broker's tick, past the send clock, so it waits out a weekend and a day
+// off the same way.
+test("a written offer waiting for the morning waits out a weekend and a day off", async () => {
+  const saved = await store.getOfferSettings(LOC);
+  await store.saveOfferSettings(LOC, { ...saved, conversationAi: { enabled: true, autoSend: { offDays: ["2026-10-13"] } } });
+  const who = "agent-letter-waits";
+  const offer = await floated(who, { autoSendPending: { reason: "outside the auto-send hours", at: "2026-10-09T23:30:00.000Z", by: "audit" } });
+  await store.createReplyDraft({
+    locationId: LOC, contactId: who, status: "sent", sentAt: "2026-10-09T23:00:00.000Z", channel: "sms", inbound: "ok",
+    reply: "Thanks", intent: "acceptance", createdAt: "2026-10-09T23:00:00.000Z",
+  });
+  const mine = () => sent.filter((m) => m.contactId === who).length;
+  await router.retryPendingOfferSends({ client, locationId: LOC, now: Date.parse("2026-10-10T18:00:00Z") });   // Saturday 11am
+  await router.retryPendingOfferSends({ client, locationId: LOC, now: Date.parse("2026-10-13T18:00:00Z") });   // the Tuesday listed
+  assert.equal(mine(), 0);
+  assert.ok((await store.getOffer(offer.id)).autoSendPending, "it's still waiting");
+  await router.retryPendingOfferSends({ client, locationId: LOC, now: Date.parse("2026-10-14T18:00:00Z") });
+  assert.ok(mine() > 0, "it goes the next working day");
+  await store.saveOfferSettings(LOC, saved);
+});

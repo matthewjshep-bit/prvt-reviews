@@ -75,7 +75,7 @@ export async function releaseMisreadHolds({ store, locationId, saved = {}, sends
       open.push(...await store.listReplyDrafts(locationId, { contactId: d.contactId, status, limit: 5 }).catch(() => []));
     }
     if (open.some((o) => o.id !== d.id)) { rows.push({ draftId: d.id, released: false, reason: "another draft is open for them" }); continue; }
-    const sendAt = spreadAcrossDay({ now, quietHours: machineHours(a), hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all", random });
+    const sendAt = spreadAcrossDay({ now, quietHours: machineHours(a), hours: a.nudgeSpreadHours ?? 8, weekends: a.weekends || "all", offDays: a.offDays || [], random });
     if (!dryRun) {
       const ts = new Date(now).toISOString();
       const said = v.amounts.map((n) => fmtMoney(n)).join(", ");

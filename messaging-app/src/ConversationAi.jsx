@@ -216,7 +216,7 @@ export default function ConversationAi({ settings }) {
                 workflows: workflows.list,   // TIER 1/2/3 and Tier 1/2 Disposition are wired by name when the list is visible
               });
               patch({ ...st, enabled: form.enabled, dailyCap: form.dailyCap, dailyCapPerContact: form.dailyCapPerContact,
-                autoSend: { ...st.autoSend, delayMinSec: form.autoSend.delayMinSec, delayMaxSec: form.autoSend.delayMaxSec, quietHours: form.autoSend.quietHours, machineUntil: form.autoSend.machineUntil, channels: form.autoSend.channels } });
+                autoSend: { ...st.autoSend, delayMinSec: form.autoSend.delayMinSec, delayMaxSec: form.autoSend.delayMaxSec, quietHours: form.autoSend.quietHours, machineUntil: form.autoSend.machineUntil, channels: form.autoSend.channels, offDays: form.autoSend.offDays || [] } });
             }}>
             Load starter playbook
           </button>
@@ -253,7 +253,7 @@ export default function ConversationAi({ settings }) {
           <RoutingCard config={form} patch={patch} version={version} />
           <PartyPlaybooks config={form} patch={patch} workflows={workflows} />
           <FollowUpCard config={form} patch={patch} />
-          <AutoSendCard config={form} patch={patch} />
+          <AutoSendCard config={form} patch={patch} version={version} />
           <CounterBandCard config={form} patch={patch} example={bandExample} />
           <InvestorBandCard config={form} patch={patch} />
           <BookingCard config={form} patch={patch} calendars={calendars} />

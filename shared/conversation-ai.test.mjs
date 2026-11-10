@@ -617,6 +617,24 @@ test("texts the machine starts stop at 5pm Pacific unless the page says otherwis
   assert.equal(normalizeConversationAi({ autoSend: { machineUntil: "5pm" } }).autoSend.machineUntil, "17:00", "a bad time falls back");
 });
 
+// Days off (2026-11): no machine texts on a day Matt lists.
+test("with no days off saved, nothing changes", () => {
+  assert.deepEqual(CONVERSATION_AI_DEFAULTS.autoSend.offDays, []);
+  assert.deepEqual(normalizeConversationAi({}).autoSend.offDays, []);
+  assert.deepEqual(normalizeConversationAi({ autoSend: { offDays: "2026-11-26" } }).autoSend.offDays, [], "a lone string isn't a list");
+});
+
+test("the days-off list keeps real dates, once each, in order, and drops the rest", () => {
+  const out = normalizeConversationAi({ autoSend: { offDays: ["2026-12-25", " 2026-11-26 ", "2026-11-26", "2026-02-30", "Thanksgivng", "11/27/2026", 20261127, null, "2027-01-01"] } });
+  assert.deepEqual(out.autoSend.offDays, ["2026-11-26", "2026-12-25", "2027-01-01"]);
+  assert.deepEqual(normalizeConversationAi(out).autoSend.offDays, out.autoSend.offDays, "normalizing twice changes nothing");
+  // At most 60: the newest are kept, a past holiday is the one to let go.
+  const many = Array.from({ length: 70 }, (_, i) => new Date(Date.UTC(2027, 0, 1 + i)).toISOString().slice(0, 10));
+  const kept = normalizeConversationAi({ autoSend: { offDays: many } }).autoSend.offDays;
+  assert.equal(kept.length, 60);
+  assert.equal(kept.at(-1), many.at(-1));
+});
+
 // reply-agent reads realmCheck.leadWhenConfident === false, but the normaliser
 // only kept `enabled`, so switching it off never survived a save.
 test("turning off 'lead with our number' survives a save", () => {

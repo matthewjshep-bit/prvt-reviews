@@ -43,6 +43,18 @@ test("the check-in ships off, and runs once a workday in its window", async () =
   assert.ok((await store.getJobCursor(loc, CURSOR_NAME)).doc.last, "the day's run is on the cursor");
 });
 
+test("the check-in claims no seats on a day off", async () => {
+  _resetJobs();
+  const loc = "loc-ap-day-off";
+  const thuNoonPT = Date.parse("2026-11-26T20:05:00Z");
+  const deps = { getContact: reachable, startProactive: async () => ({ job: { id: "j" } }) };
+  const off = { ...savedWith(), conversationAi: normalizeConversationAi({ enabled: true, autoSend: { offDays: ["2026-11-26"] } }) };
+  assert.equal(await maybeRunAgentPulse({ client, locationId: loc, saved: off, store, deps, now: thuNoonPT }), false);
+  assert.equal((await store.getJobCursor(loc, CURSOR_NAME))?.doc?.run, undefined, "no run was claimed");
+  assert.equal(await maybeRunAgentPulse({ client, locationId: loc, saved: savedWith(), store, deps, now: thuNoonPT }), true, "a Thursday nobody listed runs");
+  await settle();
+});
+
 test("claims each agent before drafting; a start that drafts nothing gives the day's seat back", async () => {
   _resetJobs();
   const loc = "loc-ap-claim";

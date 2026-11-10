@@ -22,6 +22,7 @@ import { workflowIdFrom } from "./shared/ghl-calls.js";
 import { listingDistress } from "./shared/listing-distress.js";
 import { streetKey } from "./comps-zillow.js";
 import { worksOn, runDaysFrom } from "./shared/follow-up-engine.js";
+import { isOffDay } from "./shared/follow-up-engine.js";
 
 export const CURSOR_NAME = "outreach";
 export const MIN_GAP_MS = 20 * 3600 * 1000;
@@ -96,11 +97,12 @@ export function workHour(now = Date.now(), tz = WORK_TZ) {
 }
 
 // A day the job runs on, by its `days` (shared/follow-up-engine.js RUN_DAYS):
-// Monday to Friday unless it says Sunday to Friday or every day.
+// Monday to Friday unless it says Sunday to Friday or every day. A caller
+// that passes `offDays` (conversationAi autoSend.offDays) skips those too.
 const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-export function isWorkday(now = Date.now(), tz = WORK_TZ, days = "mon_fri") {
+export function isWorkday(now = Date.now(), tz = WORK_TZ, days = "mon_fri", offDays = []) {
   const wd = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: tz }).format(new Date(now));
-  return worksOn(WEEKDAY_INDEX[wd], days);
+  return worksOn(WEEKDAY_INDEX[wd], days) && !isOffDay(now, offDays, tz);
 }
 
 // The calendar date in the work time zone.

@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PartyPlaybooks, BookingCard, AutoSendCard } from "../ConversationPlaybooks.jsx";
+import { PartyPlaybooks, BookingCard, AutoSendCard, readOffDays } from "../ConversationPlaybooks.jsx";
 import { normalizeConversationAi, NEVER_AUTO, INTENT_LABEL } from "@shared/conversation-ai.js";
 
 test("the playbook grid offers every eligible intent as a box and every locked one as a lock", () => {
@@ -22,6 +22,18 @@ test("the booking and auto-send cards render on a default config", () => {
   const auto = renderToStaticMarkup(<AutoSendCard config={config} patch={() => {}} />);
   expect(auto).toContain("Quick replies");
   expect(auto).toContain("Weekends");
+});
+
+test("the days-off box saves a list of dates and drops a typo", () => {
+  const read = readOffDays("2026-12-25\n 2026-11-26 \n\n11/27/2026\nThanksgivng\n2026-02-30\n2026-11-26");
+  expect(read.days).toEqual(["2026-11-26", "2026-11-27", "2026-12-25"]);
+  expect(read.dropped).toEqual(["Thanksgivng", "2026-02-30"]);
+  // What the box saves is what the settings keep.
+  expect(normalizeConversationAi({ autoSend: { offDays: read.days } }).autoSend.offDays).toEqual(read.days);
+  const config = normalizeConversationAi({ autoSend: { offDays: ["2026-11-26", "2026-12-25"] } });
+  const html = renderToStaticMarkup(<AutoSendCard config={config} patch={() => {}} />);
+  expect(html).toContain("Days off (no machine texts; replies still go)");
+  expect(html).toContain("2026-11-26\n2026-12-25");
 });
 
 test("the realm check's float switches show under it, off until ticked", () => {

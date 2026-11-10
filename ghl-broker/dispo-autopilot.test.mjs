@@ -42,6 +42,19 @@ test("with the intent ticked and both gates on, a blast becomes staggered schedu
   assert.notEqual(drafts[0].reply, drafts[1].reply, "the phrasing rotates");
 });
 
+test("a deal wave that runs past Friday's close carries on Monday morning, not Saturday", async () => {
+  const store = fakeStore();
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } }, dispoAutopilot: { spreadSec: 60 } };
+  const fri458 = Date.parse("2026-11-14T00:58:00Z");   // Friday 11/13, 4:58pm Pacific
+  const four = ["b1", "b2", "b3", "b4"].map((id, i) => ({ contactId: id, name: ["Odile", "Brannock", "Fenwick", "Tamsin"][i] }));
+  const r = await queueBlastDrafts({ store, locationId: "L", offer, investors: four, saved, now: fri458, sendsEnabled: true, blastsEnabled: true });
+  assert.equal(r.queued, 4);
+  const days = [...store.rows.values()].map((d) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short" }).format(new Date(d.sendAt)));
+  assert.ok(!days.includes("Sat") && !days.includes("Sun"), days.join(" "));
+  assert.equal(days[0], "Fri");
+  assert.equal(days.at(-1), "Mon");
+});
+
 // Matt, 2026-10-20: "Let's make the change where we can edit the text."
 test("a wave goes out in the deal text Matt wrote on Autopilot → Investors, rotated per buyer, at the deal's price", async () => {
   const store = fakeStore();

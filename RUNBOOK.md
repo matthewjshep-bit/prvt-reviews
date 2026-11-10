@@ -4384,6 +4384,76 @@ still text a stopped person; only GHL's DND or the stop-bot tag stops those.
 The app never writes the stop-bot tag for a Stop: that tag stops drafting
 too, and a stop keeps the drafts.
 
+#### Weekends and days off (2026-11)
+
+The rule is Monday to Friday for anything the machine starts (the
+`autoSend.weekends` setting; live is "replies_only"). Until this change only
+the spread kinds (nudges, cold opens, pulses, blast nudges) rolled past the
+weekend. Pass notes, address chases, promise follow-ups, floats and the rest
+of `MACHINE_STARTED_KINDS` went out on Saturday and Sunday, many at 8:01am:
+49 texts that weren't answers, to agents, over two weekends. The ticker
+only checked the hour, so a text queued before the setting changed still
+went. There was also no way to name a holiday short of the `machineUntil`
+08:02 lever (see the 10/12 pause).
+
+**Days off.** `conversationAi.autoSend.offDays` is a list of Pacific dates
+("2026-11-26"). The default is empty, and an empty list changes nothing.
+`normalizeConversationAi` keeps real dates only, once each, sorted, at most
+60 (the newest stay). Edit it on Conversation AI → More settings → "When it
+sends on its own" → "Days off (no machine texts; replies still go)": one
+date per line, 2026-11-26 or 11/26/2026, saved with the page. A line that
+isn't a date shows under the box and is dropped.
+
+**What waits** (`machineWorkday` in `shared/follow-up-engine.js`: a day
+`weekends` works that isn't on `offDays`):
+
+- `scheduleFor` (reply-agent.js): a kind in `MACHINE_STARTED_KINDS`, not a
+  `SERVICE_KINDS` showing text and not `answering`, whose time lands on a
+  day the machine doesn't work goes to the next working morning, spread
+  like the nudges. The spread kinds skip days off as well as weekends. A
+  pass note's "wait for Matt's minutes" time is rolled the same way.
+- The ticker (`sendDueDrafts`, `waitsForAWorkday`): a machine-started text
+  or a deal text due on such a day is re-spread to the next working morning
+  (`out.offDay`). It catches what was queued before a settings change and a
+  deal wave that ran past Friday's close. The wave itself now carries on
+  Monday morning in order (`queueBlastDrafts`).
+- `spreadAcrossDay` takes `offDays` everywhere it is called (deal waves, the
+  buyer's week, intro and check-in emails, misread releases, dial releases,
+  gatekeepers).
+- The agent check-in and the buyer pulse don't run, so no seats are claimed
+  (`isWorkday(now, tz, days, offDays)`). Neither does the GHL follow-up
+  workflow enrolment, whose texts come from GHL past our clock, nor the
+  audit's daytime pass (`maybeRunDaytimeDriver`), which skips a day off as
+  it skips a weekend. The written offer the machine sends by itself waits
+  for the next working day: after a quiet float (`sendPaperAfterSilence`),
+  after a clean underwrite (marked pending, "a weekend or a day off"), and
+  the pending retry on the tick (`retryPendingOfferSends`, which also
+  carries the nightly audit's send after a yes).
+
+**What still goes.** Answers to their texts (a reply draft, or any draft
+that carries their text), on a weekend or a day off. A buyer's showing
+reminder and follow-up. A person's own text: your answer to a question the
+bot couldn't field, a check-in you wrote, the walkthrough ask, anything you
+press Send on.
+
+**Left alone.** The outreach sweep and the gatekeeper sweep still run on a
+day off (their daily gates belong to the listing-check branch); every first
+text they write rolls through the scheduler to the next working day.
+
+**Monday.** A weekend's and a holiday's machine texts all come due Monday
+morning. `MACHINE_BURST` lets five go per tick and re-spreads the rest
+across the day.
+
+**The 08:01 trap is gone.** `windowCloseAfter` read a one-minute window as
+having no close, so a spread ran past it and a text rolled two days. With
+under two minutes left the text now goes in what's left, the next morning
+when the window is 08:00 to 08:01.
+
+**How to check.** On a weekend or a day off, the outbox
+(`GET /api/offers/automations/conversation`) shows no machine text with a
+`sendAt` that day, and the broker log has no `scheduler: auto-sent` line
+for a machine kind.
+
 ### Rows that were never a decision (2026-09-18)
 
 Read off Today the day before a week away; three kinds of row the machine made

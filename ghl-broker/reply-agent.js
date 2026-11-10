@@ -119,6 +119,8 @@ import {
 import { carrierFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
 import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend, machineHours } from "./conversation-scheduler.js";
+import { SERVICE_KINDS } from "./shared/follow-up.js";
+import { machineWorkday } from "./shared/follow-up-engine.js";
 import { refreshBlastText, refreshBundleText, defaultDataroomBaseUrl } from "./blast-refresh.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
@@ -142,14 +144,24 @@ const everyNamedHouse = (saved) => ["skeleton", "engine"].includes(underwriteMod
 // What the machine STARTS is spread across the day and skips weekends
 // (unless the page says otherwise); what it ANSWERS goes in human minutes.
 const STARTED_KINDS = new Set(["offer_nudge", "passed_checkin", "blast_nudge", "dataroom_nudge", "deal_followup", "outreach_nudge", "outreach_open", "buyer_pulse", "agent_pulse"]);
-export function scheduleFor({ config, now, kind = null, intent = "", replyLength = 0, random = Math.random }) {
+// `answering`: the draft carries their text, so it is an answer whatever its kind.
+export function scheduleFor({ config, now, kind = null, intent = "", replyLength = 0, random = Math.random, answering = false }) {
   const a = config.autoSend || {};
   // What the machine starts keeps its own, shorter hours (machineUntil, 5pm).
   const hours = kind && MACHINE_STARTED_KINDS.has(kind) ? machineHours(a) : a.quietHours;
+  const days = { weekends: a.weekends || "all", offDays: a.offDays || [] };
   if (kind && STARTED_KINDS.has(kind)) {
-    return spreadAcrossDay({ now, quietHours: hours, hours: a.nudgeSpreadHours ?? 8, random, weekends: a.weekends || "all" });
+    return spreadAcrossDay({ now, quietHours: hours, hours: a.nudgeSpreadHours ?? 8, random, ...days });
   }
   const at = nextSendTime({ now, delayMs: pickDelayMs(config, random, { intent, replyLength }), quietHours: hours });
+  // Anything else the machine starts (a pass note, an address chase, "still
+  // working the numbers") waits for a day it works too: 49 of them went out
+  // on two weekends in 2026-10/11. A buyer's showing texts and answers to
+  // their texts keep their time, days off included.
+  if (kind && !answering && MACHINE_STARTED_KINDS.has(kind) && !SERVICE_KINDS.has(kind)
+      && !machineWorkday(Date.parse(at), { ...days, tz: hours?.timeZone || "UTC" })) {
+    return spreadAcrossDay({ now: Date.parse(at), quietHours: hours, hours: a.nudgeSpreadHours ?? 8, random, ...days });
+  }
   // A reply on a weekend goes unless the page says nothing does.
   if (a.weekends === "none" && isWeekend(Date.parse(at), a.quietHours?.timeZone || "UTC")) {
     return spreadAcrossDay({ now: Date.parse(at), quietHours: hours, hours: 0, random, weekends: "none" });
@@ -4307,10 +4319,14 @@ async function runProactive(job, ctx) {
   if (auto.send && draft.reply) {
     job.phase = "scheduling";
     const random = typeof deps.random === "function" ? deps.random : Math.random;
-    let sendAt = scheduleFor({ config, now, kind, intent: kind, replyLength: String(draft.reply || "").length, random });
-    // The pass note waits out your minutes to text them yourself, inside its hours.
+    let sendAt = scheduleFor({ config, now, kind, intent: kind, replyLength: String(draft.reply || "").length, random, answering: answersInbound(record) });
+    // The pass note waits out your minutes to text them yourself, inside its
+    // hours, and on a day the machine works.
     if (kind === "pass_note" && Date.parse(outbound.notBefore || "") > Date.parse(sendAt)) {
       sendAt = nextSendTime({ now: Date.parse(outbound.notBefore), delayMs: 0, quietHours: machineHours(config.autoSend || {}) });
+      if (!machineWorkday(Date.parse(sendAt), { weekends: config.autoSend?.weekends || "all", offDays: config.autoSend?.offDays || [], tz: machineHours(config.autoSend || {}).timeZone || "UTC" })) {
+        sendAt = scheduleFor({ config, now: Date.parse(sendAt), kind, intent: kind, replyLength: 0, random });
+      }
     }
     record = { ...record, status: "scheduled", sendAt, scheduledAt: new Date(now).toISOString(), updatedAt: new Date().toISOString() };
     await store.updateReplyDraft(record.id, record);
@@ -6703,7 +6719,7 @@ async function runReply(job, ctx) {
   if (auto.send && draft.reply && !holdForBooking) {
     job.phase = "scheduling";
     const random = typeof deps.random === "function" ? deps.random : Math.random;
-    const sendAt = scheduleFor({ config, now, intent: draft.intent, replyLength: String(draft.reply || "").length, random });
+    const sendAt = scheduleFor({ config, now, intent: draft.intent, replyLength: String(draft.reply || "").length, random, answering: true });
     record = { ...record, status: "scheduled", sendAt, scheduledAt: new Date(now).toISOString(), updatedAt: new Date().toISOString() };
     await store.updateReplyDraft(record.id, record);
     job.scheduledFor = sendAt;
@@ -6914,7 +6930,7 @@ export async function previewConversation({
     if (playbook.fallback.mode === "auto") plan.auto.push(...fb); else plan.suggested.push(...fb);
   }
   const sendAt = auto.send
-    ? scheduleFor({ config, now, intent: draft.intent, replyLength: String(draft.reply || "").length, random: deps.random || Math.random })
+    ? scheduleFor({ config, now, intent: draft.intent, replyLength: String(draft.reply || "").length, random: deps.random || Math.random, answering: true })
     : null;
   return {
     ...base, held: false, draft, gate, humanActive: a.humanActive || null,
@@ -7223,7 +7239,7 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       const limit = budget.holdDealTexts ? await buyerTouchLimit({ store, locationId, contactId: d.contactId, budget, now }) : { open: true };
       if (!limit.open) {
         const config = conversationConfig(saved);
-        const sendAt = spreadAcrossDay({ now: limit.at, quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all" });
+        const sendAt = spreadAcrossDay({ now: limit.at, quietHours: machineHours(config.autoSend), hours: 0, weekends: config.autoSend.weekends || "all", offDays: config.autoSend.offDays || [] });
         const ts = new Date(now).toISOString();
         const line = `waits for this buyer's weekly limit — goes ${slotWord(Date.parse(sendAt))}, with anything else new for them`;
         await store.updateReplyDraft(d.id, {

@@ -602,7 +602,8 @@ export function startAgentPulse({
 export async function maybeRunAgentPulse({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now() }) {
   const s = agentPulseSettings(saved);
   if (!s.enabled || !conversationConfig(saved).enabled) return false;
-  if (!isWorkday(now, WORK_TZ, s.days)) return false;
+  // A day off Matt listed claims no check-in seats (autoSend.offDays).
+  if (!isWorkday(now, WORK_TZ, s.days, conversationConfig(saved).autoSend.offDays)) return false;
   const gate = await claimDailyRun({ store, locationId, cursorName: CURSOR_NAME, now, hourNow: workHour(now), startHour: s.hour,
     windowHours: WINDOW_HOURS, running: jobs.get(locationId)?.status === "running" });
   if (!gate.go) return false;

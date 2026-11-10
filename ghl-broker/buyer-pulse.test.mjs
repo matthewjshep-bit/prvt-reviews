@@ -82,6 +82,17 @@ test("not at the weekend, and not outside its hours", async () => {
   assert.equal(await maybeRunBuyerPulse({ locationId: "LOC", saved: saved(), store: fakeStore(), deps: s, now: NOW - 3 * HOUR }), false, "8am");
 });
 
+test("not on a day off, even with weekends worked", async () => {
+  _resetJobs();
+  const s = starter([buyer("a")]);
+  const off = (pulse = {}) => ({ ...saved(pulse), conversationAi: normalizeConversationAi({ enabled: true, autoSend: { offDays: ["2026-09-18"] } }) });
+  const store = fakeStore();
+  assert.equal(await maybeRunBuyerPulse({ locationId: "LOC", saved: off(), store, deps: s, now: NOW }), false);
+  assert.equal(await maybeRunBuyerPulse({ locationId: "LOC", saved: off({ weekdaysOnly: false }), store, deps: s, now: NOW }), false);
+  assert.equal(store.cursor, null, "no run was claimed");
+  assert.equal(s.calls.length, 0);
+});
+
 test("switched on, it drafts; it only sends itself with the second switch and the broker's gates open", async () => {
   for (const [pulse, gates, expectRelease, expectLive] of [
     [{}, { sendsEnabled: true, blastsEnabled: true }, false, true],

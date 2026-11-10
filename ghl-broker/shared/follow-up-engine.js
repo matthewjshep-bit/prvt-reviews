@@ -66,6 +66,43 @@ export function worksOn(wd, days = "mon_fri") {
 // and "none" start nothing on either.
 export const machineDays = (weekends) => (weekends === "all" ? "all" : weekends === "sun_to_fri" ? "sun_fri" : "mon_fri");
 
+// The calendar day and weekday of an instant in a zone. One formatter per
+// zone; an unknown zone reads as Pacific rather than throwing mid-schedule.
+const DAY_FORMATS = new Map();
+function zonedDay(t, tz = TZ) {
+  let f = DAY_FORMATS.get(tz);
+  if (!f) {
+    try { f = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" }); }
+    catch { f = DAY_FORMATS.get(TZ) || new Intl.DateTimeFormat("en-US", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" }); }
+    DAY_FORMATS.set(tz, f);
+  }
+  const p = Object.fromEntries(f.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  return { key: `${p.year}-${p.month}-${p.day}`, wd: WEEKDAYS[p.weekday] ?? 0 };
+}
+
+/**
+ * isOffDay(t, offDays, tz) → true when `t` falls on a day Matt listed as off
+ * (conversationAi autoSend.offDays, "YYYY-MM-DD"), on the zone's calendar.
+ * Nothing the machine starts goes on one; answers to their texts still do
+ * (2026-11, before Thanksgiving). An empty list is never off.
+ */
+export function isOffDay(t, offDays = [], tz = TZ) {
+  if (!Array.isArray(offDays) || !offDays.length) return false;
+  const at = ms(t);
+  return at != null && offDays.includes(zonedDay(at, tz).key);
+}
+
+/**
+ * machineWorkday(t, { weekends, offDays, tz }) → whether the machine may
+ * start a text on that day: a day `weekends` works (machineDays) that isn't
+ * on the days-off list. `weekends` "all" still keeps a day off.
+ */
+export function machineWorkday(t, { weekends = "all", offDays = [], tz = TZ } = {}) {
+  const at = ms(t);
+  if (at == null) return true;
+  return worksOn(zonedDay(at, tz).wd, machineDays(weekends)) && !isOffDay(at, offDays, tz);
+}
+
 const offsetAt = (t) => {
   const p = pacificParts(t);
   return Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi, p.s) - Math.floor(t / 1000) * 1000;
