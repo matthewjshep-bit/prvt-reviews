@@ -759,3 +759,24 @@ test("the morning post says what yesterday's AI cost", async () => {
   }
   assert.match(said(s.of("chat.postMessage").find((c) => c.body.channel === CH.daily)), /AI spend Nov 8: \*\$3\.20\* over 12 calls \(draft \$3\.20\)/);
 });
+
+// Matt, 2026-11-10: when someone asks for a call (or a walkthrough, or names
+// a time) the bot books and promises nothing, and Matt gets one ping in
+// #needs-matt. A replay of the same event posts nothing more.
+test("an agent who asks for a call is one ping in Needs Matt, with their first name and the time, never their number or words", async () => {
+  const LOC = "loc-call-wanted";
+  const s = slack();
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(0) });
+  await store.upsertContactProfile(LOC, "cw1", { party: "agent", name: "Tamsin Vole", phone: "+14255550187", email: "tamsin@example.com" });
+  await ev(LOC, "cw1", "call_wanted", 1, { address: "77 Quillon Ct, Renton, WA 98055", source: "conversation", data: { intent: "wants_call", wants: "call", when: "Thursday at 2" } });
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(2) });
+  const posts = s.of("chat.postMessage");
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].body.channel, CH.needsMatt);
+  assert.equal(posts[0].body.thread_ts, undefined, "a post of its own");
+  const t = said(posts[0]);
+  assert.match(t, /<@U012MATT34> Tamsin wants a call about \*77 Quillon Ct\*\. They named Thursday at 2\./);
+  assert.doesNotMatch(t, /Vole|555|example\.com/);
+  await runSlackEvents({ store, locationId: LOC, saved: ON, now: min(3) });
+  assert.equal(s.of("chat.postMessage").length, 1, "told once");
+});

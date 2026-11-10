@@ -12,13 +12,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Power } from "lucide-react";
 import { INTENT_LABEL, PARTY_LABEL, normalizeConversationAi, starterConfig } from "@shared/conversation-ai.js";
 import { VERDICT_LABEL } from "@shared/graduation.js";
-import { getConversationAi, getConversationHistory, getReplyDrafts, getSettings, listCalendars, listOffers, listWorkflows, saveConversationAi, setConversationEnabled } from "./api.js";
+import { getConversationAi, getConversationHistory, getReplyDrafts, getSettings, listOffers, listWorkflows, saveConversationAi, setConversationEnabled } from "./api.js";
 import { autoAcceptCeiling } from "@shared/auto-accept.js";
 import { fmtMoney } from "@shared/offer-calc.js";
 import { BTN, BTN_PRIMARY, ErrorBar, FilterChips, KpiRow, Pill, SkeletonRows, TableCard } from "./ui.jsx";
 import {
   AnswersEditor, WriteUpTermsEditor, AutoSendCard, BookingCard, CounterBandCard, ExamplesEditor, FollowUpCard, INPUT_CLS, InvestorBandCard, MediaCard, ContactCardCard, OptOutCard, PartyPlaybooks,
-  CoachSettingsCard, GmailCard, DeliveryWatchCard, PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
+  CoachSettingsCard, GmailCard, DeliveryWatchCard, BootPassCard, PersonaCard, ProfileCard, RequoteCard, RoutingCard, RulesEditor, Section, StyleCard,
 } from "./ConversationPlaybooks.jsx";
 import { IntentPill, PartyPill, ago } from "./ConversationOutbox.jsx";
 
@@ -51,7 +51,6 @@ export default function ConversationAi({ settings }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [workflows, setWorkflows] = useState({ list: [], loading: true, scopeMissing: false, error: "" });
-  const [calendars, setCalendars] = useState({ list: [], loading: true, scopeMissing: false, error: "" });
   // The counter band's worked example. An operator shouldn't have to trust a
   // description of the ceiling — they should see it in dollars on a house they
   // recognise. Computed from the newest offer that has numbers on it, through
@@ -70,9 +69,6 @@ export default function ConversationAi({ settings }) {
     listWorkflows()
       .then((r) => setWorkflows({ list: r.workflows || [], loading: false, scopeMissing: Boolean(r.scopeMissing), error: r.error || "" }))
       .catch((e) => setWorkflows({ list: [], loading: false, scopeMissing: false, error: e.message }));
-    listCalendars()
-      .then((r) => setCalendars({ list: r.calendars || [], loading: false, scopeMissing: Boolean(r.scopeMissing), error: r.error || "" }))
-      .catch((e) => setCalendars({ list: [], loading: false, scopeMissing: false, error: e.message }));
     Promise.all([listOffers({ limit: 25, lean: true }), getSettings()])
       .then(([offers, settings]) => {
         // listOffers and getSettings both unwrap their envelope already.
@@ -246,7 +242,7 @@ export default function ConversationAi({ settings }) {
       <details className="group rounded-xl border border-slate-200 bg-white">
         <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
           More settings
-          <span className="ml-2 font-normal text-slate-500">routing, playbooks, follow-up ladders, auto-send timing, bands, booking, coach, opt-outs and history</span>
+          <span className="ml-2 font-normal text-slate-500">routing, playbooks, follow-up ladders, auto-send timing, bands, coach, opt-outs and history</span>
         </summary>
         <div className="space-y-4 border-t border-slate-200 p-4">
           <KpiRow cols="sm:grid-cols-5" items={kpis} />
@@ -256,12 +252,13 @@ export default function ConversationAi({ settings }) {
           <AutoSendCard config={form} patch={patch} version={version} />
           <CounterBandCard config={form} patch={patch} example={bandExample} />
           <InvestorBandCard config={form} patch={patch} />
-          <BookingCard config={form} patch={patch} calendars={calendars} />
+          <BookingCard />
           <RequoteCard config={form} patch={patch} />
           <ProfileCard config={form} patch={patch} />
           <CoachSettingsCard config={form} patch={patch} />
           <GmailCard config={form} patch={patch} />
           <DeliveryWatchCard config={form} patch={patch} />
+          <BootPassCard config={form} patch={patch} />
           <OptOutCard config={form} patch={patch} version={version} workflows={workflows} />
           <MediaCard config={form} patch={patch} />
           <ContactCardCard config={form} patch={patch} />

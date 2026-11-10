@@ -132,9 +132,9 @@ export function autopilotSummary({ config = {}, sendsEnabled = false, underwrite
   const tm = config.driver?.timers || {};
   out.push(sw("driver:timers", "Row timers", tm.enabled && dt.enabled && config.enabled && sendsEnabled ? "on" : tm.enabled ? "drafting" : "off",
     tm.enabled ? (dt.enabled ? `floats a priced offer after ${tm.floatAfterHours}h, marks no response after ${tm.goneQuietDays} quiet days, retries a failed underwrite once` : "on, but they ride the daytime pass, which is off") : "those rows wait for you", "broker"));
-  const bk = config.booking || {};
-  out.push(sw("booking", "Booking calls on the calendar", bk.enabled && config.enabled && sendsEnabled ? "on" : bk.enabled ? "drafting" : "off",
-    bk.enabled ? `${bk.calendarName || bk.calendarId || "no calendar picked"} · offers ${bk.slotsToOffer} times` : "'let's talk Thursday' is handed to you", "broker"));
+  // Retired (Matt, 2026-11-10, shared/call-words.js): never on, whatever is saved.
+  out.push(sw("booking", "Booking calls on the calendar", "off",
+    "retired: the bot never books or promises a call; a call ask is pinged to you", "broker"));
 
   for (const party of PARTIES) {
     const pb = parties[party] || {};

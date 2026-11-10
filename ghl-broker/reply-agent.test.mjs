@@ -2303,120 +2303,92 @@ const bookingOn = () => normalizeConversationAi({ enabled: true, booking: { enab
 const bookingPass = { kind: "booking", passed: true, reason: "offers Fri Sep 11 at 10:00am", offered: [{ iso: "2026-09-11T17:00:00Z", label: "Fri Sep 11 at 10:00am" }], chosen: null };
 const bookingFail = { kind: "booking", passed: false, reason: "no time was offered — a person should answer this one", offered: [], chosen: null };
 
-test("a request for a call is released under the calendar when the guard passed and the page has it on", () => {
+// Matt, 2026-11-10: "I think the bot actually booking calls has not been
+// helpful. It's up to me to really call the agent so let's not have those
+// scheduled calls." Prod may have the calendar saved on. Names, streets and
+// words below are made up.
+test("a saved calendar booking switch can't bring booking back: no calendar verdict releases a call request", () => {
   const base = { send: false, code: "never_auto", reason: "a wants call is a person's call" };
   for (const [party, intent] of [["agent", "wants_call"], ["agent", "scheduling"], ["investor", "wants_call"], ["investor", "wants_walkthrough"]]) {
-    const out = releaseUnderGuard({ base, party, intent, config: bookingOn(), guard: bookingPass });
-    assert.equal(out.send, true, `${party}/${intent}`);
-    assert.match(out.reason, /released under the calendar/);
+    assert.equal(bookingOn().booking.enabled, false, "the saved switch reads off");
+    assert.equal(releaseUnderGuard({ base, party, intent, config: bookingOn(), guard: bookingPass }).send, false, `${party}/${intent}`);
+    // Even a config that never went through the normaliser.
+    assert.equal(releaseUnderGuard({ base, party, intent, config: { booking: { enabled: true, calendarId: "cal1" } }, guard: bookingPass }).send, false, `${party}/${intent} raw`);
   }
-  // off on the page: parked, and the verdict is not even kept
-  assert.equal(releaseUnderGuard({ base, party: "agent", intent: "wants_call", config: normalizeConversationAi({ enabled: true }), guard: bookingPass }).exception, null);
-  // failed guard: parked with the reason, verdict kept
-  const held = releaseUnderGuard({ base, party: "agent", intent: "wants_call", config: bookingOn(), guard: bookingFail });
-  assert.equal(held.send, false);
-  assert.match(held.reason, /no time was offered/);
-  assert.equal(held.exception.passed, false);
-  // the calendar never releases a counter, and only never_auto can be overturned
-  assert.equal(releaseUnderGuard({ base, party: "agent", intent: "counter", config: bookingOn(), guard: bookingPass }).send, false);
-  assert.equal(releaseUnderGuard({ base: { send: false, code: "gates", reason: "x" }, party: "agent", intent: "wants_call", config: bookingOn(), guard: bookingPass }).send, false);
-  // and the scheduling intents stay locked on the allowlist
+  // the scheduling intents stay locked on the allowlist
   for (const intent of ["wants_call", "scheduling"]) assert.ok(!autoEligible("agent").includes(intent), intent);
 });
 
-test("end to end: they ask for a call, the bot offers calendar times and the reply sends itself; they pick one and it is booked", async () => {
+test("an agent who asks for a call is never offered times or booked, and Matt gets the ping", async () => {
   _resetJobs();
   const { client } = ghlStub();
   const store = fakeStore();
-  const saved = { ...SAVED, conversationAi: { enabled: true, booking: { enabled: true, calendarId: "cal1", calendarName: "Matt", slotsToOffer: 2, minLeadHours: 1 },
+  const saved = { ...SAVED, conversationAi: { enabled: true, booking: { enabled: true, calendarId: "cal1", calendarName: "Afternoons", slotsToOffer: 2, minLeadHours: 1 },
     parties: { agent: { autoSend: { enabled: true, intents: ["question"] } } } } };
   const now = Date.parse("2026-09-10T16:00:00Z");
-  const free = ["2026-09-11T17:00:00Z", "2026-09-11T21:00:00Z", "2026-09-14T17:00:00Z"];
-  const freeSlots = async () => free;
-  let seenContext = "";
-  // 1. "can you call me tomorrow?" → the model offers the two handed-in times, verbatim
+  let read = 0;
+  const booked = [];
+  let seen = null;
   const { job } = await startReply({
-    client, locationId: "LOC", saved, store, contactId: "c1", message: "can you give me a call tomorrow?", channel: "sms", sendsEnabled: true,
-    deps: { now: () => now, freeSlots, draft: async (args) => { seenContext = args.context.text; assert.equal(args.booking, true);
-      return { ...DRAFT, intent: "wants_call", confidence: "high", reply: "Sure, does Fri Sep 11 at 10:00am or Mon Sep 14 at 10:00am work?", counterAmount: 0,
-        offeredSlots: ["2026-09-11T17:00:00Z", "2026-09-14T17:00:00Z"], chosenSlot: "" }; } },
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "can you give me a call thursday at 2?", channel: "sms", sendsEnabled: true,
+    deps: { now: () => now, freeSlots: async () => { read++; return ["2026-09-11T17:00:00Z"]; },
+      bookAppointment: async (args) => { booked.push(args); return { ok: true }; },
+      draft: async (args) => { seen = args;
+        return { ...DRAFT, intent: "wants_call", confidence: "high", propertyAddress: "12 Elm St", reply: "Sure, does Fri Sep 11 at 10:00am work?", counterAmount: 0 }; } },
   });
   await settle();
   assert.equal(job.status, "done", job.error);
-  assert.match(seenContext, /TIMES YOU MAY PROPOSE/);
-  const d1 = await store.getReplyDraft(job.draftId);
-  assert.equal(d1.status, "scheduled", d1.autoSend?.reason);
-  assert.match(d1.autoSend.reason, /released under the calendar/);
-  assert.deepEqual(d1.booking.offered.map((s) => s.iso), ["2026-09-11T17:00:00Z", "2026-09-14T17:00:00Z"]);
-  // mark it sent so it counts as what we told them
-  await store.updateReplyDraft(d1.id, { ...d1, status: "sent", updatedAt: new Date(now + 60000).toISOString() });
-
-  // 2. "the Friday one works" → booked on its own, reply confirms
-  const booked = [];
-  const { job: job2 } = await startReply({
-    client, locationId: "LOC", saved, store, contactId: "c1", message: "friday 10 works", channel: "sms", sendsEnabled: true,
-    deps: { now: () => now + 3600000, freeSlots,
-      bookAppointment: async (args) => { booked.push(args); return { ok: true, label: args.label, calendarName: "Matt" }; },
-      draft: async (args) => { assert.match(args.context.text, /TIMES WE ALREADY OFFERED/);
-        return { ...DRAFT, intent: "scheduling", confidence: "high", reply: "Great, Fri Sep 11 at 10:00am it is. Talk then.", counterAmount: 0, offeredSlots: [], chosenSlot: "2026-09-11T17:00:00Z" }; } },
+  assert.equal(read, 0, "the calendar is never read");
+  assert.equal(booked.length, 0, "nothing is booked");
+  assert.equal(seen.booking, false);
+  assert.doesNotMatch(seen.context.text, /TIMES YOU MAY PROPOSE|TIMES WE ALREADY OFFERED/);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.equal(d.status, "handled", "a call is Matt's: no reply goes");
+  assert.equal(d.reply, "");
+  assert.ok(!(d.actions || []).some((a) => a.type === "book_call"));
+  const pings = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "call_wanted");
+  assert.equal(pings.length, 1, "one ping for Matt");
+  assert.equal(pings[0].data.when, "thursday at 2");
+  assert.equal(pings[0].data.intent, "wants_call");
+  assert.equal(pings[0].address, "12 Elm St");
+  assert.doesNotMatch(JSON.stringify(pings[0].data), /give me a call/, "never their words");
+  // The same day and the same time asked again is the same ping.
+  const { job: again } = await startReply({
+    client, locationId: "LOC", saved, store, contactId: "c1", message: "just checking, thursday at 2 still good to call me?", channel: "sms", sendsEnabled: true,
+    deps: { now: () => now + 60000, draft: async () => ({ ...DRAFT, intent: "wants_call", confidence: "high", propertyAddress: "12 Elm St", reply: "", counterAmount: 0 }) },
   });
   await settle();
-  assert.equal(job2.status, "done", job2.error);
-  const d2 = await store.getReplyDraft(job2.draftId);
-  assert.equal(booked.length, 1);
-  assert.equal(booked[0].startTime, "2026-09-11T17:00:00Z");
-  assert.equal(d2.actions.find((a) => a.type === "book_call").status, "done");
-  assert.equal(d2.status, "scheduled", d2.autoSend?.reason);
-  assert.equal(d2.booking.chosen.label, "Fri Sep 11 at 10:00am");
-
-  // 3. a pick of a time that is gone: not booked, reply parks with the reason, booking offered as a click
-  free.splice(0, 1);
-  const { job: job3 } = await startReply({
-    client, locationId: "LOC", saved, store, contactId: "c1", message: "actually can we do friday 10 instead", channel: "sms", sendsEnabled: true,
-    deps: { now: () => now + 7200000, freeSlots, bookAppointment: async () => { throw new Error("must not be called"); },
-      draft: async () => ({ ...DRAFT, intent: "scheduling", confidence: "high", reply: "Fri Sep 11 at 10:00am works.", counterAmount: 0, offeredSlots: [], chosenSlot: "2026-09-11T17:00:00Z" }) },
-  });
-  await settle();
-  const d3 = await store.getReplyDraft(job3.draftId);
-  assert.equal(d3.status, "draft");
-  assert.match(d3.autoSend.reason, /no longer free/);
-  assert.equal(d3.actions.find((a) => a.type === "book_call").mode, "ask");
+  assert.equal(again.status, "done", again.error);
+  assert.equal((await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "call_wanted").length, 1, "told once");
 });
 
-// 2026-10-21: they picked 10:30 from the times we offered, the slot was free,
-// and the reply said "Works, talk at 10:30." — not our label, so the calendar
-// guard held a booked call for Matt for 26 hours. Written once more with the
-// exact words, the same guard passes it.
-test("a reply that confirms a picked time in its own words is written once more with ours, and books itself", async () => {
+// Times we offered before the calendar was retired: a pick of one books
+// nothing, and the reply is Matt's like any call.
+test("an agent who picks a time we offered before booking was retired is booked by nobody, and Matt hears the time", async () => {
   _resetJobs();
   const { client } = ghlStub();
   const now0 = Date.parse("2026-09-10T15:00:00Z");
   const store = fakeStore([{ id: "offered1", locationId: "LOC", contactId: "c1", party: "agent", status: "sent", intent: "wants_call", reply: "Does Fri Sep 11 at 10:00am or Mon Sep 14 at 10:00am work?",
     booking: { offered: [{ iso: "2026-09-11T17:00:00Z", label: "Fri Sep 11 at 10:00am" }, { iso: "2026-09-14T17:00:00Z", label: "Mon Sep 14 at 10:00am" }] },
     createdAt: new Date(now0).toISOString(), updatedAt: new Date(now0).toISOString(), sentAt: new Date(now0).toISOString() }]);
-  const saved = { ...SAVED, conversationAi: { enabled: true, booking: { enabled: true, calendarId: "cal1", calendarName: "Matt", slotsToOffer: 2, minLeadHours: 1 },
+  const saved = { ...SAVED, conversationAi: { enabled: true, booking: { enabled: true, calendarId: "cal1", calendarName: "Afternoons", slotsToOffer: 2, minLeadHours: 1 },
     parties: { agent: { autoSend: { enabled: true, intents: ["question"] } } } } };
-  const now = Date.parse("2026-09-10T16:00:00Z");
-  const freeSlots = async () => ["2026-09-11T17:00:00Z", "2026-09-14T17:00:00Z"];
   const booked = [];
-  const fixes = [];
   const { job } = await startReply({
     client, locationId: "LOC", saved, store, contactId: "c1", message: "friday 10 works", channel: "sms", sendsEnabled: true,
-    deps: { now: () => now, freeSlots,
-      bookAppointment: async (args) => { booked.push(args); return { ok: true, label: args.label, calendarName: "Matt" }; },
-      draft: async (args) => {
-        if (args.fix) { fixes.push(args.fix); return { ...DRAFT, intent: "scheduling", confidence: "high", reply: "Works, talk Fri Sep 11 at 10:00am.", counterAmount: 0, offeredSlots: [], chosenSlot: "2026-09-11T17:00:00Z" }; }
-        return { ...DRAFT, intent: "scheduling", confidence: "high", reply: "Works, talk at 10.", counterAmount: 0, offeredSlots: [], chosenSlot: "2026-09-11T17:00:00Z" };
-      } },
+    deps: { now: () => Date.parse("2026-09-10T16:00:00Z"), freeSlots: async () => ["2026-09-11T17:00:00Z"],
+      bookAppointment: async (args) => { booked.push(args); return { ok: true }; },
+      draft: async (args) => { assert.doesNotMatch(args.context.text, /TIMES WE ALREADY OFFERED/);
+        return { ...DRAFT, intent: "scheduling", confidence: "high", reply: "Works, talk Fri Sep 11 at 10:00am.", counterAmount: 0, chosenSlot: "2026-09-11T17:00:00Z" }; } },
   });
   await settle();
   assert.equal(job.status, "done", job.error);
+  assert.equal(booked.length, 0);
   const d = await store.getReplyDraft(job.draftId);
-  assert.equal(fixes.length, 1);
-  assert.match(fixes[0][0], /exactly these words: "Fri Sep 11 at 10:00am"/);
-  assert.equal(d.reply, "Works, talk Fri Sep 11 at 10:00am.");
-  assert.equal(d.status, "scheduled", d.autoSend?.reason);
-  assert.equal(booked.length, 1);
+  assert.equal(d.status, "handled");
+  assert.ok(!(d.actions || []).some((a) => a.type === "book_call"));
+  const [ping] = (await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "call_wanted");
+  assert.equal(ping.data.when, "friday", "only the time words they used");
 });
 
 test("the booking rewrite is only for the words: a slot that's gone still waits for a person, with no second call", async () => {
@@ -2428,23 +2400,33 @@ test("the booking rewrite is only for the words: a slot that's gone still waits 
   assert.equal(r.guard, guard);
 });
 
-test("a reply that invents a time, or offers none, waits for a person even with booking on", async () => {
+// A page with the heads-up emptied (notifyOnly) still drafts a reply to a
+// call request; one that offers a time is written again without it, and
+// waits for Matt like any call.
+test("with the heads-up off, a reply to a call request that offers a time is written once more and waits for Matt", async () => {
   _resetJobs();
   const { client } = ghlStub();
   const store = fakeStore();
-  const saved = { ...SAVED, conversationAi: { enabled: true, booking: { enabled: true, calendarId: "cal1" }, parties: { agent: { autoSend: { enabled: true, intents: ["question"] } } } } };
-  const freeSlots = async () => ["2026-09-11T17:00:00Z"];
+  const saved = { ...SAVED, conversationAi: { enabled: true, notifyOnly: [], booking: { enabled: true, calendarId: "cal1" }, parties: { agent: { autoSend: { enabled: true, intents: ["question"] } } } } };
+  const fixes = [];
   const { job } = await startReply({
     client, locationId: "LOC", saved, store, contactId: "c1", message: "when can we talk?", channel: "sms", sendsEnabled: true,
-    deps: { now: () => Date.parse("2026-09-10T16:00:00Z"), freeSlots,
-      draft: async () => ({ ...DRAFT, intent: "wants_call", confidence: "high", reply: "How about Saturday at noon?", counterAmount: 0, offeredSlots: ["2026-09-12T19:00:00Z"], chosenSlot: "" }) },
+    deps: { now: () => Date.parse("2026-09-10T16:00:00Z"), freeSlots: async () => { throw new Error("must not read the calendar"); },
+      draft: async (args) => {
+        if (args.fix) { fixes.push(args.fix); return { ...DRAFT, intent: "wants_call", confidence: "high", reply: "Call me whenever, or text here.", counterAmount: 0 }; }
+        return { ...DRAFT, intent: "wants_call", confidence: "high", reply: "How about Saturday at noon?", counterAmount: 0 };
+      } },
   });
   await settle();
+  assert.equal(job.status, "done", job.error);
   const d = await store.getReplyDraft(job.draftId);
-  assert.equal(d.status, "draft");
-  assert.match(d.autoSend.reason, /not on the calendar/);
-  assert.equal(d.exception.kind, "booking");
-  assert.deepEqual(d.booking.offered, [], "an unverified offer is not remembered as one we made");
+  assert.equal(fixes.length, 1);
+  assert.match(fixes[0].join(" · "), /promises, asks for or sets a time for a call \("How about Saturday at noon\?"\)/);
+  assert.equal(d.reply, "Call me whenever, or text here.");
+  assert.equal(d.status, "draft", "a call request is still Matt's");
+  assert.match(d.autoSend.reason, /a wants call is a person's call/);
+  assert.notEqual(d.exception?.kind, "booking");
+  assert.equal((await store.listContactEvents("LOC", "c1")).filter((e) => e.type === "call_wanted").length, 1);
 });
 
 
@@ -5501,7 +5483,9 @@ test("a buyer is never told a house is open, and only told it's vacant when the 
   assert.equal(inv("The lockbox code is 1234.", { vacantOk: true }).ok, false);
   // The words are fine when they aren't about the house.
   assert.equal(inv("Still available. Are you open to heavy rehab?").ok, true);
-  assert.equal(inv("Open to a call later?").ok, true);
+  assert.equal(inv("Open to something older?").ok, true);
+  // Not the house, but a call we'd owe (Matt, 2026-11-10): held for that.
+  assert.match(inv("Open to a call later?").flags.join(" · "), /promises, asks for or sets a time for a call/);
 });
 
 // 3511 NE 153rd St, 2026-09-29: buyers were told "heavy rehab" and nobody had
@@ -8307,18 +8291,15 @@ const callOn = (saved) => ({ ...saved, conversationAi: { ...saved.conversationAi
   agent: { ...saved.conversationAi.parties.agent, callAsk: { enabled: true } } } } });
 const questions = (t) => (String(t).match(/\?/g) || []).length;
 
-test("a turnkey first answer to our first text closes with one ask: other fixers and a quick call, no times", async () => {
+// Retired (Matt, 2026-11-10): a saved switch from before can't bring it back.
+test("a saved call-ask switch can't bring the call ask back on a first answer", async () => {
   const { d, uw } = await replyTo("This one's turnkey, the sellers redid it before listing.", { saved: callOn(QUALIFY_SAVED), intent: "deal_available", lines: [],
     reply: "Makes sense, that one's not for us then. Anything else sitting that needs work?" });
   assert.equal(uw.length, 0);
-  assert.match(d.reply, CALL_ASK_RX);
-  assert.match(d.reply, FIXERS_ASK_RX);
+  assert.doesNotMatch(d.reply, CALL_ASK_RX);
+  assert.equal(d.callAskAdded, undefined);
   assert.equal(questions(d.reply), 1, d.reply);
-  assert.doesNotMatch(d.reply, /\b(?:monday|tuesday|wednesday|thursday|friday|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i, "no times offered");
-  // Off, the reply is the model's as it was.
-  const off = await replyTo("This one's turnkey, the sellers redid it before listing.", { intent: "deal_available", lines: [],
-    reply: "Makes sense, that one's not for us then. Anything else sitting that needs work?" });
-  assert.doesNotMatch(off.d.reply, CALL_ASK_RX);
+  assert.doesNotMatch(d.reply, /what time works|5-minute/i);
 });
 
 // The first text no longer asks for other fixers (2026-10-15), so with the
@@ -8365,12 +8346,12 @@ test("the fixers line is never stapled after a reply that already asks a questio
   assert.equal(withFixersAsk("Makes sense. What's the seller hoping to get?", 0), "Makes sense. What's the seller hoping to get?");
 });
 
-test("the qualify question on a first answer carries the call ask, and still reads as our question", async () => {
+test("the qualify question on a first answer never carries a call ask, whatever was saved", async () => {
   const { d, uw } = await replyTo("Cosmetic fixer", { saved: callOn(QUALIFY_SAVED), lines: [] });
   assert.equal(uw.length, 0);
   assert.equal(d.qualify.stage, "ask");
   assert.match(d.reply, QUALIFY_ASK_RX);
-  assert.match(d.reply, CALL_ASK_RX);
+  assert.doesNotMatch(d.reply, CALL_ASK_RX);
   assert.equal(d.autoSendable, true, JSON.stringify(d.flags));
 });
 
@@ -9330,14 +9311,68 @@ test("after a call we promised never happened, the next 'calling you shortly' wa
   assert.match(d.autoSend.reason, /promised them a call that didn't happen/);
 });
 
-test("after the call connected, a new call promise sends as before", async () => {
+// Until 2026-11-10 a new call promise after a call that connected sent.
+// Now the bot promises no call at all: it is written once more without one.
+test("after the call connected, a new call promise is written once more without it", async () => {
   const events = [
     { type: "promise_made", at: daysAgo(3), data: { what: "call", draftId: "x1" } },
     { type: "call_summary", at: daysAgo(2), data: { durationSec: 300, transcribed: true, summary: "talked through the house" } },
   ];
-  const { d } = await claimRun([{ ...DRAFT, reply: "Good talking Tuesday. I'll give you a call tomorrow on 12 Elm." }], { offers: OFFERS, events, message: "still there?" });
+  const { d, calls } = await claimRun([
+    { ...DRAFT, reply: "Good talking Tuesday. I'll give you a call tomorrow on 12 Elm." },
+    { ...DRAFT, reply: "Good talking Tuesday. Call me whenever, or text here." },
+  ], { offers: OFFERS, events, message: "still there?" });
+  assert.equal(calls.length, 2);
   assert.deepEqual(d.flags, []);
+  assert.equal(d.reply, "Good talking Tuesday. Call me whenever, or text here.");
   assert.equal(d.status, "scheduled", d.autoSend.reason);
+});
+
+// Matt, 2026-11-10: 27 calls promised since 10/23, 1 connected. A prompt
+// rule alone has failed before, so the gate holds the words.
+test("a draft that promises a call is held and written again", async () => {
+  const { d, calls } = await claimRun([
+    { ...DRAFT, reply: "Thanks, let me give you a quick call on that." },
+    { ...DRAFT, reply: "Thanks, that helps. Call me whenever, or text here." },
+  ], { offers: OFFERS, message: "what's the plan on 12 Elm?" });
+  assert.equal(calls.length, 2, "one redraft");
+  assert.match(calls[1].fix.join(" · "), /promises, asks for or sets a time for a call \("let me give you a quick call"\).*Call me whenever, or text here\./);
+  assert.equal(d.reply, "Thanks, that helps. Call me whenever, or text here.");
+  assert.equal(d.status, "scheduled", d.autoSend.reason);
+});
+
+// The prompt sets needsHuman where it used to promise a call, so the
+// rewrite runs there too; what the model asked for stays on the draft.
+test("a draft the model sent to a person that promises a call is still written again, and keeps its reason for Matt", async () => {
+  const { d, calls } = await claimRun([
+    { ...DRAFT, needsHuman: true, humanReason: "they asked about the inspection window", reply: "Good question, I'll call you this afternoon on it." },
+    { ...DRAFT, needsHuman: true, humanReason: "they asked about the inspection window", reply: "Good question. Call me whenever, or text here." },
+  ], { offers: OFFERS, message: "how long an inspection window on 12 Elm?" });
+  assert.equal(calls.length, 2);
+  assert.equal(d.reply, "Good question. Call me whenever, or text here.");
+  assert.equal(d.needsHuman, true);
+  assert.equal(d.humanReason, "they asked about the inspection window");
+});
+
+test("a draft that still promises a call after the redraft waits for Matt with the first words", async () => {
+  const { d, calls } = await claimRun([
+    { ...DRAFT, reply: "Let's hop on a call tomorrow about 12 Elm." },
+    { ...DRAFT, reply: "Does Thursday at 2 work for a quick call?" },
+  ], { offers: OFFERS, message: "any update on 12 Elm?" });
+  assert.equal(calls.length, 2);
+  assert.equal(d.status, "draft");
+  assert.equal(d.reply, "Let's hop on a call tomorrow about 12 Elm.", "the first draft stands for Matt");
+  assert.match(d.autoSend.reason, /^needs a person: the draft promises, asks for or sets a time for a call/);
+});
+
+test("'call me whenever' is not a promise: the gate lets it through", () => {
+  for (const reply of ["Call me whenever, or text here.", "Good question. Call or text anytime.", "Talk soon."]) {
+    const g = gate({ reply });
+    assert.ok(!g.flags.some((f) => /a time for a call/.test(f)), `${reply}: ${g.flags.join(" · ")}`);
+  }
+  assert.match(gate({ reply: "I'll call you tomorrow about 12 Elm." }).flags.join(" · "), /promises, asks for or sets a time for a call/);
+  // The walkthrough reminder names a time already set; its gate is told so.
+  assert.ok(!gate({ reply: "Does tomorrow at 10 still work?" }, { callCheck: false }).flags.some((f) => /a time for a call/.test(f)));
 });
 
 test("a reply that says let me run it by my partner is rewritten", async () => {

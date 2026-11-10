@@ -335,3 +335,27 @@ test("a referral shows in the morning post without a phone number", () => {
   assert.doesNotMatch(t, /555|0142|Ashgrove/, "never a phone, never a whole name");
   assert.doesNotMatch(textOf(renderMorning({})), /Referrals/, "none: no line");
 });
+
+// Matt, 2026-11-10: the bot never books or promises a call; when someone asks
+// for one, or a walkthrough, or names a time, he gets one ping in Needs Matt
+// and decides. First name, the house, the time words: never a phone, an
+// email or what they wrote.
+test("someone who asks for a call is a Needs Matt ping of its own with their first name, the house and the time", () => {
+  assert.ok(SLACK_EVENT_TYPES.includes("call_wanted"));
+  const [r] = routeEvent({ type: "call_wanted", party: "agent" });
+  assert.deepEqual([r.stream, r.kind, r.thread, r.replyOnly, r.opensOnly], ["needsMatt", "call_wanted", null, false, false]);
+  const ev = { type: "call_wanted", party: "agent", contactId: "c-41", address: "77 Quillon Ct, Renton, WA 98055",
+    data: { intent: "wants_call", wants: "call", when: "Thursday at 2" } };
+  const msg = renderEvent(r, ev, { firstName: "Bryn", mattUserId: "U012MATT34", appUrl: "https://app.shepflips.com", locationId: "LOC" });
+  const t = textOf(msg);
+  assert.match(t, /<@U012MATT34> Bryn wants a call about \*77 Quillon Ct\*\. They named Thursday at 2\. The bot didn't book or promise one/);
+  assert.match(msg.text, /^Bryn wants a call about 77 Quillon Ct \(Thursday at 2\)$/);
+  assert.match(t, /Open in app/);
+  // A buyer who wants to walk a house; no name on the record, no time named.
+  const walk = textOf(renderEvent(r, { ...ev, party: "investor", address: "9 Larchmont Pl", data: { intent: "wants_walkthrough", wants: "walkthrough" } }, {}));
+  assert.match(walk, /A buyer wants to see \*9 Larchmont Pl\*\. Nothing was booked/);
+  assert.doesNotMatch(walk, /They named/);
+  // A time that somehow carried a number is scrubbed.
+  const leaky = textOf(renderEvent(r, { ...ev, data: { wants: "call", when: "at 3, 425-555-0187" } }, { firstName: "Bryn" }));
+  assert.doesNotMatch(leaky, /555-0187/);
+});

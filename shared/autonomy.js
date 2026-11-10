@@ -22,8 +22,9 @@
 //               first texts, re-quotes, blasts. The offer, counters, calls
 //               and invites still wait for you.
 //   full      — plus the offer after a clean underwrite, yes when they
-//               accept our own number, dataroom invites, and calendar
-//               booking. A counter above our number is met with our number
+//               accept our own number, and dataroom invites. (Calendar
+//               booking was here until 2026-11-10; it is retired, so no mode
+//               switches it on.) A counter above our number is met with our number
 //               once, held — never more (never-above-what-we-sent,
 //               2026-10-02) — then passed if they don't move (2026-10-04).
 //
@@ -47,7 +48,7 @@ export const AUTONOMY_GLOSS = {
   off: "Nothing sends itself. No drafts, no nudges, no first texts.",
   cautious: "Plain conversation sends itself. Anything with a number, a nudge or a first text is drafted for you.",
   normal: "Everything the gates allow sends itself — floats, nudges, first texts, re-quotes, blasts. The offer, counters, calls and invites still wait for you.",
-  full: "Normal, plus the offer after a clean underwrite, yes when they accept our number, dataroom invites, and booking calls on the calendar. A counter above our number gets our number once, held — never more — and a pass if they don't move.",
+  full: "Normal, plus the offer after a clean underwrite, yes when they accept our number, and dataroom invites. A counter above our number gets our number once, held — never more — and a pass if they don't move.",
   custom: "Switches were set by hand and match no mode. Picking a mode replaces them.",
 };
 
@@ -80,7 +81,7 @@ export const AUTONOMY_DOES = {
     "Yes when they accept our own number — a counter above it gets our number once, held, and after two quiet check-ins the house is passed",
     "Yes to a buyer's own number, never under contract plus the minimum fee, once per deal",
     "Dataroom invites go to evaluating buyers whose buy box fits",
-    "Calls are booked on the calendar when one is picked in Settings",
+    "Calls stay yours: the bot never books or promises one",
   ],
 };
 
@@ -102,9 +103,10 @@ const intentsFor = (party, mode) => {
 /**
  * autonomyPlan(mode, { hasCalendar }) → the switch positions
  *
- * The table, as data. `hasCalendar` decides whether "full" may switch booking
- * on: without a calendar picked the guard cannot offer a slot, so the switch
- * stays off and the mode still matches.
+ * The table, as data. `hasCalendar` used to decide whether "full" switched
+ * booking on. Booking is retired (Matt, 2026-11-10, shared/call-words.js):
+ * every mode leaves it off, calendar or not, which is also what the
+ * normaliser saves, so a mode still matches.
  */
 export function autonomyPlan(mode, { hasCalendar = false } = {}) {
   if (!AUTONOMY_MODES.includes(mode)) throw new Error(`unknown autonomy mode: ${mode}`);
@@ -137,7 +139,7 @@ export function autonomyPlan(mode, { hasCalendar = false } = {}) {
         priceBand: full,
       }),
     }])),
-    booking: full && hasCalendar,
+    booking: false,
     outreachAutopilot: normal,
     dispoAutopilot: { autoBlastOnPromote: normal, paperworkOnCommit: normal, autoInvite: full },
     // What the machine does by itself instead of putting a row on Today.

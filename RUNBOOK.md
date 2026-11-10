@@ -2737,12 +2737,14 @@ send a due text twice, and dropped any reply job still in memory.
   the gates and the dial all apply. Claimed on the `bootPass` cursor, once
   per start, retried by the tick if it failed, at most 30 a day. With it off,
   a dropped reply waits for the daytime pass or the 7pm audit, as before.
-  There is no switch on the Conversation AI page yet. The PUT replaces the
-  whole Conversation AI blob, so a body with only this key would put every
-  other setting back to its default: `GET
+  The switch (since 2026-11-10): Conversation AI page → More settings →
+  "After a restart" → "After a restart, answer texts from the last hour that
+  got no reply" (`BootPassCard`, messaging-app). Off by default; turning it
+  on keeps the rest of `nightlyAudit` as it was, and Save writes it. By API
+  instead: the PUT replaces the whole Conversation AI blob, so `GET
   /api/offers/automations/conversation/config`, set
-  `config.nightlyAudit.bootPass` to `true` in what comes back, and `PUT` that
-  whole `config` to the same path. A page save keeps whatever is there.
+  `config.nightlyAudit.bootPass` in what comes back, and `PUT` that whole
+  `config` to the same path.
 
 ### Never more than our number (2026-09-28)
 
@@ -2924,8 +2926,9 @@ retry hit the same cap). Now:
   (tag: stop bot)" instead of "nothing came of it".
 The per-contact daily cap now defaults to 0 (none) — Matt, 2026-09-22; the
 location cap (400) still bounds a runaway loop.
-What stays a person's by design: scheduling / wants a call (NEVER_AUTO, or
-turn booking on), a counter with no number read, "other", a live deal.
+What stays a person's by design: scheduling / wants a call (NEVER_AUTO; the
+calendar booking that could release one is retired, 2026-11-10), a counter
+with no number read, "other", a live deal.
 
 Fifteen ticks push pieces of the loop. None of them stood back at the end of
 the day and asked, per thread: did we answer? do we owe them something, and is
@@ -3975,7 +3978,7 @@ out. Rules: `shared/ghl-stages.js` (`targetStage`, `planCard`, `planStageMoves`)
   the one question / "the work it needs") and their answer points at the
   photos, pics or listing and names no work, `pointsToThePhotos`
   (`shared/flip-read.js`) replaces the reply with a `QUALIFY_PASSES` line
-  (the call-ask one when the call ask is on), which asks for their other
+  (the call-ask one only while the call ask was on, before 2026-11-10), which asks for their other
   houses on or off-market, and files it through the same pass above, with
   `why: "they pointed us to the photos"`. Not once a number on the house
   went out.
@@ -5093,7 +5096,18 @@ Of 132 houses agents raised, 47 were real flips, but 51 the agent had already ca
 
 Backtest on the 132 graded houses: no real flip or live house was passed. Most got the question first.
 
-### Their first answer asks for a call (2026-10-15)
+### Their first answer asks for a call (2026-10-15) — retired 2026-11-10
+
+**Retired (Matt, 2026-11-10).** The bot never asks for a call now (see
+"The bot never books, asks for or promises a call" below). The normaliser
+keeps `parties.agent.callAsk.enabled` false whatever is saved
+(`CALL_ASK_RETIRED`, `shared/call-words.js`), so a saved `true` can't bring
+it back, and the reply agent never adds `CALL_ASK_LINE` or `withCallAsk`.
+The first answer closes on the other-fixers ask alone, as it did with the
+switch off. The call-ask texts (`FIXERS_CALL_ASKS`, `QUALIFY_ASKS_CALL`,
+`QUALIFY_PASSES_CALL`) stay in the code for the record and are never picked;
+the call gate holds a text that carries one anyway. What follows is how it
+worked.
 
 **Why.** The funnel review (485 threads): all 8 contracts from outreach
 agents came after a phone call; agents who talked brought us houses 54% of
@@ -5561,7 +5575,95 @@ conversation. The call's own follow-up text comes from the reply agent, not a
 driver, and is not held by it; and a number promised **on** that call is still
 sent by the promise driver (`via: "call"`, a promise made at or after the call).
 
-### Booking calls (the calendar as a guard)
+### The bot never books, asks for or promises a call (Matt, 2026-11-10)
+
+**Why.** Matt, 2026-11-10: "I think the bot actually booking calls has not
+been helpful. It's up to me to really call the agent so let's not have those
+scheduled calls." The audit behind it: since 10/23 the bot promised 27 calls
+and 1 connected; since 10/15 it offered or confirmed 24 call slots and 4
+connected. Matt picked the audit's option (a): the bot stops promising or
+booking calls, says "call me whenever, or text here", and Matt gets a Slack
+ping so he decides whether and when to call.
+
+**What happens now** (`shared/call-words.js`, every party, no switch):
+
+- **No booking.** The calendar is never read, no time is offered, nothing is
+  booked (`BOOKING_RETIRED`). The normaliser saves
+  `conversationAi.booking.enabled` as false whatever was saved, so prod's
+  saved switch can't bring it back; the calendar id, name and other fields
+  are kept as they were. `prepareBooking` returns nothing,
+  `releaseUnderGuard` never releases under a calendar verdict, the autonomy
+  dial's Full no longer switches booking on, and `bookAppointment` refuses
+  ("booking calls is retired"). Appointments already on the GHL calendar are
+  left alone. The Conversation AI page shows "Booking calls (retired)" with
+  no controls.
+- **No call ask.** `parties.agent.callAsk` is retired the same way (above).
+- **The words.** Every prompt that told the bot to "say you'll go over it on
+  a quick call", "Let me give you a quick call on that", "let me call you on
+  that", "ask for a quick call today", "offer to walk them through it on a
+  quick call" or "ask whether it's worth a quick call" now says to answer what
+  it can and, where talking would help, "Call me whenever, or text here."
+  (`CALL_INVITE`). `NO_CALL_RULE` is fixed beside the saved playbook in every
+  reply prompt, so a saved playbook line can't bring a promise back.
+  `needsHuman` is still set wherever it was: those still go to Matt. The
+  second look asks whether the seller would take a look at our same number,
+  not whether it's worth a call. A saved playbook is never rewritten: only
+  the shipped starter changed (rule "Terms go on a call", the "two time
+  slots" rule, example st-9 "Let me give you a quick call on that", and the
+  HANDOFF line "give you a call if it makes sense"). If Matt saved any of
+  those, his saved copy still says it, and the gate below holds what it
+  produces until he edits it.
+- **The gate behind the prompt.** A prompt-only rule has failed before.
+  `callWordsFlags` (read by `evaluateReplyGates`, `callCheck`) holds a
+  machine draft that promises a call ("I'll call you", "let me give you a
+  quick call", "I'll give you a ring", "I'll call you back"), asks for or
+  sets one up ("let's hop on a call", "worth a quick call?", "what time works
+  for a call"), or offers a time to talk ("talk at 3", "does Thursday at 2
+  work"). It never flags "call me whenever", "feel free to call", "call or
+  text anytime", "talk soon", or their words in quotes. A buyer may still be
+  invited to a deal's walkthrough window: for an investor a bare time only
+  holds beside a call. The walkthrough reminder and follow-up name a time
+  already set and skip the check. A held draft gets the usual one redraft
+  told why, and since the prompt sets `needsHuman` exactly where it used to
+  promise a call, that one redraft also runs on a `needsHuman` draft whose
+  only flag is the call (`needsHuman` stays on it). Still promising after the
+  redraft: the first draft waits for Matt. The flag only ever adds a hold.
+- **When they ask for a call, or name a time, Matt gets one ping.** An agent
+  or a buyer whose text reads as `wants_call`, `scheduling` or
+  `wants_walkthrough`, or whose own words ask for a call ("call me", "can we
+  talk", "give me a ring"; never "don't call me"), records a `call_wanted`
+  event (data `{ intent, wants, when? }`, `when` being only the day or time
+  words they used, `namedTime`). A voicemail counts; a call that connected
+  doesn't (Matt was on it). One per person per Pacific day for each time
+  named; a redraft of the same text is the same event. Slack's event sweep
+  posts it to `#needs-matt` (stream `needsMatt`) as a post of its own with an
+  @-mention: "@Matt Bryn wants a call about *77 Quillon Ct*. They named
+  Thursday at 2. The bot didn't book or promise one: call when you choose,
+  or text." First name only, the house, the time words: never a phone, an
+  email or their message. A walkthrough reads "wants to see …".
+- **The call list.** Unchanged, and still the path: a held reply whose
+  intent is `wants_call` / `scheduling` / `wants_walkthrough` is an urgent
+  call (`shared/desk.js`), so with `desk.ghlCalls` on it goes into GHL's
+  Manual Actions within the tick, until 5pm. With the heads-up on for those
+  intents (`notifyOnly`, the default) no reply is drafted; the nightly audit
+  files the text as owed (`audit_owed` with the intent), which is an urgent
+  call on the next list. The Slack ping is the same-moment signal either
+  way.
+- A call or scheduling reply that only the calendar used to release now
+  follows the normal rules: `wants_call` and `scheduling` stay in
+  `NEVER_AUTO`, so it waits for Matt. `GUARDED_AUTO` and the release rules
+  are unchanged.
+
+**Check:** text the bot "can you call me Thursday at 2?" as an agent: no
+reply goes, the row reads "a wants call is yours to answer", the contact's
+timeline has `call_wanted` with `when: "Thursday at 2"`, and `#needs-matt`
+gets one post. A draft that says "let me give you a quick call" shows a
+redraft (`redraftedFor` names the call) or waits with "needs a person: the
+draft promises, asks for or sets a time for a call".
+
+### Booking calls (the calendar as a guard) — retired 2026-11-10
+
+Retired: see above. What follows is how it worked.
 
 Conversation AI page → "Booking calls". Pick a calendar (needs
 `calendars.readonly` and `calendars/events.write` on the Private
@@ -6334,7 +6436,7 @@ pipeline response carries the counts as `handOffs`:
 |---|---|---|
 | machine | the bot sends it, or it closes itself | held replies (released under the gates; `autoSend.otherNow`), counters (the counter hold), hand-made numbers (the timer floats them a day on), the ask for their read |
 | price | Matt sets the number — the GHL Tier 1 card | price_it, number owed, underwrite held, no_fit |
-| call | booked on the calendar (`conversationAi.booking`), else GHL Manual Actions (`desk.ghlCalls`) | wants_call / scheduling (held or from the audit), call_* |
+| call | GHL Manual Actions (`desk.ghlCalls`); the calendar booking is retired (2026-11-10), and Slack `#needs-matt` pings Matt when someone asks for a call | wants_call / scheduling (held or from the audit), call_* |
 | ping | GHL workflow "App: needs Matt" (`desk.ghlPings`), and its own page | paper_to_sign, approve_number (Approve on the offer), closing tasks, pre_contract, partner questions |
 | drop | closed quietly | a held thanks/photo/stop or a stranger's text a day on (the audit's `quietHolds`), an office line two agents share |
 
@@ -6760,7 +6862,7 @@ text.
 
 | Stream (`saved.slack.streams`) | Channel | What posts |
 |---|---|---|
-| needsMatt | `#needs-matt` | What lands in GHL's **Needs Matt** stage (needs-matt.js's list): a yes to approve, paper to sign, a house to price. Once each, with an @-mention. With `ghlStages` off, the GHL ping rows (`pingReasons`) instead |
+| needsMatt | `#needs-matt` | What lands in GHL's **Needs Matt** stage (needs-matt.js's list): a yes to approve, paper to sign, a house to price. Once each, with an @-mention. With `ghlStages` off, the GHL ping rows (`pingReasons`) instead. Since 2026-11-10 also someone asking for a call or a walkthrough, or naming a time (`call_wanted`, from the event sweep, a post of its own with an @-mention: first name, the house, the time words) |
 | acquisitions | `#acquisitions` | **The Tier 1 list** (Matt, 2026-10-25: "just the tier 1s that have been flagged, not the back-and-forth"). The only post in the channel is a house reaching Tier 1 (`tier1_added`, a card moved to Tier 1), once per house. The post is itemized, one thing a line, with the links underneath: **Tier 1 flagged: <street>**, Agent (full name — from the record, else read from GHL), Address (full), Description (the summary of what they said, else why it's Tier 1). Its offer sent or revised, counter, in the realm, hot, agreed, contract, underwrite result and pass reply quietly in that thread, never in the channel feed, and only once the thread exists. A house an agent merely named isn't posted |
 | underwrites | `#underwrites` | **Real underwrites only**: a run that prices the house, edited in place from running to priced (number, ARV, rehab), held (the reasons) or failed. A skeleton or draft-only run (`autoUnderwriteMode` skeleton/draft, Matt prices by hand, 2026-10-25) only makes a draft: it posts nowhere, here or in the house's Tier 1 thread. With skeleton on, this channel is nearly silent (only full runs a person starts). Also an address that left the queue without running |
 | dispositions | `#dispositions` | **One thread per deal**: the new deal (contract, fee, closing), each wave of buyer texts as one line ("sent to 25 buyers"), a buyer looking, passing or committed, the package opened, a walkthrough booked, the stage. Closed and fell through also show in the channel |

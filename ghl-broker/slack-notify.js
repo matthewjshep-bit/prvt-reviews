@@ -126,7 +126,7 @@ function contextReader({ store, locationId, cfg, now, client = null }) {
   const cache = new Map();
   return async (ev) => {
     const id = ev?.contactId;
-    if (!id) return { appUrl: cfg.appUrl, appLink: cfg.appLink, locationId };
+    if (!id) return { appUrl: cfg.appUrl, appLink: cfg.appLink, locationId, mattUserId: cfg.mattUserId };
     if (!cache.has(id)) {
       cache.set(id, (async () => {
         const [profile, offers, summaries] = await Promise.all([
@@ -148,7 +148,7 @@ function contextReader({ store, locationId, cfg, now, client = null }) {
       || (!ev.address ? c.offers.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] : null)
       || null;
     return {
-      appUrl: cfg.appUrl, appLink: cfg.appLink, locationId, firstName: c.name, fullName: c.full, summary: c.summary,
+      appUrl: cfg.appUrl, appLink: cfg.appLink, locationId, mattUserId: cfg.mattUserId, firstName: c.name, fullName: c.full, summary: c.summary,
       address: ev.address || offer?.address || "", offerId: ev.offerId || offer?.id || null,
       ours: Number(offer?.cashAmount) > 0 ? Number(offer.cashAmount) : null,
     };
