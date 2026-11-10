@@ -346,6 +346,12 @@ export function strategyFor({ lender = "", amount = 0, maturity = "", recordedAt
   return "flip";
 }
 
+// An agent Matt put in the buyer book with one press (routes/dispo.js
+// add-to-buyers, 2026-11-09). Not `investor`: routing reads that tag, and
+// their own thread stays an agent's.
+export const AGENT_BUYER_TAG = "dispo-agent-buyer";
+export const isAgentBuyer = (tags = []) => (tags || []).some((t) => String(t || "").trim().toLowerCase() === AGENT_BUYER_TAG);
+
 export const cityTag = (city) => `dispo-city-${citySlug(city)}`.slice(0, 60);
 export const regionTag = (region) => `dispo-region-${region}`;
 export const oosTag = (state) => `dispo-oos-${slug(state)}`;

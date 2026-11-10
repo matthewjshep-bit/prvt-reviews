@@ -828,6 +828,10 @@ export const leaveTierDrips = ({ dryRun = true } = {}) => post(`/api/outreach/pu
 export const getLeaveTierDrips = () => fetch(`${API_BASE}/api/outreach/pulse/leave-drips?${locq()}`).then(j);
 export const saveBuybox = (contactId, buybox) =>
   post(`/api/dispo/investors/${encodeURIComponent(contactId)}/buybox`, { buybox }, "PUT");
+// An agent who buys, into the buyer book (tag dispo-agent-buyer, the areas
+// they named as their buy box). Their own thread stays an agent's.
+export const addToBuyers = (contactId, { areas = "" } = {}) =>
+  post(`/api/dispo/investors/${encodeURIComponent(contactId)}/add-to-buyers`, { areas });
 export const setInvestorStatus = (contactId, status) =>
   post(`/api/dispo/investors/${encodeURIComponent(contactId)}/status`, { status });
 

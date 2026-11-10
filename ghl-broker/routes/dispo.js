@@ -21,8 +21,10 @@
 import { siteFlagsOf } from "../shared/site-check.js";
 import { FERRY_ONLY_ZIPS } from "../shared/underwrite-checks.js";
 import express from "express";
-import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
-import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
+import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl, ensureProfile } from "../contact-record.js";
+import { marketsFromTags, regionFor, citySlug, AGENT_BUYER_TAG } from "../shared/dispo-regions.js";
+import { resolveParty, matchTagPatterns } from "../conversation-party.js";
+import { normalizeConversationAi } from "../shared/conversation-ai.js";
 import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickDealBuyers, leftOffDealBuyers, blastedTo, isManufacturedTarget, isLandTarget } from "../shared/buyer-score.js";
 import { parseUsAddress } from "../shared/us-address.js";
 import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
@@ -65,7 +67,9 @@ const DISPO_TAG = process.env.DISPO_TAG || "dispo-blast";
 
 // Contacts carrying any of these tags are investors. Overridable per location
 // in Settings (dispoTags) — some locations tag their buyers differently.
-const DEFAULT_DISPO_TAGS = ["investor", "investor-active", "investor-stale", "on-deal"];
+// dispo-agent-buyer (2026-11-09) is an agent Matt added with Add to buyers:
+// in the book, still an agent in their own thread.
+const DEFAULT_DISPO_TAGS = ["investor", "investor-active", "investor-stale", "on-deal", AGENT_BUYER_TAG];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -805,6 +809,72 @@ export default function createDispoRouter({ resolveLocation }) {
 
       const fresh = await store.getInvestor(locationId, contactId);
       res.json({ ok: true, changed: Object.keys(changed), investor: hydrate(fresh) });
+    } catch (err) { fail(res, err); }
+  });
+
+  /* ---------- an agent who buys, into the book (2026-11-09) ---------- */
+
+  // POST /investors/:contactId/add-to-buyers { areas } — Matt's one press on
+  // an agent who said they buy or asked for our deals (his call on 10/09:
+  // never automatic). Tags them dispo-agent-buyer, which is in the book's
+  // default tags and joins his saved Investor tags when he has set them;
+  // files the areas they named as their buy box; and puts their row in the
+  // book now, not at the next sync. Their own thread stays an agent's: the
+  // tag isn't a routing investor tag, and when his routing would read it as
+  // one (a "dispo-*" pattern), they're tagged agent as well. The record's
+  // party stays "agent" (contact-record.js staysAgent). Pressing it twice
+  // writes nothing new.
+  router.post("/investors/:contactId/add-to-buyers", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const contactId = String(req.params.contactId || "").trim().slice(0, 64);
+      if (!contactId) return res.status(400).json({ error: "contact id is required" });
+      const saved = await getSettings(locationId);
+      let contact;
+      try { contact = await withRetry(() => getContact(client, contactId)); }
+      catch (e) {
+        if (e.status === 404 || e.status === 400) return res.status(404).json({ error: "GHL has no contact by that id" });
+        throw e;
+      }
+      const had = (Array.isArray(contact?.tags) ? contact.tags : []).map((t) => String(t || "").trim().toLowerCase()).filter(Boolean);
+      const routing = normalizeConversationAi(saved?.conversationAi).routing;
+      const before = resolveParty({ tags: had, routing }).party;
+      const after = resolveParty({ tags: [...had, AGENT_BUYER_TAG], routing }).party;
+      const add = [AGENT_BUYER_TAG, ...(after === "investor" && before !== "investor" ? ["agent"] : [])].filter((t) => !had.includes(t));
+      if (add.length) await withRetry(() => addContactTags(client, contactId, add));
+      const tags = [...had, ...add];
+
+      // Saved Investor tags replace the defaults, so the tag joins them.
+      const configured = String(saved?.dispoTags || "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+      let dispoTags = "default";
+      if (configured.length) {
+        if (matchTagPatterns([AGENT_BUYER_TAG], configured).length) dispoTags = "already";
+        else {
+          await store.saveOfferSettings(locationId, { ...((await store.getOfferSettings(locationId)) || {}), dispoTags: [...configured, AGENT_BUYER_TAG].join(", ") });
+          dispoTags = "added";
+        }
+      }
+
+      // Their record stays an agent's; the areas they buy in are their buy box.
+      const prev = await store.getContactProfile(locationId, contactId).catch(() => null);
+      const name = contactName(contact);
+      await ensureProfile({ store, locationId, contactId, party: prev?.party || "agent", name: name || null, email: contact?.email || null, phone: contact?.phone || null, tags });
+      const rawAreas = Array.isArray(req.body?.areas) ? req.body.areas : String(req.body?.areas || "").split(/[,;\n]/);
+      const areas = rawAreas.map((a) => String(a || "").trim().slice(0, 80)).filter(Boolean).slice(0, 20);
+      // No party: the facts are filed without moving the record off "agent".
+      if (areas.length) await learnFacts({ store, locationId, contactId, party: null, facts: areas.map((value) => ({ key: "buybox_areas", value, source: "operator", ref: "add-to-buyers" })) });
+      const facts = (await store.getContactProfile(locationId, contactId))?.facts || {};
+
+      // Their row in the book, now. A row already there keeps what the sync read.
+      const existing = await store.getInvestor(locationId, contactId);
+      const doc = {
+        ...(existing?.doc || {}),
+        name, email: contact?.email || "", phone: contact?.phone || "", tags,
+        dnd: smsUnsubscribed(contact), custom: existing?.doc?.custom || {}, record: factsAsCustom(facts),
+      };
+      await store.upsertInvestors(locationId, [{ contactId, name, doc, buyboxText: investorProfileText(doc) }]);
+      const row = await store.getInvestor(locationId, contactId);
+      res.json({ ok: true, contactId, tagged: add, dispoTags, areas, party: (await store.getContactProfile(locationId, contactId))?.party || null, investor: slim(hydrate(row)) });
     } catch (err) { fail(res, err); }
   });
 

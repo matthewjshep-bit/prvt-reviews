@@ -830,6 +830,19 @@ test("an agent who says they'd pay an assignment fee is investor-minded and flag
   assert.equal(minded.dedupeKey, "investor_minded:c1", "once per agent, the same key the reply's own read uses");
 });
 
+// 2026-11-09: an agent asked for our deals for the fourth time and the bot
+// told him there was nothing, with three deals live. Asking for our deals is
+// buying, and Matt answers it.
+test("an agent who asks if we have deals to assign is held for Matt, not told nothing's on the shelf", async () => {
+  const { d, events } = await runPartner("No luck on that one. Do you have any other deals you're looking to assign?",
+    { ...DRAFT, reply: "All quiet on our end for now, I'll keep you posted." });
+  assert.equal(d.status, "draft", "held, never scheduled");
+  assert.equal(d.needsHuman, true);
+  assert.equal(d.partnerTerms.kind, "investor_buyer");
+  assert.match(d.autoSend.reason, /they said they buy/);
+  assert.equal(events.find((e) => e.type === "partner_terms").data.addToBuyers, true);
+});
+
 test("a plain 'I'll keep you in mind' raises nothing", async () => {
   const { d, events, asked } = await runPartner("Nothing right now but I'll keep you in mind!", { ...DRAFT, reply: "Appreciate it, talk soon." });
   assert.equal(d.status, "scheduled", "an ordinary reply still sends itself");

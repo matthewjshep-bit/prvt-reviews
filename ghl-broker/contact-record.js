@@ -25,9 +25,16 @@ import { investorStatus } from "./shared/offer-status.js";
 import { refreshInvestorRow } from "./investor-row.js";
 import { annotateCurrent } from "./shared/current-offer.js";
 import { dealRolesFor, isBuyerSideRole } from "./shared/contact-deals.js";
+import { isAgentBuyer } from "./shared/dispo-regions.js";
 
 const log = (what, e) => console.error(`contact-record: ${what}:`, e?.message || e);
 const nowIso = () => new Date().toISOString();
+
+// An agent Matt added to the buyer book (dispo-agent-buyer, 2026-11-09) is
+// still an agent: their check-ins (agent-pulse.js reads the record's party),
+// tiers and own thread go on as an agent's. A write that says "investor" (a
+// deal text, a sync of the book, a buy-box edit) leaves the party alone.
+const staysAgent = (prev, tags = []) => prev?.party === "agent" && isAgentBuyer([...(prev?.tags || []), ...(Array.isArray(tags) ? tags : [])]);
 
 // Every custom-field definition the record projects into or reads from, so
 // one id→key map covers both parties and the outreach fields. GHL derives a
@@ -49,7 +56,9 @@ export const contactName = (c) => [c?.firstName, c?.lastName].filter(Boolean).jo
 export async function ensureProfile({ store, locationId, contactId, party = null, name = null, email = null, phone = null, tags, ghlSeenAt } = {}) {
   if (!store?.upsertContactProfile || !locationId || !contactId) return null;
   try {
-    const patch = { party: party || null, name: name || null, email: email || null, phone: phone || null };
+    let p = party || null;
+    if (p === "investor" && store.getContactProfile && staysAgent(await store.getContactProfile(locationId, contactId).catch(() => null), tags)) p = null;
+    const patch = { party: p, name: name || null, email: email || null, phone: phone || null };
     if (Array.isArray(tags)) patch.tags = tags;
     if (ghlSeenAt) patch.ghlSeenAt = ghlSeenAt;
     return await store.upsertContactProfile(locationId, contactId, patch);
@@ -105,14 +114,15 @@ export async function learnFacts({ store, locationId, contactId, party = null, f
       if (r.added) { doc = r.facts; added.push({ key: f.key, value: doc[f.key][doc[f.key].length - 1].value, source: f.source || "operator", at: f.at || nowIso(), ref: f.ref || null }); }
     }
     if (!added.length) return { profile: prev, added };
-    const profile = await store.upsertContactProfile(locationId, contactId, { party: party || prev?.party || null, facts: doc });
+    const keep = staysAgent(prev);
+    const profile = await store.upsertContactProfile(locationId, contactId, { party: keep ? "agent" : party || prev?.party || null, facts: doc });
     await store.appendContactEvents(locationId, contactId, added.map((a) => {
       const ev = { party: party || prev?.party || null, type: "fact_learned", at: a.at, source: a.source, ref: a.ref, data: { key: a.key, value: a.value } };
       return { ...ev, dedupeKey: eventDedupeKey(ev) };
     }));
     // A buyer's row in the Dispositions book, so search sees it now and not
-    // at the next sync.
-    if ((party || prev?.party) !== "agent") await refreshInvestorRow({ store, locationId, contactId, facts: doc });
+    // at the next sync (an agent in the buyer book has one too).
+    if ((party || prev?.party) !== "agent" || keep) await refreshInvestorRow({ store, locationId, contactId, facts: doc });
     return { profile, added };
   } catch (e) { log(`facts ${contactId}`, e); return { profile: null, added: [] }; }
 }
@@ -227,7 +237,7 @@ export async function reconcileFromGhl({ store, locationId, contactId, party = n
       ({ contact: c, custom: cu } = await readCustom({ client, locationId, contactId, contact }));
     }
     const prev = await store.getContactProfile(locationId, contactId);
-    const p = party || prev?.party || null;
+    const p = staysAgent(prev, c?.tags) ? "agent" : party || prev?.party || null;
     const at = cu.last_convo_date ? `${String(cu.last_convo_date).slice(0, 10)}T12:00:00.000Z` : (prev?.createdAt || nowIso());
     await ensureProfile({
       store, locationId, contactId, party: p,

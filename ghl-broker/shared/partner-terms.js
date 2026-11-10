@@ -84,7 +84,15 @@ const PATTERNS = {
     "(?:we|i)\\s+(?:also\\s+)?buy\\s+\\d+\\s+(?:to|-)\\s+\\d+\\s+(?:a|per)\\s+(?:month|year)",
     "i\\s+(?:also\\s+)?(?:flip|invest\\s+in|buy)\\s+(?:houses|homes|properties|fixers)",
     "(?:been\\s+wanting|want(?:ing)?|looking)\\s+to\\s+(?:take\\s+on|do)\\s+a\\s+flip",
-    "add\\s+me\\s+to\\s+your\\s+(?:buyers?|investor|cash\\s+buyer)s?\\s+list",
+    // 2026-11-09: asking for our deals is buying. "Do you have any other
+    // deals?", "anything you're looking to assign?", "send me your deals",
+    // "add me to your list" — never "I can send you deals".
+    "add\\s+me\\s+to\\s+your\\s+(?:(?:buyers?|investors?|cash\\s+buyers?|deals?|email)\\s+)?list",
+    "(?:do\\s+)?(?:you|u|y'?all)\\s+(?:guys\\s+)?(?:have|got)\\s+any\\s+(?:other\\s+|more\\s+|pending\\s+|new\\s+|off[\\s-]?market\\s+|wholesale\\s+)?deals\\b",
+    "(?:got|have)\\s+any\\s+(?:other\\s+|more\\s+|pending\\s+|new\\s+|off[\\s-]?market\\s+)?deals\\s+(?:you'?re\\s+|you\\s+are\\s+)?(?:looking|trying|wanting)\\s+to\\s+(?:assign|wholesale|move)",
+    "any(?:thing|\\s+deals?)?\\s+(?:you'?re|you\\s+are)\\s+(?:looking|trying|wanting)\\s+to\\s+(?:assign|wholesale)",
+    "(?:anything|any\\s+deals?|any\\s+(?:properties|houses))\\s+(?:to|you\\s+(?:can|could))\\s+assign",
+    "send\\s+(?:me|us)\\s+(?:over\\s+)?(?:your|any|all\\s+your)\\s+(?:off[\\s-]?market\\s+|wholesale\\s+)?deals",
   ],
 };
 
