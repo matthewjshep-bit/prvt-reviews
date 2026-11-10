@@ -125,6 +125,7 @@ import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
 import { publishedFromOf } from "../shared/calibration.js";
 import { raiseNeedsConfirm, raiseLine } from "../shared/offer-raise.js";
+import { offerSendText, forRecordText } from "../shared/offer-send-text.js";
 import { buildScorecard, maybeRunPriceScorecard } from "../price-scorecard.js";
 import { importThreadReads, startThreadReads, getThreadReadJob, CURSOR_NAME as THREAD_READS_CURSOR } from "../thread-reads.js";
 import { questionTopics } from "../shared/thread-read.js";
@@ -7641,14 +7642,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // carries the terms.
       // The write-up ask goes only at a number Matt approved (numberApproved,
       // 2026-10-15); the machine's own words leave it off otherwise.
+      // The same words the app's Send box starts from (shared/offer-send-text.js,
+      // 2026-11-09): no dash, no dollar sign, the street not the full address.
       const askWriteUp = numberApproved(offer);
-      const text = message || (template === "for_record"
-        ? `Hi ${firstName}, sending our written offer on ${offer.address || "your property"} over so you have it on file — ` +
-          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          (askWriteUp ? ` If the seller's open to it, we'd be glad to have you represent us and write it up on ${offerForms(offer.address)} forms.` : ` Happy to answer any questions.`)
-        : `Hi ${firstName}, here's our letter of intent on ${offer.address || "your property"} — ` +
-          `${fmtMoney(offer.cashAmount)}, close on your timeline (letter attached).${pricing ? ` ${pricing}` : ""}` +
-          (askWriteUp ? ` If the seller's open to it, could you represent us and write it up on ${offerForms(offer.address)} forms for us to sign?` : ` Let me know what the seller thinks.`));
+      const words = { first: offer.contactName || "", address: offer.address || "", amount: offer.cashAmount, math: pricing, askWriteUp };
+      const text = message || (template === "for_record" ? forRecordText(words) : offerSendText(words));
 
       // The agent page — our arithmetic, the comps, the scope and what the
       // seller nets, at one link. An operator's message already carries it
