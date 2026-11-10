@@ -14,6 +14,7 @@
 //   POST /api/outreach/recent-listers/preview        what the recent listers' pull would find (reads RentCast, imports nobody)
 //   POST /api/outreach/import                        bulk import to GHL (dry-run by default)
 //   POST /api/outreach/agents/:agentKey/status       skip / unskip
+//   POST /api/outreach/opt-outs/backfill             past opt-outs made permanent (dry-run by default, counts only)
 //
 // Agents and listings are scoped to a BATCH (a saved, named pull cohort);
 // batchId/batch_id defaults to the most recent batch so the cron pull keeps
@@ -34,7 +35,9 @@ import { zillowUrl } from "../shared/us-address.js";
 import { findCounty, listingInCounty } from "../shared/us-counties.js";
 import { countyName, firstTextHook } from "../shared/outreach-opener.js";
 import { isRuralLot, RURAL_LOT_ACRES } from "../shared/asset-type.js";
-import { previewProactive, machineRoomToday } from "../reply-agent.js";
+import { previewProactive, machineRoomToday, conversationConfig } from "../reply-agent.js";
+import { runOptOutBackfill } from "../opt-out.js";
+import { optOutTagsOf } from "../shared/opt-out.js";
 import { fetchZillowAgentContacts, fetchZillowListings, MAX_LISTING_LOOKUPS } from "../rehab-scan.js";
 import { streetKey } from "../comps-zillow.js";
 import { OUTREACH_FIELDS } from "../field-registry.js";
@@ -1883,6 +1886,22 @@ export default function createOutreachRouter({ resolveLocation, firstTouch = nul
     try {
       const { locationId } = resolveLocation(req);
       res.json({ ok: true, job: getReplierBackfillJob(locationId) });
+    } catch (err) { fail(res, err); }
+  });
+
+  // The opt-out backfill (opt-out.js, Matt's 2026-11-09 rule for the past).
+  // Body: { dryRun = true }. Every contact with an opt-out the reply agent
+  // handled, or a dnc / unsubscribed tag (or the page's own opt-out tags) in
+  // GHL, gets a permanent `unsubscribed` record, and the machine texts and
+  // emails waiting for them are dismissed. Their own replies wait for you as
+  // they were. Run it dry first. Counts only: never a name, phone or word.
+  router.post("/opt-outs/backfill", async (req, res) => {
+    try {
+      const { locationId, client } = resolveLocation(req);
+      const saved = await getSettings(locationId);
+      const r = await runOptOutBackfill({ client, store, locationId, optOutTags: optOutTagsOf(conversationConfig(saved)),
+        dryRun: req.body?.dryRun !== false, deps: router.optOutBackfillDeps || {} });
+      res.json({ ok: true, ...r });
     } catch (err) { fail(res, err); }
   });
 

@@ -1297,14 +1297,16 @@ which never auto-sends. **Hold** leaves a note and writes no draft;
 from the enrichment code, whose substring rules call an agent who was tagged
 into a dispo blast ambiguous.
 
-**Before any of that: opt-outs and photos.** A text that starts with one of
-the opt-out words (`stop`, `unsubscribe`, `remove`, `cancel`, `quit`, `end`)
-or contains one of the phrases (`wrong number`, `do not text`, …) gets
+**Before any of that: opt-outs and photos.** A short text that starts with
+one of the opt-out words (`stop`, `unsubscribe`, `remove`, `cancel`, `quit`,
+`end`) or contains one of the phrases (`wrong number`, `do not text`, …) gets
 **silence** — no goodbye, no confirmation — plus the opt-out tags (`stop bot`,
 `dnc` on the starter) and any reply counting down to that contact is
 cancelled. No model call is made. The model can also read an opt-out the
 words missed ("lose my number", plain anger); it ends the same way. Point a
-GHL workflow at the tag to set DND. A message that is only a photo gets the
+GHL workflow at the tag to set DND. Since 2026-11-09 an opt-out on any
+channel stops every machine text and email for good: what counts, and what
+still goes, is in **Opt-outs: any channel stops every machine send** below. A message that is only a photo gets the
 canned line ("Thanks for the images, taking a look!") — pass the attachments
 to the webhook as `attachments` (a list, a URL, or a count) so an empty body
 isn't refused.
@@ -1579,6 +1581,86 @@ call transcripts and the profile extraction), read once at the daily cap on
 the tab (default 60, plus 12 per contact), counted from the store so a
 restart can't reset it. No Apify. Two drafts in flight per location at a
 time. Settled drafts older than the retention (180 days) are pruned daily.
+
+### Opt-outs: any channel stops every machine send (2026-11)
+
+Matt, 2026-11-09: anyone who opts out by text or email never gets another
+machine text or email, and Matt can still text them by hand. Until then each
+channel heard only itself: an agent who texted STOP still got the day-2 intro
+email and the check-in emails (48 emails to 35 opted-out agents from 10/21 to
+11/9), and a buyer who unsubscribed from email, or said "wrong number", still
+got deal texts.
+
+**What counts** (`shared/opt-out.js` `optedOut`, the one read every machine
+send asks):
+- a STOP in GHL (SMS DND) or an email unsubscribe (Email DND), either channel;
+- a tag that says do not contact, however spelled (`dnc`, `dnd`,
+  `do-not-text`, `opted-out`, `unsubscribed`, `stop`, `wrong number`,
+  `phone-dead`), or one of the page's opt-out tags. A bot-off tag (`stop bot`)
+  is not one: it holds the bot and is yours to take off again;
+- an `unsubscribed` event on their timeline. The reply agent writes it for a
+  keyword opt-out by text or email, for a model read at high confidence, when
+  you press **Opt out**, and when one of our replies that went by itself
+  promised to leave them alone ("I won't text you again", "I'll take you
+  off"). One per contact, ever (`dedupeKey unsubscribed:<contactId>`);
+- an opt-out the reply agent handled (a `handled` row with intent `opt_out`).
+
+**What it stops.** Everything the machine starts: the cold ladder, the
+check-ins, the intro and check-in emails, gatekeeper steps, the buyer pulse,
+the written offer that sends itself (after a float, a clean underwrite or a
+promise; held as "they opted out ..."), every deal text in a wave, a resume,
+a pre-sell, the Find buyers blast and the tag-and-workflow blast. A machine text or email already counting down is
+dismissed at the send (`dismissedBy: "opt_out"`, "they opted out, not sent").
+Nothing sets DND in GHL on the other channel: that would block your own
+texts.
+
+**What still goes.** You pressing Send, always: a hand text from the app
+(the composer's dry run says they opted out, `optedOut { via, at }`), and a
+held reply you send. If they write back after opting out, the bot drafts its
+answer and it waits for you ("they opted out earlier: this waits for you");
+it never sends by itself. A buyer who asks for the deal after opting out gets
+it drafted, waiting for your Send.
+
+**What the words read** (`detectOptOut`, `optOutMaybe` and
+`optOutInTranscript` in `shared/conversation-ai.js`, one reading for all
+three):
+- Footers come out first: "Reply STOP to opt out", "STOP to end", "To
+  unsubscribe, click here", "Reply REMOVE to stop getting these", and the
+  footer of an agent's own listing email ("You are receiving this email
+  because...", "Unsubscribe | Update preferences", "View in browser"). An
+  email is read for their words above the quoted thread only.
+- These never count: "stop by / in / over", "end of the day / week / month /
+  year", "end up", "cancel that", "cancel the showing / appointment",
+  "remove the", a quit claim deed, and a channel they'd rather we used ("don't
+  call, just text me", "text me, don't call"). "Don't text" always counts.
+- Anywhere in the text: "take me off", "remove me", "off your list", "do not
+  text / contact / call / email", "stop texting", "stop sending me these",
+  "unsubscribe", "please stop", "opt me out", "revoke" (not "revoke the
+  offer"), "lose my number", and any configured keyword of more than one word
+  ("wrong number").
+- A one-word keyword ("stop", "remove", "end"...) counts when it opens a text
+  of three words or fewer ("STOP", "Stop texting me").
+- **A maybe.** A longer text that opens with one ("Stop, not interested") is
+  drafted by the model and held for you, with no tag and no silence:
+  "this may be an opt-out: press Opt out if it is". **Opt out** on that row
+  writes the event and the opt-out tags, and the reply doesn't go. Send it or
+  dismiss it and it was never an opt-out. While it waits, nothing the machine
+  makes goes to them, and a second text from them keeps the button.
+
+**Bursts.** Two or three texts in a row get one reply; every text in the
+burst is read for an opt-out, not just the last. "Please stop texting me
+about it", then "Thanks", is a stop.
+
+**The backfill** (`POST /api/outreach/opt-outs/backfill`, body
+`{ dryRun = true }`). Matt's rule for the past: every contact with a handled
+opt-out, or a `dnc` / `unsubscribed` tag (or one of the page's opt-out tags)
+in GHL, gets an `unsubscribed` event (`via: "backfill"`), and the machine
+texts and emails waiting for anyone opted out are dismissed. A reply to them
+waiting for you is left alone. Contacts you tagged `dnc` by hand are included,
+on purpose. It answers in counts only (`contacts`, `fromDrafts`, `fromTags`,
+`alreadyMarked`, `eventsWritten`, `draftsDismissed`, `truncated`), never a
+name, phone or email. Run it dry, read the counts, then run it with
+`{ "dryRun": false }`. Run twice, it does nothing twice.
 
 ### One number per house — the price lock (2026-09-16)
 
@@ -4040,9 +4122,10 @@ for itself:
   your list" on 8/18, before the bot, and carried no tag. `optOutInTranscript`
   (shared/conversation-ai.js) reads THEIR lines of the thread; anything the
   machine starts (`startProactive`) stands down before the model is called:
-  "they asked to be left alone on <date> — nothing is drafted". Stricter than
-  `detectOptOut` on purpose ("Stop by the open house" is not an opt-out). It
-  tags nobody: a false positive costs one nudge, not a contact. An answer to
+  "they asked to be left alone on <date> — nothing is drafted". It reads the
+  same footers and exemptions as `detectOptOut` ("Stop by the open house" is
+  not an opt-out; since 2026-11-09). It tags nobody: a false positive costs
+  one nudge, not a contact. An answer to
   something they send is not this path.
 
 ### The nightly coach (2026-09-17)
@@ -7857,7 +7940,7 @@ Before this, wave 2 re-drafted every wave-1 buyer whose text was still sitting i
   - Subject: "Mobile home in a park, Kent — under contract, 76k" (`blastSubject`).
   - The body is the same text, rewritten at send time like the texts.
 - **`autoSend`**, off by default: emailed deals schedule themselves under the same switches as texts (`CARD_SENDS_ENABLED`, `DISPO_BLASTS_ENABLED`, `blast_open` on the allowlist). Off, they wait in the outbox for you.
-- An auto-sent email checks the contact's email opt-out, not SMS.
+- An auto-sent email or text checks an opt-out on either channel (2026-11-09; see Opt-outs under Conversation AI).
 - `blast_sent` records `channel`.
 - A buyer tagged `dispo-source-fb-warei` who has never written back gets "found you through the WA real estate Facebook group" first.
 

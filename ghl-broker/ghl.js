@@ -6,6 +6,7 @@
 //   version Version: 2021-07-28  (v2 default; conversations uses 2021-04-15)
 
 import { tallyMessages } from "./shared/talked-to.js";
+import { dndOn } from "./shared/opt-out.js";
 
 const BASE = "https://services.leadconnectorhq.com";
 const V2 = "2021-07-28";
@@ -228,21 +229,16 @@ export async function searchContacts(client, locationId, query) {
 // `dndSettings.SMS.status: "permanent"` (or "active" for a manual DND) while
 // the top-level `dnd` stays false — verified on a live contact, 2026-09-16,
 // after a blast reply failed "Cannot send message as +1425… has unsubscribed".
-// Read both, so neither shape slips a draft through.
+// Read both, so neither shape slips a draft through. The rule itself lives in
+// shared/opt-out.js (dndOn), beside the any-channel opt-out read (2026-11-09).
 export const DND_TAG = "unsubscribed";
 export function smsUnsubscribed(contact) {
-  if (!contact) return false;
-  if (contact.dnd === true) return true;
-  const status = String(contact.dndSettings?.SMS?.status || "").toLowerCase();
-  return status === "active" || status === "permanent";
+  return dndOn(contact, "sms");
 }
 
 // The same, for email: an emailed blast to a buyer who opted out of email.
 export function emailUnsubscribed(contact) {
-  if (!contact) return false;
-  if (contact.dnd === true) return true;
-  const status = String(contact.dndSettings?.Email?.status || "").toLowerCase();
-  return status === "active" || status === "permanent";
+  return dndOn(contact, "email");
 }
 
 export async function getContact(client, contactId) {

@@ -44,8 +44,10 @@ import {
   searchAllContactsByTags, getContact, updateContact, listLocationTags,
   findOrCreateCustomFieldByKey, customFieldIdKeyMapForDefs, contactCustomRecord,
   addContactTags, scanConversationsByContact, lastInboundByContact,
-  smsUnsubscribed,
 } from "../ghl.js";
+import { bookDnd, optedOutContactIds } from "../opt-out.js";
+import { isBlockedBuyer } from "../shared/buyer-pulse.js";
+import { allEventsSince } from "../contact-events.js";
 import { anthropicErrorToHttp } from "../rehab-scan.js";
 import { dealsByOf } from "../shared/contact-email.js";
 import { effectiveSettings } from "../shared/offer-calc.js";
@@ -261,8 +263,9 @@ export default function createDispoRouter({ resolveLocation }) {
       // Evidence of a conversation (a logged call, a fact learned from them).
       // Its own read: the agents' share would otherwise crowd out the blasts.
       store.listContactEventsSince(locationId, since, { types: TALK_EVENT_TYPES, notParty: "agent", limit: 20000 }).catch(() => []),
-      // Unsubscribed since the last sync (the bot marks it when GHL refuses).
-      store.listContactEventsSince(locationId, "1970-01-01T00:00:00.000Z", { types: ["unsubscribed"], limit: 20000 }).catch(() => []),
+      // Opted out since the last sync, on any channel (the bot marks it when
+      // GHL refuses, or when they opt out by text or email). All of it, paged.
+      allEventsSince(store, locationId, "1970-01-01T00:00:00.000Z", { types: ["unsubscribed"] }).then((r) => r.events).catch(() => []),
     ]);
     const eng = engagementFromEvents([...engEvents, ...talkEvents]);
     const unsub = new Set(unsubEvents.map((e) => e.contactId));
@@ -544,6 +547,9 @@ export default function createDispoRouter({ resolveLocation }) {
           : `Couldn't read conversation history (${e.message}) — reply status not updated.`
       );
     }
+    // Everyone on the record as opted out, read once for the whole sync.
+    const unsubscribed = new Set(((await allEventsSince(store, locationId, "1970-01-01T00:00:00.000Z", { types: ["unsubscribed"] }).catch(() => null))?.events || [])
+      .filter((e) => e?.type === "unsubscribed").map((e) => e.contactId).filter(Boolean));
     const rows = contacts.map((c) => {
       const custom = contactCustomRecord(c, idKeyMap);
       const reply = replies.get(c.id) || null;
@@ -555,7 +561,9 @@ export default function createDispoRouter({ resolveLocation }) {
         tags: Array.isArray(c.tags) ? c.tags : [],
         // Unsubscribed in GHL (a STOP): the pulse and the deal sends skip them
         // rather than burn a seat on a text that can never go (2026-09-29).
-        dnd: smsUnsubscribed(c),
+        // Since 2026-11-09 an opt-out on any channel counts: Email DND, or an
+        // `unsubscribed` event ("wrong number", "take me off your list").
+        dnd: bookDnd(c, unsubscribed),
         custom,
         lastMessageAt: reply?.at || "",
         lastMessageDirection: reply?.direction || "",
@@ -1213,17 +1221,28 @@ export default function createDispoRouter({ resolveLocation }) {
       }
 
       const warnings = [];
+      // An opt-out on any channel (Matt, 2026-11-09): the workflow would text
+      // or email them the deal, so they're left off, as a wave leaves them
+      // off. The book row carries GHL's DND and the tags; the record (one
+      // read for the list) carries "wrong number" and "take me off".
+      const optedOutIds = await optedOutContactIds({ store, locationId }).catch(() => null);
+      const OPTED_OUT = "they opted out (text or email)";
       const results = await mapPool(contactIds, 2, async (contactId) => {
         try {
           const row = await store.getInvestor(locationId, contactId);
           if (!row) return { contactId, ok: false, error: "unknown investor" };
+          if (isBlockedBuyer({ dnd: row.doc?.dnd, tags: row.doc?.tags || [] }) || optedOutIds?.has(contactId)) {
+            return { contactId, ok: false, skipped: true, error: OPTED_OUT };
+          }
           if (dryRun) {
             return { contactId, ok: true, dryRun: true, name: row.name, lastBlastAt: row.lastBlastAt };
           }
           await sleep(150);
           // Confirm the contact still exists before tagging — an investor
           // deleted in GHL since the last sync would otherwise 404 mid-batch.
-          await withRetry(() => getContact(client, contactId));
+          // An opt-out in GHL since the last sync counts too.
+          const live = await withRetry(() => getContact(client, contactId));
+          if (bookDnd(live)) return { contactId, ok: false, skipped: true, error: OPTED_OUT };
           await withRetry(() =>
             addContactTags(client, contactId, [blastTag, ...(applyTag ? [DISPO_TAG] : [])])
           );
@@ -1460,9 +1479,11 @@ export default function createDispoRouter({ resolveLocation }) {
   }
 
   // How to reach a buyer, carried onto a deal's send list so the queue can
-  // pick the channel and the how-we-found-you line (dispo-autopilot.js).
+  // pick the channel and the how-we-found-you line (dispo-autopilot.js), and
+  // whether they opted out (`dnd`, 2026-11-09), so the Find buyers blast
+  // skips them like a wave does.
   function reachOf(i = {}) {
-    return { phone: i.phone || "", email: i.email || "", tags: i.tags || [], lastRepliedAt: i.lastRepliedAt || "", dealsBy: dealsByOf(i) };
+    return { phone: i.phone || "", email: i.email || "", tags: i.tags || [], lastRepliedAt: i.lastRepliedAt || "", dealsBy: dealsByOf(i), dnd: Boolean(i.dnd) };
   }
 
   /** rankBuyerForDeal(locationId, offer, contactId) → { rank, tier } | null — for the dataroom guard. */

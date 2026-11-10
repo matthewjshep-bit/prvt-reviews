@@ -117,6 +117,17 @@ export function optOutVia(o) {
 }
 
 /**
+ * optedOutReason(o) → the short reason on a skipped row (an email, a
+ * gatekeeper step): "they opted out (text or email)", or, while a text of
+ * theirs that may be one waits for you, "they may have opted out (a reply
+ * waits for you)".
+ */
+export function optedOutReason(o) {
+  if (!o) return "";
+  return o.via === "maybe" ? "they may have opted out (a reply waits for you)" : "they opted out (text or email)";
+}
+
+/**
  * optedOutLine(o) → the reason a machine text or email stood down
  *
  * "they opted out (texted STOP): the machine starts nothing; your own texts still go"

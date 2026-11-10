@@ -13,8 +13,11 @@
 //
 // Dry run unless CARD_SENDS_ENABLED, like every other send. SMS only. The
 // words are in GHL's thread; neither the event nor any log carries them.
+// Someone who opted out still gets your own text (Matt, 2026-11-09); the dry
+// run says that they did (opt-out.js), so the composer can show it.
 
-import { sendSms as defaultSendSms, removeContactTags as defaultRemoveContactTags } from "./ghl.js";
+import { sendSms as defaultSendSms, removeContactTags as defaultRemoveContactTags, getContact as defaultGetContact } from "./ghl.js";
+import { optedOutFor } from "./opt-out.js";
 import { recordEvent } from "./contact-record.js";
 import { OFF_MARKET_ASK_RX } from "./shared/off-market.js";
 import { RA_TAGS } from "./reply-agent.js";
@@ -38,7 +41,14 @@ export async function sendHandReply({ client = null, store, locationId, contactI
   if (!body) throw Object.assign(new Error("type the text first"), { http: 400 });
   if (body.length > HAND_REPLY_MAX) throw Object.assign(new Error(`that's over ${HAND_REPLY_MAX} characters`), { http: 400 });
 
-  if (!live) return { ok: true, dryRun: true, preview: { channel: "sms", to: who, message: body }, standAside: 0 };
+  // Your own text is never stopped by an opt-out (Matt, 2026-11-09): the dry
+  // run only says so, { via, at }, for the composer to show.
+  if (!live) {
+    const readContact = typeof deps.getContact === "function" ? deps.getContact : client ? (id) => defaultGetContact(client, id) : null;
+    const optedOut = store ? await optedOutFor({ store, locationId, contactId: who, readContact }).catch(() => null) : null;
+    return { ok: true, dryRun: true, preview: { channel: "sms", to: who, message: body }, standAside: 0,
+      optedOut: optedOut ? { via: optedOut.via, at: optedOut.at || null } : null };
+  }
 
   const sendSms = deps.sendSms || defaultSendSms;
   const removeContactTags = deps.removeContactTags || defaultRemoveContactTags;

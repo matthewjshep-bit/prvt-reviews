@@ -17,6 +17,7 @@ import {
 import { fmtMoney } from "./shared/offer-calc.js";
 import { parseUsAddress } from "./shared/us-address.js";
 import { recordEvent, learnFacts } from "./contact-record.js";
+import { recordOptOut } from "./opt-out.js";
 import { FACT_KEYS } from "./shared/contact-record.js";
 
 let seq = 0;
@@ -166,6 +167,19 @@ const EXECUTORS = {
     if (!r?.ok) return r?.reason || "no offer to mark";
     if (r.unchanged) return `${r.address} was already marked no longer available`;
     return `${r.address} marked no longer available${r.stopped ? ` — ${r.stopped} queued text${r.stopped === 1 ? "" : "s"} about it stopped` : ""}`;
+  },
+  // Opt out (2026-11-09): your word that a held text was an opt-out. The
+  // `unsubscribed` record every machine text and email reads (opt-out.js),
+  // and the opt-out tags the row carries. Injected only, never on a rule, and
+  // always an ask: a person presses it.
+  async mark_opted_out({ client, locationId, contactId, action, store, draft }) {
+    const tags = (action.tags || []).map((t) => String(t || "").trim()).filter(Boolean);
+    if (tags.length) {
+      await addContactTags(client, contactId, tags);
+      await tagEvents({ store, locationId, contactId, draft, type: "tag_added", tags });
+    }
+    await recordOptOut({ store, locationId, contactId, party: draft?.party || null, via: action.via || "you", channel: draft?.channel, confidence: draft?.confidence || null });
+    return `opted out${tags.length ? `, tagged ${tags.join(", ")}` : ""}: no machine text or email goes to them again`;
   },
   // Our reply passed on the house (reply-agent.js, ourReplyPasses): a number
   // we priced on it and never sent closes as we_passed. Never an offer that

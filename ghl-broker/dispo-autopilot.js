@@ -27,7 +27,8 @@ import { store as defaultStore } from "./store.js";
 import { blastMessage, blastNote, dealFacts, blastSubject, presellMessage, normalizeDealTexts } from "./shared/blast-text.js";
 import { normalizeBookSync } from "./investor-sync.js";
 import { normalizeInvestorReads } from "./investor-read.js";
-import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
+import { normalizeBuyerPulse, isBlockedBuyer } from "./shared/buyer-pulse.js";
+import { optedOutContactIds } from "./opt-out.js";
 import { walkthroughAsk } from "./shared/showing.js";
 import { dealNumbers } from "./dataroom.js";
 import { dealOutreachPaused } from "./shared/offer-status.js";
@@ -268,7 +269,17 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     if (tag) return { held: true, kind: "bot_off", tag };
     return stops ? botHold({ events: stops.get(inv.contactId) || [], now }) : { held: true, kind: "unread" };
   };
-  const holdText = (hold) => (hold.kind === "bot_off" ? `bot is off for this contact (tag: ${hold.tag})` : holdLine(hold));
+  const holdText = (hold) => (hold.kind === "bot_off" ? `bot is off for this contact (tag: ${hold.tag})`
+    : hold.kind === "opted_out" ? "they opted out earlier: this waits for you" : holdLine(hold));
+  // An opt-out on any channel (Matt, 2026-11-09): a STOP, an email
+  // unsubscribe, "wrong number", a do-not-text tag. One read of the record for
+  // the whole list (opt-out.js); the book row carries GHL's DND (`dnd`) and
+  // the tags (isBlockedBuyer). Every wave, the Find buyers blast, a resume and
+  // a pre-sell come through here. A buyer who just asked for this deal still
+  // gets it drafted, waiting for your Send. A failed read leaves the send-time
+  // check (reply-agent.js sendReplyDraft) to catch them.
+  const optedOutIds = await optedOutContactIds({ store, locationId }).catch(() => null);
+  const optedOutBuyer = (inv) => isBlockedBuyer({ dnd: inv.dnd ?? inv.doc?.dnd, tags: inv.tags || inv.doc?.tags || [] }) || Boolean(optedOutIds?.has(inv.contactId));
   const rows = [];
   let queued = 0, drafted = 0, waiting = 0, i = 0;
   // Cumulative: each text lands at least `spreadSec` after the one before,
@@ -283,7 +294,9 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const name = inv.name || inv.doc?.name || "";
     const channels = blastChannels(inv, da);
     if (!channels.length) { rows.push({ contactId, name, status: "skipped", reason: "no phone, and email drafting is off", text: "" }); continue; }
-    const hold = holdOf(inv);
+    const off = optedOutBuyer(inv);
+    if (off && !inv.asked) { rows.push({ contactId, name, status: "skipped", reason: "they opted out (text or email)", text: "" }); continue; }
+    const hold = off ? { held: true, kind: "opted_out" } : holdOf(inv);
     const intro = blastIntro(inv);
     const variant = i;
     const text = presell ? presellMessage({ ...facts, firstName: name, variant, intro }) : blastMessage({ ...facts, firstName: name, variant, ask, intro, templates: da.dealTexts });

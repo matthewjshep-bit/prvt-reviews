@@ -19,10 +19,12 @@ const { machineDid } = await import("./shared/flow.js");
 
 const LOC = "loc-paper-float";
 const sent = [];
+// What GHL says about a contact beyond the usual (an opt-out), by id.
+const ghlExtra = {};
 const client = {
   call: async (p, o = {}) => {
     const method = o.method || "GET";
-    if (method === "GET" && /^\/contacts\/[^/?]+$/.test(p)) return { contact: { id: p.split("/").pop(), firstName: "Dana", phone: "+12065550100", email: "dana@example.com" } };
+    if (method === "GET" && /^\/contacts\/[^/?]+$/.test(p)) return { contact: { id: p.split("/").pop(), firstName: "Dana", phone: "+12065550100", email: "dana@example.com", ...(ghlExtra[p.split("/").pop()] || {}) } };
     if (method === "POST" && p.startsWith("/conversations/messages")) {
       sent.push(typeof o.body === "string" ? JSON.parse(o.body || "{}") : o.body || {});
       return { messageId: `m${sent.length}` };
@@ -110,6 +112,20 @@ test("a stopped or unsubscribed agent gets no paper", async () => {
   assert.equal((await store.getOffer(stopped.id)).paperAfterFloat, undefined);
   assert.equal((await store.getOffer(unsub.id)).paperAfterFloat, undefined);
   assert.ok(sent.length >= before);
+});
+
+test("an agent who unsubscribed from email or is tagged dnc gets no paper by text or email", async () => {
+  ghlExtra["agent-email-off"] = { dndSettings: { Email: { status: "active" } } };
+  ghlExtra["agent-dnc"] = { tags: ["agent", "dnc"] };
+  const emailOff = await floated("agent-email-off");
+  const dnc = await floated("agent-dnc");
+  await router.sendPaperAfterSilence({ client, locationId: LOC, now: TUESDAY });
+  assert.equal(sent.filter((m) => ["agent-email-off", "agent-dnc"].includes(m.contactId)).length, 0, "no text and no email");
+  for (const o of [emailOff, dnc]) {
+    const after = await store.getOffer(o.id);
+    assert.equal(after.paperAfterFloat?.status, "held", o.contactId);
+    assert.match(after.paperAfterFloat.reason, /they opted out/);
+  }
 });
 
 test("nothing goes at night, or with the switch off", async () => {
