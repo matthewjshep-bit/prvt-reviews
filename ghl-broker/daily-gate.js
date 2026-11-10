@@ -13,17 +13,48 @@
 //   - a failed run is retried, at most MAX_DAILY_TRIES a day, RETRY_GAP_MS
 //     apart, inside the job's window;
 //   - a new day may start anywhere in the window — a deploy across the start
-//     hour no longer skips it.
+//     hour no longer skips it;
+//   - "ran today" is the Pacific calendar date (2026-11-09), not "under 20
+//     hours ago": a run retried at 2:30pm used to keep the next morning's
+//     run from starting, and a long window (the tier check's 7am to 8pm)
+//     pushed the next day into the afternoon.
 //
 // The caller passes the hour in the job's own clock (UTC for some, Pacific
-// for others) so this stays clock-agnostic.
+// for others). The day is Pacific, where the business is; a UTC job whose
+// window runs over midnight Pacific is still one run (ranThisDay).
+
+import { pacificParts } from "./shared/follow-up-engine.js";
 
 export const RETRY_GAP_MS = 20 * 60 * 1000;
 export const STALE_RUN_MS = 45 * 60 * 1000;
 export const MAX_DAILY_TRIES = 4;
+// No longer how "ran today" is decided (see ranThisDay). Kept for callers
+// that still pass `minGapMs`, which is ignored.
 export const MIN_GAP_MS = 20 * 3600 * 1000;
+const HOUR_MS = 3600 * 1000;
 
 const iso = (ms) => new Date(ms).toISOString();
+
+/** pacificDay(t) → "2026-11-09": the calendar date in Pacific time. */
+export function pacificDay(t) {
+  const p = pacificParts(t);
+  return `${p.y}-${String(p.m).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`;
+}
+
+/**
+ * ranThisDay({ dailyAt, now, hourNow, startHour }) → boolean
+ *
+ * The day's run has already started: `dailyAt` (when it was claimed) is the
+ * same Pacific date as `now`, or, for a window on the UTC clock that runs
+ * over midnight Pacific, falls inside the window that is open now.
+ */
+export function ranThisDay({ dailyAt, now = Date.now(), hourNow = null, startHour = null }) {
+  if (dailyAt == null || !Number.isFinite(dailyAt)) return false;
+  if (pacificDay(dailyAt) === pacificDay(now)) return true;
+  if (hourNow == null || startHour == null || !(hourNow >= startHour)) return false;
+  const windowOpened = now - (now % HOUR_MS) - (hourNow - startHour) * HOUR_MS;
+  return dailyAt >= windowOpened;
+}
 
 /**
  * claimDailyRun({ store, locationId, cursorName, now, hourNow, startHour, windowHours, running })
@@ -33,7 +64,7 @@ const iso = (ms) => new Date(ms).toISOString();
  */
 export async function claimDailyRun({
   store, locationId, cursorName, now = Date.now(), hourNow, startHour, windowHours = 3, running = false,
-  maxTries = MAX_DAILY_TRIES, retryGapMs = RETRY_GAP_MS, staleRunMs = STALE_RUN_MS, minGapMs = MIN_GAP_MS,
+  maxTries = MAX_DAILY_TRIES, retryGapMs = RETRY_GAP_MS, staleRunMs = STALE_RUN_MS,
 }) {
   if (!(hourNow >= startHour && hourNow < startHour + windowHours)) return { go: false };
   if (running) return { go: false };
@@ -41,7 +72,7 @@ export async function claimDailyRun({
   const doc = cursor?.doc || {};
   // A cursor written before this gate existed has only `at`: that IS the day's run.
   const dailyAt = doc.lastDaily ? Date.parse(doc.lastDaily) : (cursor?.at ? Date.parse(cursor.at) : null);
-  const ranToday = dailyAt != null && Number.isFinite(dailyAt) && now - dailyAt < minGapMs;
+  const ranToday = ranThisDay({ dailyAt, now, hourNow, startHour });
   const stale = Boolean(doc.run?.startedAt) && now - Date.parse(doc.run.startedAt) > staleRunMs;
   let tries = 1;
   if (ranToday) {

@@ -23,6 +23,7 @@ import { callDraftModel, conversationConfig, REPLY_MODEL } from "./reply-agent.j
 import { meterAi } from "./ai-spend.js";
 import { spreadAcrossDay, machineHours } from "./conversation-scheduler.js";
 import { workHour, isWorkday } from "./outreach-sweep.js";
+import { ranThisDay } from "./daily-gate.js";
 import { readNoticeEmails } from "./gatekeeper-feed.js";
 import { normalizeGatekeepers, rankGatekeepers, bestHook, GATEKEEPER_KIND_LABEL } from "./shared/gatekeeper.js";
 import { nextStep, gatekeeperPrompt, draftFlags, DRAFT_SCHEMA, SEQUENCE_EVENT_TYPES, GATEKEEPER_EVENTS } from "./shared/gatekeeper-sequence.js";
@@ -30,7 +31,6 @@ import { nextStep, gatekeeperPrompt, draftFlags, DRAFT_SCHEMA, SEQUENCE_EVENT_TY
 export const CURSOR_NAME = "gatekeepers";
 export const SWEEP_HOUR = 9;               // Pacific; before the agent sweep's own hour
 const RETRY_WINDOW_HOURS = 6;
-const MIN_GAP_MS = 20 * 3600000;
 const STALE_RUN_MS = 45 * 60000;
 const RETRY_GAP_MS = 20 * 60000;
 const MAX_DAILY_TRIES = 4;
@@ -214,7 +214,9 @@ export async function maybeRunGatekeeperSweep({ client, locationId, saved = {}, 
   if (jobs.get(locationId)?.status === "running") return false;
   const doc = (await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null))?.doc || {};
   const dailyAt = doc.lastDaily ? Date.parse(doc.lastDaily) : null;
-  const ranToday = dailyAt != null && now - dailyAt < MIN_GAP_MS;
+  // The Pacific date, not "under 20 hours ago": a 2:30pm retry used to cost
+  // the next 9am run (2026-11-09).
+  const ranToday = ranThisDay({ dailyAt, now, hourNow: h, startHour: SWEEP_HOUR });
   const stale = doc.run?.startedAt && now - Date.parse(doc.run.startedAt) > STALE_RUN_MS;
   let tries = 1;
   if (ranToday) {

@@ -54,6 +54,30 @@ test("a failed day retries at most four times, twenty minutes apart", async () =
   assert.equal(started, MAX_DAILY_TRIES);
 });
 
+// 2026-11-09 audit: "ran today" was "under 20 hours ago", so a run retried
+// late in a long window (the tier check's runs 7am to 8pm) pushed the next
+// day's start into the afternoon, or past the window altogether.
+test("a retry late in the window doesn't cost tomorrow's run", async () => {
+  const store = memStore();
+  const evening = Date.parse("2026-11-09T03:30:00Z");   // Sunday 7:30pm Pacific
+  await store.setJobCursor("L", "job", { at: new Date(evening).toISOString(), doc: { lastDaily: new Date(evening).toISOString(), tries: 3, last: { done: true } } });
+  const morning = Date.parse("2026-11-09T15:05:00Z");   // Monday 7:05am Pacific, under 12 hours later
+  const r = await gate(store, { now: morning, hourNow: 7, startHour: 7, windowHours: 13 });
+  assert.equal(r.go, true);
+  assert.equal(r.tries, 1, "a new day, not a retry");
+  await closeDailyRun({ store, locationId: "L", cursorName: "job", last: { done: true } });
+  assert.equal((await gate(store, { now: morning + 3 * 3600000, hourNow: 10, startHour: 7, windowHours: 13 })).go, false, "and only once");
+});
+
+// A job on the UTC clock whose window runs over midnight Pacific is still one run.
+test("a window that runs over midnight Pacific runs once", async () => {
+  const store = memStore();
+  const late = Date.parse("2026-11-10T07:05:00Z");      // 11:05pm Pacific Monday, hour 7 UTC
+  assert.equal((await gate(store, { now: late, hourNow: 7, startHour: 7, windowHours: 3 })).go, true);
+  await closeDailyRun({ store, locationId: "L", cursorName: "job", last: { done: true } });
+  assert.equal((await gate(store, { now: late + 2 * 3600000, hourNow: 9, startHour: 7, windowHours: 3 })).go, false, "1:05am Pacific Tuesday is the same run");
+});
+
 test("a cursor written before the gate counts as today's run", async () => {
   const store = memStore();
   await store.setJobCursor("L", "job", { at: new Date(T - 10 * MIN).toISOString(), doc: {} });
