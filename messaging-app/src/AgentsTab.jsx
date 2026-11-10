@@ -15,7 +15,7 @@ import { NUDGE_TEXTS } from "@shared/standard-texts.js";
 import { OPENER_MAX_EXAMPLES, homesFrom, homesText, normalizeOpener } from "@shared/outreach-opener.js";
 import { normalizeIntroEmail, normalizeCheckInEmail, CHECK_IN_EMAIL_MAX } from "@shared/outreach-email.js";
 import { MAX_REPEAT_DAYS } from "@shared/follow-up.js";
-import { getConversationAi, getDashboardPipeline, getSettings, patchSettings, saveConversationAi } from "./api.js";
+import { getConversationAi, getDashboardAutopilot, getSettings, patchSettings, saveConversationAi } from "./api.js";
 import { BTN, BTN_DANGER, BTN_PRIMARY, ErrorBar, SkeletonRows } from "./ui.jsx";
 import FlowChart, { emailSampleOf, sampleOf, textWarnings } from "./FlowChart.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
@@ -78,7 +78,7 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
   // Setup save after never carries the old texts back.
   const [setupVersion, setSetupVersion] = useState(0);
 
-  const load = useCallback(() => Promise.all([getSettings(), getConversationAi(), getDashboardPipeline().catch(() => null)])
+  const load = useCallback(() => Promise.all([getSettings(), getConversationAi(), getDashboardAutopilot().catch(() => null)])
     .then(([s, c, p]) => { setSettings(s); setConfig(c.config); setSwitches(p?.autopilot?.switches || []); setError(""); })
     .catch((e) => setError(e.message || "Couldn't load the agent flow.")), []);
   useEffect(() => { load(); }, [load]);

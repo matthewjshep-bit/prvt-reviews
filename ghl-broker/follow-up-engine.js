@@ -28,8 +28,9 @@ import { paperAfterSilenceDue, paperWent, addWorkingHours, PAPER_FLOAT_MAX_DAYS 
 import { showingTouches } from "./shared/showing.js";
 import { callEventConnected } from "./shared/talked-to.js";
 import { attachNextFollowUps } from "./next-follow-up.js";
-import { planAgentPulse, pulseWorkflows, pulseTierCards, MATTS_FIFTEEN_REASON, CURSOR_NAME as AGENT_PULSE_CURSOR } from "./agent-pulse.js";
-import { planBuyerPulse, pulseSettings as buyerPulseSettings } from "./buyer-pulse.js";
+import { MATTS_FIFTEEN_REASON, CURSOR_NAME as AGENT_PULSE_CURSOR } from "./agent-pulse.js";
+import { pulseSettings as buyerPulseSettings } from "./buyer-pulse.js";
+import { agentPulsePlanFor, buyerPulsePlanFor, _resetPulsePlans } from "./pulse-plans.js";
 import {
   outreachCandidates, investorCandidates, secondLookCandidates, FOLLOW_UP_UTC_HOUR, CURSOR_NAME as FOLLOW_UP_CURSOR,
 } from "./follow-up-sweep.js";
@@ -276,13 +277,12 @@ export function addressChases({ events = [], now = Date.now() }) {
 
 /* ---------- the read ---------- */
 
-// The plan doesn't depend on the period: switching chips reuses it.
-const planMemo = new Map();
-const PLAN_MEMO_MS = 60000;
-
+// The reads behind a period's page. Nothing here is kept between pages
+// (2026-11-09): this used to hold up to 100,000 events and 4,000 drafts in
+// memory for a minute so a chip switch could reuse them. What is kept is
+// derived: each period's page (routes/dashboard.js) and the two check-in
+// plans, which Line and the check-in page share (pulse-plans.js).
 async function planContext({ store, locationId, saved, client, now, deps }) {
-  const hit = planMemo.get(locationId);
-  if (hit && Math.abs(now - hit.at) < PLAN_MEMO_MS) return hit.ctx;
   const since = iso(now - PLAN_DAYS * DAY_MS);
   const [offersRaw, drafts, openDrafts, planRead, askRead, deals, cursors] = await Promise.all([
     store.listOffers(locationId, { limit: 5000, lean: true }).catch(() => []),
@@ -300,21 +300,19 @@ async function planContext({ store, locationId, saved, client, now, deps }) {
   const config = conversationConfig(saved || {});
   const oa = normalizeOutreachAutopilot(saved.outreachAutopilot);
   const [agentPlan, buyerPlan, outreach, investors, looks] = await Promise.all([
-    planAgentPulse({ locationId, saved, store, now,
-      workflows: await pulseWorkflows(client, locationId, deps).catch(() => null),
-      tierCards: await pulseTierCards(client, locationId, deps).catch(() => null) }).catch(() => null),
-    deps.buyerBook ? planBuyerPulse({ locationId, saved, store, now, deps: { book: deps.buyerBook } }).catch(() => null) : null,
+    agentPulsePlanFor({ store, locationId, saved, client, now, deps }).catch(() => null),
+    buyerPulsePlanFor({ store, locationId, saved, now, book: deps.buyerBook || null }).catch(() => null),
+    // The planner reuses the cold window the sweep last read (follow-up-sweep.js coldWindowEvents).
     outreachCandidates({ store, locationId, config, now, ghlCohort: oa.nudgeGhlCohort, fresh: false }).catch(() => []),
     investorCandidates({ store, locationId, config, now }).catch(() => []),
     secondLookCandidates({ store, locationId, config, now }).catch(() => []),
   ]);
   Object.assign(ctx, { agentPlan, buyerPlan, outreach, investors, looks });
-  planMemo.set(locationId, { at: now, ctx });
   return ctx;
 }
 
-/** _resetPlanMemo() — tests. */
-export function _resetPlanMemo() { planMemo.clear(); }
+/** _resetPlanMemo() — tests: forget the shared check-in plans. */
+export function _resetPlanMemo() { _resetPulsePlans(); }
 
 /**
  * followUpEngineFor({ store, locationId, saved, period, now, client, deps, env })

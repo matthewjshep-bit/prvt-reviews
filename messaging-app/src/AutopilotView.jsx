@@ -3,7 +3,7 @@
 // both Flow and Pipeline; now Today shows a one-line status that links here.
 
 import React, { useEffect, useState } from "react";
-import { getDashboardPipeline } from "./api.js";
+import { getDashboardAutopilot } from "./api.js";
 import { ErrorBar, SkeletonRows } from "./ui.jsx";
 import AutopilotCard from "./AutopilotCard.jsx";
 
@@ -15,7 +15,7 @@ export default function AutopilotView() {
 
   useEffect(() => {
     let live = true;
-    getDashboardPipeline()
+    getDashboardAutopilot()
       .then((r) => { if (!live) return; setAutopilot(r.autopilot); setConversationEnabled(r.conversationEnabled !== false); setError(""); })
       .catch((e) => { if (live) setError(e.message || "Couldn't load the autopilot."); });
     return () => { live = false; };

@@ -35,16 +35,6 @@ export const MAX_IMPORT = 100;
 const MAX_NOTICE_TEXT = 2_000_000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function withRetry(fn) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fn();
-    } catch (e) {
-      if (e.status !== 429 || attempt >= 2) throw e;
-      await sleep(2000 * (attempt + 1));
-    }
-  }
-}
 const digits = (s) => String(s || "").replace(/\D/g, "").slice(-10);
 const e164 = (p) => (digits(p).length === 10 ? `+1${digits(p)}` : "");
 const firstEmail = (raw) => String(raw || "").split(/[;,\s]+/).find((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)) || "";
@@ -206,8 +196,8 @@ export default function createGatekeepersRouter({ resolveLocation, deps = {} }) 
         if (!email && !phone) { results.push({ gkKey, ok: false, error: "no email or phone yet" }); continue; }
         const tags = gatekeeperTags(row);
         await sleep(150);
-        const match = await withRetry(() => findDuplicateContact(client, locationId, { email, phone }));
-        const existing = match ? await withRetry(() => getContact(client, match.id)) : null;
+        const match = await findDuplicateContact(client, locationId, { email, phone });
+        const existing = match ? await getContact(client, match.id) : null;
         const asAgent = theirsAlready(existing);
         if (asAgent) {
           results.push({ gkKey, ok: true, skipped: `already in GHL as an agent or buyer (tag: ${asAgent}) — left as they are`, contactId: match.id });
@@ -226,17 +216,17 @@ export default function createGatekeepersRouter({ resolveLocation, deps = {} }) 
           if (!existing.phone && phone) patch.phone = phone;
           if (!existing.email && email) patch.email = email;
           if (!existing.companyName && d.firm) patch.companyName = d.firm;
-          if (Object.keys(patch).length) await withRetry(() => updateContact(client, contactId, patch));
+          if (Object.keys(patch).length) await updateContact(client, contactId, patch);
         } else {
           action = "created";
-          contactId = await withRetry(() => createContact(client, locationId, {
+          contactId = await createContact(client, locationId, {
             firstName: d.firstName || d.name || d.firm || "Gatekeeper", lastName: d.lastName || "",
             ...(phone ? { phone } : {}), ...(email ? { email } : {}), ...(d.firm ? { companyName: d.firm } : {}),
             source: "gatekeeper",
-          }));
+          });
         }
         if (!contactId) throw new Error("no contact id returned");
-        await withRetry(() => addContactTags(client, contactId, tags));
+        await addContactTags(client, contactId, tags);
         const hook = bestHook(hooks.filter((h) => h.gkKey === gkKey).map((h) => ({ ...h.doc, kind: h.kind, hookKey: h.hookKey, firstSeen: h.firstSeen })));
         try {
           const at = new Date().toISOString();

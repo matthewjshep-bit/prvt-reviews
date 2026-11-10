@@ -33,7 +33,6 @@ import { getContact, searchConversations, listConversationMessages } from "./ghl
 import { conversationConfig, markUnsubscribed } from "./reply-agent.js";
 import { loadPulseAgents, pulseTierCards } from "./agent-pulse.js";
 import { mapPool } from "./map-pool.js";
-import { withRetry } from "./buyer-import.js";
 import { classifyReplierThread, agentSegment, agentStops } from "./shared/agent-pulse.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -58,13 +57,14 @@ export async function outreachContactIds(store, locationId) {
 async function readThread({ client, locationId, contactId, deps }) {
   const search = deps.searchConversations || ((id) => searchConversations(client, locationId, { contactId: id, limit: 10 }));
   const list = deps.listConversationMessages || ((convId, opts) => listConversationMessages(client, convId, { ...opts, limit: 100 }));
-  // A 429 waits and tries again (twice); anything else fails this contact.
-  const { conversations = [] } = (await withRetry(() => search(contactId))) || {};
+  // The GHL client retries a 429 or a 502 itself (ghl.js); anything else
+  // fails this contact.
+  const { conversations = [] } = (await search(contactId)) || {};
   const messages = [];
   for (const c of conversations.slice(0, MAX_CONVERSATIONS)) {
     let lastMessageId;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const r = (await withRetry(() => list(c.id, { lastMessageId }))) || {};
+      const r = (await list(c.id, { lastMessageId })) || {};
       messages.push(...(r.messages || []));
       if (!r.nextPage || !r.lastMessageId) break;
       lastMessageId = r.lastMessageId;
@@ -153,7 +153,7 @@ export async function runReplierBackfill({
       const messages = await readThread({ client, locationId, contactId, deps });
       // Their GHL record only when they wrote back: DND and do-not-text tags.
       let v = classifyReplierThread({ messages, optOut });
-      if (v.kind !== "none") v = classifyReplierThread({ messages, contact: await withRetry(() => readContact(contactId)), optOut });
+      if (v.kind !== "none") v = classifyReplierThread({ messages, contact: await readContact(contactId), optOut });
       out.read++;
       out.kinds[v.kind] = (out.kinds[v.kind] || 0) + 1;
       out.why[v.why] = (out.why[v.why] || 0) + 1;

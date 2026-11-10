@@ -2606,6 +2606,24 @@ it. Not changed: the board's
 lane (`laneFor`) still places such a row in "ready", which the GHL mirror
 reads.
 
+**Reads that only need a few rows ask for a few (2026-11-09).** Three reads
+pulled whole tables to keep a handful of rows:
+- **The tick's two send retries** (`retryPendingOfferSends`,
+  `sendPaperAfterSilence` in routes/offers.js) read the newest 300 whole
+  offer documents every fifteen minutes. They now ask
+  `store.listPendingOfferSends(locationId, { limit, floatedSince })`: among
+  the same newest 300, only an offer with `autoSendPending`, or (with
+  `floatedSince`) a float since then with no `paperAfterFloat`, never a deal.
+  The paper send picks the house's current row off the lean book, as before.
+- **Names for a few contacts** come from `store.contactNamesByIds(locationId,
+  ids)`: the investor book's name, then the contact record's. Flow used to
+  read the whole investor book (about 3.5MB) on every thirty-second poll for
+  them; Today's `namesFor` read 5,000 contact records.
+- **Typed event reads across a location** ("every stop since 1970", a year of
+  lead events) have their own index, `contact_events_loc_type_at_idx` on
+  `(location_id, type, at desc)`. Additive; the first boot that applies it
+  builds it once.
+
 ### The tick: every job on its own, every day comes back (2026-09-29)
 
 **One job can't stop the others.** The 15-minute tick ran every job for a
@@ -5983,6 +6001,61 @@ at all. Two faults, both fixed:
 - Still in memory, by design: the underwrite / reply / feedback-scan job
   registries. A restart loses job *visibility* only; every write they make
   is idempotent and every durable decision is a `contact_events` row.
+- **Opening Reports can't knock the broker over (2026-11-09).** At 18:21 PT
+  on 11-09 the one broker that takes GHL's webhooks flapped 502 for about
+  six minutes right after a `/line`. Now:
+  - `/line`, `/followup` and `/flow` each keep one compute a location (and
+    period or window) at a time: a second open joins the one running, and
+    `?fresh=1` joins it too. Line and Follow-up are kept 60 seconds, Flow 25.
+  - The agent and buyer check-in plans are computed once and shared by Line,
+    Follow-up and the check-in page (`GET /api/outreach/pulse`) for 90
+    seconds (ghl-broker/pulse-plans.js). The send jobs still plan fresh.
+  - Those computes run one at a time across every route (`heavyGate`,
+    ghl-broker/read-memo.js). A page can be up to 90 seconds behind. A
+    settings save, from any route, starts every kept page and plan over:
+    they are keyed on a fingerprint of the saved settings.
+  - What's kept is the page or the plan, never the reads behind it (the
+    follow-up page used to hold up to 100,000 events for a minute).
+  - The Autopilot tabs read `GET /api/dashboard/autopilot` (the switch pills
+    alone) instead of all of Today. Flow reads its few missing names by id,
+    counts the cold agents without building Today (`coldNoReplyCount`,
+    shared/pipeline.js), and doesn't poll a past day at all.
+  - The tick's jobs (GHL calls, GHL pings, Needs Matt, Slack) share one
+    Today read for 75 seconds (`pipelineForTick`); `GET /pipeline` is still
+    fresh on every poll. A contact GHL has no name for, or no record of (a
+    404), is asked again a day later, not every read; each ask is one try of
+    ten seconds, never the client's retries, so a GHL outage can't hold the
+    tick's Today read. The agent check-in plan the nightly audit makes
+    without GHL is kept apart from the one the pages share. The Activity
+    tab's GHL scan runs 3 at a time.
+  - Check after a deploy: open Reports → Line twice quickly; the broker's
+    log shows no error and `GET /` keeps answering.
+- **One retry and one rate limit for every GHL call (2026-11-09,
+  `makeClient` in ghl.js).** A read (a GET, or the contact search) that gets
+  429, 502, 503, 504, a timeout or a dropped connection is tried again, at
+  most 3 tries, waiting GHL's `Retry-After` when it gives one (never more
+  than 10 seconds), else 1 then 2 seconds. A send (`POST
+  /conversations/messages`) is never tried again here: one that timed out may
+  have gone, and the scheduler's own rules decide. Any other write is tried
+  again only on a 429, which GHL answers before doing anything. Every try
+  takes a turn in one bucket per location, about 8 a second
+  (`GHL_RATE_PER_SEC`), so the tick, the scheduler and the webhooks no longer
+  burst past GHL's 100 per 10 seconds together. The five `withRetry` copies
+  are gone. A GHL error reads `GHL <method> <path> -> <status> <message>`:
+  the path without its query string (a duplicate lookup carried the email or
+  phone in it) and only the body's `message`, phones and emails knocked out;
+  the whole body stays on `err.data`, never logged. Watch the 9am rush after
+  the deploy: if replies queue, raise `GHL_RATE_PER_SEC` to 9.
+- **Three outside calls give up.** The Slack post (15 seconds), the Gmail
+  token refresh (15 seconds) and cardgen's `/render` (45: a cardgen waking up
+  still answers inside that) had no timeout, so a hung one held its caller.
+- **Postgres in CI.** The backend job runs a `postgres:16`: it applies
+  `schema.pg.sql` twice with psql (`ON_ERROR_STOP`), then runs
+  `store-pg.test.mjs` with `DATABASE_URL` set (the lean row's ARV, the
+  pending-send read, names by id, a typed event read). Locally that file
+  skips its database tests without `DATABASE_URL`. Render still deploys on
+  every push whether CI passed or not; switching its auto-deploy to "after
+  CI checks pass" is a dashboard setting only Matt can change.
 - `routes/offers.js` is past five thousand lines. Splitting it into offers /
   deals / automations routers is mechanical and pending.
 - Render still carries `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` from the
@@ -6206,8 +6279,10 @@ text's sub-line counts known agents texted about a new listing
 (`agent_pulse_texted`, reason fresh_listing) without adding them to the tile. Under it "What moved": every movement in the window, newest first, filterable to
 the machine / people / acquisition / disposition, with contact and offer
 links. Windows: today / 7 / 30 days, or a single past day. Polls every 30s
-while visible. Pure builder `shared/flow.js` (`buildFlow`, `machineDid`);
-route `GET /api/dashboard/flow?days=&end=&tz_offset=`, uncached local tier.
+while visible, except a past day, which loads once. Pure builder
+`shared/flow.js` (`buildFlow`, `machineDid`); route
+`GET /api/dashboard/flow?days=&end=&tz_offset=`, kept 25 seconds a location
+and window, one compute at a time (Hardening notes, 2026-11-09).
 The timeline renderer is `messaging-app/src/EventFeed.jsx`, shared with the
 contact drawer.
 
@@ -6234,7 +6309,7 @@ timeline. Check: `GET /api/dashboard/flow` → `stages[3].key === "talked"`;
 
 The whole business as one line, measured the way a factory floor is: is each station keeping pace, where does work wait, and what fell off with nothing scheduled. It only reads. Nothing on the page changes a setting.
 
-**Where it lives.** `GET /api/dashboard/line` is cached a minute per location, and `?fresh=1` skips the cache. The arithmetic is in `shared/line.js`; the reads are in `ghl-broker/line.js` `lineFor`. The tab is `LineView.jsx`.
+**Where it lives.** `GET /api/dashboard/line` is kept a minute per location, one compute at a time; `?fresh=1` computes it again unless one is already running, which it joins (see Hardening notes, 2026-11-09). The arithmetic is in `shared/line.js`; the reads are in `ghl-broker/line.js` `lineFor`. The tab is `LineView.jsx`.
 
 **Stations.** Flow's own counts (`buildFlow`) for the last 7 and 30 days, each station's rate a day, and its pace against a target.
 - Targets are in Settings → Line targets (`settings.lineTargets`, `normalizeLineTargets`). Defaults are the Agent Method's: 10 new agents a day, 10 offers a day, 120 offers to a contract, 2 deals a month, $15K a deal, every replied agent touched in 21 days, every buyer in 30.
@@ -6285,7 +6360,7 @@ never-texted, off-market). Check: `GET /api/dashboard/line` → `supply`.
 
 Matt couldn't see what follow-up the app was generating, or what was queued for any one agent, offer or buyer. The answer was spread over the Offers column (offers only, next touch only), the check-in plan, the follow-ups preview and the Line, and buyers had nothing. This page puts it in one place, laid out like his sketch. It only reads.
 
-**Where it lives.** `/reports?view=followup` (`&period=today|week|month|ytd` opens a period). The route is `GET /api/dashboard/followup?period=`, cached a minute per location and period (`?fresh=1` skips it). The rows behind a bar or a row come from `GET /api/dashboard/followup/items?period=&bucket=|mechanism=|group=|state=`, capped at 300.
+**Where it lives.** `/reports?view=followup` (`&period=today|week|month|ytd` opens a period). The route is `GET /api/dashboard/followup?period=`, kept a minute per location and period, one compute at a time (`?fresh=1` computes it again, or joins one already running). The rows behind a bar or a row come from `GET /api/dashboard/followup/items?period=&bucket=|mechanism=|group=|state=`, capped at 300.
 - Arithmetic and catalog: `shared/follow-up-engine.js` (`buildFollowUpEngine`, `FOLLOW_UP_MECHANISMS`).
 - Reads: `ghl-broker/follow-up-engine.js` (`followUpEngineFor`).
 - Page: `messaging-app/src/FollowUpView.jsx`.

@@ -48,7 +48,6 @@ import { runIntroEmails, runCheckInEmails } from "./outreach-email.js";
 import { normalizeOutreachAutopilot } from "./outreach-sweep.js";
 import { allEventsSince } from "./contact-events.js";
 import { searchConversations, listConversationMessages, removeContactFromWorkflow } from "./ghl.js";
-import { withRetry } from "./buyer-import.js";
 import { countyName, firstTextHook } from "./shared/outreach-opener.js";
 import { secondLookDue, numberPresented, normalizeSecondLook, SECOND_LOOK_STATUSES, SECOND_LOOK_WINDOW_DAYS, SECOND_LOOK_KIND } from "./shared/second-look.js";
 import { nextRungAt, normalizeSteps } from "./shared/follow-up.js";
@@ -653,12 +652,13 @@ export function afterFirstText(messages = [], { appSince = null } = {}) {
 }
 
 // One agent's GHL thread: their few latest conversations, the newest page of
-// each. A cold thread is a handful of messages. A 429 waits and tries again.
+// each. A cold thread is a handful of messages. The GHL client retries a 429
+// or a 502 itself (ghl.js).
 async function readGhlThread(client, locationId, contactId) {
-  const { conversations = [] } = (await withRetry(() => searchConversations(client, locationId, { contactId, limit: 10 }))) || {};
+  const { conversations = [] } = (await searchConversations(client, locationId, { contactId, limit: 10 })) || {};
   const messages = [];
   for (const c of conversations.slice(0, 3)) {
-    const r = (await withRetry(() => listConversationMessages(client, c.id, { limit: 100 }))) || {};
+    const r = (await listConversationMessages(client, c.id, { limit: 100 })) || {};
     messages.push(...(r.messages || []));
   }
   return messages;

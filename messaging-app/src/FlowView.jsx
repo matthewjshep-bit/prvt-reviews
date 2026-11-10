@@ -5,7 +5,9 @@
 // its count, a bar, and the machine/person split; arrows carry the share
 // of the previous stage that reached this one. Under it: the feed of
 // everything that moved. The Flow tab of /reports. One endpoint, polled
-// every thirty seconds while the tab is visible.
+// every thirty seconds while the tab is visible, except on a past day: that
+// day is over, so it loads once (2026-11-09; each poll is a heavy read on the
+// broker that takes GHL's webhooks).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, ArrowRight } from "lucide-react";
@@ -22,6 +24,11 @@ const FEED_FILTERS = [
   { key: "agent", label: "Acquisition" }, { key: "dispo", label: "Disposition" },
 ];
 const localDayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+
+// How often to ask again: every thirty seconds, or never for a day that's over.
+export function flowPollMs(endDate = "", today = localDayKey()) {
+  return endDate && endDate < today ? null : POLL_MS;
+}
 
 /* ---------- the river ---------- */
 
@@ -117,14 +124,16 @@ export default function FlowView() {
 
   useEffect(() => {
     let live = true; let timer = null; const g = ++gen.current;
+    const every = flowPollMs(endDate);
     async function tick() {
-      if (!document.hidden) {
+      // A past day loads once, even from a hidden tab: nothing asks again.
+      if (!document.hidden || !every) {
         setLoading(true);
         try { const r = await getDashboardFlow(viewDays, endDate); if (!live || g !== gen.current) return; setData(r); setError(""); }
         catch (e) { if (live) setError(e.message || "Couldn't load the flow."); }
         finally { if (live) setLoading(false); }
       }
-      if (live) timer = setTimeout(tick, POLL_MS);
+      if (live && every) timer = setTimeout(tick, every);
     }
     tick();
     return () => { live = false; clearTimeout(timer); };

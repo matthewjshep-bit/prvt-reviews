@@ -15,8 +15,7 @@ import { annotateCurrent } from "./shared/current-offer.js";
 import { dealScorecard } from "./shared/post-mortem.js";
 import { effectiveSettings } from "./shared/offer-calc.js";
 import { attachNextFollowUps } from "./next-follow-up.js";
-import { planAgentPulse } from "./agent-pulse.js";
-import { planBuyerPulse } from "./buyer-pulse.js";
+import { agentPulsePlanFor, buyerPulsePlanFor } from "./pulse-plans.js";
 import { conversationConfig } from "./reply-agent.js";
 import { allEventsSince } from "./contact-events.js";
 import { isDealRoom } from "./routes/dataroom.js";
@@ -44,17 +43,20 @@ export async function dealRoomIds({ store, locationId, offers = [] }) {
 }
 
 /**
- * lineFor({ store, locationId, saved, now, flow, buyerBook })
+ * lineFor({ store, locationId, saved, now, flow, buyerBook, client })
  *   → buildLine() output, plus { eventsTruncated }
  *
  *   flow       { eventTypes, jobs } to count the stations (the route), or
  *              null to skip them (the audit wants leaks only)
  *   buyerBook  (locationId) → the scored buyer book, for the buyer pulse
  *              plan; omitted, the buyer side reports nothing
+ *   client     GHL, so the agent check-in plan reads the tier cards the way
+ *              the check-in run does. The two plans are the ones Follow-up
+ *              and the check-in page show (pulse-plans.js, kept 90 seconds).
  *
  * Each read that fails leaves its part empty; the rest still reports.
  */
-export async function lineFor({ store, locationId, saved = {}, now = Date.now(), flow = null, buyerBook = null }) {
+export async function lineFor({ store, locationId, saved = {}, now = Date.now(), flow = null, buyerBook = null, client = null }) {
   const settings = effectiveSettings(saved || {});
   const config = conversationConfig(saved || {});
   const since30 = iso(now - 30 * DAY_MS);
@@ -94,10 +96,10 @@ export async function lineFor({ store, locationId, saved = {}, now = Date.now(),
   let actions = [];
   try { actions = buildPipeline({ offers, drafts: openDrafts, events: dealEvents, jobs: [], config, now, dealRooms }).actions || []; } catch { actions = []; }
 
-  // The two clocks that keep people warm.
+  // The two clocks that keep people warm: the shared plans (pulse-plans.js).
   const [agentPlan, buyerPlan] = await Promise.all([
-    planAgentPulse({ locationId, saved, store, now }).catch(() => null),
-    buyerBook ? planBuyerPulse({ locationId, saved, store, now, deps: { book: buyerBook } }).catch(() => null) : null,
+    agentPulsePlanFor({ store, locationId, saved, client, now }).catch(() => null),
+    buyerPulsePlanFor({ store, locationId, saved, now, book: buyerBook }).catch(() => null),
   ]);
 
   // What buyers paid, all-in, on the deals that ended. From the whole deal,

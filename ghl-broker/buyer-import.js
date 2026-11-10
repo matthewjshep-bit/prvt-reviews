@@ -11,16 +11,6 @@ import { tagsForPurchases, strategyFor } from "./shared/dispo-regions.js";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Retry a GHL call on 429 (2s, then 4s). Other errors propagate.
-export async function withRetry(fn) {
-  for (let attempt = 0; ; attempt++) {
-    try { return await fn(); } catch (e) {
-      if (e.status !== 429 || attempt >= 2) throw e;
-      await sleep(2000 * (attempt + 1));
-    }
-  }
-}
-
 export const normPhone = (s) => { const d = String(s || "").replace(/\D/g, ""); return d.length >= 10 ? d.slice(-10) : ""; };
 export const e164 = (phone) => (normPhone(phone) ? `+1${normPhone(phone)}` : "");
 export const normEmail = (s) => String(s || "").trim().toLowerCase();

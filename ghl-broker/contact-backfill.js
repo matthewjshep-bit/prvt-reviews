@@ -22,13 +22,6 @@ import { offerEvents, draftEvents, draftFacts, inviteEvents } from "./shared/con
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PACE_MS = 150;
 
-async function withRetry(fn) {
-  for (let attempt = 0; ; attempt++) {
-    try { return await fn(); }
-    catch (e) { if (e.status !== 429 || attempt >= 2) throw e; await sleep(2000 * (attempt + 1)); }
-  }
-}
-
 /* ---------- job registry (one per location, same shape as the sweep) ---------- */
 
 const jobs = new Map();
@@ -145,7 +138,7 @@ export async function runContactBackfill(job, { client, locationId, store }) {
       const p = people.get(contactId);
       job.currentName = p.name || contactId;
       try {
-        const contact = await withRetry(() => getContact(client, contactId));
+        const contact = await getContact(client, contactId);
         if (contact) {
           const r = await reconcileFromGhl({ store, locationId, contactId, party: p.party, contact, idKeyMap });
           job.counts.events += r.events;

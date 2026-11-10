@@ -8,6 +8,7 @@
 import { tallyMessages } from "./shared/talked-to.js";
 import { dndOn } from "./shared/opt-out.js";
 import { cutQuotedHtml } from "./shared/gmail.js";
+import { scrubMessage } from "./app-errors.js";
 
 const BASE = "https://services.leadconnectorhq.com";
 const V2 = "2021-07-28";
@@ -17,11 +18,98 @@ const V_CONVERSATIONS = "2021-04-15";
 // at 10:08 and then sat "running" on a GHL request that never answered: the
 // tick saw a run in progress and never retried, and the next deploy wiped
 // the job with the day stamped as done. A request that hangs now throws, and
-// everything above (withRetry, the sweep's failed-run retry) gets its turn.
+// everything above (the client's own retry, the sweep's failed-run retry)
+// gets its turn.
 export const GHL_TIMEOUT_MS = 30000;
 
-export function makeClient(token) {
-  async function call(path, { method = "GET", body, version = V2, timeoutMs = GHL_TIMEOUT_MS } = {}) {
+// One retry and one rate limit for every GHL call (2026-11-09). Before this,
+// any non-2xx threw, five copies of a withRetry helper retried only 429, and
+// most of reply assembly didn't retry at all, so one 502 from GHL became
+// "AI reply could not be drafted, answer by hand". Nothing shared a limit
+// either, so the 9am rush (the tick, the scheduler and the webhooks at once)
+// ran into GHL's 100 requests per 10 seconds.
+//
+//   reads   GET, and the contact search that only reads (POST /contacts/search):
+//           retried on 429, 502, 503, 504, a timeout or a dropped connection
+//   sends   POST /conversations/messages…: never retried. A send that timed
+//           out may have gone; the scheduler decides what happens next.
+//   writes  everything else: retried on 429 only, which GHL answers before it
+//           does anything, so a retry can't apply a write twice
+//
+// At most GHL_MAX_TRIES tries, waiting Retry-After when GHL gives one (never
+// more than GHL_MAX_RETRY_WAIT_MS), else 1s then 2s. Every try, first or not,
+// takes its turn in a per-location bucket of GHL_RATE_PER_SEC a second.
+export const GHL_MAX_TRIES = 3;
+export const GHL_RATE_PER_SEC = Math.max(1, Number(process.env.GHL_RATE_PER_SEC) || 8);
+export const GHL_MAX_RETRY_WAIT_MS = 10000;
+const READ_RETRY = new Set([429, 502, 503, 504]);
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+const barePath = (path) => String(path || "").split("?")[0];
+
+/** callKind(method, path) → "read" | "send" | "write" */
+export function callKind(method = "GET", path = "") {
+  const m = String(method || "GET").toUpperCase();
+  const p = barePath(path).replace(/\/+$/, "");
+  if (m === "GET" || m === "HEAD") return "read";
+  if (p.startsWith("/conversations/messages")) return "send";
+  if (m === "POST" && p === "/contacts/search") return "read";
+  return "write";
+}
+
+// The thrown error says which call and what GHL answered, never what it was
+// asked: the query string (a duplicate lookup carries the email or phone it
+// looked for) is dropped, and of the body only its `message`, with any phone
+// or email knocked out ("Cannot send message as <phone> has unsubscribed").
+// The whole body stays on err.data for a caller that needs it; it is never
+// logged.
+export function ghlError({ method = "GET", path = "", status = 0, data = null } = {}) {
+  const said = data && typeof data === "object" ? data.message : null;
+  const words = said == null ? "" : scrubMessage(Array.isArray(said) ? said.join("; ") : String(said));
+  const err = new Error(`GHL ${method} ${barePath(path)} -> ${status}${words ? ` ${words}` : ""}`);
+  err.status = status;
+  err.data = data;
+  err.path = barePath(path);
+  return err;
+}
+
+// How long GHL asked us to wait, in ms: seconds or an HTTP date. null = it didn't say.
+export function retryAfterMs(value, now = Date.now()) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  if (Number.isFinite(n) && n >= 0) return Math.round(n * 1000);
+  const t = Date.parse(String(value));
+  return Number.isFinite(t) ? Math.max(0, t - now) : null;
+}
+
+const timedOutOrDropped = (e) => !e?.status && (e?.name === "TimeoutError" || e?.name === "AbortError"
+  || /fetch failed|timeout|ECONNRESET|ECONNREFUSED|socket hang up|network/i.test(String(e?.message || "")));
+
+// The per-location bucket: a token is the location's, so it keys the bucket.
+// Each try takes a turn; past the bucket, a turn is booked behind the others
+// and waited for, so concurrent callers queue instead of all going at once.
+const buckets = new Map();
+export function takeTurn(key, { rate = GHL_RATE_PER_SEC, now = Date.now() } = {}) {
+  let b = buckets.get(key);
+  if (!b) { b = { tokens: rate, at: now }; buckets.set(key, b); }
+  b.tokens = Math.min(rate, b.tokens + (Math.max(0, now - b.at) / 1000) * rate);
+  b.at = now;
+  b.tokens -= 1;
+  return b.tokens >= 0 ? 0 : Math.ceil((-b.tokens / rate) * 1000);
+}
+export function _resetBuckets() { buckets.clear(); }
+
+/**
+ * makeClient(token, opts) → { call(path, { method, body, version, timeoutMs, retry }) }
+ *
+ *   opts.rate      requests a second for this location (default GHL_RATE_PER_SEC)
+ *   opts.sleep     the wait (tests pass a fake one)
+ *   opts.retryBaseMs  first backoff when GHL gives no Retry-After (default 1000)
+ *   call(…, { retry: false }) opts one call out of the retry
+ */
+export function makeClient(token, { rate = GHL_RATE_PER_SEC, sleep = sleepMs, retryBaseMs = 1000 } = {}) {
+  async function once(path, { method, body, version, timeoutMs }) {
+    const wait = takeTurn(token, { rate });
+    if (wait > 0) await sleep(wait);
     const res = await fetch(BASE + path, {
       method,
       headers: {
@@ -41,12 +129,26 @@ export function makeClient(token) {
       data = { raw: text };
     }
     if (!res.ok) {
-      const err = new Error(`GHL ${method} ${path} -> ${res.status} ${text}`);
-      err.status = res.status;
-      err.data = data;
+      const err = ghlError({ method, path, status: res.status, data });
+      err.retryAfterMs = retryAfterMs(res.headers?.get?.("retry-after"));
       throw err;
     }
     return data;
+  }
+  async function call(path, { method = "GET", body, version = V2, timeoutMs = GHL_TIMEOUT_MS, retry = true } = {}) {
+    const kind = callKind(method, path);
+    const again = (e) => retry !== false && (kind === "read"
+      ? READ_RETRY.has(Number(e?.status)) || timedOutOrDropped(e)
+      : kind === "write" && Number(e?.status) === 429);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await once(path, { method, body, version, timeoutMs });
+      } catch (e) {
+        if (attempt >= GHL_MAX_TRIES || !again(e)) throw e;
+        const backoff = e?.retryAfterMs ?? retryBaseMs * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
+        await sleep(Math.min(GHL_MAX_RETRY_WAIT_MS, backoff));
+      }
+    }
   }
   return { call };
 }
@@ -180,8 +282,8 @@ export async function findOrCreateContactByPhone(client, locationId, phone, firs
 // Returns { id, matchedBy: "email" | "phone" } or null. Callers treat null as
 // "assume new", so null must MEAN no match: GHL's own "nothing here" answers
 // (400/404/422 — a malformed identifier, no such contact) fall through to the
-// next identifier, and anything else — a 429, a 5xx, a scope error — throws,
-// so withRetry can back off. Swallowing those used to report a rate-limited
+// next identifier, and anything else — a 429, a 5xx, a scope error — throws
+// once the client's own retry is spent (makeClient above). Swallowing those used to report a rate-limited
 // lookup as "not in GHL": on 2026-09-14 the outreach pull cleared agents who
 // were already contacts, and 10 of the sweep's 12 picks were existing ones.
 const isNoMatchError = (e) => [400, 404, 422].includes(Number(e?.status));
@@ -242,8 +344,11 @@ export function emailUnsubscribed(contact) {
   return dndOn(contact, "email");
 }
 
-export async function getContact(client, contactId) {
-  const data = await client.call(`/contacts/${encodeURIComponent(contactId)}`);
+// `opts` (optional) goes to client.call: { retry: false, timeoutMs } for a
+// read that's only nice to have.
+export async function getContact(client, contactId, opts = null) {
+  const path = `/contacts/${encodeURIComponent(contactId)}`;
+  const data = await (opts ? client.call(path, opts) : client.call(path));
   return data.contact || data;
 }
 

@@ -431,20 +431,20 @@ const TICK_JOBS = [
   // After the calls are read, so a call that just happened has cleared its
   // row. Off until desk.ghlCalls is on with a workflow; never texts anyone.
   { area: "ghl-calls", run: async ({ client, locationId, saved }) => {
-    const r = await maybeRunGhlCalls({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
+    const r = await maybeRunGhlCalls({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineForTick } });
     if (r?.mode === "morning") console.log(`GHL calls: the day's list started for ${locationId}`);
   } },
   // The few things only Matt can do (paper to sign, an agreed number, a
   // closing task) ping him through his GHL workflow, once each (ghl-pings.js,
   // 2026-10-20). Off until desk.ghlPings is on with a workflow; never texts anyone.
   { area: "ghl-pings", run: async ({ client, locationId, saved }) => {
-    await maybeRunGhlPings({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
+    await maybeRunGhlPings({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineForTick } });
   } },
   // What only Matt can do moves the agent's card to GHL's "Needs Matt" stage
   // and back when it's done (needs-matt.js, 2026-10-22: "instead of ping to
   // me they land there"). Only with ghlStages on and a stage by that name.
   { area: "needs-matt", run: async ({ client, locationId, saved }) => {
-    await maybeRunNeedsMatt({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
+    await maybeRunNeedsMatt({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineForTick } });
   } },
   // Slack (slack-notify.js, 2026-10-24): what just landed in Needs Matt
   // (after needs-matt above, so it's this tick's list) and the machine's
@@ -452,7 +452,7 @@ const TICK_JOBS = [
   // day. The events go on their own minute loop below. Off until saved.slack
   // is on with a bot token; never texts anyone.
   { area: "slack", run: async ({ client, locationId, saved }) => {
-    await maybeRunSlack({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineFor } });
+    await maybeRunSlack({ client, locationId, saved, store, deps: { pipelineFor: dashboardRouter.pipelineForTick } });
   } },
 ];
 

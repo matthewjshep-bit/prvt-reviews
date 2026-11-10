@@ -448,6 +448,12 @@ create index if not exists contact_events_contact_idx on contact_events (locatio
 -- "everything that happened here in the last N days" — which is what the
 -- investor follow-up ladder and the funnel report both ask.
 create index if not exists contact_events_loc_at_idx on contact_events (location_id, at desc);
+-- Typed, location-wide reads (2026-11-09): every stop and pause since 1970
+-- (Today's read, each tick), a year of lead events (Line), the dispo reads.
+-- With only the index above, each read walked every event the location ever
+-- had to keep the few types it asked for. Additive; built once, at the boot
+-- that first applies it.
+create index if not exists contact_events_loc_type_at_idx on contact_events (location_id, type, at desc);
 create index if not exists contact_events_offer_idx on contact_events (location_id, offer_id) where offer_id is not null;
 create unique index if not exists contact_events_dedupe_uniq
   on contact_events (location_id, contact_id, dedupe_key) where dedupe_key is not null;

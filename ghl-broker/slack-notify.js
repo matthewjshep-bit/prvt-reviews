@@ -70,14 +70,19 @@ const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t
 /* ---------- Slack's Web API ---------- */
 
 /**
- * slackApi(token, method, body) → Slack's reply. Throws on !ok with
- * err.slack (Slack's error code) and err.retryAfter on a rate limit.
+ * slackApi(token, method, body, { timeoutMs }) → Slack's reply. Throws on !ok
+ * with err.slack (Slack's error code) and err.retryAfter on a rate limit.
+ *
+ * Gives up after SLACK_TIMEOUT_MS (2026-11-09): a Slack that hangs held the
+ * tick's slack job, and the jobs after it, for as long as it hung.
  */
-export async function slackApi(token, method, body = {}) {
+export const SLACK_TIMEOUT_MS = 15000;
+export async function slackApi(token, method, body = {}, { timeoutMs = SLACK_TIMEOUT_MS } = {}) {
   const r = await fetch(`https://slack.com/api/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const j = await r.json().catch(() => ({}));
   if (r.status === 429 || !r.ok || !j?.ok) {

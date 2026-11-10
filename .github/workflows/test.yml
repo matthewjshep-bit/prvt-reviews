@@ -7,7 +7,8 @@ on:
 
 # The suite is hermetic: a temp DATA_DIR, the JSON-file store, stubbed fetch.
 # It needs no secrets, and must never be given any — a run with GHL or send
-# credentials in scope is a run that could text somebody.
+# credentials in scope is a run that could text somebody. The one database it
+# touches is the throwaway postgres:16 below, for the backend prod runs.
 permissions:
   contents: read
 
@@ -18,7 +19,24 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    # Prod runs Postgres; every suite but store-pg.test.mjs runs the JSON file.
+    # A prod-only bug of exactly this class (lean rows lost their ARV on
+    # Postgres) once shipped with every test green.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: broker_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d broker_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,6 +57,28 @@ jobs:
       - name: broker + shared tests
         run: npm run test:all
         working-directory: ghl-broker
+
+      # Boot applies schema.pg.sql every time, so it must be valid and change
+      # nothing the second time.
+      - name: the schema applies twice on postgres
+        run: |
+          psql -v ON_ERROR_STOP=1 -q -f schema.pg.sql
+          psql -v ON_ERROR_STOP=1 -q -f schema.pg.sql
+        working-directory: ghl-broker
+        env:
+          PGHOST: localhost
+          PGUSER: ci
+          PGPASSWORD: ci
+          PGDATABASE: broker_ci
+
+      # The store suites again, on the database prod runs. One file at a time:
+      # they share the one database.
+      - name: store tests on postgres
+        run: node --test --test-concurrency=1 store-pg.test.mjs
+        working-directory: ghl-broker
+        env:
+          DATABASE_URL: postgres://ci:ci@localhost:5432/broker_ci
+          PGSSL: disable
 
   frontend:
     runs-on: ubuntu-latest

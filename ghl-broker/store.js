@@ -91,6 +91,55 @@ export function offerListQuery({ locationId, contactId = null, limit = 50, lean 
   };
 }
 
+// Offers waiting on a send, among the location's newest `limit` (2026-11-09).
+// The tick's two send retries used to read the newest 300 FULL documents,
+// about 9KB each, every fifteen minutes, to find the few that matter:
+//   autoSendPending   a clean offer that couldn't send itself yet
+//                     (routes/offers.js retryPendingOfferSends)
+//   floatedSince      also a float sent since then with no paper tried
+//                     (sendPaperAfterSilence)
+// Never a deal. The callers re-check every condition on the row; this only
+// narrows, in SQL, so the documents that don't matter never leave Postgres.
+// Built as { text, params } here so it gets a unit test without a database.
+export function pendingSendsQuery({ locationId, limit = 300, floatedSince = null }) {
+  const params = [locationId];
+  const ph = (v) => `$${params.push(v)}`;
+  const empty = (k) => `coalesce(doc->'${k}', 'null'::jsonb) in ('null'::jsonb, 'false'::jsonb)`;
+  const newest = `select id from offers where location_id = $1 order by created_at desc limit ${ph(limit)}`;
+  const waiting = [`jsonb_typeof(doc->'autoSendPending') = 'object'`];
+  if (floatedSince) waiting.push(`(doc #>> '{proactive,realmCheckAt}' >= ${ph(floatedSince)} and ${empty("paperAfterFloat")})`);
+  return {
+    text: `select doc from offers
+            where id in (${newest})
+              and ${empty("deal")}
+              and (${waiting.join(" or ")})
+            order by created_at desc`,
+    params,
+  };
+}
+
+// Names for a handful of contacts (2026-11-09): the investor book's, then the
+// contact record's. Flow read the whole investor book (about 3.5MB) on every
+// thirty-second poll for the few names its feed was missing.
+export function contactNamesQuery({ locationId, ids = [] }) {
+  return {
+    text: `select contact_id as "contactId", name, 0 as pri from investors
+            where location_id = $1 and contact_id = any($2::text[]) and coalesce(name, '') <> ''
+           union all
+           select contact_id as "contactId", name, 1 as pri from contact_profiles
+            where location_id = $1 and contact_id = any($2::text[]) and coalesce(name, '') <> ''
+           order by pri`,
+    params: [locationId, ids],
+  };
+}
+const nameIds = (ids) => [...new Set((ids || []).filter((x) => x != null && String(x).trim()).map(String))].slice(0, 5000);
+// One name a contact: the first row wins (the investor book before the record).
+const firstNames = (rows) => {
+  const out = {};
+  for (const r of rows) if (r?.contactId && r.name && !(r.contactId in out)) out[r.contactId] = String(r.name);
+  return out;
+};
+
 // The last thing anyone said to each contact, one row per contact.
 //
 // Deliberately NOT windowed. The offers table's whole question is how cold an
@@ -270,6 +319,12 @@ const pgStore = {
     const { text, params } = offerListQuery({ locationId, contactId, limit, lean });
     const { rows } = await query(text, params);
     return lean ? rows.map((r) => toListOffer(r.doc)) : rows.map((r) => r.doc);
+  },
+  // See pendingSendsQuery. Full documents, but only the few waiting on a send.
+  async listPendingOfferSends(locationId, { limit = 300, floatedSince = null } = {}) {
+    const { text, params } = pendingSendsQuery({ locationId, limit, floatedSince });
+    const { rows } = await query(text, params);
+    return rows.map((r) => r.doc);
   },
   // Offers promoted to deals (doc has a `deal` key), newest deal first.
   async listDeals(locationId, { limit = 200 } = {}) {
@@ -956,6 +1011,14 @@ const pgStore = {
           [locationId, limit]
         );
     return rows;
+  },
+  // See contactNamesQuery: { contactId: name } for the ids that have one.
+  async contactNamesByIds(locationId, ids = []) {
+    const want = nameIds(ids);
+    if (!want.length) return {};
+    const { text, params } = contactNamesQuery({ locationId, ids: want });
+    const { rows } = await query(text, params);
+    return firstNames(rows);
   },
   async getInvestor(locationId, contactId) {
     const { rows } = await query(
@@ -1708,6 +1771,19 @@ const fileStore = (() => {
       // the row production sees.
       return lean ? rows.map((o) => toListOffer(leanOfferDoc(o))) : rows;
     },
+    // Same answer as pendingSendsQuery: among the newest `limit`, never a deal.
+    async listPendingOfferSends(locationId, { limit = 300, floatedSince = null } = {}) {
+      ensure();
+      const empty = (v) => v == null || v === false;
+      const pending = (o) => Boolean(o.autoSendPending) && typeof o.autoSendPending === "object" && !Array.isArray(o.autoSendPending);
+      const floated = (o) => Boolean(floatedSince) && o.proactive?.realmCheckAt != null
+        && String(o.proactive.realmCheckAt) >= floatedSince && empty(o.paperAfterFloat);
+      return Object.values(data.offers)
+        .filter((o) => o.locationId === locationId)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+        .slice(0, limit)
+        .filter((o) => empty(o.deal) && (pending(o) || floated(o)));
+    },
     async listDeals(locationId, { limit = 200 } = {}) {
       ensure();
       return Object.values(data.offers)
@@ -2328,6 +2404,14 @@ const fileStore = (() => {
         .filter((i) => i.locationId === locationId && (!status || i.status === status))
         .sort((a, b) => String(a.name || "￿").localeCompare(String(b.name || "￿")))
         .slice(0, limit);
+    },
+    async contactNamesByIds(locationId, ids = []) {
+      ensure();
+      const want = nameIds(ids);
+      const rows = [];
+      for (const id of want) { const i = data.investors[`${locationId}|${id}`]; if (i?.name) rows.push({ contactId: id, name: i.name }); }
+      for (const id of want) { const p = data.contactProfiles[`${locationId}|${id}`]; if (p?.name) rows.push({ contactId: id, name: p.name }); }
+      return firstNames(rows);
     },
     async getInvestor(locationId, contactId) {
       ensure();

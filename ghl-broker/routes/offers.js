@@ -361,6 +361,11 @@ function contactName(c) {
 }
 
 // Render the offer document through cardgen. Returns { jpeg, width, height }.
+// Gives up after CARDGEN_TIMEOUT_MS (2026-11-09): offer creation waits on
+// it, and a cardgen that hung held the request open with it. 45 seconds, not
+// 15: cardgen is its own Render service, and one that has to wake up or is
+// busy with a long render still answers inside that.
+export const CARDGEN_TIMEOUT_MS = 45000;
 async function renderDocument(calc, meta, locationId) {
   if (!CARD_SERVICE_URL) {
     throw Object.assign(new Error("CARD_SERVICE_URL not configured"), { http: 500 });
@@ -370,6 +375,7 @@ async function renderDocument(calc, meta, locationId) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ template, context: {}, store: false, format: "jpeg" }),
+    signal: AbortSignal.timeout(CARDGEN_TIMEOUT_MS),
   });
   if (!r.ok) {
     throw Object.assign(new Error("document render failed"), {
@@ -825,6 +831,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ template, context: {}, store: false, format: "jpeg" }),
+        signal: AbortSignal.timeout(CARDGEN_TIMEOUT_MS),
       });
       if (!r.ok) throw new Error(`${kind} render ${r.status}`);
       pages.push({ jpeg: Buffer.from(await r.arrayBuffer()), width: template.canvas.width, height: template.canvas.height });
@@ -5637,7 +5644,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     if (Date.parse(dueAt) - now > 60000) return { sent: 0, checked: 0 };
     // Not on a weekend the page keeps, or a day off: it waits for the next working day.
     if (!machineWorksOn(cfg, now)) return { sent: 0, checked: 0 };
-    const pending = (await store.listOffers(locationId, { limit: 300 })).filter((o) => o?.autoSendPending?.at && !o.deal).slice(0, limit);
+    // Only the offers waiting to send, not the newest 300 whole documents
+    // (store.listPendingOfferSends, 2026-11-09).
+    const pending = (await store.listPendingOfferSends(locationId, { limit: 300 })).filter((o) => o?.autoSendPending?.at && !o.deal).slice(0, limit);
     let sent = 0;
     for (const offer of pending) {
       const heldFor = offer.autoSendPending.reason;
@@ -5700,8 +5709,16 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     let today = cur?.doc?.day === day ? Number(cur.doc.count) || 0 : 0;
     if (today >= af.dailyCap) return { sent: 0, checked: 0, capped: true };
     const oldest = now - (PAPER_FLOAT_MAX_DAYS + 1) * 86400000;
-    const book = await store.listOffers(locationId, { limit: 300 });
-    const candidates = currentOffers(book).filter((o) => !o.deal && !o.paperAfterFloat && !paperWent(o)
+    // Which row is current on each house comes off the lean book; the whole
+    // document only for the floats still waiting on paper
+    // (store.listPendingOfferSends, 2026-11-09). It used to read the newest
+    // 300 whole documents every tick.
+    const [book, waiting] = await Promise.all([
+      store.listOffers(locationId, { limit: 300, lean: true }),
+      store.listPendingOfferSends(locationId, { limit: 300, floatedSince: new Date(oldest).toISOString() }),
+    ]);
+    const current = new Set(currentOffers(book).map((o) => o.id));
+    const candidates = waiting.filter((o) => current.has(o.id) && !o.deal && !o.paperAfterFloat && !paperWent(o)
       && Date.parse(o.proactive?.realmCheckAt || "") > oldest && ["new", "sent"].includes(effectiveStatus(o)));
     let sent = 0;
     let checked = 0;
