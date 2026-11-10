@@ -5014,9 +5014,12 @@ reply-agent.js (`WALK_AWAY_GAP`, `listPriceFloor`):
   (prompt: no second ask, no new number).
 - **Only after our number went out (2026-11-09 audit).** The goodbye fired at
   agents who had never seen a number of ours. It now needs `numberWentOut`
-  (reply-agent.js): the offer is past draft and new, the letter went, a float
-  left by text (`floatSentAt`), or a text of ours named the number on that
-  house, whoever typed it. Otherwise the reply waits for you with "their N vs
+  (reply-agent.js): the offer is marked sent (or was, before a later status),
+  the letter went, a float left by text (`floatSentAt`), or a text of ours
+  named the number on that house, whoever typed it. Countered, passed or no
+  response alone don't count: a reply files their number as countered on a
+  row that never went out, so their first number would otherwise have let
+  their second one draw the goodbye. Otherwise the reply waits for you with "their N vs
   our unsent M on <street>: float ours or pass", the draft carries
   `unsentCounter`, nothing is marked countered, and after the usual day's
   wait the card is a Needs Matt price: "They named 755K on <street>, over our
@@ -6207,7 +6210,8 @@ wholesale or assign were told "we close ourselves, no assignments" or "we do the
   "assignment", "assignable", "won't work with wholesalers", "do you close yourselves" and "are you
   the end buyer". "And/or assigns" and "assigned" (their listing) are not it.
 - The draft gets `asksWholesale` and needsHuman ("they asked if we wholesale: your answer"), the
-  gates flag it (`wholesaleFlags`), and `wholesaleAskLine` tells the draft never to deny or claim it.
+  gates flag it (`wholesaleFlags`), and `wholesaleAskLine` tells the draft never to deny or claim it,
+  to leave that question for you, and not to promise a call.
   No redraft, no guard and no audit release opens it.
 - `deniesWholesaling(reply)` is a gate on every agent text: "no assignments", "not wholesalers",
   "we close ourselves", "we do the flips ourselves", "buy direct with our own cash" and "we're the

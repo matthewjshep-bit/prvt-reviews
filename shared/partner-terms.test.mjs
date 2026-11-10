@@ -237,3 +237,13 @@ test("a reply that denies we wholesale or assign is caught", async () => {
   assert.match(wholesaleFlags({ reply: "We close ourselves, no assignments.", party: "agent" }).join(" "), /we close ourselves/i);
   assert.deepEqual(wholesaleFlags({ reply: "We close ourselves, no assignments.", party: "investor" }), [], "only an agent's reply");
 });
+
+test("the wholesale question leaves Matt's answer to him and promises no call for him", async () => {
+  const { wholesaleAskLine } = await import("./partner-terms.js");
+  const line = wholesaleAskLine({ phrase: "are you guys wholesalers?" });
+  assert.match(line, /^WHOLESALE QUESTION:/);
+  assert.match(line, /never say we close ourselves/);
+  assert.match(line, /don't promise a call/);
+  assert.doesNotMatch(line, /say you'll[^.]*call/i);
+  assert.equal(wholesaleAskLine(null), "");
+});

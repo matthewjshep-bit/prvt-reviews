@@ -3418,10 +3418,17 @@ export function whatWentOut(offer) {
  * sent realm check in `drafts`), or a text of ours named it on the house
  * (lastQuoteOnHouse, whoever typed it). A goodbye for being too far apart,
  * or "the number we sent", needs one of these (the 2026-11-09 audit).
+ * Countered, passed or no response is a reply's word as often as ours: a
+ * reply files their number as countered on a `new` row that never went
+ * (setOfferStatus), so those count only when the row was marked sent first
+ * or the evidence above says it went.
  */
+const NUMBER_UNPROVEN_STATUSES = new Set(["draft", "new", "countered", "passed", "no_response"]);
 export function numberWentOut({ offer = null, drafts = [], transcript = "" } = {}) {
   if (!offer) return false;
-  if (!["draft", "new"].includes(offerStatus(offer))) return true;
+  const status = offerStatus(offer);
+  if (!NUMBER_UNPROVEN_STATUSES.has(status)) return true;
+  if (status !== "draft" && status !== "new" && (offer.statusHistory || []).some((h) => h?.status === "sent")) return true;
   return Boolean(offer.floatSentAt || paperWent(offer) || (offer.id && floatSentAt(drafts || [], offer.id)) || lastQuoteOnHouse(offer, transcript));
 }
 
@@ -4651,7 +4658,9 @@ async function runReply(job, ctx) {
           draft = { ...draft, needsHuman: true,
             passHeld: { offerId: full.id, theirs, why: "our number never went out", passed: false, unsent: true },
             unsentCounter: { offerId: full.id, theirs, ours },
-            humanReason: `their ${kText(theirs)} vs our unsent ${kText(ours)} on ${where}: float ours or pass` };
+            // A row with only the ceiling behind it has no number of ours to float.
+            humanReason: ours > 0 ? `their ${kText(theirs)} vs our unsent ${kText(ours)} on ${where}: float ours or pass`
+              : `their ${kText(theirs)} on ${where}, and no number of ours went out: price it or pass` };
         } else if (reference > 0 && theirs > passLine) {
           // It ends on the NEXT ONE question (Matt, 2026-10-21), unless that
           // already went to them today.
@@ -5161,7 +5170,12 @@ async function runReply(job, ctx) {
     draft = { ...draft, partnerTerms: terms, needsHuman: true, humanReason: `they ${PARTNER_TERMS_LABEL[terms.kind]} — the terms are yours to answer` };
   }
   // Their wholesale question waits for Matt the same way (the gate flags it).
-  if (wholesaleAsk) draft = { ...draft, asksWholesale: wholesaleAsk, needsHuman: true, humanReason: draft.partnerTerms ? draft.humanReason : WHOLESALE_ASK_FLAG };
+  // A yes after our pass, our own ask after it, their number over ours unsent
+  // or their terms keep their own why: those cards are the bigger thing.
+  if (wholesaleAsk) {
+    const bigger = draft.partnerTerms || draft.yesAfterPass || draft.askedAfterPass || draft.unsentCounter;
+    draft = { ...draft, asksWholesale: wholesaleAsk, needsHuman: true, humanReason: bigger && draft.humanReason ? draft.humanReason : WHOLESALE_ASK_FLAG };
+  }
   const gateFor = (d) => evaluateReplyGates({ minConfidence: config.autoSend?.minConfidence, holdOnNeedsHuman: config.autoSend?.holdOnNeedsHuman,
     draft: d, party, allowedAmounts: context.amounts, forbiddenAmounts: context.forbiddenAmounts, staleAmounts: context.staleAmounts || [],
     hiddenAmounts: context.hiddenAmounts || [], ranges: context.ranges || [], inboundMessage: inboundText, channel: job.channel, style: config.style,

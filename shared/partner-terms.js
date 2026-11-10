@@ -331,5 +331,6 @@ export function wholesaleAskLine(asked) {
   if (!asked?.phrase) return "";
   return `WHOLESALE QUESTION: they asked whether we wholesale or assign ("${asked.phrase}"). That part isn't yours to answer: ` +
     "never say we close ourselves, that we don't assign, that we aren't wholesalers or that we're the end buyer, and never say we are. " +
-    "Answer the rest of what they said, and say you'll go over how we'd buy it on a quick call. A person reads this one before it goes.";
+    // No call promised for him (the 2026-11-09 audit: 27 calls promised, 1 made).
+    "Answer the rest of what they said and leave that question out (the answer is added before it goes); don't promise a call. A person reads this one before it goes.";
 }

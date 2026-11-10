@@ -8896,6 +8896,24 @@ test("an agent who names the seller's 755 before we ever sent our number gets no
   assert.match(floated.d.reply, /didn't work out for us/);
 });
 
+// A reply files their number as "countered" on a row that never went out
+// (setOfferStatus picks a `new` offer), so a first number of theirs inside the
+// pass line left the house countered with nothing of ours sent, and their next,
+// firmer number drew the goodbye all the same.
+test("an agent whose first number marked our unsent offer countered still gets no goodbye on her next one", async () => {
+  const at = new Date(Date.now() - 86400000).toISOString();
+  const countered = { ...NEGOTIATION_OFFER, status: "countered", statusAt: at,
+    statusHistory: [{ status: "new", ts: at }, { status: "countered", ts: at, amount: 330000 }] };
+  const { d, statuses } = await farCounterAt({ offer: countered, message: "Seller is firm at 755 on 12 Elm.", counterAmount: 755000 });
+  assert.doesNotMatch(d.reply, /didn't work out for us|too far apart/);
+  assert.equal(d.needsHuman, true);
+  assert.match(d.humanReason, /their 755K vs our unsent 300K on 12 Elm St: float ours or pass/);
+  assert.ok(!statuses.includes("passed"), `nothing filed: ${statuses}`);
+  // Sent first, then countered: they've seen it, and the goodbye stands.
+  const sentFirst = { ...countered, statusHistory: [{ status: "new", ts: at }, { status: "sent", ts: at }, { status: "countered", ts: at, amount: 330000 }] };
+  assert.match((await farCounterAt({ offer: sentFirst, message: "Seller is firm at 755 on 12 Elm.", counterAmount: 755000 })).d.reply, /didn't work out for us/);
+});
+
 test("a rival's last offer the agent mentions is not their counter, so it draws no goodbye", async () => {
   const { d, statuses } = await farCounterAt({ message: "The last offer was at 575 and it fell through.", counterAmount: 575000 });
   assert.doesNotMatch(d.reply, /didn't work out for us/);
