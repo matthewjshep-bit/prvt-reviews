@@ -89,7 +89,9 @@ test("their repair figure above ours replaces ours; below leaves ours", () => {
   assert.equal(priceHouse({ ...HOUSE, theirRepairs: 30000 }).rehab, 82500);
   const scoped = priceHouse({ ...HOUSE, scope: { total: 96000, photos: 24 } });
   assert.equal(scoped.rehab, 96000, "a photo scope over the floor is the evidence");
-  assert.equal(priceHouse({ ...HOUSE, scope: { total: 96000, photos: 5 } }).rehab, 82500, "under 8 photos is no scope");
+  // Before 2026-11-09 a scope from under 8 photos was dropped (82.5k here). It now raises the rehab
+  // when it reads above the floor, but is not evidence (see the thin-scope test below).
+  assert.equal(priceHouse({ ...HOUSE, scope: { total: 96000, photos: 5 } }).rehab, 96000, "under 8 photos still raises the rehab");
 });
 
 test("rural acreage, a park home, a short sale or someone else bidding is never grade A", () => {
@@ -151,4 +153,131 @@ test("a rent read as the list price never caps the walk-away at a few thousand d
   assert.ok(v.walkAway > 200000, `walk-away ${v.walkAway}`);
   assert.equal(v.triage, "unknown", "nothing real to measure against");
   assert.ok(v.reasons.some((r) => /2,900 isn't a sale price/.test(r)), v.reasons.join(" | "));
+});
+
+/* ---------- Matt's seller cap and what the engine can't know (audit, 2026-11-09) ---------- */
+
+// An invented house: Bricked sure at 850k, a 1961 house of 1,500 sqft (82.5k floor), listed at 520k.
+const RICH = { ...HOUSE, list: 520000, bricked: { ...BRICKED, arv: 850000 } };
+
+test("the machine never opens above the seller's own number", () => {
+  const r = priceHouse({ ...RICH, sellerNumber: 450000 });
+  assert.ok(r.open <= 450000, `open ${r.open}`);
+  assert.ok(r.walkAway <= 450000, `walk-away ${r.walkAway}`);
+  // Under the 10% line it is only a cap: their number is the most we'd go, and the grade holds.
+  const near = priceHouse({ ...RICH, sellerNumber: 460000 });
+  assert.equal(near.walkAway, 460000, "497.5k uncapped, down to their 460k");
+  assert.equal(near.open, 460000, "offering exactly their number leaves no room: Matt's rule");
+  assert.equal(near.grade, "A", near.reasons.join(" | "));
+  assert.ok(near.reasons.some((x) => /capped at their 460k/.test(x)), near.reasons.join(" | "));
+  assert.equal(priceHouse({ ...RICH, sellerNumber: 461100 }).walkAway, 461000, "their number, down to the $250");
+  assert.equal(priceHouse(RICH).walkAway, 468000, "no number from them: the list cap as before");
+});
+
+test("a walk-away more than 10% over the seller's number holds for Matt as a likely ARV error, not a hot house", () => {
+  // Off-market, ARV 700k, seller at 300k: the uncapped walk-away is 392.5k, 31% over theirs.
+  const reads = { ...HOUSE, list: 0, bricked: { ...BRICKED, arv: 700000 }, sellerNumber: 300000 };
+  const r = priceHouse(reads);
+  assert.equal(r.triage, "over_theirs", "never 'hot'");
+  assert.equal(r.overTheirs, true);
+  assert.ok(r.misses.includes("arv"));
+  assert.notEqual(r.grade, "A");
+  assert.ok(r.reasons.some((x) => /our walk-away is 31% over their number: the ARV is likely high/.test(x)), r.reasons.join(" | "));
+  assert.equal(r.walkAway, 300000, "and it never offers past their number either");
+  assert.equal(r.open, 300000);
+  // 7.5% over is inside the line: capped at theirs, graded as usual.
+  const close = priceHouse({ ...reads, sellerNumber: 365000 });
+  assert.equal(close.triage, "hot");
+  assert.equal(close.grade, "A");
+  assert.equal(close.walkAway, 365000);
+  // The line is a setting: 0 holds any amount over, 50 lets 31% through to the cap.
+  assert.equal(priceHouse({ ...reads, sellerNumber: 365000 }, { overSellerPct: 0 }).triage, "over_theirs");
+  assert.equal(priceHouse(reads, { overSellerPct: 50 }).triage, "hot");
+});
+
+test("the seller's-number line is a setting: 10% by default, 0 to 50", () => {
+  assert.equal(normalizePricingV2(undefined).overSellerPct, 10);
+  assert.equal(normalizePricingV2({ overSellerPct: 0 }).overSellerPct, 0, "0 = any amount over holds");
+  assert.equal(normalizePricingV2({ overSellerPct: "25" }).overSellerPct, 25);
+  assert.equal(normalizePricingV2({ overSellerPct: 60 }).overSellerPct, 10, "out of range reads as the default");
+  assert.equal(effectiveSettings({}).pricingV2.overSellerPct, 10);
+});
+
+test("a number over the list price is not a steal, it holds", () => {
+  // 70% of 640k less 82.5k less the 15k fee is 350.5k, over a 300k list: the comps or the scope are off.
+  const r = priceHouse({ ...HOUSE, list: 300000 });
+  assert.equal(r.overList, true);
+  assert.ok(r.misses.includes("arv"));
+  assert.notEqual(r.grade, "A");
+  assert.ok(r.reasons.some((x) => /came out above the \$300,000 list price: the comps or the scope are off, so a person should look before it goes anywhere/.test(x)), r.reasons.join(" | "));
+  assert.equal(r.walkAway, 270000, "still never past 90% of the list");
+  // Between 90% and 100% of the list it is only the cap, as it was.
+  const capped = priceHouse({ ...HOUSE, list: 375000 });
+  assert.equal(capped.overList, false);
+  assert.equal(capped.walkAway, 337500);
+  assert.equal(capped.grade, "A", capped.reasons.join(" | "));
+});
+
+test("an unfinished new build is not a flip", () => {
+  assert.ok(killersOf({ yearBuilt: 2025, currentYear: 2026 }).includes("new_build"), "built in the last two years");
+  assert.ok(!killersOf({ yearBuilt: 2023, currentYear: 2026 }).includes("new_build"));
+  assert.ok(!killersOf({ yearBuilt: 2025 }).includes("new_build"), "no clock: the year alone can't say");
+  for (const words of ["the builder walked away at about 80% complete", "it's new construction", "still under construction",
+    "an unfinished new build", "framing is 70% done", "the builder went under last spring"]) {
+    assert.ok(killersOf({ said: words }).includes("new_build"), words);
+  }
+  for (const words of ["unfinished basement", "new construction windows throughout", "100% complete remodel"]) {
+    assert.ok(!killersOf({ remarks: words }).includes("new_build"), words);
+  }
+  const r = priceHouse({ ...HOUSE, yearBuilt: 2025, currentYear: 2026 });
+  assert.equal(r.grade, "C");
+  assert.ok(r.killers.includes("new_build"));
+});
+
+test("a house Zillow didn't type never sends itself", () => {
+  const r = priceHouse({ ...HOUSE, homeType: "" });
+  assert.ok(r.misses.includes("kind"));
+  assert.notEqual(r.grade, "A");
+  assert.ok(r.reasons.some((x) => /Zillow didn't say what kind of house this is/.test(x)), r.reasons.join(" | "));
+});
+
+test("an agent's repair figure at or under the floor is not rehab evidence", () => {
+  const plain = { ...HOUSE, bricked: { ...BRICKED, condition: null } }; // nothing else says how rough it is
+  for (const theirs of [82500, 82000, 60000]) {
+    const r = priceHouse({ ...plain, theirRepairs: theirs });
+    assert.ok(r.misses.includes("rehab"), `their ${theirs} against the 82.5k floor`);
+    assert.equal(r.rehab, 82500);
+  }
+  const over = priceHouse({ ...plain, theirRepairs: 90000 });
+  assert.ok(!over.misses.includes("rehab"), "a figure above the floor is evidence");
+  assert.equal(over.rehab, 90000);
+});
+
+test("a scope from under 8 photos that reads above the floor raises the rehab and holds the grade", () => {
+  const plain = { ...HOUSE, bricked: { ...BRICKED, condition: null } };
+  const r = priceHouse({ ...plain, scope: { total: 96000, photos: 5 } });
+  assert.equal(r.rehab, 96000, "the higher read is kept");
+  assert.ok(r.misses.includes("rehab"), "but 5 photos are not evidence");
+  assert.notEqual(r.grade, "A");
+  assert.match(r.rehabWhy, /5 photos/);
+  const under = priceHouse({ ...plain, scope: { total: 50000, photos: 5 } });
+  assert.equal(under.rehab, 82500, "a thin scope under the floor changes nothing");
+  assert.ok(under.misses.includes("rehab"));
+  // An earlier, heavier read of the same house (shadowPrice keeps 14 days of them) is kept too.
+  const kept = priceHouse({ ...HOUSE, priorRehab: 118500 });
+  assert.equal(kept.rehab, 118500);
+  assert.equal(kept.rehabOwn, 82500, "what this read alone said");
+});
+
+test("four price-guessed comps from a widened ring are not a sure ARV", () => {
+  const house = { sqft: 1500, yearBuilt: 1961, homeType: "SINGLE_FAMILY", list: 600000, scope: { total: 90000, photos: 20 } };
+  const comps = (over) => ({ ...house, comps: { arv: 584000, n: 4, listing: 0, radius: 0.5, acrossInArv: 0, eraGivesWay: false, gutCheck: false, ...over } });
+  for (const [why, over] of [["past the first ring", { radius: 1 }], ["an across-road comp", { acrossInArv: 1 }],
+    ["the era band gave way", { eraGivesWay: true }], ["a gut check", { gutCheck: true }]]) {
+    const r = priceHouse(comps(over));
+    assert.ok(r.misses.includes("arv"), `${why}: ${r.reasons.join(" | ")}`);
+  }
+  assert.ok(!priceHouse(comps({ listing: 4, radius: 1 })).misses.includes("arv"), "four whose own listings say remodeled carry it");
+  assert.ok(!priceHouse(comps({})).misses.includes("arv"), "price-guessed but close, same side, no give-way: as before");
+  assert.ok(!priceHouse({ ...house, comps: { arv: 584000, n: 4 } }).misses.includes("arv"), "a read that never said how far it reached: as before");
 });

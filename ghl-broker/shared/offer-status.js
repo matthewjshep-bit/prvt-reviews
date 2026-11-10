@@ -622,6 +622,11 @@ export function numberApproved(offer) {
   if (!offer) return false;
   const amount = Math.round(Number(offer.cashAmount) || 0);
   if (!amount) return false;
+  // Never over the seller's own number (Matt, 2026-11-09): an engine offer carries the number they
+  // said they'd take (`pricing.sellerNumber`, stamped by sendEngine), and an amount above it is
+  // nobody's approval, so no write-up ask goes out on it.
+  const theirs = Math.round(Number(offer.pricing?.sellerNumber) || 0);
+  if (theirs > 0 && amount > theirs) return false;
   // At or under the number he approved (Matt, 2026-10-22: "Bot runs it"): the
   // band taking their lower counter, or a re-quote coming down, is still his.
   if (Number(offer.approved?.amount) > 0 && Math.round(Number(offer.approved.amount)) >= amount) return true;

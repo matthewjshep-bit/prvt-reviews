@@ -551,6 +551,19 @@ test("a number is approved when a person owns it, and a machine move takes the a
   assert.equal(asksForWriteUp({ ...agreed, approved: { amount: 410000, at: at(12), by: "today" } }), true);
 });
 
+// Audit 2026-11-09: an engine number went out 49k over what the agent said the sellers would take,
+// the agent said yes, and the yes unlocked the write-up ask. Matt: never over their number.
+test("a grade-A number above the seller's stated number isn't approved for the write-up ask", async () => {
+  const { numberApproved, asksForWriteUp } = await import("./offer-status.js");
+  const live = { id: "o2", cashAmount: 512000, autoUnderwrite: { basis: "engine" }, pricing: { live: true, grade: "A", walkAway: 512000, sellerNumber: 480000 } };
+  assert.equal(numberApproved(live), false, "512k is over their 480k");
+  assert.equal(numberApproved({ ...live, cashAmount: 480000 }), true, "at their number it is the walk-away's to approve");
+  assert.equal(numberApproved({ ...live, pricing: { ...live.pricing, sellerNumber: 0 } }), true, "no number from them: as before");
+  assert.equal(numberApproved({ ...live, approved: { amount: 512000, at: "2026-11-09T18:00:00Z", by: "today" } }), false, "the cap holds over any approval");
+  const yes = { ...live, status: "accepted", statusHistory: [{ status: "accepted", ts: "2026-11-09T18:00:00Z" }] };
+  assert.equal(asksForWriteUp(yes), false);
+});
+
 import { WE_PASS_REASONS, parseStatusKey, wePassedKey, wePassReasonOf, normalizeWePassReason } from "./offer-status.js";
 
 test("why we passed: a few buckets, carried on the status menu's key", () => {

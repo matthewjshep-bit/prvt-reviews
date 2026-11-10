@@ -29,6 +29,9 @@ export const PRICING_V2_DEFAULTS = Object.freeze({
   // Engine mode asks Bricked only when our own comps can't carry the ARV, at most this many a day
   // (Matt, 2026-11-04: ~300 credits left; "only when ours is unsure"). 0 = never.
   brickedPerDay: 3,
+  // Matt (2026-11-09): the engine never offers past the seller's own number, and an uncapped
+  // walk-away more than this % over it is a likely ARV error, held for him. 0 = any amount over holds.
+  overSellerPct: 10,
 });
 
 const ERA_KEYS = ["pre1950", "y1950", "y1980", "y2000"];
@@ -54,6 +57,7 @@ export function normalizePricingV2(v) {
     maxPctOfList: numIn(s.maxPctOfList, 50, 100, D.maxPctOfList),
     brickedPerDay: Math.round(numIn(s.brickedPerDay, 0, 50, D.brickedPerDay)),
     rehabFloorByEra: floors,
+    overSellerPct: numIn(s.overSellerPct, 0, 50, D.overSellerPct),
   };
 }
 
