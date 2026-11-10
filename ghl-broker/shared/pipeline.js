@@ -44,6 +44,11 @@ export const OFFER_READY_DAYS = 7;
 // How long their yes on a closed house stays a row (shared/pre-contract.js
 // PRE_CONTRACT_FRESH_DAYS: an older yes is history).
 export const THEIR_YES_DAYS = 14;
+// A counter draft (shared/desk.js isCounterDraft; not imported: desk.js reads
+// this file), and the number it names for theirYesIn: a counter at their own
+// number isn't our terms quoted back.
+const isCounterLike = (d) => Boolean(d) && (d.intent === "counter" || Boolean(d.exception && !d.exception.passed && Number(d.exception.theirAmount) > 0));
+const counterOpts = (d) => (isCounterLike(d) ? { counter: Number(d.counterAmount) || Number(d.exception?.theirAmount) || 0 } : {});
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 const round = (v) => Math.round(Number(v) || 0);
 const money = (n) => `$${round(n).toLocaleString("en-US")}`;
@@ -738,11 +743,14 @@ export function buildPipeline({
     const NOT_A_YES = new Set(["rejection", "opt_out", "we_passed", "price_pushback"]);
     const yesOf = (d, rows) => {
       if (d?.party !== "agent" || NOT_A_YES.has(d.intent)) return "";
-      const seen = theirYesIn(String(d.inbound || ""), rows);
+      const seen = theirYesIn(String(d.inbound || ""), rows, counterOpts(d));
       if (seen === "quotes_terms") return seen;
-      return d.intent !== "counter" && (seen === "writing_up" || d.dealSignal === "writing_up") ? "writing_up" : "";
+      return !isCounterLike(d) && (seen === "writing_up" || d.dealSignal === "writing_up") ? "writing_up" : "";
     };
-    const keyOf = (d) => houseKey(d.propertyAddress || "") || houseKey(offers.find((o) => o?.id === draftOfferId(d, byContact, offers))?.address || "");
+    // This read runs on every dashboard poll: each address is parsed once.
+    const keys = new Map();
+    const keyFor = (a) => { const s = String(a || ""); if (!keys.has(s)) keys.set(s, houseKey(s)); return keys.get(s); };
+    const keyOf = (d) => keyFor(d.propertyAddress) || keyFor(offers.find((o) => o?.id === draftOfferId(d, byContact, offers))?.address);
     const all = new Map();
     for (const d of [...recentDrafts, ...sentDrafts, ...drafts]) if (d?.id && d.contactId) all.set(d.id, d);
     const theirDrafts = new Map();
@@ -752,15 +760,20 @@ export function buildPipeline({
     }
     const byPerson = (id) => (e) => e?.contactId === id;
     const done = new Set();
-    const newestFirst = [...all.values()].filter((d) => d.party === "agent" && d.status !== "draft" && d.status !== "scheduled")
-      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    // ISO times sort as strings; localeCompare is slow on a thousand drafts.
+    const newestFirst = [...all.values()].filter((d) => d.party === "agent" && d.status !== "draft" && d.status !== "scheduled"
+      && ms(d.createdAt) != null && now - ms(d.createdAt) <= THEIR_YES_DAYS * DAY_MS)
+      .sort((a, b) => { const x = String(a.createdAt), y = String(b.createdAt); return x < y ? 1 : x > y ? -1 : 0; });
     for (const d of newestFirst) {
       const at = ms(d.createdAt);
-      if (at == null || now - at > THEIR_YES_DAYS * DAY_MS) continue;
+      // Most texts are neither: read the words against all their houses
+      // before working out which house this one is.
+      const theirOffers = byContact.get(d.contactId) || [];
+      if (!theirOffers.length || !yesOf(d, theirOffers)) continue;
       const key = keyOf(d);
       const houseId = `${d.contactId}|${key}`;
       if (!key || done.has(houseId)) continue;
-      const rows = (byContact.get(d.contactId) || []).filter((o) => houseKey(o.address || "") === key);
+      const rows = theirOffers.filter((o) => keyFor(o.address) === key);
       const signal = rows.length ? yesOf(d, rows) : "";
       if (!signal) continue;
       done.add(houseId);
@@ -921,8 +934,9 @@ export function buildPipeline({
       // paper (2026-11-09: a seller at our number, our terms quoted back,
       // answered "calling you shortly" three times and no call). Needs Matt
       // reads it as paper when our number is out on the house.
-      const said = String(theirs.find((d) => d.id === p.draftId)?.inbound || "");
-      const aboutTerms = Boolean(said) && (Boolean(theirYesIn(said, mine)) || asksForPaper(said));
+      const saidIn = theirs.find((d) => d.id === p.draftId) || null;
+      const said = String(saidIn?.inbound || "");
+      const aboutTerms = Boolean(said) && (Boolean(theirYesIn(said, mine, counterOpts(saidIn))) || asksForPaper(said));
       push({ ...base, id: `call_owed:${p.contactId}:${p.since}`, kind: "call_owed", section: "call", score: CALL_OWED_SCORE,
         ...(aboutTerms ? { aboutTerms: true } : {}),
         call: { reason: "call_owed", why: "we said we'd call them", since: p.since, tries: 0, houses: [],

@@ -265,6 +265,28 @@ test("an agent asking for proof of funds on our offer lands in Needs Matt the sa
   assert.equal(needFor(held("Seller would do 540 with a 10 day inspection", { intent: "counter", counterAmount: 540000 })), undefined);
 });
 
+// Review, 2026-11-09: a counter that names our number on the way to theirs
+// read as our terms quoted back, and talk about the house read as an ask
+// for the paper. Made-up words.
+test("a counter at their own number that mentions ours and an inspection stays on the counter hold", () => {
+  const counter = held("Thanks for the 512,400. Seller would do 540,000 with a 10 day inspection", { intent: "counter", counterAmount: 540000 });
+  assert.equal(needFor(counter), undefined);
+  const offersById = new Map([[house().id, house()]]);
+  assert.equal(ownerOf(waiting(counter), { draftsById: new Map([[counter.id, counter]]), offersById }), "machine");
+  // A "counter" at our own number with our terms is their yes.
+  assert.equal(needFor(held(TERMS, { intent: "counter", counterAmount: OURS }))?.kind, "yes");
+});
+
+test("talk about the house that isn't an ask for the paper stays the bot's", () => {
+  for (const words of [
+    "Pre-inspection report is attached, roof is about 12 years old.",
+    "Updates were made to the kitchen in 2019.",
+    "MLS ID 4417203 if you want the photos",
+    "Thanks! Northbay Realty Group LLC",
+    "I'll send the inspection report over tonight",
+  ]) assert.equal(needFor(held(words)), undefined, words);
+});
+
 test("a buyer's proof of funds ask stays on Deals", () => {
   const d = held("Do you need proof of funds from me before the walkthrough?", { party: "investor", intent: "proof_of_funds" });
   assert.equal(needFor(d), undefined);

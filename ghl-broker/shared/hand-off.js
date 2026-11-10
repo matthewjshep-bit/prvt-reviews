@@ -123,11 +123,13 @@ export function houseRowsOf({ contactId = "", address = "", offerId = null } = {
 export function closeSignal(d, { offers = [] } = {}) {
   if (!d || d.party !== "agent" || NOT_A_YES.has(d.intent)) return null;
   const words = String(d.inbound || "");
-  const yes = theirYesIn(words, offers);
+  const counter = isCounterDraft(d);
+  // A counter at their own number isn't our terms quoted back (theirYesIn).
+  const yes = theirYesIn(words, offers, counter ? { counter: Number(d.counterAmount) || Number(d.exception?.theirAmount) || 0 } : {});
   if (yes === "quotes_terms") return { kind: "yes", reason: yes };
-  if (!isCounterDraft(d) && (yes === "writing_up" || d.dealSignal === "writing_up")) return { kind: "yes", reason: "writing_up" };
+  if (!counter && (yes === "writing_up" || d.dealSignal === "writing_up")) return { kind: "yes", reason: "writing_up" };
   if (d.intent === "proof_of_funds") return { kind: "paper", reason: "proof_of_funds" };
-  if (!isCounterDraft(d) && asksForPaper(words) && (offers || []).some(offerIsOut)) return { kind: "paper", reason: "paper_ask" };
+  if (!counter && asksForPaper(words) && (offers || []).some(offerIsOut)) return { kind: "paper", reason: "paper_ask" };
   return null;
 }
 

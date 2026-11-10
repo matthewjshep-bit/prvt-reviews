@@ -535,26 +535,33 @@ const OUR_TERMS_RX = /\band\s*\/\s*or\s+assigns?\b|\bearnest\b|\bemd\b|\binspect
  * shortly". `offer` is an offer (its cashAmount), a number, or a list of them.
  * A sentence that says no to the number ("won't do", "too low") isn't one.
  */
+const ourNumbers = (offer) => (Array.isArray(offer) ? offer : [offer])
+  .map((o) => Math.round(Number(o && typeof o === "object" ? o.cashAmount : o) || 0)).filter((n) => n > 0);
+const isOneOf = (n, ours) => ours.some((c) => Math.abs(n - c) <= c * 0.005);
 export function quotesOurTerms(text = "", offer = null) {
   const t = String(text || "");
-  const ours = (Array.isArray(offer) ? offer : [offer])
-    .map((o) => Math.round(Number(o && typeof o === "object" ? o.cashAmount : o) || 0)).filter((n) => n > 0);
+  const ours = ourNumbers(offer);
   if (!ours.length || !OUR_TERMS_RX.test(t)) return false;
-  const isOurs = (n) => ours.some((c) => Math.abs(n - c) <= c * 0.005);
-  const sentences = t.split(/(?<=[.!?\n])\s+/).filter((s) => moneyIn(s).some(isOurs));
+  const sentences = t.split(/(?<=[.!?\n])\s+/).filter((s) => moneyIn(s).some((n) => isOneOf(n, ours)));
   return sentences.some((s) => !SIGNAL_NEGATED.test(s));
 }
 
 /**
- * theirYesIn(text, offers) → "quotes_terms" | "writing_up" | ""
+ * theirYesIn(text, offers, { counter }) → "quotes_terms" | "writing_up" | ""
  *
  * An agent's text that is a yes Matt has to answer himself: our terms quoted
  * back at our number, or they're writing it up ("what do you want me to write
  * up", shared SIGNAL_RX). "I'll present it to the seller" is neither: the bot
  * keeps that one.
+ *
+ * `counter`: the number a counter draft names (0 when it names none). A
+ * counter at their own number isn't our terms quoted back, however it names
+ * ours on the way ("thanks for the 512,400, seller would do 540,000 with a 10
+ * day inspection"): only a counter at our own number is (review, 2026-11-09).
  */
-export function theirYesIn(text = "", offers = []) {
-  if (quotesOurTerms(text, offers)) return "quotes_terms";
+export function theirYesIn(text = "", offers = [], { counter = null } = {}) {
+  const atOurs = counter == null || isOneOf(Math.round(Number(counter) || 0), ourNumbers(offers));
+  if (atOurs && quotesOurTerms(text, offers)) return "quotes_terms";
   return dealSignalFromText(text) === "writing_up" ? "writing_up" : "";
 }
 
@@ -562,11 +569,18 @@ export function theirYesIn(text = "", offers = []) {
 // letter or proof of funds, the entity or LLC, ID, a buyer agency or
 // brokerage form, "send it signed".
 const PAPER_ASK_RX = /\bbank (?:letter|statement)s?\b|\bproof of (?:funds?|financing)\b|\bpof\b|\bllc\b|\bentity\b|\bbuyer(?:'s)? agency\b|\bbrokerage (?:form|agreement|services)\b|\bsend (?:it|them|that|this|the (?:offer|paperwork|psa|contract)) (?:back )?signed\b|\bphoto id\b|\bdriver'?s licen[cs]e\b|\bidentification\b/i;
-const ID_RX = /\bID\b/;
-/** asksForPaper(text) → true when their text asks for the paper or its terms. */
+// A person's ID, not an MLS or listing number.
+const ID_RX = /\b(?:[Yy]our|YOUR|[Pp]hoto|[Pp]icture|[Vv]alid|[Gg]overnment|[Ss]tate|[Bb]uyer'?s?|[Ss]igner'?s?) ID\b|\b[Cc]opy of (?:your |the |an? )?ID\b/;
+// The sentence asks: a question, a request ("send…", "need…", "can you…",
+// "let me know…"), or what they or the seller need. "Pre-inspection report
+// attached", "updates made to the kitchen", a brokerage's LLC in a
+// signature and "I'll send the inspection report" are talk about the house,
+// not an ask for our paper (review, 2026-11-09).
+const ASKS_RX = /\?|^\s*(?:(?:please|pls|plz|also|and|ok|okay|great|perfect|thanks|sounds good)[,!.]?\s+)*(?:send|need|what|which|who|how|can|could|would|will|do|does|is|are)\b|\b(?:can|could|would|will) (?:you|u)\b|\b(?:lmk|let me know)\b|\b(?:i|we|seller|sellers|they|she|he)(?:'ll|'d| will| would| also)? (?:need|require)s?\b/i;
+/** asksForPaper(text) → true when a sentence of theirs asks for the paper or its terms. */
 export function asksForPaper(text = "") {
-  const t = String(text || "");
-  return WRITE_UP_ASK_RX.test(t) || PAPER_ASK_RX.test(t) || ID_RX.test(t);
+  return String(text || "").split(/(?<=[.!?\n])\s+/)
+    .some((s) => (WRITE_UP_ASK_RX.test(s) || PAPER_ASK_RX.test(s) || ID_RX.test(s)) && ASKS_RX.test(s));
 }
 
 // They want US to move: "unless you want to come closer to where they are",

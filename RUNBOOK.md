@@ -5343,12 +5343,15 @@ so nothing told Matt. Now, for a held agent reply (`shared/hand-off.js`
 | yes | their text carries our cash number (within 0.5%) with the words of a written offer: and/or assigns, earnest or EMD, inspection, close in, buyer name (`quotesOurTerms`) | They quoted our terms back on <street>: confirm and send the email |
 | yes | they're writing it up: "what do you want me to write up", "want me to put the offer together", "send it over to sign", "who do I make it out to" (`SIGNAL_RX.writing_up`, or the model's `dealSignal`) | They're writing it up on <street>: send the terms |
 | paper | intent `proof_of_funds`, at once | They asked for proof of funds on <street> |
-| paper | they ask for the terms (earnest, inspection days, the LLC or entity, ID, a buyer agency or brokerage form, "send it signed") and our number is out on that house: sent, countered, accepted, floated or hot | They asked about the paper on <street>: send the terms |
+| paper | they ask for the terms (earnest, inspection days, the LLC or entity, ID, a buyer agency or brokerage form, "send it signed") in a question or a request (`asksForPaper`), and our number is out on that house: sent, countered, accepted, floated or hot | They asked about the paper on <street>: send the terms |
 | paper | a call we owe (`call_owed`) after a text like those, on a house where our number is out | They sent terms on <street> and we said we'd call: call them or send the terms |
 
 "I'll present it to the seller" stays the bot's, a counter stays on the
-counter hold (unless it is our own number with terms), and buyers stay on
-Deals. A no stays a no ("I won't write it up at that number").
+counter hold (unless it is our own number with terms: a counter at their
+number that names ours on the way is still a counter), and buyers stay on
+Deals. A no stays a no ("I won't write it up at that number"). Talk about
+the house is not an ask: "inspection report attached", updates "made to"
+the kitchen, a brokerage LLC in a signature, an MLS ID.
 
 **Their yes on a house we closed.** When the house's current row says we
 passed, they passed, no response or unavailable, a yes like those becomes a

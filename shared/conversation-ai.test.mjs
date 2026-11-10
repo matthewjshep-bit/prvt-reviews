@@ -760,3 +760,20 @@ test("our terms quoted back at our number, however they write the number", () =>
   assert.equal(asksForPaper("Send me a copy of your ID"), true);
   assert.equal(asksForPaper("I'd love to see it Tuesday"), false);
 });
+
+test("an ask for the paper is an ask: the house's inspection report, a brokerage LLC or an MLS ID isn't one", () => {
+  for (const t of ["What earnest amount and how many inspection days?", "What LLC name goes on it?", "Send it signed and I'll take it from there",
+    "I need a buyer agency form before I write anything", "Who should the contract be made out to?", "Need your ID and the POF"]) {
+    assert.equal(asksForPaper(t), true, t);
+  }
+  for (const t of ["Pre-inspection report is attached, roof is about 12 years old.", "Updates were made to the kitchen in 2019.",
+    "MLS ID 4417203 if you want the photos", "Thanks! Northbay Realty Group LLC", "I'll send the inspection report over tonight",
+    "The house will need an inspection before anyone lends on it"]) {
+    assert.equal(asksForPaper(t), false, t);
+  }
+  // A counter at their own number isn't our terms quoted back.
+  const ours = { cashAmount: 683750 };
+  assert.equal(theirYesIn("Got your 683,750. Seller would do 720,000 with a 10 day inspection", [ours], { counter: 720000 }), "");
+  assert.equal(theirYesIn("683,750 cash, 10 day inspection, and/or assigns", [ours], { counter: 683750 }), "quotes_terms");
+  assert.equal(theirYesIn("683,750 cash, 10 day inspection, and/or assigns", [ours]), "quotes_terms");
+});
