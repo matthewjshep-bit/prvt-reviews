@@ -51,3 +51,39 @@ test("metering writes through the store once started, and never throws", async (
   assert.equal(day.enrich.calls, 2, "queued, so two calls in one tick both count");
   assert.doesNotThrow(() => meterAi("enrich", null));
 });
+
+// 2026-11-09 audit: a model the cost table didn't know was recorded as $0 with
+// nothing said, so the ledger under-read the bill and nobody knew why.
+test("a call on a model with no price warns once a day per model and is counted as unpriced", async () => {
+  const { _resetUnpricedWarnings, yesterdaySpend } = await import("./ai-spend.js");
+  _resetUnpricedWarnings();
+  const warned = [];
+  const realWarn = console.warn; const realLog = console.log;
+  console.warn = (...a) => warned.push(a.join(" ")); console.log = () => {};
+  const saved = new Map();
+  const store = {
+    async getJobCursor(loc, name) { return saved.get(`${loc}|${name}`) || null; },
+    async setJobCursor(loc, name, v) { saved.set(`${loc}|${name}`, v); return v; },
+  };
+  try {
+    startAiSpendMeter({ store });
+    meterAi("enrich", usage("claude-made-up-9", 1000, 100));
+    meterAi("enrich", usage("claude-made-up-9", 1000, 100));
+    meterAi("draft", usage("claude-other-unknown", 1000, 100));
+    meterAi("draft", usage("claude-sonnet-5", 1000, 100));
+    await _stopAiSpendMeter();
+  } finally { console.warn = realWarn; console.log = realLog; }
+  assert.equal(warned.length, 2, warned.join("\n"));
+  assert.match(warned[0], /claude-made-up-9/);
+  assert.match(warned[0], /no price/);
+  const day = Object.values([...saved.values()][0].doc.days)[0];
+  assert.equal(day.enrich.unpriced, 2);
+  assert.equal(day.draft.unpriced, 1);
+  assert.equal(day.draft.calls, 2);
+
+  // The morning post's line: one day's dollars, biggest feature first, unpriced calls said.
+  const doc = { days: { "2026-11-08": { draft: { calls: 40, input: 1, output: 1, usd: 6.5 }, photo_scan: { calls: 3, input: 1, output: 1, usd: 2.25, unpriced: 1 } }, "2026-11-09": { draft: { calls: 1, input: 1, output: 1, usd: 0.1 } } } };
+  const y = yesterdaySpend(doc, { now: Date.parse("2026-11-09T15:00:00Z") });
+  assert.deepEqual(y, { day: "2026-11-08", usd: 8.75, calls: 43, unpriced: 1, top: [{ feature: "draft", usd: 6.5 }, { feature: "photo_scan", usd: 2.25 }] });
+  assert.equal(yesterdaySpend({}, { now: Date.parse("2026-11-09T15:00:00Z") }), null, "no ledger, no line");
+});

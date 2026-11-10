@@ -58,6 +58,7 @@ import { holdFor, botEventsFor } from "../bot-hold.js";
 import { holdLine, pauseUntil, mergeEvents, BOT_EVENT_TYPES, PACES, paceOf, botHold } from "../shared/bot-hold.js";
 import { allEventsSince } from "../contact-events.js";
 import { lineFor, dealRoomIds } from "../line.js";
+import { rentcastBudget } from "../outreach-sweep.js";
 import { followUpEngineFor } from "../follow-up-engine.js";
 import { startConversationAudit, getAuditJob, publicAuditJob, CURSOR_NAME as AUDIT_CURSOR, DAY_CURSOR_NAME } from "../conversation-audit.js";
 import { auditActions, withCurrentOffers, stillOwed, releasableHeld, summarize as summarizeAudit } from "../shared/conversation-audit.js";
@@ -1428,12 +1429,12 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         }
       }
 
-      // Month-to-date RentCast request usage (same reduce the outreach page uses).
-      const monthStart = new Date();
-      monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
-      const requestsThisMonth = pulls
-        .filter((p) => new Date(p.createdAt) >= monthStart)
-        .reduce((s, p) => s + (Number(p.doc?.requestsUsed) || 0), 0);
+      // RentCast requests this billing month: the sweep's own meter
+      // (outreach-sweep.js rentcastBudget), from the billing day in Settings
+      // against the plan in Settings. It used to count from the 1st against
+      // a hard-coded 50 (2026-11-09 audit).
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      const budget = await rentcastBudget({ store, locationId, saved }).catch(() => null);
 
       res.json({
         ok: true,
@@ -1442,7 +1443,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         sends: { totalSms, totalEmail, daily: [...sendsDaily.values()] },
         outreach: {
           daily: [...outreachDaily.values()],
-          usage: { requestsThisMonth, limit: 50, lastPullAt: pulls[0]?.createdAt || null },
+          usage: { requestsThisMonth: budget?.used ?? null, limit: budget?.budget ?? null, since: budget?.since ?? null, lastPullAt: pulls[0]?.createdAt || null },
         },
       });
     } catch (err) { fail(res, err); }

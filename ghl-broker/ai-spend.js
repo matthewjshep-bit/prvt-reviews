@@ -27,11 +27,15 @@ export function addSpend(doc = {}, { feature, usage = {}, day }) {
   const today = { ...(days[day] || {}) };
   const was = today[feature] || { calls: 0, input: 0, output: 0, usd: 0 };
   const input = (Number(usage.input) || 0) + (Number(usage.cacheRead) || 0) + (Number(usage.cacheWrite5m) || 0) + (Number(usage.cacheWrite1h) || 0);
+  // A call on a model the cost table can't price adds $0 and is counted, so
+  // the day's total says it is short rather than looking whole.
+  const unpriced = (Number(was.unpriced) || 0) + (usage.costUsd == null ? 1 : 0);
   today[feature] = {
     calls: was.calls + 1,
     input: was.input + input,
     output: was.output + (Number(usage.output) || 0),
     usd: round6(was.usd + (Number(usage.costUsd) || 0)),
+    ...(unpriced ? { unpriced } : {}),
   };
   days[day] = today;
   const keep = Object.keys(days).sort().slice(-KEEP_DAYS);
@@ -58,8 +62,34 @@ export function spendReport(doc = {}, { days = 7, now = Date.now() } = {}) {
   return { totalUsd: round6(list.reduce((s, f) => s + f.usd, 0)), byDay, byFeature: list };
 }
 
+/**
+ * yesterdaySpend(doc, { now }) → { day, usd, calls, unpriced, top } | null
+ *
+ * The ledger's day before today (UTC, the ledger's own clock), for the
+ * morning Slack post: its dollars, its calls, how many had no price, and the
+ * two features that cost the most.
+ */
+export function yesterdaySpend(doc = {}, { now = Date.now() } = {}) {
+  const day = new Date(now - 86400000).toISOString().slice(0, 10);
+  const feats = doc?.days?.[day];
+  if (!feats || !Object.keys(feats).length) return null;
+  let usd = 0, calls = 0, unpriced = 0;
+  for (const f of Object.values(feats)) { usd += Number(f.usd) || 0; calls += Number(f.calls) || 0; unpriced += Number(f.unpriced) || 0; }
+  const top = Object.entries(feats).map(([feature, f]) => ({ feature, usd: round6(f.usd) })).sort((a, b) => b.usd - a.usd).slice(0, 2);
+  return { day, usd: round6(usd), calls, unpriced, top };
+}
+
+/** readYesterdaySpend(store, { now }) → yesterdaySpend of the stored ledger, or null. */
+export async function readYesterdaySpend(store, { now = Date.now() } = {}) {
+  const cur = await store?.getJobCursor?.(SPEND_LOCATION, SPEND_CURSOR).catch(() => null);
+  return yesterdaySpend(cur?.doc || {}, { now });
+}
+
 let sink = null;
 let queue = Promise.resolve();
+// A model with no price says so once a day, not once a call.
+const unpricedWarned = new Set();
+export function _resetUnpricedWarnings() { unpricedWarned.clear(); }
 
 /** Called once by the broker at boot. Until then metering only logs. */
 export function startAiSpendMeter({ store }) { sink = store || null; }
@@ -77,9 +107,13 @@ export function meterAi(feature, response, { model = "", batched = false } = {})
   let u;
   try { u = usageOf(response, { model, batched }); } catch { return null; }
   console.log(`ai usage: ${feature} ${u.model} in=${u.input} cache=${u.cacheRead} out=${u.output} $${u.costUsd}`);
+  const day = new Date().toISOString().slice(0, 10);
+  if (u.costUsd == null && !unpricedWarned.has(`${day}|${u.model}`)) {
+    unpricedWarned.add(`${day}|${u.model}`);
+    console.warn(`ai spend: no price for ${u.model || "an unnamed model"}; its calls count as $0 today. Add it to shared/ai-cost.js PRICES.`);
+  }
   const store = sink;
   if (store && typeof store.getJobCursor === "function") {
-    const day = new Date().toISOString().slice(0, 10);
     queue = queue.then(async () => {
       const cur = await store.getJobCursor(SPEND_LOCATION, SPEND_CURSOR).catch(() => null);
       const doc = addSpend(cur?.doc || {}, { feature, usage: u, day });
