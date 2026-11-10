@@ -7244,7 +7244,48 @@ record's facts, and a read changes nothing by itself. On the investor's row,
 **Add to buy box** shows exactly what it will file, then files it on Matt's
 press (`readFacts` → `POST /api/contacts/:id/facts`). It adds only list values
 the record lacks, and never overwrites a scalar (price, rehab, lot) that is
-already set. Those facts change which deals they're sent.
+already set. Those facts change which deals they're sent. "How they pay"
+files as `buyer_funding` (the first way they named), and never over one
+already on the record.
+
+**How a buyer pays (2026-11-09).** It was unknown in 283 of 307 buyer
+threads, and a buyer who took a contract was still lining up money three
+days later.
+- When a buyer texts or emails how they pay ("we use hard money", "all
+  cash"), the reply files it as the `buyer_funding` fact (`fundingSaid` in
+  shared/buybox.js): cash, hard money, private money, HELOC, conventional,
+  DSCR or partners. Newest wins. A question ("would the seller take hard
+  money?") or a no ("not a cash buyer") isn't filed, and neither is anything
+  an agent says. App-only, no GHL field, no schema change.
+- The Deals modal's Buyers tab shows it under each buyer who hasn't passed:
+  "pays: hard money (said 10/30)" or "pays: unknown"
+  (`GET /api/dispo/buyers/funding?ids=`, at most 60 record reads).
+- The buyer who committed also shows "no proof of funds on file" until the
+  checklist's *Proof of funds or lender approval* item is ticked.
+- The assignment opens at the price the buyer agreed in the thread
+  (`deal.investors[].agreedPrice`), the same price the draft-on-commit paper
+  uses. What was typed into the last assignment still wins.
+
+**An agent who buys (2026-11-09).** 70 agents told us they buy and none was
+in the book; one who asked for our deals was told we had nothing, with three
+deals live.
+- Asking for our deals is buying: "do you have any (other / pending) deals",
+  "anything you're looking to assign", "send me your deals", "add me to your
+  (buyers) list" (`investor_buyer` in shared/partner-terms.js). The reply is
+  held for Matt and the partner row goes up, as for any agent who says they
+  buy.
+- **Add to buyers** in the contact pane (a button when their held reply said
+  they buy, and under ⋯ for any agent) is
+  `POST /api/dispo/investors/:contactId/add-to-buyers {areas}`. It tags them
+  `dispo-agent-buyer` (in the book's default tags, and added to saved
+  Investor tags when those are set), files the areas they named as their buy
+  box, and puts their row in the book now.
+- They stay an agent: the record's party stays `agent` through deal texts,
+  book syncs and buy-box edits, so check-ins, tiers and the bot keep treating
+  them as one. When routing would read the tag as a buyer (a `dispo-*`
+  pattern), they're tagged `agent` too.
+- It stays a press (Matt, 10/09). Nothing adds anyone on its own. Pressing it
+  twice writes nothing new.
 
 **On the page (Dispositions).**
 - **Column.** "In their words" shows the one-line summary, the number of
@@ -7566,7 +7607,38 @@ morning on its own. A buyer fits (`rankParts.areaFit`) when they:
 - bought in the deal's city (`bought_city`): a `dispo-city-*` tag, or a
   `property_financed` event in that city (`flips.cities`);
 - told us its city or ZIP in their buy box (`said_city`, `said_zip`);
+- told us a part of Seattle that holds it, like "North Seattle" or "Ballard"
+  (`said_neighborhood`: the city plus that part's ZIPs);
 - told us a region that holds it, like "South King" (`said_region`).
+
+**Their own words come first (2026-11-09).** 26 deals since 10/21 went to
+buyers whose own buy box ruled them out: a Seattle city tag sent a Green Lake
+deal to a box saying "West Seattle", and "no rehabs" or "not buying right
+now" kept nobody off. One reader, `areaVerdict` in shared/dispo-regions.js,
+reads the areas the way they wrote them, for the deal sends and for Find
+buyers alike:
+- It splits on commas, `/`, `&`, "and" and "or"; drops "area", "greater",
+  "metro", "county"; tries regions before cities ("Snohomish County" is the
+  region, not the town); and reads "North Tacoma" as Tacoma.
+- "not X", "anything but X" and "avoid X" rule X out.
+- A phrase it can't place, or a loose one ("Tacoma area") that misses,
+  abstains: it never rules a deal out.
+- When every area they named resolves and none holds the deal, a city tag
+  doesn't send it (`areaFit` null).
+- Their dealbreakers also read "no rehabs / no flips / no fix-ups" (refuses
+  a house to fix), "ground-up / new construction / infill / land only"
+  (refuses anything but land), and "not buying / on hold / paused / not in
+  the market" (refuses every deal) (`ownWords` in shared/buybox.js). "No
+  rehabs over 100k" is a limit, not a no. A deal we can't tell is a fixer
+  abstains. Holding on the investor read's "buying now?" column is a
+  separate call for Matt and isn't built.
+
+**Who was left off, and why.** `GET /waves/preview` returns `leftOff`: each
+buyer who buys there (they bought in its city or named its area) and won't
+get the text, with the one reason: their own words, their areas elsewhere,
+a STOP, no phone, committed to another deal, their price band. Find buyers
+shows the list under its results, so a buy box that's out of date can be
+fixed before the deal goes. Someone who already had the deal isn't listed.
 
 A `dispo-region-*` tag with nothing else no longer sends. It is a loan
 somewhere in a region of up to 28 cities, so it ranks the buyer but doesn't
@@ -7575,8 +7647,9 @@ send them the deal.
   price, recency and engagement only set the order.
 - **Still left off:** a buyer whose own buy box rules the deal out (their
   price band, with 10% either side, or a kind of house, rehab level or lot
-  they said no to), their dealbreakers, a refused kind, STOP / DND, committed
-  to another live deal.
+  they said no to), their dealbreakers (the street, islands, off-market only,
+  and since 2026-11-09 their own words above), a place they said no to, a
+  refused kind, STOP / DND, committed to another live deal.
 - **Bot-off tags hold a deal text.** A buyer carrying one of the routing
   `botOffTags` ("stop bot", "bot-off") gets their deal text as a draft that
   waits for your Send, the same as Stop on the Bot menu. It's checked when the
@@ -7608,7 +7681,9 @@ that becomes the usual suggestion with the reason on it. Off by default.
 
 **Assignment on commit.** Marking a buyer committed drafts the assignment
 PDF from the deal, the buyer and the company settings (`offer.assignment`),
-for review. Off by default.
+for review. Off by default. The price on it is the one the buyer agreed in
+the thread when there is one; the Assignment modal opens at that price too
+(2026-11-09).
 
 ### Deal parties and the closing checklist (2026-09-29)
 
