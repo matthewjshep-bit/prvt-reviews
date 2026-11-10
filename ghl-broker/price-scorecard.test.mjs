@@ -80,3 +80,19 @@ test("a house we never priced gets its sale looked up once a week, and only a sa
   assert.equal(again.checked, 0, "not again for a week");
   assert.equal(asked.length, 0);
 });
+
+test("the evening's card is kept for Lessons to read, and it knows the seller's stated number", async () => {
+  const LOC2 = "LOC-sc-2";
+  const addr = "318 Larkspur Ct, Kent, WA 98030";
+  await store.upsertHousePricing(LOC2, houseKey(addr), record(addr, { contactId: "c9" }));
+  await store.appendContactEvents(LOC2, "c9", [{ type: "property_details", at: "2026-11-12T18:00:00Z", address: addr, data: { sellerAsk: 300000 }, dedupeKey: "pd:c9:1" }]);
+  const { storedScorecard } = await import("./price-scorecard.js");
+  assert.equal(await storedScorecard({ store, locationId: LOC2 }), null, "nothing until the evening run");
+  const r = await maybeRunPriceScorecard({ store, locationId: LOC2, saved: { pricingV2: { shadow: true } }, now: EVENING, deps: { fetchListings: async () => new Map() } });
+  assert.ok(r);
+  const kept = await storedScorecard({ store, locationId: LOC2 });
+  assert.equal(kept.card.total.n, 1);
+  assert.equal(kept.card.total.overTheir, 1, "315k walk-away over the seller's 300k");
+  assert.ok(kept.card.ready.A.missing.some((x) => /above their stated number/.test(x)));
+  assert.equal((await store.getHousePricing(LOC2, houseKey(addr))).doc.outcome.theirNumber, 300000);
+});

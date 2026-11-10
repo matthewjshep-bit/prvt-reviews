@@ -124,7 +124,7 @@ import {
 import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
 import { publishedFromOf } from "../shared/calibration.js";
-import { buildScorecard, maybeRunPriceScorecard } from "../price-scorecard.js";
+import { buildScorecard, maybeRunPriceScorecard, storedScorecard } from "../price-scorecard.js";
 import { importThreadReads, startThreadReads, getThreadReadJob, CURSOR_NAME as THREAD_READS_CURSOR } from "../thread-reads.js";
 import { questionTopics } from "../shared/thread-read.js";
 import { normalizePricingV2 } from "../shared/price-engine.js";
@@ -6950,14 +6950,17 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // ?days=1..60, default 7.
   // The offer engine v2 (2026-11-04): how far its shadow prices are from Matt's and from what
   // happened, per grade and lead source, and whether a grade is ready for his switch. Read-only:
-  // outcomes are worked out for the answer and not saved (the daily run saves them).
+  // the evening run's card as it was saved (2026-11-09: working it out on open read every offer on
+  // every priced house, one at a time); ?fresh=1, or no card yet, works it out now and saves nothing.
   router.get("/automations/pricing/scorecard", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
       const saved = (await store.getOfferSettings(locationId)) || {};
       const days = Math.min(365, Math.max(7, parseInt(req.query.days, 10) || 120));
+      const kept = req.query.fresh === "1" || req.query.days ? null : await storedScorecard({ store, locationId });
+      if (kept) return res.json({ ok: true, records: kept.records, switches: normalizePricingV2(saved.pricingV2), card: kept.card, stored: true, at: kept.at });
       const { card, records } = await buildScorecard({ store, locationId, saved, days, persist: false });
-      res.json({ ok: true, records, switches: normalizePricingV2(saved.pricingV2), card });
+      res.json({ ok: true, records, switches: normalizePricingV2(saved.pricingV2), card, stored: false });
     } catch (err) { fail(res, err); }
   });
   // Every conversation, read for pricing evidence (shared/thread-read.js). The import takes the

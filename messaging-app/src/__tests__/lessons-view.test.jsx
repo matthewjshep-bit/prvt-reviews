@@ -76,3 +76,15 @@ test("the offer engine's scorecard says it's off, or how close it is to your num
   expect(on).toContain("22 houses priced");
   expect(on).toContain("Grade A has cleared the bars");
 });
+
+test("the engine's scorecard counts walk-aways over the seller's number, reads the evening's card, and works it out now on a press", () => {
+  const now = Date.parse("2026-11-20T03:00:00Z");
+  const recs = Array.from({ length: 22 }, (_, i) => ({ v2: { arv: 600000, rehab: 95000, walkAway: 310000, grade: "A", at: new Date(now - i * 86400000).toISOString() },
+    outcome: { mattArv: 610000, mattRehab: 90000 }, ...(i === 0 ? { reads: { sellerNumber: 300000 } } : {}) }));
+  const html = renderToStaticMarkup(<EngineScorecard data={{ switches: { shadow: true }, records: 22, stored: true, at: "2026-11-20T03:30:00Z", card: scorecard(recs, { now }) }} onFresh={() => {}} />);
+  expect(html).toContain("Over their number");
+  expect(html).toContain("1 of 1");
+  expect(html).toContain("1 walk-away above their stated number");
+  expect(html).toContain("From the evening run");
+  expect(html).toContain("Work it out now");
+});
