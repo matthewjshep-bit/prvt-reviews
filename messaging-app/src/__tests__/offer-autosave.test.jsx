@@ -217,6 +217,16 @@ test("an engine draft opens on the engine's rehab, not the bare scope", async ()
   expect(html).toContain("rehab 62k (1950s house: age floor)");
 });
 
+// Before 11-09 any row with paper and no saved workspace opened on its calc.inputs. An income or
+// land row is still priced from its deal, but it keeps its address and figures off calc.inputs.
+test("an income row with no saved workspace still opens on its address", () => {
+  const income = { id: "o-inc", status: "sent", calc: { model: "income", inputs: { address: "77 Cobblestone Row, Tacoma, WA 98402", askingPrice: 1450000, arv: 0, repairs: 0, priceOverride: 0 }, settings: { maoPctOfArv: 60 } } };
+  const inputs = restoredInputs({ restore: income, snap: null });
+  expect(inputs.address).toBe("77 Cobblestone Row, Tacoma, WA 98402");
+  expect(inputs.askingPrice).toBe("1,450,000");
+  expect(pricedSettings(income)).toBe(null);
+});
+
 test("a draft still opens on its own form, and a new offer on today's settings", () => {
   const draft = { id: "d1", status: "draft", calc: { inputs: { arv: 1 }, settings: { maoPctOfArv: 60 } }, draft: { inputs: { address: "1 Pine St", arv: "410,000" } } };
   expect(restoredInputs({ restore: draft, snap: draft.draft }).arv).toBe("410,000");

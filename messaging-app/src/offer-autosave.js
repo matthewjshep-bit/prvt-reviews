@@ -115,6 +115,12 @@ export function restoredInputs({ restore = null, snap = null, initialAddress = "
   if (snap?.inputs) return { ...BLANK_INPUTS, ...snap.inputs, ...(figures || fromEngine || {}) };
   if (!restore && /,/.test(initialAddress)) return { ...BLANK_INPUTS, address: initialAddress };
   if (r) return { ...BLANK_INPUTS, address: r.calc.inputs.address || "", ...figures };
+  // An income or land row with no saved workspace opens on its calc.inputs, as it always did.
+  const paper = restore && restore.status !== "draft" ? restore.calc?.inputs : null;
+  if (paper) {
+    return { ...BLANK_INPUTS, address: paper.address || "", askingPrice: fmtN(paper.askingPrice), arv: fmtN(paper.arv),
+      repairs: fmtN(paper.repairs), priceOverride: fmtN(paper.priceOverride) };
+  }
   return { ...BLANK_INPUTS };
 }
 
