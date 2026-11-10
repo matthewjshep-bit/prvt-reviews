@@ -35,3 +35,20 @@ export function carrierFlags(text = "") {
 // from the instruction around it.
 export const CARRIER_RULE = "Phone carriers block texts that read like a we-buy-houses ad, so in this text never write cash, cash offer, as-is, investor, buy houses, no repairs, quick close, close fast, wholesale or a link. " +
   "Talk about the house or their business in plain words instead (\"is it a bit of a project?\", \"anything that needs work?\").";
+
+// Only for a buyer who has never written back (2026-10-16 and 10-20): a deal
+// text that opened by naming the recipient's own buying ("saw in the county
+// records you've bought...", "saw your flip on...", "I saw you purchased...")
+// was blocked on almost every number, and the same text without the opener
+// went through. A buyer who knows us can hear it, so it is not in RULES: the
+// send-time check on a cold buyer's deal text (reply-agent.js) reads this.
+const COLD_BUYER_RULES = [
+  ["county records", /\bcounty\s+records?\b/i],
+  ["saw you bought", /\bsaw\s+(?:that\s+)?you(?:'ve|\s+have)?\s+(?:recently\s+|just\s+)?(?:bought|purchased|built|flipped|picked\s+up)\b|\bsaw\s+your\s+(?:recent\s+|new\s+|last\s+)?(?:build|flip)s?\b/i],
+];
+
+/** coldBuyerFlags(text) → the openers about their own buying a text to a buyer who never wrote back uses. */
+export function coldBuyerFlags(text = "") {
+  const t = String(text || "");
+  return COLD_BUYER_RULES.filter(([, rx]) => rx.test(t)).map(([word]) => word);
+}

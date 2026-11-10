@@ -386,3 +386,66 @@ export function blastSubject({ address = "", city = "", price = 0, kind = "" } =
   const priceText = kText(price);
   return `${head}${city ? `, ${city}` : ""} — ${presell ? "coming up" : "under contract"}${priceText ? `, ${priceText}` : ""}`;
 }
+
+/* ---------- the deal text to a buyer who never wrote back (2026-11-09) ---------- */
+
+// A buyer who has never answered us is a stranger to the carriers too. Deal
+// texts to strangers that said "under contract", "buy" or carried a link were
+// blocked (14 of 14 on 10/20), and the same people took Matt's plain wording
+// 20 of 20. His wording from 10/30 delivered 211 of 224 with none blocked: it
+// says what we have and the numbers, and asks one thing. {what} is "a house",
+// or the kind when it isn't one ("a lot", "a mobile home in a park"), so a
+// land deal never reads as a house. Editable on Autopilot -> Investors
+// (dispoAutopilot.coldDealText).
+export const DEFAULT_COLD_DEAL_TEXT = "Hey {first}, I've got {what} at {place}. {numbers}. Any interest in it for your next project?";
+export const COLD_DEAL_TEXT_BLANKS = {
+  first: DEAL_TEXT_BLANKS.first,
+  what: "a house, or the kind when it isn't one: a lot, a mobile home in a park",
+  place: DEAL_TEXT_BLANKS.place,
+  street: DEAL_TEXT_BLANKS.street,
+  city: DEAL_TEXT_BLANKS.city,
+  numbers: DEAL_TEXT_BLANKS.numbers,
+  price: DEAL_TEXT_BLANKS.price,
+};
+const UNDER_CONTRACT_RX = /\bunder\s+contract\b/i;
+
+/**
+ * normalizeColdDealText(v) → the wording a buyer who never wrote back gets
+ *
+ * The saved text, trimmed, or the built-in one when none is saved. A saved
+ * text that says "under contract" is not used: that phrase is what got these
+ * texts blocked, and the point of this text is that it never says it.
+ */
+export function normalizeColdDealText(v) {
+  const t = String(v || "").replace(/\s+/g, " ").trim().slice(0, DEAL_TEXT_MAX_CHARS);
+  return t && !UNDER_CONTRACT_RX.test(t) ? t : DEFAULT_COLD_DEAL_TEXT;
+}
+
+/** coldWhat(kind) → "a house", "a lot", "a mobile home in a park", "a multi-family"… */
+export function coldWhat(kind = "") {
+  const k = String(kind || "").trim();
+  if (!k) return "a house";
+  return k === "land" ? "a lot" : `a ${k}`;
+}
+
+/**
+ * coldDealMessage({ firstName, intro, template, ...facts }) → string
+ *
+ * The deal for a buyer who has never written back (queueBlastDrafts, and
+ * blast-refresh.js again as it sends): their wording with the deal's numbers,
+ * no link and no walkthrough question, since the text asks its own one thing
+ * (a {close} written into it says "Want the details?"). `intro`, how we found
+ * them, goes after the greeting: "Hey Dana, Matt here. I've got...".
+ */
+export function coldDealMessage({ firstName = "", intro = "", template = "", ...facts } = {}) {
+  const first = String(firstName || "").trim().split(/\s+/)[0] || "";
+  const own = normalizeColdDealText(template);
+  const values = { ...dealTextValues({ ...facts, first, link: "", ask: "" }), what: coldWhat(facts.kind) };
+  if (!/\{close\}/.test(own)) values.close = "";
+  const text = fillDealText(own, values);
+  const how = String(intro || "").replace(/[.!?\s]+$/, "").trim();
+  if (!how) return text;
+  const m = /^((?:hey|hi|hello)\b[^,.]{0,30}),\s*/i.exec(text);
+  const rest = m ? text.slice(m[0].length) : text;
+  return `${m ? m[1] : first ? `Hey ${first}` : "Hey"}, ${how}. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
+}

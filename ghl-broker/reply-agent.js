@@ -112,7 +112,7 @@ import {
   buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext, CARRIER_CHECKED_KINDS,
   openerPlan,
 } from "./conversation-prompt.js";
-import { carrierFlags } from "./shared/carrier-words.js";
+import { carrierFlags, coldBuyerFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
 import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend, machineHours } from "./conversation-scheduler.js";
 import { refreshBlastText, refreshBundleText, defaultDataroomBaseUrl } from "./blast-refresh.js";
@@ -6997,10 +6997,12 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // written back. You pressing Send is you deciding.
   if (auto && d.channel !== "email" && BUYER_CARRIER_KINDS.has(d.outbound?.kind)) {
     let words = carrierFlags(body);
-    if (words.includes("a link")) {
-      const inv = await store.getInvestor?.(locationId, d.contactId).catch(() => null);
-      if (inv?.doc?.lastRepliedAt || inv?.lastRepliedAt) words = words.filter((w) => w !== "a link");
-    }
+    // To a buyer who never wrote back, an opener about what they bought is
+    // one more (2026-11-09: the county opener, blocked on every number). A
+    // read that fails counts them as never having written back.
+    const inv = await store.getInvestor?.(locationId, d.contactId)?.catch?.(() => null);
+    if (inv?.doc?.lastRepliedAt || inv?.lastRepliedAt) words = words.filter((w) => w !== "a link");
+    else words = [...words, ...coldBuyerFlags(body)];
     if (words.length) {
       await release(bundle);
       // The package link minted for it goes back; your Send mints a fresh one.

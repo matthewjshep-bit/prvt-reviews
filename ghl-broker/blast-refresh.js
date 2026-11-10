@@ -9,7 +9,7 @@
 // carries the buyer's own tracked package link, issued at that moment so a
 // held or dismissed text never mints one.
 
-import { blastMessage, blastSubject, dealFacts, bundleMessage, normalizeDealTexts } from "./shared/blast-text.js";
+import { blastMessage, blastSubject, dealFacts, bundleMessage, normalizeDealTexts, coldDealMessage } from "./shared/blast-text.js";
 import { dealNumbers, applyNumberOverrides, issueDataroomInvite } from "./dataroom.js";
 import { walkthroughAsk } from "./shared/showing.js";
 
@@ -79,6 +79,13 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
   // in a text is what the carriers block most, so the text asks if they want
   // the details and the reply agent sends the link when they do. An email
   // still carries it.
+  // A buyer who never wrote back (queued `cold`) gets Matt's cold wording by
+  // text, which never carries the link: it goes when they answer.
+  const cold = draft.channel !== "email" && draft.outbound?.cold === true;
+  if (cold) {
+    const text = coldDealMessage({ ...facts, firstName: draft.contactName || "", intro: draft.outbound?.intro || "", template: settings?.dispoAutopilot?.coldDealText });
+    return { text, subject: "", price, invite: null, room, withoutLink: true };
+  }
   const linkLater = draft.channel !== "email" && settings?.dispoAutopilot?.blastLink === "on_reply";
   let invite = null, link = "";
   if (room && baseUrl && !linkLater) {

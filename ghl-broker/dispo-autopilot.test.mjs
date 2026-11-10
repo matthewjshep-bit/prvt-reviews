@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { queueBlastDrafts, normalizeDispoAutopilot, catchUpDue, catchUpCandidates, startDispoSweep, _resetJobs, resumePulledBack } from "./dispo-autopilot.js";
+import { queueBlastDrafts, normalizeDispoAutopilot, catchUpDue, catchUpCandidates, startDispoSweep, _resetJobs, resumePulledBack, blastIntro } from "./dispo-autopilot.js";
+import { coldBuyerFlags } from "./shared/carrier-words.js";
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
 const fakeStore = (deals = []) => {
@@ -17,7 +18,10 @@ const fakeStore = (deals = []) => {
   };
 };
 const offer = { id: "o1", address: "22018 76th Ave W, Edmonds, WA 98026", cashAmount: 465000, arv: 640000, repairs: 60000, deal: { stage: "under_contract", contractPrice: 465000, assignmentFee: 30000, investors: [] } };
-const buyers = [{ contactId: "i1", name: "Ravi Patel" }, { contactId: "i2", name: "Mei Chen" }, { contactId: "i3", name: "Sam" }];
+// Buyers we have talked with: the deal text they get is the one these tests
+// read. A buyer who never wrote back gets the cold text (tested below).
+const TALKED = "2026-09-01T00:00:00Z";
+const buyers = [{ contactId: "i1", name: "Ravi Patel", lastRepliedAt: TALKED }, { contactId: "i2", name: "Mei Chen", lastRepliedAt: TALKED }, { contactId: "i3", name: "Sam", lastRepliedAt: TALKED }];
 const NOW = Date.parse("2026-09-10T18:00:00Z"); // 11am PT, inside the hours
 
 test("settings coerce", () => {
@@ -111,26 +115,87 @@ test("the operator's one line for a blast rides in the text and on the draft, so
   assert.equal(d.outbound.note, "3bd 1952 rambler on a quarter acre with an 840 sqft garage, ADU upside");
 });
 
-test("a buyer we found in county records is told where we found them and who we are", async () => {
-  // 9311 12th Pl SE (2026-10-08): fifty-one manufactured home owners off the
-  // Snohomish parcel roll got "Hey Colby, got 9311 … under contract" from a
-  // stranger. Matt: lead with where we found them, and who's writing — without
-  // "investor", which the carriers block (2026-10-15).
+// 9311 12th Pl SE (2026-10-08): a stranger off the parcel roll got a deal
+// text with no word of who was writing, so the county buyers' first text
+// opened on what the records said they'd bought. That opener was blocked by
+// the carriers on every number on 10/16 and went out again on 11/09; the
+// same text that just said "Matt here" went through. It says who's writing
+// and nothing about what they bought.
+test("a county-sourced buyer's first deal text doesn't open with what they bought", async () => {
   const store = fakeStore();
   const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } } };
   const lake = { id: "o3", address: "9311 12th Pl SE, Lake Stevens, WA 98258", cashAmount: 200000, arv: 370000, repairs: 50000,
     asset: { type: "manufactured", land: "own_lot", by: "you" },
     deal: { stage: "under_contract", contractPrice: 200000, assignmentFee: 18000, investors: [] } };
   await queueBlastDrafts({ store, locationId: "L", offer: lake, now: NOW, sendsEnabled: true, blastsEnabled: true, saved, investors: [
-    { contactId: "c1", name: "Colby H", phone: "+12065550101", tags: ["investor", "dispo-source-county", "dispo-type-mobile-home", "dispo-city-arlington", "dispo-region-snohomish"] },
-    { contactId: "c2", name: "Kim T", phone: "+12065550102", tags: ["investor", "dispo-source-county", "dispo-asset-sfr", "dispo-city-mill-creek"] },
+    { contactId: "c1", name: "Colby H", phone: "+12065550101", tags: ["investor", "dispo-source-county", "dispo-type-mobile-home", "dispo-city-arlington", "dispo-region-snohomish"], lastRepliedAt: "" },
+    { contactId: "c2", name: "Kim T", phone: "+12065550102", tags: ["investor", "dispo-source-county", "dispo-asset-sfr", "dispo-city-mill-creek"], lastRepliedAt: "" },
     { contactId: "c3", name: "Pat R", phone: "+12065550103", tags: ["investor", "dispo-source-county", "dispo-type-mobile-home", "dispo-city-arlington"], lastRepliedAt: "2026-10-01T00:00:00Z" },
   ] });
   const [mh, sfr, talked] = [...store.rows.values()];
-  assert.match(mh.reply, /^Hey Colby — saw in the county records you've bought mobile homes around Arlington\. I'm Matt, I fix up houses locally\. Got 9311 12th Pl SE/);
-  assert.match(sfr.reply, /^Hey Kim — saw in the county records you've bought houses around Mill Creek\. I'm Matt, I fix up houses locally\. /);
-  assert.doesNotMatch(mh.reply + sfr.reply, /investor/i);
-  assert.doesNotMatch(talked.reply, /county records/, "a buyer who has written back already knows us");
+  assert.equal(mh.reply, "Hey Colby, Matt here. I've got a mobile home on its own lot at 9311 12th Pl SE in Lake Stevens. Buyer price 218k, ARV around 370k, rehab about 50k. Any interest in it for your next project?");
+  assert.match(sfr.reply, /^Hey Kim, Matt here\. I've got a mobile home on its own lot at 9311 12th Pl SE/);
+  for (const d of [mh, sfr]) {
+    assert.doesNotMatch(d.reply, /county records|bought|investor|fix up houses/i, d.reply);
+    assert.deepEqual(coldBuyerFlags(d.reply), []);
+    assert.equal(d.outbound.intro, "Matt here");
+  }
+  assert.equal(blastIntro({ tags: ["dispo-source-county"], lastRepliedAt: "" }), "Matt here");
+  assert.equal(blastIntro({ tags: ["dispo-source-county"], lastRepliedAt: "2026-10-01T00:00:00Z" }), "", "a buyer who has written back already knows us");
+  assert.doesNotMatch(talked.reply, /Matt here|county records/, "a buyer who has written back already knows us");
+});
+
+// Matt picked the wording for strangers himself on 10/20 and 10/30, after the
+// same buyers blocked a text that said "under contract" and took one that
+// didn't (memory carrier-30007). A buyer who has never written back gets
+// that text, with no link and no second question; a buyer we've talked to
+// keeps the deal text as it was.
+test("a buyer who never wrote back gets the deal without 'under contract'", async () => {
+  const store = fakeStore();
+  const saved = { conversationAi: { enabled: true, parties: { investor: { autoSend: { enabled: true, intents: ["blast_open"] } } } }, dispoAutopilot: { blastLink: "always" } };
+  const r = await queueBlastDrafts({ store, locationId: "L", offer, now: NOW, sendsEnabled: true, blastsEnabled: true, saved, investors: [
+    { contactId: "n1", name: "Ravi Patel", phone: "+12065550111", tags: ["investor"], lastRepliedAt: "" },
+    { contactId: "n2", name: "Mei Chen", phone: "+12065550112", tags: ["investor"], lastRepliedAt: "2026-10-01T00:00:00Z" },
+  ] });
+  assert.equal(r.queued, 2);
+  const [cold, warm] = [...store.rows.values()];
+  assert.equal(cold.reply, "Hey Ravi, I've got a house at 22018 76th Ave W in Edmonds. Buyer price 495k, ARV around 640k, rehab about 60k. Any interest in it for your next project?");
+  assert.equal(cold.outbound.cold, true, "the send-time rewrite keeps it the cold text");
+  assert.doesNotMatch(cold.reply, /under contract|https?:|walk it/i);
+  assert.match(warm.reply, /^Hey Mei, new one in Edmonds: .* When could you get out to walk it\?$/, "a buyer we're talking with keeps the deal text");
+  assert.equal(warm.outbound.cold, undefined);
+
+  // Matt's own words for it, saved on Autopilot -> Investors. One that says
+  // "under contract" isn't kept: the built-in text goes instead.
+  const own = fakeStore();
+  await queueBlastDrafts({ store: own, locationId: "L", offer, now: NOW, sendsEnabled: true, blastsEnabled: true, investors: [{ contactId: "n1", name: "Ravi Patel", phone: "+12065550111", lastRepliedAt: "" }],
+    saved: { ...saved, dispoAutopilot: { coldDealText: "Hi {first}, new one at {place}. {price}. Worth a look?" } } });
+  assert.equal([...own.rows.values()][0].reply, "Hi Ravi, new one at 22018 76th Ave W in Edmonds. 495k. Worth a look?");
+  assert.equal(normalizeDispoAutopilot({}).coldDealText, "Hey {first}, I've got {what} at {place}. {numbers}. Any interest in it for your next project?");
+  assert.equal(normalizeDispoAutopilot({ coldDealText: "Hey {first}, got {place} under contract. {numbers}." }).coldDealText, normalizeDispoAutopilot({}).coldDealText);
+  assert.equal(normalizeDispoAutopilot({ coldDealText: "  Hi {first},   {place}?  " }).coldDealText, "Hi {first}, {place}?");
+
+  // A land deal says it's a lot.
+  const lot = fakeStore();
+  const land = { ...offer, id: "o-land", address: "12 Birch St, Kent, WA 98030", asset: { type: "land", by: "you" }, deal: { ...offer.deal, contractPrice: 400000, assignmentFee: 20000 } };
+  await queueBlastDrafts({ store: lot, locationId: "L", offer: land, now: NOW, sendsEnabled: true, blastsEnabled: true, saved, investors: [{ contactId: "n1", name: "Ravi Patel", phone: "+12065550111", lastRepliedAt: "" }] });
+  assert.equal([...lot.rows.values()][0].reply, "Hey Ravi, I've got a lot at 12 Birch St in Kent. Buyer price 420k. Any interest in it for your next project?");
+});
+
+test("a cold buyer's queued deal text is written again as it sends in the cold words, at the deal's price now", async () => {
+  const { refreshBlastText } = await import("./blast-refresh.js");
+  const store = {
+    async getOffer() { return { ...offer, locationId: "L", deal: { ...offer.deal, assignmentFee: 20000 } }; },
+    async getOfferSettings() { return { dispoAutopilot: { blastLink: "always" } }; },
+    async listDatarooms() { return [{ id: "r1", status: "active", kind: "deal", snapshot: {} }]; },
+    async createDataroomInvite() { throw new Error("a cold text never mints a link"); },
+  };
+  const draft = { id: "d1", contactId: "n1", contactName: "Ravi Patel", channel: "sms", reply: "queued",
+    outbound: { kind: "blast_open", offerId: "o1", address: offer.address, intro: "Matt here", cold: true } };
+  const r = await refreshBlastText({ store, client: null, locationId: "L", draft, baseUrl: "https://deals.example" });
+  assert.equal(r.text, "Hey Ravi, Matt here. I've got a house at 22018 76th Ave W in Edmonds. Buyer price 485k, ARV around 640k, rehab about 60k. Any interest in it for your next project?");
+  assert.equal(r.withoutLink, true, "the link goes when they answer");
+  assert.equal(r.invite, null);
 });
 
 test("a buyer with no phone is emailed the deal as a draft that waits for you; a phone is still texted", async () => {

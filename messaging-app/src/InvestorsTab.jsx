@@ -13,7 +13,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, X } from "lucide-react";
-import { DEFAULT_DEAL_TEXTS, normalizeDealTexts } from "@shared/blast-text.js";
+import { DEFAULT_DEAL_TEXTS, normalizeDealTexts, DEFAULT_COLD_DEAL_TEXT, COLD_DEAL_TEXT_BLANKS, normalizeColdDealText, coldDealMessage } from "@shared/blast-text.js";
 import { investorFlow } from "@shared/autopilot-flows.js";
 import { LIVE_DEAL_STAGES } from "@shared/offer-status.js";
 import { getConversationAi, getDashboardPipeline, getSettings, getWavesPreview, listDeals, patchSettings, saveConversationAi } from "./api.js";
@@ -43,6 +43,29 @@ function Check({ label, hint, checked, onChange }) {
       <input type="checkbox" className="mt-1" checked={Boolean(checked)} onChange={(e) => onChange(e.target.checked)} />
       <span>{label}{hint && <span className="block text-xs text-slate-500">{hint}</span>}</span>
     </label>
+  );
+}
+
+// The deal text a buyer who has never written back gets (2026-11-09,
+// dispoAutopilot.coldDealText): Matt's no-"under contract" wording, no link,
+// one question. Blanks are filled as each one sends.
+export function ColdDealTextEditor({ text, onChange, input = null }) {
+  const says = /\bunder\s+contract\b/i.test(String(text || ""));
+  // The edit as a buyer named Alex would get it on the picked deal, as you type.
+  const sample = input ? coldDealMessage({ ...input, firstName: "Alex", intro: "", template: text }) : "";
+  return (
+    <div className="space-y-1 rounded-lg border border-slate-200 p-3">
+      <label className="block text-sm font-semibold text-slate-700" htmlFor="cold-deal-text">To a buyer who has never written back</label>
+      <p className="text-xs text-slate-500">
+        Goes by text instead of the versions above. No link and no walkthrough question: the link goes when they answer.
+        Never "under contract", which the carriers block from strangers. Blanks: {Object.keys(COLD_DEAL_TEXT_BLANKS).map((k) => `{${k}}`).join(" ")}.
+      </p>
+      <textarea id="cold-deal-text" className={`${AREA} mt-1`} rows={3} maxLength={400} value={text || ""} placeholder={DEFAULT_COLD_DEAL_TEXT}
+        onChange={(e) => onChange(e.target.value)} aria-invalid={says || undefined} />
+      {says && <p className="text-xs font-semibold text-red-700">Take out "under contract": a stranger's text that says it gets blocked.</p>}
+      {sample && !says && <p className="rounded bg-slate-50 px-2 py-1 text-xs text-slate-700">As a buyer named Alex gets it on this deal: {sample}</p>}
+      <button type="button" className={BTN} onClick={() => onChange(DEFAULT_COLD_DEAL_TEXT)}>Use the built-in text</button>
+    </div>
   );
 }
 
@@ -98,7 +121,8 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
     else if (f === "dealFollowUp") setDraft({ day: followDay });
     else if (f === "deal") {
       const saved = normalizeDealTexts(da.dealTexts);
-      setDraft({ ...Object.fromEntries(FIELDS.deal.map((k) => [k, da[k] ?? DEFAULTS[k]])), dealTexts: saved.length ? saved : [...DEFAULT_DEAL_TEXTS] });
+      setDraft({ ...Object.fromEntries(FIELDS.deal.map((k) => [k, da[k] ?? DEFAULTS[k]])), dealTexts: saved.length ? saved : [...DEFAULT_DEAL_TEXTS],
+        coldDealText: normalizeColdDealText(da.coldDealText) });
     }
     else if (FIELDS[f]) setDraft(Object.fromEntries(FIELDS[f].map((k) => [k, da[k] ?? DEFAULTS[k]])));
     setEditing(id);
@@ -140,13 +164,18 @@ export default function InvestorsTab({ settings: appSettings, onSettingsSaved })
       <div className="space-y-2">
         <Check label="Send it when a deal goes under contract" hint="To everyone who buys in the area, then each morning to anyone new. Off: you pick the buyers from the deal." checked={draft.autoBlastOnPromote} onChange={set("autoBlastOnPromote")} />
         <DealTextsEditor texts={draft.dealTexts} onChange={set("dealTexts")} input={preview?.input || null} />
+        <ColdDealTextEditor text={draft.coldDealText} onChange={set("coldDealText")} input={preview?.input || null} />
         {bar(() => {
           const texts = normalizeDealTexts(draft.dealTexts);
           if (!texts.length) { setError("Write at least one version of the deal text."); return; }
+          const cold = String(draft.coldDealText || "").replace(/\s+/g, " ").trim();
+          if (/\bunder\s+contract\b/i.test(cold)) { setError("The text to buyers who never wrote back can't say \"under contract\": the carriers block it."); return; }
           // The built-in three, untouched, are saved as "the built-in
           // wording", so they keep reading exactly as they always have.
-          const { dealTexts: _t, ...rest } = draft;
-          run(() => patchSettings({ dispoAutopilot: { ...asNumbers(rest), dealTexts: sameTexts(texts, DEFAULT_DEAL_TEXTS) ? [] : texts } }));
+          // The same for the cold text: "" is the built-in one.
+          const { dealTexts: _t, coldDealText: _c, ...rest } = draft;
+          run(() => patchSettings({ dispoAutopilot: { ...asNumbers(rest), dealTexts: sameTexts(texts, DEFAULT_DEAL_TEXTS) ? [] : texts,
+            coldDealText: !cold || cold === DEFAULT_COLD_DEAL_TEXT ? "" : cold } }));
         })}
       </div>
     );

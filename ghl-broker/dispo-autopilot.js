@@ -24,7 +24,7 @@
 import { normalizeTouchBudget } from "./shared/buyer-touch.js";
 import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { store as defaultStore } from "./store.js";
-import { blastMessage, blastNote, dealFacts, blastSubject, presellMessage, normalizeDealTexts } from "./shared/blast-text.js";
+import { blastMessage, blastNote, dealFacts, blastSubject, presellMessage, normalizeDealTexts, normalizeColdDealText, coldDealMessage } from "./shared/blast-text.js";
 import { normalizeBookSync } from "./investor-sync.js";
 import { normalizeInvestorReads } from "./investor-read.js";
 import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
@@ -86,6 +86,9 @@ export function normalizeDispoAutopilot(v = {}) {
     // one we're talking to; a deal over that waits and goes together with
     // whatever else is new for them. On — it only ever holds texts back.
     touchBudget: normalizeTouchBudget(o.touchBudget),
+    // The deal text for a buyer who has never written back (2026-11-09):
+    // Matt's no-"under contract" wording, his own when he's saved some.
+    coldDealText: normalizeColdDealText(o.coldDealText),
   };
 }
 
@@ -107,17 +110,12 @@ export function normalizeBlastEmail(v = {}) {
 const SOURCE_INTROS = { "dispo-source-fb-warei": "found you through the WA real estate Facebook group" };
 
 // Buyers off the county sale and parcel records (dispo-source-county) never
-// heard of us. Matt, 2026-10-08: "hey saw you buy mobile homes in the area
-// from xyz, im a local investor" — what we saw, where, and who's writing.
-// Not the word "investor", though (2026-10-15): it is one the carriers
-// block (shared/carrier-words.js), and the cold deal texts that said it
-// were blocked a third of the time.
-function countyIntro(tags) {
-  const mobile = tags.includes("dispo-type-mobile-home") || tags.includes("dispo-asset-manufactured");
-  const city = (tags.find((t) => t.startsWith("dispo-city-")) || "").slice("dispo-city-".length)
-    .split("-").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
-  return `saw in the county records you've bought ${mobile ? "mobile homes" : "houses"} ${city ? `around ${city}` : "in the area"}. I'm Matt, I fix up houses locally`;
-}
+// heard of us, so the first text says who's writing. Only that: the line
+// that also told them what the records said they'd bought ("saw in the
+// county records you've bought houses around...") was blocked by the
+// carriers on every number on 10/16, and the same text with just "Matt here"
+// went through (2026-11-09, carrier-30007: don't open with their own buying).
+const COUNTY_INTRO = "Matt here";
 
 /** blastIntro({ tags, lastRepliedAt }) → the how-we-found-you line for a buyer who has never written back, or "". */
 export function blastIntro(inv = {}) {
@@ -125,7 +123,18 @@ export function blastIntro(inv = {}) {
   const tags = (inv.tags || []).map((t) => String(t || "").toLowerCase());
   for (const t of tags) if (SOURCE_INTROS[t]) return SOURCE_INTROS[t];
   if (tags.some((t) => t.startsWith("dispo-source-fb"))) return "found you through a real estate Facebook group";
-  return tags.includes("dispo-source-county") ? countyIntro(tags) : "";
+  return tags.includes("dispo-source-county") ? COUNTY_INTRO : "";
+}
+
+/**
+ * coldBuyer(inv, { presell }) → true for a buyer who has never written back
+ *
+ * They get the cold deal text (dispoAutopilot.coldDealText) by text: no
+ * "under contract", no link, one question. A pre-sell has its own words, and
+ * a buyer who asked for the deal has written to us.
+ */
+export function coldBuyer(inv = {}, { presell = false } = {}) {
+  return !presell && !inv.asked && !inv.lastRepliedAt;
 }
 
 /**
@@ -222,7 +231,9 @@ export async function sampleBlastTexts({ store = defaultStore, locationId, offer
   const link = da.blastLink === "always" ? "[their package link]" : "";
   const input = { ...facts, firstName: name, ask, link, linkOnReply: !link };
   const count = Math.max(1, Math.min(3, da.dealTexts.length || 3));
-  return { samples: Array.from({ length: count }, (_, variant) => blastMessage({ ...input, variant, templates: da.dealTexts })), input };
+  // And as a buyer who has never written back would get it (the cold text).
+  const coldSample = coldDealMessage({ ...facts, firstName: name, template: da.coldDealText });
+  return { samples: Array.from({ length: count }, (_, variant) => blastMessage({ ...input, variant, templates: da.dealTexts })), coldSample, input };
 }
 
 /**
@@ -287,6 +298,11 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
     const intro = blastIntro(inv);
     const variant = i;
     const text = presell ? presellMessage({ ...facts, firstName: name, variant, intro }) : blastMessage({ ...facts, firstName: name, variant, ask, intro, templates: da.dealTexts });
+    // A buyer who never wrote back is texted Matt's cold wording (no "under
+    // contract", no link); an email to them is the deal text as it was.
+    const cold = coldBuyer(inv, { presell });
+    const coldText = cold ? coldDealMessage({ ...facts, firstName: name, intro, template: da.coldDealText }) : "";
+    const textFor = (channel) => (cold && channel === "sms" ? coldText : text);
     if (i > 0) cursor += da.spreadSec * 1000 + Math.round(Math.random() * 15000);
     let sendAt = nextSendTime({ now: cursor, delayMs: 0, quietHours: machineHours(config.autoSend) });
     cursor = Date.parse(sendAt);
@@ -323,13 +339,14 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
       // Said on the row, so the outbox and the wave preview show why this
       // buyer gets an email as well as the text.
       const flags = [channel === "sms" ? waits : "", channel === "email" && inv.phone && !inv.channel ? "they asked for deals by email too — the text goes as well" : ""].filter(Boolean);
-      if (dryRun) { rows.push({ contactId, name, channel, status: "would queue", sendAt: schedule ? sendAt : null, text, ...(channel === "sms" && waits ? { waits } : {}), ...(subject ? { subject } : {}) }); continue; }
+      if (dryRun) { rows.push({ contactId, name, channel, status: "would queue", sendAt: schedule ? sendAt : null, text: textFor(channel), ...(channel === "sms" && waits ? { waits } : {}), ...(subject ? { subject } : {}) }); continue; }
       const ts = iso(now);
+      const coldSms = cold && channel === "sms";
       const record = await store.createReplyDraft({
         locationId, contactId, contactName: name, status: schedule ? "scheduled" : "draft", channel, jobId: null,
         inbound: "", outbound: { kind: "blast_open", offerId: offer.id, address: offer.address, label: label || "", variant, ...(ownLine ? { note: ownLine } : {}),
-          ...(intro ? { intro } : {}), ...(subject ? { subject } : {}), ...(presell ? { presell: true } : {}), ...(inv.asked ? { asked: true } : {}) },
-        reply: text, intent: "blast_open", confidence: "high", needsHuman: Boolean(presell), humanReason: presell ? PRESELL_WAITS : "",
+          ...(intro ? { intro } : {}), ...(subject ? { subject } : {}), ...(presell ? { presell: true } : {}), ...(inv.asked ? { asked: true } : {}), ...(coldSms ? { cold: true } : {}) },
+        reply: textFor(channel), intent: "blast_open", confidence: "high", needsHuman: Boolean(presell), humanReason: presell ? PRESELL_WAITS : "",
         summary: presell
           ? `Pre-sells ${offer.address} to ${name || "a buyer"} at about ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}, before we sign.`
           : `Puts ${offer.address} in front of ${name || "a buyer"} at ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}.`,
@@ -340,7 +357,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
         ...(schedule ? { sendAt, scheduledAt: ts } : {}), updatedAt: ts,
       });
       if (schedule) queued++; else drafted++;
-      rows.push({ contactId, name, channel, status: schedule ? "scheduled" : "draft", draftId: record.id, sendAt: schedule ? sendAt : null, text, ...(channel === "sms" && waits ? { waits } : {}), ...(subject ? { subject } : {}) });
+      rows.push({ contactId, name, channel, status: schedule ? "scheduled" : "draft", draftId: record.id, sendAt: schedule ? sendAt : null, text: textFor(channel), ...(channel === "sms" && waits ? { waits } : {}), ...(subject ? { subject } : {}) });
     }
   }
   return { queued, drafted, waiting, dryRun: Boolean(dryRun), scheduled: willSchedule, reason, rows, price: facts.price };
