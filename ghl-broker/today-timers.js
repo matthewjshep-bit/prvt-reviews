@@ -48,14 +48,18 @@ export async function runTodayTimers({ client = null, locationId, saved = {}, st
   if (!config.driver?.timers?.enabled) return { ...out, reason: "the timers are switched off" };
 
   const jobsFor = typeof deps.listUnderwriteJobs === "function" ? deps.listUnderwriteJobs : (loc) => listUnderwriteJobs(loc, { limit: 100 }).map(publicJob);
-  const [offers, drafts, spoke] = await Promise.all([
+  // The held drafts on their own, as Today's read takes them (routes/dashboard.js,
+  // 2026-11-09): a blast's hundreds of scheduled texts never push one out.
+  const [offers, held, scheduled, spoke] = await Promise.all([
     store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []),
-    store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }).catch(() => []),
+    store.listReplyDrafts(locationId, { status: "draft", limit: 5000 }).catch(() => []),
+    store.listReplyDrafts(locationId, { status: "scheduled", limit: 500 }).catch(() => []),
     // Your own texts and the calls of the last week (2026-11-09): the
     // pipeline's "you already texted them" guard reads these, so the timer
     // never floats a rough first pass after you gave them a number.
     Promise.resolve(store.listContactEventsSince?.(locationId, iso(now - SPOKE_DAYS * 86400000), { types: ["hand_reply", "call_summary"], limit: 5000 })).catch(() => []),
   ]);
+  const drafts = [...held, ...scheduled];
   const events = (spoke || []).filter((e) => e?.contactId).sort((a, b) => String(a.at).localeCompare(String(b.at)));
   const actions = buildPipeline({ offers, drafts, events, jobs: jobsFor(locationId) || [], config, now }).actions;
 

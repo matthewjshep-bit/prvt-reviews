@@ -42,7 +42,7 @@ export const CALL_INTENTS = new Set(["wants_call", "scheduling", "wants_walkthro
 // drafts, then the house-level and deal-level work. Anything unlisted sorts
 // after these, by severity.
 export const KIND_STRENGTH = [
-  "call_owed", "call_hot", "call_brought", "call_gatekeeper_replied", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "deal_interest_stalled",
+  "call_owed", "call_hot", "call_brought", "call_gatekeeper_replied", "hot_stalled", "call_counter", "call_gap", "call_missed", "call_wants", "call_buyer", "call_buyer_live_deal", "deal_interest_stalled",
   // An agent's partner terms lead their held reply: the row says what they offered.
   "call_partner_terms",
   "paper_to_sign", "pre_contract", "handoff", "investor_price_agreed", "draft_waiting", "promise_owed", "number_owed", "audit_owed", "referral", "email_check",
@@ -220,8 +220,9 @@ export function urgentReasons(reasons = [], { drafts = [], heldByOffer = new Map
 // Matt dials from GHL's Manual Actions queue (shared/ghl-calls.js). The day's
 // list goes in at 8:30; these go in as they turn up until 5pm: a call we
 // promised, a counter above ours, partner terms, a missed call on a live
-// house — and a held reply asking to talk (CALL_INTENTS).
-export const GHL_URGENT_CALLS = new Set(["call_owed", "call_counter", "call_partner_terms", "call_missed"]);
+// house — and a held reply asking to talk (CALL_INTENTS). A buyer on a live
+// deal waiting on us (2026-11-09) is only ever a row while desk.buyerCalls is on.
+export const GHL_URGENT_CALLS = new Set(["call_owed", "call_counter", "call_partner_terms", "call_missed", "call_buyer_live_deal"]);
 
 /**
  * ghlCallKind(reason, { draftsById }) → "urgent" | "daily" | null

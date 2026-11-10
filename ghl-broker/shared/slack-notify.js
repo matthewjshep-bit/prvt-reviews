@@ -586,6 +586,9 @@ export function renderMorning(c = {}, ctx = {}) {
       .map((h) => `${esc(street(h.street || h.address) || "a house")}${money(h.engine) ? ` (engine ${money(h.engine)})` : ""}`);
     lines.push(`:hourglass_flowing_sand: Passes today unless you price it: *${c.passesToday.count}*${shown.length ? ` — ${shown.join(", ")}${c.passesToday.count > shown.length ? ", …" : ""}` : ""}`);
   }
+  // The calls we owe this morning (the pipeline's call_owed rows: a call we
+  // said we'd make, a booked call nobody made), 2026-11-09.
+  if (Number(c.callsOwed) > 0) lines.push(`:telephone_receiver: ${row("Calls we owe", c.callsOwed)}`);
   const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });

@@ -195,6 +195,69 @@ test("a call whose row is gone, with nobody calling, is taken back out of GHL", 
   assert.equal(third.of("DELETE", /\/workflow\//).length, 0);
 });
 
+// FUP-08 (2026-11-09 audit): the live set was built from a 7-day ledger, so a
+// call queued once and pushed down the list was never taken back once its
+// reason ended a week later. On 10/29 Matt cleared 105 of them by hand.
+test("a call queued ten days ago is taken back when its reason ends", async () => {
+  const LOC = "loc-withdraw-old";
+  await runGhlCalls({ store, locationId: LOC, client: ghl(), saved: ON, deps: { pipelineFor: pipelineFor({ who: ["dana"] }) }, mode: "morning", now: NOW - 10 * 24 * H });
+  const later = ghl();
+  const r = await runGhlCalls({ store, locationId: LOC, client: later, saved: ON, deps: { pipelineFor: pipelineFor({ who: [] }) }, mode: "urgent", now: NOW });
+  assert.deepEqual(r.withdrawn.map((w) => w.contactId), ["dana"]);
+  assert.deepEqual(later.of("DELETE", /\/workflow\//).map((c) => c.path), [`/contacts/dana/workflow/${WF}`]);
+  const ev = await store.listContactEventsSince(LOC, ago(24 * 30), { types: GHL_CALL_EVENT_TYPES, limit: 50 });
+  assert.ok(ev.some((e) => e.type === "ghl_call_withdrawn" && e.data.claimKey === "ghl_call:dana:2026-10-05"));
+});
+
+// FUP-02: a held reply asking for a call fell out of a newest-500 read when a
+// blast filled the outbox, and its call was taken back out of GHL.
+test("a call isn't taken back off a held-draft read that hit its cap", async () => {
+  const LOC = "loc-withdraw-capped";
+  await runGhlCalls({ store, locationId: LOC, client: ghl(), saved: ON, deps: { pipelineFor: pipelineFor({ who: ["hal"] }) }, mode: "urgent", now: NOW });
+  const full = async (a) => ({ ...(await pipelineFor({ who: [] })(a)), capped: { held: true } });
+  const later = ghl();
+  const r = await runGhlCalls({ store, locationId: LOC, client: later, saved: ON, deps: { pipelineFor: full }, mode: "urgent", now: NOW + H });
+  assert.equal(r.withdrawn.length, 0, "unknown, not gone");
+  assert.equal(later.of("DELETE", /\/workflow\//).length, 0);
+  const whole = await runGhlCalls({ store, locationId: LOC, client: ghl(), saved: ON, deps: { pipelineFor: pipelineFor({ who: [] }) }, mode: "urgent", now: NOW + 2 * H });
+  assert.deepEqual(whole.withdrawn.map((w) => w.contactId), ["hal"], "a whole read without it: taken back");
+});
+
+test("the first run after a backlog takes back ten at a time", async () => {
+  const LOC = "loc-withdraw-backlog";
+  const { recordEvent } = await import("./contact-record.js");
+  for (let i = 0; i < 14; i++) {
+    await recordEvent({ store, locationId: LOC, contactId: `old${i}`, type: "ghl_call_queued", at: new Date(NOW - (12 + i) * 24 * H).toISOString(), source: "sweep",
+      dedupeKey: `ghl_call:old${i}:2026-09-${String(30 - i).padStart(2, "0")}`, data: { kind: "call_quiet", workflowId: WF } });
+  }
+  const first = await runGhlCalls({ store, locationId: LOC, client: ghl(), saved: ON, deps: { pipelineFor: pipelineFor({ who: [] }) }, mode: "urgent", now: NOW });
+  assert.equal(first.withdrawn.length, 10);
+  const second = await runGhlCalls({ store, locationId: LOC, client: ghl(), saved: ON, deps: { pipelineFor: pipelineFor({ who: [] }) }, mode: "urgent", now: NOW + H / 4 });
+  assert.equal(second.withdrawn.length, 4);
+});
+
+// With the whole ledger read, a GHL that refuses every take-back (down, or a
+// token gone bad) would be asked about every old call on every tick, and each
+// refusal written to the error log.
+test("a GHL that refuses every take-back is asked at most twenty times a run", async () => {
+  const LOC = "loc-withdraw-refused";
+  const { recordEvent } = await import("./contact-record.js");
+  for (let i = 0; i < 30; i++) {
+    await recordEvent({ store, locationId: LOC, contactId: `stuck${i}`, type: "ghl_call_queued", at: new Date(NOW - (12 + i) * 24 * H).toISOString(), source: "sweep",
+      dedupeKey: `ghl_call:stuck${i}:2026-09-${String(30 - (i % 28)).padStart(2, "0")}-${i}`, data: { kind: "call_quiet", workflowId: WF } });
+  }
+  const down = ghl();
+  const call = down.call;
+  down.call = async (p, opts = {}) => {
+    if (opts.method === "DELETE" && /\/workflow\//.test(p)) { down.calls.push({ method: "DELETE", path: p }); throw Object.assign(new Error("GHL DELETE -> 503"), { status: 503 }); }
+    return call(p, opts);
+  };
+  const r = await runGhlCalls({ store, locationId: LOC, client: down, saved: ON, deps: { pipelineFor: pipelineFor({ who: [] }) }, mode: "urgent", now: NOW });
+  assert.equal(r.withdrawn.length, 0);
+  assert.equal(down.of("DELETE", /\/workflow\//).length, 20, "twenty tries, then the rest wait a tick");
+  assert.equal(r.failed.filter((f) => f.stage === "withdraw").length, 20);
+});
+
 test("a call still standing, only pushed down the list, stays in GHL", async () => {
   const LOC = "loc-outranked";
   await runGhlCalls({ store, locationId: LOC, client: ghl(), saved: ON, deps: { pipelineFor: pipelineFor({ who: ["eli"] }) }, mode: "morning", now: NOW });

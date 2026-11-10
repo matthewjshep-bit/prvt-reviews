@@ -941,6 +941,29 @@ test("a call we promised is a Call row at the top of the day; a walk-through tim
   assert.equal(t.title, "Owed: a time to walk it to Sarah on 12 Elm St");
 });
 
+// The 2026-11-09 audit: a call booked for 8am was never made, and nothing
+// read the booking's time. A booking nobody called on is a call we owe.
+test("a booked call nobody made is a call we owe, at the top of the day's calls and urgent for GHL", async () => {
+  const { ghlCallKind } = await import("./desk.js");
+  const booking = { type: "call_booked", contactId: "a1", at: D(1), party: "agent", address: "12 Elm St, Renton, WA",
+    data: { startTime: new Date(NOW - 5 * 3600000).toISOString(), durationMin: 15, label: "Tue 8:00am" } };
+  const r = build({ offers: [offer()], events: [booking] });
+  const row = r.actions.find((a) => a.kind === "call_owed");
+  assert.ok(row, "a call_owed row");
+  assert.equal(row.section, "call");
+  assert.equal(row.why, "booked call missed");
+  assert.match(row.title, /^Owed: the call booked with Sarah/);
+  assert.ok(row.score > 105, "ahead of a missed call");
+  assert.equal(row.call.why, "booked call missed");
+  assert.equal(row.offerId, "o1", "the house it was booked about");
+  assert.equal(ghlCallKind(row), "urgent");
+  const rang = { type: "call_attempt", contactId: "a1", at: new Date(NOW - 4.8 * 3600000).toISOString(), data: { outcome: "voicemail", direction: "outbound" } };
+  assert.equal(build({ offers: [offer()], events: [booking, rang] }).actions.find((a) => a.kind === "call_owed"), undefined, "we rang: nothing owed");
+  // A promised call and a missed booking for one person: one row.
+  const callMade = { type: "promise_made", contactId: "a1", at: D(2), address: "12 Elm St, Renton, WA", data: { what: "call", text: "I'll give you a call tomorrow." } };
+  assert.equal(build({ offers: [offer()], events: [callMade, booking] }).actions.filter((a) => a.kind === "call_owed").length, 1);
+});
+
 // Price once (2026-10-15, shared/number-stance.js listedFit): a listed house
 // too far under the seller's number got a polite no-fit and no number. Not a
 // pass: it is Matt's to price by hand.

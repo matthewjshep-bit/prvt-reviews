@@ -631,3 +631,26 @@ test("the morning post doesn't say a house passes today when the runner is off o
   const none = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: T0 });
   assert.equal(none.counts.passesToday, undefined, "a float that left keeps it");
 });
+
+// 2026-11-09: a call we owe (a promised call, a booked one nobody made) is
+// counted in the morning post, off the same rows the GHL calls go from.
+test("the morning post counts the calls we owe from Today's read", async () => {
+  const LOC = "loc-morning-calls";
+  _resetSlack();
+  const s = slack();
+  const shownActions = [
+    { id: "call_owed:booked:pat:x", kind: "call_owed", contactId: "pat", section: "call" },
+    { id: "call_owed:pat:y", kind: "call_owed", contactId: "pat", section: "call" },
+    { id: "call_owed:lou:z", kind: "call_owed", contactId: "lou", section: "call" },
+    { id: "price_it:o1", kind: "price_it", contactId: "max" },
+  ];
+  const pipelineFor = async () => ({ shownActions, shownCalls: [], drafts: [] });
+  const saved = { ...ON, slack: { ...ON.slack, streams: { daily: true } } };
+  // 7:05am Pacific on a Monday: the morning post's hour.
+  const r = await maybeRunSlack({ locationId: LOC, saved, store, deps: { pipelineFor }, now: Date.parse("2026-10-26T14:05:00Z") });
+  assert.equal(r.morning?.counts?.callsOwed, 2, "two people, counted once each");
+  const post = s.of("chat.postMessage").find((c) => c.body.channel === CH.daily && /Yesterday/.test(said(c)));
+  assert.ok(post, "the morning post went");
+  assert.match(said(post), /Calls we owe: \*2\*/);
+  assert.doesNotMatch(said(post), /pat|lou/);
+});

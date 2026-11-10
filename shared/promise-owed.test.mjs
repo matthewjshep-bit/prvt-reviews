@@ -76,3 +76,54 @@ test("a walk-through time is kept by a booking or a text of ours with a time; th
   const deal = { contactId: "c1", address: "12 Elm St, Renton, WA", deal: { stage: "under_contract", checklist: { items: [{ id: "earnest_money", done: true }] } } };
   assert.equal(owedPersonPromises({ events: [emd], offers: [deal], now: NOW2 }).length, 0);
 });
+
+/* ---------- a booked call nobody made (2026-11-09) ---------- */
+
+// The audit: a call booked for 8am was never made, and the next text from us
+// asked the agent for fixers. Nothing read the booking's time.
+const NOW3 = Date.parse("2026-11-04T19:00:00Z");   // Wednesday 11am Pacific
+const at3 = (h) => new Date(NOW3 - h * 3600000).toISOString();
+const booked = (startHoursAgo, over = {}) => ({ type: "call_booked", contactId: "c9", at: at3(startHoursAgo + 20), party: "agent", address: "88 Quill Ln, Kent, WA",
+  data: { startTime: at3(startHoursAgo), durationMin: 15, label: "Wed 8:00am" }, ...over });
+
+test("a booked call with no call near its time is a call we owe", async () => {
+  const { bookedCallsMissed } = await import("./promise-owed.js");
+  const missed = bookedCallsMissed([booked(3)], NOW3);
+  assert.equal(missed.length, 1);
+  assert.equal(missed[0].contactId, "c9");
+  assert.equal(missed[0].startTime, at3(3));
+  assert.equal(missed[0].address, "88 Quill Ln, Kent, WA");
+  assert.equal(bookedCallsMissed([booked(1)], NOW3).length, 0, "an hour past its time: not missed yet");
+  assert.equal(bookedCallsMissed([booked(-20)], NOW3).length, 0, "tomorrow's booking isn't missed");
+  const rang = { type: "call_attempt", contactId: "c9", at: at3(3.25), data: { outcome: "no_answer", direction: "outbound" } };
+  assert.equal(bookedCallsMissed([booked(3), rang], NOW3).length, 0, "we rang a few minutes early");
+  const talked = { type: "call_summary", contactId: "c9", at: at3(2.5), data: { direction: "inbound", durationSec: 240, transcribed: true } };
+  assert.equal(bookedCallsMissed([booked(3), talked], NOW3).length, 0, "they called and we talked");
+  const late = { type: "call_attempt", contactId: "c9", at: at3(0.5), data: { outcome: "voicemail", direction: "outbound" } };
+  assert.equal(bookedCallsMissed([booked(3), late], NOW3).length, 0, "a late call still pays it");
+  const theyRang = { type: "call_attempt", contactId: "c9", at: at3(2.9), data: { outcome: "voicemail", direction: "inbound" } };
+  assert.equal(bookedCallsMissed([booked(3), theyRang], NOW3).length, 1, "their missed call to us doesn't");
+  const early = { type: "call_attempt", contactId: "c9", at: at3(4), data: { outcome: "no_answer", direction: "outbound" } };
+  assert.equal(bookedCallsMissed([booked(3), early], NOW3).length, 1, "a call an hour before the time isn't the booked call");
+  const rebooked = booked(-26, { at: at3(1) });
+  assert.equal(bookedCallsMissed([booked(3), rebooked], NOW3).length, 0, "booked again for tomorrow: that one is the call");
+  assert.equal(bookedCallsMissed([booked(24 * 70)], NOW3).length, 0, "two months on it is history");
+  assert.equal(bookedCallsMissed([{ ...booked(3), data: {} }], NOW3).length, 0, "no time on the booking: nothing to miss");
+});
+
+test("a call we owe holds the check-ins three days, and a call made since ends the wait", async () => {
+  const { callOwedWait, CALL_OWED_WAIT_DAYS } = await import("./promise-owed.js");
+  assert.equal(CALL_OWED_WAIT_DAYS, 3);
+  const w = callOwedWait({ events: [booked(3)], now: NOW3 });
+  assert.match(w.reason, /we missed the call booked with them/);
+  assert.equal(w.until, new Date(Date.parse(at3(3)) + 3 * 86400000).toISOString());
+  assert.equal(callOwedWait({ events: [booked(24 * 3 + 1)], now: NOW3 }), null, "three days on the check-ins go again");
+  assert.match(callOwedWait({ events: [booked(-20)], now: NOW3 }).reason, /a call is booked with them/);
+  const promised = { type: "promise_made", contactId: "c9", at: at3(30), data: { what: "call", text: "I'll give you a call tomorrow morning." } };
+  assert.match(callOwedWait({ events: [promised], now: NOW3 }).reason, /we said we'd call them/);
+  const rang = { type: "call_attempt", contactId: "c9", at: at3(2), data: { outcome: "no_answer", direction: "outbound" } };
+  assert.equal(callOwedWait({ events: [promised, rang], now: NOW3 }), null, "we tried: the promise is kept");
+  assert.equal(callOwedWait({ events: [{ ...promised, data: { what: "call", text: "I'll give you a call if it pencils." } }], now: NOW3 }), null, "a call if it makes sense promises nothing");
+  assert.equal(callOwedWait({ events: [promised, { type: "promise_kept", contactId: "c9", at: at3(1), data: { by: "dismissed" } }], now: NOW3 }), null, "dismissed");
+  assert.equal(callOwedWait({ events: [{ ...promised, data: { what: "number", text: "I'll get you a number tomorrow." } }], now: NOW3 }), null, "a number isn't a call");
+});

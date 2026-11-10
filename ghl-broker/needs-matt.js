@@ -67,7 +67,7 @@ const keep = (v, placed = false, landedAt = null) => ({ kind: v.kind, rowKind: v
  *   deps.syncAgentCard  tier-check.js syncAgentCard (tests stub it)
  */
 export async function runNeedsMatt({ store = defaultStore, locationId, client, saved = {}, deps = {}, now = Date.now(), dryRun = false, ghl = null } = {}) {
-  const out = { dryRun, stage: false, needs: 0, byKind: {}, entered: [], left: [], passDue: [], passed: [], screened: [], synced: 0, moved: 0, noted: 0, errors: [], finishedAt: null };
+  const out = { dryRun, stage: false, needs: 0, byKind: {}, entered: [], left: [], passDue: [], passed: [], screened: [], unknown: [], synced: 0, moved: 0, noted: 0, errors: [], finishedAt: null };
   const done = () => { out.finishedAt = iso(Date.now()); return out; };
   if (typeof deps.pipelineFor !== "function") throw new Error("runNeedsMatt needs deps.pipelineFor");
   const cfg = normalizeGhlStages(saved?.ghlStages);
@@ -100,6 +100,14 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   const needs = needsMattByContact(rows, { drafts: read.drafts || [], offers: read.offers || [], now, screened, walkedAway });
   const cur = await store.getJobCursor?.(locationId, NEEDS_MATT_CURSOR).catch(() => null);
   const prev = needsMattFromCursor(cur?.doc);
+  // A held-draft read that hit its cap (routes/dashboard.js, 2026-11-09): a
+  // card missing from it is unknown, not done. It keeps its place on the
+  // stage and its clock, and isn't passed off it, until a whole read says.
+  const unknown = new Set();
+  if (read.capped?.held) {
+    for (const [id, v] of prev) if (!needs.has(id)) { needs.set(id, { ...v }); unknown.add(id); }
+  }
+  out.unknown = [...unknown].map((id) => ({ contactId: id }));
   // The pass clock starts when the thing first landed, kept across reads.
   for (const [id, v] of needs) v.landedAt = prev.get(id)?.key === v.key && prev.get(id)?.landedAt ? prev.get(id).landedAt : iso(now);
   out.needs = needs.size;
@@ -109,7 +117,7 @@ export async function runNeedsMatt({ store = defaultStore, locationId, client, s
   const left = [...prev.keys()].filter((id) => !needs.has(id));
   out.entered = entered.map((id) => ({ contactId: id, kind: needs.get(id).kind }));
   out.left = left.map((id) => ({ contactId: id }));
-  out.passDue = [...needs].filter(([, v]) => needsMattPassDue(v, now)).map(([id, v]) => ({ contactId: id, offerId: v.offerId }));
+  out.passDue = [...needs].filter(([id, v]) => !unknown.has(id) && needsMattPassDue(v, now)).map(([id, v]) => ({ contactId: id, offerId: v.offerId }));
   if (dryRun) return done();
 
   // The list first: the 7am plan and every card sync read it from here.
@@ -201,7 +209,7 @@ export function _resetNeedsMatt() { running.clear(); }
 // What a run did, for the cursor: ids and kinds, never what was said.
 export const summarizeNeedsMatt = (r) => ({
   finishedAt: r?.finishedAt || null, stage: Boolean(r?.stage), needs: r?.needs ?? 0, byKind: r?.byKind || {},
-  entered: (r?.entered || []).length, left: (r?.left || []).length, passed: (r?.passed || []).length, screened: (r?.screened || []).length, moved: r?.moved ?? 0, noted: r?.noted ?? 0,
+  entered: (r?.entered || []).length, left: (r?.left || []).length, passed: (r?.passed || []).length, screened: (r?.screened || []).length, unknown: (r?.unknown || []).length, moved: r?.moved ?? 0, noted: r?.noted ?? 0,
   errors: (r?.errors || []).slice(0, 5),
 });
 

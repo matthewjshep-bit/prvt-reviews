@@ -37,6 +37,7 @@ import { soundsLikeSecondThoughts } from "./shared/conversation-ai.js";
 import { recordEvent } from "./contact-record.js";
 import { conversationConfig, startProactive } from "./reply-agent.js";
 import { waitingReason } from "./outbox-guard.js";
+import { callOwedReason } from "./agent-focus.js";
 import { botEventsByContact } from "./bot-hold.js";
 import { botHold, holdLine, paceOf, paceScale, MIN_PACE } from "./shared/bot-hold.js";
 import { claimDailyRun, closeDailyRun } from "./daily-gate.js";
@@ -1134,6 +1135,15 @@ async function runSweep(job, ctx) {
     if (spaced) {
       job.skipped++;
       push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: spaced });
+      continue;
+    }
+    // A call we owe them goes first (2026-11-09: a booked call nobody made,
+    // then a text asking for fixers). The cold ladder's check-in waits three
+    // days for it, unclaimed, so the rung goes once the wait is over.
+    const owedCall = c.party === "agent" ? await callOwedReason({ store, locationId, contactId: c.contactId, kind: c.kind, now }) : null;
+    if (owedCall) {
+      job.skipped++;
+      push({ contactId: c.contactId, address: c.address, kind: c.kind, step: d.step, status: "skipped", reason: owedCall });
       continue;
     }
     // A passed house rides on this nudge as one line, at most once a month.

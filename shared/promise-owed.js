@@ -243,6 +243,88 @@ export function owedPersonPromises({ events = [], sentDrafts = [], offers = [], 
   return out;
 }
 
+/* ---------- a booked call nobody made (2026-11-09) ---------- */
+
+// The 2026-11-09 audit: a call booked on the calendar for 8am was never made,
+// and the next text from us asked the agent for fixers. Nothing read the
+// booking's time (call_booked data.startTime). A booking is a call we owe at
+// that time: missed once it is BOOKED_MISSED_AFTER_HOURS past with no call
+// of ours tried and none that connected from BOOKED_EARLY_MIN before it on.
+// A call later than that still pays it: late is still made.
+export const BOOKED_MISSED_AFTER_HOURS = 2;
+const BOOKED_EARLY_MS = 30 * 60000;
+// A call we owe (booked, missed or promised) holds the check-ins this long
+// (shared/agent-focus.js callOwedHolds): the call goes first.
+export const CALL_OWED_WAIT_DAYS = 3;
+// The timeline types the two readers below need.
+export const CALL_OWED_EVENT_TYPES = Object.freeze(["call_booked", "call_attempt", "call_summary", "promise_made", "promise_kept"]);
+
+// A call of ours that was tried (rang through or not), or any call where
+// somebody talked. Their missed call to us is neither.
+const ourCallOrTalk = (e) => callEventConnected(e)
+  || (e?.type === "call_attempt" && e.data?.direction !== "inbound")
+  || (e?.type === "call_summary" && e.data?.direction === "outbound");
+const calledFrom = (list, from) => list.some((e) => (ms(e.at) ?? -Infinity) >= from && ourCallOrTalk(e));
+
+/**
+ * bookedCallsMissed(events, now, { windowDays }) → [{ contactId, startTime, bookedAt, address, party, label }]
+ *
+ * One per contact, the newest: a `call_booked` whose start is more than
+ * BOOKED_MISSED_AFTER_HOURS past with no call of ours tried, and none that
+ * connected, from 30 minutes before it until now. A newer booking for that
+ * contact is the call instead. Older than `windowDays`, it is history.
+ */
+export function bookedCallsMissed(events = [], now = Date.now(), { windowDays = OWED_WINDOW_DAYS } = {}) {
+  const byContact = new Map();
+  for (const e of events || []) {
+    if (!e?.contactId) continue;
+    if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
+    byContact.get(e.contactId).push(e);
+  }
+  const out = [];
+  for (const [contactId, list] of byContact) {
+    const bookings = list.filter((e) => e.type === "call_booked").sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")));
+    const newest = bookings.at(-1);
+    const start = ms(newest?.data?.startTime);
+    if (start == null) continue;
+    if (now - start < BOOKED_MISSED_AFTER_HOURS * HOUR_MS || now - start > windowDays * 86400000) continue;
+    if (calledFrom(list, start - BOOKED_EARLY_MS)) continue;
+    out.push({ contactId, startTime: new Date(start).toISOString(), bookedAt: newest.at || null, address: newest.address || "",
+      party: newest.party || "", label: String(newest.data?.label || "") });
+  }
+  return out;
+}
+
+/**
+ * callOwedWait({ events, now, days }) → { reason, until } | null
+ *
+ * One person's timeline: a call we owe them that the check-ins wait behind,
+ * for `days` (CALL_OWED_WAIT_DAYS) from when it was owed. A booked call
+ * (coming up, or missed) until `days` after its time; a call we said we'd
+ * make (promise_made what "call", not "…if it makes sense", not dismissed)
+ * until `days` after we said it. A call of ours tried, or one that
+ * connected, since then ends the wait. The latest wait wins.
+ */
+export function callOwedWait({ events = [], now = Date.now(), days = CALL_OWED_WAIT_DAYS } = {}) {
+  const list = (events || []).filter(Boolean);
+  const span = days * 86400000;
+  let best = null;
+  const take = (reason, until) => { if (until > now && (!best || until > best.untilMs)) best = { reason, untilMs: until }; };
+  for (const b of list.filter((e) => e.type === "call_booked")) {
+    const start = ms(b.data?.startTime);
+    if (start == null || calledFrom(list, start - BOOKED_EARLY_MS)) continue;
+    take(start > now ? "a call is booked with them" : "we missed the call booked with them", start + span);
+  }
+  for (const p of list.filter((e) => e.type === "promise_made" && e.data?.what === "call")) {
+    const t = ms(p.at);
+    if (t == null || p.data?.conditional === true || (p.data?.text && isConditionalPromise(p.data.text))) continue;
+    if (list.some((k) => k.type === "promise_kept" && k.data?.by === "dismissed" && (ms(k.at) ?? 0) >= t)) continue;
+    if (calledFrom(list, t)) continue;
+    take("we said we'd call them", t + span);
+  }
+  return best ? { reason: best.reason, until: new Date(best.untilMs).toISOString() } : null;
+}
+
 /**
  * owedOnHouse({ events, drafts, address, now }) → { what, at } | null
  *

@@ -30,6 +30,7 @@
 import { effectiveStatus, OPEN_STATUSES, dealIsOver, pushesToPaper } from "./offer-status.js";
 import { currentOffers, houseKey, isDraftOffer, pricedAt } from "./current-offer.js";
 import { MACHINE_STARTED_KINDS } from "./follow-up.js";
+import { callOwedWait } from "./promise-owed.js";
 
 const HOUR_MS = 3600000;
 const DAY_MS = 24 * HOUR_MS;
@@ -167,6 +168,28 @@ export function spacingHolds({ kind = "", sent = [], now = Date.now(), minHours 
   const week = sent.filter((x) => x.at > now - 7 * DAY_MS).length + (Number(startedToday) || 0);
   if (perWeek > 0 && week >= perWeek) return `they've had ${week} texts from us this week (the most is ${perWeek})`;
   return null;
+}
+
+/* ---------- a call we owe goes first (2026-11-09) ---------- */
+
+// The audit: a call booked for 8am was never made, and the next text from us
+// asked the agent for fixers. While we owe them a call (booked, missed or
+// promised: shared/promise-owed.js callOwedWait), the check-in and the cold
+// ladder's repeat rungs wait CALL_OWED_WAIT_DAYS. The live offer's nudge,
+// the push to paper, a counter's check-in and a first text never do.
+export const CALL_WAIT_KINDS = new Set(["agent_pulse", "outreach_nudge"]);
+
+/**
+ * callOwedHolds({ kind, events, now }) → reason | null
+ *
+ * `events` is the person's timeline, at least CALL_OWED_EVENT_TYPES.
+ */
+export function callOwedHolds({ kind = "", events = [], now = Date.now() } = {}) {
+  if (!CALL_WAIT_KINDS.has(kind)) return null;
+  const owed = callOwedWait({ events, now });
+  if (!owed) return null;
+  const until = new Date(owed.until).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" });
+  return `${owed.reason}: the call goes first, so the check-in waits until ${until}`;
 }
 
 /* ---------- the light touch ---------- */

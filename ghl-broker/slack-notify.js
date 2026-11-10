@@ -612,8 +612,14 @@ async function markEmptyDayTold(store, locationId, day) {
 
 /* ---------- the day: morning numbers, evening loose ends ---------- */
 
-/** postMorning({ store, locationId, saved, now }) → { posted, counts } */
-export async function postMorning({ store = defaultStore, locationId, saved = {}, now = Date.now() } = {}) {
+/**
+ * postMorning({ store, locationId, saved, now, client, deps }) → { posted, counts }
+ *
+ *   deps.pipelineFor  routes/dashboard.js router.pipelineFor: the calls we
+ *                     owe are its call_owed rows, one per person (2026-11-09).
+ *                     Without it, or when the read fails, the line is left out.
+ */
+export async function postMorning({ store = defaultStore, locationId, saved = {}, now = Date.now(), client = null, deps = {} } = {}) {
   const cfg = normalizeSlack(saved?.slack);
   const token = String(saved?.slackBotToken || "").trim();
   const since = iso(now - 86400000);
@@ -621,6 +627,10 @@ export async function postMorning({ store = defaultStore, locationId, saved = {}
   const counts = morningCounts(events, { since, until: iso(now) });
   const passes = await passesTodayFor({ store, locationId, saved, now });
   if (passes) counts.passesToday = passes;
+  if (typeof deps?.pipelineFor === "function") {
+    const read = await deps.pipelineFor({ locationId, client, now }).catch(() => null);
+    if (read) counts.callsOwed = new Set((read.shownActions || []).filter((a) => a?.kind === "call_owed" && a.contactId).map((a) => a.contactId)).size;
+  }
   await post(token, cfg.channels.daily, renderMorning(counts, { ...cfg, locationId, dayLabel: "the last 24 hours" }));
   return { posted: true, counts };
 }
@@ -888,7 +898,7 @@ export async function maybeRunSlack({ client, locationId, saved = {}, store = de
       if (!gate.go) continue;
       running.add(`${locationId}:${name}`);
       try {
-        const r = await fn({ store, locationId, saved, now });
+        const r = await fn({ store, locationId, saved, now, client, deps });
         await closeDailyRun({ store, locationId, cursorName: name, last: { ...r, finishedAt: iso(Date.now()) } });
         out[name === MORNING_CURSOR ? "morning" : "evening"] = r;
       } catch (e) {
