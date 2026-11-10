@@ -34,15 +34,20 @@ import { ghlCallRows, ghlCallsDue } from "./shared/desk.js";
 import { callFields, ghlCallsOn, ghlCallWindow, GHL_CALL_FIELDS, GHL_CALL_EVENT_TYPES, liveGhlQueues, ghlCallClaimKey } from "./shared/ghl-calls.js";
 import { callEventConnected } from "./shared/talked-to.js";
 import { isWorkday } from "./outreach-sweep.js";
+import { allEventsSince } from "./contact-events.js";
 
 export const CURSOR_NAME = "ghlCalls";
-// How far back a call still in GHL is looked for: a week covers a weekend
-// and a missed morning.
-const LEDGER_DAYS = 7;
+// How far back a call still in GHL is looked for: the queue's whole life.
+// Until 2026-11-09 it was a week, so a call queued once, pushed down the list
+// and never worked stayed in GHL after its reason ended (FUP-08: on 10/29 Matt
+// cleared 105 of them by hand). The ledger is a few rows a day, read a page
+// at a time (contact-events.js allEventsSince).
+const LEDGER_SINCE = "1970-01-01T00:00:00.000Z";
+const LEDGER_CEILING = 100000;
 // Calls taken back in one run, at most. A read that came back short would
-// otherwise read as every reason gone at once; the rest wait a tick.
+// otherwise read as every reason gone at once; the rest wait a tick. The
+// first run on the whole ledger spreads the backlog this way.
 const MAX_WITHDRAW_PER_RUN = 10;
-const DAY_MS = 86400000;
 const iso = (ms) => new Date(ms).toISOString();
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
 export const pacificDay = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(t));
@@ -100,7 +105,8 @@ export async function runGhlCalls({ store = defaultStore, locationId, client, sa
   const draftsById = new Map(drafts.filter((d) => d?.id).map((d) => [d.id, d]));
   const day = pacificDay(now);
   if (noPhoneDay !== day) { noPhone.clear(); noPhoneDay = day; }
-  const ledger = await store.listContactEventsSince(locationId, iso(now - LEDGER_DAYS * DAY_MS), { types: GHL_CALL_EVENT_TYPES, limit: 2000 }).catch(() => []);
+  const ledger = (await allEventsSince(store, locationId, LEDGER_SINCE, { types: GHL_CALL_EVENT_TYPES }, { ceiling: LEDGER_CEILING })
+    .catch(() => ({ events: [] }))).events;
   const live = liveGhlQueues(ledger);
   const claimedToday = new Set(ledger.filter((e) => e?.type === "ghl_call_queued" && e.dedupeKey === ghlCallClaimKey(e.contactId, day)).map((e) => e.contactId));
 
