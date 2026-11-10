@@ -40,19 +40,26 @@ const TIME_RX = new RegExp(String.raw`\b${TIME_WORD}`, "i");
 // Words within this many of each other read as one promise.
 const NEAR_WORDS = 8;
 
-// Word positions of every match of `source` in a sentence.
-function wordsAt(sentence, source) {
+// Word positions of every match of `source` in a sentence (`keep` reads the
+// sentence and the match's offset, and may drop it).
+function wordsAt(sentence, source, keep = () => true) {
   const starts = [...sentence.matchAll(/\S+/g)].map((m) => m.index);
   const at = (i) => { let n = 0; while (n < starts.length && starts[n] <= i) n++; return n - 1; };
-  return [...sentence.matchAll(new RegExp(String.raw`\b${source}`, "gi"))].map((m) => at(m.index));
+  return [...sentence.matchAll(new RegExp(String.raw`\b${source}`, "gi"))].filter((m) => keep(sentence, m.index)).map((m) => at(m.index));
 }
+// A verb that's theirs, not a promise of ours: "thanks for sending", "you
+// sending", and "will" asking what someone else will do ("will the seller
+// look at an offer this week?").
+const THEIR_VERB_BEFORE = /\b(?:for|you|they|he|she|seller|agent)\s+$/i;
+const ASKS_THEM_AFTER = /^will\s+(?:the\s+(?:seller|owner|buyer)s?|they|she|he|you|it)\b/i;
+const ourVerb = (s, i) => !THEIR_VERB_BEFORE.test(s.slice(Math.max(0, i - 12), i)) && !ASKS_THEM_AFTER.test(s.slice(i));
 
 /** timeOnANumber(text) → a promise verb, a time word and our number or offer within a few words, in one sentence. */
 export function timeOnANumber(text = "") {
   for (const s of String(text || "").split(/(?<=[.!?\n])\s+/)) {
     const times = wordsAt(s, TIME_WORD);
     if (!times.length) continue;
-    const verbs = wordsAt(s, PROMISE_VERB);
+    const verbs = wordsAt(s, PROMISE_VERB, ourVerb);
     const nums = wordsAt(s, NUMBER_WORD);
     if (!verbs.length || !nums.length) continue;
     const near = (a, b) => Math.abs(a - b) <= NEAR_WORDS;
@@ -133,7 +140,8 @@ export function inventedPeopleFlags(reply = "") {
 const TALKED = [
   /\bdid\s+connect\b|\b(?:we|we'?ve|finally)\s+connected\b/i,
   /\bI\s+spoke\s+(?:with|to)\b/i,
-  /\bspoke\s+(?:with|to)\s+(?:the\s+)?(?:owner|seller)s?\b/i,
+  // "When you spoke to the seller" is their talk, not ours.
+  /(?<!\b(?:you|they|she|he)\s+)\bspoke\s+(?:with|to)\s+(?:the\s+)?(?:owner|seller)s?\b/i,
   // "As we discussed" or "per our conversation" can be a text thread; these can't.
   /\b(?:like|as)\s+we\s+(?:talked|spoke)\b/i,
   /\bper\s+our\s+(?:phone\s+)?call\b/i,
@@ -209,9 +217,13 @@ const callPromised = (e) => {
   if (!CALL_PROMISE_TYPES.has(e?.type)) return false;
   if (e.type === "call_owed") return true;
   const d = e.data || {};
-  if (d.what !== "call" && d.kind !== "call") return false;
+  // "…and give you a call tomorrow" beside a number reads as a number
+  // (detectPromise); the call in it is owed all the same.
+  if (d.what !== "call" && d.kind !== "call" && !(d.text && promisesCall(d.text))) return false;
   return d.conditional !== true && !(d.text && isConditionalPromise(d.text));
 };
+// The call, booked for a time still ahead: the promise being kept, not one broken.
+const bookedAhead = (e, now) => e?.type === "call_booked" && (ms(e.data?.startTime) ?? -Infinity) > now;
 
 /**
  * claimFacts({ offers, events, mattPrices, now }) → { mattPrices, houses, connectedCallAt, callAt, owedCallSince }
@@ -224,8 +236,8 @@ const callPromised = (e) => {
  *                  the float that carries it may say when.
  *   connectedCallAt the newest call that connected (callEventConnected), in the window
  *   callAt         the newest call either way (a call_summary or a call_attempt)
- *   owedCallSince  the oldest call we promised in the window with no connected call
- *                  and no dismissal since
+ *   owedCallSince  the oldest call we promised in the window with no connected call,
+ *                  no dismissal and no booking for a time still ahead since
  */
 export function claimFacts({ offers = [], events = [], mattPrices = false, now = Date.now(), windowDays = CLAIM_WINDOW_DAYS } = {}) {
   const houses = [];
@@ -252,7 +264,7 @@ export function claimFacts({ offers = [], events = [], mattPrices = false, now =
   }
   for (const p of evs.filter(callPromised)) {
     const later = evs.filter((e) => String(e.at) > String(p.at));
-    if (later.some((e) => callEventConnected(e) || (e.type === "promise_kept" && e.data?.by === "dismissed"))) continue;
+    if (later.some((e) => callEventConnected(e) || bookedAhead(e, now) || (e.type === "promise_kept" && e.data?.by === "dismissed"))) continue;
     owedCallSince = p.at;
     break;
   }

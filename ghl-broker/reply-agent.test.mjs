@@ -8990,6 +8990,15 @@ test("an investor reply that says the deal was emailed holds when nothing was", 
   assert.match(d.autoSend.reason, /^needs a person: the draft says something was emailed, and nothing was/);
 });
 
+// Booking the call we owe is how it gets kept: the reply confirming the slot
+// they picked says we'll call then, and that is not a second promise.
+import { CALL_OWED_FLAG } from "./shared/reply-claims.js";
+test("a reply confirming the time they picked for the call we owe isn't held as a second call promise", () => {
+  const confirm = { reply: "You're set for Wed at 10:30, I'll give you a call then.", chosenSlot: "2026-11-11T18:30:00.000Z" };
+  assert.ok(!gate(confirm, { callOwedUnkept: true }).flags.includes(CALL_OWED_FLAG), "the booked slot is the call");
+  assert.ok(gate({ reply: confirm.reply }, { callOwedUnkept: true }).flags.includes(CALL_OWED_FLAG), "with no slot picked it's another promise");
+});
+
 test("the gate's new checks flag nothing a caller doesn't pass in", () => {
   // Matt's own canned replies (the desk-first showing answer) are his words.
   const g = gate({ reply: "Let me get you a number on 88 Larkspur Ln and we'll see if it's worth going further.", deskFirst: "unpriced" }, { numberUnpriced: true });

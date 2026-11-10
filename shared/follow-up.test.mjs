@@ -316,6 +316,17 @@ test("should have something for you today is a promise of a number", () => {
   assert.equal(detectPromise("Let me run it by my partner and get back to you today on whether there's room."), "answer", "a partner's question stays an answer");
 });
 
+// "Get back to you today with a time to walk it" owes a time to see the house,
+// not a number: the sweep's "still working on your number" text would be wrong.
+test("getting back to them today with a time to walk it is not a number we owe", () => {
+  for (const said of [
+    "I'll get back to you today with a time to walk it.",
+    "Let me get back to you this week on a time to see it.",
+    "Should have a walkthrough time for you tomorrow.",
+  ]) assert.notEqual(detectPromise(said), "number", said);
+  assert.equal(detectPromise("Let me get back to you this week on 14 Quarry Rd."), "number", "still a number with no walk in it");
+});
+
 // The GHL missed-call text-back promises a call back, and nothing read it as one.
 test("our missed-call text-back is a promise of a call", () => {
   assert.equal(detectPromise("Tied up right now, will call back when I'm free."), "call");

@@ -1233,9 +1233,11 @@ function openingFor(outbound) {
         (o.heldReason
           ? `Our numbers are stuck (${o.heldReason}), so say ${heldInPlainWords(o.heldReason)} and you want to get it right, and ask what the ` +
             `seller would take. Never ask what it's worth fixed up or what the work would run: we run our own numbers. `
-          // No "shortly" (2026-11-09 audit): a second time nothing keeps.
+          // No "shortly" (2026-11-09 audit): a second time nothing keeps. And not
+          // "still working on the numbers": the reply gates hold that stall on a
+          // house Matt prices (shared/reply-claims.js).
           : o.running
-            ? `The numbers are still running; say you're still working on them, with no time for it, and ask what the seller would take. `
+            ? `The numbers are still running; say you're still on it, with no time for it, and ask what the seller would take. `
             : `Say you're still on it and ask the one question that would help most. `) +
         `Do NOT name any number, range or percentage, and do NOT promise a new time. ${CONTINUE} Set intent to promise_due.`;
 

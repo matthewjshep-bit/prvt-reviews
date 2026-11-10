@@ -41,6 +41,7 @@ import { contactName } from "./contact-record.js";
 import { normalizeGhlStages } from "./shared/ghl-stages.js";
 import { offerStageAt } from "./shared/offer-stage.js";
 import { NEEDS_MATT_CURSOR } from "./shared/needs-matt.js";
+import { effectiveStatus } from "./shared/offer-status.js";
 import {
   acquisitionStatus, dispositionStatus, houseStatus, withStatus, legacyThreadKey, fullName, normalizeSlack, slackOn, streamOn, routeEvent, threadKeyFor, foldBlasts, renderEvent, renderBlasts, renderPing, renderNeed,
   renderError, renderJobFailed, renderMorning, renderEvening, morningCounts, slackClaimKey, firstName, passesToday,
@@ -587,33 +588,51 @@ export async function postMorning({ store = defaultStore, locationId, saved = {}
   const since = iso(now - 86400000);
   const events = await store.listContactEventsSince(locationId, since, { types: MORNING_EVENT_TYPES, limit: 20000 }).catch(() => []);
   const counts = morningCounts(events, { since, until: iso(now) });
-  const passes = await passesTodayFor({ store, locationId, now });
+  const passes = await passesTodayFor({ store, locationId, saved, now });
   if (passes) counts.passesToday = passes;
   await post(token, cfg.channels.daily, renderMorning(counts, { ...cfg, locationId, dayLabel: "the last 24 hours" }));
   return { posted: true, counts };
 }
 
+// The most due cards read back per post: a cursor left over from a runner
+// that's since been switched off is not walked in full.
+const PASSES_READ_MAX = 40;
+
 /**
- * passesTodayFor({ store, locationId, now }) → { count, houses: [{ street, engine }] } | null
+ * passesTodayFor({ store, locationId, saved, now }) → { count, houses: [{ street, engine }] } | null
  *
  * The houses the Needs Matt runner passes in the next 24 hours unless Matt
  * prices them (shared/slack-notify.js passesToday, off its cursor), with the
  * offer engine's opening number when it priced the house in the background.
- * Streets only; the five soonest are looked up.
+ * Streets only; the five soonest are named.
+ *
+ * Only what the runner will really pass: nothing when it's off (ghlStages
+ * mode, or no Needs Matt stage on its last run; the cursor stays behind), and
+ * each house re-read the way the runner re-reads it before a pass (a draft
+ * nothing went out on), so one Matt priced since its last read isn't listed.
  */
-export async function passesTodayFor({ store = defaultStore, locationId, now = Date.now() } = {}) {
+export async function passesTodayFor({ store = defaultStore, locationId, saved = {}, now = Date.now() } = {}) {
+  if (normalizeGhlStages(saved?.ghlStages).mode !== "on") return null;
   const doc = await readDoc(store, locationId, NEEDS_MATT_CURSOR);
+  if (doc.last?.stage === false) return null;
   const due = passesToday(doc.needs, { now });
   if (!due.length) return null;
-  const houses = [];
   const read = async (f) => { try { return await f(); } catch { return null; } };
-  for (const d of due.slice(0, 5)) {
+  const still = [];
+  for (const d of due.slice(0, PASSES_READ_MAX)) {
     const offer = await read(() => store.getOffer?.(d.offerId));
-    const address = String(offer?.address || "");
+    if (!offer || offer.locationId !== locationId || offer.deal || effectiveStatus(offer) !== "draft") continue;
+    if ((offer.sends || []).length || offer.floatSentAt) continue;
+    still.push(offer);
+  }
+  if (!still.length) return null;
+  const houses = [];
+  for (const offer of still.slice(0, 5)) {
+    const address = String(offer.address || "");
     const priced = address ? await read(() => store.getHousePricing?.(locationId, houseKey(address))) : null;
     houses.push({ street: address.split(",")[0].trim(), engine: Math.round(Number(priced?.doc?.v2?.open) || 0) || null });
   }
-  return { count: due.length, houses };
+  return { count: still.length + Math.max(0, due.length - PASSES_READ_MAX), houses };
 }
 
 /** postEvening({ store, locationId, saved, now }) → { posted, open } */

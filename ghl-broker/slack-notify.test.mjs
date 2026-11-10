@@ -601,9 +601,33 @@ test("the morning post names the houses that pass today unless Matt prices them,
     ike: { kind: "price", offerId: later.id, landedAt: landed(10) },
     zoe: { kind: "yes", offerId: null, landedAt: landed(70) },
   } } });
-  const r = await postMorning({ store, locationId: LOC, saved: ON, now: T0 });
+  const r = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: T0 });
   assert.deepEqual(r.counts.passesToday, { count: 2, houses: [{ street: "88 Larkspur Ln", engine: 412000 }, { street: "14 Quarry Rd", engine: null }] });
   const text = said(s.of("chat.postMessage").at(-1));
   assert.match(text, /Passes today unless you price it: \*2\* — 88 Larkspur Ln \(engine \$412,000\), 14 Quarry Rd/);
   assert.doesNotMatch(text, /Bramble|rory|nell/);
+});
+
+// The line is only true when the runner will do it: it passes nothing while
+// ghlStages is off (its cursor stays behind), and it re-reads the house
+// before a pass, so a house priced since its last read stays.
+test("the morning post doesn't say a house passes today when the runner is off or Matt priced it overnight", async () => {
+  const LOC = "loc-morning-passes-off";
+  const { postMorning } = await import("./slack-notify.js");
+  slack();
+  const lark = await store.createOffer({ locationId: LOC, contactId: "rory", address: "88 Larkspur Ln, Tacoma, WA 98404", status: "draft" });
+  const quarry = await store.createOffer({ locationId: LOC, contactId: "nell", address: "14 Quarry Rd, Kent, WA 98030", status: "draft" });
+  const landed = (h) => new Date(T0 - h * 3600000).toISOString();
+  await store.setJobCursor(LOC, "needsMatt", { at: at(0), doc: { needs: {
+    rory: { kind: "price", offerId: lark.id, landedAt: landed(60) },
+    nell: { kind: "price", offerId: quarry.id, landedAt: landed(50) },
+  } } });
+  const off = await postMorning({ store, locationId: LOC, saved: ON, now: T0 });
+  assert.equal(off.counts.passesToday, undefined, "ghlStages off: nothing passes");
+  await store.updateOffer(quarry.id, { ...quarry, status: "sent", cashAmount: 301000, sends: [{ ts: at(-30), channels: ["sms"], results: { sms: { ok: true } } }] });
+  const on = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: T0 });
+  assert.deepEqual(on.counts.passesToday, { count: 1, houses: [{ street: "88 Larkspur Ln", engine: null }] });
+  await store.updateOffer(lark.id, { ...lark, status: "draft", cashAmount: 288000, floatSentAt: at(-10) });
+  const none = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: T0 });
+  assert.equal(none.counts.passesToday, undefined, "a float that left keeps it");
 });

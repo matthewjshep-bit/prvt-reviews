@@ -257,6 +257,18 @@ test("the follow-through text on a held house never says shortly", async () => {
   }
 });
 
+// "Still working on the numbers" is a stall the reply gates hold on a house
+// Matt prices (shared/reply-claims.js), and promise_due is kept for a person:
+// told to say it, every follow-through on a running underwrite would wait for Matt.
+import { numberTimeFlags } from "./shared/reply-claims.js";
+test("the follow-through on a running underwrite doesn't ask for words the number gate holds", () => {
+  const p = outboundOpening({ kind: "promise_due", address: "88 Larkspur Ln", what: "number", running: true, heldReason: "" });
+  assert.match(p, /say you're still on it/);
+  assert.doesNotMatch(p, /working on them|running the numbers/);
+  assert.deepEqual(numberTimeFlags("Still on it for 88 Larkspur Ln. What would the seller take?", { numberUnpriced: true }), []);
+  assert.equal(numberTimeFlags("Still working on the numbers for 88 Larkspur Ln.", { numberUnpriced: true }).length, 1);
+});
+
 test("the sweep doesn't text at night", async () => {
   const night = Date.parse("2026-09-15T10:00:00Z");   // 3am Pacific
   assert.equal(localHour(night), 3);

@@ -2859,9 +2859,9 @@ Each one only adds a hold:
 | Check | Flags a reply when | Then |
 |---|---|---|
 | A number or a time on an unpriced house (agents) | the house has no number on its row, nothing of ours went out on it (no send, no float that left, no live engine number), and it's priced by hand (draft, skeleton or engine mode, or a draft-only, skeleton or engine-held draft); and the reply promises our number (`detectPromise` "number"), the written offer by a time, or puts a time word within 8 words of a promise verb and our number or offer | rewritten once, told the rule; still there, held |
-| A second call (agents) | a call we promised in the last 14 days (`promise_made` or `promise_owed` with what "call", or a `call_owed` event) with no connected call and no dismissal since, and the reply promises another ("let me give you a quick call", "I'll be calling you shortly") | held for you, never rewritten: "we already promised them a call that didn't happen" |
+| A second call (agents) | a call we promised in the last 14 days (`promise_made` or `promise_owed` with what "call", or a text of ours that promised a call beside a number) with no connected call, no dismissal and no booking for a time still ahead since, and the reply promises another ("let me give you a quick call", "I'll be calling you shortly"). A reply confirming the slot they picked is the call being booked and passes | held for you, never rewritten: "we already promised them a call that didn't happen" |
 | Someone who doesn't exist (agents and investors) | first person only: my or our partner, a team with my, our or the in front of it, an underwriting team, our underwriter, "our underwriting came back", "confirm internally". Their partner, the seller's partner, and a thank-you to them and their team pass | rewritten once; still there, held |
-| A call that didn't happen (agents and investors) | "we connected", "I spoke with", "spoke to the owner", "like we talked", "per our call" with no connected call in 14 days; "I called", "sorry I missed you" with no call either way in 14 days. "As we discussed" and "per our conversation" pass: a text thread is a discussion too | rewritten once; still there, held |
+| A call that didn't happen (agents and investors) | "we connected", "I spoke with", "spoke to the owner", "like we talked", "per our call" with no connected call in 14 days; "I called", "sorry I missed you" with no call either way in 14 days. "As we discussed" and "per our conversation" pass: a text thread is a discussion too. Their talk ("when you spoke to the seller") passes | rewritten once; still there, held |
 | An email that never went (everyone) | the emailed words (`CLAIMS_EMAIL_RX`: "just emailed it", "check your inbox") when no email went in this run. It used to run only when the reply had automatic actions, and most plans have none | held; checked after the actions run (step 5), whether or not any ran |
 | An offer that never went (agents) | "sent our offer over", "just sent the LOI", when the written offer never went on that house and no `send_offer` went in this run | held, same place |
 
@@ -2891,8 +2891,11 @@ back" (the GHL missed-call text-back) and "I'll be calling you".
 
 **What changes for you.** More replies on houses you haven't priced wait for
 you; the morning post lists the ones about to pass (below). A reply that
-promises a call after one you never made waits with that reason. Nothing new
-sends, and there is no switch.
+promises a call after one you never made waits with that reason. The checks
+send nothing and there is no switch. One thing does go out that didn't: a
+stall that leaves (a priced house, or one you send) is now a promised number,
+so the promise sweep's follow-through text and Today's owed row pick it up
+like any other promise, under the follow-up switches you already have.
 
 **Check:** a reply "I'll get back to you today with a number" on a
 draft-only house shows `redraftedFor` on the row, or holds with "the draft
@@ -2981,8 +2984,12 @@ and goes on the next tick), soonest first, up to five streets, with the
 offer engine's opening number when it priced the house in the background
 (`house_pricing` v2.open). It reads the needsMatt cursor (`passesToday` in
 shared/slack-notify.js, `passesTodayFor` in ghl-broker/slack-notify.js).
-Streets only, never a name. No line when nothing passes. It rides on the
-daily stream, so there is no new switch.
+Streets only, never a name. No line when nothing passes, and none while the
+Needs Matt runner is off (`ghlStages.mode` off, or no Needs Matt stage on its
+last run): its cursor stays behind, and nothing would pass. Each house is
+re-read the way the runner re-reads it before a pass, so one you priced or
+floated since its last read isn't listed. It rides on the daily stream, so
+there is no new switch.
 
 ### A call, a time to walk it, the earnest money: promises we keep (2026-10-15)
 

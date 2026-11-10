@@ -163,8 +163,9 @@ export function detectPromise(text = "") {
   // "give me until Thursday", "still working through the numbers". After the
   // 10/22 prompt fix these went on at about 7 a day, nothing read them as a
   // promise, and the house was later passed on the clock. A partner's
-  // question or something we said we'd check stays an answer.
-  if (!/\bpartner\b|\b(?:confirm|check\s+(?:on|with|into)|find\s+out|calendar|schedule|availability)\b/i.test(t) && STALL_PROMISE.some((re) => re.test(t))) return "number";
+  // question or something we said we'd check stays an answer, and a time to
+  // walk the house is a time, not our number.
+  if (!/\bpartner\b|\b(?:confirm|check\s+(?:on|with|into)|find\s+out|calendar|schedule|availability)\b|\b(?:times?|day)\s+to\s+(?:walk|see|tour|look\s+at|show)\b/i.test(t) && STALL_PROMISE.some((re) => re.test(t))) return "number";
   // A call, a time to walk it, the earnest money (2026-10-15: 37 of the 58
   // negotiations we dropped were a promise not kept, and these were the ones
   // nothing tracked). "…give you a call if it makes sense" promises nothing.

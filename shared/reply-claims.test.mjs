@@ -36,6 +36,17 @@ test("a reply that asks what the seller would take, or names a time for somethin
   ]) assert.deepEqual(numberTimeFlags(reply, { numberUnpriced: true }), [], reply);
 });
 
+// Their sending, and a question about what the seller will do, promise nothing of ours.
+test("thanks for what they sent, or asking what the seller will do, is not a time for our number", () => {
+  for (const reply of [
+    "Thanks for sending the numbers over today, what would the seller take?",
+    "Will the seller look at an offer this week?",
+    "Would they entertain an offer by Friday, do you think?",
+  ]) assert.deepEqual(numberTimeFlags(reply, { numberUnpriced: true }), [], reply);
+  assert.equal(numberTimeFlags("Sending our offer over today.", { numberUnpriced: true }).length, 1, "ours still is");
+  assert.equal(numberTimeFlags("Thanks for the photos. I'll send an offer over this afternoon.", { numberUnpriced: true }).length, 1, "so is ours after a thank-you");
+});
+
 /* ---------- a second call promise ---------- */
 
 test("a call promised after one that never happened is held for Matt, never rewritten", () => {
@@ -92,6 +103,16 @@ test("saying we talked, when no call connected in two weeks, is a claim we can't
   assert.equal(claimsContact("Per our conversation yesterday, still keen.", none), "", "so is a conversation by text");
   assert.equal(claimsContact("Per our call Tuesday, still keen.", none), "Per our call");
   assert.match(contactClaimFlags("We connected yesterday.", none)[0], /no call with them/);
+});
+
+// Their talk with the seller is theirs: asking about it claims nothing of ours.
+test("asking how their talk with the seller went is not a call we claim", () => {
+  const none = { connectedCallRecently: false, callTriedRecently: false };
+  for (const reply of [
+    "When you spoke to the seller, did they mention a number?",
+    "Once they spoke with the owner, any word on timing?",
+  ]) assert.equal(claimsContact(reply, none), "", reply);
+  assert.equal(claimsContact("Spoke to the seller this morning, they're flexible.", none), "Spoke to the seller", "ours still is");
 });
 
 /* ---------- a send that didn't happen ---------- */
@@ -152,4 +173,23 @@ test("a call we promised stays owed until a call connects or it's dismissed, for
   assert.equal(g.callTriedRecently, true, "we tried yesterday");
   assert.deepEqual(claimGateInputs(null), { numberUnpriced: false, callOwedUnkept: false, connectedCallRecently: true, callTriedRecently: true, offerWentOut: true },
     "no facts: nothing new is flagged");
+});
+
+// The call we promised, booked on the calendar, is that promise being kept:
+// "talk then" is not a second promise. Once its time passes with no call, it's owed again.
+test("a call we promised that's booked for later is not owed until its time passes", () => {
+  const promised = { type: "promise_made", at: ago(3), data: { what: "call", draftId: "x1" } };
+  const booked = (startDays) => ({ type: "call_booked", at: ago(2), data: { startTime: new Date(NOW + startDays * DAY).toISOString() } });
+  const owe = (events) => claimGateInputs(claimFacts({ events, now: NOW })).callOwedUnkept;
+  assert.equal(owe([promised, booked(1)]), false, "on the calendar for tomorrow");
+  assert.equal(owe([promised, booked(-1)]), true, "the booked time came and went with no call");
+});
+
+// "I'll run it by underwriting and give you a call tomorrow" is a number to
+// detectPromise (what: "number"), and a call too.
+test("a call promised beside a number is still a call we owe", () => {
+  const both = { type: "promise_made", at: ago(2), data: { what: "number", text: "I'll get back to you with a number, and I'll give you a call tomorrow." } };
+  assert.equal(claimGateInputs(claimFacts({ events: [both], now: NOW })).callOwedUnkept, true);
+  const numberOnly = { type: "promise_made", at: ago(2), data: { what: "number", text: "I'll get back to you with a number." } };
+  assert.equal(claimGateInputs(claimFacts({ events: [numberOnly], now: NOW })).callOwedUnkept, false);
 });

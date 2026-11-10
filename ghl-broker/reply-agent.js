@@ -1158,7 +1158,8 @@ export function evaluateReplyGates({
   // canned replies (desk first, number first) are his words. These only add holds.
   const claimed = draft.deskFirst || draft.numberFirst ? "" : draft.reply;
   flags.push(...(party === "agent" ? numberTimeFlags(claimed, { numberUnpriced }) : []));
-  flags.push(...(party === "agent" ? callPromiseFlags(claimed, { callOwedUnkept }) : []));
+  // A reply confirming the slot they picked is the owed call being booked, not another promise.
+  flags.push(...(party === "agent" ? callPromiseFlags(claimed, { callOwedUnkept: callOwedUnkept && !String(draft.chosenSlot || "").trim() }) : []));
   flags.push(...(party === "agent" || party === "investor" ? inventedPeopleFlags(claimed) : []));
   flags.push(...(party === "agent" || party === "investor" ? contactClaimFlags(claimed, { connectedCallRecently, callTriedRecently }) : []));
   flags.push(...(party === "agent" ? sentOfferFlags(claimed, { offerWentOut, sendOfferDone }) : []));
