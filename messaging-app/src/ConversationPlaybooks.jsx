@@ -905,6 +905,19 @@ export function DeliveryWatchCard({ config, patch }) {
   );
 }
 
+// The boot pass (conversationAi.nightlyAudit.bootPass, ghl-broker/
+// conversation-audit.js maybeRunBootPass, 2026-11-09). It rides on the
+// nightly audit's settings, so the rest of nightlyAudit is kept as it is.
+export function BootPassCard({ config, patch }) {
+  const a = config.nightlyAudit || {};
+  return (
+    <Section title="After a restart"
+      intro="About five minutes after the broker starts, a text from the last hour that a restart left with no reply goes back through the normal reply, with every gate, cap and the dial in force. At most 30 a day. Off, a reply lost to a restart waits for the daytime pass or the 7pm audit.">
+      <Toggle checked={a.bootPass === true} onChange={(v) => patch({ nightlyAudit: { ...a, bootPass: v } })}>After a restart, answer texts from the last hour that got no reply</Toggle>
+    </Section>
+  );
+}
+
 export function OptOutCard({ config, patch, version, workflows }) {
   const o = config.optOut;
   const set = (k) => (v) => patch({ optOut: { ...o, [k]: v } });

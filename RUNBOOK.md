@@ -2737,12 +2737,14 @@ send a due text twice, and dropped any reply job still in memory.
   the gates and the dial all apply. Claimed on the `bootPass` cursor, once
   per start, retried by the tick if it failed, at most 30 a day. With it off,
   a dropped reply waits for the daytime pass or the 7pm audit, as before.
-  There is no switch on the Conversation AI page yet. The PUT replaces the
-  whole Conversation AI blob, so a body with only this key would put every
-  other setting back to its default: `GET
+  The switch (since 2026-11-10): Conversation AI page → More settings →
+  "After a restart" → "After a restart, answer texts from the last hour that
+  got no reply" (`BootPassCard`, messaging-app). Off by default; turning it
+  on keeps the rest of `nightlyAudit` as it was, and Save writes it. By API
+  instead: the PUT replaces the whole Conversation AI blob, so `GET
   /api/offers/automations/conversation/config`, set
-  `config.nightlyAudit.bootPass` to `true` in what comes back, and `PUT` that
-  whole `config` to the same path. A page save keeps whatever is there.
+  `config.nightlyAudit.bootPass` in what comes back, and `PUT` that whole
+  `config` to the same path.
 
 ### Never more than our number (2026-09-28)
 

@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PartyPlaybooks, BookingCard, AutoSendCard, readOffDays, CheckInComposerFields } from "../ConversationPlaybooks.jsx";
+import { PartyPlaybooks, BookingCard, BootPassCard, AutoSendCard, readOffDays, CheckInComposerFields } from "../ConversationPlaybooks.jsx";
 import { normalizeConversationAi, NEVER_AUTO, INTENT_LABEL } from "@shared/conversation-ai.js";
 
 test("the playbook grid offers every eligible intent as a box and every locked one as a lock", () => {
@@ -72,4 +72,23 @@ test("the check-in composer shows off by default, with its share, wait and perso
   const on = renderToStaticMarkup(<CheckInComposerFields config={normalizeConversationAi({ checkIns: { composer: "shadow", composerShare: 50 } })} patch={() => {}} />);
   expect(on).toMatch(/<option value="shadow" selected="">/);
   expect(on).toContain('value="50"');
+});
+
+// The boot pass (2026-11-09) had no switch on the page: turning it on meant
+// a GET and a PUT of the whole blob by hand. Off by default; the switch keeps
+// the rest of the nightly audit as it was.
+test("the boot pass has a switch on the page, off by default, and turning it on keeps the rest of the nightly audit", () => {
+  const config = normalizeConversationAi({ nightlyAudit: { hour: 21, loose: false, heldSweep: false } });
+  expect(config.nightlyAudit.bootPass).toBe(false);
+  const html = renderToStaticMarkup(<BootPassCard config={config} patch={() => {}} />);
+  expect(html).toContain("After a restart, answer texts from the last hour that got no reply");
+  expect(html).not.toContain("checked=\"\"");
+  const patched = [];
+  const el = BootPassCard({ config, patch: (p) => patched.push(p) });
+  const toggle = [].concat(el.props.children).find((c) => typeof c?.props?.onChange === "function");
+  toggle.props.onChange(true);
+  expect(patched[0]).toEqual({ nightlyAudit: { ...config.nightlyAudit, bootPass: true } });
+  const saved = normalizeConversationAi({ ...config, ...patched[0] });
+  expect(saved.nightlyAudit).toEqual({ ...config.nightlyAudit, bootPass: true });
+  expect(renderToStaticMarkup(<BootPassCard config={saved} patch={() => {}} />)).toContain("checked=\"\"");
 });
