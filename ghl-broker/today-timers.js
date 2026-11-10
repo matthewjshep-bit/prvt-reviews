@@ -30,6 +30,7 @@ import { holdFor } from "./bot-hold.js";
 import { holdLine } from "./shared/bot-hold.js";
 
 const iso = (ms) => new Date(ms).toISOString();
+const SPOKE_DAYS = 7;
 const CLAIM_KEY = {
   float: (m) => `audit:timer_float:${m.offerId}`,
   mark_no_response: (m) => `audit:timer_quiet:${m.offerId}`,
@@ -47,11 +48,16 @@ export async function runTodayTimers({ client = null, locationId, saved = {}, st
   if (!config.driver?.timers?.enabled) return { ...out, reason: "the timers are switched off" };
 
   const jobsFor = typeof deps.listUnderwriteJobs === "function" ? deps.listUnderwriteJobs : (loc) => listUnderwriteJobs(loc, { limit: 100 }).map(publicJob);
-  const [offers, drafts] = await Promise.all([
+  const [offers, drafts, spoke] = await Promise.all([
     store.listOffers(locationId, { limit: 2000, lean: true }).catch(() => []),
     store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 500 }).catch(() => []),
+    // Your own texts and the calls of the last week (2026-11-09): the
+    // pipeline's "you already texted them" guard reads these, so the timer
+    // never floats a rough first pass after you gave them a number.
+    Promise.resolve(store.listContactEventsSince?.(locationId, iso(now - SPOKE_DAYS * 86400000), { types: ["hand_reply", "call_summary"], limit: 5000 })).catch(() => []),
   ]);
-  const actions = buildPipeline({ offers, drafts, events: [], jobs: jobsFor(locationId) || [], config, now }).actions;
+  const events = (spoke || []).filter((e) => e?.contactId).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const actions = buildPipeline({ offers, drafts, events, jobs: jobsFor(locationId) || [], config, now }).actions;
 
   for (const m of timerMoves(actions, { config, now })) {
     out.considered++;

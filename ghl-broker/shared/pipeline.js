@@ -422,9 +422,15 @@ export function buildPipeline({
     // Our number texted in a plain reply (floatSentAt) went out: not this row,
     // and no timer floats it a second time (2026-10-16).
     if (lane === "ready" && card.ai.made && !(o.sends || []).length && !noFitLive && !o.floatSentAt) {
+      // Matt texted them himself or a call connected in the last week
+      // (2026-11-09): he may have given them a number, before or after the
+      // machine priced it, and the timer won't float a "rough first pass" over it.
+      const spokeLately = (events || []).some((e) => e?.contactId === o.contactId && (ms(e.at) ?? 0) > now - OFFER_READY_DAYS * DAY_MS
+        && (e.type === "hand_reply" || callEventConnected(e)));
       card.actionIds.push(push({ ...base, kind: "offer_ready", severity: "soon",
         readyAt: o.autoUnderwrite?.finishedAt || o.createdAt || null,
-        title: `${card.address} is priced and nothing has gone out`, why: o.proactive?.skipped?.reason ? String(o.proactive.skipped.reason).slice(0, 140) : "",
+        title: `${card.address} is priced and nothing has gone out`,
+        why: o.proactive?.skipped?.reason ? String(o.proactive.skipped.reason).slice(0, 140) : spokeLately ? "you texted them yourself or talked this week" : "",
         detail: [`cash ${money(o.cashAmount)}`, o.proactive?.skipped?.reason ? `didn't float: ${String(o.proactive.skipped.reason).slice(0, 140)}` : ""].filter(Boolean).join(" · "),
         ops: [{ key: "float_take", label: "Float our read", intent: "primary" }, { key: "float_realm", label: "Float the number", intent: "secondary" }, { key: "open_editor", label: "Open", intent: "secondary" }] }));
     }
