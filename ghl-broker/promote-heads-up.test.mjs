@@ -162,3 +162,48 @@ test("the heads-up says what it can't schedule and what waits for Matt", () => {
   assert.doesNotMatch(text, /default|cents|kind of house/);
   assert.doesNotMatch(text, /[–—]/);
 });
+
+// A kind picked by mistake and set back: the first change pulled the
+// flippers and queued the builder, and the pick that ran on the way back left
+// the flippers out for good, because the deal's send list still named them.
+test("a kind set by mistake and set back puts the first buyers back on, and each change is said on #dispositions", async () => {
+  const o = await sentOffer("14 Dunlin Pl, Kent, WA 98031");
+  assert.equal((await call("POST", `/${o.id}/deal`, {})).status, 200);
+  assert.ok(await until(async () => (await dealTexts(o.id)).length === 2), "the flippers were queued at promote");
+  assert.deepEqual((await call("PATCH", `/${o.id}/asset`, { type: "land" })).repick, { dismissed: 2, queued: 1, drafted: 0 });
+  const back = await call("PATCH", `/${o.id}/asset`, { type: "sfr" });
+  assert.equal(back.status, 200, back.error);
+  assert.deepEqual(back.repick, { dismissed: 1, queued: 2, drafted: 0 });
+  const open = await dealTexts(o.id);
+  assert.deepEqual(open.map((d) => d.contactId).sort(), ["f1", "f2"], "the flippers are back and the builder is off");
+  assert.ok(open.every((d) => d.status === "scheduled" && d.outbound.assetType === "sfr"));
+  const lines = await until(() => { const l = slackPosts.filter((p) => /Dunlin/.test(p.body.text || "") && /is (land|single family)/i.test(p.body.text || "")); return l.length === 2 ? l : null; });
+  assert.ok(lines, "one line for each change");
+});
+
+test("a re-pick that only pulls texts back still says so on #dispositions", async () => {
+  const { recordEvent } = await import("./contact-record.js");
+  const o = await sentOffer("30 Whimbrel Ct, Kent, WA 98031");
+  assert.equal((await call("POST", `/${o.id}/deal`, {})).status, 200);
+  assert.ok(await until(async () => (await dealTexts(o.id)).length === 2));
+  // One text of it has gone already, so nobody new is added.
+  await recordEvent({ store, locationId: LOC, contactId: "x9", party: "investor", type: "blast_sent", at: new Date().toISOString(), offerId: o.id, address: o.address, source: "blast" });
+  const r = await call("PATCH", `/${o.id}/asset`, { type: "land" });
+  assert.deepEqual(r.repick, { dismissed: 2, queued: 0, drafted: 0 });
+  const line = await until(() => slackPosts.find((p) => /Whimbrel/.test(p.body.text || "") && /is land now/i.test(p.body.text || "")));
+  assert.ok(line, "the pull-back is said");
+  assert.match(line.body.text, /2 queued texts pulled back from buyers who don't buy it, 0 new buyers queued/);
+});
+
+test("a buyer who asked for the deal gets it whatever its kind", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const o = await store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "agent-p", address: "7 Godwit Ct, Kent, WA 98031", cashAmount: 300000, status: "accepted",
+    statusHistory: [], asset: { type: "land", by: "you" },
+    deal: { stage: "under_contract", investors: [], stageHistory: [], createdAt: new Date().toISOString(), contractPrice: 300000, assignmentFee: 20000 } });
+  const d = await store.createReplyDraft({ locationId: LOC, contactId: "f2", contactName: "Flipper f2", channel: "sms", party: "investor", status: "scheduled",
+    sendAt: new Date().toISOString(), intent: "blast_open", reply: "…", inbound: "", flags: [],
+    outbound: { kind: "blast_open", offerId: o.id, address: o.address, assetType: "sfr", asked: true } });
+  const r = await sendReplyDraft({ client: { call: async () => ({ messageId: "m2" }) }, store, locationId: LOC, draftId: d.id, live: true, auto: true, readThread: async () => "" });
+  assert.doesNotMatch(String(r.skipped || ""), /kind of house/);
+  assert.ok(!((await store.getReplyDraft(d.id)).flags || []).some((f) => /kind of house/.test(f)));
+});

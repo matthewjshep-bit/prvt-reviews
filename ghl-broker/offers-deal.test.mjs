@@ -138,3 +138,14 @@ test("a deal text queued after the deal was taken back isn't sent", async () => 
   assert.equal(sent.filter(([p]) => p === "/conversations/messages").length, 0, "nothing went");
   assert.equal((await store.getReplyDraft(queued.id)).status, "dismissed");
 });
+
+test("a fee typed as 0 reads as none: asked about like an emptied box, not called unreadable", async () => {
+  const o = await dealOffer({ address: "4 Aspen Pl, Kent, WA 98031" });
+  const zero = await call("PATCH", `/${o.id}/deal`, { assignmentFee: "0" });
+  assert.equal(zero.status, 400);
+  assert.match(zero.error, /would clear the assignment fee/);
+  assert.equal((await store.getOffer(o.id)).deal.assignmentFee, 30000);
+  const meant = await call("PATCH", `/${o.id}/deal`, { assignmentFee: "$0", clear: true });
+  assert.equal(meant.status, 200, meant.error);
+  assert.equal(meant.offer.deal.assignmentFee, null);
+});

@@ -149,6 +149,7 @@ import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
 import { normalizeAsset, assetFromSnapshot, assetOf, assetLabel } from "../shared/asset-type.js";
+import { DEAL_SENT_TYPES, sentTo } from "../shared/buyer-score.js";
 import { buildUnderwriteCalc, underwriteModel } from "../shared/underwrite-model.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType, propertyDossier } from "../shared/contact-record.js";
@@ -3366,7 +3367,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     for (const key of ["contractPrice", "assignmentFee"]) {
       if (b[key] === undefined) continue;
       const raw = b[key];
-      const empty = raw === null || String(raw).trim() === "";
+      // A 0 reads fine and means none, the same as an emptied box.
+      const empty = raw === null || String(raw).trim() === "" || parseMoney(raw) === 0;
       const n = empty ? null : dealMoney(raw);
       if (!empty && n == null) return { http: 400, error: `couldn't read "${String(raw).slice(0, 40)}" as a ${LABEL[key]}: type it like 450000 or 450k` };
       if (n == null) {
@@ -3633,7 +3635,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
     const mine = (open || []).filter((d) => d?.party === "investor" && d.outbound?.kind === "blast_open" && d.outbound.offerId === offer.id
       && !d.outbound.asked && !d.outbound.presell && !String(d.inbound || "").trim());
     if (!mine.length) return out;
-    const fits = new Set(((await dispoDeps.matchForDeal(locationId, offer, { exclude: "none" })).results || []).map((x) => x.contactId));
+    const fitting = (await dispoDeps.matchForDeal(locationId, offer, { exclude: "none" })).results || [];
+    const fits = new Set(fitting.map((x) => x.contactId));
     const kind = (assetLabel(assetOf(offer)) || "not set").toLowerCase();
     const stamp = assetOf(offer)?.type || "";
     const ts = new Date().toISOString();
@@ -3648,21 +3651,58 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
       out.dismissed++;
     }
+    // Said on #dispositions whenever it moved anything, not only when it
+    // added buyers: 40 texts pulled back with no builder to take their place
+    // is the line Matt most needs.
+    const street = String(offer.address || "").split(",")[0].trim();
+    const say = async (firstNew = null) => {
+      if (!out.dismissed && !out.queued && !out.drafted) return;
+      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      const added = out.queued + out.drafted;
+      await postDispoLine({ store, locationId, saved, key: `repick:${offer.id}:${ts}`,
+        text: `:arrows_counterclockwise: *${street}* is ${kind} now: ${out.dismissed} queued text${out.dismissed === 1 ? "" : "s"} pulled back from buyers who don't buy it, ${added} new buyer${added === 1 ? "" : "s"} queued${firstNew ? ` from ${whenText(firstNew)}` : ""}.` });
+    };
     // New fits only before the first text has left: after that, the deal is
     // out there and the button or the morning catch-up picks who's next.
     const since = offer.deal.createdAt || new Date(Date.now() - 30 * 86400000).toISOString();
-    const sent = await store.listContactEventsSince(locationId, since, { types: ["blast_sent"], limit: 20000 }).catch(() => null);
-    if (!sent || sent.some((e) => e?.offerId === offer.id)) return out;
+    const events = await store.listContactEventsSince(locationId, since, { types: DEAL_SENT_TYPES, limit: 20000 }).catch(() => null);
+    if (!events || events.some((e) => e?.type === "blast_sent" && e.offerId === offer.id)) { await say(); return out; }
     const fresh = ((await dispoDeps.matchForDeal(locationId, offer, { exclude: "blasted" })).results || []);
-    if (!fresh.length) return out;
+    // A buyer an earlier re-pick pulled back who fits again (a kind set by
+    // mistake and set back) goes back on: the deal's send list still names
+    // them, so the pick above would leave them out for good.
+    const drafts = await store.listReplyDrafts(locationId, { status: ["dismissed", "sent", "sending", "scheduled", "draft"], since: offer.deal.createdAt || null, limit: 5000 }).catch(() => []);
+    const back = repickedOut(drafts, offer);
+    const had = sentTo(offer, events);
+    const picked = new Set(fresh.map((x) => x.contactId));
+    const again = fitting.filter((x) => back.has(x.contactId) && !had.has(x.contactId) && !picked.has(x.contactId));
+    const investors = [...fresh, ...again];
+    if (!investors.length) { await say(); return out; }
     const first = times.length ? Math.min(...times) : Date.now() + PROMOTE_BLAST_GRACE_MS;
-    const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors: fresh, wave: 1, startAfterMs: Math.max(0, first - Date.now()) });
+    const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors, wave: 1, startAfterMs: Math.max(0, first - Date.now()) });
     out.queued = r.queued || 0;
     out.drafted = r.drafted || 0;
-    const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
-    const firstNew = (r.rows || []).map((x) => Date.parse(x.sendAt || "")).filter(Number.isFinite).sort((a, b) => a - b)[0];
-    await postDispoLine({ store, locationId, saved, key: `repick:${offer.id}:${ts}`,
-      text: `:arrows_counterclockwise: *${String(offer.address || "").split(",")[0].trim()}* is ${kind} now: ${out.dismissed} queued text${out.dismissed === 1 ? "" : "s"} pulled back from buyers who don't buy it, ${out.queued + out.drafted} new buyer${out.queued + out.drafted === 1 ? "" : "s"} queued${firstNew ? ` from ${whenText(firstNew)}` : ""}.` });
+    await say((r.rows || []).map((x) => Date.parse(x.sendAt || "")).filter(Number.isFinite).sort((a, b) => a - b)[0]);
+    return out;
+  }
+
+  // The buyers whose first text of this deal a re-pick pulled back and
+  // nothing has replaced: their newest one for it is that dismissal, and
+  // none went.
+  const REPICK_PULLED = /^the kind of house changed to .+ and they don't buy it — not sent$/;
+  function repickedOut(drafts = [], offer = {}) {
+    const newest = new Map(), went = new Set();
+    for (const d of drafts || []) {
+      if (d?.party !== "investor" || d.outbound?.kind !== "blast_open" || d.outbound.offerId !== offer.id || !d.contactId) continue;
+      if (d.status === "sent" || d.status === "sending") went.add(d.contactId);
+      const prev = newest.get(d.contactId);
+      if (!prev || String(d.createdAt || "") >= String(prev.createdAt || "")) newest.set(d.contactId, d);
+    }
+    const out = new Set();
+    for (const [contactId, d] of newest) {
+      if (went.has(contactId) || d.status !== "dismissed") continue;
+      if ((d.flags || []).some((f) => REPICK_PULLED.test(String(f)))) out.add(contactId);
+    }
     return out;
   }
 

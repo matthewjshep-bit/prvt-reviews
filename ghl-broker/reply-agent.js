@@ -6778,9 +6778,11 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
     // re-pick (routes/offers.js repickOnKindChange) didn't stamp it: it waits
     // for you rather than go to a buyer picked for the old kind (2026-11-09).
     // Texts queued before the stamp existed carry none and aren't checked,
-    // and a house with no kind set is picked as a single family one.
+    // and a house with no kind set is picked as a single family one. A buyer
+    // who asked for the deal, or wrote in, gets it whatever its kind
+    // (stoppedDealAction): the re-pick leaves theirs alone too.
     const pickedAs = (t) => (t === "sfr" ? "" : String(t || ""));
-    if (d.outbound?.kind === "blast_open" && offer?.deal && typeof d.outbound.assetType === "string"
+    if (d.outbound?.kind === "blast_open" && offer?.deal && typeof d.outbound.assetType === "string" && stoppedDealAction(d) === "dismiss"
       && pickedAs(assetOf(offer)?.type) !== pickedAs(d.outbound.assetType)) {
       const ts = new Date(now).toISOString();
       const line = `the kind of house changed to ${assetOf(offer)?.type?.replace(/_/g, " ") || "not set"} since this was queued`;
@@ -6960,7 +6962,10 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         });
         return { ok: true, skipped: line, sendAt };
       }
-      const waiting = (await store.listReplyDrafts(locationId, { contactId: d.contactId, status: "scheduled", limit: 20 }).catch(() => []))
+      // A buyer who never wrote back (queued `cold`) gets each deal in Matt's
+      // cold words, on its own: the combined text says "under contract", the
+      // phrase the carriers block from strangers (2026-11-09).
+      const waiting = d.outbound?.cold === true ? [] : (await store.listReplyDrafts(locationId, { contactId: d.contactId, status: "scheduled", limit: 20 }).catch(() => []))
         .filter((o) => o.id !== d.id && o.outbound?.kind === "blast_open" && o.channel !== "email"
           && o.outbound?.offerId && o.outbound.offerId !== d.outbound?.offerId)
         .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));

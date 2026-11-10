@@ -7233,7 +7233,8 @@ Bagley. Matt's own plain wording went through. Now:
   (`normalizeColdDealText`), and the editor refuses to save one. The draft
   carries `outbound.cold`, and `blast-refresh.js` writes it again in the cold
   words as it sends, priced off the deal then. An email to the same buyer is
-  the normal deal text.
+  the normal deal text. A cold text is never folded into the combined
+  two-deal text (that one says "under contract"): each deal goes on its own.
 - **The county opener is gone.** A never-replied `dispo-source-county` buyer's
   text starts "Hey Dana, Matt here. I've got..." (`blastIntro`). The Facebook
   group lines are unchanged.
@@ -7680,11 +7681,14 @@ send them the deal.
   new kind is dismissed ("the kind of house changed to land and they don't buy
   it — not sent"), one who still fits is stamped with it, and while none of the
   deal's texts has gone (`blast_sent`), new fits are queued on the schedule the
-  promote set. The answer carries `repick: { dismissed, queued, drafted }`, the
-  Property type box says what it did, and #dispositions gets a line. Each deal
-  text carries the kind it was picked for (`outbound.assetType`), and
+  promote set. A buyer an earlier re-pick pulled back who fits again (a kind
+  set by mistake and set back) is queued again with them. The answer carries
+  `repick: { dismissed, queued, drafted }`, the Property type box says what it
+  did, and #dispositions gets a line whenever it pulled back or added anyone.
+  Each deal text carries the kind it was picked for (`outbound.assetType`), and
   `sendReplyDraft` holds one whose deal's kind has changed since (an unset kind
-  counts as single family), in case the re-pick missed it.
+  counts as single family), in case the re-pick missed it. A text to a buyer
+  who asked for the deal, or wrote in, goes whatever the kind.
 
 **Dataroom link on its own.** `suggest_dataroom_invite` stays ask-only. A
 separate `send_dataroom_invite` action — which no rule can carry — is
@@ -7705,8 +7709,8 @@ the house at the contract with no fee, and "740k" cleared the price.
 cents; empty or unreadable is `null`, never a guess. `PATCH
 /api/offers/:id/deal`:
 - answers 400 on a contract price or fee it can't read, and changes nothing;
-- won't clear a stored price or fee from an emptied box unless `clear: true`
-  (the Deals modal asks first);
+- won't clear a stored price or fee from an emptied box, or a 0, unless
+  `clear: true` (the Deals modal asks first);
 - answers 409 with `confirm: true` on a contract price under $10,000 or more
   than 30% off our number until the request says `confirm: true` (the modal
   asks "save it anyway?"); the same figure sent back asks nothing;

@@ -427,7 +427,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   // shown in the bar). An emptied price or fee is cleared only when you say
   // so, and a contract price under 10k or far off our number asks first (409).
   const saveTerms = async () => {
-    const clearing = ["contractPrice", "assignmentFee"].filter((k) => String(terms[k] ?? "").trim() === "" && deal[k] != null);
+    const clearing = ["contractPrice", "assignmentFee"].filter((k) => (String(terms[k] ?? "").trim() === "" || parseMoney(terms[k]) === 0) && deal[k] != null);
     if (clearing.length && !window.confirm(`Clear the ${clearing.map((k) => (k === "contractPrice" ? "contract price" : "assignment fee")).join(" and ")}? Buyers are priced off ${clearing.length > 1 ? "them" : "it"}.`)) return;
     const body = { ...terms, ...(clearing.length ? { clear: true } : {}) };
     setError("");

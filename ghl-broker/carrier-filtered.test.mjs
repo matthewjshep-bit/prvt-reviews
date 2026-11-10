@@ -186,3 +186,25 @@ test("a deal text that opens with the buyer's own purchase waits for Matt", asyn
   assert.equal((await known.getReplyDraft("d1")).status, "sent");
   assert.match(sent.find(([p]) => p === "/conversations/messages")[1].body.message, /saw your flip/);
 });
+
+// Two deals queued for the same buyer go out as one combined text, and that
+// text says "under contract": the phrase the carriers block from strangers.
+// A buyer who never wrote back gets each deal in the cold words, on its own.
+test("a buyer who never wrote back gets each deal on its own in the cold words, never the combined text", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const store = sendStore(coldDraft());
+  store.getOfferSettings = async () => ({ dispoAutopilot: { blastLink: "on_reply" } });
+  store.getOffer = async (id) => ({ id, locationId: "LOC", address: id === "o2" ? "9 Birch St, Kent, WA 98030" : "41 Alder Way, Kent, WA 98030",
+    calc: { inputs: { arv: 520000, repairs: 60000 } }, deal: { stage: "under_contract", contractPrice: 360000, assignmentFee: 23000 } });
+  store.rows.set("d2", { ...coldDraft(), id: "d2", sendAt: new Date(Date.now() + 3600000).toISOString(), createdAt: new Date(Date.now() - 120000).toISOString(),
+    outbound: { kind: "blast_open", offerId: "o2", address: "9 Birch St, Kent, WA 98030", cold: true }, propertyAddress: "9 Birch St, Kent, WA 98030" });
+  const sent = [];
+  const r = await sendReplyDraft({ client: { call: async (path, opts) => { sent.push([path, opts]); return { messageId: "m3" }; } }, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  const text = sent.find(([p]) => p === "/conversations/messages")?.[1]?.body?.message || "";
+  assert.ok(text, JSON.stringify(r));
+  assert.doesNotMatch(text, /under contract|9 Birch/i, text);
+  assert.match(text, /^Hey Sam, I've got a house at 41 Alder Way in Kent\. .*Any interest in it for your next project\?$/, text);
+  const other = await store.getReplyDraft("d2");
+  assert.equal(other.status, "scheduled", "the other deal goes at its own time, in its own text");
+  assert.equal(other.combinedInto, undefined);
+});
