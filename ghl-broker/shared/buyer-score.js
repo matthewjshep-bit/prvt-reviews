@@ -100,7 +100,10 @@ export function dealTarget({ city = "", zip = "", state = "", priceMin = null, p
   return { city: slug, zip: /^\d{5}$/.test(String(zip || "")) ? String(zip) : "", state: st, region: slug ? regionFor(city, st || "WA") : null, price: mid, strategy, asset: kind,
     // A house to fix (a kind that isn't land, or a rehab number on it), land,
     // or null when nothing says which. "no rehabs" refuses only the first.
-    rehabDeal: kind ? kind.type !== "land" : rehabAppetite ? true : null,
+    // A full gut abstains: it's the house read as a builder's (the strategy
+    // above), and it may come down, so "land and teardowns, no rehabs" or
+    // "ground-up only" doesn't take a builder off it.
+    rehabDeal: kind?.type === "land" ? false : rehabAppetite === "full_gut" ? null : kind || rehabAppetite ? true : null,
     // What the buy box can rule in or out beyond place and price.
     box: { propertyTypes: propertyTypes || [], rehabAppetite: rehabAppetite || null, lotMin: lotMin ?? null },
     // What a buyer's own dealbreakers can refuse (buyerDealbreakers): the

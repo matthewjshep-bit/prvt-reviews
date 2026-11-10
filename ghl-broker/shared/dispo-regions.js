@@ -116,7 +116,7 @@ const SEATTLE_HOODS = {
   "north-seattle": NORTH_SEATTLE, "n-seattle": NORTH_SEATTLE, "north-of-the-ship-canal": NORTH_SEATTLE,
   "northwest-seattle": ["98107", "98117", "98177"], "nw-seattle": ["98107", "98117", "98177"],
   "northeast-seattle": ["98105", "98115", "98125"], "ne-seattle": ["98105", "98115", "98125"],
-  "west-seattle": WEST_SEATTLE, "w-seattle": WEST_SEATTLE,
+  "west-seattle": WEST_SEATTLE, "w-seattle": WEST_SEATTLE, "southwest-seattle": WEST_SEATTLE, "sw-seattle": WEST_SEATTLE,
   "south-seattle": SOUTH_SEATTLE, "s-seattle": SOUTH_SEATTLE, "southeast-seattle": SOUTH_SEATTLE, "se-seattle": SOUTH_SEATTLE,
   "central-seattle": ["98102", "98112", "98122", "98144"], "central-district": ["98122", "98144"],
   "downtown-seattle": ["98101", "98104", "98121"], belltown: ["98121"],
@@ -254,7 +254,13 @@ function placeFits(p, deal) {
   switch (p.kind) {
     case "zip": fit = deal.zip ? deal.zip === p.zip : null; break;
     case "neighborhood": fit = !city ? null : city !== "seattle" || !wa ? false : deal.zip ? p.zips.includes(deal.zip) : null; break;
-    case "region": fit = !city ? null : !wa ? false : p.regions.includes(deal.region || regionFor(city, state)); break;
+    // The map lists a county's cities, not every town in it: a town it
+    // doesn't place ("other-wa") could be in any region, so a region abstains.
+    case "region": {
+      const at = deal.region || regionFor(city, state);
+      fit = !city ? null : !wa ? false : at === "other-wa" ? null : p.regions.includes(at);
+      break;
+    }
     case "city": fit = !city ? null : city === p.city && (!deal.state || !p.state || p.state === state); break;
     case "state": fit = p.state === state; break;
     default: fit = null;

@@ -376,6 +376,37 @@ test("a builder whose buy box says no rehabs doesn't get a cosmetic flip", () =>
   assert.equal(rankAll([seattleTagged({ buybox: { exclusions: "no rehabs over 100k" } })], flip)[0].rankParts.dealbreaker, null);
 });
 
+// What went wrong (review, 2026-11-09): a house that needs a full gut is the
+// one the deal sends read as a builder's (dealTarget's new-construction
+// strategy), and "no rehabs" or "ground-up only" took the builders who said
+// "land and teardowns" off exactly that house. A house that may come down
+// can't be told from a rehab, so their own words abstain on it.
+test("a builder who said land and teardowns, no rehabs still gets a house that needs a full gut", () => {
+  const gut = dealTarget({ city: "Seattle", zip: "98103", rehabAppetite: "full_gut" });
+  assert.equal(gut.strategy, "new-construction");
+  const builder = seattleTagged({ contactId: "builder", markets: { cities: ["seattle"], regions: [], types: ["new-construction"] }, buybox: { exclusions: "Land and teardowns, no rehabs" } });
+  const groundUp = seattleTagged({ contactId: "ground-up", markets: { cities: ["seattle"], regions: [], types: ["new-construction"] }, buybox: { exclusions: "ground-up only" } });
+  const ranked = rankAll([builder, groundUp], gut);
+  assert.deepEqual(ranked.map((i) => i.rankParts.dealbreaker), [null, null]);
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId).sort(), ["builder", "ground-up"]);
+  // A full gut on a house we know is one still abstains; a fixer still refuses.
+  assert.equal(dealTarget({ city: "Seattle", asset: { type: "sfr" }, rehabAppetite: "full_gut" }).rehabDeal, null);
+  assert.equal(dealTarget({ city: "Seattle", asset: { type: "sfr" }, rehabAppetite: "heavy" }).rehabDeal, true);
+  assert.equal(dealTarget({ city: "Seattle", asset: { type: "land" }, rehabAppetite: "full_gut" }).rehabDeal, false);
+  // Not buying right now still says no to every house.
+  const paused = seattleTagged({ contactId: "paused", buybox: { exclusions: "not buying right now" } });
+  assert.equal(rankAll([paused], gut)[0].rankParts.dealbreaker, "they're not buying right now");
+});
+
+// The same buyer who bought in a town the region map doesn't list, and said
+// the county it's in, still gets the deal there.
+test("a buyer who bought in Parkland and said Pierce County still gets a Parkland deal", () => {
+  const parkland = dealTarget({ city: "Parkland", zip: "98444", rehabAppetite: "moderate" });
+  const ranked = rankAll([bare({ contactId: "pierce", markets: { cities: ["parkland"], regions: [], types: ["flip"] }, buybox: { areas: ["Pierce County"], areasRaw: "Pierce County" } })], parkland);
+  assert.equal(ranked[0].rankParts.areaFit, "bought_city");
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId), ["pierce"]);
+});
+
 test("a buyer whose buy box says not buying right now isn't sent the deal", () => {
   const ranked = rankAll([
     seattleTagged({ contactId: "paused", buybox: { exclusions: "Not buying right now, maybe spring" } }),

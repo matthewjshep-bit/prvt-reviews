@@ -129,3 +129,30 @@ test("the verdict over every area: a fit, a refusal, everything elsewhere, or no
   assert.equal(areaVerdict(["Kent"], { city: "", zip: "", region: null }).elsewhere, false, "a deal with no city can't be elsewhere");
 });
 
+
+// What went wrong (review, 2026-11-09): the region map lists a county's
+// cities, not every town in it. A buyer who said "Pierce County" read as
+// "elsewhere" for a Parkland deal, because Parkland isn't on the list, and
+// that took a buyer who had bought in Parkland off the deal. A town the map
+// doesn't place could be in any region, so a region says nothing about it.
+test("a buyer who said Pierce County isn't ruled out of a town the region map doesn't list", () => {
+  const parkland = place("Parkland", "98444");
+  assert.equal(parkland.region, "other-wa");
+  assert.equal(areaMatches("Pierce County", parkland), null);
+  assert.equal(areaMatches("King County", parkland), null);
+  assert.equal(areaMatches("South King", parkland), null);
+  assert.equal(areaVerdict(["Pierce County"], parkland).elsewhere, false);
+  assert.equal(areaVerdict(["Tacoma", "Pierce County"], parkland).elsewhere, false);
+  // A town it does list still reads as the region it's in.
+  assert.equal(areaMatches("Pierce County", kent), false);
+  assert.equal(areaVerdict(["Pierce County"], kent).elsewhere, true);
+  // A city by name still misses a town that isn't it.
+  assert.equal(areaVerdict(["Tacoma"], parkland).elsewhere, true);
+});
+
+test("a buyer who said SW Seattle doesn't get a Green Lake deal", () => {
+  for (const said of ["SW Seattle", "Southwest Seattle"]) {
+    assert.equal(areaMatches(said, greenLake), false, said);
+    assert.equal(areaMatches(said, place("Seattle", "98116")), true, said);
+  }
+});

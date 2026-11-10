@@ -7622,7 +7622,9 @@ buyers alike:
   region, not the town); and reads "North Tacoma" as Tacoma.
 - "not X", "anything but X" and "avoid X" rule X out.
 - A phrase it can't place, or a loose one ("Tacoma area") that misses,
-  abstains: it never rules a deal out.
+  abstains: it never rules a deal out. So does a region ("Pierce County")
+  against a town the region map doesn't list (Parkland): the map lists a
+  county's cities, not every town in it.
 - When every area they named resolves and none holds the deal, a city tag
   doesn't send it (`areaFit` null).
 - Their dealbreakers also read "no rehabs / no flips / no fix-ups" (refuses
@@ -7630,7 +7632,8 @@ buyers alike:
   (refuses anything but land), and "not buying / on hold / paused / not in
   the market" (refuses every deal) (`ownWords` in shared/buybox.js). "No
   rehabs over 100k" is a limit, not a no. A deal we can't tell is a fixer
-  abstains. Holding on the investor read's "buying now?" column is a
+  abstains, and so does a full gut: it's the house read as a builder's, and
+  "land and teardowns, no rehabs" doesn't keep a builder off it. Holding on the investor read's "buying now?" column is a
   separate call for Matt and isn't built.
 
 **Who was left off, and why.** `GET /waves/preview` returns `leftOff`: each
