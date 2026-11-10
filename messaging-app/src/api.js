@@ -680,8 +680,12 @@ export const savePostMortemAnalysis = (id, analysis) =>
 export const getDashboardLessons = () =>
   fetch(`${API_BASE}/api/dashboard/lessons?${locq()}`).then(j);
 // The offer engine v2 in the shadow: how close to Matt and to the market, per grade (read-only).
-export const getPricingScorecard = () =>
-  fetch(`${API_BASE}/api/offers/automations/pricing/scorecard?${locq()}`).then(j);
+// The evening run's card; fresh works it out now (one offer read per priced house).
+export const getPricingScorecard = ({ fresh = false } = {}) =>
+  fetch(`${API_BASE}/api/offers/automations/pricing/scorecard?${locq()}${fresh ? "&fresh=1" : ""}`).then(j);
+// Which first text, follow-up and check-in wins (shared/outreach-scorecard.js): the night's kept card.
+export const getOutreachScorecard = () =>
+  fetch(`${API_BASE}/api/dashboard/outreach-scorecard?${locq()}`).then(j);
 export const getDashboardPipeline = () =>
   fetch(`${API_BASE}/api/dashboard/pipeline?${locq()}`).then(j);
 // The switchboard alone: { autopilot, conversationEnabled }. The Autopilot

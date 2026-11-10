@@ -13,7 +13,8 @@
 //
 // Pure. `now`, the window and every row are passed in.
 
-import { effectiveStatus, isAiGenerated, needsAiReview } from "./offer-status.js";
+import { effectiveStatus, isAiGenerated, needsAiReview, priceAgreed } from "./offer-status.js";
+import { floatedAt } from "./offer-stage.js";
 import { EVENT_LABEL, AI_SOURCES } from "./contact-record.js";
 import { paperWent } from "./paper-follows.js";
 import { addressKey } from "./us-address.js";
@@ -44,18 +45,21 @@ export const FLOW_STAGES = [
   // The float comes before the paper (2026-10-02): a number goes by text,
   // the written offer follows it. Offered's arrow is the share of the
   // window's floats that are on paper now.
-  { key: "floated",    side: "agent", label: "Floated",        hint: "our read or a soft number went out" },
+  { key: "floated",    side: "agent", label: "Floated",        hint: "our number went out by text (counted when it went, not when it was queued)" },
   { key: "offered",    side: "agent", label: "Offered",        hint: "the written offer went to the agent" },
   { key: "countered",  side: "agent", label: "Countered",      hint: "they came back with a number — the machine's when the counter band answered it" },
-  { key: "contract",   side: "agent", label: "Under contract", hint: "promoted to a deal" },
+  { key: "contract",   side: "agent", label: "Under contract", hint: "promoted to a deal; the arrow is of the prices agreed in the window" },
   { key: "blasted",    side: "dispo", label: "Blasted",        hint: "deals put in front of buyers" },
   { key: "opened",     side: "dispo", label: "Opened",         hint: "a buyer opened the package" },
   { key: "buyer",      side: "dispo", label: "Buyer",          hint: "a committed buyer" },
-  { key: "closed",     side: "dispo", label: "Assigned / closed", hint: "assigned, or closed" },
+  { key: "closed",     side: "dispo", label: "Assigned / closed", hint: "assigned, or closed: once a deal" },
 ];
 
 // Which side of the river an event belongs to, for the feed's filter.
 const DISPO_EVENTS = new Set(["blast_sent", "dataroom_sent", "dataroom_viewed", "investor_evaluating", "investor_committed", "investor_passed", "deal_stage", "feedback"]);
+// Stages whose acts are other people's: an agent answering or countering, a
+// buyer opening the package or committing. Not yours (2026-11-09).
+const THEIR_STAGES = new Set(["replied", "countered", "opened", "buyer"]);
 
 // Did the machine do this? The timeline's own source tells most of it; a
 // few events carry an explicit flag.
@@ -98,12 +102,16 @@ export function machineDid(ev) {
 export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], now = Date.now(), windowStartMs, windowEndMs, feedLimit = 200, itemsFor = null, itemsLimit = 300 } = {}) {
   const a = windowStartMs ?? now - 7 * 86400000;
   const b = windowEndMs ?? now;
-  const counts = Object.fromEntries(FLOW_STAGES.map((s) => [s.key, { count: 0, machine: 0, person: 0, sub: "" }]));
+  // `person` is everything the machine didn't do: `you` (Matt) and `them`
+  // (an agent replying or countering, a buyer opening or committing). Until
+  // 2026-11-09 all of it read as "by you".
+  const counts = Object.fromEntries(FLOW_STAGES.map((s) => [s.key, { count: 0, machine: 0, person: 0, you: 0, them: 0, sub: "" }]));
   const items = [];
   const bump = (key, machine, item = null) => {
     const c = counts[key];
     c.count += 1;
-    if (machine) c.machine += 1; else c.person += 1;
+    if (machine) c.machine += 1;
+    else { c.person += 1; if (THEIR_STAGES.has(key)) c.them += 1; else c.you += 1; }
     // The stage's verdict wins over the row's own source. A reply is a
     // person's act whoever wrote it down — a text_summary row carries source
     // "conversation" because the BOT summarised the text, not because the
@@ -145,6 +153,12 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   // that now reads "no longer available" isn't ours either.
   const contracted = new Set();
   const goneOffers = new Set(offers.filter((o) => o?.id && effectiveStatus(o) === "unavailable").map((o) => o.id));
+  // Once per offer (Offered), per deal (Assigned / closed) and per deal and
+  // buyer (Buyer) in the window (2026-11-09: an offer sent after its float
+  // and again "as promised" counted twice; a deal assigned then closed, twice).
+  const offeredKeys = new Set(); const closedDeals = new Set(); const committed = new Set();
+  const dealKey = (e) => e.offerId || addressKey(e.address || "") || String(e.address || "").trim().toLowerCase() || e.contactId || "";
+  let handTexts = 0;              // texts you typed in GHL or on the work pane
   for (const e of events) {
     const t = ms(e.at);
     if (!inWin(t, a, b)) continue;
@@ -157,13 +171,20 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
       // The agent check-in about a fresh listing: a text to an agent we
       // already know, so not a first text — said beside it.
       case "agent_pulse_texted": if (e.data?.reason === "fresh_listing" || e.data?.listingKey) listingPings++; break;
+      // A text you typed (hand-reply.js, hand-reply-sweep.js): yours, beside
+      // the outbox's own split.
+      case "hand_reply": handTexts++; break;
+      // Their text as it arrived (inbound_received, written on every inbound
+      // once the restart branch lands), else the drafter's summary of it.
+      // Either way an agent is counted once.
+      case "inbound_received":
       case "text_summary":
       case "call_summary": {
         // An AGENT answering us: never an investor (this is the acquisition
         // row), and a text summary only when it summarises their text — the
         // contact-record backfill writes one for our own machine drafts too.
         // Counted once per contact; the machine's when the bot answered it.
-        const theirs = e.type === "call_summary" || Boolean(String(e.data?.inbound || "").trim());
+        const theirs = e.type !== "text_summary" || Boolean(String(e.data?.inbound || "").trim());
         if (e.party === "investor" || !theirs) break;
         if (e.contactId) replyTimes.set(e.contactId, [...(replyTimes.get(e.contactId) || []), t]);
         if (e.contactId && !replied.has(e.contactId)) { replied.add(e.contactId); bump("replied", botAnswered.has(e.contactId), feedRow(e, names)); }
@@ -181,7 +202,15 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
       // (and who sent it). The "we offered $X" ledger line is written when an
       // offer is CREATED — counting it made every offer the machine priced and
       // floated read as "you offered" (2026-09-17: 37 of 69 had never been sent).
-      case "offer_sent": if (isRealSend(e)) { bump("offered", m, feedRow(e, names)); if (e.offerId) sentByEvent.add(e.offerId); } break;
+      case "offer_sent": {
+        if (!isRealSend(e)) break;
+        const k = e.offerId || `${e.contactId || ""}|${addressKey(e.address || "")}`;
+        if (e.offerId) sentByEvent.add(e.offerId);
+        if (offeredKeys.has(k)) break;
+        offeredKeys.add(k);
+        bump("offered", m, feedRow(e, names));
+        break;
+      }
       case "realm_yes": break; // shown on the float's sub-line
       case "deal_promoted": {
         if (promotedButLost(e) || (e.offerId && goneOffers.has(e.offerId))) break;
@@ -198,8 +227,21 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
         break;
       }
       case "dataroom_viewed": if (e.contactId && !openedBuyers.has(`${e.contactId}|${e.offerId || e.address}`)) { openedBuyers.add(`${e.contactId}|${e.offerId || e.address}`); bump("opened", false, feedRow(e, names)); } break;
-      case "investor_committed": bump("buyer", false, feedRow(e, names)); break;
-      case "deal_stage": if (e.data?.stage === "assigned" || e.data?.stage === "closed") bump("closed", false, feedRow(e, names)); break;
+      case "investor_committed": {
+        const k = `${dealKey(e)}|${e.contactId || ""}`;
+        if (committed.has(k)) break;
+        committed.add(k);
+        bump("buyer", false, feedRow(e, names));
+        break;
+      }
+      case "deal_stage": {
+        if (e.data?.stage !== "assigned" && e.data?.stage !== "closed") break;
+        const k = dealKey(e);
+        if (closedDeals.has(k)) break;
+        closedDeals.add(k);
+        bump("closed", false, feedRow(e, names));
+        break;
+      }
       default: break;
     }
   }
@@ -227,7 +269,7 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   if (replied.size) counts.replied.sub = `${counts.replied.sub ? `${counts.replied.sub} · ` : ""}${usefulN} useful`;
 
   /* --- offer-driven stages --- */
-  let held = 0, clear = 0, realmYes = 0, floats = 0, floatsOnPaper = 0;
+  let held = 0, clear = 0, realmYes = 0, floats = 0, floatsOnPaper = 0, agreedN = 0;
   const counteredInWin = (o) => (o.statusHistory || []).some((h) => h.status === "countered" && inWin(ms(h.ts), a, b))
     || (o.counter?.at && inWin(ms(o.counter.at), a, b));
   // A send that worked, on the offer's own ledger.
@@ -245,17 +287,23 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     }
     // Sends: the offer's own send ledger, when the timeline has no offer_sent
     // rows (sends from the button write the ledger; the automation writes both).
-    if (!sentByEvent.has(o.id) && sentInWin(o)) {
+    if (!sentByEvent.has(o.id) && !offeredKeys.has(o.id) && sentInWin(o)) {
       const sentAt = (o.sends || []).filter((s) => inWin(ms(s.ts), a, b)).map((s) => s.ts).sort().at(-1);
+      offeredKeys.add(o.id);
       bump("offered", false, offerItem(o, sentAt, false));
     }
-    const t = ms(o.proactive?.takeCheckAt), r = ms(o.proactive?.realmCheckAt);
-    if (inWin(t, a, b) || inWin(r, a, b)) {
-      const floatAt = [o.proactive?.takeCheckAt, o.proactive?.realmCheckAt].filter((x) => inWin(ms(x), a, b)).sort().at(-1);
+    // The float that went (floatSentAt), never the queue stamp: until
+    // 2026-11-09 a float queued and superseded before it went counted
+    // (shared/offer-stage.js floatedAt has always had the right rule).
+    const floatAt = floatedAt(o);
+    if (inWin(ms(floatAt), a, b)) {
       bump("floated", true, offerItem(o, floatAt, true));
       floats++;
       if (paperWent(o)) floatsOnPaper++;
     }
+    // A price agreed in the window: what Under contract's arrow is measured
+    // against (a counter isn't an agreement, and many contracts never countered).
+    if (inWin(ms(priceAgreed(o)?.at), a, b)) agreedN++;
     if (o.realm?.answer === "yes" && inWin(ms(o.realm?.at), a, b)) realmYes++;
     if (counteredInWin(o)) {
       const cAt = (o.statusHistory || []).filter((h) => h.status === "countered" && inWin(ms(h.ts), a, b)).map((h) => h.ts).sort().at(-1) || o.counter?.at;
@@ -279,6 +327,8 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     if (d.autoSent) autoSent++; else personSent++;
   }
 
+  if (agreedN) counts.contract.sub = `${counts.contract.sub ? `${counts.contract.sub} · ` : ""}of ${agreedN} price${agreedN === 1 ? "" : "s"} agreed`;
+
   /* --- conversion, per row --- */
   const stages = FLOW_STAGES.map((s, i) => {
     const c = counts[s.key];
@@ -294,7 +344,9 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
     const pct = (n, d) => (d > 0 ? Math.min(100, Math.round((n / d) * 100)) : null);
     const conversion = s.key === "replied" && outreachOpen.size ? pct(cohortReplied, outreachOpen.size)
       : s.key === "offered" && floats ? pct(floatsOnPaper, floats)
-        : base && base.count > 0 ? pct(c.count, base.count) : null;
+        // Contracts over the prices agreed in the window, not over counters.
+        : s.key === "contract" ? (agreedN > 0 ? pct(c.count, agreedN) : null)
+          : base && base.count > 0 ? pct(c.count, base.count) : null;
     return { ...s, ...c, conversion };
   });
 
@@ -313,11 +365,15 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
   items.sort((x, y) => String(y.at).localeCompare(String(x.at)));
   const capped = items.slice(0, itemsLimit);
 
+  // Moves by the machine, by you (what you did, the texts you sent from the
+  // outbox and the ones you typed yourself) and by them (agents and buyers).
+  const you = stages.reduce((n, s) => n + s.you, 0) + personSent + handTexts;
+  const them = stages.reduce((n, s) => n + s.them, 0);
   const totals = {
     machine: stages.reduce((n, s) => n + s.machine, 0) + autoSent,
-    person: stages.reduce((n, s) => n + s.person, 0) + personSent,
+    you, them, person: you + them,
     events: feed.length,
-    messages: { autoSent, personSent },
+    messages: { autoSent, personSent, handTexts },
   };
   // The Replied sub-line's two numbers, for pages that show them as tiles
   // (Reports → Follow-up): agents first texted in the window, and how many
@@ -329,7 +385,7 @@ export function buildFlow({ offers = [], events = [], drafts = [], jobs = [], no
 // A reply that says something: not an opt-out, small talk or a reply the bot
 // couldn't place; not their phone answering for them; not "stop texting me".
 const NOT_USEFUL_INTENTS = new Set(["opt_out", "other", "small_talk"]);
-function usefulReply(e) {
+export function usefulReply(e) {
   if (e.type === "call_summary") return realCall(e);
   const inbound = String(e.data?.inbound || "").trim();
   if (!inbound || NOT_USEFUL_INTENTS.has(e.data?.intent)) return false;

@@ -90,3 +90,20 @@ test("the Line says when new agents are drying up, and why", () => {
   const fine = buildLine({ now: NOW, week: [{ key: "first_text", count: 70 }] });
   expect(renderToStaticMarkup(<LineBody data={fine} />)).not.toContain("drying up");
 });
+
+test("the Line shows the fee we made this month and this year, from what buyers paid, and no longer talks about Today", () => {
+  const data = buildLine({
+    now: NOW,
+    offers: [{ id: "k1", status: "sent", createdAt: "2026-09-20T00:00:00Z", sends: [{ ts: "2026-09-21T00:00:00Z" }], asset: { type: "manufactured" } }],
+    deals: [
+      { id: "d1", address: "3 Wren Ct, Kent, WA", deal: { stage: "closed", contractPrice: 300000, stageHistory: [{ stage: "closed", ts: "2026-09-25T00:00:00Z" }],
+        investors: [{ contactId: "b1", status: "committed", agreedPrice: { amount: 314000 } }] } },
+      { id: "d2", address: "4 Wren Ct, Kent, WA", deal: { stage: "assigned", contractPrice: 250000, assignmentFee: 15000, stageHistory: [{ stage: "assigned", ts: "2026-09-20T00:00:00Z" }] } },
+    ],
+  });
+  const html = renderToStaticMarkup(<LineBody data={data} />);
+  expect(html).toContain("Fees we made");
+  expect(html).toContain("$14,000");
+  expect(html).toContain("1 closed this year with no fee we can stand behind");
+  expect(html).not.toContain("on Today");
+});

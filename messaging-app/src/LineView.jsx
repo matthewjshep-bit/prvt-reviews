@@ -221,6 +221,33 @@ function Jobs({ jobs = [], errors = [] }) {
   );
 }
 
+const money = (v) => (v == null ? "—" : `$${Math.round(Number(v)).toLocaleString("en-US")}`);
+
+// The fee in hand (shared/line.js realizedFees): from what the buyer paid,
+// or a fee a person typed, never the setting filled in at promote.
+function Fees({ fees, method }) {
+  if (!fees) return null;
+  const target = method?.feeAtTarget ?? null;
+  return (
+    <Card title="Fees we made" right={target ? <span className="text-[11px] text-slate-500">target {money(target)} a month</span> : null}>
+      <div className="grid grid-cols-2 gap-4 text-sm text-slate-700">
+        <div>
+          <div className="text-2xl font-bold tabular-nums text-slate-900">{money(fees.month?.fee)}</div>
+          <div className="text-xs text-slate-500">this month · {n(fees.month?.deals)} deal{fees.month?.deals === 1 ? "" : "s"}</div>
+        </div>
+        <div>
+          <div className="text-2xl font-bold tabular-nums text-slate-900">{money(fees.ytd?.fee)}</div>
+          <div className="text-xs text-slate-500">this year · {n(fees.ytd?.deals)} deal{fees.ytd?.deals === 1 ? "" : "s"}</div>
+        </div>
+      </div>
+      <div className="mt-2 text-[11px] text-slate-400">
+        Counted when a deal is assigned or closed, from what the buyer paid over our contract, or a fee you typed.
+        {fees.unknown ? ` ${n(fees.unknown)} closed this year with no fee we can stand behind (none on record, or only the setting's): not counted.` : ""}
+      </div>
+    </Card>
+  );
+}
+
 function Pricing({ pricing }) {
   if (!pricing) return null;
   return (
@@ -282,7 +309,7 @@ function Kinds({ kinds }) {
           </tr>
         </tbody>
       </table>
-      <div className="mt-2 text-[11px] text-slate-400">The auto-underwrite holds anything but a single-family house for you on Today.</div>
+      <div className="mt-2 text-[11px] text-slate-400">The auto-underwrite holds anything but a single-family house for you to look at first.</div>
     </Card>
   );
 }
@@ -415,6 +442,7 @@ export function LineBody({ data }) {
       <Sources sources={data.sources} />
       <Supply supply={data.supply} />
       <Stations stations={data.stations} method={data.method} />
+      <Fees fees={data.fees} method={data.method} />
       <div className="grid gap-4 lg:grid-cols-2">
         <Cycle cycle={data.cycle} />
         <Coverage coverage={data.coverage} targets={data.targets} />
@@ -445,6 +473,7 @@ export default function LineView() {
         <div className="text-xs text-slate-500">
           {data ? `As of ${new Date(data.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : loading ? "Reading the line…" : ""}
           {data?.eventsTruncated ? <span className="text-amber-700"> · the month's events were more than one read holds; the counts are low</span> : null}
+          {data?.countingChanged ? <span> · counting changed on {data.countingChanged}: a float counts when it went, an offer sent twice once, a close once a deal</span> : null}
         </div>
         <button type="button" className={BTN} disabled={loading} onClick={() => load(true)}>
           <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> Refresh

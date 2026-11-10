@@ -40,7 +40,7 @@ test("a machine clock a day and a sweep late is a missed run; one due this morni
 test("cycle times count only hops that finished in the window, median and 90th", () => {
   const offers = [
     offer("a", { createdAt: D(20), sends: [{ ts: D(18) }], statusHistory: [{ status: "countered", ts: D(15) }] }),
-    offer("b", { createdAt: D(12), proactive: { realmCheckAt: D(11) }, statusHistory: [{ status: "accepted", ts: D(5) }],
+    offer("b", { createdAt: D(12), floatSentAt: D(11), statusHistory: [{ status: "accepted", ts: D(5) }],
       deal: { createdAt: D(4), stageHistory: [{ stage: "under_contract", ts: D(4) }, { stage: "buyer_found", ts: D(1) }], blasts: [{ at: D(3.5) }] } }),
     offer("old", { createdAt: D(90), sends: [{ ts: D(80) }] }),
   ];
@@ -221,4 +221,40 @@ test("the line splits the funnel by kind of house: single family, other kinds, a
   assert.deepEqual([k.sfr.offers, k.sfr.contract, k.sfr.contractRate], [2, 1, 50]);
   assert.deepEqual([k.other.offers, k.other.contract], [1, 1]);
   assert.equal(k.untyped.offers, 1);
+});
+
+/* ---------- counting what happened (2026-11-09) ---------- */
+
+test("a float that was queued and never sent isn't 'in front of the agent' in the waits", () => {
+  const c = Object.fromEntries(cycleTimes([
+    offer("q", { status: "new", createdAt: D(12), proactive: { realmCheckAt: D(11) } }),
+    offer("s", { status: "new", createdAt: D(12), proactive: { realmCheckAt: D(11) }, floatSentAt: D(10) }),
+  ], { now: NOW, days: 30 }).map((h) => [h.key, h]));
+  assert.equal(c.out.n, 1);
+  assert.equal(c.out.medianDays, 2, "from priced to the float that went");
+});
+
+test("the fee we really made, this month and this year, from what the buyer paid", async () => {
+  const { realizedFees } = await import("./line.js");
+  const closed = (id, at, deal) => ({ id, address: `${id} Fir St`, deal: { stage: "closed", contractPrice: 300000, stageHistory: [{ stage: "closed", ts: at }], ...deal } });
+  const f = realizedFees([
+    // The committed buyer agreed 12K over our contract.
+    closed("a", D(3), { investors: [{ contactId: "b1", status: "committed", agreedPrice: { amount: 312000 } }], assignmentFee: 15000 }),
+    // A fee a person typed.
+    closed("b", D(5), { assignmentFee: 9000, assignmentFeeSource: "you" }),
+    // The setting filled in at promote, or no say where it came from: not counted.
+    closed("c", D(6), { assignmentFee: 15000, assignmentFeeSource: "setting" }),
+    closed("d", D(7), { assignmentFee: 15000 }),
+    // Closed last year: not this year's.
+    closed("e", "2025-12-20T00:00:00Z", { investors: [{ contactId: "b2", status: "committed", agreedPrice: { amount: 320000 } }] }),
+    // Still under contract: nothing realized.
+    { id: "f", deal: { stage: "under_contract", contractPrice: 300000, assignmentFee: 20000, assignmentFeeSource: "you" } },
+  ], { now: NOW });
+  assert.deepEqual([f.month.fee, f.month.deals], [21000, 2]);
+  assert.deepEqual([f.ytd.fee, f.ytd.deals], [21000, 2]);
+  assert.equal(f.unknown, 2, "two closed deals with no fee we can stand behind");
+});
+
+test("the outreach scoreboard has its own row in the jobs table", () => {
+  assert.ok(LINE_JOBS.outreachScorecard);
 });

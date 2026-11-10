@@ -18,7 +18,7 @@ import { fetchZillowListings } from "./rehab-scan.js";
 import { streetKey } from "./comps-zillow.js";
 import { slackApi } from "./slack-notify.js";
 import { normalizeSlack, streamOn } from "./shared/slack-notify.js";
-import { outcomeOf, scorecard, scorecardLine } from "./shared/price-scorecard.js";
+import { outcomeOf, scorecard, scorecardLine, theirReadOf } from "./shared/price-scorecard.js";
 import { normalizePricingV2 } from "./shared/price-engine.js";
 import { houseKey } from "./shared/current-offer.js";
 
@@ -50,19 +50,38 @@ export async function outcomesFor({ store, locationId, records = [] }) {
   return out;
 }
 
+// What agents said about a house: the seller's number and their own ARV and rehab.
+const THEIR_EVENT_TYPES = ["property_details", "agent_estimate"];
+
 /** buildScorecard({ store, locationId, saved, now, persist }) → the card (and, with persist, the outcomes written back). */
 export async function buildScorecard({ store, locationId, saved = {}, now = Date.now(), persist = false, days = WINDOW_DAYS } = {}) {
   const records = (await store.listHousePricing(locationId, { since: iso(now - days * DAY_MS), limit: 5000 }).catch(() => [])) || [];
   const outcomes = await outcomesFor({ store, locationId, records });
+  // Their numbers, one read for the whole window (a month before it too: an
+  // agent's number often comes before ours).
+  const theirEvents = records.length
+    ? (await store.listContactEventsSince?.(locationId, iso(now - (days + 30) * DAY_MS), { types: THEIR_EVENT_TYPES, limit: 20000 }).catch(() => [])) || []
+    : [];
+  // Filed by house once: matching every said number against every priced
+  // house parsed records × events addresses on the one thread (2026-11-09).
+  const theirByHouse = new Map();
+  for (const e of theirEvents) {
+    const k = e?.address ? houseKey(e.address) : "";
+    if (k) (theirByHouse.get(k) || theirByHouse.set(k, []).get(k)).push(e);
+  }
   const docs = [];
   let updated = 0;
   for (const rec of records) {
     const fresh = outcomes.get(rec.houseKey);
     // A sold price found for a house with no offer row stays (outcome.sold from the unpriced read).
-    const outcome = fresh ? { ...fresh, sold: fresh.sold || rec.doc?.outcome?.sold || null } : rec.doc?.outcome || null;
+    const base = fresh ? { ...fresh, sold: fresh.sold || rec.doc?.outcome?.sold || null } : rec.doc?.outcome || null;
+    const address = rec.doc?.address || "";
+    const their = theirReadOf({ address, events: theirByHouse.get(houseKey(address)) || [] });
+    const said = Object.fromEntries(Object.entries(their).filter(([, v]) => v != null));
+    const outcome = Object.keys(said).length ? { ...(base || {}), ...said } : base;
     const doc = { ...rec.doc, outcome, leadSource: rec.doc?.leadSource || fresh?.leadSource || null };
     docs.push(doc);
-    if (persist && fresh && JSON.stringify(outcome) !== JSON.stringify(rec.doc?.outcome || null)) {
+    if (persist && (fresh || Object.keys(said).length) && JSON.stringify(outcome) !== JSON.stringify(rec.doc?.outcome || null)) {
       await store.upsertHousePricing(locationId, rec.houseKey, doc).catch(() => {});
       updated++;
     }
@@ -101,6 +120,15 @@ export async function soldForUnpriced({ store, locationId, saved = {}, now = Dat
   return { checked: due.length, sold };
 }
 
+/**
+ * storedScorecard({ store, locationId }) → { card, records, at } | null — the evening run's card, as it was saved.
+ */
+export async function storedScorecard({ store, locationId }) {
+  const c = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
+  const last = c?.doc?.last;
+  return last?.card ? { card: last.card, records: Number(last.records) || 0, at: last.card.generatedAt || c.at || null } : null;
+}
+
 /** maybeRunPriceScorecard({ store, locationId, saved, now, deps }) → the day's run, or null. */
 export async function maybeRunPriceScorecard({ store, locationId, saved = {}, now = Date.now(), deps = {} } = {}) {
   if (!normalizePricingV2(saved?.pricingV2).shadow) return null;
@@ -121,7 +149,9 @@ export async function maybeRunPriceScorecard({ store, locationId, saved = {}, no
       const post = deps.slackApi || slackApi;
       await post(token, "chat.postMessage", { channel, text: scorecardLine(card) }).then(() => { posted = true; }).catch(() => {});
     }
-    last = { records, updated, unpriced, posted, total: { n: card.total.n, withMatt: card.total.withMatt, arvGap: card.total.arvGap, walkVsMatt: card.total.walkVsMatt }, readyA: card.ready.A.ready };
+    last = { records, updated, unpriced, posted, total: { n: card.total.n, withMatt: card.total.withMatt, arvGap: card.total.arvGap, walkVsMatt: card.total.walkVsMatt }, readyA: card.ready.A.ready,
+      // The whole card: Lessons reads this one rather than working it out on open (2026-11-09).
+      card };
     return { ...last, card };
   } catch (e) {
     error = String(e?.message || e);

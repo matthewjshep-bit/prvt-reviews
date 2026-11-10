@@ -112,7 +112,7 @@ export async function lineFor({ store, locationId, saved = {}, now = Date.now(),
     else if (["closed", "assigned", "buyer_found"].includes(deal.stage)) scorecards.push(dealScorecard({ offer: o, settings, feedback: deal.feedbackPackage || null, now }));
   }
 
-  const line = buildLine({ week, month, offers, actions, agentPlan, buyerPlan, cursors, errors, scorecards, settings, now });
+  const line = buildLine({ week, month, offers, actions, agentPlan, buyerPlan, cursors, errors, scorecards, settings, now, deals: dealDocs });
   return { ...line, eventsTruncated: Boolean(flowRead?.truncated) };
 }
 

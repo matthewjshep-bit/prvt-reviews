@@ -34,7 +34,10 @@ const fmtSetting = (k, v) => (k === "underwriteCalibration" ? fmtCalibration(v) 
  * bars he switches it live on. A read; the switch is his (Settings → Auto-underwrite). Exported for tests.
  */
 const pct1 = (x) => (x == null ? "—" : `${Math.round(x * 1000) / 10}%`);
-export function EngineScorecard({ data }) {
+// A ratio (1.1) as how far over or under (+10%).
+const offBy = (x) => (x == null ? "—" : `${x >= 1 ? "+" : "−"}${Math.round(Math.abs(x - 1) * 1000) / 10}%`);
+const keptAt = (iso) => (iso ? new Date(iso).toLocaleString("en-US", { timeZone: "America/Los_Angeles", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
+export function EngineScorecard({ data, onFresh = null, busy = false }) {
   if (!data) return null;
   const { card, switches, records } = data;
   if (!switches?.shadow && !records) {
@@ -51,34 +54,42 @@ export function EngineScorecard({ data }) {
     <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4" data-testid="engine-scorecard">
       <div className="mb-1 flex items-baseline justify-between gap-2">
         <div className="font-semibold text-slate-800">Offer engine (shadow)</div>
-        <div className="text-xs text-slate-500">{card.total?.n || 0} houses priced · {card.total?.withMatt || 0} with your own number · last {card.days} days</div>
+        <div className="text-xs text-slate-500">{card.total?.n || 0} houses priced · {card.total?.withMatt || 0} with your own number · {card.total?.withTheir || 0} with their number · last {card.days} days</div>
       </div>
       <p className="mb-3 text-xs text-slate-500">
-        Its numbers are never sent. ARV and rehab are measured against yours; the walk-away against your inputs at the same formula (so 100% means it lands where you would).
+        Its numbers are never sent. ARV and rehab are measured against yours and against the agent's own read; the walk-away against your inputs at the same formula (so 100% means it lands where you would), and against the number the seller said.
       </p>
-      <table className="w-full text-left text-sm">
-        <thead className="text-xs uppercase tracking-wide text-slate-500">
-          <tr><th className="py-1">Grade</th><th>Houses</th><th>ARV off yours</th><th>Rehab under yours</th><th>Walk-away vs yours</th><th>Over what it sold for</th></tr>
-        </thead>
-        <tbody>
-          {["A", "B", "C"].map((g) => (
-            <tr key={g} className="border-t border-slate-100">
-              <td className="py-1 font-semibold">{g}</td>
-              <td>{row(g).n || 0}</td>
-              <td>{pct1(row(g).arvGap)}</td>
-              <td>{pct1(row(g).rehabBelowShare)}</td>
-              <td>{row(g).walkVsMatt == null ? "—" : `${Math.round(row(g).walkVsMatt * 100)}%`}</td>
-              <td>{row(g).sold ? `${row(g).overSold} of ${row(g).sold}` : "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] text-left text-sm">
+          <thead className="text-xs uppercase tracking-wide text-slate-500">
+            <tr><th className="py-1">Grade</th><th>Houses</th><th>ARV off yours</th><th>Rehab under yours</th><th>Walk-away vs yours</th><th>Over their number</th><th>ARV vs the agent&apos;s</th><th>Over what it sold for</th></tr>
+          </thead>
+          <tbody>
+            {["A", "B", "C"].map((g) => (
+              <tr key={g} className="border-t border-slate-100">
+                <td className="py-1 font-semibold">{g}</td>
+                <td>{row(g).n || 0}</td>
+                <td>{pct1(row(g).arvGap)}</td>
+                <td>{pct1(row(g).rehabBelowShare)}</td>
+                <td>{row(g).walkVsMatt == null ? "—" : `${Math.round(row(g).walkVsMatt * 100)}%`}</td>
+                <td className={row(g).overTheir ? "font-semibold text-red-700" : ""}>{row(g).withTheir ? `${row(g).overTheir || 0} of ${row(g).withTheir}` : "—"}</td>
+                <td>{offBy(row(g).arvVsTheir)}</td>
+                <td>{row(g).sold ? `${row(g).overSold} of ${row(g).sold}` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <p className={`mt-3 text-sm ${ready.ready ? "text-emerald-700" : "text-slate-600"}`}>
         {ready.ready ? "Grade A has cleared the bars: ready for your switch." : `Grade A isn't ready: ${(ready.missing || []).join("; ") || "—"}.`}
       </p>
       {card.trend?.prior30?.n ? (
         <p className="mt-1 text-xs text-slate-500">ARV off yours: {pct1(card.trend.last30.arvGap)} the last 30 days, {pct1(card.trend.prior30.arvGap)} the 30 before.</p>
       ) : null}
+      <p className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+        {data.stored ? `From the evening run, ${keptAt(data.at)}.` : "Worked out just now."}
+        {onFresh ? <button type="button" className="text-blue-700 hover:underline disabled:opacity-40" disabled={busy} onClick={onFresh}>{busy ? "Working it out…" : "Work it out now"}</button> : null}
+      </p>
     </div>
   );
 }
@@ -186,8 +197,11 @@ export default function LessonsView({ onSettingsSaved }) {
   const [digestBusy, setDigestBusy] = useState(false);
 
   const [engine, setEngine] = useState(null);
+  const [engineBusy, setEngineBusy] = useState(false);
   const load = () => getDashboardLessons().then(setData).catch((e) => setError(e.message));
+  // The evening run's card; "Work it out now" reads every priced house's offers, so only on a press.
   useEffect(() => { load(); getPricingScorecard().then(setEngine).catch(() => setEngine(null)); }, []);
+  const freshEngine = () => { setEngineBusy(true); getPricingScorecard({ fresh: true }).then(setEngine).catch((e) => setError(e.message)).finally(() => setEngineBusy(false)); };
 
   async function apply(r) {
     const lines = Object.entries(r.suggestedSettings).map(([k, v]) => `${SETTING_LABEL[k] || k}: ${fmtSetting(k, data.current[k])} → ${fmtSetting(k, v)}`).join("\n");
@@ -217,7 +231,7 @@ export default function LessonsView({ onSettingsSaved }) {
   return (
     <div>
       {error && <div className="mb-2"><ErrorBar>{error}</ErrorBar></div>}
-      <EngineScorecard data={engine} />
+      <EngineScorecard data={engine} onFresh={freshEngine} busy={engineBusy} />
       <LessonsBody data={data} onApply={apply} onDigest={saveDigest} applying={applying} digestBusy={digestBusy} />
     </div>
   );

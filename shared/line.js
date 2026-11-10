@@ -18,6 +18,7 @@ import { effectiveStatus, OPEN_STATUSES } from "./offer-status.js";
 import { offMarketStats, funnelBy } from "./off-market.js";
 import { normalizeAsset } from "./asset-type.js";
 import { sourceAgents } from "./lead-source.js";
+import { floatedAt } from "./offer-stage.js";
 
 const HOUR_MS = 3600000;
 const DAY_MS = 24 * HOUR_MS;
@@ -202,7 +203,8 @@ export function cycleTimes(offers = [], { now = Date.now(), days = 30 } = {}) {
     if (!o || effectiveStatus(o) === "draft") continue;
     const priced = ms(o.createdAt);
     const sent = (o.sends || []).map((s) => ms(s?.ts)).filter((t) => t != null).sort((a, b) => a - b)[0] ?? null;
-    const floated = [ms(o.proactive?.realmCheckAt), ms(o.proactive?.takeCheckAt)].filter((t) => t != null).sort((a, b) => a - b)[0] ?? null;
+    // The float that went, never the queue stamp (2026-11-09).
+    const floated = ms(floatedAt(o));
     const out = [sent, floated].filter((t) => t != null).sort((a, b) => a - b)[0] ?? null;
     add("out", priced, out);
     const answered = firstStatus(o, ["countered", "accepted", "passed"]);
@@ -364,6 +366,7 @@ export const LINE_JOBS = {
   uwQueue: { label: "Underwrite queue", every: "tick" },
   ghlMirror: { label: "GHL mirror", every: "tick" },
   deliveryWatch: { label: "Delivery check (only while on)", every: "tick" },
+  outreachScorecard: { label: "Text scoreboard", every: "day" },
 };
 
 /**
@@ -436,6 +439,64 @@ export function realizedPricing({ scorecards = [], settings = {} } = {}) {
   };
 }
 
+/* ---------- the fee we made ---------- */
+
+// The deal stages where the fee is in hand.
+const FEE_STAGES = ["assigned", "closed"];
+const PACIFIC = "America/Los_Angeles";
+const ymOf = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: PACIFIC, year: "numeric", month: "2-digit" }).format(new Date(t));
+
+/**
+ * realizedFee(deal) → { fee, source } | null
+ *
+ * What we actually made on one deal, never the setting (2026-11-09: the fee
+ * at promote defaults to settings.wholesaleFee, so a fee lesson built on it
+ * compared the setting with itself). In order: the outcome recorded at close
+ * (deal.outcome.fee, or its price less the contract), the committed buyer's
+ * agreed price less the contract, or a fee a person typed
+ * (assignmentFeeSource "you"). A fee with no source said is unknown, not real.
+ */
+export function realizedFee(deal = null) {
+  if (!deal) return null;
+  const contract = Number(deal.contractPrice) || 0;
+  const out = deal.outcome || {};
+  const pick = (fee, source) => (fee > 0 ? { fee: Math.round(fee), source } : null);
+  if (Number(out.fee) > 0) return pick(Number(out.fee), "outcome");
+  if (Number(out.price) > 0 && contract > 0) return pick(Number(out.price) - contract, "outcome");
+  const buyer = (deal.investors || []).find((i) => i?.status === "committed" && Number(i.agreedPrice?.amount) > 0);
+  if (buyer && contract > 0) return pick(Number(buyer.agreedPrice.amount) - contract, "buyer_agreed");
+  if (deal.assignmentFeeSource === "you" && Number(deal.assignmentFee) > 0) return pick(Number(deal.assignmentFee), "you");
+  return null;
+}
+
+/**
+ * realizedFees(deals, { now }) → { month: { fee, deals }, ytd: { fee, deals }, unknown, rows }
+ *
+ * The fee in hand this Pacific month and this year, from the deals assigned
+ * or closed in them (the first time they reached either stage). `unknown`
+ * counts this year's assigned or closed deals with no fee we can stand behind.
+ */
+export function realizedFees(deals = [], { now = Date.now() } = {}) {
+  const thisMonth = ymOf(now);
+  const thisYear = thisMonth.slice(0, 4);
+  const out = { month: { fee: 0, deals: 0 }, ytd: { fee: 0, deals: 0 }, unknown: 0, rows: [] };
+  for (const o of deals || []) {
+    const deal = o?.deal;
+    if (!deal || !FEE_STAGES.includes(deal.stage)) continue;
+    const at = ms(deal.outcome?.closedAt) ?? stageAt(deal, FEE_STAGES) ?? ms(deal.closedAt);
+    if (at == null || at > now) continue;
+    const ym = ymOf(at);
+    if (ym.slice(0, 4) !== thisYear) continue;
+    const r = realizedFee(deal);
+    if (!r) { out.unknown++; continue; }
+    out.ytd.fee += r.fee; out.ytd.deals++;
+    if (ym === thisMonth) { out.month.fee += r.fee; out.month.deals++; }
+    out.rows.push({ offerId: o.id || null, street: String(o.address || "").split(",")[0], fee: r.fee, source: r.source, at: new Date(at).toISOString() });
+  }
+  out.rows.sort((a, b) => b.at.localeCompare(a.at));
+  return out;
+}
+
 /* ---------- the whole line ---------- */
 
 /**
@@ -444,7 +505,7 @@ export function realizedPricing({ scorecards = [], settings = {} } = {}) {
  */
 export function buildLine({
   week = [], month = [], offers = [], actions = [], agentPlan = null, buyerPlan = null,
-  cursors = [], errors = [], scorecards = [], settings = {}, targets = null, now = Date.now(),
+  cursors = [], errors = [], scorecards = [], settings = {}, targets = null, now = Date.now(), deals = [],
 } = {}) {
   const t = normalizeLineTargets(targets ?? settings?.lineTargets);
   const leaks = {
@@ -466,6 +527,8 @@ export function buildLine({
     supply: supplyCheck({ week, cursors, targets: t, settings }),
     errors: errorsByArea(errors),
     pricing: realizedPricing({ scorecards, settings }),
+    // The fee in hand, this month and this year (2026-11-09).
+    fees: realizedFees(deals, { now }),
     // Off-market vs listed (shared/off-market.js): our best deals, counted
     // station by station — the last 90 days and all time.
     sources: { days90: offMarketStats(offers, { now, days: 90 }), allTime: offMarketStats(offers, { now }) },

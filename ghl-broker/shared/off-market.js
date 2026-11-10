@@ -14,6 +14,7 @@
 //   offMarketAskDaysAgo(events) when we last asked this agent for off-market houses
 
 import { effectiveStatus, priceAgreed } from "./offer-status.js";
+import { wasSent } from "./offer-stage.js";
 
 const DAY_MS = 86400000;
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
@@ -140,7 +141,10 @@ export function funnelBy(offers = [], sideOf = () => "all", { now = Date.now(), 
     const seen = new Set((o.statusHistory || []).map((h) => h?.status));
     const status = effectiveStatus(o);
     side.offers++;
-    if ((o.sends || []).some((s) => s?.ts) || o.proactive?.realmCheckAt || seen.has("sent") || status !== "new") side.sent++;
+    // In front of the agent: our number really went (shared/offer-stage.js
+    // wasSent). Until 2026-11-09 a queued float or any status but "new"
+    // counted, so a house we passed on unpriced read as sent.
+    if (wasSent(o)) side.sent++;
     if (seen.has("countered") || o.counter || status === "countered") side.countered++;
     if (o.deal || priceAgreed(o) || seen.has("accepted") || status === "accepted") side.agreed++;
     if (o.deal) side.contract++;

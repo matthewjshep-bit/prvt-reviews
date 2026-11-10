@@ -26,6 +26,18 @@ test("a number we texted counts as sent, before any paper goes", () => {
   assert.equal(offerStage({ status: "new", floatSentAt: "2026-10-10T18:00:00Z" }).why, "our number went by text");
 });
 
+test("every report counts sent the same way: a float that went, a send that worked, a sent status or a deal", async () => {
+  const { wasSent, sentAt } = await import("./offer-stage.js");
+  assert.equal(wasSent({ status: "new", proactive: { realmCheckAt: "2026-10-10T18:00:00Z" } }), false, "queued, never went");
+  assert.equal(wasSent({ status: "we_passed", statusHistory: [{ status: "we_passed", ts: "2026-10-11T18:00:00Z" }] }), false, "passed on before our number went");
+  assert.equal(wasSent({ status: "new", sends: [{ ts: "2026-10-10T18:00:00Z", results: { sms: { ok: false } } }] }), false, "a send that failed");
+  assert.equal(wasSent({ status: "countered", floatSentAt: "2026-10-10T18:00:00Z" }), true);
+  assert.equal(wasSent({ status: "new", sends: [{ ts: "2026-10-10T18:00:00Z", results: { sms: { ok: true } } }] }), true);
+  assert.equal(wasSent({ status: "passed", statusHistory: [{ status: "sent", ts: "2026-10-09T18:00:00Z" }, { status: "passed", ts: "2026-10-12T18:00:00Z" }] }), true);
+  assert.equal(wasSent({ status: "new", deal: { stage: "under_contract", createdAt: "2026-10-12T18:00:00Z" } }), true);
+  assert.equal(sentAt({ floatSentAt: "2026-10-10T18:00:00Z", sends: [{ ts: "2026-10-11T18:00:00Z" }] }), Date.parse("2026-10-10T18:00:00Z"), "the first time it was in front of them");
+});
+
 test("a float that was only drafted is not sent", () => {
   assert.equal(st({ status: "new", proactive: { realmCheckAt: "2026-10-10T18:00:00Z" } }), "draft");
 });

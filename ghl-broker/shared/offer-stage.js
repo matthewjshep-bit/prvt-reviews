@@ -45,6 +45,48 @@ const ms = (t) => { const v = typeof t === "number" ? t : Date.parse(t || ""); r
 /** Our number went out by text: a sent realm-check (stamped on the offer, or attached to the row as floatedAt). */
 export const floatedAt = (o) => o?.floatSentAt || o?.floatedAt || null;
 
+// A send on the offer's own ledger that reached someone: no results recorded
+// (an older row), or at least one channel that worked.
+const sendWorked = (s) => Boolean(s?.ts) && (!s.results || Object.values(s.results).some((r) => r?.ok));
+// Statuses that say our number reached them. "countered" is not one: the bot
+// files their number as a counter even when ours never went (2026-11-09).
+const OUT_STATUSES = new Set(["sent", "accepted"]);
+
+/**
+ * wasSent(o) → true when our number was really in front of the agent
+ *
+ * The one rule every report counts "sent" by (2026-11-09: the Funnel tab
+ * read 76% countered and 483% dead of sent, because a float never counted
+ * as sent, and Line counted a house we passed on unpriced as "in front of
+ * the agent"): a send that worked, a float that went (floatSentAt, never the
+ * queue stamp realmCheckAt), a sent or accepted status, or a deal.
+ */
+export function wasSent(o) {
+  if (!o) return false;
+  if (floatedAt(o) || o.deal) return true;
+  if ((o.sends || []).some(sendWorked)) return true;
+  if ((o.statusHistory || []).some((h) => OUT_STATUSES.has(h?.status))) return true;
+  return OUT_STATUSES.has(effectiveStatus(o));
+}
+
+/**
+ * sentAt(o) → epoch ms of the first time our number was in front of them, or null
+ *
+ * The earliest of the float going, a send that worked, the first sent status,
+ * and the deal. An offer marked sent with no time on record falls back to
+ * when its status changed, then when it was made.
+ */
+export function sentAt(o) {
+  if (!wasSent(o)) return null;
+  const times = [
+    ms(floatedAt(o)),
+    ...(o.sends || []).filter(sendWorked).map((s) => ms(s.ts)),
+    ...(o.statusHistory || []).filter((h) => OUT_STATUSES.has(h?.status)).map((h) => ms(h.ts)),
+    ms(o.deal?.createdAt),
+  ].filter((t) => t != null);
+  return times.length ? Math.min(...times) : ms(o.statusAt) ?? ms(o.createdAt);
+}
+
 /**
  * offerStage(o, { texted }) → { stage: "draft"|"sent"|"responded", sub: null|"passed"|"countered"|"hot"|"accepted", why }
  *

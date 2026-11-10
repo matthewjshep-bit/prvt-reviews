@@ -21,7 +21,14 @@ const HAND_APPROVALS = new Set(["revise", "publish", "send", "pin", "today"]);
 const DEAD = new Set(["passed", "we_passed", "unavailable", "no_response"]);
 
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
-const median = (a) => { const s = a.filter(Number.isFinite).sort((x, y) => x - y); return s.length ? s[Math.floor((s.length - 1) / 2)] : null; };
+// The middle value, or the middle of the two (2026-11-09: the lower middle let
+// ARV gaps of 2, 4, 10 and 12% read 4% and pass a 5% bar; the median is 7%).
+const median = (a) => {
+  const s = a.filter(Number.isFinite).sort((x, y) => x - y);
+  if (!s.length) return null;
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
 const round3 = (n) => (n == null ? null : Math.round(n * 1000) / 1000);
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : 0; };
 
@@ -64,11 +71,32 @@ export function outcomeOf({ address = "", offers = [] } = {}) {
   };
 }
 
+/**
+ * theirReadOf({ address, events }) → { theirNumber, theirArv, theirRehab }
+ *
+ * What the agent said about this house, newest first: the seller's number
+ * (property_details sellerAsk) and their own ARV and rehab (agent_estimate).
+ * The engine is graded against these as well as Matt's (2026-11-09: the
+ * scorecard only knew Matt's numbers, which run ARV high and rehab low the
+ * same way the engine's do).
+ */
+export function theirReadOf({ address = "", events = [] } = {}) {
+  const key = houseKey(address);
+  const mine = (events || []).filter((e) => e?.address && houseKey(e.address) === key)
+    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+  const newest = (type, field) => num(mine.find((e) => e.type === type && num(e.data?.[field]))?.data?.[field]) || null;
+  return { theirNumber: newest("property_details", "sellerAsk"), theirArv: newest("agent_estimate", "arv"), theirRehab: newest("agent_estimate", "rehab") };
+}
+
 /** One record's measurements against its outcome (null fields where there's nothing to measure). */
 export function measure(doc = {}, { maoPct = 70, minFee = 15000 } = {}) {
   const v = doc.v2 || {};
   const o = doc.outcome || {};
+  const r = doc.reads || {};
   const mattAtOurs = num(o.mattArv) ? (maoPct / 100) * o.mattArv - (Number(o.mattRehab) || 0) - minFee : 0;
+  // Their number: what the engine knew when it priced, else what they said since.
+  const theirs = num(r.sellerNumber) || num(o.theirNumber);
+  const theirRehab = num(o.theirRehab) || num(r.theirRepairs);
   return {
     grade: v.grade || "C", lead: o.leadSource || doc.leadSource || "unknown", triage: v.triage || "unknown", at: v.at || null,
     arvGap: num(v.arv) && num(o.mattArv) ? Math.abs(v.arv / o.mattArv - 1) : null,
@@ -77,6 +105,12 @@ export function measure(doc = {}, { maoPct = 70, minFee = 15000 } = {}) {
     overMatt: num(v.walkAway) && mattAtOurs > 0 ? v.walkAway > mattAtOurs * 1.1 : null,
     overSold: num(v.walkAway) && num(o.sold?.price) ? v.walkAway > o.sold.price : null,
     walkVsSeller: num(v.walkAway) && num(o.sellerLowest) ? v.walkAway / o.sellerLowest : null,
+    // Against their stated number (Matt, 2026-11-09: the machine never offers over it).
+    walkVsTheir: num(v.walkAway) && theirs ? v.walkAway / theirs : null,
+    overTheir: num(v.walkAway) && theirs ? v.walkAway > theirs : null,
+    // The engine's ARV and rehab against the agent's own read.
+    arvVsTheir: num(v.arv) && num(o.theirArv) ? v.arv / o.theirArv : null,
+    rehabVsTheir: num(v.rehab) && theirRehab ? v.rehab / theirRehab : null,
     agreed: Boolean(o.agreed),
   };
 }
@@ -95,6 +129,11 @@ function summarize(ms_ = []) {
     overSold: ms_.filter((m) => m.overSold).length,
     sold: ms_.filter((m) => m.overSold != null).length,
     walkVsSeller: round3(median(ms_.map((m) => m.walkVsSeller).filter((x) => x != null))),
+    withTheir: ms_.filter((m) => m.walkVsTheir != null).length,
+    walkVsTheir: round3(median(ms_.map((m) => m.walkVsTheir).filter((x) => x != null))),
+    overTheir: ms_.filter((m) => m.overTheir).length,
+    arvVsTheir: round3(median(ms_.map((m) => m.arvVsTheir).filter((x) => x != null))),
+    rehabVsTheir: round3(median(ms_.map((m) => m.rehabVsTheir).filter((x) => x != null))),
     triage,
   };
 }
@@ -107,7 +146,39 @@ export function graduated(s = {}, bars = BARS) {
   if (s.rehabBelowShare == null || s.rehabBelowShare > bars.rehabBelowShare) missing.push(`rehab under yours on ${s.rehabBelowShare == null ? "?" : Math.round(s.rehabBelowShare * 100)}% (bar ${bars.rehabBelowShare * 100}%)`);
   if (s.overMatt > 0) missing.push(`${s.overMatt} over your number by more than ${bars.overMatt * 100}% at the same formula`);
   if (s.overSold > 0) missing.push(`${s.overSold} over what the house sold for`);
+  if (s.overTheir > 0) missing.push(`${s.overTheir} walk-away${s.overTheir === 1 ? "" : "s"} above their stated number`);
   return { ready: missing.length === 0, missing };
+}
+
+/**
+ * goldenBar(golden, { price }) → { won: { n, reached }, dead: { n, stayedOut }, rows }
+ *
+ * The second bar, against the deals rather than Matt's numbers
+ * (shared/fixtures/price-golden.json when it is committed: ZIP, size, age
+ * and numbers, no names): a deal we won should be within reach of the
+ * walk-away on Matt's own inputs, and a deal that died should price at least
+ * 10% under its contract on the buyers' ARV and rehab (the answer key). Open
+ * deals aren't scored. `price({ deal, arv, rehab })` → { walkAway }.
+ */
+export function goldenBar(golden = {}, { price } = {}) {
+  const out = { won: { n: 0, reached: 0 }, dead: { n: 0, stayedOut: 0 }, rows: [] };
+  if (typeof price !== "function") return out;
+  for (const d of golden?.deals || []) {
+    const contract = num(d?.contract);
+    if (!contract) continue;
+    if (d.outcome === "won" && num(d.matt?.arv)) {
+      const w = num(price({ deal: d, arv: d.matt.arv, rehab: Number(d.matt.rehab) || 0 })?.walkAway);
+      out.won.n++;
+      if (w >= contract) out.won.reached++;
+      out.rows.push({ id: d.id, outcome: "won", on: "matt", contract, walkAway: w, miss: round3(w / contract - 1) });
+    } else if (d.outcome === "dead" && num(d.buyers?.arv) && num(d.buyers?.rehab)) {
+      const w = num(price({ deal: d, arv: d.buyers.arv, rehab: d.buyers.rehab })?.walkAway);
+      out.dead.n++;
+      if (w <= contract * 0.9) out.dead.stayedOut++;
+      out.rows.push({ id: d.id, outcome: "dead", on: "buyers", contract, walkAway: w, miss: round3(w / contract - 1) });
+    }
+  }
+  return out;
 }
 
 /**
@@ -140,5 +211,6 @@ export function scorecardLine(card = {}) {
   return `Offer engine (shadow): ${t.n || 0} houses priced, ${t.withMatt || 0} with your own number. ` +
     `ARV off yours ${pct(t.arvGap)} at the median, rehab under yours on ${pct(t.rehabBelowShare)}, ` +
     `walk-away ${t.walkVsMatt == null ? "—" : `${Math.round(t.walkVsMatt * 100)}%`} of yours at the same formula. ` +
-    `Grade A: ${a.n || 0} houses. ${ready}.`;
+    `Grade A: ${a.n || 0} houses. ${ready}.` +
+    (t.overTheir ? ` ${t.overTheir} walk-away${t.overTheir === 1 ? "" : "s"} above the seller's stated number.` : "");
 }

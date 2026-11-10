@@ -75,3 +75,66 @@ test("the card splits by lead source and keeps the last 30 days apart from the 3
   assert.ok(card.trend.last30.arvGap < card.trend.prior30.arvGap, "getting closer");
   assert.equal(graduated(card.byGrade.C).ready, false);
 });
+
+/* ---------- against their number, and an honest median (2026-11-09) ---------- */
+
+// Twenty-two houses that clear every bar against Matt's own numbers.
+const ready = (i, over = {}) => ({ v2: { arv: 600000, rehab: 95000, walkAway: 310000, grade: "A", at: day(1 + (i % 20)) }, outcome: { mattArv: 610000, mattRehab: 90000 }, ...over });
+
+test("a walk-away above the seller's stated number counts against the grade", () => {
+  const over = ready(0, { reads: { sellerNumber: 300000 } });
+  const m = measure(over);
+  assert.equal(m.overTheir, true);
+  assert.equal(Math.round(m.walkVsTheir * 1000) / 1000, 1.033);
+  // Their number said later (property_details), not known when the engine priced it.
+  assert.equal(measure(ready(1, { outcome: { mattArv: 610000, mattRehab: 90000, theirNumber: 330000 } })).overTheir, false);
+  const card = scorecard([over, ...Array.from({ length: 21 }, (_, i) => ready(i + 1))], { now: NOW });
+  assert.equal(card.byGrade.A.overTheir, 1);
+  assert.equal(card.byGrade.A.withTheir, 1);
+  assert.equal(card.ready.A.ready, false);
+  assert.ok(card.ready.A.missing.some((x) => /1 walk-away above their stated number/.test(x)), card.ready.A.missing.join("; "));
+});
+
+test("ARV gaps of 2, 4, 10 and 12 percent read 7 percent and not ready", () => {
+  const gaps = [0.02, 0.04, 0.10, 0.12];
+  const recs = Array.from({ length: 20 }, (_, i) => ready(i, { v2: { arv: 600000 * (1 + gaps[i % 4]), rehab: 95000, walkAway: 310000, grade: "A", at: day(1 + i) }, outcome: { mattArv: 600000, mattRehab: 90000 } }));
+  const card = scorecard(recs, { now: NOW });
+  assert.equal(card.byGrade.A.arvGap, 0.07);
+  assert.equal(card.ready.A.ready, false);
+  assert.ok(card.ready.A.missing.some((x) => /ARV off yours by 7%/.test(x)), card.ready.A.missing.join("; "));
+});
+
+test("the engine's ARV and rehab are measured against the agent's own read", () => {
+  const m = measure({ v2: { arv: 660000, rehab: 60000, walkAway: 300000, grade: "B", at: day(2) }, reads: { theirRepairs: 80000 }, outcome: { theirArv: 600000 } });
+  assert.equal(m.arvVsTheir, 1.1);
+  assert.equal(m.rehabVsTheir, 0.75);
+  const card = scorecard([{ v2: { arv: 660000, rehab: 60000, walkAway: 300000, grade: "B", at: day(2) }, reads: { theirRepairs: 80000 }, outcome: { theirArv: 600000 } }], { now: NOW });
+  assert.equal(card.byGrade.B.arvVsTheir, 1.1);
+  assert.equal(card.byGrade.B.rehabVsTheir, 0.75);
+});
+
+test("their read on a house is the newest number they said about that house", async () => {
+  const { theirReadOf } = await import("./price-scorecard.js");
+  const events = [
+    { type: "property_details", address: "12 Alder Way, Kent, WA", at: day(9), data: { sellerAsk: 410000 } },
+    { type: "property_details", address: "12 Alder Way, Kent WA", at: day(3), data: { sellerAsk: 395000 } },
+    { type: "agent_estimate", address: "12 Alder Way, Kent, WA", at: day(4), data: { arv: 520000, rehab: 70000 } },
+    { type: "property_details", address: "99 Other Rd, Kent, WA", at: day(1), data: { sellerAsk: 1 } },
+  ];
+  assert.deepEqual(theirReadOf({ address: "12 Alder Way, Kent, WA 98030", events }), { theirNumber: 395000, theirArv: 520000, theirRehab: 70000 });
+});
+
+test("the deals and the buyers' answer key are a second bar", async () => {
+  const { goldenBar } = await import("./price-scorecard.js");
+  // An invented golden set: one win, one that died, one still open.
+  const golden = { deals: [
+    { id: "w1", outcome: "won", contract: 290000, matt: { arv: 520000, rehab: 50000 }, buyers: {} },
+    { id: "d1", outcome: "dead", contract: 400000, matt: { arv: 600000, rehab: 40000 }, buyers: { arv: 540000, rehab: 120000 } },
+    { id: "o1", outcome: "open", contract: 350000, matt: { arv: 500000, rehab: 40000 }, buyers: {} },
+  ] };
+  const price = ({ arv, rehab }) => ({ walkAway: 0.7 * arv - rehab - 15000 });
+  const bar = goldenBar(golden, { price });
+  assert.deepEqual(bar.won, { n: 1, reached: 1 });
+  assert.deepEqual(bar.dead, { n: 1, stayedOut: 1 }, "on the buyers' numbers the walk-away sits 10% or more under a deal that died");
+  assert.equal(bar.rows.length, 2, "an open deal isn't scored");
+});

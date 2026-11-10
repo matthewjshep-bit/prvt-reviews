@@ -1,14 +1,19 @@
 // price-engine-backtest.mjs — score the offer engine v2 against what we know, read-only.
 //
 //   node scripts/price-engine-backtest.mjs                  # reads the live broker (GETs only)
-//   node scripts/price-engine-backtest.mjs --from offers.json [--deals deals.json]
+//   node scripts/price-engine-backtest.mjs --from offers.json [--deals deals.json] [--hindsight]
 //
 // Answer keys (2026-11-04 plan):
 //   - Matt's own priced offers: his ARV and rehab, and his inputs run through the SAME 70% formula,
 //     so his 75% habit doesn't read as the engine being low. ARV and rehab are scored separately.
 //   - Bricked reads beside his ARV on the same house.
 //   - The deals: the walk-away against the contract (closed deals should land within −5%…0%;
-//     the ones that died on price or rehab ≥ 10% under).
+//     the ones that died on price or rehab ≥ 10% under). A deal with no size on record is priced on
+//     the $60k rehab ballpark rather than skipped (2026-11-09: 10 of 18 deals were skipped).
+//     Why a deal fell through is hindsight the engine never has, so it is only passed as the
+//     agent's words with --hindsight.
+//   - The golden set (shared/fixtures/price-golden.json, when it is committed): the deals we won
+//     on Matt's inputs, and the ones that died on the buyers' ARV and rehab (the answer key).
 // Prints only street names and numbers; no contact names, phones or emails.
 
 import fs from "node:fs";
@@ -16,9 +21,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { priceHouse, normalizePricingV2 } from "../shared/price-engine.js";
 import { KC_FLIP_RATIOS } from "../shared/kc-flip-ratios.js";
+import { goldenBar } from "../shared/price-scorecard.js";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : null; };
+const HINDSIGHT = process.argv.includes("--hindsight");
 const envFile = path.join(root, "ghl-broker", ".env");
 const env = fs.existsSync(envFile)
   ? Object.fromEntries(fs.readFileSync(envFile, "utf8").split("\n").filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1).trim()]))
@@ -80,10 +87,28 @@ for (const d of deals) {
   const o = byId.get(d.id) || d;
   const c = d.deal?.ceilingAtPromote, i = inputsOf(o);
   const arv = c?.arv || i.arv, sqft = sqftOf(o);
-  if (!(arv > 0) || !(sqft > 0)) { console.log(`   ${street(d.address).padEnd(26)} ${d.deal?.stage}: no ARV or size on record`); continue; }
-  const r = priceHouse({ sqft, yearBuilt: yearOf(o), zip: zipOf(d), bricked: { arv, ...SURE }, said: d.deal?.fellThroughReason || "" }, settings, { ratios: KC_FLIP_RATIOS });
+  if (!(arv > 0)) { console.log(`   ${street(d.address).padEnd(26)} ${d.deal?.stage}: no ARV on record`); continue; }
+  // No size: the engine's own $60k ballpark (shared/rehab-floor.js), said so on the line.
+  const r = priceHouse({ sqft, yearBuilt: yearOf(o), zip: zipOf(d), bricked: { arv, ...SURE }, said: HINDSIGHT ? d.deal?.fellThroughReason || "" : "" }, settings, { ratios: KC_FLIP_RATIOS });
   const k = (n) => `${Math.round(n / 1000)}k`;
   const miss = r.walkAway / d.deal.contractPrice - 1;
-  console.log(`   ${street(d.address).padEnd(26)} ${String(d.deal?.stage).padEnd(14)} contract ${k(d.deal.contractPrice).padStart(6)} · v2 walk-away ${k(r.walkAway).padStart(6)} (${miss >= 0 ? "+" : ""}${Math.round(miss * 100)}%) · rehab ${k(r.rehab)} (${r.rehabTier}) · grade ${r.grade}`);
+  console.log(`   ${street(d.address).padEnd(26)} ${String(d.deal?.stage).padEnd(14)} contract ${k(d.deal.contractPrice).padStart(6)} · v2 walk-away ${k(r.walkAway).padStart(6)} (${miss >= 0 ? "+" : ""}${Math.round(miss * 100)}%) · rehab ${k(r.rehab)} (${r.rehabTier}${sqft > 0 ? "" : ", no size: the $60k ballpark"}) · grade ${r.grade}`);
+}
+if (HINDSIGHT) console.log(`   (--hindsight: why each deal fell through was read as the agent's words)`);
+
+/* 4. The golden set: the deals and the buyers' answer key. */
+const goldenFile = path.join(root, "shared", "fixtures", "price-golden.json");
+if (fs.existsSync(goldenFile)) {
+  const golden = JSON.parse(fs.readFileSync(goldenFile, "utf8"));
+  const bar = goldenBar(golden, {
+    price: ({ deal, arv, rehab }) => priceHouse({ sqft: deal.sqft || 0, yearBuilt: deal.yearBuilt || 0, zip: deal.zip || "", homeType: deal.homeType || "",
+      bricked: { arv, ...SURE }, theirRepairs: rehab }, settings, { ratios: KC_FLIP_RATIOS }),
+  });
+  console.log(`\n4. Golden set (${path.relative(root, goldenFile)})`);
+  console.log(`   won, on Matt's inputs: the walk-away reaches the contract on ${bar.won.reached} of ${bar.won.n}`);
+  console.log(`   died, on the buyers' ARV and rehab: 10% or more under the contract on ${bar.dead.stayedOut} of ${bar.dead.n}`);
+  for (const r of bar.rows) console.log(`   ${String(r.id).padEnd(10)} ${r.outcome.padEnd(5)} on ${r.on.padEnd(6)} walk-away ${Math.round(r.walkAway / 1000)}k vs contract ${Math.round(r.contract / 1000)}k (${r.miss >= 0 ? "+" : ""}${Math.round(r.miss * 100)}%)`);
+} else {
+  console.log(`\n4. Golden set: shared/fixtures/price-golden.json isn't committed yet, so there is no second bar.`);
 }
 console.log(`\nAll numbers are at maoPct ${settings.maoPct}, fees ${settings.targetFee}/${settings.minFee}, rehab floors from shared/rehab-floor.js.`);

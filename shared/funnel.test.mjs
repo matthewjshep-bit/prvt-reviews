@@ -215,3 +215,69 @@ test("why buyers passed in the last month counts each buyer once per reason per 
   assert.deepEqual(t.map((g) => [g.code, g.count]), [["location", 1], ["rehab_scope", 1]]);
   assert.deepEqual(t[0].deals, ["22018 76th Ave W"]);
 });
+
+/* ---------- counting what happened (2026-11-09) ---------- */
+
+test("a countered float counts as sent on the Funnel tab", () => {
+  // Two floats (one countered, one taken) and one written offer: three in
+  // front of the agent. On 11-09 the tab read sent 1 and 100% countered.
+  const f = offerFunnel([
+    { id: "paper", createdAt: D(1), statusHistory: [h("new", D(1)), h("sent", D(2))] },
+    { id: "f1", createdAt: D(1), status: "countered", floatSentAt: D(2), statusHistory: [h("new", D(1)), h("countered", D(3))] },
+    { id: "f2", createdAt: D(1), status: "accepted", floatSentAt: D(2), statusHistory: [h("new", D(1)), h("accepted", D(4))] },
+  ]);
+  assert.equal(f.sent, 3);
+  assert.equal(f.countered, 1);
+  assert.equal(f.accepted, 1);
+  assert.equal(f.rates.counteredOfSent, 33.3);
+  assert.equal(f.rates.acceptedOfSent, 33.3);
+});
+
+test("a house we passed on without ever sending a number is not dead of sent", () => {
+  const f = offerFunnel([
+    { id: "a", createdAt: D(1), statusHistory: [h("sent", D(2)), h("passed", D(5))] },
+    { id: "b", createdAt: D(1), status: "we_passed", statusHistory: [h("new", D(1)), h("we_passed", D(4))] },
+    { id: "c", createdAt: D(1), status: "we_passed", proactive: { realmCheckAt: D(2) }, statusHistory: [h("new", D(1)), h("we_passed", D(4))] },
+  ]);
+  assert.equal(f.sent, 1);
+  assert.equal(f.wePassed, 0);
+  assert.equal(f.passedUnsent, 2, "the two that never reached the agent are counted on their own");
+  assert.equal(f.rates.deadOfSent, 100);
+});
+
+test("each stage counts only when its own time is in the window", () => {
+  const since = Date.parse(D(10));
+  const f = offerFunnel([
+    // Sent before the window, countered inside it: a counter, not a send.
+    { id: "old", createdAt: D(1), statusHistory: [h("sent", D(2)), h("countered", D(12))] },
+    // Made and sent inside it.
+    { id: "new", createdAt: D(11), floatSentAt: D(11), statusHistory: [h("new", D(11))] },
+  ], { since });
+  assert.equal(f.created, 1);
+  assert.equal(f.sent, 1);
+  assert.equal(f.countered, 1);
+});
+
+test("the follow-up table reads the texts that went, and a STOP is not a reply", async () => {
+  const { followUpsFromOutbox } = await import("./funnel.js");
+  const rows = followUpsFromOutbox([
+    { id: "d1", contactId: "c1", status: "sent", sentAt: D(1), outbound: { kind: "offer_nudge", step: 3 } },
+    { id: "d2", contactId: "c2", status: "sent", sentAt: D(1), outbound: { kind: "offer_nudge", step: 3 } },
+    { id: "d3", contactId: "c3", status: "dismissed", sentAt: null, outbound: { kind: "offer_nudge", step: 3 } },
+    { id: "d4", contactId: "c4", status: "sent", sentAt: D(1), hasInbound: true, outbound: { kind: "offer_nudge", step: 3 } },
+  ]);
+  assert.equal(rows.length, 2, "a held or dismissed claim and a reply to them are not follow-ups that went");
+  const r = followUpPerformance(rows, [{ contactId: "c1", at: D(2) }, { contactId: "c2", at: D(2), stop: true }]);
+  assert.deepEqual([r[0].sent, r[0].replied, r[0].stopped], [2, 1, 1]);
+});
+
+test("a follow-up answered with a question and then a STOP counts as stopped, the way Follow-up counts it", () => {
+  // Reports → Follow-up (shared/follow-up-engine.js attributeAnswers) and the
+  // scoreboard both count a STOP in the window over a reply; the Funnel tab
+  // counted whichever came first, so the same text read replied here.
+  const r = followUpPerformance([fu("c1", "offer_nudge", 3, D(1))], [
+    { contactId: "c1", at: D(2) },
+    { contactId: "c1", at: "2026-09-02T15:00:00.000Z", stop: true },
+  ]);
+  assert.deepEqual([r[0].sent, r[0].replied, r[0].stopped], [1, 0, 1]);
+});

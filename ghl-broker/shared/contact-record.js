@@ -183,6 +183,9 @@ export const EVENT_TYPES = [
   // A text to a number we had as dead arrived after all: the strikes before
   // it stop counting (shared/delivery.js numberDead).
   "phone_ok",
+  // A cold agent's follow-up actually went (reply-agent.js sendReplyDraft):
+  // which text, at which step, for the text scoreboard (2026-11-09).
+  "outreach_nudge_sent",
 ];
 
 export const EVENT_LABEL = {
@@ -238,6 +241,7 @@ export const EVENT_LABEL = {
   investor_backed_out: "backed out as the buyer, so the deal is selling again",
   send_failed: "our message didn't arrive", send_retried: "the blocked deal text was queued once more without the link",
   phone_ok: "a text reached their phone again",
+  outreach_nudge_sent: "we followed up on our first text",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -292,6 +296,7 @@ export const EVENT_ICON = {
   investor_backed_out: "Undo2",
   send_failed: "CircleSlash", send_retried: "RefreshCw",
   phone_ok: "CheckCircle2",
+  outreach_nudge_sent: "Send",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

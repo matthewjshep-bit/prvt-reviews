@@ -421,16 +421,35 @@ it until the shadow runner lands.
     stood behind and its ARV and rehab, the machine's sent number, the lowest counter, a yes or a
     deal, and the sold price.
   - For houses with no offer, it looks the sold price up once a week, at most 40 a day.
-  - It posts one line to the Underwrites Slack channel, or Daily when that's off.
-- **Read it any time:** `GET /api/offers/automations/pricing/scorecard` (read-only; the Lessons card
-  reads it) and `GET …/pricing/house?key=`.
+  - It reads what the agents said about each house (`theirReadOf`, one location-wide read of
+    `property_details` and `agent_estimate`): the seller's number (`outcome.theirNumber`) and the
+    agent's own ARV and rehab (`theirArv`, `theirRehab`).
+  - It posts one line to the Underwrites Slack channel, or Daily when that's off. The line adds how
+    many walk-aways sat above the seller's stated number when any did.
+  - It keeps the whole card on its cursor (`job_cursors` "priceScorecard", `doc.last.card`).
+- **Read it any time:** `GET /api/offers/automations/pricing/scorecard` serves the evening's kept
+  card (`stored: true`, `at`). `?fresh=1`, a `?days=`, or no card yet works it out now and saves
+  nothing (one offer read per priced house, so Lessons only does it on "Work it out now"). Also
+  `GET …/pricing/house?key=`.
+- **Against their number and the agent's read (2026-11-09).** `measure()` adds `walkVsTheir` and
+  `overTheir` (the walk-away against `reads.sellerNumber`, else the seller's number said since), and
+  `arvVsTheir` / `rehabVsTheir` (the engine's ARV and rehab against the agent's `agent_estimate`).
+  Lessons shows "Over their number" and "ARV vs the agent's" per grade. The medians are true medians
+  (an even count averages the middle two): ARV gaps of 2, 4, 10 and 12% read 7%, not 4%.
 - **The bars per grade** (`shared/price-scorecard.js` `BARS`, lopsided because over-pricing is the
   costly miss):
   - ≥ 20 houses with Matt's own number;
   - median ARV gap ≤ 5%;
   - rehab under his on ≤ 30% of houses;
   - none over his number by more than 10% at the same formula;
-  - none over a sold price.
+  - none over a sold price;
+  - no walk-away above the seller's stated number (2026-11-09, Matt's cap: the machine never offers
+    over it).
+- **The backtest** (`scripts/price-engine-backtest.mjs`, read-only): a deal with no size is priced on
+  the $60k rehab ballpark instead of skipped; why a deal fell through is passed as the agent's words
+  only with `--hindsight`; and when `shared/fixtures/price-golden.json` is committed it prints a
+  second bar (`goldenBar`): the won deals on Matt's inputs (does the walk-away reach the contract?)
+  and the dead ones on the buyers' ARV and rehab (10% or more under?).
 - **The price watch keeps sale prices.** `fetchZillowListings` keeps `lastSoldPrice` / `lastSoldDate`,
   and `priceWatch.sold` is recorded only for a sale on or after the offer was made (`soldOf`).
 
@@ -6366,6 +6385,37 @@ and window, one compute at a time (Hardening notes, 2026-11-09).
 The timeline renderer is `messaging-app/src/EventFeed.jsx`, shared with the
 contact drawer.
 
+**Counting what happened (2026-11-09).** On 11-09 the Funnel read 76%
+countered and 483% dead of sent, and Flow and Line double-counted. The pages
+say "Counting changed on 2026-11-09" (`COUNTING_CHANGED`, `shared/funnel.js`).
+- **Sent** is one rule everywhere, `wasSent(o)` (`shared/offer-stage.js`): a
+  float that went (`floatSentAt`), a send that worked, a sent or accepted
+  status, or a deal. Never the queue stamp (`proactive.realmCheckAt` /
+  `takeCheckAt`), never a house we passed on before our number went.
+- **Floated** counts `floatedAt()` (the float that went), dated when it went.
+- **Offered** counts once per offer per window (an offer sent after its float
+  and again "as promised" is one). **Assigned / closed** counts once per deal;
+  **Buyer** once per deal and buyer.
+- **Under contract**'s arrow is contracts over the prices agreed in the window
+  (`priceAgreed`), not over counters; its sub-line says "of N prices agreed".
+- **Machine, you, them.** Each tile splits `machine`, `you` and `them`
+  (`person` stays as you + them). An agent replying or countering and a buyer
+  opening or committing are theirs. Texts you typed (`hand_reply`, from GHL
+  or the work pane) count as yours (`totals.messages.handTexts`).
+- **Replied** counts each agent once from `inbound_received` when that event
+  exists (the restart branch writes it on every inbound), else the drafter's
+  `text_summary`.
+- **The Funnel tab** (`GET /api/dashboard/funnel`, `offerFunnel`): sent is
+  `wasSent`, and each stage counts only when its own time is in the window.
+  What they did with it (countered, accepted, passed, gone, no reply, we
+  passed) counts only on an offer that was sent; a house we passed on before
+  our number went is `passedUnsent`, said on the page. "Did the follow-ups
+  work" reads the outbox rows that went (`followUpsFromOutbox`), not the
+  sweep's `follow_up_sent` claim, and counts a STOP apart. The response says
+  `eventsTruncated` when the replies were more than one read holds.
+Check: `GET /api/dashboard/flow` → `countingChanged`, `stages[].you/them`;
+`GET /api/dashboard/funnel` → `funnel.passedUnsent`, `followUps[].stopped`.
+
 **Talked, and useful replies (2026-10-15).** Of every step on the line, a
 phone call best predicts a contract, and the river had no station for it.
 Thirteen stages now: **Talked** sits after Replied and counts each agent once
@@ -6411,7 +6461,7 @@ last sweep's counts (on file, picked, imported, already in GHL,
 never-texted, off-market). Check: `GET /api/dashboard/line` → `supply`.
 
 **Waiting between stations** (`cycleTimes`). Median and slowest-tenth days for each hop that *finished* in the last 30 days:
-- priced → in front of the agent (letter or float);
+- priced → in front of the agent (letter or a float that went; since 2026-11-09 a queued float doesn't count);
 - in front of them → their first answer;
 - in front of them → a price agreed;
 - agreed → contract;
@@ -6431,6 +6481,12 @@ never-texted, off-market). Check: `GET /api/dashboard/line` → `supply`.
 **Coverage.** The share of agents who have written back that were touched inside the check-in cadence, and the share of reachable buyers inside theirs.
 
 **The jobs.** One row per durable job (`LINE_JOBS`, from `job_cursors` via `store.listJobCursors`, which reads only the run fields): when it last ran, whether it failed and why, or that it never ran. Whether a quiet job is switched off is the Autopilot page's to say. App errors from the last 7 days are grouped by area.
+
+**Fees we made (2026-11-09).** `realizedFees` (`shared/line.js`, on `buildLine` as `fees`, from the whole deal documents) shows the fee in hand this Pacific month and this year, beside the target. A deal counts when it is first assigned or closed. The fee (`realizedFee`) is, in order: the outcome recorded at close (`deal.outcome.fee`, or its price less the contract), the committed buyer's agreed price less the contract, or a fee a person typed (`assignmentFeeSource: "you"`). A fee filled in from the setting at promote, or with no source said, is not real: those deals are counted as `unknown` and named on the card. Check: `GET /api/dashboard/line` → `fees.month`, `fees.ytd`.
+
+**In front of the agent (2026-11-09).** The Paths, Kinds and Off-market tables count "In front of the agent" with `wasSent` (`shared/offer-stage.js`): a house we passed on unpriced and a float that was only queued no longer count. The Kinds card no longer says "on Today".
+
+**The text scoreboard's job.** `LINE_JOBS` has `outreachScorecard` (see Follow-up → Text scoreboard), so a night it fails reads as failed here.
 
 **What buyers paid** (`realizedPricing`, read-only). All-in (contract price + fee + repairs) as a share of ARV, scored from the whole deal documents the way Lessons reads them (the offer list is trimmed in SQL on Postgres and carries no ARV). It shows the median for deals that sold (buyer found, assigned, closed) and for deals that died, beside the offer setting (`maoPctOfArv`). The 2026-09-10 post-mortem found the sold deals near 70% and the dead ones asking 74–82%. The page keeps that evidence current and changes nothing.
 
@@ -6467,6 +6523,7 @@ Each row shows:
 - its status, read from the same gates the sender checks;
 - sent;
 - replied: they answered within 72 hours, before our next text (last touch takes the credit);
+- stopped (2026-11-09): that answer was a STOP (their words, `stopReply`; an `opt_out` read; or GHL's DND, `unsubscribed`). It is counted as stopped, never as replied, and shows as "N stopped (x%)" beside replied here and on Autopilot → Overview;
 - next touches;
 - next send.
 
@@ -6528,12 +6585,19 @@ Hover the pill for the job's last run.
 
 **Tiles.**
 - Agents reached out to / responded: Flow's own first-text cohort (`buildFlow().cohort`).
-- Follow-ups sent, with the replied share.
+- Follow-ups sent, with the replied share and the stopped count and share.
 - Scheduled ahead: queued plus planned.
 - Waiting on you.
 - Live offers with nothing scheduled: `offerLeaks`, the Line's own count.
 
 Check: `GET /api/dashboard/followup?period=week` → `kpis`, `groups[].mechanisms[]`.
+
+**Text scoreboard (2026-11-09).** Which first text, follow-up and check-in wins. Nothing said: the recent-lister first texts ran about 11% opt-outs and no houses, and only a hand read found it. Report only: nothing retires a text or changes a setting.
+- **What each send records.** `outreach_sent` carries `standard: { set, index, templateHash }` when one of Matt's fixed texts went (`templateHash` is a fingerprint of the unfilled text, `shared/outreach-scorecard.js`, so a rewritten text scores apart). A cold agent's follow-up writes `outreach_nudge_sent { step, set, index, templateHash }` when it actually goes (the sweep's `follow_up_sent` is a claim). A check-in's `agent_pulse_texted` carries `standard` and `detailKind` when the draft has one (last words, street, listing, personal, past deal, town, none; the check-in composer fills it). The outbox ledger keeps `outbound.standard` and `detailKind`, so texts sent before these stamps (and follow-ups from before `outreach_nudge_sent`) are read back from the outbox rows still kept, within the read's 120 days.
+- **The nightly read.** `ghl-broker/outreach-scorecard.js` on the tick at 4am Pacific (cursor `outreachScorecard`, written before the run; a failed or vanished run retried for three hours, at most 3 tries; once a night). It reads 150 days of events, the sent outbox, the offer book and the outreach hooks once, and keeps the card on the cursor (`doc.last.card`). It sends nothing and spends nothing, so it has no switch.
+- **The card** (`buildOutreachScorecard`). Texts sent 7 or more days ago (newer ones are counted as "left out", not as unanswered), grouped by text (its fingerprint, else its set and place, else "written by the model" or the GHL workflow), opening move, length, county, day sent, who sent it, follow-up step, and what a check-in named. Per group: sent, a useful reply in 3 and 7 days, a STOP within 72 hours, a real call within 14 days, a house named within 14 days, an offer (lead source hook or agent brought) within 30 days, and a deal. Each answer goes to the last text we sent them before it. A STOP is stopped, not replied. Groups under 30 sends are greyed.
+- **Where it shows.** Reports → Follow-up (follow-ups first) and Autopilot → Agents ("How these texts did", first texts first), from `GET /api/dashboard/outreach-scorecard`, which only reads the kept card.
+Check: `GET /api/dashboard/outreach-scorecard` → `card.kinds.first_text.dims.template`.
 
 ## Contact record (the app is the system of record; GHL is the digest)
 

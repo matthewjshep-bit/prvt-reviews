@@ -14,15 +14,22 @@
 // Pure. Every function takes plain rows and returns plain numbers.
 
 import { effectiveStatus } from "./offer-status.js";
+import { wasSent, sentAt } from "./offer-stage.js";
 import { PASS_REASONS, PASS_REASON_LABEL, summarizeFeedback, recodePassReason } from "./conversation-ai.js";
 import { parseUsAddress } from "./us-address.js";
+
+// The day the reports started counting what happened (2026-11-09): a float
+// that went is sent, a queued one isn't, a STOP isn't a reply, an offer sent
+// twice is one. The Funnel, Flow, Line and Follow-up pages say so, because
+// their numbers moved that day.
+export const COUNTING_CHANGED = "2026-11-09";
 
 const round = (v) => Math.round(Number(v) || 0);
 const pct = (n, d) => (d > 0 ? Math.round((n / d) * 1000) / 10 : 0);
 const dayKey = (iso) => String(iso || "").slice(0, 10);
 
 /**
- * offerFunnel(rows, { now }) → counts, rates and a daily series.
+ * offerFunnel(rows, { since, until }) → counts, rates and a daily series.
  *
  * Counted from statusHistory, FIRST occurrence of each status — so an offer
  * that went sent → countered → passed counts once in each column. That makes
@@ -30,44 +37,58 @@ const dayKey = (iso) => String(iso || "").slice(0, 10);
  * rather than a snapshot of where things currently sit, which is the thing you
  * actually want when you are asking whether the pitch works.
  *
+ * Sent is wasSent (shared/offer-stage.js): a float that went, a send that
+ * worked, a sent status or a deal, at the first of those (2026-11-09: a float
+ * never counted as sent, so the tab read 76% countered and 483% dead of
+ * sent). What they did with it (countered, accepted, passed, gone, no reply,
+ * we passed) is counted only on an offer that was sent; a house we passed on
+ * without our number ever reaching them is `passedUnsent`, apart.
+ *
+ * `since`/`until` (epoch ms): each stage counts only when its own time is in
+ * the window. Left out, everything counts.
+ *
  * An offer with no history at all is counted from its effective status, so a
  * book that predates the ledger still reports something true.
  */
-export function offerFunnel(rows = [], { now = Date.now() } = {}) {
-  const c = { created: 0, sent: 0, countered: 0, accepted: 0, passed: 0, wePassed: 0, unavailable: 0, noResponse: 0, open: 0 };
+const DEAD_FIELDS = ["passed", "wePassed", "unavailable", "noResponse"];
+export function offerFunnel(rows = [], { since = -Infinity, until = Infinity } = {}) {
+  const c = { created: 0, sent: 0, countered: 0, accepted: 0, passed: 0, wePassed: 0, unavailable: 0, noResponse: 0, open: 0, passedUnsent: 0 };
   const daily = new Map();
+  const inWin = (iso) => { const t = Date.parse(iso || ""); return Number.isFinite(t) && t >= since && t < until; };
   const bump = (iso, key) => {
     const d = dayKey(iso);
     if (!d) return;
     if (!daily.has(d)) daily.set(d, { date: d, created: 0, sent: 0, countered: 0, accepted: 0, passed: 0, wePassed: 0, unavailable: 0, noResponse: 0 });
     daily.get(d)[key]++;
   };
-  const FIELD = { sent: "sent", countered: "countered", accepted: "accepted", passed: "passed", we_passed: "wePassed", unavailable: "unavailable", no_response: "noResponse" };
+  const count = (field, iso) => { if (inWin(iso)) { c[field]++; bump(iso, field); } };
+  const FIELD = { countered: "countered", accepted: "accepted", passed: "passed", we_passed: "wePassed", unavailable: "unavailable", no_response: "noResponse" };
 
   for (const o of rows) {
     if (!o) continue;
     if (effectiveStatus(o) === "draft") continue;   // never left the building
-    c.created++;
-    bump(o.createdAt, "created");
+    count("created", o.createdAt);
+
+    const out = wasSent(o);
+    if (out) count("sent", new Date(sentAt(o)).toISOString());
 
     const history = Array.isArray(o.statusHistory) ? o.statusHistory : [];
     const seen = new Set();
-    if (history.length) {
-      for (const h of history) {
-        const field = FIELD[h?.status];
-        if (!field || seen.has(field)) continue;
-        seen.add(field);
-        c[field]++;
-        bump(h.ts, field);
-      }
-    } else {
-      const field = FIELD[effectiveStatus(o)];
-      if (field) { seen.add(field); c[field]++; bump(o.statusAt || o.createdAt, field); }
-    }
+    const first = history.length
+      ? history.filter((h) => FIELD[h?.status]).map((h) => ({ field: FIELD[h.status], ts: h.ts }))
+      : FIELD[effectiveStatus(o)] ? [{ field: FIELD[effectiveStatus(o)], ts: o.statusAt || o.createdAt }] : [];
     // A deal is an acceptance even when nobody wrote the status down.
-    if (o.deal && !seen.has("accepted")) { c.accepted++; seen.add("accepted"); bump(o.deal.createdAt || o.statusAt, "accepted"); }
+    if (o.deal) first.push({ field: "accepted", ts: o.deal.createdAt || o.statusAt });
+    let unsent = false;
+    for (const { field, ts } of first) {
+      if (seen.has(field)) continue;
+      seen.add(field);
+      if (out) count(field, ts);
+      else if (DEAD_FIELDS.includes(field) && inWin(ts)) unsent = true;
+    }
+    if (unsent) c.passedUnsent++;
     // An offer that was sent and hasn't ended is still working.
-    if (seen.has("sent") && !seen.has("accepted") && !seen.has("passed") && !seen.has("wePassed") && !seen.has("unavailable") && !seen.has("noResponse")) c.open++;
+    if (out && !seen.has("accepted") && !DEAD_FIELDS.some((f) => seen.has(f))) c.open++;
   }
 
   return {
@@ -242,9 +263,9 @@ export function followUpPerformance(followUpEvents = [], inboundEvents = [], { w
   for (const e of inboundEvents) {
     if (!e?.contactId) continue;
     if (!inboundBy.has(e.contactId)) inboundBy.set(e.contactId, []);
-    inboundBy.get(e.contactId).push(Date.parse(e.at));
+    inboundBy.get(e.contactId).push({ t: Date.parse(e.at), stop: e.stop === true });
   }
-  for (const list of inboundBy.values()) list.sort((a, b) => a - b);
+  for (const list of inboundBy.values()) list.sort((a, b) => a.t - b.t);
 
   const rows = new Map();
   for (const e of followUpEvents) {
@@ -252,16 +273,36 @@ export function followUpPerformance(followUpEvents = [], inboundEvents = [], { w
     const step = Number(e?.data?.step);
     if (!kind || !Number.isFinite(step)) continue;
     const key = `${kind}|${step}`;
-    if (!rows.has(key)) rows.set(key, { kind, step, sent: 0, replied: 0, hours: [] });
+    if (!rows.has(key)) rows.set(key, { kind, step, sent: 0, replied: 0, stopped: 0, hours: [] });
     const row = rows.get(key);
     row.sent++;
     const at = Date.parse(e.at);
-    const next = (inboundBy.get(e.contactId) || []).find((t) => t > at && t - at <= windowDays * 86400000);
-    if (next) { row.replied++; row.hours.push(Math.round((next - at) / 3600000)); }
+    const answers = (inboundBy.get(e.contactId) || []).filter((x) => x.t > at && x.t - at <= windowDays * 86400000);
+    // A STOP is their answer, but not a reply the nudge earned (2026-11-09),
+    // even after a first question: a STOP anywhere in the window is stopped,
+    // as Reports → Follow-up and the text scoreboard count it.
+    if (answers.some((x) => x.stop)) row.stopped++;
+    else if (answers.length) { row.replied++; row.hours.push(Math.round((answers[0].t - at) / 3600000)); }
   }
   return [...rows.values()]
-    .map(({ hours, ...r }) => ({ ...r, replyRate: pct(r.replied, r.sent), medianHoursToReply: median(hours.sort((a, b) => a - b)) }))
+    .map(({ hours, ...r }) => ({ ...r, replyRate: pct(r.replied, r.sent), stopRate: pct(r.stopped, r.sent), medianHoursToReply: median(hours.sort((a, b) => a - b)) }))
     .sort((a, b) => a.kind.localeCompare(b.kind) || a.step - b.step);
+}
+
+/**
+ * followUpsFromOutbox(rows) → [{ contactId, at, data: { kind, step } }]
+ *
+ * The follow-up table's sends, from the outbox rows that went (the reply
+ * draft ledger), not from `follow_up_sent`: that is the sweep's claim,
+ * written before a draft exists, so a held or dropped nudge counted as sent
+ * (2026-11-09). A ladder rung (a machine text with a step) that was sent and
+ * wasn't a reply to them.
+ */
+export function followUpsFromOutbox(rows = []) {
+  return (rows || [])
+    .filter((d) => d?.status === "sent" && d.contactId && !d.hasInbound && !String(d.inbound || "").trim()
+      && d.outbound?.kind && Number.isFinite(Number(d.outbound.step)) && d.outbound.step !== null && (d.sentAt || d.createdAt))
+    .map((d) => ({ contactId: d.contactId, at: d.sentAt || d.createdAt, data: { kind: d.outbound.kind, step: Number(d.outbound.step) } }));
 }
 
 export { PASS_REASONS, PASS_REASON_LABEL };
