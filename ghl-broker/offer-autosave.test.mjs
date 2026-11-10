@@ -288,7 +288,9 @@ const sentOffer = async (address, over = {}) => {
   const made = await req("POST", "/api/offers", { contactId: "contact-1", inputs: inputsAt(address), settings: SETTINGS });
   assert.equal(made.status, 200, JSON.stringify(made.json).slice(0, 300));
   const row = await store.getOffer(made.json.offer.id);
-  Object.assign(row, { status: "sent", sends: [{ ts: new Date().toISOString(), channels: ["sms"], results: { sms: { ok: true } } }] }, over);
+  // Sent a minute ago, not this millisecond: an edit stamped in the same millisecond as the send
+  // reads as part of what went out (shared/offer-raise.js lastSentAmount), and the test flaked.
+  Object.assign(row, { status: "sent", sends: [{ ts: new Date(Date.now() - 60000).toISOString(), channels: ["sms"], results: { sms: { ok: true } } }] }, over);
   await store.updateOffer(row.id, row);
   return row;
 };
