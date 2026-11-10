@@ -23,7 +23,8 @@ import { FERRY_ONLY_ZIPS } from "../shared/underwrite-checks.js";
 import express from "express";
 import { recordEvent, recordEvents, learnFacts, forgetFact, reconcileFromGhl } from "../contact-record.js";
 import { marketsFromTags, regionFor, citySlug } from "../shared/dispo-regions.js";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickDealBuyers, blastedTo, isManufacturedTarget, isLandTarget } from "../shared/buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, ENGAGEMENT_TYPES, pickDealBuyers, leftOffDealBuyers, blastedTo, isManufacturedTarget, isLandTarget } from "../shared/buyer-score.js";
+import { parseUsAddress } from "../shared/us-address.js";
 import { relationshipOf, TALK_EVENT_TYPES } from "../shared/talked-to.js";
 import { buyersInPlay } from "../shared/offer-status.js";
 import { WA_CITY_COORDS } from "../shared/wa-city-coords.js";
@@ -846,7 +847,9 @@ export default function createDispoRouter({ resolveLocation }) {
 
   // GET /waves/preview?offerId= — who the deal has gone to, whether the
   // morning catch-up still looks at it (or why not), and who it would go to
-  // now: everyone who fits and hasn't had it. Reads only.
+  // now: everyone who fits and hasn't had it. `leftOff` (2026-11-09) is who
+  // buys there and still won't get it, and why: their own words, a STOP, no
+  // phone. Reads only.
   router.get("/waves/preview", async (req, res) => {
     try {
       const { locationId } = resolveLocation(req);
@@ -858,13 +861,14 @@ export default function createDispoRouter({ resolveLocation }) {
       const { ranked, target } = await rankedForDeal(locationId, offer);
       const wouldGet = pickDealBuyers(ranked, { exclude: "blasted", ...dealOptions(target, da) })
         .map((i) => ({ contactId: i.contactId, name: i.name, tier: i.tier, rank: i.rank, areaFit: i.rankParts?.areaFit || null, reasons: i.rankReasons, channel: blastChannel(i, da), channels: blastChannels(i, da) }));
+      const leftOff = leftOffDealBuyers(ranked, { exclude: "blasted", ...dealOptions(target, da) });
       res.json({
         ok: true, offerId: offer.id, address: offer.address, city: target.city || "", stage: offer.deal.stage || null, asset: target.asset || null,
         autoBlastOnPromote: da.autoBlastOnPromote,
         sends: (offer.deal.blasts || []).map((b, i) => ({ send: b.wave || i + 1, at: b.at, ...(b.resumedAt ? { resumedAt: b.resumedAt } : {}), count: b.count ?? (b.contactIds || []).length, via: b.via || "app" })),
         ghlTags: offer.deal.blastTags || [],
         alreadySent: ranked.filter((i) => i.alreadyBlasted).length,
-        catchUp, wouldGet,
+        catchUp, wouldGet, leftOff,
         // The deal text as it would read now, each phrasing, and what it was
         // built from (Autopilot → Investors).
         ...(await sampleBlastTexts({ store, locationId, offer, saved }).catch(() => ({ samples: [], input: null }))),
@@ -987,7 +991,7 @@ export default function createDispoRouter({ resolveLocation }) {
   // `parsed` is an already-normalized query; `target` is what the ranker is
   // told we're placing.
   async function shortlist({
-    locationId, parsed, target, aiApiKey, extraInstructions, strict, excludeIds, filters = {},
+    locationId, parsed, target, aiApiKey, extraInstructions, strict, excludeIds, filters = {}, deal = null,
   }) {
     const rows = await store.listInvestors(locationId, { status: "active" });
     let pool = rows.map(hydrate).filter((i) => !excludeIds?.has(i.contactId));
@@ -1013,7 +1017,9 @@ export default function createDispoRouter({ resolveLocation }) {
     // so a Kirkland deal finds Kirkland flippers who never filled one in.
     pool = pool.map((i) => ({ ...i, fallbackAreas: marketsFromTags(i.tags).cities.map((c) => c.replace(/-/g, " ")) }));
 
-    const survivors = applyBuyboxFilters(pool, parsed, { strict });
+    // Against a deal, areas and their own words are read the way the deal's
+    // sends read them (shared/buybox.js matchBuybox `deal`).
+    const survivors = applyBuyboxFilters(pool, parsed, { strict, deal });
 
     // Only investors with something on file are worth paying to rank. Sending
     // the blanks too costs real money to be told "no buy box" once per row,
@@ -1135,6 +1141,13 @@ export default function createDispoRouter({ resolveLocation }) {
       // question this answers is "who else", and the linked ones come back
       // separately so the UI can show them as already-linked.
       const linked = (offer.deal.investors || []).map((i) => ({ contactId: i.contactId, name: i.name, status: i.status }));
+      // The deal as the deal sends read it: "Eastside" holds a Bellevue deal,
+      // "West Seattle" doesn't hold Green Lake (2026-11-09).
+      const areas = addressAreas(offer.address);
+      const deal = dealTarget({
+        city: areas.find((a) => !/^\d{5}$/.test(a)) || "", zip: areas.find((a) => /^\d{5}$/.test(a)) || "",
+        state: parseUsAddress(offer.address).state, rehabAppetite: target.query.rehabAppetite, asset: target.asset,
+      });
 
       const out = await shortlist({
         locationId,
@@ -1145,6 +1158,7 @@ export default function createDispoRouter({ resolveLocation }) {
         strict: req.body?.strict === true,
         excludeIds: new Set(linked.map((i) => i.contactId)),
         filters: readFilters(req.body),
+        deal,
       });
 
       res.json({
@@ -1414,7 +1428,7 @@ export default function createDispoRouter({ resolveLocation }) {
     // (the buyer-view checks or a hand-ticked chip), a ferry-only island, a
     // house buyers can already see on the MLS.
     const checkFlags = (offer.snapshot?.checks?.flags || []).map((f) => f?.key);
-    const target = dealTarget({ city, zip, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite,
+    const target = dealTarget({ city, zip, state: parseUsAddress(offer.address).state, priceMin: q.priceMin, priceMax: q.priceMax, rehabAppetite: q.rehabAppetite,
       propertyTypes: q.propertyTypes || [], lotMin: q.lotMin ?? null, asset: dq.asset,
       site: siteFlagsOf(offer), island: FERRY_ONLY_ZIPS.has(zip) || checkFlags.includes("thin_island"), onMarket: checkFlags.includes("exposure") });
     const linked = new Set((offer.deal?.investors || []).map((i) => i.contactId));

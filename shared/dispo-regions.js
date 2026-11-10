@@ -12,6 +12,8 @@
 //
 // Pure. Shared by the retag script, the buyer import and the Dispositions page.
 
+import { WA_CITY_COORDS } from "./wa-city-coords.js";
+
 const slug = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 export const REGIONS = {
@@ -87,6 +89,230 @@ export function regionFor(city, state = "WA") {
   const s = citySlug(city);
   if (!s) return null;
   return CITY_TO_REGION.get(s) || "other-wa";
+}
+
+/* ---------- where a buyer said they buy, read the way they wrote it ---------- */
+
+// 2026-11-09: 26 deals since 10/21 went to buyers whose own buy box ruled
+// them out. A box saying "West Seattle" got a Green Lake deal (a Seattle
+// city tag sent it); "North Seattle", "Seattle area" and "Shoreline/North
+// Seattle" never matched a Seattle 98133 deal, because the match compared the
+// whole phrase to a city name. `areaVerdict` is the one reader both matchers
+// use (shared/buyer-score.js rankForDeal, shared/buybox.js matchBuybox).
+//
+// A phrase resolves to places: a ZIP, a Seattle neighbourhood (the city plus
+// its ZIPs), a region, a city, or a state. One it can't place abstains, and
+// so does a loose one ("Tacoma area") that misses: neither ever rules a deal
+// out. "not X", "anything but X", "avoid X" rule X out.
+
+// Seattle by the words buyers use, and the ZIPs each covers.
+const NORTH_SEATTLE = ["98103", "98105", "98107", "98115", "98117", "98125", "98133", "98177"];
+const WEST_SEATTLE = ["98106", "98116", "98126", "98136", "98146"];
+const SOUTH_SEATTLE = ["98108", "98118", "98144", "98178", "98134"];
+const SEATTLE_HOODS = {
+  "north-seattle": NORTH_SEATTLE, "n-seattle": NORTH_SEATTLE, "north-of-the-ship-canal": NORTH_SEATTLE,
+  "northwest-seattle": ["98107", "98117", "98177"], "nw-seattle": ["98107", "98117", "98177"],
+  "northeast-seattle": ["98105", "98115", "98125"], "ne-seattle": ["98105", "98115", "98125"],
+  "west-seattle": WEST_SEATTLE, "w-seattle": WEST_SEATTLE,
+  "south-seattle": SOUTH_SEATTLE, "s-seattle": SOUTH_SEATTLE, "southeast-seattle": SOUTH_SEATTLE, "se-seattle": SOUTH_SEATTLE,
+  "central-seattle": ["98102", "98112", "98122", "98144"], "central-district": ["98122", "98144"],
+  "downtown-seattle": ["98101", "98104", "98121"], belltown: ["98121"],
+  "capitol-hill": ["98102", "98112", "98122"], "cap-hill": ["98102", "98112", "98122"], eastlake: ["98102"],
+  "queen-anne": ["98109", "98119"], interbay: ["98119"], magnolia: ["98199"],
+  ballard: ["98107", "98117"], "crown-hill": ["98117"], "loyal-heights": ["98117"], broadview: ["98177"],
+  fremont: ["98103"], wallingford: ["98103"], "green-lake": ["98103", "98115"], greenlake: ["98103", "98115"],
+  greenwood: ["98103", "98117"], phinney: ["98103"], "phinney-ridge": ["98103"],
+  "university-district": ["98105"], "u-district": ["98105"], laurelhurst: ["98105"],
+  ravenna: ["98115"], wedgwood: ["98115"], wedgewood: ["98115"], "maple-leaf": ["98115"], "view-ridge": ["98115"],
+  "lake-city": ["98125"], northgate: ["98125"], "bitter-lake": ["98133"], "haller-lake": ["98133"],
+  "beacon-hill": ["98108", "98144"], "columbia-city": ["98118"], "rainier-valley": ["98118"], "seward-park": ["98118"],
+  "rainier-beach": ["98178"], georgetown: ["98108"], "south-park": ["98108"], "mount-baker": ["98144"], "mt-baker": ["98144"],
+  delridge: ["98106", "98126"], "highland-park": ["98106"], alki: ["98116"], admiral: ["98116"], fauntleroy: ["98136"],
+  "madison-park": ["98112"], montlake: ["98112"], madrona: ["98122"], leschi: ["98122", "98144"],
+};
+// "South Seattle" has always also meant the south end of the county (the
+// region alias it had before): a Kent deal still fits it.
+const HOOD_ALSO_REGIONS = { "south-seattle": ["south-king"], "s-seattle": ["south-king"] };
+
+// Words that say nothing about where: "Seattle area", "Greater Tacoma",
+// "Pierce County", "West Seattle only".
+const STRIP_RX = /\b(?:the|greater|metro(?:politan)?|areas?|count(?:y|ies)|proper|only|city\s+limits|city\s+of|limits|mostly|mainly|primarily|ideally|preferably|prefer(?:red)?|neighbou?rhoods?|and\s+surrounding|surrounding|region)\b/g;
+// Words that make a city loose: "Tacoma area" fits a Tacoma deal, and says
+// nothing either way about Puyallup.
+const LOOSE_RX = /\b(?:greater|metro(?:politan)?|areas?|surrounding)\b/;
+const DIRECTION_RX = /^(?:north|south|east|west|n|s|e|w|ne|nw|se|sw|northeast|northwest|southeast|southwest|central|upper|lower|downtown)\s+(.+)$/;
+const NEGATION_RX = /^(?:not\s+(?:a\s+)?fan\s+of|not\s+interested\s+in|no\s+interest\s+in|anything\s+but|anywhere\s+but|everywhere\s+but|except(?:\s+for)?|excluding|exclude|avoid(?:ing)?|stay(?:ing)?\s+(?:out\s+of|away\s+from)|nothing\s+in|not\s+in|won'?t\s+(?:do|buy)|don'?t\s+(?:do|buy|want)|do\s+not\s+(?:do|buy|want)|never|not|no)\s+(?:a\s+|an\s+|the\s+)?(.+)$/i;
+// Full state names, so "Bend Oregon" and "Central Oregon" are places.
+const STATE_NAMES = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA", colorado: "CO", connecticut: "CT", delaware: "DE",
+  florida: "FL", georgia: "GA", hawaii: "HI", idaho: "ID", illinois: "IL", indiana: "IN", iowa: "IA", kansas: "KS", kentucky: "KY",
+  louisiana: "LA", maine: "ME", maryland: "MD", massachusetts: "MA", michigan: "MI", minnesota: "MN", mississippi: "MS",
+  missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV", "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM",
+  "new york": "NY", "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK", oregon: "OR", pennsylvania: "PA",
+  "rhode island": "RI", "south carolina": "SC", "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT",
+  virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI", wyoming: "WY",
+};
+const STATE_ABBRS = new Set(Object.values(STATE_NAMES));
+const KNOWN_WA_CITIES = new Set([...CITY_TO_REGION.keys(), ...Object.keys(WA_CITY_COORDS)]);
+
+// The state a phrase ends in: a full name in any case, or two capitals
+// ("Bend OR"); never a lower-case "or" or "in".
+function stateTail(original) {
+  const words = String(original || "").trim().split(/\s+/).filter(Boolean);
+  for (const take of [2, 1]) {
+    if (words.length < take) continue;
+    const tail = words.slice(-take).join(" ").replace(/[.,]+$/, "");
+    const byName = STATE_NAMES[tail.toLowerCase()];
+    if (byName) return { state: byName, rest: words.slice(0, -take).join(" ") };
+    if (take === 1 && /^[A-Z]{2}$/.test(tail) && STATE_ABBRS.has(tail)) return { state: tail, rest: words.slice(0, -1).join(" ") };
+  }
+  return null;
+}
+
+const isStateOnly = (clause) => {
+  const t = stateTail(clause);
+  return Boolean(t && !t.rest.trim());
+};
+
+// One place word ("North Seattle", "Bend OR", "98133") → a place, or null.
+function placeOf(raw) {
+  const original = String(raw || "").trim();
+  if (!original) return null;
+  const zips = original.match(/\b\d{5}\b/g);
+  if (zips) return zips.map((zip) => ({ kind: "zip", zip }));
+  const st = stateTail(original);
+  const lower = (st ? st.rest : original).toLowerCase().replace(/[^a-z0-9\s'-]+/g, " ").replace(/\s+/g, " ").trim();
+  const loose = LOOSE_RX.test(lower);
+  const core = lower.replace(STRIP_RX, " ").replace(/\s+/g, " ").trim();
+  // Out of state: we don't keep their cities, so any word before the state
+  // is their city there ("Bend OR"), and a direction or "anywhere in" is the
+  // whole state. Neither ever holds a Washington deal.
+  if (st && st.state !== "WA") {
+    if (!core || /^(?:north|south|east|west|central|eastern|western|northern|southern|anywhere|all|everywhere|in|around)\b/.test(core)) return [{ kind: "state", state: st.state }];
+    return [{ kind: "city", city: citySlug(core), state: st.state }];
+  }
+  if (!core) return null;
+  const s = citySlug(core);
+  if (SEATTLE_HOODS[s]) {
+    return [{ kind: "neighborhood", city: "seattle", zips: SEATTLE_HOODS[s] }, ...(HOOD_ALSO_REGIONS[s] ? [{ kind: "region", regions: HOOD_ALSO_REGIONS[s] }] : [])];
+  }
+  const byWord = (w) => {
+    const ws = citySlug(w);
+    if (!ws) return null;
+    // A one-city region (Seattle) is that city.
+    if (REGIONS[ws] && ws !== "other-wa" && !(REGIONS[ws].cities.length === 1 && citySlug(REGIONS[ws].cities[0]) === ws)) return [{ kind: "region", regions: [ws] }];
+    if (REGION_ALIASES[ws]) return [{ kind: "region", regions: REGION_ALIASES[ws] }];
+    // Only a Washington city we know: "Western WA" or "anywhere in WA" is not one.
+    if (KNOWN_WA_CITIES.has(ws)) return [{ kind: "city", city: ws, state: "WA", ...(loose ? { loose: true } : {}) }];
+    return null;
+  };
+  // The phrase as typed first ("king-county" is an alias), then without the
+  // filler, then without a direction ("North Tacoma" is Tacoma).
+  const hit = REGION_ALIASES[citySlug(lower)] ? [{ kind: "region", regions: REGION_ALIASES[citySlug(lower)] }] : byWord(core);
+  if (hit) return hit;
+  const dir = DIRECTION_RX.exec(core);
+  const byDir = dir ? byWord(dir[1]) : null;
+  if (byDir) return byDir;
+  // A town we don't keep is still its own name: it fits a deal there, as it
+  // always did, and says nothing about anywhere else.
+  return [{ kind: "city", city: s, guess: true }];
+}
+
+/**
+ * readArea(phrase) → { neg, places, unresolved, label } | null
+ *
+ * One clause of a buy box's areas. Several places ("Shoreline/North
+ * Seattle", "Eastside & South King", "Tacoma and Puyallup") are one clause;
+ * `unresolved` counts the parts it couldn't place.
+ */
+export function readArea(phrase) {
+  const label = String(phrase || "").replace(/\s+/g, " ").trim();
+  if (!label) return null;
+  const n = NEGATION_RX.exec(label);
+  const body = (n ? n[1] : label).replace(/\s+fan$/i, "").trim();
+  const parts = body.split(/\s*[/&+]\s*|\s+and\s+|\s+or\s+/).map((p) => p.trim()).filter(Boolean);
+  const places = [];
+  let unresolved = 0;
+  for (const p of parts) {
+    const got = placeOf(p);
+    if (got) places.push(...got);
+    else unresolved++;
+  }
+  return { neg: Boolean(n), places, unresolved, label };
+}
+
+// Does one place hold the deal? true | false | null (can't tell).
+function placeFits(p, deal) {
+  const city = deal?.city || "";
+  if (!city && !deal?.zip) return null;
+  const state = String(deal?.state || "WA").toUpperCase();
+  const wa = state === "WA";
+  let fit;
+  switch (p.kind) {
+    case "zip": fit = deal.zip ? deal.zip === p.zip : null; break;
+    case "neighborhood": fit = !city ? null : city !== "seattle" || !wa ? false : deal.zip ? p.zips.includes(deal.zip) : null; break;
+    case "region": fit = !city ? null : !wa ? false : p.regions.includes(deal.region || regionFor(city, state)); break;
+    case "city": fit = !city ? null : city === p.city && (!deal.state || !p.state || p.state === state); break;
+    case "state": fit = p.state === state; break;
+    default: fit = null;
+  }
+  return fit === false && (p.loose || p.guess) ? null : fit;
+}
+
+// The kind of fit that says the most: a ZIP over a neighbourhood over a city.
+const FIT_ORDER = ["zip", "neighborhood", "city", "region", "state"];
+
+/** areaMatches(area, deal) → true | false | null — one phrase against a deal ({ city slug, zip, region, state }). */
+export function areaMatches(area, deal = {}) {
+  const r = readArea(area);
+  if (!r || !r.places.length) return null;
+  const fits = r.places.map((p) => placeFits(p, deal));
+  const v = fits.includes(true) ? true : !r.unresolved && fits.every((f) => f === false) ? false : null;
+  if (r.neg) return v === true ? false : null;
+  return v;
+}
+
+// A buy box's areas as clauses: commas, semicolons, new lines and
+// brackets separate; "Seattle but not West Seattle" is two; a bare state
+// after a comma belongs to the place before it ("Bend, OR").
+export function areaClauses(areas) {
+  const text = Array.isArray(areas) ? areas.map((a) => String(a ?? "")).join(", ") : String(areas ?? "");
+  const out = [];
+  for (const raw of text.split(/[,;\n|()]+|\s+but\s+(?=(?:not|no)\b)/i)) {
+    const c = raw.trim();
+    if (!c) continue;
+    if (out.length && isStateOnly(c)) out[out.length - 1] = `${out[out.length - 1]} ${c}`;
+    else out.push(c);
+  }
+  return out;
+}
+
+/**
+ * areaVerdict(areas, deal) → { fit, refused, elsewhere, stated, elsewhereLabels }
+ *
+ *   fit        { kind, label } — a place they named holds the deal
+ *   refused    the phrase that rules it out ("not Seattle"), or null
+ *   elsewhere  every place they named resolved, and none holds the deal
+ *   stated     how many places they named (refusals not counted)
+ *
+ * `areas` is the buy box's raw areas text or its list.
+ */
+export function areaVerdict(areas, deal = {}) {
+  let fit = null, refused = null, stated = 0, unsure = 0;
+  const elsewhereLabels = [];
+  for (const clause of areaClauses(areas)) {
+    const r = readArea(clause);
+    if (!r) continue;
+    const fits = r.places.map((p) => placeFits(p, deal));
+    if (r.neg) { if (!refused && fits.includes(true)) refused = r.label; continue; }
+    stated++;
+    if (fits.includes(true)) {
+      const kind = FIT_ORDER.find((k) => r.places.some((p, i) => p.kind === k && fits[i] === true));
+      if (!fit || FIT_ORDER.indexOf(kind) < FIT_ORDER.indexOf(fit.kind)) fit = { kind, label: r.label };
+    } else if (!r.places.length || r.unresolved || fits.some((f) => f === null)) unsure++;
+    else elsewhereLabels.push(r.label);
+  }
+  return { fit, refused, elsewhere: !fit && stated > 0 && unsure === 0, stated, elsewhereLabels };
 }
 
 export const STRATEGIES = {

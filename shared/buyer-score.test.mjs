@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, pickDealBuyers, blastedTo, buyerDealbreakers } from "./buyer-score.js";
+import { scoreBuyer, rankForDeal, dealTarget, engagementFromEvents, pickDealBuyers, blastedTo, buyerDealbreakers, leftOffDealBuyers } from "./buyer-score.js";
 
 const NOW = Date.parse("2026-09-13T12:00:00Z");
 const monthsBack = (n) => new Date(NOW - n * 30.44 * 86400000).toISOString();
@@ -219,11 +219,16 @@ test("a deal with no kind ranks exactly as before", () => {
 // 2026-10-02: eight buyers had saved a street rule, eleven "no islands / no
 // Vashon", one "off-market only" — and were still sent the house that broke it.
 test("a buyer's saved dealbreakers are read off their own words", () => {
-  assert.deepEqual(buyerDealbreakers("busy streets"), { site: ["busy_road"], island: false, offMarketOnly: false });
+  const none = { noRehabs: false, groundUpOnly: false, notBuying: false };
+  assert.deepEqual(buyerDealbreakers("busy streets"), { site: ["busy_road"], island: false, offMarketOnly: false, ...none });
   assert.deepEqual(buyerDealbreakers("no busy streets, no proximity to commercial district, not interested in Vashon").site.sort(), ["backs_commercial", "busy_road"]);
   assert.equal(buyerDealbreakers("Vashon Island (too far)").island, true);
   assert.equal(buyerDealbreakers("Seattle city limits only, no on-market listings, off-market only").offMarketOnly, true);
-  assert.deepEqual(buyerDealbreakers(""), { site: [], island: false, offMarketOnly: false });
+  assert.deepEqual(buyerDealbreakers(""), { site: [], island: false, offMarketOnly: false, ...none });
+  assert.equal(buyerDealbreakers("No flips. Lots only").noRehabs, true);
+  assert.equal(buyerDealbreakers("No flips. Lots only").groundUpOnly, true);
+  assert.equal(buyerDealbreakers("Paused until spring").notBuying, true);
+  assert.equal(buyerDealbreakers("not in the market for condos").notBuying, false);
 });
 
 const tacoma = (over = {}) => ({ contactId: "x", phone: "+12065550100", tier: "vip", markets: { cities: ["tacoma"], regions: [], types: ["flip"] }, buybox: {}, ...over });
@@ -309,4 +314,97 @@ test("a VIP whose saved buy box tops out under the price isn't sent it", () => {
   ], kent);
   assert.equal(ranked[0].rankParts.priceOut, true);
   assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId), ["fits"]);
+});
+
+/* ---------- a buyer's own words narrow the deal, even with a city tag (2026-11-09) ---------- */
+
+// What went wrong: 26 deals since 10/21 went to buyers whose own buy box
+// ruled them out. A Seattle city tag (any loan in Seattle) set areaFit
+// before their stated areas were read, so a box saying "West Seattle" got a
+// Green Lake deal; a builder whose box said "no rehabs" got three fixers; a
+// box saying "not buying right now" got them all.
+const greenLake = dealTarget({ city: "Seattle", zip: "98103", priceMin: 640000, priceMax: 700000, rehabAppetite: "moderate" });
+const seattleTagged = (over = {}) => bare({ contactId: "x", tier: "vip", markets: { cities: ["seattle"], regions: ["seattle"], types: ["flip"] }, ...over });
+
+test("a buyer who said West Seattle only doesn't get a Green Lake deal even though they bought in Seattle", () => {
+  const ranked = rankAll([
+    seattleTagged({ contactId: "west-seattle-only", buybox: { areas: ["West Seattle only"], areasRaw: "West Seattle only" } }),
+    seattleTagged({ contactId: "seattle-tag-no-box" }),
+    seattleTagged({ contactId: "box-it-cant-read", buybox: { areas: ["West Seattle", "corner lots"] } }),
+  ], greenLake);
+  assert.equal(ranked.find((i) => i.contactId === "west-seattle-only").rankParts.areaFit, null);
+  assert.match(ranked.find((i) => i.contactId === "west-seattle-only").rankReasons.join(" | "), /their areas are elsewhere \(West Seattle only\)/);
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId).sort(), ["box-it-cant-read", "seattle-tag-no-box"], "a phrase it can't place keeps the city tag in charge");
+});
+
+test("a buyer who said North Seattle gets a 98133 deal", () => {
+  const bitterLake = dealTarget({ city: "Seattle", zip: "98133" });
+  const ranked = rankAll([
+    bare({ contactId: "north-seattle", buybox: { areas: ["North Seattle"] } }),
+    bare({ contactId: "shoreline-slash-north", buybox: { areas: ["Shoreline/North Seattle"] } }),
+    bare({ contactId: "seattle-area", buybox: { areas: ["Seattle area"] } }),
+    bare({ contactId: "west-seattle", buybox: { areas: ["West Seattle"] } }),
+  ], bitterLake);
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId).sort(), ["north-seattle", "seattle-area", "shoreline-slash-north"]);
+  assert.equal(ranked.find((i) => i.contactId === "north-seattle").rankParts.areaFit, "said_neighborhood");
+});
+
+test("a buyer who said not Seattle is left off a Seattle deal, by kind too", () => {
+  const ranked = rankAll([seattleTagged({ contactId: "not-seattle", buybox: { areas: ["Not a Seattle fan", "Kent"] } }), seattleTagged({ contactId: "other" })], greenLake);
+  assert.equal(ranked[0].rankParts.dealbreaker, "they said not a Seattle fan");
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId), ["other"]);
+  const lot = dealTarget({ city: "Seattle", zip: "98103", asset: { type: "land" } });
+  const builders = rankAll([seattleTagged({ contactId: "nope", markets: { cities: ["seattle"], regions: [], types: ["new-construction"] }, buybox: { areas: ["not Seattle"] } })], lot);
+  assert.deepEqual(pickDealBuyers(builders, { land: true }), []);
+});
+
+test("a builder whose buy box says no rehabs doesn't get a cosmetic flip", () => {
+  const flip = dealTarget({ city: "Seattle", zip: "98103", rehabAppetite: "cosmetic_only" });
+  const builder = seattleTagged({ contactId: "builder", markets: { cities: ["seattle"], regions: [], types: ["new-construction"] }, buybox: { exclusions: "Land and teardowns, no rehabs" } });
+  const ranked = rankAll([builder, seattleTagged({ contactId: "flipper" })], flip);
+  assert.equal(ranked.find((i) => i.contactId === "builder").rankParts.dealbreaker, "they said no rehabs");
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId), ["flipper"]);
+  // The same builder still gets the lot.
+  const lot = dealTarget({ city: "Seattle", zip: "98103", asset: { type: "land" } });
+  assert.deepEqual(pickDealBuyers(rankAll([builder], lot), { land: true }).map((i) => i.contactId), ["builder"]);
+  // A house we can't tell is a fixer (no kind, no rehab number) abstains.
+  assert.equal(rankAll([builder], dealTarget({ city: "Seattle", zip: "98103" }))[0].rankParts.dealbreaker, null);
+  // Ground-up only says the same thing about every house.
+  const groundUp = seattleTagged({ contactId: "ground-up", buybox: { exclusions: "ground-up only" } });
+  assert.equal(rankAll([groundUp], flip)[0].rankParts.dealbreaker, "they only build ground-up");
+  // A limit on rehab is not a no.
+  assert.equal(rankAll([seattleTagged({ buybox: { exclusions: "no rehabs over 100k" } })], flip)[0].rankParts.dealbreaker, null);
+});
+
+test("a buyer whose buy box says not buying right now isn't sent the deal", () => {
+  const ranked = rankAll([
+    seattleTagged({ contactId: "paused", buybox: { exclusions: "Not buying right now, maybe spring" } }),
+    seattleTagged({ contactId: "on-hold", buybox: { exclusions: "on hold until the new year" } }),
+    seattleTagged({ contactId: "not-condos", buybox: { exclusions: "not buying condos" } }),
+    seattleTagged({ contactId: "buying" }),
+  ], greenLake);
+  assert.equal(ranked.find((i) => i.contactId === "paused").rankParts.dealbreaker, "they're not buying right now");
+  assert.deepEqual(pickDealBuyers(ranked).map((i) => i.contactId).sort(), ["buying", "not-condos"]);
+});
+
+test("the wave preview says who was left off and why", () => {
+  const ranked = rankAll([
+    seattleTagged({ contactId: "west-seattle", name: "Wes", buybox: { areas: ["West Seattle"] } }),
+    seattleTagged({ contactId: "paused", name: "Pat", buybox: { exclusions: "on hold" } }),
+    seattleTagged({ contactId: "no-phone", name: "Nia", phone: "" }),
+    seattleTagged({ contactId: "stop", name: "Sal", tags: ["STOP"] }),
+    seattleTagged({ contactId: "had-it", name: "Hal", buybox: { exclusions: "on hold" }, alreadyBlasted: true }),
+    seattleTagged({ contactId: "gets-it", name: "Gus" }),
+    bare({ contactId: "tacoma-only", name: "Tam", buybox: { areas: ["Tacoma"] } }),
+  ], greenLake);
+  const off = leftOffDealBuyers(ranked);
+  assert.deepEqual(Object.fromEntries(off.map((i) => [i.contactId, i.why])), {
+    "west-seattle": "their areas are elsewhere (West Seattle)",
+    paused: "they're not buying right now",
+    "no-phone": "no phone on file",
+    stop: "opted out",
+  });
+  assert.equal(off.find((i) => i.contactId === "paused").name, "Pat");
+  // Nobody who gets it, already had it, or never bought or named this place.
+  for (const id of ["gets-it", "had-it", "tacoma-only"]) assert.ok(!off.some((i) => i.contactId === id), id);
 });

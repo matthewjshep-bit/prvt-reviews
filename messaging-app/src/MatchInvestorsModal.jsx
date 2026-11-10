@@ -11,7 +11,7 @@
 import React, { useEffect, useState } from "react";
 import { ExternalLink, Loader2, Megaphone, X } from "lucide-react";
 import { PROPERTY_TYPE_LABELS, REHAB_APPETITE_LABELS, priceBandText } from "@shared/buybox.js";
-import { blastInvestors, ghlContactUrl, matchInvestorsToDeal } from "./api.js";
+import { blastInvestors, getWavesPreview, ghlContactUrl, matchInvestorsToDeal } from "./api.js";
 
 const FIT_CLS = {
   strong: "bg-emerald-100 text-emerald-800",
@@ -40,6 +40,15 @@ export default function MatchInvestorsModal({ offer, existingIds, onClose, onLin
     }
   };
   useEffect(() => { load({ strict }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [strict]);
+  // Who buys there and won't get the deal text, and why (the wave preview's
+  // leftOff): their own words, a STOP, no phone. Shown so an out-of-date buy
+  // box can be fixed before the deal goes.
+  const [leftOff, setLeftOff] = useState(null);
+  useEffect(() => {
+    let live = true;
+    getWavesPreview(offer.id).then((r) => { if (live) setLeftOff(r.leftOff || []); }).catch(() => { if (live) setLeftOff([]); });
+    return () => { live = false; };
+  }, [offer.id]);
 
   const link = async (r) => {
     setLinking(r.contactId);
@@ -201,8 +210,34 @@ export default function MatchInvestorsModal({ offer, existingIds, onClose, onLin
             )}
           </>
         )}
+        <LeftOffList leftOff={leftOff} />
       </div>
     </div>
+  );
+}
+
+/**
+ * <LeftOffList leftOff /> — the buyers who buy where the deal is and won't
+ * get its text, each with the one reason (GET /api/dispo/waves/preview).
+ */
+export function LeftOffList({ leftOff }) {
+  if (!leftOff?.length) return null;
+  const n = leftOff.length;
+  return (
+    <details className="mt-3 rounded-lg border border-slate-200 px-3 py-2">
+      <summary className="cursor-pointer select-none text-xs font-semibold text-slate-700">
+        Left off the deal text: {n} buyer{n === 1 ? "" : "s"} who buy there
+        <span className="ml-1 font-normal text-slate-500">· their own words, a STOP or no phone. Fix a buy box that's out of date.</span>
+      </summary>
+      <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+        {leftOff.map((i) => (
+          <li key={i.contactId} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+            <a href={ghlContactUrl(i.contactId)} target="_blank" rel="noreferrer" className="font-semibold text-slate-800 hover:text-blue-700">{i.name || "Unnamed"}</a>
+            <span className="text-slate-500">{i.why}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

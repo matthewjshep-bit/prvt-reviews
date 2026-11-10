@@ -247,3 +247,40 @@ test("manufactured survives the buy box, however they wrote it", () => {
   const m = matchBuybox(normalizeBuybox({ buybox_property_types: "manufactured" }), { propertyTypes: ["manufactured"] });
   assert.deepEqual(m.matched, ["propertyTypes"]);
 });
+
+/* ---------------- Find buyers reads areas the way the deal sends do (2026-11-09) ---------------- */
+
+// What went wrong: Find buyers on a deal compared the buy box's areas to the
+// deal's city and ZIP as text, so a buyer who said "Eastside", "King County"
+// or "East King" was dropped from a Bellevue deal, and one who said "West
+// Seattle" was kept on a Green Lake deal because "seattle" is in the phrase.
+const bellevueDeal = { city: "bellevue", zip: "98004", region: "eastside", state: "WA", rehabDeal: true };
+const bellevueQuery = { areas: ["Bellevue", "98004"], priceMin: 850000, priceMax: 1150000 };
+
+test("Find buyers keeps an Eastside buyer on a Bellevue deal", () => {
+  const investors = [
+    { name: "Eastside", buybox: box({ areas: ["Eastside"], areasRaw: "Eastside" }) },
+    { name: "King County", buybox: box({ areas: ["King County"], areasRaw: "King County" }) },
+    { name: "East King", buybox: box({ areas: ["East King"], areasRaw: "East King" }) },
+    { name: "Tacoma", buybox: box({ areas: ["Tacoma"], areasRaw: "Tacoma" }) },
+    { name: "Not Bellevue", buybox: box({ areas: ["Eastside", "not Bellevue"], areasRaw: "Eastside, not Bellevue" }) },
+  ];
+  const out = applyBuyboxFilters(investors, bellevueQuery, { deal: bellevueDeal });
+  assert.deepEqual(out.map((i) => i.name).sort(), ["East King", "Eastside", "King County"]);
+  // Without the deal (a typed search), areas still match as text, as before.
+  assert.deepEqual(applyBuyboxFilters(investors, bellevueQuery).map((i) => i.name), ["Not Bellevue"]);
+});
+
+test("Find buyers leaves off a West Seattle buyer on a Green Lake deal, and one who isn't buying", () => {
+  const greenLake = { city: "seattle", zip: "98103", region: "seattle", state: "WA", rehabDeal: true };
+  const q = { areas: ["Seattle", "98103"] };
+  const investors = [
+    { name: "West Seattle", buybox: box({ areas: ["West Seattle"], areasRaw: "West Seattle" }) },
+    { name: "Seattle", buybox: box({ areas: ["Seattle"], areasRaw: "Seattle" }) },
+    { name: "Seattle, paused", buybox: box({ areas: ["Seattle"], areasRaw: "Seattle", exclusions: "not buying right now" }) },
+    { name: "Seattle builder", buybox: box({ areas: ["Seattle"], areasRaw: "Seattle", exclusions: "no rehabs" }) },
+  ];
+  assert.deepEqual(applyBuyboxFilters(investors, q, { deal: greenLake }).map((i) => i.name), ["Seattle"]);
+  const lot = { ...greenLake, rehabDeal: false };
+  assert.deepEqual(applyBuyboxFilters(investors, q, { deal: lot }).map((i) => i.name).sort(), ["Seattle", "Seattle builder"]);
+});
