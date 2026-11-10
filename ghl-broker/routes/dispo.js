@@ -878,10 +878,13 @@ export default function createDispoRouter({ resolveLocation }) {
 
       // Their row in the book, now. A row already there keeps what the sync read.
       const existing = await store.getInvestor(locationId, contactId);
+      // An opt-out on any channel counts, as the sync reads it (bookDnd): GHL's
+      // SMS or Email DND, or an `unsubscribed` event on their record.
+      const unsub = (await store.listContactEvents(locationId, contactId, { types: ["unsubscribed"], limit: 1 }).catch(() => null)) || [];
       const doc = {
         ...(existing?.doc || {}),
         name, email: contact?.email || "", phone: contact?.phone || "", tags,
-        dnd: smsUnsubscribed(contact), custom: existing?.doc?.custom || {}, record: factsAsCustom(facts),
+        dnd: bookDnd({ ...(contact || {}), id: contactId }, new Set(unsub.length ? [contactId] : [])), custom: existing?.doc?.custom || {}, record: factsAsCustom(facts),
       };
       await store.upsertInvestors(locationId, [{ contactId, name, doc, buyboxText: investorProfileText(doc) }]);
       const row = await store.getInvestor(locationId, contactId);

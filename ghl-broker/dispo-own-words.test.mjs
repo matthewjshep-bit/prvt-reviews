@@ -177,6 +177,30 @@ test("when Matt's routing reads every dispo tag as a buyer, the agent is tagged 
   } finally { close(); }
 });
 
+// Merged with the opt-out branch (2026-11-09): the book's do-not-text reads an
+// opt-out on any channel, so Add to buyers does too, not SMS DND alone.
+test("an agent who opted out by email or by text goes into the buyer book as do-not-text", async () => {
+  const loc = "LOC-agent-buyer-opted-out";
+  const ghl = ghlWith({ id: "agent-vela", firstName: "Vela", phone: "+12065550179", tags: ["agent"], dndSettings: { Email: { status: "active" } } });
+  const { base, close } = appFor(loc, ghl.client);
+  try {
+    await store.upsertContactProfile(loc, "agent-vela", { party: "agent", name: "Vela" });
+    const r = await post(`${base}/investors/agent-vela/add-to-buyers`, {});
+    assert.equal(r.ok, true, r.error);
+    assert.equal((await store.getInvestor(loc, "agent-vela")).doc.dnd, true, "an email unsubscribe counts");
+  } finally { close(); }
+  const ghl2 = ghlWith({ id: "agent-orrin", firstName: "Orrin", phone: "+12065550180", tags: ["agent"] });
+  const app2 = appFor(loc, ghl2.client);
+  try {
+    const { recordEvent } = await import("./contact-record.js");
+    await recordEvent({ store, locationId: loc, contactId: "agent-orrin", party: "agent", type: "unsubscribed", at: new Date().toISOString(), source: "conversation",
+      dedupeKey: "unsubscribed:agent-orrin", data: { via: "sms_keyword", channel: "sms" } });
+    const r = await post(`${app2.base}/investors/agent-orrin/add-to-buyers`, {});
+    assert.equal(r.ok, true, r.error);
+    assert.equal((await store.getInvestor(loc, "agent-orrin")).doc.dnd, true, "an opt-out on their record counts");
+  } finally { app2.close(); }
+});
+
 /* ---------- how a buyer pays, on the deal's buyer row (2026-11-09) ---------- */
 
 // What went wrong: how a buyer pays was unknown in 283 of 307 buyer threads,
