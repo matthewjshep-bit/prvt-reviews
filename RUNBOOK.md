@@ -7176,6 +7176,68 @@ never past the 60-day window), claimed by `checkin_email_queued` (dedupe
 `checkin_email:<contactId>:<step>`). Kind `checkin_email`; the next email
 in the list each time, starting from the contact's variant.
 
+#### The cold ladder after day 16: days 30, 44 and 58 (2026-11-09)
+
+**What was wrong.** The ladder found its agents with one read of the 60-day
+window capped at 5,000 events, and the store keeps the newest rows when it
+cuts. At October's volume (first texts, follow-ups, and every agent's and
+buyer's replies) that was about the last three weeks, so an agent first
+texted a month ago wasn't in the read: of 69 day-30 check-ins due by 11/6,
+one went. Reports → Follow-up planned from the same read and showed nothing
+missing. The old check-in pool had three texts for four rungs, so day 58
+repeated day 16.
+
+**The read.** `coldWindowEvents` (`ghl-broker/follow-up-sweep.js`) walks the
+window a page at a time (`contact-events.js allEventsSince`, ceiling
+200,000) for `COLD_WINDOW_TYPES`: the app ladder's types, the GHL cohort's
+(`nudgeGhlCohort`) and the two email claims. One walk serves both ladders.
+The morning sweep reads anew (`fresh`); the follow-up planner
+(`follow-up-engine.js`) reuses a walk under 10 minutes old, and a second
+caller while a walk runs shares it, so opening Reports adds no heavy read.
+A walk cut at its ceiling sets `job.readTruncated` (and `last.readTruncated`
+on the `followUp` cursor), `readTruncated` on `/api/dashboard/followup`,
+and logs one line with the count only.
+
+**Order.** The run's cap (`MAX_STARTS_PER_RUN`, 150) is unchanged. Cold
+candidates are sorted so the day-2 follow-ups go first, other configured
+rungs next, the repeat check-ins last, longest overdue first within each
+(`ladderOrder`). A missed rung is never sent in arrears: an agent whose day
+30 was lost gets day 44 when it comes, once (`dueStep`). The overdue rungs
+spread themselves through the morning's machine queue (`MACHINE_BURST`,
+`spreadAcrossDay`).
+
+**The texts** (`shared/outreach-opener.js`, filled by
+`shared/standard-texts.js`; mode `template`):
+- Day 16, 30 and 44: `opener.checkIns`, the next one along each rung. The
+  defaults are ten short texts that name their town, off the first-text
+  house's address ("Hi Dana, any houses around Halden that need real work
+  lately?"). With the town known, the default list uses only the seven that
+  name it; the other three are for an agent with no town on record. A saved
+  copy of the 10/20 three ("circling back … desk", "checking in … radar",
+  "distressed or value-add … always happy") reads as never changed and gets
+  the new ones; a list Matt edited is kept as he wrote it.
+- No house, ever (Matt, 11-09: check-ins never reference properties). No
+  check-in names the first-text house, a new listing of theirs, or any
+  street or address; their town is their area and is fine. A new listing of
+  theirs is the listing ping's to text (the agent check-in), not the
+  ladder's.
+- The last rung (`COLD_LAST_RUNG_TEXTS`, `repeatMax` on the descriptor: the
+  last repeat inside the 60-day window, day 58 on `[2]` every 14) says it is
+  the last one. A person on "check in more" reaches their rungs in half the
+  time, so their last is day 114; on "less", day 16 (the sweep passes
+  `subject.pace`, `repeatOf` in `reply-agent.js`).
+- None repeats us: the drafter reads our last six texts off the thread
+  (`ourLastTexts`) and skips a text whose words, greeting and name aside,
+  match one of them (`plainBody`). A pool with nothing left falls back to
+  the check-ins, then to the model.
+
+**Check-ins they asked for, same fix.** `runCheckInSweep`
+(`ghl-broker/promise-sweep.js`) read its 45 days of requests in one capped
+read with every text and call, so a "check back in a month" three weeks old
+could fall out of it. It now walks `checkin_requested` and `checkin_sent`
+whole, then reads texts and calls per contact only for a request that is
+due. A capped read that still decides a send sets `truncated` on the run.
+
 **The texts are Matt's own (2026-10-17).** The first text, its 14-day
 follow-up (`outreach_nudge`) and the plain agent check-in are fixed texts in
 his voice, filled in (`shared/standard-texts.js`), not written by the model:

@@ -56,6 +56,7 @@ import { passNoteStale } from "./shared/pass-note.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
 import { normalizeOpener, openerVoice, countyName, homeFor, withHomeBlank, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { standardText } from "./shared/standard-texts.js";
+import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -3568,14 +3569,48 @@ export function floatExtras({ offer, saved, dossier = null, requote = false, the
 
 // Which repeat a rung past the last configured step is (day 30 on [2] every
 // 14 is the 2nd), so each one picks the next check-in text. {} for a
-// configured step.
+// configured step. `repeatMax` is the last one the cold ladder reaches: the
+// last repeat inside its 60-day window (day 58 on [2] every 14, the 4th),
+// or the ladder's own cap when it has one; that one says it's the last.
+// `pace` (the person's check in less / more, shared/bot-hold.js) moves which
+// rung that is: on "more" a rung's day comes in half the time, so day 58
+// isn't the last, and saying so would be untrue.
 function repeatOf(subject) {
   const every = Math.round(Number(subject?.repeatEvery) || 0);
   const steps = normalizeSteps(subject?.steps || []);
   const step = Math.round(Number(subject?.step));
   if (!(every > 0) || !steps.length || !Number.isFinite(step) || steps.includes(step)) return {};
-  return { repeatN: Math.max(1, Math.round((step - steps[steps.length - 1]) / every)) };
+  const lastDay = steps[steps.length - 1];
+  const pace = Math.min(2, Math.max(0.5, Number(subject?.pace) || 1));
+  const inWindow = Math.floor(((OUTREACH_NUDGE_WINDOW_DAYS - 1) / pace - lastDay) / every);
+  const cap = Math.round(Number(subject?.maxRepeats) || 0);
+  const repeatMax = cap > 0 ? (inWindow > 0 ? Math.min(cap, inWindow) : cap) : inWindow;
+  return { repeatN: Math.max(1, Math.round((step - lastDay) / every)), ...(repeatMax > 0 ? { repeatMax } : {}) };
 }
+
+/**
+ * ourLastTexts(transcript, n) → [text], newest first
+ *
+ * What we last said to them, off the thread: our own lines with words in
+ * them (a bare call marker has none). A cold check-in reads these so it
+ * never says the same thing twice (shared/standard-texts.js plainBody).
+ */
+export function ourLastTexts(transcript = "", n = 6) {
+  const out = [];
+  for (const line of String(transcript || "").split("\n")) {
+    const m = /^\[[^\]]*\]\s+US (\w+): (.*)$/.exec(line);
+    if (m && m[1] !== "call" && m[2].trim()) out.push(m[2].trim());
+  }
+  return out.reverse().slice(0, Math.max(0, n));
+}
+
+// "federal way" or "FEDERAL WAY" (a county list's capitals) → "Federal Way";
+// a town already written properly ("McHalden") stays as written.
+const titleWords = (s) => {
+  const t = String(s || "").replace(/\s+/g, " ").trim();
+  if (!t || (t !== t.toLowerCase() && t !== t.toUpperCase())) return t;
+  return t.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+};
 
 export function outboundDescriptor({ kind, offer, subject, saved, dossier, stance = null }) {
   const address = offer?.address || subject?.address || "the property";
@@ -3750,7 +3785,11 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       mode: normalizeOpener(saved?.outreachAutopilot?.opener).mode, followUps: normalizeOpener(saved?.outreachAutopilot?.opener).followUps,
       checkIns: normalizeOpener(saved?.outreachAutopilot?.opener).checkIns, ...repeatOf(subject),
       // A recent lister's first text named a house that's gone: no follow-up asks about it.
-      ...(subject?.pastListing ? { pastListing: true } : {}) } : {}),
+      ...(subject?.pastListing ? { pastListing: true } : {}),
+      // The check-ins after day 16 (2026-11-09): their town, off the house
+      // the first text was about. Never a house or a street (Matt, 11-09:
+      // check-ins never reference properties).
+      city: titleWords(subject?.city || parseUsAddress(String(subject?.address || "")).city) } : {}),
     // A passed house riding on this nudge as one line (follow-up-sweep.js).
     ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
@@ -3997,8 +4036,11 @@ function focusOpener({ listing = {}, address = "", saved = {} }) {
     city: String(listing.city || ""), county: countyName(listing.county) };
 }
 
-function standardDraft({ kind, offer, outbound, name, contactId }) {
-  const s = standardText({ kind, outbound, name, contactId });
+// A cold check-in reads our last six texts off the thread (ourLastTexts) so
+// it never says one of them again (2026-11-09).
+function standardDraft({ kind, offer, outbound, name, contactId, transcript = "" }) {
+  const prior = kind === "outreach_nudge" ? ourLastTexts(transcript, 6) : [];
+  const s = standardText({ kind, outbound, name, contactId, prior });
   if (!s) return null;
   return { reply: s.text, summary: outboundSummary({ kind, offer, outbound }), confidence: "high", needsHuman: false, usage: null,
     standard: { set: s.set, index: s.index } };
@@ -4070,7 +4112,7 @@ export async function previewProactive({ client, locationId, saved, store, conta
     aiApiKey, party, config, context, channel: "sms", outbound, batch: null,
   };
   const draftWith = deps.draft || draftReply;
-  const draft = standardDraft({ kind, offer, outbound, name: a.contactName || name, contactId }) || await writeShorterFirstText({
+  const draft = standardDraft({ kind, offer, outbound, name: a.contactName || name, contactId, transcript: a.transcript }) || await writeShorterFirstText({
     draft: withoutSignOff(await writeAgainWithoutCarrierWords({
       draft: await draftWith(previewArgs), kind,
       redraft: (avoid) => draftWith({ ...previewArgs, outbound: { ...outbound, avoid } }),
@@ -4146,7 +4188,7 @@ async function runProactive(job, ctx) {
     batch: config.ai?.batchMachineDrafts && BATCHABLE_KINDS.has(kind) && subject?.direct !== true ? batcherFor(aiApiKey) : null,
   };
   // Still reads like an ad the carriers block: written once more without it.
-  const draft = standardDraft({ kind, offer, outbound, name: a.contactName, contactId: job.contactId }) || await writeShorterFirstText({
+  const draft = standardDraft({ kind, offer, outbound, name: a.contactName, contactId: job.contactId, transcript: a.transcript }) || await writeShorterFirstText({
     draft: withoutSignOff(await writeAgainWithoutCarrierWords({
       draft: await deps.draft(draftArgs), kind,
       redraft: (avoid) => deps.draft({ ...draftArgs, outbound: { ...outbound, avoid } }),

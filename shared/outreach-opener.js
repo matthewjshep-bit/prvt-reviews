@@ -134,10 +134,39 @@ export const PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS = [
 // answer (2026-10-20, Matt: "check in every 14 days after that"). Until
 // then a repeat rung sent follow-up 1 again, word for word. One per rung, in
 // turn, so no two in a row are the same.
+//
+// 2026-11-09, Matt: the day 30, 44 and 58 check-ins come back in his own
+// plain style. Three texts for four rungs meant day 58 repeated day 16, and
+// the third ("any distressed or value-add …, always happy to take a look")
+// drew no replies and five opt-outs in 109 sends. Each one now names their
+// town where it can (shared/standard-texts.js picks one that does when the
+// town is known) and asks one thing. None names a house or a street, not the
+// first-text house and not a new listing of theirs (Matt, 11-09: check-ins
+// never reference properties; the listing ping does that). The three before
+// are kept so a stored copy reads as never changed.
 export const DEFAULT_CHECK_IN_TEXTS = [
+  "Hi {first}, any houses around {town} that need real work lately?",
+  "Hey {first}, Matt again. Got a seller near {town} who'd rather not fix it up first?",
+  "{first}, anything off-market around {town} that needs work?",
+  "Hi {first}, any estates or long-time rentals coming up near {town}?",
+  "Rough is what I'm after, {first}. Seen anything like that around {town}?",
+  "{first}, any older houses near {town} the seller won't want to update?",
+  "Hey {first}, if a listing of yours needs too much for retail buyers, can I see it?",
+  "Hi {first}, anyone near {town} who wants to sell without doing the repairs first?",
+  "Hey {first}, Matt again. Anything on your end that needs real work?",
+  "{first}, got any fixers coming up?",
+];
+// The check-ins from 2026-10-20 to 2026-11-09: a stored copy of exactly
+// these reads as never changed and gets today's.
+export const PREVIOUS_DEFAULT_CHECK_IN_TEXTS = [
   "Hi {first}, circling back. Any fixers or distressed properties come across your desk lately, listed or off market?",
   "Hey {first}, checking in. Anything on your radar that needs work? The uglier the better.",
   "Hi {first}, any distressed or value-add properties come up lately, on or off market? Always happy to take a look.",
+];
+// The ladder's last check-in (day 58 on the default ladder): says so.
+export const COLD_LAST_RUNG_TEXTS = [
+  "Hi {first}, last one from me for a while. If a house near {town} ever needs real work, can I take a look?",
+  "{first}, I'll leave you be after this. If one of yours ever needs too much work for retail buyers, can I see it first?",
 ];
 
 export const OPENER_MAX_EXAMPLES = 8;
@@ -176,7 +205,9 @@ export function normalizeOpener(v = {}) {
   const examples = cleanTexts(o.examples, LEGACY).map((x) => SEATTLE_DEFAULTS.get(x) || x);
   let followUps = cleanTexts(o.followUps);
   if ([PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS, DAY_TWO_DEFAULT_FOLLOW_UP_TEXTS].some((old) => followUps.join("\n") === old.join("\n"))) followUps = [];
-  const checkIns = cleanTexts(o.checkIns);
+  // As many as the defaults, so a saved copy of all ten isn't cut to eight.
+  let checkIns = cleanTexts(o.checkIns, new Set(), Math.max(OPENER_MAX_EXAMPLES, DEFAULT_CHECK_IN_TEXTS.length));
+  if (checkIns.join("\n") === cleanTexts(PREVIOUS_DEFAULT_CHECK_IN_TEXTS).join("\n")) checkIns = [];
   return {
     examples: examples.length ? examples : [...DEFAULT_OPENER_EXAMPLES],
     followUps: followUps.length ? followUps : [...DEFAULT_FOLLOW_UP_TEXTS],
@@ -268,7 +299,7 @@ function stateFromCounty(county) {
 // A list of texts as Settings or the Autopilot chart saves them (an array,
 // or one string with a blank line between texts): GHL's merge fields made
 // the app's blanks, trimmed, without GHL's stop footer or a sign-off.
-function cleanTexts(v, drop = new Set()) {
+function cleanTexts(v, drop = new Set(), max = OPENER_MAX_EXAMPLES) {
   const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(/\n\s*\n/) : [];
   return raw
     .map((x) => fromMergeFields(String(x || "")).replace(/\s+/g, " ").trim().slice(0, OPENER_EXAMPLE_MAX_CHARS))
@@ -276,7 +307,7 @@ function cleanTexts(v, drop = new Set()) {
     // "…I'm all ears. Thanks, Matt" would teach the bot to sign off.
     .map((x) => stripSignOff(x))
     .filter((x) => x && !drop.has(x))
-    .slice(0, OPENER_MAX_EXAMPLES);
+    .slice(0, max);
 }
 
 /**

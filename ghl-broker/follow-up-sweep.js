@@ -50,6 +50,7 @@ import { searchConversations, listConversationMessages, removeContactFromWorkflo
 import { withRetry } from "./buyer-import.js";
 import { countyName, firstTextHook } from "./shared/outreach-opener.js";
 import { secondLookDue, numberPresented, normalizeSecondLook, SECOND_LOOK_STATUSES, SECOND_LOOK_WINDOW_DAYS, SECOND_LOOK_KIND } from "./shared/second-look.js";
+import { nextRungAt, normalizeSteps } from "./shared/follow-up.js";
 
 const DAY_MS = 86400000;
 // GHL's burst cap is 100 req / 10s per location; the same pace the enrichment
@@ -414,16 +415,19 @@ export function coldSpacing(ladder, lastEmailAt = null) {
   return { repeatFromLastTouch: true, lastEmailAt, emailGapDays: coldTouchGapDays(ladder?.repeatEvery) };
 }
 
-export async function outreachCandidates({ store, locationId, config, now = Date.now(), ghlCohort = false }) {
+// `fresh`: the morning sweep reads the window itself (it decides sends); the
+// follow-up planner passes false and reuses a read under ten minutes old.
+export async function outreachCandidates({ store, locationId, config, now = Date.now(), ghlCohort = false, fresh = true }) {
   const pb = config?.parties?.agent;
   const ladder = pb?.followUp?.ladders?.outreach_nudge;
   if (!pb?.followUp?.enabled || !ladder?.enabled || !ladder.steps?.length) return [];
 
-  const since = iso(now - OUTREACH_WINDOW_DAYS * DAY_MS);
-  const events = await store.listContactEventsSince(locationId, since, {
-    types: ["outreach_sent", "follow_up_sent", "offer_sent", "realm_yes", "deal_promoted", "text_summary", "call_summary", ...COLD_EMAIL_TYPES],
-    limit: 5000,
-  }).catch(() => []);
+  // The whole window, a page at a time, shared with the GHL cohort below
+  // (coldWindowEvents). Until 2026-11-09 this was one read capped at 5,000
+  // rows that kept the newest, and the agents first texted a month ago, the
+  // ones due day 30, 44 and 58, were the rows it dropped.
+  const read = await coldWindowEvents(store, locationId, now, { fresh }).catch(() => ({ events: [], truncated: false }));
+  const events = read.events || [];
 
   const byContact = new Map();
   for (const e of events) {
@@ -452,8 +456,31 @@ export async function outreachCandidates({ store, locationId, config, now = Date
       ladder,
     });
   }
-  if (ghlCohort) out.push(...await ghlCohortCandidates({ store, locationId, ladder, now }));
-  return out;
+  if (ghlCohort) out.push(...await ghlCohortCandidates({ store, locationId, ladder, now, read }));
+  // The run's 150 go to the day-2 follow-ups first (ladderOrder).
+  const ordered = ladderOrder(out, now);
+  if (read.truncated) ordered.truncated = true;
+  return ordered;
+}
+
+/**
+ * ladderOrder(candidates, now) → candidates
+ *
+ * Where the run's cap (MAX_STARTS_PER_RUN) bites, the second touch must not
+ * wait behind check-ins: the first configured rung (day 2) first, the other
+ * configured rungs next, the repeat check-ins last, the longest overdue first
+ * within each. The cap itself is unchanged.
+ */
+export function ladderOrder(candidates = [], now = Date.now()) {
+  const rank = (c) => {
+    const steps = normalizeSteps(c?.ladder?.steps || []);
+    const r = steps.length ? nextRungAt({ steps, repeatEvery: c.ladder.repeatEvery, startedAt: c.startedAt, sentSteps: c.sentSteps || [], now }) : null;
+    if (!r) return [3, Infinity];
+    return [r.step === steps[0] ? 0 : steps.includes(r.step) ? 1 : 2, Date.parse(r.at) || Infinity];
+  };
+  return candidates.map((c) => ({ c, k: rank(c) }))
+    .sort((a, b) => a.k[0] - b.k[0] || (a.k[1] === b.k[1] ? 0 : a.k[1] - b.k[1]))
+    .map(({ c }) => c);
 }
 
 /* ---------- the GHL workflow's cohort ---------- */
@@ -471,11 +498,81 @@ export async function outreachCandidates({ store, locationId, config, now = Date
 // capped read above keeps the newest rows, and these are the oldest).
 const GHL_COHORT_TYPES = ["outreach_enrolled", "outreach_sent", "follow_up_sent", "offer_sent", "realm_yes", "deal_promoted",
   "text_summary", "call_summary", "agent_pulse_texted", "hand_reply", "checkin_sent", "address_chase_sent"];
+const GHL_COHORT_TYPE_SET = new Set(GHL_COHORT_TYPES);
 // After the first text, any of these means they are no longer a cold opener.
 const GHL_COHORT_ENDED_BY = new Set(["offer_sent", "realm_yes", "deal_promoted"]);
 // A text of ours since the first one: the app has them already, and
 // "following up on my text" would be stale.
 const OUR_LATER_TEXTS = new Set(["agent_pulse_texted", "hand_reply", "checkin_sent", "address_chase_sent", "follow_up_sent"]);
+
+/* ---------- the cold window, read once ---------- */
+
+// Everything both cold ladders read (the app's first texts and the GHL
+// workflow's), in one walk of the 60-day window.
+export const COLD_WINDOW_TYPES = [...new Set([
+  "outreach_sent", "follow_up_sent", "offer_sent", "realm_yes", "deal_promoted", "text_summary", "call_summary",
+  ...COLD_EMAIL_TYPES, ...GHL_COHORT_TYPES,
+])];
+export const COLD_WINDOW_CEILING = 200000;
+// The follow-up planner (Reports → Follow-up) reuses a walk this fresh, so
+// opening the page adds no heavy read of its own (the 11-09 crash).
+export const COLD_WINDOW_MEMO_MS = 10 * 60000;
+// store → locationId → { at, read } | { promise }. Per store, so two stores
+// (a test's, the broker's) never see each other's rows.
+let coldMemo = new WeakMap();
+let coldInFlight = new WeakMap();
+const memoFor = (map, store) => {
+  if (!map.has(store)) map.set(store, new Map());
+  return map.get(store);
+};
+// For tests: forget every read.
+export function _resetColdWindow() {
+  coldMemo = new WeakMap();
+  coldInFlight = new WeakMap();
+}
+
+/**
+ * coldWindowEvents(store, locationId, now, { fresh }) → { events, truncated }
+ *
+ * Every event of COLD_WINDOW_TYPES in the last OUTREACH_WINDOW_DAYS, oldest
+ * first, walked a page at a time (contact-events.js). One walk in flight per
+ * location: a second caller while it runs gets the same one. `fresh` (the
+ * sweep) reads anew unless a walk is already in flight; otherwise a walk
+ * under COLD_WINDOW_MEMO_MS old is reused. A walk cut at the ceiling says
+ * `truncated` and logs one line with counts, never a contact.
+ */
+export async function coldWindowEvents(store, locationId, now = Date.now(), { fresh = false } = {}) {
+  if (!store || typeof store !== "object") return { events: [], truncated: false };
+  const flying = memoFor(coldInFlight, store);
+  if (flying.has(locationId)) return flying.get(locationId);
+  const memo = memoFor(coldMemo, store);
+  const hit = memo.get(locationId);
+  if (!fresh && hit && Math.abs(now - hit.at) < COLD_WINDOW_MEMO_MS) return hit.read;
+  const since = iso(now - OUTREACH_WINDOW_DAYS * DAY_MS);
+  const promise = allEventsSince(store, locationId, since, { types: COLD_WINDOW_TYPES }, { ceiling: COLD_WINDOW_CEILING })
+    .then((read) => {
+      const out = { events: (read?.events || []).map(slimColdEvent), truncated: Boolean(read?.truncated) };
+      if (out.truncated) console.warn(`follow-up: the cold window read stopped at ${out.events.length} events; the ladder may be missing agents or their newest replies`);
+      const entry = { at: now, read: out };
+      memo.set(locationId, entry);
+      // Held only as long as it may be reused, never for good.
+      const t = setTimeout(() => { if (memo.get(locationId) === entry) memo.delete(locationId); }, COLD_WINDOW_MEMO_MS);
+      t.unref?.();
+      return out;
+    })
+    .finally(() => flying.delete(locationId));
+  flying.set(locationId, promise);
+  return promise;
+}
+
+// What the two ladders read off an event, and nothing else: no message text
+// or summary is held in the memo.
+const COLD_DATA_KEYS = ["kind", "step", "county", "pastListing", "batchId"];
+function slimColdEvent(e) {
+  const data = {};
+  for (const k of COLD_DATA_KEYS) if (e?.data?.[k] !== undefined) data[k] = e.data[k];
+  return { id: e?.id, contactId: e?.contactId, party: e?.party ?? null, type: e?.type, at: e?.at, address: e?.address || "", offerId: e?.offerId || null, data };
+}
 
 /**
  * ghlCohortCandidates({ store, locationId, ladder, now }) → [candidate]
@@ -486,12 +583,12 @@ const OUR_LATER_TEXTS = new Set(["agent_pulse_texted", "hand_reply", "checkin_se
  * was imported from (for the county), the first text's time, and when the
  * app first nudged them — for the GHL read before the claim (ghlCohortCheck).
  */
-export async function ghlCohortCandidates({ store, locationId, ladder, now = Date.now() }) {
-  const since = iso(now - OUTREACH_WINDOW_DAYS * DAY_MS);
-  const { events } = await allEventsSince(store, locationId, since, { types: GHL_COHORT_TYPES }, { ceiling: 200000 });
+export async function ghlCohortCandidates({ store, locationId, ladder, now = Date.now(), read = null }) {
+  // The cold window outreachCandidates already walked, or a walk of our own.
+  const { events } = read || await coldWindowEvents(store, locationId, now, { fresh: true });
   const byContact = new Map();
   for (const e of events || []) {
-    if (!e?.contactId) continue;
+    if (!e?.contactId || !GHL_COHORT_TYPE_SET.has(e.type)) continue;
     if (!byContact.has(e.contactId)) byContact.set(e.contactId, []);
     byContact.get(e.contactId).push(e);
   }
@@ -774,6 +871,8 @@ async function runSweep(job, ctx) {
   // rides along — before 2026-10-02 the button ran the whole morning's sweep.
   const forThisDeal = (c) => c.party === "investor"
     && (c.offerId === scope.offerId || (!c.offerId && scope.address && c.address && sameStreet(c.address, scope.address)));
+  // The cold ladders' read of their window: cut short, the job says so.
+  let cold = null;
   // An agreed price first: if the run's quota binds, the push to paper is
   // the text that must not wait.
   const candidates = scope?.offerId ? (await investorCandidates({ store, locationId, config, now })).filter(forThisDeal) : [
@@ -786,9 +885,10 @@ async function runSweep(job, ctx) {
     // A strong past offer, asked about once more — after every clock that
     // was already running, so it never takes their morning's one text.
     ...(await secondLookCandidates({ store, locationId, config, now, book })),
-    ...(await outreachCandidates({ store, locationId, config, now, ghlCohort: oa.nudgeGhlCohort })),
+    ...(cold = await outreachCandidates({ store, locationId, config, now, ghlCohort: oa.nudgeGhlCohort, fresh: true })),
     ...(await investorCandidates({ store, locationId, config, now })),
   ];
+  job.readTruncated = Boolean(cold?.truncated);
   job.considered = candidates.length;
   job.phase = "nudging";
   // Who you stopped the bot on (shared/bot-hold.js), in one read with no
@@ -1109,6 +1209,8 @@ async function runSweep(job, ctx) {
                    viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, spokeAt: c.spokeAt || null, lastTouchAt, relisted: Boolean(c.relisted),
                    ...(c.county ? { county: c.county } : {}),
                    ...(c.pastListing ? { pastListing: true } : {}),
+                   // Check in less / more: which cold rung is the last one (reply-agent.js repeatOf).
+                   ...(c.kind === "outreach_nudge" && pace !== 1 ? { pace } : {}),
                    ...(c.wavering ? { wavering: true } : {}),
                    ...(c.kind === SECOND_LOOK_KIND ? { theirs: c.theirs, source: c.source } : {}),
                    ...(aside ? { aside: { address: aside.address, quiet: Boolean(aside.quiet) } } : {}) },
@@ -1232,7 +1334,8 @@ export async function maybeStartFollowUpSweep({ client, locationId, saved, store
   if (!gate.go) return false;
   startFollowUpSweep({ client, locationId, saved, store, sendsEnabled, now, deps, trigger: "daily",
     onDone: (job) => closeDailyRun({ store, locationId, cursorName: CURSOR_NAME, failed: job.status === "error", error: job.error,
-      last: { id: job.id, status: job.status, considered: job.considered, due: job.due, started: job.started, skipped: job.skipped, errors: job.errors, emailed: job.emailed, finishedAt: job.finishedAt } }) });
+      last: { id: job.id, status: job.status, considered: job.considered, due: job.due, started: job.started, skipped: job.skipped, errors: job.errors, emailed: job.emailed, finishedAt: job.finishedAt,
+        readTruncated: Boolean(job.readTruncated) } }) });
   return true;
 }
 // The morning's window for the sweep, from its hour.

@@ -34,7 +34,7 @@
 // Pure. ghl-broker/reply-agent.js uses standardText() in place of the model
 // for these kinds when the mode is "template".
 
-import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME, withHomeBlank } from "./outreach-opener.js";
+import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME, withHomeBlank, COLD_LAST_RUNG_TEXTS } from "./outreach-opener.js";
 
 // The follow-up to a first text nobody answered (outreach_nudge): Rigo's
 // two-week text, without the dollar figure (carriers read money in a cold
@@ -146,18 +146,45 @@ export function fillTemplate(template = "", values = {}) {
     if (!v) missing = true;
     return v;
   });
-  return missing ? "" : out.replace(/\s+([,.?])/g, "$1").replace(/\s{2,}/g, " ").trim();
+  if (missing) return "";
+  const text = out.replace(/\s+([,.?])/g, "$1").replace(/\s{2,}/g, " ").trim();
+  // No first name in a text that opens or pauses on it ("{first}, got any
+  // fixers coming up?", "Rough is what I'm after, {first}."): no stray comma.
+  return values.first ? text : nameless(text);
+}
+const nameless = (text) => {
+  const t = text.replace(/,(?=[.?])/g, "");
+  if (!/^,/.test(t)) return t;
+  const rest = t.replace(/^,\s*/, "");
+  return rest.charAt(0).toUpperCase() + rest.slice(1);
+};
+
+/**
+ * plainBody(text, first) → "any houses around halden that need real work lately"
+ *
+ * A text as words alone: lower case, the greeting and their first name gone,
+ * punctuation and spaces collapsed. Two texts with the same plain body are
+ * the same text to the agent, however each was greeted.
+ */
+export function plainBody(text = "", first = "") {
+  let t = String(text || "").toLowerCase().replace(/^\s*(?:hi|hey|hello)\b[\s,]*/, "");
+  const name = String(first || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  t = ` ${t.replace(/[^a-z0-9]+/g, " ").trim()} `;
+  if (name) t = t.split(` ${name} `).join(" ");
+  return t.trim();
 }
 
 // Which text an agent gets: the contact's variant, then the next one along
-// when that one uses a blank we can't fill.
-function pickFilled(list, variant, values) {
+// when that one uses a blank we can't fill, or says what one of our recent
+// texts to them (`prior`) already said.
+function pickFilled(list, variant, values, prior = []) {
   const n = list.length;
   const start = Math.abs(Math.round(Number(variant) || 0)) % Math.max(1, n);
+  const said = new Set((prior || []).map((p) => plainBody(p, values.first)).filter(Boolean));
   for (let i = 0; i < n; i++) {
     const index = (start + i) % n;
     const text = fillTemplate(list[index], values);
-    if (text) return { text, index };
+    if (text && !said.has(plainBody(text, values.first))) return { text, index };
   }
   return null;
 }
@@ -174,12 +201,17 @@ function pickFilled(list, variant, values) {
  *   outreach_nudge  outbound.mode "template"; outbound.followUps[step], else
  *                   NUDGE_TEXTS from the contact's variant plus the step; a
  *                   repeat rung past the last step, outbound.checkIns in turn
+ *                   (the last one COLD_LAST_RUNG_TEXTS); none names a
+ *                   house or a street
  *   agent_pulse     outbound.mode "template"; CHECKIN_TEXTS, CHECKIN_COLD_TEXTS,
  *                   or LISTING_PING_TEXTS / LISTING_PING_COLD_TEXTS when a
  *                   fresh listing of theirs came up; a focus listing
  *                   (outbound.listing.focus) one of outbound.templates
+ *
+ * `prior`: our last texts to them, newest first. A cold check-in never says
+ * what one of them said (plainBody); it walks on to the next text.
  */
-export function standardText({ kind, outbound = {}, name = "", contactId = "" } = {}) {
+export function standardText({ kind, outbound = {}, name = "", contactId = "", prior = [] } = {}) {
   const o = outbound || {};
   // The recent listers' first text and its first follow-up are these fixed
   // texts in either mode: the model has no words for a house that's gone.
@@ -212,9 +244,29 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
     // A repeat rung (every 14 days after the last step) is a check-in, the
     // next one along each time. Until 2026-10-20 its step read as step 1, so
     // it sent follow-up 1 again.
+    //
+    // 2026-11-09 (Matt: the day 30, 44 and 58 texts, in his own words): the
+    // last rung (`repeatMax`, day 58 on the default ladder) says it is the
+    // last; otherwise the next check-in along, one that names their town
+    // when we know it. None names a house or a street, not even a new
+    // listing of theirs (Matt, 11-09: check-ins never reference properties).
+    // None says what one of our recent texts to them said (`prior`): it walks
+    // on, and a pool with nothing left falls back to the check-ins, then to
+    // the model.
     if (o.repeats && !Number(o.stepIndex)) {
+      const n = Math.max(1, Math.round(Number(o.repeatN) || 1));
       const list = Array.isArray(o.checkIns) && o.checkIns.length ? o.checkIns : DEFAULT_CHECK_IN_TEXTS;
-      return done("check_in", pickFilled(list, v + Math.max(0, (Number(o.repeatN) || 1) - 1), values));
+      // The default list: seven of ten name the town, the other three are
+      // for an agent whose town we don't have.
+      const named = values.town && list.join("\n") === DEFAULT_CHECK_IN_TEXTS.join("\n") ? list.filter((t) => /\{town\}/.test(t)) : list;
+      const checkIn = () => {
+        const r = pickFilled(named, v + n - 1, values, prior);
+        return r ? { text: r.text, set: "check_in", index: list.indexOf(named[r.index]) } : null;
+      };
+      if (Number(o.repeatMax) > 0 && n >= Number(o.repeatMax)) {
+        return done("cold_last", pickFilled(COLD_LAST_RUNG_TEXTS, v, values, prior)) || checkIn();
+      }
+      return checkIn();
     }
     // Follow-up N is the text written for step N; one with none of its own
     // (or one we can't fill) takes the pool, a step along per step, so no

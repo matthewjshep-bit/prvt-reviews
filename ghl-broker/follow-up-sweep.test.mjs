@@ -1209,3 +1209,51 @@ test("a buyer's one follow-up stays one when the day is changed or the house is 
   await settle();
   assert.equal(r.started.length, 0);
 });
+
+/* ---------- the cold ladder after day 16 (2026-11-09) ---------- */
+
+// Agents the app texted first and who never answered: day 2, then a
+// check-in every 14 days. Invented contacts and streets.
+const COLD_SAVED = { aiApiKey: "k", conversationAi: configWith({ agent: { followUp: { enabled: true,
+  ladders: { outreach_nudge: { enabled: true, steps: [2], repeatEvery: 14 } } } } }) };
+const coldAgent = (contactId, firstAt, rungs = []) => [
+  { contactId, party: "agent", type: "outreach_sent", at: new Date(firstAt).toISOString(), address: "77 Thistle Ln, Halden, WA 98011", dedupeKey: `outreach:${contactId}` },
+  ...rungs.map((step) => ({ contactId, party: "agent", type: "follow_up_sent", at: new Date(firstAt + step * DAY + 3600000).toISOString(),
+    dedupeKey: followUpDedupeKey({ kind: "outreach_nudge", subjectId: contactId, step }), data: { kind: "outreach_nudge", step } })),
+];
+
+test("the day-2 follow-up goes ahead of day-30 check-ins when the run's 150 are used up", async () => {
+  _resetJobs();
+  const now = T0 + 40 * DAY;
+  const events = [];
+  // 160 agents whose day-30 check-in is due this morning, read first…
+  for (let i = 0; i < 160; i++) events.push(...coldAgent(`c-old-${String(i).padStart(3, "0")}`, now - 30 * DAY - 2 * 3600000, [2, 16]));
+  // …and one first texted two days ago, read last.
+  events.push(...coldAgent("c-new", now - 2 * DAY - 2 * 3600000));
+  const store = fakeStore({ events });
+  const { job, started } = spySweep(store, { now, opts: { saved: COLD_SAVED } });
+  const until = Date.now() + 20000;
+  while (job.status === "running" && Date.now() < until) await pause(10);
+  assert.equal(job.status, "done", job.error);
+  assert.equal(started.length, 150, "the cap is unchanged");
+  assert.equal(started[0].contactId, "c-new", "the second touch goes first");
+  assert.equal(started[0].subject.step, 2);
+  assert.ok(job.results.some((r) => r.contactId?.startsWith("c-old-") && /goes on the next run/.test(r.reason || "")), "ten check-ins wait for tomorrow");
+});
+
+test("an agent whose day-30 rung was missed gets only their current rung, never two at once", async () => {
+  _resetJobs();
+  // First texted 45 days ago: day 2 and 16 went, day 30 never did (the read
+  // lost them). This morning they get day 44, once, and day 30 is never sent.
+  const now = T0 + 60 * DAY;
+  const store = fakeStore({ events: coldAgent("c-missed", now - 45 * DAY, [2, 16]) });
+  const first = spySweep(store, { now, opts: { saved: COLD_SAVED } });
+  await settle();
+  assert.deepEqual(first.started.map((s) => [s.contactId, s.subject.step]), [["c-missed", 44]]);
+  const claims = store.events.filter((e) => e.contactId === "c-missed" && e.type === "follow_up_sent").map((e) => e.data?.step);
+  assert.deepEqual(claims.sort((a, b) => a - b), [2, 16, 44], "day 30 is not claimed in arrears");
+  _resetJobs();
+  const again = spySweep(store, { now: now + 3600000, opts: { saved: COLD_SAVED } });
+  await settle();
+  assert.equal(again.started.length, 0, "and nothing more that morning");
+});

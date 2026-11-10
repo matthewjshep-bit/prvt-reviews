@@ -20,7 +20,7 @@ test("the agent chart shows the first text and each follow-up as an agent would 
   for (const t of ["A new listing agent is found", "First text", "Wait until day 2", "Follow-up 1", "Intro email, day 2", "Then check in every 14 days", "They reply", "Check in every 21 days"]) expect(html).toContain(t);
   expect(html).toContain("Hi Brenda, saw your listing at 14820 SE 172nd St.");
   expect(html).toContain("Hey Brenda, circling back on 14820 SE 172nd St.");
-  expect(html).toContain("Hi Brenda, circling back. Any fixers or distressed properties");
+  expect(html).toContain("Hi Brenda, any houses around Renton that need real work lately?");
   // The email keeps its paragraphs and shows the website.
   expect(html).toContain("Hi Brenda,\n\nThis is Matt Shepherd with Shep Flips.");
   expect(html).toContain("https://shepflips.com");

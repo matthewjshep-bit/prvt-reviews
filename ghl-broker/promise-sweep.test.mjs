@@ -837,3 +837,52 @@ test("dismissing a promised call closes it even after the machine kept a number"
   const r = await settlePromise({ store, locationId: "LOC", contactId: "c1", by: "dismissed", reason: "handled_by_call", now: NOW });
   assert.equal(r.settled, true);
 });
+
+/* ---------- a request three weeks old, on a busy line (2026-11-09) ---------- */
+
+// The store as it really reads: past `limit` it keeps the NEWEST rows and
+// says it cut (store.js listContactEventsSince), pages oldest first
+// (listContactEventsPage), and reads one contact's own timeline.
+const busyStore = ({ events = [] } = {}) => {
+  const store = fakeStore({ events });
+  const inWindow = (since, types) => store.events.filter((e) => e.at >= since && (!types || types.includes(e.type)));
+  store.listContactEventsSince = async (_loc, since, { types = null, limit = 5000 } = {}) => {
+    const rows = inWindow(since, types).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    const kept = rows.slice(0, limit);
+    if (rows.length > limit) kept.truncated = true;
+    return kept;
+  };
+  store.listContactEventsPage = async (_loc, since, { types = null, after = null, limit = 2000 } = {}) => {
+    const rows = inWindow(since, types).sort((a, b) => String(a.at).localeCompare(String(b.at)) || String(a.dedupeKey).localeCompare(String(b.dedupeKey)))
+      .filter((e) => !after || String(e.at) > String(after.at) || (String(e.at) === String(after.at) && String(e.dedupeKey) > String(after.id)));
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return { rows: page, next: page.length >= limit && last ? { at: last.at, id: last.dedupeKey } : null };
+  };
+  store.listContactEvents = async (_loc, contactId, { since = null, types = null, limit = 500 } = {}) =>
+    store.events.filter((e) => e.contactId === contactId && (!since || e.at >= since) && (!types || types.includes(e.type)))
+      .sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, limit);
+  return store;
+};
+
+test("a check back in a month request still goes when 6,000 newer events exist", async () => {
+  // Asked 30 days ago to hear from us in a month; due yesterday.
+  const req = request(30 * 24, { kind: "date", phrase: "in a month", dueAt: at(20) });
+  // Every reply on every other thread since: invented, and all newer than the request.
+  const busy = [];
+  for (let i = 0; i < 6000; i++) {
+    busy.push({ contactId: `other-${i % 300}`, type: "text_summary", at: at(29 * 24 - (i * 29 * 24) / 6000), dedupeKey: `busy:${i}`, data: { inbound: "nothing yet" } });
+  }
+  const store = busyStore({ events: [req, ...busy] });
+  const s = starter();
+  const r = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store, now: NOW, deps: s });
+  assert.equal(r.sent, 1, JSON.stringify(r.results.slice(0, 3)));
+  assert.equal(s.calls[0].kind, "checkin_due");
+  assert.equal(s.calls[0].subject.phrase, "in a month");
+  // They wrote back since asking: still read, and nothing goes.
+  const answered = busyStore({ events: [req, ...busy, { contactId: "c9", type: "text_summary", at: at(5 * 24), dedupeKey: "theirs", data: {} }] });
+  const s2 = starter();
+  const r2 = await runCheckInSweep({ locationId: "LOC", saved: SAVED, store: answered, now: NOW, deps: s2 });
+  assert.equal(s2.calls.length, 0);
+  assert.equal(r2.answered, 1);
+});
