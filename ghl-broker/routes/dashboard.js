@@ -32,7 +32,9 @@ import { store } from "../store.js";
 import {
   countContactsByTag, searchConversations, listConversationMessages, searchContactsCreatedSince,
 } from "../ghl.js";
-import { offerFunnel, counterSpread, passReasons, followUpPerformance, passThemes } from "../shared/funnel.js";
+import { offerFunnel, counterSpread, passReasons, followUpPerformance, passThemes, followUpsFromOutbox, COUNTING_CHANGED } from "../shared/funnel.js";
+import { stopReply } from "../shared/outreach-scorecard.js";
+import { storedOutreachScorecard } from "../outreach-scorecard.js";
 import { buildPipeline } from "../shared/pipeline.js";
 import { owedPromises } from "../shared/promise-owed.js";
 import { selfNames, selfContactIds, withoutSelf } from "../shared/self-contact.js";
@@ -239,28 +241,41 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     try {
       const { locationId } = resolveLocation(req);
       const { days, tzOffset, end } = readWindow(req);
-      const { startMs, startIso } = windowFor(days, tzOffset, end);
+      const { startMs, endMs, startIso } = windowFor(days, tzOffset, end);
       // Same reasoning as /summary: a status lands on an offer created long
       // before the window, so the rows are fetched from well behind it.
       const horizonIso = new Date(startMs - 365 * DAY_MS).toISOString();
       const rows = await store.listOfferOutcomesSince(locationId, horizonIso);
 
       // The event window IS the window — a nudge sent before it is not this
-      // report's business. Note this is the only place a location-wide event
-      // query is asked for; nothing needed one before the follow-up clock.
-      const events = await store.listContactEventsSince(locationId, startIso, {
-        types: ["follow_up_sent", "text_summary", "call_summary"], limit: 5000,
-      }).catch(() => []);
-      const nudges = events.filter((e) => e.type === "follow_up_sent");
-      const inbound = events.filter((e) => e.type !== "follow_up_sent");
+      // report's business. The nudges are the outbox rows that went, not the
+      // sweep's follow_up_sent claim (written before a draft exists, so a held
+      // or dropped nudge read as sent; 2026-11-09).
+      const [read, outbox] = await Promise.all([
+        allEventsSince(store, locationId, startIso, { types: ["text_summary", "call_summary", "unsubscribed"] }, { ceiling: 20000 })
+          .catch(() => ({ events: [], truncated: false })),
+        (typeof store.listReplyDraftLedger === "function"
+          ? store.listReplyDraftLedger(locationId, { status: "sent", since: startIso, limit: 20000 })
+          : store.listReplyDrafts(locationId, { status: "sent", since: startIso, limit: 20000 })).catch(() => []),
+      ]);
+      const nudges = followUpsFromOutbox(outbox);
+      // Their texts and calls; a STOP is counted as stopped, not replied.
+      const inbound = (read.events || [])
+        .filter((e) => e.type !== "text_summary" || String(e.data?.inbound || "").trim())
+        .map((e) => ({ contactId: e.contactId, at: e.at,
+          stop: e.type === "unsubscribed" || e.data?.intent === "opt_out" || (e.type === "text_summary" && stopReply(e.data?.inbound)) }));
 
-      const inWindow = rows.filter((o) => msOf(o.createdAt) >= startMs ||
-        (o.statusHistory || []).some((h) => msOf(h.ts) >= startMs));
+      // Rows with anything in the window; each stage then counts only on its own time.
+      const inWindow = rows.filter((o) => msOf(o.createdAt) >= startMs || msOf(o.floatSentAt) >= startMs ||
+        (o.statusHistory || []).some((h) => msOf(h.ts) >= startMs) || (o.sends || []).some((x) => msOf(x?.ts) >= startMs));
 
       res.json({
         ok: true,
         window: { days, startIso, end },
-        funnel: offerFunnel(inWindow),
+        // The counting rules changed on 2026-11-09 (shared/funnel.js): the page says so.
+        countingChanged: COUNTING_CHANGED,
+        eventsTruncated: Boolean(read.truncated),
+        funnel: offerFunnel(inWindow, { since: startMs, until: endMs }),
         counters: counterSpread(inWindow),
         passReasons: {
           deal: passReasons(inWindow, { by: "deal" }),
@@ -348,6 +363,9 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
     "investor_evaluating", "investor_committed", "investor_passed", "feedback", "follow_up_sent", "call_booked", "agent_estimate",
     // What makes a reply "useful" on the Replied tile (shared/flow.js).
     "house_mentioned", "referral_mentioned", "property_details",
+    // Texts you typed yourself (counted as yours), and every inbound text as
+    // it arrived once that is recorded (2026-11-09).
+    "hand_reply", "inbound_received",
   ];
   // The line, measured (shared/line.js): each station against its target,
   // the waits between stations, what fell off with nothing scheduled, the
@@ -366,7 +384,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         flow: { eventTypes: FLOW_EVENT_TYPES, jobs: listUnderwriteJobs(locationId, { limit: 100 }).map(publicUnderwriteJob) },
         buyerBook: router.buyerBook || null,
       });
-      const body = { ok: true, ...line };
+      const body = { ok: true, ...line, countingChanged: COUNTING_CHANGED };
       lineCache.set(locationId, { at: Date.now(), body });
       res.json(body);
     } catch (err) { fail(res, err); }
@@ -398,8 +416,17 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
   router.get("/followup", async (req, res) => {
     try {
       const { items, ...page } = await followUpPage(req);
-      res.json({ ok: true, ...page, itemsTotal: items.length });
+      res.json({ ok: true, ...page, itemsTotal: items.length, countingChanged: COUNTING_CHANGED });
     } catch (err) { if (err.http === 400) return res.status(400).json({ error: err.message }); fail(res, err); }
+  });
+  // The text scoreboard (shared/outreach-scorecard.js): which first text,
+  // follow-up and check-in gets answers, STOPs and houses. The nightly run's
+  // card as it was kept; nothing is worked out on open.
+  router.get("/outreach-scorecard", async (req, res) => {
+    try {
+      const { locationId } = resolveLocation(req);
+      res.json({ ok: true, ...((await storedOutreachScorecard({ store, locationId })) || { card: null, at: null, status: null }) });
+    } catch (err) { fail(res, err); }
   });
   router.get("/followup/items", async (req, res) => {
     try {
@@ -441,6 +468,7 @@ export default function createDashboardRouter({ resolveLocation, conversationDep
         ...flow,
         // The window was bigger than the read's ceiling: the counts are low.
         eventsTruncated: Boolean(eventsRead.truncated),
+        countingChanged: COUNTING_CHANGED,
         autopilot: autopilotFor({ saved, config, recentDrafts }),
         queue: pipeline.counts.actions,
         // Agents whose outreach ladder ran out with nothing back. A number for

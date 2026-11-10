@@ -154,13 +154,14 @@ function pickFilled(list, variant, values) {
   for (let i = 0; i < n; i++) {
     const index = (start + i) % n;
     const text = fillTemplate(list[index], values);
-    if (text) return { text, index };
+    // `template`: the unfilled text, so the send can say which one went.
+    if (text) return { text, index, template: list[index] };
   }
   return null;
 }
 
 /**
- * standardText({ kind, outbound, name, contactId }) → { text, set, index } | null
+ * standardText({ kind, outbound, name, contactId }) → { text, set, index, template } | null
  *
  * The fixed text for a cold text to a listing agent, or null when the model
  * should write it: the mode is "ai", or it's a kind of text with something
@@ -193,7 +194,7 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
   };
   // The first text carries its variant; the others follow the contact id.
   const v = o.variant != null ? Number(o.variant) || 0 : openerVariant(contactId, 997);
-  const done = (set, r) => (r ? { text: r.text, set, index: r.index } : null);
+  const done = (set, r) => (r ? { text: r.text, set, index: r.index, template: r.template } : null);
   // No town on record: pickFilled moves on to the line that doesn't name one.
   if (kind === "outreach_open" && o.pastListing) return done("past_listing", pickFilled(PAST_LISTING_TEXTS, v, values));
   if (kind === "outreach_open") {
@@ -224,7 +225,7 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "" } 
       return done("check_in", pickFilled(list, v + rung, values));
     }
     const own = Array.isArray(o.followUps) ? fillTemplate(o.followUps[rung], values) : "";
-    if (own) return { text: own, set: "follow_up", index: rung };
+    if (own) return { text: own, set: "follow_up", index: rung, template: o.followUps[rung] };
     return done("nudge", pickFilled(NUDGE_TEXTS, v + rung, values));
   }
   if (kind === "agent_pulse") {

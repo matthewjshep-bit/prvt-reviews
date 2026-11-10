@@ -42,7 +42,8 @@ function Stage({ s, max, onPick }) {
       </div>
       <div className="mt-1 text-center text-xs font-semibold text-slate-700">{s.label}</div>
       <div className="text-center text-[11px] text-slate-400">
-        {s.count > 0 ? <><span className="text-violet-600">{s.machine} machine</span> · {s.person} you</> : "—"}
+        {/* Machine, you, and them: an agent's reply or a buyer's commit is theirs, not yours (2026-11-09). */}
+        {s.count > 0 ? <><span className="text-violet-600">{s.machine} machine</span>{(s.you ?? s.person) ? ` · ${s.you ?? s.person} you` : ""}{s.them ? ` · ${s.them} them` : ""}</> : "—"}
       </div>
       {s.sub && <div className="text-center text-[11px] text-slate-500">{s.sub}</div>}
     </button>
@@ -145,6 +146,9 @@ export default function FlowView() {
       {data && !data.conversationEnabled && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">The Conversation AI is switched off, so nothing here is moving on its own.</div>
       )}
+      {data?.countingChanged && (
+        <p className="text-[11px] text-slate-500">Counting changed on {data.countingChanged}: Floated counts a float when it went, Offered and Assigned count once each, and an agent's reply is theirs, not yours.</p>
+      )}
       {data?.eventsTruncated && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
           More happened in this window than one read holds — the counts below are low. Pick a shorter window for exact numbers.
@@ -157,8 +161,9 @@ export default function FlowView() {
         <input type="date" value={endDate} max={localDayKey()} onChange={(e) => setEndDate(e.target.value)}
           className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs" title="A single past day" />
         <span className="ml-auto text-xs text-slate-500">
-          <b className="text-violet-600">{t.machine ?? 0}</b> moves by the machine · <b>{t.person ?? 0}</b> by you
-          {t.messages ? ` · texts: ${t.messages.autoSent} sent itself, ${t.messages.personSent} by you` : ""}
+          <b className="text-violet-600">{t.machine ?? 0}</b> moves by the machine · <b>{t.you ?? t.person ?? 0}</b> by you
+          {t.them ? <> · <b>{t.them}</b> by agents and buyers</> : null}
+          {t.messages ? ` · texts: ${t.messages.autoSent} sent itself, ${t.messages.personSent + (t.messages.handTexts || 0)} by you` : ""}
           {data?.coldNoReply ? <span title="Their outreach follow-ups ran out with nothing back. They leave this count the moment they answer."> · {data.coldNoReply} cold agent{data.coldNoReply === 1 ? "" : "s"} never answered</span> : null}
         </span>
         <button type="button" className={BTN} onClick={() => setRefreshKey((k) => k + 1)} title="Refresh now">

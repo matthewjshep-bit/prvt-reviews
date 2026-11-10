@@ -25,7 +25,9 @@ const uuid = () => crypto.randomUUID();
 
 // listReplyDraftLedger's trim, both backends: the outbound fields that name
 // the mechanism and its subject. Change the SQL and this together.
-const DRAFT_LEDGER_OUTBOUND = ["kind", "offerId", "address", "forMatt", "step", "label", "segment", "reason"];
+// `standard` and `detailKind`: which fixed text went and what a check-in
+// named, for the text scoreboard (ghl-broker/outreach-scorecard.js).
+const DRAFT_LEDGER_OUTBOUND = ["kind", "offerId", "address", "forMatt", "step", "label", "segment", "reason", "standard", "detailKind"];
 export function draftLedgerRow(d = {}) {
   const keep = (o, keys) => Object.fromEntries(keys.filter((k) => o?.[k] !== undefined && o[k] !== null).map((k) => [k, o[k]]));
   return {
@@ -1299,7 +1301,8 @@ const pgStore = {
               cash_amount as "cashAmount", status, status_at as "statusAt",
               coalesce(doc->'statusHistory', '[]'::jsonb) as "statusHistory",
               doc->'counter' as counter, doc->'deal' as deal,
-              doc->'arv' as arv, doc->'repairs' as repairs
+              doc->'arv' as arv, doc->'repairs' as repairs,
+              doc->>'floatSentAt' as "floatSentAt", coalesce(doc->'sends', '[]'::jsonb) as sends
          from offers where location_id = $1 and created_at >= $2
          order by created_at asc limit $3`,
       [locationId, sinceIso, limit]
@@ -2605,6 +2608,8 @@ const fileStore = (() => {
           status: o.status || effectiveStatus(o), statusAt: o.statusAt || o.createdAt || null,
           statusHistory: o.statusHistory || [], counter: o.counter || null, deal: o.deal || null,
           arv: o.arv ?? null, repairs: o.repairs ?? null,
+          // Whether our number really went (shared/offer-stage.js wasSent): the float and the sends.
+          floatSentAt: o.floatSentAt || null, sends: o.sends || [],
         }));
     },
     async getJobCursor(locationId, name) {

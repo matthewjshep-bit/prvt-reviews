@@ -56,6 +56,7 @@ import { passNoteStale } from "./shared/pass-note.js";
 import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, autoReplyNumber } from "./shared/brush-offs.js";
 import { normalizeOpener, openerVoice, countyName, homeFor, withHomeBlank, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { standardText } from "./shared/standard-texts.js";
+import { templateHash } from "./shared/outreach-scorecard.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -3881,7 +3882,9 @@ function standardDraft({ kind, offer, outbound, name, contactId }) {
   const s = standardText({ kind, outbound, name, contactId });
   if (!s) return null;
   return { reply: s.text, summary: outboundSummary({ kind, offer, outbound }), confidence: "high", needsHuman: false, usage: null,
-    standard: { set: s.set, index: s.index } };
+    // Which fixed text, and a fingerprint of it unfilled, so a rewritten one
+    // scores apart from the one it replaced (shared/outreach-scorecard.js).
+    standard: { set: s.set, index: s.index, ...(s.template ? { templateHash: templateHash(s.template) } : {}) } };
 }
 
 // A check-in about their fresh listing when the thread already has that
@@ -7112,7 +7115,12 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       address: d.outbound.address || "", source: "conversation", ref: d.id, dedupeKey: `agent_pulse_texted:${d.id}`,
       data: { draftId: d.id, auto: Boolean(auto), segment: d.outbound.segment || "", reason: d.outbound.reason || "", listingKey: d.outbound.listingKey || null,
         // What it named (shared/agent-pulse.js checkInHook), to read replies by.
-        ...(d.outbound.hook ? { hook: d.outbound.hook } : {}) },
+        ...(d.outbound.hook ? { hook: d.outbound.hook } : {}),
+        // Which fixed text went, and the one real thing it named (the
+        // composer fills detailKind), for the text scoreboard (2026-11-09).
+        ...(d.outbound.standard ? { standard: d.outbound.standard } : {}),
+        ...(d.outbound.detailKind ? { detailKind: d.outbound.detailKind } : {}),
+        chars: body.length, edited: Boolean(updated.edited) },
     }).catch(() => {});
   }
   // The pass note went: each house it named is done (shared/pass-note.js).
@@ -7181,7 +7189,22 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         // "plain" since 2026-10-16; none before that.
         ...(d.outbound.style ? { style: d.outbound.style } : {}),
         turnkey: d.outbound.turnkey === true, chars: body.length, edited: Boolean(updated.edited), ...(d.outbound.offMarket ? { offMarket: true } : {}),
-        ...(d.outbound.pastListing ? { pastListing: true } : {}) },
+        ...(d.outbound.pastListing ? { pastListing: true } : {}),
+        // Which of Matt's fixed texts it was ({ set, index, templateHash }), for the text scoreboard (2026-11-09).
+        ...(d.outbound.standard ? { standard: d.outbound.standard } : {}) },
+    }).catch(() => {});
+  }
+  // A cold agent's follow-up actually went: the text scoreboard reads which
+  // one, at which step (2026-11-09). The sweep's follow_up_sent is a claim
+  // written before the draft, so it can't say.
+  if (d.outbound?.kind === "outreach_nudge") {
+    const std = d.outbound.standard || null;
+    await recordEvent({
+      store, locationId, contactId: d.contactId, party: "agent", type: "outreach_nudge_sent", at: ts,
+      address: d.outbound.address || d.propertyAddress || "", source: "conversation", ref: d.id, dedupeKey: `outreach_nudge_sent:${d.id}`,
+      data: { draftId: d.id, auto: Boolean(auto), step: d.outbound.step ?? null,
+        ...(std ? { set: std.set, index: std.index ?? null, ...(std.templateHash ? { templateHash: std.templateHash } : {}) } : {}),
+        ...(d.outbound.county ? { county: d.outbound.county } : {}), chars: body.length, edited: Boolean(updated.edited) },
     }).catch(() => {});
   }
   // A reply that promised to come back starts a clock (promise-sweep.js). The

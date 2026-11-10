@@ -27,6 +27,7 @@ import { holdState, callsInstead } from "./shared/counter-hold.js";
 import { paperAfterSilenceDue, paperWent, addWorkingHours, PAPER_FLOAT_MAX_DAYS } from "./shared/paper-follows.js";
 import { showingTouches } from "./shared/showing.js";
 import { callEventConnected } from "./shared/talked-to.js";
+import { stopReply } from "./shared/outreach-scorecard.js";
 import { attachNextFollowUps } from "./next-follow-up.js";
 import { planAgentPulse, pulseWorkflows, pulseTierCards, MATTS_FIFTEEN_REASON, CURSOR_NAME as AGENT_PULSE_CURSOR } from "./agent-pulse.js";
 import { planBuyerPulse, pulseSettings as buyerPulseSettings } from "./buyer-pulse.js";
@@ -337,7 +338,7 @@ export async function followUpEngineFor({ store, locationId, saved = {}, period 
     (typeof store.listReplyDraftLedger === "function"
       ? store.listReplyDraftLedger(locationId, { status: "sent", since: iso(win.start - LEDGER_SLACK_DAYS * DAY_MS), limit: 50000 })
       : store.listReplyDrafts(locationId, { status: "sent", since: iso(win.start - LEDGER_SLACK_DAYS * DAY_MS), limit: 20000 })).catch(() => []),
-    allEventsSince(store, locationId, startIso, { types: [...SEND_EVENT_TYPES, ...INBOUND_TYPES, "import"] }, { ceiling: 100000 }).catch(() => ({ events: [], truncated: false })),
+    allEventsSince(store, locationId, startIso, { types: [...SEND_EVENT_TYPES, ...INBOUND_TYPES, "import", "unsubscribed"] }, { ceiling: 100000 }).catch(() => ({ events: [], truncated: false })),
   ]);
   const periodEvents = periodRead.events || [];
 
@@ -386,8 +387,11 @@ export async function followUpEngineFor({ store, locationId, saved = {}, period 
     sent.push({ mech, src: "draft", at: d.sentAt || d.createdAt, contactId: d.contactId, name: d.contactName || nameOf(d.contactId),
       offerId: d.outbound?.offerId || null, address: d.outbound?.address || "", who: d.autoSent ? "machine" : "you" });
   }
-  const inbound = periodEvents.filter((e) => e.type === "call_summary" || (e.type === "text_summary" && String(e.data?.inbound || "").trim()))
-    .map((e) => ({ contactId: e.contactId, at: e.at }));
+  // Their texts and calls, and whether they asked us to stop (their words, an
+  // opt-out read, or GHL's DND): a STOP is counted as stopped, not replied.
+  const inbound = periodEvents.filter((e) => e.type === "call_summary" || e.type === "unsubscribed" || (e.type === "text_summary" && String(e.data?.inbound || "").trim()))
+    .map((e) => ({ contactId: e.contactId, at: e.at,
+      stop: e.type === "unsubscribed" || e.data?.intent === "opt_out" || (e.type === "text_summary" && stopReply(e.data?.inbound)) }));
 
   /* --- what's written --- */
   const queued = [], held = [];

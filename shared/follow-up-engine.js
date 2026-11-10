@@ -387,22 +387,25 @@ export function dedupePlanned(planned = [], open = []) {
 export const REPLY_WINDOW_HOURS = 72;
 
 /**
- * attributeReplies(sends, inbound) → Set of send ids that got a reply
+ * attributeAnswers(sends, inbound) → { replied: Set, stopped: Set } of send ids
  *
  *   sends    [{ id, contactId, at }] — every counted send, any mechanism
- *   inbound  [{ contactId, at }] — their texts and calls
+ *   inbound  [{ contactId, at, stop }] — their texts and calls; `stop` when
+ *            they asked us to stop (their words, an opt-out read, GHL's DND)
  *
  * A send is answered when they wrote or called within 72 hours of it and
  * before our next send to them: last touch gets the credit, so one reply
- * never counts for two texts.
+ * never counts for two texts. An answer that was a STOP is stopped, not
+ * replied (2026-11-09: a follow-up that provoked "stop texting me" read as
+ * one that worked).
  */
-export function attributeReplies(sends = [], inbound = [], { windowHours = REPLY_WINDOW_HOURS } = {}) {
+export function attributeAnswers(sends = [], inbound = [], { windowHours = REPLY_WINDOW_HOURS } = {}) {
   const inBy = new Map();
   for (const e of inbound) {
     const t = ms(e?.at);
     if (!e?.contactId || t == null) continue;
     if (!inBy.has(e.contactId)) inBy.set(e.contactId, []);
-    inBy.get(e.contactId).push(t);
+    inBy.get(e.contactId).push({ t, stop: e.stop === true });
   }
   const sendBy = new Map();
   for (const s of sends) {
@@ -410,25 +413,32 @@ export function attributeReplies(sends = [], inbound = [], { windowHours = REPLY
     if (!sendBy.has(s.contactId)) sendBy.set(s.contactId, []);
     sendBy.get(s.contactId).push(s);
   }
-  const answered = new Set();
+  const replied = new Set(), stopped = new Set();
   for (const [c, list] of sendBy) {
-    const ins = (inBy.get(c) || []).sort((a, b) => a - b);
+    const ins = (inBy.get(c) || []).sort((a, b) => a.t - b.t);
     if (!ins.length) continue;
     list.sort((a, b) => ms(a.at) - ms(b.at));
     list.forEach((s, i) => {
       const t0 = ms(s.at);
       const nextAt = i + 1 < list.length ? ms(list[i + 1].at) : Infinity;
       const until = Math.min(t0 + windowHours * HOUR_MS, nextAt);
-      if (ins.some((t) => t > t0 && t <= until)) answered.add(s.id);
+      const answers = ins.filter((x) => x.t > t0 && x.t <= until);
+      if (answers.some((x) => x.stop)) stopped.add(s.id);
+      else if (answers.length) replied.add(s.id);
     });
   }
-  return answered;
+  return { replied, stopped };
+}
+
+/** attributeReplies(sends, inbound) → Set of send ids that got a reply (not a STOP). */
+export function attributeReplies(sends = [], inbound = [], opts = {}) {
+  return attributeAnswers(sends, inbound, opts).replied;
 }
 
 /* ---------- the page ---------- */
 
 const pct = (a, b) => (b > 0 ? Math.round((a / b) * 100) : null);
-const ITEM_FIELDS = ["mech", "state", "at", "contactId", "name", "offerId", "address", "who", "count", "note", "replied", "overdue"];
+const ITEM_FIELDS = ["mech", "state", "at", "contactId", "name", "offerId", "address", "who", "count", "note", "replied", "stopped", "overdue"];
 const slim = (x) => Object.fromEntries(ITEM_FIELDS.filter((k) => x[k] !== undefined && x[k] !== null && x[k] !== "").map((k) => [k, x[k]]));
 
 /**
@@ -440,7 +450,7 @@ const slim = (x) => Object.fromEntries(ITEM_FIELDS.filter((k) => x[k] !== undefi
  *   queued      [item] drafts with a send time
  *   held        [item] machine drafts waiting on a person
  *   planned     [item] the planners' forecasts
- *   inbound     [{ contactId, at }] their texts and calls since the period began
+ *   inbound     [{ contactId, at, stop }] their texts and calls since the period began
  *   cohort      { firstTexted, replied } — Flow's own numbers for the period
  *   status      { [mech]: { state: on|drafts|off|ghl, why } }
  *   lastRuns    { [mech]: ISO } the job behind it last ran
@@ -466,8 +476,8 @@ export function buildFollowUpEngine({
     const t = ms(x.at);
     return m && t != null && t >= win.start && t <= now && (x.src || "draft") === m.sentFrom;
   }).map((x, i) => ({ ...x, id: x.id || `s${i}`, state: "sent" }));
-  const answered = attributeReplies(sends, inbound);
-  for (const s of sends) s.replied = answered.has(s.id);
+  const answered = attributeAnswers(sends, inbound);
+  for (const s of sends) { s.replied = answered.replied.has(s.id); s.stopped = answered.stopped.has(s.id); }
 
   // Ahead: (now, end]. A plan already overdue is due now — the next sweep has it.
   const open = [...queued, ...held];
@@ -504,7 +514,7 @@ export function buildFollowUpEngine({
         key: m.key, label: m.label, what: describeMechanism(m.key, settings), followUp: m.followUp, ghl: Boolean(m.ghl),
         status: st.state, statusLabel: STATUS_LABEL[st.state] || st.state, statusWhy: st.why || "",
         lastRun: lastRuns[m.key] || null,
-        sent: sum(s), replied: s.filter((x) => x.replied).length,
+        sent: sum(s), replied: s.filter((x) => x.replied).length, stopped: s.filter((x) => x.stopped).length,
         queued: sum(q), planned: sum(p), held: sum(h),
         // Event-driven: nothing to forecast honestly. Only what's queued.
         ahead: m.ahead, fires: m.fires || "",
@@ -513,7 +523,7 @@ export function buildFollowUpEngine({
         countedFrom: m.sentFrom === "draft" && floors.draftsFrom ? floors.draftsFrom : null,
       };
     });
-    const t = { sent: 0, replied: 0, queued: 0, planned: 0, held: 0 };
+    const t = { sent: 0, replied: 0, stopped: 0, queued: 0, planned: 0, held: 0 };
     for (const m of mechanisms) if (m.followUp) for (const k of Object.keys(t)) t[k] += m[k];
     return { ...g, totals: t, mechanisms };
   });
@@ -528,6 +538,9 @@ export function buildFollowUpEngine({
     sent: sum(fuSends),
     replied: fuSends.filter((x) => x.replied).length,
     repliedPct: pct(fuSends.filter((x) => x.replied).length, fuSends.length),
+    // Answered by a STOP, credited to the last send (never counted as replied).
+    stopped: fuSends.filter((x) => x.stopped).length,
+    stoppedPct: pct(fuSends.filter((x) => x.stopped).length, fuSends.length),
     queued: sum(fuAhead.filter((x) => x.state === "queued")),
     planned: sum(fuAhead.filter((x) => x.state === "planned")),
     waitingOnYou: sum(heldIn),

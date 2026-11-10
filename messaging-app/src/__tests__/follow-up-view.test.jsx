@@ -58,3 +58,20 @@ test("a clicked mechanism lists who and what, with the replied ones marked", () 
   expect(html).toContain("9 Oak St");
   expect(html).toContain("Tomorrow");
 });
+
+test("a follow-up answered by STOP shows as stopped beside the replies, never as replied", () => {
+  const data = page({
+    sent: [
+      { mech: "offer_nudge", src: "draft", contactId: "c1", name: "Dana Agent", offerId: "o1", address: "12 Elm St, Renton, WA", at: at(-2) },
+      { mech: "offer_nudge", src: "draft", contactId: "c5", name: "Rory Agent", offerId: "o5", address: "5 Ash St, Kent, WA", at: at(-2) },
+    ],
+    inbound: [{ contactId: "c1", at: at(-1.9) }, { contactId: "c5", at: at(-1.9), stop: true }],
+  });
+  const html = renderToStaticMarkup(<FollowUpBody data={{ ...data, countingChanged: "2026-11-09" }} now={NOW} />);
+  expect(html).toContain("2 · 50% replied · 1 stopped (50%)");
+  expect(html).toContain("1 stopped (50%)");
+  expect(html).toContain("Counting changed on 2026-11-09");
+  const items = data.items.filter((x) => x.mech === "offer_nudge");
+  const list = renderToStaticMarkup(<FollowUpBody data={data} now={NOW} pick={{ kind: "mechanism", key: "offer_nudge", items, total: items.length }} />);
+  expect(list).toContain("stopped");
+});

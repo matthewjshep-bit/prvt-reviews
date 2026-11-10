@@ -169,6 +169,9 @@ export const EVENT_TYPES = [
   // A second look at a strong past offer actually went (shared/second-look.js):
   // our same number, once more. How many a house has had reads these.
   "second_look_sent",
+  // A cold agent's follow-up actually went (reply-agent.js sendReplyDraft):
+  // which text, at which step, for the text scoreboard (2026-11-09).
+  "outreach_nudge_sent",
 ];
 
 export const EVENT_LABEL = {
@@ -220,6 +223,7 @@ export const EVENT_LABEL = {
   email_saved: "their email saved to GHL", email_offered: "they gave an email to check",
   ghl_call_queued: "a call went to GHL's Manual Actions", ghl_call_failed: "a call couldn't go to GHL", ghl_call_withdrawn: "a call was taken back out of GHL",
   second_look_sent: "we asked once more at our same number",
+  outreach_nudge_sent: "we followed up on our first text",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -270,6 +274,7 @@ export const EVENT_ICON = {
   email_saved: "AtSign", email_offered: "AtSign",
   ghl_call_queued: "Phone", ghl_call_failed: "CircleSlash", ghl_call_withdrawn: "Undo2",
   second_look_sent: "RefreshCw",
+  outreach_nudge_sent: "Send",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

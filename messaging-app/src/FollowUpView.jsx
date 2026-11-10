@@ -11,6 +11,7 @@ import { RefreshCw } from "lucide-react";
 import { getDashboardFollowUp, getDashboardFollowUpItems, offerEditorUrl, ghlContactUrl } from "./api.js";
 import { BTN, Card, ErrorBar, FilterChips, KpiRow } from "./ui.jsx";
 import { whenText } from "./NextFollowUp.jsx";
+import TextScoreboardCard from "./TextScoreboard.jsx";
 
 const TZ = "America/Los_Angeles";
 const n = (v) => (v == null ? "—" : Number(v).toLocaleString("en-US"));
@@ -217,7 +218,7 @@ export function ItemList({ items = [], total = 0, labels = {}, now = Date.now(),
                       : <span className="text-slate-500">{String(x.address || "").split(",")[0]}</span>}
                   </td>
                   <td className="py-1 pr-2 text-slate-500">
-                    {x.state === "sent" ? (x.replied ? <span className="font-semibold text-emerald-700">replied</span> : "") : x.who === "you" ? "for you" : "goes itself"}
+                    {x.state === "sent" ? (x.stopped ? <span className="font-semibold text-red-700">stopped</span> : x.replied ? <span className="font-semibold text-emerald-700">replied</span> : "") : x.who === "you" ? "for you" : "goes itself"}
                     {x.overdue ? <span className="text-amber-700"> · due now</span> : null}
                   </td>
                   <td className="py-1 text-slate-400">{x.note || ""}</td>
@@ -266,7 +267,7 @@ export function GroupCard({ group, now = Date.now(), open = "", onMechanism = nu
               <th className="py-1 pr-3 font-semibold">What it is</th>
               <th className="py-1 pr-3 font-semibold">Status</th>
               <th className="py-1 pr-3 text-right font-semibold">Sent</th>
-              <th className="py-1 pr-3 text-right font-semibold" title="They wrote or called back within 72 hours, before our next text">Replied</th>
+              <th className="py-1 pr-3 text-right font-semibold" title="They wrote or called back within 72 hours, before our next text. A STOP is counted as stopped, not replied">Replied</th>
               <th className="py-1 pr-3 text-right font-semibold" title="Queued (written, with a send time) plus planned (each thread's next touch)">Next touches</th>
               <th className="py-1 font-semibold">Next send</th>
             </tr>
@@ -287,7 +288,8 @@ export function GroupCard({ group, now = Date.now(), open = "", onMechanism = nu
                     {m.statusWhy ? <div className="mt-0.5 max-w-[11rem] text-[10px] leading-snug text-slate-400">{m.statusWhy}</div> : null}
                   </td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">{n(m.sent)}</td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">{m.sent ? <>{n(m.replied)} <span className="text-[10px] text-slate-400">{pctOf(m.replied, m.sent)}%</span></> : <span className="text-slate-400">—</span>}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{m.sent ? <>{n(m.replied)} <span className="text-[10px] text-slate-400">{pctOf(m.replied, m.sent)}%</span>
+                    {m.stopped ? <div className="text-[10px] text-red-700">{n(m.stopped)} stopped ({pctOf(m.stopped, m.sent)}%)</div> : null}</> : <span className="text-slate-400">—</span>}</td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">{aheadCell(m)}{m.held ? <div className="text-[10px] text-amber-700">{n(m.held)} waiting on you</div> : null}</td>
                   <td className="py-1.5 text-xs text-slate-600">
                     {m.next ? <>{whenText(m.next.at, now, { withTime: m.next.state === "queued" })}<div className="text-[10px] text-slate-400">{m.next.count > 1 ? `${n(m.next.count)} people` : m.next.name || String(m.next.address || "").split(",")[0]}</div></>
@@ -337,10 +339,11 @@ export function FollowUpBody({ data, now = Date.now(), pick = null, onBucket = n
   return (
     <>
       {data.truncated ? <ErrorBar>More history than one read holds: the counts here are low. Try a shorter period.</ErrorBar> : null}
+      {data.countingChanged ? <p className="text-[11px] text-slate-500">Counting changed on {data.countingChanged}: a STOP is counted as stopped, not as a reply.</p> : null}
       <KpiRow cols="sm:grid-cols-3 lg:grid-cols-6" items={[
         { label: "Agents reached out to", value: n(k.reached), hint: "New agents texted for the first time in the period (the app's text or the GHL workflow's), as Flow counts them" },
         { label: "Agents responded", value: k.reached ? `${n(k.responded)} · ${k.respondedPct ?? 0}%` : n(k.responded), hint: "Of those agents, how many wrote or called back" },
-        { label: "Follow-ups sent", value: k.sent ? `${n(k.sent)} · ${k.repliedPct ?? 0}% replied` : n(k.sent), hint: "Every follow-up the app sent in the period. Replied: they answered within 72 hours, before our next text" },
+        { label: "Follow-ups sent", value: k.sent ? `${n(k.sent)} · ${k.repliedPct ?? 0}% replied · ${n(k.stopped ?? 0)} stopped (${k.stoppedPct ?? 0}%)` : n(k.sent), hint: "Every follow-up the app sent in the period. Replied: they answered within 72 hours, before our next text. Stopped: that answer was a STOP, counted apart and never as a reply" },
         { label: "Scheduled ahead", value: n((k.queued || 0) + (k.planned || 0)), hint: `${n(k.queued)} queued (written, with a send time) · ${n(k.planned)} planned (the next sweep's own plan)` },
         { label: "Waiting on you", value: n(k.waitingOnYou), hint: "Machine follow-ups written and held for you to send or dismiss" },
         { label: "Live offers, nothing scheduled", value: n(k.nothingScheduled), hint: "An open offer whose next follow-up is none — the Line's leak" },
@@ -363,6 +366,7 @@ export function FollowUpBody({ data, now = Date.now(), pick = null, onBucket = n
       ))}
 
       <NothingScheduled data={data.nothingScheduled} />
+      <TextScoreboardCard kind="follow_up" />
       {data.tierCardsRead === false ? <p className="text-[11px] text-slate-400">GHL's Tier 2/3 cards couldn't be read just now: agents only on a card are missing from the check-in plan.</p> : null}
     </>
   );

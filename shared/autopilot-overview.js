@@ -28,7 +28,7 @@ export const OVERVIEW_LABELS = {
 export const OVERVIEW_MAX_LINES = 5;
 
 /**
- * autopilotOverview(page) → { period, sides: [{ key, label, sent, replied, coming, waiting, lines, next }] }
+ * autopilotOverview(page) → { period, sides: [{ key, label, sent, replied, stopped, coming, waiting, lines, next }] }
  *
  * `page` is the follow-up engine's page. `sent` counts every text a side's
  * machines sent in the period, first texts and deal texts included; `coming`
@@ -54,6 +54,8 @@ export function autopilotOverview(page = {}) {
     return {
       key: side.key, label: side.label,
       sent: total(active, "sent"), replied: mechs.reduce((a, m) => a + num(m.replied), 0),
+      // Answered by a STOP, credited to the last send (2026-11-09).
+      stopped: mechs.reduce((a, m) => a + num(m.stopped), 0),
       coming: total(active, "coming"), waiting: total(active, "waiting"),
       lines, next,
     };

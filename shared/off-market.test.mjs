@@ -51,6 +51,18 @@ test("off-market and listed are counted station by station, each house once, and
   assert.deepEqual(r.agents.map((a) => [a.name, a.offers, a.contracts]), [["Lori", 2, 1], ["Gina", 1, 1]]);
 });
 
+test("a house we passed on without ever sending a number isn't counted as in front of the agent", () => {
+  // 2026-11-09: 254 we_passed houses with no send and no float read as
+  // "in front of the agent", and 134 queued floats that never went.
+  const r = offMarketStats([
+    { id: "p1", contactId: "a1", status: "we_passed", createdAt: ago(10), statusHistory: [{ status: "we_passed", ts: ago(7) }] },
+    { id: "p2", contactId: "a1", status: "new", createdAt: ago(10), proactive: { realmCheckAt: ago(9) } },
+    { id: "p3", contactId: "a2", status: "new", createdAt: ago(10), floatSentAt: ago(9) },
+  ], { now: NOW, days: 90 });
+  assert.equal(r.listed.offers, 3);
+  assert.equal(r.listed.sent, 1, "only the float that went");
+});
+
 test("we ask an agent for off-market houses at most once a month", () => {
   for (const ask of ["If anything comes your way off market, I'd love a first look", "anything before it hits the market?", "any pocket listings?"]) {
     assert.ok(OFF_MARKET_ASK_RX.test(ask), ask);

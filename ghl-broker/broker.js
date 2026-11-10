@@ -32,6 +32,7 @@ import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation
 import { releaseMisreadHolds } from "./misread-holds.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunPriceScorecard } from "./price-scorecard.js";
+import { maybeRunOutreachScorecard } from "./outreach-scorecard.js";
 import { maybeRunThreadReads } from "./thread-reads.js";
 import { maybeRunTierCheck, syncChangedCards } from "./tier-check.js";
 import { sweepPassNotes } from "./pass-note.js";
@@ -329,6 +330,12 @@ const TICK_JOBS = [
   { area: "price-scorecard", run: async ({ locationId, saved }) => {
     const r = await maybeRunPriceScorecard({ store, locationId, saved });
     if (r) console.log(`price scorecard for ${locationId}: ${JSON.stringify({ records: r.records, updated: r.updated, posted: r.posted, readyA: r.readyA })}`);
+  } },
+  // Once a night (4am Pacific): which first text, follow-up and check-in gets
+  // answers, STOPs and houses, kept for Reports to read. Reads only.
+  { area: "outreach-scorecard", run: async ({ locationId, saved }) => {
+    const r = await maybeRunOutreachScorecard({ store, locationId, saved });
+    if (r) console.log(`text scoreboard for ${locationId}: ${JSON.stringify(r)}`);
   } },
   // Once a day: every agent's tier tag agrees with their Acquisitions card.
   { area: "tier-check", run: async ({ client, locationId, saved }) => {

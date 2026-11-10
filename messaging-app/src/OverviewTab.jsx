@@ -50,7 +50,8 @@ export function SideCard({ side, onOpen }) {
         )}
       </div>
       <div className="mt-4 grid grid-cols-3 gap-4">
-        <Stat value={side.sent} label="Sent" sub={side.sent ? `${side.replied} replied` : ""} />
+        {/* Answered by a STOP, credited to the last send: never counted as replied. */}
+        <Stat value={side.sent} label="Sent" sub={side.sent ? `${side.replied} replied · ${side.stopped || 0} stopped (${Math.round(((side.stopped || 0) / side.sent) * 100)}%)` : ""} />
         <Stat value={side.coming} label="Coming up" />
         <Stat value={side.waiting} label="Waiting on you" />
       </div>

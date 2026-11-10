@@ -46,7 +46,8 @@ test("a week of the machine at work counts each stage once and splits machine fr
   ];
   const offers = [
     { id: "o1", contactId: "a1", contactName: "Priya", address: "4410 S Holly St", status: "accepted", createdAt: at(65), autoUnderwrite: { finishedAt: at(64), dryRun: false }, cashAmount: 412000,
-      proactive: { takeCheckAt: at(63) }, realm: { answer: "yes", at: at(55) }, statusHistory: [{ status: "sent", ts: at(60) }, { status: "countered", ts: at(50) }], counter: { amount: 425000, at: at(50) }, deal: { stage: "assigned" } },
+      // The float went (floatSentAt): Floated counts the send, not the queue stamp (2026-11-09).
+      floatSentAt: at(63), realm: { answer: "yes", at: at(55) }, statusHistory: [{ status: "sent", ts: at(60) }, { status: "countered", ts: at(50) }], counter: { amount: 425000, at: at(50) }, deal: { stage: "assigned" } },
     { id: "o2", contactId: "a3", address: "9 Held St", status: "draft", createdAt: at(30), autoUnderwrite: { finishedAt: at(30), held: true, holdReasons: ["comps"] } },
   ];
   const drafts = [
@@ -89,7 +90,7 @@ test("a week of the machine at work counts each stage once and splits machine fr
   assert.equal(r.feed.find((f) => f.type === "blast_sent").side, "dispo");
   assert.ok(!r.feed.some((f) => f.id === "old"));
   // totals carry the drafts' machine share
-  assert.deepEqual(r.totals.messages, { autoSent: 1, personSent: 1 });
+  assert.deepEqual(r.totals.messages, { autoSent: 1, personSent: 1, handTexts: 0 });
 });
 
 test("the outreach autopilot's finds and first texts are the machine's; so are replies and counters it answered", () => {
@@ -138,7 +139,7 @@ const DRILL = (() => {
   ];
   const offers = [
     { id: "o1", contactId: "a1", contactName: "Priya", address: "4410 S Holly St", status: "accepted", createdAt: at(65),
-      autoUnderwrite: { finishedAt: at(64), dryRun: false }, cashAmount: 412000, proactive: { takeCheckAt: at(63) },
+      autoUnderwrite: { finishedAt: at(64), dryRun: false }, cashAmount: 412000, floatSentAt: at(63),
       statusHistory: [{ status: "countered", ts: at(50) }], counter: { amount: 425000, at: at(50) }, deal: { stage: "assigned" } },
   ];
   return { events, offers };
@@ -267,10 +268,11 @@ test("Floated comes before Offered and the arrow is the share of floats on paper
   assert.ok(keys.indexOf("underwritten") < keys.indexOf("floated") && keys.indexOf("floated") < keys.indexOf("offered"));
   const ok = { sms: { ok: true } };
   const offers = [
-    { id: "f1", contactId: "c1", status: "sent", createdAt: at(50), proactive: { realmCheckAt: at(48) }, sends: [{ ts: at(20), results: ok }] },
-    { id: "f2", contactId: "c2", status: "new", createdAt: at(50), proactive: { realmCheckAt: at(47) }, sends: [{ ts: at(20), results: { sms: { ok: false } } }] },
-    { id: "f3", contactId: "c3", status: "passed", createdAt: at(50), proactive: { realmCheckAt: at(46) } },
-    { id: "f4", contactId: "c4", status: "new", createdAt: at(50), proactive: { takeCheckAt: at(45) } },
+    // Each float went (floatSentAt); a queue stamp alone isn't one (2026-11-09).
+    { id: "f1", contactId: "c1", status: "sent", createdAt: at(50), floatSentAt: at(48), sends: [{ ts: at(20), results: ok }] },
+    { id: "f2", contactId: "c2", status: "new", createdAt: at(50), floatSentAt: at(47), sends: [{ ts: at(20), results: { sms: { ok: false } } }] },
+    { id: "f3", contactId: "c3", status: "passed", createdAt: at(50), floatSentAt: at(46) },
+    { id: "f4", contactId: "c4", status: "new", createdAt: at(50), floatSentAt: at(45) },
     // Papered by hand, never floated: an Offered, not a float on paper.
     { id: "h1", contactId: "c5", status: "sent", createdAt: at(50), sends: [{ ts: at(10), results: ok }] },
   ];
@@ -390,4 +392,83 @@ test("a deal promoted twice counts once", () => {
   const s = Object.fromEntries(r.stages.map((x) => [x.key, x]));
   assert.equal(s.contract.count, 2);
   assert.equal(r.items.length, 2);
+});
+
+/* ---------- counting what happened (2026-11-09) ---------- */
+
+test("a float that was queued and never sent isn't counted as floated", () => {
+  const offers = [
+    // Queued, then superseded before it went: the agent never saw a number.
+    { id: "q1", contactId: "c1", status: "new", createdAt: at(50), proactive: { realmCheckAt: at(48) } },
+    { id: "q2", contactId: "c2", status: "new", createdAt: at(50), proactive: { takeCheckAt: at(47) } },
+    // Went.
+    { id: "s1", contactId: "c3", status: "new", createdAt: at(50), proactive: { realmCheckAt: at(46) }, floatSentAt: at(45) },
+  ];
+  const r = buildFlow({ ...win, offers, itemsFor: "floated" });
+  assert.equal(stageOf(r, "floated").count, 1);
+  assert.equal(r.items[0].at, at(45), "dated when it went, not when it was queued");
+});
+
+test("one offer sent twice counts once", () => {
+  const sent = (id, h, by) => ({ id, contactId: "c1", type: "offer_sent", at: at(h), source: "conversation", offerId: "o1", data: { by, channels: ["sms"] } });
+  const events = [sent("e1", 40, "after_float"), sent("e2", 20, "promise"),
+    { id: "e3", contactId: "c2", type: "offer_sent", at: at(30), source: "offer", offerId: "o2", data: { by: "operator", channels: ["email"] } }];
+  assert.equal(stageOf(buildFlow({ ...win, events }), "offered").count, 2);
+});
+
+test("a deal assigned then closed counts one close", () => {
+  const events = [
+    { id: "a1", contactId: "c1", type: "deal_stage", at: at(40), source: "deal", offerId: "o1", data: { stage: "assigned" } },
+    { id: "a2", contactId: "c1", type: "deal_stage", at: at(20), source: "deal", offerId: "o1", data: { stage: "closed" } },
+    { id: "b1", contactId: "i1", type: "investor_committed", at: at(30), source: "deal", offerId: "o1" },
+    { id: "b2", contactId: "i1", type: "investor_committed", at: at(25), source: "deal", offerId: "o1" },
+    { id: "b3", contactId: "i2", type: "investor_committed", at: at(25), source: "deal", offerId: "o2" },
+  ];
+  const f = buildFlow({ ...win, events });
+  assert.equal(stageOf(f, "closed").count, 1);
+  assert.equal(stageOf(f, "buyer").count, 2, "one buyer committing twice to one deal is one buyer");
+});
+
+test("the contract arrow is measured against prices agreed, not counters", () => {
+  const offers = [
+    { id: "o1", contactId: "c1", status: "accepted", createdAt: at(90), statusHistory: [{ status: "accepted", ts: at(40) }], deal: { stage: "under_contract", createdAt: at(30) } },
+    { id: "o2", contactId: "c2", status: "sent", createdAt: at(90), agreed: { amount: 300000, at: at(35) } },
+    // Countered and never agreed: not in the arrow's base.
+    { id: "o3", contactId: "c3", status: "countered", createdAt: at(90), floatSentAt: at(80), statusHistory: [{ status: "countered", ts: at(50) }] },
+  ];
+  const events = [{ id: "p1", contactId: "c1", type: "deal_promoted", at: at(30), source: "deal", offerId: "o1" },
+    { id: "p2", contactId: "c4", type: "deal_promoted", at: at(29), source: "deal", offerId: "o4" }];
+  const s = stageOf(buildFlow({ ...win, offers, events }), "contract");
+  assert.equal(s.count, 2);
+  assert.equal(s.conversion, 100, "two contracts over two prices agreed, capped");
+  const one = stageOf(buildFlow({ ...win, offers, events: events.slice(0, 1) }), "contract");
+  assert.equal(one.conversion, 50, "one contract of two prices agreed");
+});
+
+test("'by you' splits the machine, you and them, and counts the texts you typed in GHL", () => {
+  const events = [
+    { id: "r1", contactId: "a1", type: "text_summary", at: at(30), source: "conversation", data: { inbound: "might have one" } },
+    { id: "c1", contactId: "a2", type: "call_summary", at: at(29), source: "call", data: { durationSec: 120, summary: "talked it through" } },
+    { id: "b1", contactId: "i1", type: "investor_committed", at: at(20), source: "deal", offerId: "o1" },
+    { id: "h1", contactId: "a1", type: "hand_reply", at: at(28), source: "operator", data: {} },
+    { id: "h2", contactId: "a3", type: "hand_reply", at: at(27), source: "operator", data: {} },
+  ];
+  const f = buildFlow({ ...win, events });
+  const replied = stageOf(f, "replied");
+  assert.deepEqual([replied.machine, replied.you, replied.them], [0, 0, 2], "their text and their call are theirs, not yours");
+  assert.deepEqual([stageOf(f, "talked").you, stageOf(f, "buyer").them], [1, 1]);
+  assert.equal(f.totals.messages.handTexts, 2);
+  assert.equal(f.totals.you, 3, "the call and the two texts you typed");
+  assert.equal(f.totals.them, 3, "two agents answering and a buyer committing");
+});
+
+test("Replied counts each agent once from the recorded inbound text, with or without a summary", () => {
+  const events = [
+    { id: "i1", contactId: "a1", type: "inbound_received", at: at(30), source: "ghl", data: {} },
+    { id: "t1", contactId: "a1", type: "text_summary", at: at(29), source: "conversation", data: { inbound: "yes I have one" } },
+    // The drafter wrote no summary for this one.
+    { id: "i2", contactId: "a2", type: "inbound_received", at: at(28), source: "ghl", data: {} },
+    { id: "i3", contactId: "b1", type: "inbound_received", at: at(28), party: "investor", source: "ghl", data: {} },
+  ];
+  assert.equal(stageOf(buildFlow({ ...win, events }), "replied").count, 2);
 });

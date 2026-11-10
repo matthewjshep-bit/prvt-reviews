@@ -89,6 +89,26 @@ test("a reply after the second nudge credits only the second, and one four days 
   assert.deepEqual([...attributeReplies(sends, inbound)], ["b"]);
 });
 
+test("a follow-up answered by STOP counts as stopped, not replied, beside the replies", () => {
+  const at = new Date(NOW - 2 * DAY).toISOString();
+  const later = new Date(NOW - 2 * DAY + HOUR).toISOString();
+  const page = buildFollowUpEngine({
+    period: "week", now: NOW,
+    sent: [
+      { mech: "offer_nudge", src: "draft", contactId: "c1", at },
+      { mech: "offer_nudge", src: "draft", contactId: "c2", at },
+      { mech: "offer_nudge", src: "draft", contactId: "c3", at },
+    ],
+    inbound: [{ contactId: "c1", at: later }, { contactId: "c2", at: later, stop: true }],
+  });
+  const m = page.groups.find((g) => g.key === "offer_live").mechanisms.find((x) => x.key === "offer_nudge");
+  assert.deepEqual([m.sent, m.replied, m.stopped], [3, 1, 1]);
+  assert.deepEqual([page.kpis.replied, page.kpis.stopped, page.kpis.stoppedPct], [1, 1, 33]);
+  const stopped = page.items.find((x) => x.contactId === "c2");
+  assert.equal(stopped.stopped, true);
+  assert.equal(stopped.replied, false);
+});
+
 test("each mechanism counts sends from its own source only", () => {
   const at = new Date(NOW - DAY).toISOString();
   const page = buildFollowUpEngine({

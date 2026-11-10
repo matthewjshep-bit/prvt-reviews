@@ -20,6 +20,7 @@ import { BTN, BTN_DANGER, BTN_PRIMARY, ErrorBar, SkeletonRows } from "./ui.jsx";
 import FlowChart, { emailSampleOf, sampleOf, textWarnings } from "./FlowChart.jsx";
 import AgentOutreach from "./AgentOutreach.jsx";
 import SettingsView from "./SettingsView.jsx";
+import TextScoreboardCard from "./TextScoreboard.jsx";
 
 const AREA = "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm leading-snug focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 const NUM = "w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm";
@@ -376,6 +377,9 @@ export default function AgentsTab({ settings: appSettings, onSettingsSaved }) {
           </>
         )}
       </section>
+
+      {/* How each of these texts did: replies, STOPs and houses, kept from last night. */}
+      <TextScoreboardCard kind="first_text" title="How these texts did" />
 
       <details className="rounded-xl border border-slate-200 bg-white">
         <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">

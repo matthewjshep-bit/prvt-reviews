@@ -77,8 +77,14 @@ export default function FunnelView({ days = 30, end = "" }) {
 
   return (
     <div className="space-y-4">
+      {data.countingChanged ? (
+        <p className="text-[11px] text-slate-500">
+          Counting changed on {data.countingChanged}: a number we texted counts as sent, each stage counts on its own date, and a house we passed on before our number went is counted apart{f.passedUnsent ? ` (${f.passedUnsent} in this window)` : ""}.
+        </p>
+      ) : null}
+      {data.eventsTruncated ? <ErrorBar>More replies in this window than one read holds: the follow-up rates are low. Pick a shorter window.</ErrorBar> : null}
       <KpiRow items={[
-        { label: "Offers sent", value: f.sent },
+        { label: "Offers sent", value: f.sent, hint: "the written offer or a number we texted" },
         { label: "Countered", value: `${f.countered} · ${pctText(f.rates.counteredOfSent)}`, hint: "of the offers we sent" },
         { label: "Accepted", value: `${f.accepted} · ${pctText(f.rates.acceptedOfSent)}`, hint: "of the offers we sent" },
         { label: "Still working", value: f.open, hint: "sent, and not yet passed, dead or accepted" },
@@ -167,14 +173,14 @@ export default function FunnelView({ days = 30, end = "" }) {
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h3 className="mb-1 text-sm font-bold">Did the follow-ups work</h3>
-        <p className="mb-3 text-xs text-slate-500">Replies within five days of each nudge, per rung.</p>
+        <p className="mb-3 text-xs text-slate-500">Replies within five days of each nudge that went, per rung. A STOP is counted apart, never as a reply.</p>
         {(!followUps || followUps.length === 0) ? (
           <p className="text-xs text-slate-400">No follow-ups have gone out in this window.</p>
         ) : (
           <table className="w-full text-xs">
             <thead className="text-left text-slate-400">
               <tr><th className="py-1 font-medium">Ladder</th><th className="font-medium">Day</th><th className="font-medium">Sent</th>
-                <th className="font-medium">Replied</th><th className="font-medium">Rate</th><th className="font-medium">Typical wait</th></tr>
+                <th className="font-medium">Replied</th><th className="font-medium">Rate</th><th className="font-medium">Stopped</th><th className="font-medium">Typical wait</th></tr>
             </thead>
             <tbody>
               {followUps.map((r) => (
@@ -184,6 +190,7 @@ export default function FunnelView({ days = 30, end = "" }) {
                   <td className="tabular-nums">{r.sent}</td>
                   <td className="tabular-nums">{r.replied}</td>
                   <td className="tabular-nums font-medium">{pctText(r.replyRate)}</td>
+                  <td className={`tabular-nums ${r.stopped ? "text-red-700" : "text-slate-400"}`}>{r.stopped || 0}{r.stopped ? ` · ${pctText(r.stopRate)}` : ""}</td>
                   <td className="tabular-nums text-slate-500">{r.medianHoursToReply ? `${r.medianHoursToReply}h` : "—"}</td>
                 </tr>
               ))}
