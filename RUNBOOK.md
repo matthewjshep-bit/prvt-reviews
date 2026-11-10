@@ -2949,6 +2949,55 @@ number" and "text you where we'd land" still read as a promised number.
 "call"}` on the timeline; a day on, Today's calls shows "Owed: a call to …"
 until a call is logged or tried.
 
+#### Booked calls, the check-in wait, the morning count and buyer calls (2026-11-09)
+
+**Why.** The 11-09 audit: 221 threads with a call, visit or paper promise
+nobody kept, and nothing read a booking's time. A call booked for 8am was
+never made, and the next text from us asked the agent for fixers. Offer to
+contract ran 11.3% with a call and 0.9% without.
+
+- **A booked call nobody made** (`bookedCallsMissed`,
+  shared/promise-owed.js): a `call_booked` whose `startTime` is more than 2
+  hours past, with no call of ours tried and none that connected from 30
+  minutes before it on. A later call still pays it; a newer booking is the
+  call instead; 60 days on it's history. It is a `call_owed` row ("Owed: the
+  call booked with Pat for Tue 8:00am on 12 Elm St", why "booked call
+  missed"), score 110, urgent for GHL's Manual Actions like a promised call.
+  One row per person: a promised call already up speaks for both. No
+  Dismiss button of its own (there's no promise to settle); the row's
+  ordinary dismiss hides it.
+- **The check-ins wait for the call** (`callOwedWait`; `callOwedHolds` in
+  shared/agent-focus.js): while we owe someone a call (booked and coming
+  up, booked and missed, or promised and not tried) the agent check-in
+  (`agent_pulse`, its listing pings included) and the cold ladder's
+  `outreach_nudge` rungs wait `CALL_OWED_WAIT_DAYS` (3) from when the call
+  was owed. A call of ours tried or connected since ends the wait. The
+  planner says so ("we missed the call booked with them: the call goes
+  first"), the morning sweep holds the rung unclaimed so it goes after the
+  wait, and `startProactive` asks the same at every other door. The live
+  offer's nudge, the push to paper, a counter's check-in and a first text
+  never wait for it. The missed-call text-back is read as a promise by the
+  promises branch, not this one.
+- **The morning post** (`renderMorning`): "Calls we owe: N", the people with
+  a `call_owed` row in Today's read, when there are any. Never a name.
+- **Buyer calls** (`call_buyer_live_deal`, shared/call-list.js
+  `buyersWaitingOnLiveDeals`): a buyer on a deal's list (not one who passed)
+  on a deal under contract or with a buyer found, whose newest text on it
+  names a price (a third to three times the deal's price), a walk-through, a
+  partner or lender check, or "let you know", with nothing from us (a sent
+  text, a hand reply, a call) for one working day. Keyed on the buyer, never
+  the listing agent. The brief is the street, their number and its date
+  ("40 Juniper Ct: their 285K (Oct 1), nothing back from us"), never their
+  words. Score 98, urgent for GHL. **Off by default**:
+  `saved.desk.buyerCalls` (normalised by `normalizeDesk`), Settings →
+  Today's calls in GHL → "Buyers on a live deal are calls too".
+
+**Check:** a booking whose time passed with no call shows on
+`GET /api/dashboard/pipeline` as a `call_owed` row with `why: "booked call
+missed"`; `GET /api/outreach/pulse?agents=1` lists that agent as
+`not_due`, "…: the call goes first", until the wait's date; the 7am #daily
+post has the "Calls we owe" line.
+
 ### Answers the bot didn't have (2026-09-17)
 
 **Why.** Three of Today's "we owe them an answer" rows were the bot saying "let
@@ -3223,6 +3272,38 @@ in the words of the first reason that sent it: a counter that arrives at 2pm
 for someone already in GHL for a hot offer doesn't change the GHL words (the
 counter row stays on Today with its buttons, marked as in GHL). A call that
 failed to go waits on Today until the next morning.
+
+#### The queue stays current, and a busy outbox can't empty it (2026-11-09)
+
+**Why.** The 11-09 audit (FUP-08, FUP-02): the live set was built from a
+7-day ledger, so a call queued once, pushed down the list and never worked
+stayed in GHL after its reason ended (on 10/29 Matt cleared 105 by hand). And
+Today's read took the open drafts as one newest-500 list, so a 520-text deal
+blast pushed an older held yes out of it: Needs Matt took the card out as
+done, its 72-hour clock restarted when it came back, and the call queue took
+the call back.
+
+- **The whole ledger** (`ghl-broker/ghl-calls.js`): the live set is every
+  `ghl_call_queued` with no `ghl_call_failed` or `ghl_call_withdrawn` after
+  it, read a page at a time over the queue's whole life (`allEventsSince`).
+  A call queued ten days ago is taken back once its reason ends. Still at
+  most ten take-backs a run (`MAX_WITHDRAW_PER_RUN`), so the first runs
+  after this deploy spread the old backlog over the morning; a contact GHL
+  says isn't in the workflow any more is written down as taken back.
+- **Held drafts read on their own** (`routes/dashboard.js` `pipelineFor`,
+  and `today-timers.js`): `status: draft` up to 5,000, `status: scheduled`
+  up to 500, merged newest first. The read says when either list filled
+  (`capped: { held, scheduled }`, not in the route's body).
+- **A capped read is unknown, not done.** With the held list full,
+  `runNeedsMatt` keeps every card it had (same clock, never passed off the
+  stage that run; the cursor's `last.unknown` counts them) and `runGhlCalls`
+  takes nothing back that run. The next whole read decides.
+- **Buyer calls** (`desk.buyerCalls`, see the promises section): a
+  `call_buyer_live_deal` row is urgent here, so it goes in as it turns up.
+
+**Check:** `POST /api/dashboard/ghl-calls/run {"mode":"urgent"}` (a dry run)
+lists old calls as "would take back" once their reason is gone; GHL's
+Manual Actions stop growing with calls nobody can explain.
 
 ### The pipeline — GHL follows the offers (2026-10-13)
 
