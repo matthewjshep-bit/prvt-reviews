@@ -4677,7 +4677,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   }
 
   // Un-promote (mistake correction) — removes deal tracking, keeps the offer.
-  // The best-effort GHL tag isn't reversed.
+  // The best-effort GHL tag isn't reversed. The deal texts it queued are
+  // pulled back (2026-11-09: one click on "Accepted, track as deal" queues
+  // the house to every buyer in the area, and taking it back left them
+  // queued); the answer says how many.
   router.delete("/:id/deal", async (req, res) => {
     try {
       const ctx = await loadDealOffer(req, res);
@@ -4689,6 +4692,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // before it (sent if the docs went out, otherwise not sent).
       recordStatus(offer, statusAfterUnpromote(offer));
       await store.updateOffer(offer.id, offer);
+      const pulled = await stopDealOutreach({ client, store, locationId, offer, takenBack: true }).catch(() => ({ dismissed: [] }));
       // There is no assignment contract any more — an investor room falls back
       // to the offer's own cash number and the default fee.
       await syncDealNumbers({ store, offer, settings: effectiveSettings(await store.getOfferSettings(locationId)) });
@@ -4696,7 +4700,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       for (const inv of investors) {
         await syncInvestorDealTag(client, locationId, inv.contactId);
       }
-      res.json({ ok: true, offer });
+      res.json({ ok: true, offer, pulled: { dismissed: pulled.dismissed.length } });
     } catch (err) { fail(res, err); }
   });
 

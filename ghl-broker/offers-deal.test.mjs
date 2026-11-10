@@ -85,12 +85,56 @@ test("a fee typed as 15k is 15,000 and a contract price of 450 is refused", asyn
 
 test("promote says whether the fee was yours or the default", async () => {
   await store.saveOfferSettings(LOC, { wholesaleFee: 30000 });
-  const mk = () => store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "agent2", address: `${Math.floor(Math.random() * 900) + 100} Spruce St, Kent, WA 98031`,
+  const mk = (n) => store.createOffer({ id: crypto.randomUUID(), locationId: LOC, contactId: "agent2", address: `${n} Spruce St, Kent, WA 98031`,
     cashAmount: 300000, status: "sent", statusHistory: [], sends: [{ ts: new Date().toISOString() }] });
-  const a = await call("POST", `/${(await mk()).id}/deal`, {});
+  const a = await call("POST", `/${(await mk(101)).id}/deal`, {});
   assert.equal(a.offer.deal.assignmentFee, 30000);
   assert.equal(a.offer.deal.assignmentFeeSource, "setting");
-  const b = await call("POST", `/${(await mk()).id}/deal`, { assignmentFee: "12.5k" });
+  const b = await call("POST", `/${(await mk(102)).id}/deal`, { assignmentFee: "12.5k" });
   assert.equal(b.offer.deal.assignmentFee, 12500);
   assert.equal(b.offer.deal.assignmentFeeSource, "you");
+});
+
+/* ---------- taking a deal back ---------- */
+
+// One click on "Accepted, track as deal" queues the house to every buyer in
+// the area, and Remove deal tracking left those texts queued: at send time an
+// offer with no deal read as "send it as written".
+const draft = (over) => store.createReplyDraft({ locationId: LOC, channel: "sms", party: "investor", reply: "…", inbound: "", flags: [], contactName: "Buyer", ...over });
+
+test("un-promoting a deal pulls back its queued texts", async () => {
+  const o = await dealOffer({ address: "512 Larch Ln, Kent, WA 98031" });
+  const other = await dealOffer({ address: "9 Other Rd, Kent, WA 98031" });
+  const sendAt = new Date(Date.now() + 9 * 60000).toISOString();
+  const blast = await draft({ contactId: "t1", status: "scheduled", sendAt, intent: "blast_open", outbound: { kind: "blast_open", offerId: o.id, address: o.address } });
+  const nudge = await draft({ contactId: "t2", status: "draft", intent: "blast_nudge", outbound: { kind: "blast_nudge", offerId: o.id, address: o.address } });
+  const reply = await draft({ contactId: "t3", status: "scheduled", sendAt, intent: "question", inbound: "Is Larch still open to offers?", propertyAddress: "512 Larch Ln, Kent" });
+  const elsewhere = await draft({ contactId: "t4", status: "scheduled", sendAt, intent: "blast_open", outbound: { kind: "blast_open", offerId: other.id, address: other.address } });
+
+  const r = await call("DELETE", `/${o.id}/deal`);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.offer.deal, undefined);
+  assert.deepEqual(r.pulled, { dismissed: 2 });
+  const after = async (d) => store.getReplyDraft(d.id);
+  assert.equal((await after(blast)).status, "dismissed");
+  assert.ok((await after(blast)).flags.some((f) => /^you took the deal back on 512 Larch Ln — not sent$/.test(f)), (await after(blast)).flags.join(" | "));
+  assert.equal((await after(nudge)).status, "dismissed");
+  assert.equal((await after(reply)).status, "scheduled", "an answer to a buyer still goes");
+  assert.equal((await after(elsewhere)).status, "scheduled", "another deal's text is untouched");
+});
+
+test("a deal text queued after the deal was taken back isn't sent", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const o = await dealOffer({ address: "77 Tamarack Ct, Kent, WA 98031" });
+  const queued = await draft({ contactId: "t5", status: "scheduled", sendAt: new Date().toISOString(), intent: "blast_open", outbound: { kind: "blast_open", offerId: o.id, address: o.address } });
+  // Taken back some other way than the route (an older broker, a hand edit): no deal on the offer now.
+  const bare = await store.getOffer(o.id);
+  delete bare.deal;
+  await store.updateOffer(o.id, bare);
+  const sent = [];
+  const client = { call: async (p, opts) => { sent.push([p, opts]); return { messageId: "m1" }; } };
+  const r = await sendReplyDraft({ client, store, locationId: LOC, draftId: queued.id, live: true, auto: true, readThread: async () => "" });
+  assert.match(String(r.skipped), /taken back/);
+  assert.equal(sent.filter(([p]) => p === "/conversations/messages").length, 0, "nothing went");
+  assert.equal((await store.getReplyDraft(queued.id)).status, "dismissed");
 });

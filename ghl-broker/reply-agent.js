@@ -6760,6 +6760,20 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
       return { ok: true, skipped: why };
     }
+    // The deal was taken back since this was queued (Remove deal tracking,
+    // 2026-11-09): its offer has no deal now, and a deal text about it isn't
+    // sent. A pre-sell is about a house with no deal yet and is left alone; a
+    // read that fails leaves the text as it was.
+    if (d.outbound?.offerId && !d.outbound.presell && !offer?.deal && stoppedDealAction(d) === "dismiss" && store.getOffer) {
+      const own = await store.getOffer(d.outbound.offerId).then((o) => ({ o }), () => null);
+      if (own && !own.o?.deal) {
+        const ts = new Date(now).toISOString();
+        const why = `the deal on ${String(own.o?.address || address || "the house").split(",")[0].trim()} was taken back`;
+        await store.updateReplyDraft(d.id, { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts, flags: [...(d.flags || []), `${why} — not sent`] });
+        await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+        return { ok: true, skipped: why };
+      }
+    }
   }
 
   // We walked away since (marked "we passed" while a check-in counted
@@ -7316,14 +7330,17 @@ export const stoppedDealAction = (d) => (FIRST_DEAL_TEXTS.has(d?.outbound?.kind)
  * queued is pulled back rather than left to be caught at its send time (the
  * guard in sendReplyDraft), from the outbox too. What answers a buyer stays
  * on its clock (stoppedDealAction). The listing agent's thread is not a
- * buyer's and is left alone.
+ * buyer's and is left alone. `takenBack`: the deal itself was taken back
+ * (DELETE /:id/deal), which the flag says, so Resume never reads it as a
+ * text Stop pulled.
  */
-export async function stopDealOutreach({ client, store, locationId, offer, now = Date.now() }) {
+export async function stopDealOutreach({ client, store, locationId, offer, now = Date.now(), takenBack = false }) {
   const out = { dismissed: [] };
   if (!offer?.id) return out;
   const open = await store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 5000 }).catch(() => []);
   const ts = new Date(now).toISOString();
-  const why = `you stopped outreach on ${String(offer.address || "the deal").split(",")[0].trim()}`;
+  const street = String(offer.address || "the deal").split(",")[0].trim();
+  const why = takenBack ? `you took the deal back on ${street}` : `you stopped outreach on ${street}`;
   for (const d of open) {
     if (d?.party !== "investor" || !["draft", "scheduled"].includes(d.status)) continue;
     const about = d.outbound?.offerId ? d.outbound.offerId === offer.id

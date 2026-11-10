@@ -456,7 +456,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   }
 
   const removeThisDeal = async () => {
-    if (!window.confirm("Remove deal tracking from this offer? The offer itself is kept.")) return;
+    if (!window.confirm("Remove deal tracking from this offer? The offer itself is kept, and deal texts still waiting to go to buyers are pulled back.")) return;
     const r = await run(() => removeDeal(offer.id));
     if (r?.ok) onRemoved(offer.id);
   };
