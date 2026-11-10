@@ -4,6 +4,8 @@
 // start from the same words (shared/offer-send-text.js); what you type over them is yours.
 import { test, expect } from "vitest";
 import { defaultSendMessage } from "../SendModal.jsx";
+import { buildMessage as netSheetMessage } from "../NetSheetModal.jsx";
+import { netComparison } from "@shared/offer-calc.js";
 import { offerSendText } from "@shared/offer-send-text.js";
 
 const OFFER = { id: "o1", contactName: "Dana Reeves", address: "27 Wrenfield Ct, Renton, WA 98055", cashAmount: 412000, calc: { settings: {}, inputs: {}, offers: {} } };
@@ -19,4 +21,11 @@ test("the app's send box and the server fall back to the same words", () => {
   expect(defaultSendMessage(OFFER)).toBe(offerSendText({ first: "Dana", address: OFFER.address, amount: 412000 }));
   // No first name: it opens on the letter, not "Hi there".
   expect(defaultSendMessage({ ...OFFER, contactName: "" })).toMatch(/^Here's our letter of intent on 27 Wrenfield Ct: 412k/);
+});
+
+// UWM-16: the seller's net leaves out WA excise tax and closing costs; the message says so (the math is unchanged).
+test("the net sheet message says the seller's net is before excise tax and closing costs", () => {
+  const net = netComparison(412000, { sellerAgentPct: 3, buyerAgentPct: 3 });
+  const m = netSheetMessage(OFFER, net);
+  expect(m).toMatch(/the seller nets about \$[\d,]+ after the listing side's 3% and before excise tax and closing costs\./);
 });

@@ -401,6 +401,9 @@ function netSection(snap) {
       </div>
     </div>
     <p class="muted" style="margin-top:14px">
+      Both nets are after commissions and before excise tax and closing costs, which come off either way.
+    </p>
+    <p class="muted" style="margin-top:10px">
       We represent ourselves on the purchase, so there's no buyer's agent commission to pay — that saving is
       already built into the number above. We're also flexible on how that side is handled: if you'd rather
       bring a buyer's agent, or write your own commission into the deal, tell us what you need and we'll

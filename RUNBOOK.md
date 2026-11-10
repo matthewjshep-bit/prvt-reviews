@@ -4929,6 +4929,13 @@ email body's "Please find … attached —", the letter's financing row "Funded
 with cash or private loan", and the net sheet's "Our cash offer". The
 memory says the letters are his call.
 
+The seller's net, on the agent page ("What the seller nets",
+`ghl-broker/offer-page.js`) and in the Net sheet's draft message
+(`NetSheetModal.jsx`), now says it is before excise tax and closing costs.
+Nothing in the math takes off WA excise tax yet, so the net runs about 6k
+high on a 300k offer (audit UWM-16). The wording changed and the math did
+not.
+
 ### Matt's contact card (2026-10-09)
 
 Matt: share my contact card "when people ask or if an initial deal doesn't work,

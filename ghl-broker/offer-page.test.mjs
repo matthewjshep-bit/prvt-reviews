@@ -307,6 +307,17 @@ test("the net comparison shows what we pay before what the seller keeps", async 
   assert.equal((net.match(/\$277,905/g) || []).length, 2, "both columns net the seller the same");
 });
 
+// UWM-16 (2026-11-09): there's no WA excise tax anywhere in the math, so "Seller nets" overstates
+// it by about 6k on a 300k offer, on a page agents forward to sellers. The math is unchanged; the
+// page says what the net is before.
+test("the agent page says the seller's net is before excise tax and closing costs", async () => {
+  const { token } = await build();
+  const r = await req("GET", `/o/${token}`);
+  const net = r.text.split("What the seller nets")[1].split("<h2>")[0];
+  assert.match(net, /Seller nets/);
+  assert.match(net, /before excise tax and closing costs/);
+});
+
 test("the offer page header keeps the logo and drops the marketing nav", async () => {
   const { renderOfferPage } = await import("./offer-page.js");
   const { brandFrom } = await import("./dataroom.js");

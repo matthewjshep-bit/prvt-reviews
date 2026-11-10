@@ -15,14 +15,16 @@ const LABEL_CLS = "mb-1 block text-xs font-semibold uppercase tracking-wide text
 
 const round100 = (v) => Math.round(v / 100) * 100;
 
-function buildMessage(offer, net) {
+// Exported for its test. The seller's net leaves out WA excise tax and closing costs
+// (audit UWM-16, 2026-11-09): the math is unchanged, and the message says what it's before.
+export function buildMessage(offer, net) {
   const first = (offer.contactName || "").split(" ")[0] || "there";
   const addr = offer.address || "the property";
   return (
     `Hi ${first} — here's our letter of intent on ${addr}: ${fmtMoney(offer.cashAmount)}, ` +
     `as-is, closing on your timeline (attached).\n\n` +
     `Worth framing it this way: we're buying directly, so no buyer's-agent commission comes off the top. ` +
-    `At our offer the seller nets about ${fmtMoney(Math.round(net.netA))} after the listing side's ${net.sellerPct}%. ` +
+    `At our offer the seller nets about ${fmtMoney(Math.round(net.netA))} after the listing side's ${net.sellerPct}% and before excise tax and closing costs. ` +
     `To net that same amount through a traditional sale paying both agents (${net.sellerPct}% + ${net.buyerPct}%), ` +
     `it would need to sell at roughly ${fmtMoney(round100(net.listPrice))} — and that's before repairs, ` +
     `holding costs, or time on market.\n\n` +
