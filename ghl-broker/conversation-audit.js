@@ -16,7 +16,8 @@ import { botEventsByContact } from "./bot-hold.js";
 import { mergeEvents } from "./shared/bot-hold.js";
 import { effectiveStatus, OPEN_STATUSES, dealIsOver } from "./shared/offer-status.js";
 import { buildPipeline } from "./shared/pipeline.js";
-import { conversationConfig, startReply as defaultStartReply, RA_TAGS } from "./reply-agent.js";
+import { conversationConfig, startReply as defaultStartReply, RA_TAGS, INBOUND_RECEIVED, listJobs as listReplyJobs } from "./reply-agent.js";
+import { answersInbound } from "./shared/follow-up.js";
 import { removeContactTags } from "./ghl.js";
 import { startFollowUpSweep as defaultStartFollowUpSweep } from "./follow-up-sweep.js";
 import { recordEvent } from "./contact-record.js";
@@ -523,5 +524,125 @@ export async function maybeRunDaytimeDriver({ client, locationId, saved = {}, st
 
   await store.setJobCursor?.(locationId, DAY_CURSOR_NAME, { at: iso(now), doc: { day: today, tries: triesToday + 1, lastRun: iso(now), last: doc.last || null, ...(stale ? { staleRun: doc.run } : {}) } }).catch(() => {});
   startConversationAudit({ client, locationId, saved, store, sendsEnabled, deps, trigger: "daytime", now, mode: "day" });
+  return true;
+}
+
+/* ---------- the boot pass (2026-11-09) ---------- */
+
+// A reply job lives in memory: a deploy or a crash drops the ones waiting on
+// their debounce or on the model, and until now nothing picked those texts
+// up before the daytime pass or the 7pm audit. Every text is written down as
+// it arrives (`inbound_received`, reply-agent.js recordInbound), so about
+// five minutes after the broker starts, the last hour's texts that have no
+// reply, hold or "nothing to answer" after them go back through startReply:
+// the caps, the stand-down, the gates and the dial all apply, as if the
+// webhook had just fired. Off until nightlyAudit.bootPass is switched on.
+export const BOOT_PASS_CURSOR = "bootPass";
+export const BOOT_PASS_DELAY_MS = 5 * 60 * 1000;
+export const BOOT_PASS_WINDOW_MS = 60 * 60 * 1000;
+export const BOOT_PASS_STALE_MS = 10 * 60 * 1000;
+// Deploys ran up to 14 a day in October; this bounds a crash loop.
+export const BOOT_PASS_MAX_DAILY_TRIES = 30;
+export const BOOT_PASS_MAX_TRIES_PER_BOOT = 3;
+// GHL's newest text more than this before the one recorded is some other
+// text (the recorded one was a photo with no words): left alone.
+const BOOT_PASS_READBACK_SLACK_MS = 5 * 60 * 1000;
+// What says the pipeline already decided about a text.
+const SETTLED_TYPES = ["reply_held", "reply_not_needed", "unsubscribed"];
+const bootRuns = new Set();
+
+/**
+ * runBootPass({ client, locationId, saved, store, sendsEnabled, deps, now, pace })
+ *   → { considered, redriven: [{ contactId, jobId, skipped }], left: [{ contactId, why }] }
+ *
+ * `deps` are the offers router's conversationDeps (latestInbound reads the
+ * text back from GHL; the record never holds the words) plus, for tests,
+ * `startReply`.
+ */
+export async function runBootPass({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), pace = PACE_MS }) {
+  const out = { considered: 0, redriven: [], left: [] };
+  const since = iso(now - BOOT_PASS_WINDOW_MS);
+  const [events, drafts] = await Promise.all([
+    store.listContactEventsSince(locationId, since, { types: [INBOUND_RECEIVED, ...SETTLED_TYPES], limit: 2000 }),
+    store.listReplyDrafts(locationId, { since, limit: 2000 }),
+  ]);
+  const newest = new Map();
+  for (const e of events) {
+    if (e?.type !== INBOUND_RECEIVED || !e.contactId || e.data?.noise) continue;
+    const prev = newest.get(e.contactId);
+    if (!prev || String(e.at) > String(prev.at)) newest.set(e.contactId, e);
+  }
+  // A reply job this broker already has for them (a webhook since the boot).
+  const inHand = new Set(listReplyJobs(locationId, { limit: Infinity }).filter((j) => j.status !== "superseded").map((j) => j.contactId));
+  const startReply = typeof deps.startReply === "function" ? deps.startReply : defaultStartReply;
+  for (const [contactId, e] of newest) {
+    out.considered++;
+    const at = String(e.at);
+    const leave = (why) => out.left.push({ contactId, why });
+    if (drafts.some((d) => d?.contactId === contactId && String(d.createdAt || "") >= at && answersInbound(d))) { leave("answered"); continue; }
+    if (events.some((x) => x?.contactId === contactId && SETTLED_TYPES.includes(x.type) && String(x.at) >= at)) { leave("settled"); continue; }
+    if (inHand.has(contactId)) { leave("a reply is already being drafted here"); continue; }
+    const latest = typeof deps.latestInbound === "function" ? await deps.latestInbound(contactId).catch(() => null) : null;
+    if (!latest?.body) { leave("no text to read back from GHL"); continue; }
+    if ((Date.parse(latest.at) || 0) < (Date.parse(at) || 0) - BOOT_PASS_READBACK_SLACK_MS) { leave("GHL's newest text is older than the one that came in"); continue; }
+    try {
+      const r = await startReply({
+        client, locationId, saved, store, contactId, message: String(latest.body).slice(0, 4000),
+        channel: e.data?.channel === "email" || /email/i.test(latest.type || "") ? "email" : "sms",
+        attachments: latest.attachments || 0, sendsEnabled, deps,
+      });
+      out.redriven.push({ contactId, jobId: r?.job?.id || null, skipped: r?.skipped || null });
+    } catch (err) {
+      out.redriven.push({ contactId, jobId: null, skipped: `error: ${String(err?.message || err).slice(0, 120)}` });
+    }
+    if (pace > 0) await wait(pace);
+  }
+  return out;
+}
+
+/**
+ * maybeRunBootPass({ client, locationId, saved, store, sendsEnabled, deps, now, bootAt }) → boolean
+ *
+ * Once per broker start, about five minutes in, claimed on its cursor first
+ * (the audit's gating: the cursor is written before the run, a run that died
+ * is retried once stale, the day's tries are capped). A newer broker's boot
+ * on the cursor means this one is the old broker of a deploy: its pass, not
+ * ours.
+ */
+export async function maybeRunBootPass({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now(), bootAt = null, pace = PACE_MS }) {
+  const config = conversationConfig(saved);
+  if (!config.enabled || config.nightlyAudit?.bootPass !== true) return false;
+  if (!Number.isFinite(bootAt) || now - bootAt < BOOT_PASS_DELAY_MS) return false;
+  if (bootRuns.has(locationId)) return false;
+  const boot = iso(bootAt);
+  const cursor = await store.getJobCursor?.(locationId, BOOT_PASS_CURSOR).catch(() => null);
+  const doc = cursor?.doc || {};
+  if (doc.bootAt && String(doc.bootAt) > boot) return false;
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(now));
+  const triesToday = doc.day === today ? Number(doc.tries) || 0 : 0;
+  if (triesToday >= BOOT_PASS_MAX_DAILY_TRIES) return false;
+  const sameBoot = doc.bootAt === boot;
+  if (sameBoot) {
+    const stale = doc.run?.startedAt && now - Date.parse(doc.run.startedAt) > BOOT_PASS_STALE_MS;
+    if (doc.run && !stale) return false;
+    if (!(doc.failed || stale)) return false;
+    if ((Number(doc.bootTries) || 0) >= BOOT_PASS_MAX_TRIES_PER_BOOT) return false;
+  }
+  const base = { bootAt: boot, day: today, tries: triesToday + 1, bootTries: sameBoot ? (Number(doc.bootTries) || 0) + 1 : 1, last: doc.last || null };
+  await store.setJobCursor?.(locationId, BOOT_PASS_CURSOR, { at: iso(now), doc: { ...base, run: { startedAt: iso(now) } } });
+  bootRuns.add(locationId);
+  try {
+    const r = await runBootPass({ client, locationId, saved, store, sendsEnabled, deps, now, pace });
+    const last = { at: iso(now), finishedAt: new Date().toISOString(), status: "done", considered: r.considered,
+      redriven: r.redriven.length, started: r.redriven.filter((x) => x.jobId).length, left: r.left.length };
+    await store.setJobCursor?.(locationId, BOOT_PASS_CURSOR, { at: iso(now), doc: { ...base, run: null, failed: false, last } }).catch(() => {});
+    if (r.redriven.length) console.log(`boot pass for ${locationId}: ${last.started} of ${r.redriven.length} text(s) a restart left unanswered started again`);
+  } catch (e) {
+    const error = String(e?.message || e).slice(0, 200);
+    await store.setJobCursor?.(locationId, BOOT_PASS_CURSOR, { at: iso(now), doc: { ...base, run: null, failed: true, error,
+      last: { at: iso(now), finishedAt: new Date().toISOString(), status: "error", error } } }).catch(() => {});
+  } finally {
+    bootRuns.delete(locationId);
+  }
   return true;
 }

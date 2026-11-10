@@ -148,6 +148,7 @@ import { numberTimeFlags, callPromiseFlags, inventedPeopleFlags, contactClaimFla
 import { notTheirNumber, NEXT_ONE_QUESTION, nextOneAskedToday } from "./shared/flip-read.js";
 import { asksIfWholesaler, wholesaleFlags, wholesaleAskLine, formsFlags, formsStateOf, WHOLESALE_ASK_FLAG } from "./shared/partner-terms.js";
 import { buyBoxRule } from "./shared/conversation-ai.js";
+import { createHash } from "node:crypto";
 
 // Skeleton and engine modes both take every house an agent names, not only the one the rule picks.
 const everyNamedHouse = (saved) => ["skeleton", "engine"].includes(underwriteMode(saved));
@@ -2723,6 +2724,91 @@ export async function assembleConversation({
   };
 }
 
+/* ---------- the inbound record (2026-11-09) ---------- */
+
+// Every text the webhook hands us is written down before its reply job
+// starts. A reply job lives in memory (a debounce timer, then the lane), so a
+// deploy or a crash in that minute used to leave no trace that the text came
+// at all, and GHL sending the same webhook again after a restart drafted it
+// twice. The record carries the channel and GHL's message id, never the words.
+export const INBOUND_RECEIVED = "inbound_received";
+// A second delivery of a text recorded less than this long ago, with no reply
+// drafted since, is the same text still being worked when this broker has a
+// reply job for them started since it came. With no job here (the first try
+// died before its job started, or a restart took the job), or older than
+// this with nothing drafted, the text is answered.
+export const INBOUND_IN_HAND_MS = 10 * 60 * 1000;
+
+/**
+ * inboundKey({ messageId, contactId, message, attachmentUrls, at }) → dedupe key
+ *
+ * GHL's message id when the webhook sends one; otherwise the contact, a hash
+ * of the words and the minute it came in. The hash is one-way: the key never
+ * carries the text.
+ */
+export function inboundKey({ messageId = "", contactId = "", message = "", attachmentUrls = [], at = Date.now() } = {}) {
+  const id = String(messageId || "").trim();
+  if (id) return `inbound:${id.slice(0, 80)}`;
+  const urls = (Array.isArray(attachmentUrls) ? attachmentUrls : []).map(String).slice(0, 8).join(" ");
+  const hash = createHash("sha1").update(`${String(message || "").trim().slice(0, 1000)}|${urls}`).digest("hex").slice(0, 16);
+  return `inbound:${contactId}:${hash}:${new Date(at).toISOString().slice(0, 16)}`;
+}
+
+/**
+ * recordInbound({ store, locationId, contactId, party, channel, messageId, message, attachmentUrls, attachments, now })
+ *   → { key, at, recorded, duplicate, firstAt }
+ *
+ * Writes `inbound_received` for a text the webhook just took. A key already
+ * on the record means GHL delivered this text before (a retry, a workflow
+ * that fired twice, a restart in between): `duplicate`, with when it first
+ * came. A machine's auto-reply or our own words echoed back are marked
+ * `data.noise`, so nothing counts them as a reply and the boot pass leaves
+ * them alone. Never throws: a record that can't be written leaves the reply
+ * to run as it always did.
+ */
+export async function recordInbound({ store, locationId, contactId, party = "", channel = "sms", messageId = "", message = "", attachmentUrls = [], attachments = 0, now = Date.now() } = {}) {
+  const at = new Date(now).toISOString();
+  const key = inboundKey({ messageId, contactId, message, attachmentUrls, at: now });
+  const out = { key, at, recorded: false, duplicate: false, firstAt: null };
+  if (!store?.appendContactEvents || !locationId || !contactId) return out;
+  try {
+    const noise = isAutoReply(message) ? "auto_reply"
+      : (await isOurEcho({ store, locationId, contactId, message }).catch(() => false)) ? "echo" : null;
+    const who = party === "agent" || party === "investor" ? party : null;
+    const n = Math.max(0, Number(attachments) || 0);
+    const r = await store.appendContactEvents(locationId, contactId, [{
+      type: INBOUND_RECEIVED, at, party: who, source: "conversation", dedupeKey: key,
+      data: { channel: channel === "email" ? "email" : "sms", ...(messageId ? { messageId: String(messageId).slice(0, 80) } : {}), ...(n ? { attachments: n } : {}), ...(noise ? { noise } : {}) },
+    }]);
+    const earlier = async (keys) => {
+      const rows = typeof store.listContactEvents === "function"
+        ? await store.listContactEvents(locationId, contactId, { types: [INBOUND_RECEIVED], limit: 50 }).catch(() => []) : [];
+      return rows.filter((e) => keys.includes(e.dedupeKey)).map((e) => String(e.at)).sort()[0] || null;
+    };
+    if (r?.inserted > 0) {
+      out.recorded = true;
+      // Without GHL's id the key is per minute: the same words a minute
+      // earlier are the same text, delivered across the minute's turn.
+      if (!messageId) {
+        const prev = inboundKey({ messageId, contactId, message, attachmentUrls, at: now - 60000 });
+        const firstAt = await earlier([prev]);
+        if (firstAt) Object.assign(out, { duplicate: true, firstAt });
+      }
+    } else {
+      out.duplicate = true;
+      out.firstAt = (await earlier([key])) || at;
+    }
+  } catch { /* the reply still runs */ }
+  return out;
+}
+
+// A reply already drafted for them since `sinceIso`: what makes a second
+// delivery of the same text one too many.
+async function answeredSince({ store, locationId, contactId, sinceIso }) {
+  const rows = await store.listReplyDrafts(locationId, { contactId, since: sinceIso, limit: 20 }).catch(() => []);
+  return rows.some((d) => d && String(d.createdAt || "") >= String(sinceIso) && answersInbound(d));
+}
+
 /* ---------- the pipeline ---------- */
 
 /**
@@ -2736,6 +2822,9 @@ export async function assembleConversation({
 export async function startReply({
   client, locationId, saved, store, contactId, message, channel = "sms", party = "", sendsEnabled = false, deps = {},
   attachments = 0, inboundKind = "text", call = null, fromCheckIn = false, attachmentUrls = [],
+  // The webhook's recordInbound result: a text already on the record is a
+  // second delivery, checked below against what was drafted since.
+  received = null,
 }) {
   const aiApiKey = String(saved?.aiApiKey || "").trim();
   if (!aiApiKey) throw Object.assign(new Error("Anthropic API key required (Settings)"), { http: 400 });
@@ -2801,6 +2890,25 @@ export async function startReply({
         (j.attachmentUrls || []).join(" ") === urls.join(" ") &&
         j.status !== "superseded" && Date.now() - Date.parse(j.startedAt) < DEDUPE_MS) {
       return { skipped: `duplicate of ${j.id}`, job: null };
+    }
+  }
+  // The same check, kept where a restart can't clear it (2026-11-09): GHL's
+  // second delivery of a text already on the record is skipped when a reply
+  // was drafted since, or when this broker still has the first one's reply
+  // job (recent, not superseded or failed). GHL only sends a text again when
+  // the first try failed, so a recent first copy with no job here is one
+  // whose request died before its reply started (a 500, a crash, a deploy):
+  // it is answered now, not left for the 7pm audit. The job check comes after
+  // the read, with nothing awaited between it and this job starting, so a
+  // first delivery whose job started while we read is still seen.
+  if (received?.duplicate) {
+    const firstAt = received.firstAt || received.at || new Date().toISOString();
+    const recent = Date.now() - (Date.parse(firstAt) || 0) < INBOUND_IN_HAND_MS;
+    const answered = await answeredSince({ store, locationId, contactId, sinceIso: firstAt });
+    const inHand = recent && [...jobs.values()].some((j) => j.locationId === locationId && j.contactId === contactId &&
+      j.status !== "superseded" && j.status !== "error" && String(j.startedAt || "") >= String(firstAt));
+    if (answered || inHand) {
+      return { skipped: `duplicate of the text that came in at ${firstAt}`, job: null, duplicate: true };
     }
   }
 

@@ -122,6 +122,7 @@ import {
   startReply, startProactive, previewProactive, chooseProactiveKind, leadsWithNumber, floatStanceFor, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
   stopMachineTextsForOffer, stopDealOutreach, RA_TAGS,
+  recordInbound,
 } from "../reply-agent.js";
 import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
@@ -7000,11 +7001,19 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       ).toLowerCase();
       const channel = rawChannel.includes("email") ? "email" : "sms";
       const party = String(b.party || b.customData?.party || "").toLowerCase();
+      const urls = attachmentUrls(rawAttachments);
+
+      // On the record before any reply job exists (reply-agent.js
+      // recordInbound): a deploy or a crash in the next minute can't lose
+      // that it came, and GHL sending it again can't draft it twice.
+      const messageId = String(b.messageId || b.message_id || b.customData?.message_id || b.customData?.messageId ||
+        (b.message && typeof b.message === "object" ? b.message.id || b.message.messageId || "" : "") || "").slice(0, 80);
+      const received = await recordInbound({ store, locationId, contactId, party, channel, messageId, message, attachmentUrls: urls, attachments });
 
       const saved = await store.getOfferSettings(locationId);
       const { skipped, job } = await startReply({
-        client, locationId, saved, store, contactId, message, channel, party, attachments, attachmentUrls: attachmentUrls(rawAttachments),
-        sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved }),
+        client, locationId, saved, store, contactId, message, channel, party, attachments, attachmentUrls: urls,
+        sendsEnabled: CARD_SENDS_ENABLED, deps: conversationDeps({ client, locationId, saved }), received,
       });
       // A cap hit (or the bot being switched off) answers 200, not 4xx — a
       // GHL workflow that gets an error retries, and retrying is exactly

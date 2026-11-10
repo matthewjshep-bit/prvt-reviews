@@ -367,6 +367,9 @@ export const LINE_JOBS = {
   ghlMirror: { label: "GHL mirror", every: "tick" },
   deliveryWatch: { label: "Delivery check (only while on)", every: "tick" },
   outreachScorecard: { label: "Text scoreboard", every: "day" },
+  // The broker's own start (ghl-broker/boot.js): "failed" when it restarted
+  // without a new commit, which is a crash or a manual restart.
+  brokerBoot: { label: "Broker start", every: "boot" },
 };
 
 /**

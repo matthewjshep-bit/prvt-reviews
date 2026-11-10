@@ -185,6 +185,29 @@ export function nextSendTime({ now = Date.now(), delayMs = 0, quietHours = {} } 
 
 const inFlight = new Set();
 
+/** inFlightSends() → how many sends this broker has started and not finished (the SIGTERM drain waits on them). */
+export const inFlightSends = () => inFlight.size;
+
+// The claim on one due draft: scheduled → sending, and the draft back only
+// to the first caller (store.claimReplyDraft, a conditional update in both
+// backends). During a deploy the old broker and the new one both run this
+// loop for a minute; until 2026-11-09 both could read "scheduled" and both
+// send. A store without the conditional claim (a test double) reads and
+// writes, which is only safe inside one process.
+async function claimDue(store, d, now) {
+  const at = new Date(now).toISOString();
+  if (typeof store.claimReplyDraft === "function") return store.claimReplyDraft(d.id, "scheduled", { at, dueBy: at });
+  // Read it again before claiming: the list is from the top of the tick, and
+  // a text sent since may have taken this one with it (two deals for one
+  // buyer go as one text — reply-agent.js) or put it off to the buyer's next
+  // open day. Claiming the stale copy would undo that and send it twice.
+  const fresh = typeof store.getReplyDraft === "function" ? await store.getReplyDraft(d.id).catch(() => null) : null;
+  if (fresh && (fresh.status !== "scheduled" || Date.parse(fresh.sendAt || "") > now)) return null;
+  const next = { ...(fresh || d), status: "sending", sendingAt: at, updatedAt: at };
+  await store.updateReplyDraft(d.id, next);
+  return next;
+}
+
 /**
  * sendDueDrafts({ store, locations, live, now, send, log })
  *
@@ -221,7 +244,7 @@ export function waitsForAWorkday(d) {
   return MACHINE_STARTED_KINDS.has(kind) || kind === "blast_open";
 }
 
-export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, enabledFor = null, windowFor = null, log = () => {}, maxPerTick = MAX_SENDS_PER_TICK, paceMs = PACE_MS, random = Math.random }) {
+export async function sendDueDrafts({ store, locations = [], live = false, now = Date.now(), send, enabledFor = null, windowFor = null, log = () => {}, maxPerTick = MAX_SENDS_PER_TICK, paceMs = PACE_MS, random = Math.random, stopping = () => false }) {
   const out = { sent: 0, failed: 0, recovered: 0, returned: 0, deferred: 0, afterHours: 0 };
   for (const { locationId, client } of locations) {
     // Two texts never leave in the same second, and a tick sends at most a
@@ -316,18 +339,16 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
         out.returned++;
         continue;
       }
+      // A deploy is draining this broker (SIGTERM): the send under way
+      // finishes, nothing new is claimed. What's left stays "scheduled" for
+      // the broker that replaces this one.
+      if (stopping()) { out.leftForNext = (out.leftForNext || 0) + 1; continue; }
       inFlight.add(d.id);
       try {
-        // Read it again before claiming: the list is from the top of the
-        // tick, and a text sent since may have taken this one with it (two
-        // deals for one buyer go as one text — reply-agent.js) or put it off
-        // to the buyer's next open day. Claiming the stale copy would undo
-        // that and send it twice.
-        const fresh = typeof store.getReplyDraft === "function" ? await store.getReplyDraft(d.id).catch(() => null) : null;
-        if (fresh && (fresh.status !== "scheduled" || Date.parse(fresh.sendAt || "") > now)) continue;
         // Claim first, so an overlapping tick (or a second process) sees
-        // "sending" and leaves it alone.
-        await store.updateReplyDraft(d.id, { ...(fresh || d), status: "sending", sendingAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() });
+        // "sending" and leaves it alone. Only a claimed row is sent.
+        const claimed = await claimDue(store, d, now);
+        if (!claimed) { out.claimedElsewhere = (out.claimedElsewhere || 0) + 1; continue; }
         const r = await send({ client, store, locationId, draftId: d.id, live: true, auto: true });
         if (r?.skipped) {
           out.stoodAside = (out.stoodAside || 0) + 1;
@@ -336,7 +357,7 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
           out.sent++;
           sentThisTick++;
           log(`scheduler: auto-sent ${d.id} (${d.party || "agent"} · ${d.intent}) for ${locationId}`);
-          if (paceMs > 0) await wait(Math.round(paceMs * (0.6 + 0.8 * random())));
+          if (paceMs > 0 && !stopping()) await wait(Math.round(paceMs * (0.6 + 0.8 * random())));
         }
       } catch (e) {
         const fresh = (await store.getReplyDraft(d.id).catch(() => null)) || d;

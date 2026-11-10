@@ -21,14 +21,16 @@ import createContactsRouter from "./routes/contacts.js";
 import { createDataroomRouter, createDataroomPublicRouter } from "./routes/dataroom.js";
 import { createOfferPageRouter, createOfferPagePublicRouter } from "./routes/offer-page.js";
 import { store } from "./store.js";
+import { dbEnabled, schemaState } from "./db.js";
 import { checkObjectStore } from "./r2.js";
-import { sendDueDrafts } from "./conversation-scheduler.js";
+import { sendDueDrafts, inFlightSends } from "./conversation-scheduler.js";
+import { recordBoot, sampleMemory, reportSchema, rootHandler, guarded, makeShutdown, untilIdle, BOOT_TICK_DELAY_MS, MEMORY_SAMPLE_MS, DRAIN_MS, TICK_STUCK_MS, SEND_LOOP_STUCK_MS, RESTART_NOTE as RESTART_LOG } from "./boot.js";
 import { maybeStartFollowUpSweep, FOLLOW_UP_UTC_HOUR } from "./follow-up-sweep.js";
 import { sendReplyDraft, conversationConfig, startProactive } from "./reply-agent.js";
 import { maybeStartOutreachSweep } from "./outreach-sweep.js";
 import { maybeStartOutreachFollowUp } from "./outreach-followup.js";
 import { maybeRunPromiseSweep } from "./promise-sweep.js";
-import { maybeRunConversationAudit, maybeRunDaytimeDriver } from "./conversation-audit.js";
+import { maybeRunConversationAudit, maybeRunDaytimeDriver, maybeRunBootPass, BOOT_PASS_DELAY_MS } from "./conversation-audit.js";
 import { releaseMisreadHolds } from "./misread-holds.js";
 import { maybeRunPriceWatch } from "./price-watch.js";
 import { maybeRunPriceScorecard } from "./price-scorecard.js";
@@ -59,6 +61,10 @@ import { openerVariant } from "./shared/outreach-opener.js";
 import { createContactCardPublicRouter } from "./contact-card.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// When this broker started, and on which commit (boot.js): a start on the
+// commit the last one had is a crash or a restart by hand.
+const BOOT_AT = Date.now();
+const COMMIT = process.env.RENDER_GIT_COMMIT || "";
 
 const PORT = process.env.PORT || 4000;
 const GHL_TOKEN = process.env.GHL_TOKEN || "";
@@ -130,9 +136,11 @@ app.use((req, res, next) => {
 app.use("/uploads", express.static(UPLOAD_DIR, { maxAge: "1d" }));
 
 // Root doubles as a deploy check: Render injects RENDER_GIT_COMMIT, so this
-// shows exactly which commit is live.
-app.get("/", (_req, res) =>
-  res.type("text/plain").send(`offer broker ok @ ${(process.env.RENDER_GIT_COMMIT || "dev").slice(0, 7)}`));
+// shows exactly which commit is live. Since 2026-11-09 it also says which
+// store is in use (db=pg, or db=file when DATABASE_URL is missing and claims
+// won't survive a deploy) and whether the schema applied (schema=failed
+// means a new column is missing; the error is in #machine under db:migrate).
+app.get("/", rootHandler({ commit: COMMIT, backend: dbEnabled ? "pg" : "file", schema: schemaState }));
 
 // Resolve + validate the location for an incoming request.
 function resolveLocation(req) {
@@ -217,7 +225,14 @@ app.use("/o", createOfferPagePublicRouter());
 // (contact-card.js). The token in the path is the credential.
 app.use("/card", createContactCardPublicRouter({ store, locations: () => sweepLocations() }));
 
-store.init().catch((e) => console.error("store init failed:", e.message));
+// A failed migration is recorded under db:migrate as soon as it's known
+// (#machine hears it); once the store is up, this start goes on the
+// brokerBoot cursor, which says in #machine when it wasn't a deploy.
+store.init({ onSchema: (result) => reportSchema({ store, locationIds: sweepLocations(), result }) })
+  .catch((e) => console.error("store init failed:", e.message))
+  .then(() => recordBoot({ store, locationIds: sweepLocations(), commit: COMMIT, now: BOOT_AT }))
+  .then((rows) => { if ((rows || []).some((r) => r.restarted)) console.warn(`broker ${RESTART_LOG}`); })
+  .catch((e) => console.error("boot record failed:", e.message));
 // Every Claude call is added to the day's spend ledger from here on
 // (ai-spend.js); before this, scans and enrichment were invisible.
 startAiSpendMeter({ store });
@@ -308,6 +323,13 @@ const TICK_JOBS = [
   { area: "daytime", run: async ({ client, locationId, saved }) => {
     if (await maybeRunDaytimeDriver({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE,
       deps: offersRouter.conversationDepsFor({ locationId, client, saved }) })) console.log(`daytime pass started for ${locationId}`);
+  } },
+  // A restart's lost replies (conversation-audit.js maybeRunBootPass): its
+  // own timer runs it five minutes after the start; the tick only retries a
+  // run that failed or died. Off until nightlyAudit.bootPass is switched on.
+  { area: "boot-pass", run: async ({ client, locationId, saved }) => {
+    await maybeRunBootPass({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE, bootAt: BOOT_AT,
+      deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
   } },
   // An hour behind it: what today's edits and dismissals say the bot should
   // learn. Proposes; a person applies. Off until switched on.
@@ -472,7 +494,11 @@ const TICK_JOBS = [
   } },
 ];
 
-setInterval(async () => {
+// The tick never runs over itself (boot.js guarded): its jobs await GHL one
+// after another, and on a slow GHL day one tick used to still be going when
+// the next began. A deploy also used to restart its clock, so a burst of
+// pushes left half an hour with no tick; one now runs 90 seconds after start.
+const runTick = guarded(async () => {
   for (const locationId of sweepLocations()) {
     try {
       const token = getTokenFor(locationId);
@@ -485,12 +511,39 @@ setInterval(async () => {
       await recordError(store, { locationId, area: "sweep", err: e });
     }
   }
-}, 15 * 60 * 1000).unref();
+}, { name: "15-minute tick", log: console.warn, staleMs: TICK_STUCK_MS });
+const tickNow = () => runTick().catch((e) => console.error(`tick failed: ${e.message}`));
+const tickTimer = setInterval(tickNow, 15 * 60 * 1000).unref();
+const bootTickTimer = setTimeout(tickNow, BOOT_TICK_DELAY_MS).unref();
+
+// The broker's memory on its boot cursor every five minutes (boot.js), so a
+// restart nobody deployed can say what it was before it went down.
+const memoryTimer = setInterval(() => {
+  sampleMemory({ store, locationIds: sweepLocations(), bootAt: BOOT_AT }).catch(() => {});
+}, MEMORY_SAMPLE_MS).unref();
+
+// A restart's lost replies, five minutes after the start (the boot pass;
+// off until nightlyAudit.bootPass). The tick retries one that failed.
+const bootPassTimer = setTimeout(async () => {
+  for (const locationId of sweepLocations()) {
+    try {
+      const token = getTokenFor(locationId);
+      if (!token) continue;
+      const client = makeClient(token);
+      const saved = (await store.getOfferSettings(locationId)) || {};
+      await maybeRunBootPass({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE, bootAt: BOOT_AT,
+        deps: offersRouter.conversationDepsFor({ locationId, client, saved }) });
+    } catch (e) {
+      console.error(`boot pass failed for ${locationId}: ${e.message}`);
+      await recordError(store, { locationId, area: "boot-pass", err: e });
+    }
+  }
+}, BOOT_PASS_DELAY_MS + 15000).unref();
 
 // Slack's events (slack-notify.js): a Tier 1 house, a counter, an underwrite
 // running, a buyer committing — within a minute, not a tick. One settings
 // read per location, nothing more while Slack is off.
-setInterval(async () => {
+const slackTimer = setInterval(async () => {
   for (const locationId of sweepLocations()) {
     try {
       const saved = await store.getOfferSettings(locationId);
@@ -510,7 +563,9 @@ setInterval(async () => {
 // place, and anything left over from before the flag flipped is handed back
 // to the outbox with a flag rather than left counting down.
 let lastPrune = 0;
-setInterval(async () => {
+// One pass at a time (a paced pass of twenty texts runs past 30 seconds),
+// and while a deploy drains this broker it claims nothing new.
+const sendLoop = guarded(async () => {
   try {
     const locations = sweepLocations()
       .map((locationId) => ({ locationId, token: getTokenFor(locationId) }))
@@ -521,6 +576,7 @@ setInterval(async () => {
       enabledFor: async (locationId) => conversationConfig((await store.getOfferSettings(locationId)) || {}).enabled,
       // What the machine started waits for its own hours (machineUntil, 5pm).
       windowFor: async (locationId) => conversationConfig((await store.getOfferSettings(locationId)) || {}).autoSend,
+      stopping: () => shutdown.stopping(),
     });
     if (r.failed || r.recovered || r.returned) console.warn(`conversation scheduler: ${JSON.stringify(r)}`);
     // Once a day: settled drafts past the tab's retention go.
@@ -539,6 +595,19 @@ setInterval(async () => {
   } catch (e) {
     console.error(`conversation scheduler tick failed: ${e.message}`);
   }
-}, 30 * 1000).unref();
+}, { name: "send loop", log: console.warn, staleMs: SEND_LOOP_STUCK_MS, quietSkips: true });
+const sendTimer = setInterval(() => { sendLoop().catch(() => {}); }, 30 * 1000).unref();
 
-app.listen(PORT, () => console.log(`offer broker on :${PORT}`));
+const server = app.listen(PORT, () => console.log(`offer broker on :${PORT}`));
+
+// A deploy (Render sends SIGTERM, then kills the process 30 seconds later):
+// every timer stops, nothing new is claimed, and the texts already going out
+// finish (up to 25 seconds) instead of being cut off mid-send and handed back
+// to Matt as "auto-send was interrupted". What's still scheduled stays
+// scheduled for the broker that replaces this one.
+const shutdown = makeShutdown({
+  timers: () => [tickTimer, bootTickTimer, memoryTimer, bootPassTimer, slackTimer, sendTimer],
+  idle: [() => sendLoop.idle(), () => untilIdle(inFlightSends)],
+  server, timeoutMs: DRAIN_MS, log: console.log,
+});
+process.on("SIGTERM", () => { shutdown("SIGTERM"); });

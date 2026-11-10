@@ -186,6 +186,11 @@ export const EVENT_TYPES = [
   // A cold agent's follow-up actually went (reply-agent.js sendReplyDraft):
   // which text, at which step, for the text scoreboard (2026-11-09).
   "outreach_nudge_sent",
+  // A text or email of theirs reached the webhook (ghl-broker/reply-agent.js
+  // recordInbound, 2026-11-09), written before any reply job starts: the
+  // channel and GHL's message id, never the words. The duplicate check across
+  // a restart, the boot pass and the reply counts read it.
+  "inbound_received",
 ];
 
 export const EVENT_LABEL = {
@@ -242,6 +247,7 @@ export const EVENT_LABEL = {
   send_failed: "our message didn't arrive", send_retried: "the blocked deal text was queued once more without the link",
   phone_ok: "a text reached their phone again",
   outreach_nudge_sent: "we followed up on our first text",
+  inbound_received: "their message came in",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -297,6 +303,7 @@ export const EVENT_ICON = {
   send_failed: "CircleSlash", send_retried: "RefreshCw",
   phone_ok: "CheckCircle2",
   outreach_nudge_sent: "Send",
+  inbound_received: "MessageCircle",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];
