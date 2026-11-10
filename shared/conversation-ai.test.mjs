@@ -794,3 +794,32 @@ test("STOP on its own is still an opt-out", async () => {
   }
   assert.equal(detectOptOut("STOP", { ...o, enabled: false }), false);
 });
+
+test("an agent's listing email with an unsubscribe footer isn't an opt-out", async () => {
+  const { detectOptOut, optOutMaybe, optOutInTranscript, starterConfig: starter } = await import("./conversation-ai.js");
+  const o = starter().optOut;
+  for (const t of [
+    "Just listed: 12 Wicket Ln, 3 bd 2 ba, open Sunday 1 to 3.\nYou are receiving this email because you signed up on our site.\nUnsubscribe | Update preferences",
+    "Price improvement on 9 Quarry Rd. If you no longer wish to receive these emails, unsubscribe here.",
+    "View this email in your browser. Coming soon on Fennel Ct. Unsubscribe",
+    "Back on market, 41 Lantern Way. Click here to unsubscribe.",
+    "New listing alert. Reply REMOVE to stop getting these.",
+  ]) {
+    assert.equal(detectOptOut(t, o), false, t);
+    assert.equal(optOutMaybe(t, o), false, t);
+  }
+  assert.equal(optOutInTranscript("[2026-11-02 17:05] THEM email: Coming soon on Fennel Ct. Manage your email preferences. Unsubscribe", o), null);
+  assert.equal(detectOptOut("Please unsubscribe me from everything", o), true, "their own words still count");
+  assert.equal(detectOptOut("Unsubscribe", o), true);
+});
+
+test("an agent who says don't call, just text me is asking for texts, not opting out", async () => {
+  const { detectOptOut, starterConfig: starter } = await import("./conversation-ai.js");
+  const o = starter().optOut;
+  for (const t of ["Don't call, just text me", "Text me, don't call", "Please don't call me, text me only", "Don't email me, text", "Can you stop sending the photos one at a time"]) {
+    assert.equal(detectOptOut(t, o), false, t);
+  }
+  for (const t of ["Don't call or text me", "Do not call me", "don't text, call me", "Stop sending me these", "Please do not email me again"]) {
+    assert.equal(detectOptOut(t, o), true, t);
+  }
+});

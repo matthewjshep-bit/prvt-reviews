@@ -601,6 +601,10 @@ export const ACTION_LABEL = {
   // Injected by the reply agent only: our reply passed on the house, so a
   // number we priced on it and never sent closes (we passed).
   retire_unsent_offer: "Close a number we never sent on a house we passed on",
+  // Injected by the reply agent only, always an ask: a held text that may be
+  // an opt-out ("Stop, not interested"). Your press makes it one, for good:
+  // no machine text or email goes to them again (shared/opt-out.js).
+  mark_opted_out: "Opt out",
   mark_investor_passed: "Mark them passed on the deal", mark_investor_committed: "Mark them the committed buyer",
   record_deal_feedback: "File what they said about the deal as feedback",
   revise_offer_to_counter: "Re-issue the offer at their number",
@@ -1511,20 +1515,42 @@ export function normalizeConversationAi(doc, seed = {}) {
 // Widened 2026-11-09 (Matt: any opt-out, any channel): "please stop", "opt
 // me out", "revoke" (the FCC's own word; not "revoke the offer"), "do not
 // email", "off your mailing list". 73 of 505 real opt-outs had needed the
-// model to catch them.
-const LEAVE_ME_ALONE_RX = /\b(take me off|remove me|off (?:your|the|this) (?:mailing |contact |texting |call )?list|do(?: not|n'?t) (?:text|contact|message|call|email)|stop (?:texting|contacting|messaging|calling|emailing|sending)|unsubscribe|no more (?:texts|messages|emails)|lose my number|please stop|opt[\s-]?(?:me[\s-]?)?out|stopall|revoke\b(?!\s+(?:the|our|their|his|her|its|that|this)\b))\b/i;
+// model to catch them. "Stop sending" counts only for us or our texts ("stop
+// sending me these"), not "stop sending the photos one at a time".
+const LEAVE_ME_ALONE_RX = /\b(take me off|remove me|off (?:your|the|this) (?:mailing |contact |texting |call )?list|do(?: not|n'?t) (?:text|contact|message|call|email)|stop (?:texting|contacting|messaging|calling|emailing)|stop sending (?:me|these|those|them|texts|messages|emails)|unsubscribe|no more (?:texts|messages|emails)|lose my number|please stop|opt[\s-]?(?:me[\s-]?)?out|stopall|revoke\b(?!\s+(?:the|our|their|his|her|its|that|this)\b))\b/i;
 // Marketing footers pasted in from a flyer, an MLS blast or an email
 // signature: never their words to us ("Reply STOP to opt out", "STOP to
-// end", "To unsubscribe, click here").
+// end", "To unsubscribe, click here"). An agent's own listing email carries
+// one too ("You are receiving this email because...", "Unsubscribe | Update
+// preferences"), and read as theirs it would silence them for good.
 const OPT_OUT_FOOTERS = [
-  /\b(?:reply|text|txt|send|respond)(?:\s+with)?\s+["'“”]?(?:stop|end|quit|cancel|unsubscribe|stopall)["'“”]?\s+to\b[^.!?\n]*/gi,
+  /\b(?:reply|text|txt|send|respond)(?:\s+with)?\s+["'“”]?(?:stop|end|quit|cancel|unsubscribe|stopall|remove)["'“”]?\s+to\b[^.!?\n]*/gi,
   /\bstop["'“”]?\s+to\s+(?:end|cancel|quit|stop|opt[\s-]?out|unsubscribe)\b[^.!?\n]*/gi,
   /(^|[.!?\n]\s*)to\s+(?:unsubscribe|opt[\s-]?out)\b\s*(?:[,:-]|from\b|click\b|reply\b|text\b|visit\b|tap\b|go\b|please\b)[^.!?\n]*/gi,
+  /\b(?:click|tap)\s+here\s+to\s+(?:unsubscribe|opt[\s-]?out)\b[^.!?\n]*/gi,
+  /\bunsubscribe\s+(?:from\s+(?:this|these|our|all)\s+(?:list|emails?|mailings?|messages?)|here|link)\b[^.!?\n]*/gi,
+  /[|·•]\s*unsubscribe\b|\bunsubscribe\s*[|·•]/gi,
 ];
+// Marks of a bulk email (a newsletter, a listing blast): with one of these in
+// it, a bare "Unsubscribe" is the footer's link, not their word.
+const BULK_EMAIL_RX = /\byou(?:'re|\s+are)\s+receiving\s+this\b[^.!?\n]*|\b(?:manage|update)\s+(?:your\s+)?(?:email\s+|subscription\s+|communication\s+)?(?:preferences|subscriptions?)\b[^.!?\n]*|\bif\s+you\s+(?:no\s+longer\s+)?(?:wish|want|would\s+like)\s+to\s+(?:stop\s+|no\s+longer\s+)?receiv\w*\b[^.!?\n]*|\bview\s+(?:this\s+(?:email\s+)?)?in\s+(?:your\s+)?browser\b[^.!?\n]*/gi;
 // A keyword that opens a sentence about something else: "Stop by anytime",
 // "End of the month works", "Remove the carpet", "Cancel that, they want
-// 450", a quit claim deed. These never count.
-const NOT_AN_OPT_OUT_RX = /\bstop(?:ping)?\s+(?:by|in|over)\b|\bend\s+of\s+(?:the\s+)?(?:day|week|month|year)\b|\bend(?:s|ed)?\s+up\b|\bcancel\s+that\b|\bcancel\s+the\s+(?:showing|appointment)\b|\bremove\s+the\b|\bquit[\s-]*claim\b/gi;
+// 450", a quit claim deed. And a channel they'd rather we used ("don't call,
+// just text me", "text me, don't call"): that asks for texts, it doesn't
+// stop them. These never count. "Don't text" always does.
+const NOT_AN_OPT_OUT_RX = new RegExp([
+  String.raw`\bstop(?:ping)?\s+(?:by|in|over)\b`,
+  String.raw`\bend\s+of\s+(?:the\s+)?(?:day|week|month|year)\b`,
+  String.raw`\bend(?:s|ed)?\s+up\b`,
+  String.raw`\bcancel\s+that\b`,
+  String.raw`\bcancel\s+the\s+(?:showing|appointment)\b`,
+  String.raw`\bremove\s+the\b`,
+  String.raw`\bquit[\s-]*claim\b`,
+  String.raw`\bdo(?:\s+not|n'?t)\s+(?:call|e-?mail)(?:\s+me)?\s*[,.;:-]*\s*(?:(?:just|only|please|but)\s+)?(?:text|txt)(?:s|ing)?(?:\s+me)?\b(?!\s*(?:or|and|&)\b)`,
+  String.raw`\bdo(?:\s+not|n'?t)\s+call(?:\s+me)?\s*[,.;:-]*\s*(?:(?:just|only|please|but)\s+)?e-?mail(?:\s+me)?\b(?!\s*(?:or|and|&)\b)`,
+  String.raw`\b(?:text|txt)(?:\s+me)?(?:\s+only)?\s*[,.;:-]*\s*(?:please\s+)?do(?:\s+not|n'?t)\s+call(?:\s+me)?\b(?!\s*(?:or|and|&)\b)`,
+].join("|"), "gi");
 // The opening keyword followed by a clause of its own ("Stop, not
 // interested", "Stop! That's a great number"): a longer text, not a bare STOP.
 const CLAUSE_AFTER_RX = /^\W*[a-z']+\s*[,;:.!?-]+\s*\S+\s+\S+/;
@@ -1544,6 +1570,8 @@ function optOutRead(message, optOut) {
   if (!optOut?.enabled) return { read: null, words: 0 };
   let text = String(message || "").toLowerCase().replace(/[‘’]/g, "'");
   for (const rx of OPT_OUT_FOOTERS) text = text.replace(rx, (m, lead) => (typeof lead === "string" ? `${lead} ` : " "));
+  const unbulked = text.replace(BULK_EMAIL_RX, " ");
+  if (unbulked !== text) text = unbulked.replace(/\bunsubscribe\b/g, " ");
   text = text.replace(NOT_AN_OPT_OUT_RX, " ").replace(/\s+/g, " ").trim();
   if (!/[a-z]/.test(text)) return { read: null, words: 0 };
   const words = text.split(/\s+/).length;
