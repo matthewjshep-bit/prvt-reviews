@@ -31,7 +31,7 @@
 // Pure. ghl-broker/reply-agent.js uses standardText() in place of the model
 // for these kinds when the mode is "template".
 
-import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME, withHomeBlank, COLD_LISTING_CHECK_IN_TEXTS, COLD_LAST_RUNG_TEXTS } from "./outreach-opener.js";
+import { streetName, openerVariant, DEFAULT_FOLLOW_UP_TEXTS, DEFAULT_CHECK_IN_TEXTS, DEFAULT_HOME, withHomeBlank, COLD_LAST_RUNG_TEXTS } from "./outreach-opener.js";
 
 // The follow-up to a first text nobody answered (outreach_nudge): Rigo's
 // two-week text, without the dollar figure (carriers read money in a cold
@@ -198,8 +198,8 @@ function pickFilled(list, variant, values, prior = []) {
  *   outreach_nudge  outbound.mode "template"; outbound.followUps[step], else
  *                   NUDGE_TEXTS from the contact's variant plus the step; a
  *                   repeat rung past the last step, outbound.checkIns in turn
- *                   (the last one COLD_LAST_RUNG_TEXTS, one with a new
- *                   listing of theirs COLD_LISTING_CHECK_IN_TEXTS)
+ *                   (the last one COLD_LAST_RUNG_TEXTS); none names a
+ *                   house or a street
  *   agent_pulse     outbound.mode "template"; CHECKIN_TEXTS, CHECKIN_COLD_TEXTS,
  *                   or LISTING_PING_TEXTS / LISTING_PING_COLD_TEXTS when a
  *                   fresh listing of theirs came up; a focus listing
@@ -244,11 +244,12 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
     //
     // 2026-11-09 (Matt: the day 30, 44 and 58 texts, in his own words): the
     // last rung (`repeatMax`, day 58 on the default ladder) says it is the
-    // last; a rung with a new listing of theirs (`freshListing`, never the
-    // first-text house) names its street; otherwise the next check-in along,
-    // one that names their town when we know it. None says what one of our
-    // recent texts to them said (`prior`): it walks on, and a pool with
-    // nothing left falls back to the check-ins, then to the model.
+    // last; otherwise the next check-in along, one that names their town
+    // when we know it. None names a house or a street, not even a new
+    // listing of theirs (Matt, 11-09: check-ins never reference properties).
+    // None says what one of our recent texts to them said (`prior`): it walks
+    // on, and a pool with nothing left falls back to the check-ins, then to
+    // the model.
     if (o.repeats && !Number(o.stepIndex)) {
       const n = Math.max(1, Math.round(Number(o.repeatN) || 1));
       const list = Array.isArray(o.checkIns) && o.checkIns.length ? o.checkIns : DEFAULT_CHECK_IN_TEXTS;
@@ -261,11 +262,6 @@ export function standardText({ kind, outbound = {}, name = "", contactId = "", p
       };
       if (Number(o.repeatMax) > 0 && n >= Number(o.repeatMax)) {
         return done("cold_last", pickFilled(COLD_LAST_RUNG_TEXTS, v, values, prior)) || checkIn();
-      }
-      const street = streetName(o.freshListing?.street || o.freshListing?.address || "");
-      if (street) {
-        const town = String(o.freshListing?.city || "").trim() || values.town;
-        return done("cold_listing", pickFilled(COLD_LISTING_CHECK_IN_TEXTS, v + n - 1, { ...values, street, town }, prior)) || checkIn();
       }
       return checkIn();
     }

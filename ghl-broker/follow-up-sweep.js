@@ -51,10 +51,6 @@ import { withRetry } from "./buyer-import.js";
 import { countyName, firstTextHook } from "./shared/outreach-opener.js";
 import { secondLookDue, numberPresented, normalizeSecondLook, SECOND_LOOK_STATUSES, SECOND_LOOK_WINDOW_DAYS, SECOND_LOOK_KIND } from "./shared/second-look.js";
 import { nextRungAt, normalizeSteps } from "./shared/follow-up.js";
-import { normalizeAgentPulse, freshListingFor } from "./shared/agent-pulse.js";
-import { streetName } from "./shared/outreach-opener.js";
-import { parseUsAddress } from "./shared/us-address.js";
-import { housesFrom } from "./agent-pulse.js";
 
 const DAY_MS = 86400000;
 // GHL's burst cap is 100 req / 10s per location; the same pace the enrichment
@@ -556,7 +552,7 @@ export async function coldWindowEvents(store, locationId, now = Date.now(), { fr
   const promise = allEventsSince(store, locationId, since, { types: COLD_WINDOW_TYPES }, { ceiling: COLD_WINDOW_CEILING })
     .then((read) => {
       const out = { events: (read?.events || []).map(slimColdEvent), truncated: Boolean(read?.truncated) };
-      if (out.truncated) console.warn(`follow-up: the cold window read stopped at ${out.events.length} events; agents first texted earliest may be missing from the ladder`);
+      if (out.truncated) console.warn(`follow-up: the cold window read stopped at ${out.events.length} events; the ladder may be missing agents or their newest replies`);
       const entry = { at: now, read: out };
       memo.set(locationId, entry);
       // Held only as long as it may be reused, never for good.
@@ -857,30 +853,6 @@ async function runSweep(job, ctx) {
     if (!offersOf.has(o.contactId)) offersOf.set(o.contactId, []);
     offersOf.get(o.contactId).push(o);
   }
-  // A new listing of theirs for a cold check-in after day 16 to name
-  // (2026-11-09): the agent check-in's own read of the outreach pulls
-  // (shared/agent-pulse.js freshListingFor), first seen in its `freshDays`,
-  // never the house the first text was about. Read once a run, and only when
-  // such a check-in goes.
-  let freshRead = null;
-  const coldFreshListing = async (c) => {
-    if (!freshRead) {
-      const s = normalizeAgentPulse(saved?.outreachAutopilot?.pulse);
-      const rows = typeof store.listFreshAgentListings === "function"
-        ? await store.listFreshAgentListings(locationId, { since: iso(now - s.freshDays * DAY_MS), seenSince: iso(now - s.listingSeenDays * DAY_MS) }).catch(() => [])
-        : [];
-      const by = new Map();
-      for (const l of rows || []) {
-        if (!l?.contactId) continue;
-        if (!by.has(l.contactId)) by.set(l.contactId, []);
-        by.get(l.contactId).push(l);
-      }
-      freshRead = { s, by, houses: housesFrom(book || [], [], now) };
-    }
-    const l = freshListingFor({ listings: freshRead.by.get(c.contactId) || [], raised: [c.address].filter(Boolean), houses: freshRead.houses, settings: freshRead.s, now });
-    const address = String(l?.doc?.address || "");
-    return streetName(address) ? { street: streetName(address), address, city: String(l.doc.city || parseUsAddress(address).city || "") } : null;
-  };
   const focusCache = new Map();
   const focusFor = (contactId) => {
     if (!focusCache.has(contactId)) focusCache.set(contactId, focusOf(offersOf.get(contactId) || [], { contactId }));
@@ -1230,8 +1202,6 @@ async function runSweep(job, ctx) {
 
     try {
       const offer = c.offerId ? await store.getOffer(c.offerId).catch(() => null) : null;
-      const freshListing = c.kind === "outreach_nudge" && d.step > Math.max(0, ...normalizeSteps(c.ladder.steps))
-        ? await coldFreshListing(c).catch(() => null) : null;
       const r = await start({
         client, locationId, saved, store, contactId: c.contactId, kind: c.kind,
         offer: OFFER_KINDS.has(c.kind) ? offer : null,
@@ -1239,7 +1209,8 @@ async function runSweep(job, ctx) {
                    viewedAt: c.viewedAt || null, blastedAt: c.blastedAt || null, spokeAt: c.spokeAt || null, lastTouchAt, relisted: Boolean(c.relisted),
                    ...(c.county ? { county: c.county } : {}),
                    ...(c.pastListing ? { pastListing: true } : {}),
-                   ...(freshListing ? { freshListing } : {}),
+                   // Check in less / more: which cold rung is the last one (reply-agent.js repeatOf).
+                   ...(c.kind === "outreach_nudge" && pace !== 1 ? { pace } : {}),
                    ...(c.wavering ? { wavering: true } : {}),
                    ...(c.kind === SECOND_LOOK_KIND ? { theirs: c.theirs, source: c.source } : {}),
                    ...(aside ? { aside: { address: aside.address, quiet: Boolean(aside.quiet) } } : {}) },

@@ -6791,18 +6791,16 @@ spread themselves through the morning's machine queue (`MACHINE_BURST`,
   copy of the 10/20 three ("circling back … desk", "checking in … radar",
   "distressed or value-add … always happy") reads as never changed and gets
   the new ones; a list Matt edited is kept as he wrote it.
-- A new listing of theirs (`COLD_LISTING_CHECK_IN_TEXTS`): the sweep reads
-  the agent check-in's fresh listings once a run (`listFreshAgentListings`,
-  `freshListingFor`: first seen in `pulse.freshDays`, 14, still up, needs
-  work, not a house we have live or walked from, never the first-text
-  house) and passes it as `subject.freshListing`. The text names its street,
-  never the number. A listing the thread already names, in our words or
-  theirs, is dropped and the plain check-in goes: by number and street
-  (`listingAlreadyRaised`), or by its street alone (`streetInThread`), so
-  the street a check-in named isn't named again two weeks on.
+- No house, ever (Matt, 11-09: check-ins never reference properties). No
+  check-in names the first-text house, a new listing of theirs, or any
+  street or address; their town is their area and is fine. A new listing of
+  theirs is the listing ping's to text (the agent check-in), not the
+  ladder's.
 - The last rung (`COLD_LAST_RUNG_TEXTS`, `repeatMax` on the descriptor: the
-  last repeat inside the 60-day window, day 58 on `[2]` every 14, or the
-  ladder's `maxRepeats` when lower) says it is the last one.
+  last repeat inside the 60-day window, day 58 on `[2]` every 14) says it is
+  the last one. A person on "check in more" reaches their rungs in half the
+  time, so their last is day 114; on "less", day 16 (the sweep passes
+  `subject.pace`, `repeatOf` in `reply-agent.js`).
 - None repeats us: the drafter reads our last six texts off the thread
   (`ourLastTexts`) and skips a text whose words, greeting and name aside,
   match one of them (`plainBody`). A pool with nothing left falls back to

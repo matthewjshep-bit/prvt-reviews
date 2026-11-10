@@ -5,9 +5,10 @@
 // in his own plain style. The old pool had three texts for four rungs, so
 // day 58 sent the day-16 text word for word, and its third text ("any
 // distressed or value-add properties … always happy to take a look") drew no
-// replies and five opt-outs in 109 sends. A check-in now names one real
-// thing (a new listing of theirs, or their town), the last one says it is the
-// last, and none repeats a text we sent them lately.
+// replies and five opt-outs in 109 sends. A check-in now names their town
+// and never a house or a street (Matt, 11-09: check-ins never reference
+// properties), the last one says it is the last, and none repeats a text we
+// sent them lately.
 //
 // Every name, street and town here is invented.
 
@@ -15,7 +16,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { standardText, fillTemplate, plainBody } from "./standard-texts.js";
 import {
-  normalizeOpener, DEFAULT_CHECK_IN_TEXTS, PREVIOUS_DEFAULT_CHECK_IN_TEXTS, COLD_LISTING_CHECK_IN_TEXTS, COLD_LAST_RUNG_TEXTS,
+  normalizeOpener, DEFAULT_CHECK_IN_TEXTS, PREVIOUS_DEFAULT_CHECK_IN_TEXTS, COLD_LAST_RUNG_TEXTS,
 } from "./outreach-opener.js";
 import { carrierFlags } from "./carrier-words.js";
 
@@ -57,30 +58,35 @@ test("the last rung says it is the last one", () => {
   assert.notEqual(textFor(1, { repeatMax: 2 }).set, "cold_last");
 });
 
-test("a cold check-in names a new listing of theirs when one came up, else their town", () => {
+test("a cold check-in names their town and never a house, not even a new listing of theirs", () => {
+  // Matt, 2026-11-09: check-ins never reference properties; it gets
+  // confusing. Their town is their area, and that is fine.
   const fresh = { street: "Larch Ave", address: "88 Larch Ave, Halden, WA 98011", city: "Halden" };
   for (let i = 0; i < 20; i++) {
     const contactId = `c-listing-${i}`;
-    const withListing = textFor(2, { freshListing: fresh }, { contactId });
-    assert.equal(withListing.set, "cold_listing", withListing.text);
-    assert.match(withListing.text, /Larch Ave/, withListing.text);
-    assert.doesNotMatch(withListing.text, /\b88\b|Quarry/, "the street, never the house number, and never the first-text house");
+    for (const n of [1, 2, 3, 4]) {
+      const t = textFor(n, { freshListing: fresh }, { contactId });
+      assert.ok(t?.text, `${contactId} rung ${n}`);
+      assert.notEqual(t.set, "cold_listing", t.text);
+      assert.doesNotMatch(t.text, /Larch|Quarry|\b88\b|\b4410\b/, `no street, no house number: ${t.text}`);
+    }
     const plain = textFor(2, {}, { contactId });
     assert.equal(plain.set, "check_in");
     assert.match(plain.text, /Halden/, `${contactId}: ${plain.text}`);
-    assert.doesNotMatch(plain.text, /Quarry/, "a rung never names the house the first text was about");
   }
   // No town on record: one of the texts that doesn't need one.
   const noTown = textFor(2, { city: "", address: "" });
   assert.ok(noTown?.text, "still a text");
   assert.doesNotMatch(noTown.text, /\{|\}|around ,|near \?/, noTown.text);
-  // The last rung beats the listing: it is the goodbye either way.
+  // The last rung is the goodbye either way.
   assert.equal(textFor(4, { freshListing: fresh }).set, "cold_last");
+  // No default check-in has a blank for a house.
+  for (const t of [...DEFAULT_CHECK_IN_TEXTS, ...COLD_LAST_RUNG_TEXTS]) assert.doesNotMatch(t, /\{street\}|\{address\}/, t);
 });
 
 test("no cold check-in says circling back, checking in, desk or radar, and every one passes the carrier check with and without a first name", () => {
   const values = { street: "Larch Ave", town: "Halden", address: "4410 Quarry Rd" };
-  for (const t of [...DEFAULT_CHECK_IN_TEXTS, ...COLD_LISTING_CHECK_IN_TEXTS, ...COLD_LAST_RUNG_TEXTS]) {
+  for (const t of [...DEFAULT_CHECK_IN_TEXTS, ...COLD_LAST_RUNG_TEXTS]) {
     for (const first of ["Wendell", ""]) {
       const text = fillTemplate(t, { ...values, first });
       assert.ok(text, t);

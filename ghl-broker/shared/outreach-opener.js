@@ -143,8 +143,10 @@ export const PREVIOUS_DEFAULT_FOLLOW_UP_TEXTS = [
 // the third ("any distressed or value-add …, always happy to take a look")
 // drew no replies and five opt-outs in 109 sends. Each one now names their
 // town where it can (shared/standard-texts.js picks one that does when the
-// town is known), never the house the first text was about, and asks one
-// thing. The three before are kept so a stored copy reads as never changed.
+// town is known) and asks one thing. None names a house or a street, not the
+// first-text house and not a new listing of theirs (Matt, 11-09: check-ins
+// never reference properties; the listing ping does that). The three before
+// are kept so a stored copy reads as never changed.
 export const DEFAULT_CHECK_IN_TEXTS = [
   "Hi {first}, any houses around {town} that need real work lately?",
   "Hey {first}, Matt again. Got a seller near {town} who'd rather not fix it up first?",
@@ -163,14 +165,6 @@ export const PREVIOUS_DEFAULT_CHECK_IN_TEXTS = [
   "Hi {first}, circling back. Any fixers or distressed properties come across your desk lately, listed or off market?",
   "Hey {first}, checking in. Anything on your radar that needs work? The uglier the better.",
   "Hi {first}, any distressed or value-add properties come up lately, on or off market? Always happy to take a look.",
-];
-// A cold check-in when a new listing of theirs came up in the last two
-// weeks (not the first-text house): its street, never its number.
-export const COLD_LISTING_CHECK_IN_TEXTS = [
-  "Hi {first}, saw you've got {street} up now. Anything around {town} that needs more work than that one?",
-  "{first}, saw {street} come up. If your next one needs too much for retail buyers, can I see it first?",
-  "Hey {first}, Matt again. Saw your new one on {street}. Got anything older coming up around {town}?",
-  "Saw {street} hit the market, {first}. Any sellers near {town} who'd rather not fix up first?",
 ];
 // The ladder's last check-in (day 58 on the default ladder): says so.
 export const COLD_LAST_RUNG_TEXTS = [

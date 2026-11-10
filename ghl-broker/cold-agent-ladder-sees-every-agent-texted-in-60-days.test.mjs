@@ -114,6 +114,24 @@ test("an agent first texted 40 days ago still gets the day-44 check-in when 6,00
   assert.ok(!job.readTruncated, "the whole window was read");
 });
 
+test("the sweep tells the check-in an agent's check-in-more pace, so day 58 isn't called the last", async () => {
+  const loc = "loc-cold-pace";
+  _resetColdWindow?.();
+  // First texted 31 days ago on "more": rungs come in half the time (day 44
+  // went on day 22), so day 58 is due on day 29.
+  const first = await seedAgent(loc, "c-quill", 31);
+  for (const step of [2, 16, 30, 44]) {
+    await recordEvent({ store, locationId: loc, contactId: "c-quill", party: "agent", type: "follow_up_sent", at: iso(first + (step / 2) * DAY + 2 * HOUR), address: HOUSE,
+      source: "conversation", dedupeKey: followUpDedupeKey({ kind: "outreach_nudge", subjectId: "c-quill", step }), data: { kind: "outreach_nudge", step, ladder: [2] } });
+  }
+  await recordEvent({ store, locationId: loc, contactId: "c-quill", party: "agent", type: "cadence_set", at: iso(NOW - 40 * DAY),
+    source: "operator", dedupeKey: "pace:c-quill", data: { pace: "more" } });
+  const { started } = await sweep(loc, NOW);
+  assert.deepEqual(started.map((s) => [s.contactId, s.step, s.subject.pace]), [["c-quill", 58, 0.5]]);
+  const t = standardText({ kind: "outreach_nudge", outbound: outboundDescriptor({ kind: "outreach_nudge", offer: null, saved: {}, subject: started[0].subject }), name: "Quill", contactId: "c-quill" });
+  assert.notEqual(t.set, "cold_last", t.text);
+});
+
 test("the follow-up planner and the sweep share one read of the cold window", async () => {
   const loc = "loc-cold-shared";
   _resetColdWindow?.();
@@ -200,12 +218,28 @@ test("a town written in capitals or lower case reads the way people write it in 
   assert.doesNotMatch(t.text, /NORTH HALDEN/, t.text);
 });
 
-test("a new listing of theirs rides into the check-in by its street; one we've already talked about doesn't", () => {
+test("a cold check-in names no street, not even a new listing of theirs", () => {
+  // Matt, 2026-11-09: check-ins never reference properties. A listing of
+  // theirs handed in on the subject never reaches the text.
   const fresh = { street: "Larch Ave", address: "88 Larch Ave, Halden, WA 98011", city: "Halden" };
-  const o = rungDescriptor(30, { freshListing: fresh });
-  assert.deepEqual(o.freshListing, fresh);
-  const t = standardText({ kind: "outreach_nudge", outbound: o, name: "Wendell", contactId: "c-a1" });
-  assert.match(t.text, /Larch Ave/, t.text);
+  for (const step of [16, 30, 44, 58]) {
+    const o = rungDescriptor(step, { freshListing: fresh });
+    assert.equal(o.freshListing, undefined);
+    const t = standardText({ kind: "outreach_nudge", outbound: o, name: "Wendell", contactId: "c-a1" });
+    assert.doesNotMatch(t.text, /Larch|Quarry/, t.text);
+  }
+});
+
+test("an agent on the check-in-more pace isn't told it's the last text while more are coming", () => {
+  // On "more" a rung's day comes in half the time: day 58 is reached on day
+  // 29 and day 114 on day 57, all inside the 60-day window.
+  assert.equal(rungDescriptor(58, { pace: 0.5 }).repeatMax, 8);
+  const day58 = standardText({ kind: "outreach_nudge", outbound: rungDescriptor(58, { pace: 0.5 }), name: "Wendell", contactId: "c-a1" });
+  assert.notEqual(day58.set, "cold_last", day58.text);
+  assert.equal(standardText({ kind: "outreach_nudge", outbound: rungDescriptor(114, { pace: 0.5 }), name: "Wendell", contactId: "c-a1" }).set, "cold_last");
+  // On "less", day 30 would land on day 60, past the window: day 16 is their last.
+  assert.equal(rungDescriptor(16, { pace: 2 }).repeatMax, 1);
+  assert.equal(rungDescriptor(58).repeatMax, 4, "the normal pace is unchanged");
 });
 
 test("our last texts are read off the thread, newest first, calls left out", () => {
@@ -220,7 +254,7 @@ test("our last texts are read off the thread, newest first, calls left out", () 
   assert.deepEqual(ourLastTexts("", 6), []);
 });
 
-test("the check-in never sends the text our thread already has, and drops a listing the thread already named", async () => {
+test("the check-in never sends the text our thread already has", async () => {
   const contactId = "c-thread";
   const would = standardText({ kind: "outreach_nudge", outbound: rungDescriptor(30), name: "Wendell", contactId }).text;
   const recent = (daysAgo) => new Date(Date.now() - daysAgo * DAY).toISOString();
@@ -242,43 +276,7 @@ test("the check-in never sends the text our thread already has, and drops a list
   assert.ok(r.reply, JSON.stringify(r));
   assert.notEqual(plainBody(r.reply, "Wendell"), plainBody(would, "Wendell"), r.reply);
   assert.equal(r.held, false, `the gates pass it: ${(r.flags || []).join(" · ")}`);
-  // Their new listing was already in the thread: the plain check-in, not that listing again.
-  const fresh = { street: "Larch Ave", address: "88 Larch Ave, Halden, WA 98011", city: "Halden" };
-  const named = thread([{ id: "m3", direction: "outbound", messageType: "TYPE_SMS", body: "Saw 88 Larch Ave came up, nice one.", dateAdded: recent(3) }]);
-  const r2 = await previewProactive({ client: clientWith(named), locationId: "loc-preview", saved, store, contactId, kind: "outreach_nudge",
-    subject: { address: HOUSE, step: 30, steps: [2], repeatEvery: 14, freshListing: fresh }, deps: { draft } });
-  assert.doesNotMatch(r2.reply, /Larch/, r2.reply);
-  const r3 = await previewProactive({ client: clientWith(thread()), locationId: "loc-preview", saved, store, contactId, kind: "outreach_nudge",
-    subject: { address: HOUSE, step: 30, steps: [2], repeatEvery: 14, freshListing: fresh }, deps: { draft } });
-  assert.match(r3.reply, /Larch Ave/, r3.reply);
   assert.ok(DEFAULT_CHECK_IN_TEXTS.length >= 6 && COLD_LAST_RUNG_TEXTS.length >= 2);
-});
-
-test("a new listing our last check-in named by its street isn't named again two weeks later", async () => {
-  // Day 30 named their new one by street alone ("saw you've got Larch Ave up
-  // now"), so the house-number check never sees it. Freshness set wide
-  // (Settings → pulse.freshDays), the same listing is still new on day 44.
-  const contactId = "c-street-twice";
-  const fresh = { street: "Larch Ave", address: "88 Larch Ave, Halden, WA 98011", city: "Halden" };
-  const day30 = standardText({ kind: "outreach_nudge", outbound: rungDescriptor(30, { freshListing: fresh }), name: "Wendell", contactId }).text;
-  assert.match(day30, /Larch Ave/, day30);
-  const recent = (daysAgo) => new Date(Date.now() - daysAgo * DAY).toISOString();
-  const messages = [
-    { id: "s1", direction: "outbound", messageType: "TYPE_SMS", body: "Hi Wendell, saw your listing at 4410 Quarry Rd. Does it need much work?", dateAdded: recent(44) },
-    { id: "s2", direction: "outbound", messageType: "TYPE_SMS", body: day30, dateAdded: recent(14) },
-  ];
-  const client = { call: async (p) => {
-    if (p.startsWith(`/contacts/${contactId}`)) return { contact: { id: contactId, firstName: "Wendell", lastName: "Okafor", tags: ["agent"] } };
-    if (p.startsWith("/conversations/search")) return { conversations: [{ id: "cv2" }] };
-    if (p.startsWith("/conversations/cv2/messages")) return { messages: { messages, nextPage: false } };
-    return {};
-  } };
-  const r = await previewProactive({ client, locationId: "loc-preview", saved: { aiApiKey: "k", conversationAi: AI }, store, contactId, kind: "outreach_nudge",
-    subject: { address: HOUSE, step: 44, steps: [2], repeatEvery: 14, freshListing: fresh },
-    deps: { draft: async () => { throw new Error("no model call for a fixed text"); } } });
-  assert.ok(r.reply, JSON.stringify(r));
-  assert.doesNotMatch(r.reply, /Larch/, r.reply);
-  assert.match(r.reply, /Halden/, "the plain check-in, by their town");
 });
 
 test("every cold check-in text gets past the reply agent's gates as it would go", async () => {
@@ -298,8 +296,10 @@ test("every cold check-in text gets past the reply agent's gates as it would go"
         subject: { address: HOUSE, step, steps: [2], repeatEvery: 14, ...more }, deps: { draft } });
       assert.ok(r.reply, JSON.stringify(r));
       assert.equal(r.held, false, `${r.reply}: ${(r.flags || []).join(" · ")}`);
+      assert.doesNotMatch(r.reply, /Larch|Quarry/, `names no house: ${r.reply}`);
       seen.add(r.reply);
     }
   }
-  assert.ok(seen.size >= 10, `${seen.size} different texts`);
+  // The seven default check-ins that name a town and the two goodbyes.
+  assert.ok(seen.size >= 9, `${seen.size} different texts`);
 });

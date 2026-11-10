@@ -57,7 +57,6 @@ import { cadenceRequest, cadenceDueAt, refusesAddress, notAHouse, isAutoReply, a
 import { normalizeOpener, openerVoice, countyName, homeFor, withHomeBlank, stripSignOff, houseDetails, overusedPhrases, openerVariant, OPENER_MAX_CHARS } from "./shared/outreach-opener.js";
 import { standardText } from "./shared/standard-texts.js";
 import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
-import { streetName } from "./shared/outreach-opener.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
 import { agentFocusRule } from "./shared/asset-type.js";
@@ -3456,13 +3455,17 @@ export function floatExtras({ offer, saved, dossier = null, requote = false, the
 // configured step. `repeatMax` is the last one the cold ladder reaches: the
 // last repeat inside its 60-day window (day 58 on [2] every 14, the 4th),
 // or the ladder's own cap when it has one; that one says it's the last.
+// `pace` (the person's check in less / more, shared/bot-hold.js) moves which
+// rung that is: on "more" a rung's day comes in half the time, so day 58
+// isn't the last, and saying so would be untrue.
 function repeatOf(subject) {
   const every = Math.round(Number(subject?.repeatEvery) || 0);
   const steps = normalizeSteps(subject?.steps || []);
   const step = Math.round(Number(subject?.step));
   if (!(every > 0) || !steps.length || !Number.isFinite(step) || steps.includes(step)) return {};
   const lastDay = steps[steps.length - 1];
-  const inWindow = Math.floor((OUTREACH_NUDGE_WINDOW_DAYS - 1 - lastDay) / every);
+  const pace = Math.min(2, Math.max(0.5, Number(subject?.pace) || 1));
+  const inWindow = Math.floor(((OUTREACH_NUDGE_WINDOW_DAYS - 1) / pace - lastDay) / every);
   const cap = Math.round(Number(subject?.maxRepeats) || 0);
   const repeatMax = cap > 0 ? (inWindow > 0 ? Math.min(cap, inWindow) : cap) : inWindow;
   return { repeatN: Math.max(1, Math.round((step - lastDay) / every)), ...(repeatMax > 0 ? { repeatMax } : {}) };
@@ -3484,24 +3487,6 @@ export function ourLastTexts(transcript = "", n = 6) {
   return out.reverse().slice(0, Math.max(0, n));
 }
 
-/**
- * streetInThread(transcript, street) → boolean
- *
- * A line of ours or theirs names the street ("Larch Ave"), with or without
- * the house number. A cold check-in names a new listing by its street alone,
- * so the house-number check (listingAlreadyRaised) never sees it again, and
- * two weeks on the same listing could be named twice.
- */
-export function streetInThread(transcript = "", street = "") {
-  const words = String(street || "").trim().split(/\s+/).filter(Boolean).map(escapeRe);
-  if (!words.length) return false;
-  const rx = new RegExp(`(?<![a-z0-9])${words.join("\\s+")}(?![a-z0-9])`, "i");
-  return String(transcript || "").split("\n").some((line) => {
-    const m = /^\[[^\]]*\]\s+(?:US|THEM) \w+: (.*)$/.exec(line);
-    return Boolean(m && rx.test(m[1]));
-  });
-}
-
 // "federal way" or "FEDERAL WAY" (a county list's capitals) → "Federal Way";
 // a town already written properly ("McHalden") stays as written.
 const titleWords = (s) => {
@@ -3509,15 +3494,6 @@ const titleWords = (s) => {
   if (!t || (t !== t.toLowerCase() && t !== t.toUpperCase())) return t;
   return t.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
 };
-
-// A new listing of theirs for a cold check-in to name (the follow-up sweep
-// reads it, shared/agent-pulse.js freshListingFor): its street and town.
-function freshListingOf(subject) {
-  const l = subject?.freshListing;
-  const street = streetName(l?.street || l?.address || "");
-  if (!street) return null;
-  return { street, address: String(l.address || ""), city: titleWords(l.city || "") };
-}
 
 export function outboundDescriptor({ kind, offer, subject, saved, dossier, stance = null }) {
   const address = offer?.address || subject?.address || "the property";
@@ -3694,9 +3670,9 @@ export function outboundDescriptor({ kind, offer, subject, saved, dossier, stanc
       // A recent lister's first text named a house that's gone: no follow-up asks about it.
       ...(subject?.pastListing ? { pastListing: true } : {}),
       // The check-ins after day 16 (2026-11-09): their town, off the house
-      // the first text was about, and a new listing of theirs when one came up.
-      city: titleWords(subject?.city || parseUsAddress(String(subject?.address || "")).city),
-      ...(freshListingOf(subject) ? { freshListing: freshListingOf(subject) } : {}) } : {}),
+      // the first text was about. Never a house or a street (Matt, 11-09:
+      // check-ins never reference properties).
+      city: titleWords(subject?.city || parseUsAddress(String(subject?.address || "")).city) } : {}),
     // A passed house riding on this nudge as one line (follow-up-sweep.js).
     ...(kind === "offer_nudge" && subject?.aside?.address ? { aside: { street: streetOf(subject.aside.address), quiet: Boolean(subject.aside.quiet) } } : {}),
     blastedAt: subject?.blastedAt || null, viewedAt: subject?.viewedAt || null,
@@ -3941,14 +3917,9 @@ function focusOpener({ listing = {}, address = "", saved = {} }) {
 }
 
 // A cold check-in reads our last six texts off the thread (ourLastTexts) so
-// it never says one of them again, and drops a new listing of theirs the
-// thread already has in it, in our words or theirs (2026-11-09).
+// it never says one of them again (2026-11-09).
 function standardDraft({ kind, offer, outbound, name, contactId, transcript = "" }) {
   const prior = kind === "outreach_nudge" ? ourLastTexts(transcript, 6) : [];
-  const fresh = kind === "outreach_nudge" ? outbound?.freshListing : null;
-  if (fresh && ((fresh.address && listingAlreadyRaised(transcript, fresh.address)) || streetInThread(transcript, fresh.street))) {
-    outbound = { ...outbound, freshListing: null };
-  }
   const s = standardText({ kind, outbound, name, contactId, prior });
   if (!s) return null;
   return { reply: s.text, summary: outboundSummary({ kind, offer, outbound }), confidence: "high", needsHuman: false, usage: null,
