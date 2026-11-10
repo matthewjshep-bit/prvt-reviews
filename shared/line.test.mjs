@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeLineTargets, lineStations, methodMath, cycleTimes, offerLeaks, agentLeaks, buyerLeaks, dealLeaks,
-  leakTotal, backlogTotal, lineJobs, errorsByArea, realizedPricing, buildLine, LINE_JOBS, supplyCheck,
+  leakTotal, backlogTotal, lineJobs, errorsByArea, realizedPricing, buildLine, LINE_JOBS, supplyCheck, passedUnpriced,
 } from "./line.js";
 
 const NOW = Date.parse("2026-09-29T18:00:00Z");
@@ -166,6 +166,76 @@ test("the switchboard lists every job, which never ran and which failed; errors 
   assert.equal(by.agentPulse.never, true);
   const e = errorsByArea([{ area: "tick:dispo", count: 3, lastAt: H(1), message: "x" }, { area: "tick:dispo", count: 1, lastAt: H(5) }, { area: "proactive", count: 1, lastAt: H(2) }]);
   assert.deepEqual(e.map((x) => [x.area, x.count]), [["tick:dispo", 4], ["proactive", 1]]);
+});
+
+// 2026-11-09 audit: the Needs Matt runner, the GHL call queue, the card sync
+// and Slack itself had no row, and a job that quietly stopped running was
+// never reported; only one whose cursor said "failed" was.
+test("a Needs Matt runner that hasn't run in two of its cadences reads as late", () => {
+  // Tuesday 2026-11-10, 10:00am Pacific.
+  const now = Date.parse("2026-11-10T18:00:00Z");
+  const at = (min) => new Date(now - min * 60000).toISOString();
+  const on = { needsMatt: true, cardSync: true, handReplies: true };
+  const by = (cursors, opts = {}) => Object.fromEntries(lineJobs(cursors, { now, switches: on, ...opts }).map((j) => [j.name, j]));
+  for (const name of ["needsMatt", "ghlCalls", "priceScorecard", "threadReads", "cardSync", "handReplies", "slack"]) assert.ok(LINE_JOBS[name], `${name} is on the switchboard`);
+  const j = by([
+    { name: "needsMatt", at: at(40), doc: { last: { finishedAt: at(40) } } },
+    { name: "cardSync", at: at(20), doc: { since: at(20) } },
+    { name: "handReplies", at: at(10), doc: { found: 0 } },
+  ]);
+  assert.equal(j.needsMatt.late, true, "40 minutes on a 15-minute job");
+  assert.equal(j.needsMatt.failed, false);
+  assert.equal(j.cardSync.late, false, "20 minutes is inside two ticks");
+  assert.equal(j.handReplies.late, false);
+  // Overnight is outside its hours: 7am Pacific, last run at 9pm, is not late.
+  const seven = Date.parse("2026-11-10T15:10:00Z");
+  const night = lineJobs([{ name: "needsMatt", at: "2026-11-10T04:55:00Z", doc: { last: { finishedAt: "2026-11-10T04:55:00Z" } } }], { now: seven, switches: on });
+  assert.equal(night.find((x) => x.name === "needsMatt").late, false, "the night it doesn't run isn't counted");
+  // A workday job: Friday's run read on Monday morning is on time, on Tuesday it is late.
+  const fri = "2026-11-06T16:35:00Z";
+  const mon = lineJobs([{ name: "ghlCalls", doc: { last: { finishedAt: fri } } }], { now: Date.parse("2026-11-09T17:00:00Z"), switches: { ghlCalls: true } });
+  assert.equal(mon.find((x) => x.name === "ghlCalls").late, false, "the weekend isn't counted");
+  const tue = lineJobs([{ name: "ghlCalls", doc: { last: { finishedAt: fri } } }], { now: Date.parse("2026-11-10T17:00:00Z"), switches: { ghlCalls: true } });
+  assert.equal(tue.find((x) => x.name === "ghlCalls").late, true, "Monday was missed");
+});
+
+test("a house the Needs Matt clock passed with no price today is counted; one Matt passed himself is not", () => {
+  const since = H(24);
+  const rows = passedUnpriced([
+    offer("1", { status: "we_passed", passReason: { code: "quiet", at: H(3), by: "needs-matt" } }),
+    offer("2", { status: "we_passed", passReason: { code: "quiet", at: H(30), by: "needs-matt" } }),
+    offer("3", { status: "we_passed", passReason: { code: "price", at: H(2), by: "matt" } }),
+    offer("4", { status: "we_passed", passReason: { code: "turnkey", at: H(2), by: "needs-matt" } }),
+  ], { since });
+  assert.deepEqual(rows.map((r) => r.offerId), ["1"]);
+  assert.equal(rows[0].address, "1 Elm St, Renton, WA");
+});
+
+test("a switched-off job is never late, and one that never ran isn't either", () => {
+  const now = Date.parse("2026-11-10T18:00:00Z");
+  const old = new Date(now - 5 * 86400000).toISOString();
+  const cursors = [{ name: "needsMatt", at: old, doc: { last: { finishedAt: old } } }, { name: "priceScorecard", at: old, doc: { lastDaily: old } }];
+  const off = Object.fromEntries(lineJobs(cursors, { now, switches: { needsMatt: false } }).map((j) => [j.name, j]));
+  assert.equal(off.needsMatt.late, false, "switched off");
+  assert.equal(off.priceScorecard.late, false, "no word on its switch is not a yes");
+  const on = Object.fromEntries(lineJobs([], { now, switches: { needsMatt: true } }).map((j) => [j.name, j]));
+  assert.equal(on.needsMatt.never, true);
+  assert.equal(on.needsMatt.late, false);
+  assert.equal(Object.fromEntries(lineJobs(cursors, { now, switches: { priceScorecard: true } }).map((j) => [j.name, j])).priceScorecard.late, true, "five days on a daily job");
+});
+
+test("a run that ended in an error reads as failed; Slack's own rate limit does not", () => {
+  const now = Date.parse("2026-11-10T18:00:00Z");
+  const t = new Date(now - 5 * 60000).toISOString();
+  const by = Object.fromEntries(lineJobs([
+    { name: "needsMatt", at: t, doc: { last: { finishedAt: t, error: "GHL 401: the token is not authorized" } } },
+    { name: "slack", at: t, doc: { last: { finishedAt: t, error: "rate limited: the rest next run" } } },
+    { name: "priceWatch", at: t, doc: { last: { error: "zillow lookup failed" } } },
+  ], { now }).map((j) => [j.name, j]));
+  assert.equal(by.needsMatt.failed, true);
+  assert.equal(by.needsMatt.error, "GHL 401: the token is not authorized");
+  assert.equal(by.slack.failed, false);
+  assert.equal(by.priceWatch.failed, true);
 });
 
 test("the whole line adds its leaks into one number, leaving out what waits on you", () => {

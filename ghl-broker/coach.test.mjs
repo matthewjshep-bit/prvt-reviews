@@ -231,3 +231,19 @@ test("the work pane sees the lessons from one person's thread, and what was taug
   const someoneElse = await coachForContact({ store, locationId: "PANE", contactId: "c2", now: NOW });
   assert.deepEqual(someoneElse, { proposals: [], taught: [] });
 });
+
+// 2026-11-09 audit: the coach started only on a tick inside its exact hour,
+// so a run of deploys across 8pm skipped the night with nothing said.
+test("a deploy across eight pm does not skip the coach", async () => {
+  _resetJobs();
+  await settings("DEPLOY");
+  await seedEdit("DEPLOY");
+  const saved = await store.getOfferSettings("DEPLOY");
+  // Last night's run is on the cursor; no tick came in the 8pm hour tonight.
+  await store.setJobCursor("DEPLOY", CURSOR_NAME, { at: new Date(NOW - 86400000).toISOString(), doc: { tries: 1, lastDaily: new Date(NOW - 86400000).toISOString(), last: { status: "done" } } });
+  const nineTen = NOW + 50 * 60000;   // 9:10pm Pacific
+  assert.equal(await maybeRunCoach({ locationId: "DEPLOY", saved, store, now: nineTen, deps: { propose: proposeRule() } }), true);
+  await (await import("./coach.js")).getJob("DEPLOY").done;
+  assert.equal(await maybeRunCoach({ locationId: "DEPLOY", saved, store, now: nineTen + 30 * 60000, deps: { propose: proposeRule() } }), false, "and only once");
+  assert.equal(await maybeRunCoach({ locationId: "DEPLOY", saved, store, now: NOW + 4 * 3600000, deps: { propose: proposeRule() } }), false, "past its window, tomorrow");
+});

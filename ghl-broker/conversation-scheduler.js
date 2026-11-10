@@ -10,6 +10,7 @@
 
 import { answersInbound, MACHINE_STARTED_KINDS, SERVICE_KINDS } from "./shared/follow-up.js";
 import { machineWorkday } from "./shared/follow-up-engine.js";
+import { scrubMessage } from "./app-errors.js";
 
 // A send GHL refused without taking it goes again after these waits
 // (minutes), then comes back to a person like any other failure.
@@ -392,10 +393,11 @@ export async function sendDueDrafts({ store, locations = [], live = false, now =
         out.failed++;
         await store.updateReplyDraft(d.id, {
           ...fresh, status: "draft", sendAt: null, sendingAt: null,
-          flags: [...(fresh.flags || []), `auto-send failed: ${String(e?.message || e).slice(0, 160)}`],
+          // Scrubbed, here and in the log: GHL's error text can carry their email or number.
+          flags: [...(fresh.flags || []), `auto-send failed: ${scrubMessage(e).slice(0, 160)}`],
           updatedAt: new Date().toISOString(),
         }).catch(() => {});
-        log(`scheduler: auto-send failed for ${d.id}: ${e?.message}`);
+        log(`scheduler: auto-send failed for ${d.id}: ${scrubMessage(e)}`);
       } finally {
         inFlight.delete(d.id);
       }

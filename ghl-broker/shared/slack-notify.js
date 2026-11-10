@@ -229,8 +229,18 @@ const PHONE = /\+?\(?\d[\d\s().-]{8,}\d/g;
 const EMAIL = /[^\s@<>"']+@[^\s@<>"']+\.[a-z]{2,}/gi;
 const clip = (s, max) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > max ? `${t.slice(0, max - 1)}…` : t; };
 
-/** scrubForSlack(s) → the text with any phone or email taken out, on one line. */
-export const scrubForSlack = (s) => String(s || "").replace(EMAIL, "[email]").replace(PHONE, "[phone]").replace(/\s+/g, " ").trim();
+// A URL's query string (?key=value&…) is somebody's email or number when an
+// error carries the lookup it made (GHL's do). Trailing punctuation stays.
+const QUERY_STRING = /\?[\w.%-]+=[^\s"']*?(?=[:;,)]?(?:\s|$|["']))/g;
+
+/**
+ * scrubForSlack(s) → the text with any phone or email taken out, on one line.
+ * A URL-encoded one (%40 for @, %2B for +) is decoded first and a query
+ * string dropped, so it can't slip past (2026-11-09 audit).
+ */
+export const scrubForSlack = (s) => String(s || "")
+  .replace(/%40/gi, "@").replace(/%2B/gi, "+").replace(QUERY_STRING, "")
+  .replace(EMAIL, "[email]").replace(PHONE, "[phone]").replace(/\s+/g, " ").trim();
 
 // Slack's mrkdwn: &, < and > are control characters.
 const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -503,9 +513,9 @@ export const slackClaimKey = (kind, id) => `${kind}:${id}`;
 
 /* ---------- the machine and the day ---------- */
 
-/** renderError(e) → a new kind of app error, once a day. */
+/** renderError(e) → a new kind of app error, or one back after quiet days (reopenedAt), once each. */
 export function renderError(e = {}) {
-  const head = `:red_circle: New error in *${esc(e.area || "the app")}*${Number(e.count) > 1 ? ` (×${e.count})` : ""}`;
+  const head = `:red_circle: ${e.reopenedAt ? "Error back in" : "New error in"} *${esc(e.area || "the app")}*${Number(e.count) > 1 ? ` (×${e.count})` : ""}`;
   const text = `${head}\n_${esc(clip(scrubForSlack(e.message), 200))}_`;
   return { text: clip(head.replace(/\*/g, ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }
@@ -515,6 +525,44 @@ export function renderJobFailed(j = {}) {
   const head = `:warning: *${esc(j.label || j.name)}* failed its last run${Number(j.tries) > 1 ? ` (try ${j.tries})` : ""}`;
   const text = j.error ? `${head}\n_${esc(clip(scrubForSlack(j.error), 200))}_` : head;
   return { text: clip(head.replace(/\*/g, ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
+}
+
+const EVERY_LABEL = { tick: "every 15 minutes", day: "once a day", workday: "every workday" };
+
+/** renderJobLate(job) → a switched-on job that has stopped running (shared/line.js lineJobs row, late). */
+export function renderJobLate(j = {}) {
+  const ago = j.hoursAgo != null ? ` in ${j.hoursAgo}h` : "";
+  const head = `:hourglass_flowing_sand: *${esc(j.label || j.name)}* hasn't run${ago}${EVERY_LABEL[j.every] ? ` (it runs ${EVERY_LABEL[j.every]})` : ""}`;
+  return { text: clip(head.replace(/\*/g, ""), 150), blocks: [{ type: "section", text: { type: "mrkdwn", text: head } }] };
+}
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const cents = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+
+/** spendLine(s) → the morning's AI spend line, from ai-spend.js yesterdaySpend. */
+function spendLine(s = {}) {
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(s.day || "")) ? new Date(`${s.day}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }) : "yesterday";
+  const top = (s.top || []).filter((f) => f?.feature).map((f) => `${esc(f.feature)} ${cents(f.usd)}`).join(", ");
+  return `AI spend ${day}: *${cents(s.usd)}* over ${plural(Number(s.calls) || 0, "call", "calls")}${top ? ` (${top})` : ""}`
+    + (Number(s.unpriced) > 0 ? `; ${plural(Number(s.unpriced), "call", "calls")} on a model with no price` : "");
+}
+
+/**
+ * leakLine(leaks, now) → "Leaks last night: N (…)" from the nightly audit's
+ * leakSummary (ghl-broker/line.js) and when it finished; null when the last
+ * audit is more than a day and a bit old.
+ */
+function leakLine(l = {}, now = Date.now()) {
+  const done = Date.parse(l.finishedAt || "");
+  if (!Number.isFinite(done) || now - done > 30 * 3600000 || l.total == null) return null;
+  const parts = [
+    l.offersNothing ? plural(l.offersNothing, "offer with nothing coming", "offers with nothing coming") : "",
+    l.offersMissed ? plural(l.offersMissed, "missed clock", "missed clocks") : "",
+    l.agentsOff ? plural(l.agentsOff, "agent due while their check-in is off", "agents due while their check-in is off") : "",
+    l.buyersOff ? plural(l.buyersOff, "buyer due while their check-in is off", "buyers due while their check-in is off") : "",
+    l.deals ? plural(l.deals, "deal not moving", "deals not moving") : "",
+  ].filter(Boolean);
+  return `:droplet: Leaks ${now - done < 6 * 3600000 ? "tonight" : "last night"}: *${Number(l.total) || 0}*${parts.length ? ` (${parts.join(", ")})` : ""}`;
 }
 
 /**
@@ -589,6 +637,8 @@ export function renderMorning(c = {}, ctx = {}) {
   // The calls we owe this morning (the pipeline's call_owed rows: a call we
   // said we'd make, a booked call nobody made), 2026-11-09.
   if (Number(c.callsOwed) > 0) lines.push(`:telephone_receiver: ${row("Calls we owe", c.callsOwed)}`);
+  // What the AI cost the day before (ghl-broker/ai-spend.js yesterdaySpend).
+  if (c.aiSpend) lines.push(spendLine(c.aiSpend));
   const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
@@ -596,12 +646,15 @@ export function renderMorning(c = {}, ctx = {}) {
 }
 
 /**
- * renderEvening(digest, { jobs, errors }, ctx) → tonight's loose ends for #daily.
- *   digest  shared/digest.js buildDigest
- *   jobs    shared/line.js lineJobs rows (failed ones are listed)
- *   errors  shared/line.js errorsByArea rows
+ * renderEvening(digest, { jobs, errors, leaks, passedUnpriced }, ctx) → tonight's loose ends for #daily.
+ *   digest          shared/digest.js buildDigest
+ *   jobs            shared/line.js lineJobs rows (failed and late ones are listed)
+ *   errors          shared/line.js errorsByArea rows
+ *   leaks           the nightly audit's leakSummary, with its finishedAt
+ *   passedUnpriced  offers the 72-hour clock passed with no price today ({ address })
+ *   ctx.now         for how old the audit's count is
  */
-export function renderEvening(digest = {}, { jobs = [], errors = [] } = {}, ctx = {}) {
+export function renderEvening(digest = {}, { jobs = [], errors = [], leaks = null, passedUnpriced = [] } = {}, ctx = {}) {
   const lines = [":crescent_moon: *Tonight's loose ends*"];
   for (const s of digest.sections || []) {
     const items = s.items || [];
@@ -618,6 +671,15 @@ export function renderEvening(digest = {}, { jobs = [], errors = [] } = {}, ctx 
       errs.length ? `errors in ${errs.map((e) => `${esc(e.area)} ×${e.count}`).join(", ")}` : "",
     ].filter(Boolean).join("; ")}`);
   }
+  // 2026-11-09: a switched-on job that stopped running, beside the failed ones.
+  const late = (jobs || []).filter((j) => j?.late && !j.failed);
+  if (late.length) lines.push(`:hourglass_flowing_sand: Late: ${late.map((j) => `${esc(j.label || j.name)}${j.hoursAgo != null ? ` (last ran ${j.hoursAgo}h ago)` : ""}`).join(", ")}`);
+  // The nightly audit's leak count (the Line's own arithmetic).
+  const leak = leaks ? leakLine(leaks, ctx.now ?? Date.now()) : null;
+  if (leak) lines.push(leak);
+  // Houses the 72-hour Needs Matt clock passed with no price today.
+  const passed = passedUnpriced || [];
+  if (passed.length) lines.push(`• Passed unpriced today: *${passed.length}* — ${passed.slice(0, 5).map((o) => esc(street(o.address) || "a house")).join(", ")}${passed.length > 5 ? ", …" : ""}`);
   const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });

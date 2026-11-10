@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   normalizeSlack, slackOn, streamOn, slackChannelId, slackUserId, routeEvent, threadKeyFor, foldBlasts,
   renderEvent, renderTier1, renderPing, fullName, acquisitionStatus, dispositionStatus, withStatus, houseStatus, renderMorning, renderEvening, morningCounts, firstName, scrubForSlack, slackLinks, SLACK_EVENT_TYPES,
+  renderError, renderJobLate,
 } from "./slack-notify.js";
 
 const textOf = (msg) => [msg.text, ...(msg.blocks || []).flatMap((b) => [b.text?.text, ...(b.elements || []).map((e) => e.text)])].filter(Boolean).join("\n");
@@ -174,6 +175,45 @@ test("the evening post lists the loose ends by street, never by name, and the ma
   assert.doesNotMatch(t, /Underwrites that held/, "an empty section is left out");
   assert.match(t, /1 job failed \(Nightly audit\)/);
   assert.match(t, /underwrite ×3/);
+});
+
+// 2026-11-09 audit: last night's leak count sat on the audit's cursor and
+// reached nobody, a job that quietly stopped was never named, and the houses
+// the 72-hour clock passed unpriced were counted nowhere.
+test("the evening post carries last night's leak count and the houses passed unpriced", () => {
+  const now = Date.parse("2026-11-10T03:00:00Z");   // 7pm Pacific
+  const t = textOf(renderEvening({ sections: [] }, {
+    jobs: [{ label: "Needs Matt list", late: true, hoursAgo: 2.5 }, { label: "Nightly audit", failed: true }, { label: "Card sync", late: false }],
+    leaks: { total: 7, offersNothing: 3, offersMissed: 2, deals: 1, finishedAt: "2026-11-09T03:40:00Z" },
+    passedUnpriced: [{ address: "4410 Larkspur Ln, Renton, WA" }, { address: "88 Quarry Rd, Kent, WA" }],
+  }, { now }));
+  assert.match(t, /Leaks last night: \*7\* \(3 offers with nothing coming, 2 missed clocks, 1 deal not moving\)/);
+  assert.match(t, /Passed unpriced today: \*2\* — 4410 Larkspur Ln, 88 Quarry Rd/);
+  assert.match(t, /Late: Needs Matt list \(last ran 2\.5h ago\)/);
+  assert.doesNotMatch(t, /Card sync/);
+  assert.match(t, /1 job failed \(Nightly audit\)/);
+  // An audit from tonight reads as tonight; a stale one (or none) says nothing.
+  assert.match(textOf(renderEvening({}, { leaks: { total: 0, finishedAt: "2026-11-10T02:50:00Z" } }, { now })), /Leaks tonight: \*0\*/);
+  assert.doesNotMatch(textOf(renderEvening({}, { leaks: { total: 4, finishedAt: "2026-11-07T03:00:00Z" } }, { now })), /Leaks/);
+  assert.doesNotMatch(textOf(renderEvening({}, {}, { now })), /Leaks|Passed unpriced|Late/);
+});
+
+test("the morning post says what yesterday's AI cost, and when some of it couldn't be priced", () => {
+  const t = textOf(renderMorning({ aiSpend: { day: "2026-11-08", usd: 8.75, calls: 43, unpriced: 1, top: [{ feature: "draft", usd: 6.5 }, { feature: "photo_scan", usd: 2.25 }] } }));
+  assert.match(t, /AI spend Nov 8: \*\$8\.75\* over 43 calls \(draft \$6\.50, photo_scan \$2\.25\); 1 call on a model with no price/);
+  assert.doesNotMatch(textOf(renderMorning({})), /AI spend/);
+});
+
+test("an error that comes back after quiet days says it's back; a stopped job says when it last ran", () => {
+  assert.match(textOf(renderError({ area: "gmail", message: "gmail token refresh: HTTP 401", count: 9, reopenedAt: "2026-11-09T18:00:00Z" })), /Error back in \*gmail\*/);
+  assert.match(textOf(renderError({ area: "gmail", message: "x" })), /New error in \*gmail\*/);
+  assert.match(textOf(renderJobLate({ label: "Needs Matt list", hoursAgo: 1.5 })), /Needs Matt list\* hasn't run in 1\.5h/);
+});
+
+test("an error with a URL-encoded email in it is scrubbed before Slack sees it", () => {
+  const s = scrubForSlack("GHL GET /contacts/search/duplicate?locationId=L1&email=dana.fake%40example.com: 400; also lee%40example.org and %2B12065550142");
+  assert.doesNotMatch(s, /dana|lee|example|2065550142|%40|%2B/i, s);
+  assert.match(s, /duplicate: 400; also \[email\] and \[phone\]/);
 });
 
 test("scrubForSlack takes out phones and emails; firstName drops what isn't a name", () => {

@@ -87,6 +87,7 @@ import {
 import { runCounterHolds } from "../counter-hold.js";
 import { attachNextFollowUps, attachNextFollowUpsFor } from "../next-follow-up.js";
 import { readSpend } from "../ai-spend.js";
+import { scrubMessage } from "../app-errors.js";
 import { dueStep } from "../shared/follow-up.js";
 import { holdFor, botEventsByContact } from "../bot-hold.js";
 import { holdLine, botHold, paceOf } from "../shared/bot-hold.js";
@@ -438,7 +439,9 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   const router = express.Router();
   const fail = (res, err) => {
     const code = err.http || err.status || 500;
-    if (code >= 500) console.error("offers error:", code, err.message, err.detail || "");
+    // The log line is scrubbed: an error's text (GHL's carries the lookup it
+    // made) can hold a contact's email or number (2026-11-09 audit).
+    if (code >= 500) console.error("offers error:", code, scrubMessage(err), err.detail ? scrubMessage(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail)) : "");
     res.status(code).json({ error: err.message, detail: err.detail });
   };
   // Where generated documents live:

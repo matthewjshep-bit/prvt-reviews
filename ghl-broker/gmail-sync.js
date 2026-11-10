@@ -17,6 +17,7 @@
 import { store as defaultStore } from "./store.js";
 import { recordEvent } from "./contact-record.js";
 import { gmailEnv, makeGmail } from "./gmail-api.js";
+import { recordError } from "./app-errors.js";
 import { normalizeConversationAi } from "./shared/conversation-ai.js";
 import { isPersonMail, summarizeMessage, emailEvent, addressInEmail, emailDedupeKey, EMAIL_EVENT_TYPES } from "./shared/gmail.js";
 
@@ -81,9 +82,18 @@ export async function syncContactGmail({ locationId, contactId, emails = [], sav
 }
 
 /**
+ * gmailAuthFailed(e) → the Gmail link itself is broken: Google refused the
+ * token (401/403 on a call, or the refresh token refused: 400 invalid_grant).
+ * Not a slow or busy Gmail.
+ */
+export const gmailAuthFailed = (e) => e?.status === 401 || e?.status === 403 || (e?.status === 400 && e?.what === "token refresh");
+
+/**
  * gmailBeforeDraft(args) → the same result, never throws, never waits past
  * DRAFT_TIMEOUT_MS. What the reply agent calls; a failure is a warning on
  * the draft, and the draft goes on with whatever the record already has.
+ * A broken link (gmailAuthFailed) is also a durable error, once per run
+ * (2026-11-09: it used to be a draft's warning and nothing else).
  */
 export async function gmailBeforeDraft({ warnings = [], timeoutMs = DRAFT_TIMEOUT_MS, ...args }) {
   const cfg = normalizeConversationAi(args.saved?.conversationAi || {}).gmail;
@@ -96,6 +106,10 @@ export async function gmailBeforeDraft({ warnings = [], timeoutMs = DRAFT_TIMEOU
     return r;
   } catch (e) {
     warnings.push(`gmail: HTTP ${e?.status || "?"}`);
+    if (gmailAuthFailed(e)) {
+      await recordError(args.store || defaultStore, { locationId: args.locationId, area: "gmail", err: e,
+        context: { contactId: args.contactId, status: e.status, stage: e.what || "" } });
+    }
     return { skipped: `HTTP ${e?.status || "?"}` };
   } finally { clearTimeout(timer); }
 }

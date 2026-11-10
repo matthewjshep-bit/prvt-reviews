@@ -31,6 +31,7 @@ import { runTodayTimers } from "./today-timers.js";
 import { waitingReason } from "./outbox-guard.js";
 import { worksOn, machineDays, pacificParts } from "./shared/follow-up-engine.js";
 import { isOffDay } from "./shared/follow-up-engine.js";
+import { claimDailyRun } from "./daily-gate.js";
 
 // The remedies that end in a text the machine writes itself (not a reply to
 // their text): each waits while a reply or a person's draft is in the outbox.
@@ -451,36 +452,44 @@ export function startConversationAudit({ client, locationId, saved = {}, store =
 }
 
 /**
+ * nightClock(store) → the store as a nightly job's gate should read it.
+ *
+ * The night's run is its own clock (`lastDaily`), not the cursor's `at`: a
+ * run by hand at noon (three of them on 2026-09-16) stamps `at` too, and
+ * must not read as "already ran tonight" and skip the evening one.
+ * daily-gate.js claimDailyRun takes `at` as the day's run when there is no
+ * `lastDaily`; this hides it from the gate and nothing else.
+ */
+export function nightClock(store) {
+  return {
+    getJobCursor: async (locationId, name) => {
+      const c = await store.getJobCursor?.(locationId, name);
+      return c && !c.doc?.lastDaily ? { ...c, at: null } : c;
+    },
+    setJobCursor: (locationId, name, v) => store.setJobCursor?.(locationId, name, v),
+  };
+}
+
+/**
  * maybeRunConversationAudit({ client, locationId, saved, store, sendsEnabled, deps, now }) → boolean
  *
- * The tick's decision: once a day in its Pacific hour (config
- * nightlyAudit.hour, 19 by default — after the promise window closes), a
- * failed or vanished run retried through the evening, never twice a day.
+ * The tick's decision: once a day in its Pacific window (config
+ * nightlyAudit.hour, 19 by default — after the promise window closes — and
+ * the RETRY_WINDOW_HOURS after it), a failed or vanished run retried through
+ * the evening, never twice a day. Since 2026-11-09 the night may start
+ * anywhere in the window (daily-gate.js claimDailyRun): a deploy across 7pm
+ * used to skip the night.
  */
 export async function maybeRunConversationAudit({ client, locationId, saved = {}, store = defaultStore, sendsEnabled = false, deps = {}, now = Date.now() }) {
   const config = conversationConfig(saved);
   if (!config.nightlyAudit?.enabled) return false;
-  const hour = config.nightlyAudit.hour;
-  const h = workHour(now);
-  if (h < hour || h >= hour + RETRY_WINDOW_HOURS) return false;
-  if (jobs.get(locationId)?.status === "running") return false;
-  const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-  const doc = cursor?.doc || {};
-  // The night's run is its own clock (`lastDaily`), not the cursor's `at`:
-  // a run by hand at noon — three of them on 2026-09-16 — must not read as
-  // "already ran tonight" and skip the 7pm one.
-  const dailyAt = doc.lastDaily ? Date.parse(doc.lastDaily) : null;
-  const ranToday = dailyAt != null && now - dailyAt < MIN_GAP_MS;
-  const stale = doc.run?.startedAt && now - Date.parse(doc.run.startedAt) > STALE_RUN_MS;
-  let tries = 1;
-  if (ranToday) {
-    const triedSoFar = Number(doc.tries) || 1;
-    if (!(doc.failed || stale) || triedSoFar >= MAX_DAILY_TRIES || now - dailyAt < RETRY_GAP_MS) return false;
-    tries = triedSoFar + 1;
-  } else if (h !== hour) {
-    return false;
-  }
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: { tries, lastDaily: iso(now), last: doc.last || null, ...(stale ? { staleRun: doc.run } : {}) } }).catch(() => {});
+  const gate = await claimDailyRun({
+    store: nightClock(store), locationId, cursorName: CURSOR_NAME, now,
+    hourNow: workHour(now), startHour: config.nightlyAudit.hour, windowHours: RETRY_WINDOW_HOURS,
+    running: jobs.get(locationId)?.status === "running",
+    maxTries: MAX_DAILY_TRIES, retryGapMs: RETRY_GAP_MS, staleRunMs: STALE_RUN_MS, minGapMs: MIN_GAP_MS,
+  });
+  if (!gate.go) return false;
   startConversationAudit({ client, locationId, saved, store, sendsEnabled, deps, trigger: "daily", now });
   return true;
 }

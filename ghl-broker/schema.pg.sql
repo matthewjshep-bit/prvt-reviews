@@ -493,6 +493,9 @@ create table if not exists app_errors (
   primary key (location_id, fingerprint)
 );
 create index if not exists app_errors_loc_last_idx on app_errors (location_id, last_at desc);
+-- When an error came back after three or more quiet days (store.js
+-- recordAppError), so Slack's #machine tells it again (2026-11-09).
+alter table app_errors add column if not exists reopened_at timestamptz;
 
 -- What the nightly coach thinks should change: a new voice example, a house
 -- rule, a standing instruction, or a gap only code can close. Nothing here

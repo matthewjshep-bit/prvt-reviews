@@ -47,6 +47,39 @@ test("a repeated failure counts up rather than piling up, and the night's errors
   assert.equal((await store.listAppErrorsSince("LOC", new Date(t0 + 90000).toISOString())).length, 1);
 });
 
+// 2026-11-09 audit: GHL's own error text carries the lookup URL, so an email
+// arrived as dana%40example.com and a phone as %2B1206..., which the
+// scrubbers didn't read as either.
+test("an error with a URL-encoded email in it is scrubbed before it's stored", async () => {
+  const msg = "GHL GET /contacts/search/duplicate?locationId=L1&email=dana.fake%40example.com&number=%2B12065550142: 400 Bad Request";
+  const s = scrubMessage(new Error(msg));
+  assert.doesNotMatch(s, /dana|example|2065550142|%40|%2B/i, s);
+  assert.match(s, /^GHL GET \/contacts\/search\/duplicate: 400 Bad Request$/);
+  assert.equal(scrubMessage("no contact for dana.fake%40example.com"), "no contact for <email>");
+  assert.equal(scrubMessage("who is this? call back"), "who is this? call back", "a question mark that isn't a query stays");
+  const row = await recordError(store, { locationId: "LOC-SCRUB", area: "outreach", err: new Error(msg) });
+  assert.doesNotMatch(JSON.stringify(row), /dana|example\.com|2065550142/);
+  const [kept] = await store.listAppErrorsSince("LOC-SCRUB", "2000-01-01T00:00:00Z");
+  assert.doesNotMatch(JSON.stringify(kept), /dana|example\.com|2065550142/);
+});
+
+test("an error that comes back after three quiet days is marked reopened; one that kept happening is not", async () => {
+  const t0 = Date.parse("2026-10-01T20:00:00Z");
+  const DAY = 86400000;
+  await recordError(store, { locationId: "LOC-RE", area: "gmail", err: new Error("gmail token refresh: HTTP 401"), now: t0 });
+  await recordError(store, { locationId: "LOC-RE", area: "gmail", err: new Error("gmail token refresh: HTTP 401"), now: t0 + 2 * DAY });
+  let [row] = await store.listAppErrorsSince("LOC-RE", new Date(t0 - DAY).toISOString());
+  assert.equal(row.reopenedAt ?? null, null, "two days apart is the same spell");
+  await recordError(store, { locationId: "LOC-RE", area: "gmail", err: new Error("gmail token refresh: HTTP 401"), now: t0 + 5 * DAY + 60000 });
+  [row] = await store.listAppErrorsSince("LOC-RE", new Date(t0 - DAY).toISOString());
+  assert.equal(row.reopenedAt, new Date(t0 + 5 * DAY + 60000).toISOString(), "three quiet days, then back");
+  assert.equal(row.firstAt, new Date(t0).toISOString());
+  assert.equal(row.count, 3);
+  await recordError(store, { locationId: "LOC-RE", area: "gmail", err: new Error("gmail token refresh: HTTP 401"), now: t0 + 5 * DAY + 120000 });
+  [row] = await store.listAppErrorsSince("LOC-RE", new Date(t0 - DAY).toISOString());
+  assert.equal(row.reopenedAt, new Date(t0 + 5 * DAY + 60000).toISOString(), "kept from when it came back");
+});
+
 test("recording an error never throws — not with a broken store, not with nothing", async () => {
   assert.equal(await recordError({ recordAppError: async () => { throw new Error("db down"); } }, { locationId: "LOC", area: "reply", err: "x" }), null);
   assert.equal(await recordError(null, {}), null);

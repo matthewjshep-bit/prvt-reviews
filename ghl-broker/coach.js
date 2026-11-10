@@ -21,7 +21,8 @@ import { GRADUATION } from "./shared/graduation.js";
 import { conversationConfig, saveConversationConfig, previewConversation } from "./reply-agent.js";
 import { anthropicErrorToHttp } from "./rehab-scan.js";
 import { workHour } from "./outreach-sweep.js";
-import { CURSOR_NAME as AUDIT_CURSOR } from "./conversation-audit.js";
+import { CURSOR_NAME as AUDIT_CURSOR, nightClock } from "./conversation-audit.js";
+import { claimDailyRun } from "./daily-gate.js";
 import { recordError } from "./app-errors.js";
 import { usageOf } from "./shared/ai-cost.js";
 import { meterAi } from "./ai-spend.js";
@@ -140,32 +141,23 @@ export function startCoach({ locationId, saved = {}, store = defaultStore, deps 
 /**
  * maybeRunCoach({ locationId, saved, store, deps, now }) → boolean
  *
- * The audit's gate, verbatim: once a night in its Pacific hour, the cursor
- * written BEFORE the run so a crash can't buy the model call twice, a failed
- * or vanished run retried through the evening.
+ * The audit's gate (daily-gate.js claimDailyRun): once a night in its
+ * Pacific window, the cursor written BEFORE the run so a crash can't buy the
+ * model call twice, a failed or vanished run retried through the evening.
+ * The night may start anywhere in the window (2026-11-09): a deploy across
+ * its hour used to skip it.
  */
 export async function maybeRunCoach({ locationId, saved = {}, store = defaultStore, deps = {}, now = Date.now() }) {
   const config = conversationConfig(saved);
   if (!config.coach?.enabled) return false;
   if (!deps.propose && !String(saved.aiApiKey || "").trim()) return false;
-  const hour = config.coach.hour;
-  const h = workHour(now);
-  if (h < hour || h >= hour + RETRY_WINDOW_HOURS) return false;
-  if (jobs.get(locationId)?.status === "running") return false;
-  const cursor = await store.getJobCursor?.(locationId, CURSOR_NAME).catch(() => null);
-  const doc = cursor?.doc || {};
-  const dailyAt = doc.lastDaily ? Date.parse(doc.lastDaily) : null;
-  const ranToday = dailyAt != null && now - dailyAt < MIN_GAP_MS;
-  const stale = doc.run?.startedAt && now - Date.parse(doc.run.startedAt) > STALE_RUN_MS;
-  let tries = 1;
-  if (ranToday) {
-    const triedSoFar = Number(doc.tries) || 1;
-    if (!(doc.failed || stale) || triedSoFar >= MAX_DAILY_TRIES || now - dailyAt < RETRY_GAP_MS) return false;
-    tries = triedSoFar + 1;
-  } else if (h !== hour) {
-    return false;
-  }
-  await store.setJobCursor?.(locationId, CURSOR_NAME, { at: iso(now), doc: { ...doc, run: null, tries, lastDaily: iso(now), ...(stale ? { staleRun: doc.run } : {}) } }).catch(() => {});
+  const gate = await claimDailyRun({
+    store: nightClock(store), locationId, cursorName: CURSOR_NAME, now,
+    hourNow: workHour(now), startHour: config.coach.hour, windowHours: RETRY_WINDOW_HOURS,
+    running: jobs.get(locationId)?.status === "running",
+    maxTries: MAX_DAILY_TRIES, retryGapMs: RETRY_GAP_MS, staleRunMs: STALE_RUN_MS, minGapMs: MIN_GAP_MS,
+  });
+  if (!gate.go) return false;
   startCoach({ locationId, saved, store, deps, trigger: "daily", now });
   return true;
 }

@@ -2887,6 +2887,13 @@ classification, post-mortems and the coach were never metered.
   `buybox_parse`, `buyer_rank`, `classify_party`, `post_mortem`, `coach`.
 - Read it at `GET /api/offers/automations/ai-spend?days=N`. The last section
   of `node scripts/ai-usage-report.mjs` prints it.
+- **Every model priced (2026-11-09).** `shared/ai-cost.js` prices Opus 5.5
+  ($4 / $20, cache reads $0.20), Sonnet 5.5 ($2 / $10, cache reads $0.20) and
+  Haiku 5.5 ($0.10 / $0.50, $0.50 / $2.50 once the prompt passes 100K tokens).
+  A model id matches its longest listed name, so Opus 5.5 is no longer billed
+  as Opus 5. A call on a model with no price adds $0, counts as `unpriced` on
+  its day, and logs one warning per model per day. Yesterday's total is in the
+  7am Slack post.
 - **Drafts moved to Sonnet 5** (`REPLY_MODEL`). The case for it was 420
   drafts side by side with Opus 5: same intent 80%, same needs-a-person 87%,
   42% of the cost, and every number above ours caught by the gates. Sonnet
@@ -5002,6 +5009,8 @@ Failures in the reply agent, proactive drafts, the underwriter, the 15-minute sw
 
 Since 2026-11-09 two boot failures are durable too. A schema migration that fails (`ghl-broker/db.js` `migrate()` now returns `{ ok, error }`) is recorded under `db:migrate` for each location, so #machine hears it, and `GET /` shows `schema=failed` until a boot applies it. A broker that started again on the same commit (a crash, or a restart by hand) is on the `brokerBoot` cursor and posts once to #machine through the job-failed line; see "The tick" above. A boot pass that throws is recorded under `boot-pass`.
 
+**2026-11-09.** GHL's error text carries the lookup URL, so an email arrived as `name%40host` and a number as `%2B1…`, which the scrubbers didn't see. Both scrubbers (`scrubMessage` here, `scrubForSlack` in `shared/slack-notify.js`) now decode `%40` and `%2B` and drop a URL's query string before they look for emails and phones. The console paths log the scrubbed text too: the tick (`tick.js`), the offers router's `fail()`, and the scheduler's auto-send failure (its log line and the draft's flag). Outreach warnings name no agent: an agent's key is their email or phone, so per-agent failures are counted ("workflow enrollment failed for 3 agents: …", `routes/outreach.js failureTally`), and the sweep scrubs the warning and error it keeps on its cursor. A row that comes back after three quiet days gets `reopened_at` (schema: `alter table app_errors add column if not exists reopened_at`), and Slack's `#machine` tells it again. A Gmail link that stops working is a row in area `gmail`.
+
 ### No longer available — a house that sold isn't anyone's pass (2026-10-02)
 
 **Why.** "We passed" means we chose to walk away. "They passed" means the
@@ -6550,7 +6559,7 @@ never-texted, off-market). Check: `GET /api/dashboard/line` → `supply`.
 
 **Coverage.** The share of agents who have written back that were touched inside the check-in cadence, and the share of reachable buyers inside theirs.
 
-**The jobs.** One row per durable job (`LINE_JOBS`, from `job_cursors` via `store.listJobCursors`, which reads only the run fields): when it last ran, whether it failed and why, or that it never ran. Whether a quiet job is switched off is the Autopilot page's to say. App errors from the last 7 days are grouped by area.
+**The jobs.** One row per durable job (`LINE_JOBS`, from `job_cursors` via `store.listJobCursors`, which reads only the run fields): when it last ran, whether it failed and why, or that it never ran. Whether a quiet job is switched off is the Autopilot page's to say. App errors from the last 7 days are grouped by area. Since 2026-11-09 the table also lists the Needs Matt list, the GHL call queue, the price scorecard, the thread reads, the card sync, the hand-reply read and Slack, and a run that ended in an error reads as failed; lateness (Slack → How it runs → Quiet failures) is reported in Slack, not yet on this page.
 
 **Fees we made (2026-11-09).** `realizedFees` (`shared/line.js`, on `buildLine` as `fees`, from the whole deal documents) shows the fee in hand this Pacific month and this year, beside the target. A deal counts when it is first assigned or closed. The fee (`realizedFee`) is, in order: the outcome recorded at close (`deal.outcome.fee`, or its price less the contract), the committed buyer's agreed price less the contract, or a fee a person typed (`assignmentFeeSource: "you"`). A fee filled in from the setting at promote, or with no source said, is not real: those deals are counted as `unknown` and named on the card. Check: `GET /api/dashboard/line` → `fees.month`, `fees.ytd`.
 
@@ -6755,8 +6764,8 @@ text.
 | acquisitions | `#acquisitions` | **The Tier 1 list** (Matt, 2026-10-25: "just the tier 1s that have been flagged, not the back-and-forth"). The only post in the channel is a house reaching Tier 1 (`tier1_added`, a card moved to Tier 1), once per house. The post is itemized, one thing a line, with the links underneath: **Tier 1 flagged: <street>**, Agent (full name — from the record, else read from GHL), Address (full), Description (the summary of what they said, else why it's Tier 1). Its offer sent or revised, counter, in the realm, hot, agreed, contract, underwrite result and pass reply quietly in that thread, never in the channel feed, and only once the thread exists. A house an agent merely named isn't posted |
 | underwrites | `#underwrites` | **Real underwrites only**: a run that prices the house, edited in place from running to priced (number, ARV, rehab), held (the reasons) or failed. A skeleton or draft-only run (`autoUnderwriteMode` skeleton/draft, Matt prices by hand, 2026-10-25) only makes a draft: it posts nowhere, here or in the house's Tier 1 thread. With skeleton on, this channel is nearly silent (only full runs a person starts). Also an address that left the queue without running |
 | dispositions | `#dispositions` | **One thread per deal**: the new deal (contract, fee, closing), each wave of buyer texts as one line ("sent to 25 buyers"), a buyer looking, passing or committed, the package opened, a walkthrough booked, the stage. Closed and fell through also show in the channel |
-| machine | `#machine` | A new kind of app error (once per fingerprint), and a scheduled job whose last run failed (once per run). Mute it |
-| daily | `#daily` | `morningHour` (7am): the last 24 hours in numbers. `eveningHour` (7pm): the evening digest (`shared/digest.js`) by street, plus the machine's failures |
+| machine | `#machine` | A new kind of app error (once per fingerprint), the same error back after three quiet days (once per comeback), a scheduled job whose last run failed (once per run; a 15-minute job once a day), and a switched-on job that stopped running (once per stall). Mute it |
+| daily | `#daily` | `morningHour` (7am): the last 24 hours in numbers, and yesterday's AI spend. `eveningHour` (7pm): the evening digest (`shared/digest.js`) by street, plus the machine's failures, the late jobs, last night's leak count and the houses passed unpriced today |
 
 ### How it runs
 
@@ -6785,6 +6794,42 @@ claim back and stops the run. A run makes at most 30 posts.
 
 **First switch-on.** The first run after Slack is switched on only marks the
 start (`since`), so no history is posted. Open Needs Matt items do post.
+
+**Quiet failures (2026-11-09).** A job that stopped, a link that broke and
+last night's leaks used to reach nobody. Now:
+
+- **Errors that come back.** `app_errors.reopened_at` is set when an error
+  returns after three or more quiet days (`APP_ERROR_REOPEN_DAYS`, both store
+  backends). `#machine` posts a new error once (`err:<fingerprint>`) and a
+  comeback once more ("Error back in", `err:<fingerprint>:<reopenedAt>`).
+- **Failed jobs.** `lineJobs` (`shared/line.js`) counts a run whose `last.error`
+  is set as failed, unless the job calls that error soft (Slack's own rate
+  limit). A 15-minute job that keeps failing posts once a Pacific day, not
+  every tick. Slack's own job is never posted to Slack; the evening post and
+  the Line list it.
+- **Late jobs.** `LINE_JOBS` now lists `needsMatt`, `ghlCalls`,
+  `priceScorecard`, `threadReads`, `cardSync`, `handReplies` and `slack`,
+  each with its cadence. A job is late at more than twice its cadence,
+  counted only in its own time (its Pacific `hours`, Monday to Friday for a
+  workday job), and only while its switch is on. `ghl-broker/job-switches.js`
+  reads each switch the way the job does; a job it doesn't name is never
+  late. A late job posts to `#machine` once per stall and is listed in the
+  evening post ("Late: Needs Matt list (last ran 2.5h ago)").
+- **Leaks.** The evening post carries "Leaks last night: N (…)" from the
+  nightly audit's `last.leaks` (the Line's arithmetic), "tonight" when the
+  audit finished in the last six hours, nothing when it's more than 30 hours
+  old. It also carries "Passed unpriced today: N", the houses the Needs Matt
+  clock passed with no price (`passReason` quiet, by needs-matt;
+  `shared/line.js passedUnpriced`).
+- **Spend.** The morning post carries "AI spend <day>: $X over N calls" with
+  the two costliest features, and how many calls were on a model with no
+  price (`ai-spend.js yesterdaySpend`). The day is the ledger's UTC day.
+- **Nightly gates.** The audit and the coach use `daily-gate.js claimDailyRun`:
+  the night may start anywhere in its window, so a deploy across 7pm (8pm for
+  the coach) no longer skips it. A run by hand still doesn't count as the
+  night's (`conversation-audit.js nightClock`).
+- **Gmail.** A 401 or 403, or a refresh token Google refuses, is an `app_errors`
+  row in area `gmail`, once per run, beside the draft's warning.
 
 **Underwrite events.** Underwrites leave events now:
 `underwrite_started`, `underwrite_held`, `underwrite_done` and
@@ -8093,7 +8138,10 @@ from `cycleDay` in Pacific time and is summed by the store
 (`sumOutreachRequests`, every pull since the cycle began); it used to read
 the newest 200 pulls and undercount. The Pull button stays at ten requests a
 press. `GET /api/outreach/autopilot` returns `budget {used, budget, reserve,
-runsLeft, perRun, since}`; the Agents page meter reads the same numbers.
+runsLeft, perRun, since}`; the Agents page meter reads the same numbers. The
+Activity page's meter (`GET /api/dashboard/summary` `outreach.usage`) reads
+`rentcastBudget` too since 2026-11-09: from the billing day, against the plan
+in Settings (it counted from the 1st against a hard-coded 50).
 
 **When it doesn't happen (2026-09-16).** The sweep started at 10:03,
 imported one agent at 10:08 and then sat "running" on a GHL request that

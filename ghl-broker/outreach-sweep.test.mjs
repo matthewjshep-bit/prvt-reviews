@@ -569,3 +569,20 @@ test("the pull keeps turnkey agents only when there are seats for them, and the 
   await settle();
   assert.equal(queries[0]?.keepTurnkey, undefined);
 });
+
+// 2026-11-09 audit: the sweep keeps its first warning on the cursor, and a
+// warning could carry an agent's email straight out of GHL's error text.
+test("sweep warnings carry no email or phone", async () => {
+  _resetJobs();
+  const leaky = "the pull failed: GHL GET /contacts/search/duplicate?email=pat.fake%40example.com&phone=%2B12065550188: 400; pat.fake@example.com (206) 555-0188";
+  const deps = {
+    runPull: async () => ({ ok: true, batchId: "b1", requestsUsed: 1, warnings: [leaky] }),
+    importAgents: async () => ({ ok: true, imported: 0, results: [], warnings: [leaky] }),
+  };
+  const store = fakeStore([row("a")]);
+  startOutreachSweep({ locationId: "loc-pii", client: {}, saved: { outreachAutopilot: { enabled: true } }, store, deps });
+  await settle();
+  const last = store.cursors.get(`loc-pii|${CURSOR_NAME}`).doc.last;
+  assert.ok(last.warning, "a warning was kept");
+  assert.doesNotMatch(JSON.stringify(last), /pat\.fake|example\.com|555-0188|5550188|%40|%2B/, JSON.stringify(last));
+});

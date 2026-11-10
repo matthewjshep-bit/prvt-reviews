@@ -32,7 +32,9 @@ import { CURSOR_NAME as OUTREACH_CURSOR } from "./outreach-sweep.js";
 import { pingReasons } from "./shared/hand-off.js";
 import { pingClaimKey } from "./shared/ghl-pings.js";
 import { buildDigest } from "./shared/digest.js";
-import { lineJobs, errorsByArea } from "./shared/line.js";
+import { lineJobs, errorsByArea, passedUnpriced } from "./shared/line.js";
+import { jobSwitches } from "./job-switches.js";
+import { readYesterdaySpend } from "./ai-spend.js";
 import { addressKey, sameStreetLoose, parseUsAddress } from "./shared/us-address.js";
 import { houseKey, houseRowFor } from "./shared/current-offer.js";
 import { passedOnHouse, TIER_ONE_OUT_EVENTS } from "./shared/tier-one.js";
@@ -45,7 +47,7 @@ import { NEEDS_MATT_CURSOR } from "./shared/needs-matt.js";
 import { effectiveStatus } from "./shared/offer-status.js";
 import {
   acquisitionStatus, dispositionStatus, houseStatus, withStatus, legacyThreadKey, fullName, normalizeSlack, slackOn, streamOn, routeEvent, threadKeyFor, foldBlasts, renderEvent, renderBlasts, renderPing, renderNeed,
-  renderError, renderJobFailed, renderMorning, renderEvening, morningCounts, slackClaimKey, firstName, passesToday,
+  renderError, renderJobFailed, renderJobLate, renderMorning, renderEvening, morningCounts, slackClaimKey, firstName, passesToday,
   SLACK_EVENT_TYPES, MORNING_EVENT_TYPES, SLACK_STREAMS, SLACK_STREAM_LABEL,
 } from "./shared/slack-notify.js";
 
@@ -66,6 +68,11 @@ const PING_KEEP_MS = 60 * 86400000;
 const SUMMARY_MAX_AGE_MS = 3 * 86400000;
 const iso = (ms) => new Date(ms).toISOString();
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
+const pacificDay = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(t));
+// The nightly audit's cursor (conversation-audit.js CURSOR_NAME): its last run
+// carries the night's leak count. Named here, not imported, to keep the audit's
+// whole import tree out of the Slack runner.
+const AUDIT_CURSOR = "conversationAudit";
 
 /* ---------- Slack's Web API ---------- */
 
@@ -549,15 +556,30 @@ export async function runSlackPings({ store = defaultStore, locationId, saved = 
     for (const e of errors) {
       // A Slack error told to Slack goes nowhere useful; it's on the switchboard.
       if (e?.area === "slack" || !e?.fingerprint) continue;
-      if ((ms(e.firstAt) ?? 0) < now - 86400000) continue;
-      const key = slackClaimKey("err", e.fingerprint);
-      if (!claimed[key]) owed.push({ key, stream: "machine", kind: "error", msg: renderError(e) });
+      // New today, or back today after three quiet days (store.js reopened_at):
+      // the comeback is its own claim, so it is told once more.
+      const isNew = (ms(e.firstAt) ?? 0) >= now - 86400000;
+      const back = !isNew && (ms(e.reopenedAt) ?? 0) >= now - 86400000;
+      if (!isNew && !back) continue;
+      const key = slackClaimKey("err", back ? `${e.fingerprint}:${e.reopenedAt}` : e.fingerprint);
+      if (!claimed[key]) owed.push({ key, stream: "machine", kind: "error", msg: renderError(back ? e : { ...e, reopenedAt: null }) });
     }
     const cursors = await store.listJobCursors?.(locationId).catch(() => []) || [];
-    for (const j of lineJobs(cursors, { now })) {
-      if (!j.failed || !j.lastRunAt) continue;
-      const key = slackClaimKey("job", `${j.name}:${j.lastRunAt}`);
-      if (!claimed[key]) owed.push({ key, stream: "machine", kind: "job", msg: renderJobFailed(j) });
+    for (const j of lineJobs(cursors, { now, switches: jobSwitches(saved) })) {
+      // Slack's own job told to Slack goes nowhere useful; the evening post and the Line list it.
+      if (j.name === "slack" || !j.lastRunAt) continue;
+      if (j.failed) {
+        // A job that runs every tick says so once a day, not every 15 minutes:
+        // the day of the failed run, so a failure that stays on a cursor that
+        // stopped moving (its hours ended, or it was switched off) isn't told
+        // again each day.
+        const key = slackClaimKey("job", j.every === "tick" ? `${j.name}:${pacificDay(ms(j.lastRunAt) ?? now)}` : `${j.name}:${j.lastRunAt}`);
+        if (!claimed[key]) owed.push({ key, stream: "machine", kind: "job", msg: renderJobFailed(j) });
+      } else if (j.late) {
+        // Switched on and stopped: once per stall (its last run is the stall's name).
+        const key = slackClaimKey("late", `${j.name}:${j.lastRunAt}`);
+        if (!claimed[key]) owed.push({ key, stream: "machine", kind: "late", msg: renderJobLate(j) });
+      }
     }
     // A sending day whose outreach sweep opened fewer new agents than
     // outreachAutopilot.minNewAgentsPerDay (outreach-sweep.js emptyDayFor),
@@ -636,7 +658,9 @@ export async function postMorning({ store = defaultStore, locationId, saved = {}
     const read = await deps.pipelineFor({ locationId, client, now }).catch(() => null);
     if (read) counts.callsOwed = new Set((read.shownActions || []).filter((a) => a?.kind === "call_owed" && a.contactId).map((a) => a.contactId)).size;
   }
-  await post(token, cfg.channels.daily, renderMorning(counts, { ...cfg, locationId, dayLabel: "the last 24 hours" }));
+  // Yesterday's AI spend, from the ledger (ai-spend.js); none, no line.
+  const aiSpend = await readYesterdaySpend(store, { now }).catch(() => null);
+  await post(token, cfg.channels.daily, renderMorning({ ...counts, aiSpend }, { ...cfg, locationId, dayLabel: "the last 24 hours" }));
   return { posted: true, counts };
 }
 
@@ -687,15 +711,24 @@ export async function postEvening({ store = defaultStore, locationId, saved = {}
   const token = String(saved?.slackBotToken || "").trim();
   const since = iso(now - 86400000);
   // The digest route's own reads (routes/dashboard.js GET /digest).
-  const [drafts, events, offers, cursors, errors] = await Promise.all([
+  const [drafts, events, offers, cursors, errors, audit] = await Promise.all([
     store.listReplyDrafts?.(locationId, { since, limit: 1000 }).catch(() => []),
     store.listContactEventsSince(locationId, since, { types: ["promise_owed", "promise_kept"], limit: 2000 }).catch(() => []),
     store.listOffers(locationId, { limit: 1000, lean: true }).catch(() => []),
     store.listJobCursors?.(locationId).catch(() => []),
     store.listAppErrorsSince?.(locationId, since, { limit: 100 }).catch(() => []),
+    store.getJobCursor?.(locationId, AUDIT_CURSOR).catch(() => null),
   ]);
   const digest = buildDigest({ drafts: drafts || [], events: events || [], offers: offers || [], now, hours: 24 });
-  const msg = renderEvening(digest, { jobs: lineJobs(cursors || [], { now }), errors: errorsByArea((errors || []).filter((e) => e?.area !== "slack")) }, { ...cfg, locationId });
+  // The nightly audit's leak count, as it stood when the audit finished.
+  const lastAudit = audit?.doc?.last;
+  const leaks = lastAudit?.leaks ? { ...lastAudit.leaks, finishedAt: lastAudit.finishedAt || null } : null;
+  const msg = renderEvening(digest, {
+    jobs: lineJobs(cursors || [], { now, switches: jobSwitches(saved) }),
+    errors: errorsByArea((errors || []).filter((e) => e?.area !== "slack")),
+    leaks,
+    passedUnpriced: passedUnpriced(offers || [], { since }),
+  }, { ...cfg, locationId, now });
   await post(token, cfg.channels.daily, msg);
   return { posted: true, open: (digest.sections || []).reduce((a, s) => a + (s.items?.length || 0), 0) };
 }

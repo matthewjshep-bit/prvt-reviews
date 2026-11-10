@@ -554,3 +554,20 @@ test("the audit closes a day-old held thanks and leaves a held question", async 
   assert.equal(updated.has("q2") && updated.get("q2").status === "dismissed", false, "the question stays");
   assert.ok(acted.some((r) => r.kind === "quiet_hold" && r.status === "closed"));
 });
+
+// 2026-11-09 audit: the audit started only on a tick inside the 7pm hour, so
+// a run of deploys across 7pm skipped the night (the held sweep, the redrafts,
+// the leak count) with nothing said.
+test("a deploy across seven pm does not skip the audit", async () => {
+  _resetJobs();
+  const store = fakeStore();
+  const d = deps({ ghlLastMessages: async () => new Map() });
+  const base = { client: {}, locationId: "L-DEPLOY", saved: SAVED, store, sendsEnabled: false, deps: d };
+  store.cursors.set(`L-DEPLOY|${CURSOR_NAME}`, { at: new Date(NOW - 86400000).toISOString(), doc: { tries: 1, lastDaily: new Date(NOW - 86400000).toISOString(), last: { status: "done" } } });
+  const eightTen = Date.parse("2026-09-17T03:10:00Z");   // 8:10pm Pacific, the first tick after a deploy
+  assert.equal(await maybeRunConversationAudit({ ...base, now: eightTen }), true);
+  await settle();
+  assert.equal(getAuditJob("L-DEPLOY").status, "done");
+  assert.equal(await maybeRunConversationAudit({ ...base, now: eightTen + 30 * 60000 }), false, "and only once");
+  assert.equal(await maybeRunConversationAudit({ ...base, now: Date.parse("2026-09-17T05:10:00Z") }), false, "10pm is past the window");
+});

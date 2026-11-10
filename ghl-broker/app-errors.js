@@ -13,9 +13,18 @@ const CONTEXT_KEYS = ["contactId", "offerId", "draftId", "jobId", "kind", "inten
 
 const PHONE = /\+?\d[\d\s().-]{8,}\d/g;
 const EMAIL = /[^\s@<>"']+@[^\s@<>"']+\.[a-z]{2,}/gi;
+// A URL's query string (?key=value&…): GHL's error text carries the lookup it
+// made, and its query is nothing but somebody's email or number. Trailing
+// punctuation before a space stays with the sentence.
+export const QUERY_STRING = /\?[\w.%-]+=[^\s"']*?(?=[:;,)]?(?:\s|$|["']))/g;
 
+// The same address URL-encoded (%40 for @, %2B for the + of a number) is
+// decoded first, so the email and phone patterns see it (2026-11-09 audit).
 export function scrubMessage(v) {
-  return String(v?.message ?? v ?? "").replace(EMAIL, "<email>").replace(PHONE, "<phone>").replace(/\s+/g, " ").trim().slice(0, 300);
+  return String(v?.message ?? v ?? "")
+    .replace(/%40/gi, "@").replace(/%2B/gi, "+")
+    .replace(QUERY_STRING, "")
+    .replace(EMAIL, "<email>").replace(PHONE, "<phone>").replace(/\s+/g, " ").trim().slice(0, 300);
 }
 
 export function safeContext(ctx = {}) {
