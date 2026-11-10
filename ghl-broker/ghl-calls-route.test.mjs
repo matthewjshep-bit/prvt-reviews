@@ -53,8 +53,12 @@ const H = 3600000;
 const ago = (h) => new Date(Date.now() - h * H).toISOString();
 const WF = "7f1c2a9e-0b3d-4e5f-8a6b-1c2d3e4f5a6b";
 const today = pacificDay(Date.now());
+// A time earlier today in Pacific time, never before midnight: run in the first
+// half hour of a day, "30 minutes ago" was yesterday and the calls weren't today's.
+const dayStart = ["-08:00", "-07:00"].map((z) => Date.parse(`${today}T00:00:00${z}`)).find((t) => pacificDay(t) === today && pacificDay(t - 1) !== today);
+const todayAgo = (h, floorMs = 0) => new Date(Math.max(Date.now() - h * H, dayStart + floorMs)).toISOString();
 const pipeline = async () => { const r = await (await fetch(`${B}/api/dashboard/pipeline`)).json(); assert.equal(r.ok, true, r.error); return r; };
-const queue = (contactId, kind, at = ago(0.5)) => recordEvent({ store, locationId: LOC, contactId, type: "ghl_call_queued", at, source: "sweep",
+const queue = (contactId, kind, at = todayAgo(0.5)) => recordEvent({ store, locationId: LOC, contactId, type: "ghl_call_queued", at, source: "sweep",
   dedupeKey: `ghl_call:${contactId}:${today}`, data: { kind, workflowId: WF } });
 
 await store.saveOfferSettings(LOC, {});
@@ -96,7 +100,7 @@ test("on, a call in GHL leaves Today; the counter stays, marked as in GHL; the c
 
 test("a call that failed to go to GHL stays on Today", async () => {
   await store.saveOfferSettings(LOC, { desk: { ghlCalls: { enabled: true, workflowId: WF } } });
-  await recordEvent({ store, locationId: LOC, contactId: "dana", type: "ghl_call_failed", at: ago(0.4), source: "sweep",
+  await recordEvent({ store, locationId: LOC, contactId: "dana", type: "ghl_call_failed", at: todayAgo(0.4, 1000), source: "sweep",
     dedupeKey: `ghl_call_failed:ghl_call:dana:${today}`, data: { claimKey: `ghl_call:dana:${today}`, failed: true, error: "GHL 500" } });
   const r = await pipeline();
   assert.ok(r.desk.rows.some((x) => x.contactId === "dana" && x.kind === "call_hot"));
