@@ -68,7 +68,7 @@ const PING_KEEP_MS = 60 * 86400000;
 const SUMMARY_MAX_AGE_MS = 3 * 86400000;
 const iso = (ms) => new Date(ms).toISOString();
 const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : null; };
-const pacificDay = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(t));
+// pacificDay, the Pacific calendar date ("2026-11-09"), is daily-gate.js's, imported above.
 // The nightly audit's cursor (conversation-audit.js CURSOR_NAME): its last run
 // carries the night's leak count. Named here, not imported, to keep the audit's
 // whole import tree out of the Slack runner.
