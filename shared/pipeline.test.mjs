@@ -987,3 +987,17 @@ test("a number we texted in a reply is not a priced-not-floated row, and the tim
   assert.equal(timerMoves(r.actions, { config: TIMED, now: NOW }).length, 0);
   assert.equal(kinds(build({ offers: [offer({ status: "new", sends: [], floatSentAt: D(2) })] })).includes("offer_ready"), false, "made by hand too");
 });
+
+// 2026-11-09: Matt gave the agent a number himself, and the timer floated the
+// machine's priced row on the same house a few days later.
+test("a machine-priced row for someone you texted or talked to this week says so, and nothing floats it", () => {
+  const ready = offer({ status: "new", sends: [], autoUnderwrite: { jobId: "j1", held: [] } });
+  const texted = { type: "hand_reply", contactId: "a1", at: D(4), data: { via: "ghl" } };
+  const row = build({ offers: [ready], events: [texted] }).actions.find((a) => a.kind === "offer_ready");
+  assert.equal(row.why, "you texted them yourself or talked this week");
+  assert.equal(row.group, "stuck");
+  assert.equal(build({ offers: [ready], events: [{ ...texted, at: D(9) }] }).actions.find((a) => a.kind === "offer_ready").why, "", "over a week ago");
+  assert.equal(build({ offers: [ready], events: [{ ...texted, contactId: "a9" }] }).actions.find((a) => a.kind === "offer_ready").why, "", "someone else");
+  const missed = { type: "call_summary", contactId: "a1", at: D(2), data: { missed: true } };
+  assert.equal(build({ offers: [ready], events: [missed] }).actions.find((a) => a.kind === "offer_ready").why, "", "a call nobody picked up");
+});

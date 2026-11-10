@@ -320,6 +320,21 @@ const COST_AFTER = "to\\s+(?:buy|sell|resell|hold|carry|close)\\b|(?:in|of|for|o
   "(?:when|once)\\s+(?:it'?s\\s+)?(?:fixed|done|finished|renovated)\\b";
 const COST_BEFORE = "\\bclosing(?:\\s+costs?)?|\\bholding(?:\\s+costs?)?|\\bcarry(?:ing)?(?:\\s+costs?)?|\\bresale(?:\\s+costs?)?|\\bresell(?:ing)?|" +
   "\\bprofit(?:\\s*(?:&|and)\\s*risk)?|\\brisk|\\bmargin|\\b(?:renovation\\s+)?budget|\\bcommissions?|\\bcosts?";
+// Their number, said back to them (2026-11-09): "the seller's bottom is 450",
+// "their number is 450", "he's hoping for 450", and figures that are no price
+// on the house at all: the HOA, the rent, the taxes, what they owe, a
+// Zestimate or an appraisal. A their-word is required before "bottom" or
+// "number": "our bottom line is 400" is ours. Read on the rough numbers only
+// (roughHits), so a figure the money gate already caught stays caught.
+const THEIRS_BEFORE = "\\b(?:their|his|her|the\\s+sellers?'?s?|sellers?'?s?|the\\s+owners?'?s?|owners?'?s?)\\s+(?:bottom(?:\\s+line)?|floor|number|price|ask(?:ing)?|target|net|counter(?:\\s+offer)?)|" +
+  "\\b(?:they(?:'re|\\s+are)?|he(?:'s|\\s+is)?|she(?:'s|\\s+is)?|(?:the\\s+)?sellers?(?:\\s+(?:is|are))?)\\s+hoping\\s+(?:to\\s+get|for)|" +
+  "\\bzestimate|\\bapprais(?:ed|al)|\\bassessed|\\bhoa(?:\\s+dues)?|\\bdues|\\brent|\\btax(?:es)?|\\bpayoff|\\bowes?|\\bowed|\\bmortgage|\\bloan";
+const THEIRS_BEFORE_RX = new RegExp("(?:" + THEIRS_BEFORE + ")\\s*(?:is|of|at|=|:|around|about|~|for)?\\s*$", "i");
+// A hedge between the word and the number ("the rehab is probably 110", "ARV
+// is likely 450", "taxes are probably 4"): the number is still the rehab's,
+// the ARV's, the taxes'. Review, 2026-11-09: read as our price, the counter
+// hold texted the rehab as our number.
+const HEDGE_TAIL_RX = /(?:\s+(?:is|are|was|were|be|'s|likely|probably|prob|roughly|around|about|maybe|somewhere|near|close\s+to|more\s+like))+\s*$/i;
 
 /* ---------- a range topped by our number (2026-10-07) ---------- */
 
@@ -480,7 +495,56 @@ const SHORT_STREET = /^\s+(?:(?:n|s|e|w|ne|nw|se|sw)\s+)?\d+(?:st|nd|rd|th)\b/i;
 const SHORT_BEFORE_RX = /\b(?:at|to|for|do|of|around|about|pay|paying|offer|go|be|near|meet(?:\s+you)?\s+at|up\s+to)\s+(\d{2,4})(ish)?(?![\d,]|\.\d)/gi;
 // Not the tail of "1,304,955" or "$683,750": whole numbers only.
 const SHORT_AFTER_RX = /(?<![\d,.$])\b(\d{2,4})(ish)?\s+(?:works|would\s+work|could\s+work|is\s+workable|is\s+doable|as-is|as\s+is|cash|flat|all\s+in)\b/gi;
-function shorthandHits(t, reference) {
+// Rough numbers (2026-11-09). "We'd probably come in near 515ish", "our
+// number is 400", "probably 450", "the mid 400s", "the 450 range": the bot's
+// rough floats, which the readers above never saw, so neither did the money
+// gate nor never-raise. A band reads as its BOTTOM third: "low 400s" is 400K,
+// "mid" 433K, "high" or "upper" 466K. Each hit passes the not-ours words below
+// (the seller's bottom, the list, the HOA, the work) before it counts, so a
+// their-price phrasing that trips goes there, never into a looser rule.
+const ROUGH_CUE_RX = /\b(?:is|likely|probably|land(?:ing)?(?:\s+(?:at|around|near|in\s+at))?|number\s+is|come\s+in\s+at|around)\s+(\d{2,4})(ish)?(?![\d,]|\.\d|\s?[kKmM]\b|'?s\b)/gi;
+const ROUGH_ISH_RX = /(?<![\w,.$])\$?(\d{2,4})\s?([kK])?ish\b/g;
+const ROUGH_BAND_RX = /\b(low|mid|high|upper)[\s-]+\$?(\d{2,4})[kK]?'?s\b/gi;
+const ROUGH_RANGE_RX = /(?<![\w,.$])\$?(\d{2,4})\s?([kK])?\s+(?:range|or\s+so)\b/gi;
+const YEAR = /^(?:19|20)\d\d$/;
+// After a rough number, not money: the rest of a phone number ("my cell is"
+// and ten digits) or a count or a distance ("probably 200 photos", "is 300 feet").
+// Review, 2026-11-09: read low, a hold would have texted it as our number.
+const ROUGH_NOT_MONEY_RX = /^(?:[\s.)-]*\d{3}[\s.-]*\d{4}\b|\s+(?:photos?|pics?|pictures?|feet|foot|ft\b|miles?|mi\b|acres?|homes?|houses?|units?|doors?|people|agents?|buyers?|showings?|offers?|times?|calls?|texts?|emails?|percent)\b)/i;
+function roughHits(t) {
+  const hits = [];
+  for (const m of t.matchAll(ROUGH_CUE_RX)) {
+    // "probably 550ish fixed up": the end is past the "ish", so the words
+    // after it are the ones read.
+    const said = m[1] + (m[2] || "");
+    const start = m.index + m[0].length - said.length;
+    const end = start + said.length;
+    const rest = t.slice(end, end + 12);
+    if (YEAR.test(m[1]) || SHORT_UNIT.test(rest) || SHORT_STREET.test(rest) || /^\s+[A-Z]/.test(rest) || ROUGH_NOT_MONEY_RX.test(rest)) continue;
+    hits.push({ v: Number(m[1]) * 1000, start, end });
+  }
+  // A year is never a rough price: "built 1995 or so", "the mid 1900s".
+  for (const rx of [ROUGH_ISH_RX, ROUGH_RANGE_RX]) {
+    for (const m of t.matchAll(rx)) {
+      if (YEAR.test(m[1]) || ROUGH_NOT_MONEY_RX.test(t.slice(m.index + m[0].length, m.index + m[0].length + 16))) continue;
+      const start = m.index + m[0].indexOf(m[1]);
+      hits.push({ v: Number(m[1]) * 1000, start, end: m.index + m[0].length });
+    }
+  }
+  for (const m of t.matchAll(ROUGH_BAND_RX)) {
+    if (YEAR.test(m[2])) continue;
+    const n = Number(m[2]);
+    const width = n % 100 === 0 ? 100 : n % 10 === 0 ? 10 : 1;
+    const step = { low: 0, mid: Math.floor(width / 3), high: Math.floor((2 * width) / 3), upper: Math.floor((2 * width) / 3) }[m[1].toLowerCase()];
+    const start = m.index + m[0].indexOf(m[2], m[1].length);
+    hits.push({ v: (n + step) * 1000, start, end: m.index + m[0].length });
+  }
+  return hits.filter((h) => notTheirs(t, h.start, h.end));
+}
+// `rough: false` reads as before rough numbers were read: the money gate's
+// allowlist of the agent's own figures, so reading more of OUR words never
+// lets the bot echo more of theirs.
+function shorthandHits(t, reference, { rough = true } = {}) {
   const ref = Math.max(0, Number(reference) || 0);
   const plausible = (v) => (ref ? v >= ref * 0.4 && v <= ref * 3 : v >= 50000 && v <= 5e6);
   const hits = [];
@@ -495,16 +559,24 @@ function shorthandHits(t, reference) {
       if (plausible(v)) hits.push({ v, start, end });
     }
   }
+  if (rough) for (const h of roughHits(t)) if (plausible(h.v)) hits.push(h);
   return hits;
 }
-export function shorthandPrices(text = "", reference = 0) {
-  return [...new Set(shorthandHits(String(text || ""), reference).map((h) => h.v))];
+export function shorthandPrices(text = "", reference = 0, { rough = true } = {}) {
+  return [...new Set(shorthandHits(String(text || ""), reference, { rough }).map((h) => h.v))];
 }
 
 // Not a price we'd pay: the list price, their price, and the value or the
 // work — or a cost we name when we show our work.
 const NOT_OURS_AFTER = new RegExp("^\\s*(?:arv\\b|after[- ]repair|(?:in|of|for)\\s+(?:rehab|repairs?|work)\\b|rehab\\b|repairs?\\b|(?:worth\\s+)?of\\s+work\\b|done\\b|fixed\\b|finished\\b|renovated\\b|retail\\b|once\\b|after\\s+(?:the\\s+)?(?:work|reno|rehab|repairs)|emd\\b|earnest\\b|deposit\\b|is\\s+(?:way\\s+|well\\s+|a\\s+(?:bit|lot)\\s+|too\\s+)?(?:past|over|above|beyond|out\\s+of|more\\s+than|too)|" + COST_AFTER + ")", "i");
 const NOT_OURS_BEFORE = new RegExp("(?:\\barv|after[- ]repair value|\\brehab|\\brepairs?|\\bwork|\\blist(?:ed|ing)?(?:\\s+price)?|\\basking(?:\\s+price)?|\\bpriced|\\bon\\s+price|\\bthe\\s+market|\\bworth|\\bvalue|\\b(?:came|come|dropped|reduced|cut|down)\\s+(?:down\\s+)?to|\\breads?\\s+(?:like|as)|" + COST_BEFORE + ")\\s*(?:is|of|at|=|:|around|about|~|for)?\\s*$", "i");
+// Is the rough number at [start, end) a price we'd pay, by the words around
+// it? The not-ours words above, and their number said back to them.
+function notTheirs(t, start, end) {
+  const raw = t.slice(Math.max(0, start - 40), start);
+  const befores = [raw, raw.replace(HEDGE_TAIL_RX, " ")];
+  return !NOT_OURS_AFTER.test(t.slice(end, end + 28)) && !befores.some((b) => NOT_OURS_BEFORE.test(b) || THEIRS_BEFORE_RX.test(b));
+}
 
 /**
  * pricesWeName(text, reference) → [dollars]
@@ -602,29 +674,218 @@ function namesHouse(text, address) {
   return new RegExp(`\\b${esc(p.houseNo)}\\b`).test(text) && new RegExp(`\\b${esc(word)}\\b`, "i").test(text);
 }
 
+// Some house, ours or not: "1450 Marlow", "336 SW 15th", "40 Ash Ct". A
+// house number then a capitalised name, a numbered street, or a street word
+// with its suffix. Reading a line as about SOME house is the safe mistake:
+// the price in it is then nobody's.
+const ANY_HOUSE_RX = new RegExp("(?<![\\d,.$])\\b\\d{2,6}\\s+(?:(?:[NSEW]|NE|NW|SE|SW|North|South|East|West)\\.?\\s+)?(?:\\d{1,3}(?:st|nd|rd|th)\\b|[A-Z][a-z]{2,})" +
+  "|(?<![\\d,.$])\\b\\d{2,6}\\s+[a-z]{3,}\\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|ct|court|pl|place|way|blvd|loop|cir|circle|ter|terrace|pkwy|trl|trail|hwy)\\b");
+const streetWordOf = (address) => String(parseUsAddress(address).street || "").split(/\s+/).find((w) => w && !DIRECTION.test(w.replace(/\./g, ""))) || "";
+const wordIn = (text, w) => w.length >= 3 && new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text);
+const CLOSED_STATUSES = new Set(["we_passed", "passed", "unavailable", "expired", "withdrawn", "no_response"]);
+// When a row stopped being a house in play, or 0 (open, or no time on it).
+function closedAt(r) {
+  if (!CLOSED_STATUSES.has(r?.status)) return 0;
+  return maxOf([...(r.statusHistory || []).filter((h) => h?.status === r.status).map((h) => ms(h.ts)), ms(r.statusAt)]);
+}
+
 /**
- * lastQuoteOnHouse(offer, transcript) → { amount, ts, text } | null
+ * quotesOnHouse(offer, transcript, { offers }) → [{ amount, ts, text, low? }], oldest first
  *
- * The price we last put to the agent on this offer's house — a text of ours
- * that names the house — whatever row it came off, and whoever typed it.
+ * Every price we put to the agent on this offer's house, whatever row it
+ * came off and whoever typed it: a text of ours that names the house, and
+ * (2026-11-09) one that names a price but no house at all — "we'd likely
+ * come in near 515ish" — when `offers` (the agent's book) says it can
+ * only have been this one: the agent had no other house in play when it
+ * went, or the nearest line before it that named a house (theirs or ours)
+ * named this one. 102 of 166 bot floats from September to November named no
+ * house number, and never-raise and never-cut saw none of them. A line that
+ * names another house, or some house we can't place, is nobody's. Without
+ * the book only the texts that name the house count, as before. `low` is
+ * the bottom of a range the text floated ("between 280k and 295k").
+ */
+function quotesOnHouse(o, transcript = "", { offers = null } = {}) {
+  const amount = Number(o?.cashAmount) || 0;
+  if (!amount || !transcript || !o?.address) return [];
+  const book = Array.isArray(offers) ? offers.filter((r) => r && String(r.address || "").trim() && (!o.contactId || !r.contactId || r.contactId === o.contactId)) : null;
+  const key = houseKey(o.address);
+  const onThis = (r) => r.id === o.id || houseKey(r.address) === key || oneAgentsHouse(r.address, o.address);
+  const others = (book || []).filter((r) => !onThis(r));
+  const mine = streetWordOf(o.address).toLowerCase();
+  const otherWords = [...new Set(others.map((r) => streetWordOf(r.address)).filter((w) => w && w.toLowerCase() !== mine))];
+  const about = (text) => {
+    if (namesHouse(text, o.address)) return "this";
+    if (others.some((r) => namesHouse(text, r.address)) || ANY_HOUSE_RX.test(text) || otherWords.some((w) => wordIn(text, w))) return "other";
+    return "none";
+  };
+  // No other house of the agent's was in play at `ts` (drafts count: a house
+  // we were still pricing is a house the text could be about). This house's
+  // own rows needn't date from then: a re-run replaces the row a float came off.
+  const onlyHouseThen = (ts) => Boolean(book) && !others.some((r) => (!ms(r.createdAt) || ms(r.createdAt) <= ts) && !(closedAt(r) && closedAt(r) < ts));
+  const out = [];
+  let lastNamed = "none";
+  for (const line of String(transcript).split(/\r?\n/)) {
+    const any = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] (US|THEM) \w+(?: TRANSCRIPT)?:? ?(.*)$/.exec(line);
+    if (!any) continue;
+    const ts = Date.parse(`${any[1]}T${any[2]}:00Z`);
+    if (!Number.isFinite(ts)) continue;
+    const ours = any[3] === "US" && /^\[[^\]]+\] US \w+: /.test(line);
+    // An offer letter's text names our number first and the math after it.
+    const text = ours ? quotedPart(any[4].trim()) : any[4].trim();
+    const house = about(text);
+    if (ours) {
+      const prices = pricesWeName(text, amount).filter((n) => n >= amount * 0.4 && n <= amount * 3);
+      const counts = house === "this" || (house === "none" && book && (onlyHouseThen(ts) || lastNamed === "this"));
+      if (prices.length && counts) {
+        const q = Math.min(...prices);
+        // A range we floated ("between 280 and 295"): its bottom is ours to
+        // say too, so the gate never reads 285 after it as a cut.
+        const low = Math.min(q, ...rangeLows(text).filter((r) => Math.round(r.high) === Math.round(q)).map((r) => Math.round(r.low)));
+        out.push({ amount: q, ts, text: text.slice(0, 120), ...(low < q ? { low } : {}) });
+      }
+    }
+    if (house !== "none") lastNamed = house;
+  }
+  return out.sort((a, b) => a.ts - b.ts);
+}
+
+/**
+ * lastQuoteOnHouse(offer, transcript, { offers }) → { amount, ts, text } | null
+ *
+ * The price we last put to the agent on this offer's house (quotesOnHouse).
  * The lowest price in that text when it names several.
  */
-export function lastQuoteOnHouse(o, transcript = "") {
-  const amount = Number(o?.cashAmount) || 0;
-  if (!amount || !transcript || !o?.address) return null;
-  let last = null;
-  for (const line of String(transcript).split(/\r?\n/)) {
-    const m = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] US \w+: (.*)$/.exec(line);
-    if (!m) continue;
-    const ts = Date.parse(`${m[1]}T${m[2]}:00Z`);
-    // An offer letter's text names our number first and the math after it.
-    const text = quotedPart(m[3].trim());
-    if (!Number.isFinite(ts) || !namesHouse(text, o.address)) continue;
-    const prices = pricesWeName(text, amount).filter((n) => n >= amount * 0.4 && n <= amount * 3);
-    if (!prices.length) continue;
-    if (!last || ts >= last.ts) last = { amount: Math.min(...prices), ts, text: text.slice(0, 120) };
+export function lastQuoteOnHouse(o, transcript = "", { offers = null } = {}) {
+  return quotesOnHouse(o, transcript, { offers }).at(-1) || null;
+}
+
+/**
+ * typedAboveBook({ offer, transcript, offers, events }) → { typed, book, ts, line } | null
+ *
+ * Matt's own last typed number on the house (a text of ours that lines up
+ * with a `hand_reply` on the timeline) is above what a machine hold would say
+ * (2026-11-05: he texted a round number above the book; days later the bot
+ * held at the book's odd number, under it). The machine doesn't hold under his word; the line is
+ * the why on Needs Matt. Moot when a person brought the offer down to that
+ * number after his text.
+ */
+export function typedAboveBook({ offer = null, transcript = "", offers = null, events = [] } = {}) {
+  const book = sentNumber(offer);
+  if (!book || !transcript) return null;
+  const typedAt = (events || []).filter((e) => e?.type === "hand_reply" && (!e.contactId || !offer.contactId || e.contactId === offer.contactId))
+    .map((e) => ms(e.at)).filter(Boolean);
+  if (!typedAt.length) return null;
+  // A transcript line is stamped to the minute; the event to the second.
+  const byHand = (ts) => typedAt.some((t) => t >= ts - 60000 && t < ts + 120000);
+  const q = quotesOnHouse(offer, transcript, { offers }).filter((x) => byHand(x.ts)).at(-1);
+  if (!q) return null;
+  const hold = holdAmount({ offer, transcript, offers });
+  if (!hold || q.amount <= hold.raw + Math.max(1000, hold.raw * 0.005)) return null;
+  if (settledSince(offer) > q.ts && Number(offer.cashAmount) <= hold.raw + Math.max(1000, hold.raw * 0.005)) return null;
+  const where = String(offer.address || "").split(",")[0].trim() || "the house";
+  return { typed: q.amount, book: hold.raw, ts: q.ts, line: `you texted ${kText(q.amount)} on ${where}; the offer says ${hold.raw.toLocaleString("en-US")}` };
+}
+
+/**
+ * personPricedAt(offer) → ms, or 0
+ *
+ * When a person last put their own number on this row: one they made by hand
+ * (or sent), published, pinned, revised by hand, or approved. A machine's row,
+ * re-quote or counter-band move is not a person's number.
+ */
+const MACHINE_MOVES = new Set(["requote", "counter_band", "walkaway"]);
+export function personPricedAt(o) {
+  if (!o) return 0;
+  const uw = o.autoUnderwrite;
+  return maxOf([
+    !uw ? maxOf([ms(o.createdAt), lastSentAt(o)]) : 0,
+    ms(uw?.publishedAt),
+    o.pin?.at && !o.pin.off ? ms(o.pin.at) : 0,
+    ...(o.revisions || []).filter((r) => !MACHINE_MOVES.has(r?.by)).map((r) => ms(r?.ts)),
+    Number(o.approved?.amount) > 0 ? ms(o.approved.at) : 0,
+  ]);
+}
+
+/**
+ * otherAgentsNumber({ offer, offers, now, days }) → { amount, contactId, id, at } | null
+ *
+ * Two agents on one house hear one number (2026-11-07: the machine floated
+ * about 305 to one agent while Matt had given the other about 290). The
+ * newest number a person put on the same house for ANOTHER agent in the last
+ * `days`, when ours is not within slack of it; null when they match, or no
+ * person priced it for anyone else. The house is matched on number + street.
+ */
+export function otherAgentsNumber({ offer = null, offers = [], now = Date.now(), days = 14 } = {}) {
+  const amount = Math.round(Number(offer?.cashAmount) || 0);
+  const key = offer?.address ? houseKey(offer.address) : "";
+  if (!amount || !key || !parseUsAddress(offer.address).houseNo) return null;
+  const since = now - days * 86400000;
+  const theirs = (offers || [])
+    .filter((r) => r && r.id !== offer.id && r.contactId && r.contactId !== offer.contactId && !r.deal && !isDraftOffer(r)
+      && Number(r.cashAmount) > 0 && houseKey(r.address || "") === key)
+    .map((r) => ({ r, at: personPricedAt(r) }))
+    .filter((x) => x.at >= since)
+    .sort((a, b) => b.at - a.at)[0];
+  if (!theirs) return null;
+  const n = Math.round(Number(theirs.r.cashAmount));
+  if (Math.abs(n - amount) <= Math.max(1000, n * 0.005)) return null;
+  return { amount: n, contactId: theirs.r.contactId, id: theirs.r.id || null, at: new Date(theirs.at).toISOString() };
+}
+
+/**
+ * awaitingReprice(offer) → boolean
+ *
+ * A number the old machine priced that no one has stood behind (2026-11-09):
+ * an open row the auto-underwrite made, never sent, never floated, not
+ * published, pinned, revised by hand or approved, and not the offer engine's
+ * own (`pricing.live`, or `autoUnderwrite.basis: "engine"` on a lean row).
+ * In engine mode it is being re-priced: the bot says there's no number yet,
+ * and nothing floats it. 3 of the first 5 numbers floated after engine mode
+ * came off such rows, with $4.5k to $50k of rehab. Whether the thread
+ * already carries its number is the caller's to check (lastQuoteOnHouse).
+ */
+export function awaitingReprice(o) {
+  if (!o || isDraftOffer(o) || o.deal || !(Number(o.cashAmount) > 0)) return false;
+  if (o.status && o.status !== "new") return false;
+  const uw = o.autoUnderwrite;
+  if (!uw || uw.publishedAt || uw.basis === "engine" || o.pricing?.live) return false;
+  if (lastSentAt(o) || o.floatSentAt || (o.pin?.at && !o.pin.off) || Number(o.approved?.amount) > 0) return false;
+  return !(o.revisions || []).some((r) => !MACHINE_MOVES.has(r?.by));
+}
+
+/**
+ * quoteGateFlags({ reply, intent, quotes }) → [flag]
+ *
+ * The reply gate's two number checks on the house a draft is about
+ * (2026-11-09). `quotes` = { lastOnHouse: { amount, ts, low? }, sellerNumber,
+ * personBehindChange, street }:
+ *   - a price above or below the last one we texted on the house, when no
+ *     person stood behind the book's number since (machineRaise/machineCut,
+ *     for the reply bot). A counter's number above it is the band's to weigh.
+ *   - a price above the seller's own number on the house (their words, a
+ *     house_mentioned ask, their counter; never the list price or a payoff).
+ *     Matt, 2026-11-09: "the machine never offers more than the seller said
+ *     they'd take" (2026-11-06: ours 49K over their number, and the agent said yes).
+ * Pure; only ever adds holds.
+ */
+export function quoteGateFlags({ reply = "", intent = "", quotes = null } = {}) {
+  if (!quotes || !String(reply || "").trim()) return [];
+  const flags = [];
+  const last = Math.round(Number(quotes.lastOnHouse?.amount) || 0);
+  const seller = Math.round(Number(quotes.sellerNumber) || 0);
+  const where = String(quotes.street || "").trim() || "the house";
+  const named = pricesWeName(reply, last || seller);
+  if (last > 0 && !quotes.personBehindChange) {
+    const slack = Math.max(1000, last * 0.005);
+    // The bottom of a range we floated is no cut.
+    const floor = Math.min(last, Math.round(Number(quotes.lastOnHouse?.low) || last));
+    const up = intent === "counter" ? [] : named.filter((n) => n > last + slack && n <= last * 3);
+    const down = named.filter((n) => n < floor - slack && n >= last * 0.4);
+    if (up.length) flags.push(`the draft says ${up.map((n) => fmtMoney(n)).join(", ")}, above the ${kText(last)} we last texted on ${where} — the machine never raises our own number; a person decides to go up`);
+    if (down.length) flags.push(`the draft says ${down.map((n) => fmtMoney(n)).join(", ")}, below the ${kText(last)} we last texted on ${where} — the machine never takes our number back; a person decides to go down`);
   }
-  return last;
+  if (seller > 0 && named.some((n) => n > seller)) flags.push(`the seller's number on ${where} is ${kText(seller)}: we never offer above it`);
+  return flags;
 }
 
 /**
@@ -644,8 +905,19 @@ export function sentNumber(o) {
   return after.length ? Math.round(Number(after[0].from)) : book;
 }
 
+// The lowest number we have put to them on the house: the book as it went
+// out, a lower number we texted since, or the last quote that named it.
+function holdAmount({ offer = null, transcript = "", offers = null } = {}) {
+  const book = sentNumber(offer);
+  if (!book) return null;
+  const down = ourComeDown(offer, transcript);
+  const last = lastQuoteOnHouse(offer, transcript, { offers });
+  const raw = Math.min(...[book, down?.amount, last?.amount].map((n) => Math.round(Number(n) || 0)).filter((n) => n > 0));
+  return { raw, book, down, last };
+}
+
 /**
- * holdNumber({ offer, transcript }) → { amount, text, from } | null
+ * holdNumber({ offer, transcript, offers, events }) → { amount, raw, text, from } | null
  *
  * "Hold our number" on a counter (the Desk, 2026-10-02). Their counter is
  * above ours and Matt stands where we are: the number said is the lowest we
@@ -653,22 +925,29 @@ export function sentNumber(o) {
  * (ourComeDown), or the last quote that named the house — never above any of
  * them (never-above-what-we-sent). The text names that one number and no
  * other; a text that would read as more is not offered at all.
+ *
+ * 2026-11-09: never under a number Matt typed himself on the house
+ * (typedAboveBook, with the timeline's `events`): null, and that line is
+ * Needs Matt's why. And the number is said rounded DOWN to the thousand
+ * ("hold at 418,000", not 418,640), inside machineCut's slack: an odd book
+ * number read as machine-made. `raw` is the number before the rounding, so a
+ * reader can tell it was already said the old way.
  */
-export function holdNumber({ offer = null, transcript = "" } = {}) {
-  const book = sentNumber(offer);
-  if (!book) return null;
-  const down = ourComeDown(offer, transcript);
-  const last = lastQuoteOnHouse(offer, transcript);
-  const amount = Math.min(...[book, down?.amount, last?.amount].map((n) => Math.round(Number(n) || 0)).filter((n) => n > 0));
+export function holdNumber({ offer = null, transcript = "", offers = null, events = [] } = {}) {
+  const h = holdAmount({ offer, transcript, offers });
+  if (!h) return null;
+  if (typedAboveBook({ offer, transcript, offers, events })) return null;
+  const { raw, book, down, last } = h;
+  const amount = raw >= 10000 ? Math.floor(raw / 1000) * 1000 : raw;
   const where = String(offer.address || "").split(",")[0].trim() || "the house";
   const text = `Appreciate you working it. On ${where} we're going to hold at $${amount.toLocaleString("en-US")}: that's where the numbers work for us. If the seller can get there, we're ready to go.`;
   if (pricesWeName(text, amount).some((n) => n > amount)) return null;
-  const from = down && amount === Math.round(down.amount) ? "come_down" : last && amount === Math.round(last.amount) && amount !== book ? "last_quote" : "book";
-  return { amount, text, from };
+  const from = down && raw === Math.round(down.amount) ? "come_down" : last && raw === Math.round(last.amount) && raw !== book ? "last_quote" : "book";
+  return { amount, raw, text, from };
 }
 
 /**
- * machineRaise(offer, transcript) → { amount, ts, text } | null
+ * machineRaise(offer, transcript, { offers }) → { amount, ts, text } | null
  *
  * The offer's number is above the last price we put to the agent on its
  * house, and no person has stood behind the higher number since. 336 SW
@@ -679,9 +958,9 @@ export function holdNumber({ offer = null, transcript = "" } = {}) {
  * our own number; a person does (pin, revise, re-quote, send, or a row
  * they made or published after that text).
  */
-export function machineRaise(o, transcript = "") {
+export function machineRaise(o, transcript = "", { offers = null } = {}) {
   const amount = Number(o?.cashAmount) || 0;
-  const q = lastQuoteOnHouse(o, transcript);
+  const q = lastQuoteOnHouse(o, transcript, { offers });
   if (!q || amount <= q.amount + Math.max(1000, amount * 0.005)) return null;
   return settledSince(o) > q.ts ? null : q;
 }
@@ -696,15 +975,16 @@ export function machineRaise(o, transcript = "") {
  * 400K → 214K on a wrong ARV) soured agents who were sending us houses. A
  * machine never takes back its own number either; a person does.
  */
-export function machineCut(o, transcript = "") {
+export function machineCut(o, transcript = "", { offers = null } = {}) {
   const amount = Number(o?.cashAmount) || 0;
-  const q = lastQuoteOnHouse(o, transcript);
+  const q = lastQuoteOnHouse(o, transcript, { offers });
   if (!q || amount >= q.amount - Math.max(1000, q.amount * 0.005)) return null;
   return settledSince(o) > q.ts ? null : q;
 }
 
 // When a person last stood behind the offer's own number: a send, a
 // revision or re-quote, a pin, or a row they made or published.
+export const personSettledAt = (o) => (o ? settledSince(o) : 0);
 function settledSince(o) {
   const uw = o.autoUnderwrite;
   const personMade = !uw || uw.publishedAt;
@@ -752,7 +1032,8 @@ export function paperCheck({ offer = null, offers = null, transcript = "" } = {}
   // A machine's row came in above what the agent last heard from us on this
   // house: the paper would be a raise nobody decided on. Re-quoting down to
   // the number they have is the button; going up is a pin or a revision.
-  const raise = machineRaise(offer, transcript);
+  const book = Array.isArray(offers) ? offers : null;
+  const raise = machineRaise(offer, transcript, { offers: book });
   if (raise) {
     return {
       ok: false, comeDown: raise,
@@ -761,7 +1042,7 @@ export function paperCheck({ offer = null, offers = null, transcript = "" } = {}
   }
   // …and below it: paper under what they last heard would take our number
   // back, which only a person does.
-  const cut = machineCut(offer, transcript);
+  const cut = machineCut(offer, transcript, { offers: book });
   if (cut) {
     return {
       ok: false, cut,

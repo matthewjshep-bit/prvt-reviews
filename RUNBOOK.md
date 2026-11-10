@@ -1790,6 +1790,52 @@ What a person still owns: the PSA after a yes. "14 days works on the 800k"
 was held as "an acceptance is a person's call" and nobody sent the contract
 that day; the bot had already promised it twice. That handoff is on Today.
 
+**Our last number on the house, wherever it came from (2026-11-09).** An
+audit found 56 threads where the bot's text, the letter, the row and Matt
+disagreed. 102 of 166 bot floats from September to November named no house
+("we'd probably come in near 515ish"), so never-raise and never-cut never saw
+them. All in code, all holds only:
+
+- **A float that names no house still counts.** `lastQuoteOnHouse(offer,
+  transcript, { offers })` (`shared/current-offer.js`) counts a line of ours
+  with a price and no house when the agent's book says it can only be this
+  one: they had no other house in play then, or the nearest line before it
+  that named a house named this one. A line naming another house, or a house
+  we can't place, is nobody's. `machineRaise`, `machineCut`, `paperCheck` and
+  `holdNumber` all read it.
+- **The reply bot never moves our number by itself.** The reply gate
+  (`quoteGateFlags`, via `quotesFor` in `reply-agent.js`) holds a draft that
+  names a price above or below the last one we texted on the house when no
+  person stood behind the book's number since (send, revision, re-quote, pin,
+  a row they made or published). A re-run row that came in above the float is
+  held, not texted. A counter's number above it is still the band's to weigh,
+  and the bottom of a range we floated is not a cut.
+- **Never under Matt's own number.** `holdNumber` returns nothing when Matt's
+  last typed number on the house (a line of ours that lines up with a
+  `hand_reply` event) is above what the hold would say. The draft goes to you
+  with the why "you texted 270K on 88 Larch Way; the offer says 263,750".
+  Hold texts say the number rounded down to the thousand ("hold at
+  418,000", not 418,640), inside never-cut's slack. A closed house we already
+  told "still at 418,640" isn't told "still at 418,000" as a second goodbye.
+- **Two agents, one house, one number.** Before the machine floats a number
+  or our read (realm check, hot push, take check), a number a person put on
+  the same house for another agent in the last 14 days must match ours within
+  max($1k, 0.5%) (`otherAgentsNumber`), or the float stands down with "you
+  gave another agent 290K on <street> and this number is 306K".
+- **Rows the old machine priced before engine mode.** In engine mode
+  (`underwriteMode` "engine") a machine row nobody stood behind, never sent,
+  never floated and not the engine's own (`awaitingReprice`) is shown to the
+  bot as "not sent: being re-priced (no number yet)" when the thread doesn't
+  already carry its number. Its amount is not one the bot may say, no
+  write-up ask goes on it, nothing floats it, and the float's touch prices the
+  house in the engine (`repriceStaleRow` in `price-v2.js`, the house record
+  only; the row waits for you).
+- **The timer never re-floats after you talked.** The float timer
+  (`today-timers.js`) reads your own texts (`hand_reply`) and connected calls
+  from the last 7 days. A machine-priced row for someone you texted or talked
+  to that week reads "you texted them yourself or talked this week" on Today
+  and the timer leaves it.
+
 ### Never above what we sent (2026-10-02)
 
 17044 Woodcrest Dr NE, Bothell. Matt had taken the offer from the
@@ -2014,6 +2060,24 @@ Both halves live in `shared/number-stance.js` (pure).
   {highStakes: {enabled: true}}}` on a big house shows the range and the
   question. Offers with `noFit` show on Today; `GET /api/offers/:id` shows
   `noFit` and `paperHeld`.
+- **Never above the seller's own number (Matt, 2026-11-09).** The seller's
+  own number is `sellerOwnNumber`: the agent's words (the dossier's
+  `sellerAsk`), a `house_mentioned` with one, or their counter, newest first.
+  Never the list price, a payoff or what they owe. When ours is above it,
+  `listedFit` (any house, off-market too) says:
+  - **requote_down** before anything of ours went out on the house: the most
+    we'd say is their number floored to 250 (`to`, reason "capped at the
+    seller's number"). The machine does not re-price the row by itself: the
+    float stands down and the row says "re-quote it at N or price it";
+  - **hold** once a number of ours went out (we never cut a number we gave by
+    machine), or when the engine read its walk-away as far over theirs
+    (`pricing.triage` "over_theirs");
+  - **hold** too when the agent's repair figure landed after we priced it and
+    is above our rehab (`workAfterPricing`): "the agent put the work at 90K
+    after we priced it on 45K".
+  With the switch off, `startProactive` still never floats a realm check or a
+  hot push above the seller's own number, and never floats an engine number
+  the agent put more work on since.
 
 ### The agent's own numbers only ever lower ours (2026-10-16)
 
@@ -2507,6 +2571,38 @@ What holds it now:
 Replay over the 30 days before the fix: 11 of 606 agent replies with an offer
 on the book would have held. Most were genuine mismatches, e.g. "still at 400"
 on a 373.5K book, and "still good for 700k" on a 669K book.
+
+**Rough numbers and the seller's number (2026-11-09).** In Bend an agent named
+the seller's number and two minutes later the bot floated ours 49K over it.
+The agent said yes, which unlocked the write-up ask.
+
+- **Rough numbers are money.** `shorthandPrices` also reads "NNNish" anywhere,
+  a number after "is", "likely", "probably", "land at", "number is", "come in
+  at" or "around", "NNN range" and "NNN or so", and a band as its bottom
+  third: "low 400s" is 400K, "mid 400s" 433K, "high" or "upper 400s" 466K.
+  The unit, year and street skips still apply.
+- **Their number said back is not ours.** A rough number after their words
+  ("the seller's bottom is 450", "their number is", "he's hoping for") or
+  after a figure that is no price on the house (HOA, dues, rent, taxes,
+  payoff, owe, mortgage, loan, Zestimate, appraisal, assessed) doesn't count.
+  These words only ever take a rough number out; a figure the gate already
+  read as ours stays ours, and "our bottom line is 400" is ours. A hedge
+  between the word and the number doesn't change whose it is: "the rehab is
+  probably 110" and "ARV is likely 450" are the work and the value, never our
+  price (a review on 11-09 caught the counter hold texting the rehab as our
+  number). A year is never a rough price ("built 1995 or so").
+- **Only our words are read rough.** The agent's own figures the bot may say
+  back (the money gate's allowlist) are read as before
+  (`shorthandPrices(text, ref, { rough: false })`), so reading more of our
+  words never lets the bot echo more of theirs.
+- **Never above the seller's own number.** The reply gate holds an agent
+  reply that names a price above the house's seller number: "the seller's
+  number on <street> is 610K: we never offer above it". The number is their
+  own: the dossier's `sellerAsk`, a `house_mentioned` ask, their counter, or
+  the one in the message being answered (the model's `propertyDetails.sellerAsk`,
+  or their counter). Never the list price or a payoff, and never a figure
+  under 10K (one filed without its thousands). Saying their number back, or
+  ours at it, goes.
 
 ### What the drafts cost (2026-09-25)
 

@@ -29,6 +29,7 @@
 import { isOffMarket } from "./off-market.js";
 import { numberApproved } from "./offer-status.js";
 import { sameStreet } from "./us-address.js";
+import { pricedAt } from "./current-offer.js";
 
 // "Eyes on it": a photo scan this deep, a walkthrough video, or a person
 // marking that someone has been (offer.seen).
@@ -128,20 +129,75 @@ export function sellerNumberOn({ offer = null, dossier = null, events = [] } = {
 }
 
 /**
+ * sellerOwnNumber({ offer, dossier, events }) → { amount, at, from, source: "seller" } | null
+ *
+ * The seller's own number on the house, newest first: the agent's words
+ * (the dossier's sellerAsk), a house_mentioned with one, or their counter.
+ * Never the list price, a payoff or what they owe. The number Matt's 11-09
+ * rule caps ours at: "the machine never offers more than the seller said
+ * they'd take" (2026-11-06: ours went out 49K over the seller's number two
+ * minutes after the agent named it, and the agent said yes).
+ */
+// Under 10K is a figure filed without its thousands, not a seller's number.
+const SELLER_MIN = 10000;
+export function sellerOwnNumber({ offer = null, dossier = null, events = [] } = {}) {
+  const found = [];
+  const said = dossier?.have?.sellerAsk;
+  if (round(said?.value) >= SELLER_MIN) found.push({ amount: round(said.value), at: String(said.at || ""), from: "said" });
+  for (const e of events || []) {
+    if (e?.type === "house_mentioned" && round(e.data?.sellerAsk) >= SELLER_MIN && e.address && offer?.address && sameStreet(e.address, offer.address)) {
+      found.push({ amount: round(e.data.sellerAsk), at: String(e.at || ""), from: "mentioned" });
+    }
+  }
+  if (round(offer?.counter?.amount) >= SELLER_MIN) found.push({ amount: round(offer.counter.amount), at: String(offer.counter.at || ""), from: "counter" });
+  if (!found.length) return null;
+  return { ...found.sort((a, b) => b.at.localeCompare(a.at))[0], source: "seller" };
+}
+
+const ms = (v) => { const t = Date.parse(v || ""); return Number.isFinite(t) ? t : 0; };
+const street = (o) => String(o?.address || "").split(",")[0].trim() || "the house";
+
+/**
+ * workAfterPricing({ offer, dossier }) → { theirs, ours, at, line } | null
+ *
+ * The agent's repair figure (agent_estimate.rehab, on the dossier) landed
+ * after we priced the house and is above the rehab our number carries (the
+ * engine's `pricing.rehab`, else the row's repairs): our number is off their
+ * read of the work, and a person re-prices it before a number goes
+ * (2026-11-09). Their figure from before we priced it is already in ours.
+ */
+export function workAfterPricing({ offer = null, dossier = null } = {}) {
+  const work = dossier?.have?.rehab;
+  const ours = round(offer?.pricing?.rehab ?? offer?.repairs ?? offer?.calc?.inputs?.repairs);
+  const theirs = round(work?.value);
+  if (!(ours > 0) || !(theirs > ours) || !(ms(work.at) > pricedAt(offer))) return null;
+  return { theirs, ours, at: String(work.at || ""), line: `${street(offer)}: the agent put the work at ${kWord(theirs)} after we priced it on ${kWord(ours)} — yours to re-price before a number goes` };
+}
+
+/**
  * listedFit({ offer, dossier, events, leadSource, pct, quoted })
- *   → { listed, theirs, source, ratio, move: "ask_number" | "no_fit" | "float" }
+ *   → { listed, theirs, source, ratio, move: "ask_number" | "no_fit" | "float" | "requote_down" | "hold", line? }
  *
- *   ask_number  a listed house, nothing of ours on it yet, and we don't know
- *               the seller's number: ask "what's the seller hoping to get?"
- *               before anything else
- *   no_fit      ours is under `pct`% of theirs (their number, or the list
- *               price once we've asked): a polite no-fit, no number, and a
- *               row for Matt
- *   float       anything else: as before
+ *   ask_number    a listed house, nothing of ours on it yet, and we don't
+ *                 know the seller's number: ask "what's the seller hoping to
+ *                 get?" before anything else
+ *   no_fit        ours is under `pct`% of theirs (their number, or the list
+ *                 price once we've asked): a polite no-fit, no number, and a
+ *                 row for Matt
+ *   requote_down  ours is above the seller's own number (sellerOwnNumber,
+ *                 2026-11-09) and nothing of ours has gone out: their number,
+ *                 floored to 250, is the most we say (`to`, `cap`, `reason`)
+ *   hold          ours is above the seller's own number after a quote (we
+ *                 never cut a number we gave by machine), or the engine read
+ *                 its own number as far over theirs (pricing.triage
+ *                 "over_theirs"), or the agent put the work above our rehab
+ *                 after we priced it: Matt's, with `line` saying why
+ *   float         anything else: as before
  *
- * Only before the first quote: once a number of ours went out on the house
- * (`quoted`: a price in the thread, paper, a floated number), it is "float"
- * and the counter rules own it. Off-market houses are never "listed".
+ * The seller's cap and the repair figure hold off-market houses too. The
+ * rest is only before the first quote: once a number of ours went out on the
+ * house (`quoted`: a price in the thread, paper, a floated number), it is
+ * "float" and the counter rules own it. Off-market houses are never "listed".
  */
 export function listedFit({ offer = null, dossier = null, events = [], leadSource = "", pct = LISTED_MIN_PCT, quoted = false } = {}) {
   const asking = round(offer?.askingPrice ?? offer?.calc?.inputs?.askingPrice ?? offer?.inputs?.askingPrice);
@@ -151,7 +207,17 @@ export function listedFit({ offer = null, dossier = null, events = [], leadSourc
   const ours = round(offer?.cashAmount);
   const ratio = theirs?.amount && ours ? ours / theirs.amount : null;
   const out = (move) => ({ listed, theirs: theirs?.amount || 0, source: theirs?.source || "", ratio, move });
-  if (!listed || !ours) return out("float");
+  if (!ours) return out("float");
+  const cap = sellerOwnNumber({ offer, dossier, events });
+  if (cap && ours > cap.amount) {
+    const said = quoted || Boolean(offer?.proactive?.realmCheckAt || offer?.floatSentAt);
+    if (said) return { ...out("hold"), cap: cap.amount, line: `${street(offer)}: the seller's number is ${kWord(cap.amount)}, under the ${kWord(ours)} we already gave — we never cut a number we gave by machine, nor go above theirs: yours to call` };
+    if (offer?.pricing?.triage === "over_theirs") return { ...out("hold"), cap: cap.amount, line: `${street(offer)}: our walk-away is far over the seller's ${kWord(cap.amount)}, likely an ARV error — yours to price` };
+    return { ...out("requote_down"), cap: cap.amount, to: Math.floor(cap.amount / 250) * 250, reason: "capped at the seller's number" };
+  }
+  const work = workAfterPricing({ offer, dossier });
+  if (work) return { ...out("hold"), line: work.line };
+  if (!listed) return out("float");
   if (quoted || offer?.proactive?.realmCheckAt) return out("float");
   const asked = Boolean(offer?.proactive?.takeCheckAt || offer?.listedFit?.askedAt);
   if (theirs?.source !== "seller" && !asked) return out("ask_number");

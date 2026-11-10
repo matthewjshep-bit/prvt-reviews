@@ -669,3 +669,44 @@ test("a house with our number out isn't told never to give a figure", async () =
   assert.match(MATT_PRICES_LINE, /already in OUR OFFERS is not new: follow the book/);
   assert.doesNotMatch(MATT_PRICES_LINE, /every house is priced by hand/);
 });
+
+// 2026-11-07: engine mode was on, and the bot told an agent "the number we
+// sent" off a row the old machine had priced on a few thousand of rehab and
+// never sent. She had never seen a number from us.
+const OLD_ROW = { id: "old", contactId: "c1", address: "342 Wren St, Kent, WA 98030", cashAmount: 186250, repairs: 6000, status: "new",
+  createdAt: "2026-11-01T18:00:00Z", autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+
+test("a number the old machine priced before engine mode isn't quoted as the number we sent", () => {
+  const ctx = buildAgentContext({ offers: [OLD_ROW], custom: {}, now: NOW, engineMode: true });
+  assert.match(ctx.text, /342 Wren St, Kent, WA 98030: not sent: being re-priced \(no number yet\)/);
+  assert.doesNotMatch(ctx.text, /186,250/);
+  for (const n of [186250, 186000, 185000, 180000]) assert.ok(!ctx.amounts.includes(n), `${n} is not ours to say`);
+  assert.equal(ctx.offers.numbers.find((x) => x.address === OLD_ROW.address)?.amount, 0, "no number of ours on it for the gate");
+  // Outside engine mode, or once a person or the thread stands behind it, it is our number as before.
+  assert.match(buildAgentContext({ offers: [OLD_ROW], custom: {}, now: NOW }).text, /our cash offer \$186,250/);
+  assert.match(buildAgentContext({ offers: [{ ...OLD_ROW, floatSentAt: "2026-11-02T00:00:00Z" }], custom: {}, now: NOW, engineMode: true }).text, /our cash offer \$186,250/);
+  const said = "[2026-11-02 18:00] US sms: On 342 Wren St we'd likely land around 186k as-is.";
+  assert.match(buildAgentContext({ offers: [OLD_ROW], custom: {}, now: NOW, engineMode: true, transcript: said }).text, /our cash offer \$186,250/);
+});
+
+// The reply gate's per-house numbers (2026-11-09): our last quote on the
+// house, whether a person stood behind the book since, and the seller's own number.
+test("the book hands the gate our last quote on each house and the seller's own number", () => {
+  const row = { id: "r", contactId: "c1", address: "7 Fir Loop, Puyallup, WA 98371", cashAmount: 575000, status: "new", createdAt: "2026-11-03T00:00:00Z",
+    autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+  const transcript = "[2026-11-01 18:05] US sms: We'd probably come in near 515ish as-is, quick close.";
+  const events = [{ type: "property_details", at: "2026-11-02T00:00:00Z", address: "7 Fir Loop", data: { sellerAsk: 560000 } }];
+  const n = buildAgentContext({ offers: [row], custom: {}, now: NOW, transcript, events }).offers.numbers[0];
+  assert.equal(n.lastQuote.amount, 515000);
+  assert.equal(n.personBehind, false);
+  assert.equal(n.sellerNumber, 560000);
+});
+
+test("a house being re-priced is never written up, and its number isn't ours to say", async () => {
+  const { writeUpOkFor, ourNumberFor } = await import("./reply-agent.js");
+  const { numbers } = buildAgentContext({ offers: [OLD_ROW], custom: {}, now: NOW, engineMode: true }).offers;
+  assert.equal(numbers[0].repricing, true);
+  assert.equal(writeUpOkFor(numbers, "342 Wren St"), false);
+  assert.equal(writeUpOkFor(numbers, ""), false);
+  assert.equal(ourNumberFor(numbers, "342 Wren St"), 0);
+});

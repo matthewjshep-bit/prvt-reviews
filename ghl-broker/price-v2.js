@@ -199,6 +199,34 @@ export function priorRehabOf(record = null, now = Date.now()) {
 }
 
 /**
+ * repriceStaleRow({ store, locationId, saved, offer, now }) → the record written, or null
+ *
+ * Engine mode's touch on a row the old machine priced and nobody stood behind (shared/current-
+ * offer.js awaitingReprice, 2026-11-09): when a float on it is skipped, the engine prices the house
+ * on what the row already holds — its comps ARV, the list price, the house's facts — and the house
+ * record gets the engine's answer. Only when the house has no engine answer yet, or one older than
+ * the row: a full run's richer answer is never replaced by this thinner one. It writes the house
+ * record only; the offer row and the thread are untouched.
+ */
+export async function repriceStaleRow({ store, locationId, saved = {}, offer = null, now = Date.now() } = {}) {
+  if (!offer?.address || !store?.upsertHousePricing) return null;
+  const key = houseKey(offer.address);
+  if (!key) return null;
+  const prev = await Promise.resolve(store.getHousePricing?.(locationId, key)).catch(() => null);
+  const prevAt = Date.parse(prev?.pricedAt || prev?.doc?.v2?.at || "");
+  if (Number.isFinite(prevAt) && prevAt >= (Date.parse(offer.createdAt || "") || 0)) return null;
+  const info = offer.snapshot?.subjectInfo || {};
+  const facts = { sqft: info.sqft, yearBuilt: info.yearBuilt, lotSqft: info.lotSqft ?? offer.subjectLotSqft, homeType: info.homeType || offer.subjectHomeType || "" };
+  const arv = num(offer.arv ?? offer.calc?.inputs?.arv);
+  const list = num(offer.askingPrice ?? offer.calc?.inputs?.askingPrice);
+  return shadowPrice({
+    store, locationId, saved, force: true, now, address: offer.address, facts, listPrice: list,
+    job: { contactId: offer.contactId || null, offerId: offer.id || null, message: "", askingPrice: list, leadSource: offer.autoUnderwrite?.leadSource || null, warnings: [] },
+    comps: arv ? { arv, n: Number(offer.autoUnderwrite?.compsUsedCount) || 0 } : null,
+  });
+}
+
+/**
  * shadowPrice({ store, locationId, saved, job, address, b, listing, facts, subject, comps, scope, listPrice, thread, offer, dossier })
  *   → the record written, or null (switch off, nothing to price, or a failure — never thrown).
  */

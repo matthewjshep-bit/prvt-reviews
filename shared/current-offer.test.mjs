@@ -345,3 +345,226 @@ test("a new offer on a house typed without its SW opens the row already there", 
   const there = { id: "d1", contactId: "k", address: "12201 Champion Dr SW, Olympia, WA 98512", status: "draft", draft: {}, createdAt: "2026-10-26T16:02:00Z" };
   assert.equal(rowOnHouse([there], { address: "12201 Champion Dr" })?.id, "d1");
 });
+
+/* ---------- 2026-11-09: one number per house, rough numbers, the seller's number ---------- */
+
+// Rough numbers the old reader missed: "likely 450ish", "our number is 400",
+// "the mid 400s", "the 450 range". Every one of them is a price we named,
+// unless it is said as theirs or as the work.
+test("the seller's bottom is 450 is not read as ours", async () => {
+  const { pricesWeName, shorthandPrices } = await import("./current-offer.js");
+  for (const said of [
+    "Got it, so the seller's bottom is 450.",
+    "Understood, their number is 450 on it.",
+    "Makes sense the list is 450 right now.",
+    "The HOA is 350 a year there?",
+  ]) {
+    assert.deepEqual(pricesWeName(said, 380000), [], said);
+    assert.deepEqual(shorthandPrices(said, 380000), [], said);
+  }
+  // The same cue words in our own mouth are a price.
+  assert.deepEqual(pricesWeName("Honestly our number is 400 on it.", 380000), [400000]);
+  assert.deepEqual(pricesWeName("We'd likely land 450ish on it.", 380000), [450000]);
+  assert.deepEqual(pricesWeName("Probably somewhere in the mid 400s for us.", 380000), [433000]);
+  assert.deepEqual(pricesWeName("We're probably in the low 400s.", 380000), [400000]);
+  assert.deepEqual(pricesWeName("Upper 400s would be a stretch.", 380000), [466000]);
+  assert.deepEqual(pricesWeName("We'd be in the 450 range, cash.", 380000), [450000]);
+  assert.deepEqual(pricesWeName("Something like 450 or so.", 380000), [450000]);
+  assert.deepEqual(pricesWeName("We're at 657kish as-is.", 600000), [657000]);
+  // Units, years and streets after a cue word are still not money.
+  assert.deepEqual(pricesWeName("The inspection is 10 days and the close is 21 days.", 380000), []);
+  assert.deepEqual(pricesWeName("The house is 1950s construction.", 380000), []);
+  assert.deepEqual(pricesWeName("The other one is 512 112th Ave NE.", 380000), []);
+});
+
+// A float that doesn't name the house ("we'd probably come in near 515ish")
+// was invisible to never-raise and never-cut: 102 of 166 bot floats,
+// September to November, named no house number.
+const FIR = "7 Fir Loop, Puyallup, WA 98371";
+const FIR_ROW = { id: "fir", contactId: "kf", address: FIR, cashAmount: 515000, status: "new", createdAt: "2026-11-01T18:00:00Z",
+  autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+const FIR_THREAD = [
+  "[2026-11-01 18:05] US sms: Ran the numbers. We'd probably come in near 515ish as-is, quick close. In the realm for the seller?",
+  "[2026-11-01 19:10] THEM sms: Let me ask him.",
+].join("\n");
+
+test("a float that doesn't name the house still counts as our last number when it's the agent's only house", () => {
+  assert.equal(lastQuoteOnHouse(FIR_ROW, FIR_THREAD), null, "without the book there is no telling which house");
+  assert.equal(lastQuoteOnHouse(FIR_ROW, FIR_THREAD, { offers: [FIR_ROW] })?.amount, 515000);
+  // A re-run under it is a cut nobody decided on; over it, a raise.
+  const lower = { ...FIR_ROW, id: "fir2", cashAmount: 474000, createdAt: "2026-11-03T00:00:00Z" };
+  assert.equal(machineCut(lower, FIR_THREAD, { offers: [FIR_ROW, lower] })?.amount, 515000);
+  const higher = { ...FIR_ROW, id: "fir3", cashAmount: 548000, createdAt: "2026-11-03T00:00:00Z" };
+  assert.equal(machineRaise(higher, FIR_THREAD, { offers: [FIR_ROW, higher] })?.amount, 515000);
+  assert.equal(paperCheck({ offer: higher, offers: [FIR_ROW, higher], transcript: FIR_THREAD }).ok, false);
+  // Two houses in play when it went: the line is no house's.
+  const other = { id: "ash", contactId: "kf", address: "40 Ash Ct, Puyallup, WA 98371", cashAmount: 310000, status: "new", createdAt: "2026-10-30T00:00:00Z" };
+  assert.equal(lastQuoteOnHouse(FIR_ROW, FIR_THREAD, { offers: [FIR_ROW, other] }), null);
+  // …unless the nearest line before it that names a house named this one.
+  const named = ["[2026-11-01 18:01] THEM sms: Any thoughts on 7 Fir Loop?", FIR_THREAD].join("\n");
+  assert.equal(lastQuoteOnHouse(FIR_ROW, named, { offers: [FIR_ROW, other] })?.amount, 515000);
+  const otherNamed = ["[2026-11-01 18:01] THEM sms: Any thoughts on 40 Ash Ct?", FIR_THREAD].join("\n");
+  assert.equal(lastQuoteOnHouse(FIR_ROW, otherNamed, { offers: [FIR_ROW, other] }), null);
+  // Another agent's row never makes it "their only house".
+  assert.equal(lastQuoteOnHouse(FIR_ROW, FIR_THREAD, { offers: [FIR_ROW, { ...other, contactId: "someone-else" }] })?.amount, 515000);
+});
+
+// Drift (2026-11-05): Matt texted a round number above the book by hand;
+// days later the bot held at the book's odd number, under his word.
+const LARCH = "88 Larch Way, Tacoma, WA 98408";
+const LARCH_ROW = { id: "larch", contactId: "kl", address: LARCH, cashAmount: 263750, status: "countered", createdAt: "2026-10-20T00:00:00Z",
+  sends: [{ ts: "2026-10-20T00:05:00Z" }] };
+const LARCH_THREAD = [
+  "[2026-10-20 00:05] US sms: here's our written cash offer on 88 Larch Way, $263,750 as-is.",
+  "[2026-10-27 17:42] US sms: Ran it past my partner and we could stretch to about $270,000 if that closes it out.",
+  "[2026-11-05 16:00] THEM sms: Seller wants 305 on it.",
+].join("\n");
+const TYPED = [{ type: "hand_reply", at: "2026-10-27T17:42:31Z", data: { via: "ghl", chars: 90 } }];
+
+test("the bot never holds at a number below the one Matt texted on that house", async () => {
+  const { typedAboveBook } = await import("./current-offer.js");
+  // Without his text on the timeline it's the book, as before.
+  assert.equal(holdNumber({ offer: LARCH_ROW, transcript: LARCH_THREAD, offers: [LARCH_ROW] })?.amount, 263000, "a hold says the book rounded down to the thousand");
+  // His own typed 270K is above the book: no machine hold, and the why says both numbers.
+  assert.equal(holdNumber({ offer: LARCH_ROW, transcript: LARCH_THREAD, offers: [LARCH_ROW], events: TYPED }), null);
+  const why = typedAboveBook({ offer: LARCH_ROW, transcript: LARCH_THREAD, offers: [LARCH_ROW], events: TYPED });
+  assert.equal(why.typed, 270000);
+  assert.equal(why.book, 263750);
+  assert.equal(why.line, "you texted 270K on 88 Larch Way; the offer says 263,750");
+  // He re-quoted the offer to his number, but the letter they hold still says
+  // 263,750: still his call, not a machine hold at the old letter.
+  const requoted = { ...LARCH_ROW, cashAmount: 270000, revisions: [{ ts: "2026-10-28T00:00:00Z", from: 263750, to: 270000 }] };
+  assert.equal(holdNumber({ offer: requoted, transcript: LARCH_THREAD, offers: [requoted], events: TYPED }), null);
+  // The letter went again at his number: that is the number to hold at.
+  const resent = { ...requoted, sends: [...requoted.sends, { ts: "2026-10-28T00:05:00Z" }] };
+  assert.equal(typedAboveBook({ offer: resent, transcript: LARCH_THREAD, offers: [resent], events: TYPED }), null);
+  assert.equal(holdNumber({ offer: resent, transcript: LARCH_THREAD, offers: [resent], events: TYPED })?.amount, 270000);
+});
+
+test("a hold text rounds an odd book number down to the thousand, never up", () => {
+  const o = { id: "odd", address: "5 Birch Ct, Kent, WA 98030", cashAmount: 418640, createdAt: "2026-10-01T00:00:00Z", sends: [{ ts: "2026-10-01T00:00:00Z" }] };
+  const h = holdNumber({ offer: o });
+  assert.equal(h.amount, 418000);
+  assert.match(h.text, /hold at \$418,000/);
+});
+
+// Two agents on one house (2026-11-07): Matt priced it for one agent; the
+// machine floated a higher number to a second agent on the same house.
+test("a person's number on the house for another agent must match ours before a machine float", async () => {
+  const { otherAgentsNumber } = await import("./current-offer.js");
+  const NOW = Date.parse("2026-11-07T18:00:00Z");
+  const ours = { id: "m2", contactId: "agent-b", address: "310 Quarry Ave, Bremerton, WA 98312", cashAmount: 305500, status: "new", createdAt: "2026-11-07T17:00:00Z",
+    autoUnderwrite: { passed: true } };
+  const matts = { id: "m1", contactId: "agent-a", address: "310 Quarry Ave", cashAmount: 290000, status: "sent", createdAt: "2026-11-02T17:00:00Z",
+    sends: [{ ts: "2026-11-02T17:05:00Z" }] };
+  assert.equal(otherAgentsNumber({ offer: ours, offers: [ours, matts], now: NOW })?.amount, 290000);
+  assert.equal(otherAgentsNumber({ offer: { ...ours, cashAmount: 290000 }, offers: [ours, matts], now: NOW }), null, "the same number");
+  assert.equal(otherAgentsNumber({ offer: ours, offers: [ours, { ...matts, createdAt: "2026-10-01T00:00:00Z", sends: [{ ts: "2026-10-01T00:05:00Z" }] }], now: NOW }), null, "over 14 days old");
+  // A machine row for the other agent is not a person's number.
+  assert.equal(otherAgentsNumber({ offer: ours, offers: [ours, { ...matts, autoUnderwrite: { passed: true } }], now: NOW }), null);
+  assert.equal(otherAgentsNumber({ offer: ours, offers: [ours, { ...matts, autoUnderwrite: { passed: true, publishedAt: "2026-11-02T17:00:00Z" } }], now: NOW })?.amount, 290000, "published is his");
+  assert.equal(otherAgentsNumber({ offer: ours, offers: [ours, { ...matts, contactId: "agent-b" }], now: NOW }), null, "the same agent is the current-offer rule's");
+});
+
+// Engine mode (2026-11-04): a row the old machine priced before it, never
+// sent, never floated, nobody behind it, waits for a re-price.
+test("an unsent row the old machine priced is waiting on a re-price; one a person or the engine stands behind isn't", async () => {
+  const { awaitingReprice } = await import("./current-offer.js");
+  const old = { id: "p", contactId: "c", address: "342 Wren St, Kent, WA 98030", cashAmount: 186250, repairs: 6000, status: "new", createdAt: "2026-11-01T00:00:00Z",
+    autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+  assert.equal(awaitingReprice(old), true);
+  assert.equal(awaitingReprice({ ...old, sends: [{ ts: "2026-11-02T00:00:00Z" }] }), false, "sent");
+  assert.equal(awaitingReprice({ ...old, floatSentAt: "2026-11-02T00:00:00Z" }), false, "floated");
+  assert.equal(awaitingReprice({ ...old, autoUnderwrite: { ...old.autoUnderwrite, publishedAt: "2026-11-02T00:00:00Z" } }), false, "published");
+  assert.equal(awaitingReprice({ ...old, autoUnderwrite: undefined }), false, "made by hand");
+  assert.equal(awaitingReprice({ ...old, pin: { at: "2026-11-02T00:00:00Z" } }), false, "pinned");
+  assert.equal(awaitingReprice({ ...old, approved: { amount: 186250, at: "2026-11-02T00:00:00Z" } }), false, "approved");
+  assert.equal(awaitingReprice({ ...old, pricing: { live: true, grade: "A" } }), false, "the engine's own");
+  assert.equal(awaitingReprice({ ...old, autoUnderwrite: { ...old.autoUnderwrite, basis: "engine" } }), false, "the engine's own, on a lean row");
+  assert.equal(awaitingReprice({ ...old, status: "draft", draft: {} }), false, "a draft is no number");
+  assert.equal(awaitingReprice({ ...old, status: "we_passed" }), false, "closed");
+});
+
+test("the reply gate holds a number off our last quote, and above the seller's", async () => {
+  const { quoteGateFlags } = await import("./current-offer.js");
+  const quotes = { lastOnHouse: { amount: 515000, ts: Date.parse("2026-11-01T18:05:00Z") }, sellerNumber: 0, personBehindChange: false, street: "7 Fir Loop" };
+  assert.match(quoteGateFlags({ reply: "Ran it again, we can do 548k on it.", quotes }).join(" | "), /above the 515K we last texted on 7 Fir Loop/);
+  assert.match(quoteGateFlags({ reply: "We're at 474k on it.", quotes }).join(" | "), /below the 515K we last texted on 7 Fir Loop/);
+  assert.deepEqual(quoteGateFlags({ reply: "Still around 515ish on it.", quotes }), []);
+  assert.deepEqual(quoteGateFlags({ reply: "We're at 548k.", quotes: { ...quotes, personBehindChange: true } }), []);
+  assert.deepEqual(quoteGateFlags({ reply: "548 works for us.", intent: "counter", quotes }), [], "a counter is the band's to weigh");
+  const seller = { lastOnHouse: null, sellerNumber: 610000, street: "1 Ridge Ct" };
+  assert.deepEqual(quoteGateFlags({ reply: "We'd probably come in near 655k as-is.", quotes: seller }), ["the seller's number on 1 Ridge Ct is 610K: we never offer above it"]);
+  assert.deepEqual(quoteGateFlags({ reply: "610 works on our end.", quotes: seller }), []);
+  assert.deepEqual(quoteGateFlags({ reply: "It's listed at 725k, we'd be at 610k.", quotes: seller }), []);
+});
+
+// The their-words only ever take a ROUGH number out of ours. A figure the
+// money gate already read as ours stays ours, and "our bottom line" is ours.
+test("our bottom line is 400 is still our number, and a full figure after their words is still read", async () => {
+  const { pricesWeName } = await import("./current-offer.js");
+  assert.deepEqual(pricesWeName("Honestly our bottom line is 400 on it.", 380000), [400000]);
+  assert.deepEqual(pricesWeName("Our floor is 400 on this one.", 380000), [400000]);
+  assert.deepEqual(pricesWeName("Their number is $450,000 and we're at $380,000.", 380000).sort(), [380000, 450000]);
+  assert.deepEqual(pricesWeName("He's hoping to get 450ish on it.", 380000), []);
+  // "for 450" was ours before rough numbers were read, and it still is: never loosened.
+  assert.deepEqual(pricesWeName("He's hoping for 450 on it.", 380000), [450000]);
+});
+
+test("a range we floated makes its bottom ours to say, not a cut", async () => {
+  const { quoteGateFlags } = await import("./current-offer.js");
+  const row = { id: "rg", contactId: "kr", address: "19 Sorrel Ln, Lacey, WA 98503", cashAmount: 295000, status: "new", createdAt: "2026-11-01T18:00:00Z" };
+  const thread = "[2026-11-01 18:05] US sms: On 19 Sorrel Ln we'd be somewhere between 280k and 295k as-is.";
+  const q = lastQuoteOnHouse(row, thread, { offers: [row] });
+  assert.equal(q.amount, 295000);
+  assert.equal(q.low, 280000);
+  const quotes = { lastOnHouse: q, sellerNumber: 0, personBehindChange: false, street: "19 Sorrel Ln" };
+  assert.deepEqual(quoteGateFlags({ reply: "We're at 285k on it.", quotes }), []);
+  assert.match(quoteGateFlags({ reply: "We're at 262k on it.", quotes }).join(" | "), /below the 295K we last texted/);
+});
+
+// Review, 2026-11-09: the rough reader took the rehab for our price ("the
+// rehab is probably 110"), and the counter hold then texted that as our
+// number, 140K under the offer.
+test("the rehab said with a hedge is not our price, and a hold never says it", async () => {
+  const { pricesWeName } = await import("./current-offer.js");
+  for (const said of [
+    "Rehab is probably 100 on this one.",
+    "The ARV is likely 450 once it's done.",
+    "The work is likely 120 on it.",
+    "Taxes are probably 450 a year there.",
+    "Comps are probably 550ish fixed up.",
+    "Their counter is 450 on it.",
+    "The house was built 1995 or so.",
+    "Probably mid 1900s construction.",
+    "Call me anytime, my cell is 253 555 0134.",
+    "We went through probably 200 photos on it.",
+    "It is 300 feet from the water.",
+  ]) assert.deepEqual(pricesWeName(said, 300000), [], said);
+  // The same hedges on our own number still read as ours.
+  assert.deepEqual(pricesWeName("Our number is probably 400 on it.", 380000), [400000]);
+  assert.deepEqual(pricesWeName("Rehab is probably 100, so we're probably 250 on it.", 250000), [250000]);
+  const offer = { id: "pine", contactId: "kp", address: "21 Pine Hollow Rd, Tacoma, WA 98404", cashAmount: 250000, status: "countered",
+    createdAt: "2026-10-01T00:00:00Z", sends: [{ ts: "2026-10-02T00:00:00Z" }] };
+  const thread = "[2026-10-03 17:00] US sms: On 21 Pine Hollow the rehab is probably 110, so we're where we are.";
+  assert.equal(lastQuoteOnHouse(offer, thread), null);
+  assert.equal(holdNumber({ offer, transcript: thread })?.amount, 250000);
+});
+
+// An agent's number said with a cue word ("best is 350") was never one the
+// money gate let the bot echo; reading rough numbers doesn't change that.
+test("an agent's rough number is read only when asked for, so the money gate's allowlist is as before", async () => {
+  const { shorthandPrices } = await import("./current-offer.js");
+  assert.deepEqual(shorthandPrices("Best they'd do is 350.", 400000), [350000]);
+  assert.deepEqual(shorthandPrices("Best they'd do is 350.", 400000, { rough: false }), []);
+  assert.deepEqual(shorthandPrices("They'd go to 350.", 400000, { rough: false }), [350000], "the old shorthand still reads");
+});
+
+// A closed house's "still at N" said before hold texts rounded down: the
+// next answer must see it was already said, at either spelling.
+test("a hold names the number it rounded from, so a goodbye said before the rounding isn't said again", () => {
+  const o = { id: "odd2", address: "5 Birch Ct, Kent, WA 98030", cashAmount: 418640, createdAt: "2026-10-01T00:00:00Z", sends: [{ ts: "2026-10-01T00:00:00Z" }] };
+  const h = holdNumber({ offer: o });
+  assert.equal(h.amount, 418000);
+  assert.equal(h.raw, 418640);
+});

@@ -8847,3 +8847,227 @@ test("with the walk-away switch off, too low steps nothing up", async () => {
   assert.ok(!order.some(([k]) => k === "revise"), JSON.stringify(order));
   assert.equal(d.intent, "rejection");
 });
+
+/* ---------- 2026-11-09: the bot's numbers never top the seller's or drift from ours ---------- */
+
+// Rough numbers the money gate never saw: the bot's own "likely 450ish",
+// "our number is 400", "the mid 400s" on a 380K offer went past it.
+const roughGate = (reply, over = {}) => evaluateReplyGates({ draft: { ...DRAFT, intent: "question", reply, propertyAddress: "12 Elm St" },
+  party: "agent", allowedAmounts: [380000], ourAmount: 380000, inboundMessage: "what can you do on it?", ...over });
+
+test("our number is 400 on a 380k offer is held", () => {
+  const g = roughGate("Honestly our number is 400 on it.");
+  assert.equal(g.ok, false);
+  assert.ok(g.flags.some((f) => /\$400,000, above our \$380,000 offer/.test(f)), g.flags.join(" | "));
+});
+
+test("likely 450ish is held", () => {
+  const g = roughGate("We're likely 450ish on it.");
+  assert.equal(g.ok, false);
+  assert.ok(g.flags.some((f) => /\$450,000/.test(f)), g.flags.join(" | "));
+});
+
+test("mid 400s on a 380k offer is held", () => {
+  const g = roughGate("Probably somewhere in the mid 400s for us.");
+  assert.equal(g.ok, false);
+  assert.ok(g.flags.some((f) => /\$433,000, above our \$380,000 offer/.test(f)), g.flags.join(" | "));
+});
+
+test("the seller's bottom is 450 said back to the agent is not read as ours, and goes", () => {
+  const g = roughGate("Got it, so the seller's bottom is 450. We're at 380k on it as-is.", { inboundMessage: "seller's bottom is 450" });
+  assert.equal(g.ok, true, g.flags.join(" | "));
+});
+
+// A float that named no house, then a re-run row above it: the reply bot
+// quoted the new row as if nothing had gone out.
+const FIR_ADDR = "7 Fir Loop, Puyallup, WA 98371";
+test("a re-run that came in above the number we floated isn't texted by the reply bot", async () => {
+  _resetJobs();
+  const client = withMessages(ghlStubFor(["agent"]).client, [
+    { direction: "outbound", dateAdded: hoursAgo(50), body: "Ran the numbers. We'd probably come in near 515ish as-is, quick close. In the realm for the seller?" },
+    { direction: "inbound", dateAdded: hoursAgo(1), body: "Any update on your number?" },
+  ]);
+  const rerun = { id: "fr2", locationId: "LOC", contactId: "c1", address: FIR_ADDR, cashAmount: 548000, status: "new", createdAt: hoursAgo(20),
+    autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+  const store = negotiationStore(rerun);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "Any update on your number?", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, intent: "question", reply: "Ran it again, we can do 548k on 7 Fir Loop.", propertyAddress: "7 Fir Loop" }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.notEqual(d.status, "scheduled");
+  assert.ok(d.flags.some((f) => /\$548,000, above the 515K we last texted on 7 Fir Loop/.test(f)), d.flags.join(" | "));
+});
+
+// 2026-11-06: the agent named the seller's number, and two minutes later the
+// bot floated ours 49K over it. The agent said yes.
+test("an agent who says the seller would take anything over 850 never hears 899 from us", async () => {
+  const RIDGE = { id: "rg", locationId: "LOC", contactId: "c1", address: "23 Ridge Ct, Redmond, OR 97756", cashAmount: 899000, askingPrice: 975000, status: "new",
+    createdAt: hoursAgo(3), autoUnderwrite: { passed: true, basis: "engine", grade: "A" }, pricing: { live: true, grade: "A", open: 899000, walkAway: 899000, moves: 0 } };
+  const run = async ({ events = [], details = null }) => {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = negotiationStore(RIDGE);
+    if (events.length) store.events.set("LOC|c1", events);
+    const { job } = await startReply({
+      client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", message: "Seller told me anything north of 850 gets a signature", sendsEnabled: true,
+      deps: { draft: async () => ({ ...DRAFT, intent: "question", propertyAddress: "23 Ridge Ct", ...(details ? { propertyDetails: details } : {}),
+        reply: "Makes sense. We'd probably come in near 899k as-is, quick close. Does that work for them?" }) },
+    });
+    await settle();
+    assert.equal(job.status, "done", job.error);
+    return store.getReplyDraft(job.draftId);
+  };
+  // The number in this very message (the model's read of it).
+  const now = await run({ details: { sellerAsk: 850000 } });
+  assert.notEqual(now.status, "scheduled");
+  assert.ok(now.flags.includes("the seller's number on 23 Ridge Ct is 850K: we never offer above it"), now.flags.join(" | "));
+  // The number already on their record.
+  const before = await run({ events: [{ type: "property_details", party: "agent", at: hoursAgo(1), address: "23 Ridge Ct", data: { sellerAsk: 850000 } }] });
+  assert.ok(before.flags.includes("the seller's number on 23 Ridge Ct is 850K: we never offer above it"), before.flags.join(" | "));
+  // Saying their number back, or ours at it, goes.
+  const { quotesFor } = await import("./reply-agent.js");
+  const q = quotesFor([{ address: RIDGE.address, amount: 899000, sellerNumber: 850000 }], "23 Ridge Ct");
+  assert.equal(evaluateReplyGates({ draft: { ...DRAFT, reply: "850 works on our end.", propertyAddress: "23 Ridge Ct" }, party: "agent",
+    allowedAmounts: [899000, 850000], ourAmount: 899000, inboundMessage: "", quotes: q }).flags.some((f) => /seller's number/.test(f)), false);
+});
+
+// Two agents on one house (2026-11-07): Matt priced it for one agent; the
+// machine floated a higher number to the second.
+test("a second agent on the same house isn't floated a different number than the one Matt gave the first", async () => {
+  const QUARRY = "310 Quarry Ave, Bremerton, WA 98312";
+  const ours = { id: "pk2", address: QUARRY, contactId: "c1", cashAmount: 305500, status: "new", createdAt: hoursAgo(2), autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+  const matts = { id: "pk1", address: QUARRY, contactId: "c-first", cashAmount: 290000, status: "sent", createdAt: hoursAgo(72), sends: [{ ts: hoursAgo(71) }] };
+  const float = async (offer, extra = {}) => {
+    _resetJobs();
+    const client = withMessages(ghlStubFor(["agent"]).client, []);
+    const store = withTheirTake(fakeStore());
+    store.listOffers = async () => [offer, matts];
+    let drafted = false;
+    const r = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer, sendsEnabled: true, ...extra,
+      deps: { draft: async () => { drafted = true; return { ...DRAFT, intent: "realm_check", reply: `We'd likely land around ${Math.round(offer.cashAmount / 1000)}k on 310 Quarry Ave.` }; } } });
+    await settle();
+    return { r, drafted };
+  };
+  const held = await float(ours);
+  assert.equal(held.r.job, null);
+  assert.match(held.r.skipped, /you gave another agent 290K on 310 Quarry Ave and this number is 306K — one number per house/);
+  assert.equal(held.drafted, false);
+  const same = await float({ ...ours, cashAmount: 290000 });
+  assert.ok(same.r.job, same.r.skipped);
+  const pressed = await float(ours, { personAsked: true });
+  assert.ok(pressed.r.job, "a person pressing Float has decided");
+});
+
+// Engine mode (2026-11-07): three of the first five floats came off rows the
+// old machine priced before it, on rehab well under the age floor.
+test("an unsent pre-engine row with rehab under the age floor isn't floated", async () => {
+  const OLD = { id: "pe1", address: "342 Wren St, Kent, WA 98030", contactId: "c1", cashAmount: 186250, arv: 340000, repairs: 6000, status: "new",
+    createdAt: hoursAgo(30), autoUnderwrite: { passed: true, compsUsedCount: 4 } };
+  const float = async (saved) => {
+    _resetJobs();
+    const client = withMessages(ghlStubFor(["agent"]).client, []);
+    const store = withTheirTake(fakeStore());
+    store.listOffers = async () => [OLD];
+    const priced = [];
+    store.getHousePricing = async () => null;
+    store.upsertHousePricing = async (_l, key, doc) => { priced.push({ key, doc }); return doc; };
+    let drafted = false;
+    const r = await startProactive({ client, locationId: "LOC", saved, store, contactId: "c1", kind: "realm_check", offer: OLD, sendsEnabled: true,
+      deps: { draft: async () => { drafted = true; return { ...DRAFT, intent: "realm_check", reply: "We'd likely land around 186k on 342 Wren St." }; } } });
+    await settle();
+    return { r, drafted, priced };
+  };
+  const engine = await float({ ...STARTER_SAVED, autoUnderwriteMode: "engine" });
+  assert.equal(engine.r.job, null);
+  assert.match(engine.r.skipped, /342 Wren St: a number the old machine priced before engine mode, never sent — it's being re-priced; nothing floats on it/);
+  assert.equal(engine.drafted, false);
+  assert.equal(engine.priced.length, 1, "the touch re-prices the house in the engine");
+  const legacy = await float(STARTER_SAVED);
+  assert.ok(legacy.r.job, legacy.r.skipped);
+});
+
+// Hold, then pass, after Matt texted a higher number himself (2026-11-05):
+// the hold said the book's number, under his.
+test("the counter hold never says a number below the one Matt texted on that house", async () => {
+  _resetJobs();
+  const typedAt = new Date(Date.now() - 2 * 86400000);
+  const client = withMessages(ghlStubFor(["agent"]).client, [
+    { direction: "outbound", dateAdded: typedAt.toISOString(), body: "Ran it past my partner and we could stretch to about 320,000 if that closes it out." },
+  ]);
+  const offer = { ...HELD_OFFER, createdAt: new Date(Date.now() - 6 * 86400000).toISOString() };
+  const store = negotiationStore(offer);
+  store.events.set("LOC|c1", [{ type: "hand_reply", at: new Date(typedAt.getTime() + 20000).toISOString(), data: { via: "ghl", chars: 80 } }]);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: HOLD_SAVED(true), store, contactId: "c1", message: "Seller says 345", sendsEnabled: true,
+    deps: { draft: async () => ({ ...DRAFT, confidence: "high", propertyAddress: "12 Elm St", intent: "counter", counterAmount: 345000, reply: "Let me run that by my partner." }),
+      markCounterHold: async () => ({ ok: true }) },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.doesNotMatch(d.reply, /hold at 300,000/);
+  assert.notEqual(d.status, "scheduled");
+  assert.match(d.humanReason || "", /you texted 320K on 12 Elm St; the offer says 300,000/);
+});
+
+// The engine priced the house on its rehab; the agent then put the work far
+// higher. Floating our number on top of their read is a person's call.
+test("an engine number the agent put more work on after we priced it isn't floated by the machine", async () => {
+  const ENGINE = { ...LANDED, id: "e9", pricing: { live: true, grade: "A", open: 410000, walkAway: 425000, rehab: 40000, moves: 0 },
+    autoUnderwrite: { passed: true, basis: "engine", grade: "A" } };
+  const float = async (extra = {}) => {
+    _resetJobs();
+    const { client } = ghlStubFor(["agent"]);
+    const store = withTheirTake(fakeStore());
+    store.listOffers = async () => [ENGINE];
+    let drafted = false;
+    const r = await startProactive({ client, locationId: "LOC", saved: STARTER_SAVED, store, contactId: "c1", kind: "realm_check", offer: ENGINE, sendsEnabled: true, ...extra,
+      deps: { draft: async () => { drafted = true; return { ...DRAFT, intent: "realm_check", reply: "Ran 12 Elm. We'd likely land around 410k cash, as-is. Is that in the realm for your seller?" }; } } });
+    await settle();
+    return { r, drafted };
+  };
+  const held = await float();
+  assert.equal(held.r.job, null);
+  assert.match(held.r.skipped, /^12 Elm St: the agent put the work at 85K after we priced it on 40K/);
+  assert.equal(held.drafted, false);
+  const pressed = await float({ personAsked: true });
+  assert.ok(pressed.r.job, "a person pressing Float has decided");
+});
+
+// Review, 2026-11-09: hold texts now round down to the thousand. A house we
+// already told "still at 300,640" must not hear "still at 300,000" as a
+// second goodbye at a lower number.
+test("a closed house told our odd number before the rounding doesn't get a second goodbye at the rounded one", async () => {
+  _resetJobs();
+  const client = withMessages(ghlStubFor(["agent"]).client, [
+    { direction: "outbound", dateAdded: hoursAgo(30), body: "Understood. We're still at 300,640 on 12 Elm St; if anything changes on the seller's side, I'm here." },
+  ]);
+  const offer = { ...HELD_OFFER, cashAmount: 300640, status: "we_passed" };
+  const store = negotiationStore(offer);
+  const { job } = await startReply({
+    client, locationId: "LOC", saved: HOLD_SAVED(), store, contactId: "c1", sendsEnabled: true, message: "Seller still needs 400 to cover the payoff",
+    deps: {
+      draft: async () => ({ ...DRAFT, intent: "counter", confidence: "high", counterAmount: 400000, propertyAddress: "12 Elm St",
+        reply: "Got it, let me check whether there's any room and get back to you." }),
+      setOfferStatus: async ({ status }) => ({ ok: true, address: offer.address, status }),
+      markCounterHold: async () => ({ ok: true }),
+    },
+  });
+  await settle();
+  assert.equal(job.status, "done", job.error);
+  const d = await store.getReplyDraft(job.draftId);
+  assert.doesNotMatch(d.reply, /still at 300,000/, d.reply);
+  assert.equal(d.humanReason, "we already told them we're still at 300,640 on 12 Elm St; nothing more to say");
+});
+
+// The agent's own figure said with a cue word was never one the bot could
+// echo; the rough reader reads our words, not more of theirs.
+test("an agent's 'best is 350' is not a number the bot may say back, as before", () => {
+  const g = evaluateReplyGates({ draft: { ...DRAFT, intent: "question", reply: "Got it, 350 could work for us.", propertyAddress: "12 Elm St" },
+    party: "agent", allowedAmounts: [400000], ourAmount: 400000, inboundMessage: "Best they'd do is 350." });
+  assert.equal(g.ok, false);
+  assert.ok(g.flags.some((f) => /\$350,000, which is not in the offer book/.test(f)), g.flags.join(" | "));
+});

@@ -127,6 +127,29 @@ test("the float timer leaves a stopped person's offer alone and keeps its once-e
   assert.deepEqual(s.calls.float, [{ offerId: "o1" }], "floats after Resume");
 });
 
+// 2026-11-09 audit: Matt gave an agent a number himself, and the timer then
+// floated the machine's "rough first pass" on the same house a few days on.
+test("the timer does not float a number Matt texted himself four days ago", async () => {
+  const typed = { type: "hand_reply", contactId: "c1", at: ago(4 * 24), data: { via: "ghl", chars: 60 } };
+  const s = spies();
+  const r = await run(fakeStore({ offers: [ready()], events: [typed] }), s.deps);
+  assert.deepEqual(s.calls.float, []);
+  assert.equal(r.results.some((x) => x.move === "float"), false, JSON.stringify(r.results));
+  // A call that connected counts the same; one nobody picked up doesn't.
+  const talked = { type: "call_summary", contactId: "c1", at: ago(3 * 24), data: { durationSec: 240 } };
+  const s2 = spies();
+  await run(fakeStore({ offers: [ready()], events: [talked] }), s2.deps);
+  assert.deepEqual(s2.calls.float, []);
+  const missed = { type: "call_summary", contactId: "c1", at: ago(3 * 24), data: { missed: true } };
+  const s3 = spies();
+  await run(fakeStore({ offers: [ready()], events: [missed] }), s3.deps);
+  assert.deepEqual(s3.calls.float, [{ offerId: "o1" }]);
+  // Older than a week, or another contact's: the timer floats as before.
+  const s4 = spies();
+  await run(fakeStore({ offers: [ready()], events: [{ ...typed, at: ago(9 * 24) }, { ...typed, contactId: "c9", at: ago(24) }] }), s4.deps);
+  assert.deepEqual(s4.calls.float, [{ offerId: "o1" }]);
+});
+
 test("a quiet offer isn't marked no response while you've stopped the bot on them", async () => {
   const store = fakeStore({ offers: [quiet()], events: [{ type: "drive_stopped", contactId: "c2", at: ago(100), data: { reason: "" } }] });
   const s = spies();
