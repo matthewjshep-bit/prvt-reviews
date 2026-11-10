@@ -7996,6 +7996,37 @@ the buyer price, the ARV and the rehab estimate.** The contract price and the
 assignment fee are not in `dealFacts` and must never be — that is asserted in
 `shared/blast-text.test.mjs`.
 
+**A buyer who never wrote back gets Matt's plain wording (2026-11-09).** Deal
+texts to strangers that said "under contract", "buy" or carried a link were
+blocked (14 of 14 on 10/20), and the county opener ("saw in the county
+records you've bought houses around...") was blocked on 150 of 150 numbers on
+Bagley. Matt's own plain wording went through. Now:
+- **The cold text.** A buyer with no reply on file (`coldBuyer` in
+  `dispo-autopilot.js`: never written back, didn't ask for the deal, not a
+  pre-sell) is texted `dispoAutopilot.coldDealText` instead of the three
+  rotating versions: default "Hey {first}, I've got {what} at {place}.
+  {numbers}. Any interest in it for your next project?". `{what}` is "a
+  house", or "a lot" / "a mobile home in a park" when the kind says so. No
+  link and no walkthrough question: the link goes when they answer. Edit it on
+  Autopilot → Investors ("To a buyer who has never written back"); empty is
+  the built-in text. A saved text that says "under contract" is never used
+  (`normalizeColdDealText`), and the editor refuses to save one. The draft
+  carries `outbound.cold`, and `blast-refresh.js` writes it again in the cold
+  words as it sends, priced off the deal then. An email to the same buyer is
+  the normal deal text. A cold text is never folded into the combined
+  two-deal text (that one says "under contract"): each deal goes on its own.
+- **The county opener is gone.** A never-replied `dispo-source-county` buyer's
+  text starts "Hey Dana, Matt here. I've got..." (`blastIntro`). The Facebook
+  group lines are unchanged.
+- **The send-time hold.** The buyer carrier check in `sendReplyDraft` (auto
+  path) also holds, for a buyer who never wrote back, a deal text that opens on
+  their own buying: "county records", "saw you bought / purchased / built /
+  flipped", "saw your build / flip" (`coldBuyerFlags` in
+  `shared/carrier-words.js`). It is not in the every-text rule list: a buyer
+  who knows us can hear it. A read of the buyer that fails counts them as cold.
+  So a saved deal text of Matt's that opens on their buying now waits for him
+  on never-replied buyers.
+
 ### In their words — what each investor told us about how they buy (2026-11-02)
 
 Matt, 2026-11-02: "all that information is kind of locked up in all the
@@ -8188,6 +8219,41 @@ the deal. Now (`resumeDealOutreach` in `routes/offers.js`, `resumeWave` in
 The pane says what came back: "Outreach is back on: N deal texts queued…, N
 waiting for you in the outbox, N buyers left out…".
 
+**Taking a deal back pulls its texts (2026-11-09).** One click on "Accepted,
+track as deal" queues the house to every buyer in the area, and Remove deal
+tracking (`DELETE /api/offers/:id/deal`) used to leave those texts queued: at
+send time an offer with no deal read as "send it as written". Now the route
+calls `stopDealOutreach` with `takenBack`, which dismisses the same texts Stop
+does with "you took the deal back on <street> — not sent" (so Resume never
+reads them as Stop's), and answers `pulled: { dismissed }`. The send-time
+guard also dismisses a queued `blast_open` / `blast_nudge` /
+`dataroom_nudge` whose offer no longer has a deal (not a pre-sell; a read that
+fails leaves it).
+
+**A deal Matt texts by hand counts as sent (2026-11-09).** After 10/21 about
+1,140 buyers got deals through scripts on the hand-text route, which recorded
+only `hand_reply`. The app's newest `blast_sent` was 10/20, so the morning
+catch-up or a Resume would text the same buyers the same deal again.
+- `sendHandReply` (`hand-reply.js`) with an `offerId` that is a live deal, to
+  someone in the buyer book who isn't the deal's own agent, records
+  `deal_hand_sent { offerId, messageId }`, once per buyer per deal. It is its
+  own event type, so the pulse's after-deal group, the Slack waves post and the
+  ghost penalty (all on `blast_sent`) are unchanged.
+- Who already has a deal reads both (`DEAL_SENT_TYPES`, `sentTo` and
+  `blastedTo` in `shared/buyer-score.js`): the picker, the morning catch-up and
+  Resume skip them.
+- **The backfill.** `POST /api/dispo/ledger/backfill { offerId, dryRun = true }`
+  (`deal-ledger.js`) reads every thread with activity since the deal was made,
+  and writes `deal_hand_sent` for each buyer we sent a text or email naming the
+  deal's street. It skips the listing agent, the deal's parties, anyone outside
+  the buyer book, buyers already on record and a text the carrier marked failed
+  or undelivered. It is dry unless `dryRun: false`, answers with counts only,
+  and `GET /api/dispo/ledger/backfill?offerId=` reads the job back. A passing
+  mention of the street in our own text counts as sent.
+- **Don't Resume 4334 130th Pl SE until its backfill has run with
+  `dryRun: false`.** Its builders were texted by hand while it was stopped;
+  without the ledger, Resume would text about 200 of them again.
+
 ### A buyer is followed up only after they speak (2026-10-05)
 
 Buck, on 3511 NE 153rd St, never answered the deal. He still got the blast, a
@@ -8378,6 +8444,31 @@ send them the deal.
   `secondWaveCount`, `secondWaveMinScore`, `maxWaves`. Saved values are
   dropped on the next save. `autoBlastOnPromote` still turns all of it on, and
   ships off.
+- **The heads-up (2026-11-09).** Matt stopped four of four promote blasts by
+  hand, two on wrong data. Right after the promote queues, one line goes to
+  the #dispositions stream (`promoteHeadsUp` / `postDispoLine` in
+  `ghl-broker/slack-notify.js`): "2 texts start at 1:23pm to buyers who buy in
+  Kent at $442,346 (contract $412,345.67 + default $30,000 fee; the contract
+  price has cents; kind of house not set). Stop on the deal to hold them." It
+  flags a fee filled from Settings (`deal.assignmentFeeSource: "setting"`), a
+  contract price with cents and a deal with no kind of house. With sends off it
+  says how many wait in the outbox and why. No delay is added. Claimed on its
+  own cursor (`slackHeadsUp`) before the post; off unless Slack and the
+  dispositions stream are on.
+- **A change of kind re-picks (2026-11-09).** Setting the kind of house on a
+  deal (`PATCH /api/offers/:id/asset`) whose first texts are still queued
+  re-runs `matchForDeal`: a queued first text to a buyer who doesn't fit the
+  new kind is dismissed ("the kind of house changed to land and they don't buy
+  it — not sent"), one who still fits is stamped with it, and while none of the
+  deal's texts has gone (`blast_sent`), new fits are queued on the schedule the
+  promote set. A buyer an earlier re-pick pulled back who fits again (a kind
+  set by mistake and set back) is queued again with them. The answer carries
+  `repick: { dismissed, queued, drafted }`, the Property type box says what it
+  did, and #dispositions gets a line whenever it pulled back or added anyone.
+  Each deal text carries the kind it was picked for (`outbound.assetType`), and
+  `sendReplyDraft` holds one whose deal's kind has changed since (an unset kind
+  counts as single family), in case the re-pick missed it. A text to a buyer
+  who asked for the deal, or wrote in, goes whatever the kind.
 
 **Dataroom link on its own.** `suggest_dataroom_invite` stays ask-only. A
 separate `send_dataroom_invite` action — which no rule can carry — is
@@ -8389,6 +8480,34 @@ that becomes the usual suggestion with the reason on it. Off by default.
 **Assignment on commit.** Marking a buyer committed drafts the assignment
 PDF from the deal, the buyer and the company settings (`offer.assignment`),
 for review. Off by default.
+
+### A deal's money fields read the way they're typed (2026-11-09)
+
+A fee typed as "15k" saved as nothing, so buyer pages and deal texts priced
+the house at the contract with no fee, and "740k" cleared the price.
+`parseMoney` (`shared/money.js`) reads "15k", "$450K", "4.18M", commas and
+cents; empty or unreadable is `null`, never a guess. `PATCH
+/api/offers/:id/deal`:
+- answers 400 on a contract price or fee it can't read, and changes nothing;
+- won't clear a stored price or fee from an emptied box, or a 0, unless
+  `clear: true` (the Deals modal asks first);
+- answers 409 with `confirm: true` on a contract price under $10,000 or more
+  than 30% off our number until the request says `confirm: true` (the modal
+  asks "save it anyway?"); the same figure sent back asks nothing;
+- stamps `deal.assignmentFeeSource`: "setting" when promote filled the default
+  fee, "you" when a person typed one. The modal says when the fee is still the
+  default.
+
+**Counters keep their newest number.** An agent who came down from 480 to 430
+while the offer already read "countered" kept 480 on file: the Desk showed the
+old gap and the hold clock (`callsInstead`, `shared/counter-hold.js`) never
+stood down for a call. The conversation's `setOfferStatus` now re-records a
+countered offer when the number differs (the `offer_countered` dedupe key is
+unchanged, so the ledger keeps its one row). The status menu's "Countered"
+asks "Their number?" (optional, read by `parseMoney`); the key
+`countered:430000` goes to `PATCH /:id/status` as `amount`, which refuses a
+number it can't read. A hand-marked counter now has a number, a call row and a
+hold clock.
 
 ### Deal parties and the closing checklist (2026-09-29)
 

@@ -59,7 +59,7 @@ import { standardText } from "./shared/standard-texts.js";
 import { OUTREACH_NUDGE_WINDOW_DAYS } from "./shared/follow-up.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
-import { agentFocusRule } from "./shared/asset-type.js";
+import { agentFocusRule, assetOf } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { holdFor } from "./bot-hold.js";
 import { machineMayStart, liveHouse, LIVE_THREAD_KINDS, PASS_SHAPED_KINDS, IRRITATED_RX } from "./shared/thread-health.js";
@@ -116,7 +116,7 @@ import {
   buildSystemPrompt, buildUserContext, schemaFor, CLASSIFY_SYSTEM, CLASSIFY_SCHEMA, buildClassifyContext, CARRIER_CHECKED_KINDS,
   openerPlan,
 } from "./conversation-prompt.js";
-import { carrierFlags } from "./shared/carrier-words.js";
+import { carrierFlags, coldBuyerFlags } from "./shared/carrier-words.js";
 import { planActions, runActions } from "./conversation-actions.js";
 import { pickDelayMs, nextSendTime, spreadAcrossDay, isWeekend, machineHours } from "./conversation-scheduler.js";
 import { SERVICE_KINDS } from "./shared/follow-up.js";
@@ -7057,6 +7057,39 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
       await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
       return { ok: true, skipped: why };
     }
+    // The deal was taken back since this was queued (Remove deal tracking,
+    // 2026-11-09): its offer has no deal now, and a deal text about it isn't
+    // sent. A pre-sell is about a house with no deal yet and is left alone; a
+    // read that fails leaves the text as it was.
+    if (d.outbound?.offerId && !d.outbound.presell && !offer?.deal && stoppedDealAction(d) === "dismiss" && store.getOffer) {
+      const own = await store.getOffer(d.outbound.offerId).then((o) => ({ o }), () => null);
+      if (own && !own.o?.deal) {
+        const ts = new Date(now).toISOString();
+        const why = `the deal on ${String(own.o?.address || address || "the house").split(",")[0].trim()} was taken back`;
+        await store.updateReplyDraft(d.id, { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts, flags: [...(d.flags || []), `${why} — not sent`] });
+        await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+        return { ok: true, skipped: why };
+      }
+    }
+    // The kind of house changed after this deal text was queued, and the
+    // re-pick (routes/offers.js repickOnKindChange) didn't stamp it: it waits
+    // for you rather than go to a buyer picked for the old kind (2026-11-09).
+    // Texts queued before the stamp existed carry none and aren't checked,
+    // and a house with no kind set is picked as a single family one. A buyer
+    // who asked for the deal, or wrote in, gets it whatever its kind
+    // (stoppedDealAction): the re-pick leaves theirs alone too.
+    const pickedAs = (t) => (t === "sfr" ? "" : String(t || ""));
+    if (d.outbound?.kind === "blast_open" && offer?.deal && typeof d.outbound.assetType === "string" && stoppedDealAction(d) === "dismiss"
+      && pickedAs(assetOf(offer)?.type) !== pickedAs(d.outbound.assetType)) {
+      const ts = new Date(now).toISOString();
+      const line = `the kind of house changed to ${assetOf(offer)?.type?.replace(/_/g, " ") || "not set"} since this was queued`;
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `held: ${line}`],
+        autoSend: { ...(d.autoSend || {}), decided: false, reason: `${line} — it waits for you` },
+      });
+      return { ok: true, skipped: line };
+    }
   }
 
   // We walked away since (marked "we passed" while a check-in counted
@@ -7253,7 +7286,10 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         });
         return { ok: true, skipped: line, sendAt };
       }
-      const waiting = (await store.listReplyDrafts(locationId, { contactId: d.contactId, status: "scheduled", limit: 20 }).catch(() => []))
+      // A buyer who never wrote back (queued `cold`) gets each deal in Matt's
+      // cold words, on its own: the combined text says "under contract", the
+      // phrase the carriers block from strangers (2026-11-09).
+      const waiting = d.outbound?.cold === true ? [] : (await store.listReplyDrafts(locationId, { contactId: d.contactId, status: "scheduled", limit: 20 }).catch(() => []))
         .filter((o) => o.id !== d.id && o.outbound?.kind === "blast_open" && o.channel !== "email"
           && o.outbound?.offerId && o.outbound.offerId !== d.outbound?.offerId)
         .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
@@ -7321,10 +7357,12 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
   // written back. You pressing Send is you deciding.
   if (auto && d.channel !== "email" && BUYER_CARRIER_KINDS.has(d.outbound?.kind)) {
     let words = carrierFlags(body);
-    if (words.includes("a link")) {
-      const inv = await store.getInvestor?.(locationId, d.contactId).catch(() => null);
-      if (inv?.doc?.lastRepliedAt || inv?.lastRepliedAt) words = words.filter((w) => w !== "a link");
-    }
+    // To a buyer who never wrote back, an opener about what they bought is
+    // one more (2026-11-09: the county opener, blocked on every number). A
+    // read that fails counts them as never having written back.
+    const inv = await store.getInvestor?.(locationId, d.contactId)?.catch?.(() => null);
+    if (inv?.doc?.lastRepliedAt || inv?.lastRepliedAt) words = words.filter((w) => w !== "a link");
+    else words = [...words, ...coldBuyerFlags(body)];
     if (words.length) {
       await release(bundle);
       // The package link minted for it goes back; your Send mints a fresh one.
@@ -7644,14 +7682,17 @@ export const stoppedDealAction = (d) => (FIRST_DEAL_TEXTS.has(d?.outbound?.kind)
  * queued is pulled back rather than left to be caught at its send time (the
  * guard in sendReplyDraft), from the outbox too. What answers a buyer stays
  * on its clock (stoppedDealAction). The listing agent's thread is not a
- * buyer's and is left alone.
+ * buyer's and is left alone. `takenBack`: the deal itself was taken back
+ * (DELETE /:id/deal), which the flag says, so Resume never reads it as a
+ * text Stop pulled.
  */
-export async function stopDealOutreach({ client, store, locationId, offer, now = Date.now() }) {
+export async function stopDealOutreach({ client, store, locationId, offer, now = Date.now(), takenBack = false }) {
   const out = { dismissed: [] };
   if (!offer?.id) return out;
   const open = await store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 5000 }).catch(() => []);
   const ts = new Date(now).toISOString();
-  const why = `you stopped outreach on ${String(offer.address || "the deal").split(",")[0].trim()}`;
+  const street = String(offer.address || "the deal").split(",")[0].trim();
+  const why = takenBack ? `you took the deal back on ${street}` : `you stopped outreach on ${street}`;
   for (const d of open) {
     if (d?.party !== "investor" || !["draft", "scheduled"].includes(d.status)) continue;
     const about = d.outbound?.offerId ? d.outbound.offerId === offer.id

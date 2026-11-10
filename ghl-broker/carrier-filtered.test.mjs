@@ -83,7 +83,8 @@ test("a deal text without its link asks if they want it", () => {
 // check-ins, which already carried the carrier rule, went through.
 test("a deal text to a buyer who never replied carries no word carriers block", async () => {
   const { blastIntro } = await import("./dispo-autopilot.js");
-  const { carrierFlags } = await import("./shared/carrier-words.js");
+  const { carrierFlags, coldBuyerFlags } = await import("./shared/carrier-words.js");
+  const { coldDealMessage } = await import("./shared/blast-text.js");
   const facts = { address: "41 Alder Way, Kent, WA 98030", city: "Kent", price: 383000, arv: 520000, repairs: 60000, beds: 3, baths: 2 };
   const strangers = [
     { tags: ["investor", "dispo-source-county", "dispo-city-kent"] },
@@ -93,11 +94,16 @@ test("a deal text to a buyer who never replied carries no word carriers block", 
   for (const inv of strangers) {
     const intro = blastIntro(inv);
     assert.ok(intro, "a stranger is told how we found them");
+    // The text they get by text (2026-11-09): Matt's cold wording, which
+    // never says "under contract" and never opens on what they bought.
+    const cold = coldDealMessage({ ...facts, firstName: "Sam Buyer", intro });
+    assert.deepEqual([...carrierFlags(cold), ...coldBuyerFlags(cold)], [], cold);
+    assert.doesNotMatch(cold, /under contract/i, cold);
     for (const variant of [0, 1, 2]) {
       for (const ask of ["", "Walkthrough is Thu 4–5pm. Can you make it?"]) {
         // The operator's line off the package headline can say it too.
         const t = blastMessage({ ...facts, firstName: "Sam Buyer", variant, intro, ask, linkOnReply: true, note: "Cash only, sold as-is" });
-        assert.deepEqual(carrierFlags(t), [], t);
+        assert.deepEqual([...carrierFlags(t), ...coldBuyerFlags(t)], [], t);
       }
     }
   }
@@ -124,4 +130,81 @@ test("the for-the-record letter reads as the app's own text, not a person answer
   assert.match("Hi Dana, sending our written offer on 9520 187th Street Ct E over so you have it on file — $300,000, close on your timeline (letter attached).", OUR_OFFER_TEXT_RX);
   assert.match("Hi Dana, here's our letter of intent on 12 Elm St — $300,000, close on your timeline (letter attached).", OUR_OFFER_TEXT_RX);
   assert.doesNotMatch("sounds good, I'll send it over", OUR_OFFER_TEXT_RX);
+});
+
+/* ---------- 2026-11-09: openers about what the buyer bought ---------- */
+
+// The county buyers' opener told them what the records said they'd bought,
+// and the carriers blocked it on every number (10/16); an opener naming the
+// builders' own purchases on 10/20 went the same way for most of them. A
+// deal text that leaves by itself and opens like that, to a buyer who never
+// wrote back, waits for Matt instead. One who has written back knows us, and
+// it goes.
+const sendStore = (draft, { lastRepliedAt = "" } = {}) => {
+  const rows = new Map([[draft.id, draft]]);
+  return {
+    rows,
+    listReplyDrafts: async (_loc, { status = null, contactId = null } = {}) =>
+      [...rows.values()].filter((d) => (!status || (Array.isArray(status) ? status.includes(d.status) : d.status === status)) && (!contactId || d.contactId === contactId)),
+    getReplyDraft: async (id) => rows.get(id) || null,
+    updateReplyDraft: async (id, doc) => { rows.set(id, doc); return true; },
+    listOffers: async () => [],
+    listContactEvents: async () => [],
+    appendContactEvents: async () => ({ inserted: 1, skipped: 0 }),
+    getContactProfile: async () => null, upsertContactProfile: async () => ({}),
+    getOffer: async () => ({ id: "o1", locationId: "LOC", address: "41 Alder Way, Kent, WA 98030", calc: { inputs: { arv: 520000, repairs: 60000 } },
+      deal: { stage: "under_contract", contractPrice: 360000, assignmentFee: 23000 } }),
+    getOfferSettings: async () => ({ dispoAutopilot: { blastLink: "on_reply", coldDealText: "Hey {first}, saw you bought near {city} last year. I've got {what} at {place}. {numbers}. Any interest?" } }),
+    listDatarooms: async () => [],
+    getInvestor: async () => ({ contactId: "c1", doc: { lastRepliedAt } }),
+  };
+};
+const coldDraft = () => ({
+  id: "d1", locationId: "LOC", contactId: "c1", contactName: "Sam Buyer", status: "scheduled", channel: "sms", party: "investor", intent: "blast_open", inbound: "",
+  reply: "queued", outbound: { kind: "blast_open", offerId: "o1", address: "41 Alder Way, Kent, WA 98030", cold: true }, propertyAddress: "41 Alder Way, Kent, WA 98030",
+  createdAt: new Date(Date.now() - 60000).toISOString(),
+});
+
+test("a deal text that opens with the buyer's own purchase waits for Matt", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const store = sendStore(coldDraft());
+  const calls = [];
+  const client = { call: async (path, opts) => { calls.push([path, opts]); return { messageId: "m1" }; } };
+  const r = await sendReplyDraft({ client, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  assert.equal(r.held, true, JSON.stringify(r));
+  assert.equal(calls.filter(([p]) => p === "/conversations/messages").length, 0, "nothing went");
+  const d = await store.getReplyDraft("d1");
+  assert.equal(d.status, "draft");
+  assert.ok(d.flags.some((f) => /carriers block texts like this — it says "saw you bought"/.test(f)), d.flags.join(" · "));
+
+  // A buyer who has written back hears it as written.
+  const warm = { ...coldDraft(), outbound: { kind: "blast_open", offerId: "o1", address: "41 Alder Way, Kent, WA 98030" } };
+  const known = sendStore(warm, { lastRepliedAt: "2026-10-01T00:00:00Z" });
+  known.getOfferSettings = async () => ({ dispoAutopilot: { blastLink: "on_reply", showings: { askInBlast: false }, dealTexts: ["Hey {first}, saw your flip on Birch St came out well. {place}, {numbers}. {close}"] } });
+  const sent = [];
+  await sendReplyDraft({ client: { call: async (path, opts) => { sent.push([path, opts]); return { messageId: "m2" }; } }, store: known, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  assert.equal((await known.getReplyDraft("d1")).status, "sent");
+  assert.match(sent.find(([p]) => p === "/conversations/messages")[1].body.message, /saw your flip/);
+});
+
+// Two deals queued for the same buyer go out as one combined text, and that
+// text says "under contract": the phrase the carriers block from strangers.
+// A buyer who never wrote back gets each deal in the cold words, on its own.
+test("a buyer who never wrote back gets each deal on its own in the cold words, never the combined text", async () => {
+  const { sendReplyDraft } = await import("./reply-agent.js");
+  const store = sendStore(coldDraft());
+  store.getOfferSettings = async () => ({ dispoAutopilot: { blastLink: "on_reply" } });
+  store.getOffer = async (id) => ({ id, locationId: "LOC", address: id === "o2" ? "9 Birch St, Kent, WA 98030" : "41 Alder Way, Kent, WA 98030",
+    calc: { inputs: { arv: 520000, repairs: 60000 } }, deal: { stage: "under_contract", contractPrice: 360000, assignmentFee: 23000 } });
+  store.rows.set("d2", { ...coldDraft(), id: "d2", sendAt: new Date(Date.now() + 3600000).toISOString(), createdAt: new Date(Date.now() - 120000).toISOString(),
+    outbound: { kind: "blast_open", offerId: "o2", address: "9 Birch St, Kent, WA 98030", cold: true }, propertyAddress: "9 Birch St, Kent, WA 98030" });
+  const sent = [];
+  const r = await sendReplyDraft({ client: { call: async (path, opts) => { sent.push([path, opts]); return { messageId: "m3" }; } }, store, locationId: "LOC", draftId: "d1", live: true, auto: true, readThread: async () => "" });
+  const text = sent.find(([p]) => p === "/conversations/messages")?.[1]?.body?.message || "";
+  assert.ok(text, JSON.stringify(r));
+  assert.doesNotMatch(text, /under contract|9 Birch/i, text);
+  assert.match(text, /^Hey Sam, I've got a house at 41 Alder Way in Kent\. .*Any interest in it for your next project\?$/, text);
+  const other = await store.getReplyDraft("d2");
+  assert.equal(other.status, "scheduled", "the other deal goes at its own time, in its own text");
+  assert.equal(other.combinedInto, undefined);
 });

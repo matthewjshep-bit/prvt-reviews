@@ -685,6 +685,101 @@ export async function postEvening({ store = defaultStore, locationId, saved = {}
   return { posted: true, open: (digest.sections || []).reduce((a, s) => a + (s.items?.length || 0), 0) };
 }
 
+/* ---------- a line before it happens: what a deal is about to send ---------- */
+
+// Matt stopped four of four promote blasts by hand (2026-10/11), two of them
+// on wrong data: nothing said how many texts were queued, when the first one
+// went, or at what price. The deal's own events reach Slack a minute later
+// through the sweep above; this one line goes at once, while Stop still
+// holds everything, and is claimed on its own cursor first.
+export const HEADS_UP_CURSOR = "slackHeadsUp";
+
+const usd = (v) => {
+  const x = Number(v);
+  if (!Number.isFinite(x) || x <= 0) return "";
+  const cents = Math.round(x * 100) % 100 !== 0;
+  return `$${x.toLocaleString("en-US", { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0 })}`;
+};
+const pacificDay = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(t));
+/** whenText(iso | ms, now) → "1:23pm", or "Tue 8:00am" when it isn't today in Pacific time. */
+export function whenText(at, now = Date.now()) {
+  const t = typeof at === "number" ? (Number.isFinite(at) ? at : null) : ms(at);
+  if (t == null) return "";
+  const clock = new Date(t).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" }).replace(/\s*([AP])M$/i, (_, p) => `${p.toLowerCase()}m`);
+  if (pacificDay(t) === pacificDay(now)) return clock;
+  const day = new Date(t).toLocaleDateString("en-US", { weekday: "short", timeZone: "America/Los_Angeles" });
+  return `${day} ${clock}`;
+}
+const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/**
+ * promoteHeadsUp({ address, where, rows, scheduled, reason, price, contractPrice,
+ *   assignmentFee, feeSource, kindSet, now }) → one line for #dispositions
+ *
+ * Pure. `rows` are queueBlastDrafts' rows. Says how many texts, when the
+ * first goes, to whom and at what buyer price, and flags what was wrong on
+ * the deals Matt stopped: a fee filled from the setting, a contract price
+ * with cents, no kind of house. Ids and the street only, never a name.
+ */
+export function promoteHeadsUp({ address = "", where = "who buy in the area", rows = [], scheduled = false, reason = "", price = 0, contractPrice = 0, assignmentFee = 0, feeSource = "", kindSet = true, now = Date.now() } = {}) {
+  const made = (rows || []).filter((r) => r?.draftId);
+  const going = made.filter((r) => r.status === "scheduled" && r.sendAt);
+  const goingTexts = going.filter((r) => r.channel !== "email");
+  const waiting = made.filter((r) => r.status !== "scheduled");
+  const waitTexts = waiting.filter((r) => r.channel !== "email").length;
+  const waitEmails = waiting.length - waitTexts;
+  const first = going.map((r) => ms(r.sendAt)).filter((t) => t != null).sort((a, b) => a - b)[0];
+  const house = `*${String(address || "").split(",")[0].trim() || "A deal"}*`;
+
+  const contract = Number(contractPrice) > 0 ? `contract ${usd(contractPrice)}` : "no contract price";
+  const cents = Number(contractPrice) > 0 && Math.round(Number(contractPrice) * 100) % 100 !== 0;
+  const fee = Number(assignmentFee) > 0 ? `${feeSource === "setting" ? "default " : ""}${usd(assignmentFee)} fee` : "no fee";
+  const flags = [`${contract} + ${fee}`, ...(cents ? ["the contract price has cents"] : []), ...(kindSet ? [] : ["kind of house not set"])].join("; ");
+  const at = usd(price) ? ` at ${usd(price)}` : "";
+
+  const parts = [];
+  if (goingTexts.length || going.length) {
+    const n = goingTexts.length || going.length;
+    parts.push(`${house}: ${plural(n, goingTexts.length ? "text" : "email")} start at ${whenText(first, now)} to buyers ${where}${at} (${flags}). Stop on the deal to hold them.`);
+    const held = [waitTexts ? plural(waitTexts, "text") : "", waitEmails ? plural(waitEmails, "email") : ""].filter(Boolean).join(" and ");
+    if (held) parts.push(`${held} more wait for you in the outbox.`);
+  } else if (waiting.length) {
+    const held = [waitTexts ? plural(waitTexts, "text") : "", waitEmails ? plural(waitEmails, "email") : ""].filter(Boolean).join(" and ");
+    parts.push(`${house}: ${held} wait in the outbox as drafts for buyers ${where}${at} (${flags})${scheduled || !reason ? "" : `: ${reason}`}.`);
+  } else {
+    parts.push(`${house}: nothing queued for buyers ${where}${at} (${flags}).`);
+  }
+  return `:mega: ${parts.join(" ")}`;
+}
+
+/**
+ * postDispoLine({ store, locationId, saved, key, text, now }) → { posted, why? }
+ *
+ * One line to the dispositions stream, now (promoteHeadsUp, a re-pick).
+ * Claimed under `key` before the post, so the same key never posts twice.
+ * Off unless Slack and the dispositions stream are on. Never throws; a post
+ * that fails is an app error, without the words.
+ */
+export async function postDispoLine({ store = defaultStore, locationId, saved = {}, key, text, now = Date.now() } = {}) {
+  try {
+    const cfg = normalizeSlack(saved?.slack);
+    const token = String(saved?.slackBotToken || "").trim();
+    if (!slackOn(cfg, token) || !streamOn(cfg, "dispositions")) return { posted: false, why: "off" };
+    if (!key || !String(text || "").trim()) return { posted: false, why: "nothing to say" };
+    const doc = await readDoc(store, locationId, HEADS_UP_CURSOR);
+    const posted = prune(doc.posted, CLAIM_KEEP_MS, now);
+    if (posted[key]) return { posted: false, why: "already posted" };
+    posted[key] = iso(now);
+    await store.setJobCursor?.(locationId, HEADS_UP_CURSOR, { at: iso(now), doc: { ...doc, posted } });
+    const mrkdwn = String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    await post(token, cfg.channels.dispositions, { text: String(text).replace(/\*/g, "").slice(0, 300), blocks: [{ type: "section", text: { type: "mrkdwn", text: mrkdwn } }] });
+    return { posted: true };
+  } catch (e) {
+    await recordError(store, { locationId, area: "slack", err: e, context: { stage: "dispositions:heads_up" } }).catch(() => {});
+    return { posted: false, why: scrubMessage(e).slice(0, 160) };
+  }
+}
+
 /* ---------- the test button ---------- */
 
 /** testSlack({ saved }) → { results: [{ stream, channel, ok, error }] } — one hello per channel set, on or off. */

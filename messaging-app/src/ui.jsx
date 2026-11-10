@@ -14,7 +14,8 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, Flame, Loader2, Pin, Search, X } from "lucide-react";
-import { HOT_ON, HOT_OFF, MAKE_CURRENT, UNPIN_CURRENT, OFF_MARKET_ON, OFF_MARKET_OFF } from "./api.js";
+import { HOT_ON, HOT_OFF, MAKE_CURRENT, UNPIN_CURRENT, OFF_MARKET_ON, OFF_MARKET_OFF, counteredKey } from "./api.js";
+import { parseMoney } from "@shared/money.js";
 import { offMarketOf } from "@shared/off-market.js";
 import { paperHeldNow } from "@shared/current-offer.js";
 import { PASS_NOTE_WAIT_MIN } from "@shared/pass-note.js";
@@ -243,6 +244,24 @@ export function PaperHeldBanner({ offer, onRequote, busy = false }) {
  * bucket (WE_PASS_REASONS), so every pass says why and the bot can tell the
  * agent. On a house already passed, another bucket corrects the reason.
  */
+/**
+ * askTheirNumber() → "countered:430000" | "countered" | null
+ *
+ * "Countered" from the menu asks for their number (2026-11-09: a counter
+ * marked by hand had none, so no call row, no hold clock and no seller's
+ * number). Optional, typed the way a person types it ("430k"). Empty is a
+ * counter with no number; Cancel, or a number that doesn't read, changes
+ * nothing.
+ */
+export function askTheirNumber() {
+  const typed = window.prompt("Their number? Like 430k. Leave it empty if they didn't say one.", "");
+  if (typed === null || typed === undefined) return null;
+  if (!String(typed).trim()) return "countered";
+  const n = parseMoney(typed);
+  if (!n) { window.alert(`Couldn't read "${String(typed).slice(0, 40)}" as their number. Type it like 430000 or 430k.`); return null; }
+  return counteredKey(n);
+}
+
 export function statusItems(offer, onSelect) {
   const current = effectiveStatus(offer);
   const why = wePassReasonOf(offer);
@@ -258,7 +277,11 @@ export function statusItems(offer, onSelect) {
       key,
       label: key === "accepted" ? "Accepted → track as deal" : OFFER_STATUS[key].label,
       selected: key === current,
-      onSelect: () => onSelect?.(key),
+      onSelect: () => {
+        if (key !== "countered") { onSelect?.(key); return; }
+        const picked = askTheirNumber();
+        if (picked) onSelect?.(picked);
+      },
     }]));
 }
 

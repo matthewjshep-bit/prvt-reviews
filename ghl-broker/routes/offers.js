@@ -121,7 +121,7 @@ import {
 import {
   startReply, startProactive, previewProactive, chooseProactiveKind, leadsWithNumber, floatStanceFor, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
-  stopMachineTextsForOffer, stopDealOutreach,
+  stopMachineTextsForOffer, stopDealOutreach, RA_TAGS,
 } from "../reply-agent.js";
 import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
@@ -137,6 +137,8 @@ import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAut
 import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
 import { machineWorkday } from "../shared/follow-up-engine.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
+import { promoteHeadsUp, postDispoLine, whenText } from "../slack-notify.js";
+import { parseMoney } from "../shared/money.js";
 import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STATUSES } from "../shared/showing.js";
 import { mergeParties } from "../shared/deal-parties.js";
 import { mergeAccess, accessFor } from "../shared/deal-access.js";
@@ -151,7 +153,8 @@ import { syncAgentCard } from "../tier-check.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
-import { normalizeAsset, assetFromSnapshot, assetOf } from "../shared/asset-type.js";
+import { normalizeAsset, assetFromSnapshot, assetOf, assetLabel } from "../shared/asset-type.js";
+import { DEAL_SENT_TYPES, sentTo } from "../shared/buyer-score.js";
 import { buildUnderwriteCalc, underwriteModel } from "../shared/underwrite-model.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType, propertyDossier } from "../shared/contact-record.js";
@@ -3366,10 +3369,51 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   // disposition investors (existing GHL contacts) evaluating the property.
 
   const dealStr = (v, max = 200) => String(v ?? "").trim().slice(0, max);
+  // "15k", "$740K", "4.18M" read as dollars (shared/money.js); they used to
+  // read as nothing and wipe the fee (2026-11-09).
   const dealMoney = (v) => {
-    const n = Number(String(v ?? "").replace(/[$,\s]/g, ""));
-    return Number.isFinite(n) && n > 0 ? n : null;
+    const n = parseMoney(v);
+    return n != null && n > 0 ? n : null;
   };
+  // A contract price this far from our own number, or under this, is asked
+  // about before it's saved: buyers are priced off it the minute it lands.
+  const CONTRACT_FAR_PCT = 30;
+  const CONTRACT_MIN = 10000;
+  /**
+   * dealMoneyEdit(deal, offer, body) → { set: { contractPrice?, assignmentFee? } } | { http, error }
+   *
+   * The two money fields of a PATCH, read before anything is touched. A
+   * value that doesn't read as dollars is a 400, never a null. An empty box
+   * doesn't clear a stored figure unless `clear: true` says so. A contract
+   * price under 10k, or more than 30% off our number, is a 409 until
+   * `confirm: true`. A figure sent back unchanged asks nothing.
+   */
+  function dealMoneyEdit(deal, offer, b = {}) {
+    const set = {};
+    const LABEL = { contractPrice: "contract price", assignmentFee: "assignment fee" };
+    for (const key of ["contractPrice", "assignmentFee"]) {
+      if (b[key] === undefined) continue;
+      const raw = b[key];
+      // A 0 reads fine and means none, the same as an emptied box.
+      const empty = raw === null || String(raw).trim() === "" || parseMoney(raw) === 0;
+      const n = empty ? null : dealMoney(raw);
+      if (!empty && n == null) return { http: 400, error: `couldn't read "${String(raw).slice(0, 40)}" as a ${LABEL[key]}: type it like 450000 or 450k` };
+      if (n == null) {
+        if (deal[key] != null && b.clear !== true) return { http: 400, error: `that would clear the ${LABEL[key]} buyers are priced on: type a number, or clear it on purpose` };
+        set[key] = null;
+        continue;
+      }
+      if (key === "contractPrice" && n !== Number(deal.contractPrice) && b.confirm !== true) {
+        const ours = Number(offer.cashAmount) || 0;
+        const off = ours > 0 ? Math.abs(n - ours) / ours * 100 : 0;
+        if (n < CONTRACT_MIN || off > CONTRACT_FAR_PCT) {
+          return { http: 409, error: `a contract price of ${fmtMoney(n)} is ${n < CONTRACT_MIN ? "under $10,000" : `${Math.round(off)}% off our ${fmtMoney(ours)}`}: save it anyway?`, confirm: true };
+        }
+      }
+      set[key] = n;
+    }
+    return { set };
+  }
 
   // Shared loader: offer must exist, belong to the location, and (unless
   // promoting) already be a deal. Writes the error response itself.
@@ -3574,7 +3618,119 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors: picked, saved, wave: 1, startAfterMs: PROMOTE_BLAST_GRACE_MS });
       console.log(`auto-blast on promote: ${offer.address} → ${picked.length} buyers ${where} (${r.scheduled ? "scheduled" : `drafts: ${r.reason}`})`);
       await createContactNote(client, offer.contactId, { body: `Sent ${offer.address} to the ${picked.length} buyer${picked.length === 1 ? "" : "s"} ${where}${r.scheduled ? "" : " (queued as drafts)"}.` }).catch(() => {});
+      // One line to #dispositions while Stop still holds all of it
+      // (2026-11-09): how many, when, to whom, at what price, and what looks
+      // wrong. No delay is added: the texts go when Matt's 10/21 rule says.
+      // Keyed on the first text this queue made: a Resume that queues the
+      // first wave of a deal stopped before it went says so again.
+      await postDispoLine({ store, locationId, saved, key: `promote:${offer.id}:${(r.rows || []).find((x) => x.draftId)?.draftId || offer.deal?.createdAt || ""}`,
+        text: promoteHeadsUp({ ...headsUpDeal(offer, where), rows: r.rows, scheduled: r.scheduled, reason: r.reason || "", price: r.price }) });
     } catch (e) { console.error(`auto-blast on promote failed for ${offer.id}: ${e?.message}`); }
+  }
+
+  // What the heads-up says about the deal itself: its contract, its fee and
+  // whose fee it is, and whether anyone has said what kind of house it is
+  // (4334's builders were picked off a deal with no kind set).
+  const headsUpDeal = (offer, where) => ({
+    address: offer.address, where: where === "who buy in the area" ? whoBuyIn(offer.address) : where,
+    contractPrice: offer.deal?.contractPrice, assignmentFee: offer.deal?.assignmentFee, feeSource: offer.deal?.assignmentFeeSource || "",
+    kindSet: Boolean(assetOf(offer)),
+  });
+  const whoBuyIn = (address) => {
+    const city = String(address || "").split(",").map((p) => p.trim())[1] || "";
+    return city ? `who buy in ${city}` : "who buy in the area";
+  };
+
+  /**
+   * repickOnKindChange({ locationId, client, offer, before }) → { dismissed, queued, drafted }
+   *
+   * The kind of house changed on a deal whose first texts are still queued
+   * (2026-11-09: a deal set to land after promote still went to the flippers
+   * it was first picked for). The buyers it was queued to are picked again
+   * for the new kind: a first text to one who no longer fits is pulled back,
+   * one who still fits is stamped with the new kind, and, while none of the
+   * deal's texts has gone yet, new fits are queued on the schedule the
+   * promote set. Only ever narrows what was queued before adding the new
+   * fits; the send-time check in sendReplyDraft holds any it missed.
+   */
+  async function repickOnKindChange({ locationId, client, offer, before }) {
+    const out = { dismissed: 0, queued: 0, drafted: 0 };
+    if (!offer?.deal || !dispoDeps?.matchForDeal) return out;
+    const was = assetOf(before)?.type || "", now = assetOf(offer)?.type || "";
+    if (was === now) return out;
+    const open = await store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 5000 }).catch(() => null);
+    const mine = (open || []).filter((d) => d?.party === "investor" && d.outbound?.kind === "blast_open" && d.outbound.offerId === offer.id
+      && !d.outbound.asked && !d.outbound.presell && !String(d.inbound || "").trim());
+    if (!mine.length) return out;
+    const fitting = (await dispoDeps.matchForDeal(locationId, offer, { exclude: "none" })).results || [];
+    const fits = new Set(fitting.map((x) => x.contactId));
+    const kind = (assetLabel(assetOf(offer)) || "not set").toLowerCase();
+    const stamp = assetOf(offer)?.type || "";
+    const ts = new Date().toISOString();
+    const times = mine.map((d) => Date.parse(d.sendAt || "")).filter(Number.isFinite);
+    for (const d of mine) {
+      if (fits.has(d.contactId)) {
+        await store.updateReplyDraft(d.id, { ...d, outbound: { ...d.outbound, assetType: stamp }, updatedAt: ts });
+        continue;
+      }
+      await store.updateReplyDraft(d.id, { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `the kind of house changed to ${kind} and they don't buy it — not sent`] });
+      await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      out.dismissed++;
+    }
+    // Said on #dispositions whenever it moved anything, not only when it
+    // added buyers: 40 texts pulled back with no builder to take their place
+    // is the line Matt most needs.
+    const street = String(offer.address || "").split(",")[0].trim();
+    const say = async (firstNew = null) => {
+      if (!out.dismissed && !out.queued && !out.drafted) return;
+      const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+      const added = out.queued + out.drafted;
+      await postDispoLine({ store, locationId, saved, key: `repick:${offer.id}:${ts}`,
+        text: `:arrows_counterclockwise: *${street}* is ${kind} now: ${out.dismissed} queued text${out.dismissed === 1 ? "" : "s"} pulled back from buyers who don't buy it, ${added} new buyer${added === 1 ? "" : "s"} queued${firstNew ? ` from ${whenText(firstNew)}` : ""}.` });
+    };
+    // New fits only before the first text has left: after that, the deal is
+    // out there and the button or the morning catch-up picks who's next.
+    const since = offer.deal.createdAt || new Date(Date.now() - 30 * 86400000).toISOString();
+    const events = await store.listContactEventsSince(locationId, since, { types: DEAL_SENT_TYPES, limit: 20000 }).catch(() => null);
+    if (!events || events.some((e) => e?.type === "blast_sent" && e.offerId === offer.id)) { await say(); return out; }
+    const fresh = ((await dispoDeps.matchForDeal(locationId, offer, { exclude: "blasted" })).results || []);
+    // A buyer an earlier re-pick pulled back who fits again (a kind set by
+    // mistake and set back) goes back on: the deal's send list still names
+    // them, so the pick above would leave them out for good.
+    const drafts = await store.listReplyDrafts(locationId, { status: ["dismissed", "sent", "sending", "scheduled", "draft"], since: offer.deal.createdAt || null, limit: 5000 }).catch(() => []);
+    const back = repickedOut(drafts, offer);
+    const had = sentTo(offer, events);
+    const picked = new Set(fresh.map((x) => x.contactId));
+    const again = fitting.filter((x) => back.has(x.contactId) && !had.has(x.contactId) && !picked.has(x.contactId));
+    const investors = [...fresh, ...again];
+    if (!investors.length) { await say(); return out; }
+    const first = times.length ? Math.min(...times) : Date.now() + PROMOTE_BLAST_GRACE_MS;
+    const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors, wave: 1, startAfterMs: Math.max(0, first - Date.now()) });
+    out.queued = r.queued || 0;
+    out.drafted = r.drafted || 0;
+    await say((r.rows || []).map((x) => Date.parse(x.sendAt || "")).filter(Number.isFinite).sort((a, b) => a - b)[0]);
+    return out;
+  }
+
+  // The buyers whose first text of this deal a re-pick pulled back and
+  // nothing has replaced: their newest one for it is that dismissal, and
+  // none went.
+  const REPICK_PULLED = /^the kind of house changed to .+ and they don't buy it — not sent$/;
+  function repickedOut(drafts = [], offer = {}) {
+    const newest = new Map(), went = new Set();
+    for (const d of drafts || []) {
+      if (d?.party !== "investor" || d.outbound?.kind !== "blast_open" || d.outbound.offerId !== offer.id || !d.contactId) continue;
+      if (d.status === "sent" || d.status === "sending") went.add(d.contactId);
+      const prev = newest.get(d.contactId);
+      if (!prev || String(d.createdAt || "") >= String(prev.createdAt || "")) newest.set(d.contactId, d);
+    }
+    const out = new Set();
+    for (const [contactId, d] of newest) {
+      if (went.has(contactId) || d.status !== "dismissed") continue;
+      if ((d.flags || []).some((f) => REPICK_PULLED.test(String(f)))) out.add(contactId);
+    }
+    return out;
   }
 
   async function promoteToDeal({ locationId, client, offer, body = {} }) {
@@ -3589,6 +3745,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       ?? dealMoney(offer.contract?.fields?.price)
       ?? dealMoney(offer.cashAmount);
     const assignmentFee = dealMoney(body.assignmentFee) ?? dealMoney(settings.wholesaleFee);
+    // Whose fee it is: one you typed, or the setting's default filled in
+    // (4334 130th Pl SE went to buyers at the default 30k on 11/09). The
+    // promote heads-up says so; a fee typed on the deal later is yours.
+    const assignmentFeeSource = dealMoney(body.assignmentFee) != null ? "you" : "setting";
     // Inspection contingency deadline: today + the contract's inspection
     // period (local date, same yyyy-mm-dd convention as closingDate).
     const parsedDays = parseInt(offer.contract?.fields?.inspectionDays, 10);
@@ -3602,6 +3762,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       stageHistory: [{ stage: "under_contract", ts }],
       contractPrice,
       assignmentFee,
+      assignmentFeeSource,
       closingDate: dealStr(body.closingDate, 40) || dealStr(offer.contract?.fields?.closingDate, 40),
       inspectionDate: dealStr(body.inspectionDate, 40) || inspectionDefault,
       notes: "",
@@ -3773,7 +3934,15 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
         ts = new Date(t).toISOString();
       }
       // Their number, when the status is their counter: the band reads it.
-      const amount = status === "countered" ? Math.max(0, Math.round(Number(req.body?.amount) || 0)) : 0;
+      // Typed the way a person types it ("345k", shared/money.js); one that
+      // doesn't read is refused rather than dropped (2026-11-09: a counter
+      // marked by hand had no number, so no call row and no hold clock).
+      const typedAmount = req.body?.amount;
+      const parsedAmount = typedAmount == null || String(typedAmount).trim() === "" ? 0 : parseMoney(typedAmount);
+      if (status === "countered" && parsedAmount == null) {
+        return res.status(400).json({ error: `couldn't read "${String(typedAmount).slice(0, 40)}" as their number: type it like 430000 or 430k` });
+      }
+      const amount = status === "countered" ? Math.max(0, Math.round(parsedAmount || 0)) : 0;
       // A house nothing went out on, marked "We passed: <reason>": the bot
       // tells them (shared/pass-note.js). Read before the status changes.
       const notePass = wantsPassNote({ before: { ...offer }, status, reason: passReason });
@@ -4127,6 +4296,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { offer } = ctx;
       const ts = new Date().toISOString();
       const type = String(req.body?.type || "").trim();
+      const before = { ...offer };
       if (type) {
         const picked = normalizeAsset({ type, land: req.body?.land, by: "you", at: ts });
         if (!picked) return res.status(400).json({ error: "type must be sfr, multi_family, manufactured, commercial or land" });
@@ -4137,7 +4307,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       offer.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
-      res.json({ ok: true, offer, asset: assetOf(offer) });
+      // A deal whose texts are still queued is picked again for its new kind.
+      const repick = await repickOnKindChange({ locationId: ctx.locationId, client: ctx.client, offer, before })
+        .catch((e) => { console.error(`offers: re-pick on kind change failed for ${offer.id}: ${String(e?.message || e).slice(0, 160)}`); return { dismissed: 0, queued: 0, drafted: 0, error: "the deal's queued texts couldn't be picked again: check them in the outbox" }; });
+      res.json({ ok: true, offer, asset: assetOf(offer), repick });
     } catch (err) { fail(res, err); }
   });
 
@@ -4550,6 +4723,8 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       if (b.fellThroughCode && !fellThroughCode) {
         return res.status(400).json({ error: `fellThroughCode must be one of: ${Object.keys(FELL_THROUGH_LABEL).join(", ")}` });
       }
+      const money = dealMoneyEdit(deal, offer, b);
+      if (money.http) return res.status(money.http).json({ error: money.error, ...(money.confirm ? { confirm: true } : {}) });
       if (b.stage !== undefined) {
         if (!DEAL_STAGES.includes(b.stage)) {
           return res.status(400).json({ error: `stage must be one of: ${DEAL_STAGES.join(", ")}` });
@@ -4560,8 +4735,11 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
           stageChanged = true;
         }
       }
-      if (b.contractPrice !== undefined) deal.contractPrice = dealMoney(b.contractPrice);
-      if (b.assignmentFee !== undefined) deal.assignmentFee = dealMoney(b.assignmentFee);
+      if ("contractPrice" in money.set) deal.contractPrice = money.set.contractPrice;
+      if ("assignmentFee" in money.set) {
+        if (money.set.assignmentFee !== deal.assignmentFee) deal.assignmentFeeSource = "you";
+        deal.assignmentFee = money.set.assignmentFee;
+      }
       if (b.closingDate !== undefined) deal.closingDate = dealStr(b.closingDate, 40);
       if (b.inspectionDate !== undefined) deal.inspectionDate = dealStr(b.inspectionDate, 40);
       if (b.notes !== undefined) deal.notes = dealStr(b.notes, 4000);
@@ -4654,7 +4832,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
   }
 
   // Un-promote (mistake correction) — removes deal tracking, keeps the offer.
-  // The best-effort GHL tag isn't reversed.
+  // The best-effort GHL tag isn't reversed. The deal texts it queued are
+  // pulled back (2026-11-09: one click on "Accepted, track as deal" queues
+  // the house to every buyer in the area, and taking it back left them
+  // queued); the answer says how many.
   router.delete("/:id/deal", async (req, res) => {
     try {
       const ctx = await loadDealOffer(req, res);
@@ -4666,6 +4847,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       // before it (sent if the docs went out, otherwise not sent).
       recordStatus(offer, statusAfterUnpromote(offer));
       await store.updateOffer(offer.id, offer);
+      const pulled = await stopDealOutreach({ client, store, locationId, offer, takenBack: true }).catch(() => ({ dismissed: [] }));
       // There is no assignment contract any more — an investor room falls back
       // to the offer's own cash number and the default fee.
       await syncDealNumbers({ store, offer, settings: effectiveSettings(await store.getOfferSettings(locationId)) });
@@ -4673,7 +4855,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       for (const inv of investors) {
         await syncInvestorDealTag(client, locationId, inv.contactId);
       }
-      res.json({ ok: true, offer });
+      res.json({ ok: true, offer, pulled: { dismissed: pulled.dismissed.length } });
     } catch (err) { fail(res, err); }
   });
 
@@ -6219,9 +6401,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const rows = await store.listOffers(locationId, { contactId, limit: 50 });
       const offer = pickOfferForStatus(currentOffers(rows), addressHint, status, { drafts: rows });
       if (!offer?.id) return { ok: false, reason: offer?.reason || "no open offer to mark" };
-      if (effectiveStatus(offer) === status) return { ok: true, unchanged: true, address: offer.address, status };
-      const ts = new Date().toISOString();
       const counter = Math.max(0, Math.round(Number(amount) || 0));
+      // Already countered: a new number is still news (2026-11-09: an agent
+      // who came down from 480 to 430 kept 480 on file, so the Desk showed
+      // the old gap and the hold clock never stood down for a call). The
+      // same number, or none, changes nothing.
+      const newNumber = status === "countered" && counter > 0 && counter !== Math.round(Number(offer.counter?.amount) || 0);
+      if (effectiveStatus(offer) === status && !newNumber) return { ok: true, unchanged: true, address: offer.address, status };
+      const ts = new Date().toISOString();
       recordStatus(offer, status, dealStr(note, 200), ts, { amount: counter, source: "conversation" });
       // A counter or a no says the price isn't settled: heat the conversation
       // raised comes off (a flag a person set is theirs to clear). A later

@@ -477,6 +477,11 @@ export const UNPIN_CURRENT = "__unpin_current";
 // same menu, same { offer } back.
 export const OFF_MARKET_ON = "__off_market_on";
 export const OFF_MARKET_OFF = "__off_market_off";
+// "Countered" with their number (2026-11-09): the status menu's key carries
+// it ("countered:430000") the way "we_passed:rural" carries its reason, and
+// it goes to the broker as `amount`.
+export const counteredKey = (amount) => `countered:${Math.round(Number(amount) || 0)}`;
+const counterAmountOf = (key) => { const [s, n] = String(key || "").split(":"); return s === "countered" ? Math.max(0, Math.round(Number(n) || 0)) : 0; };
 export const setOfferStatus = (id, status, note = "") => announced(
   status === OFF_MARKET_ON || status === OFF_MARKET_OFF
     ? post(`/api/offers/${encodeURIComponent(id)}/off-market`, { offMarket: status === OFF_MARKET_ON, note }, "PATCH")
@@ -485,7 +490,7 @@ export const setOfferStatus = (id, status, note = "") => announced(
     : status === MAKE_CURRENT || status === UNPIN_CURRENT
       ? post(`/api/offers/${encodeURIComponent(id)}/current`, { pin: status === MAKE_CURRENT, note }, "PATCH")
       // "we_passed:rural": we passed, and why (WE_PASS_REASONS).
-      : (({ status: key, reason }) => post(`/api/offers/${encodeURIComponent(id)}/status`, { status: key, note, ...(reason ? { reason } : {}) }, "PATCH"))(parseStatusKey(status)));
+      : (({ status: key, reason }, amount) => post(`/api/offers/${encodeURIComponent(id)}/status`, { status: key, note, ...(reason ? { reason } : {}), ...(amount ? { amount } : {}) }, "PATCH"))(parseStatusKey(status), counterAmountOf(status)));
 // Re-price an offer in place at `amount` — the held-paper banner's one tap.
 // Sends nothing. Returns { offer }.
 export const requoteOffer = (id, amount) =>

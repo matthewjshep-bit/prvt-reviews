@@ -280,11 +280,30 @@ export function pickDealBuyers(ranked = [], { exclude = "blasted", manufactured 
 // A blast draft that is going out, or about to.
 const BLAST_DRAFT_LIVE = new Set(["draft", "scheduled", "sending"]);
 
+// A deal Matt texted a buyer himself (ghl-broker/hand-reply.js, and the
+// ledger backfill for the deals his scripts sent after 10/21). Its own event
+// type, not blast_sent: the pulse's after-deal group, the Slack waves post
+// and the ghost penalty read blast_sent and stay as they were. Who already
+// has a deal reads both.
+export const DEAL_HAND_SENT = "deal_hand_sent";
+export const DEAL_SENT_TYPES = ["blast_sent", DEAL_HAND_SENT];
+
+/** sentTo(offer, events) → Set(contactId): the buyers a send of this deal is recorded for, by the app or by hand. */
+export function sentTo(offer = {}, events = []) {
+  const out = new Set();
+  for (const e of events || []) {
+    if (e?.type === DEAL_HAND_SENT && e.contactId && e.offerId && e.offerId === offer?.id) out.add(e.contactId);
+    else if (e?.type === "blast_sent" && e.contactId && e.offerId === offer?.id && offer?.id) out.add(e.contactId);
+  }
+  return out;
+}
+
 /**
  * blastedTo(offer, { events, drafts }) → Set(contactId)
  *
  * Everyone this deal has gone to or is about to go to. That means:
- *   - a blast_sent recorded for the offer;
+ *   - a blast_sent recorded for the offer, or the deal texted by hand
+ *     (deal_hand_sent);
  *   - a GHL-workflow blast, which knows its tag and label but not its deal,
  *     matched on one of the deal's blast tags or its street;
  *   - anyone on one of the deal's app waves (deal.blasts[].contactIds);
@@ -295,6 +314,7 @@ const BLAST_DRAFT_LIVE = new Set(["draft", "scheduled", "sending"]);
 export function blastedTo(offer = {}, { events = [], drafts = [] } = {}) {
   const out = new Set();
   const tags = new Set((offer?.deal?.blastTags || []).map((t) => String(t || "").toLowerCase()).filter(Boolean));
+  for (const id of sentTo(offer, events)) out.add(id);
   for (const e of events || []) {
     if (e?.type !== "blast_sent" || !e.contactId) continue;
     if (e.offerId) { if (e.offerId === offer?.id) out.add(e.contactId); continue; }

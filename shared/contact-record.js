@@ -114,6 +114,10 @@ export const EVENT_TYPES = [
   // A text a person typed on Today's work pane (ghl-broker/hand-reply.js).
   // The words are in GHL's thread, not here.
   "hand_reply",
+  // A deal Matt texted a buyer himself (hand-reply.js with a deal's offerId,
+  // or the ledger backfill): who already has the deal reads it with
+  // blast_sent (shared/buyer-score.js DEAL_SENT_TYPES).
+  "deal_hand_sent",
   // A deal post-mortem was written to the record (by the machine or by hand).
   "post_mortem_built",
   // A loan recorded on a property they bought — from a borrower list. What the
@@ -204,6 +208,7 @@ export const EVENT_LABEL = {
   showing_reminder_sent: "reminded them about the walkthrough", showing_followup_sent: "followed up after the walkthrough",
   call_booked: "call booked",
   hand_reply: "you texted them",
+  deal_hand_sent: "you texted them the deal",
   post_mortem_built: "post-mortem written",
   property_financed: "financed a property",
   email_received: "they emailed us",
@@ -247,6 +252,7 @@ export const EVENT_ICON = {
   showing_reminder_sent: "CalendarCheck", showing_followup_sent: "MessageSquare",
   call_booked: "CalendarCheck",
   hand_reply: "MessageSquare",
+  deal_hand_sent: "Megaphone",
   post_mortem_built: "ClipboardCheck",
   email_received: "Mail",
   email_sent: "Mail",

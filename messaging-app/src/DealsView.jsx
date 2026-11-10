@@ -8,6 +8,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Ban, ExternalLink, FileText, Loader2, Lock, Paperclip, Pencil, Play, Sparkles, Target, Trash2, Upload, X, MessageSquare } from "lucide-react";
 import { fmtMoney } from "@shared/offer-calc.js";
+import { parseMoney } from "@shared/money.js";
 import { INVESTOR_STATUSES, INVESTOR_STATUS_LABEL, investorStatus, dealOutreachPaused, dealOutreachStopped, dealIsOver } from "@shared/offer-status.js";
 import { summarizeFeedback } from "@shared/conversation-ai.js";
 import { FELL_THROUGH_CODES, FELL_THROUGH_LABEL, buyerCeiling, codeFromPassReasons } from "@shared/post-mortem.js";
@@ -75,7 +76,8 @@ function dateInfo(ymdStr) {
 const closingSub = (days) => (days > 0 ? `in ${days}d` : days === 0 ? "today" : `${-days}d overdue`);
 const inspectionSub = (days) => (days > 0 ? `in ${days}d` : days === 0 ? "today" : "ended");
 
-const num = (v) => Number(String(v ?? "").replace(/[$,\s]/g, "")) || 0;
+// "15k" is 15,000 here as it is on the broker (shared/money.js).
+const num = (v) => parseMoney(v) || 0;
 const assignmentTotal = (contractPrice, assignmentFee) => num(contractPrice) + num(assignmentFee);
 
 const shortDate = (iso) =>
@@ -421,7 +423,26 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   const asking = assignmentTotal(terms.contractPrice, terms.assignmentFee);
   const overBy = ceiling.computable && asking ? asking - ceiling.noFee : 0;
 
-  const saveTerms = () => run(() => updateDeal(offer.id, terms));
+  // The broker reads "15k" as 15,000 and refuses what it can't read (400,
+  // shown in the bar). An emptied price or fee is cleared only when you say
+  // so, and a contract price under 10k or far off our number asks first (409).
+  const saveTerms = async () => {
+    const clearing = ["contractPrice", "assignmentFee"].filter((k) => (String(terms[k] ?? "").trim() === "" || parseMoney(terms[k]) === 0) && deal[k] != null);
+    if (clearing.length && !window.confirm(`Clear the ${clearing.map((k) => (k === "contractPrice" ? "contract price" : "assignment fee")).join(" and ")}? Buyers are priced off ${clearing.length > 1 ? "them" : "it"}.`)) return;
+    const body = { ...terms, ...(clearing.length ? { clear: true } : {}) };
+    setError("");
+    setBusy(true);
+    try {
+      let r;
+      try { r = await updateDeal(offer.id, body); }
+      catch (e) {
+        if (e.status !== 409 || !window.confirm(e.message)) throw e;
+        r = await updateDeal(offer.id, { ...body, confirm: true });
+      }
+      if (r?.offer) onUpdated(r.offer);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
 
   // Stop or resume outreach. Stopping pulls back what was already queued,
   // and resuming puts it back; the banner says how much either way, so
@@ -435,7 +456,7 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
   }
 
   const removeThisDeal = async () => {
-    if (!window.confirm("Remove deal tracking from this offer? The offer itself is kept.")) return;
+    if (!window.confirm("Remove deal tracking from this offer? The offer itself is kept, and deal texts still waiting to go to buyers are pulled back.")) return;
     const r = await run(() => removeDeal(offer.id));
     if (r?.ok) onRemoved(offer.id);
   };
@@ -719,6 +740,10 @@ function DealModal({ offer, settings, onClose, onUpdated, onRemoved, onAssignmen
               <span className={labelCls}>Assignment fee</span>
               <input className={inputCls} value={terms.assignmentFee} placeholder={`$ — e.g. ${fmtMoney(settings?.wholesaleFee || 15000)}`}
                 onChange={(e) => setTerms((t) => ({ ...t, assignmentFee: e.target.value }))} />
+              {/* The setting's default filled it at promote: say so, since buyers are priced off it. */}
+              {deal.assignmentFeeSource === "setting" && String(terms.assignmentFee) === String(deal.assignmentFee ?? "") && (
+                <div className="mt-1 text-xs font-medium text-amber-800">The default fee from Settings. Type the real one if it's different.</div>
+              )}
             </div>
             <div className="rounded-lg bg-slate-50 px-3 py-2">
               <span className={labelCls}>Assignment contract</span>
