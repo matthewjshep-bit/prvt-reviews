@@ -71,6 +71,14 @@ test("a deal promoted at 6pm Pacific ends inspection N Pacific days later, not N
   assert.equal(earnest.dueYmd, "2026-11-02");
 });
 
+test("a date you correct on the Terms tab stops saying it came from the default", async () => {
+  const o = await mkDeal({ inspectionDate: "2026-10-11", closingDate: "2026-10-22", datesFrom: { inspection: "default", closing: "terms", earnest: "terms" } });
+  // The Terms tab sends every field; only the one that changed is yours.
+  const r = await req("PATCH", `/api/offers/${o.id}/deal`, { inspectionDate: "2026-10-14", closingDate: "2026-10-22", notes: "" });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual((await store.getOffer(o.id)).deal.datesFrom, { inspection: "you", closing: "terms", earnest: "terms" });
+});
+
 test("a PSA built after a write-up-terms letter names $1,000 due after feasibility", async () => {
   // The Conversation AI saved: its write-up terms are $1,000 earnest after the inspection, a 14 day inspection.
   await store.saveOfferSettings(LOC, { conversationAi: { enabled: false } });

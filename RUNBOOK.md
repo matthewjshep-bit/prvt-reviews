@@ -7654,15 +7654,15 @@ An inspection period lapsed with no notice. The deal's one checklist row was an 
 - It fires beside the `closing_task_due` row, whatever else is overdue. When the inspection is itself the most urgent item, only this row shows.
 - Title: "Extend, re-trade or cancel 12 Elm St by Nov 12". Detail: when it ends, and whether a buyer is committed.
 - Severity is `now` from 1 day out, `soon` at 2 to 3 days. Ops: **Done** (`tick_task`, ticks the inspection item) and **Open the deal**.
-- It sits on the Desk under Needs you, folds with the deal's other rows, and pings like a checklist row when GHL pings are on. It does not go to the Needs Matt stage: that is Matt's call (plan question 11).
+- It sits on the Desk under Needs you, folds with the deal's other rows, and pings like a checklist row when GHL pings are on. It does not go to the Needs Matt stage. Whether it should is Matt's call (open question 22 in the 2026-11-09 audit plan).
 
 #### Deal dates come from the paper, in Pacific days (2026-11-09)
 
 Promote (`promoteToDeal`, `ghl-broker/routes/offers.js`) used to read only the generic contract, fall back to 10 days, and count from the server's UTC day, so a promote after about 5pm Pacific ended the inspection a day late.
 
-- `promoteDates` (`shared/deal-checklist.js`) takes each date from the first of: what you typed, the PSA we generated (`psa.fields`), the generic contract (`contract.fields`), the letter's stamped terms (`offer.terms`), our write-up terms (`writtenTerms`). The inspection falls back to 10 days. Day counts start from today in Pacific time (`pacificYmd`, `addDays`, now exported).
+- `promoteDates` (`shared/deal-checklist.js`) takes each date from the first of: what you typed, the PSA we generated (`psa.fields`), the generic contract (`contract.fields`), the letter's stamped terms (`offer.terms`: its inspection days and closing days), our write-up terms (`writtenTerms`). The inspection falls back to 10 days. A letter or write-up window ("10 to 14 day inspection") ends on its shortest day, so the deadline row never comes after a shorter period on the signed paper has run out. Day counts start from today in Pacific time (`pacificYmd`, `addDays`, now exported).
 - A short sale's PSA leaves the inspection date blank: its feasibility starts at the lienholder's approval.
-- The deal stores `earnestMoney`, `earnestDue` (`acceptance` | `feasibility`) and `datesFrom` (`{ inspection, closing, earnest }`). The Terms tab says where each date came from and asks you to check them against the signed paper.
+- The deal stores `earnestMoney`, `earnestDue` (`acceptance` | `feasibility`) and `datesFrom` (`{ inspection, closing, earnest }`). The Terms tab says where each date came from and asks you to check them against the signed paper. A date you change there by hand reads as yours from then on.
 - With earnest due after feasibility, the checklist's earnest item is chased 3 days after the inspection ends (`checklistForTerms`), not 3 days after the contract.
 - The PSA (`PsaModal.jsx`, `POST /:id/psa`) starts from the letter's earnest money and inspection days, then the write-up terms (`psaTermsPrefill`, `shared/wa-psa-template.js`). § 4 and the summary row now print `{{earnest_due}}`, one of two fixed wordings (`PSA_EARNEST_DUE`): three business days after mutual acceptance, or after the Feasibility Period expires. A PSA saved before this keeps "after mutual acceptance" when regenerated.
 - Buyer found items (the assignment, the deposit) are dated from the last time the deal reached Buyer found, so a second buyer is chased from the day they committed.

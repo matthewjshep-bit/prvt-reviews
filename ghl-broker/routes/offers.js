@@ -4566,8 +4566,14 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       if (b.contractPrice !== undefined) deal.contractPrice = dealMoney(b.contractPrice);
       if (b.assignmentFee !== undefined) deal.assignmentFee = dealMoney(b.assignmentFee);
-      if (b.closingDate !== undefined) deal.closingDate = dealStr(b.closingDate, 40);
-      if (b.inspectionDate !== undefined) deal.inspectionDate = dealStr(b.inspectionDate, 40);
+      // A date you change by hand is yours (shared/deal-checklist.js
+      // promoteDates `from`): the Terms tab stops calling it a default.
+      for (const [k, src] of [["closingDate", "closing"], ["inspectionDate", "inspection"]]) {
+        if (b[k] === undefined) continue;
+        const v = dealStr(b[k], 40);
+        if (v !== (deal[k] || "") && deal.datesFrom) deal.datesFrom = { ...deal.datesFrom, [src]: "you" };
+        deal[k] = v;
+      }
       if (b.notes !== undefined) deal.notes = dealStr(b.notes, 4000);
       if (b.fellThroughReason !== undefined) deal.fellThroughReason = dealStr(b.fellThroughReason, 200);
       if (fellThroughCode !== undefined) deal.fellThroughCode = fellThroughCode;

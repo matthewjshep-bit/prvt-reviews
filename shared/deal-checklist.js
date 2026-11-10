@@ -301,11 +301,15 @@ export function promoteDates({ offer = {}, terms = {}, body = {}, now = Date.now
   const b = body || {};
 
   let inspectionDate = "", inspection = "";
+  // The letter and the write-up terms name a window ("10 to 14 day
+  // inspection"). A guess ends on its shortest day: the signed paper may say
+  // 10, and a warning dated off 14 would come after it had run out.
+  const shortest = (t) => wholeDays(t?.inspectionDaysMin) || wholeDays(t?.inspectionDays) || null;
   const days = [
     ["psa", shortSale ? null : wholeDays(psa?.feasibilityDays)],
     ["contract", wholeDays(contract?.inspectionDays)],
-    ["letter", wholeDays(letter?.inspectionDays) || null],
-    ["terms", Number(terms?.inspectionDays) > 0 ? wholeDays(terms.inspectionDays) : null],
+    ["letter", shortest(letter)],
+    ["terms", Number(terms?.inspectionDays) > 0 ? shortest(terms) : null],
   ];
   if (dateIn(b.inspectionDate)) { inspectionDate = dateIn(b.inspectionDate); inspection = "you"; }
   else if (shortSale) inspection = "psa_short_sale";
@@ -320,6 +324,8 @@ export function promoteDates({ offer = {}, terms = {}, body = {}, now = Date.now
   else if (shortSale) closing = "";
   else if (isYmd(psa?.closingDate)) { closingDate = psa.closingDate; closing = "psa"; }
   else if (dateIn(contract?.closingDate)) { closingDate = dateIn(contract.closingDate); closing = "contract"; }
+  // The letter's own closing days (shared/offer-status.js termsOnLetter), before today's settings.
+  else if (wholeDays(letter?.closingDays)) { closingDate = addDays(today, wholeDays(letter.closingDays)); closing = "letter"; }
   else if (Number(terms?.closeDays) > 0) { closingDate = addDays(today, wholeDays(terms.closeDays)); closing = "terms"; }
 
   let earnestMoney = null, earnest = "";

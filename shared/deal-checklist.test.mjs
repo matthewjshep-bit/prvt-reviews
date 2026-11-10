@@ -109,6 +109,10 @@ test("deal dates come from the PSA first, then the contract, then the letter, th
   assert.deepEqual([d.inspectionDate, d.closingDate, d.earnestMoney, d.earnestDue], ["2026-10-30", "2026-11-10", 1000, "feasibility"]);
   assert.deepEqual(d.from, { inspection: "letter", closing: "terms", earnest: "letter" });
 
+  // A letter that named its closing days closes on those, not on today's settings.
+  d = promoteDates({ offer: { terms: { inspectionDays: 10, closingDays: 30 } }, terms: WRITE_UP, now: SIX_PM_PACIFIC });
+  assert.deepEqual([d.closingDate, d.from.closing], ["2026-11-19", "letter"]);
+
   d = promoteDates({ offer: {}, terms: WRITE_UP, now: SIX_PM_PACIFIC });
   assert.deepEqual([d.inspectionDate, d.from.inspection], ["2026-11-03", "terms"]);
 
@@ -120,6 +124,19 @@ test("deal dates come from the PSA first, then the contract, then the letter, th
   // What you typed at promote beats all of it.
   d = promoteDates({ offer: { psa: { fields: psa } }, body: { inspectionDate: "2026-11-03", closingDate: "2026-12-01" }, terms: WRITE_UP, now: SIX_PM_PACIFIC });
   assert.deepEqual([d.inspectionDate, d.closingDate, d.from.inspection, d.from.closing], ["2026-11-03", "2026-12-01", "you", "you"]);
+});
+
+// The letter and the write-up terms name a window ("10 to 14 day inspection").
+// Ending a guessed period on its last day would put the warning after a
+// 10-day period on the signed paper had already run out.
+test("a guessed inspection window ends on its shortest day, so the warning never comes after the real deadline", () => {
+  let d = promoteDates({ offer: { terms: { inspectionDays: 14, inspectionDaysMin: 10 } }, terms: WRITE_UP, now: SIX_PM_PACIFIC });
+  assert.deepEqual([d.inspectionDate, d.from.inspection], ["2026-10-30", "letter"]);
+  d = promoteDates({ offer: {}, terms: { ...WRITE_UP, inspectionDaysMin: 10 }, now: SIX_PM_PACIFIC });
+  assert.deepEqual([d.inspectionDate, d.from.inspection], ["2026-10-30", "terms"]);
+  // A PSA states one number, and that is the one.
+  d = promoteDates({ offer: { psa: { fields: { mode: "standard", feasibilityDays: 14 } }, terms: { inspectionDays: 14, inspectionDaysMin: 10 } }, terms: { ...WRITE_UP, inspectionDaysMin: 10 }, now: SIX_PM_PACIFIC });
+  assert.deepEqual([d.inspectionDate, d.from.inspection], ["2026-11-03", "psa"]);
 });
 
 test("a short sale's inspection waits on the lienholder, so promote leaves its date for you", () => {
