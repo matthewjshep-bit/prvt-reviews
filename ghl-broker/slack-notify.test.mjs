@@ -582,3 +582,28 @@ test("a numbered house never borrows the status of the agent's other house", asy
   assert.deepEqual(r.rows.map((x) => [x.app.emoji, x.change]), [[null, false]]);
   assert.equal(s.of("reactions.add").length, 0);
 });
+
+// 2026-11-09 audit: houses passed on the 72-hour clock with nothing in the
+// morning post saying which were about to go. Streets only, never a name.
+test("the morning post names the houses that pass today unless Matt prices them, with the engine's number", async () => {
+  const LOC = "loc-morning-passes";
+  const { postMorning } = await import("./slack-notify.js");
+  const { houseKey } = await import("./shared/current-offer.js");
+  const s = slack();
+  const lark = await store.createOffer({ locationId: LOC, contactId: "rory", address: "88 Larkspur Ln, Tacoma, WA 98404", status: "draft" });
+  const quarry = await store.createOffer({ locationId: LOC, contactId: "nell", address: "14 Quarry Rd, Kent, WA 98030", status: "draft" });
+  const later = await store.createOffer({ locationId: LOC, contactId: "ike", address: "9 Bramble Ct, Auburn, WA 98002", status: "draft" });
+  await store.upsertHousePricing(LOC, houseKey(lark.address), { address: lark.address, v2: { grade: "B", open: 412000, walkAway: 430000 } });
+  const landed = (h) => new Date(T0 - h * 3600000).toISOString();
+  await store.setJobCursor(LOC, "needsMatt", { at: at(0), doc: { needs: {
+    rory: { kind: "price", offerId: lark.id, landedAt: landed(60) },
+    nell: { kind: "price", offerId: quarry.id, landedAt: landed(50) },
+    ike: { kind: "price", offerId: later.id, landedAt: landed(10) },
+    zoe: { kind: "yes", offerId: null, landedAt: landed(70) },
+  } } });
+  const r = await postMorning({ store, locationId: LOC, saved: ON, now: T0 });
+  assert.deepEqual(r.counts.passesToday, { count: 2, houses: [{ street: "88 Larkspur Ln", engine: 412000 }, { street: "14 Quarry Rd", engine: null }] });
+  const text = said(s.of("chat.postMessage").at(-1));
+  assert.match(text, /Passes today unless you price it: \*2\* — 88 Larkspur Ln \(engine \$412,000\), 14 Quarry Rd/);
+  assert.doesNotMatch(text, /Bramble|rory|nell/);
+});

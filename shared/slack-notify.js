@@ -18,6 +18,7 @@ import { pingWhy } from "./ghl-pings.js";
 import { DRAFT_ONLY_RX, wePassReasonOf } from "./offer-status.js";
 import { offerStage } from "./offer-stage.js";
 import { houseKey, resolveHouse } from "./current-offer.js";
+import { PASS_AFTER_HOURS, needsMattPassDue } from "./needs-matt.js";
 
 export const SLACK_STREAMS = Object.freeze(["needsMatt", "acquisitions", "underwrites", "dispositions", "machine", "daily"]);
 export const SLACK_STREAM_LABEL = Object.freeze({
@@ -546,6 +547,25 @@ export const MORNING_EVENT_TYPES = Object.freeze([
   "underwrite_done", "underwrite_held", "underwrite_failed", "deal_promoted", "blast_sent", "investor_committed", "text_summary",
 ]);
 
+/**
+ * passesToday(needs, { now, withinHours }) → [{ contactId, offerId, landedAt, passAt }], soonest first
+ *
+ * The Needs Matt price cards (the runner's cursor, ghl-broker/needs-matt.js)
+ * that pass PASS_AFTER_HOURS after they landed within the next `withinHours`,
+ * or are already due and go on the next tick. Only a card the runner can mark
+ * (one with an offer); a yes or paper is never passed by the machine.
+ */
+export function passesToday(needs = {}, { now = Date.now(), withinHours = 24 } = {}) {
+  const out = [];
+  for (const [contactId, v] of Object.entries(needs || {})) {
+    // The runner's own test (needsMattPassDue), asked of the end of the window.
+    if (!needsMattPassDue(v, now + withinHours * 3600000)) continue;
+    const passAt = Date.parse(v.landedAt) + PASS_AFTER_HOURS * 3600000;
+    out.push({ contactId, offerId: v.offerId, landedAt: v.landedAt, passAt: new Date(passAt).toISOString() });
+  }
+  return out.sort((a, b) => a.passAt.localeCompare(b.passAt));
+}
+
 /** renderMorning(counts, ctx) → yesterday in numbers, for #daily. */
 export function renderMorning(c = {}, ctx = {}) {
   const row = (label, v) => `${label}: *${Number(v) || 0}*`;
@@ -556,6 +576,13 @@ export function renderMorning(c = {}, ctx = {}) {
     [row("Offers sent", c.offersSent), row("Counters", c.counters), row("Hot", c.hot), row("Agreed", c.agreed)].join(" · "),
     [row("New deals", c.deals), row("Buyer texts", c.buyerTexts), row("Buyers committed", c.buyersCommitted)].join(" · "),
   ];
+  // Houses the 72-hour clock passes today unless Matt prices them (2026-11-09 audit), with the
+  // offer engine's number when it priced one in the background. Streets only.
+  if (c.passesToday?.count) {
+    const shown = (c.passesToday.houses || []).slice(0, 5)
+      .map((h) => `${esc(street(h.street || h.address) || "a house")}${money(h.engine) ? ` (engine ${money(h.engine)})` : ""}`);
+    lines.push(`:hourglass_flowing_sand: Passes today unless you price it: *${c.passesToday.count}*${shown.length ? ` — ${shown.join(", ")}${c.passesToday.count > shown.length ? ", …" : ""}` : ""}`);
+  }
   const link = slackLinks({ appUrl: ctx.appUrl, appLink: ctx.appLink, locationId: ctx.locationId, path: "/reports", view: "activity" });
   const blocks = [{ type: "section", text: { type: "mrkdwn", text: lines.join("\n") } }];
   if (link) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: link }] });
