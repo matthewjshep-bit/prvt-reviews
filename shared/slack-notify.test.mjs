@@ -137,9 +137,10 @@ test("the morning numbers count houses and offers, Tier 1 once per contact", () 
 
 // 2026-11-09 audit: 43 houses passed on the 72-hour clock unpriced since
 // 10/25, with nothing in the morning post saying which ones were about to go.
+// 2026-11-10: three working days, so this is a Thursday at 7am Pacific.
 test("the morning post names the houses that pass today unless Matt prices them", async () => {
   const { passesToday } = await import("./slack-notify.js");
-  const now = Date.parse("2026-11-09T15:00:00Z");
+  const now = Date.parse("2026-11-12T15:00:00Z");
   const hoursAgo = (h) => new Date(now - h * 3600000).toISOString();
   const needs = {
     c1: { kind: "price", offerId: "o1", landedAt: hoursAgo(60) },   // passes in 12h
@@ -147,15 +148,20 @@ test("the morning post names the houses that pass today unless Matt prices them"
     c3: { kind: "yes", offerId: "o3", landedAt: hoursAgo(70) },     // a yes never passes
     c4: { kind: "price", offerId: "o4", landedAt: hoursAgo(73) },   // due now: goes on the next tick
     c5: { kind: "price", offerId: null, landedAt: hoursAgo(70) },   // nothing the runner can mark
+    c6: { kind: "price", offerId: "o6", landedAt: hoursAgo(80), engine: { grade: "B", open: 238000 } }, // the engine priced it: never
   };
   const due = passesToday(needs, { now });
   assert.deepEqual(due.map((x) => x.offerId), ["o4", "o1"], "soonest first");
   assert.equal(due[1].contactId, "c1");
+  assert.equal(due[1].passAt, "2026-11-13T03:00:00.000Z", "Thursday 7pm Pacific: 72 working hours after it landed");
+  // On a Monday, a house that landed Thursday at 10am has 69 working hours by Tuesday morning (117 clock hours).
+  const mon = Date.parse("2026-11-09T15:00:00Z");
+  assert.deepEqual(passesToday({ c7: { kind: "price", offerId: "o7", landedAt: new Date(mon - 93 * 3600000).toISOString() } }, { now: mon }), [], "the weekend doesn't count");
   const c = { passesToday: { count: 6, houses: [
-    { street: "88 Larkspur Ln", engine: 412000 }, { street: "14 Quarry Rd" }, { street: "6 Ferncliff Ave" },
+    { street: "88 Larkspur Ln" }, { street: "14 Quarry Rd" }, { street: "6 Ferncliff Ave" },
     { street: "9 Bramble Ct" }, { street: "300 Tidewater Way" }, { street: "2 Juniper Pl" }] } };
   const t = textOf(renderMorning(c));
-  assert.match(t, /Passes today unless you price it: \*6\* — 88 Larkspur Ln \(engine \$412,000\), 14 Quarry Rd, 6 Ferncliff Ave, 9 Bramble Ct, 300 Tidewater Way, …/);
+  assert.match(t, /Passes today unless you price it \(no engine number, three working days\): \*6\* — 88 Larkspur Ln, 14 Quarry Rd, 6 Ferncliff Ave, 9 Bramble Ct, 300 Tidewater Way, …/);
   assert.doesNotMatch(t, /2 Juniper Pl/, "five streets at most");
   assert.doesNotMatch(textOf(renderMorning({})), /Passes today/, "no line when nothing passes");
 });

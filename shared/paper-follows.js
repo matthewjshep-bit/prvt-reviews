@@ -26,18 +26,27 @@ const ms = (v) => {
   return Number.isFinite(t) ? t : null;
 };
 
-function isWeekday(t, tz = WORK_TZ) {
+// A weekday that isn't one of the days off (conversationAi autoSend.offDays, "YYYY-MM-DD" on the
+// zone's calendar, 2026-11-10). No days off: any weekday.
+const DAY_KEY = new Map();
+function isWeekday(t, tz = WORK_TZ, offDays = null) {
   const wd = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: tz }).format(new Date(t));
-  return wd !== "Sat" && wd !== "Sun";
+  if (wd === "Sat" || wd === "Sun") return false;
+  if (!offDays?.length) return true;
+  let f = DAY_KEY.get(tz);
+  if (!f) { f = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }); DAY_KEY.set(tz, f); }
+  return !offDays.includes(f.format(new Date(t)));
 }
 
 /**
- * workingHoursBetween(fromMs, toMs, tz) → hours
+ * workingHoursBetween(fromMs, toMs, tz, { offDays }) → hours
  *
  * Clock hours on weekdays (Pacific) between two moments — a number floated
  * Friday at 2pm has had ten working hours by Monday morning, not sixty.
+ * `offDays` ("YYYY-MM-DD") don't count either (the Needs Matt pass clock,
+ * 2026-11-10).
  */
-export function workingHoursBetween(fromMs, toMs, tz = WORK_TZ) {
+export function workingHoursBetween(fromMs, toMs, tz = WORK_TZ, { offDays = null } = {}) {
   if (!(toMs > fromMs)) return 0;
   let total = 0;
   // An hour at a time is plenty: the question is "a day or more?", and the
@@ -45,27 +54,28 @@ export function workingHoursBetween(fromMs, toMs, tz = WORK_TZ) {
   const end = Math.min(toMs, fromMs + (PAPER_FLOAT_MAX_DAYS + 3) * 24 * HOUR);
   for (let t = fromMs; t < end;) {
     const next = Math.min(end, t + HOUR);
-    if (isWeekday(t, tz)) total += next - t;
+    if (isWeekday(t, tz, offDays)) total += next - t;
     t = next;
   }
   return total / HOUR;
 }
 
 /**
- * addWorkingHours(fromMs, hours, tz) → ms
+ * addWorkingHours(fromMs, hours, tz, { offDays }) → ms
  *
  * workingHoursBetween the other way round: the moment `hours` weekday clock
  * hours after `fromMs` (Reports → Follow-up, when the written offer follows
  * a float). Capped like it, at the float's shelf life.
  */
-export function addWorkingHours(fromMs, hours, tz = WORK_TZ) {
+export function addWorkingHours(fromMs, hours, tz = WORK_TZ, { offDays = null } = {}) {
   let left = Math.max(0, Number(hours) || 0) * HOUR;
   let t = fromMs;
   const end = fromMs + (PAPER_FLOAT_MAX_DAYS + 3) * 24 * HOUR;
   while (left > 0 && t < end) {
     const next = Math.min(t + HOUR, t + left);
-    if (isWeekday(t, tz)) left -= next - t;
-    t = isWeekday(t, tz) ? next : t + HOUR;
+    const working = isWeekday(t, tz, offDays);
+    if (working) left -= next - t;
+    t = working ? next : t + HOUR;
   }
   return t;
 }

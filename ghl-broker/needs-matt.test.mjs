@@ -151,6 +151,52 @@ test("a house still unpriced three days after it landed is passed, and the agent
   assert.equal((await store.getOffer("o-gil")).status, "draft");
 });
 
+// Matt, 2026-11-10: the clock passed houses the engine had already priced. A house with an engine
+// number of any grade stays on Needs Matt with that number on the card; only an unpriced one passes.
+test("a house the engine priced stays on Needs Matt with its number and is never passed by the clock", async () => {
+  const { houseKey } = await import("./shared/current-offer.js");
+  const loc = "loc-engine-priced";
+  const ghl = ghlWith(STAGES);
+  const old = 24 + 72 + 1;
+  await store.createOffer({ id: "o-hal", locationId: loc, contactId: "hal", address: "15 Cedar St, Kent, WA", status: "draft", cashAmount: 0,
+    draft: { engine: { grade: "B", open: 238000, walkAway: 253000, gradeB: { mode: "shadow", open: 214250, wouldSend: true } } } });
+  await store.createOffer({ id: "o-ida", locationId: loc, contactId: "ida", address: "16 Spruce St, Kent, WA", status: "draft", cashAmount: 0 });
+  await store.upsertHousePricing(loc, houseKey("16 Spruce St, Kent, WA"), { address: "16 Spruce St, Kent, WA", v2: { grade: "C", open: 0, walkAway: 181000, at: hoursAgo(old) } });
+  await store.createOffer({ id: "o-jo", locationId: loc, contactId: "jo", address: "17 Hemlock St, Kent, WA", status: "draft", cashAmount: 0 });
+  const row = (who, h) => ({ id: `price_it:o-${who}`, kind: "price_it", contactId: who, offerId: `o-${who}`, address: { hal: "15 Cedar St, Kent, WA", ida: "16 Spruce St, Kent, WA", jo: "17 Hemlock St, Kent, WA" }[who], readyAt: hoursAgo(h) });
+  const rows = ["hal", "ida", "jo"].map((w) => row(w, old));
+  await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: ON, now: NOW - 73 * 3600000,
+    deps: { pipelineFor: pipelineFor(rows.map((x) => ({ ...x, readyAt: new Date(Date.parse(x.readyAt) - 73 * 3600000).toISOString() }))), syncAgentCard: syncStub().fn } });
+  const r = await runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved: ON, now: NOW, deps: { pipelineFor: pipelineFor(rows), syncAgentCard: syncStub().fn } });
+  assert.deepEqual(r.passed, [{ contactId: "jo", offerId: "o-jo" }], "only the house with no engine number");
+  assert.equal((await store.getOffer("o-hal")).status, "draft");
+  assert.equal((await store.getOffer("o-ida")).status, "draft", "the house's record counts too, any grade");
+  assert.equal((await store.getOffer("o-jo")).status, "we_passed");
+  const needs = (await store.getJobCursor(loc, NEEDS_MATT_CURSOR)).doc.needs;
+  assert.deepEqual(needs.hal.engine, { grade: "B", open: 238000, walkAway: 253000 });
+  assert.equal(needs.hal.why, "Price it on 15 Cedar St: the engine has 238K (grade B) on the draft; the agent has waited 4 days");
+  assert.equal(needs.ida.engine.walkAway, 181000);
+  assert.equal(needs.jo.engine, undefined);
+});
+
+test("the pass clock skips the weekend and his days off", async () => {
+  const loc = "loc-weekend";
+  const ghl = ghlWith(STAGES);
+  await store.createOffer({ id: "o-kit", locationId: loc, contactId: "kit", address: "18 Laurel St, Kent, WA", status: "draft", cashAmount: 0 });
+  const FRI = Date.parse("2026-10-16T17:00:00Z"); // Friday 10am Pacific
+  const rows = [{ id: "price_it:o-kit", kind: "price_it", contactId: "kit", offerId: "o-kit", address: "18 Laurel St, Kent, WA", readyAt: new Date(FRI - 30 * 3600000).toISOString() }];
+  const go = (now, saved = ON) => runNeedsMatt({ store, locationId: loc, client: ghl, ghl, saved, now, deps: { pipelineFor: pipelineFor(rows), syncAgentCard: syncStub().fn } });
+  await go(FRI);
+  const mon = await go(Date.parse("2026-10-19T18:00:00Z")); // Monday 11am: 73 clock hours, 25 working
+  assert.deepEqual(mon.passDue, []);
+  assert.equal((await store.getOffer("o-kit")).status, "draft", "the weekend didn't count");
+  const off = { ...ON, conversationAi: { autoSend: { offDays: ["2026-10-20"] } } };
+  const wedOff = await go(Date.parse("2026-10-21T17:30:00Z"), off); // Wednesday 10:30am, Tuesday off
+  assert.deepEqual(wedOff.passDue, [], "a day off doesn't count either");
+  const wed = await go(Date.parse("2026-10-21T17:30:00Z")); // Wednesday 10:30am: three working days
+  assert.deepEqual(wed.passed, [{ contactId: "kit", offerId: "o-kit" }]);
+});
+
 test("a house the agent called cosmetic is passed at once and never lands; one with no house number is left to the bot", async () => {
   const loc = "loc-screen";
   const ghl = ghlWith(STAGES);

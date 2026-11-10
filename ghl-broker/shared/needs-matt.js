@@ -24,8 +24,11 @@
 //              is out, and a call we owe after they sent terms
 //   price      a house an agent surfaced that has waited PRICE_WAIT_HOURS
 //              for his number, or their number on a house we never priced.
-//              PASS_AFTER_HOURS after it landed, still unpriced, the runner
-//              passes it and the pass note tells the agent
+//              PASS_AFTER_HOURS working hours after it landed (weekdays,
+//              not his days off), still unpriced, the runner passes it and
+//              the pass note tells the agent. A house the offer engine priced
+//              is never passed by that clock (Matt, 2026-11-10): it waits
+//              for him with the engine's number on the card
 //
 // Everything else stays the machine's: counters (the bot holds our number,
 // Matt 2026-10-22), booked calls (booking), calls (the GHL dialer,
@@ -41,11 +44,13 @@ import { isCounterDraft } from "./desk.js";
 import { saysTurnkey, saysCosmeticOnly, workBudgetIn } from "./flip-read.js";
 import { hasHouseNumber } from "./mentioned-houses.js";
 import { isOffMarket } from "./off-market.js";
+import { workingHoursBetween, addWorkingHours, WORK_TZ } from "./paper-follows.js";
 
 export const NEEDS_MATT_STAGE_RX = /^needs\s+matt\b/i;
 export const NEEDS_MATT_STAGE_NAME = "Needs Matt";
 export const PRICE_WAIT_HOURS = 24;
-// Matt, 2026-10-22: "Land, then bot passes." Three days on the stage.
+// Matt, 2026-10-22: "Land, then bot passes." Three days on the stage: working days since
+// 2026-11-10 (18 of the 43 houses it passed in 16 days had waited over a weekend).
 export const PASS_AFTER_HOURS = 72;
 export const NEEDS_MATT_CURSOR = "needsMatt";
 export const NEEDS_MATT_EVENT = "needs_matt_noted";
@@ -170,9 +175,35 @@ export function needsMattWhy(x = {}) {
   if (x.kind === "price") {
     const hours = Math.max(1, Math.round(((x.now ?? Date.now()) - (ms(x.since) ?? Date.now())) / HOUR_MS));
     const waited = hours >= 48 ? `${Math.round(hours / 24)} days` : `${hours} hours`;
+    // The engine priced it (2026-11-10): its number is on the draft, one look to send or change.
+    const n = engineNumber(x.engine);
+    if (n) return clip(`Price it${at}: the engine has ${k$(n)} (grade ${x.engine.grade || "?"}) on the draft; the agent has waited ${waited}`, 300);
     return clip(`Price it${at}: the agent has waited ${waited} for our number`, 300);
   }
   return "";
+}
+
+/**
+ * engineNumber(engine) → the offer engine's number on a house, or 0.
+ * `engine` is { grade, open, walkAway } from the draft's engine read or the house's record: any
+ * grade with a number counts (Matt, 2026-11-10: a house the engine priced is never passed by the
+ * clock). The open when there is one, else the walk-away.
+ */
+export function engineNumber(engine = null) {
+  const open = Math.round(Number(engine?.open) || 0);
+  const walk = Math.round(Number(engine?.walkAway) || 0);
+  return open > 0 ? open : walk > 0 ? walk : 0;
+}
+
+/**
+ * engineOn({ offer, record }) → { grade, open, walkAway } | null — the engine's number on a house:
+ * the Price-it draft's engine read (draft.engine), else the house's record (house_pricing v2).
+ */
+export function engineOn({ offer = null, record = null } = {}) {
+  for (const e of [offer?.draft?.engine, record?.v2]) {
+    if (e && engineNumber(e)) return { grade: e.grade || null, open: Math.round(Number(e.open) || 0), walkAway: Math.round(Number(e.walkAway) || 0) };
+  }
+  return null;
 }
 
 /**
@@ -190,8 +221,12 @@ export function needsMattWhy(x = {}) {
  *
  * `offersById`: the offers the read came with (a Map, or pass `offers`), so a
  * held reply can be read against our number on its house.
+ *
+ * `engineByOffer`: offer id → the engine's number on that house (engineOn).
+ * A price card carries it as `engine`: its why line names it, and the pass
+ * clock never passes it (needsMattPassDue).
  */
-export function needsMattByContact(rows = [], { drafts = [], offers = null, offersById = null, now = Date.now(), screened = null, walkedAway = null } = {}) {
+export function needsMattByContact(rows = [], { drafts = [], offers = null, offersById = null, now = Date.now(), screened = null, walkedAway = null, engineByOffer = null } = {}) {
   const draftsById = new Map((drafts || []).filter((d) => d?.id).map((d) => [d.id, d]));
   const byId = offersById instanceof Map ? offersById : new Map((offers || []).filter((o) => o?.id).map((o) => [o.id, o]));
   const out = new Map();
@@ -209,13 +244,14 @@ export function needsMattByContact(rows = [], { drafts = [], offers = null, offe
       const d = r.draftId ? draftsById.get(r.draftId) : null;
       const since = r.owedAt || r.readyAt || r.promisedAt || waitedFrom(d) || r.at || null;
       const theirs = kind === "price" && d && isCounterDraft(d) ? Math.round(Number(d.counterAmount) || 0) || null : null;
+      const engine = kind === "price" && r.offerId ? engineByOffer?.get?.(r.offerId) || null : null;
       const item = { kind, reason: found.reason || "", rowKind: r.kind, offerId: r.offerId || null, address: r.address || d?.propertyAddress || "",
-        amount: r.amount || null, title: r.title || "", since, now, theirs,
+        amount: r.amount || null, title: r.title || "", since, now, theirs, engine,
         ours: kind === "price" && d?.unsentCounter?.ours ? Math.round(Number(d.unsentCounter.ours) || 0) || null : null };
       const prev = out.get(contactId);
       if (prev && RANK[prev.kind] <= RANK[kind]) continue;
       out.set(contactId, { kind, rowKind: r.kind, offerId: item.offerId, address: item.address, at: since,
-        why: needsMattWhy(item), key: `${NEEDS_MATT_EVENT}:${r.id || `${r.kind}:${contactId}`}` });
+        why: needsMattWhy(item), key: `${NEEDS_MATT_EVENT}:${r.id || `${r.kind}:${contactId}`}`, ...(engine ? { engine } : {}) });
     }
   }
   return out;
@@ -256,18 +292,34 @@ export function botTakesHouse(offer) {
 }
 
 /**
- * needsMattPassDue(need, now) → boolean
+ * needsMattPassDue(need, now, { offDays }) → boolean
  *
- * A house still waiting on his price PASS_AFTER_HOURS after it landed in the
- * stage (`landedAt`, the runner's first sight of it): the runner marks it we
- * passed, and the pass note tells the agent. Not from the row's age: on the
- * stage's first day, houses a week old would have been passed unseen. Only a
- * row the runner can mark; a yes or paper is never passed by the machine.
+ * A house still waiting on his price PASS_AFTER_HOURS working hours after it
+ * landed in the stage (`landedAt`, the runner's first sight of it): the
+ * runner marks it we passed, and the pass note tells the agent. Not from the
+ * row's age: on the stage's first day, houses a week old would have been
+ * passed unseen. Only a row the runner can mark; a yes or paper is never
+ * passed by the machine.
+ *
+ * Matt, 2026-11-10: the clock counts weekdays only, and not his days off
+ * (conversationAi autoSend.offDays); and a house the offer engine priced
+ * (`need.engine`, any grade) is never passed by it.
  */
-export function needsMattPassDue(need, now = Date.now()) {
-  if (need?.kind !== "price" || !need.offerId) return false;
+export function needsMattPassDue(need, now = Date.now(), { offDays = null } = {}) {
+  if (need?.kind !== "price" || !need.offerId || engineNumber(need.engine)) return false;
   const landed = ms(need.landedAt);
-  return landed != null && now - landed >= PASS_AFTER_HOURS * HOUR_MS;
+  return landed != null && workingHoursBetween(landed, now, WORK_TZ, { offDays }) >= PASS_AFTER_HOURS;
+}
+
+/**
+ * needsMattPassAt(need, { offDays }) → ISO | null — when the clock passes this card: PASS_AFTER_HOURS
+ * working hours after it landed. Null for a card it never passes (not a price card, no row to
+ * mark, or the engine priced it).
+ */
+export function needsMattPassAt(need, { offDays = null } = {}) {
+  if (need?.kind !== "price" || !need.offerId || engineNumber(need.engine)) return null;
+  const landed = ms(need.landedAt);
+  return landed == null ? null : new Date(addWorkingHours(landed, PASS_AFTER_HOURS, WORK_TZ, { offDays })).toISOString();
 }
 
 /**

@@ -14,6 +14,7 @@ import { KC_FLIP_RATIOS } from "./shared/kc-flip-ratios.js";
 import { houseKey } from "./shared/current-offer.js";
 import { oneAgentsHouse, parseUsAddress, normalizeUsAddress } from "./shared/us-address.js";
 import { streetMentions } from "./shared/mentioned-houses.js";
+import { engineOn } from "./shared/needs-matt.js";
 
 export const ENGINE_VERSION = "v2.0";
 const HISTORY_MAX = 10;
@@ -186,6 +187,22 @@ export function nextRecord(prev = null, { address = "", contactId = null, offerI
     outcome: p.outcome || null,
     evidence: p.evidence || [],
   };
+}
+
+/**
+ * engineNumberFor({ store, locationId, offer }) → { grade, open, walkAway } | null
+ *
+ * The offer engine's number on an offer's house, any grade (shared/needs-matt.js engineOn): the
+ * Price-it draft's own engine read first, else the house's record. The Needs Matt clock never
+ * passes a house that has one (Matt, 2026-11-10). One light read past the offer; never throws.
+ */
+export async function engineNumberFor({ store, locationId, offer = null } = {}) {
+  if (!offer) return null;
+  const onDraft = engineOn({ offer });
+  if (onDraft) return onDraft;
+  const key = offer.address ? houseKey(offer.address) : "";
+  const rec = key ? await Promise.resolve().then(() => store?.getHousePricing?.(locationId, key)).catch(() => null) : null;
+  return engineOn({ record: rec?.doc });
 }
 
 /**

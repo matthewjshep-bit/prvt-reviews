@@ -585,7 +585,11 @@ test("a numbered house never borrows the status of the agent's other house", asy
 
 // 2026-11-09 audit: houses passed on the 72-hour clock with nothing in the
 // morning post saying which were about to go. Streets only, never a name.
-test("the morning post names the houses that pass today unless Matt prices them, with the engine's number", async () => {
+// 2026-11-10: the clock counts working days, and never passes a house the
+// engine priced, so neither is in the line.
+const MON_7AM = Date.parse("2026-10-26T14:05:00Z"); // Monday 7:05am Pacific
+const landedAt = (iso) => new Date(Date.parse(iso)).toISOString();
+test("the morning post names the houses that pass today unless Matt prices them, never one the engine priced or one that waited over the weekend", async () => {
   const LOC = "loc-morning-passes";
   const { postMorning } = await import("./slack-notify.js");
   const { houseKey } = await import("./shared/current-offer.js");
@@ -594,18 +598,17 @@ test("the morning post names the houses that pass today unless Matt prices them,
   const quarry = await store.createOffer({ locationId: LOC, contactId: "nell", address: "14 Quarry Rd, Kent, WA 98030", status: "draft" });
   const later = await store.createOffer({ locationId: LOC, contactId: "ike", address: "9 Bramble Ct, Auburn, WA 98002", status: "draft" });
   await store.upsertHousePricing(LOC, houseKey(lark.address), { address: lark.address, v2: { grade: "B", open: 412000, walkAway: 430000 } });
-  const landed = (h) => new Date(T0 - h * 3600000).toISOString();
   await store.setJobCursor(LOC, "needsMatt", { at: at(0), doc: { needs: {
-    rory: { kind: "price", offerId: lark.id, landedAt: landed(60) },
-    nell: { kind: "price", offerId: quarry.id, landedAt: landed(50) },
-    ike: { kind: "price", offerId: later.id, landedAt: landed(10) },
-    zoe: { kind: "yes", offerId: null, landedAt: landed(70) },
+    rory: { kind: "price", offerId: lark.id, landedAt: landedAt("2026-10-20T17:00:00Z") },  // a week on, but the engine priced it
+    nell: { kind: "price", offerId: quarry.id, landedAt: landedAt("2026-10-21T19:00:00Z") }, // Wednesday noon: passes Monday noon
+    ike: { kind: "price", offerId: later.id, landedAt: landedAt("2026-10-23T19:00:00Z") },   // Friday noon: the weekend doesn't count
+    zoe: { kind: "yes", offerId: null, landedAt: landedAt("2026-10-19T17:00:00Z") },
   } } });
-  const r = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: T0 });
-  assert.deepEqual(r.counts.passesToday, { count: 2, houses: [{ street: "88 Larkspur Ln", engine: 412000 }, { street: "14 Quarry Rd", engine: null }] });
+  const r = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: MON_7AM });
+  assert.deepEqual(r.counts.passesToday, { count: 1, houses: [{ street: "14 Quarry Rd" }] });
   const text = said(s.of("chat.postMessage").at(-1));
-  assert.match(text, /Passes today unless you price it: \*2\* — 88 Larkspur Ln \(engine \$412,000\), 14 Quarry Rd/);
-  assert.doesNotMatch(text, /Bramble|rory|nell/);
+  assert.match(text, /Passes today unless you price it \(no engine number, three working days\): \*1\* — 14 Quarry Rd/);
+  assert.doesNotMatch(text, /Larkspur|Bramble|rory|nell/);
 });
 
 // The line is only true when the runner will do it: it passes nothing while
@@ -617,18 +620,17 @@ test("the morning post doesn't say a house passes today when the runner is off o
   slack();
   const lark = await store.createOffer({ locationId: LOC, contactId: "rory", address: "88 Larkspur Ln, Tacoma, WA 98404", status: "draft" });
   const quarry = await store.createOffer({ locationId: LOC, contactId: "nell", address: "14 Quarry Rd, Kent, WA 98030", status: "draft" });
-  const landed = (h) => new Date(T0 - h * 3600000).toISOString();
   await store.setJobCursor(LOC, "needsMatt", { at: at(0), doc: { needs: {
-    rory: { kind: "price", offerId: lark.id, landedAt: landed(60) },
-    nell: { kind: "price", offerId: quarry.id, landedAt: landed(50) },
+    rory: { kind: "price", offerId: lark.id, landedAt: landedAt("2026-10-21T19:00:00Z") },
+    nell: { kind: "price", offerId: quarry.id, landedAt: landedAt("2026-10-21T20:00:00Z") },
   } } });
-  const off = await postMorning({ store, locationId: LOC, saved: ON, now: T0 });
+  const off = await postMorning({ store, locationId: LOC, saved: ON, now: MON_7AM });
   assert.equal(off.counts.passesToday, undefined, "ghlStages off: nothing passes");
   await store.updateOffer(quarry.id, { ...quarry, status: "sent", cashAmount: 301000, sends: [{ ts: at(-30), channels: ["sms"], results: { sms: { ok: true } } }] });
-  const on = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: T0 });
-  assert.deepEqual(on.counts.passesToday, { count: 1, houses: [{ street: "88 Larkspur Ln", engine: null }] });
+  const on = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: MON_7AM });
+  assert.deepEqual(on.counts.passesToday, { count: 1, houses: [{ street: "88 Larkspur Ln" }] });
   await store.updateOffer(lark.id, { ...lark, status: "draft", cashAmount: 288000, floatSentAt: at(-10) });
-  const none = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: T0 });
+  const none = await postMorning({ store, locationId: LOC, saved: { ...ON, ghlStages: { mode: "on" } }, now: MON_7AM });
   assert.equal(none.counts.passesToday, undefined, "a float that left keeps it");
 });
 
