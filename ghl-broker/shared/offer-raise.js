@@ -9,10 +9,12 @@
 // letter said 300k (UWM-03). Never above our number (memory never-raise-our-number) means a save
 // that comes out above what the agent was last sent waits for a person to confirm the raise.
 //
-// The ceiling is the higher of:
+// The ceiling is the highest of:
 //   - the number the agent was last sent: the amount in effect at the newest send that went;
 //   - the engine's walk-away, on an offer the engine made live (pricing.live). The machine may
-//     already step up to it (shared/walkaway.js), so a person may too.
+//     already step up to it (shared/walkaway.js), so a person may too;
+//   - the number the letter is at now. A raise you confirmed is the letter until it goes out, and
+//     fixing a term on it before you send isn't a second raise.
 // An offer that never went out has no ceiling: it's still being priced.
 //
 // Pure.
@@ -60,7 +62,7 @@ export function raiseCeiling(offer) {
   const sent = lastSentAmount(offer);
   if (!sent) return 0;
   const walk = offer?.pricing?.live ? num(offer.pricing.walkAway) : 0;
-  return Math.max(sent, walk);
+  return Math.max(sent, walk, num(offer?.cashAmount));
 }
 
 /** raiseNeedsConfirm({ offer, to }) → { from, to } when `to` raises a sent offer past its ceiling, else null. */

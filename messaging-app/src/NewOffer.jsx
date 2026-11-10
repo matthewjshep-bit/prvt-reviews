@@ -1644,7 +1644,7 @@ function OfferEditor({ settings, initialContactId, initialAddress = "", restore,
       {saveState.phase === "confirm" && saveState.ask && (
         <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           <span className="min-w-0 flex-1">
-            {saveState.ask.line} Until you confirm, the letter, the agent's link and the bot's number stay at {fmtMoney(saveState.ask.from)}. What you typed is kept.
+            {saveState.ask.line} Until you confirm, the letter, the agent's link and the bot's number stay where they are. What you typed is kept.
           </span>
           <button type="button" onClick={() => saver.current.confirm()} className="font-semibold underline">Confirm the raise</button>
         </div>

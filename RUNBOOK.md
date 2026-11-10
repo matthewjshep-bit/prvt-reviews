@@ -310,9 +310,11 @@ things changed:
 - **A save that raises a sent offer waits for you.** `PUT /api/offers/:id`
   runs the numbers before it renders anything. When the result is above the
   ceiling it answers 409 `{ needsConfirm: "raise", from, to }` and writes
-  nothing, unless the body carries `confirmRaise`. The ceiling is the higher
-  of what the agent was last sent and the engine's walk-away on a live engine
-  offer (`shared/offer-raise.js`). "Last sent" is the amount in effect at the
+  nothing, unless the body carries `confirmRaise`. The ceiling is the highest
+  of what the agent was last sent, the engine's walk-away on a live engine
+  offer, and the number the letter is at now (`shared/offer-raise.js`): a
+  raise you confirmed is the letter until it goes out, so fixing a term on it
+  before you send doesn't ask again. "Last sent" is the amount in effect at the
   newest send that went, read off `revisions[]`. A send ends a typing
   sitting on that ledger, so the number that went out mid-sitting stays on
   it. With no send on the ledger

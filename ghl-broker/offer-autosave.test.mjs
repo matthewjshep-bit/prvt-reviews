@@ -321,6 +321,25 @@ test("a live save that raises a sent offer needs confirmRaise", async () => {
   assert.equal(confirmed.json.offer.cashAmount, raise.json.to);
 });
 
+// The raise you confirmed is the letter now. Fixing a term before you send it saved at that same
+// number, which is still above what went out, so it asked again on every pause and held Send.
+test("after you confirm a raise, fixing a term before you send doesn't ask again", async () => {
+  const row = await sentOffer("48 Pipistrelle Way, Tacoma, WA 98404");
+  const put = (inputs, over = {}) => req("PUT", `/api/offers/${row.id}`, { contactId: "contact-1", inputs, settings: SETTINGS, live: true, ...over });
+  const raised = inputsAt("48 Pipistrelle Way, Tacoma, WA 98404", { arv: 600000 });
+  assert.equal((await put(raised)).status, 409);
+  const confirmed = await put(raised, { confirmRaise: true });
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.json).slice(0, 300));
+  const term = await req("PUT", `/api/offers/${row.id}`, { contactId: "contact-1", inputs: raised, live: true,
+    settings: { ...SETTINGS, letterTerms: [{ label: "Closing", value: "21 days" }] } });
+  assert.equal(term.status, 200, JSON.stringify(term.json).slice(0, 300));
+  assert.equal(term.json.offer.cashAmount, confirmed.json.offer.cashAmount);
+  // Anything above the raise you confirmed asks again.
+  const more = await put(inputsAt("48 Pipistrelle Way, Tacoma, WA 98404", { arv: 640000 }));
+  assert.equal(more.status, 409);
+  assert.equal(more.json.from, confirmed.json.offer.cashAmount);
+});
+
 test("an engine offer's walk-away is room a person can save into without a confirm, and nothing past it", async () => {
   const row = await sentOffer("5150 Brackenridge Pl, Tacoma, WA 98404");
   const sent = row.cashAmount;

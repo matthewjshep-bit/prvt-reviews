@@ -43,3 +43,12 @@ test("an engine offer's walk-away is room up to it, and the line says what moves
   assert.equal(raiseLine({ from: 254000, to: 300000 }), "This raises a sent offer from 254k to 300k: confirm?");
   assert.equal(raiseLine({ from: 254000, to: 301750 }), "This raises a sent offer from 254k to 301,750: confirm?");
 });
+
+test("a raise you confirmed is the letter until it goes out: saving at it again is no raise", () => {
+  const o = { status: "sent", cashAmount: 300000, sends: [went("2026-11-05T18:00:00Z")],
+    revisions: [{ ts: "2026-11-06T18:00:00Z", from: 254000, to: 300000, by: "you", live: true }] };
+  assert.equal(lastSentAmount(o), 254000, "they were sent 254k");
+  assert.equal(raiseCeiling(o), 300000);
+  assert.equal(raiseNeedsConfirm({ offer: o, to: 300000 }), null);
+  assert.deepEqual(raiseNeedsConfirm({ offer: o, to: 310000 }), { from: 300000, to: 310000 });
+});
