@@ -79,7 +79,9 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
   // in a text is what the carriers block most, so the text asks if they want
   // the details and the reply agent sends the link when they do. An email
   // still carries it.
-  const linkLater = draft.channel !== "email" && settings?.dispoAutopilot?.blastLink === "on_reply";
+  // The one retry of a deal text the carrier blocked (delivery-watch.js,
+  // `outbound.noLink`) never carries the link, whatever blastLink says.
+  const linkLater = draft.channel !== "email" && (settings?.dispoAutopilot?.blastLink === "on_reply" || draft.outbound?.noLink === true);
   let invite = null, link = "";
   if (room && baseUrl && !linkLater) {
     const out = await issueDataroomInvite({ store, client, room, contactId: draft.contactId, name: draft.contactName || "", baseUrl, send: false });
@@ -92,8 +94,9 @@ export async function refreshBlastText({ store, client, locationId, draft, baseU
   // rather than through dispo-autopilot.js, which imports reply-agent.js.)
   const ask = settings?.dispoAutopilot?.showings?.askInBlast === false ? "" : walkthroughAsk({ showing: offer.deal?.showing || null });
   // Matt's own wording when he's saved some (Autopilot → Investors), read now
-  // like everything else here.
-  const templates = normalizeDealTexts(settings?.dispoAutopilot?.dealTexts);
+  // like everything else here. A text queued with its own wording (the
+  // retry's cold deal text, `outbound.template`) keeps it.
+  const templates = draft.outbound?.template ? normalizeDealTexts([draft.outbound.template]) : normalizeDealTexts(settings?.dispoAutopilot?.dealTexts);
   const text = blastMessage({ ...facts, firstName: draft.contactName || "", variant: blastVariant(draft), link, ask, intro: draft.outbound?.intro || "", linkOnReply: linkLater, templates });
   const subject = draft.channel === "email" ? blastSubject(facts) : "";
   return { text, subject, price, invite, room, withoutLink: linkLater };

@@ -966,6 +966,11 @@ export const CONVERSATION_AI_DEFAULTS = Object.freeze({
   // instructions. It never applies one; a person does, from Today. Off until
   // switched on, and the autonomy dial leaves it alone — it sends nothing.
   coach: { enabled: false, hour: 20 },
+  // The delivery check (ghl-broker/delivery-watch.js, 2026-11-09): reads back
+  // whether each app text arrived. A blocked answer goes on Needs Matt and
+  // Slack #machine, a dead number stops getting machine texts. Off until Matt
+  // switches it on; it reads GHL and never sends anything.
+  deliveryWatch: { enabled: false },
 });
 
 /* ---------- coercion helpers ---------- */
@@ -1487,6 +1492,7 @@ export function normalizeConversationAi(doc, seed = {}) {
       holdOnNeedsHuman: bool(auto.holdOnNeedsHuman, D.autoSend.holdOnNeedsHuman),
       otherNow: bool(auto.otherNow, D.autoSend.otherNow),
     },
+    deliveryWatch: { enabled: bool(d.deliveryWatch?.enabled, D.deliveryWatch.enabled) },
   };
   // Version 1 → 2, once. A deploy never edits a saved setting — except this
   // once, at Matt's explicit ask on 2026-09-07 ("can you enable these"):

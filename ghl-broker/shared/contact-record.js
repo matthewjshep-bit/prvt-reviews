@@ -169,6 +169,13 @@ export const EVENT_TYPES = [
   // A second look at a strong past offer actually went (shared/second-look.js):
   // our same number, once more. How many a house has had reads these.
   "second_look_sent",
+  // A text or email of ours GHL marked failed (ghl-broker/delivery-watch.js,
+  // shared/delivery.js): data.code, class, kind, channel, draftId, answer.
+  // A blocked deal text's one retry, claimed per buyer per deal.
+  "send_failed", "send_retried",
+  // A text to a number we had as dead arrived after all: the strikes before
+  // it stop counting (shared/delivery.js numberDead).
+  "phone_ok",
 ];
 
 export const EVENT_LABEL = {
@@ -220,6 +227,8 @@ export const EVENT_LABEL = {
   email_saved: "their email saved to GHL", email_offered: "they gave an email to check",
   ghl_call_queued: "a call went to GHL's Manual Actions", ghl_call_failed: "a call couldn't go to GHL", ghl_call_withdrawn: "a call was taken back out of GHL",
   second_look_sent: "we asked once more at our same number",
+  send_failed: "our message didn't arrive", send_retried: "the blocked deal text was queued once more without the link",
+  phone_ok: "a text reached their phone again",
 };
 
 // Lucide icon names — the drawer resolves them; the broker never needs to.
@@ -270,6 +279,8 @@ export const EVENT_ICON = {
   email_saved: "AtSign", email_offered: "AtSign",
   ghl_call_queued: "Phone", ghl_call_failed: "CircleSlash", ghl_call_withdrawn: "Undo2",
   second_look_sent: "RefreshCw",
+  send_failed: "CircleSlash", send_retried: "RefreshCw",
+  phone_ok: "CheckCircle2",
 };
 
 export const SOURCES = ["conversation", "call", "sweep", "operator", "import", "offer", "deal", "dataroom", "blast", "gmail"];

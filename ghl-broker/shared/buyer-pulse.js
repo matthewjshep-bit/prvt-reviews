@@ -69,8 +69,9 @@ export function normalizeBuyerPulse(v = {}) {
   };
 }
 
-// Tags that mean "do not text", however they were spelled.
-const BLOCK_TAG_RX = /^(?:dnc|dnd|do[-\s]?not[-\s]?(?:contact|text|call)|opt(?:ed)?[-\s]?out|unsubscribed?|stop|wrong[-\s]?number)$/i;
+// Tags that mean "do not text", however they were spelled. "phone-dead": the
+// delivery check found their number dead (ghl-broker/delivery-watch.js).
+const BLOCK_TAG_RX = /^(?:dnc|dnd|do[-\s]?not[-\s]?(?:contact|text|call)|opt(?:ed)?[-\s]?out|unsubscribed?|stop|wrong[-\s]?number|phone[-\s]?dead)$/i;
 // Unsubscribed in GHL (synced onto the row as `dnd`) or tagged off. The pulse
 // and the deal sends both ask (shared/buyer-score.js pickDealBuyers).
 export const isBlockedBuyer = (inv = {}) => Boolean(inv?.dnd) || (inv?.tags || []).some((t) => BLOCK_TAG_RX.test(String(t).trim()));

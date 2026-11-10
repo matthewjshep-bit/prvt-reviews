@@ -50,8 +50,11 @@ export const NEEDS_MATT_KINDS = Object.freeze(["yes", "paper", "price"]);
 const RANK = Object.fromEntries(NEEDS_MATT_KINDS.map((k, i) => [k, i]));
 
 // Pipeline row kinds that are his on sight (hand-off.js says "ping" for
-// them; buyers' and closing rows stay on Deals).
-const PAPER_KINDS = new Set(["paper_to_sign", "pre_contract", "handoff"]);
+// them; buyers' and closing rows stay on Deals). `undelivered`: our answer
+// to their text never arrived (shared/delivery.js undeliveredAnswers, read by
+// ghl-broker/needs-matt.js while the delivery check is on, 2026-11-09). The
+// machine never resends an answer, so a call or an email is his.
+const PAPER_KINDS = new Set(["paper_to_sign", "pre_contract", "handoff", "undelivered"]);
 // A house waiting on his number: the draft he prices, a number we owe.
 const PRICE_KINDS = new Set(["price_it", "number_owed"]);
 

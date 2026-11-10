@@ -4847,6 +4847,82 @@ each conversation's messages, and group outbound `TYPE_SMS` by the `Error
 NNNNN` in `error` — read gently (two at a time, back off on 429), the broker
 shares GHL's rate limit.
 
+### Texts that never arrived (2026-11, off until switched on)
+
+The 11-09 audit: nothing read a send's status back. Since 10-01, 22 of our
+answers to someone who had just written never arrived (two on 11-09, both to
+someone asking who we were), and 160 machine texts went to 104 numbers that had already
+come back dead. `ghl-broker/delivery-watch.js` reads it back. Pure rules:
+`shared/delivery.js`.
+
+- **Switch:** `conversationAi.deliveryWatch.enabled` (Settings → Conversation
+  AI → More settings → Delivery check). Ships off. Off, nothing is read and
+  nothing below happens. It reads GHL and the store; it never sends.
+- **When:** on the 15-minute tick, a run every two hours (cursor
+  `deliveryWatch` in `job_cursors`, written before the run; a run a deploy
+  killed is retried once it is 30 minutes stale; a failed run after 20
+  minutes; at most 12 tries a Pacific day). The switchboard lists it as
+  "Delivery check (only while on)".
+- **What it reads:** sent drafts with a `ghlMessageId`, sent 2 to 26 hours ago,
+  with no verdict yet (`store.listSentDraftsBetween`, both backends), at most
+  100 a run, 300 ms apart, one `GET /conversations/messages/{id}` each
+  (`ghl.js getMessage`). A message still pending, or a read that failed, is
+  looked at again next run; one GHL has no record of (404) is marked
+  `unknown` and left.
+- **What it writes:** the verdict on the draft as `delivery { status, code,
+  checkedAt }`. A failure is a `send_failed` contact event (deduped on the
+  message id) with `code`, `class` (`carrier_block` 30007, `dead_number`
+  30005/30006, `unreachable` 30003, `limit` 30022/30023, `email_policy`,
+  `other`), `kind`, `channel`, `draftId`, `answer`. Codes and ids only.
+- **A failed answer** (a reply to their own text, `answersInbound`): one Slack
+  `#machine` line a contact a day, first name and street only ("Our answer to
+  Robin on 12 Alder Ln never arrived (the carrier blocked it). Call or
+  email."), and for an agent a Needs Matt card (row kind `undelivered`, kind
+  `paper`: "Your answer on <street> didn't reach them (<why>): call or
+  email"). The card stays until a hand text, a call, an email or a new text
+  from them (a text summary with their words in it; the one a check-in of
+  ours writes doesn't count), or 7 days. Needs Matt reads it in two light
+  steps: the week's `send_failed` events, then only those agents' timelines
+  (at most 50 a run). The answer is never resent by the machine.
+- **The nightly audit** (shared/conversation-audit.js) no longer counts a
+  sent draft the check read back as failed (`deliveryFailed`) as our answer:
+  the thread is a "Texts we never answered" row with no action ("our answer
+  never arrived (the carrier blocked it): call or email"), and the morning's
+  row stays until a reply that arrived, a hand text or a call. It never
+  redrafts or resends it.
+- **A dead number** (`numberDead`: one 30005 or 30006, or two 30003s, because
+  30003 is sometimes temporary): nothing the machine starts is texted to them.
+  `startProactive` and `runProactive` stand down (`handsOffReason` with
+  `deadNumber`), and a scheduled machine text or deal text is dismissed at
+  send with "their number came back dead — not sent". Any other text going
+  by itself (a walkthrough ask, a float a person queued) goes back to the
+  outbox to wait for your Send. Email still goes, and an answer to a new text
+  from them still drafts and sends. A buyer's GHL record also gets the tag
+  `phone-dead` (`BLOCK_TAG_RX` in shared/buyer-pulse.js), and so does their
+  row in the buyer book straight away, so no pulse and no deal picks them.
+  A text of ours that reaches a dead number after all (an answer, or a send
+  of yours) writes `phone_ok`: the strikes before it stop counting and the
+  tag comes off.
+- **One retry of a blocked deal text** (`dispoAutopilot.retryBlocked`,
+  Autopilot → Investors; ships off, and does nothing while the delivery check
+  is off): a `blast_open` or `blast_nudge` the
+  carrier blocked (30007) is drafted once more, per buyer per deal (claim
+  `send_retried`, dedupe `retry:<offerId>:<contactId>`), as the same text
+  without its link (`outbound.noLink`, which the send-time rewrite in
+  blast-refresh.js honours), or the cold deal text for a buyer who never
+  wrote back once `dispoAutopilot.coldDealText` exists. It is scheduled only if
+  the first one went by itself and the same switches (CARD_SENDS_ENABLED,
+  DISPO_BLASTS_ENABLED, the investor auto-send list) still allow it; otherwise
+  it waits for your Send. A retry that is blocked again is never retried.
+- **Check:** `GET /api/dashboard/line` lists the job, when it last ran and
+  whether that run failed; the run's counts (checked, delivered, failed by
+  class, unknown, answers, dead, tagged, retried) are `last` on its `deliveryWatch`
+  cursor; a contact's timeline shows "our message didn't arrive"; the Outbox's
+  dismissed rows say "their number came back dead".
+- `getUnansweredInbound` (ghl.js) skips an outbound GHL marked failed or
+  undelivered, so when the audit redrafts a thread it reads every text under
+  a blocked send (one of Matt's typed in GHL too), not only the newest.
+
 ### Matt's contact card (2026-10-09)
 
 Matt: share my contact card "when people ask or if an initial deal doesn't work,

@@ -86,6 +86,10 @@ export function normalizeDispoAutopilot(v = {}) {
     // one we're talking to; a deal over that waits and goes together with
     // whatever else is new for them. On — it only ever holds texts back.
     touchBudget: normalizeTouchBudget(o.touchBudget),
+    // A deal text the carrier blocked (30007) is drafted once more without
+    // its link, per buyer per deal, by the delivery check (delivery-watch.js,
+    // 2026-11-09). A retry blocked again hurts the number, so never twice. Off.
+    retryBlocked: o.retryBlocked === true,
   };
 }
 

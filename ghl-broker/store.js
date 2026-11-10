@@ -35,6 +35,28 @@ export function draftLedgerRow(d = {}) {
   };
 }
 
+// listSentDraftsBetween, both backends: the delivery check's read
+// (delivery-watch.js). Sent drafts with a GHL message id, sent in
+// [fromIso, toIso), not yet given a delivery verdict, oldest first. sentAt is
+// an ISO string on the doc, so the window compares as text in both. Change
+// the SQL and sentDraftInWindow together.
+export function sentDraftsBetweenQuery({ locationId, fromIso, toIso, limit = 100 }) {
+  return {
+    text: `select doc from reply_drafts
+       where location_id = $1 and status = 'sent'
+         and (doc->>'sentAt') >= $2 and (doc->>'sentAt') < $3
+         and coalesce(doc->>'ghlMessageId', '') <> ''
+         and coalesce(jsonb_typeof(doc->'delivery'), 'null') = 'null'
+       order by (doc->>'sentAt') asc limit $4`,
+    params: [locationId, fromIso, toIso, Math.max(1, Math.round(Number(limit) || 0))],
+  };
+}
+export function sentDraftInWindow(d, { locationId, fromIso, toIso }) {
+  const at = String(d?.sentAt || "");
+  return d?.locationId === locationId && d.status === "sent" && Boolean(at) && at >= fromIso && at < toIso
+    && Boolean(String(d.ghlMessageId || "")) && d.delivery == null;
+}
+
 /* ============================================================= *
  * Offer list query
  * ============================================================= */
@@ -598,6 +620,12 @@ const pgStore = {
        order by created_at desc limit $${params.length}`,
       params
     );
+    return rows.map((r) => r.doc);
+  },
+  // The delivery check's read (sentDraftsBetweenQuery).
+  async listSentDraftsBetween(locationId, fromIso, toIso, { limit = 100 } = {}) {
+    const { text, params } = sentDraftsBetweenQuery({ locationId, fromIso, toIso, limit });
+    const { rows } = await query(text, params);
     return rows.map((r) => r.doc);
   },
   async getReplyDraft(id) {
@@ -2018,6 +2046,13 @@ const fileStore = (() => {
         .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
         .slice(0, limit)
         .map(draftLedgerRow);
+    },
+    async listSentDraftsBetween(locationId, fromIso, toIso, { limit = 100 } = {}) {
+      ensure();
+      return Object.values(data.replyDrafts)
+        .filter((d) => sentDraftInWindow(d, { locationId, fromIso, toIso }))
+        .sort((a, b) => String(a.sentAt).localeCompare(String(b.sentAt)))
+        .slice(0, Math.max(1, Math.round(Number(limit) || 0)));
     },
     async getReplyDraft(id) {
       ensure();

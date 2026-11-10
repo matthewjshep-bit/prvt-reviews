@@ -6,6 +6,7 @@
 //   version Version: 2021-07-28  (v2 default; conversations uses 2021-04-15)
 
 import { tallyMessages } from "./shared/talked-to.js";
+import { carrierCode } from "./shared/delivery.js";
 
 const BASE = "https://services.leadconnectorhq.com";
 const V2 = "2021-07-28";
@@ -689,11 +690,33 @@ export async function getUnansweredInbound(client, locationId, contactId, { perC
   for (const m of messages) {
     if (/ACTIVITY/i.test(String(m.messageType || m.type || ""))) continue;
     const inbound = String(m.direction || "").toLowerCase() === "inbound";
+    // A send the carrier refused never reached them, so it answered nothing
+    // (2026-11-09: two blocked answers to "who are you" questions read as answered).
+    if (!inbound && FAILED_SEND.has(String(m.status || "").toLowerCase())) continue;
     if (!inbound) break;
     const body = await messageWords(client, m);
     if (body) out.push(body);
   }
   return out.reverse();
+}
+
+/**
+ * getMessage(client, messageId) → { id, status, code, type }
+ *
+ * One message's delivery, for the delivery check (delivery-watch.js): GHL's
+ * status ("delivered", "failed", "undelivered", "pending" …) and the carrier's
+ * code from its error fields (shared/delivery.js carrierCode), or null.
+ * Tolerates { message: {...} } and the flat shape. Throws on GHL errors.
+ */
+export async function getMessage(client, messageId) {
+  const data = await client.call(`/conversations/messages/${encodeURIComponent(messageId)}`, { version: V_CONVERSATIONS });
+  const m = data?.message && typeof data.message === "object" ? data.message : (data || {});
+  return {
+    id: m.id || messageId,
+    status: String(m.status || m.messageStatus || "").toLowerCase(),
+    code: carrierCode(m),
+    type: String(m.messageType || m.type || ""),
+  };
 }
 
 // Sentence-level transcription of a recorded call message. Returns an array

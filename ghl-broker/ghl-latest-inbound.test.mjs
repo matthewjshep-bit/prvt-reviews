@@ -78,3 +78,33 @@ test("an email thread with only our own email in it is not a message from them",
   assert.equal(await getLatestInboundMessage(client, "LOC", "c1"), null);
   assert.deepEqual(await getUnansweredInbound(client, "LOC", "c1"), []);
 });
+
+// 2026-11-09 audit: our answer to someone asking who we were was blocked by the
+// carrier. A send GHL marked failed or undelivered never reached them, so the
+// texts under it are still theirs to answer (the audit's redraft reads these;
+// shared/conversation-audit.test.mjs has the audit's side).
+test("the question under a blocked answer is still read as unanswered", async () => {
+  const client = fake([{ id: "sms", last: 1, messages: [
+    { id: "o1", direction: "outbound", body: "Matt here, I fix up houses locally.", status: "undelivered", messageType: "TYPE_SMS", dateAdded: "2026-11-09T21:55:00Z" },
+    { id: "i2", direction: "inbound", body: "Sorry, do I know you?", messageType: "TYPE_SMS", dateAdded: "2026-11-09T21:52:00Z" },
+    { id: "o0", direction: "outbound", body: "Is your place on Birch Rd a bit of a project?", status: "delivered", messageType: "TYPE_SMS", dateAdded: "2026-11-09T18:00:00Z" },
+  ] }]);
+  assert.deepEqual(await getUnansweredInbound(client, "LOC", "c1"), ["Sorry, do I know you?"]);
+  // One that arrived is an answer, as before.
+  const answered = fake([{ id: "sms", last: 1, messages: [
+    { id: "o1", direction: "outbound", body: "Matt here, I fix up houses locally.", status: "delivered", messageType: "TYPE_SMS", dateAdded: "2026-11-09T21:55:00Z" },
+    { id: "i2", direction: "inbound", body: "Sorry, do I know you?", messageType: "TYPE_SMS", dateAdded: "2026-11-09T21:52:00Z" },
+  ] }]);
+  assert.deepEqual(await getUnansweredInbound(answered, "LOC", "c1"), []);
+});
+
+// The delivery check's one read per send (delivery-watch.js).
+test("a message's delivery is read back with its carrier code, whatever shape GHL answers in", async () => {
+  const { getMessage } = await import("./ghl.js");
+  const seen = [];
+  const client = { call: async (p, opts) => { seen.push([p, opts?.version]); return { message: { id: "m9", status: "undelivered", error: "Error 30007", body: "x" } }; } };
+  assert.deepEqual(await getMessage(client, "m9"), { id: "m9", status: "undelivered", code: "30007", type: "" });
+  assert.deepEqual(seen, [["/conversations/messages/m9", "2021-04-15"]]);
+  const flat = { call: async () => ({ id: "m8", status: "delivered", messageType: "TYPE_SMS" }) };
+  assert.deepEqual(await getMessage(flat, "m8"), { id: "m8", status: "delivered", code: null, type: "TYPE_SMS" });
+});
