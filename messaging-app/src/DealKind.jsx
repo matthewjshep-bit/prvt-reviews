@@ -10,16 +10,34 @@ import { setOfferAsset } from "./api.js";
  * mobile home goes to the buyers who said they buy them. 1510 Maple Lane
  * (2026-10-01) had no kind and went to Kent flippers.
  */
+/**
+ * repickLine(repick) → what a change of kind did to the deal's queued texts
+ * (ghl-broker routes/offers.js repickOnKindChange), or "" when it did nothing.
+ */
+export function repickLine(r) {
+  if (!r) return "";
+  if (r.error) return r.error;
+  const pulled = Number(r.dismissed) || 0;
+  const added = (Number(r.queued) || 0) + (Number(r.drafted) || 0);
+  if (!pulled && !added) return "";
+  const parts = [];
+  if (pulled) parts.push(`${pulled} queued text${pulled === 1 ? "" : "s"} pulled back from buyers who don't buy it`);
+  if (added) parts.push(`${added} new buyer${added === 1 ? "" : "s"} queued on the same schedule`);
+  return `Picked again for the new kind: ${parts.join(", ")}.`;
+}
+
 export default function DealKind({ offer, onUpdated }) {
   const saved = normalizeAsset(offer.asset);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [note, setNote] = useState("");
 
   async function save(next) {
-    setError(""); setBusy(true);
+    setError(""); setNote(""); setBusy(true);
     try {
       const r = await setOfferAsset(offer.id, next);
       if (r?.offer) onUpdated(r.offer);
+      setNote(repickLine(r?.repick));
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
 
@@ -59,6 +77,7 @@ export default function DealKind({ offer, onUpdated }) {
             : saved.type === "manufactured" ? "Goes only to buyers who said they buy mobile homes."
             : "Yours. Waves and the blast text go by it."}
         </p>
+        {note && <p className="text-xs font-medium text-amber-800" role="status">{note}</p>}
         {error && <p className="text-xs text-rose-700">{error}</p>}
       </div>
     </div>

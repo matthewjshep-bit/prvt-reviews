@@ -119,7 +119,7 @@ import {
 import {
   startReply, startProactive, previewProactive, chooseProactiveKind, leadsWithNumber, floatStanceFor, listJobs as listReplyJobs, publicJob as publicReplyJob,
   sendReplyDraft, dismissReplyDraft, holdReplyDraft, applyDraftAction, previewConversation, conversationConfig, saveConversationConfig,
-  stopMachineTextsForOffer, stopDealOutreach,
+  stopMachineTextsForOffer, stopDealOutreach, RA_TAGS,
 } from "../reply-agent.js";
 import { attachmentUrls } from "../photo-addresses.js";
 import { normalizeConversationAi, draftStats, normalizePassReason, PASS_REASON_LABEL, writeUpTermsText } from "../shared/conversation-ai.js";
@@ -132,6 +132,7 @@ import { graduationReport } from "../shared/graduation.js";
 import { AUTONOMY_MODES, AUTONOMY_LABEL, AUTONOMY_GLOSS, AUTONOMY_DOES, applyAutonomy, detectAutonomy, autonomyTurnsDown, dialHeldReleasable } from "../shared/autonomy.js";
 import { nextSendTime, spreadAcrossDay, machineHours } from "../conversation-scheduler.js";
 import { normalizeDispoAutopilot } from "../dispo-autopilot.js";
+import { promoteHeadsUp, postDispoLine, whenText } from "../slack-notify.js";
 import { parseMoney } from "../shared/money.js";
 import { normalizeShowing, applyShowingEdit, agentAskText, recordRsvp, RSVP_STATUSES } from "../shared/showing.js";
 import { mergeParties } from "../shared/deal-parties.js";
@@ -147,7 +148,7 @@ import { syncAgentCard } from "../tier-check.js";
 import { startCallIntake, listCallJobs } from "../call-intake.js";
 import { dealToQuery } from "../dispo.js";
 import { normalizeBuybox, buyboxIsEmpty, matchBuybox } from "../shared/buybox.js";
-import { normalizeAsset, assetFromSnapshot, assetOf } from "../shared/asset-type.js";
+import { normalizeAsset, assetFromSnapshot, assetOf, assetLabel } from "../shared/asset-type.js";
 import { buildUnderwriteCalc, underwriteModel } from "../shared/underwrite-model.js";
 import { recordEvent, recordEvents, learnFacts, ensureProfile } from "../contact-record.js";
 import { FACT_KEYS, eventFromLedgerLine, parseHistoryLine, ledgerEventType, propertyDossier } from "../shared/contact-record.js";
@@ -3588,7 +3589,81 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors: picked, saved, wave: 1, startAfterMs: PROMOTE_BLAST_GRACE_MS });
       console.log(`auto-blast on promote: ${offer.address} → ${picked.length} buyers ${where} (${r.scheduled ? "scheduled" : `drafts: ${r.reason}`})`);
       await createContactNote(client, offer.contactId, { body: `Sent ${offer.address} to the ${picked.length} buyer${picked.length === 1 ? "" : "s"} ${where}${r.scheduled ? "" : " (queued as drafts)"}.` }).catch(() => {});
+      // One line to #dispositions while Stop still holds all of it
+      // (2026-11-09): how many, when, to whom, at what price, and what looks
+      // wrong. No delay is added: the texts go when Matt's 10/21 rule says.
+      // Keyed on the first text this queue made: a Resume that queues the
+      // first wave of a deal stopped before it went says so again.
+      await postDispoLine({ store, locationId, saved, key: `promote:${offer.id}:${(r.rows || []).find((x) => x.draftId)?.draftId || offer.deal?.createdAt || ""}`,
+        text: promoteHeadsUp({ ...headsUpDeal(offer, where), rows: r.rows, scheduled: r.scheduled, reason: r.reason || "", price: r.price }) });
     } catch (e) { console.error(`auto-blast on promote failed for ${offer.id}: ${e?.message}`); }
+  }
+
+  // What the heads-up says about the deal itself: its contract, its fee and
+  // whose fee it is, and whether anyone has said what kind of house it is
+  // (4334's builders were picked off a deal with no kind set).
+  const headsUpDeal = (offer, where) => ({
+    address: offer.address, where: where === "who buy in the area" ? whoBuyIn(offer.address) : where,
+    contractPrice: offer.deal?.contractPrice, assignmentFee: offer.deal?.assignmentFee, feeSource: offer.deal?.assignmentFeeSource || "",
+    kindSet: Boolean(assetOf(offer)),
+  });
+  const whoBuyIn = (address) => {
+    const city = String(address || "").split(",").map((p) => p.trim())[1] || "";
+    return city ? `who buy in ${city}` : "who buy in the area";
+  };
+
+  /**
+   * repickOnKindChange({ locationId, client, offer, before }) → { dismissed, queued, drafted }
+   *
+   * The kind of house changed on a deal whose first texts are still queued
+   * (2026-11-09: a deal set to land after promote still went to the flippers
+   * it was first picked for). The buyers it was queued to are picked again
+   * for the new kind: a first text to one who no longer fits is pulled back,
+   * one who still fits is stamped with the new kind, and, while none of the
+   * deal's texts has gone yet, new fits are queued on the schedule the
+   * promote set. Only ever narrows what was queued before adding the new
+   * fits; the send-time check in sendReplyDraft holds any it missed.
+   */
+  async function repickOnKindChange({ locationId, client, offer, before }) {
+    const out = { dismissed: 0, queued: 0, drafted: 0 };
+    if (!offer?.deal || !dispoDeps?.matchForDeal) return out;
+    const was = assetOf(before)?.type || "", now = assetOf(offer)?.type || "";
+    if (was === now) return out;
+    const open = await store.listReplyDrafts(locationId, { status: ["draft", "scheduled"], limit: 5000 }).catch(() => null);
+    const mine = (open || []).filter((d) => d?.party === "investor" && d.outbound?.kind === "blast_open" && d.outbound.offerId === offer.id
+      && !d.outbound.asked && !d.outbound.presell && !String(d.inbound || "").trim());
+    if (!mine.length) return out;
+    const fits = new Set(((await dispoDeps.matchForDeal(locationId, offer, { exclude: "none" })).results || []).map((x) => x.contactId));
+    const kind = (assetLabel(assetOf(offer)) || "not set").toLowerCase();
+    const stamp = assetOf(offer)?.type || "";
+    const ts = new Date().toISOString();
+    const times = mine.map((d) => Date.parse(d.sendAt || "")).filter(Number.isFinite);
+    for (const d of mine) {
+      if (fits.has(d.contactId)) {
+        await store.updateReplyDraft(d.id, { ...d, outbound: { ...d.outbound, assetType: stamp }, updatedAt: ts });
+        continue;
+      }
+      await store.updateReplyDraft(d.id, { ...d, status: "dismissed", sendAt: null, sendingAt: null, dismissedAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `the kind of house changed to ${kind} and they don't buy it — not sent`] });
+      await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
+      out.dismissed++;
+    }
+    // New fits only before the first text has left: after that, the deal is
+    // out there and the button or the morning catch-up picks who's next.
+    const since = offer.deal.createdAt || new Date(Date.now() - 30 * 86400000).toISOString();
+    const sent = await store.listContactEventsSince(locationId, since, { types: ["blast_sent"], limit: 20000 }).catch(() => null);
+    if (!sent || sent.some((e) => e?.offerId === offer.id)) return out;
+    const fresh = ((await dispoDeps.matchForDeal(locationId, offer, { exclude: "blasted" })).results || []);
+    if (!fresh.length) return out;
+    const first = times.length ? Math.min(...times) : Date.now() + PROMOTE_BLAST_GRACE_MS;
+    const r = await dispoDeps.blastFromApp({ locationId, client, offer, investors: fresh, wave: 1, startAfterMs: Math.max(0, first - Date.now()) });
+    out.queued = r.queued || 0;
+    out.drafted = r.drafted || 0;
+    const saved = (await store.getOfferSettings(locationId).catch(() => null)) || {};
+    const firstNew = (r.rows || []).map((x) => Date.parse(x.sendAt || "")).filter(Number.isFinite).sort((a, b) => a - b)[0];
+    await postDispoLine({ store, locationId, saved, key: `repick:${offer.id}:${ts}`,
+      text: `:arrows_counterclockwise: *${String(offer.address || "").split(",")[0].trim()}* is ${kind} now: ${out.dismissed} queued text${out.dismissed === 1 ? "" : "s"} pulled back from buyers who don't buy it, ${out.queued + out.drafted} new buyer${out.queued + out.drafted === 1 ? "" : "s"} queued${firstNew ? ` from ${whenText(firstNew)}` : ""}.` });
+    return out;
   }
 
   async function promoteToDeal({ locationId, client, offer, body = {} }) {
@@ -4154,6 +4229,7 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       const { offer } = ctx;
       const ts = new Date().toISOString();
       const type = String(req.body?.type || "").trim();
+      const before = { ...offer };
       if (type) {
         const picked = normalizeAsset({ type, land: req.body?.land, by: "you", at: ts });
         if (!picked) return res.status(400).json({ error: "type must be sfr, multi_family, manufactured, commercial or land" });
@@ -4164,7 +4240,10 @@ export default function createOffersRouter({ resolveLocation, uploadDir, publicB
       }
       offer.updatedAt = ts;
       await store.updateOffer(offer.id, offer);
-      res.json({ ok: true, offer, asset: assetOf(offer) });
+      // A deal whose texts are still queued is picked again for its new kind.
+      const repick = await repickOnKindChange({ locationId: ctx.locationId, client: ctx.client, offer, before })
+        .catch((e) => { console.error(`offers: re-pick on kind change failed for ${offer.id}: ${String(e?.message || e).slice(0, 160)}`); return { dismissed: 0, queued: 0, drafted: 0, error: "the deal's queued texts couldn't be picked again: check them in the outbox" }; });
+      res.json({ ok: true, offer, asset: assetOf(offer), repick });
     } catch (err) { fail(res, err); }
   });
 

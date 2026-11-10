@@ -2,8 +2,8 @@
 //
 // What went wrong on the deals after 10/21: a fee typed as "15k" saved as
 // nothing and a price could be typed as "450"; taking a deal back left its
-// texts queued; a promote queued texts nobody was told about; and a kind of
-// house set in the first minutes never changed who got it.
+// texts queued. (A promote nobody was told about, and a kind of house set in
+// the first minutes, are in promote-heads-up.test.mjs: they need sends on.)
 //
 //   node --test offers-deal.test.mjs
 

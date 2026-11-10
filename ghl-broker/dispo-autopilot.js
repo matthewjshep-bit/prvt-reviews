@@ -26,6 +26,7 @@ import { buyerTouchLimit, slotWord } from "./buyer-touch.js";
 import { store as defaultStore } from "./store.js";
 import { blastMessage, blastNote, dealFacts, blastSubject, presellMessage, normalizeDealTexts, normalizeColdDealText, coldDealMessage } from "./shared/blast-text.js";
 import { normalizeBookSync } from "./investor-sync.js";
+import { assetOf } from "./shared/asset-type.js";
 import { normalizeInvestorReads } from "./investor-read.js";
 import { normalizeBuyerPulse } from "./shared/buyer-pulse.js";
 import { walkthroughAsk } from "./shared/showing.js";
@@ -282,6 +283,10 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
   const holdText = (hold) => (hold.kind === "bot_off" ? `bot is off for this contact (tag: ${hold.tag})` : holdLine(hold));
   const rows = [];
   let queued = 0, drafted = 0, waiting = 0, i = 0;
+  // The kind of house these buyers were picked for, on each deal text: a
+  // change of kind re-picks them (routes/offers.js repickOnKindChange) and
+  // the send-time check holds one it missed (reply-agent.js).
+  const assetType = assetOf(offer || {})?.type || "";
   // Cumulative: each text lands at least `spreadSec` after the one before,
   // plus a little jitter so the gaps aren't a metronome. nextSendTime rolls
   // anything past the close into the next open window.
@@ -345,7 +350,7 @@ export async function queueBlastDrafts({ store = defaultStore, locationId, offer
       const record = await store.createReplyDraft({
         locationId, contactId, contactName: name, status: schedule ? "scheduled" : "draft", channel, jobId: null,
         inbound: "", outbound: { kind: "blast_open", offerId: offer.id, address: offer.address, label: label || "", variant, ...(ownLine ? { note: ownLine } : {}),
-          ...(intro ? { intro } : {}), ...(subject ? { subject } : {}), ...(presell ? { presell: true } : {}), ...(inv.asked ? { asked: true } : {}), ...(coldSms ? { cold: true } : {}) },
+          ...(intro ? { intro } : {}), ...(subject ? { subject } : {}), ...(presell ? { presell: true } : {}), ...(inv.asked ? { asked: true } : {}), ...(coldSms ? { cold: true } : {}), assetType },
         reply: textFor(channel), intent: "blast_open", confidence: "high", needsHuman: Boolean(presell), humanReason: presell ? PRESELL_WAITS : "",
         summary: presell
           ? `Pre-sells ${offer.address} to ${name || "a buyer"} at about ${facts.price ? `$${facts.price.toLocaleString("en-US")}` : "the buyer price"}, before we sign.`

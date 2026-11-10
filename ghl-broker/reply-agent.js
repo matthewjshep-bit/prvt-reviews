@@ -58,7 +58,7 @@ import { normalizeOpener, openerVoice, countyName, homeFor, withHomeBlank, strip
 import { standardText } from "./shared/standard-texts.js";
 import { OFF_MARKET_ASK_RX, offMarketCue, onMarketCue } from "./shared/off-market.js";
 import { PASS_RE, inferReason } from "./shared/deal-feedback.js";
-import { agentFocusRule } from "./shared/asset-type.js";
+import { agentFocusRule, assetOf } from "./shared/asset-type.js";
 import { draftWaitingOnYou } from "./outbox-guard.js";
 import { holdFor } from "./bot-hold.js";
 import { machineMayStart, liveHouse, LIVE_THREAD_KINDS, PASS_SHAPED_KINDS, IRRITATED_RX } from "./shared/thread-health.js";
@@ -6773,6 +6773,23 @@ export async function sendReplyDraft({ client, store, locationId, draftId, text,
         await removeContactTags(client, d.contactId, [RA_TAGS.draft]).catch(() => {});
         return { ok: true, skipped: why };
       }
+    }
+    // The kind of house changed after this deal text was queued, and the
+    // re-pick (routes/offers.js repickOnKindChange) didn't stamp it: it waits
+    // for you rather than go to a buyer picked for the old kind (2026-11-09).
+    // Texts queued before the stamp existed carry none and aren't checked,
+    // and a house with no kind set is picked as a single family one.
+    const pickedAs = (t) => (t === "sfr" ? "" : String(t || ""));
+    if (d.outbound?.kind === "blast_open" && offer?.deal && typeof d.outbound.assetType === "string"
+      && pickedAs(assetOf(offer)?.type) !== pickedAs(d.outbound.assetType)) {
+      const ts = new Date(now).toISOString();
+      const line = `the kind of house changed to ${assetOf(offer)?.type?.replace(/_/g, " ") || "not set"} since this was queued`;
+      await store.updateReplyDraft(d.id, {
+        ...d, status: "draft", sendAt: null, sendingAt: null, heldAt: ts, updatedAt: ts,
+        flags: [...(d.flags || []), `held: ${line}`],
+        autoSend: { ...(d.autoSend || {}), decided: false, reason: `${line} — it waits for you` },
+      });
+      return { ok: true, skipped: line };
     }
   }
 
