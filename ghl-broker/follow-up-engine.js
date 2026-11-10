@@ -304,7 +304,7 @@ async function planContext({ store, locationId, saved, client, now, deps }) {
       workflows: await pulseWorkflows(client, locationId, deps).catch(() => null),
       tierCards: await pulseTierCards(client, locationId, deps).catch(() => null) }).catch(() => null),
     deps.buyerBook ? planBuyerPulse({ locationId, saved, store, now, deps: { book: deps.buyerBook } }).catch(() => null) : null,
-    outreachCandidates({ store, locationId, config, now, ghlCohort: oa.nudgeGhlCohort }).catch(() => []),
+    outreachCandidates({ store, locationId, config, now, ghlCohort: oa.nudgeGhlCohort, fresh: false }).catch(() => []),
     investorCandidates({ store, locationId, config, now }).catch(() => []),
     secondLookCandidates({ store, locationId, config, now }).catch(() => []),
   ]);
@@ -583,6 +583,8 @@ export async function followUpEngineFor({ store, locationId, saved = {}, period 
     ...page,
     tierCardsRead: ctx.agentPlan ? Boolean(ctx.agentPlan.tierCardsRead) : null,
     buyerPlanRead: Boolean(ctx.buyerPlan),
+    // The cold ladder's read of its 60 days stopped at its ceiling (follow-up-sweep.js coldWindowEvents).
+    readTruncated: Boolean(ctx.outreach?.truncated),
     env: { sends: Boolean(env.sends), blasts: Boolean(env.blasts), imports: Boolean(env.imports) },
   };
 }

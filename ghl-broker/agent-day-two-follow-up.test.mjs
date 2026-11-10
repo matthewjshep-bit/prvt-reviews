@@ -79,7 +79,8 @@ test("a check-in 14 days after the follow-up is a check-in, not follow-up 1 agai
     const first = textOn(2, contactId);
     const checkIn = textOn(16, contactId);
     assert.notEqual(checkIn, first, contactId);
-    assert.ok(DEFAULT_CHECK_IN_TEXTS.map((t) => t.replace("{first}", "Brenda")).includes(checkIn), checkIn);
+    // Since 2026-11-09 a check-in names their town, off the first-text house's address.
+    assert.ok(DEFAULT_CHECK_IN_TEXTS.map((t) => t.replace("{first}", "Brenda").replace("{town}", "Renton")).includes(checkIn), checkIn);
   }
 });
 
