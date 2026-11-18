@@ -335,6 +335,12 @@ export function normalizeOutreachAutopilot(v = {}) {
     distressCheck: {
       enabled: o.distressCheck?.enabled === true,
       perRun: Math.min(MAX_SCREEN_PER_RUN, Math.max(SCREEN_CHUNK, Math.round(Number(o.distressCheck?.perRun)) || DEFAULT_SCREEN_PER_RUN)),
+      // Also text the agent of a for-sale listing whose remarks say nothing
+      // about its condition either way (2026-11-18: the check kept 5 of 171
+      // picks, and 76 of the rest said nothing; the first text asks whether
+      // it needs work). Finished, pending, new-build and bank-owned listings
+      // stay out. Off by default.
+      keepUnsaid: o.distressCheck?.keepUnsaid === true,
     },
     // A daily run that opens fewer new agents than this (or than the daily
     // cap, if that is lower) posts the day's counts to Slack #machine, once a
@@ -409,8 +415,12 @@ function screenBucket(why = "") {
  * (SCREEN_RULES_VERSION). Those re-reads count against `perRun`.
  * `error` says why a lookup failed, when one did.
  */
-export async function screenAddresses({ items = [], locationId, store = defaultStore, deps = {}, now = Date.now(), perRun = DEFAULT_SCREEN_PER_RUN, want = Infinity, remember = true, beat = async () => {} } = {}) {
-  const stats = { checked: 0, remembered: 0, rememberedDrops: 0, reread: 0, kept: 0, dropped: {}, waiting: 0 };
+export async function screenAddresses({ items = [], locationId, store = defaultStore, deps = {}, now = Date.now(), perRun = DEFAULT_SCREEN_PER_RUN, want = Infinity, remember = true, keepUnsaid = false, beat = async () => {} } = {}) {
+  const stats = { checked: 0, remembered: 0, rememberedDrops: 0, reread: 0, kept: 0, unsaid: 0, dropped: {}, waiting: 0 };
+  // With `keepUnsaid`, a for-sale listing whose remarks say nothing either
+  // way passes too. The read itself is remembered as it was (ok: false), so
+  // switching the setting off again needs no clean-up.
+  const unsaid = (e) => keepUnsaid && e && !e.ok && screenBucket(e.why) === "no sign it needs work";
   const verdict = new Map();
   const warnings = [];
   let error = null;
@@ -420,7 +430,9 @@ export async function screenAddresses({ items = [], locationId, store = defaultS
   // Whether a remembered read still stands, or the listing is read again.
   const trusted = (e) => {
     if (!recent(e)) return false;
-    if (e.ok) return Date.parse(e.at) > now - SCREEN_KEEP_OK_DAYS * DAY_MS;
+    // A listing we would text about has to still be for sale: its read is
+    // trusted days, not a month.
+    if (e.ok || unsaid(e)) return Date.parse(e.at) > now - SCREEN_KEEP_OK_DAYS * DAY_MS;
     return !(screenBucket(e.why) === "no sign it needs work" && (Number(e.v) || 1) < SCREEN_RULES_VERSION);
   };
   const drop = (why) => { const b = screenBucket(why); stats.dropped[b] = (stats.dropped[b] || 0) + 1; };
@@ -430,9 +442,11 @@ export async function screenAddresses({ items = [], locationId, store = defaultS
     const k = keyOf(it);
     if (!k) { verdict.set(it.id, false); drop("no address"); continue; }
     if (trusted(seen[k])) {
-      verdict.set(it.id, seen[k].ok === true);
+      verdict.set(it.id, seen[k].ok === true || unsaid(seen[k]));
       stats.remembered++;
-      if (seen[k].ok) stats.kept++; else { stats.rememberedDrops++; drop(seen[k].why); }
+      if (seen[k].ok) stats.kept++;
+      else if (unsaid(seen[k])) { stats.kept++; stats.unsaid++; }
+      else { stats.rememberedDrops++; drop(seen[k].why); }
       continue;
     }
     if (recent(seen[k])) stats.reread++;
@@ -456,9 +470,11 @@ export async function screenAddresses({ items = [], locationId, store = defaultS
       const v = z
         ? listingDistress({ status: z.status, description: z.description, yearBuilt: z.yearBuilt || it.yearBuilt }, { now })
         : { ok: false, why: "Zillow couldn't find the listing", signals: [] };
-      verdict.set(it.id, v.ok);
+      verdict.set(it.id, v.ok || unsaid(v));
       seen[keyOf(it)] = { at: iso(now), ok: v.ok, v: SCREEN_RULES_VERSION, ...(v.why ? { why: v.why } : {}), ...(v.signals?.length ? { signals: v.signals.slice(0, 3) } : {}) };
-      if (v.ok) stats.kept++; else drop(v.why);
+      if (v.ok) stats.kept++;
+      else if (unsaid(v)) { stats.kept++; stats.unsaid++; }
+      else drop(v.why);
     }
     await beat();
   }
@@ -492,7 +508,8 @@ export async function listingCheckDown(deps = {}, locationId) {
 // "12 of 40 listings read as needing work (left out: 20 reads finished, …)"
 export function screenSummary(stats) {
   const dropped = Object.entries(stats.dropped || {}).map(([b, n]) => `${n} ${b}`).join(", ");
-  return `${stats.kept} of ${stats.checked + stats.remembered} listings read as needing work${dropped ? ` (left out: ${dropped})` : ""}`;
+  const kept = stats.unsaid ? `${stats.kept - stats.unsaid} of ${stats.checked + stats.remembered} listings read as needing work, ${stats.unsaid} more said nothing either way and were kept` : `${stats.kept} of ${stats.checked + stats.remembered} listings read as needing work`;
+  return `${kept}${dropped ? ` (left out: ${dropped})` : ""}`;
 }
 
 /**
@@ -527,6 +544,7 @@ async function screenPicked({ groups, oa, job, locationId, store, deps, now, bea
   const { verdict, stats, warnings, error } = await screenAddresses({
     items: rows.map((r) => ({ id: r.agentKey, address: r.doc?.hook?.address || "", yearBuilt: r.doc?.hook?.yearBuilt })),
     locationId, store, deps, now, perRun: oa.distressCheck.perRun, want: Math.ceil(oa.dailyCap * 1.2), remember: !job.dryRun, beat,
+    keepUnsaid: oa.distressCheck.keepUnsaid,
   });
   job.screen = stats;
   if (error) job.screenFailed = error;

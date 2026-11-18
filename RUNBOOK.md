@@ -8570,6 +8570,21 @@ nothing said so. Four changes:
   (`SCREEN_KEEP_OK_DAYS`), so a ping doesn't name a listing that went
   pending since. Re-reads count against `distressCheck.perRun` (about a
   fifth of a cent each). `last.screen` adds `reread` and `rememberedDrops`.
+- **Listings that say nothing either way (2026-11-18,
+  `distressCheck.keepUnsaid`, off by default).** The 11-18 sweep picked 171
+  agents and the check kept 5; 76 of the rest had remarks that said nothing
+  about condition. With `keepUnsaid` on, a listing still for sale whose
+  remarks say neither "needs work" nor "finished" keeps its agent picked: the
+  first text already asks whether it needs much work. "Reads finished",
+  pending or sold, built in the last ten years, bank-owned, not on Zillow and
+  no remarks are left out as before. The read is remembered unchanged
+  (`ok: false`, "nothing in the remarks…"), so switching the setting off
+  needs no clean-up; while it is on, such a read is trusted only
+  `SCREEN_KEEP_OK_DAYS` (3), like any listing we would text about.
+  `last.screen.unsaid` counts them, and the run's summary line says how many
+  were kept that way. The agent check-in's own listing read
+  (`agent-pulse.js`) does not use it. Turn on: `PATCH /api/offers/settings`
+  `{ outreachAutopilot: { distressCheck: { keepUnsaid: true } } }`.
 - **A check that can't run fails the day.** With the check on, the sweep
   asks `screenListings` with an empty list before the pull (free: it only
   checks the Apify token). No token, or a broker that can't read Zillow,

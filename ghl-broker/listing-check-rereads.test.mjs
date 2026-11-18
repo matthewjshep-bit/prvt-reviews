@@ -100,6 +100,84 @@ test("a for-sale verdict older than 3 days is read again", async () => {
   assert.equal(verdict.get("302"), true, "two days old is still trusted");
 });
 
+/* ---------- listings whose remarks don't say either way ---------- */
+
+// 2026-11-18: the day's sweep picked 171 agents and the check kept 5. 76 of
+// the rest had remarks that said nothing about condition either way, and the
+// first text already asks "does it need much work, or is it pretty move-in
+// ready?". Matt: let those through, keep leaving out the finished ones.
+
+test("a listing whose remarks say nothing either way gets a first text once the setting is on", async () => {
+  const store = fakeStore();
+  const says = { "400": "Three bedrooms on a quiet street near schools and parks.", "402": "Fully remodeled, move-in ready.", "404": "Fixer with good bones." };
+  const deps = { screenListings: async ({ addresses }) => new Map(addresses.map((a) => [streetKey(a), { status: "FOR_SALE", description: says[a.slice(0, 3)] }])) };
+  const items = Object.keys(says).map((n) => ({ id: n, address: `${n} Cedar Way, Tacoma, WA` }));
+  const { verdict, stats } = await screenAddresses({ items, locationId: "U1", store, deps, now: MON, keepUnsaid: true, remember: false });
+  assert.equal(verdict.get("400"), true, "nothing either way: asked");
+  assert.equal(verdict.get("402"), false, "finished: still left out");
+  assert.equal(verdict.get("404"), true);
+  assert.equal(stats.kept, 2);
+  assert.equal(stats.unsaid, 1, "counted apart from the ones that say they need work");
+  assert.equal(stats.dropped["no sign it needs work"], undefined, "a kept listing isn't counted as left out");
+});
+
+test("with the setting off, a listing that says nothing either way is still left out", async () => {
+  const store = fakeStore();
+  const deps = { screenListings: zillowSays("Three bedrooms on a quiet street near schools and parks.") };
+  const items = [{ id: "410", address: "410 Cedar Way, Tacoma, WA" }];
+  const { verdict, stats } = await screenAddresses({ items, locationId: "U2", store, deps, now: MON, remember: false });
+  assert.equal(verdict.get("410"), false);
+  assert.equal(stats.dropped["no sign it needs work"], 1);
+  assert.equal(normalizeOutreachAutopilot({}).distressCheck.keepUnsaid, false, "off unless switched on");
+  assert.equal(normalizeOutreachAutopilot({ distressCheck: { enabled: true, keepUnsaid: true } }).distressCheck.keepUnsaid, true, "the setting survives a save");
+});
+
+test("a pending, sold, new-build or bank-owned listing is never let through as saying nothing", async () => {
+  const store = fakeStore();
+  const plain = "Three bedrooms on a quiet street near schools and parks.";
+  const deps = { screenListings: async ({ addresses }) => new Map(addresses.map((a) => {
+    const n = a.slice(0, 3);
+    return [streetKey(a), n === "420" ? { status: "PENDING", description: plain } : n === "422" ? { status: "FOR_SALE", description: plain, yearBuilt: 2024 } : { status: "FOR_SALE", description: "Bank owned, sold as is." }];
+  })) };
+  const items = ["420", "422", "424"].map((n) => ({ id: n, address: `${n} Cedar Way, Tacoma, WA` }));
+  const { verdict, stats } = await screenAddresses({ items, locationId: "U3", store, deps, now: MON, keepUnsaid: true, remember: false });
+  assert.deepEqual([...verdict.values()], [false, false, false]);
+  assert.equal(stats.kept, 0);
+});
+
+test("a say-nothing listing read more than 3 days ago is read again before its agent is texted", async () => {
+  const store = fakeStore();
+  const why = "nothing in the remarks says it needs work";
+  store.cursors.set(`U4|${SCREEN_CURSOR}`, { at: iso(MON), doc: { seen: {
+    [streetKey("430 Cedar Way, Tacoma, WA")]: { at: iso(MON - 6 * DAY), ok: false, why, v: SCREEN_RULES_VERSION },
+    [streetKey("432 Cedar Way, Tacoma, WA")]: { at: iso(MON - 1 * DAY), ok: false, why, v: SCREEN_RULES_VERSION },
+  } } });
+  const asked = [];
+  // It went pending in the meantime: nobody is asked about a house that's gone.
+  const deps = { screenListings: async (a) => { asked.push(...a.addresses); return zillowSays("Three bedrooms near parks.", "PENDING")(a); } };
+  const items = ["430", "432"].map((n) => ({ id: n, address: `${n} Cedar Way, Tacoma, WA` }));
+  const { verdict } = await screenAddresses({ items, locationId: "U4", store, deps, now: MON, keepUnsaid: true });
+  assert.deepEqual(asked, ["430 Cedar Way, Tacoma, WA"], "only the stale one costs a lookup");
+  assert.equal(verdict.get("430"), false);
+  assert.equal(verdict.get("432"), true, "yesterday's read still stands, and now it passes");
+});
+
+test("the day's sweep texts the agent whose listing says nothing, and not the one whose listing reads finished", async () => {
+  _resetJobs();
+  const LOC = "loc-unsaid";
+  const store = fakeStore([agent("a41", "440 Cedar Way"), agent("a42", "442 Cedar Way")]);
+  const imported = [];
+  const deps = {
+    runPull: async () => ({ batchId: "b1", warnings: [], requestsUsed: 1 }),
+    importAgents: async ({ agentKeys }) => { imported.push(...agentKeys); return { results: [], imported: 0 }; },
+    screenListings: async ({ addresses }) => new Map(addresses.map((a) => [streetKey(a), { status: "FOR_SALE", description: a.startsWith("440") ? "Three bedrooms near parks." : "Completely remodeled, turnkey." }])),
+  };
+  const saved = SWEEP({ distressCheck: { enabled: true, keepUnsaid: true } });
+  assert.equal(await maybeStartOutreachSweep({ locationId: LOC, client: {}, store, deps, saved, now: MON }), true);
+  await settle(LOC);
+  assert.deepEqual(imported, ["a41"]);
+});
+
 /* ---------- a listing check that couldn't run ---------- */
 
 test("a sweep whose listing check throws is marked failed and retried", async () => {
