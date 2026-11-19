@@ -178,15 +178,17 @@ export function countyOpener(county = "") {
 
 // The first text to an agent whose listing came down lately, sold or not (the
 // recent listers, 2026-10-26, Matt: agents "who have active listings in the
-// last 60-90 days"). The house is gone, so it is named as theirs, in the
-// past, as proof we know their patch — never "came off the market" (Matt,
-// 2026-10-20) and never a question about that house. The ask is the next one.
+// last 60-90 days"). Never "came off the market" (Matt, 2026-10-20).
 // 2026-11-09: the second said "I buy houses", which our own carrier gate
 // holds, so a third of these waited on the Desk; the third said "TLC".
+// 2026-11-18, Matt, on the first day these went out: naming a listing and
+// then only asking for another one "doesn't make sense". Ask about the
+// listing we wrote about first (is it a good flip, does it need work), then
+// for anything else if it isn't. One question, so it passes the voice check.
 export const PAST_LISTING_TEXTS = [
-  "Hi {first}, it's Matt, I fix up houses around {town}. Saw you had {address} recently. Anything else like it come across your desk, listed or off market?",
-  "Hey {first}, Matt here. I fix up houses around {town} and saw you had {address}. Anything else coming that needs real work?",
-  "Hi {first}, it's Matt. I fix up houses locally and noticed you had {address} recently. Got anything else that needs work, listed or off market?",
+  "Hi {first}, it's Matt, I fix up houses around {town}. Saw your listing at {address}. Is it a good flip, or do you have another that needs work?",
+  "Hey {first}, Matt here. I fix up houses around {town}. Saw your listing at {address}. Does it need real work, or do you have another that does?",
+  "Hi {first}, it's Matt. I fix up houses locally and saw your listing at {address}. Is it a good flip, or do you have another that needs work?",
 ];
 
 // "SE", "NW" as people write them; listing feeds send "Se".
