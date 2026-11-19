@@ -92,7 +92,7 @@ test("a Pierce agent whose 1962 listing sold last month is in the batch, with th
   assert.ok(listingRows.every((x) => x.doc.pastListing === true));
 });
 
-test("the first text names the house as theirs, in the past, and asks for the next one", () => {
+test("the first text asks about the listing we wrote about first, then for another one", () => {
   const doc = { brokerage: "Tacoma Realty", listingCount: 1, hook: { address: "1 Yakima Ave, Tacoma, WA 98405", county: "Pierce", city: "Tacoma", pastListing: true, removedDate: day(30) } };
   const hook = firstTextHook(doc);
   assert.equal(hook.pastListing, true);
@@ -102,9 +102,11 @@ test("the first text names the house as theirs, in the past, and asks for the ne
     const t = standardText({ kind: "outreach_open", outbound: { ...o, variant }, name: "Robin Lister" });
     assert.equal(t.set, "past_listing");
     assert.match(t.text, /^(Hi|Hey) Robin, /, t.text);
-    assert.match(t.text, /had 1 Yakima Ave/, t.text);
-    assert.doesNotMatch(t.text, /came off|off the market lately|still hoping|is it a (bit of a )?project|does (it|this one) need/i, t.text);
-    assert.match(t.text, /anything else|other fixers|got anything else/i, t.text);
+    assert.match(t.text, /your listing at 1 Yakima Ave/, t.text);
+    assert.doesNotMatch(t.text, /came off|off the market|still hoping|you had/i, t.text);
+    assert.match(t.text, /good flip|need real work/i, "it asks about that listing");
+    assert.match(t.text, /\bor\b.*\banother\b/i, "and for another one if it isn't");
+    assert.equal((t.text.match(/\?/g) || []).length, 1, "one question");
   }
   const ai = standardText({ kind: "outreach_open", outbound: { ...o, mode: "ai", variant: 0 }, name: "Robin Lister" });
   assert.equal(ai.set, "past_listing", "the model has no words for a house that's gone: the fixed text either way");
@@ -224,7 +226,7 @@ test("the preview reads Pierce's recent listers and says who is new and what the
     assert.equal(body.county, "Pierce, WA");
     assert.equal(body.pickable, 2, JSON.stringify(body));
     assert.equal(body.samples.length, 2);
-    assert.ok(body.samples.every((t) => /had \d Yakima Ave/.test(t)), body.samples.join(" | "));
+    assert.ok(body.samples.every((t) => /your listing at \d Yakima Ave/.test(t)), body.samples.join(" | "));
     const batch = (await store.listOutreachBatches(L)).find((b) => b.name === "Autopilot · Recent · Pierce, WA");
     const rows = await store.listOutreachAgents(L, { batchId: batch.id });
     assert.ok(rows.every((x) => x.status === "new"), "nobody imported");
