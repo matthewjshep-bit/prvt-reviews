@@ -587,7 +587,7 @@ const keyOf = (kind, at, text = "") => `${kind}:${String(at || "").slice(0, 10)}
  * `hooks`, ranked; hooks[0] is THE ONE THING.
  *
  *   agents     lead › question › call › their words › personal › their old no
- *   investors  their words (deal talk) › their quotes › where they bought › personal
+ *   investors  their words (deal talk) › their quotes › personal
  *
  * `context.spent`: hook keys one of our check-ins already used (the texted
  * events' checkIn.key), never used twice. `context.newerThan`: only what is
@@ -701,8 +701,8 @@ function oneThings({ lines = [], theirLast = null, ourLast = [], subject = {}, c
     add(words);
     for (const q of quotes) add({ kind: "quotes", key: keyOf("quotes", q.at, q.text), at: q.at, daysAgo: q.daysAgo,
       line: `in their own words, ${dayWord(q.daysAgo)}: "${q.text}"`, anchor: anchorOf(q.text, { skip: skipNames }), from: "their read" });
-    if (buyCity) add({ kind: "purchase_city", key: `purchase_city:${buyCity.toLowerCase()}`, at: null, daysAgo: null,
-      line: `public records show they bought around ${buyCity} lately: name the town as where they buy, never the house`, anchor: buyCity, from: "public records" });
+    // Where they bought is not a hook (2026-11-19): 169 check-ins opened with
+    // the town public records show they bought in, and 1 got a reply.
     add(personalHook);
   }
   return { lead, question, call, theirWords, personal, theirNo, quotes, buyCity, areas, lastSummary, hooks };
