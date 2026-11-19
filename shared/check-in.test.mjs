@@ -431,6 +431,14 @@ test("a buyer's pulse quotes what they said only when it's under six months old"
   assert.equal(pack.hooks[0].kind, "quotes");
 });
 
+test("a buyer's check-in never opens with the town public records say they bought in", () => {
+  // 30 days to 2026-11-19: 169 check-ins opened this way and 1 got a reply.
+  // With nothing else to say, the check-in is skipped instead.
+  const pack = checkInPack("", { lastBuyCity: "Halden", lastBuyYear: 2026 }, { party: "investor", quotes: [] }, NOW);
+  assert.equal(pack.hooks.some((h) => h.kind === "purchase_city"), false);
+  assert.equal(pack.hooks.length, 0);
+});
+
 test("the composer opens a different way than our last text did, by the contact's own count", () => {
   const seen = new Set([0, 1, 2, 3].map((touch) => openingIndex({ touch, contactId: "a1" })));
   assert.ok(seen.size >= 2);
