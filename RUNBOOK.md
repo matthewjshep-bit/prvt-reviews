@@ -10051,6 +10051,31 @@ Notes for whoever maintains this:
 - The token is scoped to appending to the comp inbox and nothing else.
   *Regenerate* revokes it — the old bookmark 403s immediately.
 
+## Deals on Porchcard (2026-11-20)
+
+Matt's other app, porchcard.com, has his agent profile. `ghl-broker/porchcard-sync.js` keeps our deals on it as his own listings. What a deal publishes is decided in `shared/porchcard-listing.js`.
+
+- **Which deals:** under contract or buyer found go up as active. Assigned or closed are marked closed. Fell through comes off the profile (`shown: false`), but the listing is kept.
+- **What shows:** it follows the deal room's own public switches, the same ones the public deal page and `deals.json` obey.
+  - A room that keeps its photos private isn't put up at all. Porchcard hides a listing with no photo anyway.
+  - ARV and rehab show only with the equity section on.
+  - The room's notes are the description only with the summary on.
+  - Up to 15 photos, in the room's order.
+- **Closed:** the contract price (the recorded sale) and a one-line facts description. No ARV, no rehab, no pitch, matching `soldCard`.
+- **Required:** Porchcard needs beds, baths and sqft. A room without them is skipped and the reason is logged on the run. Land goes up with 0/0 and no price per sqft.
+- **Never twice, never back:** a listing for the same house already on Porchcard (same street line and ZIP) is adopted, not duplicated. Matt put the first 7 up by hand on 2026-11-20. A listing Matt hides or deletes on Porchcard stays that way.
+- **When:** the 15-minute tick. The `porchcardSync` job cursor holds `links[offerId] = { key, photoIds, photosDone, hidden, settled, fails, failDay }`.
+  - The cursor is written before the run, and a run under 30 minutes old is left alone.
+  - A deal that fails 3 times in a day waits until tomorrow.
+  - At most 20 photos go up per run.
+  - Settled deals (closed with photos, or hidden) make no call at all.
+- **Switches (Render env), all off by default:**
+  - `PORCHCARD_SYNC_ENABLED=true`
+  - `PORCHCARD_ADMIN_KEY`: an admin key from porchcard.com. It works only while that account's email is matt@shepflips.com.
+  - `PORCHCARD_LOCATION_ID`: the GHL location whose deals go up.
+  - `PORCHCARD_ACCOUNT_ID` (optional): which Porchcard agent; defaults to the key's owner.
+  - It never texts or emails anyone.
+
 ## Safety rails
 
 - **SMS sends are dry-run by default.** `POST /api/offers/:id/send` returns a

@@ -55,6 +55,7 @@ import { maybeRunCoach } from "./coach.js";
 import { runLocationTick } from "./tick.js";
 import { maybeRunAgentPulse, maybeRunMattsFifteen } from "./agent-pulse.js";
 import { maybeRunShowingSweep } from "./showing-sweep.js";
+import { maybeRunPorchcardSync } from "./porchcard-sync.js";
 import { maybeSweepHandReplies } from "./hand-reply-sweep.js";
 import { startAiSpendMeter } from "./ai-spend.js";
 import { openerVariant } from "./shared/outreach-opener.js";
@@ -477,6 +478,14 @@ const TICK_JOBS = [
   { area: "delivery-watch", run: async ({ client, locationId, saved }) => {
     const r = await maybeRunDeliveryWatch({ client, locationId, saved, store, sendsEnabled: CONVERSATION_SENDS_LIVE });
     if (r?.started) console.log(`delivery check started for ${locationId} (try ${r.tries} today)`);
+  } },
+  // Our deals on Matt's Porchcard profile (porchcard-sync.js, 2026-11-20): a
+  // live deal goes up with its room's photos, a closed one is marked closed,
+  // a dead one comes off. Off until PORCHCARD_SYNC_ENABLED=true with
+  // PORCHCARD_ADMIN_KEY and PORCHCARD_LOCATION_ID; never texts anyone.
+  { area: "porchcard", run: async ({ locationId }) => {
+    const r = await maybeRunPorchcardSync({ locationId, store });
+    if (r?.changed) console.log(`porchcard: ${r.changed} listing change(s) for ${locationId}`);
   } },
   // What only Matt can do moves the agent's card to GHL's "Needs Matt" stage
   // and back when it's done (needs-matt.js, 2026-10-22: "instead of ping to
