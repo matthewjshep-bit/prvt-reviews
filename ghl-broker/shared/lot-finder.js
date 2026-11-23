@@ -412,10 +412,11 @@ export function builderFromNewBuild({ row = {}, facts = null, pocket = {}, now =
       priorLotPrice: prior?.price || null, priorLotDate: prior?.date || null,
       builder, name,
       agent: { name: clean(agent.name).slice(0, 80), phone: e164(agent.phone), email: clean(agent.email).slice(0, 120), brokerage: clean(facts?.brokerage).slice(0, 80) },
-      // Who we'd reach: the builder (P1) when we have a number for them — we
-      // don't off Zillow — else the listing agent (P2). P3, the LLC behind the
-      // sale, is the county's and a skip trace's, by hand for now.
-      reach: agent.phone ? "agent" : "none",
+      // Who we reach: the builder, by their own number, once builder-contacts.js
+      // has found it (the registry, the county's entity, a skip trace on the
+      // LLC). Never the listing agent (Matt, 2026-11-23): the agent is kept here
+      // as a reference only.
+      reach: "none",
       seenAt: iso(now),
     },
   };

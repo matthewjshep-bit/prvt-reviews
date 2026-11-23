@@ -142,7 +142,7 @@ export default function LotsTab() {
           </div>
         </div>
         <p className="max-w-3xl text-xs text-slate-600">
-          Each weekday at 10am: pull the old houses on big lots in each pocket (weekly), look up the owners' cell numbers up to the day's cap, put the day's new ones in GHL tagged <code>lot-owner</code>, and write each a first text that names the price band, then one follow-up a day later. A reply is yours: the bot never answers a homeowner, and the Desk says call now. The same weekly pass reads the new builds that sold in the pocket and puts their builders (through the listing agent until you have the builder's own number) into the buyer book tagged new construction, so a lot you lock up there goes to them on promote.
+          Each weekday at 10am: pull the old houses on big lots in each pocket (weekly), look up the owners' cell numbers up to the day's cap, put the day's new ones in GHL tagged <code>lot-owner</code>, and write each a first text that names the price band, then one follow-up a day later. A reply is yours: the bot never answers a homeowner, and the Desk says call now. The same weekly pass reads the new builds that sold in the pocket and finds the builders behind them, by their own number: the contractor registry by name, the county's sale record for the company, a skip trace for a one-off LLC. Only the builder goes into the buyer book, never the listing agent.
         </p>
         {err && <ErrorBar>{err}</ErrorBar>}
         {msg && <p className="mt-2 text-sm text-blue-800" role="status">{msg}</p>}
@@ -214,15 +214,15 @@ export default function LotsTab() {
                       <td className="py-1 pr-2 tabular-nums">{money(d.exitPrice)}</td>
                       <td className="py-1 pr-2 tabular-nums">{d.lotSqft ? d.lotSqft.toLocaleString("en-US") : "—"}</td>
                       <td className="py-1 pr-2 tabular-nums">{d.priorLotPrice ? `${money(d.priorLotPrice)}${d.priorLotDate ? ` (${d.priorLotDate.slice(0, 7)})` : ""}` : "—"}</td>
-                      <td className="py-1 pr-2">{d.builder ? <><span className="font-semibold">{d.builder}</span>{d.agent?.name ? ` · ${d.agent.name}` : ""}</> : d.agent?.name ? `${d.agent.name} (listing agent)` : "—"}{d.agent?.brokerage ? <span className="text-slate-500">, {d.agent.brokerage}</span> : null}</td>
-                      <td className="py-1 pr-2">{b.status === "imported" ? "In the buyer book" : b.status === "no_phone" ? "No number on Zillow" : b.status === "skipped" ? "Skipped" : "Found"}</td>
+                      <td className="py-1 pr-2">{d.builderContact?.entity || d.builder ? <><span className="font-semibold">{d.builderContact?.entity || d.builder}</span>{d.builderContact?.principal ? ` · ${d.builderContact.principal}` : ""}</> : "—"}{d.builderContact?.source && d.builderContact.source !== "none" ? <span className="text-slate-500"> ({d.builderContact.source === "lni" ? "contractor registry" : d.builderContact.source === "trace" ? "skip trace" : "county record"})</span> : null}</td>
+                      <td className="py-1 pr-2">{b.status === "imported" ? "In the buyer book" : b.status === "no_phone" ? "No builder number yet" : b.status === "skipped" ? "Skipped" : "Found"}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-          <p className="mt-2 text-[11px] text-slate-500">The builder's own number isn't on Zillow. Until you find it, the listing agent is the way in: the builder gives them the finished house to list, so they have a reason to help. Budget about 2.5% for the agent on the lot deal.</p>
+          <p className="mt-2 text-[11px] text-slate-500">Only the builder, by their own number, goes into the buyer book: the contractor registry when the listing names them, the county's sale record for the company behind an unnamed build, a skip trace on a one-off LLC's mailing address. The listing agent is kept as a reference and never texted as a buyer.</p>
         </div>
       )}
 
