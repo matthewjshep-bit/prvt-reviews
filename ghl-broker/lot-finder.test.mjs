@@ -245,3 +245,19 @@ test("a first text still unsent is rewritten with the current words on the next 
     assert.equal(fresh.status, "draft");
   } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; }
 });
+
+test("a first text drafted while the switches were off schedules itself once they're all on", async () => {
+  process.env.OUTREACH_IMPORTS_ENABLED = "true";
+  try {
+    const g = ghl();
+    await runLotFinder({ client: {}, locationId: "L11", saved: ON({ traceDailyCap: 5, autoSend: false }), store, sendsEnabled: true, deps: { fetch: fetchStub(PHONES), ...g.deps }, now: T0 });
+    const d = (await store.listReplyDrafts("L11", { limit: 10 })).find((x) => x.outbound?.kind === "lot_owner_open");
+    assert.equal(d.status, "draft");
+    process.env.OWNER_SMS_ENABLED = "true";
+    const again = await runLotFinder({ client: {}, locationId: "L11", saved: ON({ traceDailyCap: 5, autoSend: true }), store, sendsEnabled: true, deps: { fetch: fetchStub(PHONES), ...g.deps }, now: T0 + 3600000 });
+    assert.equal(again.texts.scheduled, 1);
+    const s = (await store.listReplyDrafts("L11", { limit: 10 })).find((x) => x.id === d.id);
+    assert.equal(s.status, "scheduled");
+    assert.ok(s.sendAt);
+  } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; delete process.env.OWNER_SMS_ENABLED; }
+});
