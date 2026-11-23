@@ -42,7 +42,12 @@ export const e164 = (p) => (digits(p).length === 10 ? `+1${digits(p)}` : "");
 
 export const POCKET_DEFAULTS = Object.freeze({
   id: "", name: "", address: "", lat: 0, lng: 0, radiusMiles: 1,
-XX  bandLo: 0, bandHi: 0,          // the lot value band the first text names, in dollars
+  // 10,000 sqft is a starting point for Seattle-side pockets (Medina runs
+  // 15–40k, Mercer Island 10–20k, Laurelhurst 7–15k; Scottsdale's ¾-acre
+  // lots were 30k+). Suggest from Zillow sets the real band off the lots the
+  // builders bought here.
+  lotSqftMin: 10000, yearBuiltMax: 1980, yearsOwnedMin: 5,
+  bandLo: 0, bandHi: 0,          // the lot value band the first text names, in dollars
   enabled: true,
 });
 
@@ -66,7 +71,7 @@ export function normalizePocket(raw = {}, i = 0) {
     address: clean(r.address).slice(0, 160),
     lat: num(r.lat), lng: num(r.lng),
     radiusMiles: Math.min(5, Math.max(0.25, num(r.radiusMiles, D.radiusMiles))),
-    lotSqftMin: int(r.lotSqftMin, D.lotSqftMin, 5000, 200000),
+    lotSqftMin: int(r.lotSqftMin, D.lotSqftMin, 3000, 200000),
     yearBuiltMax: int(r.yearBuiltMax, D.yearBuiltMax, 1850, 2100),
     yearsOwnedMin: int(r.yearsOwnedMin, D.yearsOwnedMin, 0, 60),
     bandLo: Math.max(0, Math.round(num(r.bandLo))),
