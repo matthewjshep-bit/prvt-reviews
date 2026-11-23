@@ -211,3 +211,20 @@ test("a house from a lot owner, or inside a pocket, belongs to the luxury lane; 
   assert.equal(luxuryLaneFor({ saved, contact: { tags: ["agent-outreach"] }, lat: 47.635, lng: -122.212, lotSqft: 7000, yearBuilt: 1962 }), null, "too small a lot");
   assert.equal(luxuryLaneFor({ saved: {}, contact: { tags: ["agent-outreach"] }, lat: 47.635, lng: -122.212, lotSqft: 34000, yearBuilt: 1962 }), null, "no pockets");
 });
+
+test("a builder first read without a number and read again with one goes back to new and into the buyer book", async () => {
+  process.env.OUTREACH_IMPORTS_ENABLED = "true";
+  try {
+    const g = ghl();
+    const build = (phone) => ({ address: "12 Summit Dr, Clyde Hill, WA 98004", price: 4600000, saleDate: "2026-06-10", lotSqft: 32670, sqft: 6500, yearBuilt: 2026,
+      facts: { description: "Built by Mystery Homes", sales: [], agent: { name: "Ann Agent", phone, email: "" }, brokerage: "" } });
+    const saved = { ...ON({ traceDailyCap: 0, dailyNew: 0 }), apifyToken: "apify" };
+    const first = await runLotFinder({ client: {}, locationId: "L9", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => ({ suggest: {}, teardowns: [], newBuilds: [build("")] }), ...g.deps }, now: T0 });
+    assert.equal(first.builders.noPhone, 1);
+    assert.equal((await store.listLotBuilders("L9"))[0].status, "no_phone");
+    const again = await runLotFinder({ client: {}, locationId: "L9", saved, store, deps: { fetch: fetchStub(PHONES), scanPocketZillow: async () => ({ suggest: {}, teardowns: [], newBuilds: [build("4255550177")] }), ...g.deps }, now: T0 + 1000, rescan: true });
+    assert.equal(again.builders.created, 1);
+    assert.equal((await store.listLotBuilders("L9"))[0].status, "imported");
+    assert.equal(g.created[0].phone, "+14255550177");
+  } finally { delete process.env.OUTREACH_IMPORTS_ENABLED; }
+});

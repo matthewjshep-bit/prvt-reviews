@@ -360,7 +360,7 @@ export const BUILDER_SOURCE_TAG = "dispo-source-builder-exits";
 // A name stops at a sentence ("Thomas James Homes. Nestled…" is Thomas James Homes).
 const BUILDER_RX = /\b(?:built|constructed|crafted|presented|brought to you|developed|designed and built)\s+by\s+([A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,4})/;
 const BUILDER_WORD_RX = /\b([A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,3}\s+(?:Homes|Home Builders|Builders|Construction|Development|Developments|Custom Homes|Design Build|Residential))\b/;
-const NOT_A_BUILDER = /\b(?:New|This|The|Stunning|Luxury|Modern|Custom|Beautiful|Gorgeous|Welcome)\b$/;
+const NOT_A_BUILDER = /\b(?:New|This|The|Stunning|Luxury|Modern|Custom|Beautiful|Gorgeous|Welcome)\b$|^(?:New|Brand New|Quality|Luxury|Custom|Modern) (?:Construction|Homes?|Build)$/i;
 
 /** builderName(description) → "Acme Homes" | "" — the builder a listing names, if it does. */
 export function builderName(description = "") {
